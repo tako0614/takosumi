@@ -1,3 +1,4 @@
+import { expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   type CatalogReleaseDescriptor,
@@ -11,7 +12,7 @@ import {
 } from "./mod.ts";
 import { InMemoryAuditStore } from "../audit/mod.ts";
 
-Deno.test("CatalogReleaseService adopts a signed release and records audit", async () => {
+test("CatalogReleaseService adopts a signed release and records audit", async () => {
   const signer = await createSigner();
   const stores = storesFixture();
   const service = new CatalogReleaseService({
@@ -61,7 +62,7 @@ Deno.test("CatalogReleaseService adopts a signed release and records audit", asy
   ]);
 });
 
-Deno.test("CatalogReleaseService marks replacement as catalog-release-rotated", async () => {
+test("CatalogReleaseService marks replacement as catalog-release-rotated", async () => {
   const signer = await createSigner();
   const stores = storesFixture();
   const service = new CatalogReleaseService({
@@ -103,7 +104,7 @@ Deno.test("CatalogReleaseService marks replacement as catalog-release-rotated", 
   );
 });
 
-Deno.test("CatalogReleaseService rejects revoked publisher keys fail-closed", async () => {
+test("CatalogReleaseService rejects revoked publisher keys fail-closed", async () => {
   const signer = await createSigner();
   const stores = storesFixture();
   const service = new CatalogReleaseService({
@@ -129,7 +130,7 @@ Deno.test("CatalogReleaseService rejects revoked publisher keys fail-closed", as
         descriptor,
       }),
     (error) => {
-      assert(error instanceof CatalogReleaseVerificationError);
+      expect(error instanceof CatalogReleaseVerificationError).toBeTruthy();
       assert.equal(error.verification.reason, "publisher-key-revoked");
       assert.equal(error.verification.risk.code, "implementation-unverified");
       return true;
@@ -138,7 +139,7 @@ Deno.test("CatalogReleaseService rejects revoked publisher keys fail-closed", as
   assert.equal(await stores.adoptions.currentForSpace("space:prod"), undefined);
 });
 
-Deno.test("CatalogReleaseService rejects descriptor tampering", async () => {
+test("CatalogReleaseService rejects descriptor tampering", async () => {
   const signer = await createSigner();
   const stores = storesFixture();
   const service = new CatalogReleaseService({ stores });

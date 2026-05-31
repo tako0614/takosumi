@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { MemoryNotificationSink } from "../../adapters/notification/mod.ts";
 import { InMemoryOutboxStore } from "../../shared/events.ts";
@@ -21,7 +22,7 @@ const latencyThreshold: SlaThreshold = {
   recoveryConsecutiveWindows: 2,
 };
 
-Deno.test("SLA detection emits no event when no threshold matches", async () => {
+test("SLA detection emits no event when no threshold matches", async () => {
   const service = new SlaBreachDetectionService();
 
   const result = await service.observe({
@@ -35,8 +36,7 @@ Deno.test("SLA detection emits no event when no threshold matches", async () => 
   assert.equal(result.events.length, 0);
 });
 
-Deno.test(
-  "SLA detection publishes warning, breach, recovering, and recovered events",
+test("SLA detection publishes warning, breach, recovering, and recovered events",
   async () => {
     const states = new InMemorySlaObservationStateStore();
     const observability = new InMemoryObservabilitySink();
@@ -140,8 +140,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "SLA detection keeps wildcard space thresholds independent by target",
+test("SLA detection keeps wildcard space thresholds independent by target",
   async () => {
     const threshold: SlaThreshold = {
       ...latencyThreshold,

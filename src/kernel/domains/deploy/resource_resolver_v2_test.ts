@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   type ProviderPlugin,
@@ -65,7 +66,7 @@ function tearDown() {
   unregisterProvider(PROVIDER_ID);
 }
 
-Deno.test("resolveResourcesV2 returns resolved when shape and provider match", () => {
+test("resolveResourcesV2 returns resolved when shape and provider match", () => {
   setUp();
   try {
     const resources: ManifestResource[] = [{
@@ -83,7 +84,7 @@ Deno.test("resolveResourcesV2 returns resolved when shape and provider match", (
   }
 });
 
-Deno.test("resolveResourcesV2 selects a single registered provider when omitted", () => {
+test("resolveResourcesV2 selects a single registered provider when omitted", () => {
   setUp();
   try {
     const resources: ManifestResource[] = [{
@@ -100,7 +101,7 @@ Deno.test("resolveResourcesV2 selects a single registered provider when omitted"
   }
 });
 
-Deno.test("resolveResourcesV2 reports ambiguous provider selection", () => {
+test("resolveResourcesV2 reports ambiguous provider selection", () => {
   setUp();
   const otherProviderId = "test-rr-provider-other";
   registerProvider(
@@ -125,7 +126,7 @@ Deno.test("resolveResourcesV2 reports ambiguous provider selection", () => {
   }
 });
 
-Deno.test("resolveResourcesV2 reports unknown shape", () => {
+test("resolveResourcesV2 reports unknown shape", () => {
   setUp();
   try {
     const result = resolveResourcesV2([{
@@ -140,7 +141,7 @@ Deno.test("resolveResourcesV2 reports unknown shape", () => {
   }
 });
 
-Deno.test("resolveResourcesV2 reports unknown provider", () => {
+test("resolveResourcesV2 reports unknown provider", () => {
   setUp();
   try {
     const result = resolveResourcesV2([{
@@ -155,7 +156,7 @@ Deno.test("resolveResourcesV2 reports unknown provider", () => {
   }
 });
 
-Deno.test("resolveResourcesV2 reports provider/shape mismatch", () => {
+test("resolveResourcesV2 reports provider/shape mismatch", () => {
   setUp();
   try {
     registerShape(fakeShape("other-shape"));
@@ -182,7 +183,7 @@ Deno.test("resolveResourcesV2 reports provider/shape mismatch", () => {
   }
 });
 
-Deno.test("resolveResourcesV2 reports spec validation issues", () => {
+test("resolveResourcesV2 reports spec validation issues", () => {
   setUp();
   try {
     const result = resolveResourcesV2([{
@@ -198,7 +199,7 @@ Deno.test("resolveResourcesV2 reports spec validation issues", () => {
   }
 });
 
-Deno.test("resolveResourcesV2 reports missing capability", () => {
+test("resolveResourcesV2 reports missing capability", () => {
   setUp();
   try {
     const result = resolveResourcesV2([{
@@ -214,7 +215,7 @@ Deno.test("resolveResourcesV2 reports missing capability", () => {
   }
 });
 
-Deno.test("resolveResourcesV2 detects duplicate resource names", () => {
+test("resolveResourcesV2 detects duplicate resource names", () => {
   setUp();
   try {
     const result = resolveResourcesV2([
@@ -237,13 +238,12 @@ Deno.test("resolveResourcesV2 detects duplicate resource names", () => {
   }
 });
 
-Deno.test(
-  "resolveResourcesV2 rejects bare provider id with a namespaced suggestion",
+test("resolveResourcesV2 rejects bare provider id with a namespaced suggestion",
   () => {
     registerShape(fakeShape("object-store"));
     registerProvider(
       fakeProvider(
-        "@takos/aws-s3",
+        "@takosjp/takosumi-plugins/kind/aws-s3-object-store",
         { id: "object-store", version: "v1" },
         ["c1", "c2"],
       ),
@@ -261,13 +261,17 @@ Deno.test(
       assert.equal(issue.path, "$.resources[0].provider");
       assert.ok(
         issue.message.includes("aws-s3") &&
-          issue.message.includes("@takos/aws-s3"),
+          issue.message.includes(
+            "@takosjp/takosumi-plugins/kind/aws-s3-object-store",
+          ),
         `expected rejection message naming both the bare id and the ` +
           `namespaced replacement, got: ${issue.message}`,
       );
     } finally {
       unregisterShape("object-store", "v1");
-      unregisterProvider("@takos/aws-s3");
+      unregisterProvider(
+        "@takosjp/takosumi-plugins/kind/aws-s3-object-store",
+      );
     }
   },
 );

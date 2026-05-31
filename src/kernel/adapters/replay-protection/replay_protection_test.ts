@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryReplayProtectionStore,
@@ -80,13 +81,13 @@ const baseInput: ReplayProtectionMarkInput = {
   seenAt: Date.parse("2026-04-30T00:00:00.500Z"),
 };
 
-Deno.test("InMemoryReplayProtectionStore admits a fresh request once and rejects replays", async () => {
+test("InMemoryReplayProtectionStore admits a fresh request once and rejects replays", async () => {
   const store: ReplayProtectionStore = new InMemoryReplayProtectionStore();
   assert.equal(await store.markSeen(baseInput), true);
   assert.equal(await store.markSeen(baseInput), false);
 });
 
-Deno.test("InMemoryReplayProtectionStore namespaces are isolated", async () => {
+test("InMemoryReplayProtectionStore namespaces are isolated", async () => {
   const store: ReplayProtectionStore = new InMemoryReplayProtectionStore();
   assert.equal(await store.markSeen(baseInput), true);
   // Same id but different namespace must still be admitted — request and
@@ -97,7 +98,7 @@ Deno.test("InMemoryReplayProtectionStore namespaces are isolated", async () => {
   );
 });
 
-Deno.test("InMemoryReplayProtectionStore evicts expired entries via cleanupExpired", async () => {
+test("InMemoryReplayProtectionStore evicts expired entries via cleanupExpired", async () => {
   const store: ReplayProtectionStore = new InMemoryReplayProtectionStore();
   assert.equal(await store.markSeen(baseInput), true);
   // Cleanup runs at a wall-clock past the expiry — the row must drop and
@@ -112,7 +113,7 @@ Deno.test("InMemoryReplayProtectionStore evicts expired entries via cleanupExpir
   );
 });
 
-Deno.test("SqlReplayProtectionStore: only one of two simulated PaaS replicas wins the race", async () => {
+test("SqlReplayProtectionStore: only one of two simulated PaaS replicas wins the race", async () => {
   const backend = new FakeSharedReplayBackend();
   const replicaA: ReplayProtectionStore = new SqlReplayProtectionStore({
     client: backend.client(),
@@ -134,7 +135,7 @@ Deno.test("SqlReplayProtectionStore: only one of two simulated PaaS replicas win
   assert.equal(await replicaB.markSeen(input), false);
 });
 
-Deno.test("SqlReplayProtectionStore: concurrent markSeen calls only succeed once", async () => {
+test("SqlReplayProtectionStore: concurrent markSeen calls only succeed once", async () => {
   const backend = new FakeSharedReplayBackend();
   const replicaA: ReplayProtectionStore = new SqlReplayProtectionStore({
     client: backend.client(),
@@ -156,7 +157,7 @@ Deno.test("SqlReplayProtectionStore: concurrent markSeen calls only succeed once
   assert.equal(Number(resultA) + Number(resultB), 1);
 });
 
-Deno.test("SqlReplayProtectionStore.cleanupExpired drops only stale rows", async () => {
+test("SqlReplayProtectionStore.cleanupExpired drops only stale rows", async () => {
   const backend = new FakeSharedReplayBackend();
   const store: ReplayProtectionStore = new SqlReplayProtectionStore({
     client: backend.client(),
@@ -193,7 +194,7 @@ Deno.test("SqlReplayProtectionStore.cleanupExpired drops only stale rows", async
   );
 });
 
-Deno.test("SqlReplayProtectionStore honors a custom table name", async () => {
+test("SqlReplayProtectionStore honors a custom table name", async () => {
   const backend = new FakeSharedReplayBackend();
   const observed: string[] = [];
   const wrapped: SqlClient = {

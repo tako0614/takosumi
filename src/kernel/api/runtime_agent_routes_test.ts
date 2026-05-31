@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { Hono, type Hono as HonoApp } from "hono";
 import {
@@ -28,7 +29,7 @@ import {
   TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS,
 } from "./runtime_agent_routes.ts";
 
-Deno.test("runtime agent routes enroll, heartbeat, lease, complete, and drain", async () => {
+test("runtime agent routes enroll, heartbeat, lease, complete, and drain", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     idGenerator: sequence("a", "lease"),
@@ -98,7 +99,7 @@ Deno.test("runtime agent routes enroll, heartbeat, lease, complete, and drain", 
   assert.equal(drained.agent.drainRequestedAt, "2026-04-27T00:01:00.000Z");
 });
 
-Deno.test("runtime agent routes report failed leases with retry", async () => {
+test("runtime agent routes report failed leases with retry", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     idGenerator: sequence("x"),
   });
@@ -130,7 +131,7 @@ Deno.test("runtime agent routes report failed leases with retry", async () => {
   assert.equal(work?.leaseId, undefined);
 });
 
-Deno.test("runtime agent routes return auth and registry errors", async () => {
+test("runtime agent routes return auth and registry errors", async () => {
   const denied = createApp(new InMemoryRuntimeAgentRegistry(), () => ({
     ok: false,
     status: 403,
@@ -175,7 +176,7 @@ Deno.test("runtime agent routes return auth and registry errors", async () => {
   assert.equal((await missingAgent.json()).error.code, "not_found");
 });
 
-Deno.test("runtime agent routes fail closed without signed auth or explicit authenticator", async () => {
+test("runtime agent routes fail closed without signed auth or explicit authenticator", async () => {
   const app: HonoApp = new Hono();
   registerRuntimeAgentRoutes(app, {
     registry: new InMemoryRuntimeAgentRegistry(),
@@ -195,7 +196,7 @@ Deno.test("runtime agent routes fail closed without signed auth or explicit auth
   });
 });
 
-Deno.test("runtime agent routes accept progress reports and extend the lease", async () => {
+test("runtime agent routes accept progress reports and extend the lease", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     idGenerator: sequence("a", "b", "c"),
@@ -232,7 +233,7 @@ Deno.test("runtime agent routes accept progress reports and extend the lease", a
   assert.equal(work?.leaseExpiresAt, "2026-04-27T00:15:00.000Z");
 });
 
-Deno.test("runtime agent routes reject path agent identity mismatches", async () => {
+test("runtime agent routes reject path agent identity mismatches", async () => {
   const registry = new InMemoryRuntimeAgentRegistry();
   await registry.register({ agentId: "agent_a", provider: "aws" });
   const app = createApp(registry, () => ({
@@ -255,7 +256,7 @@ Deno.test("runtime agent routes reject path agent identity mismatches", async ()
   assert.equal((await response.json()).error.code, "permission_denied");
 });
 
-Deno.test("runtime agent routes ignore agent-supplied clocks and cap lease TTLs", async () => {
+test("runtime agent routes ignore agent-supplied clocks and cap lease TTLs", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     idGenerator: sequence("l"),
@@ -294,7 +295,7 @@ Deno.test("runtime agent routes ignore agent-supplied clocks and cap lease TTLs"
   assert.equal(body.lease.expiresAt, "2026-04-27T00:15:00.000Z");
 });
 
-Deno.test("runtime agent routes reject reports with unknown status", async () => {
+test("runtime agent routes reject reports with unknown status", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     idGenerator: sequence("a", "b", "c"),
   });
@@ -320,7 +321,7 @@ Deno.test("runtime agent routes reject reports with unknown status", async () =>
   assert.equal(body.error.code, "invalid_argument");
 });
 
-Deno.test("runtime agent routes return renewAfterMs on enroll", async () => {
+test("runtime agent routes return renewAfterMs on enroll", async () => {
   const app = createApp(new InMemoryRuntimeAgentRegistry());
   const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
@@ -332,7 +333,7 @@ Deno.test("runtime agent routes return renewAfterMs on enroll", async () => {
   assert.ok(body.renewAfterMs > 0);
 });
 
-Deno.test("runtime agent routes return common envelope for uncaught errors", async () => {
+test("runtime agent routes return common envelope for uncaught errors", async () => {
   class ThrowingRegistry extends InMemoryRuntimeAgentRegistry {
     override register(): never {
       throw new Error("registry failed");
@@ -354,7 +355,7 @@ Deno.test("runtime agent routes return common envelope for uncaught errors", asy
   });
 });
 
-Deno.test("runtime agent routes bind gateway response signatures to request id and nonce", async () => {
+test("runtime agent routes bind gateway response signatures to request id and nonce", async () => {
   const keypair = await crypto.subtle.generateKey("Ed25519", true, [
     "sign",
     "verify",
@@ -423,7 +424,7 @@ Deno.test("runtime agent routes bind gateway response signatures to request id a
   );
 });
 
-Deno.test("runtime agent routes require signed workload identity service grants when wired", async () => {
+test("runtime agent routes require signed workload identity service grants when wired", async () => {
   const secret = "agent-secret";
   const stores: WorkerAuthzStores = {
     workloadIdentities: new InMemoryWorkloadIdentityStore(),

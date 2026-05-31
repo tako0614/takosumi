@@ -1,9 +1,10 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   resetRuntimeForTesting,
   type RuntimeAdapter,
   setRuntimeForTesting,
-} from "@takos/takosumi-kernel/runtime";
+} from "../../kernel/shared/runtime/index.ts";
 import {
   exitProcess,
   readEnv,
@@ -72,7 +73,7 @@ function fakeRuntime(overrides: {
   return { runtime, calls };
 }
 
-Deno.test("spawnMigrate routes through the runtime SubprocessAdapter", async () => {
+test("spawnMigrate routes through the runtime SubprocessAdapter", async () => {
   const { runtime, calls } = fakeRuntime({ subprocessCode: 0 });
   setRuntimeForTesting(runtime);
   try {
@@ -86,7 +87,7 @@ Deno.test("spawnMigrate routes through the runtime SubprocessAdapter", async () 
   }
 });
 
-Deno.test("spawnMigrate surfaces a non-zero exit code", async () => {
+test("spawnMigrate surfaces a non-zero exit code", async () => {
   const { runtime } = fakeRuntime({ subprocessCode: 7 });
   setRuntimeForTesting(runtime);
   try {
@@ -97,7 +98,7 @@ Deno.test("spawnMigrate surfaces a non-zero exit code", async () => {
   }
 });
 
-Deno.test("statIsFile returns true when the sync read succeeds", () => {
+test("statIsFile returns true when the sync read succeeds", () => {
   const { runtime, calls } = fakeRuntime({ readSyncThrows: false });
   setRuntimeForTesting(runtime);
   try {
@@ -108,7 +109,7 @@ Deno.test("statIsFile returns true when the sync read succeeds", () => {
   }
 });
 
-Deno.test("statIsFile returns false when the path is absent", () => {
+test("statIsFile returns false when the path is absent", () => {
   const { runtime } = fakeRuntime({ readSyncThrows: true });
   setRuntimeForTesting(runtime);
   try {
@@ -118,7 +119,7 @@ Deno.test("statIsFile returns false when the path is absent", () => {
   }
 });
 
-Deno.test("readEnv reads via the runtime EnvReader", () => {
+test("readEnv reads via the runtime EnvReader", () => {
   const { runtime } = fakeRuntime({ env: { TAKOSUMI_DATABASE_URL: "pg://x" } });
   setRuntimeForTesting(runtime);
   try {
@@ -129,7 +130,7 @@ Deno.test("readEnv reads via the runtime EnvReader", () => {
   }
 });
 
-Deno.test("exitProcess delegates to the runtime exit", () => {
+test("exitProcess delegates to the runtime exit", () => {
   const { runtime, calls } = fakeRuntime({});
   setRuntimeForTesting(runtime);
   try {

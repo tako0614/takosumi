@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   type ApplyResult,
@@ -89,7 +90,7 @@ function tearDown(): void {
 
 const ctx = {} as PlatformContext;
 
-Deno.test("destroyV2 invokes provider.destroy in reverse topological order", async () => {
+test("destroyV2 invokes provider.destroy in reverse topological order", async () => {
   setUp();
   try {
     const resources: ManifestResource[] = [
@@ -126,7 +127,7 @@ Deno.test("destroyV2 invokes provider.destroy in reverse topological order", asy
   }
 });
 
-Deno.test("destroyV2 accumulates per-resource errors and returns partial", async () => {
+test("destroyV2 accumulates per-resource errors and returns partial", async () => {
   setUp();
   try {
     const resources: ManifestResource[] = [
@@ -160,7 +161,7 @@ Deno.test("destroyV2 accumulates per-resource errors and returns partial", async
   }
 });
 
-Deno.test("destroyV2 returns failed-validation on unknown shape", async () => {
+test("destroyV2 returns failed-validation on unknown shape", async () => {
   setUp();
   try {
     const resources: ManifestResource[] = [
@@ -176,7 +177,7 @@ Deno.test("destroyV2 returns failed-validation on unknown shape", async () => {
   }
 });
 
-Deno.test("destroyV2 returns failed-validation on cycle", async () => {
+test("destroyV2 returns failed-validation on cycle", async () => {
   setUp();
   try {
     const resources: ManifestResource[] = [
@@ -201,7 +202,7 @@ Deno.test("destroyV2 returns failed-validation on cycle", async () => {
   }
 });
 
-Deno.test("destroyV2 threads WAL idempotency context to provider.destroy", async () => {
+test("destroyV2 threads WAL idempotency context to provider.destroy", async () => {
   setUp();
   try {
     const resources: ManifestResource[] = [
@@ -247,7 +248,7 @@ Deno.test("destroyV2 threads WAL idempotency context to provider.destroy", async
   }
 });
 
-Deno.test("destroyV2 records provider destroy trace spans", async () => {
+test("destroyV2 records provider destroy trace spans", async () => {
   setUp();
   try {
     const observability = new InMemoryObservabilitySink();
@@ -300,7 +301,7 @@ Deno.test("destroyV2 records provider destroy trace spans", async () => {
   }
 });
 
-Deno.test("destroyV2 honors handleFor override for handle resolution", async () => {
+test("destroyV2 honors handleFor override for handle resolution", async () => {
   setUp();
   try {
     const captured: string[] = [];

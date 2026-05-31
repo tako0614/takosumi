@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Vertical-slice integration smoke for the Deployment-centric public surface:
 //
 //   1. core space + group are created via CoreDomainServices.
@@ -8,7 +9,7 @@
 //
 // Runtime-agent terminal result projection onto
 // `Deployment.desired.activation_envelope` is covered by
-// `runtime-vertical-slice/service_test.ts`; this smoke stays focused on the
+// `runtime-agent-projection/service_test.ts`; this smoke stays focused on the
 // deployment lifecycle and GroupHead commit path.
 import assert from "node:assert/strict";
 import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
@@ -22,7 +23,7 @@ import {
 } from "../../domains/deploy/deployment_service.ts";
 import type { PublicDeployManifest } from "../../domains/deploy/types.ts";
 
-Deno.test("integration smoke: create space/group, resolve and apply Deployment, advance GroupHead", async () => {
+test("integration smoke: create space/group, resolve and apply Deployment, advance GroupHead", async () => {
   const actor = actorContext("acct_smoke_owner", "req_smoke");
   const coreDeps = createInMemoryCoreDomainDependencies({
     clock: fixedCoreClock("2026-04-27T00:00:00.000Z"),

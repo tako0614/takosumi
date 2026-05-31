@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { MemoryQueueAdapter } from "./mod.ts";
 
-Deno.test("memory queue leases by priority then enqueue order and ack hides work", async () => {
+test("memory queue leases by priority then enqueue order and ack hides work", async () => {
   const queue = new MemoryQueueAdapter({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     idGenerator: sequence("a", "b", "lease-1"),
@@ -30,7 +31,7 @@ Deno.test("memory queue leases by priority then enqueue order and ack hides work
   assert.equal(next?.message.payload.name, "low");
 });
 
-Deno.test("memory queue nack retries with delay and then leases again", async () => {
+test("memory queue nack retries with delay and then leases again", async () => {
   const queue = new MemoryQueueAdapter({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     idGenerator: sequence("m1", "l1", "l2"),
@@ -66,7 +67,7 @@ Deno.test("memory queue nack retries with delay and then leases again", async ()
   assert.equal(second?.message.attempts, 2);
 });
 
-Deno.test("memory queue sends message to dead letters after max attempts", async () => {
+test("memory queue sends message to dead letters after max attempts", async () => {
   const queue = new MemoryQueueAdapter({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     idGenerator: sequence("m1", "l1"),
@@ -91,7 +92,7 @@ Deno.test("memory queue sends message to dead letters after max attempts", async
   assert.deepEqual(await queue.listDeadLetters("jobs"), [dead]);
 });
 
-Deno.test("memory queue requeues expired leases after visibility timeout", async () => {
+test("memory queue requeues expired leases after visibility timeout", async () => {
   const queue = new MemoryQueueAdapter({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     idGenerator: sequence("m1", "l1", "l2"),

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // H6 / Phase 18.2 — provider-agnostic error category tests.
 //
 // Each cloud provider (AWS / GCP / Kubernetes / Cloudflare) exposes a native
@@ -83,7 +84,7 @@ function withStubsRegistered(): void {
   registerProviderErrorClassifier("cloudflare", classifyStubCloudflare);
 }
 
-Deno.test("H6: AWS native errors normalise onto ProviderErrorCategory", () => {
+test("H6: AWS native errors normalise onto ProviderErrorCategory", () => {
   withStubsRegistered();
   assert.equal(
     normalizeProviderError({ code: "ThrottlingException" }, "aws"),
@@ -107,7 +108,7 @@ Deno.test("H6: AWS native errors normalise onto ProviderErrorCategory", () => {
   );
 });
 
-Deno.test("H6: GCP native errors normalise onto ProviderErrorCategory", () => {
+test("H6: GCP native errors normalise onto ProviderErrorCategory", () => {
   withStubsRegistered();
   assert.equal(
     normalizeProviderError({ status: "RESOURCE_EXHAUSTED" }, "gcp"),
@@ -127,7 +128,7 @@ Deno.test("H6: GCP native errors normalise onto ProviderErrorCategory", () => {
   );
 });
 
-Deno.test("H6: Kubernetes native errors normalise onto ProviderErrorCategory", () => {
+test("H6: Kubernetes native errors normalise onto ProviderErrorCategory", () => {
   withStubsRegistered();
   assert.equal(
     normalizeProviderError({ reason: "TooManyRequests" }, "k8s"),
@@ -147,7 +148,7 @@ Deno.test("H6: Kubernetes native errors normalise onto ProviderErrorCategory", (
   );
 });
 
-Deno.test("H6: Cloudflare native errors normalise onto ProviderErrorCategory", () => {
+test("H6: Cloudflare native errors normalise onto ProviderErrorCategory", () => {
   withStubsRegistered();
   assert.equal(
     normalizeProviderError({ httpStatus: 429 }, "cloudflare"),
@@ -167,7 +168,7 @@ Deno.test("H6: Cloudflare native errors normalise onto ProviderErrorCategory", (
   );
 });
 
-Deno.test("H6: unknown provider name returns 'unknown' (fail-closed)", () => {
+test("H6: unknown provider name returns 'unknown' (fail-closed)", () => {
   withStubsRegistered();
   // No classifier registered for 'azure' — must collapse to 'unknown' so the
   // kernel-side retry loop fails closed.
@@ -177,7 +178,7 @@ Deno.test("H6: unknown provider name returns 'unknown' (fail-closed)", () => {
   );
 });
 
-Deno.test("H6: classifier that throws is contained and surfaces 'unknown'", () => {
+test("H6: classifier that throws is contained and surfaces 'unknown'", () => {
   registerProviderErrorClassifier("buggy", () => {
     throw new Error("classifier blew up");
   });
@@ -186,7 +187,7 @@ Deno.test("H6: classifier that throws is contained and surfaces 'unknown'", () =
   assert.equal(normalizeProviderError({}, "buggy"), "unknown");
 });
 
-Deno.test("H6: retryable / fail-closed predicates agree with the enum semantics", () => {
+test("H6: retryable / fail-closed predicates agree with the enum semantics", () => {
   // transient + rate-limited are retryable; permission-denied / invalid /
   // permanent / unknown fail-closed; conflict / not-found are neither (caller
   // decides — see the contract docstring).
@@ -206,7 +207,7 @@ Deno.test("H6: retryable / fail-closed predicates agree with the enum semantics"
   assert.equal(isFailClosedErrorCategory("rate-limited"), false);
 });
 
-Deno.test("H6: registry tracks the four canonical providers after registration", () => {
+test("H6: registry tracks the four canonical providers after registration", () => {
   withStubsRegistered();
   const providers = listRegisteredProviders();
   for (const expected of ["aws", "cloudflare", "gcp", "k8s"]) {

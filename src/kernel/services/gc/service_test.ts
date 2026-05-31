@@ -1,8 +1,9 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { InMemoryProtectedReferenceStore } from "../../domains/supply-chain/mod.ts";
 import { GcRetentionService } from "./mod.ts";
 
-Deno.test("GC retains object with active ProtectedReference", async () => {
+test("GC retains object with active ProtectedReference", async () => {
   const protectedReferences = new InMemoryProtectedReferenceStore();
   await protectedReferences.put({
     id: "protect_artifact",
@@ -35,7 +36,7 @@ Deno.test("GC retains object with active ProtectedReference", async () => {
   assert.deepEqual(decision.reasons[0]?.referenceIds, ["protect_artifact"]);
 });
 
-Deno.test("GC keeps old WorkloadRevision during rollback window", async () => {
+test("GC keeps old WorkloadRevision during rollback window", async () => {
   const service = new GcRetentionService({
     protectedReferences: new InMemoryProtectedReferenceStore(),
   });
@@ -59,7 +60,7 @@ Deno.test("GC keeps old WorkloadRevision during rollback window", async () => {
   assert.equal(expired.deleteOperation?.dryRun, true);
 });
 
-Deno.test("GC plans prepared artifact/resource/kind package decisions without deleting", async () => {
+test("GC plans prepared artifact/resource/plugin binding decisions without deleting", async () => {
   const service = new GcRetentionService({
     protectedReferences: new InMemoryProtectedReferenceStore(),
   });
@@ -97,7 +98,7 @@ Deno.test("GC plans prepared artifact/resource/kind package decisions without de
       activeBindingCount: 0,
       providerResourceActive: false,
     }],
-    kindPackages: [{
+    backendPlugins: [{
       digest: "sha256:provider-active",
       activeMaterializationIds: ["materialization_current"],
     }, {
@@ -140,12 +141,12 @@ Deno.test("GC plans prepared artifact/resource/kind package decisions without de
     [
       ["PreparedArtifact", "artifact_expired"],
       ["ResourceInstance", "resource_deleted"],
-      ["KindPackage", "sha256:provider-unused"],
+      ["BackendPlugin", "sha256:provider-unused"],
     ],
   );
 });
 
-Deno.test("GC retains mirrored external image through rollback window", async () => {
+test("GC retains mirrored external image through rollback window", async () => {
   const service = new GcRetentionService({
     protectedReferences: new InMemoryProtectedReferenceStore(),
   });
@@ -167,7 +168,7 @@ Deno.test("GC retains mirrored external image through rollback window", async ()
   assert.equal(expired.deleteOperation?.dryRun, true);
 });
 
-Deno.test("GC retains deploy retained artifacts required for rollback", async () => {
+test("GC retains deploy retained artifacts required for rollback", async () => {
   const service = new GcRetentionService({
     protectedReferences: new InMemoryProtectedReferenceStore(),
   });

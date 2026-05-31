@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Phase 18 fix tests — covering C1 (multi-cloud partial-success rollback),
 // C2 (descriptor closure determinism on profile switch), H1 (preview-mode
 // resolve does not persist), H2 (rollback validators always run, defaulted),
@@ -64,7 +65,7 @@ function fixedClock(iso: string): () => Date {
 
 // -- H1: preview mode --------------------------------------------------------
 
-Deno.test("H1: resolveDeploymentWithMode mode='preview' returns persisted=false and skips store write", async () => {
+test("H1: resolveDeploymentWithMode mode='preview' returns persisted=false and skips store write", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -88,7 +89,7 @@ Deno.test("H1: resolveDeploymentWithMode mode='preview' returns persisted=false 
   assert.equal(Object.isFrozen(result.deployment), true);
 });
 
-Deno.test("H1: default mode (resolve) persists Deployment to store", async () => {
+test("H1: default mode (resolve) persists Deployment to store", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -109,7 +110,7 @@ Deno.test("H1: default mode (resolve) persists Deployment to store", async () =>
 
 // -- H4: approval gate enforcement ------------------------------------------
 
-Deno.test("H4: apply blocks with ApprovalRequired condition when require-approval policy decision is unfilled", async () => {
+test("H4: apply blocks with ApprovalRequired condition when require-approval policy decision is unfilled", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -157,7 +158,7 @@ Deno.test("H4: apply blocks with ApprovalRequired condition when require-approva
   assert.equal(await store.getGroupHead("demo-app"), undefined);
 });
 
-Deno.test("H4: apply succeeds when require-approval policy decision is satisfied by approval payload", async () => {
+test("H4: apply succeeds when require-approval policy decision is satisfied by approval payload", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -203,7 +204,7 @@ Deno.test("H4: apply succeeds when require-approval policy decision is satisfied
 
 // -- C1: multi-cloud partial-success rollback -------------------------------
 
-Deno.test("C1: provider failure after partial success reverts committed operations and emits RolledBack condition", async () => {
+test("C1: provider failure after partial success reverts committed operations and emits RolledBack condition", async () => {
   const store = new InMemoryDeploymentStore();
   const reverted: PlannedOperation[] = [];
   // Adapter succeeds for everything except runtime.deploy. The orchestrator
@@ -276,7 +277,7 @@ Deno.test("C1: provider failure after partial success reverts committed operatio
   assert.equal(await store.getGroupHead("demo-app"), undefined);
 });
 
-Deno.test("C1: adapter without rollback method emits RolledBackPartial terminal condition", async () => {
+test("C1: adapter without rollback method emits RolledBackPartial terminal condition", async () => {
   const store = new InMemoryDeploymentStore();
   // Adapter omits `rollback` entirely so committed ops are flagged
   // unrevertable.
@@ -327,7 +328,7 @@ Deno.test("C1: adapter without rollback method emits RolledBackPartial terminal 
   assert.equal(await store.getGroupHead("demo-app"), undefined);
 });
 
-Deno.test("C1: provider materialize throw finalizes failed Deployment and rolls back committed operations", async () => {
+test("C1: provider materialize throw finalizes failed Deployment and rolls back committed operations", async () => {
   const store = new InMemoryDeploymentStore();
   const reverted: PlannedOperation[] = [];
   const adapter: DeploymentProviderAdapter = {
@@ -378,7 +379,7 @@ Deno.test("C1: provider materialize throw finalizes failed Deployment and rolls 
   assert.equal(await store.getGroupHead("demo-app"), undefined);
 });
 
-Deno.test("C1: stale GroupHead CAS rolls back successful provider operations", async () => {
+test("C1: stale GroupHead CAS rolls back successful provider operations", async () => {
   const store = new InMemoryDeploymentStore();
   const reverted: PlannedOperation[] = [];
   const adapter: DeploymentProviderAdapter = {
@@ -441,7 +442,7 @@ Deno.test("C1: stale GroupHead CAS rolls back successful provider operations", a
 
 // -- C2: descriptor closure determinism on profile switch -------------------
 
-Deno.test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a different descriptor_closure digest", async () => {
+test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a different descriptor_closure digest", async () => {
   // Compile the same authoring manifest twice and then synthesise a
   // post-profile-merge AppSpec by stamping `effectiveRuntimeCapabilities`
   // onto the second spec. The descriptor seeds (components / resources /
@@ -481,7 +482,7 @@ Deno.test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a differ
   assert.notEqual(baseClosure.closureDigest, profiledClosure.closureDigest);
 });
 
-Deno.test("C2: identical effective capability maps yield identical closure digests", async () => {
+test("C2: identical effective capability maps yield identical closure digests", async () => {
   const manifest: PublicDeployManifest = {
     name: "demo-app",
     version: "1.0.0",
@@ -513,7 +514,7 @@ Deno.test("C2: identical effective capability maps yield identical closure diges
   assert.equal(closureA.closureDigest, closureB.closureDigest);
 });
 
-Deno.test("C2: capability ordering does not change the closure digest (canonical sort)", async () => {
+test("C2: capability ordering does not change the closure digest (canonical sort)", async () => {
   const manifest: PublicDeployManifest = {
     name: "demo-app",
     version: "1.0.0",
@@ -546,7 +547,7 @@ Deno.test("C2: capability ordering does not change the closure digest (canonical
 
 // -- H2: rollback validators required + default bundle ----------------------
 
-Deno.test("H2: DeploymentStore exposes default rollback validators (always-ok) so rollback never silently skips", async () => {
+test("H2: DeploymentStore exposes default rollback validators (always-ok) so rollback never silently skips", async () => {
   // The exported DEFAULT_ROLLBACK_VALIDATORS bundle MUST contain three
   // distinct validator slots — descriptorClosure, artifactAvailability,
   // artifactDigest — each emitting the stamped "RollbackPreflightDefault"
@@ -591,7 +592,7 @@ Deno.test("H2: DeploymentStore exposes default rollback validators (always-ok) s
   assert.equal(typeof fromStore.artifactDigestValidator, "function");
 });
 
-Deno.test("H2: rollback path uses store-provided validators when caller omits them", async () => {
+test("H2: rollback path uses store-provided validators when caller omits them", async () => {
   let descriptorClosureCalls = 0;
   let artifactAvailabilityCalls = 0;
   let artifactDigestCalls = 0;

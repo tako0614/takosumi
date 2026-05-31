@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   BundledRegistrySeedAdapter,
@@ -5,14 +6,14 @@ import {
   bundledRegistrySeedResolutions,
 } from "./mod.ts";
 
-Deno.test("bundled registry seed adapter resolves built-in packages by kind and ref", async () => {
+test("bundled registry seed adapter resolves built-in packages by kind and ref", async () => {
   const registry = new BundledRegistrySeedAdapter();
 
   const expected = [
     ["resource-contract-package", "resource.sql.postgres@v1"],
     ["resource-contract-package", "resource.object-store.s3@v1"],
-    ["kind-package", "provider.noop@v1"],
-    ["kind-package", "provider.local-docker@v1"],
+    ["backend-plugin", "provider.noop@v1"],
+    ["backend-plugin", "provider.local-docker@v1"],
     ["data-contract-package", "data.json@v1"],
     ["output-contract-package", "output.route@v1"],
   ] as const;
@@ -43,11 +44,11 @@ Deno.test("bundled registry seed adapter resolves built-in packages by kind and 
   }
 });
 
-Deno.test("bundled registry seed adapter only resolves digest-pinned built-ins", async () => {
+test("bundled registry seed adapter only resolves digest-pinned built-ins", async () => {
   const registry = new BundledRegistrySeedAdapter();
 
   assert.equal(
-    await registry.resolve("kind-package", "missing@v1"),
+    await registry.resolve("backend-plugin", "missing@v1"),
     undefined,
   );
   assert.equal(
@@ -56,7 +57,7 @@ Deno.test("bundled registry seed adapter only resolves digest-pinned built-ins",
   );
 
   const resolution = await registry.resolve(
-    "kind-package",
+    "backend-plugin",
     "provider.noop@v1",
   );
   assert.ok(resolution);
@@ -70,7 +71,7 @@ Deno.test("bundled registry seed adapter only resolves digest-pinned built-ins",
   );
 });
 
-Deno.test("bundled registry seed exports descriptors and resolutions with matching digests", () => {
+test("bundled registry seed exports descriptors and resolutions with matching digests", () => {
   assert.equal(bundledRegistrySeedDescriptors.length, 6);
   assert.equal(bundledRegistrySeedResolutions.length, 6);
 
@@ -86,13 +87,13 @@ Deno.test("bundled registry seed exports descriptors and resolutions with matchi
   }
 });
 
-Deno.test("bundled registry seed adapter reports provider support", async () => {
+test("bundled registry seed adapter reports provider support", async () => {
   const registry = new BundledRegistrySeedAdapter();
 
   const reports = await registry.listProviderSupport();
   assert.equal(reports.length, 2);
   assert.deepEqual(
-    reports.map((report) => report.kindPackageRef).sort(),
+    reports.map((report) => report.backendPluginRef).sort(),
     ["provider.local-docker@v1", "provider.noop@v1"],
   );
   for (const report of reports) {

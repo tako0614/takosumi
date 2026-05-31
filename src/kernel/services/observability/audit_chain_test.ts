@@ -1,8 +1,9 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { AuditEvent } from "../../domains/audit/types.ts";
 import { InMemoryObservabilitySink, verifyAuditHashChain } from "./mod.ts";
 
-Deno.test("audit hash chain verifies appended events", async () => {
+test("audit hash chain verifies appended events", async () => {
   const sink = new InMemoryObservabilitySink();
 
   await sink.appendAudit(event("audit_1", "2026-04-27T00:00:00.000Z"));
@@ -11,7 +12,7 @@ Deno.test("audit hash chain verifies appended events", async () => {
   assert.equal(await sink.verifyAuditChain(), true);
 });
 
-Deno.test("audit hash chain detects tampered event payload", async () => {
+test("audit hash chain detects tampered event payload", async () => {
   const sink = new InMemoryObservabilitySink();
   await sink.appendAudit(event("audit_1", "2026-04-27T00:00:00.000Z"));
   await sink.appendAudit(event("audit_2", "2026-04-27T00:01:00.000Z"));
@@ -31,7 +32,7 @@ Deno.test("audit hash chain detects tampered event payload", async () => {
   assert.equal(result.invalidAt, 1);
 });
 
-Deno.test("audit hash chain detects broken previous hash linkage", async () => {
+test("audit hash chain detects broken previous hash linkage", async () => {
   const sink = new InMemoryObservabilitySink();
   await sink.appendAudit(event("audit_1", "2026-04-27T00:00:00.000Z"));
   await sink.appendAudit(event("audit_2", "2026-04-27T00:01:00.000Z"));

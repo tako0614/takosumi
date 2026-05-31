@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   DefaultRouteProjector,
@@ -5,7 +6,7 @@ import {
   routeOwnershipKey,
 } from "./mod.ts";
 
-Deno.test("routing projects runtime route bindings to addressable targets", async () => {
+test("routing projects runtime route bindings to addressable targets", async () => {
   const projector = new DefaultRouteProjector({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
   });

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   EnvOperatorConfig,
@@ -9,7 +10,7 @@ import { StandaloneBootstrapService } from "./mod.ts";
 
 const fixedClock = () => new Date("2026-04-27T00:00:00.000Z");
 
-Deno.test("standalone bootstrap selects explicit local adapters and redacts config", async () => {
+test("standalone bootstrap selects explicit local adapters and redacts config", async () => {
   const config = new LocalOperatorConfig({
     clock: fixedClock,
     values: {
@@ -84,7 +85,7 @@ Deno.test("standalone bootstrap selects explicit local adapters and redacts conf
   );
 });
 
-Deno.test("standalone bootstrap reports unsafe default adapters in production", async () => {
+test("standalone bootstrap reports unsafe default adapters in production", async () => {
   const config = new EnvOperatorConfig({
     clock: fixedClock,
     env: {
@@ -119,7 +120,7 @@ Deno.test("standalone bootstrap reports unsafe default adapters in production", 
   );
 });
 
-Deno.test("standalone bootstrap reports the primary internal API secret name", async () => {
+test("standalone bootstrap reports the primary internal API secret name", async () => {
   const config = new LocalOperatorConfig({
     clock: fixedClock,
     values: {
@@ -141,7 +142,7 @@ Deno.test("standalone bootstrap reports the primary internal API secret name", a
   );
 });
 
-Deno.test("standalone bootstrap rejects production local Docker provider", async () => {
+test("standalone bootstrap rejects production local Docker provider", async () => {
   const report = await new StandaloneBootstrapService({
     operatorConfig: new EnvOperatorConfig({
       clock: fixedClock,
@@ -163,7 +164,7 @@ Deno.test("standalone bootstrap rejects production local Docker provider", async
   );
 });
 
-Deno.test("standalone bootstrap does not downgrade production unsafe adapters with unsafe flag", async () => {
+test("standalone bootstrap does not downgrade production unsafe adapters with unsafe flag", async () => {
   const report = await new StandaloneBootstrapService({
     operatorConfig: new EnvOperatorConfig({
       clock: fixedClock,
@@ -182,7 +183,7 @@ Deno.test("standalone bootstrap does not downgrade production unsafe adapters wi
   );
 });
 
-Deno.test("standalone bootstrap rejects production memory secret store without encryption key", async () => {
+test("standalone bootstrap rejects production memory secret store without encryption key", async () => {
   const config = new EnvOperatorConfig({
     clock: fixedClock,
     env: {
@@ -207,7 +208,7 @@ Deno.test("standalone bootstrap rejects production memory secret store without e
   );
 });
 
-Deno.test("standalone bootstrap accepts memory secret store when production key supplied", async () => {
+test("standalone bootstrap accepts memory secret store when production key supplied", async () => {
   const config = new LocalOperatorConfig({
     clock: fixedClock,
     values: {
@@ -235,7 +236,7 @@ Deno.test("standalone bootstrap accepts memory secret store when production key 
   );
 });
 
-Deno.test("standalone bootstrap rejects removed adapter selectors", async () => {
+test("standalone bootstrap rejects removed adapter selectors", async () => {
   const report = await new StandaloneBootstrapService({
     operatorConfig: new EnvOperatorConfig({
       clock: fixedClock,

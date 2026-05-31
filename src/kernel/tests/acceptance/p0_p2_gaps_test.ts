@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Phase 4 (core simplification) acceptance tests for P0/P1/P2.
 //
 // The deploy domain exposes the canonical Deployment record. These acceptance
@@ -29,7 +30,7 @@ import {
 // wired through the InMemoryDeploymentStore. A drifted provider records
 // onto the observation stream while the committed Deployment.status stays
 // `applied` (provider observation is observed-side, never canonical).
-Deno.test("acceptance P0: provider failure does not mutate committed deployment", async () => {
+test("acceptance P0: provider failure does not mutate committed deployment", async () => {
   const { DeploymentService, InMemoryDeploymentStore } = await import(
     "../../domains/deploy/deployment_service.ts"
   );
@@ -85,12 +86,12 @@ Deno.test("acceptance P0: provider failure does not mutate committed deployment"
   assert.equal(reread?.applied_at, "2026-04-27T00:01:00.000Z");
 });
 
-Deno.test("acceptance P1: revoked registry trust degrades group and blocks security", async () => {
+test("acceptance P1: revoked registry trust degrades group and blocks security", async () => {
   const descriptors = new InMemoryPackageDescriptorStore();
   const resolutions = new InMemoryPackageResolutionStore();
   const trustRecords = new InMemoryTrustRecordStore();
   const descriptor: PackageDescriptor = {
-    kind: "kind-package",
+    kind: "backend-plugin",
     ref: "providers/noop",
     digest: "sha256:revoked",
     publisher: "takos",
@@ -125,7 +126,7 @@ Deno.test("acceptance P1: revoked registry trust degrades group and blocks secur
 
   const securityCondition = trustCondition(
     await trustRecords.findForPackage(
-      "kind-package",
+      "backend-plugin",
       "providers/noop",
       "sha256:revoked",
     ),
@@ -184,7 +185,7 @@ Deno.test("acceptance P1: revoked registry trust degrades group and blocks secur
 // asserted on all of those at once. Deleted because the kernel no longer
 // emits any route-bearing projection.
 
-Deno.test("acceptance P2: app factory rejects unsigned internal routes", async () => {
+test("acceptance P2: app factory rejects unsigned internal routes", async () => {
   const app = await createApiApp({
     getInternalServiceSecret: () => "acceptance-secret",
   });

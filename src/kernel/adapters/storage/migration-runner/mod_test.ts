@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import {
   StorageMigrationCatalogError,
   StorageMigrationChecksumMismatchError,
@@ -24,7 +25,7 @@ const migrations: readonly StorageMigrationStatement[] = [
   },
 ];
 
-Deno.test("StorageMigrationRunner applies pending migrations in version order", async () => {
+test("StorageMigrationRunner applies pending migrations in version order", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, { migrations });
 
@@ -44,7 +45,7 @@ Deno.test("StorageMigrationRunner applies pending migrations in version order", 
   assert(sql.calls.some((call) => call.sql === migrations[1].sql));
 });
 
-Deno.test("StorageMigrationRunner dry-run reports pending without writes", async () => {
+test("StorageMigrationRunner dry-run reports pending without writes", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, { migrations });
 
@@ -60,7 +61,7 @@ Deno.test("StorageMigrationRunner dry-run reports pending without writes", async
   assert(!sql.calls.some((call) => call.sql.startsWith("insert into")));
 });
 
-Deno.test("StorageMigrationRunner validates applied migration checksums", async () => {
+test("StorageMigrationRunner validates applied migration checksums", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, { migrations });
   await runner.applyPending();
@@ -73,7 +74,7 @@ Deno.test("StorageMigrationRunner validates applied migration checksums", async 
   );
 });
 
-Deno.test("StorageMigrationRunner fails closed on unknown applied migrations", async () => {
+test("StorageMigrationRunner fails closed on unknown applied migrations", async () => {
   const sql = new FakeSqlClient();
   sql.recordApplied({
     id: "unknown.999",
@@ -89,7 +90,7 @@ Deno.test("StorageMigrationRunner fails closed on unknown applied migrations", a
   );
 });
 
-Deno.test("StorageMigrationRunner fails closed on applied version drift", async () => {
+test("StorageMigrationRunner fails closed on applied version drift", async () => {
   const sql = new FakeSqlClient();
   sql.recordApplied({
     id: "system.001",
@@ -105,7 +106,7 @@ Deno.test("StorageMigrationRunner fails closed on applied version drift", async 
   );
 });
 
-Deno.test("StorageMigrationRunner checksums include down/forward-only state", async () => {
+test("StorageMigrationRunner checksums include down/forward-only state", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, { migrations });
   await runner.applyPending();
@@ -125,7 +126,7 @@ Deno.test("StorageMigrationRunner checksums include down/forward-only state", as
   );
 });
 
-Deno.test("StorageMigrationRunner uses one runner-wide lock while applying", async () => {
+test("StorageMigrationRunner uses one runner-wide lock while applying", async () => {
   const sql = new FakeSqlClient();
   const lock = new RecordingLock();
   const runner = new StorageMigrationRunner(sql, { migrations, lock });

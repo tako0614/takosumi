@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { loadRuntimeConfigFromEnv, RuntimeConfigError } from "./mod.ts";
 
-Deno.test("runtime config loader defaults to local + takosumi-api when env empty", async () => {
+test("runtime config loader defaults to local + takosumi-api when env empty", async () => {
   const config = await loadRuntimeConfigFromEnv({ env: {} });
 
   assert.equal(config.environment, "local");
@@ -10,7 +11,7 @@ Deno.test("runtime config loader defaults to local + takosumi-api when env empty
   assert.deepEqual(config.diagnostics, []);
 });
 
-Deno.test("runtime config loader reads explicit environment + process role", async () => {
+test("runtime config loader reads explicit environment + process role", async () => {
   const config = await loadRuntimeConfigFromEnv({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
@@ -23,7 +24,7 @@ Deno.test("runtime config loader reads explicit environment + process role", asy
   assert.deepEqual(config.diagnostics, []);
 });
 
-Deno.test("runtime config loader prefers canonical process role key", async () => {
+test("runtime config loader prefers canonical process role key", async () => {
   const config = await loadRuntimeConfigFromEnv({
     env: {
       TAKOSUMI_PROCESS_ROLE: "takosumi-runtime-agent",
@@ -33,7 +34,7 @@ Deno.test("runtime config loader prefers canonical process role key", async () =
   assert.equal(config.processRole, "takosumi-runtime-agent");
 });
 
-Deno.test("runtime config loader rejects invalid process role", async () => {
+test("runtime config loader rejects invalid process role", async () => {
   await assert.rejects(
     () =>
       loadRuntimeConfigFromEnv({
@@ -52,7 +53,7 @@ Deno.test("runtime config loader rejects invalid process role", async () => {
   );
 });
 
-Deno.test("runtime config loader rejects stale backend selectors", async () => {
+test("runtime config loader rejects stale backend selectors", async () => {
   await assert.rejects(
     () =>
       loadRuntimeConfigFromEnv({
@@ -79,7 +80,7 @@ Deno.test("runtime config loader rejects stale backend selectors", async () => {
   );
 });
 
-Deno.test("runtime config loader rejects retired port-based plugin selectors", async () => {
+test("runtime config loader rejects retired port-based plugin selectors", async () => {
   await assert.rejects(
     () =>
       loadRuntimeConfigFromEnv({
@@ -99,7 +100,7 @@ Deno.test("runtime config loader rejects retired port-based plugin selectors", a
   );
 });
 
-Deno.test("runtime config loader accepts dev mode flag", async () => {
+test("runtime config loader accepts dev mode flag", async () => {
   const config = await loadRuntimeConfigFromEnv({
     env: {
       TAKOSUMI_DEV_MODE: "1",
@@ -109,7 +110,7 @@ Deno.test("runtime config loader accepts dev mode flag", async () => {
   assert.equal(config.allowUnsafeProductionDefaults, true);
 });
 
-Deno.test("runtime config loader rejects invalid environment", async () => {
+test("runtime config loader rejects invalid environment", async () => {
   await assert.rejects(
     () =>
       loadRuntimeConfigFromEnv({

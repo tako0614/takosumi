@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { HttpArtifactFetcher } from "./artifact_fetcher.ts";
 
@@ -15,7 +16,7 @@ function mockFetch(
   }) as typeof fetch;
 }
 
-Deno.test("HttpArtifactFetcher.fetch returns bytes and kind from header", async () => {
+test("HttpArtifactFetcher.fetch returns bytes and kind from header", async () => {
   const payload = new TextEncoder().encode("hello world");
   let seenAuth: string | null = null;
   let seenUrl = "";
@@ -46,7 +47,7 @@ Deno.test("HttpArtifactFetcher.fetch returns bytes and kind from header", async 
   assert.equal(new TextDecoder().decode(got.bytes), "hello world");
 });
 
-Deno.test("HttpArtifactFetcher.fetch throws on non-200", async () => {
+test("HttpArtifactFetcher.fetch throws on non-200", async () => {
   const fetcher = new HttpArtifactFetcher({
     baseUrl: "https://kernel.example.com/v1/artifacts",
     token: "tk",
@@ -60,7 +61,7 @@ Deno.test("HttpArtifactFetcher.fetch throws on non-200", async () => {
   );
 });
 
-Deno.test("HttpArtifactFetcher.fetch rejects when content-length exceeds cap", async () => {
+test("HttpArtifactFetcher.fetch rejects when content-length exceeds cap", async () => {
   let cancelled = false;
   const fetcher = new HttpArtifactFetcher({
     baseUrl: "https://kernel.example.com/v1/artifacts",
@@ -89,7 +90,7 @@ Deno.test("HttpArtifactFetcher.fetch rejects when content-length exceeds cap", a
   assert.equal(cancelled, true);
 });
 
-Deno.test("HttpArtifactFetcher.fetch streams and aborts past cap when length absent", async () => {
+test("HttpArtifactFetcher.fetch streams and aborts past cap when length absent", async () => {
   const fetcher = new HttpArtifactFetcher({
     baseUrl: "https://kernel.example.com/v1/artifacts",
     token: "tk",
@@ -113,7 +114,7 @@ Deno.test("HttpArtifactFetcher.fetch streams and aborts past cap when length abs
   );
 });
 
-Deno.test("HttpArtifactFetcher.fetch accepts a body at the cap boundary", async () => {
+test("HttpArtifactFetcher.fetch accepts a body at the cap boundary", async () => {
   const payload = new Uint8Array(8).fill(1);
   const fetcher = new HttpArtifactFetcher({
     baseUrl: "https://kernel.example.com/v1/artifacts",
@@ -130,7 +131,7 @@ Deno.test("HttpArtifactFetcher.fetch accepts a body at the cap boundary", async 
   assert.equal(got.bytes.byteLength, 8);
 });
 
-Deno.test("HttpArtifactFetcher.head returns kind+size from headers", async () => {
+test("HttpArtifactFetcher.head returns kind+size from headers", async () => {
   const fetcher = new HttpArtifactFetcher({
     baseUrl: "https://kernel.example.com/v1/artifacts/",
     token: "tk",
@@ -148,7 +149,7 @@ Deno.test("HttpArtifactFetcher.head returns kind+size from headers", async () =>
   assert.deepEqual(got, { kind: "operator.example/test-bundle", size: 256 });
 });
 
-Deno.test("HttpArtifactFetcher.head returns undefined on 404", async () => {
+test("HttpArtifactFetcher.head returns undefined on 404", async () => {
   const fetcher = new HttpArtifactFetcher({
     baseUrl: "https://kernel.example.com/v1/artifacts",
     token: "tk",
@@ -158,7 +159,7 @@ Deno.test("HttpArtifactFetcher.head returns undefined on 404", async () => {
   assert.equal(got, undefined);
 });
 
-Deno.test("HttpArtifactFetcher.head throws on other errors", async () => {
+test("HttpArtifactFetcher.head throws on other errors", async () => {
   const fetcher = new HttpArtifactFetcher({
     baseUrl: "https://kernel.example.com/v1/artifacts",
     token: "tk",

@@ -1,8 +1,9 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import { LocalActorAdapter, ServiceActorAuthAdapter } from "./mod.ts";
 
-Deno.test("local actor adapter returns configured actor", async () => {
+test("local actor adapter returns configured actor", async () => {
   const actor = actorContext("acct_local", "req_local");
   const adapter = new LocalActorAdapter({ actor });
 
@@ -15,7 +16,7 @@ Deno.test("local actor adapter returns configured actor", async () => {
   assert.equal(result.actor.actorAccountId, "acct_local");
 });
 
-Deno.test("service actor adapter verifies signed internal request", async () => {
+test("service actor adapter verifies signed internal request", async () => {
   const actor = actorContext("acct_service", "req_service");
   const adapter = new ServiceActorAuthAdapter({
     secret: "test-secret",
@@ -42,7 +43,7 @@ Deno.test("service actor adapter verifies signed internal request", async () => 
   assert.equal(result.actor.requestId, "req_service");
 });
 
-Deno.test("service actor adapter binds signed requests to the query string", async () => {
+test("service actor adapter binds signed requests to the query string", async () => {
   const actor = actorContext("acct_service", "req_service_query");
   const adapter = new ServiceActorAuthAdapter({
     secret: "test-secret",

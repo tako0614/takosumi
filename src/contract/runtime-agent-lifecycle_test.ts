@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   getArtifactKind,
@@ -14,7 +15,7 @@ const SAMPLE: RegisteredArtifactKind = {
   contentTypeHint: "application/x-test",
 };
 
-Deno.test("registerArtifactKind stores and getArtifactKind retrieves", () => {
+test("registerArtifactKind stores and getArtifactKind retrieves", () => {
   try {
     assert.equal(registerArtifactKind(SAMPLE), undefined);
     assert.equal(isArtifactKindRegistered("test-kind-basic"), true);
@@ -25,15 +26,14 @@ Deno.test("registerArtifactKind stores and getArtifactKind retrieves", () => {
   }
 });
 
-Deno.test("unregisterArtifactKind returns true on hit and false on miss", () => {
+test("unregisterArtifactKind returns true on hit and false on miss", () => {
   registerArtifactKind({ kind: "test-kind-unreg", description: "x" });
   assert.equal(unregisterArtifactKind("test-kind-unreg"), true);
   assert.equal(unregisterArtifactKind("test-kind-unreg"), false);
   assert.equal(isArtifactKindRegistered("test-kind-unreg"), false);
 });
 
-Deno.test(
-  "registerArtifactKind warns on differing-value collision",
+test("registerArtifactKind warns on differing-value collision",
   () => {
     const first: RegisteredArtifactKind = {
       kind: "test-kind-warn",
@@ -61,8 +61,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "registerArtifactKind stays silent for structurally-identical re-registration",
+test("registerArtifactKind stays silent for structurally-identical re-registration",
   () => {
     const captured: string[] = [];
     const original = console.warn;
@@ -87,8 +86,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "registerArtifactKind with allowOverride suppresses the warning",
+test("registerArtifactKind with allowOverride suppresses the warning",
   () => {
     const captured: string[] = [];
     const original = console.warn;

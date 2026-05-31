@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 import {
@@ -12,7 +13,7 @@ const EXTRA_RESOURCE: ManifestResource = {
   spec: { name: "backups" },
 };
 
-Deno.test("manifest v1 resolver accepts resources without provider pin", () => {
+test("manifest v1 resolver accepts resources without provider pin", () => {
   const result = resolveManifestResourcesV1({
     apiVersion: "1.0",
     kind: "Manifest",
@@ -26,7 +27,7 @@ Deno.test("manifest v1 resolver accepts resources without provider pin", () => {
   assert.equal(result.ok ? result.value[0].provider : undefined, undefined);
 });
 
-Deno.test("manifest v1 resolver rejects retired top-level template", () => {
+test("manifest v1 resolver rejects retired top-level template", () => {
   const result = resolveManifestResourcesV1({
     apiVersion: "1.0",
     kind: "Manifest",
@@ -40,7 +41,7 @@ Deno.test("manifest v1 resolver rejects retired top-level template", () => {
   assert.match(result.ok ? "" : result.error, /template is not a known field/);
 });
 
-Deno.test("manifest v1 resolver rejects unknown closed-envelope fields", () => {
+test("manifest v1 resolver rejects unknown closed-envelope fields", () => {
   const result = resolveManifestResourcesV1({
     apiVersion: "1.0",
     kind: "Manifest",
@@ -54,7 +55,7 @@ Deno.test("manifest v1 resolver rejects unknown closed-envelope fields", () => {
   );
 });
 
-Deno.test("manifest v1 resolver validates metadata and resource field shape", () => {
+test("manifest v1 resolver validates metadata and resource field shape", () => {
   const result = resolveManifestResourcesV1({
     apiVersion: "1.0",
     kind: "Manifest",
@@ -81,7 +82,7 @@ Deno.test("manifest v1 resolver validates metadata and resource field shape", ()
   );
 });
 
-Deno.test("manifest v1 resolver requires resources[]", () => {
+test("manifest v1 resolver requires resources[]", () => {
   const result = resolveManifestResourcesV1({
     apiVersion: "1.0",
     kind: "Manifest",
@@ -93,7 +94,7 @@ Deno.test("manifest v1 resolver requires resources[]", () => {
   );
 });
 
-Deno.test("manifest v1 deployment name falls back deterministically", () => {
+test("manifest v1 deployment name falls back deterministically", () => {
   assert.equal(
     readDeploymentNameV1({ metadata: { name: "app" } }, [EXTRA_RESOURCE]),
     "app",

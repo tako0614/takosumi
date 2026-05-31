@@ -1,8 +1,9 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { InMemoryRuntimeAgentRegistry, InMemoryWorkLedger } from "./mod.ts";
 import { DomainError } from "../shared/errors.ts";
 
-Deno.test("runtime agents register, heartbeat, lease, complete, and revoke work", async () => {
+test("runtime agents register, heartbeat, lease, complete, and revoke work", async () => {
   const ids = sequenceIds([
     "agent_seq",
     "work_low",
@@ -119,7 +120,7 @@ Deno.test("runtime agents register, heartbeat, lease, complete, and revoke work"
   assert.equal((await registry.getWork(lowPriority.id))?.status, "queued");
 });
 
-Deno.test("runtime agent registry rejects heartbeat after revoke", async () => {
+test("runtime agent registry rejects heartbeat after revoke", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
   });
@@ -137,7 +138,7 @@ Deno.test("runtime agent registry rejects heartbeat after revoke", async () => {
   );
 });
 
-Deno.test("runtime agent reportProgress extends lease without losing it", async () => {
+test("runtime agent reportProgress extends lease without losing it", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
     idGenerator: sequenceIds(["agent_1", "work_1", "lease_1"]),
@@ -181,7 +182,7 @@ Deno.test("runtime agent reportProgress extends lease without losing it", async 
   });
 });
 
-Deno.test("runtime agent reportProgress refuses to shrink the lease", async () => {
+test("runtime agent reportProgress refuses to shrink the lease", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
     idGenerator: sequenceIds(["a", "w", "l"]),
@@ -205,7 +206,7 @@ Deno.test("runtime agent reportProgress refuses to shrink the lease", async () =
   assert.equal(updated.leaseExpiresAt, expiresAt);
 });
 
-Deno.test("runtime agent reportProgress requires a valid lease", async () => {
+test("runtime agent reportProgress requires a valid lease", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
   });
@@ -224,7 +225,7 @@ Deno.test("runtime agent reportProgress requires a valid lease", async () => {
   );
 });
 
-Deno.test("runtime agent detectStaleAgents marks idle agents expired and requeues their leases", async () => {
+test("runtime agent detectStaleAgents marks idle agents expired and requeues their leases", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
     idGenerator: sequenceIds(["w_a", "w_b", "lease_a", "lease_b"]),
@@ -265,7 +266,7 @@ Deno.test("runtime agent detectStaleAgents marks idle agents expired and requeue
   assert.equal(refreshed?.leasedByAgentId, undefined);
 });
 
-Deno.test("runtime agent detectStaleAgents returns empty when none idle", async () => {
+test("runtime agent detectStaleAgents returns empty when none idle", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
   });
@@ -278,7 +279,7 @@ Deno.test("runtime agent detectStaleAgents returns empty when none idle", async 
   assert.equal(detection.requeuedWork.length, 0);
 });
 
-Deno.test("runtime agent detectStaleAgents skips already-revoked agents", async () => {
+test("runtime agent detectStaleAgents skips already-revoked agents", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
   });
@@ -291,7 +292,7 @@ Deno.test("runtime agent detectStaleAgents skips already-revoked agents", async 
   assert.equal(detection.stale.length, 0);
 });
 
-Deno.test("runtime agent detectStaleAgents requires a positive ttl", () => {
+test("runtime agent detectStaleAgents requires a positive ttl", () => {
   const registry = new InMemoryRuntimeAgentRegistry();
   assert.throws(
     () => registry.detectStaleAgents({ ttlMs: 0 }),
@@ -303,7 +304,7 @@ Deno.test("runtime agent detectStaleAgents requires a positive ttl", () => {
   );
 });
 
-Deno.test("runtime agent heartbeat after expiry restores the agent to ready", async () => {
+test("runtime agent heartbeat after expiry restores the agent to ready", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
   });
@@ -320,7 +321,7 @@ Deno.test("runtime agent heartbeat after expiry restores the agent to ready", as
   assert.equal(restored.expiredAt, undefined);
 });
 
-Deno.test("runtime agent enqueueWork deduplicates by idempotencyKey", async () => {
+test("runtime agent enqueueWork deduplicates by idempotencyKey", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
     idGenerator: sequenceIds(["w_first", "w_second"]),
@@ -342,7 +343,7 @@ Deno.test("runtime agent enqueueWork deduplicates by idempotencyKey", async () =
   assert.equal(all.length, 1);
 });
 
-Deno.test("runtime agent enqueueLongRunningOperation emits provider-prefixed kind", async () => {
+test("runtime agent enqueueLongRunningOperation emits provider-prefixed kind", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
     idGenerator: sequenceIds(["w"]),
@@ -364,7 +365,7 @@ Deno.test("runtime agent enqueueLongRunningOperation emits provider-prefixed kin
   assert.equal(work.idempotencyKey, "aws-rds-primary");
 });
 
-Deno.test("runtime agent leaseWork honours maxConcurrentLeases", async () => {
+test("runtime agent leaseWork honours maxConcurrentLeases", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
     idGenerator: sequenceIds(["w1", "w2", "l1", "l2"]),
@@ -391,7 +392,7 @@ Deno.test("runtime agent leaseWork honours maxConcurrentLeases", async () => {
   assert.equal(second, undefined);
 });
 
-Deno.test("runtime agent register rejects host-key mismatch", async () => {
+test("runtime agent register rejects host-key mismatch", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
   });
@@ -416,7 +417,7 @@ Deno.test("runtime agent register rejects host-key mismatch", async () => {
   );
 });
 
-Deno.test("runtime agent register accepts repeat enrollments with the same host key", async () => {
+test("runtime agent register accepts repeat enrollments with the same host key", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
   });
@@ -439,8 +440,7 @@ Deno.test("runtime agent register accepts repeat enrollments with the same host 
 // ---------------------------------------------------------------------------
 // Phase 18 / C4 — host-key impersonation guard requeues stranded leases.
 // ---------------------------------------------------------------------------
-Deno.test(
-  "runtime agent register on host-key mismatch requeues every leased work item the prior agent held (C4)",
+test("runtime agent register on host-key mismatch requeues every leased work item the prior agent held (C4)",
   async () => {
     const registry = new InMemoryRuntimeAgentRegistry({
       clock: fixedClock("2026-04-30T00:00:00.000Z"),
@@ -509,8 +509,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "runtime agent register awaits host-key mismatch requeue persistence before conflict",
+test("runtime agent register awaits host-key mismatch requeue persistence before conflict",
   async () => {
     class CountingLedger extends InMemoryWorkLedger {
       applied = 0;
@@ -565,8 +564,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "runtime agent register supports operator-driven credential rotation (C4)",
+test("runtime agent register supports operator-driven credential rotation (C4)",
   async () => {
     const registry = new InMemoryRuntimeAgentRegistry({
       clock: fixedClock("2026-04-30T00:00:00.000Z"),
@@ -614,8 +612,7 @@ Deno.test(
 // ---------------------------------------------------------------------------
 // Phase 18 / C5 — kernel restart resumability via the persistent work ledger.
 // ---------------------------------------------------------------------------
-Deno.test(
-  "runtime agent registry resumes in-flight long-running work after a kernel restart (C5)",
+test("runtime agent registry resumes in-flight long-running work after a kernel restart (C5)",
   async () => {
     const ledger = new InMemoryWorkLedger();
     // Phase 1: a kernel boots, an agent registers + leases a long-running
@@ -691,8 +688,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "runtime agent registry rehydration requeues stale leases on kernel boot (C5)",
+test("runtime agent registry rehydration requeues stale leases on kernel boot (C5)",
   async () => {
     const ledger = new InMemoryWorkLedger();
     {
@@ -742,7 +738,7 @@ Deno.test(
   },
 );
 
-Deno.test("runtime agent failWork records result payload", async () => {
+test("runtime agent failWork records result payload", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
     idGenerator: sequenceIds(["w", "l"]),
@@ -766,7 +762,7 @@ Deno.test("runtime agent failWork records result payload", async () => {
   assert.deepEqual(failed.result, { admission: "denied", reason: "PSP" });
 });
 
-Deno.test("runtime agent completeWork records result payload", async () => {
+test("runtime agent completeWork records result payload", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
     idGenerator: sequenceIds(["w", "l"]),
@@ -791,7 +787,7 @@ Deno.test("runtime agent completeWork records result payload", async () => {
   });
 });
 
-Deno.test("runtime agent terminal reporter receives completed and failed work", async () => {
+test("runtime agent terminal reporter receives completed and failed work", async () => {
   const reported: string[] = [];
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
@@ -835,7 +831,7 @@ Deno.test("runtime agent terminal reporter receives completed and failed work", 
   ]);
 });
 
-Deno.test("runtime agent leaseWork caps requested TTL", async () => {
+test("runtime agent leaseWork caps requested TTL", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
     idGenerator: sequenceIds(["w", "l"]),
@@ -857,7 +853,7 @@ Deno.test("runtime agent leaseWork caps requested TTL", async () => {
   assert.equal(lease.renewAfter, "2026-04-27T00:01:00.000Z");
 });
 
-Deno.test("runtime agent reportProgress caps lease extension", async () => {
+test("runtime agent reportProgress caps lease extension", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
     idGenerator: sequenceIds(["w", "l"]),
@@ -880,7 +876,7 @@ Deno.test("runtime agent reportProgress caps lease extension", async () => {
   assert.equal(progressed.leaseExpiresAt, "2026-04-27T00:02:00.000Z");
 });
 
-Deno.test("runtime agent idempotency keys dedupe only non-terminal work", async () => {
+test("runtime agent idempotency keys dedupe only non-terminal work", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
     idGenerator: sequenceIds(["w1", "l1", "w2"]),
@@ -908,8 +904,7 @@ Deno.test("runtime agent idempotency keys dedupe only non-terminal work", async 
   assert.equal((await registry.listWork()).length, 2);
 });
 
-Deno.test(
-  "concurrent leaseWork calls never double-claim the same queued candidate (G9)",
+test("concurrent leaseWork calls never double-claim the same queued candidate (G9)",
   async () => {
     // A ledger whose `apply` yields to the microtask queue before
     // committing, and that tracks whether two critical sections overlap.
@@ -1001,8 +996,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "register host-key revoke/requeue is serialized against concurrent leaseWork",
+test("register host-key revoke/requeue is serialized against concurrent leaseWork",
   async () => {
     // register()'s host-key-rotation branch requeues every leased work item
     // the prior agent held (read-then-write over #work) and then awaits the
@@ -1082,8 +1076,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "detectStaleAgents partial persist failure does not corrupt registry state (G9)",
+test("detectStaleAgents partial persist failure does not corrupt registry state (G9)",
   async () => {
     // Ledger that commits the first stale-agent persist, then rejects the
     // second. The persist-first ordering must keep the first agent fully

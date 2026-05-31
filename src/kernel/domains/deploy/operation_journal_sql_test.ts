@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type {
   SqlClient,
@@ -166,7 +167,7 @@ class FakeSqlClient implements SqlClient {
   }
 }
 
-Deno.test("SqlOperationJournalStore appends and replays the same stage", async () => {
+test("SqlOperationJournalStore appends and replays the same stage", async () => {
   const client = new FakeSqlClient();
   const store = new SqlOperationJournalStore({
     client,
@@ -203,7 +204,7 @@ Deno.test("SqlOperationJournalStore appends and replays the same stage", async (
   );
 });
 
-Deno.test("SqlOperationJournalStore rejects replay effect mismatch", async () => {
+test("SqlOperationJournalStore rejects replay effect mismatch", async () => {
   const client = new FakeSqlClient();
   const store = new SqlOperationJournalStore({
     client,

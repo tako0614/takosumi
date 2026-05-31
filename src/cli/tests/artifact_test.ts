@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 
 const ORIGINAL_FETCH = globalThis.fetch;
@@ -14,7 +15,7 @@ function mockFetch(
   };
 }
 
-Deno.test("artifact push posts multipart with kind + body", async () => {
+test("artifact push posts multipart with kind + body", async () => {
   let observed: { url: string; method: string; auth?: string; form?: FormData };
   observed = { url: "", method: "" };
   const restore = mockFetch(async (req) => {
@@ -42,7 +43,7 @@ Deno.test("artifact push posts multipart with kind + body", async () => {
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
-    await artifactCommand.parse([
+    await artifactCommand.parseAsync([
       "push",
       tmp,
       "--kind=operator.example/test-bundle",
@@ -60,7 +61,7 @@ Deno.test("artifact push posts multipart with kind + body", async () => {
   }
 });
 
-Deno.test("artifact list GETs /v1/artifacts with bearer token", async () => {
+test("artifact list GETs /v1/artifacts with bearer token", async () => {
   let observed: { url: string; method: string; auth?: string };
   observed = { url: "", method: "" };
   const restore = mockFetch((req) => {
@@ -80,7 +81,7 @@ Deno.test("artifact list GETs /v1/artifacts with bearer token", async () => {
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
-    await artifactCommand.parse(["list"]);
+    await artifactCommand.parseAsync(["list"]);
     assert.equal(observed.method, "GET");
     // CLI now appends `limit=...` for pagination; assert the path + query.
     const url = new URL(observed.url);
@@ -94,7 +95,7 @@ Deno.test("artifact list GETs /v1/artifacts with bearer token", async () => {
   }
 });
 
-Deno.test("artifact list follows pagination cursor automatically", async () => {
+test("artifact list follows pagination cursor automatically", async () => {
   // Two-page response: first page has nextCursor, second is final.
   const calls: Array<{ url: string }> = [];
   const restore = mockFetch((req) => {
@@ -122,7 +123,7 @@ Deno.test("artifact list follows pagination cursor automatically", async () => {
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
-    await artifactCommand.parse(["list"]);
+    await artifactCommand.parseAsync(["list"]);
     assert.equal(
       calls.length,
       2,
@@ -137,7 +138,7 @@ Deno.test("artifact list follows pagination cursor automatically", async () => {
   }
 });
 
-Deno.test("artifact gc POSTs /v1/artifacts/gc", async () => {
+test("artifact gc POSTs /v1/artifacts/gc", async () => {
   let observed: { url: string; method: string; auth?: string };
   observed = { url: "", method: "" };
   const restore = mockFetch((req) => {
@@ -157,7 +158,7 @@ Deno.test("artifact gc POSTs /v1/artifacts/gc", async () => {
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
-    await artifactCommand.parse(["gc"]);
+    await artifactCommand.parseAsync(["gc"]);
     assert.equal(observed.method, "POST");
     assert.equal(observed.url, "http://example.test/v1/artifacts/gc");
     assert.equal(observed.auth, "Bearer T");
@@ -168,7 +169,7 @@ Deno.test("artifact gc POSTs /v1/artifacts/gc", async () => {
   }
 });
 
-Deno.test("artifact gc --dry-run sets dryRun query param", async () => {
+test("artifact gc --dry-run sets dryRun query param", async () => {
   let observed: { url: string };
   observed = { url: "" };
   const restore = mockFetch((req) => {
@@ -184,7 +185,7 @@ Deno.test("artifact gc --dry-run sets dryRun query param", async () => {
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
-    await artifactCommand.parse(["gc", "--dry-run"]);
+    await artifactCommand.parseAsync(["gc", "--dry-run"]);
     const url = new URL(observed.url);
     assert.equal(url.pathname, "/v1/artifacts/gc");
     assert.equal(url.searchParams.get("dryRun"), "1");
@@ -195,7 +196,7 @@ Deno.test("artifact gc --dry-run sets dryRun query param", async () => {
   }
 });
 
-Deno.test("artifact rm DELETEs /v1/artifacts/:hash", async () => {
+test("artifact rm DELETEs /v1/artifacts/:hash", async () => {
   let observed: { url: string; method: string };
   observed = { url: "", method: "" };
   const restore = mockFetch((req) => {
@@ -208,7 +209,7 @@ Deno.test("artifact rm DELETEs /v1/artifacts/:hash", async () => {
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
-    await artifactCommand.parse(["rm", "sha256:abc"]);
+    await artifactCommand.parseAsync(["rm", "sha256:abc"]);
     assert.equal(observed.method, "DELETE");
     assert.equal(observed.url, "http://example.test/v1/artifacts/sha256%3Aabc");
   } finally {

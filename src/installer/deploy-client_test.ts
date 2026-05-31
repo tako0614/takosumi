@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { InstallerClient, InstallerHttpError } from "./deploy-client.ts";
 
@@ -9,7 +10,7 @@ function clientWith(fetchImpl: typeof fetch): InstallerClient {
   });
 }
 
-Deno.test("InstallerClient surfaces HTTP status for non-JSON error bodies", async () => {
+test("InstallerClient surfaces HTTP status for non-JSON error bodies", async () => {
   const client = clientWith(() =>
     Promise.resolve(
       new Response("<html>502 Bad Gateway</html>", {
@@ -32,7 +33,7 @@ Deno.test("InstallerClient surfaces HTTP status for non-JSON error bodies", asyn
   assert.match(err.envelope.error.message, /HTTP 502/);
 });
 
-Deno.test("InstallerClient throws typed error for malformed JSON on a 200", async () => {
+test("InstallerClient throws typed error for malformed JSON on a 200", async () => {
   const client = clientWith(() =>
     Promise.resolve(
       new Response("{ not json", { status: 200 }),
@@ -47,7 +48,7 @@ Deno.test("InstallerClient throws typed error for malformed JSON on a 200", asyn
   assert.match(err.envelope.error.message, /not valid JSON/);
 });
 
-Deno.test("InstallerClient passes through a well-formed error envelope", async () => {
+test("InstallerClient passes through a well-formed error envelope", async () => {
   const client = clientWith(() =>
     Promise.resolve(
       new Response(
@@ -72,7 +73,7 @@ Deno.test("InstallerClient passes through a well-formed error envelope", async (
   assert.equal(err.envelope.error.requestId, "req-1");
 });
 
-Deno.test("InstallerClient returns parsed success bodies unchanged", async () => {
+test("InstallerClient returns parsed success bodies unchanged", async () => {
   const client = clientWith(() =>
     Promise.resolve(
       new Response(JSON.stringify({ installationId: "i-1" }), { status: 200 }),

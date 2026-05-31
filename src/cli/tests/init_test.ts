@@ -1,8 +1,9 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { initCommand } from "../commands/init.ts";
 
-Deno.test("init command prints an AppSpec scaffold by default", async () => {
-  const output = await captureStdout(() => initCommand.parse([]));
+test("init command prints an AppSpec scaffold by default", async () => {
+  const output = await captureStdout(() => initCommand.parseAsync([]));
 
   assert.match(output, /apiVersion: v1/);
   assert.match(output, /components:/);
@@ -13,10 +14,12 @@ Deno.test("init command prints an AppSpec scaffold by default", async () => {
   assert.equal(output.includes("${ref:"), false);
 });
 
-Deno.test("init command writes the empty AppSpec template", async () => {
+test("init command writes the empty AppSpec template", async () => {
   const tmp = await Deno.makeTempFile({ suffix: ".takosumi.yml" });
   try {
-    await captureStdout(() => initCommand.parse(["--template", "empty", tmp]));
+    await captureStdout(() =>
+      initCommand.parseAsync(["--template", "empty", tmp])
+    );
 
     const text = await Deno.readTextFile(tmp);
     assert.match(text, /apiVersion: v1/);

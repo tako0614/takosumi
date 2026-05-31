@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   TAKOSUMI_INTERNAL_SIGNATURE_HEADER,
@@ -29,7 +30,7 @@ const actor: TakosumiActorContext = {
   serviceId: "svc_internal",
 };
 
-Deno.test("readInternalAuth rejects stale and replayed signed requests", async () => {
+test("readInternalAuth rejects stale and replayed signed requests", async () => {
   const stale = await signedRequest({
     requestId: "req_internal_auth_stale",
     timestamp: "2026-04-27T00:00:00.000Z",
@@ -57,7 +58,7 @@ Deno.test("readInternalAuth rejects stale and replayed signed requests", async (
   );
 });
 
-Deno.test("readInternalAuth verifies signatures against the query string", async () => {
+test("readInternalAuth verifies signatures against the query string", async () => {
   const signed = await signedRequest({
     requestId: "req_internal_auth_query",
     timestamp: "2026-04-27T00:00:00.000Z",
@@ -83,7 +84,7 @@ Deno.test("readInternalAuth verifies signatures against the query string", async
   });
 });
 
-Deno.test("verifyInternalResponse accepts a valid Worker -> kernel response", async () => {
+test("verifyInternalResponse accepts a valid Worker -> kernel response", async () => {
   const body = '{"deployment":"dep_pass","status":"applied"}';
   const signed = await signedResponse({
     body,
@@ -101,7 +102,7 @@ Deno.test("verifyInternalResponse accepts a valid Worker -> kernel response", as
   assert.equal(verified.body, body);
 });
 
-Deno.test("verifyInternalResponse rejects tampered response body", async () => {
+test("verifyInternalResponse rejects tampered response body", async () => {
   const body = '{"deployment":"dep_tamper","status":"applied"}';
   const signed = await signedResponse({
     body,
@@ -129,7 +130,7 @@ Deno.test("verifyInternalResponse rejects tampered response body", async () => {
   );
 });
 
-Deno.test("verifyInternalResponse rejects responses missing the signature header", async () => {
+test("verifyInternalResponse rejects responses missing the signature header", async () => {
   const body = '{"deployment":"dep_missing"}';
   const signed = await signedResponse({
     body,
@@ -154,7 +155,7 @@ Deno.test("verifyInternalResponse rejects responses missing the signature header
   );
 });
 
-Deno.test("verifyInternalResponse rejects expired timestamp", async () => {
+test("verifyInternalResponse rejects expired timestamp", async () => {
   const body = '{"deployment":"dep_stale"}';
   const signed = await signedResponse({
     body,
@@ -176,7 +177,7 @@ Deno.test("verifyInternalResponse rejects expired timestamp", async () => {
   );
 });
 
-Deno.test("verifyInternalResponse rejects replayed responses", async () => {
+test("verifyInternalResponse rejects replayed responses", async () => {
   const body = '{"deployment":"dep_replay"}';
   const signed = await signedResponse({
     body,
@@ -200,7 +201,7 @@ Deno.test("verifyInternalResponse rejects replayed responses", async () => {
   );
 });
 
-Deno.test("verifyInternalResponse rejects mismatched request id", async () => {
+test("verifyInternalResponse rejects mismatched request id", async () => {
   const body = '{"deployment":"dep_mismatch"}';
   const signed = await signedResponse({
     body,
@@ -223,7 +224,7 @@ Deno.test("verifyInternalResponse rejects mismatched request id", async () => {
   );
 });
 
-Deno.test("signInternalResponse + verifyInternalResponse fail-closed on missing timestamp", async () => {
+test("signInternalResponse + verifyInternalResponse fail-closed on missing timestamp", async () => {
   const body = "{}";
   const signed = await signedResponse({
     body,
@@ -341,7 +342,7 @@ class FakeSharedReplayBackend {
   }
 }
 
-Deno.test("readInternalAuth uses SqlReplayProtectionStore to reject cross-pod replays", async () => {
+test("readInternalAuth uses SqlReplayProtectionStore to reject cross-pod replays", async () => {
   // Two PaaS replicas share the same `internal_request_replay_log` row
   // set (the FakeSharedReplayBackend stands in for Postgres). The same
   // signed request is delivered first to replica A, then replayed to
@@ -377,7 +378,7 @@ Deno.test("readInternalAuth uses SqlReplayProtectionStore to reject cross-pod re
   });
 });
 
-Deno.test("readInternalAuth: independent in-memory stores do NOT share state (regression baseline)", async () => {
+test("readInternalAuth: independent in-memory stores do NOT share state (regression baseline)", async () => {
   // Sanity check that documents the original Phase 18 vulnerability:
   // when each replica owns its own in-memory store, a replayed request
   // is incorrectly accepted by the second replica. This test pins the
@@ -405,7 +406,7 @@ Deno.test("readInternalAuth: independent in-memory stores do NOT share state (re
   assert.equal(acceptedOnB.ok, true);
 });
 
-Deno.test("verifyInternalResponse uses SqlReplayProtectionStore to reject cross-pod response replays", async () => {
+test("verifyInternalResponse uses SqlReplayProtectionStore to reject cross-pod response replays", async () => {
   const backend = new FakeSharedReplayBackend();
   const replicaAStore = new SqlReplayProtectionStore({
     client: backend.client(),

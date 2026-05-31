@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { DomainError } from "../../shared/errors.ts";
 import {
@@ -27,7 +28,7 @@ function buildService(options?: {
   };
 }
 
-Deno.test("RoutingTokenService: issue + verify happy path returns the original scope and hostnames", async () => {
+test("RoutingTokenService: issue + verify happy path returns the original scope and hostnames", async () => {
   const { service } = buildService();
   const issued = await service.issue({
     tenantId: "tenant-a",
@@ -46,7 +47,7 @@ Deno.test("RoutingTokenService: issue + verify happy path returns the original s
   assert.deepEqual(verified.hostnames, ["api.example.com"]);
 });
 
-Deno.test("RoutingTokenService: scope assertion rejects token issued for a different tenant", async () => {
+test("RoutingTokenService: scope assertion rejects token issued for a different tenant", async () => {
   const { service } = buildService();
   const issued = await service.issue({
     tenantId: "tenant-a",
@@ -68,7 +69,7 @@ Deno.test("RoutingTokenService: scope assertion rejects token issued for a diffe
   );
 });
 
-Deno.test("RoutingTokenService: hostname assertion rejects token issued without that hostname", async () => {
+test("RoutingTokenService: hostname assertion rejects token issued without that hostname", async () => {
   const { service } = buildService();
   const issued = await service.issue({
     tenantId: "tenant-a",
@@ -96,7 +97,7 @@ Deno.test("RoutingTokenService: hostname assertion rejects token issued without 
   assert.equal(verified.ok, true);
 });
 
-Deno.test("RoutingTokenService: rotation honors previously-issued tokens within the rotation window", async () => {
+test("RoutingTokenService: rotation honors previously-issued tokens within the rotation window", async () => {
   const { service, tick } = buildService({
     rotationPeriodMs: 60 * 60 * 1000,
   });
@@ -114,7 +115,7 @@ Deno.test("RoutingTokenService: rotation honors previously-issued tokens within 
   assert.equal(verified.fromPrevious, true);
 });
 
-Deno.test("RoutingTokenService: tokens minted under the previous secret stop verifying after a full rotation period", async () => {
+test("RoutingTokenService: tokens minted under the previous secret stop verifying after a full rotation period", async () => {
   const { service, tick } = buildService({
     rotationPeriodMs: 60 * 60 * 1000,
   });
@@ -139,7 +140,7 @@ Deno.test("RoutingTokenService: tokens minted under the previous secret stop ver
   );
 });
 
-Deno.test("RoutingTokenService: expired token is rejected with conflict", async () => {
+test("RoutingTokenService: expired token is rejected with conflict", async () => {
   const { service, tick } = buildService({
     rotationPeriodMs: 60 * 60 * 1000,
   });
@@ -164,7 +165,7 @@ Deno.test("RoutingTokenService: expired token is rejected with conflict", async 
   );
 });
 
-Deno.test("RoutingTokenService: tampered token (modified payload) fails verification", async () => {
+test("RoutingTokenService: tampered token (modified payload) fails verification", async () => {
   const { service } = buildService();
   const issued = await service.issue({
     tenantId: "tenant-a",
@@ -197,7 +198,7 @@ Deno.test("RoutingTokenService: tampered token (modified payload) fails verifica
   );
 });
 
-Deno.test("RoutingTokenService: rotation rejects re-using the current secret", () => {
+test("RoutingTokenService: rotation rejects re-using the current secret", () => {
   const { service } = buildService({ secret: "kernel-routing-secret-v1" });
   assert.throws(
     () => service.rotate("kernel-routing-secret-v1"),
@@ -209,7 +210,7 @@ Deno.test("RoutingTokenService: rotation rejects re-using the current secret", (
   );
 });
 
-Deno.test("RoutingTokenService: constructor rejects non-finite maxClockSkewMs (no fail-open expiry)", () => {
+test("RoutingTokenService: constructor rejects non-finite maxClockSkewMs (no fail-open expiry)", () => {
   for (const skew of [Infinity, -Infinity, NaN, -1]) {
     assert.throws(
       () =>
@@ -227,7 +228,7 @@ Deno.test("RoutingTokenService: constructor rejects non-finite maxClockSkewMs (n
   }
 });
 
-Deno.test("RoutingTokenService: issue rejects empty scope fields up-front", async () => {
+test("RoutingTokenService: issue rejects empty scope fields up-front", async () => {
   const { service } = buildService();
   await assert.rejects(
     () =>
@@ -244,7 +245,7 @@ Deno.test("RoutingTokenService: issue rejects empty scope fields up-front", asyn
   );
 });
 
-Deno.test("RoutingTokenService: cross-tenant token replay (different tenant token) is rejected by scope check", async () => {
+test("RoutingTokenService: cross-tenant token replay (different tenant token) is rejected by scope check", async () => {
   const { service } = buildService();
   const tokenA = await service.issue({
     tenantId: "tenant-a",

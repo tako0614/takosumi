@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { DomainError } from "../../shared/errors.ts";
 import {
@@ -19,7 +20,7 @@ function buildService(start = "2026-04-30T00:00:00.000Z") {
   return { store, service };
 }
 
-Deno.test("CustomDomainRegistryService: tenant-A reserves api.example.com first, claim is recorded", async () => {
+test("CustomDomainRegistryService: tenant-A reserves api.example.com first, claim is recorded", async () => {
   const { service } = buildService();
   const reservation = await service.reserve({
     hostname: "api.example.com",
@@ -33,7 +34,7 @@ Deno.test("CustomDomainRegistryService: tenant-A reserves api.example.com first,
   assert.equal(reservation.status, "pending");
 });
 
-Deno.test("CustomDomainRegistryService: cross-tenant collision rejects the second reservation with conflict", async () => {
+test("CustomDomainRegistryService: cross-tenant collision rejects the second reservation with conflict", async () => {
   const { service } = buildService();
   await service.reserve({
     hostname: "api.example.com",
@@ -62,7 +63,7 @@ Deno.test("CustomDomainRegistryService: cross-tenant collision rejects the secon
   );
 });
 
-Deno.test("CustomDomainRegistryService: same-owner re-reserve is idempotent and does not raise", async () => {
+test("CustomDomainRegistryService: same-owner re-reserve is idempotent and does not raise", async () => {
   const { service } = buildService();
   const first = await service.reserve({
     hostname: "api.example.com",
@@ -80,7 +81,7 @@ Deno.test("CustomDomainRegistryService: same-owner re-reserve is idempotent and 
   assert.equal(second.owner.deploymentId, "deployment-a-1");
 });
 
-Deno.test("CustomDomainRegistryService: hostname is canonicalized (case + trailing dot) so collisions are detected across casing", async () => {
+test("CustomDomainRegistryService: hostname is canonicalized (case + trailing dot) so collisions are detected across casing", async () => {
   const { service } = buildService();
   await service.reserve({
     hostname: "API.example.com.",
@@ -105,7 +106,7 @@ Deno.test("CustomDomainRegistryService: hostname is canonicalized (case + traili
   );
 });
 
-Deno.test("CustomDomainRegistryService: release frees the hostname so a different tenant can claim it", async () => {
+test("CustomDomainRegistryService: release frees the hostname so a different tenant can claim it", async () => {
   const { service } = buildService();
   await service.reserve({
     hostname: "api.example.com",
@@ -130,7 +131,7 @@ Deno.test("CustomDomainRegistryService: release frees the hostname so a differen
   assert.equal(claim.owner.tenantId, "tenant-b");
 });
 
-Deno.test("CustomDomainRegistryService: release rejects callers from a different deployment owner", async () => {
+test("CustomDomainRegistryService: release rejects callers from a different deployment owner", async () => {
   const { service } = buildService();
   await service.reserve({
     hostname: "api.example.com",
@@ -156,7 +157,7 @@ Deno.test("CustomDomainRegistryService: release rejects callers from a different
   );
 });
 
-Deno.test("CustomDomainRegistryService: verify transitions a pending reservation to verified", async () => {
+test("CustomDomainRegistryService: verify transitions a pending reservation to verified", async () => {
   const { service } = buildService();
   const owner = {
     tenantId: "tenant-a",
@@ -171,7 +172,7 @@ Deno.test("CustomDomainRegistryService: verify transitions a pending reservation
   assert.equal(verified.status, "verified");
 });
 
-Deno.test("CustomDomainRegistryService: listByOwner returns reservations for the requested tenant", async () => {
+test("CustomDomainRegistryService: listByOwner returns reservations for the requested tenant", async () => {
   const { service } = buildService();
   await service.reserve({
     hostname: "api.example.com",
@@ -198,7 +199,7 @@ Deno.test("CustomDomainRegistryService: listByOwner returns reservations for the
   }
 });
 
-Deno.test("CustomDomainRegistryService: rejects empty hostname / owner fields up-front", async () => {
+test("CustomDomainRegistryService: rejects empty hostname / owner fields up-front", async () => {
   const { service } = buildService();
   await assert.rejects(
     () =>

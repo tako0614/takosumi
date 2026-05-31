@@ -1,3 +1,4 @@
+import { expect, test } from "bun:test";
 /**
  * E2E smoke for the v1 installer pipeline under the Phase C component-output
  * connection model.
@@ -12,7 +13,6 @@
  *     `failed_precondition` path (mismatched expected pin, connect cycle)
  */
 
-import { assert, assertEquals } from "jsr:@std/assert@^1.0.5";
 import { Hono } from "hono";
 import type { Component } from "takosumi-contract/app-spec";
 import type {
@@ -150,7 +150,7 @@ function buildApp(pipeline: InstallerPipeline) {
   return app;
 }
 
-Deno.test("installer e2e — plain-array plugins drive dry-run + apply with local outputs", async () => {
+test("installer e2e — plain-array plugins drive dry-run + apply with local outputs", async () => {
   await withTempSource(async (workingDirectory) => {
     const events: string[] = [];
     const applies: ApplyRecord[] = [];
@@ -202,12 +202,12 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
         source: { kind: "local", url: workingDirectory },
       }),
     });
-    assertEquals(dryRunRes.status, 200);
+    expect(dryRunRes.status).toEqual(200);
     const dryRun = await dryRunRes.json() as InstallationDryRunResponse;
-    assert(dryRun.manifestDigest.startsWith("sha256:"));
-    assertEquals(dryRun.appSpec.metadata.id, "example-notes");
-    assertEquals(dryRun.changes.length, 2);
-    assert(dryRun.changes.every((change) => change.op === "create"));
+    expect(dryRun.manifestDigest.startsWith("sha256:")).toBeTruthy();
+    expect(dryRun.appSpec.metadata.id).toEqual("example-notes");
+    expect(dryRun.changes.length).toEqual(2);
+    expect(dryRun.changes.every((change) => change.op === "create")).toBeTruthy();
 
     const applyRes = await app.request("/v1/installations", {
       method: "POST",
@@ -218,7 +218,7 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
         expected: dryRun.expected,
       }),
     });
-    assertEquals(applyRes.status, 201);
+    expect(applyRes.status).toEqual(201);
     const apply = await applyRes.json() as InstallationApplyResponse;
     assertInstallation(apply.installation, "space_test", "example-notes");
     assertDeployment(
@@ -226,13 +226,11 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
       apply.installation.id,
       dryRun.manifestDigest,
     );
-    assertEquals(apply.deployment.status, "succeeded");
-    assertEquals(Object.keys(apply.deployment.outputs.components ?? {}), [
+    expect(apply.deployment.status).toEqual("succeeded");
+    expect(Object.keys(apply.deployment.outputs.components ?? {})).toEqual([
       "db",
     ]);
-    assertEquals(
-      apply.deployment.outputs.components?.db?.connection,
-      {
+    expect(apply.deployment.outputs.components?.db?.connection).toEqual({
         protocol: "postgresql",
         host: "db.local",
         port: 5432,
@@ -240,22 +238,21 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
         username: "notes",
         passwordRef: { secretRef: "secret://db-password" },
         connectionUrl: "postgres://notes@db.local:5432/notes",
-      },
-    );
+      });
 
     // Topology: db (producer) -> web (consumer via db.connection).
-    assertEquals(applies.length, 2);
-    assertEquals(applies[0].componentName, "db");
-    assertEquals(applies[1].componentName, "web");
+    expect(applies.length).toEqual(2);
+    expect(applies[0].componentName).toEqual("db");
+    expect(applies[1].componentName).toEqual("web");
     const dbMaterial = applies[1].inputMaterials.db;
-    assert(dbMaterial, "worker should see db material on the db binding");
-    assertEquals(dbMaterial.host, "db.local");
-    assertEquals(dbMaterial.port, 5432);
-    assertEquals(dbMaterial.database, "notes");
+    expect(dbMaterial).toBeTruthy();
+    expect(dbMaterial.host).toEqual("db.local");
+    expect(dbMaterial.port).toEqual(5432);
+    expect(dbMaterial.database).toEqual("notes");
 
     // First-install lifecycle hook ordering: install hooks bracket
     // deployment hooks, deployment hooks bracket per-component applies.
-    assertEquals(events, [
+    expect(events).toEqual([
       "onInstallStart:@test/postgres",
       "onInstallStart:@test/worker",
       "onDeploymentStart:@test/postgres",
@@ -270,7 +267,7 @@ Deno.test("installer e2e — plain-array plugins drive dry-run + apply with loca
   });
 });
 
-Deno.test("installer e2e — applyBinding receives material with prefixed env", async () => {
+test("installer e2e — applyBinding receives material with prefixed env", async () => {
   await withTempSource(async (workingDirectory) => {
     const events: string[] = [];
     const applies: ApplyRecord[] = [];
@@ -321,19 +318,19 @@ Deno.test("installer e2e — applyBinding receives material with prefixed env", 
         expected: dryRun.expected,
       }),
     });
-    assertEquals(applyRes.status, 201);
+    expect(applyRes.status).toEqual(201);
     // The consumer plugin's applyBinding hook saw exactly one binding with
     // the AppSpec connect options.
-    assertEquals(captured.length, 1);
-    assertEquals(captured[0].bindingName, "db");
-    assertEquals(captured[0].sourceRef, "db.connection");
-    assertEquals(captured[0].options.inject, "env");
-    assertEquals(captured[0].options.prefix, "DB");
-    assertEquals(captured[0].material.host, "h");
+    expect(captured.length).toEqual(1);
+    expect(captured[0].bindingName).toEqual("db");
+    expect(captured[0].sourceRef).toEqual("db.connection");
+    expect(captured[0].options.inject).toEqual("env");
+    expect(captured[0].options.prefix).toEqual("DB");
+    expect(captured[0].material.host).toEqual("h");
   });
 });
 
-Deno.test("installer e2e — rollback is pointer-only and does not re-apply providers", async () => {
+test("installer e2e — rollback is pointer-only and does not re-apply providers", async () => {
   await withTempSource(async (workingDirectory) => {
     const events: string[] = [];
     const applies: ApplyRecord[] = [];
@@ -366,7 +363,7 @@ Deno.test("installer e2e — rollback is pointer-only and does not re-apply prov
         source: { kind: "local", url: workingDirectory },
       }),
     });
-    assertEquals(installRes.status, 201);
+    expect(installRes.status).toEqual(201);
     const install = await installRes.json() as InstallationApplyResponse;
 
     const deployRes = await app.request(
@@ -379,13 +376,13 @@ Deno.test("installer e2e — rollback is pointer-only and does not re-apply prov
         }),
       },
     );
-    assertEquals(deployRes.status, 201);
+    expect(deployRes.status).toEqual(201);
     const deploy = await deployRes.json() as DeploymentApplyResponse;
-    assertEquals(applies.length, 4);
+    expect(applies.length).toEqual(4);
     const before = await deployments.listForInstallation(
       install.installation.id,
     );
-    assertEquals(before.length, 2);
+    expect(before.length).toEqual(2);
 
     const rollbackRes = await app.request(
       `/v1/installations/${install.installation.id}/rollback`,
@@ -395,21 +392,18 @@ Deno.test("installer e2e — rollback is pointer-only and does not re-apply prov
         body: JSON.stringify({ deploymentId: install.deployment.id }),
       },
     );
-    assertEquals(rollbackRes.status, 200);
+    expect(rollbackRes.status).toEqual(200);
     const rollback = await rollbackRes.json() as RollbackResponse;
 
     const after = await deployments.listForInstallation(
       install.installation.id,
     );
-    assertEquals(after.length, 2);
-    assertEquals(applies.length, 4);
-    assertEquals(rollback.deployment.id, install.deployment.id);
-    assertEquals(
-      rollback.installation.currentDeploymentId,
-      install.deployment.id,
-    );
-    assertEquals(rollback.installation.status, "ready");
-    assertEquals(rollback.rollback, {
+    expect(after.length).toEqual(2);
+    expect(applies.length).toEqual(4);
+    expect(rollback.deployment.id).toEqual(install.deployment.id);
+    expect(rollback.installation.currentDeploymentId).toEqual(install.deployment.id);
+    expect(rollback.installation.status).toEqual("ready");
+    expect(rollback.rollback).toEqual({
       rolledBackFrom: deploy.deployment.id,
       rolledBackTo: install.deployment.id,
       scope: {
@@ -418,11 +412,11 @@ Deno.test("installer e2e — rollback is pointer-only and does not re-apply prov
         workloadState: "not-reverted",
       },
     });
-    assert(!events.some((event) => event.includes("rollback")));
+    expect(!events.some((event) => event.includes("rollback"))).toBeTruthy();
   });
 });
 
-Deno.test("installer e2e — apply with mismatched expected returns 409 (Phase A status flip)", async () => {
+test("installer e2e — apply with mismatched expected returns 409 (Phase A status flip)", async () => {
   await withTempSource(async (workingDirectory) => {
     const events: string[] = [];
     const applies: ApplyRecord[] = [];
@@ -456,13 +450,13 @@ Deno.test("installer e2e — apply with mismatched expected returns 409 (Phase A
     });
     // Phase A docs flip: failed_precondition surfaces as 409 Conflict
     // (the request's expected pin conflicts with the resolved source).
-    assertEquals(res.status, 409);
+    expect(res.status).toEqual(409);
     const body = await res.json();
-    assertEquals(body.error.code, "failed_precondition");
+    expect(body.error.code).toEqual("failed_precondition");
   });
 });
 
-Deno.test("installer e2e — connect cycle aborts apply with non-2xx error envelope", async () => {
+test("installer e2e — connect cycle aborts apply with non-2xx error envelope", async () => {
   // a connects to b.out and b connects to a.out.
   // The yaml-parser rejects this at parse time with validationPhase
   // = connection-resolution.
@@ -513,15 +507,15 @@ components:
     // Parse-time cycle detection (validationPhase=connection-resolution) is
     // surfaced on the closed error envelope as `invalid_argument` / HTTP 400,
     // not a generic 500 internal_error.
-    assertEquals(res.status, 400);
+    expect(res.status).toEqual(400);
     const body = await res.json();
-    assertEquals(body.error.code, "invalid_argument");
+    expect(body.error.code).toEqual("invalid_argument");
     // No applies ran — the parse rejected before topology computation.
-    assertEquals(applies.length, 0);
+    expect(applies.length).toEqual(0);
   }, cyclicSpec);
 });
 
-Deno.test("installer e2e — declared component output name resolves", async () => {
+test("installer e2e — declared component output name resolves", async () => {
   // db produces a local `db.primary` material; worker connects through a
   // local binding named `database`.
   const spec = `apiVersion: v1
@@ -579,16 +573,13 @@ components:
         expected: dryRun.expected,
       }),
     });
-    assertEquals(applyRes.status, 201);
+    expect(applyRes.status).toEqual(201);
     const apply = await applyRes.json() as InstallationApplyResponse;
-    assertEquals(apply.deployment.status, "succeeded");
+    expect(apply.deployment.status).toEqual("succeeded");
     // Worker saw the db material via the declared local binding.
     const dbMaterial = applies[1].inputMaterials.database;
-    assert(
-      dbMaterial,
-      "worker should see db material on the database binding",
-    );
-    assertEquals(dbMaterial.host, "db.local");
+    expect(dbMaterial).toBeTruthy();
+    expect(dbMaterial.host).toEqual("db.local");
   }, spec);
 });
 
@@ -641,11 +632,11 @@ function assertInstallation(
   spaceId: string,
   appId: string,
 ): void {
-  assert(installation.id.startsWith("ins_"));
-  assertEquals(installation.spaceId, spaceId);
-  assertEquals(installation.appId, appId);
-  assertEquals(installation.status, "ready");
-  assert(typeof installation.createdAt === "number");
+  expect(installation.id.startsWith("ins_")).toBeTruthy();
+  expect(installation.spaceId).toEqual(spaceId);
+  expect(installation.appId).toEqual(appId);
+  expect(installation.status).toEqual("ready");
+  expect(typeof installation.createdAt === "number").toBeTruthy();
 }
 
 function assertDeployment(
@@ -653,14 +644,12 @@ function assertDeployment(
   installationId: string,
   manifestDigest: string,
 ): void {
-  assert(deployment.id.startsWith("dep_"));
-  assertEquals(deployment.installationId, installationId);
-  assertEquals(deployment.manifestDigest, manifestDigest);
-  assert(typeof deployment.createdAt === "number");
-  assert(
-    deployment.outputs.components === undefined ||
-      typeof deployment.outputs.components === "object",
-  );
+  expect(deployment.id.startsWith("dep_")).toBeTruthy();
+  expect(deployment.installationId).toEqual(installationId);
+  expect(deployment.manifestDigest).toEqual(manifestDigest);
+  expect(typeof deployment.createdAt === "number").toBeTruthy();
+  expect(deployment.outputs.components === undefined ||
+      typeof deployment.outputs.components === "object").toBeTruthy();
   // Silence unused-import warning by referencing Component.
   const _component: Component | undefined = undefined;
   void _component;

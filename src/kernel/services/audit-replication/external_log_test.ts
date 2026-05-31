@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   AuditReplicationConfigurationError,
@@ -94,7 +95,7 @@ class FakeS3Port implements S3ImmutableLogPort {
   }
 }
 
-Deno.test("StdoutReplicationSink captures records and is idempotent", async () => {
+test("StdoutReplicationSink captures records and is idempotent", async () => {
   const lines: string[] = [];
   const sink = new StdoutReplicationSink({ write: (line) => lines.push(line) });
   const chain = await buildChain(3);
@@ -107,7 +108,7 @@ Deno.test("StdoutReplicationSink captures records and is idempotent", async () =
   assert.deepEqual(replayed.map((r) => r.sequence), [1, 2, 3]);
 });
 
-Deno.test("S3ImmutableLogReplicationSink writes objects with Object Lock", async () => {
+test("S3ImmutableLogReplicationSink writes objects with Object Lock", async () => {
   const port = new FakeS3Port();
   const fixed = new Date("2026-05-01T00:00:00.000Z");
   const sink = new S3ImmutableLogReplicationSink({
@@ -138,7 +139,7 @@ Deno.test("S3ImmutableLogReplicationSink writes objects with Object Lock", async
   assert.equal(replayed[0].hash, chain[0].hash);
 });
 
-Deno.test("verifyAuditReplicationConsistency detects DB tampering against external replica", async () => {
+test("verifyAuditReplicationConsistency detects DB tampering against external replica", async () => {
   const chain = await buildChain(3);
   const tampered: ChainedAuditEvent[] = chain.map((r, i) =>
     i === 1
@@ -157,7 +158,7 @@ Deno.test("verifyAuditReplicationConsistency detects DB tampering against extern
   assert.equal(result.reason, "primary-chain-invalid");
 });
 
-Deno.test("verifyAuditReplicationConsistency detects deleted DB rows present in immutable replica", async () => {
+test("verifyAuditReplicationConsistency detects deleted DB rows present in immutable replica", async () => {
   const chain = await buildChain(3);
   const truncated = [chain[0], chain[1]];
   const result = await verifyAuditReplicationConsistency(truncated, chain);
@@ -167,7 +168,7 @@ Deno.test("verifyAuditReplicationConsistency detects deleted DB rows present in 
   assert.equal(result.externalCount, 3);
 });
 
-Deno.test("verifyAuditReplicationConsistency tolerates primary ahead of replica (catch-up)", async () => {
+test("verifyAuditReplicationConsistency tolerates primary ahead of replica (catch-up)", async () => {
   const chain = await buildChain(3);
   // External replica only has the first two; primary already wrote the third.
   const result = await verifyAuditReplicationConsistency(
@@ -179,7 +180,7 @@ Deno.test("verifyAuditReplicationConsistency tolerates primary ahead of replica 
   assert.equal(result.externalCount, 2);
 });
 
-Deno.test("verifyAuditReplicationConsistency reports hash mismatch when external and primary disagree at same sequence", async () => {
+test("verifyAuditReplicationConsistency reports hash mismatch when external and primary disagree at same sequence", async () => {
   const chain = await buildChain(3);
   // Build a parallel chain where event 2 has a different occurredAt so its
   // hash differs but the previous-hash structure is internally valid.
@@ -202,7 +203,7 @@ Deno.test("verifyAuditReplicationConsistency reports hash mismatch when external
   assert.equal(result.mismatchAtSequence, 1);
 });
 
-Deno.test("CompositeExternalReplicationSink fans out and uses first sink as canonical readChain", async () => {
+test("CompositeExternalReplicationSink fans out and uses first sink as canonical readChain", async () => {
   const a = new StdoutReplicationSink({ write: () => {} });
   const b = new StdoutReplicationSink({ write: () => {} });
   const composite = new CompositeExternalReplicationSink([a, b]);
@@ -214,7 +215,7 @@ Deno.test("CompositeExternalReplicationSink fans out and uses first sink as cano
   assert.equal((await composite.readChain()).length, 2);
 });
 
-Deno.test("selectAuditExternalReplicationSink fails closed in production without configuration", () => {
+test("selectAuditExternalReplicationSink fails closed in production without configuration", () => {
   assert.throws(
     () =>
       selectAuditExternalReplicationSink({
@@ -231,14 +232,14 @@ Deno.test("selectAuditExternalReplicationSink fails closed in production without
   );
 });
 
-Deno.test("selectAuditExternalReplicationSink returns undefined locally without config", () => {
+test("selectAuditExternalReplicationSink returns undefined locally without config", () => {
   const sink = selectAuditExternalReplicationSink({
     env: { TAKOSUMI_ENVIRONMENT: "local" },
   });
   assert.equal(sink, undefined);
 });
 
-Deno.test("selectAuditExternalReplicationSink builds stdout sink from env", () => {
+test("selectAuditExternalReplicationSink builds stdout sink from env", () => {
   const sink = selectAuditExternalReplicationSink({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
@@ -248,7 +249,7 @@ Deno.test("selectAuditExternalReplicationSink builds stdout sink from env", () =
   assert.ok(sink instanceof StdoutReplicationSink);
 });
 
-Deno.test("selectAuditExternalReplicationSink builds s3 sink with bucket + port", () => {
+test("selectAuditExternalReplicationSink builds s3 sink with bucket + port", () => {
   const port = new FakeS3Port();
   const sink = selectAuditExternalReplicationSink({
     env: {
@@ -264,7 +265,7 @@ Deno.test("selectAuditExternalReplicationSink builds s3 sink with bucket + port"
   assert.ok(sink instanceof S3ImmutableLogReplicationSink);
 });
 
-Deno.test("selectAuditExternalReplicationSink rejects s3 without bucket or port", () => {
+test("selectAuditExternalReplicationSink rejects s3 without bucket or port", () => {
   assert.throws(
     () =>
       selectAuditExternalReplicationSink({
@@ -288,7 +289,7 @@ Deno.test("selectAuditExternalReplicationSink rejects s3 without bucket or port"
   );
 });
 
-Deno.test("StdoutReplicationSink readChain after random replicate order returns sorted chain", async () => {
+test("StdoutReplicationSink readChain after random replicate order returns sorted chain", async () => {
   const sink = new StdoutReplicationSink({ write: () => {} });
   const chain = await buildChain(4);
   // Replay out of order.
@@ -300,14 +301,14 @@ Deno.test("StdoutReplicationSink readChain after random replicate order returns 
   assert.deepEqual(replayed.map((r) => r.sequence), [1, 2, 3, 4]);
 });
 
-Deno.test("verifyAuditReplicationConsistency accepts empty chains", async () => {
+test("verifyAuditReplicationConsistency accepts empty chains", async () => {
   const result = await verifyAuditReplicationConsistency([], []);
   assert.equal(result.ok, true);
   assert.equal(result.primaryCount, 0);
   assert.equal(result.externalCount, 0);
 });
 
-Deno.test("verifyAuditReplicationConsistency rejects empty primary with non-empty external", async () => {
+test("verifyAuditReplicationConsistency rejects empty primary with non-empty external", async () => {
   const chain = await buildChain(2);
   const result = await verifyAuditReplicationConsistency([], chain);
   assert.equal(result.ok, false);
@@ -316,7 +317,7 @@ Deno.test("verifyAuditReplicationConsistency rejects empty primary with non-empt
   assert.equal(result.reason, "primary-shorter-than-external");
 });
 
-Deno.test("verifyAuditReplicationConsistency flags non-empty primary with empty external as configuration error", async () => {
+test("verifyAuditReplicationConsistency flags non-empty primary with empty external as configuration error", async () => {
   const chain = await buildChain(2);
   const result = await verifyAuditReplicationConsistency(chain, []);
   // An empty external replica with a non-empty primary means replication
@@ -326,7 +327,7 @@ Deno.test("verifyAuditReplicationConsistency flags non-empty primary with empty 
   assert.equal(result.reason, "external-empty-but-primary-not");
 });
 
-Deno.test("S3ImmutableLogReplicationSink keys lexically sort identical to sequence order", async () => {
+test("S3ImmutableLogReplicationSink keys lexically sort identical to sequence order", async () => {
   const port = new FakeS3Port();
   const fixed = new Date("2026-05-01T00:00:00.000Z");
   const sink = new S3ImmutableLogReplicationSink({

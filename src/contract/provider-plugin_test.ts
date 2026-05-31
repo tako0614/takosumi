@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   capabilitySubsetIssues,
@@ -39,7 +40,7 @@ function fakeProvider(
   };
 }
 
-Deno.test("registerProvider stores and getProvider retrieves", () => {
+test("registerProvider stores and getProvider retrieves", () => {
   const provider = fakeProvider("test-provider-basic", {
     id: "object-store",
     version: "v1",
@@ -54,7 +55,7 @@ Deno.test("registerProvider stores and getProvider retrieves", () => {
   }
 });
 
-Deno.test("registerProvider returns previous on replace", () => {
+test("registerProvider returns previous on replace", () => {
   const first = fakeProvider("test-provider-replace", {
     id: "x",
     version: "v1",
@@ -72,7 +73,7 @@ Deno.test("registerProvider returns previous on replace", () => {
   }
 });
 
-Deno.test("listProvidersForShape filters by shape ref", () => {
+test("listProvidersForShape filters by shape ref", () => {
   const a = fakeProvider("test-provider-shape-a", {
     id: "object-store",
     version: "v1",
@@ -101,11 +102,11 @@ Deno.test("listProvidersForShape filters by shape ref", () => {
   }
 });
 
-Deno.test("listProvidersForShape returns empty for unknown shape", () => {
+test("listProvidersForShape returns empty for unknown shape", () => {
   assert.deepEqual(listProvidersForShape("nonexistent-shape", "v1"), []);
 });
 
-Deno.test("capabilitySubsetIssues returns empty when satisfied", () => {
+test("capabilitySubsetIssues returns empty when satisfied", () => {
   const issues = capabilitySubsetIssues(
     ["always-on", "websocket"],
     ["always-on", "websocket", "long-request"],
@@ -114,7 +115,7 @@ Deno.test("capabilitySubsetIssues returns empty when satisfied", () => {
   assert.equal(issues.length, 0);
 });
 
-Deno.test("capabilitySubsetIssues lists each missing capability", () => {
+test("capabilitySubsetIssues lists each missing capability", () => {
   const issues = capabilitySubsetIssues(
     ["always-on", "websocket", "encryption"],
     ["always-on"],
@@ -126,7 +127,7 @@ Deno.test("capabilitySubsetIssues lists each missing capability", () => {
   assert.equal(issues[0].path, "$.requires");
 });
 
-Deno.test("registerProvider warns on differing-value collision", () => {
+test("registerProvider warns on differing-value collision", () => {
   const first = fakeProvider("test-provider-warn", {
     id: "x",
     version: "v1",
@@ -149,7 +150,7 @@ Deno.test("registerProvider warns on differing-value collision", () => {
   }
 });
 
-Deno.test("registerProvider stays silent for idempotent re-registration", () => {
+test("registerProvider stays silent for idempotent re-registration", () => {
   const provider = fakeProvider("test-provider-idempotent", {
     id: "x",
     version: "v1",
@@ -167,7 +168,7 @@ Deno.test("registerProvider stays silent for idempotent re-registration", () => 
   }
 });
 
-Deno.test("registerProvider with allowOverride suppresses the warning", () => {
+test("registerProvider with allowOverride suppresses the warning", () => {
   const first = fakeProvider("test-provider-allow", {
     id: "x",
     version: "v1",
@@ -189,7 +190,7 @@ Deno.test("registerProvider with allowOverride suppresses the warning", () => {
   }
 });
 
-Deno.test("ProviderPlugin apply returns ApplyResult shape", async () => {
+test("ProviderPlugin apply returns ApplyResult shape", async () => {
   const provider = fakeProvider("test-provider-apply", {
     id: "object-store",
     version: "v1",

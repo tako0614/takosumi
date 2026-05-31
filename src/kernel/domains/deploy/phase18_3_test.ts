@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Phase 18.3 — M6 (multi-generation GroupHead rollback) tests.
 
 import assert from "node:assert/strict";
@@ -57,7 +58,7 @@ async function applyN(
   return ids;
 }
 
-Deno.test("M6: GroupHead history retains every applied generation", async () => {
+test("M6: GroupHead history retains every applied generation", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -82,7 +83,7 @@ Deno.test("M6: GroupHead history retains every applied generation", async () => 
   );
 });
 
-Deno.test("M6: rollbackGroup --steps walks N generations back", async () => {
+test("M6: rollbackGroup --steps walks N generations back", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -109,7 +110,7 @@ Deno.test("M6: rollbackGroup --steps walks N generations back", async () => {
   assert.equal(d4?.status, "rolled-back");
 });
 
-Deno.test("M6: rollbackGroup --target validates against retained history", async () => {
+test("M6: rollbackGroup --target validates against retained history", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -128,7 +129,7 @@ Deno.test("M6: rollbackGroup --target validates against retained history", async
   assert.equal(head.current_deployment_id, ids[0]);
 });
 
-Deno.test("M6: rollbackGroup rejects target that was never the head", async () => {
+test("M6: rollbackGroup rejects target that was never the head", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -154,7 +155,7 @@ Deno.test("M6: rollbackGroup rejects target that was never the head", async () =
   );
 });
 
-Deno.test("M6: rollbackGroup --target and --steps cross-check agree", async () => {
+test("M6: rollbackGroup --target and --steps cross-check agree", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -175,7 +176,7 @@ Deno.test("M6: rollbackGroup --target and --steps cross-check agree", async () =
   assert.equal(head.current_deployment_id, ids[0]);
 });
 
-Deno.test("M6: rollbackGroup --target and --steps cross-check disagree → error", async () => {
+test("M6: rollbackGroup --target and --steps cross-check disagree → error", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -197,7 +198,7 @@ Deno.test("M6: rollbackGroup --target and --steps cross-check disagree → error
   );
 });
 
-Deno.test("M6: rollbackGroup with neither steps nor target is rejected", async () => {
+test("M6: rollbackGroup with neither steps nor target is rejected", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -219,7 +220,7 @@ Deno.test("M6: rollbackGroup with neither steps nor target is rejected", async (
   );
 });
 
-Deno.test("M6: chained rollback retains access to deeper retained generations", async () => {
+test("M6: chained rollback retains access to deeper retained generations", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -247,7 +248,7 @@ Deno.test("M6: chained rollback retains access to deeper retained generations", 
   assert.equal(head2.current_deployment_id, ids[0]);
 });
 
-Deno.test("M6: resolveRollbackTarget is unit-testable in isolation", async () => {
+test("M6: resolveRollbackTarget is unit-testable in isolation", async () => {
   const history = new InMemoryGroupHeadHistoryStore();
   const base = {
     spaceId: "space_m6",
@@ -324,7 +325,7 @@ Deno.test("M6: resolveRollbackTarget is unit-testable in isolation", async () =>
   );
 });
 
-Deno.test("M6: history append rejects sequence regressions", async () => {
+test("M6: history append rejects sequence regressions", async () => {
   const history = new InMemoryGroupHeadHistoryStore();
   await history.append({
     spaceId: "s",

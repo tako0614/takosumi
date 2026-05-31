@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   type BillingPort,
@@ -12,7 +13,7 @@ import {
   UsageQuotaExceededError,
 } from "./mod.ts";
 
-Deno.test("UsageProjectionService aggregates deploy/runtime/resource/agent usage events", async () => {
+test("UsageProjectionService aggregates deploy/runtime/resource/agent usage events", async () => {
   const aggregates = new InMemoryUsageAggregateStore();
   const service = new UsageProjectionService({
     aggregates,
@@ -58,7 +59,7 @@ Deno.test("UsageProjectionService aggregates deploy/runtime/resource/agent usage
   );
 });
 
-Deno.test("NoopBillingPort is an explicit billing boundary and does not own usage aggregates", async () => {
+test("NoopBillingPort is an explicit billing boundary and does not own usage aggregates", async () => {
   const aggregates = new InMemoryUsageAggregateStore();
   const billing = new NoopBillingPort();
   const service = new UsageProjectionService({
@@ -76,7 +77,7 @@ Deno.test("NoopBillingPort is an explicit billing boundary and does not own usag
   assert.equal("priceId" in result.aggregate, false);
 });
 
-Deno.test("UsageProjectionService can cross the BillingPort without coupling aggregate storage to billing", async () => {
+test("UsageProjectionService can cross the BillingPort without coupling aggregate storage to billing", async () => {
   const aggregates = new InMemoryUsageAggregateStore();
   const billing = new RecordingBillingPort();
   const service = new UsageProjectionService({ aggregates, billing });
@@ -88,7 +89,7 @@ Deno.test("UsageProjectionService can cross the BillingPort without coupling agg
   assert.equal((await aggregates.listBySpace("space_a"))[0], result.aggregate);
 });
 
-Deno.test("UsageProjectionService reports CPU storage and bandwidth quota tiers", async () => {
+test("UsageProjectionService reports CPU storage and bandwidth quota tiers", async () => {
   const aggregates = new InMemoryUsageAggregateStore();
   const quotaPolicy = new LocalUsageQuotaPolicy({
     defaultTierId: "free",
@@ -139,7 +140,7 @@ Deno.test("UsageProjectionService reports CPU storage and bandwidth quota tiers"
   assert.equal(bandwidth.quotaDecision?.allowed, false);
 });
 
-Deno.test("UsageProjectionService requireWithinQuota rejects before recording", async () => {
+test("UsageProjectionService requireWithinQuota rejects before recording", async () => {
   const aggregates = new InMemoryUsageAggregateStore();
   const service = new UsageProjectionService({
     aggregates,

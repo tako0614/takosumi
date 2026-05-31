@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // H9 / Phase 18.2 — descriptor closure version compatibility tests.
 //
 // The retained closure on `Deployment.resolution.descriptor_closure` pins
@@ -56,7 +57,7 @@ function liveMap(
   return new Map(entries);
 }
 
-Deno.test("H9: closure compatible when every alias matches live registry exactly", () => {
+test("H9: closure compatible when every alias matches live registry exactly", () => {
   const closure = buildClosure([
     { alias: "provider.aws.rds@v1", rawDigest: "sha256:aws-rds-v1" },
     {
@@ -89,7 +90,7 @@ Deno.test("H9: closure compatible when every alias matches live registry exactly
   verifyDescriptorClosureCompatibility(closure, live);
 });
 
-Deno.test("H9: closure incompatible on major version mismatch (v1 pinned, v2 live)", () => {
+test("H9: closure incompatible on major version mismatch (v1 pinned, v2 live)", () => {
   const closure = buildClosure([
     { alias: "provider.aws.rds@v1", rawDigest: "sha256:aws-rds-v1" },
   ]);
@@ -111,7 +112,7 @@ Deno.test("H9: closure incompatible on major version mismatch (v1 pinned, v2 liv
   assert.equal(mismatch.kind, "major-version-mismatch");
   assert.equal(mismatch.alias, "provider.aws.rds@v1");
   assert.equal(mismatch.liveAlias, "provider.aws.rds@v2");
-  assert.match(mismatch.upgradeGuide, /takos deploy plan --refresh/);
+  assert.match(mismatch.upgradeGuide, /Rebuild the descriptor closure/);
 
   // Throwing wrapper surfaces a TypeError naming the mismatch + the
   // upgrade guide so apply preflight fails closed with an actionable
@@ -129,7 +130,7 @@ Deno.test("H9: closure incompatible on major version mismatch (v1 pinned, v2 liv
   );
 });
 
-Deno.test("H9: closure incompatible when alias exists but raw digest changed (apiVersion bump on same v1)", () => {
+test("H9: closure incompatible when alias exists but raw digest changed (apiVersion bump on same v1)", () => {
   const closure = buildClosure([
     { alias: "provider.gcp.cloud-run@v1", rawDigest: "sha256:gcp-cr-v1-a" },
   ]);
@@ -150,7 +151,7 @@ Deno.test("H9: closure incompatible when alias exists but raw digest changed (ap
   assert.equal(report.mismatches[0].kind, "digest-mismatch");
 });
 
-Deno.test("H9: closure incompatible when pinned alias not present in live registry (plugin disabled)", () => {
+test("H9: closure incompatible when pinned alias not present in live registry (plugin disabled)", () => {
   const closure = buildClosure([
     {
       alias: "provider.cloudflare.workers@v1",

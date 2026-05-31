@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { createKernelLogger } from "./log.ts";
 
-Deno.test("createKernelLogger emits JSON to stdout for info", () => {
+test("createKernelLogger emits JSON to stdout for info", () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const log = createKernelLogger({
@@ -25,7 +26,7 @@ Deno.test("createKernelLogger emits JSON to stdout for info", () => {
   assert.equal(parsed.ts, "2026-01-01T00:00:00.000Z");
 });
 
-Deno.test("createKernelLogger routes warn / error to stderr", () => {
+test("createKernelLogger routes warn / error to stderr", () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const log = createKernelLogger({
@@ -45,7 +46,7 @@ Deno.test("createKernelLogger routes warn / error to stderr", () => {
   assert.equal(errorEntry.level, "error");
 });
 
-Deno.test("createKernelLogger pretty format embeds event and JSON tail", () => {
+test("createKernelLogger pretty format embeds event and JSON tail", () => {
   const stdout: string[] = [];
   const log = createKernelLogger({
     format: "pretty",
@@ -63,7 +64,7 @@ Deno.test("createKernelLogger pretty format embeds event and JSON tail", () => {
   );
 });
 
-Deno.test("createKernelLogger normalizes Error values into fields", () => {
+test("createKernelLogger normalizes Error values into fields", () => {
   const stderr: string[] = [];
   const log = createKernelLogger({
     format: "json",
@@ -81,7 +82,7 @@ Deno.test("createKernelLogger normalizes Error values into fields", () => {
   assert.equal(typeof parsed.error.stack, "string");
 });
 
-Deno.test("createKernelLogger format defaults to pretty for local env", () => {
+test("createKernelLogger format defaults to pretty for local env", () => {
   const stdout: string[] = [];
   const log = createKernelLogger({
     env: { TAKOSUMI_ENVIRONMENT: "local" },
@@ -96,7 +97,7 @@ Deno.test("createKernelLogger format defaults to pretty for local env", () => {
   assert.ok(!stdout[0].startsWith("{"));
 });
 
-Deno.test("createKernelLogger format defaults to json for production env", () => {
+test("createKernelLogger format defaults to json for production env", () => {
   const stdout: string[] = [];
   const log = createKernelLogger({
     env: { TAKOSUMI_ENVIRONMENT: "production" },
@@ -108,7 +109,7 @@ Deno.test("createKernelLogger format defaults to json for production env", () =>
   assert.ok(stdout[0].startsWith("{"));
 });
 
-Deno.test("createKernelLogger honours TAKOSUMI_LOG_FORMAT override", () => {
+test("createKernelLogger honours TAKOSUMI_LOG_FORMAT override", () => {
   const stdout: string[] = [];
   const log = createKernelLogger({
     env: { TAKOSUMI_ENVIRONMENT: "production", TAKOSUMI_LOG_FORMAT: "pretty" },

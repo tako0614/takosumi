@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Phase 18.2 (H3 + H13): tests for the rollback CLI.
 //
 // H3 — verify the catalog migration that collapses source deploy rows to current:
@@ -16,7 +17,7 @@
 import { evaluateProductionGuard, parseDownArgs } from "./db-migrate-down.ts";
 import { postgresStorageMigrationStatements } from "../adapters/storage/migrations.ts";
 
-Deno.test("H3: deployment collapse migration preserves deterministic source ids in deployments", () => {
+test("H3: deployment collapse migration preserves deterministic source ids in deployments", () => {
   const migration = postgresStorageMigrationStatements.find((m) =>
     m.id === "deploy.unify_to_deployments"
   );
@@ -39,7 +40,7 @@ Deno.test("H3: deployment collapse migration preserves deterministic source ids 
   );
 });
 
-Deno.test("H3: deployment collapse migration computes group_heads.previous_deployment_id (no hardcoded null)", () => {
+test("H3: deployment collapse migration computes group_heads.previous_deployment_id (no hardcoded null)", () => {
   const migration = postgresStorageMigrationStatements.find((m) =>
     m.id === "deploy.unify_to_deployments"
   );
@@ -66,7 +67,7 @@ Deno.test("H3: deployment collapse migration computes group_heads.previous_deplo
   );
 });
 
-Deno.test("H3: deployment collapse migration is forward-only", () => {
+test("H3: deployment collapse migration is forward-only", () => {
   const migration = postgresStorageMigrationStatements.find((m) =>
     m.id === "deploy.unify_to_deployments"
   );
@@ -234,7 +235,7 @@ function mapSourceToCurrent(input: {
   return { deployments: [...deployments.values()], group_heads: heads };
 }
 
-Deno.test("H3 integrity: source plan+activation -> current deployment retains activation id (Rule 1)", () => {
+test("H3 integrity: source plan+activation -> current deployment retains activation id (Rule 1)", () => {
   const result = mapSourceToCurrent({
     plans: [{ id: "plan-A", group_id: "g1", space_id: "s1" }],
     activations: [{
@@ -256,7 +257,7 @@ Deno.test("H3 integrity: source plan+activation -> current deployment retains ac
   if (d.status !== "applied") throw new Error("expected status=applied");
 });
 
-Deno.test("H3 integrity: source plan-only (no activation) -> current deployment retains plan id (Rule 2)", () => {
+test("H3 integrity: source plan-only (no activation) -> current deployment retains plan id (Rule 2)", () => {
   const result = mapSourceToCurrent({
     plans: [{ id: "plan-Solo", group_id: "g1", space_id: "s1" }],
     activations: [],
@@ -275,7 +276,7 @@ Deno.test("H3 integrity: source plan-only (no activation) -> current deployment 
   }
 });
 
-Deno.test("H3 integrity: orphan activation (plan pruned) -> current deployment via ar.id (Rule 3)", () => {
+test("H3 integrity: orphan activation (plan pruned) -> current deployment via ar.id (Rule 3)", () => {
   const result = mapSourceToCurrent({
     plans: [], // plan was already pruned
     activations: [{
@@ -298,7 +299,7 @@ Deno.test("H3 integrity: orphan activation (plan pruned) -> current deployment v
   }
 });
 
-Deno.test("H3 integrity: pointer + history -> group_heads.previous_deployment_id (Rule 4+5)", () => {
+test("H3 integrity: pointer + history -> group_heads.previous_deployment_id (Rule 4+5)", () => {
   const result = mapSourceToCurrent({
     plans: [
       { id: "plan-old", group_id: "g1", space_id: "s1" },
@@ -343,7 +344,7 @@ Deno.test("H3 integrity: pointer + history -> group_heads.previous_deployment_id
   }
 });
 
-Deno.test("H3 integrity: deploy_operation_records collapse into deployments.conditions[] (Rule 6)", () => {
+test("H3 integrity: deploy_operation_records collapse into deployments.conditions[] (Rule 6)", () => {
   const result = mapSourceToCurrent({
     plans: [{ id: "plan-X", group_id: "g1", space_id: "s1" }],
     activations: [{
@@ -387,7 +388,7 @@ Deno.test("H3 integrity: deploy_operation_records collapse into deployments.cond
   }
 });
 
-Deno.test("H13: production guard refuses without --allow-production-rollback", async () => {
+test("H13: production guard refuses without --allow-production-rollback", async () => {
   const outcome = await evaluateProductionGuard({
     env: "production",
     dryRun: false,
@@ -400,7 +401,7 @@ Deno.test("H13: production guard refuses without --allow-production-rollback", a
   );
 });
 
-Deno.test("H13: production guard accepts --confirm=ROLLBACK with the allow flag", async () => {
+test("H13: production guard accepts --confirm=ROLLBACK with the allow flag", async () => {
   const outcome = await evaluateProductionGuard({
     env: "production",
     dryRun: false,
@@ -410,7 +411,7 @@ Deno.test("H13: production guard accepts --confirm=ROLLBACK with the allow flag"
   assert(outcome.allowed, `expected guard to allow, got: ${outcome.reason}`);
 });
 
-Deno.test("H13: production guard rejects --confirm=NOPE even with the allow flag", async () => {
+test("H13: production guard rejects --confirm=NOPE even with the allow flag", async () => {
   const outcome = await evaluateProductionGuard({
     env: "production",
     dryRun: false,
@@ -424,7 +425,7 @@ Deno.test("H13: production guard rejects --confirm=NOPE even with the allow flag
   );
 });
 
-Deno.test("H13: production guard allows dry-run unconditionally", async () => {
+test("H13: production guard allows dry-run unconditionally", async () => {
   const outcome = await evaluateProductionGuard({
     env: "production",
     dryRun: true,
@@ -433,7 +434,7 @@ Deno.test("H13: production guard allows dry-run unconditionally", async () => {
   assert(outcome.allowed, "expected dry-run to bypass production guard");
 });
 
-Deno.test("H13: production guard does not gate staging or local", async () => {
+test("H13: production guard does not gate staging or local", async () => {
   for (const env of ["staging", "local"] as const) {
     const outcome = await evaluateProductionGuard({
       env,
@@ -444,7 +445,7 @@ Deno.test("H13: production guard does not gate staging or local", async () => {
   }
 });
 
-Deno.test("H13: parseDownArgs rejects --target combined with --steps", () => {
+test("H13: parseDownArgs rejects --target combined with --steps", () => {
   let threw = false;
   try {
     parseDownArgs(["--target=2", "--steps=1"]);
@@ -458,7 +459,7 @@ Deno.test("H13: parseDownArgs rejects --target combined with --steps", () => {
   assert(threw, "expected parser to reject --target+--steps combination");
 });
 
-Deno.test("H13: parseDownArgs accepts --steps with numeric value", () => {
+test("H13: parseDownArgs accepts --steps with numeric value", () => {
   const opts = parseDownArgs(["--steps=3", "--env=staging"]);
   if (opts.steps !== 3) throw new Error(`expected steps=3, got ${opts.steps}`);
   if (opts.env !== "staging") {

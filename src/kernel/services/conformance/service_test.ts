@@ -1,12 +1,13 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   BundledRegistrySeedAdapter,
   bundledRegistrySeedTrustRecords,
 } from "../../adapters/registry/mod.ts";
-import { PackageConformanceService } from "./mod.ts";
+import { BackendPluginConformanceService } from "./mod.ts";
 
-Deno.test("package conformance accepts trusted provider with required support", async () => {
-  const service = new PackageConformanceService({
+test("backend plugin conformance accepts trusted provider with required support", async () => {
+  const service = new BackendPluginConformanceService({
     registry: new BundledRegistrySeedAdapter(),
   });
 
@@ -27,8 +28,8 @@ Deno.test("package conformance accepts trusted provider with required support", 
   assert.ok(result.checks.every((check) => check.passed));
 });
 
-Deno.test("package conformance blocks providers missing required features", async () => {
-  const service = new PackageConformanceService({
+test("backend plugin conformance blocks providers missing required features", async () => {
+  const service = new BackendPluginConformanceService({
     registry: new BundledRegistrySeedAdapter(),
   });
 
@@ -52,7 +53,7 @@ Deno.test("package conformance blocks providers missing required features", asyn
   );
 });
 
-Deno.test("package conformance blocks revoked trust records", async () => {
+test("backend plugin conformance blocks revoked trust records", async () => {
   const trustRecords = bundledRegistrySeedTrustRecords.map((record) =>
     record.packageRef === "provider.noop@v1"
       ? {
@@ -63,7 +64,7 @@ Deno.test("package conformance blocks revoked trust records", async () => {
       }
       : record
   );
-  const service = new PackageConformanceService({
+  const service = new BackendPluginConformanceService({
     registry: new BundledRegistrySeedAdapter(
       undefined,
       undefined,

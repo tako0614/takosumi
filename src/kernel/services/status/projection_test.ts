@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { DefaultGroupSummaryStatusProjector } from "./mod.ts";
 import type { GroupSummaryStatusProjectionInput } from "./mod.ts";
@@ -75,8 +76,7 @@ const baseInput: GroupSummaryStatusProjectionInput = {
   securityConditions: [{ type: "SecurityPolicySatisfied", status: "true" }],
 };
 
-Deno.test(
-  "status projection marks committed activation active after serving converges",
+test("status projection marks committed activation active after serving converges",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -106,8 +106,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "status projection degrades committed activation when serving is degraded",
+test("status projection degrades committed activation when serving is degraded",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -139,8 +138,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "status projection degrades committed activation when security is blocked",
+test("status projection degrades committed activation when security is blocked",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -164,8 +162,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "status projection requires current provider observation before serving converges",
+test("status projection requires current provider observation before serving converges",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -192,8 +189,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "status projection requires role-scoped provider materializations before serving converges",
+test("status projection requires role-scoped provider materializations before serving converges",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -222,8 +218,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "status projection maps provider drift to catalog condition reasons",
+test("status projection maps provider drift to catalog condition reasons",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -341,8 +336,7 @@ const multiCloudInput: GroupSummaryStatusProjectionInput = {
   },
 };
 
-Deno.test(
-  "phase 18.2: per-provider projections cover every provider id with status=serving when all observations are present",
+test("phase 18.2: per-provider projections cover every provider id with status=serving when all observations are present",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -362,8 +356,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "phase 18.2: critical-path provider missing escalates serving to outage",
+test("phase 18.2: critical-path provider missing escalates serving to outage",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -398,8 +391,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "phase 18.2: optional provider outage degrades but never escalates to outage",
+test("phase 18.2: optional provider outage degrades but never escalates to outage",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -443,8 +435,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "phase 18.2: dependent provider is degraded when its critical upstream is outage",
+test("phase 18.2: dependent provider is degraded when its critical upstream is outage",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -486,8 +477,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "phase 18.2: drift on critical provider degrades layer without outage",
+test("phase 18.2: drift on critical provider degrades layer without outage",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -518,8 +508,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "phase 18.2: unknown observation on critical provider rolls up to recovering",
+test("phase 18.2: unknown observation on critical provider rolls up to recovering",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -545,8 +534,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "status projection replaces non-catalog dependency and security reasons",
+test("status projection replaces non-catalog dependency and security reasons",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),
@@ -590,8 +578,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "status projection marks managed projection health failures as degraded",
+test("status projection marks managed projection health failures as degraded",
   () => {
     const projector = new DefaultGroupSummaryStatusProjector({
       clock: () => new Date("2026-04-27T00:00:03.000Z"),

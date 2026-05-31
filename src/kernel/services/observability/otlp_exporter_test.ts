@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { InMemoryObservabilitySink } from "./sink.ts";
 import {
@@ -36,7 +37,7 @@ const traceSpan: TraceSpanEvent = {
   },
 };
 
-Deno.test("OtlpObservabilitySink records locally and exports OTLP JSON metrics", async () => {
+test("OtlpObservabilitySink records locally and exports OTLP JSON metrics", async () => {
   const calls: Array<{ url: string; init?: RequestInit; body: unknown }> = [];
   const fetchImpl: typeof fetch = (input, init) => {
     const requestInit = init as
@@ -97,7 +98,7 @@ Deno.test("OtlpObservabilitySink records locally and exports OTLP JSON metrics",
   );
 });
 
-Deno.test("OtlpObservabilitySink records locally and exports OTLP JSON traces", async () => {
+test("OtlpObservabilitySink records locally and exports OTLP JSON traces", async () => {
   const calls: Array<{ url: string; init?: RequestInit; body: unknown }> = [];
   const fetchImpl: typeof fetch = (input, init) => {
     const requestInit = init as
@@ -159,7 +160,7 @@ Deno.test("OtlpObservabilitySink records locally and exports OTLP JSON traces", 
   );
 });
 
-Deno.test("OtlpObservabilitySink fail-open keeps metrics when collector fails", async () => {
+test("OtlpObservabilitySink fail-open keeps metrics when collector fails", async () => {
   const fetchImpl: typeof fetch = () =>
     Promise.resolve(new Response("down", { status: 503 }));
   const sink = new OtlpObservabilitySink(new InMemoryObservabilitySink(), {
@@ -172,7 +173,7 @@ Deno.test("OtlpObservabilitySink fail-open keeps metrics when collector fails", 
   assert.equal((await sink.listMetrics()).length, 1);
 });
 
-Deno.test("OtlpObservabilitySink can fail closed for strict telemetry profiles", async () => {
+test("OtlpObservabilitySink can fail closed for strict telemetry profiles", async () => {
   const fetchImpl: typeof fetch = () =>
     Promise.resolve(new Response("down", { status: 503 }));
   const sink = new OtlpObservabilitySink(new InMemoryObservabilitySink(), {
@@ -187,7 +188,7 @@ Deno.test("OtlpObservabilitySink can fail closed for strict telemetry profiles",
   );
 });
 
-Deno.test("otlpOptionsFromEnv supports Takosumi and standard OTEL env vars", () => {
+test("otlpOptionsFromEnv supports Takosumi and standard OTEL env vars", () => {
   assert.deepEqual(
     otlpOptionsFromEnv({
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector.local:4318/",
@@ -220,12 +221,12 @@ Deno.test("otlpOptionsFromEnv supports Takosumi and standard OTEL env vars", () 
   );
 });
 
-Deno.test("wrapObservabilitySinkWithOtlpMetrics is a no-op without endpoint", () => {
+test("wrapObservabilitySinkWithOtlpMetrics is a no-op without endpoint", () => {
   const base = new InMemoryObservabilitySink();
   assert.equal(wrapObservabilitySinkWithOtlpMetrics(base, {}), base);
 });
 
-Deno.test("wrapObservabilitySinkWithOtlpMetrics accepts trace-only endpoint", () => {
+test("wrapObservabilitySinkWithOtlpMetrics accepts trace-only endpoint", () => {
   const base = new InMemoryObservabilitySink();
   const wrapped = wrapObservabilitySinkWithOtlpMetrics(base, {
     TAKOSUMI_OTLP_TRACES_ENDPOINT: "http://collector.local/v1/traces",

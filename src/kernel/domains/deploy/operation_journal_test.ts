@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 import { buildOperationPlanPreview } from "./operation_plan_preview.ts";
@@ -14,7 +15,7 @@ const RESOURCE = {
   spec: { name: "logs" },
 } satisfies ManifestResource;
 
-Deno.test("operation journal appends public plan stages idempotently", async () => {
+test("operation journal appends public plan stages idempotently", async () => {
   let ids = 0;
   const store = new InMemoryOperationJournalStore({
     idFactory: () => `journal-row-${++ids}`,
@@ -65,7 +66,7 @@ Deno.test("operation journal appends public plan stages idempotently", async () 
   );
 });
 
-Deno.test("operation journal rejects same tuple with different effect digest", async () => {
+test("operation journal rejects same tuple with different effect digest", async () => {
   const store = new InMemoryOperationJournalStore({
     idFactory: () => "journal-row-1",
   });

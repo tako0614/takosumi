@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   type ApplyResult,
@@ -141,7 +142,7 @@ function tearDown() {
 
 const ctx = {} as PlatformContext;
 
-Deno.test("applyV2 succeeds for independent resources", async () => {
+test("applyV2 succeeds for independent resources", async () => {
   setUp();
   try {
     const resources: ManifestResource[] = [
@@ -160,7 +161,7 @@ Deno.test("applyV2 succeeds for independent resources", async () => {
   }
 });
 
-Deno.test("applyV2 threads outputs through ref expressions", async () => {
+test("applyV2 threads outputs through ref expressions", async () => {
   setUp();
   try {
     const resources: ManifestResource[] = [
@@ -189,7 +190,7 @@ Deno.test("applyV2 threads outputs through ref expressions", async () => {
   }
 });
 
-Deno.test("applyV2 fails validation when shape unregistered", async () => {
+test("applyV2 fails validation when shape unregistered", async () => {
   setUp();
   try {
     const resources: ManifestResource[] = [
@@ -207,7 +208,7 @@ Deno.test("applyV2 fails validation when shape unregistered", async () => {
   }
 });
 
-Deno.test("applyV2 rolls back applied resources on apply failure", async () => {
+test("applyV2 rolls back applied resources on apply failure", async () => {
   setUp("fail");
   try {
     const resources: ManifestResource[] = [
@@ -224,7 +225,7 @@ Deno.test("applyV2 rolls back applied resources on apply failure", async () => {
   }
 });
 
-Deno.test("applyV2 surfaces rollback destroy failures after apply failure", async () => {
+test("applyV2 surfaces rollback destroy failures after apply failure", async () => {
   setUp("fail");
   registerProvider(destroyFailingProvider(), { allowOverride: true });
   try {
@@ -252,7 +253,7 @@ Deno.test("applyV2 surfaces rollback destroy failures after apply failure", asyn
   }
 });
 
-Deno.test("applyV2 uses provider compensate hook during rollback when available", async () => {
+test("applyV2 uses provider compensate hook during rollback when available", async () => {
   setUp("fail");
   registerProvider(compensatingProvider(), { allowOverride: true });
   try {
@@ -274,7 +275,7 @@ Deno.test("applyV2 uses provider compensate hook during rollback when available"
   }
 });
 
-Deno.test("applyV2 surfaces compensation failures after apply failure", async () => {
+test("applyV2 surfaces compensation failures after apply failure", async () => {
   setUp("fail");
   registerProvider(compensateFailingProvider(), { allowOverride: true });
   try {
@@ -302,7 +303,7 @@ Deno.test("applyV2 surfaces compensation failures after apply failure", async ()
   }
 });
 
-Deno.test("applyV2 fails validation on cycle", async () => {
+test("applyV2 fails validation on cycle", async () => {
   setUp();
   try {
     const resources: ManifestResource[] = [
@@ -326,7 +327,7 @@ Deno.test("applyV2 fails validation on cycle", async () => {
   }
 });
 
-Deno.test("applyV2 dry-run includes deterministic OperationPlan preview", async () => {
+test("applyV2 dry-run includes deterministic OperationPlan preview", async () => {
   setUp();
   try {
     const resources: ManifestResource[] = [
@@ -384,7 +385,7 @@ Deno.test("applyV2 dry-run includes deterministic OperationPlan preview", async 
   }
 });
 
-Deno.test("applyV2 threads WAL idempotency context to provider.apply", async () => {
+test("applyV2 threads WAL idempotency context to provider.apply", async () => {
   setUp();
   try {
     const resources: ManifestResource[] = [
@@ -435,7 +436,7 @@ Deno.test("applyV2 threads WAL idempotency context to provider.apply", async () 
   }
 });
 
-Deno.test("applyV2 records provider apply trace spans", async () => {
+test("applyV2 records provider apply trace spans", async () => {
   setUp();
   try {
     const observability = new InMemoryObservabilitySink();
@@ -489,7 +490,7 @@ Deno.test("applyV2 records provider apply trace spans", async () => {
   }
 });
 
-Deno.test("applyV2 writes prepare + commit WAL stages when a journal store is wired", async () => {
+test("applyV2 writes prepare + commit WAL stages when a journal store is wired", async () => {
   setUp();
   try {
     const journal = new InMemoryOperationJournalStore();
@@ -548,7 +549,7 @@ Deno.test("applyV2 writes prepare + commit WAL stages when a journal store is wi
   }
 });
 
-Deno.test("applyV2 re-apply with same plan is journal-idempotent", async () => {
+test("applyV2 re-apply with same plan is journal-idempotent", async () => {
   setUp();
   try {
     const journal = new InMemoryOperationJournalStore();
@@ -585,7 +586,7 @@ Deno.test("applyV2 re-apply with same plan is journal-idempotent", async () => {
   }
 });
 
-Deno.test("applyV2 commit stage guard rejects commit before prepare", async () => {
+test("applyV2 commit stage guard rejects commit before prepare", async () => {
   setUp();
   try {
     // A store that silently drops `prepare` appends (e.g. a partial write /

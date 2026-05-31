@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   allowedProjectionFamiliesForMaterialKind,
@@ -18,7 +19,7 @@ import {
   validateOfficialMaterialMappingOutputFields,
 } from "./catalog.ts";
 
-Deno.test("catalog guards pin official names", () => {
+test("catalog guards pin official names", () => {
   assert.equal(isOfficialMaterialKindName("http-endpoint"), true);
   assert.equal(isOfficialMaterialKindName("mcp-server@v1"), true);
   assert.equal(isOfficialMaterialKindName("sql-connection"), false);
@@ -35,7 +36,7 @@ Deno.test("catalog guards pin official names", () => {
   assert.equal(isSafeDefaultAccessMode("read-write"), false);
 });
 
-Deno.test("catalog projection matrix matches official material kinds", () => {
+test("catalog projection matrix matches official material kinds", () => {
   assert.deepEqual(
     [...allowedProjectionFamiliesForMaterialKind("http-endpoint")],
     ["upstream", "env", "config-mount"],
@@ -62,7 +63,7 @@ Deno.test("catalog projection matrix matches official material kinds", () => {
   );
 });
 
-Deno.test("catalog accepts valid official material samples", () => {
+test("catalog accepts valid official material samples", () => {
   const http: HttpEndpointMaterial = {
     targets: [{
       name: "default",
@@ -157,7 +158,7 @@ Deno.test("catalog accepts valid official material samples", () => {
   assert.deepEqual(validateOfficialMaterial("mcp-server@v1", mcp), []);
 });
 
-Deno.test("catalog rejects ambiguous official material", () => {
+test("catalog rejects ambiguous official material", () => {
   assert.deepEqual(validateOfficialMaterial("http-endpoint", {}), [{
     path: "$",
     message: "http-endpoint requires at least one target or endpoint",
@@ -280,7 +281,7 @@ Deno.test("catalog rejects ambiguous official material", () => {
   );
 });
 
-Deno.test("catalog rejects invalid official material URL values", () => {
+test("catalog rejects invalid official material URL values", () => {
   assert.deepEqual(
     validateOfficialMaterial("object-store", {
       bucket: "assets",
@@ -327,7 +328,7 @@ Deno.test("catalog rejects invalid official material URL values", () => {
   );
 });
 
-Deno.test("catalog rejects embedded credentials in public URL fields", () => {
+test("catalog rejects embedded credentials in public URL fields", () => {
   assert.deepEqual(
     validateOfficialMaterial("object-store", {
       bucket: "assets",
@@ -361,7 +362,7 @@ Deno.test("catalog rejects embedded credentials in public URL fields", () => {
   );
 });
 
-Deno.test("catalog rejects incoherent http endpoint material", () => {
+test("catalog rejects incoherent http endpoint material", () => {
   assert.deepEqual(
     validateOfficialMaterial("http-endpoint", {
       endpoints: [{
@@ -383,7 +384,7 @@ Deno.test("catalog rejects incoherent http endpoint material", () => {
   );
 });
 
-Deno.test("catalog rejects embedded credentials in literal material mappings", () => {
+test("catalog rejects embedded credentials in literal material mappings", () => {
   assert.deepEqual(
     validateOfficialMaterialMapping("object-store", {
       bucket: "$outputs.bucket",
@@ -412,7 +413,7 @@ Deno.test("catalog rejects embedded credentials in literal material mappings", (
   );
 });
 
-Deno.test("catalog rejects invalid http endpoint material values", () => {
+test("catalog rejects invalid http endpoint material values", () => {
   assert.deepEqual(
     validateOfficialMaterial("http-endpoint", {
       targets: [{
@@ -483,7 +484,7 @@ Deno.test("catalog rejects invalid http endpoint material values", () => {
   );
 });
 
-Deno.test("catalog accepts valid official material mapping samples", () => {
+test("catalog accepts valid official material mapping samples", () => {
   assert.deepEqual(
     validateOfficialMaterialMapping("http-endpoint", {
       targets: [{
@@ -563,7 +564,7 @@ Deno.test("catalog accepts valid official material mapping samples", () => {
   );
 });
 
-Deno.test("catalog checks output marker types in material mappings", () => {
+test("catalog checks output marker types in material mappings", () => {
   assert.deepEqual(
     validateOfficialMaterialMappingOutputFields(
       "http-endpoint",
@@ -733,7 +734,7 @@ Deno.test("catalog checks output marker types in material mappings", () => {
   );
 });
 
-Deno.test("catalog rejects drifted material mapping shapes", () => {
+test("catalog rejects drifted material mapping shapes", () => {
   assert.deepEqual(
     validateOfficialMaterialMapping("http-endpoint", {
       urls: ["$outputs.url"],

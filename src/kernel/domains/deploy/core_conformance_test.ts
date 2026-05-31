@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Core conformance tests for Deployment.resolution / Deployment.desired /
 // Deployment.policy_decisions.
 
@@ -140,7 +141,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-Deno.test("core conformance: resolveDeployment pins descriptor closure and resolved graph", async () => {
+test("core conformance: resolveDeployment pins descriptor closure and resolved graph", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -167,7 +168,7 @@ Deno.test("core conformance: resolveDeployment pins descriptor closure and resol
   assert.equal(resolved.resolution.resolved_graph.components.length >= 1, true);
 });
 
-Deno.test("core conformance: descriptor closure uses docs JSON-LD body digests", async () => {
+test("core conformance: descriptor closure uses docs JSON-LD body digests", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -192,7 +193,7 @@ Deno.test("core conformance: descriptor closure uses docs JSON-LD body digests",
   }
 });
 
-Deno.test("core conformance: source/runtime-input descriptors use current bundled kind names", () => {
+test("core conformance: source/runtime-input descriptors use current bundled kind names", () => {
   const aliases = new Set(
     REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS.map((record) => record.alias),
   );
@@ -207,7 +208,7 @@ Deno.test("core conformance: source/runtime-input descriptors use current bundle
   assert.match(body, /source\.js-module@v1/);
 });
 
-Deno.test("core conformance: reference descriptor refs resolve in-tree", () => {
+test("core conformance: reference descriptor refs resolve in-tree", () => {
   const knownRefs = new Set<string>();
   for (const record of REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS) {
     knownRefs.add(record.alias);
@@ -225,7 +226,7 @@ Deno.test("core conformance: reference descriptor refs resolve in-tree", () => {
   }
 });
 
-Deno.test("core conformance: source-backed worker pins source descriptor in closure and graph", async () => {
+test("core conformance: source-backed worker pins source descriptor in closure and graph", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -263,7 +264,7 @@ Deno.test("core conformance: source-backed worker pins source descriptor in clos
   assert.equal(sourceInstance.descriptorId, SOURCE_JS_MODULE_DESCRIPTOR_ID);
 });
 
-Deno.test("core conformance: public shorthand expansion is descriptor-traced", async () => {
+test("core conformance: public shorthand expansion is descriptor-traced", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -300,7 +301,7 @@ Deno.test("core conformance: public shorthand expansion is descriptor-traced", a
 // against. Deleted because the assertion is no longer reachable from the
 // kernel's reduced projection set.
 
-Deno.test("core conformance: resource access paths emit policy decisions on resolution", async () => {
+test("core conformance: resource access paths emit policy decisions on resolution", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -329,7 +330,7 @@ Deno.test("core conformance: resource access paths emit policy decisions on reso
   }
 });
 
-Deno.test("core conformance: public resource bindings become plan-visible resource access paths", async () => {
+test("core conformance: public resource bindings become plan-visible resource access paths", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -355,7 +356,7 @@ Deno.test("core conformance: public resource bindings become plan-visible resour
   assert.equal(resolved.desired.bindings[0].bindingName, "DATABASE_URL");
 });
 
-Deno.test("core conformance: removed service import bindings are rejected", async () => {
+test("core conformance: removed service import bindings are rejected", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -395,7 +396,7 @@ Deno.test("core conformance: removed service import bindings are rejected", asyn
   );
 });
 
-Deno.test("core conformance: blockers from authoring resolution surface as Deployment.conditions", async () => {
+test("core conformance: blockers from authoring resolution surface as Deployment.conditions", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -421,7 +422,7 @@ Deno.test("core conformance: blockers from authoring resolution surface as Deplo
   );
 });
 
-Deno.test("core conformance: approveDeployment stores approval without applying", async () => {
+test("core conformance: approveDeployment stores approval without applying", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -448,7 +449,7 @@ Deno.test("core conformance: approveDeployment stores approval without applying"
   assert.equal(await store.getGroupHead("demo-app"), undefined);
 });
 
-Deno.test("core conformance: activation envelope assignment invariants — primary maps to a component", async () => {
+test("core conformance: activation envelope assignment invariants — primary maps to a component", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -473,7 +474,7 @@ Deno.test("core conformance: activation envelope assignment invariants — prima
 // asserted on the removed `routeAssignments[]` projection chain. Deleted
 // because the kernel no longer emits route assignments.
 
-Deno.test("core conformance: applyDeployment emits ActivationCommitted on success", async () => {
+test("core conformance: applyDeployment emits ActivationCommitted on success", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -498,7 +499,7 @@ Deno.test("core conformance: applyDeployment emits ActivationCommitted on succes
   );
 });
 
-Deno.test("core conformance: rolledBack condition is appended to the previously current Deployment", async () => {
+test("core conformance: rolledBack condition is appended to the previously current Deployment", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -534,7 +535,7 @@ Deno.test("core conformance: rolledBack condition is appended to the previously 
   );
 });
 
-Deno.test("core conformance: unsupported runtime type is rejected at resolution without rewriting Core contracts", async () => {
+test("core conformance: unsupported runtime type is rejected at resolution without rewriting Core contracts", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -560,7 +561,7 @@ Deno.test("core conformance: unsupported runtime type is rejected at resolution 
     /unsupported|unknown|invalid/i,
   );
 });
-Deno.test("core conformance: provider capabilities reject unsupported runtime capability requirements", async () => {
+test("core conformance: provider capabilities reject unsupported runtime capability requirements", async () => {
   // Phase 17D — provider capability rejection. The compiler accepts the
   // `runtimeCapabilities` requirement, but the resolved-graph's runtime
   // claim projection carries the capability list. A live provider adapter
@@ -628,7 +629,7 @@ Deno.test("core conformance: provider capabilities reject unsupported runtime ca
   );
   assert.notEqual(runtimeClaim.digest, baselineClaim?.digest);
 });
-Deno.test("core conformance: minInstances derives always-on container capability", async () => {
+test("core conformance: minInstances derives always-on container capability", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -659,7 +660,7 @@ Deno.test("core conformance: minInstances derives always-on container capability
   assert.ok(component);
   assert.ok(projection);
 });
-Deno.test("core conformance: provider capabilities reject unsupported resource access paths without rewriting access mode", async () => {
+test("core conformance: provider capabilities reject unsupported resource access paths without rewriting access mode", async () => {
   // Phase 17D — resource access paths are projected from the descriptor
   // closure verbatim. The resolved Deployment surfaces them on
   // `desired.bindings[].accessPath`. Provider-capability rejection (i.e.
@@ -689,7 +690,7 @@ Deno.test("core conformance: provider capabilities reject unsupported resource a
   );
   assert.ok(decisions.length >= 1);
 });
-Deno.test("core conformance: unsupported route protocol is rejected at resolution", async () => {
+test("core conformance: unsupported route protocol is rejected at resolution", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -723,7 +724,7 @@ Deno.test("core conformance: unsupported route protocol is rejected at resolutio
 // caller (apply_worker, runtime-agent) and consults the provider observation
 // stream for closure-digest drift. A non-ok finding aborts apply before any
 // state mutation.
-Deno.test("core conformance: apply rejects descriptor closure drift without mutating activation", async () => {
+test("core conformance: apply rejects descriptor closure drift without mutating activation", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -763,7 +764,7 @@ Deno.test("core conformance: apply rejects descriptor closure drift without muta
   assert.equal(reread?.status, "resolved");
 });
 
-Deno.test("core conformance: read-set validation uses current descriptor provider snapshots", async () => {
+test("core conformance: read-set validation uses current descriptor provider snapshots", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -791,7 +792,7 @@ Deno.test("core conformance: read-set validation uses current descriptor provide
   assert.equal(applied.status, "applied");
 });
 
-Deno.test("core conformance: missing read-set snapshots are stale", async () => {
+test("core conformance: missing read-set snapshots are stale", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -830,7 +831,7 @@ Deno.test("core conformance: missing read-set snapshots are stale", async () => 
 // "route exposure targets surface as exposure-target projections" tests both
 // asserted on the removed `route_assignments[]` / `exposure-target`
 // projections. Deleted because the kernel no longer emits either.
-Deno.test("core conformance: unsupported route target is blocked at resolution", async () => {
+test("core conformance: unsupported route target is blocked at resolution", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -858,7 +859,7 @@ Deno.test("core conformance: unsupported route target is blocked at resolution",
 // .route_assignments` / `exposure-target` projections that the kernel no
 // longer emits. Deleted because the activation-ownership invariant has no
 // surface on the routes-agnostic kernel.
-Deno.test("core conformance: resource access path descriptor refs are carried onto Deployment.desired.bindings", async () => {
+test("core conformance: resource access path descriptor refs are carried onto Deployment.desired.bindings", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -883,7 +884,7 @@ Deno.test("core conformance: resource access path descriptor refs are carried on
     ),
   );
 });
-Deno.test("core conformance: runtime network policy can allow external resource access path", async () => {
+test("core conformance: runtime network policy can allow external resource access path", async () => {
   // Phase 17D — when a binding's accessPath has `networkBoundary: external`,
   // the resolved Deployment status flips to `failed` unless the manifest
   // overrides include a runtimeNetworkPolicy egress rule allowing the
@@ -924,7 +925,7 @@ Deno.test("core conformance: runtime network policy can allow external resource 
   );
   assert.ok(decisions.length >= 1);
 });
-Deno.test("core conformance: approval is recorded on Deployment.approval and is independent of apply", async () => {
+test("core conformance: approval is recorded on Deployment.approval and is independent of apply", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -951,7 +952,7 @@ Deno.test("core conformance: approval is recorded on Deployment.approval and is 
   assert.equal(await store.getGroupHead("demo-app"), undefined);
 });
 
-Deno.test("core conformance: native raw binding requires policy approval before apply", async () => {
+test("core conformance: native raw binding requires policy approval before apply", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -1048,7 +1049,7 @@ Deno.test("core conformance: native raw binding requires policy approval before 
   );
 });
 
-Deno.test("core conformance: approval applied to a denied resolution does not unblock apply", async () => {
+test("core conformance: approval applied to a denied resolution does not unblock apply", async () => {
   // The resolved Deployment with a deny policy_decision is `failed`, not
   // `resolved`. Approval is rejected for terminal statuses and apply remains
   // blocked because the canonical apply gate is the Deployment status.
@@ -1088,7 +1089,7 @@ Deno.test("core conformance: approval applied to a denied resolution does not un
   );
 });
 
-Deno.test("core conformance: required provider features deny unsupported runtime capabilities locally", async () => {
+test("core conformance: required provider features deny unsupported runtime capabilities locally", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -1123,7 +1124,7 @@ Deno.test("core conformance: required provider features deny unsupported runtime
   assert.equal(decision.gate, "provider-selection");
 });
 
-Deno.test("core conformance: pgvector native feature realization requires approval", async () => {
+test("core conformance: pgvector native feature realization requires approval", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -1159,7 +1160,7 @@ Deno.test("core conformance: pgvector native feature realization requires approv
   );
 });
 
-Deno.test("core conformance: cross-contract previousNames are denied at resolution", async () => {
+test("core conformance: cross-contract previousNames are denied at resolution", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -1198,7 +1199,7 @@ Deno.test("core conformance: cross-contract previousNames are denied at resoluti
   assert.equal(decision.ruleRef, "previous-names:cross-contract-denied");
 });
 
-Deno.test("core conformance: canary candidate-scoped egress requires approval", async () => {
+test("core conformance: canary candidate-scoped egress requires approval", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -1242,7 +1243,7 @@ Deno.test("core conformance: canary candidate-scoped egress requires approval", 
   assert.equal(decision.decision, "require-approval");
 });
 
-Deno.test("core conformance: shadow side-effect manifests are denied before DB semantic write approval", async () => {
+test("core conformance: shadow side-effect manifests are denied before DB semantic write approval", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -1294,7 +1295,7 @@ Deno.test("core conformance: shadow side-effect manifests are denied before DB s
   assert.equal(decisionIds.has("policy-decision:db-semantic-write:db"), true);
 });
 
-Deno.test("core conformance: advisory external access path records audit allow while enforced path denies", async () => {
+test("core conformance: advisory external access path records audit allow while enforced path denies", async () => {
   const advisoryService = new DeploymentService({
     store: new InMemoryDeploymentStore(),
     idFactory: () => "deployment_advisory_egress_1",
@@ -1383,7 +1384,7 @@ Deno.test("core conformance: advisory external access path records audit allow w
     ),
   );
 });
-Deno.test("core conformance: ambiguous resource binding shorthand is blocked at resolution", async () => {
+test("core conformance: ambiguous resource binding shorthand is blocked at resolution", async () => {
   // Public resource binding shorthand `bindings: { web: "DB" }` requires the
   // referenced compute to exist. A typo (referencing an unknown component)
   // is rejected by the compiler-level validator before resolution proceeds.
@@ -1410,7 +1411,7 @@ Deno.test("core conformance: ambiguous resource binding shorthand is blocked at 
     /references unknown compute/,
   );
 });
-Deno.test("core conformance: activation envelope route assignments use the canonical permille weight", async () => {
+test("core conformance: activation envelope route assignments use the canonical permille weight", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -1433,7 +1434,7 @@ Deno.test("core conformance: activation envelope route assignments use the canon
     }
   }
 });
-Deno.test("core conformance: applying a finalized Deployment never re-runs activation", async () => {
+test("core conformance: applying a finalized Deployment never re-runs activation", async () => {
   // The Deployment equivalent of "activation preview blocks not-ready and retired
   // app releases" is that any non-resolved Deployment is treated as
   // finalized: status `applied` / `failed` / `rolled-back` are all rejected
@@ -1466,7 +1467,7 @@ Deno.test("core conformance: applying a finalized Deployment never re-runs activ
 });
 
 // Surviving test 1: ProviderObservation store ordering / drift reasoning.
-Deno.test("core conformance: provider observation is recorded separately from materialization", async () => {
+test("core conformance: provider observation is recorded separately from materialization", async () => {
   const store = new InMemoryProviderObservationStore();
   await store.record({
     materializationId: "materialization_1",
@@ -1496,7 +1497,7 @@ Deno.test("core conformance: provider observation is recorded separately from ma
 });
 
 // Surviving test 2: condition-reason catalog exposure.
-Deno.test("core conformance: condition reasons are exposed from the catalog", () => {
+test("core conformance: condition reasons are exposed from the catalog", () => {
   for (
     const reason of [
       "DescriptorChanged",
@@ -1515,7 +1516,7 @@ Deno.test("core conformance: condition reasons are exposed from the catalog", ()
 });
 
 // Surviving smoke test: reference descriptor conformance dataset still loads.
-Deno.test("core conformance: reference descriptor conformance dataset is exposed", () => {
+test("core conformance: reference descriptor conformance dataset is exposed", () => {
   assert.equal(REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS.length > 0, true);
   for (const record of REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS) {
     assert.match(record.digest, /^sha256:/);

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import {
@@ -5,7 +6,7 @@ import {
   createInMemoryCoreDomainDependencies,
 } from "./services.ts";
 
-Deno.test("core creates a space, grants owner membership, and permits owner group creation", async () => {
+test("core creates a space, grants owner membership, and permits owner group creation", async () => {
   const deps = createInMemoryCoreDomainDependencies({
     clock: { now: () => new Date("2026-04-27T00:00:00.000Z") },
     idGenerator: { create: (prefix) => `${prefix}_test` },
@@ -63,7 +64,7 @@ Deno.test("core creates a space, grants owner membership, and permits owner grou
   });
 });
 
-Deno.test("core denies group creation and entitlement for non-admin members", async () => {
+test("core denies group creation and entitlement for non-admin members", async () => {
   const deps = createInMemoryCoreDomainDependencies({
     clock: { now: () => new Date("2026-04-27T00:00:00.000Z") },
     idGenerator: { create: (prefix) => `${prefix}_${crypto.randomUUID()}` },

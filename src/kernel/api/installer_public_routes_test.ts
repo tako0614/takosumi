@@ -1,8 +1,8 @@
-import { assertEquals } from "jsr:@std/assert@^1.0.5";
+import { expect, test } from "bun:test";
+
 import { createApiApp } from "./app.ts";
 
-Deno.test(
-  "installer_public_routes — 5 endpoints respond with 501 not_implemented",
+test("installer_public_routes — 5 endpoints respond with 501 not_implemented",
   async () => {
     const app = await createApiApp({
       registerInternalRoutes: false,
@@ -30,29 +30,16 @@ Deno.test(
         },
         body: JSON.stringify(body),
       });
-      assertEquals(response.status, 501, `expected 501 for ${path}`);
+      expect(response.status).toEqual(501);
       const json = await response.json();
-      assertEquals(
-        json.error.code,
-        "not_implemented",
-        `expected not_implemented for ${path}`,
-      );
-      assertEquals(
-        typeof json.error.message,
-        "string",
-        `expected error.message string for ${path}`,
-      );
-      assertEquals(
-        typeof json.error.requestId,
-        "string",
-        `expected error.requestId string for ${path}`,
-      );
+      expect(json.error.code).toEqual("not_implemented");
+      expect(typeof json.error.message).toEqual("string");
+      expect(typeof json.error.requestId).toEqual("string");
     }
   },
 );
 
-Deno.test(
-  "installer_public_routes — disabled without TAKOSUMI_INSTALLER_TOKEN",
+test("installer_public_routes — disabled without TAKOSUMI_INSTALLER_TOKEN",
   async () => {
     const app = await createApiApp({
       registerInternalRoutes: false,
@@ -65,12 +52,12 @@ Deno.test(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
     });
-    assertEquals(response.status, 404);
-    assertEquals((await response.json()).error.code, "not_found");
+    expect(response.status).toEqual(404);
+    expect((await response.json()).error.code).toEqual("not_found");
   },
 );
 
-Deno.test("installer_public_routes — rejects invalid bearer", async () => {
+test("installer_public_routes — rejects invalid bearer", async () => {
   const app = await createApiApp({
     registerInternalRoutes: false,
     registerInstallerPublicRoutes: true,
@@ -88,6 +75,6 @@ Deno.test("installer_public_routes — rejects invalid bearer", async () => {
     },
     body: JSON.stringify({}),
   });
-  assertEquals(response.status, 401);
-  assertEquals((await response.json()).error.code, "unauthenticated");
+  expect(response.status).toEqual(401);
+  expect((await response.json()).error.code).toEqual("unauthenticated");
 });

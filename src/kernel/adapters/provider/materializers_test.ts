@@ -1,9 +1,10 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { RuntimeDesiredState } from "../../domains/runtime/mod.ts";
 import { DryRunProviderMaterializer } from "./dry_run.ts";
 import { NoopProviderMaterializer } from "./noop.ts";
 
-Deno.test("NoopProviderMaterializer records a noop operation without side effects", async () => {
+test("NoopProviderMaterializer records a noop operation without side effects", async () => {
   const materializer = new NoopProviderMaterializer({
     clock: fixedClock("2026-04-27T01:00:00.000Z"),
     idGenerator: sequenceIds(["op_1", "plan_1"]),
@@ -36,7 +37,7 @@ Deno.test("NoopProviderMaterializer records a noop operation without side effect
   assert.deepEqual(await materializer.listRecordedOperations(), []);
 });
 
-Deno.test("DryRunProviderMaterializer renders protocol-aware route operations", async () => {
+test("DryRunProviderMaterializer renders protocol-aware route operations", async () => {
   const materializer = new DryRunProviderMaterializer({
     clock: fixedClock("2026-04-27T01:00:00.000Z"),
     idGenerator: sequenceIds([

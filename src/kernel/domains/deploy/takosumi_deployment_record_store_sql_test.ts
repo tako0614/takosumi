@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type {
   SqlClient,
@@ -278,7 +279,7 @@ function createStore(): {
   return { store, client };
 }
 
-Deno.test("SqlStore.upsert inserts a new row when (tenantId, name) is fresh", async () => {
+test("SqlStore.upsert inserts a new row when (tenantId, name) is fresh", async () => {
   const { store } = createStore();
   const record = await store.upsert({
     tenantId: TENANT,
@@ -296,7 +297,7 @@ Deno.test("SqlStore.upsert inserts a new row when (tenantId, name) is fresh", as
   assert.ok(record.id.length > 0);
 });
 
-Deno.test("SqlStore.upsert updates the same row when natural key matches", async () => {
+test("SqlStore.upsert updates the same row when natural key matches", async () => {
   const { store } = createStore();
   const first = await store.upsert({
     tenantId: TENANT,
@@ -338,13 +339,13 @@ Deno.test("SqlStore.upsert updates the same row when natural key matches", async
   );
 });
 
-Deno.test("SqlStore.get returns undefined for missing rows", async () => {
+test("SqlStore.get returns undefined for missing rows", async () => {
   const { store } = createStore();
   const missing = await store.get(TENANT, "nope");
   assert.equal(missing, undefined);
 });
 
-Deno.test("SqlStore.list filters by tenantId", async () => {
+test("SqlStore.list filters by tenantId", async () => {
   const { store } = createStore();
   await store.upsert({
     tenantId: "tenant-a",
@@ -370,7 +371,7 @@ Deno.test("SqlStore.list filters by tenantId", async () => {
   assert.equal(b[0].tenantId, "tenant-b");
 });
 
-Deno.test("SqlStore.markDestroyed clears appliedResources and flips status", async () => {
+test("SqlStore.markDestroyed clears appliedResources and flips status", async () => {
   const { store } = createStore();
   await store.upsert({
     tenantId: TENANT,
@@ -395,13 +396,13 @@ Deno.test("SqlStore.markDestroyed clears appliedResources and flips status", asy
   assert.equal(updated!.createdAt, NOW_1);
 });
 
-Deno.test("SqlStore.markDestroyed returns undefined when no row matches", async () => {
+test("SqlStore.markDestroyed returns undefined when no row matches", async () => {
   const { store } = createStore();
   const result = await store.markDestroyed(TENANT, "ghost", NOW_2);
   assert.equal(result, undefined);
 });
 
-Deno.test("SqlStore.remove drops the row and returns true exactly once", async () => {
+test("SqlStore.remove drops the row and returns true exactly once", async () => {
   const { store } = createStore();
   await store.upsert({
     tenantId: TENANT,
@@ -417,8 +418,7 @@ Deno.test("SqlStore.remove drops the row and returns true exactly once", async (
 
 // --- listReferencedArtifactHashes -------------------------------------------
 
-Deno.test(
-  "SqlStore.listReferencedArtifactHashes returns hashes from manifest_json",
+test("SqlStore.listReferencedArtifactHashes returns hashes from manifest_json",
   async () => {
     const { store } = createStore();
     await store.upsert({
@@ -442,8 +442,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "SqlStore.listReferencedArtifactHashes returns hashes from applied_resources_json outputs",
+test("SqlStore.listReferencedArtifactHashes returns hashes from applied_resources_json outputs",
   async () => {
     const { store } = createStore();
     await store.upsert({
@@ -467,8 +466,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "SqlStore.listReferencedArtifactHashes unions input + output hashes across rows",
+test("SqlStore.listReferencedArtifactHashes unions input + output hashes across rows",
   async () => {
     const { store } = createStore();
     await store.upsert({
@@ -504,8 +502,7 @@ Deno.test(
 
 // --- Concurrency ------------------------------------------------------------
 
-Deno.test(
-  "SqlStore.acquireLock serialises concurrent acquirers on the same key",
+test("SqlStore.acquireLock serialises concurrent acquirers on the same key",
   async () => {
     const { store } = createStore();
     const order: string[] = [];
@@ -537,8 +534,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "SqlStore.acquireLock serialises waiters across store instances",
+test("SqlStore.acquireLock serialises waiters across store instances",
   async () => {
     const client = new FakeTakosumiSqlClient();
     const first = new SqlTakosumiDeploymentRecordStore({
@@ -573,8 +569,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "SqlStore.acquireLock can take over an expired cross-process lease",
+test("SqlStore.acquireLock can take over an expired cross-process lease",
   async () => {
     const client = new FakeTakosumiSqlClient();
     const first = new SqlTakosumiDeploymentRecordStore({
@@ -604,7 +599,7 @@ Deno.test(
   },
 );
 
-Deno.test("SqlStore.acquireLock applies configured SQL lease window", async () => {
+test("SqlStore.acquireLock applies configured SQL lease window", async () => {
   const client = new FakeTakosumiSqlClient();
   const store = new SqlTakosumiDeploymentRecordStore({
     client,
@@ -619,8 +614,7 @@ Deno.test("SqlStore.acquireLock applies configured SQL lease window", async () =
   await store.releaseLock(TENANT, "custom-lease-app");
 });
 
-Deno.test(
-  "SqlStore.acquireLock does not block on different keys",
+test("SqlStore.acquireLock does not block on different keys",
   async () => {
     const { store } = createStore();
     await store.acquireLock(TENANT, "app-a");
@@ -632,8 +626,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "SqlStore.acquireLock keys tenant and deployment name as a tuple locally",
+test("SqlStore.acquireLock keys tenant and deployment name as a tuple locally",
   async () => {
     const { store, client } = createStore();
     await store.acquireLock("tenant a", "app");
@@ -652,8 +645,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "SqlStore.releaseLock without prior acquire is a no-op",
+test("SqlStore.releaseLock without prior acquire is a no-op",
   async () => {
     const { store } = createStore();
     await store.releaseLock(TENANT, "ghost");
@@ -663,8 +655,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "SqlStore.acquireLock + releaseLock round-trip serialises a second acquirer",
+test("SqlStore.acquireLock + releaseLock round-trip serialises a second acquirer",
   async () => {
     const { store } = createStore();
     await store.acquireLock(TENANT, "advisory-key");
@@ -684,8 +675,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "SqlStore.acquireLock fan-out: many concurrent waiters resolve in arrival order",
+test("SqlStore.acquireLock fan-out: many concurrent waiters resolve in arrival order",
   async () => {
     const { store } = createStore();
     const order: number[] = [];
@@ -724,8 +714,7 @@ function resolvesWithin(
 
 // --- Round-trip CRUD --------------------------------------------------------
 
-Deno.test(
-  "SqlStore CRUD round-trip: upsert -> get -> list -> markDestroyed -> remove",
+test("SqlStore CRUD round-trip: upsert -> get -> list -> markDestroyed -> remove",
   async () => {
     const { store } = createStore();
     await store.upsert({
@@ -774,7 +763,7 @@ Deno.test(
   },
 );
 
-Deno.test("SqlStore.list returns rows ordered by createdAt ascending", async () => {
+test("SqlStore.list returns rows ordered by createdAt ascending", async () => {
   const { store } = createStore();
   await store.upsert({
     tenantId: TENANT,
