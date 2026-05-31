@@ -35,17 +35,7 @@ const ENTRY_TABLE: Record<string, string> = {
   "./kernel": "src/all/kernel.ts",
   "./cli": "src/all/cli.ts",
   "./runtime-agent": "src/runtime-agent/server.ts",
-  "./kinds": "src/all/kinds.ts",
   "./server": "src/all/server.ts",
-  "./kind/gateway": "src/kinds/gateway/mod.ts",
-  "./kind/kv-store": "src/kinds/kv-store/mod.ts",
-  "./kind/message-queue": "src/kinds/message-queue/mod.ts",
-  "./kind/object-store": "src/kinds/object-store/mod.ts",
-  "./kind/postgres": "src/kinds/postgres/mod.ts",
-  "./kind/sqlite": "src/kinds/sqlite/mod.ts",
-  "./kind/vector-store": "src/kinds/vector-store/mod.ts",
-  "./kind/web-service": "src/kinds/web-service/mod.ts",
-  "./kind/worker": "src/kinds/worker/mod.ts",
 };
 
 function parseArgs() {
@@ -115,7 +105,7 @@ await build({
     name: "@takosjp/takosumi",
     version: umbrella.version,
     description:
-      "Takosumi core contract / kernel / installer / cli / runtime-agent / portable kind packages (npm build).",
+      "Takosumi core contract / kernel / installer / cli / runtime-agent (kind-agnostic framework; official kind catalog is published JSON-LD at takosumi.com/kinds/v1) (npm build).",
     license: "MIT",
     type: "module",
   },

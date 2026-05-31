@@ -42,23 +42,16 @@ const VOCABULARY_ROOT_PATH = fromFileUrl(
   new URL("../spec/contexts/v1.jsonld", import.meta.url),
 );
 
-const KIND_ROOTS = [
-  "worker",
-  "web-service",
-  "postgres",
-  "object-store",
-  "gateway",
-  "sqlite",
-  "kv-store",
-  "message-queue",
-  "vector-store",
-].map((name) =>
-  fromFileUrl(new URL(`../src/kinds/${name}/spec`, import.meta.url))
+// Official kind descriptors are published spec, not framework source: the
+// canonical JSON-LD lives under docs/kinds/v1/<name>.jsonld and is served at
+// https://takosumi.com/kinds/v1/<name>. The framework imports none of them.
+const KIND_CATALOG_ROOT = fromFileUrl(
+  new URL("../docs/kinds/v1", import.meta.url),
 );
 
 const ROOTS = [
   fromFileUrl(new URL("../spec/contexts", import.meta.url)),
-  ...KIND_ROOTS,
+  KIND_CATALOG_ROOT,
 ] as const;
 
 const KIND_ID_PREFIX = "https://takosumi.com/kinds/v1/";
