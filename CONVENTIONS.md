@@ -11,8 +11,8 @@ manifest and publication selectors use `kind`.
 
 ## Kind ownership
 
-- Portable kinds are subpath exports `@takosjp/takosumi/kind/<alias>` and own `spec/kind.jsonld`, helper types, and validators in `packages/kind-<alias>/`.
-- Native kinds are sourced in the sibling `takosumi-plugins` repository, exported as `@takosjp/takosumi-plugins/kind/<alias>` subpaths, and own substrate-specific kind definition metadata and adapter factories.
+- Official kind descriptors are JSON-LD spec documents in `docs/kinds/v1/<alias>.jsonld`, published at `https://takosumi.com/kinds/v1/<alias>`. They are not runtime package exports.
+- Native kind implementations are sourced in the sibling `takosumi-plugins` repository and exported as `@takosjp/takosumi-plugins/kind/<alias>` subpaths.
 - Kind families such as worker, postgres, object-store, gateway, and web-service are documentation groups, not an manifest field.
 - Backend-specific `spec` fields belong to native kinds. Do not hide them behind a portable kind.
 
@@ -24,14 +24,14 @@ discoverable by `kind` and `labels`; multiple pathless publications with the
 same kind are valid. Consumers that intentionally want all visible matches use
 `listen.<binding>.kind` with `many: true`.
 
-## Adding a kind package
+## Adding a kind descriptor or binding
 
 1. Choose a stable alias such as `cloudflare-worker` or `aws-rds-postgres`.
-2. Create `packages/kind-<alias>/deno.json`, `mod.ts`, and `spec/kind.jsonld` in `takosumi/` for portable descriptors or `takosumi-plugins/` for native backend bindings.
-3. Export `KIND_NAME`, `KIND_URI`, and `KIND_ALIASES`.
-4. Add a `KernelPlugin` factory only when the reference implementation has an adapter.
-5. Add the package to the owning repository's `deno.json` workspace and wire its subpath into that repository's npm build (`scripts/build-npm.ts` for portable kinds, `takosumi-plugins/scripts/dnt-build.ts` for native kinds).
-6. Update [Kind Packages](docs/reference/kind-packages.md) and examples.
+2. Add or edit the descriptor JSON-LD in `docs/kinds/v1/<alias>.jsonld`.
+3. If the reference implementation needs a backend binding, add or update `takosumi-plugins/src/plugins/<alias>/`.
+4. Export `KIND_NAME`, `KIND_URI`, `KIND_ALIASES`, and a `KernelPlugin` factory from that plugin subpath only when the reference implementation has an adapter.
+5. Add the plugin export to `takosumi-plugins/package.json` and its npm subpath build.
+6. Update [Reference Plugin Exports](docs/reference/reference-plugin-exports.md) and examples.
 
 ## Reference implementation binding
 
