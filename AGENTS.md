@@ -17,7 +17,7 @@ Takosumi AppSpec is kind-agnostic and intentionally small:
 
 `Component.kind` is an opaque alias or URI. Its meaning comes from operator-injected `kindAliases`, descriptor metadata, Space policy, and the operator's implementation binding. The Installer API carries source and apply requests; it does not define kind semantics.
 
-Official portable kind descriptors are **published spec, not framework source**: each is flat JSON-LD under `docs/kinds/v1/<name>.jsonld`, published as `https://takosumi.com/kinds/v1/<name>`. The framework imports none of them. Operators may adopt those descriptors or use their own catalog.
+Official kind descriptors are **published spec, not framework source**, and form one catalog with no "native" vs "portable" category split: every descriptor — base kinds and the descriptors that extend them via `portableBase` — is flat JSON-LD under `docs/kinds/v1/<name>.jsonld`, published as `https://takosumi.com/kinds/v1/<name>`. The framework imports none of them, and `takosumi-plugins` holds only implementations that follow them. Operators may adopt those descriptors or use their own catalog.
 
 ## Workspace
 

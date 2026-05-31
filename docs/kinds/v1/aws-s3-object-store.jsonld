@@ -1,0 +1,70 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/aws-s3-object-store",
+  "@type": "ComponentKind",
+  "name": "aws-s3-object-store",
+  "version": "v1",
+  "description": "AWS S3 bucket binding. Publishes bucket name, endpoint, and region as object-store material.",
+  "family": "object-store",
+  "portableBase": "https://takosumi.com/kinds/v1/object-store",
+  "referenceAliases": [
+    "aws-s3-object-store"
+  ],
+  "publications": {
+    "bucket": {
+      "contract": "object-store",
+      "exampleMaterialMapping": {
+        "bucket": "$outputs.bucket",
+        "endpoint": "$outputs.endpoint",
+        "region": "$outputs.region"
+      }
+    }
+  },
+  "capabilityTerms": [
+    "versioning"
+  ],
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+      "name"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Logical bucket name (provider applies its own scoping rules)."
+      },
+      "versioning": {
+        "type": "boolean",
+        "description": "Request object versioning. Operator policy and the selected implementation materialize or reject the request."
+      },
+      "region": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Provider region (when applicable)."
+      }
+    }
+  },
+  "outputs": [
+    {
+      "name": "bucket",
+      "type": "string",
+      "required": true,
+      "meaning": "Implementation-scoped bucket name."
+    },
+    {
+      "name": "endpoint",
+      "type": "string",
+      "required": true,
+      "meaning": "S3-class endpoint URL."
+    },
+    {
+      "name": "region",
+      "type": "string",
+      "required": true,
+      "meaning": "Bucket region."
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/minio-object-store",
+  "@type": "ComponentKind",
+  "name": "minio-object-store",
+  "version": "v1",
+  "description": "MinIO bucket binding for an S3-compatible endpoint. Publishes bucket name, endpoint, and region as object-store material.",
+  "family": "object-store",
+  "portableBase": "https://takosumi.com/kinds/v1/object-store",
+  "referenceAliases": [
+    "minio-object-store"
+  ],
+  "publications": {
+    "bucket": {
+      "contract": "object-store",
+      "exampleMaterialMapping": {
+        "bucket": "$outputs.bucket",
+        "endpoint": "$outputs.endpoint",
+        "region": "$outputs.region"
+      }
+    }
+  },
+  "capabilityTerms": [
+    "s3-compatible"
+  ],
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+      "name"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Logical bucket name (provider applies its own scoping rules)."
+      }
+    }
+  },
+  "outputs": [
+    {
+      "name": "bucket",
+      "type": "string",
+      "required": true,
+      "meaning": "Implementation-scoped bucket name."
+    },
+    {
+      "name": "endpoint",
+      "type": "string",
+      "required": true,
+      "meaning": "S3-class endpoint URL."
+    },
+    {
+      "name": "region",
+      "type": "string",
+      "required": true,
+      "meaning": "Bucket region."
+    }
+  ]
+}
