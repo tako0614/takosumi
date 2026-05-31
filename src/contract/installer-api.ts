@@ -17,6 +17,7 @@ import type {
   AppSpec,
   ComponentOutputRef,
   PlatformServicePath,
+  PublicationLabelMap,
 } from "./app-spec.ts";
 import type { JsonValue } from "./types.ts";
 
@@ -260,8 +261,10 @@ export interface DeploymentOutputs {
 export type DeploymentComponentOutput = Readonly<Record<string, JsonValue>>;
 
 export type DeploymentServicePathExposure = Readonly<{
-  readonly path: PlatformServicePath;
   readonly output: ComponentOutputRef;
+  readonly kind?: string;
+  readonly path?: PlatformServicePath;
+  readonly labels?: PublicationLabelMap;
   readonly material: DeploymentComponentOutput;
 }>;
 

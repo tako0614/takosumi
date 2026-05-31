@@ -56,6 +56,7 @@ Rules:
 - maximum 8 segments
 - maximum 255 characters
 - no empty segments
+- first segment `takosumi` / `system` and `_` prefixes are reserved
 
 Paths such as `identity.primary.oidc` or `acme.database.reporting` resolve by
 exact match. Add a path only when a publication needs a stable name. The field
@@ -103,13 +104,15 @@ labels or fail apply before resources are created.
 ## Path Ownership {#path-ownership}
 
 Path inventory, lifecycle, and ownership belong to the distribution or
-organization that offers the path. Takosumi core does not special-case path
-prefixes; it handles grammar and exact-match resolution.
+organization that offers the path. Takosumi core handles grammar, reserved
+prefix guards, and exact-match resolution. `takosumi.*` and `system.*` are
+reserved platform/operator namespaces; each distribution spec defines the
+concrete paths it publishes.
 
 | Provider example                 | Example path              |
 | -------------------------------- | ------------------------- |
 | Account plane                    | `identity.primary.oidc`   |
-| Billing provider                 | `billing.primary.account` |
+| Billing provider                 | `billing.primary.default` |
 | Organization or private operator | `acme.database.reporting` |
 
 Takosumi Cloud or another operator distribution can publish its concrete paths

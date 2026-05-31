@@ -59,7 +59,7 @@ Validates the manifest and returns planned changes without creating an Installat
 
 `git` and `prepared` are remote source kinds. Remote operators, CLIs, and build services pass one of those two kinds. `local` is for dev/operator-local profiles where the kernel process can directly read the path in `source.url`.
 
-Remote `source.url` values use HTTPS. `http://localhost` and `http://127.0.0.1` are only for single-host loopback development. A digest is integrity evidence; it does not replace the HTTPS transport requirement. File paths and `file://` locators are represented with `source.kind: "local"`, not with remote source.
+Remote `source.url` values use HTTPS for `prepared` and HTTPS or Git SSH shorthand (`git@host:path`) for `git`. The SSRF guard hard-rejects private, loopback, and link-local IP literals. A digest is integrity evidence; it does not replace the HTTPS transport requirement. Single-host loopback development uses `source.kind: "local"` or local TLS. `http://localhost`, `http://127.0.0.1`, filesystem paths, and `file://` locators are invalid as portable remote source URLs.
 
 Source descriptors are closed by kind:
 
@@ -75,7 +75,7 @@ Portable Installer API v1 defines:
 - archive-root `.takosumi.yml`
 - size caps and path-safety requirements
 
-Portable v1 prepared source payloads are uncompressed POSIX tar archives. Operator-local profiles may accept other encodings, but those are outside portable v1 compatibility.
+Portable v1 prepared source payloads are POSIX tar archives. Uncompressed tar and gzip-compressed tar (`.tar.gz` / gzip magic bytes) are accepted. The digest covers the exact fetched payload bytes, including compression when present.
 
 The kernel computes `sha256:<hex>` over the fetched payload bytes, checks the portable tar parser and archive safety policy, then reads the manifest. If the computed digest does not match caller-supplied `source.digest`, the response is `409 failed_precondition`. Build recipe, cache metadata, and provenance remain build-service records.
 
@@ -96,7 +96,7 @@ The `outputs`-related examples in this page use catalog-shaped output data an op
     "commit": "abc123"
   },
   "manifestDigest": "sha256:...",
-  "manifest": {
+  "appSpec": {
     "apiVersion": "v1",
     "metadata": {
       "id": "com.example.notes",
@@ -473,7 +473,12 @@ Moves the current pointer back to a previous Deployment. It does not mutate hist
   },
   "rollback": {
     "rolledBackFrom": "dep_01HM9N7XK4QY8RT2P5JZF6V3WB",
-    "rolledBackTo": "dep_01HM9N7XK4QY8RT2P5JZF6V3WA"
+    "rolledBackTo": "dep_01HM9N7XK4QY8RT2P5JZF6V3WA",
+    "scope": {
+      "pointer": "reverted",
+      "resourceMaterialization": "not-reapplied",
+      "workloadState": "not-reverted"
+    }
   }
 }
 ```

@@ -311,7 +311,7 @@ export class ApplyService {
   }
 
   // ---------------------------------------------------------------------
-  // Shape-model dispatch (apply_v2)
+  // Legacy resources[] dispatch (apply_v2)
   // ---------------------------------------------------------------------
 
   async #applyManifestV2(
@@ -384,9 +384,8 @@ export class ApplyService {
 // ---------------------------------------------------------------------
 
 /**
- * `true` when the manifest uses the current shape model. Internal compiler
- * inputs may still carry a `resources` map before they are expanded; public
- * deploy manifests use an array.
+ * `true` when the manifest uses the legacy deploy-domain `resources[]` model.
+ * Public `.takosumi.yml` authoring uses AppSpec `components`, not this path.
  */
 function manifestUsesShapeModel(manifest: PublicDeployManifest): boolean {
   const m = manifest as Record<string, unknown>;

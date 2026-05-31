@@ -11,11 +11,11 @@ Backend-specific reference adapters live in the separate `takosumi-plugins` repo
 `component.spec` is descriptor-owned author input. The reference pipeline resolves `connect` output refs and `listen.path` / `listen.kind` selectors into `ctx.resolvedBindings` before `apply()`. Adapters read that context when they need env, mount, or upstream runtime inputs. Native packages should not rely on hidden mutation of `spec` to receive dependency-derived values.
 
 ```ts
-import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
+import { createPaaSApp } from "@takosjp/takosumi/kernel";
 import {
   cloudflareWorkerPlugin,
   KIND_URI as WORKER_KIND,
-} from "@takos/takosumi-kind-cloudflare-worker";
+} from "@takosjp/takosumi-plugins/kind/cloudflare-worker";
 
 const lifecycle = createCloudflareWorkersLifecycleClient({ accountId });
 

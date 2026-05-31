@@ -59,7 +59,7 @@ token は operator が actor 単位に発行する scoped credential です。 S
 
 `git` と `prepared` が remote source kind です。remote operator / CLI / build service はこの 2 つのどちらかを渡します。`local` は dev / operator-local profile 用で、kernel process から `source.url` の path が直接見える場合だけ使います。
 
-remote `source.url` は HTTPS です。SSRF guard は private / loopback / link-local range の IP literal (`127.0.0.0/8` / `::1` / RFC1918 / `169.254.0.0/16` 等) を常に hard-reject します。`http://localhost` は bare hostname であり kernel が name resolution しないため single-host loopback dev で使えますが、`http://127.0.0.1` のような IP literal は loopback dev でも block されます。digest は integrity evidence であり、 public network transport の HTTPS 要求を置き換えません。file path や `file://` locator は remote source ではなく、`source.kind: "local"` で表します。
+remote `source.url` は `prepared` では HTTPS、`git` では HTTPS または Git SSH shorthand (`git@host:path`) です。SSRF guard は private / loopback / link-local range の IP literal (`127.0.0.0/8` / `::1` / RFC1918 / `169.254.0.0/16` 等) を hard-reject します。digest は integrity evidence であり、public network transport の HTTPS 要求を置き換えません。single-host loopback dev は `source.kind: "local"` または local TLS を使います。`http://localhost`、`http://127.0.0.1`、file path、`file://` locator は remote source ではなく、portable Installer API の remote source URL としては invalid です。
 
 source input の構造は kind ごとに閉じています。
 
@@ -75,7 +75,7 @@ Installer API v1 wire が定義する要素:
 - archive root の `.takosumi.yml`
 - size cap、path-safety requirements
 
-Portable v1 prepared source payload は uncompressed POSIX tar archive です。 operator-local profile が別 archive encoding を受け付ける場合でも、それは portable v1 の互換条件ではありません。
+Portable v1 prepared source payload は POSIX tar archive です。uncompressed tar と gzip-compressed tar (`.tar.gz` / gzip magic bytes) を受け付けます。digest は圧縮の有無を含む fetched payload bytes 全体に対して計算します。
 
 Takosumi は取得した payload bytes の `sha256:<hex>` を計算し、portable tar parser と archive safety policy で検証してから manifest を読みます。計算した payload digest が caller-supplied `source.digest` と一致しなければ 409 `failed_precondition` です。build recipe、cache metadata、provenance は build service 側の record として扱います。
 
@@ -96,7 +96,7 @@ Takosumi は取得した payload bytes の `sha256:<hex>` を計算し、portabl
     "commit": "abc123"
   },
   "manifestDigest": "sha256:...",
-  "manifest": {
+  "appSpec": {
     "apiVersion": "v1",
     "metadata": {
       "id": "com.example.notes",
@@ -474,7 +474,12 @@ deploy apply の `expected.currentDeploymentId` は dry-run 時点の current po
   },
   "rollback": {
     "rolledBackFrom": "dep_01HM9N7XK4QY8RT2P5JZF6V3WB",
-    "rolledBackTo": "dep_01HM9N7XK4QY8RT2P5JZF6V3WA"
+    "rolledBackTo": "dep_01HM9N7XK4QY8RT2P5JZF6V3WA",
+    "scope": {
+      "pointer": "reverted",
+      "resourceMaterialization": "not-reapplied",
+      "workloadState": "not-reverted"
+    }
   }
 }
 ```

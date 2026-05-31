@@ -77,7 +77,7 @@ metadata:
 
 | Field         | Required | 説明                                                            |
 | ------------- | -------- | --------------------------------------------------------------- |
-| `id`          | yes      | manifest の stable identifier。reverse domain notation を推奨。 |
+| `id`          | yes      | manifest の stable identifier。`[a-z][a-z0-9-]{0,62}` segment を 1-5 個 `.` でつなぐ relaxed reverse-DNS。 |
 | `name`        | yes      | 人間向けの表示名。                                              |
 | `description` | no       | 人間向けの短い説明。                                            |
 | `publisher`   | no       | publisher / vendor 名。                                         |

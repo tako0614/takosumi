@@ -1719,16 +1719,25 @@ export class InstallerPipeline {
           "git source requires source.url",
         );
       }
-      const result = await fetchGitSource({
-        url: source.url,
-        ref: source.ref,
-        // Inject the kernel's runtime FS so the installer stages the checkout
-        // through the RuntimeAdapter instead of the installer-local Deno
-        // fallback. The git runner is injected only when the operator / bootstrap
-        // supplied one; otherwise the installer's own default applies.
-        fs: currentRuntime().fs,
-        ...(this.#gitRunner ? { gitRunner: this.#gitRunner } : {}),
-      });
+      let result: Awaited<ReturnType<typeof fetchGitSource>>;
+      try {
+        result = await fetchGitSource({
+          url: source.url,
+          ref: source.ref,
+          // Inject the kernel's runtime FS so the installer stages the checkout
+          // through the RuntimeAdapter instead of the installer-local Deno
+          // fallback. The git runner is injected only when the operator / bootstrap
+          // supplied one; otherwise the installer's own default applies.
+          fs: currentRuntime().fs,
+          ...(this.#gitRunner ? { gitRunner: this.#gitRunner } : {}),
+        });
+      } catch (err) {
+        const cause = err instanceof Error ? err.message : String(err);
+        throw new InstallerPipelineError(
+          classifySourceFetchError(cause),
+          `failed to fetch git source: ${cause}`,
+        );
+      }
       return {
         workingDirectory: result.workingDirectory,
         commit: result.commit,
@@ -1765,7 +1774,7 @@ export class InstallerPipeline {
       } catch (err) {
         const cause = err instanceof Error ? err.message : String(err);
         throw new InstallerPipelineError(
-          "failed_precondition",
+          classifySourceFetchError(cause),
           `failed to fetch prepared source: ${cause}`,
         );
       }
@@ -2617,6 +2626,24 @@ function validateExpectedPinShape(
 }
 
 function validateSourceDescriptor(source: Source): void {
+  const raw = source as unknown as Record<string, unknown>;
+  if (!isRecord(raw)) {
+    throw new InstallerPipelineError(
+      "invalid_argument",
+      "source must be an object",
+    );
+  }
+  if (
+    source.kind !== "git" &&
+    source.kind !== "prepared" &&
+    source.kind !== "local"
+  ) {
+    throw new InstallerPipelineError(
+      "invalid_argument",
+      `source.kind must be one of git, prepared, or local`,
+    );
+  }
+  rejectUnknownSourceFields(raw, allowedSourceKeys(source.kind));
   if (source.kind === "git") {
     if (source.ref === undefined || source.ref.length === 0) {
       throw new InstallerPipelineError(
@@ -2628,6 +2655,12 @@ function validateSourceDescriptor(source: Source): void {
       throw new InstallerPipelineError(
         "invalid_argument",
         "git source must not include source.digest",
+      );
+    }
+    if (source.commit !== undefined) {
+      throw new InstallerPipelineError(
+        "invalid_argument",
+        "git source must not include source.commit",
       );
     }
     return;
@@ -2666,6 +2699,54 @@ function validateSourceDescriptor(source: Source): void {
       );
     }
   }
+}
+
+function allowedSourceKeys(kind: Source["kind"]): readonly string[] {
+  if (kind === "git") return ["kind", "url", "ref"];
+  if (kind === "prepared") return ["kind", "url", "digest"];
+  return ["kind", "url"];
+}
+
+function rejectUnknownSourceFields(
+  source: Record<string, unknown>,
+  allowed: readonly string[],
+): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(source)) {
+    if (allowedSet.has(key)) continue;
+    throw new InstallerPipelineError(
+      "invalid_argument",
+      `source.${key} is not allowed for source.kind ${JSON.stringify(source.kind)}`,
+    );
+  }
+}
+
+function classifySourceFetchError(message: string): InstallerPipelineErrorCode {
+  if (
+    message.includes("archive_too_large") ||
+    message.includes("payload too large") ||
+    message.includes("exceeds")
+  ) {
+    return "resource_exhausted";
+  }
+  if (message.includes("digest mismatch")) {
+    return "failed_precondition";
+  }
+  if (
+    message.includes("unsupported_source_url") ||
+    message.includes("scheme is not allowed") ||
+    message.includes("must use https://") ||
+    message.includes("must not start with '-'") ||
+    message.includes("must not contain control characters") ||
+    message.includes("has no host") ||
+    message.includes("host is not allowed") ||
+    message.includes("digest must use sha256") ||
+    message.includes("requires a non-empty url") ||
+    message.includes("malformed")
+  ) {
+    return "invalid_argument";
+  }
+  return "failed_precondition";
 }
 
 function requireNonEmptyString(
