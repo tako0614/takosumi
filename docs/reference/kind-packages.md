@@ -1,24 +1,24 @@
 # Reference Kind Packages {#kind-packages}
 
-Takosumi core は kind-agnostic です。manifest は `kind` だけで component の種類を選び、operator distribution が catalog / alias / implementation binding を供給します。各 kind の descriptor、TypeScript helper、validator は **kind package** に置きます。Backend-specific native kind package は、reference kernel に attach する `KernelPlugin` factory も export できます。これは reference implementation の配線方法で、AppSpec の必須 mechanism ではありません。kind は published npm package の subpath として配布します。
+Takosumi core は kind-agnostic です。manifest は `kind` だけで component の種類を選び、operator distribution が catalog / alias / implementation binding を供給します。kind descriptor は **単一の公式カタログ** (`takosumi/docs/kinds/v1/*.jsonld`、公開 URI は `https://takosumi.com/kinds/v1/*`) に置きます。descriptor は npm package export ではありません。
 
 kind descriptor は spec であり、すべて単一の公式カタログ `takosumi/docs/kinds/v1/<name>.jsonld` に置きます(base kind も、`portableBase` で base を継承する descriptor も区別なく)。`takosumi-plugins/packages/kind-*` は実装(`KernelPlugin` factory と生成 view)だけを持ち、descriptor source は持ちません。published export 上は backend-specific kind の実装が `@takosjp/takosumi-plugins/kind/<alias>` subpath で配られます。
 
 `worker` のような portable kind は共通最小契約です。`cloudflare-worker` のような native kind は substrate 固有契約です。backend 固有の field や output shape が必要なら native kind を使います。`provider` field は manifest にはありません。
 
-## Portable kind packages
+## Official catalog descriptors
 
-| Subpath export                         | kind alias      |
-| -------------------------------------- | --------------- |
-| `@takosjp/takosumi/kind/worker`        | `worker`        |
-| `@takosjp/takosumi/kind/web-service`   | `web-service`   |
-| `@takosjp/takosumi/kind/postgres`      | `postgres`      |
-| `@takosjp/takosumi/kind/sqlite`        | `sqlite`        |
-| `@takosjp/takosumi/kind/object-store`  | `object-store`  |
-| `@takosjp/takosumi/kind/kv-store`      | `kv-store`      |
-| `@takosjp/takosumi/kind/message-queue` | `message-queue` |
-| `@takosjp/takosumi/kind/vector-store`  | `vector-store`  |
-| `@takosjp/takosumi/kind/gateway`       | `gateway`       |
+| Descriptor source                    | Published URI                                  | suggested alias |
+| ------------------------------------ | ---------------------------------------------- | --------------- |
+| `docs/kinds/v1/worker.jsonld`        | `https://takosumi.com/kinds/v1/worker`         | `worker`        |
+| `docs/kinds/v1/web-service.jsonld`   | `https://takosumi.com/kinds/v1/web-service`    | `web-service`   |
+| `docs/kinds/v1/postgres.jsonld`      | `https://takosumi.com/kinds/v1/postgres`       | `postgres`      |
+| `docs/kinds/v1/sqlite.jsonld`        | `https://takosumi.com/kinds/v1/sqlite`         | `sqlite`        |
+| `docs/kinds/v1/object-store.jsonld`  | `https://takosumi.com/kinds/v1/object-store`   | `object-store`  |
+| `docs/kinds/v1/kv-store.jsonld`      | `https://takosumi.com/kinds/v1/kv-store`       | `kv-store`      |
+| `docs/kinds/v1/message-queue.jsonld` | `https://takosumi.com/kinds/v1/message-queue`  | `message-queue` |
+| `docs/kinds/v1/vector-store.jsonld`  | `https://takosumi.com/kinds/v1/vector-store`   | `vector-store`  |
+| `docs/kinds/v1/gateway.jsonld`       | `https://takosumi.com/kinds/v1/gateway`        | `gateway`       |
 
 Base kind の descriptor は単一カタログ `takosumi/docs/kinds/v1/` に置かれ、portable `spec` vocabulary、output slot、connection compatibility を定義します。alias は URI への短縮名で、解決後の kind URI が `spec` schema、output slot、connection compatibility を所有します。portable alias を portable URI に解決する場合、operator はその portable URI を実装する binding を attach します。native kind URI に解決する alias は native schema を選ぶ alias です。
 
@@ -150,9 +150,8 @@ evidence store に保存します。
 
 ## Package ownership rule
 
-- kind の descriptor source は owning kind package の `spec/kind.jsonld`。JSON-LD は catalog / schema metadata であり、runtime plugin requirement ではない。
 - 全 kind descriptor source は単一カタログ `takosumi/docs/kinds/v1/`。`takosumi-plugins/packages/kind-*` は実装のみ(descriptor source なし)。
-- kind の public identity は subpath export。portable kind は `@takosjp/takosumi/kind/<alias>`、native kind は `@takosjp/takosumi-plugins/kind/<alias>`。
+- descriptor の public identity は `https://takosumi.com/kinds/v1/<name>`。backend-specific implementation の public package identity は `@takosjp/takosumi-plugins/kind/<alias>`。
 - alias の有効化は operator の `kindAliases` が決めます。
 - 解決後の kind URI が `spec` schema、output slot、connection compatibility を所有します。
 - backend によって `spec` や material output が変わるなら別 native kind package にします。

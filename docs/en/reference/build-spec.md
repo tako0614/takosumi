@@ -16,7 +16,7 @@ source root
 
 `source.digest` is the sha256 of the payload bytes fetched by the Installer. It is not a build graph digest, package manager lock digest, cache key, or provenance digest.
 
-Portable Installer API v1 prepared source payloads are uncompressed POSIX tar archives. The digest covers the fetched tar payload bytes. If an operator-local profile accepts another archive encoding, that encoding is outside the portable v1 compatibility profile.
+Portable Installer API v1 prepared source payloads are POSIX tar archives. Uncompressed tar and gzip-compressed tar (`.tar.gz` / gzip magic bytes) are accepted. The digest covers the exact fetched payload bytes, including compression when present.
 
 Runtime file paths stay in kind-specific `spec` fields. Build commands, container images, dependency caches, generated intermediate outputs, and provenance records stay outside the manifest.
 

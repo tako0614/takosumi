@@ -20,7 +20,7 @@ flow、account-facing Installation projection、 export/materialize action、dep
 facade は Cloud docs に置きます。
 
 Cloud platform service path の例として `identity.primary.oidc` と
-`billing.primary.account` があります。これらは workload が manifest の
+`billing.primary.default` があります。これらは workload が manifest の
 `listen.path` から参照できる Cloud の出力データです。MCP server
 のような複数存在する capability は `mcp-server@v1` publication を `listen.kind`
 と labels で discovery できます。material kind は公式カタログ、dotted reference grammar は Takosumi

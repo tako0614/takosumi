@@ -7,6 +7,12 @@ import { validateManifestEnvelope } from "./_internal_manifest_types.ts";
 
 export type { ManifestResource } from "./_internal_manifest_types.ts";
 
+/**
+ * Resolve the legacy deploy-domain `resources[]` compatibility shape.
+ *
+ * Despite the historical name, this is not the public AppSpec v1 parser.
+ * Public `.takosumi.yml` parsing lives in `src/installer/yaml-parser.ts`.
+ */
 export type ManifestV1Resolution =
   | { readonly ok: true; readonly value: readonly ManifestResource[] }
   | { readonly ok: false; readonly error: string };

@@ -1,24 +1,24 @@
 # Reference Kind Packages {#kind-packages}
 
-Takosumi core is kind-agnostic. Manifests choose a component with `kind`, and operator distributions supply the catalog, aliases, and implementation bindings. Each kind's descriptor, TypeScript helpers, and validator live in a **kind package**. Backend-specific native kind packages may also export a `KernelPlugin` factory for the reference kernel. That is reference implementation wiring, not a required AppSpec mechanism. Package names use `@takosjp/takosumi-plugins/kind/<alias>`.
+Takosumi core is kind-agnostic. Manifests choose a component with `kind`, and operator distributions supply the catalog, aliases, and implementation bindings. Kind descriptors live in the **single official catalog** (`takosumi/docs/kinds/v1/*.jsonld`, published as `https://takosumi.com/kinds/v1/*`). Descriptors are not npm package exports.
 
-Repository ownership is split. Portable kind packages stay in `takosumi/`; backend-specific native kind packages live in `takosumi-plugins/`. Both keep the `@takosjp/takosumi-plugins/kind/*` package naming convention.
+Repository ownership is split. Official descriptors stay in `takosumi/docs/kinds/v1/`; backend-specific implementation modules live in `takosumi-plugins/packages/kind-*` and publish as `@takosjp/takosumi-plugins/kind/<alias>` subpaths.
 
 Portable kinds define the shared author-facing contract. Native kinds define concrete backend behavior. If a backend needs its own fields or outputs, use a native kind instead of adding a `provider` field to the manifest.
 
-## Portable Kind Packages
+## Official Catalog Descriptors
 
-| Package                                        | kind alias      |
-| ---------------------------------------------- | --------------- |
-| `@takosjp/takosumi-plugins/kind/worker`        | `worker`        |
-| `@takosjp/takosumi-plugins/kind/web-service`   | `web-service`   |
-| `@takosjp/takosumi-plugins/kind/postgres`      | `postgres`      |
-| `@takosjp/takosumi-plugins/kind/sqlite`        | `sqlite`        |
-| `@takosjp/takosumi-plugins/kind/object-store`  | `object-store`  |
-| `@takosjp/takosumi-plugins/kind/kv-store`      | `kv-store`      |
-| `@takosjp/takosumi-plugins/kind/message-queue` | `message-queue` |
-| `@takosjp/takosumi-plugins/kind/vector-store`  | `vector-store`  |
-| `@takosjp/takosumi-plugins/kind/gateway`       | `gateway`       |
+| Descriptor source                    | Published URI                                  | suggested alias |
+| ------------------------------------ | ---------------------------------------------- | --------------- |
+| `docs/kinds/v1/worker.jsonld`        | `https://takosumi.com/kinds/v1/worker`         | `worker`        |
+| `docs/kinds/v1/web-service.jsonld`   | `https://takosumi.com/kinds/v1/web-service`    | `web-service`   |
+| `docs/kinds/v1/postgres.jsonld`      | `https://takosumi.com/kinds/v1/postgres`       | `postgres`      |
+| `docs/kinds/v1/sqlite.jsonld`        | `https://takosumi.com/kinds/v1/sqlite`         | `sqlite`        |
+| `docs/kinds/v1/object-store.jsonld`  | `https://takosumi.com/kinds/v1/object-store`   | `object-store`  |
+| `docs/kinds/v1/kv-store.jsonld`      | `https://takosumi.com/kinds/v1/kv-store`       | `kv-store`      |
+| `docs/kinds/v1/message-queue.jsonld` | `https://takosumi.com/kinds/v1/message-queue`  | `message-queue` |
+| `docs/kinds/v1/vector-store.jsonld`  | `https://takosumi.com/kinds/v1/vector-store`   | `vector-store`  |
+| `docs/kinds/v1/gateway.jsonld`       | `https://takosumi.com/kinds/v1/gateway`        | `gateway`       |
 
 Base kind descriptors live in the single catalog `takosumi/docs/kinds/v1/` and define portable `spec` vocabulary, output slots, and connection compatibility. An alias is only a shortcut to a URI. The resolved kind URI owns the `spec` schema, output slots, and connection compatibility. When a portable alias resolves to a portable URI, the operator attaches a binding that provides that portable URI. An alias that resolves to a native kind URI selects that native schema.
 
@@ -76,7 +76,7 @@ Native gateway packages may provide implementation bindings that materialize HTT
 Native kind packages export a factory that returns a `KernelPlugin`. The plugin advertises concrete kind URIs through `provides[]`.
 
 ```ts
-import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
+import { createPaaSApp } from "@takosjp/takosumi/kernel";
 import {
   cloudflareWorkerPlugin,
   KIND_URI as WORKER_KIND,
@@ -151,9 +151,8 @@ public docs.
 
 ## Ownership Rule
 
-- The descriptor source for a kind package is `spec/kind.jsonld`; JSON-LD is catalog metadata, not a runtime plugin requirement.
 - Every kind descriptor source lives in the single catalog `takosumi/docs/kinds/v1/`; `takosumi-plugins/packages/kind-*` holds implementations only (no descriptor source).
-- The public package identity is `@takosjp/takosumi-plugins/kind/<alias>`.
+- Descriptor public identity is `https://takosumi.com/kinds/v1/<name>`. Backend-specific implementation public package identity is `@takosjp/takosumi-plugins/kind/<alias>`.
 - The operator's `kindAliases` decides which aliases are active.
 - The resolved kind URI owns the `spec` schema, output slots, and connection compatibility.
 - A backend-specific `spec` or material output should be a native kind package.

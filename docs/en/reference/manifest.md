@@ -77,7 +77,7 @@ metadata:
 
 | Field         | Required | Meaning                                                             |
 | ------------- | -------- | ------------------------------------------------------------------- |
-| `id`          | yes      | Stable manifest identifier. Reverse domain notation is recommended. |
+| `id`          | yes      | Stable manifest identifier: 1-5 relaxed reverse-DNS segments matching `[a-z][a-z0-9-]{0,62}`. |
 | `name`        | yes      | Human-facing display name.                                          |
 | `description` | no       | Short human-facing description.                                     |
 | `publisher`   | no       | Publisher or vendor name.                                           |

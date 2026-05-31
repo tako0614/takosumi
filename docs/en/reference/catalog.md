@@ -9,7 +9,7 @@ catalog vocabulary from their own docs.
 This page defines Takosumi catalog vocabulary: kind definition identities,
 material kind names, injection mode names, access metadata, and the JSON-LD
 format for the official catalog. Code that targets the official vocabulary can
-import TypeScript helpers from `@takos/takosumi-contract/catalog`.
+import TypeScript helpers from `@takosjp/takosumi/contract/catalog`.
 `OfficialMaterialKindName` is the public name for material vocabulary.
 
 Catalog selectors use `kind` consistently. Component `kind` says what is
@@ -66,17 +66,17 @@ These are the current portable `takosumi.com` v1 catalog kind definitions. They
 are not a closed built-in kind set; operators can adopt other kind definition
 URIs.
 
-| Suggested alias | Kind URI                                      | Typical output slot                        |
-| --------------- | --------------------------------------------- | ------------------------------------------ |
-| `worker`        | `https://takosumi.com/kinds/v1/worker`        | `http` as `http-endpoint`                  |
-| `web-service`   | `https://takosumi.com/kinds/v1/web-service`   | `http` as `http-endpoint`                  |
-| `postgres`      | `https://takosumi.com/kinds/v1/postgres`      | `connection` as `service-binding`          |
-| `sqlite`        | `https://takosumi.com/kinds/v1/sqlite`        | `connection` as `service-binding`          |
-| `object-store`  | `https://takosumi.com/kinds/v1/object-store`  | `bucket` as `object-store`                 |
-| `kv-store`      | `https://takosumi.com/kinds/v1/kv-store`      | `store` as `service-binding`               |
-| `message-queue` | `https://takosumi.com/kinds/v1/message-queue` | `producer` / `consumer` as `event-channel` |
-| `vector-store`  | `https://takosumi.com/kinds/v1/vector-store`  | `index` as `service-binding`               |
-| `gateway`       | `https://takosumi.com/kinds/v1/gateway`       | `public` as `http-endpoint`                |
+| Suggested alias | Kind URI                                      | Descriptor source                    | Typical output slot                        |
+| --------------- | --------------------------------------------- | ------------------------------------ | ------------------------------------------ |
+| `worker`        | `https://takosumi.com/kinds/v1/worker`        | `docs/kinds/v1/worker.jsonld`        | `http` as `http-endpoint`                  |
+| `web-service`   | `https://takosumi.com/kinds/v1/web-service`   | `docs/kinds/v1/web-service.jsonld`   | `http` as `http-endpoint`                  |
+| `postgres`      | `https://takosumi.com/kinds/v1/postgres`      | `docs/kinds/v1/postgres.jsonld`      | `connection` as `service-binding`          |
+| `sqlite`        | `https://takosumi.com/kinds/v1/sqlite`        | `docs/kinds/v1/sqlite.jsonld`        | `connection` as `service-binding`          |
+| `object-store`  | `https://takosumi.com/kinds/v1/object-store`  | `docs/kinds/v1/object-store.jsonld`  | `bucket` as `object-store`                 |
+| `kv-store`      | `https://takosumi.com/kinds/v1/kv-store`      | `docs/kinds/v1/kv-store.jsonld`      | `store` as `service-binding`               |
+| `message-queue` | `https://takosumi.com/kinds/v1/message-queue` | `docs/kinds/v1/message-queue.jsonld` | `producer` / `consumer` as `event-channel` |
+| `vector-store`  | `https://takosumi.com/kinds/v1/vector-store`  | `docs/kinds/v1/vector-store.jsonld`  | `index` as `service-binding`               |
+| `gateway`       | `https://takosumi.com/kinds/v1/gateway`       | `docs/kinds/v1/gateway.jsonld`       | `public` as `http-endpoint`                |
 
 Short aliases are operator-selected conveniences. The URI is the kind definition
 identity. Kind definition documents may publish `referenceAliases` as
@@ -84,11 +84,11 @@ suggestions; operator distributions activate aliases explicitly.
 
 Official native kind definitions use the same `https://takosumi.com/kinds/v1/*`
 catalog URI space. Native definitions can carry backend-specific `spec` and
-output vocabulary, so their package sources live in the sibling
-`takosumi-plugins/packages/kind-*` repository. Those packages contain both the
-descriptor and a reference plugin binding; the plugin is reference
-implementation wiring, not part of the AppSpec core contract. Native kind
-packages are listed in [Kind Packages](/en/reference/kind-packages).
+output vocabulary. Their descriptor sources still live in this single catalog;
+the sibling `takosumi-plugins/packages/kind-*` repository contains the reference
+plugin binding and generated views only. The plugin is reference implementation
+wiring, not part of the AppSpec core contract. Native kind implementation
+subpaths are listed in [Kind Packages](/en/reference/kind-packages).
 
 Official descriptor `spec` JSON Schemas are closed shapes. Official portable and
 native kinds spell supported fields instead of accepting undeclared fields with
@@ -393,12 +393,11 @@ that slot through `connect`; platform and external publications attach through
 
 ## Source Of Truth
 
-The public catalog surface is the package-owned
-`packages/kind-*/spec/kind.jsonld` sources, sibling
-`takosumi-plugins/packages/kind-*/spec/kind.jsonld` native sources, published
-`https://takosumi.com/kinds/v1/*`, `https://takosumi.com/kinds/v1/*.jsonld`, and
+The public catalog surface is the `takosumi/docs/kinds/v1/*.jsonld` source set,
+published `https://takosumi.com/kinds/v1/*`,
+`https://takosumi.com/kinds/v1/*.jsonld`, and
 `https://takosumi.com/contexts/v1.jsonld` documents, this page, and the
-`@takos/takosumi-contract/catalog` TypeScript helpers.
+`@takosjp/takosumi/contract/catalog` TypeScript helpers.
 
 Catalog compatibility is based on kind definition URI identity, material kind
 names, projection-family names, access vocabulary, and documented output
