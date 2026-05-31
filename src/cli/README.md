@@ -5,7 +5,7 @@ Operator CLI for the Takosumi operator-portable PaaS toolkit. Wraps the kernel H
 ## Install
 
 ```bash
-deno install -gA -n takosumi jsr:@takos/takosumi-cli
+deno install -gA -n takosumi npm:@takosjp/takosumi
 takosumi version
 ```
 
