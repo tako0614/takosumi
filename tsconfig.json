@@ -34,6 +34,55 @@
       "jsr:@std/fs@*": ["./shims/std/fs.ts"],
       "jsr:@std/fs@^1.0.5/walk": ["./shims/std/fs.ts"],
 
+      "@takos/takosumi-contract": ["./src/contract/mod.ts"],
+      "@takos/takosumi-contract/app-spec": ["./src/contract/app-spec.ts"],
+      "@takos/takosumi-contract/catalog": ["./src/contract/catalog.ts"],
+      "@takos/takosumi-contract/installer-api": [
+        "./src/contract/installer-api.ts"
+      ],
+      "@takos/takosumi-contract/reference/compat": [
+        "./src/contract/reference-compat.ts"
+      ],
+      "@takos/takosumi-contract/reference/error-category": [
+        "./src/contract/error-category.ts"
+      ],
+      "@takos/takosumi-contract/reference/plugin": ["./src/contract/plugin.ts"],
+      "@takos/takosumi-contract/reference/plugin-sdk": [
+        "./src/contract/plugin-sdk.ts"
+      ],
+      "@takos/takosumi-contract/reference/runtime-agent": [
+        "./src/contract/runtime-agent.ts"
+      ],
+      "@takos/takosumi-contract/reference/runtime-agent-lifecycle": [
+        "./src/contract/runtime-agent-lifecycle.ts"
+      ],
+      "@takos/takosumi-contract/reference/runtime-capability": [
+        "./src/contract/runtime-capability.ts"
+      ],
+      "@takos/takosumi-contract/reference/shape": ["./src/contract/shape.ts"],
+      "@takos/takosumi-contract/reference/shape-validators": [
+        "./src/contract/shape-validators.ts"
+      ],
+      "@takos/takosumi-contract/reference/types": ["./src/contract/types.ts"],
+      "@takos/takosumi-contract/reference/types-validators": [
+        "./src/contract/types-validators.ts"
+      ],
+      "@takos/takosumi-contract/internal/api": [
+        "./src/contract/internal-api.ts"
+      ],
+      "@takos/takosumi-contract/internal/material": [
+        "./src/contract/internal-material.ts"
+      ],
+      "@takos/takosumi-contract/internal/material-validators": [
+        "./src/contract/internal-material-validators.ts"
+      ],
+      "@takos/takosumi-contract/internal/provider-plugin": [
+        "./src/contract/provider-plugin.ts"
+      ],
+      "@takos/takosumi-contract/internal/rpc": [
+        "./src/contract/internal-rpc.ts"
+      ],
+      "@takos/takosumi-kernel/runtime": ["./src/kernel/shared/runtime/mod.ts"],
       "takosumi-contract": ["./src/contract/mod.ts"],
       "takosumi-contract/app-spec": ["./src/contract/app-spec.ts"],
       "takosumi-contract/catalog": ["./src/contract/catalog.ts"],
