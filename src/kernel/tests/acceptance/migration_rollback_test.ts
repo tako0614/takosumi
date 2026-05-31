@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type {
   DeploymentProviderAdapter,
@@ -20,7 +21,7 @@ import { ResourceOperationService } from "../../services/resources/mod.ts";
 const DEMO_IMAGE =
   "registry.example.test/demo@sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
-Deno.test("acceptance migration: post-migration apply failure leaves GroupHead unchanged", async () => {
+test("acceptance migration: post-migration apply failure leaves GroupHead unchanged", async () => {
   const deployStore = new InMemoryDeploymentStore();
   const deploy = new DeploymentService({
     store: deployStore,
@@ -73,7 +74,7 @@ Deno.test("acceptance migration: post-migration apply failure leaves GroupHead u
   assert.equal(migrated?.lifecycle.generation, 2);
 });
 
-Deno.test("acceptance migration: rollback does not reverse durable resource generation", async () => {
+test("acceptance migration: rollback does not reverse durable resource generation", async () => {
   const deployStore = new InMemoryDeploymentStore();
   const deploy = new DeploymentService({
     store: deployStore,

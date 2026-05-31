@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   assertPreparedArtifactReusable,
@@ -19,7 +20,7 @@ const artifact: PreparedArtifact = {
   createdAt: "2026-04-27T00:00:00.000Z",
 };
 
-Deno.test("prepared artifact reuse is rejected when package resolution digest differs", () => {
+test("prepared artifact reuse is rejected when package resolution digest differs", () => {
   assert.throws(
     () =>
       assertPreparedArtifactReusable(artifact, {
@@ -37,7 +38,7 @@ Deno.test("prepared artifact reuse is rejected when package resolution digest di
   );
 });
 
-Deno.test("protected reference blocks prepared artifact GC", async () => {
+test("protected reference blocks prepared artifact GC", async () => {
   const artifacts = new InMemoryPreparedArtifactStore();
   const references = new InMemoryProtectedReferenceStore();
 

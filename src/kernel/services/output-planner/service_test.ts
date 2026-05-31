@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryCoreOutputResolutionStore,
@@ -12,7 +13,7 @@ import {
 import { DomainError } from "../../shared/errors.ts";
 import { OutputDependencyPlanner } from "./mod.ts";
 
-Deno.test("output planner validates explicit bindings without auto-injection", async () => {
+test("output planner validates explicit bindings without auto-injection", async () => {
   const { service, stores } = fixture();
   await stores.outputs.put(output({
     outputs: [
@@ -67,7 +68,7 @@ Deno.test("output planner validates explicit bindings without auto-injection", a
   );
 });
 
-Deno.test("output planner blocks ambiguous short output names", async () => {
+test("output planner blocks ambiguous short output names", async () => {
   const { service, stores } = fixture();
   await stores.outputs.put(output({
     id: "pub_docs_a",
@@ -89,7 +90,7 @@ Deno.test("output planner blocks ambiguous short output names", async () => {
   );
 });
 
-Deno.test("output planner requires approvals for sensitive output injection", async () => {
+test("output planner requires approvals for sensitive output injection", async () => {
   const { service, stores } = fixture();
   await stores.outputs.put(output({
     outputs: [
@@ -135,7 +136,7 @@ Deno.test("output planner requires approvals for sensitive output injection", as
   assert.deepEqual(planned.approvedOutputNames, ["TOKEN"]);
 });
 
-Deno.test("output planner validates grants and direct binding cycles", async () => {
+test("output planner validates grants and direct binding cycles", async () => {
   const { service, stores } = fixture({ withGrantStore: true });
   await stores.outputs.put(output());
   await stores.grants?.put(grant());
@@ -165,7 +166,7 @@ Deno.test("output planner validates grants and direct binding cycles", async () 
   );
 });
 
-Deno.test("output planner can require an active grant for cross-group consumption", async () => {
+test("output planner can require an active grant for cross-group consumption", async () => {
   const withoutGrantStore = fixture({ requireCrossGroupGrant: true });
   await withoutGrantStore.stores.outputs.put(output());
 
@@ -195,7 +196,7 @@ Deno.test("output planner can require an active grant for cross-group consumptio
   assert.equal(planned.grant?.ref, "grant_docs");
 });
 
-Deno.test("output planner requires consumer rebind plan for breaking producer changes", async () => {
+test("output planner requires consumer rebind plan for breaking producer changes", async () => {
   const { service, stores } = fixture();
   const previous = output({
     id: "pub_v1",
@@ -264,7 +265,7 @@ Deno.test("output planner requires consumer rebind plan for breaking producer ch
   assert.equal(withRebind.canProceed, true);
 });
 
-Deno.test("output planner detects deployment-time dependency cycles", async () => {
+test("output planner detects deployment-time dependency cycles", async () => {
   const { service, stores } = fixture();
   await stores.outputs.put(output({
     id: "pub_a",
@@ -297,7 +298,7 @@ Deno.test("output planner detects deployment-time dependency cycles", async () =
   );
 });
 
-Deno.test("output planner applies and observes deployment projections", async () => {
+test("output planner applies and observes deployment projections", async () => {
   const { service, stores } = fixture();
   await stores.outputs.put(output());
 
@@ -337,7 +338,7 @@ Deno.test("output planner applies and observes deployment projections", async ()
   );
 });
 
-Deno.test("output planner keeps consumer binding stable while output value changes create a new Core resolution", async () => {
+test("output planner keeps consumer binding stable while output value changes create a new Core resolution", async () => {
   const { service, stores } = fixture();
   const firstOutput = output({
     id: "pub_docs_v1",
@@ -388,7 +389,7 @@ Deno.test("output planner keeps consumer binding stable while output value chang
   );
 });
 
-Deno.test("output planner invalidates persisted projections for withdrawn outputs", async () => {
+test("output planner invalidates persisted projections for withdrawn outputs", async () => {
   const { service, stores } = fixture();
   const currentOutput = output({
     policy: { withdrawal: "retain-last-projection", rebind: "compatible-only" },

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { MemoryStorageDriver } from "./memory.ts";
 import type { Space } from "../../domains/core/types.ts";
 
@@ -10,7 +11,7 @@ const space: Space = {
   updatedAt: "2026-04-27T00:00:00.000Z",
 };
 
-Deno.test("MemoryStorageDriver transaction rolls back writes on throw", async () => {
+test("MemoryStorageDriver transaction rolls back writes on throw", async () => {
   const driver = new MemoryStorageDriver();
 
   await assertRejectsWithMessage(
@@ -26,7 +27,7 @@ Deno.test("MemoryStorageDriver transaction rolls back writes on throw", async ()
   assertEquals(driver.snapshot().spaces, []);
 });
 
-Deno.test("MemoryStorageDriver transaction commits writes on success", async () => {
+test("MemoryStorageDriver transaction commits writes on success", async () => {
   const driver = new MemoryStorageDriver();
 
   await driver.transaction(async (tx) => {
@@ -37,7 +38,7 @@ Deno.test("MemoryStorageDriver transaction commits writes on success", async () 
   assertEquals(driver.snapshot().spaces, [space]);
 });
 
-Deno.test("MemoryStorageDriver serializes concurrent transactions", async () => {
+test("MemoryStorageDriver serializes concurrent transactions", async () => {
   const driver = new MemoryStorageDriver();
   const firstInside = deferred<void>();
   const releaseFirst = deferred<void>();

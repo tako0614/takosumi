@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { AuditEvent } from "../../domains/audit/types.ts";
 import type {
@@ -192,7 +193,7 @@ function event(id: string, occurredAt: string): AuditEvent {
   };
 }
 
-Deno.test("SqlObservabilitySink durably persists audit events with valid hash chain", async () => {
+test("SqlObservabilitySink durably persists audit events with valid hash chain", async () => {
   const client = new FakeAuditSqlClient();
   const sink = new SqlObservabilitySink({ client });
 
@@ -204,7 +205,7 @@ Deno.test("SqlObservabilitySink durably persists audit events with valid hash ch
   assert.equal(await sink.verifyAuditChain(), true);
 });
 
-Deno.test("SqlObservabilitySink hash chain verifies after restart (durability)", async () => {
+test("SqlObservabilitySink hash chain verifies after restart (durability)", async () => {
   const client = new FakeAuditSqlClient();
   const sink1 = new SqlObservabilitySink({ client });
   await sink1.appendAudit(event("audit_1", "2026-04-27T00:00:00.000Z"));
@@ -225,7 +226,7 @@ Deno.test("SqlObservabilitySink hash chain verifies after restart (durability)",
   );
 });
 
-Deno.test("SqlObservabilitySink atomically rolls back failed insert", async () => {
+test("SqlObservabilitySink atomically rolls back failed insert", async () => {
   const client = new FakeAuditSqlClient();
   const sink = new SqlObservabilitySink({ client });
   await sink.appendAudit(event("audit_1", "2026-04-27T00:00:00.000Z"));
@@ -247,7 +248,7 @@ Deno.test("SqlObservabilitySink atomically rolls back failed insert", async () =
   assert.equal(await sink.verifyAuditChain(), true);
 });
 
-Deno.test("SqlObservabilitySink detects tampering after replay", async () => {
+test("SqlObservabilitySink detects tampering after replay", async () => {
   const client = new FakeAuditSqlClient();
   const sink = new SqlObservabilitySink({ client });
   await sink.appendAudit(event("audit_1", "2026-04-27T00:00:00.000Z"));
@@ -265,7 +266,7 @@ Deno.test("SqlObservabilitySink detects tampering after replay", async () => {
   assert.equal(result.reason, "event-hash-mismatch");
 });
 
-Deno.test("SqlObservabilitySink applies retention policy by archiving old events", async () => {
+test("SqlObservabilitySink applies retention policy by archiving old events", async () => {
   const client = new FakeAuditSqlClient();
   const fixedNow = new Date("2026-05-01T00:00:00.000Z");
   const sink = new SqlObservabilitySink({
@@ -286,7 +287,7 @@ Deno.test("SqlObservabilitySink applies retention policy by archiving old events
   assert.equal(await sink.verifyAuditChain(), true);
 });
 
-Deno.test("SqlObservabilitySink sends archive candidates to replication before marking archived", async () => {
+test("SqlObservabilitySink sends archive candidates to replication before marking archived", async () => {
   const { InMemoryAuditReplicationSink, AuditReplicationDriver } = await import(
     "../audit-replication/sink.ts"
   );
@@ -318,7 +319,7 @@ Deno.test("SqlObservabilitySink sends archive candidates to replication before m
   assert.equal(client.rows.find((r) => r.id === "recent")?.archived, false);
 });
 
-Deno.test("SqlObservabilitySink replicates new appends to attached replication driver", async () => {
+test("SqlObservabilitySink replicates new appends to attached replication driver", async () => {
   const { InMemoryAuditReplicationSink, AuditReplicationDriver } = await import(
     "../audit-replication/sink.ts"
   );
@@ -338,7 +339,7 @@ Deno.test("SqlObservabilitySink replicates new appends to attached replication d
   );
 });
 
-Deno.test("SqlObservabilitySink delete-after-archive only triggers when policy enables it", async () => {
+test("SqlObservabilitySink delete-after-archive only triggers when policy enables it", async () => {
   const { resolveAuditRetention } = await import(
     "../audit-replication/policy.ts"
   );
@@ -387,7 +388,7 @@ Deno.test("SqlObservabilitySink delete-after-archive only triggers when policy e
   assert.equal(client.rows.find((r) => r.id === "recent")?.archived, false);
 });
 
-Deno.test("SqlObservabilitySink refuses delete-after-archive without replication", async () => {
+test("SqlObservabilitySink refuses delete-after-archive without replication", async () => {
   const { resolveAuditRetention } = await import(
     "../audit-replication/policy.ts"
   );
@@ -412,7 +413,7 @@ Deno.test("SqlObservabilitySink refuses delete-after-archive without replication
   );
 });
 
-Deno.test("StandaloneBootstrapService rejects memory observability sink in production", async () => {
+test("StandaloneBootstrapService rejects memory observability sink in production", async () => {
   const config = new LocalOperatorConfig({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     values: {
@@ -439,7 +440,7 @@ Deno.test("StandaloneBootstrapService rejects memory observability sink in produ
   );
 });
 
-Deno.test("StandaloneBootstrapService selects sql observability when sqlClient available", async () => {
+test("StandaloneBootstrapService selects sql observability when sqlClient available", async () => {
   const config = new LocalOperatorConfig({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     values: {

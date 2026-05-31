@@ -1,8 +1,9 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { RouteProjection } from "../../domains/routing/mod.ts";
 import { InMemoryRouterConfigAdapter, NoopRouterConfigAdapter } from "./mod.ts";
 
-Deno.test("InMemoryRouterConfigAdapter renders and stores route projections", async () => {
+test("InMemoryRouterConfigAdapter renders and stores route projections", async () => {
   const adapter = new InMemoryRouterConfigAdapter({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
   });
@@ -28,7 +29,7 @@ Deno.test("InMemoryRouterConfigAdapter renders and stores route projections", as
   assert.deepEqual(await adapter.get(projection.id), result.config);
 });
 
-Deno.test("NoopRouterConfigAdapter renders without writing state", async () => {
+test("NoopRouterConfigAdapter renders without writing state", async () => {
   const adapter = new NoopRouterConfigAdapter({
     clock: () => new Date("2026-04-27T02:00:00.000Z"),
   });
@@ -40,7 +41,7 @@ Deno.test("NoopRouterConfigAdapter renders without writing state", async () => {
   assert.equal(result.config.routes.length, 1);
 });
 
-Deno.test("router config adapters reject activation mutation", async () => {
+test("router config adapters reject activation mutation", async () => {
   const adapter = new InMemoryRouterConfigAdapter();
   const projection = routeProjection({ routeActivationId: "activation-b" });
 

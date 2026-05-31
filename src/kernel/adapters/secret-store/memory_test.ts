@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   cloudPartitionEnvKeys,
@@ -9,7 +10,7 @@ import {
   selectSecretBoundaryCrypto,
 } from "./mod.ts";
 
-Deno.test("memory encrypted secret store keeps versioned secret boundary", async () => {
+test("memory encrypted secret store keeps versioned secret boundary", async () => {
   const store = new MemoryEncryptedSecretStore({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     idGenerator: () => "v1",
@@ -34,7 +35,7 @@ Deno.test("memory encrypted secret store keeps versioned secret boundary", async
   assert.equal(await store.getSecret(record), undefined);
 });
 
-Deno.test("selectSecretBoundaryCrypto fails closed in production without key", () => {
+test("selectSecretBoundaryCrypto fails closed in production without key", () => {
   assert.throws(
     () =>
       selectSecretBoundaryCrypto({
@@ -53,7 +54,7 @@ Deno.test("selectSecretBoundaryCrypto fails closed in production without key", (
   );
 });
 
-Deno.test("selectSecretBoundaryCrypto fails closed in staging without key", () => {
+test("selectSecretBoundaryCrypto fails closed in staging without key", () => {
   assert.throws(
     () =>
       selectSecretBoundaryCrypto({
@@ -63,7 +64,7 @@ Deno.test("selectSecretBoundaryCrypto fails closed in staging without key", () =
   );
 });
 
-Deno.test("selectSecretBoundaryCrypto rejects production opt-in attempts", () => {
+test("selectSecretBoundaryCrypto rejects production opt-in attempts", () => {
   // TAKOSUMI_DEV_MODE must NOT bypass production fail-closed.
   assert.throws(
     () =>
@@ -77,7 +78,7 @@ Deno.test("selectSecretBoundaryCrypto rejects production opt-in attempts", () =>
   );
 });
 
-Deno.test("selectSecretBoundaryCrypto returns multi-cloud AES-GCM crypto when global key supplied", async () => {
+test("selectSecretBoundaryCrypto returns multi-cloud AES-GCM crypto when global key supplied", async () => {
   const crypto = selectSecretBoundaryCrypto({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
@@ -92,7 +93,7 @@ Deno.test("selectSecretBoundaryCrypto returns multi-cloud AES-GCM crypto when gl
   assert.equal(await crypto.open(sealed, "global"), "hello");
 });
 
-Deno.test("selectSecretBoundaryCrypto allows local opt-in to placeholder", () => {
+test("selectSecretBoundaryCrypto allows local opt-in to placeholder", () => {
   const crypto = selectSecretBoundaryCrypto({
     env: {
       TAKOSUMI_ENVIRONMENT: "local",
@@ -102,7 +103,7 @@ Deno.test("selectSecretBoundaryCrypto allows local opt-in to placeholder", () =>
   assert.ok(crypto instanceof PlaceholderSecretBoundaryCrypto);
 });
 
-Deno.test("selectSecretBoundaryCrypto requires local plaintext opt-in", () => {
+test("selectSecretBoundaryCrypto requires local plaintext opt-in", () => {
   assert.throws(
     () =>
       selectSecretBoundaryCrypto({
@@ -117,7 +118,7 @@ Deno.test("selectSecretBoundaryCrypto requires local plaintext opt-in", () => {
   );
 });
 
-Deno.test("MemoryEncryptedSecretStore env option drives fail-closed", () => {
+test("MemoryEncryptedSecretStore env option drives fail-closed", () => {
   assert.throws(
     () =>
       new MemoryEncryptedSecretStore({
@@ -127,7 +128,7 @@ Deno.test("MemoryEncryptedSecretStore env option drives fail-closed", () => {
   );
 });
 
-Deno.test("MemoryEncryptedSecretStore env option uses AES-GCM with key", async () => {
+test("MemoryEncryptedSecretStore env option uses AES-GCM with key", async () => {
   const store = new MemoryEncryptedSecretStore({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     idGenerator: () => "v1",
@@ -147,7 +148,7 @@ Deno.test("MemoryEncryptedSecretStore env option uses AES-GCM with key", async (
 // Phase 18.2 H14: per-cloud secret partition isolation
 // ---------------------------------------------------------------------------
 
-Deno.test("cloudPartitionEnvKeys derives per-cloud env names", () => {
+test("cloudPartitionEnvKeys derives per-cloud env names", () => {
   assert.deepEqual(cloudPartitionEnvKeys("global"), SECRET_STORE_KEY_ENV_KEYS);
   assert.deepEqual(cloudPartitionEnvKeys("aws"), [
     "TAKOSUMI_SECRET_STORE_PASSPHRASE_AWS",
@@ -155,7 +156,7 @@ Deno.test("cloudPartitionEnvKeys derives per-cloud env names", () => {
   ]);
 });
 
-Deno.test("MultiCloudSecretBoundaryCrypto isolates partitions: aws ciphertext is unreadable with global key only", async () => {
+test("MultiCloudSecretBoundaryCrypto isolates partitions: aws ciphertext is unreadable with global key only", async () => {
   // The "aws" cloud has a dedicated override key; "gcp" inherits from global.
   const crypto = new MultiCloudSecretBoundaryCrypto({
     globalPassphrase: "global-passphrase-32-byte-x".padEnd(40, "x"),
@@ -177,7 +178,7 @@ Deno.test("MultiCloudSecretBoundaryCrypto isolates partitions: aws ciphertext is
   await assert.rejects(() => crypto.open(gcpCipher, "aws"));
 });
 
-Deno.test("MultiCloudSecretBoundaryCrypto: aws key compromise does not unlock other partitions", async () => {
+test("MultiCloudSecretBoundaryCrypto: aws key compromise does not unlock other partitions", async () => {
   const sealing = new MultiCloudSecretBoundaryCrypto({
     globalPassphrase: "global-pass-".padEnd(40, "g"),
     perCloudPassphrases: {
@@ -206,7 +207,7 @@ Deno.test("MultiCloudSecretBoundaryCrypto: aws key compromise does not unlock ot
   await assert.rejects(() => compromised.open(cloudflareCipher, "cloudflare"));
 });
 
-Deno.test("MemoryEncryptedSecretStore stores per-cloud partition and rejects cross-partition reads", async () => {
+test("MemoryEncryptedSecretStore stores per-cloud partition and rejects cross-partition reads", async () => {
   const store = new MemoryEncryptedSecretStore({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     crypto: new MultiCloudSecretBoundaryCrypto({
@@ -237,7 +238,7 @@ Deno.test("MemoryEncryptedSecretStore stores per-cloud partition and rejects cro
   assert.equal(awsList[0].name, "AWS_ACCESS_KEY_ID");
 });
 
-Deno.test("MultiCloudSecretBoundaryCrypto.fromEnv picks per-cloud overrides", async () => {
+test("MultiCloudSecretBoundaryCrypto.fromEnv picks per-cloud overrides", async () => {
   const env = {
     TAKOSUMI_SECRET_STORE_PASSPHRASE: "global-passphrase-".padEnd(40, "g"),
     TAKOSUMI_SECRET_STORE_PASSPHRASE_AWS: "aws-only-".padEnd(40, "a"),
@@ -257,7 +258,7 @@ Deno.test("MultiCloudSecretBoundaryCrypto.fromEnv picks per-cloud overrides", as
 // Phase 18.2 H15: rotation policy + version GC
 // ---------------------------------------------------------------------------
 
-Deno.test("rotationStatus marks secrets due / expired based on policy", async () => {
+test("rotationStatus marks secrets due / expired based on policy", async () => {
   let now = new Date("2026-01-01T00:00:00.000Z");
   const store = new MemoryEncryptedSecretStore({
     clock: () => now,
@@ -285,7 +286,7 @@ Deno.test("rotationStatus marks secrets due / expired based on policy", async ()
   assert.equal(status[0].state, "expired");
 });
 
-Deno.test("runVersionGc keeps latest N + recently accessed versions", async () => {
+test("runVersionGc keeps latest N + recently accessed versions", async () => {
   let counter = 0;
   let now = new Date("2026-01-01T00:00:00.000Z");
   const store = new MemoryEncryptedSecretStore({
@@ -325,7 +326,7 @@ Deno.test("runVersionGc keeps latest N + recently accessed versions", async () =
   assert.equal(latest!.version, refs[5].version);
 });
 
-Deno.test("runVersionGc retains versions accessed within window", async () => {
+test("runVersionGc retains versions accessed within window", async () => {
   let counter = 0;
   let now = new Date("2026-01-01T00:00:00.000Z");
   const store = new MemoryEncryptedSecretStore({
@@ -349,7 +350,7 @@ Deno.test("runVersionGc retains versions accessed within window", async () => {
   assert.equal(report.retained, 2);
 });
 
-Deno.test("getSecret updates lastAccessedAt", async () => {
+test("getSecret updates lastAccessedAt", async () => {
   let now = new Date("2026-01-01T00:00:00.000Z");
   const store = new MemoryEncryptedSecretStore({
     clock: () => now,

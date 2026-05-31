@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryRuntimeNetworkPolicyStore,
@@ -7,7 +8,7 @@ import {
 import { DomainError } from "../../shared/errors.ts";
 import { WorkerAuthzService, type WorkerAuthzStores } from "./mod.ts";
 
-Deno.test("WorkerAuthzService rejects internal calls without identity", async () => {
+test("WorkerAuthzService rejects internal calls without identity", async () => {
   const { service } = createService();
 
   await assert.rejects(
@@ -20,7 +21,7 @@ Deno.test("WorkerAuthzService rejects internal calls without identity", async ()
   );
 });
 
-Deno.test("WorkerAuthzService rejects identity without matching service grant", async () => {
+test("WorkerAuthzService rejects identity without matching service grant", async () => {
   const { service, stores } = createService();
   await putIdentity(stores);
 
@@ -35,7 +36,7 @@ Deno.test("WorkerAuthzService rejects identity without matching service grant", 
   );
 });
 
-Deno.test("WorkerAuthzService allows matching workload identity service grant", async () => {
+test("WorkerAuthzService allows matching workload identity service grant", async () => {
   const { service, stores } = createService();
   await putIdentity(stores);
   await stores.serviceGrants.put({
@@ -61,7 +62,7 @@ Deno.test("WorkerAuthzService allows matching workload identity service grant", 
   assert.equal(result.grant.id, "grant_runtime");
 });
 
-Deno.test("WorkerAuthzService denies private egress when runtime network policy blocks", async () => {
+test("WorkerAuthzService denies private egress when runtime network policy blocks", async () => {
   const { service, stores } = createService();
   await putIdentity(stores);
   await stores.runtimeNetworkPolicies.put({
@@ -94,7 +95,7 @@ Deno.test("WorkerAuthzService denies private egress when runtime network policy 
   assert.equal(decision.policy?.id, "policy_web");
 });
 
-Deno.test("WorkerAuthzService reports advisory egress denial as unknown instead of enforced deny", async () => {
+test("WorkerAuthzService reports advisory egress denial as unknown instead of enforced deny", async () => {
   const { service, stores } = createService();
   await putIdentity(stores);
   await stores.runtimeNetworkPolicies.put({
@@ -127,7 +128,7 @@ Deno.test("WorkerAuthzService reports advisory egress denial as unknown instead 
   );
 });
 
-Deno.test("WorkerAuthzService keeps candidate-scoped egress policy activation-local", async () => {
+test("WorkerAuthzService keeps candidate-scoped egress policy activation-local", async () => {
   const { service, stores } = createService();
   await putIdentity(stores, { activationId: "activation_primary" });
   await stores.runtimeNetworkPolicies.put({

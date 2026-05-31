@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { deployCommand } from "../commands/deploy.ts";
 import { installCommand } from "../commands/install.ts";
@@ -16,7 +17,7 @@ interface CapturedRequest {
   readonly authorization: string | null;
 }
 
-Deno.test("installer source parser maps supported source refs", () => {
+test("installer source parser maps supported source refs", () => {
   assert.deepEqual(parseSourceRef("./"), { kind: "local", url: "./" });
   assert.deepEqual(
     parseSourceRef("git:https://github.com/acme/app#main"),
@@ -60,7 +61,7 @@ Deno.test("installer source parser maps supported source refs", () => {
   );
 });
 
-Deno.test("deploy expected guard parses null current pointer", () => {
+test("deploy expected guard parses null current pointer", () => {
   assert.deepEqual(
     deploymentExpectedGuardFromOptions({
       expectedManifestDigest: "sha256:manifest",
@@ -73,12 +74,12 @@ Deno.test("deploy expected guard parses null current pointer", () => {
   );
 });
 
-Deno.test("install command posts source to /v1/installations", async () => {
+test("install command posts source to /v1/installations", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
     const captured = await runCommandAgainstFakeKernel(() =>
-      installCommand.parse([
+      installCommand.parseAsync([
         "--space",
         "space_personal",
         "--source",
@@ -103,12 +104,12 @@ Deno.test("install command posts source to /v1/installations", async () => {
   }
 });
 
-Deno.test("install dry-run posts source to /v1/installations/dry-run", async () => {
+test("install dry-run posts source to /v1/installations/dry-run", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
     const captured = await runCommandAgainstFakeKernel(() =>
-      installCommand.parse([
+      installCommand.parseAsync([
         "dry-run",
         "--space",
         "space_personal",
@@ -136,12 +137,12 @@ Deno.test("install dry-run posts source to /v1/installations/dry-run", async () 
   }
 });
 
-Deno.test("deploy command posts to an installation deployment endpoint", async () => {
+test("deploy command posts to an installation deployment endpoint", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
     const captured = await runCommandAgainstFakeKernel(() =>
-      deployCommand.parse([
+      deployCommand.parseAsync([
         "ins_123",
         "--source",
         "git:https://github.com/acme/app#v1.0.0",
@@ -181,12 +182,12 @@ Deno.test("deploy command posts to an installation deployment endpoint", async (
   }
 });
 
-Deno.test("deploy dry-run posts to the deployment dry-run endpoint", async () => {
+test("deploy dry-run posts to the deployment dry-run endpoint", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
     const captured = await runCommandAgainstFakeKernel(() =>
-      deployCommand.parse([
+      deployCommand.parseAsync([
         "dry-run",
         "ins_123",
         "--source",
@@ -212,12 +213,12 @@ Deno.test("deploy dry-run posts to the deployment dry-run endpoint", async () =>
   }
 });
 
-Deno.test("rollback command posts deploymentId to rollback endpoint", async () => {
+test("rollback command posts deploymentId to rollback endpoint", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
     const captured = await runCommandAgainstFakeKernel(() =>
-      rollbackCommand.parse([
+      rollbackCommand.parseAsync([
         "ins_123",
         "dep_old",
         "--remote",

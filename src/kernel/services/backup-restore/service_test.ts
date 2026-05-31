@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Backup / restore service tests — Deployment-centric port.
 //
 // These tests cover the resource-side restore semantics that this service
@@ -23,7 +24,7 @@ import {
   type ResourceOperationStores,
 } from "../resources/mod.ts";
 
-Deno.test("BackupRestoreService blocks unsupported restore providers", async () => {
+test("BackupRestoreService blocks unsupported restore providers", async () => {
   const { service } = await createFixture({
     provider: "unsupported-provider",
   });
@@ -42,7 +43,7 @@ Deno.test("BackupRestoreService blocks unsupported restore providers", async () 
   );
 });
 
-Deno.test("BackupRestoreService blocks unsupported restore modes", async () => {
+test("BackupRestoreService blocks unsupported restore modes", async () => {
   const { service } = await createFixture({
     provider: "postgres-provider",
     providerSupport: [{
@@ -65,7 +66,7 @@ Deno.test("BackupRestoreService blocks unsupported restore modes", async () => {
   );
 });
 
-Deno.test("BackupRestoreService validates backup metadata against current resource", async () => {
+test("BackupRestoreService validates backup metadata against current resource", async () => {
   const { service, backupRestoreStore } = await createFixture({
     provider: "postgres-provider",
     providerSupport: [{
@@ -99,7 +100,7 @@ Deno.test("BackupRestoreService validates backup metadata against current resour
   );
 });
 
-Deno.test("BackupRestoreService blocks expired rollback-window backups", async () => {
+test("BackupRestoreService blocks expired rollback-window backups", async () => {
   const { service } = await createFixture({
     provider: "postgres-provider",
     providerSupport: [{
@@ -124,7 +125,7 @@ Deno.test("BackupRestoreService blocks expired rollback-window backups", async (
   );
 });
 
-Deno.test("BackupRestoreService guards provider-native restore safety", async () => {
+test("BackupRestoreService guards provider-native restore safety", async () => {
   const { service, resources } = await createFixture({
     provider: "postgres-provider",
     providerSupport: [{
@@ -167,7 +168,7 @@ Deno.test("BackupRestoreService guards provider-native restore safety", async ()
   );
 });
 
-Deno.test("BackupRestoreService rejects provider-native backups without materialization identity", async () => {
+test("BackupRestoreService rejects provider-native backups without materialization identity", async () => {
   const { service } = await createFixture({
     provider: "postgres-provider",
     providerSupport: [{
@@ -192,7 +193,7 @@ Deno.test("BackupRestoreService rejects provider-native backups without material
   );
 });
 
-Deno.test("BackupRestoreService records restore through resource operation semantics", async () => {
+test("BackupRestoreService records restore through resource operation semantics", async () => {
   const { service, backupRestoreStore, resourceOperationStores } =
     await createFixture({
       provider: "postgres-provider",
@@ -243,7 +244,7 @@ Deno.test("BackupRestoreService records restore through resource operation seman
   );
 });
 
-Deno.test("BackupRestoreService requires resource operation semantics before completing restore", async () => {
+test("BackupRestoreService requires resource operation semantics before completing restore", async () => {
   const { service } = await createFixture({
     provider: "postgres-provider",
     providerSupport: [{
@@ -273,7 +274,7 @@ Deno.test("BackupRestoreService requires resource operation semantics before com
   );
 });
 
-Deno.test("BackupRestoreService rejects group rollback when no deployment service is wired", async () => {
+test("BackupRestoreService rejects group rollback when no deployment service is wired", async () => {
   const { service } = await createFixture({
     provider: "postgres-provider",
     providerSupport: [{

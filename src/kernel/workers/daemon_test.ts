@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   type ApplyWorkerLike,
@@ -10,7 +11,7 @@ import {
   WorkerDaemon,
 } from "./daemon.ts";
 
-Deno.test("WorkerDaemon runOnce ticks each configured task once", async () => {
+test("WorkerDaemon runOnce ticks each configured task once", async () => {
   const calls: string[] = [];
   const daemon = new WorkerDaemon({
     tasks: [
@@ -36,7 +37,7 @@ Deno.test("WorkerDaemon runOnce ticks each configured task once", async () => {
   assert.deepEqual(results.map((result) => result.iteration), [0, 0, 0, 0]);
 });
 
-Deno.test("WorkerDaemon applies backoff after failed ticks and stops on cancellation", async () => {
+test("WorkerDaemon applies backoff after failed ticks and stops on cancellation", async () => {
   const controller = new AbortController();
   const slept: number[] = [];
   const errors: unknown[] = [];
@@ -75,7 +76,7 @@ Deno.test("WorkerDaemon applies backoff after failed ticks and stops on cancella
   assert.equal(results[0].nextDelayMs, 25);
 });
 
-Deno.test("worker task factories adapt apply, outbox, registry, and repair workers", async () => {
+test("worker task factories adapt apply, outbox, registry, and repair workers", async () => {
   const calls: string[] = [];
   const applyTask = createApplyWorkerTask({
     intervalMs: 1,
@@ -104,7 +105,7 @@ Deno.test("worker task factories adapt apply, outbox, registry, and repair worke
   });
   const registryTask = createRegistrySyncWorkerTask({
     intervalMs: 1,
-    refs: [{ kind: "kind-package", ref: "demo@1.0.0" }],
+    refs: [{ kind: "backend-plugin", ref: "demo@1.0.0" }],
     syncProviderSupport: true,
     worker: {
       syncPackages: (refs) => {

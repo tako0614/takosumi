@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryRuntimeNetworkPolicyStore,
@@ -20,7 +21,7 @@ import {
 } from "../../services/security/mod.ts";
 import { DomainError } from "../../shared/errors.ts";
 
-Deno.test("acceptance P3: internal service call without WorkloadIdentity is rejected", async () => {
+test("acceptance P3: internal service call without WorkloadIdentity is rejected", async () => {
   const { security } = createRuntimeSecurityAcceptanceHarness();
 
   await assert.rejects(
@@ -35,7 +36,7 @@ Deno.test("acceptance P3: internal service call without WorkloadIdentity is reje
   );
 });
 
-Deno.test("acceptance P3: ServiceGrant is required before runtime internal service calls", async () => {
+test("acceptance P3: ServiceGrant is required before runtime internal service calls", async () => {
   const { security, securityStores } = createRuntimeSecurityAcceptanceHarness();
   await putWorkerIdentity(securityStores);
 
@@ -74,7 +75,7 @@ Deno.test("acceptance P3: ServiceGrant is required before runtime internal servi
   assert.equal(result.grant.id, "grant_runtime_invoke");
 });
 
-Deno.test("acceptance P3: private resource egress is denied when runtime policy requires it", async () => {
+test("acceptance P3: private resource egress is denied when runtime policy requires it", async () => {
   const { security, securityStores, resources, resourceStores } =
     createRuntimeSecurityAcceptanceHarness({
       ids: ["resource_private_db", "binding_private_db", "revision_private_db"],

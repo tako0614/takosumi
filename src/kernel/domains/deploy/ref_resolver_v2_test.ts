@@ -1,8 +1,9 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 import { buildRefDag, resolveSpecRefs } from "./ref_resolver_v2.ts";
 
-Deno.test("buildRefDag orders independent resources alphabetically", () => {
+test("buildRefDag orders independent resources alphabetically", () => {
   const resources: ManifestResource[] = [
     { shape: "x@v1", name: "z", provider: "p", spec: {} },
     { shape: "x@v1", name: "a", provider: "p", spec: {} },
@@ -13,7 +14,7 @@ Deno.test("buildRefDag orders independent resources alphabetically", () => {
   assert.equal(dag.issues.length, 0);
 });
 
-Deno.test("buildRefDag orders by ref dependencies", () => {
+test("buildRefDag orders by ref dependencies", () => {
   const resources: ManifestResource[] = [
     {
       shape: "x@v1",
@@ -33,7 +34,7 @@ Deno.test("buildRefDag orders by ref dependencies", () => {
   assert.equal(dag.issues.length, 0);
 });
 
-Deno.test("buildRefDag detects cycles", () => {
+test("buildRefDag detects cycles", () => {
   const resources: ManifestResource[] = [
     { shape: "x@v1", name: "a", provider: "p", spec: { ref: "${ref:b.x}" } },
     { shape: "x@v1", name: "b", provider: "p", spec: { ref: "${ref:a.x}" } },
@@ -42,7 +43,7 @@ Deno.test("buildRefDag detects cycles", () => {
   assert.ok(dag.issues.some((i) => i.message.includes("cycle")));
 });
 
-Deno.test("buildRefDag rejects self-reference", () => {
+test("buildRefDag rejects self-reference", () => {
   const resources: ManifestResource[] = [
     { shape: "x@v1", name: "a", provider: "p", spec: { ref: "${ref:a.x}" } },
   ];
@@ -50,7 +51,7 @@ Deno.test("buildRefDag rejects self-reference", () => {
   assert.ok(dag.issues.some((i) => i.message.includes("itself")));
 });
 
-Deno.test("buildRefDag rejects unknown ref source", () => {
+test("buildRefDag rejects unknown ref source", () => {
   const resources: ManifestResource[] = [
     {
       shape: "x@v1",
@@ -63,7 +64,7 @@ Deno.test("buildRefDag rejects unknown ref source", () => {
   assert.ok(dag.issues.some((i) => i.message.includes("missing")));
 });
 
-Deno.test("resolveSpecRefs replaces full ref expression with value", () => {
+test("resolveSpecRefs replaces full ref expression with value", () => {
   const result = resolveSpecRefs(
     { db: "${ref:db.url}", port: 8080 },
     {
@@ -73,7 +74,7 @@ Deno.test("resolveSpecRefs replaces full ref expression with value", () => {
   assert.deepEqual(result, { db: "postgres://x", port: 8080 });
 });
 
-Deno.test("resolveSpecRefs supports interpolation in strings", () => {
+test("resolveSpecRefs supports interpolation in strings", () => {
   const result = resolveSpecRefs(
     "host=${ref:db.host}:port=${ref:db.port}",
     {
@@ -83,7 +84,7 @@ Deno.test("resolveSpecRefs supports interpolation in strings", () => {
   assert.equal(result, "host=h:port=5432");
 });
 
-Deno.test("resolveSpecRefs walks nested objects and arrays", () => {
+test("resolveSpecRefs walks nested objects and arrays", () => {
   const result = resolveSpecRefs(
     {
       env: {
@@ -101,14 +102,14 @@ Deno.test("resolveSpecRefs walks nested objects and arrays", () => {
   });
 });
 
-Deno.test("resolveSpecRefs leaves unresolved refs intact", () => {
+test("resolveSpecRefs leaves unresolved refs intact", () => {
   const result = resolveSpecRefs("${ref:missing.x}", {
     outputs: new Map(),
   });
   assert.equal(result, "${ref:missing.x}");
 });
 
-Deno.test("resolveSpecRefs uses secretResolver for secret-ref expressions", () => {
+test("resolveSpecRefs uses secretResolver for secret-ref expressions", () => {
   const result = resolveSpecRefs(
     "${secret-ref:db.password}",
     {

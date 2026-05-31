@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryCoreOutputResolutionStore,
@@ -9,7 +10,7 @@ import {
   projectOutput,
 } from "./mod.ts";
 
-Deno.test("output stores current outputs, explicit bindings, and projections", async () => {
+test("output stores current outputs, explicit bindings, and projections", async () => {
   const outputs = new InMemoryOutputStore();
   const bindings = new InMemoryOutputConsumerBindingStore();
   const resolutions = new InMemoryCoreOutputResolutionStore();
@@ -108,7 +109,7 @@ Deno.test("output stores current outputs, explicit bindings, and projections", a
   );
 });
 
-Deno.test("withdrawn outputs are omitted from current lookup by default", async () => {
+test("withdrawn outputs are omitted from current lookup by default", async () => {
   const outputs = new InMemoryOutputStore();
   await outputs.put({
     id: "pub_old",

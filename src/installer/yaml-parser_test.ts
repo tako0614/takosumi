@@ -1,3 +1,4 @@
+import { expect, test } from "bun:test";
 import { assertEquals, assertThrows } from "jsr:@std/assert@^1.0.5";
 import {
   AppSpecParseError,
@@ -6,7 +7,7 @@ import {
   parseAppSpec,
 } from "./yaml-parser.ts";
 
-Deno.test("parseAppSpec accepts canonical connect + platform listen + root publish example", () => {
+test("parseAppSpec accepts canonical connect + platform listen + root publish example", () => {
   const spec = parseAppSpec(`
 apiVersion: v1
 metadata:
@@ -57,21 +58,18 @@ publish:
       app: notes
 `);
 
-  assertEquals(spec.apiVersion, "v1");
-  assertEquals(spec.components.web.connect?.db?.output, "db.connection");
-  assertEquals(spec.components.web.connect?.db?.inject, "secret-env");
-  assertEquals(
-    spec.components.web.listen?.identity?.path,
-    "identity.primary.oidc",
-  );
-  assertEquals(spec.components.public.connect?.app?.inject, "upstream");
-  assertEquals(spec.publish?.api?.output, "web.http");
-  assertEquals(spec.publish?.api?.kind, "http-endpoint");
-  assertEquals(spec.publish?.api?.path, "acme.notes.api");
-  assertEquals(spec.publish?.api?.labels?.app, "notes");
+  expect(spec.apiVersion).toEqual("v1");
+  expect(spec.components.web.connect?.db?.output).toEqual("db.connection");
+  expect(spec.components.web.connect?.db?.inject).toEqual("secret-env");
+  expect(spec.components.web.listen?.identity?.path).toEqual("identity.primary.oidc");
+  expect(spec.components.public.connect?.app?.inject).toEqual("upstream");
+  expect(spec.publish?.api?.output).toEqual("web.http");
+  expect(spec.publish?.api?.kind).toEqual("http-endpoint");
+  expect(spec.publish?.api?.path).toEqual("acme.notes.api");
+  expect(spec.publish?.api?.labels?.app).toEqual("notes");
 });
 
-Deno.test("parseAppSpec rejects component-local publish", () => {
+test("parseAppSpec rejects component-local publish", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -86,11 +84,11 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "schema");
-  assertEquals(err.validationPath, "$.components.web.publish");
+  expect(err.validationPhase).toEqual("schema");
+  expect(err.validationPath).toEqual("$.components.web.publish");
 });
 
-Deno.test("parseAppSpec rejects legacy local listen.from", () => {
+test("parseAppSpec rejects legacy local listen.from", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -106,11 +104,11 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "schema");
-  assertEquals(err.validationPath, '$.components.web.listen."db".from');
+  expect(err.validationPhase).toEqual("schema");
+  expect(err.validationPath).toEqual('$.components.web.listen."db".from');
 });
 
-Deno.test("parseAppSpec rejects connect output that is not a local component output ref", () => {
+test("parseAppSpec rejects connect output that is not a local component output ref", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -126,19 +124,42 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "connection-resolution");
-  assertEquals(
-    err.validationPath,
-    '$.components.web.connect."identity".output',
-  );
+  expect(err.validationPhase).toEqual("connection-resolution");
+  expect(err.validationPath).toEqual('$.components.web.connect."identity".output');
 });
 
-Deno.test("parseAppSpec accepts platform listen path boundaries", () => {
+test("parseAppSpec rejects duplicate connect/listen binding names on one component", () => {
+  const err = assertThrows(
+    () =>
+      parseAppSpec(`
+apiVersion: v1
+metadata: { id: x, name: y }
+components:
+  db:
+    kind: postgres
+  web:
+    kind: worker
+    connect:
+      db:
+        output: db.connection
+        inject: env
+    listen:
+      db:
+        path: identity.primary.oidc
+        inject: env
+`),
+    AppSpecParseError,
+  );
+  expect(err.validationPhase).toEqual("connection-resolution");
+  expect(err.validationPath).toEqual('$.components.web.listen."db"');
+});
+
+test("parseAppSpec accepts platform listen path boundaries", () => {
   const maxSegment = "a".repeat(63);
   const exactly255Chars = [maxSegment, maxSegment, maxSegment, maxSegment].join(
     ".",
   );
-  assertEquals(exactly255Chars.length, 255);
+  expect(exactly255Chars.length).toEqual(255);
 
   for (const path of ["a.b.c.d.e.f.g.h", exactly255Chars]) {
     const spec = parseAppSpec(`
@@ -152,11 +173,11 @@ components:
         path: ${path}
         inject: env
 `);
-    assertEquals(spec.components.web.listen?.ext?.path, path);
+    expect(spec.components.web.listen?.ext?.path).toEqual(path);
   }
 });
 
-Deno.test("parseAppSpec accepts discovery listen by material kind", () => {
+test("parseAppSpec accepts discovery listen by material kind", () => {
   const spec = parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
@@ -172,15 +193,12 @@ components:
         inject: config-mount
 `);
 
-  assertEquals(spec.components.agent.listen?.tools?.kind, "mcp-server@v1");
-  assertEquals(
-    spec.components.agent.listen?.tools?.labels?.capability,
-    "docs",
-  );
-  assertEquals(spec.components.agent.listen?.tools?.many, true);
+  expect(spec.components.agent.listen?.tools?.kind).toEqual("mcp-server@v1");
+  expect(spec.components.agent.listen?.tools?.labels?.capability).toEqual("docs");
+  expect(spec.components.agent.listen?.tools?.many).toEqual(true);
 });
 
-Deno.test("parseAppSpec accepts root publish without path for discovery", () => {
+test("parseAppSpec accepts root publish without path for discovery", () => {
   const spec = parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
@@ -195,13 +213,13 @@ publish:
       capability: docs
 `);
 
-  assertEquals(spec.publish?.tools?.output, "web.mcp");
-  assertEquals(spec.publish?.tools?.kind, "mcp-server@v1");
-  assertEquals(spec.publish?.tools?.path, undefined);
-  assertEquals(spec.publish?.tools?.labels?.capability, "docs");
+  expect(spec.publish?.tools?.output).toEqual("web.mcp");
+  expect(spec.publish?.tools?.kind).toEqual("mcp-server@v1");
+  expect(spec.publish?.tools?.path).toEqual(undefined);
+  expect(spec.publish?.tools?.labels?.capability).toEqual("docs");
 });
 
-Deno.test("parseAppSpec rejects type as a component or material selector", () => {
+test("parseAppSpec rejects type as a component or material selector", () => {
   const component = assertThrows(
     () =>
       parseAppSpec(`
@@ -214,8 +232,8 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(component.validationPhase, "schema");
-  assertEquals(component.validationPath, "$.components.web.type");
+  expect(component.validationPhase).toEqual("schema");
+  expect(component.validationPath).toEqual("$.components.web.type");
 
   const listen = assertThrows(
     () =>
@@ -233,8 +251,8 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(listen.validationPhase, "schema");
-  assertEquals(listen.validationPath, '$.components.web.listen."tools".type');
+  expect(listen.validationPhase).toEqual("schema");
+  expect(listen.validationPath).toEqual('$.components.web.listen."tools".type');
 
   const publish = assertThrows(
     () =>
@@ -251,11 +269,11 @@ publish:
 `),
     AppSpecParseError,
   );
-  assertEquals(publish.validationPhase, "schema");
-  assertEquals(publish.validationPath, '$.publish."tools".type');
+  expect(publish.validationPhase).toEqual("schema");
+  expect(publish.validationPath).toEqual('$.publish."tools".type');
 });
 
-Deno.test("parseAppSpec rejects malformed platform service paths", () => {
+test("parseAppSpec rejects malformed platform service paths", () => {
   const cases = [
     ["uppercase segment", "identity.Primary.oidc"],
     ["underscore segment", "identity.primary_oidc.service"],
@@ -283,16 +301,12 @@ components:
       undefined,
       name,
     );
-    assertEquals(err.validationPhase, "connection-resolution", name);
-    assertEquals(
-      err.validationPath,
-      '$.components.web.listen."service".path',
-      name,
-    );
+    expect(err.validationPhase).toEqual("connection-resolution");
+    expect(err.validationPath).toEqual('$.components.web.listen."service".path');
   }
 });
 
-Deno.test("parseAppSpec rejects listen selectors without path or kind", () => {
+test("parseAppSpec rejects listen selectors without path or kind", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -307,11 +321,11 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "connection-resolution");
-  assertEquals(err.validationPath, '$.components.web.listen."service"');
+  expect(err.validationPhase).toEqual("connection-resolution");
+  expect(err.validationPath).toEqual('$.components.web.listen."service"');
 });
 
-Deno.test("parseAppSpec rejects many on exact listen path", () => {
+test("parseAppSpec rejects many on exact listen path", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -328,11 +342,11 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "connection-resolution");
-  assertEquals(err.validationPath, '$.components.web.listen."service".many');
+  expect(err.validationPhase).toEqual("connection-resolution");
+  expect(err.validationPath).toEqual('$.components.web.listen."service".many');
 });
 
-Deno.test("parseAppSpec rejects connect cycles and self loops", () => {
+test("parseAppSpec rejects connect cycles and self loops", () => {
   const cycle = assertThrows(
     () =>
       parseAppSpec(`
@@ -354,7 +368,7 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(cycle.validationPhase, "connection-resolution");
+  expect(cycle.validationPhase).toEqual("connection-resolution");
 
   const self = assertThrows(
     () =>
@@ -371,11 +385,11 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(self.validationPhase, "connection-resolution");
-  assertEquals(self.validationPath, "$.components.web.connect.self.output");
+  expect(self.validationPhase).toEqual("connection-resolution");
+  expect(self.validationPath).toEqual("$.components.web.connect.self.output");
 });
 
-Deno.test("parseAppSpec rejects root publish duplicate paths and unknown components", () => {
+test("parseAppSpec rejects root publish duplicate paths and unknown components", () => {
   const duplicate = assertThrows(
     () =>
       parseAppSpec(`
@@ -394,8 +408,8 @@ publish:
 `),
     AppSpecParseError,
   );
-  assertEquals(duplicate.validationPhase, "connection-resolution");
-  assertEquals(duplicate.validationPath, '$.publish."api-copy".path');
+  expect(duplicate.validationPhase).toEqual("connection-resolution");
+  expect(duplicate.validationPath).toEqual('$.publish."api-copy".path');
 
   const unknown = assertThrows(
     () =>
@@ -412,11 +426,11 @@ publish:
 `),
     AppSpecParseError,
   );
-  assertEquals(unknown.validationPhase, "connection-resolution");
-  assertEquals(unknown.validationPath, '$.publish."api".output');
+  expect(unknown.validationPhase).toEqual("connection-resolution");
+  expect(unknown.validationPath).toEqual('$.publish."api".output');
 });
 
-Deno.test("parseAppSpec keeps kind opaque and rejects removed root/legacy fields", () => {
+test("parseAppSpec keeps kind opaque and rejects removed root/legacy fields", () => {
   const spec = parseAppSpec(`
 apiVersion: v1
 metadata: { id: x, name: y }
@@ -426,10 +440,7 @@ components:
     spec:
       handler: index.handler
 `);
-  assertEquals(
-    spec.components.fn.kind,
-    "https://example.com/kinds/lambda",
-  );
+  expect(spec.components.fn.kind).toEqual("https://example.com/kinds/lambda");
 
   const legacyUse = assertThrows(
     () =>
@@ -444,7 +455,7 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(legacyUse.validationPhase, "legacy-use");
+  expect(legacyUse.validationPhase).toEqual("legacy-use");
 
   const rootKind = assertThrows(
     () =>
@@ -456,14 +467,14 @@ components: { web: { kind: worker } }
 `),
     AppSpecParseError,
   );
-  assertEquals(rootKind.validationPath, "$.kind");
+  expect(rootKind.validationPath).toEqual("$.kind");
 });
 
 // --------------------------------------------------------------------------
 // Hardening fixes (Agent 4)
 // --------------------------------------------------------------------------
 
-Deno.test("parseAppSpec rejects manifests larger than 1 MiB", () => {
+test("parseAppSpec rejects manifests larger than 1 MiB", () => {
   // Pad a valid manifest with a large YAML comment so the YAML stays
   // syntactically valid but the source byte length crosses the limit.
   const filler = "# " + "a".repeat(1024 * 1024) + "\n";
@@ -475,11 +486,11 @@ components:
     kind: worker
 `;
   const err = assertThrows(() => parseAppSpec(source), AppSpecParseError);
-  assertEquals(err.validationPhase, "manifest-too-large");
-  assertEquals(err.validationPath, "$");
+  expect(err.validationPhase).toEqual("manifest-too-large");
+  expect(err.validationPath).toEqual("$");
 });
 
-Deno.test("parseAppSpec accepts manifests at or just under the 1 MiB limit", () => {
+test("parseAppSpec accepts manifests at or just under the 1 MiB limit", () => {
   // A valid manifest plus a comment block that keeps the total just
   // under the limit must parse cleanly.
   const valid = `
@@ -493,10 +504,10 @@ components:
     100;
   const filler = "# " + "a".repeat(headroom) + "\n";
   const spec = parseAppSpec(filler + valid);
-  assertEquals(spec.metadata.id, "x");
+  expect(spec.metadata.id).toEqual("x");
 });
 
-Deno.test("parseAppSpec rejects more than 256 components", () => {
+test("parseAppSpec rejects more than 256 components", () => {
   const lines = [
     "apiVersion: v1",
     "metadata: { id: x, name: y }",
@@ -510,11 +521,11 @@ Deno.test("parseAppSpec rejects more than 256 components", () => {
     () => parseAppSpec(lines.join("\n")),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "too-many-components");
-  assertEquals(err.validationPath, "$.components");
+  expect(err.validationPhase).toEqual("too-many-components");
+  expect(err.validationPath).toEqual("$.components");
 });
 
-Deno.test("parseAppSpec accepts exactly 256 components", () => {
+test("parseAppSpec accepts exactly 256 components", () => {
   const lines = [
     "apiVersion: v1",
     "metadata: { id: x, name: y }",
@@ -525,10 +536,10 @@ Deno.test("parseAppSpec accepts exactly 256 components", () => {
     lines.push("    kind: worker");
   }
   const spec = parseAppSpec(lines.join("\n"));
-  assertEquals(Object.keys(spec.components).length, 256);
+  expect(Object.keys(spec.components).length).toEqual(256);
 });
 
-Deno.test("parseAppSpec rejects forbidden prototype-pollution keys in spec", () => {
+test("parseAppSpec rejects forbidden prototype-pollution keys in spec", () => {
   for (const forbidden of ["__proto__", "constructor", "prototype"]) {
     const err = assertThrows(
       () =>
@@ -544,11 +555,11 @@ components:
 `),
       AppSpecParseError,
     );
-    assertEquals(err.validationPhase, "forbidden-field", forbidden);
+    expect(err.validationPhase).toEqual("forbidden-field");
   }
 });
 
-Deno.test("parseAppSpec rejects forbidden keys nested deep inside spec", () => {
+test("parseAppSpec rejects forbidden keys nested deep inside spec", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -565,14 +576,11 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "forbidden-field");
-  assertEquals(
-    err.validationPath,
-    "$.components.web.spec.env.nested.__proto__",
-  );
+  expect(err.validationPhase).toEqual("forbidden-field");
+  expect(err.validationPath).toEqual("$.components.web.spec.env.nested.__proto__");
 });
 
-Deno.test("parseAppSpec rejects forbidden keys inside spec arrays", () => {
+test("parseAppSpec rejects forbidden keys inside spec arrays", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -589,10 +597,10 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "forbidden-field");
+  expect(err.validationPhase).toEqual("forbidden-field");
 });
 
-Deno.test("parseAppSpec accepts relaxed reverse-DNS metadata ids", () => {
+test("parseAppSpec accepts relaxed reverse-DNS metadata ids", () => {
   for (
     const id of [
       "x",
@@ -609,11 +617,11 @@ components:
   web:
     kind: worker
 `);
-    assertEquals(spec.metadata.id, id);
+    expect(spec.metadata.id).toEqual(id);
   }
 });
 
-Deno.test("parseAppSpec rejects metadata ids that fail the reverse-DNS pattern", () => {
+test("parseAppSpec rejects metadata ids that fail the reverse-DNS pattern", () => {
   // YAML cannot embed bare control characters, but uppercase / digit-first /
   // 6-segment / trailing-dot variants must all be rejected.
   const cases: ReadonlyArray<readonly [string, string]> = [
@@ -640,12 +648,12 @@ components:
       undefined,
       name,
     );
-    assertEquals(err.validationPhase, "invalid-metadata-id", name);
-    assertEquals(err.validationPath, "$.metadata.id", name);
+    expect(err.validationPhase).toEqual("invalid-metadata-id");
+    expect(err.validationPath).toEqual("$.metadata.id");
   }
 });
 
-Deno.test("parseAppSpec rejects metadata ids containing control characters", () => {
+test("parseAppSpec rejects metadata ids containing control characters", () => {
   // Inject NUL / tab / DEL via double-quoted YAML escapes so the YAML
   // lexer accepts the value but the parser then rejects it with
   // `invalid_metadata_id`. The relaxed reverse-DNS regex would already
@@ -660,12 +668,12 @@ Deno.test("parseAppSpec rejects metadata ids containing control characters", () 
       undefined,
       escape,
     );
-    assertEquals(err.validationPhase, "invalid-metadata-id", escape);
-    assertEquals(err.validationPath, "$.metadata.id", escape);
+    expect(err.validationPhase).toEqual("invalid-metadata-id");
+    expect(err.validationPath).toEqual("$.metadata.id");
   }
 });
 
-Deno.test("parseAppSpec rejects manifests with raw NUL via YAML syntax error", () => {
+test("parseAppSpec rejects manifests with raw NUL via YAML syntax error", () => {
   // YAML 1.2 forbids unescaped C0 control characters in scalars
   // (other than tab/LF/CR), so a manifest with a raw NUL is rejected
   // by the YAML lexer before the parser sees it. We still want to
@@ -674,10 +682,10 @@ Deno.test("parseAppSpec rejects manifests with raw NUL via YAML syntax error", (
   const yaml =
     `apiVersion: v1\nmetadata: { id: "com.\u0000example", name: y }\ncomponents:\n  web:\n    kind: worker\n`;
   const err = assertThrows(() => parseAppSpec(yaml), AppSpecParseError);
-  assertEquals(err.validationPhase, "syntax");
+  expect(err.validationPhase).toEqual("syntax");
 });
 
-Deno.test("parseAppSpec accepts https / http homepage URLs", () => {
+test("parseAppSpec accepts https / http homepage URLs", () => {
   for (const homepage of ["https://example.com", "http://example.test"]) {
     const spec = parseAppSpec(`
 apiVersion: v1
@@ -689,11 +697,11 @@ components:
   web:
     kind: worker
 `);
-    assertEquals(spec.metadata.homepage, homepage);
+    expect(spec.metadata.homepage).toEqual(homepage);
   }
 });
 
-Deno.test("parseAppSpec rejects dangerous homepage URL schemes", () => {
+test("parseAppSpec rejects dangerous homepage URL schemes", () => {
   for (
     const homepage of [
       "javascript:alert(1)",
@@ -719,12 +727,12 @@ components:
       undefined,
       homepage,
     );
-    assertEquals(err.validationPhase, "invalid-metadata-homepage", homepage);
-    assertEquals(err.validationPath, "$.metadata.homepage", homepage);
+    expect(err.validationPhase).toEqual("invalid-metadata-homepage");
+    expect(err.validationPath).toEqual("$.metadata.homepage");
   }
 });
 
-Deno.test("parseAppSpec rejects reserved platform service path prefixes on listen", () => {
+test("parseAppSpec rejects reserved platform service path prefixes on listen", () => {
   for (
     const reserved of ["takosumi.core.lifecycle", "system.metrics.endpoint"]
   ) {
@@ -745,16 +753,12 @@ components:
       undefined,
       reserved,
     );
-    assertEquals(err.validationPhase, "connection-resolution", reserved);
-    assertEquals(
-      err.validationPath,
-      '$.components.web.listen."svc".path',
-      reserved,
-    );
+    expect(err.validationPhase).toEqual("connection-resolution");
+    expect(err.validationPath).toEqual('$.components.web.listen."svc".path');
   }
 });
 
-Deno.test("parseAppSpec rejects reserved platform service path prefixes on root publish", () => {
+test("parseAppSpec rejects reserved platform service path prefixes on root publish", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -770,11 +774,11 @@ publish:
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "connection-resolution");
-  assertEquals(err.validationPath, '$.publish."bad".path');
+  expect(err.validationPhase).toEqual("connection-resolution");
+  expect(err.validationPath).toEqual('$.publish."bad".path');
 });
 
-Deno.test("parseAppSpec iterative cycle detector handles deep but legal connect chains", () => {
+test("parseAppSpec iterative cycle detector handles deep but legal connect chains", () => {
   const depth = 256;
   const lines = [
     "apiVersion: v1",
@@ -792,10 +796,10 @@ Deno.test("parseAppSpec iterative cycle detector handles deep but legal connect 
     }
   }
   const spec = parseAppSpec(lines.join("\n"));
-  assertEquals(Object.keys(spec.components).length, depth);
+  expect(Object.keys(spec.components).length).toEqual(depth);
 });
 
-Deno.test("parseAppSpec iterative detector still rejects long cycles", () => {
+test("parseAppSpec iterative detector still rejects long cycles", () => {
   // Build a256 → a0 to create a cycle that covers the full chain.
   const depth = 256;
   const lines = [
@@ -815,10 +819,10 @@ Deno.test("parseAppSpec iterative detector still rejects long cycles", () => {
     () => parseAppSpec(lines.join("\n")),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "connection-resolution");
+  expect(err.validationPhase).toEqual("connection-resolution");
 });
 
-Deno.test("parseAppSpec warns on unknown listen inject shape but accepts it", () => {
+test("parseAppSpec warns on unknown listen inject shape but accepts it", () => {
   const warnings: Array<{ message: string; path: string }> = [];
   const logger: AppSpecParseLogger = {
     warn(message: string, path: string) {
@@ -839,12 +843,12 @@ components:
 `,
     { logger },
   );
-  assertEquals(spec.components.web.listen?.svc?.inject, "operator-shape-xyz");
-  assertEquals(warnings.length, 1);
-  assertEquals(warnings[0]!.path, '$.components.web.listen."svc".inject');
+  expect(spec.components.web.listen?.svc?.inject).toEqual("operator-shape-xyz");
+  expect(warnings.length).toEqual(1);
+  expect(warnings[0]!.path).toEqual('$.components.web.listen."svc".inject');
 });
 
-Deno.test("parseAppSpec stays silent on known listen inject shapes", () => {
+test("parseAppSpec stays silent on known listen inject shapes", () => {
   const warnings: Array<{ message: string; path: string }> = [];
   const logger: AppSpecParseLogger = {
     warn(message: string, path: string) {
@@ -867,10 +871,10 @@ components:
       { logger },
     );
   }
-  assertEquals(warnings.length, 0);
+  expect(warnings.length).toEqual(0);
 });
 
-Deno.test("parseAppSpec does not warn on open-vocabulary listen.kind", () => {
+test("parseAppSpec does not warn on open-vocabulary listen.kind", () => {
   // Regression: listen.kind is a discovered material KIND, not an inject
   // SHAPE. It must not be compared against KNOWN_LISTEN_SHAPES (which would
   // warn for essentially every legitimate kind such as `mcp-server@v1`).
@@ -894,10 +898,10 @@ components:
 `,
     { logger },
   );
-  assertEquals(warnings.length, 0);
+  expect(warnings.length).toEqual(0);
 });
 
-Deno.test("parseAppSpec rejects inject values that conflict with KNOWN_LISTEN_SHAPES typing", () => {
+test("parseAppSpec rejects inject values that conflict with KNOWN_LISTEN_SHAPES typing", () => {
   for (const bad of ["bad shape", "with\ttab", "with\u0000nul"]) {
     const err = assertThrows(
       () =>
@@ -916,16 +920,12 @@ components:
       undefined,
       bad,
     );
-    assertEquals(err.validationPhase, "connection-resolution", bad);
-    assertEquals(
-      err.validationPath,
-      '$.components.web.listen."svc".inject',
-      bad,
-    );
+    expect(err.validationPhase).toEqual("connection-resolution");
+    expect(err.validationPath).toEqual('$.components.web.listen."svc".inject');
   }
 });
 
-Deno.test("parseAppSpec also validates connect inject typing", () => {
+test("parseAppSpec also validates connect inject typing", () => {
   const err = assertThrows(
     () =>
       parseAppSpec(`
@@ -943,6 +943,6 @@ components:
 `),
     AppSpecParseError,
   );
-  assertEquals(err.validationPhase, "connection-resolution");
-  assertEquals(err.validationPath, '$.components.web.connect."db".inject');
+  expect(err.validationPhase).toEqual("connection-resolution");
+  expect(err.validationPath).toEqual('$.components.web.connect."db".inject');
 });

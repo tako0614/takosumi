@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type {
   LifecycleApplyRequest,
@@ -16,7 +17,7 @@ const applyReq: LifecycleApplyRequest = {
   spec: { name: "bucket" },
 };
 
-Deno.test("withConnectorResilience retries transient connector errors", async () => {
+test("withConnectorResilience retries transient connector errors", async () => {
   const delays: number[] = [];
   let calls = 0;
   const connector = testConnector({
@@ -42,7 +43,7 @@ Deno.test("withConnectorResilience retries transient connector errors", async ()
   assert.deepEqual(delays, [10]);
 });
 
-Deno.test("withConnectorResilience does not retry non-transient errors", async () => {
+test("withConnectorResilience does not retry non-transient errors", async () => {
   let calls = 0;
   const connector = testConnector({
     apply: () => {
@@ -64,7 +65,7 @@ Deno.test("withConnectorResilience does not retry non-transient errors", async (
   assert.equal(calls, 1);
 });
 
-Deno.test("withConnectorResilience refreshes credentials before retry", async () => {
+test("withConnectorResilience refreshes credentials before retry", async () => {
   let calls = 0;
   let refreshes = 0;
   const connector = testConnector({
@@ -91,7 +92,7 @@ Deno.test("withConnectorResilience refreshes credentials before retry", async ()
   assert.equal(refreshes, 1);
 });
 
-Deno.test("withConnectorResilience surfaces the final retry error", async () => {
+test("withConnectorResilience surfaces the final retry error", async () => {
   let calls = 0;
   const connector = testConnector({
     apply: () => {
@@ -111,7 +112,7 @@ Deno.test("withConnectorResilience surfaces the final retry error", async () => 
   assert.equal(calls, 2);
 });
 
-Deno.test("withConnectorResilience can be disabled", () => {
+test("withConnectorResilience can be disabled", () => {
   const connector = testConnector();
   assert.equal(withConnectorResilience(connector, false), connector);
 });

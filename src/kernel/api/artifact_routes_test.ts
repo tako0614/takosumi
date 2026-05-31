@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { Hono, type Hono as HonoApp } from "hono";
 import {
@@ -74,7 +75,7 @@ async function uploadArtifact(
   });
 }
 
-Deno.test("artifact upload returns 404 when token unset", async () => {
+test("artifact upload returns 404 when token unset", async () => {
   const { app } = createApp({ token: undefined });
   const res = await uploadArtifact(
     app,
@@ -85,7 +86,7 @@ Deno.test("artifact upload returns 404 when token unset", async () => {
   assert.equal(res.status, 404);
 });
 
-Deno.test("artifact upload returns 401 on missing auth", async () => {
+test("artifact upload returns 401 on missing auth", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   const form = new FormData();
   form.set("kind", "js-bundle");
@@ -97,7 +98,7 @@ Deno.test("artifact upload returns 401 on missing auth", async () => {
   assert.equal(res.status, 401);
 });
 
-Deno.test("artifact upload returns 400 when kind missing", async () => {
+test("artifact upload returns 400 when kind missing", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   const form = new FormData();
   form.set("body", new Blob([new Uint8Array([1]) as BlobPart]), "f.bin");
@@ -109,7 +110,7 @@ Deno.test("artifact upload returns 400 when kind missing", async () => {
   assert.equal(res.status, 400);
 });
 
-Deno.test("artifact upload returns 400 when body field missing", async () => {
+test("artifact upload returns 400 when body field missing", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   const form = new FormData();
   form.set("kind", "js-bundle");
@@ -121,7 +122,7 @@ Deno.test("artifact upload returns 400 when body field missing", async () => {
   assert.equal(res.status, 400);
 });
 
-Deno.test("artifact upload stores blob and returns ArtifactStored", async () => {
+test("artifact upload stores blob and returns ArtifactStored", async () => {
   const { app, storage } = createApp({
     token: VALID_TOKEN,
     now: () => "2026-05-02T10:00:00.000Z",
@@ -148,7 +149,7 @@ Deno.test("artifact upload stores blob and returns ArtifactStored", async () => 
   assert.equal(head!.metadata.kind, "js-bundle");
 });
 
-Deno.test("artifact upload rejects mismatched expectedDigest", async () => {
+test("artifact upload rejects mismatched expectedDigest", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   const form = new FormData();
   form.set("kind", "js-bundle");
@@ -171,7 +172,7 @@ Deno.test("artifact upload rejects mismatched expectedDigest", async () => {
   assert.match(body.error.message, /digest mismatch/);
 });
 
-Deno.test("artifact upload rejects malformed expectedDigest", async () => {
+test("artifact upload rejects malformed expectedDigest", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   const form = new FormData();
   form.set("kind", "js-bundle");
@@ -191,7 +192,7 @@ Deno.test("artifact upload rejects malformed expectedDigest", async () => {
   assert.match(body.error.message, /expectedDigest/);
 });
 
-Deno.test("artifact GET returns the stored bytes", async () => {
+test("artifact GET returns the stored bytes", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   const bytes = new TextEncoder().encode("payload-payload");
   const upload = await uploadArtifact(app, VALID_TOKEN, bytes, "raw");
@@ -206,7 +207,7 @@ Deno.test("artifact GET returns the stored bytes", async () => {
   assert.equal(res.headers.get("x-takosumi-artifact-kind"), "raw");
 });
 
-Deno.test("artifact HEAD returns metadata headers without body", async () => {
+test("artifact HEAD returns metadata headers without body", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   const bytes = new Uint8Array([10, 20, 30]);
   const upload = await uploadArtifact(app, VALID_TOKEN, bytes, "lambda-zip");
@@ -220,7 +221,7 @@ Deno.test("artifact HEAD returns metadata headers without body", async () => {
   assert.equal(res.headers.get("x-takosumi-artifact-size"), "3");
 });
 
-Deno.test("artifact GET returns 404 for unknown hash", async () => {
+test("artifact GET returns 404 for unknown hash", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   const res = await app.request(
     `${TAKOSUMI_ARTIFACTS_PATH}/sha256:deadbeef`,
@@ -229,7 +230,7 @@ Deno.test("artifact GET returns 404 for unknown hash", async () => {
   assert.equal(res.status, 404);
 });
 
-Deno.test("artifact list returns all uploaded artifacts", async () => {
+test("artifact list returns all uploaded artifacts", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   await uploadArtifact(app, VALID_TOKEN, new Uint8Array([1]), "js-bundle");
   await uploadArtifact(app, VALID_TOKEN, new Uint8Array([2]), "lambda-zip");
@@ -245,7 +246,7 @@ Deno.test("artifact list returns all uploaded artifacts", async () => {
   );
 });
 
-Deno.test("artifact DELETE removes the blob", async () => {
+test("artifact DELETE removes the blob", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   const upload = await uploadArtifact(
     app,
@@ -267,7 +268,7 @@ Deno.test("artifact DELETE removes the blob", async () => {
 
 // --- Task 2: pagination ------------------------------------------------------
 
-Deno.test("artifact list with limit=1 returns 1 + nextCursor", async () => {
+test("artifact list with limit=1 returns 1 + nextCursor", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   await uploadArtifact(app, VALID_TOKEN, new Uint8Array([1]), "js-bundle");
   await uploadArtifact(app, VALID_TOKEN, new Uint8Array([2]), "lambda-zip");
@@ -280,8 +281,7 @@ Deno.test("artifact list with limit=1 returns 1 + nextCursor", async () => {
   assert.ok(body.nextCursor, "nextCursor must be present when more pages");
 });
 
-Deno.test(
-  "artifact list following cursor surfaces every artifact exactly once",
+test("artifact list following cursor surfaces every artifact exactly once",
   async () => {
     const { app } = createApp({ token: VALID_TOKEN });
     await uploadArtifact(app, VALID_TOKEN, new Uint8Array([1]), "k1");
@@ -315,7 +315,7 @@ Deno.test(
   },
 );
 
-Deno.test("artifact list rejects non-positive limit", async () => {
+test("artifact list rejects non-positive limit", async () => {
   const { app } = createApp({ token: VALID_TOKEN });
   const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}?limit=0`, {
     headers: authHeaders(VALID_TOKEN),
@@ -325,8 +325,7 @@ Deno.test("artifact list rejects non-positive limit", async () => {
 
 // --- Task 1: GC --------------------------------------------------------------
 
-Deno.test(
-  "artifact gc removes unreferenced artifacts but keeps referenced ones",
+test("artifact gc removes unreferenced artifacts but keeps referenced ones",
   async () => {
     const recordStore = new InMemoryTakosumiDeploymentRecordStore();
     const { app, storage } = createApp({
@@ -378,7 +377,7 @@ Deno.test(
   },
 );
 
-Deno.test("artifact gc respects dry-run", async () => {
+test("artifact gc respects dry-run", async () => {
   const recordStore = new InMemoryTakosumiDeploymentRecordStore();
   const { app, storage } = createApp({
     token: VALID_TOKEN,
@@ -406,8 +405,7 @@ Deno.test("artifact gc respects dry-run", async () => {
   assert.ok(head, "dry run must not actually delete the blob");
 });
 
-Deno.test(
-  "artifact gc keeps artifacts referenced by destroyed records",
+test("artifact gc keeps artifacts referenced by destroyed records",
   async () => {
     const recordStore = new InMemoryTakosumiDeploymentRecordStore();
     const { app, storage } = createApp({
@@ -451,7 +449,7 @@ Deno.test(
   },
 );
 
-Deno.test("artifact gc is idempotent", async () => {
+test("artifact gc is idempotent", async () => {
   const recordStore = new InMemoryTakosumiDeploymentRecordStore();
   const { app } = createApp({ token: VALID_TOKEN, recordStore });
   await uploadArtifact(
@@ -475,7 +473,7 @@ Deno.test("artifact gc is idempotent", async () => {
   assert.equal(secondBody.retained, 0);
 });
 
-Deno.test("artifact gc requires deploy token (not fetch token)", async () => {
+test("artifact gc requires deploy token (not fetch token)", async () => {
   const recordStore = new InMemoryTakosumiDeploymentRecordStore();
   const { app } = createApp({
     token: VALID_TOKEN,
@@ -491,7 +489,7 @@ Deno.test("artifact gc requires deploy token (not fetch token)", async () => {
 
 // --- Task 3: read-only fetch token -------------------------------------------
 
-Deno.test("artifact GET accepts the read-only fetch token", async () => {
+test("artifact GET accepts the read-only fetch token", async () => {
   const { app } = createApp({
     token: VALID_TOKEN,
     fetchToken: FETCH_TOKEN,
@@ -509,7 +507,7 @@ Deno.test("artifact GET accepts the read-only fetch token", async () => {
   assert.equal(res.status, 200);
 });
 
-Deno.test("artifact HEAD accepts the read-only fetch token", async () => {
+test("artifact HEAD accepts the read-only fetch token", async () => {
   const { app } = createApp({
     token: VALID_TOKEN,
     fetchToken: FETCH_TOKEN,
@@ -528,8 +526,7 @@ Deno.test("artifact HEAD accepts the read-only fetch token", async () => {
   assert.equal(res.status, 200);
 });
 
-Deno.test(
-  "artifact POST rejects the read-only fetch token with 401",
+test("artifact POST rejects the read-only fetch token with 401",
   async () => {
     const { app } = createApp({
       token: VALID_TOKEN,
@@ -547,8 +544,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "artifact DELETE rejects the read-only fetch token with 401",
+test("artifact DELETE rejects the read-only fetch token with 401",
   async () => {
     const { app } = createApp({
       token: VALID_TOKEN,
@@ -572,7 +568,7 @@ Deno.test(
   },
 );
 
-Deno.test("artifact GET still works with the deploy token", async () => {
+test("artifact GET still works with the deploy token", async () => {
   // Sanity: setting the fetch token must NOT lock out the deploy token.
   const { app } = createApp({
     token: VALID_TOKEN,
@@ -593,15 +589,14 @@ Deno.test("artifact GET still works with the deploy token", async () => {
 
 // --- Task 4: maxBytes / 413 resource_exhausted -------------------------------
 
-Deno.test("artifact upload below maxBytes succeeds", async () => {
+test("artifact upload below maxBytes succeeds", async () => {
   const { app } = createApp({ token: VALID_TOKEN, maxBytes: 1024 });
   const bytes = new TextEncoder().encode("under-cap");
   const res = await uploadArtifact(app, VALID_TOKEN, bytes, "js-bundle");
   assert.equal(res.status, 200);
 });
 
-Deno.test(
-  "artifact upload above custom maxBytes returns 413 resource_exhausted",
+test("artifact upload above custom maxBytes returns 413 resource_exhausted",
   async () => {
     const { app } = createApp({ token: VALID_TOKEN, maxBytes: 8 });
     const bytes = new Uint8Array(64); // 64 bytes > 8 bytes cap
@@ -616,8 +611,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "artifact upload honors registered per-kind maxSize",
+test("artifact upload honors registered per-kind maxSize",
   async () => {
     const kind = "test-only-small-artifact";
     registerArtifactKind({
@@ -644,8 +638,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "artifact upload allows registered maxSize above the route default",
+test("artifact upload allows registered maxSize above the route default",
   async () => {
     const kind = "test-only-large-artifact";
     registerArtifactKind({
@@ -671,8 +664,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "artifact upload with Content-Length above cap returns 413 without buffering",
+test("artifact upload with Content-Length above cap returns 413 without buffering",
   async () => {
     const { app } = createApp({ token: VALID_TOKEN, maxBytes: 1024 });
     // Body itself is small, but the declared Content-Length lies. The
@@ -694,8 +686,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "artifact upload with Content-Length below cap reaches multipart parse",
+test("artifact upload with Content-Length below cap reaches multipart parse",
   async () => {
     // Sanity: cap should ONLY fire when declared length is over. A
     // small declared value passes the gate; we then expect the normal
@@ -717,15 +708,13 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "artifact maxBytes default is 50 MiB and exposed as a constant",
+test("artifact maxBytes default is 50 MiB and exposed as a constant",
   () => {
     assert.equal(TAKOSUMI_ARTIFACT_MAX_BYTES_DEFAULT, 52_428_800);
   },
 );
 
-Deno.test(
-  "artifact upload uses default 50 MiB cap when option omitted",
+test("artifact upload uses default 50 MiB cap when option omitted",
   async () => {
     // Operator omits maxBytes entirely. A 1 KiB payload must fly under
     // the implicit 50 MiB default.
@@ -738,8 +727,7 @@ Deno.test(
 
 // --- Task: GET /v1/artifacts/kinds discovery endpoint ------------------------
 
-Deno.test(
-  "GET /v1/artifacts/kinds returns 401 without bearer auth",
+test("GET /v1/artifacts/kinds returns 401 without bearer auth",
   async () => {
     registerBundledArtifactKinds();
     const { app } = createApp({ token: VALID_TOKEN });
@@ -748,8 +736,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "GET /v1/artifacts/kinds surfaces the bundled artifact kinds",
+test("GET /v1/artifacts/kinds surfaces the bundled artifact kinds",
   async () => {
     registerBundledArtifactKinds();
     const { app } = createApp({ token: VALID_TOKEN });
@@ -780,8 +767,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "GET /v1/artifacts/kinds reflects newly registered kinds",
+test("GET /v1/artifacts/kinds reflects newly registered kinds",
   async () => {
     registerBundledArtifactKinds();
     const { app } = createApp({ token: VALID_TOKEN });
@@ -807,8 +793,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "GET /v1/artifacts/kinds returns 404 when deploy token unset",
+test("GET /v1/artifacts/kinds returns 404 when deploy token unset",
   async () => {
     registerBundledArtifactKinds();
     const { app } = createApp({ token: undefined });

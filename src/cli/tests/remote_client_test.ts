@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { callKernel } from "../remote_client.ts";
 
-Deno.test("callKernel sends auth + JSON body on write requests", async () => {
+test("callKernel sends auth + JSON body on write requests", async () => {
   const originalFetch = globalThis.fetch;
   let observedHeaders: Headers | undefined;
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -34,7 +35,7 @@ Deno.test("callKernel sends auth + JSON body on write requests", async () => {
   }
 });
 
-Deno.test("callKernel passes through GET requests without idempotency residue", async () => {
+test("callKernel passes through GET requests without idempotency residue", async () => {
   const originalFetch = globalThis.fetch;
   let observedHeaders: Headers | undefined;
   globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {

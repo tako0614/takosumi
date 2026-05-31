@@ -1,8 +1,9 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { kernelPluginFromProviderPlugin } from "./kernel-plugin-adapter.ts";
 import type { ProviderPlugin } from "./provider-plugin.ts";
 
-Deno.test("kernelPluginFromProviderPlugin injects resolved env into legacy spec", async () => {
+test("kernelPluginFromProviderPlugin injects resolved env into legacy spec", async () => {
   let seenSpec: unknown;
   const provider: ProviderPlugin = {
     id: "@test/gateway",
@@ -26,11 +27,11 @@ Deno.test("kernelPluginFromProviderPlugin injects resolved env into legacy spec"
   const plugin = kernelPluginFromProviderPlugin({
     provider,
     kindUri: "https://takosumi.com/kinds/v1/gateway",
-    name: "@takos/takosumi-kind-test-gateway",
+    name: "@takosjp/takosumi-plugins/kind/test-gateway",
     version: "0.1.0",
   });
 
-  assert.equal(plugin.name, "@takos/takosumi-kind-test-gateway");
+  assert.equal(plugin.name, "@takosjp/takosumi-plugins/kind/test-gateway");
   assert.equal(plugin.version, "0.1.0");
 
   await plugin.apply({
@@ -88,7 +89,7 @@ Deno.test("kernelPluginFromProviderPlugin injects resolved env into legacy spec"
   });
 });
 
-Deno.test("kernelPluginFromProviderPlugin projects provider outputs as output material", async () => {
+test("kernelPluginFromProviderPlugin projects provider outputs as output material", async () => {
   const provider: ProviderPlugin = {
     id: "@test/postgres",
     version: "1.0.0",
@@ -137,7 +138,7 @@ Deno.test("kernelPluginFromProviderPlugin projects provider outputs as output ma
   });
 });
 
-Deno.test("kernelPluginFromProviderPlugin projects object-store outputs to official material", async () => {
+test("kernelPluginFromProviderPlugin projects object-store outputs to official material", async () => {
   const provider: ProviderPlugin = {
     id: "@test/object-store",
     version: "1.0.0",
@@ -208,7 +209,7 @@ Deno.test("kernelPluginFromProviderPlugin projects object-store outputs to offic
   });
 });
 
-Deno.test("kernelPluginFromProviderPlugin projects HTTP outputs to endpoint material", async () => {
+test("kernelPluginFromProviderPlugin projects HTTP outputs to endpoint material", async () => {
   const provider: ProviderPlugin = {
     id: "@test/worker",
     version: "1.0.0",
@@ -245,7 +246,7 @@ Deno.test("kernelPluginFromProviderPlugin projects HTTP outputs to endpoint mate
   });
 });
 
-Deno.test("kernelPluginFromProviderPlugin rejects explicit env collision", async () => {
+test("kernelPluginFromProviderPlugin rejects explicit env collision", async () => {
   const provider: ProviderPlugin = {
     id: "@test/web",
     version: "1.0.0",

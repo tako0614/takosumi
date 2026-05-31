@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   type CoreRole,
@@ -6,7 +7,7 @@ import {
 import { DomainError } from "../../shared/errors.ts";
 import { EntitlementPolicyService } from "./mod.ts";
 
-Deno.test("EntitlementPolicyService grants owner full mutation capabilities", async () => {
+test("EntitlementPolicyService grants owner full mutation capabilities", async () => {
   const service = await serviceForRole("owner");
 
   const effective = await service.getEffectiveEntitlements({
@@ -29,7 +30,7 @@ Deno.test("EntitlementPolicyService grants owner full mutation capabilities", as
   assert.equal(decision.allowed, true);
 });
 
-Deno.test("EntitlementPolicyService grants admin deploy/resource/runtime-agent mutations except revoke", async () => {
+test("EntitlementPolicyService grants admin deploy/resource/runtime-agent mutations except revoke", async () => {
   const service = await serviceForRole("admin");
 
   assert.equal(
@@ -66,7 +67,7 @@ Deno.test("EntitlementPolicyService grants admin deploy/resource/runtime-agent m
   );
 });
 
-Deno.test("EntitlementPolicyService limits member to non-mutating plan/read capability", async () => {
+test("EntitlementPolicyService limits member to non-mutating plan/read capability", async () => {
   const service = await serviceForRole("member");
 
   const plan = await service.decideMutationBoundary({
@@ -100,7 +101,7 @@ Deno.test("EntitlementPolicyService limits member to non-mutating plan/read capa
   );
 });
 
-Deno.test("EntitlementPolicyService keeps viewer read-only", async () => {
+test("EntitlementPolicyService keeps viewer read-only", async () => {
   const service = await serviceForRole("viewer");
 
   const effective = await service.getEffectiveEntitlements({
@@ -123,7 +124,7 @@ Deno.test("EntitlementPolicyService keeps viewer read-only", async () => {
   assert.equal(decision.allowed, false);
 });
 
-Deno.test("EntitlementPolicyService applies space and group policy overlays", async () => {
+test("EntitlementPolicyService applies space and group policy overlays", async () => {
   const stores = new InMemorySpaceMembershipStore();
   await putMembership(stores, "member");
   const service = new EntitlementPolicyService({

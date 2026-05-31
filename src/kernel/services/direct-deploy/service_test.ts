@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Direct deploy service tests — Deployment-centric.
 //
 // Direct deploy generates a public app manifest payload from raw image / source
@@ -23,7 +24,7 @@ import type { Deployment, GroupHead } from "takosumi-contract/reference/compat";
 const IMAGE_API =
   "registry.example.com/demo/api@sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
-Deno.test("buildDirectWorkloadManifest emits the takosumi.directDeploy override", () => {
+test("buildDirectWorkloadManifest emits the takosumi.directDeploy override", () => {
   const manifest = buildDirectWorkloadManifest({
     kind: "image",
     spaceId: "space-a",
@@ -40,7 +41,7 @@ Deno.test("buildDirectWorkloadManifest emits the takosumi.directDeploy override"
   assert.equal(isDirectDeployGeneratedManifest(manifest), true);
 });
 
-Deno.test("buildDirectWorkloadSource maps each input kind to a DeploySourceRef", () => {
+test("buildDirectWorkloadSource maps each input kind to a DeploySourceRef", () => {
   assert.deepEqual(
     buildDirectWorkloadSource({
       kind: "image",
@@ -84,7 +85,7 @@ Deno.test("buildDirectWorkloadSource maps each input kind to a DeploySourceRef",
   );
 });
 
-Deno.test("isDirectDeployGeneratedManifestSnapshot detects the marker in JSON snapshots", () => {
+test("isDirectDeployGeneratedManifestSnapshot detects the marker in JSON snapshots", () => {
   const snapshot = JSON.stringify({
     name: "demo-app",
     overrides: {
@@ -95,7 +96,7 @@ Deno.test("isDirectDeployGeneratedManifestSnapshot detects the marker in JSON sn
   assert.equal(isDirectDeployGeneratedManifestSnapshot("{}"), false);
 });
 
-Deno.test("DirectDeployService.resolve emits a resolved Deployment via the client", async () => {
+test("DirectDeployService.resolve emits a resolved Deployment via the client", async () => {
   const client = new StubDirectDeploymentClient();
   const service = new DirectDeployService({ deploymentService: client });
 
@@ -114,7 +115,7 @@ Deno.test("DirectDeployService.resolve emits a resolved Deployment via the clien
   assert.equal(client.resolveCalls[0].mode, "resolve");
 });
 
-Deno.test("DirectDeployService.apply resolves and immediately applies", async () => {
+test("DirectDeployService.apply resolves and immediately applies", async () => {
   const client = new StubDirectDeploymentClient();
   const service = new DirectDeployService({ deploymentService: client });
 
@@ -131,7 +132,7 @@ Deno.test("DirectDeployService.apply resolves and immediately applies", async ()
   assert.equal(client.applyCalls.length, 1);
 });
 
-Deno.test("DirectDeployService rejects mutating a manifest-managed group without opt-in", async () => {
+test("DirectDeployService rejects mutating a manifest-managed group without opt-in", async () => {
   const client = new StubDirectDeploymentClient({
     existingHead: {
       space_id: "space-a",
@@ -163,7 +164,7 @@ Deno.test("DirectDeployService rejects mutating a manifest-managed group without
   );
 });
 
-Deno.test("DirectDeployService allows mutation when opt-in flag is set", async () => {
+test("DirectDeployService allows mutation when opt-in flag is set", async () => {
   const client = new StubDirectDeploymentClient({
     existingHead: {
       space_id: "space-a",

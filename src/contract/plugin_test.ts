@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   type ApplyListenContext,
@@ -19,7 +20,7 @@ import {
 import type { Component } from "./app-spec.ts";
 import type { Deployment, Installation } from "./installer-api.ts";
 
-Deno.test("kernelPluginFromNativeKindOperations wraps native operations without provider bridge", async () => {
+test("kernelPluginFromNativeKindOperations wraps native operations without provider bridge", async () => {
   const seenSpecs: unknown[] = [];
   const plugin = kernelPluginFromNativeKindOperations({
     kindUri: "https://takosumi.com/kinds/v1/worker",
@@ -125,7 +126,7 @@ Deno.test("kernelPluginFromNativeKindOperations wraps native operations without 
   });
 });
 
-Deno.test("kernelPluginFromNativeKindOperations validates author spec before apply", async () => {
+test("kernelPluginFromNativeKindOperations validates author spec before apply", async () => {
   let applied = false;
   const plugin = kernelPluginFromNativeKindOperations({
     kindUri: "https://takosumi.com/kinds/v1/worker",
@@ -167,7 +168,7 @@ Deno.test("kernelPluginFromNativeKindOperations validates author spec before app
   assert.equal(applied, false);
 });
 
-Deno.test("kernelPluginFromNativeKindOperations keeps listen env out of spec validation", async () => {
+test("kernelPluginFromNativeKindOperations keeps listen env out of spec validation", async () => {
   let applied = false;
   let seenSpec: unknown;
   const plugin = kernelPluginFromNativeKindOperations({
@@ -215,7 +216,7 @@ Deno.test("kernelPluginFromNativeKindOperations keeps listen env out of spec val
   assert.deepEqual(seenSpec, { version: "16", size: "small" });
 });
 
-Deno.test("mergeResolvedEnv explicitly merges runtime env for native providers", () => {
+test("mergeResolvedEnv explicitly merges runtime env for native providers", () => {
   const env = mergeResolvedEnv({ EXPLICIT: "yes" }, [{
     listenerComponent: "web",
     bindingName: "db",
@@ -248,7 +249,7 @@ Deno.test("mergeResolvedEnv explicitly merges runtime env for native providers",
   );
 });
 
-Deno.test("outputsToOutputMaterial projects official materials and secret refs", () => {
+test("outputsToOutputMaterial projects official materials and secret refs", () => {
   const service = outputsToOutputMaterial({
     host: "db.internal",
     port: 5432,
@@ -282,7 +283,7 @@ Deno.test("outputsToOutputMaterial projects official materials and secret refs",
   });
 });
 
-Deno.test("outputsToOutputMaterial rejects retired object-store credential aliases", () => {
+test("outputsToOutputMaterial rejects retired object-store credential aliases", () => {
   assert.throws(
     () =>
       outputsToOutputMaterial({
@@ -295,7 +296,7 @@ Deno.test("outputsToOutputMaterial rejects retired object-store credential alias
   );
 });
 
-Deno.test("mergeResolvedEnv rejects listen env collisions", () => {
+test("mergeResolvedEnv rejects listen env collisions", () => {
   assert.throws(
     () =>
       mergeResolvedEnv({ DB_HOST: "explicit.example" }, [
@@ -312,7 +313,7 @@ Deno.test("mergeResolvedEnv rejects listen env collisions", () => {
   );
 });
 
-Deno.test("KernelPlugin is a plain-array shape: name + provides + apply suffice", () => {
+test("KernelPlugin is a plain-array shape: name + provides + apply suffice", () => {
   const plugin: KernelPlugin = {
     name: "@takos/cloudflare-workers",
     version: "1.0.0",
@@ -334,7 +335,7 @@ Deno.test("KernelPlugin is a plain-array shape: name + provides + apply suffice"
   assert.equal(plugin.applyListen, undefined);
 });
 
-Deno.test("KernelPlugin lifecycle hook signatures accept Installation + Deployment", async () => {
+test("KernelPlugin lifecycle hook signatures accept Installation + Deployment", async () => {
   const calls: string[] = [];
   const installation: Installation = {
     id: "ins_1",
@@ -400,7 +401,7 @@ Deno.test("KernelPlugin lifecycle hook signatures accept Installation + Deployme
   ]);
 });
 
-Deno.test("KernelPlugin.apply receives Component + source + input materials", async () => {
+test("KernelPlugin.apply receives Component + source + input materials", async () => {
   const component: Component = {
     kind: "worker",
     connect: {
@@ -456,7 +457,7 @@ Deno.test("KernelPlugin.apply receives Component + source + input materials", as
   assert.equal(seen[0].sourceDirectory, "/tmp/prepared-source");
 });
 
-Deno.test("KernelPlugin.materializeOutput emits output material", async () => {
+test("KernelPlugin.materializeOutput emits output material", async () => {
   const component: Component = {
     kind: "worker",
   };
@@ -488,7 +489,7 @@ Deno.test("KernelPlugin.materializeOutput emits output material", async () => {
   assert.equal(material.id, "w_1");
 });
 
-Deno.test("KernelPlugin.applyListen returns an EnvInjection", async () => {
+test("KernelPlugin.applyListen returns an EnvInjection", async () => {
   const component: Component = {
     kind: "worker",
     connect: {
@@ -540,7 +541,7 @@ Deno.test("KernelPlugin.applyListen returns an EnvInjection", async () => {
   });
 });
 
-Deno.test("InlineMaterializer is the minimal Materializer packaging", () => {
+test("InlineMaterializer is the minimal Materializer packaging", () => {
   // `Materializer = KernelPlugin | InlineMaterializer` — both attach to
   // the same installer surface; this test exercises the inline form to
   // pin the type contract.

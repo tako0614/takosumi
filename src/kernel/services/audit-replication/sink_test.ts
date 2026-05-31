@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   AuditReplicationDriver,
@@ -48,7 +49,7 @@ function makeChained(
   };
 }
 
-Deno.test("InMemoryAuditReplicationSink captures replicated records", async () => {
+test("InMemoryAuditReplicationSink captures replicated records", async () => {
   const sink = new InMemoryAuditReplicationSink({ id: "test" });
   const result = await sink.replicate(
     makeChained("audit_1", 1, "2026-04-27T00:00:00.000Z"),
@@ -58,7 +59,7 @@ Deno.test("InMemoryAuditReplicationSink captures replicated records", async () =
   assert.equal(sink.records()[0]?.event.id, "audit_1");
 });
 
-Deno.test("InMemoryAuditReplicationSink dedups duplicate event ids", async () => {
+test("InMemoryAuditReplicationSink dedups duplicate event ids", async () => {
   const sink = new InMemoryAuditReplicationSink();
   await sink.replicate(makeChained("audit_1", 1, "2026-04-27T00:00:00.000Z"));
   const second = await sink.replicate(
@@ -68,7 +69,7 @@ Deno.test("InMemoryAuditReplicationSink dedups duplicate event ids", async () =>
   assert.equal(sink.records().length, 1);
 });
 
-Deno.test("ObjectStorageAuditReplicationSink writes idempotent archive objects", async () => {
+test("ObjectStorageAuditReplicationSink writes idempotent archive objects", async () => {
   const objectStorage = new MemoryObjectStorage();
   const sink = new ObjectStorageAuditReplicationSink({
     objectStorage,
@@ -104,7 +105,7 @@ Deno.test("ObjectStorageAuditReplicationSink writes idempotent archive objects",
   assert.equal(body.hash, "hash_audit_1");
 });
 
-Deno.test("runReplicationBatch falls back to sequential replicate", async () => {
+test("runReplicationBatch falls back to sequential replicate", async () => {
   const sink: AuditReplicationSink = {
     id: "fallback",
     replicate: (record) =>
@@ -122,7 +123,7 @@ Deno.test("runReplicationBatch falls back to sequential replicate", async () => 
   assert.equal(result.results.length, 2);
 });
 
-Deno.test("AuditReplicationDriver isolates sink failures", async () => {
+test("AuditReplicationDriver isolates sink failures", async () => {
   const ok = new InMemoryAuditReplicationSink({ id: "ok" });
   const failingSink: AuditReplicationSink = {
     id: "broken",
@@ -148,7 +149,7 @@ Deno.test("AuditReplicationDriver isolates sink failures", async () => {
   assert.equal(ok.records().length, 1);
 });
 
-Deno.test("resolveAuditRetention defaults to 365d when no env supplied", () => {
+test("resolveAuditRetention defaults to 365d when no env supplied", () => {
   const resolved = resolveAuditRetention();
   assert.equal(resolved.regime, "default");
   assert.equal(resolved.retentionDays, 365);
@@ -159,7 +160,7 @@ Deno.test("resolveAuditRetention defaults to 365d when no env supplied", () => {
   );
 });
 
-Deno.test("resolveAuditRetention applies regulated 7y band for HIPAA", () => {
+test("resolveAuditRetention applies regulated 7y band for HIPAA", () => {
   const resolved = resolveAuditRetention({
     env: { TAKOSUMI_AUDIT_RETENTION_REGIME: "hipaa" },
   });
@@ -167,7 +168,7 @@ Deno.test("resolveAuditRetention applies regulated 7y band for HIPAA", () => {
   assert.equal(resolved.retentionDays, 2555);
 });
 
-Deno.test("resolveAuditRetention honors explicit override env", () => {
+test("resolveAuditRetention honors explicit override env", () => {
   const resolved = resolveAuditRetention({
     env: {
       TAKOSUMI_AUDIT_RETENTION_REGIME: "sox",
@@ -182,7 +183,7 @@ Deno.test("resolveAuditRetention honors explicit override env", () => {
   assert.equal(resolved.archiveGracePeriodDays, 45);
 });
 
-Deno.test("resolveAuditRetention falls back to default for unknown regime", () => {
+test("resolveAuditRetention falls back to default for unknown regime", () => {
   const resolved = resolveAuditRetention({
     env: { TAKOSUMI_AUDIT_RETENTION_REGIME: "made-up" },
   });
@@ -190,7 +191,7 @@ Deno.test("resolveAuditRetention falls back to default for unknown regime", () =
   assert.equal(resolved.retentionDays, 365);
 });
 
-Deno.test("resolveAuditRetention rejects non-positive override and falls back to band", () => {
+test("resolveAuditRetention rejects non-positive override and falls back to band", () => {
   const resolved = resolveAuditRetention({
     env: {
       TAKOSUMI_AUDIT_RETENTION_REGIME: "regulated",

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { runtimeAgentCommand } from "../commands/runtime_agent.ts";
 
@@ -66,7 +67,7 @@ async function runVerifyAgainstFakeAgent(
     throw new Error(`__test_exit__:${code ?? 0}`);
   };
   try {
-    await runtimeAgentCommand.parse(args);
+    await runtimeAgentCommand.parseAsync(args);
   } catch (error) {
     if (
       !(error instanceof Error) ||
@@ -87,8 +88,7 @@ async function runVerifyAgainstFakeAgent(
   return { request: captured[0], output, errors, exitCode };
 }
 
-Deno.test(
-  "runtime-agent verify POSTs to /v1/lifecycle/verify and renders an ok row",
+test("runtime-agent verify POSTs to /v1/lifecycle/verify and renders an ok row",
   async () => {
     const fakeResponse = {
       results: [
@@ -122,8 +122,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "runtime-agent verify exits non-zero and renders FAIL when any connector fails",
+test("runtime-agent verify exits non-zero and renders FAIL when any connector fails",
   async () => {
     const fakeResponse = {
       results: [
@@ -161,8 +160,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "runtime-agent verify forwards --shape / --provider as filter body",
+test("runtime-agent verify forwards --shape / --provider as filter body",
   async () => {
     const fakeResponse = { results: [] };
     const { request } = await runVerifyAgainstFakeAgent(

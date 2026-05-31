@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { fetchPreparedSource } from "./prepared-source.ts";
 
-Deno.test("fetchPreparedSource verifies sha256 and extracts tar snapshot", async () => {
+test("fetchPreparedSource verifies sha256 and extracts tar snapshot", async () => {
   const sourceDir = await Deno.makeTempDir({
     prefix: "takosumi-prepared-source-src-",
   });
@@ -43,7 +44,7 @@ Deno.test("fetchPreparedSource verifies sha256 and extracts tar snapshot", async
   }
 });
 
-Deno.test("fetchPreparedSource rejects digest mismatch", async () => {
+test("fetchPreparedSource rejects digest mismatch", async () => {
   const url = "https://example.test/bad-prepared-source.tar";
   await withFetchStub(url, new TextEncoder().encode("not a tar"), async () => {
     await assert.rejects(
@@ -57,7 +58,7 @@ Deno.test("fetchPreparedSource rejects digest mismatch", async () => {
   });
 });
 
-Deno.test("fetchPreparedSource rejects file:// URLs", async () => {
+test("fetchPreparedSource rejects file:// URLs", async () => {
   await assert.rejects(
     fetchPreparedSource({
       url: "file:///tmp/anything.tar",
@@ -68,7 +69,7 @@ Deno.test("fetchPreparedSource rejects file:// URLs", async () => {
   );
 });
 
-Deno.test("fetchPreparedSource rejects raw filesystem paths", async () => {
+test("fetchPreparedSource rejects raw filesystem paths", async () => {
   await assert.rejects(
     fetchPreparedSource({
       url: "/tmp/anything.tar",
@@ -79,7 +80,7 @@ Deno.test("fetchPreparedSource rejects raw filesystem paths", async () => {
   );
 });
 
-Deno.test("fetchPreparedSource rejects http:// URLs", async () => {
+test("fetchPreparedSource rejects http:// URLs", async () => {
   await assert.rejects(
     fetchPreparedSource({
       url: "http://example.test/x.tar",
@@ -90,7 +91,7 @@ Deno.test("fetchPreparedSource rejects http:// URLs", async () => {
   );
 });
 
-Deno.test("fetchPreparedSource accepts regular file whose name literally contains ' -> '", async () => {
+test("fetchPreparedSource accepts regular file whose name literally contains ' -> '", async () => {
   // Regression: a regular file literally named `evil -> target` used to be
   // truncated to `evil` by extractTarEntryPath, which both lost duplicate /
   // traversal detection coverage on the real path and could trick the
@@ -143,7 +144,7 @@ Deno.test("fetchPreparedSource accepts regular file whose name literally contain
   }
 });
 
-Deno.test("fetchPreparedSource rejects oversized prepared archive by Content-Length", async () => {
+test("fetchPreparedSource rejects oversized prepared archive by Content-Length", async () => {
   const url = "https://example.test/too-big.tar";
   const cap = 50 * 1024 * 1024; // matches the default cap
   const original = globalThis.fetch;
@@ -175,7 +176,7 @@ Deno.test("fetchPreparedSource rejects oversized prepared archive by Content-Len
   }
 });
 
-Deno.test("fetchPreparedSource rejects oversized prepared archive by actual byte length", async () => {
+test("fetchPreparedSource rejects oversized prepared archive by actual byte length", async () => {
   // Use the env var to lower the cap so the test can produce a real
   // payload that exceeds it without allocating tens of megabytes.
   const previous = Deno.env.get("TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES");
@@ -202,7 +203,7 @@ Deno.test("fetchPreparedSource rejects oversized prepared archive by actual byte
   }
 });
 
-Deno.test("fetchPreparedSource rejects loopback / metadata host literals before fetch", async () => {
+test("fetchPreparedSource rejects loopback / metadata host literals before fetch", async () => {
   // No fetch stub installed: if the host guard fails open, the real fetch
   // would be attempted. The guard must reject first.
   for (
@@ -224,7 +225,7 @@ Deno.test("fetchPreparedSource rejects loopback / metadata host literals before 
   }
 });
 
-Deno.test("fetchPreparedSource rejects redirect responses (SSRF-via-redirect)", async () => {
+test("fetchPreparedSource rejects redirect responses (SSRF-via-redirect)", async () => {
   const url = "https://example.test/redirecting.tar";
   const original = globalThis.fetch;
   let manualRedirectRequested = false;
@@ -259,7 +260,7 @@ Deno.test("fetchPreparedSource rejects redirect responses (SSRF-via-redirect)", 
   }
 });
 
-Deno.test("fetchPreparedSource rejects a gzip bomb by decompressed size", async () => {
+test("fetchPreparedSource rejects a gzip bomb by decompressed size", async () => {
   // Build a tar of a single large sparse-ish file, gzip it (high ratio), and
   // lower the decompressed cap so the listing-sum guard trips before extract.
   const sourceDir = await Deno.makeTempDir({
@@ -305,7 +306,7 @@ Deno.test("fetchPreparedSource rejects a gzip bomb by decompressed size", async 
   }
 });
 
-Deno.test("fetchPreparedSource rejects symlink whose filename contains ' -> ' and escapes", async () => {
+test("fetchPreparedSource rejects symlink whose filename contains ' -> ' and escapes", async () => {
   // Regression: a symlink named `a -> b` pointing at `../../../etc/evil`
   // produces the tar -tv line `... a -> b -> ../../../etc/evil`. The old
   // split(" -> ")[1] validated the fragment `b` (which passes) instead of the

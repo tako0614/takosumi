@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { createInMemoryAppContext } from "./app_context.ts";
 import { NoopTestKms } from "./adapters/kms/mod.ts";
@@ -13,7 +14,7 @@ import {
 } from "./services/observability/mod.ts";
 import { EntitlementPolicyService } from "./services/entitlements/mod.ts";
 
-Deno.test("createInMemoryAppContext exposes full optional composition fields", async () => {
+test("createInMemoryAppContext exposes full optional composition fields", async () => {
   const context = createInMemoryAppContext({
     dateClock: () => new Date("2026-04-27T00:00:00.000Z"),
     uuidFactory: () => "fixed",
@@ -40,7 +41,7 @@ Deno.test("createInMemoryAppContext exposes full optional composition fields", a
   assert.deepEqual(await context.adapters.observability.listMetrics(), []);
 });
 
-Deno.test("full AppContext wires queue and object storage default adapters", async () => {
+test("full AppContext wires queue and object storage default adapters", async () => {
   const context = createInMemoryAppContext({
     dateClock: () => new Date("2026-04-27T00:00:00.000Z"),
     uuidFactory: () => "fixed",
@@ -71,7 +72,7 @@ Deno.test("full AppContext wires queue and object storage default adapters", asy
   );
 });
 
-Deno.test("createInMemoryAppContext wraps observability with OTLP metrics exporter from env", () => {
+test("createInMemoryAppContext wraps observability with OTLP metrics exporter from env", () => {
   const context = createInMemoryAppContext({
     runtimeEnv: {
       TAKOSUMI_OTLP_METRICS_ENDPOINT: "http://collector.local/v1/metrics",
@@ -82,7 +83,7 @@ Deno.test("createInMemoryAppContext wraps observability with OTLP metrics export
   assert.ok(context.adapters.observability instanceof OtlpObservabilitySink);
 });
 
-Deno.test("full AppContext composition wires default adapters and services", () => {
+test("full AppContext composition wires default adapters and services", () => {
   const context = createInMemoryAppContext();
 
   assert.ok(context.adapters.provider instanceof NoopProviderMaterializer);

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { compileManifestToAppSpec } from "./compiler.ts";
 import type { PublicDeployManifest } from "./types.ts";
@@ -14,7 +15,7 @@ const WORKER_IMAGE = IMAGE_A;
 // `appSpec.routes[].to/path` projections was deleted because the kernel no
 // longer projects routes.
 
-Deno.test("public manifest compiler infers image-backed compute as container runtime", () => {
+test("public manifest compiler infers image-backed compute as container runtime", () => {
   const appSpec = compileManifestToAppSpec({
     name: "image-app",
     compute: {
@@ -31,8 +32,7 @@ Deno.test("public manifest compiler infers image-backed compute as container run
 // Phase 10 Wave 4: enabled — this test only exercises the compiler-level
 // validation (the Plan-projection part is now covered by the
 // Deployment.resolution surface in deployment_service tests).
-Deno.test(
-  "public manifest compiler validates and projects worker attached containers",
+test("public manifest compiler validates and projects worker attached containers",
   () => {
     assert.throws(
       () =>
@@ -87,7 +87,7 @@ Deno.test(
 );
 
 // Workflow/trigger authoring is owned above the kernel by installer clients.
-Deno.test("public manifest compiler rejects compute triggers", () => {
+test("public manifest compiler rejects compute triggers", () => {
   assert.throws(
     () =>
       compileManifestToAppSpec({
@@ -109,7 +109,7 @@ Deno.test("public manifest compiler rejects compute triggers", () => {
 // "keeps route and outputs map" test exercised; deleted because the kernel no
 // longer carries routes through `compileManifestToAppSpec`.
 
-Deno.test("public manifest compiler expands documented resource bindings", () => {
+test("public manifest compiler expands documented resource bindings", () => {
   const appSpec = compileManifestToAppSpec({
     name: "resource-app",
     compute: {
@@ -231,7 +231,7 @@ Deno.test("public manifest compiler expands documented resource bindings", () =>
   );
 });
 
-Deno.test("public manifest compiler accepts every documented resource type", () => {
+test("public manifest compiler accepts every documented resource type", () => {
   const appSpec = compileManifestToAppSpec({
     name: "resource-types",
     resources: {
@@ -261,7 +261,7 @@ Deno.test("public manifest compiler accepts every documented resource type", () 
   );
 });
 
-Deno.test("public manifest compiler rejects removed publish field", () => {
+test("public manifest compiler rejects removed publish field", () => {
   assert.throws(
     () =>
       compileManifestToAppSpec({
@@ -277,7 +277,7 @@ Deno.test("public manifest compiler rejects removed publish field", () => {
 // `overrides.production.routes[]` chain. Deleted because the kernel no longer
 // reads or projects `routes` in overrides.
 
-Deno.test("public manifest compiler rejects invalid documented manifest fields", () => {
+test("public manifest compiler rejects invalid documented manifest fields", () => {
   assert.throws(
     () =>
       compileManifestToAppSpec({
@@ -340,7 +340,7 @@ Deno.test("public manifest compiler rejects invalid documented manifest fields",
   );
 });
 
-Deno.test("public manifest compiler validates route and output references", () => {
+test("public manifest compiler validates route and output references", () => {
   const base: PublicDeployManifest = {
     name: "route-app",
     compute: {
@@ -430,8 +430,7 @@ Deno.test("public manifest compiler validates route and output references", () =
 // `interfaceContractRef` projections. Deleted because the kernel no longer
 // validates or normalizes route protocols.
 
-Deno.test(
-  "public manifest compiler validates bindings request/inject shape",
+test("public manifest compiler validates bindings request/inject shape",
   () => {
     assert.throws(
       () =>
@@ -458,7 +457,7 @@ Deno.test(
   },
 );
 
-Deno.test("public manifest compiler rejects env collisions after uppercase normalization", () => {
+test("public manifest compiler rejects env collisions after uppercase normalization", () => {
   assert.throws(
     () =>
       compileManifestToAppSpec({
@@ -519,7 +518,7 @@ Deno.test("public manifest compiler rejects env collisions after uppercase norma
   );
 });
 
-Deno.test("public manifest compiler validates OAuth redirect URI schemes", () => {
+test("public manifest compiler validates OAuth redirect URI schemes", () => {
   compileManifestToAppSpec({
     name: "oauth-relative",
     compute: {
@@ -618,7 +617,7 @@ Deno.test("public manifest compiler validates OAuth redirect URI schemes", () =>
   assert.equal(appSpec.name, "oauth-localhost");
 });
 
-Deno.test("public manifest compiler accepts the canonical 'outputs' authoring key", () => {
+test("public manifest compiler accepts the canonical 'outputs' authoring key", () => {
   const manifest: PublicDeployManifest = {
     name: "outputs-canonical",
     version: "1.0.0",
@@ -641,7 +640,7 @@ Deno.test("public manifest compiler accepts the canonical 'outputs' authoring ke
   assert.equal(searchOutput?.type, "output.http-endpoint@v1");
 });
 
-Deno.test("public manifest compiler accepts component bindings authoring", () => {
+test("public manifest compiler accepts component bindings authoring", () => {
   const manifest: PublicDeployManifest = {
     name: "binding-canonical",
     version: "1.0.0",
@@ -673,7 +672,7 @@ Deno.test("public manifest compiler accepts component bindings authoring", () =>
   assert.equal(binding!.inject.target, "TAKOSUMI_API_KEY");
 });
 
-Deno.test("public manifest compiler rejects removed service import bindings", () => {
+test("public manifest compiler rejects removed service import bindings", () => {
   assert.throws(
     () =>
       compileManifestToAppSpec({

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   formatShapeRef,
@@ -31,7 +32,7 @@ function fakeShape(id: string, version = "v1"): Shape {
   };
 }
 
-Deno.test("parseShapeRef parses valid id@version", () => {
+test("parseShapeRef parses valid id@version", () => {
   assert.deepEqual(parseShapeRef("web-service@v1"), {
     id: "web-service",
     version: "v1",
@@ -42,20 +43,20 @@ Deno.test("parseShapeRef parses valid id@version", () => {
   });
 });
 
-Deno.test("parseShapeRef rejects malformed input", () => {
+test("parseShapeRef rejects malformed input", () => {
   assert.equal(parseShapeRef(""), undefined);
   assert.equal(parseShapeRef("no-version"), undefined);
   assert.equal(parseShapeRef("@v1"), undefined);
   assert.equal(parseShapeRef("id@"), undefined);
 });
 
-Deno.test("formatShapeRef round-trips with parseShapeRef", () => {
+test("formatShapeRef round-trips with parseShapeRef", () => {
   const ref = formatShapeRef("web-service", "v1");
   assert.equal(ref, "web-service@v1");
   assert.deepEqual(parseShapeRef(ref), { id: "web-service", version: "v1" });
 });
 
-Deno.test("registerShape stores and listShapes returns registered shapes", () => {
+test("registerShape stores and listShapes returns registered shapes", () => {
   const shape = fakeShape("test-shape-list");
   try {
     assert.equal(registerShape(shape), undefined);
@@ -68,7 +69,7 @@ Deno.test("registerShape stores and listShapes returns registered shapes", () =>
   }
 });
 
-Deno.test("registerShape returns previous on replace", () => {
+test("registerShape returns previous on replace", () => {
   const first = fakeShape("test-shape-replace");
   const second = fakeShape("test-shape-replace");
   try {
@@ -80,7 +81,7 @@ Deno.test("registerShape returns previous on replace", () => {
   }
 });
 
-Deno.test("unregisterShape returns true on hit, false on miss", () => {
+test("unregisterShape returns true on hit, false on miss", () => {
   const shape = fakeShape("test-shape-unreg");
   registerShape(shape);
   assert.equal(unregisterShape("test-shape-unreg", "v1"), true);
@@ -88,7 +89,7 @@ Deno.test("unregisterShape returns true on hit, false on miss", () => {
   assert.equal(isShapeRegistered("test-shape-unreg", "v1"), false);
 });
 
-Deno.test("shape versions are independent registry entries", () => {
+test("shape versions are independent registry entries", () => {
   const v1 = fakeShape("test-shape-versions", "v1");
   const v2 = fakeShape("test-shape-versions", "v2");
   try {
@@ -102,7 +103,7 @@ Deno.test("shape versions are independent registry entries", () => {
   }
 });
 
-Deno.test("registerShape warns on differing-value collision", () => {
+test("registerShape warns on differing-value collision", () => {
   const first = fakeShape("test-shape-warn");
   const second = fakeShape("test-shape-warn");
   const captured: string[] = [];
@@ -119,7 +120,7 @@ Deno.test("registerShape warns on differing-value collision", () => {
   }
 });
 
-Deno.test("registerShape with allowOverride suppresses the warning", () => {
+test("registerShape with allowOverride suppresses the warning", () => {
   const first = fakeShape("test-shape-allow");
   const second = fakeShape("test-shape-allow");
   const captured: string[] = [];
@@ -135,7 +136,7 @@ Deno.test("registerShape with allowOverride suppresses the warning", () => {
   }
 });
 
-Deno.test("validateSpec / validateOutputs accumulate issues", () => {
+test("validateSpec / validateOutputs accumulate issues", () => {
   const shape = fakeShape("test-shape-validate");
   const specIssues: ShapeValidationIssue[] = [];
   shape.validateSpec("not-an-object", specIssues);

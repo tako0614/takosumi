@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { ConnectorRegistry } from "./connectors/mod.ts";
 import {
@@ -6,7 +7,7 @@ import {
   LifecycleDispatcher,
 } from "./lifecycle_dispatcher.ts";
 
-Deno.test("dispatcher throws ConnectorNotFoundError for unknown shape/provider", () => {
+test("dispatcher throws ConnectorNotFoundError for unknown shape/provider", () => {
   const dispatcher = new LifecycleDispatcher(new ConnectorRegistry());
   assert.throws(
     () =>
@@ -21,7 +22,7 @@ Deno.test("dispatcher throws ConnectorNotFoundError for unknown shape/provider",
   );
 });
 
-Deno.test("dispatcher rejects request whose artifact.kind is not accepted", () => {
+test("dispatcher rejects request whose artifact.kind is not accepted", () => {
   const reg = new ConnectorRegistry();
   reg.register({
     provider: "lambda",
@@ -52,7 +53,7 @@ Deno.test("dispatcher rejects request whose artifact.kind is not accepted", () =
   );
 });
 
-Deno.test("dispatcher accepts spec.image shorthand as oci-image kind", async () => {
+test("dispatcher accepts spec.image shorthand as oci-image kind", async () => {
   const reg = new ConnectorRegistry();
   let received: unknown;
   reg.register({
@@ -85,7 +86,7 @@ Deno.test("dispatcher accepts spec.image shorthand as oci-image kind", async () 
   );
 });
 
-Deno.test("dispatcher accepts new artifact.kind matching accepted list", async () => {
+test("dispatcher accepts new artifact.kind matching accepted list", async () => {
   const reg = new ConnectorRegistry();
   reg.register({
     provider: "static-host",
@@ -110,7 +111,7 @@ Deno.test("dispatcher accepts new artifact.kind matching accepted list", async (
   assert.equal(res.handle, "h");
 });
 
-Deno.test("dispatcher passes ConnectorContext through to connector.apply", async () => {
+test("dispatcher passes ConnectorContext through to connector.apply", async () => {
   const reg = new ConnectorRegistry();
   let seenCtx: { fetcher?: unknown } | undefined;
   reg.register({
@@ -140,7 +141,7 @@ Deno.test("dispatcher passes ConnectorContext through to connector.apply", async
   assert.equal(seenCtx?.fetcher, fetcher);
 });
 
-Deno.test("dispatcher skips kind validation when spec has no artifact and no image", async () => {
+test("dispatcher skips kind validation when spec has no artifact and no image", async () => {
   const reg = new ConnectorRegistry();
   reg.register({
     provider: "no-artifact",
@@ -161,7 +162,7 @@ Deno.test("dispatcher skips kind validation when spec has no artifact and no ima
   assert.equal(res.handle, "h");
 });
 
-Deno.test("dispatcher routes compensate to connector hook when present", async () => {
+test("dispatcher routes compensate to connector hook when present", async () => {
   const reg = new ConnectorRegistry();
   let seenHandle = "";
   reg.register({
@@ -187,7 +188,7 @@ Deno.test("dispatcher routes compensate to connector hook when present", async (
   assert.deepEqual(res, { ok: true, note: "compensated" });
 });
 
-Deno.test("dispatcher falls back to destroy when compensate hook is absent", async () => {
+test("dispatcher falls back to destroy when compensate hook is absent", async () => {
   const reg = new ConnectorRegistry();
   let destroyed = "";
   reg.register({

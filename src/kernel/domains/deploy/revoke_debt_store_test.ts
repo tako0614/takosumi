@@ -1,10 +1,11 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryRevokeDebtStore,
   summarizeRevokeDebt,
 } from "./revoke_debt_store.ts";
 
-Deno.test("InMemoryRevokeDebtStore enqueues one open debt per source tuple", async () => {
+test("InMemoryRevokeDebtStore enqueues one open debt per source tuple", async () => {
   const store = new InMemoryRevokeDebtStore({
     idFactory: () => "revoke-debt:one",
   });
@@ -50,7 +51,7 @@ Deno.test("InMemoryRevokeDebtStore enqueues one open debt per source tuple", asy
   assert.deepEqual(await store.listOpenOwnerSpaces(), ["space:one"]);
 });
 
-Deno.test("InMemoryRevokeDebtStore records retry, aging, reopen, and clearance transitions", async () => {
+test("InMemoryRevokeDebtStore records retry, aging, reopen, and clearance transitions", async () => {
   const store = new InMemoryRevokeDebtStore({
     idFactory: () => "revoke-debt:lifecycle",
   });

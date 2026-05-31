@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryMigrationLedgerStore,
@@ -8,7 +9,7 @@ import {
   type ResourceInstance,
 } from "./mod.ts";
 
-Deno.test("resources store bindings and migration ledger entries by claim and resource", async () => {
+test("resources store bindings and migration ledger entries by claim and resource", async () => {
   const instances = new InMemoryResourceInstanceStore();
   const bindings = new InMemoryResourceBindingStore();
   const ledger = new InMemoryMigrationLedgerStore();

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   assertDatabaseEncryptionAtRest,
@@ -6,7 +7,7 @@ import {
   resolveBootDatabaseUrl,
 } from "./encryption.ts";
 
-Deno.test("assertDatabaseEncryptionAtRest fails closed in production with plain postgres", () => {
+test("assertDatabaseEncryptionAtRest fails closed in production with plain postgres", () => {
   assert.throws(
     () =>
       assertDatabaseEncryptionAtRest({
@@ -19,7 +20,7 @@ Deno.test("assertDatabaseEncryptionAtRest fails closed in production with plain 
   );
 });
 
-Deno.test("assertDatabaseEncryptionAtRest fails closed in staging with plain postgres", () => {
+test("assertDatabaseEncryptionAtRest fails closed in staging with plain postgres", () => {
   assert.throws(
     () =>
       assertDatabaseEncryptionAtRest({
@@ -32,7 +33,7 @@ Deno.test("assertDatabaseEncryptionAtRest fails closed in staging with plain pos
   );
 });
 
-Deno.test("assertDatabaseEncryptionAtRest accepts sslmode=require in production", () => {
+test("assertDatabaseEncryptionAtRest accepts sslmode=require in production", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
@@ -44,7 +45,7 @@ Deno.test("assertDatabaseEncryptionAtRest accepts sslmode=require in production"
   assert.equal(result.evidence, "sslmode=require");
 });
 
-Deno.test("assertDatabaseEncryptionAtRest accepts sslmode=verify-full in production", () => {
+test("assertDatabaseEncryptionAtRest accepts sslmode=verify-full in production", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
@@ -56,7 +57,7 @@ Deno.test("assertDatabaseEncryptionAtRest accepts sslmode=verify-full in product
   assert.equal(result.evidence, "sslmode=verify-full");
 });
 
-Deno.test("assertDatabaseEncryptionAtRest rejects sslmode=disable in production", () => {
+test("assertDatabaseEncryptionAtRest rejects sslmode=disable in production", () => {
   assert.throws(
     () =>
       assertDatabaseEncryptionAtRest({
@@ -70,7 +71,7 @@ Deno.test("assertDatabaseEncryptionAtRest rejects sslmode=disable in production"
   );
 });
 
-Deno.test("assertDatabaseEncryptionAtRest accepts encrypted=true generic flag", () => {
+test("assertDatabaseEncryptionAtRest accepts encrypted=true generic flag", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
@@ -81,7 +82,7 @@ Deno.test("assertDatabaseEncryptionAtRest accepts encrypted=true generic flag", 
   assert.equal(result.evidence, "encrypted-flag");
 });
 
-Deno.test("assertDatabaseEncryptionAtRest accepts D1 (managed encrypted)", () => {
+test("assertDatabaseEncryptionAtRest accepts D1 (managed encrypted)", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
@@ -92,7 +93,7 @@ Deno.test("assertDatabaseEncryptionAtRest accepts D1 (managed encrypted)", () =>
   assert.equal(result.evidence, "d1-managed-encryption");
 });
 
-Deno.test("assertDatabaseEncryptionAtRest accepts sqlcipher in production", () => {
+test("assertDatabaseEncryptionAtRest accepts sqlcipher in production", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
@@ -103,7 +104,7 @@ Deno.test("assertDatabaseEncryptionAtRest accepts sqlcipher in production", () =
   assert.equal(result.evidence, "sqlcipher");
 });
 
-Deno.test("assertDatabaseEncryptionAtRest accepts sqlite with key=", () => {
+test("assertDatabaseEncryptionAtRest accepts sqlite with key=", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
@@ -114,7 +115,7 @@ Deno.test("assertDatabaseEncryptionAtRest accepts sqlite with key=", () => {
   assert.equal(result.evidence, "sqlite-with-key");
 });
 
-Deno.test("assertDatabaseEncryptionAtRest rejects plain sqlite in production", () => {
+test("assertDatabaseEncryptionAtRest rejects plain sqlite in production", () => {
   assert.throws(
     () =>
       assertDatabaseEncryptionAtRest({
@@ -127,7 +128,7 @@ Deno.test("assertDatabaseEncryptionAtRest rejects plain sqlite in production", (
   );
 });
 
-Deno.test("assertDatabaseEncryptionAtRest production ignores TAKOSUMI_DEV_MODE override", () => {
+test("assertDatabaseEncryptionAtRest production ignores TAKOSUMI_DEV_MODE override", () => {
   assert.throws(
     () =>
       assertDatabaseEncryptionAtRest({
@@ -141,7 +142,7 @@ Deno.test("assertDatabaseEncryptionAtRest production ignores TAKOSUMI_DEV_MODE o
   );
 });
 
-Deno.test("assertDatabaseEncryptionAtRest local without override still allows boot (silent satisfy)", () => {
+test("assertDatabaseEncryptionAtRest local without override still allows boot (silent satisfy)", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
       TAKOSUMI_ENVIRONMENT: "local",
@@ -153,7 +154,7 @@ Deno.test("assertDatabaseEncryptionAtRest local without override still allows bo
   assert.equal(result.required, false);
 });
 
-Deno.test("assertDatabaseEncryptionAtRest local with TAKOSUMI_DEV_MODE sets overrideAccepted", () => {
+test("assertDatabaseEncryptionAtRest local with TAKOSUMI_DEV_MODE sets overrideAccepted", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
       TAKOSUMI_ENVIRONMENT: "local",
@@ -166,7 +167,7 @@ Deno.test("assertDatabaseEncryptionAtRest local with TAKOSUMI_DEV_MODE sets over
   assert.equal(result.evidence, "local-override");
 });
 
-Deno.test("assertDatabaseEncryptionAtRest production with no DB url is fail-closed", () => {
+test("assertDatabaseEncryptionAtRest production with no DB url is fail-closed", () => {
   assert.throws(
     () =>
       assertDatabaseEncryptionAtRest({
@@ -176,7 +177,7 @@ Deno.test("assertDatabaseEncryptionAtRest production with no DB url is fail-clos
   );
 });
 
-Deno.test("inspectDatabaseEncryption preserves info without throwing", () => {
+test("inspectDatabaseEncryption preserves info without throwing", () => {
   const inspection = inspectDatabaseEncryption({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
@@ -187,7 +188,7 @@ Deno.test("inspectDatabaseEncryption preserves info without throwing", () => {
   assert.equal(inspection.evidence, "sslmode=require");
 });
 
-Deno.test("resolveBootDatabaseUrl prefers TAKOSUMI_DATABASE_URL over DATABASE_URL", () => {
+test("resolveBootDatabaseUrl prefers TAKOSUMI_DATABASE_URL over DATABASE_URL", () => {
   assert.equal(
     resolveBootDatabaseUrl({
       TAKOSUMI_DATABASE_URL: "postgres://primary",
@@ -197,7 +198,7 @@ Deno.test("resolveBootDatabaseUrl prefers TAKOSUMI_DATABASE_URL over DATABASE_UR
   );
 });
 
-Deno.test("resolveBootDatabaseUrl falls back to staging url in staging env", () => {
+test("resolveBootDatabaseUrl falls back to staging url in staging env", () => {
   assert.equal(
     resolveBootDatabaseUrl({
       TAKOSUMI_ENVIRONMENT: "staging",

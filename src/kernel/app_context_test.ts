@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { KernelPlugin } from "takosumi-contract/reference/compat";
 import {
@@ -26,7 +27,7 @@ import { MemoryStorageDriver } from "./adapters/storage/mod.ts";
 import { InMemoryRuntimeAgentRegistry } from "./agents/mod.ts";
 import { InMemoryObservabilitySink } from "./services/observability/mod.ts";
 
-Deno.test("createInMemoryAppContext keeps default in-memory skeleton wiring", () => {
+test("createInMemoryAppContext keeps default in-memory skeleton wiring", () => {
   const context = createInMemoryAppContext();
 
   assert.ok(context.adapters.provider instanceof NoopProviderMaterializer);
@@ -34,7 +35,7 @@ Deno.test("createInMemoryAppContext keeps default in-memory skeleton wiring", ()
   assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
 });
 
-Deno.test("createInMemoryAppContext backs default runtime-agent registry with storage ledger", async () => {
+test("createInMemoryAppContext backs default runtime-agent registry with storage ledger", async () => {
   const context = createInMemoryAppContext({
     dateClock: () => new Date("2026-04-30T00:00:00.000Z"),
     uuidFactory: sequenceIds(["w_1"]),
@@ -56,7 +57,7 @@ Deno.test("createInMemoryAppContext backs default runtime-agent registry with st
   assert.equal(snapshot.runtimeAgentWorkItems[0].id, "work_w_1");
 });
 
-Deno.test("createConfiguredAppContext returns in-memory adapters when no overrides are passed", async () => {
+test("createConfiguredAppContext returns in-memory adapters when no overrides are passed", async () => {
   const context = await createConfiguredAppContext({
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
   });
@@ -66,7 +67,7 @@ Deno.test("createConfiguredAppContext returns in-memory adapters when no overrid
   assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
 });
 
-Deno.test("createAppContext uses operator-injected adapters in production", async () => {
+test("createAppContext uses operator-injected adapters in production", async () => {
   const customSource = new ImmutableManifestSourceAdapter({
     clock: () => new Date("2026-04-29T00:00:00.000Z"),
     idGenerator: () => "id",
@@ -84,7 +85,7 @@ Deno.test("createAppContext uses operator-injected adapters in production", asyn
   assert.equal(context.adapters.source, customSource);
 });
 
-Deno.test("createAppContext rejects production runtime without an explicit deploy providerAdapter", async () => {
+test("createAppContext rejects production runtime without an explicit deploy providerAdapter", async () => {
   // Even with full AppAdapters (including AppAdapters.provider), a production
   // context refuses to fall back to SYNTHETIC_PROVIDER_ADAPTER on the deploy
   // domain: the deploy providerAdapter is a distinct injection point that the
@@ -99,7 +100,7 @@ Deno.test("createAppContext rejects production runtime without an explicit deplo
   );
 });
 
-Deno.test("createAppContext rejects production runtime without explicit adapters", async () => {
+test("createAppContext rejects production runtime without explicit adapters", async () => {
   await assert.rejects(
     () =>
       createAppContext({
@@ -109,7 +110,7 @@ Deno.test("createAppContext rejects production runtime without explicit adapters
   );
 });
 
-Deno.test("createAppContext rejects staging runtime without explicit adapters", async () => {
+test("createAppContext rejects staging runtime without explicit adapters", async () => {
   await assert.rejects(
     () =>
       createAppContext({
@@ -119,7 +120,7 @@ Deno.test("createAppContext rejects staging runtime without explicit adapters", 
   );
 });
 
-Deno.test("buildKernelPluginRegistry exposes operator-supplied plugins by kind URI", () => {
+test("buildKernelPluginRegistry exposes operator-supplied plugins by kind URI", () => {
   const plugin = buildExamplePlugin();
   const registry = buildKernelPluginRegistry({ plugins: [plugin] });
   assert.equal(
@@ -128,7 +129,7 @@ Deno.test("buildKernelPluginRegistry exposes operator-supplied plugins by kind U
   );
 });
 
-Deno.test("buildKernelPluginRegistry resolves operator kind aliases", () => {
+test("buildKernelPluginRegistry resolves operator kind aliases", () => {
   const plugin = buildExamplePlugin();
   const registry = buildKernelPluginRegistry({
     kindAliases: { test: "https://example.test/kinds/v1/test" },

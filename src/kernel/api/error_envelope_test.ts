@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { DomainError } from "../shared/errors.ts";
 import {
@@ -9,7 +10,7 @@ import {
   redactApiErrorDetails,
 } from "./error_envelope.ts";
 
-Deno.test("error envelope maps DomainError code, status, message, request id, and redacted details", () => {
+test("error envelope maps DomainError code, status, message, request id, and redacted details", () => {
   const error = new DomainError("invalid_argument", "spaceId is required", {
     field: "spaceId",
     nested: {
@@ -39,7 +40,7 @@ Deno.test("error envelope maps DomainError code, status, message, request id, an
   });
 });
 
-Deno.test("error envelope maps every DomainError code to HTTP status", () => {
+test("error envelope maps every DomainError code to HTTP status", () => {
   assert.equal(httpStatusForDomainErrorCode("invalid_argument"), 400);
   assert.equal(httpStatusForDomainErrorCode("not_found"), 404);
   assert.equal(httpStatusForDomainErrorCode("conflict"), 409);
@@ -47,7 +48,7 @@ Deno.test("error envelope maps every DomainError code to HTTP status", () => {
   assert.equal(httpStatusForDomainErrorCode("not_implemented"), 501);
 });
 
-Deno.test("error envelope maps provider failure reasons to gateway/provider statuses", () => {
+test("error envelope maps provider failure reasons to gateway/provider statuses", () => {
   const cases = [
     ["provider_timeout", 504],
     ["provider_unavailable", 503],
@@ -76,7 +77,7 @@ Deno.test("error envelope maps provider failure reasons to gateway/provider stat
   }
 });
 
-Deno.test("error envelope classifies named provider errors by message", () => {
+test("error envelope classifies named provider errors by message", () => {
   const error = new Error("request timed out while applying manifest");
   error.name = "ProviderOperationError";
 
@@ -92,7 +93,7 @@ Deno.test("error envelope classifies named provider errors by message", () => {
   );
 });
 
-Deno.test("error envelope keeps unknown errors generic", () => {
+test("error envelope keeps unknown errors generic", () => {
   const response = createApiErrorResponse(new Error("database password"));
 
   assert.equal(response.status, 500);
@@ -104,7 +105,7 @@ Deno.test("error envelope keeps unknown errors generic", () => {
   });
 });
 
-Deno.test("redactApiErrorDetails recursively redacts sensitive keys and coerces non-json values", () => {
+test("redactApiErrorDetails recursively redacts sensitive keys and coerces non-json values", () => {
   const redacted = redactApiErrorDetails({
     authorization: "Bearer x",
     api_key: "key",
@@ -130,7 +131,7 @@ Deno.test("redactApiErrorDetails recursively redacts sensitive keys and coerces 
   });
 });
 
-Deno.test("readRequestId reads request and correlation headers with fallback", () => {
+test("readRequestId reads request and correlation headers with fallback", () => {
   assert.equal(
     readRequestId(
       new Request("https://example.test", {

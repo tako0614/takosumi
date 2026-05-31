@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   canonicalInternalResponse,
@@ -9,7 +10,7 @@ import {
   verifySignedInternalResponseFromHeaders,
 } from "./internal-api.ts";
 
-Deno.test("signInternalResponse / verifySignedInternalResponseFromHeaders round trip", async () => {
+test("signInternalResponse / verifySignedInternalResponseFromHeaders round trip", async () => {
   const body = '{"deployment":"dep_42","status":"applied"}';
   const path = TAKOSUMI_INTERNAL_PATHS.deploymentApply.replace(
     ":deploymentId",
@@ -66,7 +67,7 @@ Deno.test("signInternalResponse / verifySignedInternalResponseFromHeaders round 
   );
 });
 
-Deno.test("canonicalInternalResponse binds method/path/status/body", () => {
+test("canonicalInternalResponse binds method/path/status/body", () => {
   const path = TAKOSUMI_INTERNAL_PATHS.deploymentApply.replace(
     ":deploymentId",
     "dep_42",

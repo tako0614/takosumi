@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   assertObjectAddress,
@@ -16,7 +17,7 @@ import {
   objectAddressSegment,
 } from "./core-v1.ts";
 
-Deno.test("isCoreConditionReason validates the exported condition reason catalog", () => {
+test("isCoreConditionReason validates the exported condition reason catalog", () => {
   assert.equal(isCoreConditionReason("ProviderConfigDrift"), true);
   assert.equal(isCoreConditionReason("provider-config-drift"), false);
   assert.equal(isCoreConditionReason(undefined), false);
@@ -26,7 +27,7 @@ Deno.test("isCoreConditionReason validates the exported condition reason catalog
   );
 });
 
-Deno.test("ObjectAddress helpers encode names and validate canonical grammar", () => {
+test("ObjectAddress helpers encode names and validate canonical grammar", () => {
   const address = joinObjectAddressSegments(
     objectAddressSegment("component", "api/service"),
     objectAddressSegment("contract", "public:http"),
@@ -42,7 +43,7 @@ Deno.test("ObjectAddress helpers encode names and validate canonical grammar", (
   assert.doesNotThrow(() => assertObjectAddress("app.exposure:web"));
 });
 
-Deno.test("Core condition reason catalog includes the Output / Binding vocabulary", () => {
+test("Core condition reason catalog includes the Output / Binding vocabulary", () => {
   const required = [
     "OutputWithdrawn",
     "OutputUnavailable",
@@ -63,7 +64,7 @@ Deno.test("Core condition reason catalog includes the Output / Binding vocabular
   }
 });
 
-Deno.test("Retired Publication-* condition reasons are no longer in the catalog", () => {
+test("Retired Publication-* condition reasons are no longer in the catalog", () => {
   const removed = [
     "PublicationWithdrawn",
     "PublicationUnavailable",
@@ -85,7 +86,7 @@ Deno.test("Retired Publication-* condition reasons are no longer in the catalog"
   }
 });
 
-Deno.test("DeploymentBindingSource accepts only canonical sources", () => {
+test("DeploymentBindingSource accepts only canonical sources", () => {
   const sources: DeploymentBindingSource[] = [
     "resource",
     "output",
@@ -111,7 +112,7 @@ Deno.test("DeploymentBindingSource accepts only canonical sources", () => {
   }
 });
 
-Deno.test("CoreOutputDeclaration / OutputRevision round-trip the Output contract shape", () => {
+test("CoreOutputDeclaration / OutputRevision round-trip the Output contract shape", () => {
   const declaration: CoreOutputDeclaration = {
     address: "output:search-agent/search",
     producerGroupId: "search-agent",
@@ -144,7 +145,7 @@ Deno.test("CoreOutputDeclaration / OutputRevision round-trip the Output contract
   assert.equal(revision.outputAddress, declaration.address);
 });
 
-Deno.test("CoreBindingDeclaration distinguishes resource / output / secret / provider-output sources", () => {
+test("CoreBindingDeclaration distinguishes resource / output / secret / provider-output sources", () => {
   const resource: CoreBindingDeclaration = {
     address: "app.binding:api%2FDATABASE_URL",
     componentAddress: "app.component:api",
@@ -195,7 +196,7 @@ Deno.test("CoreBindingDeclaration distinguishes resource / output / secret / pro
   assert.equal(providerOutput.source.kind, "provider-output");
 });
 
-Deno.test("CoreBindingResolution carries policy, grant, approval, and source revision", () => {
+test("CoreBindingResolution carries policy, grant, approval, and source revision", () => {
   const resolution: CoreBindingResolution = {
     bindingDeclarationAddress: "app.binding:web%2FSEARCH_MCP_URL",
     resolvedSourceRevision: "rev-1",
@@ -211,7 +212,7 @@ Deno.test("CoreBindingResolution carries policy, grant, approval, and source rev
   assert.equal(resolution.policyDecisionId, "policy-1");
 });
 
-Deno.test("CoreBindingSetRevision composes declarations + resolutions immutably", () => {
+test("CoreBindingSetRevision composes declarations + resolutions immutably", () => {
   const revision: CoreBindingSetRevision = {
     id: "bsr-1",
     groupId: "checkout-prod",

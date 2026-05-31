@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { redactJsonObject, redactString } from "./mod.ts";
 
-Deno.test("redaction masks nested secret and token fields", () => {
+test("redaction masks nested secret and token fields", () => {
   const redacted = redactJsonObject({
     ok: "visible",
     password: "p@ssw0rd",
@@ -21,7 +22,7 @@ Deno.test("redaction masks nested secret and token fields", () => {
   });
 });
 
-Deno.test("redaction masks bearer and assignment secrets inside strings", () => {
+test("redaction masks bearer and assignment secrets inside strings", () => {
   assert.equal(
     redactString("Authorization: Bearer abc.def token=xyz&safe=true"),
     "Authorization: Bearer [REDACTED] token=[REDACTED]&safe=true",

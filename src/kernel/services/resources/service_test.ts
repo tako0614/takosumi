@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryBindingSetRevisionStore,
@@ -12,7 +13,7 @@ import {
   type ResourceOperationStores,
 } from "./mod.ts";
 
-Deno.test("ResourceOperationService creates, binds, and unbinds through resource stores", async () => {
+test("ResourceOperationService creates, binds, and unbinds through resource stores", async () => {
   const { service, stores } = createService({
     ids: [
       "resource_db",
@@ -84,7 +85,7 @@ Deno.test("ResourceOperationService creates, binds, and unbinds through resource
   );
 });
 
-Deno.test("ResourceOperationService rejects changed migration ledger checksums", async () => {
+test("ResourceOperationService rejects changed migration ledger checksums", async () => {
   const { service } = createService({ ids: ["resource_db", "migration_1"] });
   const resource = await service.createResource({
     spaceId: "space_a",
@@ -125,7 +126,7 @@ Deno.test("ResourceOperationService rejects changed migration ledger checksums",
   );
 });
 
-Deno.test("ResourceOperationService blocks imported bind-only and shared readonly migrations", async () => {
+test("ResourceOperationService blocks imported bind-only and shared readonly migrations", async () => {
   const { service } = createService({
     ids: ["resource_imported", "resource_shared"],
   });
@@ -163,7 +164,7 @@ Deno.test("ResourceOperationService blocks imported bind-only and shared readonl
   );
 });
 
-Deno.test("ResourceOperationService enforces sharing and import binding roles", async () => {
+test("ResourceOperationService enforces sharing and import binding roles", async () => {
   const { service } = createService({
     ids: [
       "resource_exclusive",
@@ -242,7 +243,7 @@ Deno.test("ResourceOperationService enforces sharing and import binding roles", 
   );
 });
 
-Deno.test("ResourceOperationService advances durable generation for completed migrations", async () => {
+test("ResourceOperationService advances durable generation for completed migrations", async () => {
   const { service, stores } = createService({
     ids: ["resource_db", "migration_1"],
   });
@@ -269,7 +270,7 @@ Deno.test("ResourceOperationService advances durable generation for completed mi
   );
 });
 
-Deno.test("ResourceOperationService models restore as a resource operation separate from rollback", async () => {
+test("ResourceOperationService models restore as a resource operation separate from rollback", async () => {
   const { service, stores } = createService({
     ids: ["resource_db", "restore_ledger"],
   });
@@ -306,7 +307,7 @@ Deno.test("ResourceOperationService models restore as a resource operation separ
   );
 });
 
-Deno.test("ResourceOperationService rejects unsafe provider-native restores", async () => {
+test("ResourceOperationService rejects unsafe provider-native restores", async () => {
   const { service } = createService({
     ids: ["resource_db", "resource_imported", "resource_readonly"],
   });
@@ -383,7 +384,7 @@ Deno.test("ResourceOperationService rejects unsafe provider-native restores", as
   );
 });
 
-Deno.test("ResourceOperationService stores secret binding value resolutions and repair condition for revoked versions", async () => {
+test("ResourceOperationService stores secret binding value resolutions and repair condition for revoked versions", async () => {
   const { service, stores } = createService({
     ids: ["revision_secret"],
     withSecrets: true,

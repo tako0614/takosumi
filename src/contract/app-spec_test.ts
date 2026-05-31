@@ -1,27 +1,25 @@
-import { assertEquals } from "jsr:@std/assert@^1.0.6";
+import { expect, test } from "bun:test";
+
 import {
   isComponentOutputRef,
   isPlatformServicePath,
   isPlatformServiceRef,
 } from "./app-spec.ts";
 
-Deno.test("AppSpec output and service path helpers distinguish local and platform refs", () => {
-  assertEquals(isComponentOutputRef("db.connection"), true);
-  assertEquals(isComponentOutputRef("identity.primary.oidc"), false);
+test("AppSpec output and service path helpers distinguish local and platform refs", () => {
+  expect(isComponentOutputRef("db.connection")).toEqual(true);
+  expect(isComponentOutputRef("identity.primary.oidc")).toEqual(false);
 
-  assertEquals(isPlatformServicePath("identity.primary.oidc"), true);
-  assertEquals(isPlatformServiceRef("identity.primary.oidc"), true);
-  assertEquals(isPlatformServicePath("db.connection"), false);
+  expect(isPlatformServicePath("identity.primary.oidc")).toEqual(true);
+  expect(isPlatformServiceRef("identity.primary.oidc")).toEqual(true);
+  expect(isPlatformServicePath("db.connection")).toEqual(false);
 });
 
-Deno.test("AppSpec platform service path helper rejects malformed paths", () => {
-  assertEquals(isPlatformServicePath("Identity.primary.oidc"), false);
-  assertEquals(isPlatformServicePath("identity..oidc"), false);
-  assertEquals(isPlatformServicePath("identity.primary"), false);
-  assertEquals(
-    isPlatformServicePath(
+test("AppSpec platform service path helper rejects malformed paths", () => {
+  expect(isPlatformServicePath("Identity.primary.oidc")).toEqual(false);
+  expect(isPlatformServicePath("identity..oidc")).toEqual(false);
+  expect(isPlatformServicePath("identity.primary")).toEqual(false);
+  expect(isPlatformServicePath(
       "a.b.c.d.e.f.g.h.i",
-    ),
-    false,
-  );
+    )).toEqual(false);
 });

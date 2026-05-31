@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import { signTakosumiInternalRequest } from "takosumi-contract/internal/rpc";
@@ -6,7 +7,7 @@ import { createInMemoryAppContext } from "../app_context.ts";
 import { createApiApp } from "./app.ts";
 import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
-Deno.test("createApiApp exposes /openapi.json when enabled", async () => {
+test("createApiApp exposes /openapi.json when enabled", async () => {
   const app = await createApiApp({
     registerInternalRoutes: false,
     registerOpenApiRoute: true,
@@ -21,7 +22,7 @@ Deno.test("createApiApp exposes /openapi.json when enabled", async () => {
   assert.ok(body.paths["/health"]);
 });
 
-Deno.test("createApiApp does not mount legacy public deployment routes", async () => {
+test("createApiApp does not mount legacy public deployment routes", async () => {
   const app = await createApiApp({
     registerInternalRoutes: false,
     registerInstallerPublicRoutes: true,
@@ -78,7 +79,7 @@ Deno.test("createApiApp does not mount legacy public deployment routes", async (
   );
 });
 
-Deno.test("createApiApp mounts runtime-agent routes fail-closed when enabled", async () => {
+test("createApiApp mounts runtime-agent routes fail-closed when enabled", async () => {
   const app = await createApiApp({
     registerInternalRoutes: false,
     registerRuntimeAgentRoutes: true,
@@ -94,7 +95,7 @@ Deno.test("createApiApp mounts runtime-agent routes fail-closed when enabled", a
   assert.equal((await response.json()).error.code, "unauthenticated");
 });
 
-Deno.test("createApiApp accepts signed v1 runtime-agent routes when enabled", async () => {
+test("createApiApp accepts signed v1 runtime-agent routes when enabled", async () => {
   const secret = "runtime-agent-secret";
   const app = await createApiApp({
     registerInternalRoutes: false,
@@ -128,7 +129,7 @@ Deno.test("createApiApp accepts signed v1 runtime-agent routes when enabled", as
   assert.equal(responseBody.agent.provider, "local");
 });
 
-Deno.test("createApiApp uses context runtime-agent registry for mounted routes", async () => {
+test("createApiApp uses context runtime-agent registry for mounted routes", async () => {
   const secret = "runtime-agent-secret";
   const registry = new InMemoryRuntimeAgentRegistry();
   const context = createInMemoryAppContext({

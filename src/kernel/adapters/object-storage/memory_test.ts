@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   MemoryObjectStorage,
@@ -5,7 +6,7 @@ import {
   sha256ObjectDigest,
 } from "./mod.ts";
 
-Deno.test("memory object storage supports put/get/head/list/delete with digest verification", async () => {
+test("memory object storage supports put/get/head/list/delete with digest verification", async () => {
   const storage = new MemoryObjectStorage({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
   });
@@ -84,7 +85,7 @@ Deno.test("memory object storage supports put/get/head/list/delete with digest v
   );
 });
 
-Deno.test("memory object storage rejects mismatched content digest", async () => {
+test("memory object storage rejects mismatched content digest", async () => {
   const storage = new MemoryObjectStorage();
   await assert.rejects(
     () =>

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { Deployment } from "takosumi-contract/reference/compat";
 import {
@@ -8,7 +9,7 @@ import type { PublicDeployManifest } from "../domains/deploy/types.ts";
 import { InMemoryOutboxStore } from "../shared/events.ts";
 import { ApplyWorker } from "./apply_worker.ts";
 
-Deno.test("ApplyWorker promotes a resolved Deployment to applied", async () => {
+test("ApplyWorker promotes a resolved Deployment to applied", async () => {
   const store = new InMemoryDeploymentStore();
   const outboxStore = new InMemoryOutboxStore();
   const service = new DeploymentService({
@@ -43,8 +44,7 @@ Deno.test("ApplyWorker promotes a resolved Deployment to applied", async () => {
   assert.equal(event.payload.status, "applied");
 });
 
-Deno.test(
-  "ApplyWorker reports DEPLOYMENT_STALE when applying a non-resolved Deployment",
+test("ApplyWorker reports DEPLOYMENT_STALE when applying a non-resolved Deployment",
   async () => {
     const store = new InMemoryDeploymentStore();
     const outboxStore = new InMemoryOutboxStore();
@@ -88,8 +88,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "ApplyWorker fails with APPLY_FAILED when the Deployment id is unknown",
+test("ApplyWorker fails with APPLY_FAILED when the Deployment id is unknown",
   async () => {
     const store = new InMemoryDeploymentStore();
     const outboxStore = new InMemoryOutboxStore();
@@ -121,8 +120,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "ApplyWorker maps DeploymentStaleError to DEPLOYMENT_STALE on the failure event",
+test("ApplyWorker maps DeploymentStaleError to DEPLOYMENT_STALE on the failure event",
   async () => {
     const store = new InMemoryDeploymentStore();
     const outboxStore = new InMemoryOutboxStore();
@@ -168,8 +166,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "ApplyWorker maps DeploymentBlockedError to POLICY_BLOCKED on the failure event",
+test("ApplyWorker maps DeploymentBlockedError to POLICY_BLOCKED on the failure event",
   async () => {
     const store = new InMemoryDeploymentStore();
     const outboxStore = new InMemoryOutboxStore();

@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { type AuditEvent, InMemoryAuditStore } from "./mod.ts";
 
-Deno.test("audit store appends once and queries in append order", async () => {
+test("audit store appends once and queries in append order", async () => {
   const store = new InMemoryAuditStore();
   const first = event(
     "audit_1",

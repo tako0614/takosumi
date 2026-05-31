@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryRuntimeDesiredStateStore,
@@ -6,7 +7,7 @@ import {
   type RuntimeObservedStateSnapshot,
 } from "./mod.ts";
 
-Deno.test("runtime observed snapshots are stored separately from canonical desired state", async () => {
+test("runtime observed snapshots are stored separately from canonical desired state", async () => {
   const desiredStore = new InMemoryRuntimeDesiredStateStore();
   const observedStore = new InMemoryRuntimeObservedStateStore();
 
