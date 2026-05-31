@@ -17,28 +17,30 @@ Takosumi AppSpec is kind-agnostic and intentionally small:
 
 `Component.kind` is an opaque alias or URI. Its meaning comes from operator-injected `kindAliases`, descriptor metadata, Space policy, and the operator's implementation binding. The Installer API carries source and apply requests; it does not define kind semantics.
 
-Official descriptors are package-owned under `packages/kind-*/spec/kind.jsonld` and are published as `https://takosumi.com/kinds/v1/<name>`. Operators may adopt those descriptors or use their own catalog.
+Official portable kind descriptors are **published spec, not framework source**: each is flat JSON-LD under `docs/kinds/v1/<name>.jsonld`, published as `https://takosumi.com/kinds/v1/<name>`. The framework imports none of them. Operators may adopt those descriptors or use their own catalog.
 
 ## Workspace
 
+This repository is one npm package, `@takosjp/takosumi`, sourced from a single `src/` tree (no `packages/` workspace) and built to npm via dnt.
+
 ```text
 takosumi/
-├── deno.json
-├── packages/
+├── deno.json                    one package manifest (exports + self-mapped imports)
+├── src/
 │   ├── contract/                @takosjp/takosumi/contract
-│   ├── kernel/                  @takosjp/takosumi/kernel
 │   ├── installer/               @takosjp/takosumi/installer
-│   ├── cli/                     @takosjp/takosumi/cli
+│   ├── kernel/                  @takosjp/takosumi/kernel (via all/kernel.ts)
 │   ├── runtime-agent/           @takosjp/takosumi/runtime-agent
-│   ├── kind-*/                  portable kind descriptors → @takosjp/takosumi/kind/*
-│   └── all/                     @takosjp/takosumi (umbrella + subpath exports)
-├── docs/, website/, deploy/, fixtures/, scripts/
+│   ├── cli/                     @takosjp/takosumi/cli (via all/cli.ts)
+│   └── all/                     umbrella entry + server/cli/kernel re-exports
+├── docs/kinds/v1/*.jsonld       official portable kind catalog (published spec)
+├── docs/, website/, spec/, deploy/, fixtures/, scripts/
 └── README.md, CONVENTIONS.md, CHANGELOG.md
 ```
 
-Kind sources are split by ownership; both ship as subpaths of the two published npm packages:
+Kind sources are split by role between the two published packages — but neither is a framework code dependency:
 
-- Portable kinds define author-facing shapes and are exported as `@takosjp/takosumi/kind/<name>` subpaths: `worker`, `web-service`, `postgres`, `sqlite`, `object-store`, `kv-store`, `message-queue`, `vector-store`, `gateway`.
+- Portable kind **descriptors** are author-facing JSON-LD shapes, hosted as published spec under `docs/kinds/v1/<name>.jsonld` (`worker`, `web-service`, `postgres`, `sqlite`, `object-store`, `kv-store`, `message-queue`, `vector-store`, `gateway`). They are not a package export.
 - Native kind plugins and concrete runtime-agent connectors bind concrete backends into the reference kernel, source-located in `../takosumi-plugins`, and exported as `@takosjp/takosumi-plugins/kind/<backend-name>` (plus `@takosjp/takosumi-plugins/connectors`): Cloudflare Workers/R2/DNS, Deno Deploy, AWS Fargate/RDS/S3/Route53, GCP Cloud Run/Cloud SQL/GCS/Cloud DNS, Kubernetes, Docker Compose, systemd, MinIO, filesystem, Docker Postgres, CoreDNS, Cloudflare Containers, and Azure Container Apps.
 
 ## Public Concepts
@@ -131,20 +133,13 @@ Core/runtime/tooling are reached as subpath exports of `@takosjp/takosumi`:
 - `@takosjp/takosumi/cli`
 - `@takosjp/takosumi/runtime-agent`
 - `@takosjp/takosumi/server`
-- `@takosjp/takosumi/kinds`
 - `@takosjp/takosumi` (umbrella entry)
 
-Portable kinds in this repository are subpath exports of the same package:
-
-- `@takosjp/takosumi/kind/worker`
-- `@takosjp/takosumi/kind/web-service`
-- `@takosjp/takosumi/kind/postgres`
-- `@takosjp/takosumi/kind/sqlite`
-- `@takosjp/takosumi/kind/object-store`
-- `@takosjp/takosumi/kind/kv-store`
-- `@takosjp/takosumi/kind/message-queue`
-- `@takosjp/takosumi/kind/vector-store`
-- `@takosjp/takosumi/kind/gateway`
+This package ships **no kind code**. The official portable kind catalog is
+published spec, not a package export: each descriptor is flat JSON-LD under
+`docs/kinds/v1/<name>.jsonld`, served at `https://takosumi.com/kinds/v1/<name>`
+(`worker`, `web-service`, `postgres`, `sqlite`, `object-store`, `kv-store`,
+`message-queue`, `vector-store`, `gateway`). The framework imports none of them.
 
 Native kinds and connectors in `../takosumi-plugins` are subpath exports of
 `@takosjp/takosumi-plugins` (`/kind/<backend-name>` and `/connectors`). That
@@ -184,10 +179,10 @@ cd packages/kernel && deno task db:migrate:dry-run
 
 - Keep public contract changes in `packages/contract/` and update docs/tests in the same change.
 - Keep kernel-specific changes in `packages/kernel/`.
-- Add or change portable descriptor behavior in the owning `packages/kind-*` package.
+- Add or change a portable kind descriptor by editing its published JSON-LD at `docs/kinds/v1/<name>.jsonld` (it is spec, not framework code — the kernel imports none of them).
 - Add or change backend-specific native kind behavior in `../takosumi-plugins/packages/kind-*`.
 - Add or change concrete runtime-agent connectors in `../takosumi-plugins/packages/runtime-agent-connectors/`.
-- Add new official portable catalog descriptors as package-owned JSON-LD under `packages/kind-*/spec/kind.jsonld`.
+- Add new official portable catalog descriptors as published JSON-LD under `docs/kinds/v1/<name>.jsonld`.
 - Keep Takos product IDs and Takos-specific services out of Takosumi kernel core.
 - Keep account-plane features in operator distribution docs/code, not in Takosumi core.
 - Follow [`CONVENTIONS.md`](./CONVENTIONS.md), [`docs/reference/kind-packages.md`](./docs/reference/kind-packages.md), and [`docs/reference/public-spec-source-map.md`](./docs/reference/public-spec-source-map.md) when changing kind packages or public descriptors.

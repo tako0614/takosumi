@@ -23,7 +23,7 @@ const PORTABLE_KIND_PACKAGES = [
 Deno.test("portable kind descriptors publish official material mappings", async () => {
   for (const pkg of PORTABLE_KIND_PACKAGES) {
     const path = new URL(
-      `../src/kinds/${pkg}/spec/kind.jsonld`,
+      `../docs/kinds/v1/${pkg}.jsonld`,
       import.meta.url,
     );
     const descriptor = JSON.parse(await Deno.readTextFile(path)) as {

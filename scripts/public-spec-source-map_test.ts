@@ -34,15 +34,15 @@ const TAKOSUMI_OWNED_PATHS = [
   "src/kernel/api/runtime_agent_routes.ts",
   "src/kernel/api/readiness_routes.ts",
   "src/kernel/api/openapi.ts",
-  "src/kinds/worker/spec/kind.jsonld",
-  "src/kinds/web-service/spec/kind.jsonld",
-  "src/kinds/postgres/spec/kind.jsonld",
-  "src/kinds/sqlite/spec/kind.jsonld",
-  "src/kinds/object-store/spec/kind.jsonld",
-  "src/kinds/kv-store/spec/kind.jsonld",
-  "src/kinds/message-queue/spec/kind.jsonld",
-  "src/kinds/vector-store/spec/kind.jsonld",
-  "src/kinds/gateway/spec/kind.jsonld",
+  "docs/kinds/v1/worker.jsonld",
+  "docs/kinds/v1/web-service.jsonld",
+  "docs/kinds/v1/postgres.jsonld",
+  "docs/kinds/v1/sqlite.jsonld",
+  "docs/kinds/v1/object-store.jsonld",
+  "docs/kinds/v1/kv-store.jsonld",
+  "docs/kinds/v1/message-queue.jsonld",
+  "docs/kinds/v1/vector-store.jsonld",
+  "docs/kinds/v1/gateway.jsonld",
   "../takosumi-plugins/packages/kind-cloudflare-worker/spec/kind.jsonld",
   "deno.json",
 ];
@@ -72,7 +72,7 @@ Deno.test("public spec source map covers required public surfaces", async () => 
   assert.equal(source.includes(`takosumi-${"git"}-artifact-uri-v1`), false);
   assert.ok(source.includes("src/contract/app-spec.ts"));
   assert.ok(source.includes("src/contract/catalog.ts"));
-  assert.ok(source.includes("src/kinds/*/spec/kind.jsonld"));
+  assert.ok(source.includes("docs/kinds/v1/*.jsonld"));
   assert.ok(
     source.includes("../takosumi-plugins/packages/kind-*/spec/kind.jsonld"),
   );
