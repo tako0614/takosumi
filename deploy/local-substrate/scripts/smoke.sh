@@ -70,7 +70,7 @@ bundle_freshness_gate() {
 	local kernel_worker_bundle="$repo_root/takosumi/deploy/cloudflare/.wrangler/dist/takosumi-cloudflare-worker.mjs"
 	local kernel_worker_sources=(
 		"$repo_root/takosumi/deploy/cloudflare/src"
-		"$repo_root/takosumi/packages/kernel/src"
+		"$repo_root/takosumi/src/kernel"
 	)
 	if [[ -f "$kernel_worker_bundle" ]]; then
 		local kernel_newer
