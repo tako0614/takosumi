@@ -2,7 +2,7 @@
 
 This repository is **Takosumi**, an operator-portable PaaS contract and reference kernel published as a **framework library you import** (`@takosjp/takosumi`). It provides (a) a programmatic **operate-the-kernel API** (install / deploy / rollback / status) and (b) an **embeddable, extendable Hono `app`** that already mounts the 5 installer endpoints and the kernel API. It reads `.takosumi.yml` from source, creates an Installation in a Space, and records each apply as a Deployment. The framework **never self-serves**: `createPaaSApp` returns the `app` and an operate facade, and the implementation owns production serving, route extension, and runtime capability injection. It contains the contract, reference kernel, installer, CLI, generic runtime-agent host, portable official catalog descriptors, and an optional dev-runner server entry, all shipped as one npm package (`@takosjp/takosumi`) via subpath exports. Backend-specific native kind plugin packages and concrete runtime-agent connectors ship as the sibling `@takosjp/takosumi-plugins` npm package, sourced from the `takosumi-plugins` repository. The reference **composer** that embeds this app, extends it (dashboard / billing / install routes), and serves the one composed app from a single cloud URL is `takosumi-cloud`.
 
-Canonical contract: [`@takosjp/takosumi/contract`](https://www.npmjs.com/package/@takosjp/takosumi) (`packages/contract/`).
+Canonical contract: [`@takosjp/takosumi/contract`](https://www.npmjs.com/package/@takosjp/takosumi) (`src/contract/`).
 
 ## Spec Status
 
@@ -21,24 +21,24 @@ Official kind descriptors are **published spec, not framework source**, and form
 
 ## Workspace
 
-This repository is one npm package, `@takosjp/takosumi`, sourced from a single `src/` tree (no `packages/` workspace) and built to npm via dnt.
+This repository is one npm package, `@takosjp/takosumi`, sourced from a single `src/` tree (no `packages/` workspace) and built to npm with Bun.
 
 ```text
 takosumi/
-├── deno.json                    one package manifest (exports + self-mapped imports)
+├── package.json                 one package manifest (exports + scripts)
 ├── src/
 │   ├── contract/                @takosjp/takosumi/contract
 │   ├── installer/               @takosjp/takosumi/installer
-│   ├── kernel/                  @takosjp/takosumi/kernel (via all/kernel.ts)
+│   ├── kernel/                  reference kernel implementation
 │   ├── runtime-agent/           @takosjp/takosumi/runtime-agent
-│   ├── cli/                     @takosjp/takosumi/cli (via all/cli.ts)
-│   └── all/                     umbrella entry + server/cli/kernel re-exports
+│   ├── cli/                     CLI implementation
+│   └── entrypoints/             npm root + server/cli/kernel export wrappers
 ├── docs/kinds/v1/*.jsonld       official portable kind catalog (published spec)
 ├── docs/, website/, spec/, deploy/, fixtures/, scripts/
 └── README.md, CONVENTIONS.md, CHANGELOG.md
 ```
 
-Kind sources are split by role between the two published packages — but neither is a framework code dependency:
+Kind surfaces are split by role between the two published packages — but neither is a framework code dependency:
 
 - Portable kind **descriptors** are author-facing JSON-LD shapes, hosted as published spec under `docs/kinds/v1/<name>.jsonld` (`worker`, `web-service`, `postgres`, `sqlite`, `object-store`, `kv-store`, `message-queue`, `vector-store`, `gateway`). They are not a package export.
 - Native kind plugins and concrete runtime-agent connectors bind concrete backends into the reference kernel, source-located in `../takosumi-plugins`, and exported as `@takosjp/takosumi-plugins/kind/<backend-name>` (plus `@takosjp/takosumi-plugins/connectors`): Cloudflare Workers/R2/DNS, Deno Deploy, AWS Fargate/RDS/S3/Route53, GCP Cloud Run/Cloud SQL/GCS/Cloud DNS, Kubernetes, Docker Compose, systemd, MinIO, filesystem, Docker Postgres, CoreDNS, Cloudflare Containers, and Azure Container Apps.
@@ -99,11 +99,11 @@ This is the official reference implementation strategy, similar in shape to Vite
 
 Plugins extend **kinds + materialization + lifecycle** only: `provides[]` kind URIs, `apply` / `destroy` / `status` / `materializeOutput` / `applyBinding`, and install/deploy lifecycle hooks. Plugins do **not** add HTTP routes or middleware and do not transform the AppSpec — the 5-endpoint Installer API stays a closed contract. **Route extension is the implementation's job via the returned Hono `app`** (the composer does `app.route('/dashboard', …)`), not a plugin hook. This keeps the contract fixed while allowing unlimited composition around it.
 
-Kernel core must remain cloud-provider neutral. Cloud SDKs, host commands, and backend credentials stay in kind packages, runtime-agent connectors, or operator distribution code. Runtime capabilities the library needs (git / tar subprocess, temp-dir FS, HTTP serve) are **injected by the implementation** through the runtime adapter, never called directly on the imported library surface.
+Kernel core must remain cloud-provider neutral. Cloud SDKs, host commands, and backend credentials stay in Takosumi plugins, runtime-agent connectors, or operator distribution code. Runtime capabilities the library needs (git / tar subprocess, temp-dir FS, HTTP serve) are **injected by the implementation** through the runtime adapter, never called directly on the imported library surface.
 
 ## Runtime Neutrality
 
-Kernel runtime primitives go through `packages/kernel/src/shared/runtime/`. Do not add direct `Deno.*`, `process.*`, or `node:*` calls in kernel core paths unless they are inside the runtime adapter boundary.
+Kernel runtime primitives go through `src/kernel/shared/runtime/`. Do not add direct `Bun.*`, `process.*`, or `node:*` calls in kernel core paths unless they are inside the runtime adapter boundary.
 
 ## Installer API
 
@@ -148,41 +148,41 @@ repository, not from this one.
 
 ## Build And Publish Toolchain
 
-Source is Deno-first and published to npm via dnt (Deno→Node Transform). The
-build entry in this repository is `scripts/build-npm.ts`; the plugins package
-builds via `takosumi-plugins/scripts/dnt-build.ts`. Because the framework surface
-never calls `Deno.serve` / `Deno.Command` directly — serving and git / tar / temp-dir
+Source is Bun-native TypeScript and published to npm. The build entry in this
+repository is `scripts/build-npm.ts`; the plugins package builds via
+`takosumi-plugins/scripts/build-npm.ts`. Because the framework surface never calls
+`Bun.serve` / host subprocess primitives directly — serving and git / tar / temp-dir
 capabilities are injected by the implementation through the runtime adapter — the
 published `@takosjp/takosumi` graph builds with no subprocess module mappings, and
-Node behavior comes from the Node runtime adapter at runtime.
+Node / Bun behavior comes from the runtime adapter at runtime.
 
 ## Commands
 
 ```bash
-deno task check
-deno test --allow-all
-deno task fmt:check
-deno task lint
-deno task lint:json-ld
-deno task spec:check-drift
-deno run -A scripts/build-npm.ts
+bun run check
+bun test
+bun run fmt
+bun run lint
+bun run lint:json-ld
+bun run spec:check-drift
+bun run scripts/build-npm.ts
 ```
 
-Per-package work should run from the package or product root:
+Focused work should run from the repository root:
 
 ```bash
-cd packages/cli && deno task test
-cd packages/kernel && deno task db:migrate:dry-run
+bunx tsc --noEmit src/cli/main.ts
+bun run db:migrate:dry-run
 ```
 
 ## Work Rules
 
-- Keep public contract changes in `packages/contract/` and update docs/tests in the same change.
-- Keep kernel-specific changes in `packages/kernel/`.
+- Keep public contract changes in `src/contract/` and update docs/tests in the same change.
+- Keep kernel-specific changes in `src/kernel/`.
 - Add or change a portable kind descriptor by editing its published JSON-LD at `docs/kinds/v1/<name>.jsonld` (it is spec, not framework code — the kernel imports none of them).
-- Add or change backend-specific native kind behavior in `../takosumi-plugins/packages/kind-*`.
-- Add or change concrete runtime-agent connectors in `../takosumi-plugins/packages/runtime-agent-connectors/`.
+- Add or change backend-specific native kind behavior in `../takosumi-plugins/src/plugins/*`.
+- Add or change concrete runtime-agent connectors in `../takosumi-plugins/src/connectors/`.
 - Add new official portable catalog descriptors as published JSON-LD under `docs/kinds/v1/<name>.jsonld`.
 - Keep Takos product IDs and Takos-specific services out of Takosumi kernel core.
 - Keep account-plane features in operator distribution docs/code, not in Takosumi core.
-- Follow [`CONVENTIONS.md`](./CONVENTIONS.md), [`docs/reference/kind-packages.md`](./docs/reference/kind-packages.md), and [`docs/reference/public-spec-source-map.md`](./docs/reference/public-spec-source-map.md) when changing kind packages or public descriptors.
+- Follow [`CONVENTIONS.md`](./CONVENTIONS.md), [`docs/reference/reference-plugin-exports.md`](./docs/reference/reference-plugin-exports.md), and [`docs/reference/public-spec-source-map.md`](./docs/reference/public-spec-source-map.md) when changing official descriptors or reference plugin bindings.
