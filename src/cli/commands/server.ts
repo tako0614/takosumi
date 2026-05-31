@@ -1,15 +1,16 @@
-import { Command } from "@cliffy/command";
+import { Command } from "../command.ts";
 import { LIFECYCLE_AGENT_URL_ENV } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { currentRuntime } from "@takos/takosumi-kernel/runtime";
 
-function createServerCommand() {
-  return new Command()
+function createServerCommand(): Command {
+  return new Command("server")
     .description("Start the Takosumi kernel HTTP server")
-    .option("--port <port:number>", "Port to listen on", { default: 8788 })
+    .option("--port <port>", "Port to listen on", (v) => Number(v), 8788)
     .option(
-      "--agent-port <port:number>",
+      "--agent-port <port>",
       "Port for the embedded runtime-agent (only used when TAKOSUMI_AGENT_URL is unset)",
-      { default: 8789 },
+      (v) => Number(v),
+      8789,
     )
     .option(
       "--no-agent",
@@ -21,7 +22,14 @@ function createServerCommand() {
         "exit immediately. Deno does not provide a portable detach primitive, " +
         "so we surface the supervisor template instead of half-baked daemonising.",
     )
-    .action(async ({ port, agentPort, agent, detach }) => {
+    .action(async (
+      { port, agentPort, agent, detach }: {
+        port: number;
+        agentPort: number;
+        agent: boolean;
+        detach?: boolean;
+      },
+    ) => {
       if (detach) {
         printDaemonizationTemplate(port);
         return;
@@ -127,5 +135,4 @@ function printDaemonizationTemplate(port: number): void {
   for (const line of lines) console.log(line);
 }
 
-export const serverCommand: ReturnType<typeof createServerCommand> =
-  createServerCommand();
+export const serverCommand: Command = createServerCommand();

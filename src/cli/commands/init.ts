@@ -1,4 +1,4 @@
-import { Command } from "@cliffy/command";
+import { Command } from "../command.ts";
 
 const TEMPLATES = {
   "worker-postgres": `apiVersion: v1
@@ -48,29 +48,30 @@ components:
 `,
 } as const;
 
-function createInitCommand() {
-  return new Command()
+function createInitCommand(): Command {
+  return new Command("init")
     .description(
       "Scaffold a Takosumi AppSpec. Writes to <output> when given, " +
         "otherwise prints to stdout.",
     )
+    .argument("[output]", "Output file path (prints to stdout when omitted)")
     .option(
-      "--template <name:string>",
+      "--template <name>",
       "Scaffold preset (worker-postgres | empty)",
-      { default: "worker-postgres" },
+      "worker-postgres",
     )
-    .arguments("[output:string]")
-    .action(async ({ template }, output) => {
-      const content = TEMPLATES[template as keyof typeof TEMPLATES] ??
-        TEMPLATES.empty;
-      if (output) {
-        await Deno.writeTextFile(output, content);
-        console.log(`wrote ${output}`);
-      } else {
-        console.log(content);
-      }
-    });
+    .action(
+      async (output: string | undefined, opts: { template: string }) => {
+        const content = TEMPLATES[opts.template as keyof typeof TEMPLATES] ??
+          TEMPLATES.empty;
+        if (output) {
+          await Deno.writeTextFile(output, content);
+          console.log(`wrote ${output}`);
+        } else {
+          console.log(content);
+        }
+      },
+    ) as Command;
 }
 
-export const initCommand: ReturnType<typeof createInitCommand> =
-  createInitCommand();
+export const initCommand: Command = createInitCommand();

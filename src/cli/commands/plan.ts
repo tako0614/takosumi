@@ -1,4 +1,4 @@
-import { Command } from "@cliffy/command";
+import { Command } from "../command.ts";
 import {
   callInstaller,
   INSTALLATIONS_DRY_RUN_PATH,
@@ -7,42 +7,50 @@ import {
   resolveSourceArg,
 } from "../installer_client.ts";
 
-function createPlanCommand() {
-  return new Command()
+function createPlanCommand(): Command {
+  return new Command("plan")
     .description(
       "Alias for `takosumi install dry-run`: preview a new Installation",
     )
-    .arguments("[source:string]")
-    .option(
-      "--source <source:string>",
-      "git:, prepared:, or local path",
-    )
-    .option("--space <spaceId:string>", "Target Space id", { required: true })
-    .option("--remote <url:string>", "Remote kernel URL")
-    .option("--token <token:string>", "Installer bearer token")
-    .action(async ({ source: sourceFlag, space, remote, token }, sourceArg) => {
-      try {
-        const sourceRef = resolveSourceArg({
-          argument: sourceArg,
-          flag: sourceFlag,
-        });
-        const target = await requireRemoteInstaller(remote, token);
-        const { status, body } = await callInstaller(target, {
-          path: INSTALLATIONS_DRY_RUN_PATH,
-          body: { spaceId: space, source: parseSourceRef(sourceRef) },
-        });
-        if (status >= 400) {
-          console.error(`kernel returned ${status}:`, body);
+    .argument("[source]", "git:, prepared:, or local path")
+    .option("--source <source>", "git:, prepared:, or local path")
+    .requiredOption("--space <spaceId>", "Target Space id")
+    .option("--remote <url>", "Remote kernel URL")
+    .option("--token <token>", "Installer bearer token")
+    .action(
+      async (
+        sourceArg: string | undefined,
+        opts: {
+          source?: string;
+          space: string;
+          remote?: string;
+          token?: string;
+        },
+      ) => {
+        try {
+          const sourceRef = resolveSourceArg({
+            argument: sourceArg,
+            flag: opts.source,
+          });
+          const target = await requireRemoteInstaller(opts.remote, opts.token);
+          const { status, body } = await callInstaller(target, {
+            path: INSTALLATIONS_DRY_RUN_PATH,
+            body: { spaceId: opts.space, source: parseSourceRef(sourceRef) },
+          });
+          if (status >= 400) {
+            console.error(`kernel returned ${status}:`, body);
+            Deno.exit(1);
+          }
+          console.log(JSON.stringify(body, null, 2));
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : String(error);
+          console.error(`error: ${message}`);
           Deno.exit(1);
         }
-        console.log(JSON.stringify(body, null, 2));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`error: ${message}`);
-        Deno.exit(1);
-      }
-    });
+      },
+    ) as Command;
 }
 
-export const planCommand: ReturnType<typeof createPlanCommand> =
-  createPlanCommand();
+export const planCommand: Command = createPlanCommand();
