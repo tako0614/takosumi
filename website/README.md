@@ -8,8 +8,6 @@ Wave M-G (= 2026-05-20) consolidated the previous 2-project layout into this sin
 
 ```sh
 bash takosumi/website/build.sh
-# or, from the repo root:
-deno task website:build
 ```
 
 `build.sh` runs three steps in order:
@@ -36,10 +34,8 @@ wrangler pages project create takosumi-website
 Per-deploy:
 
 ```sh
-deno task website:build
+bash website/build.sh
 wrangler pages deploy website/.output/public --project-name=takosumi-website
-# or:
-deno task website:deploy
 ```
 
 The default Pages host `takosumi-website.pages.dev` stays available for preview deploys. See [`DEPLOY.md`](../DEPLOY.md) for full prerequisites and smoke checks.

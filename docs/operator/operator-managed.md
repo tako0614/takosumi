@@ -81,7 +81,7 @@ export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
 export TAKOSUMI_LOCAL_ADAPTER_OBJECT_STORE_ROOT=/var/lib/takosumi/objects
 export TAKOSUMI_LOCAL_ADAPTER_SYSTEMD_UNIT_DIR=/etc/systemd/system
 
-deno run -A ./server.ts
+bun --preload ./shims/deno-compat.ts ./server.ts
 ```
 
 ::: danger passphrase は必ず永続化してください `TAKOSUMI_SECRET_STORE_PASSPHRASE` はシェルセッション終了で消失します。紛失すると暗号化済みの全 secret データが復号不能になります。生成後すぐに永続化してください。

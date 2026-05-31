@@ -17,11 +17,11 @@ installer command (`install` / `deploy` / `rollback`) は remote Takosumi server
 ## インストール
 
 ```bash
-deno install -gA -n takosumi npm:@takosjp/takosumi
+npm install -g @takosjp/takosumi
 takosumi version
 ```
 
-サポート runtime は Deno 2.x。CLI 単体で動きます。
+サポート runtime は Node.js 20+ / npm または Bun です。CLI 単体で動きます。
 
 ## 認証
 

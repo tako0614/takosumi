@@ -109,7 +109,7 @@ kind packages and reference adapters.
 | `kernel-route-inventory`       | internal / runtime-agent HTTP boundary  | reference kernel implementation                                    | [Reference Kernel Route Inventory](./kernel-http-api.md)                                                                       |
 | `runtime-agent-envelope`       | lifecycle RPC envelope                  | operator runtime topology                                          | [Reference Runtime-Agent Execution Surface](./runtime-agent-api.md)                                                            |
 | `reference-kind-binding-guide` | kind package and binding guide          | takosumi portable kind packages + takosumi-plugins native packages | [Kind Binding Implementations](./kind-bindings.md); [Kind Packages](./kind-packages.md)                                        |
-| `takosumi-npm-package`         | npm subpath exports and dependency pins | package owners                                                     | `deno.json`, `src/all/*.ts`, `scripts/build-npm.ts`, `https://www.npmjs.com/package/@takosjp/takosumi`                         |
+| `takosumi-npm-package`         | npm subpath exports and dependency pins | package owners                                                     | `package.json`, `tsconfig.json`, `src/all/*.ts`, `scripts/build-npm.ts`, `https://www.npmjs.com/package/@takosjp/takosumi`     |
 
 ## Placement rules
 
@@ -131,10 +131,10 @@ kind packages and reference adapters.
 - Account layer, billing, OIDC issuer, and deploy facades are operator surfaces
   around ownership, grants, workload platform services, approval, ledgers, and
   admin automation.
-- npm subpath export checks use each package's `deno.json` and the npm build
-  manifest, not only the root workspace import map. A package that imports a
-  contract subpath declares that subpath in its own import map or dependency
-  metadata.
+- npm subpath export checks use each package's `package.json` and the npm build
+  manifest, plus `tsconfig.json` for workspace-local source aliases. A package
+  that imports a contract subpath declares that subpath in package metadata or a
+  local compiler path.
 
 ## Installer API evidence
 
@@ -147,10 +147,9 @@ public-only OpenAPI artifact publishes it separately from that inventory.
 
 ## Drift check
 
-- `deno task check`
-- `deno task lint:json-ld`
-- `deno task spec:check-drift`
-- `deno test --allow-all scripts/public-spec-source-map_test.ts`
+- `bun run check`
+- `bun run lint:json-ld`
+- `bun run test:scripts`
 
 ## 関連ページ
 

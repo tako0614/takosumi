@@ -11,7 +11,7 @@ export default function EndCTA() {
         </p>
         <CodeBlock terminal class="terminal">
           <span class="k">$</span>{" "}
-          deno install -gA -n takosumi jsr:@takos/takosumi-cli{"\n"}
+          npm install -g @takosjp/takosumi{"\n"}
           <span class="k">$</span> takosumi space create my-home{"\n"}
           <span class="k">$</span> takosumi deploy my-home
         </CodeBlock>

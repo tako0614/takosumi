@@ -14,7 +14,7 @@ Single entry point for deploying the two Takosumi-public properties to Cloudflar
 1. Cloudflare account with the `takosumi.com` zone added (DNS hosted on Cloudflare).
 2. `wrangler` installed and authenticated:
    ```sh
-   npx wrangler login
+   bunx wrangler login
    ```
    Or set the env vars `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` for non-interactive deploys (CI). The token needs: Workers Scripts:Edit, Workers Routes:Edit, D1:Edit, Pages:Edit, Account Settings:Read.
 
@@ -46,9 +46,9 @@ One-time setup:
 
 ```sh
 cd takosumi
-deno task docs:install              # installs vitepress under docs/node_modules
+npm --prefix docs install           # installs vitepress under docs/node_modules
 (cd website && npm install)          # installs solid start + vinxi under website/node_modules
-npx wrangler pages project create takosumi-website \
+bunx wrangler pages project create takosumi-website \
   --production-branch=main
 # In dashboard:
 #   Workers & Pages → takosumi-website → Custom domains
@@ -60,7 +60,8 @@ Deploy:
 
 ```sh
 cd takosumi
-deno task website:deploy
+bash website/build.sh
+wrangler pages deploy website/.output/public --project-name=takosumi-website
 ```
 
 Smoke:
@@ -85,21 +86,21 @@ One-time setup:
 ```sh
 cd takosumi-cloud
 # Create the D1 database
-npx wrangler d1 create takosumi-cloud-accounts
+bunx wrangler d1 create takosumi-cloud-accounts
 # Copy the returned UUID into deploy/cloudflare/wrangler.toml's
 # `database_id` field (replacing the all-zeros placeholder).
 
 # Create the R2 bucket for metadata-only AppInstallation export artifacts.
-npx wrangler r2 bucket create takosumi-cloud-accounts-exports
+bunx wrangler r2 bucket create takosumi-cloud-accounts-exports
 
 # Push secrets (replace each value with the real secret on prompt)
-npx wrangler secret put TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK \
+bunx wrangler secret put TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK \
   --config deploy/cloudflare/wrangler.toml
-npx wrangler secret put TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET \
+bunx wrangler secret put TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET \
   --config deploy/cloudflare/wrangler.toml
-npx wrangler secret put TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET \
+bunx wrangler secret put TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET \
   --config deploy/cloudflare/wrangler.toml
-npx wrangler secret put TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET \
+bunx wrangler secret put TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET \
   --config deploy/cloudflare/wrangler.toml
 # Optional: Stripe / passkey / upstream OIDC / OIDC client secret
 
@@ -110,19 +111,15 @@ npx wrangler secret put TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET \
 #  dashboard step wires DNS + TLS.)
 ```
 
-Generate an ES256 private JWK with one of:
-
-```sh
-deno run -A jsr:@takos/takosumi-cloud-accounts-service/scripts/gen-jwk   # if present
-# or any tool that emits {kty:"EC", crv:"P-256", d, x, y}
-```
+Generate an ES256 private JWK with any operator-approved tool that emits
+`{ kty: "EC", crv: "P-256", d, x, y }`.
 
 Deploy:
 
 ```sh
 cd takosumi-cloud
-deno task deploy:cloudflare:dryrun   # validates bindings + env, no upload
-deno task deploy:cloudflare          # actual deploy
+bun run deploy:cloudflare:dryrun   # validates bindings + env, no upload
+bun run deploy:cloudflare          # actual deploy
 ```
 
 Smoke:
@@ -174,9 +171,9 @@ The OIDC client `takos-private-production` is registered with the Worker via the
 
 ## Rolling back
 
-- **Pages** (`takosumi.com`): redeploy the previous git commit via `deno task website:deploy`. Cloudflare Pages also keeps deployment history in the dashboard for one-click rollback. Rolling back the website also rolls back `/docs/` and `/contexts/` because they ship from the same Pages artifact.
+- **Pages** (`takosumi.com`): redeploy the previous git commit with `bash website/build.sh` and `wrangler pages deploy website/.output/public --project-name=takosumi-website`. Cloudflare Pages also keeps deployment history in the dashboard for one-click rollback. Rolling back the website also rolls back `/docs/` and `/contexts/` because they ship from the same Pages artifact.
 - **Worker** (`cloud.takosumi.com`): `wrangler rollback` or redeploy the previous commit. D1 state is preserved across rollbacks.
 
 ## CI
 
-`.github/workflows/website-deploy.yml` builds and pushes the merged Pages artifact on `master` (or via manual dispatch). Push-to-deploy for the Accounts Worker is intentionally not wired here — operators run the deno tasks from a workstation. To add GitHub Actions later for the Worker, wrap the same `takosumi-cloud` tasks with `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` exposed as repo secrets; the deploy commands themselves do not change.
+`.github/workflows/website-deploy.yml` builds and pushes the merged Pages artifact on `master` (or via manual dispatch). Push-to-deploy for the Accounts Worker is intentionally not wired here — operators run the Bun deploy tasks from a workstation. To add GitHub Actions later for the Worker, wrap the same `takosumi-cloud` tasks with `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` exposed as repo secrets; the deploy commands themselves do not change.

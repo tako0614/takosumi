@@ -1,5 +1,6 @@
 .wrangler/
 npm/
+deno.lock
 node_modules/
 /node_modules
 .bun_install.log
@@ -12,4 +13,3 @@ node_modules/
 .fix_commit.sh
 .fix_result.txt
 .gitignore_addition.txt
-bun.lock

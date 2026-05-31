@@ -118,7 +118,7 @@ credential-free fixture gate.
 
 ```sh
 cd takosumi
-deno task live-provisioning-smoke:fixture:all
+bun run live-provisioning-smoke
 ```
 
 The fixture gate validates AWS, GCP, Kubernetes, Cloudflare, self-host, and
@@ -132,7 +132,7 @@ TAKOSUMI_PLUGIN_LIVE_PROVIDER=cloudflare \
 TAKOSUMI_PLUGIN_LIVE_PROOF_FIXTURE_FILE=fixtures/live-provisioning/cloudflare.shape-v1.json \
 TAKOSUMI_PLUGIN_GATEWAY_URL=https://<operator-provider-gateway> \
 TAKOSUMI_PLUGIN_GATEWAY_BEARER_TOKEN=<operator-token> \
-deno task live-provisioning-smoke
+bun run live-provisioning-smoke
 ```
 
 Canonical fixtures by provider:

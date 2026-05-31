@@ -2,14 +2,14 @@
 
 ## 前提条件
 
-- [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.x 以上
+- Node.js 20+ / npm または Bun
 
 この手順では、ローカル開発サーバーに manifest を渡して Installation と最初の Deployment の記録が作られるところまでを確認します。アプリを公開 URL で提供するには、gateway を備えた operator 環境が必要です。
 
 ## 1. CLI をインストールする
 
 ```bash
-deno install -gA -n takosumi npm:@takosjp/takosumi
+npm install -g @takosjp/takosumi
 takosumi version
 ```
 

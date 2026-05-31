@@ -33,7 +33,9 @@
     "check": "tsc --noEmit",
     "test": "bun test ./src/",
     "test:scripts": "bun test ./scripts/",
-    "live-provisioning-smoke": "bun scripts/live-provisioning-smoke.ts"
+    "lint:json-ld": "bun --preload ./shims/deno-compat.ts scripts/lint-json-ld.ts",
+    "live-provisioning-smoke": "bun scripts/live-provisioning-smoke.ts",
+    "build:npm": "deno run -A scripts/build-npm.ts"
   },
   "dependencies": {
     "commander": "^12.1.0",

@@ -22,7 +22,9 @@ on:
       - "docs/**"
       - "spec/contexts/**"
       - ".github/workflows/website-deploy.yml"
-      - "deno.json"
+      - "package.json"
+      - "bun.lock"
+      - "tsconfig.json"
       - "CHANGELOG.md"
   pull_request:
     branches: [master]

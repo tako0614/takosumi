@@ -4,12 +4,12 @@ This local walkthrough covers manifest validation and the Deployment ledger. Pub
 
 ## Prerequisites
 
-- [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.x or later
+- Node.js 20+ / npm or Bun
 
 ## 1. Install the CLI
 
 ```bash
-deno install -gA -n takosumi npm:@takosjp/takosumi
+npm install -g @takosjp/takosumi
 takosumi version
 ```
 
