@@ -1,10 +1,8 @@
-// dnt build script: produce the @takosjp/takosumi npm package from the Deno
-// source. deno.json is the single source of truth — its `exports` become the
-// dnt entry points and its `imports` map is fed straight to dnt (no duplicated
-// ENTRY_TABLE / npm-import-map.json). Inlines the internal bare-specifier graph
-// into ONE npm package.
+// dnt build script: produce the @takosjp/takosumi npm package from the
+// Bun-first source tree. package.json is the single source of truth for npm
+// subpath exports; tsconfig.json supplies workspace-local source aliases.
 //
-// Usage: deno run -A scripts/build-npm.ts
+// Usage: bun run build:npm
 //   --typecheck=both|single|none   (default: single)
 //   --no-typecheck                 (alias for none)
 //   --entry=.,./contract,...       (restrict to a comma list of npm exports)
@@ -17,36 +15,83 @@ const HERE = new URL(".", import.meta.url);
 const ROOT = new URL("../", HERE);
 const fromRoot = (p: string) => new URL(p, ROOT).pathname;
 
+interface SourcePackage {
+  readonly version: string;
+  readonly exports: Record<string, string | { readonly import?: string }>;
+  readonly dependencies?: Record<string, string>;
+  readonly peerDependencies?: Record<string, string>;
+}
+
+interface TsConfig {
+  readonly compilerOptions?: {
+    readonly paths?: Record<string, readonly string[]>;
+  };
+}
+
 // The subprocess/serve primitives are runtime-detecting single modules: they
 // use a local `declare const Deno` type (so the dnt typecheck surface never
 // touches Deno.*) and branch on `globalThis.Deno` at call time, running
 // `Deno.Command` / `Deno.serve` on Deno and `node:child_process` / `node:http`
 // on Node. The npm build therefore needs no module mappings.
 
-// deno.json is the single source of truth — version, the npm `exports` (which
-// become the dnt entry points), and the internal `imports` map (fed straight to
-// dnt). No duplicated ENTRY_TABLE / npm-import-map.json.
-const umbrella = JSON.parse(
-  await Deno.readTextFile(fromRoot("deno.json")),
-) as { version: string; exports: Record<string, string> };
+const sourcePackage = JSON.parse(
+  await Deno.readTextFile(fromRoot("package.json")),
+) as SourcePackage;
+const tsconfig = JSON.parse(
+  await Deno.readTextFile(fromRoot("tsconfig.json")),
+) as TsConfig;
 
-// npm export name -> source file, derived from deno.json `exports`.
+function exportTarget(value: string | { readonly import?: string }): string {
+  if (typeof value === "string") return value;
+  if (typeof value.import === "string") return value.import;
+  throw new Error("package.json export entries must expose an import target");
+}
+
+// npm export name -> source file, derived from package.json `exports`.
 const ENTRY_TABLE: Record<string, string> = Object.fromEntries(
-  Object.entries(umbrella.exports).map(
-    ([name, rel]) => [name, rel.replace(/^\.\//, "")],
+  Object.entries(sourcePackage.exports).map(
+    ([name, rel]) => [name, exportTarget(rel).replace(/^\.\//, "")],
   ),
 );
 
+async function writeDntImportMap(): Promise<{ path: string; cleanup(): Promise<void> }> {
+  const dir = await Deno.makeTempDir({ prefix: "takosumi-dnt-" });
+  const imports: Record<string, string> = {};
+
+  for (const [name, range] of Object.entries(sourcePackage.dependencies ?? {})) {
+    if (name.startsWith("@types/")) continue;
+    imports[name] = `npm:${name}@${range}`;
+    imports[`${name}/`] = `npm:${name}@${range}/`;
+  }
+  for (const [specifier, targets] of Object.entries(
+    tsconfig.compilerOptions?.paths ?? {},
+  )) {
+    if (specifier.includes("*")) continue;
+    const first = targets[0];
+    if (!first) continue;
+    imports[specifier] = /^[a-z][a-z0-9+.-]*:/i.test(first)
+      ? first
+      : new URL(first, ROOT).href;
+  }
+
+  const path = `${dir}/import_map.json`;
+  await Deno.writeTextFile(path, JSON.stringify({ imports }, null, 2) + "\n");
+  return {
+    path,
+    cleanup: () => Deno.remove(dir, { recursive: true }),
+  };
+}
+
 function parseArgs() {
-  let typeCheck: "both" | "single" | undefined = "single";
+  let typeCheck: "both" | "single" | false = "single";
   let entries: string[] | undefined;
   for (const arg of Deno.args) {
     if (arg === "--no-typecheck" || arg === "--typecheck=none") {
-      typeCheck = undefined;
+      typeCheck = false;
     } else if (arg.startsWith("--typecheck=")) {
       const v = arg.slice("--typecheck=".length);
       if (v === "both" || v === "single") typeCheck = v;
-      else if (v === "none") typeCheck = undefined;
+      else if (v === "none") typeCheck = false;
     } else if (arg.startsWith("--entry=")) {
       entries = arg.slice("--entry=".length).split(",").map((s) => s.trim())
         .filter(Boolean);
@@ -83,14 +128,17 @@ const outDir = fromRoot("npm");
 await emptyDir(outDir);
 
 console.log(
-  `[build-npm] @takosjp/takosumi@${umbrella.version} ` +
+  `[build-npm] @takosjp/takosumi@${sourcePackage.version} ` +
     `typeCheck=${typeCheck ?? "none"} entries=${selected.length}`,
 );
 
-await build({
+const importMap = await writeDntImportMap();
+
+try {
+  await build({
   entryPoints,
   outDir,
-  importMap: fromRoot("deno.json"),
+  importMap: importMap.path,
   shims: { deno: true },
   test: false,
   typeCheck,
@@ -104,7 +152,6 @@ await build({
     return true;
   },
   compilerOptions: {
-    // Workspace deno.json uses lib ["deno.window","dom","dom.iterable"].
     // The kernel/contract assume Web Platform types (CryptoKey, BodyInit,
     // BufferSource, HeadersInit, BlobPart) and @cliffy needs ES2022's
     // ErrorOptions/`cause`. Mirror those into the dnt tsc lib set.
@@ -115,7 +162,7 @@ await build({
   scriptModule: false, // ESM-only output (the kernel/runtime is ESM/Deno-first)
   package: {
     name: "@takosjp/takosumi",
-    version: umbrella.version,
+    version: sourcePackage.version,
     description:
       "Takosumi core contract / kernel / installer / cli / runtime-agent (kind-agnostic framework; official kind catalog is published JSON-LD at takosumi.com/kinds/v1) (npm build).",
     license: "MIT",
@@ -144,6 +191,9 @@ await build({
       await Deno.writeTextFile(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
     }
   },
-});
+  });
+} finally {
+  await importMap.cleanup();
+}
 
 console.log(`[build-npm] done -> ${outDir}`);

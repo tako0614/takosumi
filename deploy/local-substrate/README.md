@@ -21,7 +21,7 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 
 この test bed は **Takosumi (kernel + Accounts + cloud worker + dashboard)** の integration test 専用。 Takos product (`takos-app`) や bundled app (yurucommu) の動作確認は各 repo 内の test に任せる:
 
-- `takos/` — Takos product 固有の test (deno task test / Playwright 等)
+- `takos/` — Takos product 固有の test (`bun test` / Playwright 等)
 - `yurucommu/` — yurucommu 固有の test
 
 外部 app の `.takosumi.yml` 由来 fixture を installer mock で使うことはあるが、それは Takosumi の install contract を検証するための入力 fixture です。該当 product を local-substrate の service として直起動する運用は扱わない。「Takosumi 経由で yurucommu / takos-app を install して deploy する」統合シナリオは別タスク (`@takos/local-miniflare-workers` connector 実装が前提、 TODO-SMOKE.md 筆頭参照)。
@@ -101,11 +101,11 @@ Vite server on host port 5173:
 
 # separate shell, from the repository root
 cd yurucommu
-deno task dev:web
+bun run dev:web
 
 # from the repository root
 cd takosumi-cloud/packages/dashboard-ui
-PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 npm run e2e
+PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 bun run e2e
 ```
 
 詳細は [docs/root-ca-install.md](docs/root-ca-install.md) と [docs/operator-runbook.md](docs/operator-runbook.md)。

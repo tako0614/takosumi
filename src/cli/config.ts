@@ -15,7 +15,7 @@
  * binary (e.g. piped invocations).
  */
 
-import { parse as parseYaml } from "@std/yaml";
+import { parse as parseYaml } from "yaml";
 
 export interface CliConfig {
   readonly kernelUrl?: string;

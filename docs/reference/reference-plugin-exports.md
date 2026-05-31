@@ -119,7 +119,7 @@ infrastructure と credential を使う外部証跡です。Takosumi は proof s
 
 ```sh
 cd takosumi
-deno task live-provisioning-smoke:fixture:all
+bun run live-provisioning-smoke
 ```
 
 この fixture gate は AWS、GCP、Kubernetes、Cloudflare、self-host、external
@@ -133,7 +133,7 @@ TAKOSUMI_PLUGIN_LIVE_PROVIDER=cloudflare \
 TAKOSUMI_PLUGIN_LIVE_PROOF_FIXTURE_FILE=fixtures/live-provisioning/cloudflare.shape-v1.json \
 TAKOSUMI_PLUGIN_GATEWAY_URL=https://<operator-provider-gateway> \
 TAKOSUMI_PLUGIN_GATEWAY_BEARER_TOKEN=<operator-token> \
-deno task live-provisioning-smoke
+bun run live-provisioning-smoke
 ```
 
 provider ごとの canonical fixture:

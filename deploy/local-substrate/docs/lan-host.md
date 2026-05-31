@@ -122,8 +122,8 @@ production hostname 構造を正確に mirror する dev hostname のみを Cadd
 | dev hostname (= production の mirror)          | upstream (host で起動)      | 起動コマンド (= 該当 product root で) |
 | ---------------------------------------------- | --------------------------- | ------------------------------------- |
 | `https://takos.test/` (= `takos.jp`)           | `host.docker.internal:4322` | `cd takos/website && npm run dev`     |
-| `https://road.takos.test/` (= `road.takos.jp`) | `host.docker.internal:1420` | `cd road-to-me/app && deno task dev`  |
-| `https://yurucommu.test/` (= `yurucommu.com`)  | `host.docker.internal:5173` | `cd yurucommu/web && deno task dev`   |
+| `https://road.takos.test/` (= `road.takos.jp`) | `host.docker.internal:1420` | `cd road-to-me/app && bun run dev`    |
+| `https://yurucommu.test/` (= `yurucommu.com`)  | `host.docker.internal:5173` | `cd yurucommu && bun run dev:web`     |
 
 bundled apps (= `takos-docs` / `takos-slide` / `takos-excel` / `takos-computer`) は **Takos space 内に install されて `*.app.takos.jp` tenant subdomain で serve される** model なので、専用 dev hostname を持たない。 dev では各 Vite dev server を localhost (= `:3001` / `:3002` / `:3003` / etc.) で直起動し、 Takos UI 内から iframe / launch する。
 
@@ -184,13 +184,13 @@ sudo cp /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt \
   /tmp/takos-caddy-root.crt
 
 # 6. takosumi を build (= file_server は build 出力を都度 read)
-cd <repo-root>/takosumi && deno task docs:build
-cd <repo-root>/takosumi/website && npx vinxi build
+cd <repo-root>/takosumi && npm --prefix docs run build
+cd <repo-root>/takosumi/website && npm run build
 ```
 
 LAN client (= browser PC) 側は [`takos-private/docs/operations/lan-dev-setup.md`](../../../../takos-private/docs/operations/lan-dev-setup.md) の手順を実行 (= root CA install + systemd-resolved per-domain split)。
 
-docs を編集 → `deno task docs:build` を再実行 → ブラウザ refresh で反映 (= Caddy reload 不要、 file_server は file system 直読)。 production deploy が **static file_server** なので、 dev も同 method で揃え、 dev-only HMR layer を入れない方針。
+docs を編集 → `npm --prefix docs run build` を再実行 → ブラウザ refresh で反映 (= Caddy reload 不要、 file_server は file system 直読)。 production deploy が **static file_server** なので、 dev も同 method で揃え、 dev-only HMR layer を入れない方針。
 
 ## 既知の制約
 

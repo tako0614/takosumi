@@ -35,11 +35,16 @@ const FRAMEWORK_SOURCE_DIRS = [
   "src/runtime-agent/",
 ] as const;
 
-interface DenoManifest {
+interface PackageManifest {
   readonly name?: string;
   readonly exports?: Record<string, string>;
-  readonly workspace?: readonly string[];
   readonly imports?: Record<string, string>;
+}
+
+interface TsConfig {
+  readonly compilerOptions?: {
+    readonly paths?: Record<string, readonly string[]>;
+  };
 }
 
 interface KindDescriptor {
@@ -74,7 +79,10 @@ Deno.test("takosumi framework ships no kind source packages", async () => {
     "src/kinds must not exist — the official catalog is published JSON-LD in docs/kinds/v1",
   );
 
-  const manifest = await readJson<DenoManifest>(new URL("deno.json", ROOT));
+  const manifest = await readJson<PackageManifest>(
+    new URL("package.json", ROOT),
+  );
+  const tsconfig = await readJson<TsConfig>(new URL("tsconfig.json", ROOT));
 
   const kindExports = Object.keys(manifest.exports ?? {})
     .filter((subpath) =>
@@ -86,7 +94,9 @@ Deno.test("takosumi framework ships no kind source packages", async () => {
     "the framework package must not expose ./kind/* or ./kinds subpath exports",
   );
 
-  const kindImports = Object.keys(manifest.imports ?? {})
+  const packageImports = Object.keys(manifest.imports ?? {});
+  const compilerPaths = Object.keys(tsconfig.compilerOptions?.paths ?? {});
+  const kindImports = [...packageImports, ...compilerPaths]
     .filter((specifier) => specifier.startsWith("@takos/takosumi-kind-"));
   assert.deepEqual(
     kindImports,
@@ -252,16 +262,18 @@ Deno.test("takosumi scripts use narrow contract subpaths", async () => {
   const broadCompatSubpath = "takosumi-contract/reference/" + "compat";
   const files = await listTsFiles(new URL("scripts/", ROOT));
   for (const file of files) {
-    if (relativeToRoot(file) === "scripts/kind-package-ownership_test.ts") {
+    const relative = relativeToRoot(file);
+    if (
+      relative === "scripts/kind-package-ownership_test.ts" ||
+      relative === "scripts/catalog-plugin-boundary_test.ts"
+    ) {
       continue;
     }
     const source = await Deno.readTextFile(file);
     assert.equal(
       source.includes(broadCompatSubpath),
       false,
-      `${
-        relativeToRoot(file)
-      }: import the specific contract subpath instead of the broad compat umbrella`,
+          `${relative}: import the specific contract subpath instead of the broad compat umbrella`,
     );
   }
 });
@@ -291,11 +303,20 @@ Deno.test("reference compat does not expose legacy provider bridge", async () =>
     "reference/compat must not re-export the legacy ProviderPlugin bridge",
   );
 
-  const manifest = await readJson<DenoManifest>(new URL("deno.json", ROOT));
-  assert.equal(
-    manifest.imports?.["@takos/takosumi-contract/internal/provider-plugin"],
-    "./src/contract/provider-plugin.ts",
-    "legacy provider bridge stays reachable only via the internal contract alias",
+  const tsconfig = await readJson<TsConfig>(new URL("tsconfig.json", ROOT));
+  assert.deepEqual(
+    tsconfig.compilerOptions?.paths?.[
+      "@takos/takosumi-contract/internal/provider-plugin"
+    ],
+    ["./src/contract/provider-plugin.ts"],
+    "legacy provider bridge stays reachable only via the internal @takos contract alias",
+  );
+  assert.deepEqual(
+    tsconfig.compilerOptions?.paths?.[
+      "takosumi-contract/internal/provider-plugin"
+    ],
+    ["./src/contract/provider-plugin.ts"],
+    "legacy provider bridge stays reachable only via the internal workspace-local contract alias",
   );
 });
 
