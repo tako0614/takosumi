@@ -243,6 +243,20 @@ export class RepairWorker {
     return { plan, operation, event };
   }
 
+  async rematerializeWithTrustedPlugin(
+    input: RepairRematerializeInput,
+  ): Promise<RepairRematerializeResult> {
+    const result = await this.rematerializeWithTrustedPackage(input);
+    if (result.plan.reason !== "package-conformance-blocked") return result;
+    return {
+      ...result,
+      plan: {
+        ...result.plan,
+        reason: "backend-plugin-conformance-blocked",
+      },
+    };
+  }
+
   async #selectDesired(input: RepairGroupInput): Promise<{
     readonly desiredStates: readonly RuntimeDesiredState[];
     readonly latestDesired?: RuntimeDesiredState;

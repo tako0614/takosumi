@@ -11,7 +11,7 @@ import {
 
 interface InstallFlags {
   source?: string;
-  space: string;
+  space?: string;
   remote?: string;
   token?: string;
   expectedCommit?: string;
@@ -25,15 +25,20 @@ function createInstallCommand(): Command {
     .description("Dry-run a new Installation from a source")
     .argument("[source]", "git:, prepared:, or local path")
     .option("--source <source>", "git:, prepared:, or local path")
-    .requiredOption("--space <spaceId>", "Target Space id")
+    .option("--space <spaceId>", "Target Space id")
     .option("--remote <url>", "Remote kernel URL")
-    .option("--token <token>", "Installer bearer token")
-    .action(async (sourceArg: string | undefined, opts: InstallFlags) => {
+    .option("--token <token>", "Installer bearer token");
+  dryRun.action(async (
+      sourceArg: string | undefined,
+      opts: InstallFlags | Command,
+      actionCommand?: Command,
+    ) => {
+      const flags = actionFlags(dryRun, opts, actionCommand);
       await runInstall({
-        sourceRef: resolveSourceArg({ argument: sourceArg, flag: opts.source }),
-        spaceId: opts.space,
-        remote: opts.remote,
-        token: opts.token,
+        sourceRef: resolveSourceArg({ argument: sourceArg, flag: flags.source }),
+        spaceId: requireSpace(flags.space),
+        remote: flags.remote,
+        token: flags.token,
         dryRun: true,
       });
     });
@@ -42,7 +47,7 @@ function createInstallCommand(): Command {
     .description("Create a new Installation from an AppSpec source")
     .argument("[source]", "git:, prepared:, or local path")
     .option("--source <source>", "git:, prepared:, or local path")
-    .requiredOption("--space <spaceId>", "Target Space id")
+    .option("--space <spaceId>", "Target Space id")
     .option("--remote <url>", "Remote kernel URL")
     .option("--token <token>", "Installer bearer token")
     .option("--expected-commit <commit>", "Expected source commit pin")
@@ -54,17 +59,22 @@ function createInstallCommand(): Command {
       "--expected-source-digest <digest>",
       "Expected prepared source digest pin",
     )
-    .option("--dry-run", "Alias for `takosumi install dry-run`")
-    .action(async (sourceArg: string | undefined, opts: InstallFlags) => {
+    .option("--dry-run", "Alias for `takosumi install dry-run`");
+  command.action(async (
+      sourceArg: string | undefined,
+      opts: InstallFlags | Command,
+      actionCommand?: Command,
+    ) => {
+      const flags = actionFlags(command, opts, actionCommand);
       await runInstall({
-        sourceRef: resolveSourceArg({ argument: sourceArg, flag: opts.source }),
-        spaceId: opts.space,
-        remote: opts.remote,
-        token: opts.token,
-        expectedCommit: opts.expectedCommit,
-        expectedManifestDigest: opts.expectedManifestDigest,
-        expectedSourceDigest: opts.expectedSourceDigest,
-        dryRun: opts.dryRun === true,
+        sourceRef: resolveSourceArg({ argument: sourceArg, flag: flags.source }),
+        spaceId: requireSpace(flags.space),
+        remote: flags.remote,
+        token: flags.token,
+        expectedCommit: flags.expectedCommit,
+        expectedManifestDigest: flags.expectedManifestDigest,
+        expectedSourceDigest: flags.expectedSourceDigest,
+        dryRun: flags.dryRun === true,
       });
     });
 
@@ -108,6 +118,43 @@ async function runInstall(input: {
     console.error(`error: ${message}`);
     Deno.exit(1);
   }
+}
+
+function commandFlags(command: Command, opts: InstallFlags): InstallFlags {
+  const parent = (command as unknown as { readonly parent?: Command }).parent;
+  return {
+    ...((parent?.opts<Record<string, unknown>>() ?? {}) as InstallFlags),
+    ...(command.opts<Record<string, unknown>>() as InstallFlags),
+    ...definedOptions(opts),
+  };
+}
+
+function actionFlags(
+  fallbackCommand: Command,
+  opts: InstallFlags | Command | undefined,
+  actionCommand?: Command,
+): InstallFlags {
+  const command = actionCommand ??
+    (opts instanceof Command ? opts : fallbackCommand);
+  const values = opts instanceof Command || opts === undefined ? {} : opts;
+  return commandFlags(command, values);
+}
+
+function requireSpace(space: string | undefined): string {
+  if (!space) {
+    throw new Error("required option '--space <spaceId>' not specified");
+  }
+  return space;
+}
+
+function definedOptions<T extends object>(
+  value: T,
+): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(([, option]) =>
+      option !== undefined
+    ),
+  ) as Partial<T>;
 }
 
 export const installCommand: Command = createInstallCommand();

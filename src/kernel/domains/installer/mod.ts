@@ -79,8 +79,11 @@ import {
   type DeploymentStore,
   InMemoryDeploymentStore,
   InMemoryInstallationStore,
+  InMemoryPublicationPathStore,
   InstallationPatchGuardConflict,
   type InstallationStore,
+  type PublicationPathClaim,
+  type PublicationPathStore,
 } from "./store.ts";
 
 /**
@@ -179,6 +182,8 @@ export interface HttpPlatformServiceResolverOptions {
   readonly fetch?: typeof fetch;
 }
 
+const PUBLISH_PATH_CLAIM_TTL_MS = 10 * 60 * 1000;
+
 export function httpPlatformServiceResolver(
   options: HttpPlatformServiceResolverOptions,
 ): PlatformServiceResolver {
@@ -254,6 +259,7 @@ export interface InstallationStatus {
 export interface InstallerPipelineDependencies {
   readonly installations?: InstallationStore;
   readonly deployments?: DeploymentStore;
+  readonly publicationPaths?: PublicationPathStore;
   /**
    * Component apply boundary. When unset, `plugins` (or the default
    * empty plugin registry) is consulted to materialize each component.
@@ -309,9 +315,11 @@ export interface InstallerPipelineDependencies {
 export class InstallerPipeline {
   readonly #installations: InstallationStore;
   readonly #deployments: DeploymentStore;
+  readonly #publicationPaths: PublicationPathStore;
   readonly #providers: InstallerProviderRegistry;
   readonly #plugins: readonly KernelPlugin[];
   readonly #pluginRegistry: KernelPluginRegistry;
+  readonly #usesPluginProviders: boolean;
   readonly #platformServices?: PlatformServiceResolver;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
@@ -359,10 +367,14 @@ export class InstallerPipeline {
       new InMemoryInstallationStore();
     this.#deployments = dependencies.deployments ??
       new InMemoryDeploymentStore();
+    this.#publicationPaths = dependencies.publicationPaths ??
+      new InMemoryPublicationPathStore();
     this.#plugins = dependencies.plugins ?? [];
     this.#pluginRegistry = createKernelPluginRegistry(this.#plugins, {
       kindAliases: dependencies.kindAliases,
     });
+    this.#usesPluginProviders = dependencies.providers === undefined &&
+      this.#plugins.length > 0;
     this.#providers = dependencies.providers ??
       (dependencies.plugins && dependencies.plugins.length > 0
         ? installerProviderRegistryFromPluginRegistry(this.#pluginRegistry)
@@ -413,6 +425,7 @@ export class InstallerPipeline {
       material = defaultOutputMaterial(
         ctx.outputName,
         ctx.outputs,
+        { allowEmpty: !this.#usesPluginProviders || plugin === undefined },
       );
     }
     validateOutputMaterial({
@@ -459,6 +472,7 @@ export class InstallerPipeline {
       );
       const sourceSummary = summarizeSource(request.source, fetched);
       checkExpectedPin(request.expected, sourceSummary, manifestDigest);
+      await this.#preflightPluginProviders(appSpec);
 
       const installationId = this.#newId("ins");
       const now = this.#now();
@@ -573,6 +587,7 @@ export class InstallerPipeline {
       );
       const sourceSummary = summarizeSource(source, fetched);
       checkExpectedPin(request.expected, sourceSummary, manifestDigest);
+      await this.#preflightPluginProviders(appSpec);
       // Serialize the apply + status patch per Space when the AppSpec
       // declares pathful publications (alongside the already-applied
       // per-Installation `#runSerialized`) so the conflict guard's
@@ -700,6 +715,10 @@ export class InstallerPipeline {
         `deployment ${request.deploymentId} is not a succeeded rollback target`,
       );
     }
+    await this.#assertDeploymentPublishPathsAvailable({
+      installation,
+      deployment: previous,
+    });
     const rolledBackFrom = installation.currentDeploymentId;
     // Pointer-only update: we flip currentDeploymentId, append a RollbackEvent
     // to the audit log, and return. No re-apply, no resource destroy.
@@ -718,6 +737,10 @@ export class InstallerPipeline {
       currentDeploymentId: previous.id,
       status: "ready" as const,
     };
+    await this.#commitDeploymentPublishPathClaims({
+      installation: updatedInstallation,
+      deployment: previous,
+    });
     // `rollback.scope` is the first-class, contract-declared statement of what
     // this operation reverts: the Deployment pointer is flipped, provider
     // resources are NOT re-materialized, and workload data/schema are NEVER
@@ -768,6 +791,31 @@ export class InstallerPipeline {
     return this.#runChained(this.#spaceMutationChains, spaceId, work);
   }
 
+  async #preflightPluginProviders(appSpec: AppSpec): Promise<void> {
+    if (!this.#usesPluginProviders) return;
+    for (const componentName of topologicalOrder(appSpec)) {
+      const component = appSpec.components[componentName];
+      const plugin = findPluginForKind(this.#pluginRegistry, component.kind);
+      if (!plugin) {
+        throw new InstallerPipelineError(
+          "not_implemented",
+          `no kernel plugin advertises kind ${component.kind} (component ${componentName})`,
+        );
+      }
+      if (!plugin.validateComponent) continue;
+      try {
+        await plugin.validateComponent(component);
+      } catch (error) {
+        throw new InstallerPipelineError(
+          "failed_precondition",
+          `plugin ${plugin.name} rejected component ${componentName}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  }
+
   /**
    * Generic FIFO mutation queue keyed on `key` against the supplied chain
    * map. Each call chains onto the previous in-flight promise for the same
@@ -812,6 +860,13 @@ export class InstallerPipeline {
       string,
       Record<string, Readonly<Record<string, JsonValue>>>
     > = {};
+    const appliedOutputsByComponent = new Map<
+      string,
+      {
+        readonly component: Component;
+        readonly outputs: Readonly<Record<string, JsonValue>>;
+      }
+    >();
 
     // Material registry — single Installation-scoped store used for component
     // output refs (`component.output`) and platform service paths
@@ -823,6 +878,17 @@ export class InstallerPipeline {
         if (!kind) return undefined;
         return findPluginForKind(this.#pluginRegistry, kind);
       },
+    });
+
+    await this.#reservePublishPaths({
+      installation: input.installation,
+      deploymentId,
+      appSpec: input.appSpec,
+      leaseExpiresAt: now + PUBLISH_PATH_CLAIM_TTL_MS,
+    });
+    const preflightListenMaterials = await this.#preflightListens({
+      installation: input.installation,
+      appSpec: input.appSpec,
     });
 
     // Stable pre-apply Deployment snapshot used as the lifecycle hook
@@ -909,16 +975,27 @@ export class InstallerPipeline {
                   `the publish path or the component output`,
               );
             }
-            const material = registry.get(sourceRef) ??
-              await this.#resolvePlatformService({
-                installation: input.installation,
-                componentName,
-                component,
-                bindingName,
-                sourceRef,
-                options,
-                registry,
-              });
+            const listenKey = listenMaterialKey(componentName, bindingName);
+            const hasPreflightMaterial = preflightListenMaterials.has(
+              listenKey,
+            );
+            const preflightMaterial = preflightListenMaterials.get(listenKey);
+            const material = hasPreflightMaterial
+              ? preflightMaterial ?? undefined
+              : registry.get(sourceRef) ??
+                await this.#resolvePublishedMaterial({
+                  installation: input.installation,
+                  sourceRef,
+                  options,
+                }) ??
+                await this.#resolvePlatformService({
+                  installation: input.installation,
+                  componentName,
+                  component,
+                  bindingName,
+                  sourceRef,
+                  options,
+                });
             if (!material) {
               if (options.required !== true) {
                 continue;
@@ -963,6 +1040,10 @@ export class InstallerPipeline {
         });
         appliedComponentCount += 1;
         appliedResources.push(applied.resource);
+        appliedOutputsByComponent.set(componentName, {
+          component,
+          outputs: applied.outputs,
+        });
         const neededComponentOutputs = neededOutputs.get(componentName) ??
           new Set<OutputSlotName>();
         for (const outputName of neededComponentOutputs) {
@@ -981,7 +1062,7 @@ export class InstallerPipeline {
         }
         if (Object.keys(applied.outputs).length > 0) {
           componentOutputs[componentName] ??= {};
-          componentOutputs[componentName].outputs =
+          componentOutputs[componentName].providerOutputs =
             providerOutputsToDeploymentOutput(applied.outputs);
         }
       }
@@ -1018,14 +1099,26 @@ export class InstallerPipeline {
         }
       }
       for (const [name, options] of publishEntries) {
-        const material = registry.get(options.output);
-        if (!material) {
+        const [componentName, outputName] = options.output.split(".");
+        const applied = componentName
+          ? appliedOutputsByComponent.get(componentName)
+          : undefined;
+        if (!componentName || !outputName || !applied) {
           throw new InstallerPipelineError(
             "failed_precondition",
             `publish.${name}.output refers to unresolved component output ` +
               JSON.stringify(options.output),
           );
         }
+        const material = await this.#materializeOutput({
+          installationId: input.installation.id,
+          componentName,
+          component: applied.component,
+          outputName: outputName as OutputSlotName,
+          options,
+          outputs: applied.outputs,
+        });
+        assertPublishMaterialKind(name, options, material);
         servicePathExposures[name] = {
           output: options.output,
           ...(options.kind ? { kind: options.kind } : {}),
@@ -1052,6 +1145,11 @@ export class InstallerPipeline {
         createdAt: now,
       };
       const persisted = await this.#deployments.put(deployment);
+      await this.#commitPublishPaths({
+        installation: input.installation,
+        deployment: persisted,
+        appSpec: input.appSpec,
+      });
       // After-apply hook: errors do not roll back the Deployment.
       await this.#fireDeploymentHook("onDeploymentComplete", {
         installation: input.installation,
@@ -1157,6 +1255,172 @@ export class InstallerPipeline {
     }
   }
 
+  async #preflightListens(input: {
+    readonly installation: Installation;
+    readonly appSpec: AppSpec;
+  }): Promise<Map<string, OutputMaterial | null>> {
+    const materials = new Map<string, OutputMaterial | null>();
+    for (const componentName of topologicalOrder(input.appSpec)) {
+      const component = input.appSpec.components[componentName];
+      for (const [bindingName, options] of Object.entries(
+        component.listen ?? {},
+      )) {
+        const sourceRef = listenSourceRef(options);
+        const material = await this.#resolvePublishedMaterial({
+          installation: input.installation,
+          sourceRef,
+          options,
+        }) ??
+          await this.#resolvePlatformService({
+            installation: input.installation,
+            componentName,
+            component,
+            bindingName,
+            sourceRef,
+            options,
+          });
+        if (!material) {
+          if (options.required === true) {
+            throw new InstallerPipelineError(
+              "failed_precondition",
+              `${componentName}.listen.${bindingName} refers to ` +
+                `unresolved platform service ${JSON.stringify(sourceRef)}`,
+            );
+          }
+          materials.set(listenMaterialKey(componentName, bindingName), null);
+          continue;
+        }
+        try {
+          assertListenMaterialKind({
+            component: componentName,
+            bindingName,
+            options,
+            sourceRef,
+            material,
+          });
+        } catch (error) {
+          if (error instanceof BindingResolutionError) {
+            throw new InstallerPipelineError(
+              "failed_precondition",
+              error.message,
+            );
+          }
+          throw error;
+        }
+        materials.set(listenMaterialKey(componentName, bindingName), material);
+      }
+    }
+    return materials;
+  }
+
+  async #reservePublishPaths(input: {
+    readonly installation: Installation;
+    readonly deploymentId: string;
+    readonly appSpec: AppSpec;
+    readonly leaseExpiresAt: number;
+  }): Promise<void> {
+    const entries = pathfulPublishEntries(input.appSpec);
+    if (entries.length === 0) return;
+    await this.#assertPublishPathsAvailable({
+      spaceId: input.installation.spaceId,
+      installationId: input.installation.id,
+      entries,
+    });
+    const updatedAt = this.#now();
+    for (const [publishName, options] of entries) {
+      await this.#publicationPaths.claim({
+        spaceId: input.installation.spaceId,
+        path: options.path,
+        installationId: input.installation.id,
+        deploymentId: input.deploymentId,
+        publishName,
+        updatedAt,
+        leaseExpiresAt: input.leaseExpiresAt,
+      });
+    }
+  }
+
+  async #commitPublishPaths(input: {
+    readonly installation: Installation;
+    readonly deployment: Deployment;
+    readonly appSpec: AppSpec;
+  }): Promise<void> {
+    const entries = pathfulPublishEntries(input.appSpec);
+    if (entries.length === 0) return;
+    const updatedAt = this.#now();
+    for (const [publishName, options] of entries) {
+      await this.#publicationPaths.claim({
+        spaceId: input.installation.spaceId,
+        path: options.path,
+        installationId: input.installation.id,
+        deploymentId: input.deployment.id,
+        publishName,
+        updatedAt,
+      });
+    }
+  }
+
+  async #commitDeploymentPublishPathClaims(input: {
+    readonly installation: Installation;
+    readonly deployment: Deployment;
+  }): Promise<void> {
+    const entries = deploymentPathfulPublications(input.deployment);
+    if (entries.length === 0) return;
+    const updatedAt = this.#now();
+    for (const entry of entries) {
+      await this.#publicationPaths.claim({
+        spaceId: input.installation.spaceId,
+        path: entry.path,
+        installationId: input.installation.id,
+        deploymentId: input.deployment.id,
+        publishName: entry.name,
+        updatedAt,
+      });
+    }
+  }
+
+  async #assertDeploymentPublishPathsAvailable(input: {
+    readonly installation: Installation;
+    readonly deployment: Deployment;
+  }): Promise<void> {
+    const entries = deploymentPathfulPublications(input.deployment).map(
+      (entry) => [entry.name, { path: entry.path }] as const,
+    );
+    await this.#assertPublishPathsAvailable({
+      spaceId: input.installation.spaceId,
+      installationId: input.installation.id,
+      entries,
+    });
+  }
+
+  async #assertPublishPathsAvailable(input: {
+    readonly spaceId: string;
+    readonly installationId: string;
+    readonly entries: readonly (readonly [
+      string,
+      { readonly path: string },
+    ])[];
+  }): Promise<void> {
+    if (input.entries.length === 0) return;
+    const existingPaths = await this.#collectActivePublishPaths({
+      spaceId: input.spaceId,
+      excludeInstallationId: input.installationId,
+    });
+    for (const [name, options] of input.entries) {
+      const owner = existingPaths.get(options.path);
+      if (owner !== undefined) {
+        throw new InstallerPipelineError(
+          "failed_precondition",
+          `publish.${name}.path ${
+            JSON.stringify(options.path)
+          } conflicts with an active publication owned by installation ${
+            JSON.stringify(owner)
+          } (publish_path_conflict)`,
+        );
+      }
+    }
+  }
+
   /**
    * Collect the set of `publish.path` values already owned by active
    * Installations in the given Space. The map is keyed by path and points
@@ -1184,6 +1448,80 @@ export class InstallerPipeline {
     readonly excludeInstallationId?: string;
   }): Promise<Map<string, string>> {
     const result = new Map<string, string>();
+    for (
+      const publication of await this.#listActivePublications({
+        spaceId: input.spaceId,
+        excludeInstallationId: input.excludeInstallationId,
+      })
+    ) {
+      if (publication.path && !result.has(publication.path)) {
+        result.set(publication.path, publication.installationId);
+      }
+    }
+    const now = this.#now();
+    for (const claim of await this.#publicationPaths.list(input.spaceId)) {
+      if (
+        input.excludeInstallationId !== undefined &&
+        claim.installationId === input.excludeInstallationId
+      ) {
+        continue;
+      }
+      if (await this.#isActivePublicationPathClaim(claim, now)) {
+        if (!result.has(claim.path)) {
+          result.set(claim.path, claim.installationId);
+        }
+      }
+    }
+    return result;
+  }
+
+  async #isActivePublicationPathClaim(
+    claim: PublicationPathClaim,
+    now: number,
+  ): Promise<boolean> {
+    const installation = await this.#installations.get(claim.installationId);
+    if (!installation) return false;
+    if (
+      installation.status !== "ready" &&
+      installation.status !== "installing"
+    ) {
+      return false;
+    }
+    if (claim.leaseExpiresAt !== undefined) {
+      return claim.leaseExpiresAt > now;
+    }
+    const deployment = await this.#deployments.get(claim.deploymentId);
+    if (!deployment || deployment.status !== "succeeded") return false;
+    if (installation.currentDeploymentId === claim.deploymentId) return true;
+    return installation.status === "installing" &&
+      claim.updatedAt + PUBLISH_PATH_CLAIM_TTL_MS > now;
+  }
+
+  async #resolvePublishedMaterial(input: {
+    readonly installation: Installation;
+    readonly sourceRef: string;
+    readonly options: ListenOptions;
+  }): Promise<OutputMaterial | undefined> {
+    const publications = await this.#listActivePublications({
+      spaceId: input.installation.spaceId,
+      excludeInstallationId: input.installation.id,
+    });
+    const matches = publications.filter((publication) =>
+      publicationMatchesListen(publication, input.options)
+    );
+    if (matches.length === 0) return undefined;
+    return normalizeResolvedPlatformService({
+      sourceRef: input.sourceRef,
+      many: input.options.many === true,
+      resolved: matches.map((publication) => publication.material),
+    });
+  }
+
+  async #listActivePublications(input: {
+    readonly spaceId: string;
+    readonly excludeInstallationId?: string;
+  }): Promise<readonly ActivePublication[]> {
+    const publications: ActivePublication[] = [];
     const installations = await this.#installations.list(input.spaceId);
     for (const installation of installations) {
       if (
@@ -1201,26 +1539,12 @@ export class InstallerPipeline {
       const deploymentId = installation.currentDeploymentId;
       if (deploymentId === null) continue;
       const deployment = await this.#deployments.get(deploymentId);
-      if (!deployment) continue;
-      const exposures =
-        (deployment.outputs.extensions?.servicePathExposures ?? undefined) as
-          | Readonly<Record<string, JsonValue>>
-          | undefined;
-      if (exposures === undefined) continue;
-      for (const value of Object.values(exposures)) {
-        if (
-          value === null || typeof value !== "object" || Array.isArray(value)
-        ) {
-          continue;
-        }
-        const path = (value as { readonly path?: unknown }).path;
-        if (typeof path !== "string" || path.length === 0) continue;
-        if (!result.has(path)) {
-          result.set(path, installation.id);
-        }
-      }
+      if (!deployment || deployment.status !== "succeeded") continue;
+      publications.push(
+        ...deploymentPublications(deployment, installation.id),
+      );
     }
-    return result;
+    return publications;
   }
 
   async #resolvePlatformService(input: {
@@ -1230,7 +1554,6 @@ export class InstallerPipeline {
     readonly bindingName: string;
     readonly sourceRef: string;
     readonly options: ListenOptions;
-    readonly registry: MaterialRegistry;
   }): Promise<OutputMaterial | undefined> {
     if (!this.#platformServices) return undefined;
     let resolved: OutputMaterial | readonly OutputMaterial[] | undefined;
@@ -1270,7 +1593,6 @@ export class InstallerPipeline {
           "invalid material",
       );
     }
-    input.registry.publishPlatformService(input.sourceRef, material);
     return material;
   }
 
@@ -1455,6 +1777,151 @@ export class InstallerPipeline {
   }
 }
 
+interface ActivePublication {
+  readonly installationId: string;
+  readonly name: string;
+  readonly output: string;
+  readonly path?: string;
+  readonly kind?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly material: OutputMaterial;
+}
+
+function pathfulPublishEntries(
+  appSpec: AppSpec,
+): readonly (readonly [
+  string,
+  PublishOptions & { readonly path: string },
+])[] {
+  const entries: Array<
+    readonly [string, PublishOptions & { readonly path: string }]
+  > = [];
+  for (const [name, options] of Object.entries(appSpec.publish ?? {})) {
+    if (typeof options.path === "string" && options.path.length > 0) {
+      entries.push([
+        name,
+        { ...options, path: options.path },
+      ]);
+    }
+  }
+  return entries;
+}
+
+function deploymentPathfulPublications(
+  deployment: Deployment,
+): readonly { readonly name: string; readonly path: string }[] {
+  return deploymentPublications(deployment, "").flatMap((publication) =>
+    publication.path
+      ? [{ name: publication.name, path: publication.path }]
+      : []
+  );
+}
+
+function deploymentPublications(
+  deployment: Deployment,
+  installationId: string,
+): readonly ActivePublication[] {
+  const exposures = deployment.outputs.extensions?.servicePathExposures;
+  if (!isRecord(exposures)) return [];
+  const publications: ActivePublication[] = [];
+  for (const [name, value] of Object.entries(exposures)) {
+    if (!isRecord(value)) continue;
+    const material = value.material;
+    if (!isOutputMaterial(material)) continue;
+    const output = typeof value.output === "string" ? value.output : "";
+    const path = typeof value.path === "string" && value.path.length > 0
+      ? value.path
+      : undefined;
+    const kind = typeof value.kind === "string" && value.kind.length > 0
+      ? value.kind
+      : undefined;
+    const labels = isStringRecord(value.labels) ? value.labels : undefined;
+    publications.push({
+      installationId,
+      name,
+      output,
+      ...(path ? { path } : {}),
+      ...(kind ? { kind } : {}),
+      ...(labels ? { labels } : {}),
+      material,
+    });
+  }
+  return publications;
+}
+
+function publicationMatchesListen(
+  publication: ActivePublication,
+  options: ListenOptions,
+): boolean {
+  if (typeof options.path === "string") {
+    return publication.path === options.path;
+  }
+  if (typeof options.kind !== "string" || options.kind.length === 0) {
+    return false;
+  }
+  const actualKind = publication.kind ?? readOutputMaterialKind(
+    publication.material,
+    `publish.${publication.name}.material`,
+  );
+  if (actualKind !== options.kind) return false;
+  return labelsInclude(publication.labels ?? {}, options.labels ?? {});
+}
+
+function labelsInclude(
+  actual: Readonly<Record<string, string>>,
+  selector: Readonly<Record<string, string>>,
+): boolean {
+  for (const [key, value] of Object.entries(selector)) {
+    if (actual[key] !== value) return false;
+  }
+  return true;
+}
+
+function assertPublishMaterialKind(
+  publishName: string,
+  options: PublishOptions,
+  material: OutputMaterial,
+): void {
+  if (typeof options.kind !== "string" || options.kind.length === 0) return;
+  const actual = readOutputMaterialKind(
+    material,
+    `publish.${publishName}.material`,
+  );
+  if (actual === options.kind) return;
+  throw new InstallerPipelineError(
+    "failed_precondition",
+    `publish.${publishName}.kind expects material kind ${
+      JSON.stringify(options.kind)
+    } but material advertises kind ${JSON.stringify(actual ?? "unknown")}`,
+  );
+}
+
+function readOutputMaterialKind(
+  material: OutputMaterial,
+  context: string,
+): string | undefined {
+  const record = material as Record<string, unknown>;
+  const kind = typeof record.kind === "string" ? record.kind : undefined;
+  const materialKind = typeof record.materialKind === "string"
+    ? record.materialKind
+    : undefined;
+  if (kind && materialKind && kind !== materialKind) {
+    throw new InstallerPipelineError(
+      "failed_precondition",
+      `${context} has conflicting kind fields: kind ${JSON.stringify(kind)} ` +
+        `and materialKind ${JSON.stringify(materialKind)}`,
+    );
+  }
+  return materialKind ?? kind;
+}
+
+function isStringRecord(
+  value: unknown,
+): value is Readonly<Record<string, string>> {
+  if (!isRecord(value)) return false;
+  return Object.values(value).every((entry) => typeof entry === "string");
+}
+
 interface FetchedSource {
   readonly workingDirectory: string;
   readonly commit?: string;
@@ -1508,16 +1975,26 @@ function installerProviderRegistryFromPluginRegistry(
           `no kernel plugin advertises kind ${kind} (component ${context.componentName})`,
         );
       }
-      const result = await plugin.apply({
-        installationId: context.installationId,
-        componentName: context.componentName,
-        component: context.component,
-        source: context.source,
-        sourceDirectory: context.sourceDirectory,
-        inputMaterials: context.inputMaterials ?? context.listenedMaterials,
-        listenedMaterials: context.listenedMaterials,
-        resolvedBindings: context.resolvedBindings,
-      });
+      let result: Awaited<ReturnType<KernelPlugin["apply"]>>;
+      try {
+        result = await plugin.apply({
+          installationId: context.installationId,
+          componentName: context.componentName,
+          component: context.component,
+          source: context.source,
+          sourceDirectory: context.sourceDirectory,
+          inputMaterials: context.inputMaterials ?? context.listenedMaterials,
+          listenedMaterials: context.listenedMaterials,
+          resolvedBindings: context.resolvedBindings,
+        });
+      } catch (error) {
+        throw new InstallerPipelineError(
+          "failed_precondition",
+          `plugin ${plugin.name} apply failed for component ${
+            context.componentName
+          }: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       return {
         resource: {
           component: context.componentName,
@@ -1620,6 +2097,10 @@ function listenSourceRef(options: ListenOptions): string {
   return `query:${JSON.stringify(selector)}`;
 }
 
+function listenMaterialKey(componentName: string, bindingName: string): string {
+  return `${componentName}\0${bindingName}`;
+}
+
 function normalizeResolvedPlatformService(input: {
   readonly sourceRef: string;
   readonly many: boolean;
@@ -1629,14 +2110,24 @@ function normalizeResolvedPlatformService(input: {
     return input.resolved as OutputMaterial;
   }
   if (input.resolved.length === 0) {
-    return undefined;
+    if (input.many) {
+      return {
+        kind: "collection",
+        items: [],
+      };
+    }
+    throw new InstallerPipelineError(
+      "failed_precondition",
+      `platform service selector ${JSON.stringify(input.sourceRef)} ` +
+        `matched 0 entries; expected exactly one`,
+    );
   }
   if (!input.many) {
     if (input.resolved.length === 1) return input.resolved[0]!;
     throw new InstallerPipelineError(
       "failed_precondition",
       `platform service selector ${JSON.stringify(input.sourceRef)} matched ` +
-        `${input.resolved.length} entries; set many: true to bind a collection`,
+        `${input.resolved.length} entries; expected exactly one or set many: true`,
     );
   }
   return {
@@ -1655,8 +2146,9 @@ function localOutputRef(
 function defaultOutputMaterial(
   outputName: OutputSlotName,
   outputs: Readonly<Record<string, JsonValue>>,
+  options: { readonly allowEmpty?: boolean } = {},
 ): OutputMaterial {
-  if (Object.keys(outputs).length === 0) return {};
+  if (options.allowEmpty && Object.keys(outputs).length === 0) return {};
   const selected = outputs[outputName];
   if (selected !== undefined) {
     return { [outputName]: selected };
@@ -1971,9 +2463,6 @@ function collectNeededOutputSlots(
     for (const options of Object.values(component.connect ?? {})) {
       add(options.output);
     }
-  }
-  for (const options of Object.values(appSpec.publish ?? {})) {
-    add(options.output);
   }
   return needed;
 }

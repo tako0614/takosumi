@@ -11,6 +11,7 @@ export type GcRefType =
   | "PreparedArtifact"
   | "WorkloadRevision"
   | "ResourceInstance"
+  | "BackendPlugin"
   | "KindPackage"
   | "MirroredArtifact"
   | "RetainedDeployArtifact";
@@ -85,6 +86,8 @@ export interface GcDryRunPlanInput {
   readonly preparedArtifacts?: readonly PreparedArtifact[];
   readonly workloadRevisions?: readonly WorkloadRevisionRetentionCandidate[];
   readonly resources?: readonly ResourceRetentionCandidate[];
+  /** @deprecated Use `kindPackages`. Kept for migration compatibility. */
+  readonly backendPlugins?: readonly KindPackageRetentionCandidate[];
   readonly kindPackages?: readonly KindPackageRetentionCandidate[];
   readonly mirroredArtifacts?: readonly MirroredArtifactRetentionCandidate[];
   readonly retainedDeployArtifacts?: readonly RetainedDeployArtifact[];
@@ -122,6 +125,9 @@ export class GcRetentionService {
     }
     for (const resource of input.resources ?? []) {
       decisions.push(await this.decideResource(resource, now));
+    }
+    for (const backendPlugin of input.backendPlugins ?? []) {
+      decisions.push(await this.decideBackendPlugin(backendPlugin, now));
     }
     for (const kindPackage of input.kindPackages ?? []) {
       decisions.push(await this.decideKindPackage(kindPackage, now));
@@ -230,23 +236,56 @@ export class GcRetentionService {
     kindPackage: KindPackageRetentionCandidate,
     now: IsoTimestamp = this.#clock().toISOString(),
   ): Promise<GcRetentionDecision> {
+    return await this.#decideKindPackageLike({
+      candidate: kindPackage,
+      refType: "KindPackage",
+      activeMessage:
+        "KindPackage digest is referenced by active materialization.",
+      rollbackMessage:
+        "KindPackage digest is referenced by rollback-window materialization.",
+      now,
+    });
+  }
+
+  /** @deprecated Use `decideKindPackage`. Kept for migration compatibility. */
+  async decideBackendPlugin(
+    backendPlugin: KindPackageRetentionCandidate,
+    now: IsoTimestamp = this.#clock().toISOString(),
+  ): Promise<GcRetentionDecision> {
+    return await this.#decideKindPackageLike({
+      candidate: backendPlugin,
+      refType: "BackendPlugin",
+      activeMessage:
+        "BackendPlugin digest is referenced by active materialization.",
+      rollbackMessage:
+        "BackendPlugin digest is referenced by rollback-window materialization.",
+      now,
+    });
+  }
+
+  async #decideKindPackageLike(input: {
+    readonly candidate: KindPackageRetentionCandidate;
+    readonly refType: "BackendPlugin" | "KindPackage";
+    readonly activeMessage: string;
+    readonly rollbackMessage: string;
+    readonly now: IsoTimestamp;
+  }): Promise<GcRetentionDecision> {
     const reasons: GcRetentionReason[] = [];
-    if ((kindPackage.activeMaterializationIds ?? []).length > 0) {
+    if ((input.candidate.activeMaterializationIds ?? []).length > 0) {
       reasons.push({
         code: "active-materialization",
-        message: "KindPackage digest is referenced by active materialization.",
-        referenceIds: kindPackage.activeMaterializationIds,
+        message: input.activeMessage,
+        referenceIds: input.candidate.activeMaterializationIds,
       });
     }
-    const rollbackIds = (kindPackage.rollbackMaterializations ?? [])
+    const rollbackIds = (input.candidate.rollbackMaterializations ?? [])
       .filter((materialization) =>
-        materialization.rollbackWindowExpiresAt > now
+        materialization.rollbackWindowExpiresAt > input.now
       );
     if (rollbackIds.length > 0) {
       reasons.push({
         code: "rollback-materialization",
-        message:
-          "KindPackage digest is referenced by rollback-window materialization.",
+        message: input.rollbackMessage,
         until: maxIso(
           rollbackIds.map((materialization) =>
             materialization.rollbackWindowExpiresAt
@@ -256,9 +295,9 @@ export class GcRetentionService {
       });
     }
     return await this.#decideBase({
-      refType: "KindPackage",
-      refId: kindPackage.digest,
-      now,
+      refType: input.refType,
+      refId: input.candidate.digest,
+      now: input.now,
       reasons,
     });
   }

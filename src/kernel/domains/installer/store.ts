@@ -179,6 +179,21 @@ export interface DeploymentStore {
   ): Promise<readonly RollbackEvent[]>;
 }
 
+export interface PublicationPathClaim {
+  readonly spaceId: string;
+  readonly path: string;
+  readonly installationId: string;
+  readonly deploymentId: string;
+  readonly publishName: string;
+  readonly updatedAt: number;
+  readonly leaseExpiresAt?: number;
+}
+
+export interface PublicationPathStore {
+  claim(claim: PublicationPathClaim): Promise<PublicationPathClaim>;
+  list(spaceId: string): Promise<readonly PublicationPathClaim[]>;
+}
+
 export class InMemoryInstallationStore implements InstallationStore {
   readonly #rows = new Map<string, Installation>();
 
@@ -269,4 +284,30 @@ export class InMemoryDeploymentStore implements DeploymentStore {
       ),
     );
   }
+}
+
+export class InMemoryPublicationPathStore implements PublicationPathStore {
+  readonly #rows = new Map<string, PublicationPathClaim>();
+
+  constructor() {
+    maybeWarnInMemoryStore("InMemoryPublicationPathStore");
+  }
+
+  claim(claim: PublicationPathClaim): Promise<PublicationPathClaim> {
+    const stored = Object.freeze({ ...claim });
+    this.#rows.set(publicationPathKey(claim.spaceId, claim.path), stored);
+    return Promise.resolve(stored);
+  }
+
+  list(spaceId: string): Promise<readonly PublicationPathClaim[]> {
+    return Promise.resolve(
+      Array.from(this.#rows.values()).filter((row) =>
+        row.spaceId === spaceId
+      ),
+    );
+  }
+}
+
+function publicationPathKey(spaceId: string, path: string): string {
+  return `${spaceId}:${path}`;
 }
