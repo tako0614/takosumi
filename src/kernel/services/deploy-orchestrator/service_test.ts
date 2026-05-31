@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Deploy orchestrator tests — Deployment-centric.
 //
 // Phase 3 Agent B migrated this orchestrator onto the Deployment shape.
@@ -25,7 +26,7 @@ import {
 } from "../../domains/supply-chain/mod.ts";
 import { SupplyChainService } from "../supply-chain/mod.ts";
 
-Deno.test("DeploymentPhaseBlockedError preserves blocker codes for caller surfacing", () => {
+test("DeploymentPhaseBlockedError preserves blocker codes for caller surfacing", () => {
   const blockers: readonly DeploymentPhaseBlocker[] = [
     {
       phase: "resolve",
@@ -51,7 +52,7 @@ Deno.test("DeploymentPhaseBlockedError preserves blocker codes for caller surfac
   );
 });
 
-Deno.test("DeploymentPhaseBoundaryCheck shape matches the documented orchestrator surface", () => {
+test("DeploymentPhaseBoundaryCheck shape matches the documented orchestrator surface", () => {
   // Compile-time only: ensures the public type stays usable as an input.
   const check: DeploymentPhaseBoundaryCheck = {
     phase: "apply",
@@ -67,7 +68,7 @@ Deno.test("DeploymentPhaseBoundaryCheck shape matches the documented orchestrato
   assert.equal(check.phase, "apply");
 });
 
-Deno.test("DeploymentOrchestrator drives a clean Deployment through resolve + apply", async () => {
+test("DeploymentOrchestrator drives a clean Deployment through resolve + apply", async () => {
   const client = new StubOrchestratorClient();
   const orchestrator = new DeploymentOrchestrator({
     deploymentService: client,
@@ -86,7 +87,7 @@ Deno.test("DeploymentOrchestrator drives a clean Deployment through resolve + ap
   assert.equal(client.applyCalls.length, 1);
 });
 
-Deno.test("DeploymentOrchestrator raises DeploymentPhaseBlockedError before resolving when pre-resolve blockers exist", async () => {
+test("DeploymentOrchestrator raises DeploymentPhaseBlockedError before resolving when pre-resolve blockers exist", async () => {
   const client = new StubOrchestratorClient();
   const orchestrator = new DeploymentOrchestrator({
     deploymentService: client,
@@ -115,7 +116,7 @@ Deno.test("DeploymentOrchestrator raises DeploymentPhaseBlockedError before reso
   assert.equal(client.applyCalls.length, 0);
 });
 
-Deno.test("DeploymentOrchestrator raises DeploymentPhaseBlockedError after resolve when apply blockers exist", async () => {
+test("DeploymentOrchestrator raises DeploymentPhaseBlockedError after resolve when apply blockers exist", async () => {
   const client = new StubOrchestratorClient();
   const orchestrator = new DeploymentOrchestrator({
     deploymentService: client,
@@ -145,7 +146,7 @@ Deno.test("DeploymentOrchestrator raises DeploymentPhaseBlockedError after resol
   assert.equal(client.applyCalls.length, 0);
 });
 
-Deno.test("DeploymentOrchestrator blocks apply when PreparedArtifact package resolution changed", async () => {
+test("DeploymentOrchestrator blocks apply when PreparedArtifact package resolution changed", async () => {
   const client = new StubOrchestratorClient();
   const orchestrator = new DeploymentOrchestrator({
     deploymentService: client,
@@ -181,7 +182,7 @@ Deno.test("DeploymentOrchestrator blocks apply when PreparedArtifact package res
   );
 });
 
-Deno.test("DeploymentOrchestrator applies when PreparedArtifact validation matches", async () => {
+test("DeploymentOrchestrator applies when PreparedArtifact validation matches", async () => {
   const client = new StubOrchestratorClient();
   const orchestrator = new DeploymentOrchestrator({
     deploymentService: client,
@@ -200,7 +201,7 @@ Deno.test("DeploymentOrchestrator applies when PreparedArtifact validation match
   assert.deepEqual(client.applyCalls, ["deploy_0"]);
 });
 
-Deno.test("DeploymentOrchestrator fails closed when PreparedArtifact expectations have no validator", async () => {
+test("DeploymentOrchestrator fails closed when PreparedArtifact expectations have no validator", async () => {
   const client = new StubOrchestratorClient();
   const orchestrator = new DeploymentOrchestrator({
     deploymentService: client,
@@ -230,7 +231,7 @@ Deno.test("DeploymentOrchestrator fails closed when PreparedArtifact expectation
   );
 });
 
-Deno.test("DeploymentOrchestrator surfaces phase boundary checks raised by callers", async () => {
+test("DeploymentOrchestrator surfaces phase boundary checks raised by callers", async () => {
   const client = new StubOrchestratorClient();
   const orchestrator = new DeploymentOrchestrator({
     deploymentService: client,

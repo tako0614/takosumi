@@ -1,10 +1,11 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { InMemoryTakosumiDeploymentRecordStore } from "./takosumi_deployment_record_store.ts";
 
 const TENANT = "takosumi-deploy";
 const NAME = "my-app";
 
-Deno.test("acquireLock + releaseLock serialises concurrent waiters", async () => {
+test("acquireLock + releaseLock serialises concurrent waiters", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   const order: string[] = [];
 
@@ -34,7 +35,7 @@ Deno.test("acquireLock + releaseLock serialises concurrent waiters", async () =>
   assert.deepEqual(order, ["first-acquired", "second-acquired"]);
 });
 
-Deno.test("acquireLock against unrelated keys is non-blocking", async () => {
+test("acquireLock against unrelated keys is non-blocking", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   await store.acquireLock(TENANT, "app-a");
   // Should resolve immediately because (TENANT, app-b) has no holder.
@@ -43,7 +44,7 @@ Deno.test("acquireLock against unrelated keys is non-blocking", async () => {
   await store.releaseLock(TENANT, "app-b");
 });
 
-Deno.test("releaseLock without prior acquire is a no-op", async () => {
+test("releaseLock without prior acquire is a no-op", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   await store.releaseLock(TENANT, NAME);
   // Subsequent acquire must still work normally.
@@ -51,7 +52,7 @@ Deno.test("releaseLock without prior acquire is a no-op", async () => {
   await store.releaseLock(TENANT, NAME);
 });
 
-Deno.test("multiple queued acquirers each receive the lock in arrival order", async () => {
+test("multiple queued acquirers each receive the lock in arrival order", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   const order: number[] = [];
 

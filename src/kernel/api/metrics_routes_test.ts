@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { Hono, type Hono as HonoApp } from "hono";
 import { InMemoryObservabilitySink } from "../services/observability/mod.ts";
@@ -8,7 +9,7 @@ import {
   TAKOSUMI_METRICS_PATH,
 } from "./metrics_routes.ts";
 
-Deno.test("metrics route requires bearer scrape token", async () => {
+test("metrics route requires bearer scrape token", async () => {
   const app = createApp("scrape-token");
 
   const missing = await app.request(TAKOSUMI_METRICS_PATH);
@@ -20,7 +21,7 @@ Deno.test("metrics route requires bearer scrape token", async () => {
   assert.equal(wrong.status, 401);
 });
 
-Deno.test("metrics route returns Prometheus text exposition", async () => {
+test("metrics route returns Prometheus text exposition", async () => {
   const observability = new InMemoryObservabilitySink();
   await observability.recordMetric({
     id: "metric:1",
@@ -47,7 +48,7 @@ Deno.test("metrics route returns Prometheus text exposition", async () => {
   );
 });
 
-Deno.test("renderPrometheusMetrics aggregates counters and histograms", () => {
+test("renderPrometheusMetrics aggregates counters and histograms", () => {
   const rendered = renderPrometheusMetrics([
     {
       id: "metric:counter:1",

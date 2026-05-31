@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   canonicalGatewayManifest,
@@ -36,7 +37,7 @@ async function generateTrustedKeypair(): Promise<{
   };
 }
 
-Deno.test("verifyGatewayManifest accepts a freshly signed manifest from the trusted key", async () => {
+test("verifyGatewayManifest accepts a freshly signed manifest from the trusted key", async () => {
   const trusted = await generateTrustedKeypair();
   const manifest: GatewayManifest = {
     gatewayUrl: "https://gateway.example.com",
@@ -60,7 +61,7 @@ Deno.test("verifyGatewayManifest accepts a freshly signed manifest from the trus
   assert.equal(result.ok, true);
 });
 
-Deno.test("verifyGatewayManifest rejects a manifest with a swapped gatewayUrl", async () => {
+test("verifyGatewayManifest rejects a manifest with a swapped gatewayUrl", async () => {
   const trusted = await generateTrustedKeypair();
   const manifest: GatewayManifest = {
     gatewayUrl: "https://gateway.example.com",
@@ -87,7 +88,7 @@ Deno.test("verifyGatewayManifest rejects a manifest with a swapped gatewayUrl", 
   assert.equal(result.ok, false);
 });
 
-Deno.test("verifyGatewayResponseSignature round-trips for a freshly signed payload", async () => {
+test("verifyGatewayResponseSignature round-trips for a freshly signed payload", async () => {
   const trusted = await generateTrustedKeypair();
   const manifest: GatewayManifest = {
     gatewayUrl: "https://gateway.example.com",
@@ -135,7 +136,7 @@ Deno.test("verifyGatewayResponseSignature round-trips for a freshly signed paylo
   assert.equal(replayedForOtherRequest, false);
 });
 
-Deno.test("canonicalGatewayResponse binds method/path/body/timestamp/request id/nonce", () => {
+test("canonicalGatewayResponse binds method/path/body/timestamp/request id/nonce", () => {
   const a = canonicalGatewayResponse({
     method: "POST",
     path: "/x",
@@ -164,7 +165,7 @@ Deno.test("canonicalGatewayResponse binds method/path/body/timestamp/request id/
   assert.notEqual(new TextDecoder().decode(a), new TextDecoder().decode(c));
 });
 
-Deno.test("canonicalGatewayManifest is deterministic regardless of key order", () => {
+test("canonicalGatewayManifest is deterministic regardless of key order", () => {
   const a = canonicalGatewayManifest({
     gatewayUrl: "https://x",
     issuer: "i",

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type {
   ProviderMaterializationPlan,
@@ -12,7 +13,7 @@ import type { PublicDeployManifest } from "../../domains/deploy/types.ts";
 import { RuntimeAgentTerminalWorkProjector } from "./service.ts";
 import { InMemoryProviderMaterializationStore } from "./stores.ts";
 
-Deno.test("RuntimeAgentTerminalWorkProjector records terminal runtime-agent result on provider operation", async () => {
+test("RuntimeAgentTerminalWorkProjector records terminal runtime-agent result on provider operation", async () => {
   const store = new InMemoryProviderMaterializationStore();
   await store.put(providerPlan());
   const projector = new RuntimeAgentTerminalWorkProjector({
@@ -43,7 +44,7 @@ Deno.test("RuntimeAgentTerminalWorkProjector records terminal runtime-agent resu
   );
 });
 
-Deno.test("RuntimeAgentTerminalWorkProjector projects failed runtime-agent result onto Deployment activation envelope status", async () => {
+test("RuntimeAgentTerminalWorkProjector projects failed runtime-agent result onto Deployment activation envelope status", async () => {
   const deploymentStore = new InMemoryDeploymentStore();
   const deployments = new DeploymentService({
     store: deploymentStore,

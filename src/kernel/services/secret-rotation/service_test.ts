@@ -1,9 +1,10 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { MemoryEncryptedSecretStore } from "../../adapters/secret-store/mod.ts";
 import { InMemoryObservabilitySink } from "../observability/mod.ts";
 import { SecretRotationService } from "./mod.ts";
 
-Deno.test("checkRotation emits notices for due / expired secrets", async () => {
+test("checkRotation emits notices for due / expired secrets", async () => {
   let now = new Date("2026-01-01T00:00:00.000Z");
   const store = new MemoryEncryptedSecretStore({
     clock: () => now,
@@ -45,7 +46,7 @@ Deno.test("checkRotation emits notices for due / expired secrets", async () => {
   assert.equal(audit[1].event.severity, "critical");
 });
 
-Deno.test("rotateSecret writes a new version and emits audit event", async () => {
+test("rotateSecret writes a new version and emits audit event", async () => {
   let counter = 0;
   let now = new Date("2026-01-01T00:00:00.000Z");
   const store = new MemoryEncryptedSecretStore({
@@ -93,7 +94,7 @@ Deno.test("rotateSecret writes a new version and emits audit event", async () =>
   assert.equal(rotationEvent.event.actor?.actorAccountId, "operator-1");
 });
 
-Deno.test("checkRotation withGc deletes superseded versions", async () => {
+test("checkRotation withGc deletes superseded versions", async () => {
   let counter = 0;
   let now = new Date("2026-01-01T00:00:00.000Z");
   const store = new MemoryEncryptedSecretStore({
@@ -117,7 +118,7 @@ Deno.test("checkRotation withGc deletes superseded versions", async () => {
   assert.equal(report.gc!.deleted.length, 2);
 });
 
-Deno.test("rotateSecret on a missing secret creates the first version", async () => {
+test("rotateSecret on a missing secret creates the first version", async () => {
   const now = new Date("2026-01-01T00:00:00.000Z");
   const store = new MemoryEncryptedSecretStore({
     clock: () => now,

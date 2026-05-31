@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Integration tests for ApplyService dispatch into apply_v2.
 //
 // Verifies that:
@@ -140,7 +141,7 @@ function componentMapManifest(): PublicDeployManifest {
   };
 }
 
-Deno.test("ApplyService dispatches shape-model resources to apply_v2", async () => {
+test("ApplyService dispatches shape-model resources to apply_v2", async () => {
   setUp();
   try {
     const store = new InMemoryDeploymentStore();
@@ -200,7 +201,7 @@ Deno.test("ApplyService dispatches shape-model resources to apply_v2", async () 
   }
 });
 
-Deno.test("ApplyService rejects retired top-level template shorthand", async () => {
+test("ApplyService rejects retired top-level template shorthand", async () => {
   setUp();
   try {
     const store = new InMemoryDeploymentStore();
@@ -230,7 +231,7 @@ Deno.test("ApplyService rejects retired top-level template shorthand", async () 
   }
 });
 
-Deno.test("ApplyService keeps component-map inputs on the plan/apply path", async () => {
+test("ApplyService keeps component-map inputs on the plan/apply path", async () => {
   setUp();
   try {
     const store = new InMemoryDeploymentStore();
@@ -262,7 +263,7 @@ Deno.test("ApplyService keeps component-map inputs on the plan/apply path", asyn
   }
 });
 
-Deno.test("ApplyService surfaces a clear error when shape-model is used without platformAdapters", async () => {
+test("ApplyService surfaces a clear error when shape-model is used without platformAdapters", async () => {
   setUp();
   try {
     const store = new InMemoryDeploymentStore();

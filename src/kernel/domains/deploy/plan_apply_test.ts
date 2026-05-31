@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Plan/Apply lifecycle tests for the Deployment-centric service surface.
 
 import assert from "node:assert/strict";
@@ -81,7 +82,7 @@ async function withTimeout<T>(
 // being exactly 5 (including `exposure-target`) and on `desired.routes`
 // length being 1. Deleted because the kernel no longer emits those.
 
-Deno.test("deploy: approve stores Deployment.approval without applying", async () => {
+test("deploy: approve stores Deployment.approval without applying", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -126,7 +127,7 @@ Deno.test("deploy: approve stores Deployment.approval without applying", async (
   });
 });
 
-Deno.test("deploy: ProviderObservation store lists by deployment", async () => {
+test("deploy: ProviderObservation store lists by deployment", async () => {
   const store = new InMemoryDeploymentStore();
   await store.recordObservation({
     id: "obs_1",
@@ -152,7 +153,7 @@ Deno.test("deploy: ProviderObservation store lists by deployment", async () => {
   );
 });
 
-Deno.test("deploy: apply promotes resolved -> applied and advances GroupHead", async () => {
+test("deploy: apply promotes resolved -> applied and advances GroupHead", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -181,7 +182,7 @@ Deno.test("deploy: apply promotes resolved -> applied and advances GroupHead", a
   assert.equal(head?.generation, 1);
 });
 
-Deno.test("deploy: GroupHead is scoped by space and group", async () => {
+test("deploy: GroupHead is scoped by space and group", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -220,7 +221,7 @@ Deno.test("deploy: GroupHead is scoped by space and group", async () => {
   assert.equal(await store.getGroupHead("demo-app"), undefined);
 });
 
-Deno.test("deploy: applying a non-resolved Deployment is rejected", async () => {
+test("deploy: applying a non-resolved Deployment is rejected", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -247,7 +248,7 @@ Deno.test("deploy: applying a non-resolved Deployment is rejected", async () => 
   );
 });
 
-Deno.test("deploy: rollback advances GroupHead to a prior Deployment", async () => {
+test("deploy: rollback advances GroupHead to a prior Deployment", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -289,7 +290,7 @@ Deno.test("deploy: rollback advances GroupHead to a prior Deployment", async () 
   assert.equal(rolledBack.generation, 3);
 });
 
-Deno.test("deploy: rollback records rollback rate and latency metrics", async () => {
+test("deploy: rollback records rollback rate and latency metrics", async () => {
   const store = new InMemoryDeploymentStore();
   const observability = new InMemoryObservabilitySink();
   let counter = 0;
@@ -341,7 +342,7 @@ Deno.test("deploy: rollback records rollback rate and latency metrics", async ()
   assert.equal(rollbackLatency.tags?.operationKind, "rollback");
 });
 
-Deno.test("deploy: rollback target must belong to the addressed group", async () => {
+test("deploy: rollback target must belong to the addressed group", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -366,7 +367,7 @@ Deno.test("deploy: rollback target must belong to the addressed group", async ()
   );
 });
 
-Deno.test("deploy: rollback target must belong to the addressed space", async () => {
+test("deploy: rollback target must belong to the addressed space", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -394,7 +395,7 @@ Deno.test("deploy: rollback target must belong to the addressed space", async ()
   );
 });
 
-Deno.test("deploy: listDeployments filters by space, group and status", async () => {
+test("deploy: listDeployments filters by space, group and status", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -433,7 +434,7 @@ Deno.test("deploy: listDeployments filters by space, group and status", async ()
 // must-replan / read-set re-validation hooks remain ignored with a
 // `phase-12` reference (those need the live provider adapter contract).
 
-Deno.test("deploy: resolveDeployment is non-mutating and pins manifest_snapshot", async () => {
+test("deploy: resolveDeployment is non-mutating and pins manifest_snapshot", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -462,7 +463,7 @@ Deno.test("deploy: resolveDeployment is non-mutating and pins manifest_snapshot"
   assert.equal(resolved.applied_at, null);
 });
 
-Deno.test("deploy: resolved Deployment.desired is comparable across resolves", async () => {
+test("deploy: resolved Deployment.desired is comparable across resolves", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -521,7 +522,7 @@ Deno.test("deploy: resolved Deployment.desired is comparable across resolves", a
   );
 });
 
-Deno.test("deploy: blockers from resolution surface on conditions and apply still requires resolved status", async () => {
+test("deploy: blockers from resolution surface on conditions and apply still requires resolved status", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -562,7 +563,7 @@ Deno.test("deploy: blockers from resolution surface on conditions and apply stil
   );
 });
 
-Deno.test("deploy: applying a denied resolution is rejected (status='failed')", async () => {
+test("deploy: applying a denied resolution is rejected (status='failed')", async () => {
   // A denied policy_decision flips the resolved Deployment to status=failed
   // and apply rejects with a stale-precondition error — the Deployment equivalent
   // of "apply rejects Core plans that still require approval".
@@ -600,7 +601,7 @@ Deno.test("deploy: applying a denied resolution is rejected (status='failed')", 
   assert.equal(await store.getGroupHead("demo-app"), undefined);
 });
 
-Deno.test("deploy: provider operation failure marks Deployment failed and does NOT advance GroupHead", async () => {
+test("deploy: provider operation failure marks Deployment failed and does NOT advance GroupHead", async () => {
   const store = new InMemoryDeploymentStore();
   const failingAdapter: DeploymentProviderAdapter = {
     materialize(
@@ -647,7 +648,7 @@ Deno.test("deploy: provider operation failure marks Deployment failed and does N
   assert.equal(await store.getGroupHead("demo-app"), undefined);
 });
 
-Deno.test("deploy: applied Deployment is immutable and advances the GroupHead pointer", async () => {
+test("deploy: applied Deployment is immutable and advances the GroupHead pointer", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -673,7 +674,7 @@ Deno.test("deploy: applied Deployment is immutable and advances the GroupHead po
   assert.equal(head?.generation, 1);
 });
 
-Deno.test("deploy: apply commits final Deployment and GroupHead atomically", async () => {
+test("deploy: apply commits final Deployment and GroupHead atomically", async () => {
   class InspectingStore extends InMemoryDeploymentStore {
     sawFinalDeploymentInCommit = false;
 
@@ -712,7 +713,7 @@ Deno.test("deploy: apply commits final Deployment and GroupHead atomically", asy
   assert.equal(store.sawFinalDeploymentInCommit, true);
 });
 
-Deno.test("deploy: applying twice on the same Deployment is rejected (stale precondition)", async () => {
+test("deploy: applying twice on the same Deployment is rejected (stale precondition)", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -738,7 +739,7 @@ Deno.test("deploy: applying twice on the same Deployment is rejected (stale prec
   );
 });
 
-Deno.test("deploy: rollback is a GroupHead pointer move (no new Deployment is created)", async () => {
+test("deploy: rollback is a GroupHead pointer move (no new Deployment is created)", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -790,7 +791,7 @@ Deno.test("deploy: rollback is a GroupHead pointer move (no new Deployment is cr
   );
 });
 
-Deno.test("deploy: rollback target must be retained (applied or rolled-back)", async () => {
+test("deploy: rollback target must be retained (applied or rolled-back)", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -823,7 +824,7 @@ Deno.test("deploy: rollback target must be retained (applied or rolled-back)", a
 // `ApplyDeploymentInput` / `RollbackGroupInput` and are injected by callers
 // (apply_worker, rollout, runtime-agent) in production deployments.
 
-Deno.test("apply rejects a must-replan stale read set without mutating current activation", async () => {
+test("apply rejects a must-replan stale read set without mutating current activation", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -858,7 +859,7 @@ Deno.test("apply rejects a must-replan stale read set without mutating current a
   assert.equal(reread?.status, "resolved");
 });
 
-Deno.test("apply atomic commit rejects a stale group pointer race without creating activation", async () => {
+test("apply atomic commit rejects a stale group pointer race without creating activation", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -900,7 +901,7 @@ Deno.test("apply atomic commit rejects a stale group pointer race without creati
   assert.equal(secondAfter?.status, "failed");
 });
 
-Deno.test("deploy: long materialization does not hold GroupHead lock", async () => {
+test("deploy: long materialization does not hold GroupHead lock", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   let releaseFirstResourceBind!: () => void;
@@ -982,7 +983,7 @@ Deno.test("deploy: long materialization does not hold GroupHead lock", async () 
   );
 });
 
-Deno.test("apply reruns validation for must-revalidate read sets before activation", async () => {
+test("apply reruns validation for must-revalidate read sets before activation", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -1022,7 +1023,7 @@ Deno.test("apply reruns validation for must-revalidate read sets before activati
   assert.equal(await store.getGroupHead("demo-app"), undefined);
 });
 
-Deno.test("apply preserves source snapshot validation hooks", async () => {
+test("apply preserves source snapshot validation hooks", async () => {
   const store = new InMemoryDeploymentStore();
   const service = new DeploymentService({
     store,
@@ -1069,7 +1070,7 @@ Deno.test("apply preserves source snapshot validation hooks", async () => {
   assert.equal(applied.status, "applied");
 });
 
-Deno.test("rollback is blocked when retained descriptor graph digests drift", async () => {
+test("rollback is blocked when retained descriptor graph digests drift", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -1124,7 +1125,7 @@ Deno.test("rollback is blocked when retained descriptor graph digests drift", as
   );
 });
 
-Deno.test("rollback is blocked when retained Core artifacts are unavailable", async () => {
+test("rollback is blocked when retained Core artifacts are unavailable", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -1172,7 +1173,7 @@ Deno.test("rollback is blocked when retained Core artifacts are unavailable", as
   );
 });
 
-Deno.test("rollback is blocked when retained artifact digest changed", async () => {
+test("rollback is blocked when retained artifact digest changed", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const service = new DeploymentService({
@@ -1222,7 +1223,7 @@ Deno.test("rollback is blocked when retained artifact digest changed", async () 
 
 // --- Fail-closed: synthetic provider adapter on strict environments ---------
 
-Deno.test("deploy: production env refuses synthetic provider adapter fallback", () => {
+test("deploy: production env refuses synthetic provider adapter fallback", () => {
   const store = new InMemoryDeploymentStore();
   assert.throws(
     () =>
@@ -1234,7 +1235,7 @@ Deno.test("deploy: production env refuses synthetic provider adapter fallback", 
   );
 });
 
-Deno.test("deploy: staging env refuses synthetic provider adapter fallback", () => {
+test("deploy: staging env refuses synthetic provider adapter fallback", () => {
   const store = new InMemoryDeploymentStore();
   assert.throws(
     () =>
@@ -1246,7 +1247,7 @@ Deno.test("deploy: staging env refuses synthetic provider adapter fallback", () 
   );
 });
 
-Deno.test("deploy: production env with explicit providerAdapter is accepted", () => {
+test("deploy: production env with explicit providerAdapter is accepted", () => {
   const store = new InMemoryDeploymentStore();
   const adapter: DeploymentProviderAdapter = {
     materialize: (): OperationOutcome => ({
@@ -1266,7 +1267,7 @@ Deno.test("deploy: production env with explicit providerAdapter is accepted", ()
   });
 });
 
-Deno.test("deploy: dev env keeps synthetic adapter (no throw)", () => {
+test("deploy: dev env keeps synthetic adapter (no throw)", () => {
   const store = new InMemoryDeploymentStore();
   // Omitting environment (dev/test) keeps the synthetic fallback so local
   // bootstraps Just Work.
@@ -1276,7 +1277,7 @@ Deno.test("deploy: dev env keeps synthetic adapter (no throw)", () => {
 
 // --- Fail-closed: strict rollback validators on production ------------------
 
-Deno.test("deploy: production rollback is refused without a real validator (fail-closed)", async () => {
+test("deploy: production rollback is refused without a real validator (fail-closed)", async () => {
   // A store that does NOT supply default rollback validators — mirrors the
   // storage-backed production store, which opts out of
   // `getDefaultRollbackValidators` (it is in the storage proxy's
@@ -1343,7 +1344,7 @@ Deno.test("deploy: production rollback is refused without a real validator (fail
   );
 });
 
-Deno.test("deploy: production rollback proceeds when caller supplies passing validators", async () => {
+test("deploy: production rollback proceeds when caller supplies passing validators", async () => {
   const store = new InMemoryDeploymentStore();
   let counter = 0;
   const adapter: DeploymentProviderAdapter = {
@@ -1400,7 +1401,7 @@ Deno.test("deploy: production rollback proceeds when caller supplies passing val
 
 // --- Rollback metric label: resolved target id, steps in payload ------------
 
-Deno.test("deploy: rollback metric records resolved target id and steps payload", async () => {
+test("deploy: rollback metric records resolved target id and steps payload", async () => {
   const store = new InMemoryDeploymentStore();
   const observability = new InMemoryObservabilitySink();
   let counter = 0;

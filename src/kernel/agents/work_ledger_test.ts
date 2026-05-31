@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryRuntimeAgentRegistry,
@@ -8,7 +9,7 @@ import {
 } from "./mod.ts";
 import { MemoryStorageDriver } from "../adapters/storage/mod.ts";
 
-Deno.test("InMemoryWorkLedger.apply persists agent + work mutations atomically", async () => {
+test("InMemoryWorkLedger.apply persists agent + work mutations atomically", async () => {
   const ledger = new InMemoryWorkLedger();
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-30T00:00:00.000Z"),
@@ -34,7 +35,7 @@ Deno.test("InMemoryWorkLedger.apply persists agent + work mutations atomically",
   assert.equal(snapshot.works[0].leaseId, "lease_lease_1");
 });
 
-Deno.test("InMemoryWorkLedger reflects every progress update", async () => {
+test("InMemoryWorkLedger reflects every progress update", async () => {
   const ledger = new InMemoryWorkLedger();
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: fixedClock("2026-04-30T00:00:00.000Z"),
@@ -67,7 +68,7 @@ Deno.test("InMemoryWorkLedger reflects every progress update", async () => {
   assert.equal(snapshot.works[0].leaseExpiresAt, "2026-04-30T00:15:30.000Z");
 });
 
-Deno.test("rehydrateLeases requeues stale leases past their expiry", () => {
+test("rehydrateLeases requeues stale leases past their expiry", () => {
   const raw: WorkLedgerSnapshot = {
     agents: [],
     works: [
@@ -115,7 +116,7 @@ Deno.test("rehydrateLeases requeues stale leases past their expiry", () => {
   assert.equal(fresh?.leaseExpiresAt, "2026-04-30T01:00:00.000Z");
 });
 
-Deno.test("rehydrateLeases leaves non-leased work items untouched", () => {
+test("rehydrateLeases leaves non-leased work items untouched", () => {
   const raw: WorkLedgerSnapshot = {
     agents: [],
     works: [
@@ -150,7 +151,7 @@ Deno.test("rehydrateLeases leaves non-leased work items untouched", () => {
   assert.equal(result.snapshot.works[1].status, "completed");
 });
 
-Deno.test("InMemoryRuntimeAgentRegistry.fromLedger replays prior agents and works", async () => {
+test("InMemoryRuntimeAgentRegistry.fromLedger replays prior agents and works", async () => {
   const ledger = new InMemoryWorkLedger();
   // Boot 1: initial registry seeds the ledger.
   {
@@ -191,7 +192,7 @@ Deno.test("InMemoryRuntimeAgentRegistry.fromLedger replays prior agents and work
   );
 });
 
-Deno.test("InMemoryRuntimeAgentRegistry.fromLedger persists boot requeues back to ledger", async () => {
+test("InMemoryRuntimeAgentRegistry.fromLedger persists boot requeues back to ledger", async () => {
   const ledger = new InMemoryWorkLedger();
   {
     const registry = new InMemoryRuntimeAgentRegistry({
@@ -220,7 +221,7 @@ Deno.test("InMemoryRuntimeAgentRegistry.fromLedger persists boot requeues back t
   assert.equal(snapshot.works[0].leaseExpiresAt, undefined);
 });
 
-Deno.test("StorageBackedWorkLedger persists through the storage transaction boundary", async () => {
+test("StorageBackedWorkLedger persists through the storage transaction boundary", async () => {
   const driver = new MemoryStorageDriver();
   const ledger = new StorageBackedWorkLedger(driver);
   const registry = new InMemoryRuntimeAgentRegistry({
@@ -241,7 +242,7 @@ Deno.test("StorageBackedWorkLedger persists through the storage transaction boun
   assert.equal(snapshot.runtimeAgentWorkItems[0].id, "work_w_1");
 });
 
-Deno.test("InMemoryRuntimeAgentRegistry mutations without ledger are still local-only", async () => {
+test("InMemoryRuntimeAgentRegistry mutations without ledger are still local-only", async () => {
   // Sanity check — when constructed without a ledger the registry must
   // not crash on the persist path. This guards against regressions that
   // make `ledger` accidentally required.

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Phase 18.2 (H13): tests for the down-migration / rollback path.
 //
 // These tests focus on the runner's rollback semantics. They use a fake
@@ -43,7 +44,7 @@ const reversibleMigrations: readonly StorageMigrationStatement[] = [
   },
 ];
 
-Deno.test("rollback default rolls back the single most recent migration", async () => {
+test("rollback default rolls back the single most recent migration", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, {
     migrations: reversibleMigrations,
@@ -75,7 +76,7 @@ Deno.test("rollback default rolls back the single most recent migration", async 
   );
 });
 
-Deno.test("rollback with --steps=2 rolls back two migrations in reverse order", async () => {
+test("rollback with --steps=2 rolls back two migrations in reverse order", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, {
     migrations: reversibleMigrations,
@@ -92,7 +93,7 @@ Deno.test("rollback with --steps=2 rolls back two migrations in reverse order", 
   assertEquals(remaining.map((row) => row.id), ["system.001"]);
 });
 
-Deno.test("rollback with --target=1 rolls back every migration whose version > 1", async () => {
+test("rollback with --target=1 rolls back every migration whose version > 1", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, {
     migrations: reversibleMigrations,
@@ -109,7 +110,7 @@ Deno.test("rollback with --target=1 rolls back every migration whose version > 1
   assertEquals(remaining.map((row) => row.id), ["system.001"]);
 });
 
-Deno.test("rollback dry-run reports plan but does not execute", async () => {
+test("rollback dry-run reports plan but does not execute", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, {
     migrations: reversibleMigrations,
@@ -137,7 +138,7 @@ Deno.test("rollback dry-run reports plan but does not execute", async () => {
   );
 });
 
-Deno.test("rollback refuses to undo a forward-only migration", async () => {
+test("rollback refuses to undo a forward-only migration", async () => {
   const forwardOnly: readonly StorageMigrationStatement[] = [
     reversibleMigrations[0],
     reversibleMigrations[1],
@@ -164,7 +165,7 @@ Deno.test("rollback refuses to undo a forward-only migration", async () => {
   assertEquals(remaining.length, 3);
 });
 
-Deno.test("rollback refuses to cross deployment unification in the current catalog", async () => {
+test("rollback refuses to cross deployment unification in the current catalog", async () => {
   const migration = postgresStorageMigrationStatements.find((entry) =>
     entry.id === "deploy.unify_to_deployments"
   );
@@ -184,7 +185,7 @@ Deno.test("rollback refuses to cross deployment unification in the current catal
   );
 });
 
-Deno.test("rollback against an empty ledger returns an empty plan", async () => {
+test("rollback against an empty ledger returns an empty plan", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, {
     migrations: reversibleMigrations,
@@ -196,7 +197,7 @@ Deno.test("rollback against an empty ledger returns an empty plan", async () => 
   assertEquals(result.planned.length, 0);
 });
 
-Deno.test("rollback uses one runner-wide lock while executing", async () => {
+test("rollback uses one runner-wide lock while executing", async () => {
   const sql = new FakeSqlClient();
   const lock = new RecordingLock();
   const runner = new StorageMigrationRunner(sql, {

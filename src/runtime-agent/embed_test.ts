@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   LIFECYCLE_AGENT_TOKEN_ENV,
@@ -6,7 +7,7 @@ import {
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { startEmbeddedAgent } from "./embed.ts";
 
-Deno.test("startEmbeddedAgent serves /v1/health and exports env", async () => {
+test("startEmbeddedAgent serves /v1/health and exports env", async () => {
   const prevUrl = Deno.env.get(LIFECYCLE_AGENT_URL_ENV);
   const prevToken = Deno.env.get(LIFECYCLE_AGENT_TOKEN_ENV);
   Deno.env.delete(LIFECYCLE_AGENT_URL_ENV);
@@ -30,7 +31,7 @@ Deno.test("startEmbeddedAgent serves /v1/health and exports env", async () => {
   }
 });
 
-Deno.test("startEmbeddedAgent does not export env when exportToProcessEnv=false", async () => {
+test("startEmbeddedAgent does not export env when exportToProcessEnv=false", async () => {
   const prevUrl = Deno.env.get(LIFECYCLE_AGENT_URL_ENV);
   Deno.env.delete(LIFECYCLE_AGENT_URL_ENV);
   const handle = startEmbeddedAgent({

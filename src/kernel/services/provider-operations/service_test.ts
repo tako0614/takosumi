@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type {
   ProviderMaterializationPlan,
@@ -12,7 +13,7 @@ import {
   ProviderOperationService,
 } from "./mod.ts";
 
-Deno.test("ProviderOperationService materializes provider output and returns success status", async () => {
+test("ProviderOperationService materializes provider output and returns success status", async () => {
   const provider = new FakeProviderMaterializer({
     plan: providerPlan({ id: "plan-success", operationStatus: "succeeded" }),
   });
@@ -48,7 +49,7 @@ Deno.test("ProviderOperationService materializes provider output and returns suc
   );
 });
 
-Deno.test("ProviderOperationService replays same idempotency key without invoking provider again", async () => {
+test("ProviderOperationService replays same idempotency key without invoking provider again", async () => {
   const provider = new FakeProviderMaterializer({
     plan: providerPlan({ id: "plan-once", operationStatus: "succeeded" }),
   });
@@ -80,7 +81,7 @@ Deno.test("ProviderOperationService replays same idempotency key without invokin
   assert.deepEqual(second.record, first.record);
 });
 
-Deno.test("ProviderOperationService classifies failed provider operation status", async () => {
+test("ProviderOperationService classifies failed provider operation status", async () => {
   const provider = new FakeProviderMaterializer({
     plan: providerPlan({
       id: "plan-failed",
@@ -109,7 +110,7 @@ Deno.test("ProviderOperationService classifies failed provider operation status"
   assert.match(result.status.message ?? "", /invalid image reference/);
 });
 
-Deno.test("ProviderOperationService classifies thrown transient provider failures", async () => {
+test("ProviderOperationService classifies thrown transient provider failures", async () => {
   const provider = new FakeProviderMaterializer({
     error: new Error("connection refused by provider daemon"),
   });
@@ -132,7 +133,7 @@ Deno.test("ProviderOperationService classifies thrown transient provider failure
   assert.equal(result.status.retryable, true);
 });
 
-Deno.test("ProviderOperationService writes an audit event when provider credentials are used", async () => {
+test("ProviderOperationService writes an audit event when provider credentials are used", async () => {
   const auditStore = new InMemoryAuditStore();
   const service = new ProviderOperationService({
     provider: "fake",
@@ -169,7 +170,7 @@ Deno.test("ProviderOperationService writes an audit event when provider credenti
   assert.equal(events[0].requestId, "req_provider");
 });
 
-Deno.test("ProviderOperationService rejects tenant runtime secret refs before provider execution", async () => {
+test("ProviderOperationService rejects tenant runtime secret refs before provider execution", async () => {
   const provider = new FakeProviderMaterializer({
     plan: providerPlan({
       id: "plan-secret-scope",
@@ -200,7 +201,7 @@ Deno.test("ProviderOperationService rejects tenant runtime secret refs before pr
   assert.match(result.status.message ?? "", /outside provider scope/);
 });
 
-Deno.test("classifyProviderOperationFailure maps timeout to retryable timeout", () => {
+test("classifyProviderOperationFailure maps timeout to retryable timeout", () => {
   assert.deepEqual(
     classifyProviderOperationFailure(new Error("request timed out")),
     {

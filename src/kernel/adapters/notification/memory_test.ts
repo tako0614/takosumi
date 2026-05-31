@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { MemoryNotificationSink } from "./mod.ts";
 
-Deno.test("memory notification sink stores published notifications", async () => {
+test("memory notification sink stores published notifications", async () => {
   const sink = new MemoryNotificationSink({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     idGenerator: () => "n1",

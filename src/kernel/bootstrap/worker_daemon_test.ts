@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { createInMemoryAppContext } from "../app_context.ts";
 import { InMemoryRevokeDebtStore } from "../domains/deploy/revoke_debt_store.ts";
@@ -6,7 +7,7 @@ import {
   createWorkerDaemonState,
 } from "./worker_daemon.ts";
 
-Deno.test("createRoleWorkerDaemon schedules RevokeDebt cleanup from shared store", async () => {
+test("createRoleWorkerDaemon schedules RevokeDebt cleanup from shared store", async () => {
   const revokeDebtStore = new InMemoryRevokeDebtStore({
     idFactory: () => "revoke-debt:daemon",
   });

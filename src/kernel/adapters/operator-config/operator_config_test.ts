@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { EnvOperatorConfig, LocalOperatorConfig } from "./mod.ts";
 
-Deno.test("local operator config returns redacted secret refs", async () => {
+test("local operator config returns redacted secret refs", async () => {
   const config = new LocalOperatorConfig({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     values: {
@@ -37,7 +38,7 @@ Deno.test("local operator config returns redacted secret refs", async () => {
   });
 });
 
-Deno.test("env operator config parses secret ref keys without exposing raw value", async () => {
+test("env operator config parses secret ref keys without exposing raw value", async () => {
   const config = new EnvOperatorConfig({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
     env: {

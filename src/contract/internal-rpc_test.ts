@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   canonicalTakosumiInternalRequest,
@@ -30,7 +31,7 @@ const actor: TakosumiActorContext = {
   spaceId: "space_1",
 };
 
-Deno.test("signTakosumiInternalRequest emits canonical internal envelope headers", async () => {
+test("signTakosumiInternalRequest emits canonical internal envelope headers", async () => {
   const body = '{"repositoryId":"repo_1"}';
   const signed = await signTakosumiInternalRequest({
     method: "post",
@@ -96,7 +97,7 @@ Deno.test("signTakosumiInternalRequest emits canonical internal envelope headers
   assert.deepEqual(verified?.capabilities, ["repo.read"]);
 });
 
-Deno.test("verifyTakosumiInternalRequestFromHeaders rejects tamper and policy mismatch", async () => {
+test("verifyTakosumiInternalRequestFromHeaders rejects tamper and policy mismatch", async () => {
   const signed = await signTakosumiInternalRequest({
     method: "GET",
     path: "/internal/repositories",
@@ -157,7 +158,7 @@ Deno.test("verifyTakosumiInternalRequestFromHeaders rejects tamper and policy mi
   );
 });
 
-Deno.test("verifyTakosumiInternalRequestFromHeaders enforces single-use nonce when recordNonce is supplied", async () => {
+test("verifyTakosumiInternalRequestFromHeaders enforces single-use nonce when recordNonce is supplied", async () => {
   const body = '{"repositoryId":"repo_1"}';
   const signed = await signTakosumiInternalRequest({
     method: "POST",
@@ -209,7 +210,7 @@ Deno.test("verifyTakosumiInternalRequestFromHeaders enforces single-use nonce wh
   assert.equal(replay, undefined);
 });
 
-Deno.test("verifyTakosumiInternalRequestFromHeaders does not consult recordNonce for a forged signature", async () => {
+test("verifyTakosumiInternalRequestFromHeaders does not consult recordNonce for a forged signature", async () => {
   const signed = await signTakosumiInternalRequest({
     method: "POST",
     path: "/internal/source/resolve",
@@ -241,7 +242,7 @@ Deno.test("verifyTakosumiInternalRequestFromHeaders does not consult recordNonce
   assert.equal(recorderCalls, 0);
 });
 
-Deno.test("internal RPC signing verifies binary request bodies", async () => {
+test("internal RPC signing verifies binary request bodies", async () => {
   const body = new Uint8Array([0, 255, 1, 2, 128, 10]);
   const signed = await signTakosumiInternalRequest({
     method: "POST",
@@ -282,7 +283,7 @@ Deno.test("internal RPC signing verifies binary request bodies", async () => {
   );
 });
 
-Deno.test("TakosumiInternalClient signs routed service requests", async () => {
+test("TakosumiInternalClient signs routed service requests", async () => {
   const calls: Request[] = [];
   const client = new TakosumiInternalClient({
     caller: "caller-app",
@@ -324,7 +325,7 @@ Deno.test("TakosumiInternalClient signs routed service requests", async () => {
   );
 });
 
-Deno.test("TakosumiInternalClient propagates trace context and records client spans", async () => {
+test("TakosumiInternalClient propagates trace context and records client spans", async () => {
   const calls: Request[] = [];
   const spans: TakosumiInternalTraceSpanEvent[] = [];
   const client = new TakosumiInternalClient({
@@ -380,7 +381,7 @@ Deno.test("TakosumiInternalClient propagates trace context and records client sp
   assert.equal(spans[0].attributes?.["http.response.status_code"], 200);
 });
 
-Deno.test("EnvTakosumiServiceDirectory resolves operator-namespaced env URLs", () => {
+test("EnvTakosumiServiceDirectory resolves operator-namespaced env URLs", () => {
   const directory = new EnvTakosumiServiceDirectory({
     TAKOSUMI_PAAS_INTERNAL_URL: "https://paas.internal",
     TAKOSUMI_APP_INTERNAL_URL: "https://app.internal",
@@ -406,7 +407,7 @@ Deno.test("EnvTakosumiServiceDirectory resolves operator-namespaced env URLs", (
   assert.equal(directory.resolve("runtime"), undefined);
 });
 
-Deno.test("EnvTakosumiServiceDirectory respects custom envPrefix", () => {
+test("EnvTakosumiServiceDirectory respects custom envPrefix", () => {
   const directory = new EnvTakosumiServiceDirectory(
     {
       MYORG_BILLING_INTERNAL_URL: "https://billing.internal",
@@ -422,7 +423,7 @@ Deno.test("EnvTakosumiServiceDirectory respects custom envPrefix", () => {
   assert.equal(directory.resolve("missing"), undefined);
 });
 
-Deno.test("EnvTakosumiServiceDirectory normalizes hyphenated service ids", () => {
+test("EnvTakosumiServiceDirectory normalizes hyphenated service ids", () => {
   const directory = new EnvTakosumiServiceDirectory({
     TAKOSUMI_LOG_WORKER_INTERNAL_URL: "https://log.internal",
   });
@@ -434,7 +435,7 @@ Deno.test("EnvTakosumiServiceDirectory normalizes hyphenated service ids", () =>
   });
 });
 
-Deno.test("canonicalTakosumiInternalRequest binds query and digest", () => {
+test("canonicalTakosumiInternalRequest binds query and digest", () => {
   const canonical = canonicalTakosumiInternalRequest({
     method: "get",
     path: "/internal/repositories",

@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { buildEgressReport, summarizeEgress } from "./mod.ts";
 
-Deno.test("network egress reports summarize decisions and byte totals", () => {
+test("network egress reports summarize decisions and byte totals", () => {
   const entries = [{
     sourceIdentityId: "identity_web",
     sourceComponentName: "web",

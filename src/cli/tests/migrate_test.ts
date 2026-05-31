@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { runMigrate } from "../commands/migrate.ts";
 
-Deno.test("runMigrate fails fast with missing-env when DATABASE_URL unset for staging", async () => {
+test("runMigrate fails fast with missing-env when DATABASE_URL unset for staging", async () => {
   const lines: string[] = [];
   const result = await runMigrate({
     env: "staging",
@@ -15,7 +16,7 @@ Deno.test("runMigrate fails fast with missing-env when DATABASE_URL unset for st
   assert.ok(lines.some((line) => /TAKOSUMI_DATABASE_URL/.test(line)));
 });
 
-Deno.test("runMigrate dry-run does not require DATABASE_URL", async () => {
+test("runMigrate dry-run does not require DATABASE_URL", async () => {
   let spawnedArgs: readonly string[] | undefined;
   const result = await runMigrate({
     env: "production",
@@ -35,7 +36,7 @@ Deno.test("runMigrate dry-run does not require DATABASE_URL", async () => {
   assert.ok(spawnedArgs!.includes("--env=production"));
 });
 
-Deno.test("runMigrate returns missing-script when kernel script unreachable", async () => {
+test("runMigrate returns missing-script when kernel script unreachable", async () => {
   const lines: string[] = [];
   const result = await runMigrate({
     env: "local",
@@ -48,12 +49,12 @@ Deno.test("runMigrate returns missing-script when kernel script unreachable", as
   assert.equal(result.exitCode, 1);
   assert.ok(lines.some((line) => /db-migrate\.ts/.test(line)));
   assert.ok(
-    lines.some((line) => /cd packages\/kernel/.test(line)),
+    lines.some((line) => /deno task db:migrate/.test(line)),
     "must print the exact command operators should run",
   );
 });
 
-Deno.test("runMigrate spawns deno run against resolved script", async () => {
+test("runMigrate spawns deno run against resolved script", async () => {
   let spawnedCmd: string | undefined;
   let spawnedArgs: readonly string[] | undefined;
   const result = await runMigrate({
@@ -77,7 +78,7 @@ Deno.test("runMigrate spawns deno run against resolved script", async () => {
   assert.ok(!spawnedArgs!.includes("--dry-run"));
 });
 
-Deno.test("runMigrate surfaces non-zero exit codes from kernel script", async () => {
+test("runMigrate surfaces non-zero exit codes from kernel script", async () => {
   const result = await runMigrate({
     env: "local",
     readEnv: (key) =>

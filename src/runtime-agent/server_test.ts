@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   LIFECYCLE_APPLY_PATH,
@@ -18,7 +19,7 @@ function authHeaders(token: string) {
   };
 }
 
-Deno.test("health returns ok with connector count", async () => {
+test("health returns ok with connector count", async () => {
   const registry = new ConnectorRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const res = await app.request(LIFECYCLE_HEALTH_PATH);
@@ -28,7 +29,7 @@ Deno.test("health returns ok with connector count", async () => {
   assert.equal(body.connectors, 0);
 });
 
-Deno.test("lifecycle endpoints reject missing auth header", async () => {
+test("lifecycle endpoints reject missing auth header", async () => {
   const registry = new ConnectorRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const res = await app.request(LIFECYCLE_APPLY_PATH, {
@@ -39,7 +40,7 @@ Deno.test("lifecycle endpoints reject missing auth header", async () => {
   assert.equal(res.status, 401);
 });
 
-Deno.test("lifecycle endpoints reject wrong token", async () => {
+test("lifecycle endpoints reject wrong token", async () => {
   const registry = new ConnectorRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const res = await app.request(LIFECYCLE_APPLY_PATH, {
@@ -50,7 +51,7 @@ Deno.test("lifecycle endpoints reject wrong token", async () => {
   assert.equal(res.status, 401);
 });
 
-Deno.test("apply returns 400 on missing fields", async () => {
+test("apply returns 400 on missing fields", async () => {
   const registry = new ConnectorRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const res = await app.request(LIFECYCLE_APPLY_PATH, {
@@ -61,7 +62,7 @@ Deno.test("apply returns 400 on missing fields", async () => {
   assert.equal(res.status, 400);
 });
 
-Deno.test("apply returns 404 for unknown connector", async () => {
+test("apply returns 404 for unknown connector", async () => {
   const registry = new ConnectorRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const req: LifecycleApplyRequest = {
@@ -81,7 +82,7 @@ Deno.test("apply returns 404 for unknown connector", async () => {
   assert.equal(body.code, "connector_not_found");
 });
 
-Deno.test("apply dispatches to registered connector", async () => {
+test("apply dispatches to registered connector", async () => {
   const registry = new ConnectorRegistry();
   registry.register({
     provider: "memory",
@@ -111,7 +112,7 @@ Deno.test("apply dispatches to registered connector", async () => {
   assert.deepEqual(body.outputs, { bucket: "x" });
 });
 
-Deno.test("GET /v1/connectors lists registered connectors with auth", async () => {
+test("GET /v1/connectors lists registered connectors with auth", async () => {
   const registry = new ConnectorRegistry();
   registry.register({
     provider: "memory",
@@ -148,7 +149,7 @@ Deno.test("GET /v1/connectors lists registered connectors with auth", async () =
   );
 });
 
-Deno.test("/v1/lifecycle/verify rejects missing auth", async () => {
+test("/v1/lifecycle/verify rejects missing auth", async () => {
   const registry = new ConnectorRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const res = await app.request("/v1/lifecycle/verify", {
@@ -159,8 +160,7 @@ Deno.test("/v1/lifecycle/verify rejects missing auth", async () => {
   assert.equal(res.status, 401);
 });
 
-Deno.test(
-  "/v1/lifecycle/verify reports `no verify hook` for connectors without verify",
+test("/v1/lifecycle/verify reports `no verify hook` for connectors without verify",
   async () => {
     const registry = new ConnectorRegistry();
     registry.register({
@@ -189,7 +189,7 @@ Deno.test(
   },
 );
 
-Deno.test("/v1/lifecycle/verify aggregates ok + fail connectors", async () => {
+test("/v1/lifecycle/verify aggregates ok + fail connectors", async () => {
   const registry = new ConnectorRegistry();
   registry.register({
     provider: "good",
@@ -240,8 +240,7 @@ Deno.test("/v1/lifecycle/verify aggregates ok + fail connectors", async () => {
   assert.equal(byProvider.bad.code, "auth_failed");
 });
 
-Deno.test(
-  "/v1/lifecycle/verify catches thrown errors as network_error",
+test("/v1/lifecycle/verify catches thrown errors as network_error",
   async () => {
     const registry = new ConnectorRegistry();
     registry.register({
@@ -271,8 +270,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "/v1/lifecycle/verify filters by shape + provider when supplied",
+test("/v1/lifecycle/verify filters by shape + provider when supplied",
   async () => {
     const registry = new ConnectorRegistry();
     registry.register({
@@ -308,7 +306,7 @@ Deno.test(
   },
 );
 
-Deno.test("destroy dispatches to registered connector", async () => {
+test("destroy dispatches to registered connector", async () => {
   const registry = new ConnectorRegistry();
   let destroyed: string | undefined;
   registry.register({
@@ -338,7 +336,7 @@ Deno.test("destroy dispatches to registered connector", async () => {
   assert.equal(destroyed, "memory://x");
 });
 
-Deno.test("compensate dispatches to registered connector", async () => {
+test("compensate dispatches to registered connector", async () => {
   const registry = new ConnectorRegistry();
   let compensated: string | undefined;
   registry.register({

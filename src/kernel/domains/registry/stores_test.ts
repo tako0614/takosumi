@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryBundledRegistry,
@@ -9,7 +10,7 @@ import {
   type TrustRecord,
 } from "./mod.ts";
 
-Deno.test("registry resolves package descriptors and exposes trust records", async () => {
+test("registry resolves package descriptors and exposes trust records", async () => {
   const descriptors = new InMemoryPackageDescriptorStore();
   const resolutions = new InMemoryPackageResolutionStore();
   const trustRecords = new InMemoryTrustRecordStore();
@@ -18,7 +19,7 @@ Deno.test("registry resolves package descriptors and exposes trust records", asy
   const newDescriptor = descriptor("sha256:new", "1.1.0");
   const resolution: PackageResolution = {
     ref: "providers/postgres",
-    kind: "kind-package",
+    kind: "backend-plugin",
     digest: newDescriptor.digest,
     registry: "bundled",
     trustRecordId: "trust_new",
@@ -48,12 +49,12 @@ Deno.test("registry resolves package descriptors and exposes trust records", asy
   );
 
   assert.equal(
-    (await registry.resolve("kind-package", "providers/postgres"))?.digest,
+    (await registry.resolve("backend-plugin", "providers/postgres"))?.digest,
     "sha256:new",
   );
   assert.equal(
     (await registry.getDescriptor(
-      "kind-package",
+      "backend-plugin",
       "providers/postgres",
       "sha256:new",
     ))?.version,
@@ -61,7 +62,7 @@ Deno.test("registry resolves package descriptors and exposes trust records", asy
   );
   assert.equal(
     (await trustRecords.findForPackage(
-      "kind-package",
+      "backend-plugin",
       "providers/postgres",
       "sha256:new",
     ))?.trustLevel,
@@ -70,7 +71,7 @@ Deno.test("registry resolves package descriptors and exposes trust records", asy
   assert.deepEqual(await registry.getTrustRecord("trust_new"), trust);
 });
 
-Deno.test("registry resolves resource contract packages through PackageResolution", async () => {
+test("registry resolves resource contract packages through PackageResolution", async () => {
   const descriptors = new InMemoryPackageDescriptorStore();
   const resolutions = new InMemoryPackageResolutionStore();
   const trustRecords = new InMemoryTrustRecordStore();
@@ -140,7 +141,7 @@ Deno.test("registry resolves resource contract packages through PackageResolutio
 function descriptor(digest: string, version: string): PackageDescriptor {
   return {
     ref: "providers/postgres",
-    kind: "kind-package",
+    kind: "backend-plugin",
     digest,
     publisher: "takos",
     version,

@@ -1,10 +1,11 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   createEventSubscriptionRevision,
   InMemoryEventSubscriptionRevisionStore,
 } from "./mod.ts";
 
-Deno.test("event subscription revisions resolve implicit targets through primaryAppReleaseId", async () => {
+test("event subscription revisions resolve implicit targets through primaryAppReleaseId", async () => {
   const store = new InMemoryEventSubscriptionRevisionStore();
   const revision = createEventSubscriptionRevision({
     id: "events_rev_1",
@@ -58,7 +59,7 @@ Deno.test("event subscription revisions resolve implicit targets through primary
   );
 });
 
-Deno.test("event subscription revision store lists by activation and release", async () => {
+test("event subscription revision store lists by activation and release", async () => {
   const store = new InMemoryEventSubscriptionRevisionStore();
   await store.put(createEventSubscriptionRevision({
     id: "events_rev_1",
@@ -96,7 +97,7 @@ Deno.test("event subscription revision store lists by activation and release", a
   );
 });
 
-Deno.test("queue consumer records are owned by an AppRelease", async () => {
+test("queue consumer records are owned by an AppRelease", async () => {
   const store = new InMemoryEventSubscriptionRevisionStore();
   const revision = createEventSubscriptionRevision({
     id: "events_rev_queue_owner",

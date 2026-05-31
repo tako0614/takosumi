@@ -1,10 +1,11 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { LocalOperatorConfig } from "../../adapters/operator-config/mod.ts";
 import { BootstrapMigrationService } from "./mod.ts";
 
 const fixedClock = () => new Date("2026-04-27T00:00:00.000Z");
 
-Deno.test("BootstrapMigrationService treats storage migrations as adapter-owned", async () => {
+test("BootstrapMigrationService treats storage migrations as adapter-owned", async () => {
   const report = await new BootstrapMigrationService({
     operatorConfig: new LocalOperatorConfig({
       clock: fixedClock,
@@ -22,7 +23,7 @@ Deno.test("BootstrapMigrationService treats storage migrations as adapter-owned"
   assert.equal(report.migrations, undefined);
 });
 
-Deno.test("BootstrapMigrationService reports hard-break stale selector errors", async () => {
+test("BootstrapMigrationService reports hard-break stale selector errors", async () => {
   const report = await new BootstrapMigrationService({
     operatorConfig: new LocalOperatorConfig({
       clock: fixedClock,

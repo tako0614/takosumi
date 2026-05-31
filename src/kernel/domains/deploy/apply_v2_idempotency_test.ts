@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   type ApplyResult,
@@ -122,8 +123,7 @@ function tearDown(): void {
 
 const ctx = {} as PlatformContext;
 
-Deno.test(
-  "applyV2 idempotency: matching fingerprint reuses prior handle and skips provider.apply",
+test("applyV2 idempotency: matching fingerprint reuses prior handle and skips provider.apply",
   async () => {
     const provider = setUp();
     try {
@@ -179,8 +179,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "applyV2 idempotency: edited spec triggers re-apply",
+test("applyV2 idempotency: edited spec triggers re-apply",
   async () => {
     const provider = setUp();
     try {
@@ -243,8 +242,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "applyV2 idempotency: provider id mismatch does not reuse",
+test("applyV2 idempotency: provider id mismatch does not reuse",
   async () => {
     const provider = setUp();
     try {
@@ -285,8 +283,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "applyV2 idempotency: rollback does not destroy reused prior resources",
+test("applyV2 idempotency: rollback does not destroy reused prior resources",
   async () => {
     const provider = setUp();
     registerProvider(failingProvider());
@@ -345,8 +342,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "computeSpecFingerprint is canonical, stable, and changes when tuple changes",
+test("computeSpecFingerprint is canonical, stable, and changes when tuple changes",
   async () => {
     const resource: ManifestResource = {
       shape: "test-shape@v1",

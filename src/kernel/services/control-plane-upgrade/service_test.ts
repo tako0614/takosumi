@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import { DomainError } from "../../shared/errors.ts";
@@ -5,7 +6,7 @@ import { ControlPlaneUpgradePlanner } from "./mod.ts";
 
 const fixedClock = () => new Date("2026-04-27T00:00:00.000Z");
 
-Deno.test("ControlPlaneUpgradePlanner blocks non-operator actors", () => {
+test("ControlPlaneUpgradePlanner blocks non-operator actors", () => {
   const planner = new ControlPlaneUpgradePlanner({ clock: fixedClock });
 
   assert.throws(
@@ -20,7 +21,7 @@ Deno.test("ControlPlaneUpgradePlanner blocks non-operator actors", () => {
   );
 });
 
-Deno.test("ControlPlaneUpgradePlanner reports preflight results and migration skeleton", () => {
+test("ControlPlaneUpgradePlanner reports preflight results and migration skeleton", () => {
   const planner = new ControlPlaneUpgradePlanner({
     idFactory: () => "upgrade_plan_1",
     clock: fixedClock,

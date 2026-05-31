@@ -1,7 +1,8 @@
+import { expect, test } from "bun:test";
 import { assertEquals, assertRejects } from "jsr:@std/assert@^1.0.0";
 import { httpPlatformServiceResolver, InstallerPipelineError } from "./mod.ts";
 
-Deno.test("httpPlatformServiceResolver posts context and returns material", async () => {
+test("httpPlatformServiceResolver posts context and returns material", async () => {
   const requests: Request[] = [];
   const resolver = httpPlatformServiceResolver({
     url:
@@ -29,16 +30,10 @@ Deno.test("httpPlatformServiceResolver posts context and returns material", asyn
     sourceRef: "identity.primary.oidc",
   });
 
-  assertEquals(requests.length, 1);
-  assertEquals(
-    requests[0].url,
-    "https://cloud.example.test/internal/workload-platform-services/resolve",
-  );
-  assertEquals(
-    requests[0].headers.get("authorization"),
-    "Bearer resolver-token",
-  );
-  assertEquals(await requests[0].json(), {
+  expect(requests.length).toEqual(1);
+  expect(requests[0].url).toEqual("https://cloud.example.test/internal/workload-platform-services/resolve");
+  expect(requests[0].headers.get("authorization")).toEqual("Bearer resolver-token");
+  expect(await requests[0].json()).toEqual({
     installationId: "ins_1",
     spaceId: "space_1",
     appId: "app.example",
@@ -47,14 +42,14 @@ Deno.test("httpPlatformServiceResolver posts context and returns material", asyn
     bindingName: "oidc",
     sourceRef: "identity.primary.oidc",
   });
-  assertEquals(material, {
+  expect(material).toEqual({
     materialKind: "identity.oidc@v1",
     issuerUrl: "https://cloud.example.test",
     clientSecretRef: { secretRef: "secret://oidc/client-secret" },
   });
 });
 
-Deno.test("httpPlatformServiceResolver treats 404 as absent platform service", async () => {
+test("httpPlatformServiceResolver treats 404 as absent platform service", async () => {
   const resolver = httpPlatformServiceResolver({
     url:
       "https://cloud.example.test/internal/workload-platform-services/resolve",
@@ -64,8 +59,7 @@ Deno.test("httpPlatformServiceResolver treats 404 as absent platform service", a
       })),
   });
 
-  assertEquals(
-    await resolver.resolve({
+  expect(await resolver.resolve({
       installationId: "ins_1",
       spaceId: "space_1",
       appId: "app.example",
@@ -73,12 +67,10 @@ Deno.test("httpPlatformServiceResolver treats 404 as absent platform service", a
       component: { kind: "worker" },
       bindingName: "oidc",
       sourceRef: "identity.missing.service",
-    }),
-    undefined,
-  );
+    })).toEqual(undefined);
 });
 
-Deno.test("httpPlatformServiceResolver returns material collections", async () => {
+test("httpPlatformServiceResolver returns material collections", async () => {
   const resolver = httpPlatformServiceResolver({
     url:
       "https://cloud.example.test/internal/workload-platform-services/resolve",
@@ -91,8 +83,7 @@ Deno.test("httpPlatformServiceResolver returns material collections", async () =
       })),
   });
 
-  assertEquals(
-    await resolver.resolve({
+  expect(await resolver.resolve({
       installationId: "ins_1",
       spaceId: "space_1",
       appId: "app.example",
@@ -101,15 +92,13 @@ Deno.test("httpPlatformServiceResolver returns material collections", async () =
       bindingName: "tools",
       kind: "mcp-server",
       many: true,
-    }),
-    [
+    })).toEqual([
       { materialKind: "mcp-server", url: "https://one.example.test/mcp" },
       { materialKind: "mcp-server", url: "https://two.example.test/mcp" },
-    ],
-  );
+    ]);
 });
 
-Deno.test("httpPlatformServiceResolver rejects non-material responses", async () => {
+test("httpPlatformServiceResolver rejects non-material responses", async () => {
   const resolver = httpPlatformServiceResolver({
     url:
       "https://cloud.example.test/internal/workload-platform-services/resolve",

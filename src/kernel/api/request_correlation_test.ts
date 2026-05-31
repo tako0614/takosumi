@@ -1,3 +1,4 @@
+import { expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { Hono } from "hono";
 import { InMemoryObservabilitySink } from "../services/observability/mod.ts";
@@ -11,7 +12,7 @@ import {
   TRACEPARENT_HEADER,
 } from "./request_correlation.ts";
 
-Deno.test("request correlation propagates inbound ids to response headers and logs", async () => {
+test("request correlation propagates inbound ids to response headers and logs", async () => {
   const logs: ApiRequestLogLine[] = [];
   const app = new Hono();
   let monotonic = 10;
@@ -61,7 +62,7 @@ Deno.test("request correlation propagates inbound ids to response headers and lo
   });
 });
 
-Deno.test("request correlation records HTTP server trace spans", async () => {
+test("request correlation records HTTP server trace spans", async () => {
   const observability = new InMemoryObservabilitySink();
   const app = new Hono();
   registerRequestCorrelation(app, {
@@ -109,7 +110,7 @@ Deno.test("request correlation records HTTP server trace spans", async () => {
   });
 });
 
-Deno.test("request correlation generates ids when headers are absent", async () => {
+test("request correlation generates ids when headers are absent", async () => {
   const logs: ApiRequestLogLine[] = [];
   const app = new Hono();
   registerRequestCorrelation(app, {
@@ -135,7 +136,7 @@ Deno.test("request correlation generates ids when headers are absent", async () 
   assert.equal(logs[0]?.correlationId, "req_generated");
 });
 
-Deno.test("request correlation respects minimum log level", async () => {
+test("request correlation respects minimum log level", async () => {
   const logs: ApiRequestLogLine[] = [];
   const app = new Hono();
   registerRequestCorrelation(app, {
@@ -155,7 +156,7 @@ Deno.test("request correlation respects minimum log level", async () => {
   assert.equal(logs[0]?.status, 404);
 });
 
-Deno.test("console request logger emits JSON only above configured level", () => {
+test("console request logger emits JSON only above configured level", () => {
   const lines: string[] = [];
   const originalLog = console.log;
   const originalWarn = console.warn;
@@ -193,5 +194,5 @@ Deno.test("console request logger emits JSON only above configured level", () =>
   }
 
   assert.equal(lines.length, 1);
-  assert(JSON.parse(lines[0] ?? "{}").requestId === "req_2");
+  expect(JSON.parse(lines[0] ?? "{}").requestId === "req_2").toBeTruthy();
 });

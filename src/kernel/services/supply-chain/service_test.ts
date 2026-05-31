@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryPreparedArtifactStore,
@@ -6,7 +7,7 @@ import {
 } from "../../domains/supply-chain/mod.ts";
 import { SupplyChainService } from "./mod.ts";
 
-Deno.test("prepare artifact request creates artifact, record, mirror decision, and protected windows", async () => {
+test("prepare artifact request creates artifact, record, mirror decision, and protected windows", async () => {
   const service = newService([
     "artifact_1",
     "record_1",
@@ -23,7 +24,7 @@ Deno.test("prepare artifact request creates artifact, record, mirror decision, a
     resolvedGraphDigest: "sha256:graph",
     packageResolutionDigest: "sha256:packages",
     artifactDigest: "sha256:artifact",
-    kindPackageDigests: ["sha256:provider"],
+    backendPluginDigests: ["sha256:provider"],
     resourceContractPackageDigests: ["sha256:resource-contract"],
     nativeSchemaDigests: ["sha256:schema"],
     provenanceRef: "prov://artifact_1",
@@ -70,7 +71,7 @@ Deno.test("prepare artifact request creates artifact, record, mirror decision, a
   );
 });
 
-Deno.test("prepare artifact request reuses matching prepared artifact", async () => {
+test("prepare artifact request reuses matching prepared artifact", async () => {
   const stores = storesFixture();
   await stores.artifacts.put({
     id: "artifact_existing",
@@ -109,7 +110,7 @@ Deno.test("prepare artifact request reuses matching prepared artifact", async ()
   assert.equal(result.supplyChainRecord.id, "record_reuse");
 });
 
-Deno.test("prepare artifact request rejects digest collision when reuse validation fails", async () => {
+test("prepare artifact request rejects digest collision when reuse validation fails", async () => {
   const stores = storesFixture();
   await stores.artifacts.put({
     id: "artifact_existing",
@@ -147,7 +148,7 @@ Deno.test("prepare artifact request rejects digest collision when reuse validati
   assert.equal((await stores.records.list()).length, 0);
 });
 
-Deno.test("prepare artifact request does not reuse prepared artifact without explicit read set and approval validation", async () => {
+test("prepare artifact request does not reuse prepared artifact without explicit read set and approval validation", async () => {
   const stores = storesFixture();
   await stores.artifacts.put({
     id: "artifact_existing",
@@ -195,7 +196,7 @@ Deno.test("prepare artifact request does not reuse prepared artifact without exp
   assert.equal((await stores.records.list()).length, 0);
 });
 
-Deno.test("pre-Apply prepared artifact validation requires package resolution, read set, and approval match", async () => {
+test("pre-Apply prepared artifact validation requires package resolution, read set, and approval match", async () => {
   const stores = storesFixture();
   await stores.artifacts.put({
     id: "artifact_existing",
@@ -285,7 +286,7 @@ Deno.test("pre-Apply prepared artifact validation requires package resolution, r
   assert.equal(validated.validation.reusable, true);
 });
 
-Deno.test("mirror policy can decide not to mirror or retain", () => {
+test("mirror policy can decide not to mirror or retain", () => {
   const service = newService([]);
 
   const decision = service.decideArtifactMirror({

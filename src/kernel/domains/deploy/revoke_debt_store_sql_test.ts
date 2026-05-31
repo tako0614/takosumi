@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type {
   SqlClient,
@@ -287,7 +288,7 @@ class FakeSqlClient implements SqlClient {
   }
 }
 
-Deno.test("SqlRevokeDebtStore enqueues idempotently by source key", async () => {
+test("SqlRevokeDebtStore enqueues idempotently by source key", async () => {
   const client = new FakeSqlClient();
   const store = new SqlRevokeDebtStore({
     client,
@@ -331,7 +332,7 @@ Deno.test("SqlRevokeDebtStore enqueues idempotently by source key", async () => 
   assert.deepEqual(await store.listOpenOwnerSpaces(), ["space:sql"]);
 });
 
-Deno.test("SqlRevokeDebtStore persists retry, aging, reopen, and clearance transitions", async () => {
+test("SqlRevokeDebtStore persists retry, aging, reopen, and clearance transitions", async () => {
   const client = new FakeSqlClient();
   const store = new SqlRevokeDebtStore({
     client,
@@ -402,7 +403,7 @@ Deno.test("SqlRevokeDebtStore persists retry, aging, reopen, and clearance trans
   assert.deepEqual(await store.listOpenOwnerSpaces(), []);
 });
 
-Deno.test("SqlRevokeDebtStore CAS guard does not clobber a concurrently cleared debt", async () => {
+test("SqlRevokeDebtStore CAS guard does not clobber a concurrently cleared debt", async () => {
   const client = new FakeSqlClient();
   const store = new SqlRevokeDebtStore({
     client,

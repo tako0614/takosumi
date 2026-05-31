@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type {
   SqlClient,
@@ -107,7 +108,7 @@ function isoDaysAgo(days: number): string {
   return new Date(REFERENCE_NOW.getTime() - days * 86_400_000).toISOString();
 }
 
-Deno.test("ObservationRetentionService archives rows older than 30 days", async () => {
+test("ObservationRetentionService archives rows older than 30 days", async () => {
   const client = new FakeObservationSqlClient();
   client.providerObservations.push(
     {
@@ -143,7 +144,7 @@ Deno.test("ObservationRetentionService archives rows older than 30 days", async 
   );
 });
 
-Deno.test("ObservationRetentionService deletes archived rows past the 90d cap", async () => {
+test("ObservationRetentionService deletes archived rows past the 90d cap", async () => {
   const client = new FakeObservationSqlClient();
   client.providerObservations.push(
     {
@@ -179,7 +180,7 @@ Deno.test("ObservationRetentionService deletes archived rows past the 90d cap", 
   );
 });
 
-Deno.test("ObservationRetentionService never archives observations of the current deployment", async () => {
+test("ObservationRetentionService never archives observations of the current deployment", async () => {
   const client = new FakeObservationSqlClient();
   client.groupHeads.push({
     space_id: "space_a",
@@ -220,7 +221,7 @@ Deno.test("ObservationRetentionService never archives observations of the curren
   );
 });
 
-Deno.test("ObservationRetentionService archives runtime observations independently", async () => {
+test("ObservationRetentionService archives runtime observations independently", async () => {
   const client = new FakeObservationSqlClient();
   client.runtimeObservations.push(
     {
@@ -265,7 +266,7 @@ Deno.test("ObservationRetentionService archives runtime observations independent
   );
 });
 
-Deno.test("ObservationRetentionService is idempotent", async () => {
+test("ObservationRetentionService is idempotent", async () => {
   const client = new FakeObservationSqlClient();
   client.providerObservations.push({
     id: "obs",
@@ -286,7 +287,7 @@ Deno.test("ObservationRetentionService is idempotent", async () => {
   assert.equal(second.deletedDeploy, 0);
 });
 
-Deno.test("ObservationRetentionService rejects invalid policy", () => {
+test("ObservationRetentionService rejects invalid policy", () => {
   const client = new FakeObservationSqlClient();
   assert.throws(
     () =>
@@ -298,12 +299,12 @@ Deno.test("ObservationRetentionService rejects invalid policy", () => {
   );
 });
 
-Deno.test("ObservationRetentionService default policy uses 30d / 90d", () => {
+test("ObservationRetentionService default policy uses 30d / 90d", () => {
   assert.equal(DEFAULT_OBSERVATION_RETENTION_POLICY.recentRetentionDays, 30);
   assert.equal(DEFAULT_OBSERVATION_RETENTION_POLICY.archiveCapDays, 90);
 });
 
-Deno.test("startObservationRetentionJob runs immediately and stops cleanly", async () => {
+test("startObservationRetentionJob runs immediately and stops cleanly", async () => {
   const client = new FakeObservationSqlClient();
   client.providerObservations.push({
     id: "obs_old",
@@ -326,7 +327,7 @@ Deno.test("startObservationRetentionJob runs immediately and stops cleanly", asy
   assert.equal(reports[0], 1);
 });
 
-Deno.test("ObservationRetentionService tolerates missing relations", async () => {
+test("ObservationRetentionService tolerates missing relations", async () => {
   const client: SqlClient = {
     query<Row extends Record<string, unknown>>(): Promise<
       SqlQueryResult<Row>

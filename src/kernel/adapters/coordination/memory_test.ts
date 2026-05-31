@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { MemoryCoordinationAdapter } from "./mod.ts";
 
-Deno.test("memory coordination leases and alarms are scoped and expiring", async () => {
+test("memory coordination leases and alarms are scoped and expiring", async () => {
   let now = new Date("2026-04-30T00:00:00.000Z");
   const coordination = new MemoryCoordinationAdapter({
     clock: () => now,

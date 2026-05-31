@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 /**
  * BindingResolver unit tests.
  *
@@ -25,7 +26,7 @@ import {
   defaultEnvInjection,
 } from "./mod.ts";
 
-Deno.test("defaultEnvInjection implements exactly the official projection families", () => {
+test("defaultEnvInjection implements exactly the official projection families", () => {
   assert.deepEqual([...PROJECTION_FAMILY_NAMES].sort(), [
     "config-mount",
     "env",
@@ -76,7 +77,7 @@ Deno.test("defaultEnvInjection implements exactly the official projection famili
   );
 });
 
-Deno.test("defaultEnvInjection treats non-official projection names as env expansion", () => {
+test("defaultEnvInjection treats non-official projection names as env expansion", () => {
   const material: OutputMaterial = {
     url: "https://service.internal",
   };
@@ -89,7 +90,7 @@ Deno.test("defaultEnvInjection treats non-official projection names as env expan
   });
 });
 
-Deno.test("defaultEnvInjection expands env-shape material with a prefix", () => {
+test("defaultEnvInjection expands env-shape material with a prefix", () => {
   const material: OutputMaterial = {
     host: "db.local",
     port: "5432",
@@ -106,7 +107,7 @@ Deno.test("defaultEnvInjection expands env-shape material with a prefix", () => 
   });
 });
 
-Deno.test("defaultEnvInjection inject: secret-env strips secret Ref suffix from env names", () => {
+test("defaultEnvInjection inject: secret-env strips secret Ref suffix from env names", () => {
   const material: OutputMaterial = {
     issuerUrl: "https://accounts.example.test",
     clientId: "client_test",
@@ -127,7 +128,7 @@ Deno.test("defaultEnvInjection inject: secret-env strips secret Ref suffix from 
   });
 });
 
-Deno.test("defaultEnvInjection without prefix emits bare upper-snake keys", () => {
+test("defaultEnvInjection without prefix emits bare upper-snake keys", () => {
   const material: OutputMaterial = { url: "https://w.example/" };
   const injection = defaultEnvInjection(
     { output: "web.http", inject: "env" },
@@ -136,7 +137,7 @@ Deno.test("defaultEnvInjection without prefix emits bare upper-snake keys", () =
   assert.deepEqual(injection.env, { URL: "https://w.example/" });
 });
 
-Deno.test("defaultEnvInjection rejects material fields that collide on the same env key", () => {
+test("defaultEnvInjection rejects material fields that collide on the same env key", () => {
   // `fooBar` and `foo_bar` both normalize to FOO_BAR. Silently last-write-wins
   // would inject only one (arbitrary) value, so the resolver throws instead.
   const material: OutputMaterial = { fooBar: "camel", foo_bar: "snake" };
@@ -148,7 +149,7 @@ Deno.test("defaultEnvInjection rejects material fields that collide on the same 
   );
 });
 
-Deno.test("defaultEnvInjection secret-env rejects clientSecret / clientSecretRef collision", () => {
+test("defaultEnvInjection secret-env rejects clientSecret / clientSecretRef collision", () => {
   // Under stripSecretRefSuffix both `clientSecret` and `clientSecretRef` map
   // to CLIENT_SECRET; surfacing the collision avoids injecting the wrong
   // secret value into the consumer's env.
@@ -168,7 +169,7 @@ Deno.test("defaultEnvInjection secret-env rejects clientSecret / clientSecretRef
   );
 });
 
-Deno.test("defaultEnvInjection serializes non-secret JSON material for env", () => {
+test("defaultEnvInjection serializes non-secret JSON material for env", () => {
   const material: OutputMaterial = {
     routes: [{ pathPrefix: "/", to: "app" }],
   };
@@ -181,7 +182,7 @@ Deno.test("defaultEnvInjection serializes non-secret JSON material for env", () 
   });
 });
 
-Deno.test("defaultEnvInjection inject: upstream surfaces material verbatim", () => {
+test("defaultEnvInjection inject: upstream surfaces material verbatim", () => {
   const material: OutputMaterial = {
     targets: [{ name: "default", url: "https://w.example/" }],
   };
@@ -192,7 +193,7 @@ Deno.test("defaultEnvInjection inject: upstream surfaces material verbatim", () 
   assert.deepEqual(injection.target, material);
 });
 
-Deno.test("defaultEnvInjection inject: config-mount writes deterministic mount descriptor", () => {
+test("defaultEnvInjection inject: config-mount writes deterministic mount descriptor", () => {
   const material: OutputMaterial = {
     fqdn: "notes.example.com",
     certificateId: "cert_123",
@@ -204,7 +205,7 @@ Deno.test("defaultEnvInjection inject: config-mount writes deterministic mount d
   assert.deepEqual(Object.keys(injection.mounts ?? {}), ["/srv"]);
 });
 
-Deno.test("BindingResolver falls back to kernel default when no materializer found", async () => {
+test("BindingResolver falls back to kernel default when no materializer found", async () => {
   const resolver = new BindingResolver();
   const binding = await resolver.resolveEdge({
     installationId: "ins_x",
@@ -225,7 +226,7 @@ Deno.test("BindingResolver falls back to kernel default when no materializer fou
   });
 });
 
-Deno.test("BindingResolver invokes plugin.applyListen when present", async () => {
+test("BindingResolver invokes plugin.applyListen when present", async () => {
   const captured: ApplyListenContext[] = [];
   const plugin: KernelPlugin = {
     name: "@test/worker",
@@ -258,7 +259,7 @@ Deno.test("BindingResolver invokes plugin.applyListen when present", async () =>
   assert.deepEqual(binding.envInjections, { CUSTOM_HOST: "db.local" });
 });
 
-Deno.test("BindingResolver prefers plugin.applyBinding over legacy applyListen", async () => {
+test("BindingResolver prefers plugin.applyBinding over legacy applyListen", async () => {
   const captured: ApplyInputBindingContext[] = [];
   const plugin: KernelPlugin = {
     name: "@test/worker",
@@ -289,7 +290,7 @@ Deno.test("BindingResolver prefers plugin.applyBinding over legacy applyListen",
   assert.deepEqual(binding.envInjections, { FROM_BINDING: "yes" });
 });
 
-Deno.test("BindingResolver.resolveAppSpec emits one binding per connect/listen edge", async () => {
+test("BindingResolver.resolveAppSpec emits one binding per connect/listen edge", async () => {
   const resolver = new BindingResolver();
   const appSpec: AppSpec = {
     apiVersion: APP_SPEC_API_VERSION,
@@ -326,7 +327,7 @@ Deno.test("BindingResolver.resolveAppSpec emits one binding per connect/listen e
   });
 });
 
-Deno.test("BindingResolver.resolveAppSpec silently skips unresolved platform listens", async () => {
+test("BindingResolver.resolveAppSpec silently skips unresolved platform listens", async () => {
   const resolver = new BindingResolver();
   const appSpec: AppSpec = {
     apiVersion: APP_SPEC_API_VERSION,
@@ -342,4 +343,157 @@ Deno.test("BindingResolver.resolveAppSpec silently skips unresolved platform lis
   };
   const bindings = await resolver.resolveAppSpec(appSpec, {});
   assert.deepEqual(bindings, []);
+});
+
+test("BindingResolver.resolveAppSpec accepts listen.path kind match via materialKind", async () => {
+  const resolver = new BindingResolver();
+  const appSpec: AppSpec = {
+    apiVersion: APP_SPEC_API_VERSION,
+    metadata: { id: "demo", name: "Demo" },
+    components: {
+      web: {
+        kind: "worker",
+        listen: {
+          oidc: {
+            path: "identity.primary.oidc",
+            kind: "identity.oidc@v1",
+            inject: "env",
+            prefix: "OIDC",
+            required: true,
+          },
+        },
+      },
+    },
+  };
+  const bindings = await resolver.resolveAppSpec(appSpec, {
+    "identity.primary.oidc": {
+      materialKind: "identity.oidc@v1",
+      issuerUrl: "https://accounts.example.test",
+    },
+  });
+
+  assert.equal(bindings.length, 1);
+  assert.deepEqual(bindings[0].envInjections, {
+    OIDC_MATERIAL_KIND: "identity.oidc@v1",
+    OIDC_ISSUER_URL: "https://accounts.example.test",
+  });
+});
+
+test("BindingResolver.resolveAppSpec accepts collection items matched by materialKind", async () => {
+  const resolver = new BindingResolver();
+  const appSpec: AppSpec = {
+    apiVersion: APP_SPEC_API_VERSION,
+    metadata: { id: "demo", name: "Demo" },
+    components: {
+      agent: {
+        kind: "worker",
+        listen: {
+          tools: {
+            kind: "mcp-server",
+            many: true,
+            inject: "upstream",
+          },
+        },
+      },
+    },
+  };
+  const material: OutputMaterial = {
+    kind: "collection",
+    items: [
+      { materialKind: "mcp-server", url: "https://one.example.test/mcp" },
+      { materialKind: "mcp-server", url: "https://two.example.test/mcp" },
+    ],
+  };
+  const bindings = await resolver.resolveAppSpec(appSpec, {
+    "kind:mcp-server": material,
+  });
+
+  assert.equal(bindings.length, 1);
+  assert.deepEqual(bindings[0].target, material);
+});
+
+test("BindingResolver.resolveAppSpec rejects mismatched collection item materialKind", async () => {
+  const resolver = new BindingResolver();
+  const appSpec: AppSpec = {
+    apiVersion: APP_SPEC_API_VERSION,
+    metadata: { id: "demo", name: "Demo" },
+    components: {
+      agent: {
+        kind: "worker",
+        listen: {
+          tools: {
+            kind: "mcp-server",
+            many: true,
+            inject: "upstream",
+          },
+        },
+      },
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      resolver.resolveAppSpec(appSpec, {
+        "kind:mcp-server": {
+          kind: "collection",
+          items: [
+            { materialKind: "mcp-server", url: "https://one.example.test/mcp" },
+            { materialKind: "object-store", bucket: "docs-cache" },
+          ],
+        },
+      }),
+    (error: unknown) => {
+      assert.equal(error instanceof BindingResolutionError, true);
+      assert.equal(
+        (error as BindingResolutionError).code,
+        "material_kind_mismatch",
+      );
+      assert.equal(
+        (error as BindingResolutionError).details.expectedKind,
+        "mcp-server",
+      );
+      assert.equal(
+        (error as BindingResolutionError).details.actualKind,
+        "object-store",
+      );
+      assert.equal((error as BindingResolutionError).details.itemIndex, "1");
+      return true;
+    },
+  );
+});
+
+test("BindingResolver.resolveAppSpec rejects conflicting kind and materialKind fields", async () => {
+  const resolver = new BindingResolver();
+  const appSpec: AppSpec = {
+    apiVersion: APP_SPEC_API_VERSION,
+    metadata: { id: "demo", name: "Demo" },
+    components: {
+      web: {
+        kind: "worker",
+        listen: {
+          oidc: {
+            path: "identity.primary.oidc",
+            kind: "identity.oidc@v1",
+            inject: "env",
+            required: true,
+          },
+        },
+      },
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      resolver.resolveAppSpec(appSpec, {
+        "identity.primary.oidc": {
+          kind: "other.material@v1",
+          materialKind: "identity.oidc@v1",
+        },
+      }),
+    (error: unknown) => {
+      assert.equal(error instanceof BindingResolutionError, true);
+      assert.match(String((error as Error).message), /conflicting kind fields/);
+      return true;
+    },
+  );
 });

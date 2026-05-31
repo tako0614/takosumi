@@ -1,6 +1,7 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 
-Deno.test("kernel startup diagnostics reference current docs", async () => {
+test("kernel startup diagnostics reference current docs", async () => {
   const source = await Deno.readTextFile(
     new URL("./index.ts", import.meta.url),
   );

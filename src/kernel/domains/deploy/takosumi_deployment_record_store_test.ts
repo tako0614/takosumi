@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryTakosumiDeploymentRecordStore,
@@ -8,7 +9,7 @@ const TENANT = "takosumi-deploy";
 const NOW_1 = "2026-05-02T00:00:00.000Z";
 const NOW_2 = "2026-05-02T00:00:01.000Z";
 
-Deno.test("upsert inserts a new row when (tenantId, name) is fresh", async () => {
+test("upsert inserts a new row when (tenantId, name) is fresh", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   const record = await store.upsert({
     tenantId: TENANT,
@@ -26,7 +27,7 @@ Deno.test("upsert inserts a new row when (tenantId, name) is fresh", async () =>
   assert.ok(record.id.length > 0);
 });
 
-Deno.test("upsert updates the same row when natural key matches", async () => {
+test("upsert updates the same row when natural key matches", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   const first = await store.upsert({
     tenantId: TENANT,
@@ -58,7 +59,7 @@ Deno.test("upsert updates the same row when natural key matches", async () => {
   assert.equal(second.appliedResources[0].handle, "h_1");
 });
 
-Deno.test("upsert keys tenant and deployment name as a tuple", async () => {
+test("upsert keys tenant and deployment name as a tuple", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   const first = await store.upsert({
     tenantId: "tenant a",
@@ -82,13 +83,13 @@ Deno.test("upsert keys tenant and deployment name as a tuple", async () => {
   assert.equal((await store.get("tenant", "a app"))?.manifest.name, "second");
 });
 
-Deno.test("get returns undefined for missing rows", async () => {
+test("get returns undefined for missing rows", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   const missing = await store.get(TENANT, "nope");
   assert.equal(missing, undefined);
 });
 
-Deno.test("list filters by tenantId", async () => {
+test("list filters by tenantId", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   await store.upsert({
     tenantId: "tenant-a",
@@ -114,7 +115,7 @@ Deno.test("list filters by tenantId", async () => {
   assert.equal(b[0].tenantId, "tenant-b");
 });
 
-Deno.test("markDestroyed clears appliedResources and flips status", async () => {
+test("markDestroyed clears appliedResources and flips status", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   await store.upsert({
     tenantId: TENANT,
@@ -140,13 +141,13 @@ Deno.test("markDestroyed clears appliedResources and flips status", async () => 
   assert.equal(updated!.createdAt, NOW_1);
 });
 
-Deno.test("markDestroyed returns undefined when no row matches", async () => {
+test("markDestroyed returns undefined when no row matches", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   const result = await store.markDestroyed(TENANT, "ghost", NOW_2);
   assert.equal(result, undefined);
 });
 
-Deno.test("remove drops the row and returns true once", async () => {
+test("remove drops the row and returns true once", async () => {
   const store = new InMemoryTakosumiDeploymentRecordStore();
   await store.upsert({
     tenantId: TENANT,
@@ -160,7 +161,7 @@ Deno.test("remove drops the row and returns true once", async () => {
   assert.equal(await store.remove(TENANT, "my-app"), false);
 });
 
-Deno.test("recordsFromAppliedResources copies shape from manifest", () => {
+test("recordsFromAppliedResources copies shape from manifest", () => {
   const records = recordsFromAppliedResources(
     [{
       name: "logs",
@@ -194,8 +195,7 @@ const HASH_C =
 const HASH_D =
   "sha256:4444444444444444444444444444444444444444444444444444444444444444";
 
-Deno.test(
-  "listReferencedArtifactHashes finds artifact.hash in manifest tree",
+test("listReferencedArtifactHashes finds artifact.hash in manifest tree",
   async () => {
     const store = new InMemoryTakosumiDeploymentRecordStore();
     await store.upsert({
@@ -219,8 +219,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "listReferencedArtifactHashes unions across many records",
+test("listReferencedArtifactHashes unions across many records",
   async () => {
     const store = new InMemoryTakosumiDeploymentRecordStore();
     await store.upsert({
@@ -244,8 +243,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "listReferencedArtifactHashes preserves hash on destroyed records",
+test("listReferencedArtifactHashes preserves hash on destroyed records",
   async () => {
     const store = new InMemoryTakosumiDeploymentRecordStore();
     await store.upsert({
@@ -267,8 +265,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "listReferencedArtifactHashes ignores non-hash strings",
+test("listReferencedArtifactHashes ignores non-hash strings",
   async () => {
     const store = new InMemoryTakosumiDeploymentRecordStore();
     await store.upsert({
@@ -287,8 +284,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "listReferencedArtifactHashes scans applied resource outputs too",
+test("listReferencedArtifactHashes scans applied resource outputs too",
   async () => {
     const store = new InMemoryTakosumiDeploymentRecordStore();
     await store.upsert({

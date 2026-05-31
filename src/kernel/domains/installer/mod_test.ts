@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 /**
  * InstallerPipeline lifecycle hook + KernelPlugin integration tests.
  *
@@ -22,7 +23,11 @@ import {
   type ProviderApplyContext,
   type ProviderApplyResult,
 } from "./mod.ts";
-import { InMemoryDeploymentStore } from "./store.ts";
+import {
+  InMemoryDeploymentStore,
+  InMemoryInstallationStore,
+  InMemoryPublicationPathStore,
+} from "./store.ts";
 
 // Canonical AppSpec: a `postgres` component produces `db.connection`; a
 // `worker` component connects to it with `inject: env` + `prefix: DB` so the
@@ -136,7 +141,7 @@ function defaultTestOutputMaterial(
   return ctx.outputs as OutputMaterial;
 }
 
-Deno.test("installer lifecycle hooks fire onInstallStart -> onDeploymentStart -> apply -> onDeploymentComplete -> onInstallComplete", async () => {
+test("installer lifecycle hooks fire onInstallStart -> onDeploymentStart -> apply -> onDeploymentComplete -> onInstallComplete", async () => {
   await withTempSource(async (dir) => {
     const events: string[] = [];
     const dbPlugin = buildRecordingPlugin({
@@ -185,7 +190,7 @@ Deno.test("installer lifecycle hooks fire onInstallStart -> onDeploymentStart ->
   });
 });
 
-Deno.test("installer lifecycle hooks fire on subsequent deployments without re-running install hooks", async () => {
+test("installer lifecycle hooks fire on subsequent deployments without re-running install hooks", async () => {
   await withTempSource(async (dir) => {
     const events: string[] = [];
     const dbPlugin = buildRecordingPlugin({
@@ -225,7 +230,7 @@ Deno.test("installer lifecycle hooks fire on subsequent deployments without re-r
   });
 });
 
-Deno.test("InstallerPipeline resolves required platform services through operator resolver", async () => {
+test("InstallerPipeline resolves required platform services through operator resolver", async () => {
   const spec = `apiVersion: v1
 metadata:
   id: platform-listen-test
@@ -286,7 +291,7 @@ components:
   }, spec);
 });
 
-Deno.test("InstallerPipeline rejects missing required platform service", async () => {
+test("InstallerPipeline rejects missing required platform service", async () => {
   const spec = `apiVersion: v1
 metadata:
   id: missing-platform-listen-test
@@ -323,7 +328,7 @@ components:
   }, spec);
 });
 
-Deno.test("InstallerPipeline records root publish as service path declaration", async () => {
+test("InstallerPipeline records root publish as service path declaration", async () => {
   const spec = `apiVersion: v1
 metadata:
   id: service-path-declaration-test
@@ -377,7 +382,160 @@ publish:
   }, spec);
 });
 
-Deno.test("InstallerPipeline rollback moves current pointer without creating a new Deployment", async () => {
+test("InstallerPipeline materializes root publish with PublishOptions", async () => {
+  const spec = `apiVersion: v1
+metadata:
+  id: publish-options-test
+  name: Publish Options Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    kind: postgresql
+    path: database.primary.connection
+    labels:
+      tier: primary
+`;
+  await withTempSource(async (dir) => {
+    const seenOptions: Array<OutputMaterialContext["options"]> = [];
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: [],
+          outputs: { host: "db.local" },
+          materializeOutput: (ctx) => {
+            seenOptions.push(ctx.options);
+            if (ctx.options) {
+              return Promise.resolve({
+                materialKind: ctx.options.kind ?? "unknown",
+                publicationPath: ctx.options.path ?? "",
+                labelTier: ctx.options.labels?.tier ?? "",
+              });
+            }
+            return Promise.resolve({
+              protocol: "postgresql",
+              host: String(ctx.outputs.host),
+            });
+          },
+        }),
+      ],
+    });
+
+    const { deployment } = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+
+    assert.deepEqual(seenOptions.map((options) => options?.path ?? null), [
+      "database.primary.connection",
+    ]);
+    assert.deepEqual(deployment.outputs.extensions, {
+      servicePathExposures: {
+        database: {
+          output: "db.connection",
+          kind: "postgresql",
+          path: "database.primary.connection",
+          labels: { tier: "primary" },
+          material: {
+            materialKind: "postgresql",
+            publicationPath: "database.primary.connection",
+            labelTier: "primary",
+          },
+        },
+      },
+    });
+  }, spec);
+});
+
+test("InstallerPipeline rejects root publish kind that does not match material kind", async () => {
+  const spec = `apiVersion: v1
+metadata:
+  id: publish-kind-mismatch-test
+  name: Publish Kind Mismatch Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    kind: object-store
+`;
+  await withTempSource(async (dir) => {
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: [],
+          outputs: { host: "db.local" },
+          materializeOutput: () =>
+            Promise.resolve({
+              materialKind: "postgresql",
+              host: "db.local",
+            }),
+        }),
+      ],
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /publish\.database\.kind expects material kind "object-store"/,
+    );
+  }, spec);
+});
+
+test("InstallerPipeline rejects root publish material with conflicting kind fields", async () => {
+  const spec = `apiVersion: v1
+metadata:
+  id: publish-kind-conflict-test
+  name: Publish Kind Conflict Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    kind: postgresql
+`;
+  await withTempSource(async (dir) => {
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: [],
+          outputs: { host: "db.local" },
+          materializeOutput: () =>
+            Promise.resolve({
+              kind: "postgresql",
+              materialKind: "object-store",
+              host: "db.local",
+            }),
+        }),
+      ],
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /conflicting kind fields/,
+    );
+  }, spec);
+});
+
+test("InstallerPipeline rollback moves current pointer without creating a new Deployment", async () => {
   await withTempSource(async (dir) => {
     const deployments = new InMemoryDeploymentStore();
     let nextId = 0;
@@ -436,7 +594,7 @@ Deno.test("InstallerPipeline rollback moves current pointer without creating a n
   });
 });
 
-Deno.test("InstallerPipeline failed redeploy keeps prior ready Installation current", async () => {
+test("InstallerPipeline failed redeploy keeps prior ready Installation current", async () => {
   await withTempSource(async (dir) => {
     const deployments = new InMemoryDeploymentStore();
     let applyCalls = 0;
@@ -485,7 +643,7 @@ Deno.test("InstallerPipeline failed redeploy keeps prior ready Installation curr
   });
 });
 
-Deno.test("installer onInstallStart error aborts apply and surfaces InstallerPipelineError", async () => {
+test("installer onInstallStart error aborts apply and surfaces InstallerPipelineError", async () => {
   await withTempSource(async (dir) => {
     const db: KernelPlugin = {
       name: "@example/postgres",
@@ -518,7 +676,7 @@ Deno.test("installer onInstallStart error aborts apply and surfaces InstallerPip
   });
 });
 
-Deno.test("installer onDeploymentComplete error is swallowed (post-apply hook is best-effort)", async () => {
+test("installer onDeploymentComplete error is swallowed (post-apply hook is best-effort)", async () => {
   await withTempSource(async (dir) => {
     const db: KernelPlugin = {
       name: "@example/postgres",
@@ -562,7 +720,7 @@ Deno.test("installer onDeploymentComplete error is swallowed (post-apply hook is
   });
 });
 
-Deno.test("installerProviderRegistryFromPlugins resolves operator alias via kind URI", async () => {
+test("installerProviderRegistryFromPlugins resolves operator alias via kind URI", async () => {
   const plugin = buildRecordingPlugin({
     name: "@example/worker",
     provides: ["https://takosumi.com/kinds/v1/worker"],
@@ -589,7 +747,7 @@ Deno.test("installerProviderRegistryFromPlugins resolves operator alias via kind
   );
 });
 
-Deno.test("installerProviderRegistryFromPlugins accepts operator-defined kind URI", async () => {
+test("installerProviderRegistryFromPlugins accepts operator-defined kind URI", async () => {
   const plugin = buildRecordingPlugin({
     name: "@operator/lambda",
     provides: ["https://example.com/kinds/lambda"],
@@ -610,7 +768,7 @@ Deno.test("installerProviderRegistryFromPlugins accepts operator-defined kind UR
   assert.equal(result.resource.provider, "@operator/lambda");
 });
 
-Deno.test("installerProviderRegistryFromPlugins throws when no plugin provides the kind", async () => {
+test("installerProviderRegistryFromPlugins throws when no plugin provides the kind", async () => {
   const registry = installerProviderRegistryFromPlugins([]);
 
   await assert.rejects(
@@ -627,7 +785,170 @@ Deno.test("installerProviderRegistryFromPlugins throws when no plugin provides t
   );
 });
 
-Deno.test("InstallerPipeline falls back to noop provider when no plugins / providers supplied", async () => {
+test("installerProviderRegistryFromPlugins maps plugin apply errors to InstallerPipelineError", async () => {
+  const registry = installerProviderRegistryFromPlugins([{
+    name: "@example/worker",
+    version: "1.0.0",
+    provides: ["worker"],
+    apply: () => Promise.reject(new Error("invalid projection")),
+  }]);
+
+  await assert.rejects(
+    registry.apply({
+      installationId: "ins_1",
+      componentName: "web",
+      component: { kind: "worker" },
+      source: { kind: "local", url: "/tmp/src" },
+      sourceDirectory: "/tmp/src",
+      listenedMaterials: {},
+      resolvedBindings: [],
+    }),
+    /plugin @example\/worker apply failed for component web: invalid projection/,
+  );
+});
+
+test("InstallerPipeline preflights plugin-backed providers before applying earlier components", async () => {
+  await withTempSource(async (dir) => {
+    const events: string[] = [];
+    const postgres: KernelPlugin = {
+      name: "@example/postgres",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/postgres"],
+      apply: (ctx) => {
+        events.push(`apply:${ctx.componentName}`);
+        return Promise.resolve({
+          resourceHandle: `postgres://${ctx.componentName}`,
+          outputs: {},
+        });
+      },
+    };
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [postgres],
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /no kernel plugin advertises kind worker \(component web\)/,
+    );
+    assert.deepEqual(events, []);
+  });
+});
+
+test("InstallerPipeline preflights plugin component validation before provider apply", async () => {
+  await withTempSource(async (dir) => {
+    const events: string[] = [];
+    const postgres: KernelPlugin = {
+      name: "@example/postgres",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/postgres"],
+      apply: (ctx) => {
+        events.push(`apply:${ctx.componentName}`);
+        return Promise.resolve({
+          resourceHandle: `postgres://${ctx.componentName}`,
+          outputs: {},
+        });
+      },
+    };
+    const worker: KernelPlugin = {
+      name: "@example/worker",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      validateComponent: () => {
+        throw new Error("unsupported binding projection");
+      },
+      apply: (ctx) => {
+        events.push(`apply:${ctx.componentName}`);
+        return Promise.resolve({
+          resourceHandle: `worker://${ctx.componentName}`,
+          outputs: {},
+        });
+      },
+    };
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [postgres, worker],
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /plugin @example\/worker rejected component web: unsupported binding projection/,
+    );
+    assert.deepEqual(events, []);
+  });
+});
+
+test("InstallerPipeline does not run install hooks before deployment preflight", async () => {
+  await withTempSource(async (dir) => {
+    const events: string[] = [];
+    const postgres = buildRecordingPlugin({
+      name: "@example/postgres",
+      provides: ["https://takosumi.com/kinds/v1/postgres"],
+      recorder: events,
+    });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [postgres],
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /no kernel plugin advertises kind worker \(component web\)/,
+    );
+    assert.deepEqual(events, []);
+  });
+});
+
+test("InstallerPipeline does not plugin-preflight custom providers", async () => {
+  await withTempSource(async (dir) => {
+    const recorded: string[] = [];
+    const providers: InstallerProviderRegistry = {
+      apply(ctx: ProviderApplyContext): Promise<ProviderApplyResult> {
+        recorded.push(ctx.componentName);
+        return Promise.resolve({
+          resource: {
+            component: ctx.componentName,
+            kind: ctx.component.kind,
+            provider: "test-direct",
+            resourceHandle: `test://${ctx.componentName}`,
+          },
+          outputs: {},
+        });
+      },
+    };
+    const postgres: KernelPlugin = {
+      name: "@example/postgres",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/postgres"],
+      apply: () =>
+        Promise.resolve({ resourceHandle: "postgres://x", outputs: {} }),
+    };
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [postgres],
+      providers,
+    });
+
+    const { deployment } = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+
+    assert.equal(deployment.status, "succeeded");
+    assert.deepEqual(recorded, ["db", "web"]);
+  });
+});
+
+test("InstallerPipeline falls back to noop provider when no plugins / providers supplied", async () => {
   await withTempSource(async (dir) => {
     const pipeline = new InstallerPipeline();
     const { deployment } = await pipeline.installationApply({
@@ -642,7 +963,7 @@ Deno.test("InstallerPipeline falls back to noop provider when no plugins / provi
   });
 });
 
-Deno.test("InstallerPipeline lets test code override providers directly without plugins", async () => {
+test("InstallerPipeline lets test code override providers directly without plugins", async () => {
   await withTempSource(async (dir) => {
     const recorded: ProviderApplyContext[] = [];
     const providers: InstallerProviderRegistry = {
@@ -669,7 +990,7 @@ Deno.test("InstallerPipeline lets test code override providers directly without 
   });
 });
 
-Deno.test("InstallerPipeline skips missing platform service refs by default", async () => {
+test("InstallerPipeline skips missing platform service refs by default", async () => {
   const yaml = `apiVersion: v1
 metadata:
   id: optional-platform-service-test
@@ -706,7 +1027,7 @@ components:
   }, yaml);
 });
 
-Deno.test("InstallerPipeline fails required missing platform service refs", async () => {
+test("InstallerPipeline fails required missing platform service refs", async () => {
   const yaml = `apiVersion: v1
 metadata:
   id: required-platform-service-test
@@ -742,7 +1063,73 @@ components:
   }, yaml);
 });
 
-Deno.test("InstallerPipeline binds discovery listen collections", async () => {
+test("InstallerPipeline preflights required listens before provider apply", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: required-listen-preflight-test
+  name: Required Listen Preflight Test
+components:
+  db:
+    kind: postgres
+  web:
+    kind: worker
+    listen:
+      oidc:
+        path: identity.primary.oidc
+        inject: env
+        required: true
+`;
+  await withTempSource(async (dir) => {
+    const events: string[] = [];
+    let resolverCalls = 0;
+    const dbPlugin: KernelPlugin = {
+      name: "@example/postgres",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/postgres"],
+      apply: (ctx) => {
+        events.push(`apply:${ctx.componentName}`);
+        return Promise.resolve({
+          resourceHandle: `postgres://${ctx.componentName}`,
+          outputs: {},
+        });
+      },
+    };
+    const workerPlugin: KernelPlugin = {
+      name: "@example/worker",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      apply: (ctx) => {
+        events.push(`apply:${ctx.componentName}`);
+        return Promise.resolve({
+          resourceHandle: `worker://${ctx.componentName}`,
+          outputs: {},
+        });
+      },
+    };
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [dbPlugin, workerPlugin],
+      platformServices: {
+        resolve: () => {
+          resolverCalls += 1;
+          return undefined;
+        },
+      },
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /web\.listen\.oidc refers to unresolved platform service "identity\.primary\.oidc"/,
+    );
+    assert.equal(resolverCalls, 1);
+    assert.deepEqual(events, []);
+  }, yaml);
+});
+
+test("InstallerPipeline binds discovery listen collections", async () => {
   const yaml = `apiVersion: v1
 metadata:
   id: mcp-discovery-test
@@ -808,7 +1195,220 @@ components:
   }, yaml);
 });
 
-Deno.test("InstallerPipeline enforces listen.kind compatibility at apply time", async () => {
+test("InstallerPipeline resolves platform listens per consumer binding", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: per-consumer-listen-test
+  name: Per Consumer Listen Test
+components:
+  api:
+    kind: worker
+    listen:
+      oidc:
+        path: identity.primary.oidc
+        kind: oidc-issuer
+        inject: env
+        required: true
+  admin:
+    kind: worker
+    listen:
+      oidc:
+        path: identity.primary.oidc
+        kind: oidc-issuer
+        inject: env
+        required: true
+`;
+  await withTempSource(async (dir) => {
+    const resolverCalls: string[] = [];
+    const captures = new Map<
+      string,
+      Readonly<Record<string, OutputMaterial>>
+    >();
+    const workerPlugin = buildRecordingPlugin({
+      name: "@example/worker",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      recorder: [],
+      captureApply: (ctx) =>
+        captures.set(ctx.componentName, ctx.inputMaterials),
+    });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [workerPlugin],
+      platformServices: {
+        resolve: (ctx) => {
+          resolverCalls.push(ctx.componentName);
+          return {
+            materialKind: "oidc-issuer",
+            clientId: `client-${ctx.componentName}`,
+          };
+        },
+      },
+    });
+
+    const { deployment } = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+
+    assert.equal(deployment.status, "succeeded");
+    assert.deepEqual(resolverCalls, ["api", "admin"]);
+    assert.equal(captures.get("api")?.oidc?.clientId, "client-api");
+    assert.equal(captures.get("admin")?.oidc?.clientId, "client-admin");
+  }, yaml);
+});
+
+test("InstallerPipeline binds empty discovery result as empty collection when many is true", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: empty-discovery-test
+  name: Empty Discovery Test
+components:
+  agent:
+    kind: worker
+    listen:
+      tools:
+        kind: mcp-server
+        many: true
+        inject: upstream
+`;
+  await withTempSource(async (dir) => {
+    const captures: Array<Readonly<Record<string, OutputMaterial>>> = [];
+    const workerPlugin = buildRecordingPlugin({
+      name: "@example/worker",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      recorder: [],
+      captureApply: (ctx) => captures.push(ctx.inputMaterials),
+    });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [workerPlugin],
+      platformServices: {
+        resolve: () => [],
+      },
+    });
+
+    const { deployment } = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+
+    assert.equal(deployment.status, "succeeded");
+    assert.deepEqual(captures, [
+      { tools: { kind: "collection", items: [] } },
+    ]);
+  }, yaml);
+});
+
+test("InstallerPipeline preflights discovery cardinality before provider apply", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: discovery-cardinality-preflight-test
+  name: Discovery Cardinality Preflight Test
+components:
+  db:
+    kind: postgres
+  web:
+    kind: worker
+    listen:
+      tools:
+        kind: mcp-server
+        inject: env
+`;
+  await withTempSource(async (dir) => {
+    const events: string[] = [];
+    const dbPlugin: KernelPlugin = {
+      name: "@example/postgres",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/postgres"],
+      apply: (ctx) => {
+        events.push(`apply:${ctx.componentName}`);
+        return Promise.resolve({
+          resourceHandle: `postgres://${ctx.componentName}`,
+          outputs: {},
+        });
+      },
+    };
+    const workerPlugin: KernelPlugin = {
+      name: "@example/worker",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      apply: (ctx) => {
+        events.push(`apply:${ctx.componentName}`);
+        return Promise.resolve({
+          resourceHandle: `worker://${ctx.componentName}`,
+          outputs: {},
+        });
+      },
+    };
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [dbPlugin, workerPlugin],
+      platformServices: {
+        resolve: () => [
+          { materialKind: "mcp-server", url: "https://one.example.test/mcp" },
+          { materialKind: "mcp-server", url: "https://two.example.test/mcp" },
+        ],
+      },
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /matched 2 entries; expected exactly one or set many: true/,
+    );
+    assert.deepEqual(events, []);
+  }, yaml);
+});
+
+test("InstallerPipeline rejects empty discovery result without many before provider apply", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: empty-single-discovery-test
+  name: Empty Single Discovery Test
+components:
+  web:
+    kind: worker
+    listen:
+      tool:
+        kind: mcp-server
+        inject: env
+`;
+  await withTempSource(async (dir) => {
+    const events: string[] = [];
+    const workerPlugin: KernelPlugin = {
+      name: "@example/worker",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      apply: (ctx) => {
+        events.push(`apply:${ctx.componentName}`);
+        return Promise.resolve({
+          resourceHandle: `worker://${ctx.componentName}`,
+          outputs: {},
+        });
+      },
+    };
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [workerPlugin],
+      platformServices: {
+        resolve: () => [],
+      },
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /matched 0 entries; expected exactly one/,
+    );
+    assert.deepEqual(events, []);
+  }, yaml);
+});
+
+test("InstallerPipeline enforces listen.kind compatibility at apply time", async () => {
   // `listen.path` with an explicit `kind` is a compatibility assertion: the
   // resolved material must advertise the same `kind`. The real deployment
   // pipeline (not just the test-only resolveAppSpec) must reject a mismatch.
@@ -852,7 +1452,7 @@ components:
   }, yaml);
 });
 
-Deno.test("InstallerPipeline binds listen.kind when material kind matches", async () => {
+test("InstallerPipeline binds listen.kind when material kind matches", async () => {
   const yaml = `apiVersion: v1
 metadata:
   id: listen-kind-match-test
@@ -890,7 +1490,7 @@ components:
   }, yaml);
 });
 
-Deno.test("InstallerPipeline rejects a second Installation publishing a path another already owns", async () => {
+test("InstallerPipeline rejects a second Installation publishing a path another already owns", async () => {
   const yaml = `apiVersion: v1
 metadata:
   id: publish-path-conflict-test
@@ -933,7 +1533,492 @@ publish:
   }, yaml);
 });
 
-Deno.test("InstallerPipeline serializes concurrent same-path fresh installs in one Space", async () => {
+test("InstallerPipeline exposes root publish paths to other Installation listens", async () => {
+  const publisherYaml = `apiVersion: v1
+metadata:
+  id: publish-listen-path-publisher
+  name: Publish Listen Path Publisher
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    path: database.primary.connection
+`;
+  const consumerYaml = `apiVersion: v1
+metadata:
+  id: publish-listen-path-consumer
+  name: Publish Listen Path Consumer
+components:
+  web:
+    kind: worker
+    listen:
+      db:
+        path: database.primary.connection
+        inject: env
+        required: true
+`;
+  await withTempSource(async (publisherDir) => {
+    await withTempSource(async (consumerDir) => {
+      let captured: Readonly<Record<string, OutputMaterial>> | undefined;
+      const pipeline = new InstallerPipeline({
+        kindAliases: TEST_KIND_ALIASES,
+        plugins: [
+          buildRecordingPlugin({
+            name: "@example/postgres",
+            provides: ["https://takosumi.com/kinds/v1/postgres"],
+            recorder: [],
+            outputs: { host: "published-db.local", port: "5432" },
+          }),
+          buildRecordingPlugin({
+            name: "@example/worker",
+            provides: ["https://takosumi.com/kinds/v1/worker"],
+            recorder: [],
+            captureApply: (ctx) => {
+              captured = ctx.inputMaterials;
+            },
+          }),
+        ],
+      });
+
+      await pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: publisherDir },
+      });
+      await pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: consumerDir },
+      });
+
+      assert.deepEqual(captured?.db, {
+        protocol: "postgresql",
+        host: "published-db.local",
+        port: 5432,
+      });
+    }, consumerYaml);
+  }, publisherYaml);
+});
+
+test("InstallerPipeline discovers pathless root publish materials by kind and labels", async () => {
+  const publisherYaml = `apiVersion: v1
+metadata:
+  id: publish-listen-discovery-publisher
+  name: Publish Listen Discovery Publisher
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    kind: service-binding
+    labels:
+      role: primary
+`;
+  const consumerYaml = `apiVersion: v1
+metadata:
+  id: publish-listen-discovery-consumer
+  name: Publish Listen Discovery Consumer
+components:
+  web:
+    kind: worker
+    listen:
+      db:
+        kind: service-binding
+        labels:
+          role: primary
+        inject: env
+        required: true
+`;
+  await withTempSource(async (publisherDir) => {
+    await withTempSource(async (consumerDir) => {
+      let captured: Readonly<Record<string, OutputMaterial>> | undefined;
+      const pipeline = new InstallerPipeline({
+        kindAliases: TEST_KIND_ALIASES,
+        plugins: [
+          buildRecordingPlugin({
+            name: "@example/postgres",
+            provides: ["https://takosumi.com/kinds/v1/postgres"],
+            recorder: [],
+            outputs: { host: "discovered-db.local", port: "5432" },
+            materializeOutput: (ctx) =>
+              Promise.resolve({
+                materialKind: "service-binding",
+                ...defaultTestOutputMaterial(ctx),
+              }),
+          }),
+          buildRecordingPlugin({
+            name: "@example/worker",
+            provides: ["https://takosumi.com/kinds/v1/worker"],
+            recorder: [],
+            captureApply: (ctx) => {
+              captured = ctx.inputMaterials;
+            },
+          }),
+        ],
+      });
+
+      await pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: publisherDir },
+      });
+      await pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: consumerDir },
+      });
+
+      assert.deepEqual(captured?.db, {
+        materialKind: "service-binding",
+        protocol: "postgresql",
+        host: "discovered-db.local",
+        port: 5432,
+      });
+    }, consumerYaml);
+  }, publisherYaml);
+});
+
+test("InstallerPipeline checks publish path conflicts before deployment hook and provider apply", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: publish-path-preflight-test
+  name: Publish Path Preflight Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    path: database.primary.connection
+`;
+  await withTempSource(async (dir) => {
+    const events: string[] = [];
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: events,
+          outputs: { host: "db.local", port: "5432" },
+        }),
+      ],
+    });
+    await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+    events.length = 0;
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /publish_path_conflict/,
+    );
+    assert.equal(
+      events.some((event) => event.startsWith("onDeploymentStart:")),
+      false,
+    );
+    assert.equal(events.some((event) => event.startsWith("apply:")), false);
+  }, yaml);
+});
+
+test("InstallerPipeline expires stale provisional publish path claims", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: publish-path-expired-claim-test
+  name: Publish Path Expired Claim Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    path: database.primary.connection
+`;
+  await withTempSource(async (dir) => {
+    const installations = new InMemoryInstallationStore();
+    const publicationPaths = new InMemoryPublicationPathStore();
+    await installations.put({
+      id: "ins_stale",
+      spaceId: "space_test",
+      appId: "stale.app",
+      currentDeploymentId: null,
+      status: "installing",
+      createdAt: 0,
+    });
+    await publicationPaths.claim({
+      spaceId: "space_test",
+      path: "database.primary.connection",
+      installationId: "ins_stale",
+      deploymentId: "dep_stale",
+      publishName: "database",
+      updatedAt: 0,
+      leaseExpiresAt: 100,
+    });
+    let now = 50;
+    const pipeline = new InstallerPipeline({
+      installations,
+      publicationPaths,
+      now: () => now,
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: [],
+          outputs: { host: "db.local", port: "5432" },
+        }),
+      ],
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /publish_path_conflict/,
+    );
+
+    now = 101;
+    const applied = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+    assert.equal(applied.deployment.status, "succeeded");
+  }, yaml);
+});
+
+test("InstallerPipeline ignores stale active publish path claims without a succeeded Deployment", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: publish-path-orphan-claim-test
+  name: Publish Path Orphan Claim Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    path: database.primary.connection
+`;
+  await withTempSource(async (dir) => {
+    const installations = new InMemoryInstallationStore();
+    const publicationPaths = new InMemoryPublicationPathStore();
+    await installations.put({
+      id: "ins_orphan",
+      spaceId: "space_test",
+      appId: "orphan.app",
+      currentDeploymentId: "dep_missing",
+      status: "ready",
+      createdAt: 0,
+    });
+    await publicationPaths.claim({
+      spaceId: "space_test",
+      path: "database.primary.connection",
+      installationId: "ins_orphan",
+      deploymentId: "dep_missing",
+      publishName: "database",
+      updatedAt: 0,
+    });
+    const pipeline = new InstallerPipeline({
+      installations,
+      publicationPaths,
+      now: () => 1,
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: [],
+          outputs: { host: "db.local", port: "5432" },
+        }),
+      ],
+    });
+
+    const applied = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+    assert.equal(applied.deployment.status, "succeeded");
+  }, yaml);
+});
+
+test("InstallerPipeline expires active publish claims that never became current", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: publish-path-uncurrent-claim-test
+  name: Publish Path Uncurrent Claim Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    path: database.primary.connection
+`;
+  await withTempSource(async (dir) => {
+    const installations = new InMemoryInstallationStore();
+    const deployments = new InMemoryDeploymentStore();
+    const publicationPaths = new InMemoryPublicationPathStore();
+    await installations.put({
+      id: "ins_uncurrent",
+      spaceId: "space_test",
+      appId: "uncurrent.app",
+      currentDeploymentId: null,
+      status: "installing",
+      createdAt: 0,
+    });
+    await deployments.put({
+      id: "dep_uncurrent",
+      installationId: "ins_uncurrent",
+      source: { kind: "local", url: dir },
+      manifestDigest: "sha256:uncurrent",
+      status: "succeeded",
+      outputs: {},
+      createdAt: 0,
+    });
+    await publicationPaths.claim({
+      spaceId: "space_test",
+      path: "database.primary.connection",
+      installationId: "ins_uncurrent",
+      deploymentId: "dep_uncurrent",
+      publishName: "database",
+      updatedAt: 0,
+    });
+    const pipeline = new InstallerPipeline({
+      installations,
+      deployments,
+      publicationPaths,
+      now: () => 10 * 60 * 1000 + 1,
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: [],
+          outputs: { host: "db.local", port: "5432" },
+        }),
+      ],
+    });
+
+    const applied = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+    assert.equal(applied.deployment.status, "succeeded");
+  }, yaml);
+});
+
+test("InstallerPipeline lets an Installation keep its pathful publish on redeploy", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: publish-path-redeploy-test
+  name: Publish Path Redeploy Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    path: database.primary.connection
+`;
+  await withTempSource(async (dir) => {
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [
+        buildRecordingPlugin({
+          name: "@example/postgres",
+          provides: ["https://takosumi.com/kinds/v1/postgres"],
+          recorder: [],
+          outputs: { host: "db.local", port: "5432" },
+        }),
+      ],
+    });
+    const first = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+
+    const second = await pipeline.deploymentApply(first.installation.id, {
+      source: { kind: "local", url: dir },
+    });
+
+    assert.equal(second.deployment.status, "succeeded");
+    assert.deepEqual(second.deployment.outputs.extensions, {
+      servicePathExposures: {
+        database: {
+          output: "db.connection",
+          path: "database.primary.connection",
+          material: {
+            protocol: "postgresql",
+            host: "db.local",
+            port: 5432,
+          },
+        },
+      },
+    });
+  }, yaml);
+});
+
+test("InstallerPipeline rejects rollback when target publish path is now owned by another Installation", async () => {
+  const pathful = `apiVersion: v1
+metadata:
+  id: rollback-path-conflict-test
+  name: Rollback Path Conflict Test
+components:
+  db:
+    kind: postgres
+publish:
+  database:
+    output: db.connection
+    path: database.primary.connection
+`;
+  const pathless = `apiVersion: v1
+metadata:
+  id: rollback-path-conflict-test
+  name: Rollback Path Conflict Test
+components:
+  db:
+    kind: postgres
+`;
+  await withTempSource(async (pathfulDir) => {
+    await withTempSource(async (pathlessDir) => {
+      const pipeline = new InstallerPipeline({
+        kindAliases: TEST_KIND_ALIASES,
+        plugins: [
+          buildRecordingPlugin({
+            name: "@example/postgres",
+            provides: ["https://takosumi.com/kinds/v1/postgres"],
+            recorder: [],
+            outputs: { host: "db.local", port: "5432" },
+          }),
+        ],
+      });
+      const first = await pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: pathfulDir },
+      });
+      await pipeline.deploymentApply(first.installation.id, {
+        source: { kind: "local", url: pathlessDir },
+      });
+      await pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: pathfulDir },
+      });
+
+      await assert.rejects(
+        pipeline.rollback(first.installation.id, {
+          deploymentId: first.deployment.id,
+        }),
+        /publish_path_conflict/,
+      );
+    }, pathless);
+  }, pathful);
+});
+
+test("InstallerPipeline serializes concurrent same-path fresh installs in one Space", async () => {
   // Two fresh installs of the same pathful publish started concurrently must
   // not both succeed: the per-Space mutation chain serializes them so the
   // second observes the first's publication and is rejected.
@@ -982,7 +2067,7 @@ publish:
   }, yaml);
 });
 
-Deno.test("InstallerPipeline rejects unmapped provider outputs for connected output", async () => {
+test("InstallerPipeline rejects unmapped provider outputs for connected output", async () => {
   await withTempSource(async (dir) => {
     const dbPlugin: KernelPlugin = {
       name: "@example/postgres",
@@ -1014,7 +2099,95 @@ Deno.test("InstallerPipeline rejects unmapped provider outputs for connected out
   });
 });
 
-Deno.test("InstallerPipeline accepts prepared source tar with source digest pin", async () => {
+test("InstallerPipeline rejects missing output slots even when provider outputs are empty", async () => {
+  await withTempSource(async (dir) => {
+    const dbPlugin: KernelPlugin = {
+      name: "@example/postgres",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/postgres"],
+      apply: () =>
+        Promise.resolve({
+          resourceHandle: "postgres://x",
+          outputs: {},
+        }),
+    };
+    const workerPlugin = buildRecordingPlugin({
+      name: "@example/worker",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      recorder: [],
+    });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [dbPlugin, workerPlugin],
+    });
+
+    await assert.rejects(
+      pipeline.installationApply({
+        spaceId: "space_test",
+        source: { kind: "local", url: dir },
+      }),
+      /output connection requires the component materializer/,
+    );
+  });
+});
+
+test("InstallerPipeline preserves output slot named outputs when recording raw provider outputs", async () => {
+  const yaml = `apiVersion: v1
+metadata:
+  id: output-slot-collision-test
+  name: Output Slot Collision Test
+components:
+  db:
+    kind: postgres
+  web:
+    kind: worker
+    connect:
+      data:
+        output: db.outputs
+        inject: upstream
+`;
+  await withTempSource(async (dir) => {
+    const dbPlugin: KernelPlugin = {
+      name: "@example/postgres",
+      version: "1.0.0",
+      provides: ["https://takosumi.com/kinds/v1/postgres"],
+      apply: () =>
+        Promise.resolve({
+          resourceHandle: "postgres://x",
+          outputs: { rawUrl: "postgres://raw" },
+        }),
+      materializeOutput: (ctx) =>
+        Promise.resolve({
+          materialKind: "db.outputs",
+          value: String(ctx.outputs.rawUrl),
+        }),
+    };
+    const workerPlugin = buildRecordingPlugin({
+      name: "@example/worker",
+      provides: ["https://takosumi.com/kinds/v1/worker"],
+      recorder: [],
+    });
+    const pipeline = new InstallerPipeline({
+      kindAliases: TEST_KIND_ALIASES,
+      plugins: [dbPlugin, workerPlugin],
+    });
+
+    const { deployment } = await pipeline.installationApply({
+      spaceId: "space_test",
+      source: { kind: "local", url: dir },
+    });
+
+    assert.deepEqual(deployment.outputs.components?.db?.outputs, {
+      materialKind: "db.outputs",
+      value: "postgres://raw",
+    });
+    assert.deepEqual(deployment.outputs.components?.db?.providerOutputs, {
+      rawUrl: "postgres://raw",
+    });
+  }, yaml);
+});
+
+test("InstallerPipeline accepts prepared source tar with source digest pin", async () => {
   const prepared = await makePreparedSource();
   try {
     const pipeline = new InstallerPipeline({

@@ -1,8 +1,9 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { DomainError } from "../../shared/errors.ts";
 import { buildChangeSetPartialSuccessResult, ChangeSetPlanner } from "./mod.ts";
 
-Deno.test("change-set planner orders groups before output/event/resource changes", () => {
+test("change-set planner orders groups before output/event/resource changes", () => {
   const plan = new ChangeSetPlanner().plan({
     id: "plan-ordering",
     changes: [
@@ -36,7 +37,7 @@ Deno.test("change-set planner orders groups before output/event/resource changes
   );
 });
 
-Deno.test("change-set planner blocks dependency cycles", () => {
+test("change-set planner blocks dependency cycles", () => {
   assert.throws(
     () =>
       new ChangeSetPlanner().plan({
@@ -57,7 +58,7 @@ Deno.test("change-set planner blocks dependency cycles", () => {
   );
 });
 
-Deno.test("change-set partial success result keeps succeeded changes and skips dependents", () => {
+test("change-set partial success result keeps succeeded changes and skips dependents", () => {
   const planner = new ChangeSetPlanner();
   const plan = planner.plan({
     id: "plan-partial",

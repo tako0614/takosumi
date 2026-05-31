@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 import {
@@ -22,7 +23,7 @@ function buildPlugin(
   };
 }
 
-Deno.test("registry exposes registered plugins in registration order", () => {
+test("registry exposes registered plugins in registration order", () => {
   const a = buildPlugin("@example/a", ["https://example.test/kinds/v1/a"]);
   const b = buildPlugin("@example/b", ["https://example.test/kinds/v1/b"]);
   const registry = createKernelPluginRegistry([a, b]);
@@ -33,7 +34,7 @@ Deno.test("registry exposes registered plugins in registration order", () => {
   );
 });
 
-Deno.test("registry resolves operator alias to kind URI lookup", () => {
+test("registry resolves operator alias to kind URI lookup", () => {
   const workerPlugin = buildPlugin(
     "@takos/workers-reference",
     ["https://takosumi.com/kinds/v1/worker"],
@@ -54,7 +55,7 @@ Deno.test("registry resolves operator alias to kind URI lookup", () => {
   );
 });
 
-Deno.test("registry resolves operator-defined kind URI without normalization", () => {
+test("registry resolves operator-defined kind URI without normalization", () => {
   const operatorPlugin = buildPlugin(
     "@operator/lambda",
     ["https://operator.example.com/kinds/lambda"],
@@ -68,7 +69,7 @@ Deno.test("registry resolves operator-defined kind URI without normalization", (
   );
 });
 
-Deno.test("registry rejects duplicate plugin name", () => {
+test("registry rejects duplicate plugin name", () => {
   const a = buildPlugin("@example/dup", ["https://example.test/kinds/v1/a"]);
   const b = buildPlugin("@example/dup", ["https://example.test/kinds/v1/b"]);
 
@@ -78,7 +79,7 @@ Deno.test("registry rejects duplicate plugin name", () => {
   );
 });
 
-Deno.test("registry rejects conflicting kind URI providers", () => {
+test("registry rejects conflicting kind URI providers", () => {
   const a = buildPlugin("@example/a", ["https://example.test/kinds/v1/x"]);
   const b = buildPlugin("@example/b", ["https://example.test/kinds/v1/x"]);
 
@@ -88,7 +89,7 @@ Deno.test("registry rejects conflicting kind URI providers", () => {
   );
 });
 
-Deno.test("registry refuses plugin with empty provides[]", () => {
+test("registry refuses plugin with empty provides[]", () => {
   assert.throws(
     () =>
       createKernelPluginRegistry([
@@ -103,7 +104,7 @@ Deno.test("registry refuses plugin with empty provides[]", () => {
   );
 });
 
-Deno.test("registry refuses plugin without apply()", () => {
+test("registry refuses plugin without apply()", () => {
   assert.throws(
     () =>
       createKernelPluginRegistry([
@@ -119,7 +120,7 @@ Deno.test("registry refuses plugin without apply()", () => {
   );
 });
 
-Deno.test("normalizeKindToUri resolves only operator-provided aliases", () => {
+test("normalizeKindToUri resolves only operator-provided aliases", () => {
   assert.equal(
     normalizeKindToUri("worker", {
       worker: "https://takosumi.com/kinds/v1/worker",
@@ -137,7 +138,7 @@ Deno.test("normalizeKindToUri resolves only operator-provided aliases", () => {
   );
 });
 
-Deno.test("findPluginForKind returns undefined when no plugin matches", () => {
+test("findPluginForKind returns undefined when no plugin matches", () => {
   const registry = createKernelPluginRegistry([]);
   assert.equal(findPluginForKind(registry, "worker"), undefined);
   assert.equal(

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import {
   postgresStorageMigrationStatements,
   postgresStorageTableDefinitions,
@@ -79,7 +80,7 @@ const mirroredMigrationFiles: readonly {
   },
 ];
 
-Deno.test("deploy statement catalog references deployment tables only", () => {
+test("deploy statement catalog references deployment tables only", () => {
   for (const statement of storageStatementCatalog.deploy) {
     const tables = extractReferencedTables(statement.sql);
     for (const table of tables) {
@@ -99,7 +100,7 @@ Deno.test("deploy statement catalog references deployment tables only", () => {
   );
 });
 
-Deno.test("statement catalog references declared storage tables", () => {
+test("statement catalog references declared storage tables", () => {
   const declared = new Set(
     postgresStorageTableDefinitions.map((definition) => definition.name),
   );
@@ -113,7 +114,7 @@ Deno.test("statement catalog references declared storage tables", () => {
   }
 });
 
-Deno.test("statement insert and update columns exist in table definitions", () => {
+test("statement insert and update columns exist in table definitions", () => {
   const definitions = new Map(
     postgresStorageTableDefinitions.map((definition) => [
       definition.name,
@@ -130,7 +131,7 @@ Deno.test("statement insert and update columns exist in table definitions", () =
   }
 });
 
-Deno.test("migration catalog creates every declared storage table", () => {
+test("migration catalog creates every declared storage table", () => {
   const createdTables = new Set(
     extractCreatedTables(
       postgresStorageMigrationStatements.map((migration) => migration.sql)
@@ -145,7 +146,7 @@ Deno.test("migration catalog creates every declared storage table", () => {
   }
 });
 
-Deno.test("deployment unification migration is forward-only", () => {
+test("deployment unification migration is forward-only", () => {
   const migration = postgresStorageMigrationStatements.find((entry) =>
     entry.id === "deploy.unify_to_deployments"
   );
@@ -153,7 +154,7 @@ Deno.test("deployment unification migration is forward-only", () => {
   assertEquals(migration.down, undefined);
 });
 
-Deno.test("migration SQL files do not drift from the storage catalog", () => {
+test("migration SQL files do not drift from the storage catalog", () => {
   const migrationsById = new Map(
     postgresStorageMigrationStatements.map((migration) => [
       migration.id,
@@ -199,7 +200,7 @@ Deno.test("migration SQL files do not drift from the storage catalog", () => {
   }
 });
 
-Deno.test("migration SQL files have unique timestamp prefixes", () => {
+test("migration SQL files have unique timestamp prefixes", () => {
   const seen = new Map<string, string>();
   for (const fileName of listMigrationSqlFiles()) {
     const match = /^(\d{14})_/.exec(fileName);

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   decideRuntimeLogRetention,
@@ -5,7 +6,7 @@ import {
   type RuntimeLogAppendInput,
 } from "./mod.ts";
 
-Deno.test("runtime logs redact messages and payloads on append", async () => {
+test("runtime logs redact messages and payloads on append", async () => {
   const service = new InMemoryRuntimeLogsService();
 
   const event = await service.append(log({
@@ -31,7 +32,7 @@ Deno.test("runtime logs redact messages and payloads on append", async () => {
   assert.deepEqual(stored, event);
 });
 
-Deno.test("runtime logs query by worker, stream, level, time, text, and limit", async () => {
+test("runtime logs query by worker, stream, level, time, text, and limit", async () => {
   const service = new InMemoryRuntimeLogsService();
 
   await service.append(
@@ -77,7 +78,7 @@ Deno.test("runtime logs query by worker, stream, level, time, text, and limit", 
   assert.deepEqual(events.map((event) => event.id), ["2"]);
 });
 
-Deno.test("runtime logs retention decision identifies expired window", () => {
+test("runtime logs retention decision identifies expired window", () => {
   const decision = decideRuntimeLogRetention({
     now: "2026-04-27T01:00:00.000Z",
     policy: { windowMs: 60 * 60 * 1000 },
@@ -88,7 +89,7 @@ Deno.test("runtime logs retention decision identifies expired window", () => {
   assert.equal(decision.shouldPrune, true);
 });
 
-Deno.test("runtime logs prune removes events outside retention window", async () => {
+test("runtime logs prune removes events outside retention window", async () => {
   const service = new InMemoryRuntimeLogsService({ windowMs: 60 * 60 * 1000 });
 
   await service.append(

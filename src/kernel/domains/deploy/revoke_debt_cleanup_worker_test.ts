@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   type ApplyResult,
@@ -106,7 +107,7 @@ async function seedDeployment(
   });
 }
 
-Deno.test("RevokeDebtCleanupWorker clears debt through provider compensate", async () => {
+test("RevokeDebtCleanupWorker clears debt through provider compensate", async () => {
   const revokeDebtStore = new InMemoryRevokeDebtStore({
     idFactory: () => "revoke-debt:cleanup-one",
   });
@@ -159,7 +160,7 @@ Deno.test("RevokeDebtCleanupWorker clears debt through provider compensate", asy
   }
 });
 
-Deno.test("RevokeDebtCleanupWorker falls back to destroy when compensate is absent", async () => {
+test("RevokeDebtCleanupWorker falls back to destroy when compensate is absent", async () => {
   const revokeDebtStore = new InMemoryRevokeDebtStore({
     idFactory: () => "revoke-debt:cleanup-destroy",
   });
@@ -193,7 +194,7 @@ Deno.test("RevokeDebtCleanupWorker falls back to destroy when compensate is abse
   }
 });
 
-Deno.test("RevokeDebtCleanupWorker records retryable compensation failure", async () => {
+test("RevokeDebtCleanupWorker records retryable compensation failure", async () => {
   const revokeDebtStore = new InMemoryRevokeDebtStore({
     idFactory: () => "revoke-debt:cleanup-retry",
   });
@@ -243,7 +244,7 @@ Deno.test("RevokeDebtCleanupWorker records retryable compensation failure", asyn
   }
 });
 
-Deno.test("RevokeDebtCleanupWorker does not let not-due debts starve a due debt against the per-tick limit", async () => {
+test("RevokeDebtCleanupWorker does not let not-due debts starve a due debt against the per-tick limit", async () => {
   const revokeDebtStore = new InMemoryRevokeDebtStore();
   const deploymentStore = new InMemoryTakosumiDeploymentRecordStore();
   registerProvider(
@@ -329,7 +330,7 @@ Deno.test("RevokeDebtCleanupWorker does not let not-due debts starve a due debt 
   }
 });
 
-Deno.test("RevokeDebtCleanupWorker blocks debt when cleanup handle is unresolved", async () => {
+test("RevokeDebtCleanupWorker blocks debt when cleanup handle is unresolved", async () => {
   const revokeDebtStore = new InMemoryRevokeDebtStore({
     idFactory: () => "revoke-debt:cleanup-missing",
   });

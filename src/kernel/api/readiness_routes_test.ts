@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { Hono, type Hono as HonoApp } from "hono";
 import type { GroupSummaryStatusProjection } from "../services/status/mod.ts";
@@ -6,7 +7,7 @@ import {
   TAKOSUMI_PAAS_READINESS_PATHS,
 } from "./readiness_routes.ts";
 
-Deno.test("readiness routes expose injected liveness and readiness probes", async () => {
+test("readiness routes expose injected liveness and readiness probes", async () => {
   const app = createApp({
     ready: () => ({
       ok: true,
@@ -30,7 +31,7 @@ Deno.test("readiness routes expose injected liveness and readiness probes", asyn
   assert.deepEqual(await live.json(), { ok: true, pid: 1234 });
 });
 
-Deno.test("readiness route returns service unavailable for failed probes", async () => {
+test("readiness route returns service unavailable for failed probes", async () => {
   const app = createApp({
     ready: () => ({
       ok: false,
@@ -67,7 +68,7 @@ Deno.test("readiness route returns service unavailable for failed probes", async
   });
 });
 
-Deno.test("readiness route returns service unavailable for booting probes", async () => {
+test("readiness route returns service unavailable for booting probes", async () => {
   const app = createApp({
     ready: () => ({
       ok: false,
@@ -94,7 +95,7 @@ Deno.test("readiness route returns service unavailable for booting probes", asyn
   });
 });
 
-Deno.test("status summary route returns existing projection DTO", async () => {
+test("status summary route returns existing projection DTO", async () => {
   const app = createApp({
     ready: () => ({ ok: true }),
     live: () => ({ ok: true }),
@@ -109,7 +110,7 @@ Deno.test("status summary route returns existing projection DTO", async () => {
   assert.deepEqual(await response.json(), activeStatusSummary);
 });
 
-Deno.test("status summary route reports probe failures", async () => {
+test("status summary route reports probe failures", async () => {
   const app = createApp({
     ready: () => ({ ok: true }),
     live: () => ({ ok: true }),
@@ -131,7 +132,7 @@ Deno.test("status summary route reports probe failures", async () => {
   });
 });
 
-Deno.test("status summary route rejects non-catalog condition reasons", async () => {
+test("status summary route rejects non-catalog condition reasons", async () => {
   const app = createApp({
     ready: () => ({ ok: true }),
     live: () => ({ ok: true }),

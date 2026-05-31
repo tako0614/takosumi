@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   __resetConfigFileCacheForTesting,
@@ -5,7 +6,7 @@ import {
   resolveMode,
 } from "../config.ts";
 
-Deno.test("resolveMode prefers explicit --remote flag", () => {
+test("resolveMode prefers explicit --remote flag", () => {
   const result = resolveMode(
     { remote: "https://kernel.local", token: "t1" },
     { kernelUrl: "https://config.local", token: "tcfg" },
@@ -17,7 +18,7 @@ Deno.test("resolveMode prefers explicit --remote flag", () => {
   });
 });
 
-Deno.test("resolveMode falls back to config kernelUrl", () => {
+test("resolveMode falls back to config kernelUrl", () => {
   const result = resolveMode(
     {},
     { kernelUrl: "https://config.local", token: "tcfg" },
@@ -29,12 +30,12 @@ Deno.test("resolveMode falls back to config kernelUrl", () => {
   });
 });
 
-Deno.test("resolveMode returns local when no URL configured", () => {
+test("resolveMode returns local when no URL configured", () => {
   const result = resolveMode({}, {});
   assert.deepEqual(result, { mode: "local" });
 });
 
-Deno.test("loadConfig reads ~/.takosumi/config.yml when env unset", async () => {
+test("loadConfig reads ~/.takosumi/config.yml when env unset", async () => {
   const dir = await Deno.makeTempDir({ prefix: "takosumi-cfg-" });
   try {
     const path = `${dir}/config.yml`;
@@ -73,7 +74,7 @@ Deno.test("loadConfig reads ~/.takosumi/config.yml when env unset", async () => 
   }
 });
 
-Deno.test("loadConfig env wins over config file", async () => {
+test("loadConfig env wins over config file", async () => {
   const dir = await Deno.makeTempDir({ prefix: "takosumi-cfg-" });
   try {
     const path = `${dir}/config.yml`;
@@ -116,7 +117,7 @@ Deno.test("loadConfig env wins over config file", async () => {
   }
 });
 
-Deno.test("loadConfig returns empty when neither env nor file present", async () => {
+test("loadConfig returns empty when neither env nor file present", async () => {
   const dir = await Deno.makeTempDir({ prefix: "takosumi-cfg-" });
   try {
     const path = `${dir}/missing-config.yml`;

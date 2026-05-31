@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   InMemoryServiceEndpointStore,
@@ -9,7 +10,7 @@ import {
   type ServiceTrustRecord,
 } from "./mod.ts";
 
-Deno.test("service endpoint registry keeps endpoint, trust, and grants separate", async () => {
+test("service endpoint registry keeps endpoint, trust, and grants separate", async () => {
   const registry = createRegistry();
   await registry.registerEndpoint(endpoint());
   await registry.recordTrust(trustRecord());
@@ -35,7 +36,7 @@ Deno.test("service endpoint registry keeps endpoint, trust, and grants separate"
   assert.equal(effective[0]?.subject, "workload:space_a/group_a/worker");
 });
 
-Deno.test("service endpoint health updates do not rewrite trust records or grants", async () => {
+test("service endpoint health updates do not rewrite trust records or grants", async () => {
   const registry = createRegistry();
   await registry.registerEndpoint(endpoint());
   await registry.recordTrust(trustRecord());
@@ -59,7 +60,7 @@ Deno.test("service endpoint health updates do not rewrite trust records or grant
   assert.equal(effective[0]?.id, "grant_worker_call_web");
 });
 
-Deno.test("trust revoke removes effective grants without deleting endpoint", async () => {
+test("trust revoke removes effective grants without deleting endpoint", async () => {
   const registry = createRegistry();
   await registry.registerEndpoint(endpoint());
   await registry.recordTrust(trustRecord());

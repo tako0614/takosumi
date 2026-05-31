@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 // Phase 4 (core simplification) acceptance tests for P4/P5/P6.
 //
 // RolloutCanaryService drives a chain of Deployment records via
@@ -25,7 +26,7 @@ import {
 import { OutputDependencyPlanner } from "../../services/output-planner/mod.ts";
 import { DomainError } from "../../shared/errors.ts";
 
-Deno.test("acceptance P4: registry resolution carries active trust for selected package digest", async () => {
+test("acceptance P4: registry resolution carries active trust for selected package digest", async () => {
   const descriptors = new InMemoryPackageDescriptorStore();
   const resolutions = new InMemoryPackageResolutionStore();
   const trustRecords = new InMemoryTrustRecordStore();
@@ -35,7 +36,7 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
     "1.1.0",
   );
   const currentResolution: PackageResolution = {
-    kind: "kind-package",
+    kind: "backend-plugin",
     ref: "providers/postgres",
     digest: currentDescriptor.digest,
     registry: "bundled",
@@ -59,7 +60,7 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
   await resolutions.record(currentResolution);
   await trustRecords.put({
     id: "trust_provider_old",
-    packageKind: "kind-package",
+    packageKind: "backend-plugin",
     packageRef: "providers/postgres",
     packageDigest: oldDescriptor.digest,
     trustLevel: "reference",
@@ -76,8 +77,8 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
     resolutions,
     trustRecords,
     [{
-      kindPackageRef: "providers/postgres",
-      kindPackageDigest: currentDescriptor.digest,
+      backendPluginRef: "providers/postgres",
+      backendPluginDigest: currentDescriptor.digest,
       resourceContracts: ["postgres.v1"],
       capabilityProfiles: ["runtime.worker.v1"],
       conformanceTier: "tested",
@@ -85,13 +86,13 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
   );
 
   const resolution = await registry.resolve(
-    "kind-package",
+    "backend-plugin",
     "providers/postgres",
   );
   assert.deepEqual(resolution, currentResolution);
   assert.equal(
     (await registry.getDescriptor(
-      "kind-package",
+      "backend-plugin",
       "providers/postgres",
       resolution?.digest ?? "",
     ))?.version,
@@ -105,7 +106,7 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
   );
   assert.equal(
     (await trustRecords.findForPackage(
-      "kind-package",
+      "backend-plugin",
       "providers/postgres",
       currentDescriptor.digest,
     ))?.status,
@@ -113,8 +114,8 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
   );
   assert.deepEqual(
     (await registry.listProviderSupport()).map((report) => ({
-      ref: report.kindPackageRef,
-      digest: report.kindPackageDigest,
+      ref: report.backendPluginRef,
+      digest: report.backendPluginDigest,
       tier: report.conformanceTier,
     })),
     [{
@@ -125,7 +126,7 @@ Deno.test("acceptance P4: registry resolution carries active trust for selected 
   );
 });
 
-Deno.test("acceptance P5: output bindings do not auto-inject outputs and secrets require explicit target", async () => {
+test("acceptance P5: output bindings do not auto-inject outputs and secrets require explicit target", async () => {
   const { planner, stores } = outputHarness();
   await stores.outputs.put(output({
     outputs: [
@@ -276,7 +277,7 @@ function providerDescriptor(
   version: string,
 ): PackageDescriptor {
   return {
-    kind: "kind-package",
+    kind: "backend-plugin",
     ref: "providers/postgres",
     digest,
     publisher: "takos",
