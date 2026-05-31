@@ -192,6 +192,14 @@
       "jsr:@std/assert@^1.0.6",
       "jsr:@std/yaml@1",
       "npm:hono@^4.12.4"
-    ]
+    ],
+    "packageJson": {
+      "dependencies": [
+        "npm:@types/node@22",
+        "npm:hono@^4.12.4",
+        "npm:typescript@^5.7.0",
+        "npm:yaml@^2.8.2"
+      ]
+    }
   }
 }
