@@ -1,0 +1,29 @@
+{
+  "name": "@takosjp/takosumi",
+  "version": "0.17.0",
+  "license": "MIT",
+  "type": "module",
+  "module": "./src/all/mod.ts",
+  "exports": {
+    ".": "./src/all/mod.ts",
+    "./contract": "./src/contract/mod.ts",
+    "./installer": "./src/installer/mod.ts",
+    "./kernel": "./src/all/kernel.ts",
+    "./cli": "./src/all/cli.ts",
+    "./runtime-agent": "./src/runtime-agent/server.ts",
+    "./server": "./src/all/server.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "bun test ./src/",
+    "test:scripts": "bun test ./scripts/"
+  },
+  "dependencies": {
+    "hono": "^4.12.4",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
