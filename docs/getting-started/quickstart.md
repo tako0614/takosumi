@@ -9,7 +9,7 @@
 ## 1. CLI をインストールする
 
 ```bash
-deno install -gA -n takosumi jsr:@takos/takosumi-cli
+deno install -gA -n takosumi npm:@takosjp/takosumi
 takosumi version
 ```
 

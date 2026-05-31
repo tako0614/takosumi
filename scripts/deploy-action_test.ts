@@ -8,7 +8,7 @@ Deno.test("deploy action wraps the installer API", async () => {
   );
 
   assert.match(source, /name: Takosumi Deploy/);
-  assert.match(source, /jsr:@takos\/takosumi-cli@/);
+  assert.match(source, /npm:@takosjp\/takosumi@/);
   assert.match(source, /install "\$TAKOSUMI_ACTION_SOURCE"/);
   assert.match(source, /install dry-run "\$TAKOSUMI_ACTION_SOURCE"/);
   assert.match(source, /--space "\$TAKOSUMI_ACTION_SPACE"/);

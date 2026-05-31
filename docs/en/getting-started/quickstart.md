@@ -9,7 +9,7 @@ This local walkthrough covers manifest validation and the Deployment ledger. Pub
 ## 1. Install the CLI
 
 ```bash
-deno install -gA -n takosumi jsr:@takos/takosumi-cli
+deno install -gA -n takosumi npm:@takosjp/takosumi
 takosumi version
 ```
 

@@ -17,7 +17,7 @@ installer command (`install` / `deploy` / `rollback`) は remote Takosumi server
 ## インストール
 
 ```bash
-deno install -gA -n takosumi jsr:@takos/takosumi-cli
+deno install -gA -n takosumi npm:@takosjp/takosumi
 takosumi version
 ```
 

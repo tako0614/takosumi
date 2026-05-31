@@ -5,7 +5,7 @@ The `takosumi` CLI is a thin client for the five-endpoint [Installer API](./inst
 ## Install
 
 ```bash
-deno install -gA -n takosumi jsr:@takos/takosumi-cli
+deno install -gA -n takosumi npm:@takosjp/takosumi
 takosumi version
 ```
 
