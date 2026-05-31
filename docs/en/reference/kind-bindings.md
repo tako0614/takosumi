@@ -8,7 +8,7 @@ Takosumi components contain `kind`, `spec`, `connect`, and `listen`. The operato
 
 In the reference kernel, that binding is a `KernelPlugin` passed to `createPaaSApp({ kindAliases, plugins })`. The `plugins` array is the reference implementation's adapter-loading mechanism. A compatible implementation may bind the same kind URI with a native controller, static registry, workflow engine, or SaaS adapter.
 
-Portable descriptor packages live in `takosumi/`. Backend-specific native kind packages live in `takosumi-plugins/`. Both publish as `@takos/takosumi-kind-*`.
+Official descriptor sources live in `takosumi/docs/kinds/v1/*.jsonld`. Backend-specific native implementation packages live in `takosumi-plugins/` and publish as `@takosjp/takosumi-plugins/kind/<alias>` subpaths.
 
 ## Portable And Native Kinds
 
@@ -33,15 +33,15 @@ Use native kinds such as `cloudflare-worker` or `aws-rds-postgres` when the mani
 ## Reference Kernel Attach
 
 ```ts
-import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
+import { createPaaSApp } from "@takosjp/takosumi/kernel";
 import {
   cloudflareWorkerPlugin,
   KIND_URI as WORKER_KIND,
-} from "@takos/takosumi-kind-cloudflare-worker";
+} from "@takosjp/takosumi-plugins/kind/cloudflare-worker";
 import {
   awsS3ObjectStorePlugin,
   KIND_URI as STORE_KIND,
-} from "@takos/takosumi-kind-aws-s3-object-store";
+} from "@takosjp/takosumi-plugins/kind/aws-s3-object-store";
 
 const workerLifecycle = createCloudflareWorkersLifecycleClient({ accountId });
 const objectStoreLifecycle = createAwsS3LifecycleClient({

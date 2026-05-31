@@ -31,11 +31,11 @@ core handoff rules:
 - Installer API は payload digest、source path safety、size cap、manifest parse を resource side effect 前に検証する。
 - Installer API が response / Deployment record に残す source identity は、build service の recipe や cache key ではなく Installer が検証した source input。
 
-concrete wire fields、portable payload profile、error mapping は [Installer API](./installer-api.md) の一部です。Portable Installer API v1 の prepared source payload は uncompressed POSIX tar です。build recipe、cache metadata、provenance は build-service profile に残します。 operator-local profile が別 archive encoding を受け付ける場合でも、それは portable v1 の互換条件ではありません。
+concrete wire fields、portable payload profile、error mapping は [Installer API](./installer-api.md) の一部です。Portable Installer API v1 の prepared source payload は POSIX tar です。uncompressed tar と gzip-compressed tar (`.tar.gz` / gzip magic bytes) を受け付け、digest は fetched payload bytes 全体に対して計算します。build recipe、cache metadata、provenance は build-service profile に残します。
 
 ## Prepared source archive contract {#prepared-source-archive-contract}
 
-Portable Installer API v1 の prepared source archive は uncompressed POSIX tar です。archive は `.takosumi.yml` を含む source root を表し、Installer は取得した payload bytes の sha256 を `source.digest` として検証します。path traversal、 absolute path、NUL byte、source root 外への escape、operator policy の size cap 違反は resource side effect 前に reject します。
+Portable Installer API v1 の prepared source archive は POSIX tar です。archive は `.takosumi.yml` を含む source root を表し、Installer は取得した payload bytes の sha256 を `source.digest` として検証します。gzip-compressed tar の場合も、digest は圧縮済み payload bytes を対象にします。path traversal、 absolute path、NUL byte、source root 外への escape、operator policy の size cap 違反は resource side effect 前に reject します。
 
 component kind schema metadata が source path field として扱う値は、resolved source root 内に存在し、source root から escape せず、注入 policy に反しない必要があります。dry-run は side effect なしで決定できる schema / kind の定義 / source path のバリデーションを返し、apply はリソースの作成・更新前に selected binding で同じバリデーションを繰り返します。
 

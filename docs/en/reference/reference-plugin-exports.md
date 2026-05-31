@@ -26,7 +26,7 @@ Base kind descriptors live in the single catalog `takosumi/docs/kinds/v1/` and d
 
 ## Native Worker Plugin Exports
 
-Native plugin source lives under `takosumi-plugins/src/plugins/*`.
+Native plugin source lives under `takosumi-plugins/packages/kind-*`.
 
 | Subpath export                                      | kind alias           |
 | --------------------------------------------------- | -------------------- |
@@ -154,7 +154,7 @@ public docs.
 ## Ownership Rule
 
 - Every kind descriptor source lives in the single catalog `takosumi/docs/kinds/v1/`; JSON-LD is catalog metadata, not a runtime plugin requirement.
-- `takosumi-plugins/src/plugins/*` holds implementations only (no descriptor source).
+- `takosumi-plugins/packages/kind-*` holds implementations only (no descriptor source).
 - The public package identity is `@takosjp/takosumi-plugins/kind/<alias>`.
 - The operator's `kindAliases` decides which aliases are active.
 - The resolved kind URI owns the `spec` schema, output slots, and connection compatibility.

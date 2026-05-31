@@ -8,7 +8,7 @@ Takosumi component は `kind`、`spec`、`connect`、`listen` を持ちます。
 
 Reference kernel では、その binding を `KernelPlugin` として `createPaaSApp({ kindAliases, plugins })` に渡します。`plugins` array は reference implementation の adapter loading 方式です。互換 implementation は同じ kind URI を native controller、static registry、workflow engine、SaaS adapter などへ bind できます。
 
-Portable descriptor package は `takosumi/`、backend-specific native kind package は `takosumi-plugins/` が所有します。どちらも public package 名は `@takos/takosumi-kind-*` です。
+公式 descriptor source は `takosumi/docs/kinds/v1/*.jsonld` が所有します。backend-specific native implementation package は `takosumi-plugins/` が所有し、public package subpath は `@takosjp/takosumi-plugins/kind/<alias>` です。
 
 ## Portable kind と native kind
 
@@ -33,15 +33,15 @@ Backend 固有 field が必要な manifest は `cloudflare-worker` や `aws-rds-
 ## Reference kernel への attach
 
 ```ts
-import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
+import { createPaaSApp } from "@takosjp/takosumi/kernel";
 import {
   cloudflareWorkerPlugin,
   KIND_URI as WORKER_KIND,
-} from "@takos/takosumi-kind-cloudflare-worker";
+} from "@takosjp/takosumi-plugins/kind/cloudflare-worker";
 import {
   awsS3ObjectStorePlugin,
   KIND_URI as STORE_KIND,
-} from "@takos/takosumi-kind-aws-s3-object-store";
+} from "@takosjp/takosumi-plugins/kind/aws-s3-object-store";
 
 const workerLifecycle = createCloudflareWorkersLifecycleClient({ accountId });
 const objectStoreLifecycle = createAwsS3LifecycleClient({
@@ -77,11 +77,10 @@ Capability name は operator tooling / dashboard のための open string です
 
 ## Source roots
 
-- `packages/contract/src/plugin.ts` — `KernelPlugin` / materializer interface。
-- `takosumi/packages/kind-*/spec/kind.jsonld` — portable package-owned kind descriptor。
-- `takosumi-plugins/packages/kind-*/spec/kind.jsonld` — native package-owned kind descriptor。JSON-LD は catalog / schema metadata で、runtime plugin requirement ではない。
+- `src/contract/plugin.ts` — `KernelPlugin` / materializer interface。
+- `docs/kinds/v1/*.jsonld` — official kind descriptor source。JSON-LD は catalog / schema metadata で、runtime plugin requirement ではない。
 - `takosumi-plugins/packages/kind-*/mod.ts` — native descriptor constant と reference adapter factory。
-- `takosumi/packages/runtime-agent/src/connectors/` — generic connector interface、registry、resilience wrapper。
+- `src/runtime-agent/connectors/` — generic connector interface、registry、resilience wrapper。
 - `takosumi-plugins/packages/runtime-agent-connectors/` — operator distribution が使える concrete connector implementation。
 
 ## 関連ページ

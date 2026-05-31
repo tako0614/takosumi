@@ -17,6 +17,7 @@ import type {
   OutputMaterialContext,
 } from "takosumi-contract/reference/plugin";
 import {
+  InstallerPipelineError,
   InstallerPipeline,
   type InstallerProviderRegistry,
   installerProviderRegistryFromPlugins,
@@ -2231,6 +2232,80 @@ test("InstallerPipeline accepts prepared source tar with source digest pin", asy
   } finally {
     await prepared.cleanup();
   }
+});
+
+test("InstallerPipeline rejects malformed git source as invalid_argument", async () => {
+  const pipeline = new InstallerPipeline({
+    kindAliases: TEST_KIND_ALIASES,
+    plugins: [],
+  });
+
+  await assert.rejects(
+    pipeline.installationDryRun({
+      spaceId: "space_test",
+      source: {
+        kind: "git",
+        url: "file:///etc/passwd",
+        ref: "main",
+      },
+    }),
+    (err) => {
+      assert.ok(err instanceof InstallerPipelineError);
+      assert.equal(err.code, "invalid_argument");
+      assert.match(err.message, /scheme is not allowed/);
+      return true;
+    },
+  );
+});
+
+test("InstallerPipeline enforces closed source descriptors", async () => {
+  const pipeline = new InstallerPipeline({
+    kindAliases: TEST_KIND_ALIASES,
+    plugins: [],
+  });
+
+  await assert.rejects(
+    pipeline.installationDryRun({
+      spaceId: "space_test",
+      source: {
+        kind: "git",
+        url: "https://example.test/repo.git",
+        ref: "main",
+        commit: "caller-supplied",
+      } as never,
+    }),
+    (err) => {
+      assert.ok(err instanceof InstallerPipelineError);
+      assert.equal(err.code, "invalid_argument");
+      assert.match(err.message, /source\.commit is not allowed/);
+      return true;
+    },
+  );
+});
+
+test("InstallerPipeline rejects malformed prepared source as invalid_argument", async () => {
+  const pipeline = new InstallerPipeline({
+    kindAliases: TEST_KIND_ALIASES,
+    plugins: [],
+  });
+
+  await assert.rejects(
+    pipeline.installationDryRun({
+      spaceId: "space_test",
+      source: {
+        kind: "prepared",
+        url: "http://example.test/archive.tar",
+        digest:
+          "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      },
+    }),
+    (err) => {
+      assert.ok(err instanceof InstallerPipelineError);
+      assert.equal(err.code, "invalid_argument");
+      assert.match(err.message, /unsupported_source_url|must use https/);
+      return true;
+    },
+  );
 });
 
 async function makePreparedSource(): Promise<{

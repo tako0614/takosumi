@@ -6,7 +6,7 @@
 
 コントロールプレーンは Takosumi が管理する内部層であり、Installation と Deployment の状態管理、参照 API の提供、およびライフサイクルイベントの記録を担います。外部から見える public API surface は Installer API の 5 endpoint に限定されますが、コントロールプレーン内部では以下の責務を持ちます:
 
-- **Installation 状態管理**: Space ごとの Installation record を保持し、current Deployment pointer と status (`pending` / `ready` / `failed`) を追跡する
+- **Installation 状態管理**: Space ごとの Installation record を保持し、current Deployment pointer と public status (`installing` / `ready` / `failed` / `suspended`) を追跡する
 - **Deployment 履歴**: apply ごとに Deployment record を作成し、manifest digest、 source 情報、apply 結果を時系列で記録する。rollback は current pointer を過去の `succeeded` Deployment に戻す操作として実装される
 - **ObservationState / OperationJournal**: runtime-agent が報告する現在状態の観測結果と、recovery に必要な操作履歴を保持する ([Observation の保持](../observation-retention.md) 参照)
 

@@ -20,7 +20,7 @@ account-facing Installation projection, export/materialize actions, and deploy
 facade.
 
 Cloud platform service paths include examples such as `identity.primary.oidc`
-and `billing.primary.account`. Workloads can reference those Cloud-provided
+and `billing.primary.default`. Workloads can reference those Cloud-provided
 outputs with manifest `listen.path`. Capabilities with many possible providers,
 such as MCP servers, can be discovered as `mcp-server@v1` publications with
 `listen.kind` and labels. Material kind belongs to the official catalog; dotted reference grammar belongs to

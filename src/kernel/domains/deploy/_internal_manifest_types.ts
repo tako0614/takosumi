@@ -1,11 +1,13 @@
 import type { JsonObject, JsonValue } from "takosumi-contract/reference/types";
 
 /**
- * Pinned envelope identifier for every Takosumi manifest. The `apiVersion`
- * and `kind` fields are required from 0.13 onward — operators that omit
- * them are rejected at the deploy public route. The version is bumped when
- * a future manifest schema breaks compatibility (additive shape /
- * provider / template changes do NOT bump it).
+ * Legacy deploy-domain envelope identifier.
+ *
+ * This is not the public `.takosumi.yml` AppSpec (`apiVersion: "v1"`,
+ * `metadata`, `components`, optional `publish`). It exists only for older
+ * deploy-domain internals that still consume an expanded `resources[]` shape.
+ * New installer / authoring code must use `AppSpec` from
+ * `takosumi-contract/app-spec`.
  */
 export const MANIFEST_API_VERSION = "1.0" as const;
 export const MANIFEST_KIND = "Manifest" as const;
@@ -23,9 +25,12 @@ export interface ManifestMetadata {
 }
 
 /**
- * Top-level shape of a Takosumi manifest. The wire representation is YAML
- * or JSON; the envelope must pin `apiVersion` and `kind` so the kernel can
- * route future schema versions to compatible validators.
+ * Legacy internal deploy manifest shape.
+ *
+ * Public Takosumi manifests do not have root `kind`, `namespace`, or
+ * `resources[]`; those fields belong to this compatibility path only.
+ *
+ * @deprecated Use `AppSpec` from `takosumi-contract/app-spec`.
  */
 export interface Manifest {
   readonly "@context"?: ManifestJsonLdContext;

@@ -107,36 +107,36 @@ Everything in this repository ships as one npm package, [`@takosjp/takosumi`](ht
 
 | Subpath                           | Purpose                                       |
 | --------------------------------- | --------------------------------------------- |
-| `@takosjp/takosumi`               | umbrella entry for core exports and kinds     |
+| `@takosjp/takosumi`               | umbrella entry for core exports               |
 | `@takosjp/takosumi/contract`      | manifest and Installer API wire types         |
 | `@takosjp/takosumi/kernel`        | reference kernel and Installer API server     |
 | `@takosjp/takosumi/installer`     | `.takosumi.yml` parser, source fetch, client  |
 | `@takosjp/takosumi/cli`           | `takosumi` command                            |
 | `@takosjp/takosumi/runtime-agent` | lifecycle execution host for backend adapters |
 | `@takosjp/takosumi/server`        | Installer API server entry                    |
-| `@takosjp/takosumi/kinds`         | portable kind descriptors barrel              |
 
-Portable kinds are reached through the pattern `@takosjp/takosumi/kind/<name>`. Native kinds and runtime-agent connectors ship as subpaths of the sibling [`@takosjp/takosumi-plugins`](https://www.npmjs.com/package/@takosjp/takosumi-plugins) package (`/kind/<backend-name>`, `/connectors`), which depends on `@takosjp/takosumi` as a peer. Current subpath names are listed in [`docs/reference/kind-packages.md`](./docs/reference/kind-packages.md). Operators import only the subpaths they need.
+Official kind descriptors are published spec, not package exports. Their source is `docs/kinds/v1/*.jsonld`, and the public URIs are `https://takosumi.com/kinds/v1/<name>`. Native kind implementations and runtime-agent connectors ship as subpaths of the sibling [`@takosjp/takosumi-plugins`](https://www.npmjs.com/package/@takosjp/takosumi-plugins) package (`/kind/<backend-name>`, `/connectors`), which depends on `@takosjp/takosumi` as a peer. Current implementation subpaths are listed in [`docs/reference/kind-packages.md`](./docs/reference/kind-packages.md).
 
 ## Workspace Layout
 
 ```text
 takosumi/
-├── packages/
+├── package.json                 @takosjp/takosumi exports
+├── src/
 │   ├── contract/                @takosjp/takosumi/contract
 │   ├── kernel/                  @takosjp/takosumi/kernel
 │   ├── installer/               @takosjp/takosumi/installer
 │   ├── cli/                     @takosjp/takosumi/cli
 │   ├── runtime-agent/           @takosjp/takosumi/runtime-agent
-│   ├── kind-*/                  portable kinds → @takosjp/takosumi/kind/*
-│   └── all/                     @takosjp/takosumi (umbrella + subpath exports)
+│   └── all/                     @takosjp/takosumi umbrella wrappers
+├── docs/kinds/v1/*.jsonld       official kind catalog descriptors
 ├── docs/                        VitePress docs site
 ├── website/                     takosumi.com landing + merged publish artifact
 ├── deploy/, fixtures/, scripts/
 └── AGENTS.md, CONVENTIONS.md, CHANGELOG.md
 ```
 
-Canonical contract source is `packages/contract/`; the public export is [`@takosjp/takosumi/contract`](https://www.npmjs.com/package/@takosjp/takosumi).
+Canonical contract source is `src/contract/`; the public export is [`@takosjp/takosumi/contract`](https://www.npmjs.com/package/@takosjp/takosumi).
 
 ## Development
 
