@@ -74,6 +74,13 @@ export interface KernelPlugin {
   readonly capabilities?: readonly string[];
 
   /**
+   * Validate a full AppSpec component before any component is applied.
+   * Native providers use this for constraints that depend on connect/listen
+   * declarations rather than only `component.spec` shape.
+   */
+  validateComponent?(component: Component): void | Promise<void>;
+
+  /**
    * Materialize a component into a concrete resource on the target
    * runtime. Called by `InstallerPipeline` during `apply` in connect
    * topological order. Resolved input materials are made available via
@@ -172,6 +179,7 @@ export interface InlineMaterializer {
   readonly provides: readonly string[];
   /** Optional short-name aliases supplied by operator tooling / alias maps. */
   readonly aliases?: readonly string[];
+  validateComponent?(component: Component): void | Promise<void>;
   apply(ctx: KernelPluginApplyContext): Promise<KernelPluginApplyResult>;
   status?(ctx: KernelPluginStatusContext): Promise<KernelPluginResourceStatus>;
   materializeOutput?(
@@ -436,6 +444,7 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
   validateSpec?(
     value: unknown,
   ): readonly NativeKindSpecValidationIssue[];
+  validateComponent?(component: Component): void | Promise<void>;
   /**
    * Receives the author-provided component spec unchanged. Runtime inputs
    * derived from `connect` / `listen` live on `ctx.resolvedBindings`; implementations that
@@ -507,6 +516,18 @@ export function kernelPluginFromNativeKindOperations<Spec, Outputs>(
     version: opts.version ?? operations.version,
     provides: [opts.kindUri],
     ...(capabilities ? { capabilities } : {}),
+    validateComponent(component) {
+      const spec = (component.spec ?? {}) as Spec;
+      const issues = operations.validateSpec?.(spec) ?? [];
+      if (issues.length > 0) {
+        throw new Error(
+          `component spec invalid for ${opts.kindUri}: ${
+            issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
+          }`,
+        );
+      }
+      return operations.validateComponent?.(component);
+    },
     async apply(ctx) {
       const spec = (ctx.component.spec ?? {}) as Spec;
       const issues = operations.validateSpec?.(spec) ?? [];

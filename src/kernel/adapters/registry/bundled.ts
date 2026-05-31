@@ -223,8 +223,12 @@ export class BundledRegistrySeedAdapter implements BundledRegistry {
     kind: PackageKind,
     ref: string,
   ): Promise<PackageResolution | undefined> {
+    const storageKind = storagePackageKind(kind);
+    const resolution = clonePackageResolution(
+      this.#resolutionsByRef.get(refKey(storageKind, ref)),
+    );
     return Promise.resolve(
-      clonePackageResolution(this.#resolutionsByRef.get(refKey(kind, ref))),
+      resolution ? exposePackageResolution(resolution, kind) : undefined,
     );
   }
 
@@ -233,15 +237,27 @@ export class BundledRegistrySeedAdapter implements BundledRegistry {
     ref: string,
     digest: Digest,
   ): Promise<PackageDescriptor | undefined> {
+    const storageKind = storagePackageKind(kind);
+    const descriptor = clonePackageDescriptor(
+      this.#descriptorsByKey.get(keyFor(storageKind, ref, digest)),
+    );
     return Promise.resolve(
-      clonePackageDescriptor(
-        this.#descriptorsByKey.get(keyFor(kind, ref, digest)),
-      ),
+      descriptor ? exposePackageDescriptor(descriptor, kind) : undefined,
     );
   }
 
   getTrustRecord(id: string): Promise<TrustRecord | undefined> {
-    return Promise.resolve(cloneTrustRecord(this.#trustRecordsById.get(id)));
+    const record = cloneTrustRecord(this.#trustRecordsById.get(id));
+    if (record) return Promise.resolve(record);
+    const legacy = cloneTrustRecord(
+      this.#trustRecordsById.get(id.replace(":backend-plugin:", ":kind-package:")),
+    );
+    if (!legacy) return Promise.resolve(undefined);
+    return Promise.resolve({
+      ...legacy,
+      id,
+      packageKind: "backend-plugin",
+    });
   }
 
   listProviderSupport(): Promise<readonly ProviderSupportReport[]> {
@@ -279,6 +295,8 @@ function providerSupportReport(
   return {
     kindPackageRef: resolution.ref,
     kindPackageDigest: resolution.digest,
+    backendPluginRef: resolution.ref,
+    backendPluginDigest: resolution.digest,
     resourceContracts: [
       "resource.sql.postgres@v1",
       "resource.object-store.s3@v1",
@@ -297,6 +315,33 @@ function refKey(kind: PackageKind, ref: string): string {
 
 function keyFor(kind: PackageKind, ref: string, digest: Digest): string {
   return `${kind}:${ref}:${digest}`;
+}
+
+function storagePackageKind(kind: PackageKind): PackageKind {
+  return kind === "backend-plugin" ? "kind-package" : kind;
+}
+
+function exposePackageResolution(
+  resolution: PackageResolution,
+  requestedKind: PackageKind,
+): PackageResolution {
+  if (requestedKind !== "backend-plugin") return resolution;
+  return {
+    ...resolution,
+    kind: requestedKind,
+    trustRecordId: resolution.trustRecordId
+      ? trustRecordIdFor(requestedKind, resolution.ref, resolution.digest)
+      : undefined,
+  };
+}
+
+function exposePackageDescriptor(
+  descriptor: PackageDescriptor,
+  requestedKind: PackageKind,
+): PackageDescriptor {
+  return requestedKind === "backend-plugin"
+    ? { ...descriptor, kind: requestedKind }
+    : descriptor;
 }
 
 function descriptorKey(descriptor: PackageDescriptor): string {

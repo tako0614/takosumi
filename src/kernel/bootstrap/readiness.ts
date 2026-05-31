@@ -54,10 +54,21 @@ export function createRoleReadinessProbes(
         await options.context.adapters.storage.transaction(() => undefined);
         return "ok";
       });
-      await recordCheck(checks, failures, "implementationBindings", () => ({
-        selected: options.implementationBindingCount ?? 0,
-        strict: options.strictImplementationBindings ?? false,
-      }));
+      await recordCheck(checks, failures, "implementationBindings", () => {
+        const selected = options.implementationBindingCount ?? 0;
+        const strict = options.strictImplementationBindings ?? false;
+        return {
+          selected,
+          strict,
+          ...(strict && selected === 0
+            ? {
+              ok: false,
+              error:
+                "strict implementation binding mode requires at least one KernelPlugin",
+            }
+            : {}),
+        };
+      });
       if (requiresInternalApiSecret(options.role)) {
         await recordCheck(checks, failures, "internalApiSecret", () => {
           if (!options.runtimeEnv.TAKOSUMI_INTERNAL_API_SECRET) {

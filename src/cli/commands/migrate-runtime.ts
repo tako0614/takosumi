@@ -2,7 +2,7 @@
  * Runtime primitives for the `migrate` command.
  *
  * These route through the kernel `RuntimeAdapter`
- * (`@takos/takosumi-kernel/runtime`) instead of touching `Deno.*` directly,
+ * (`src/kernel/shared/runtime`) instead of touching `Deno.*` directly,
  * so the same source runs unchanged on Deno (`currentRuntime()` resolves the
  * Deno adapter: `Deno.Command` / `Deno.statSync`-equivalent / `Deno.env` /
  * `Deno.exit`) and on the npm/Node build (the Node adapter resolves
@@ -10,7 +10,7 @@
  * required: the adapter selection is the runtime-neutral boundary.
  */
 
-import { currentRuntime } from "@takos/takosumi-kernel/runtime";
+import { currentRuntime } from "../../kernel/shared/runtime/index.ts";
 
 export async function spawnMigrate(
   cmd: string,

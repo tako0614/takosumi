@@ -25,7 +25,11 @@
  * Every CLI command module imports `Command` from here instead of directly from
  * `commander` so the whole tree shares these semantics.
  */
-import { Command as CommanderCommand, type Option } from "commander";
+import {
+  Command as CommanderCommand,
+  type Option,
+  type ParseOptions,
+} from "commander";
 
 export class Command extends CommanderCommand {
   /** Option values mirrored from `option:<name>` events during parse. */
@@ -69,7 +73,7 @@ export class Command extends CommanderCommand {
 
   override parse(
     argv?: readonly string[],
-    options?: { from?: "node" | "electron" | "user" },
+    options?: ParseOptions,
   ): this {
     return super.parse(
       argv as string[] | undefined,
@@ -79,7 +83,7 @@ export class Command extends CommanderCommand {
 
   override parseAsync(
     argv?: readonly string[],
-    options?: { from?: "node" | "electron" | "user" },
+    options?: ParseOptions,
   ): Promise<this> {
     return super.parseAsync(
       argv as string[] | undefined,

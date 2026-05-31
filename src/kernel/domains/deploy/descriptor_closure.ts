@@ -594,8 +594,8 @@ function verifyAliasMatch(
         `Descriptor '${alias}' was pinned at major version v${pinnedMajor} ` +
         `but the live adapter now consumes '${live.alias}' (major v${liveMajor}). ` +
         `Major version bumps signal a breaking contract change and the closure ` +
-        `cannot be safely reused. Run \`takos deploy plan --refresh\` against ` +
-        `the manifest to rebuild the descriptor closure against v${liveMajor}, ` +
+        `cannot be safely reused. Rebuild the descriptor closure with ` +
+        `\`takos deploy plan --refresh\` against the manifest and v${liveMajor}, ` +
         `then re-apply.`,
     });
     return;
