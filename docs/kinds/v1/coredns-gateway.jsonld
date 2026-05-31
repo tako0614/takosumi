@@ -1,0 +1,159 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/coredns-gateway",
+  "@type": "ComponentKind",
+  "name": "coredns-gateway",
+  "version": "v1",
+  "description": "CoreDNS-backed local gateway binding. It publishes a public HTTP endpoint by pointing a requested listener host at one DNS target; HTTP routing is handled by the upstream ingress target.",
+  "family": "gateway",
+  "portableBase": "https://takosumi.com/kinds/v1/gateway",
+  "referenceAliases": [
+    "coredns-gateway"
+  ],
+  "publications": {
+    "public": {
+      "contract": "http-endpoint",
+      "exampleMaterialMapping": {
+        "endpoints": [
+          {
+            "url": "$outputs.url",
+            "scheme": "$outputs.scheme",
+            "host": "$outputs.host",
+            "listener": "$outputs.listener",
+            "visibility": "public",
+            "primary": true,
+            "routes": "$outputs.routes"
+          }
+        ]
+      }
+    }
+  },
+  "capabilityTerms": [
+    "host-routing",
+    "wildcard"
+  ],
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+      "listeners",
+      "routes"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "listeners": {
+        "type": "object",
+        "description": "Named HTTP listeners. A listener may request an operator-managed host and TLS policy.",
+        "propertyNames": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "required": [
+            "protocol"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "type": "string",
+              "enum": [
+                "http",
+                "https"
+              ],
+              "description": "Listener protocol."
+            },
+            "host": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Optional requested hostname, such as `notes.example.com`."
+            },
+            "tls": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "manual",
+                "off"
+              ],
+              "description": "TLS policy for this listener."
+            }
+          }
+        }
+      },
+      "routes": {
+        "type": "array",
+        "minItems": 1,
+        "description": "Path routing rules. Each route sends requests from a listener to one listen binding name.",
+        "items": {
+          "type": "object",
+          "required": [
+            "listener",
+            "path",
+            "to"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "listener": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,62}$",
+              "description": "Listener name from `listeners`."
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^/[^?#]*$",
+              "description": "HTTP path prefix, such as `/` or `/api`. Duplicate route and segment-boundary checks are descriptor semantic validation."
+            },
+            "to": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,62}$",
+              "description": "Local listen binding name that supplies the upstream endpoint."
+            }
+          }
+        }
+      }
+    }
+  },
+  "listens": {
+    "*": {
+      "accepts": [
+        "http-endpoint"
+      ],
+      "projectionFamilies": [
+        "upstream"
+      ],
+      "requiredWhenReferencedBy": "spec.routes[].to"
+    }
+  },
+  "outputs": [
+    {
+      "name": "url",
+      "type": "string",
+      "required": true,
+      "meaning": "Public URL including scheme."
+    },
+    {
+      "name": "host",
+      "type": "string",
+      "required": true,
+      "meaning": "Resolved public hostname."
+    },
+    {
+      "name": "scheme",
+      "type": "string",
+      "required": true,
+      "meaning": "Resolved public scheme (`http` or `https`)."
+    },
+    {
+      "name": "listener",
+      "type": "string",
+      "required": true,
+      "meaning": "Listener name that produced the public endpoint."
+    },
+    {
+      "name": "routes",
+      "type": "object[]",
+      "required": true,
+      "meaning": "Portable route summary with pathPrefix and listen binding target."
+    }
+  ]
+}

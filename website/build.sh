@@ -34,11 +34,12 @@ OUTPUT_PUBLIC="${WEBSITE_DIR}/.output/public"
 DOCS_DIR="${REPO_ROOT}/docs"
 DOCS_DIST="${DOCS_DIR}/.vitepress/dist"
 SPEC_CONTEXTS="${REPO_ROOT}/spec/contexts"
-# Official portable kind descriptors are published spec, hosted as flat JSON-LD
-# under docs/kinds/v1/<name>.jsonld (the framework imports none of them).
-# Backend-specific native reference descriptors live in takosumi-plugins.
-PORTABLE_CATALOG="${REPO_ROOT}/docs/kinds/v1"
-PLUGIN_KIND_PACKAGES="${REPO_ROOT}/../takosumi-plugins/packages"
+# Kind descriptors are published spec, not framework or plugin source. The single
+# official catalog is flat JSON-LD under docs/kinds/v1/<name>.jsonld — both base
+# kinds (worker, postgres, …) and the descriptors that extend them via
+# portableBase (cloudflare-worker, aws-rds-postgres, …). Plugins are pure
+# implementations that consume these descriptors; they hold no descriptor source.
+KIND_CATALOG="${REPO_ROOT}/docs/kinds/v1"
 
 # 1. Landing build (Solid Start, static prerender).
 echo "[takosumi/website] build landing (vinxi build)"
@@ -89,18 +90,12 @@ fi
 #    as the stable kind URI while clients that prefer explicit JSON-LD can fetch
 #    `.jsonld`. Strip local codegen-only `x-ts*` annotations from the public
 #    catalog payload.
-# Emit `descriptor_path<TAB>kind_name` for every catalog source. Portable
-# descriptors are flat `docs/kinds/v1/<name>.jsonld`; native descriptors are
-# package-owned `*/kind-<name>/spec/kind.jsonld` in takosumi-plugins.
+# Emit `descriptor_path<TAB>kind_name` for every descriptor in the single
+# official catalog (flat `docs/kinds/v1/<name>.jsonld`).
 list_descriptors() {
-  if [ -d "${PORTABLE_CATALOG}" ]; then
-    find "${PORTABLE_CATALOG}" -maxdepth 1 -name '*.jsonld' -type f | while read -r f; do
+  if [ -d "${KIND_CATALOG}" ]; then
+    find "${KIND_CATALOG}" -maxdepth 1 -name '*.jsonld' -type f | while read -r f; do
       printf '%s\t%s\n' "${f}" "$(basename "${f}" .jsonld)"
-    done
-  fi
-  if [ -d "${PLUGIN_KIND_PACKAGES}" ]; then
-    find "${PLUGIN_KIND_PACKAGES}" -maxdepth 3 -path '*/kind-*/spec/kind.jsonld' -type f | while read -r f; do
-      printf '%s\t%s\n' "${f}" "$(basename "$(dirname "$(dirname "${f}")")" | sed 's/^kind-//')"
     done
   fi
 }

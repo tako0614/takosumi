@@ -1,0 +1,67 @@
+{
+  "@context": "https://takosumi.com/contexts/v1.jsonld",
+  "@id": "https://takosumi.com/kinds/v1/cloudflare-queue-message-queue",
+  "@type": "ComponentKind",
+  "name": "cloudflare-queue-message-queue",
+  "version": "v1",
+  "description": "Cloudflare Queues binding. Publishes queue identity as event-channel material.",
+  "family": "message-queue",
+  "portableBase": "https://takosumi.com/kinds/v1/message-queue",
+  "referenceAliases": ["cloudflare-queue-message-queue"],
+  "publications": {
+    "producer": {
+      "contract": "event-channel",
+      "exampleMaterialMapping": {
+        "channel": "$outputs.queueId",
+        "protocol": "queue",
+        "queue": "$outputs.name"
+      }
+    },
+    "consumer": {
+      "contract": "event-channel",
+      "exampleMaterialMapping": {
+        "channel": "$outputs.queueId",
+        "protocol": "queue",
+        "queue": "$outputs.name"
+      }
+    }
+  },
+  "capabilityTerms": ["queue-produce", "queue-consume", "cloudflare-queues"],
+  "spec": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["name"],
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Cloudflare Queue name."
+      },
+      "deliveryDelay": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Default delivery delay in seconds."
+      },
+      "messageRetentionPeriod": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Message retention period in seconds."
+      }
+    }
+  },
+  "outputs": [
+    {
+      "name": "queueId",
+      "type": "string",
+      "required": true,
+      "meaning": "Cloudflare Queue identifier."
+    },
+    {
+      "name": "name",
+      "type": "string",
+      "required": true,
+      "meaning": "Cloudflare Queue name."
+    }
+  ]
+}

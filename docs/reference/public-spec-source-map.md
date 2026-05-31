@@ -58,25 +58,29 @@ Current public docs and examples use `app-spec`, `installer-api`, or a narrow
 ## Official Catalog Spec Map
 
 The Takosumi official catalog covers vocabulary hosted at `takosumi.com`.
-Operators can adopt its descriptors and material kinds. Portable definition
-packages live in `takosumi/`; official native definition packages live in the
-sibling `takosumi-plugins/` repository because they also ship reference
-implementation bindings. Operator implementations and reference runtime helpers
-live in the reference/operator sections. Published catalog documents live under
-`/kinds/v1/*` and `/contexts/v1.jsonld`. Provider-selection descriptors under
-kernel implementation paths are reference internal metadata.
+Operators can adopt its descriptors and material kinds. Every descriptor — base
+kinds and the descriptors that extend them via `portableBase` — lives in one
+catalog at `takosumi/docs/kinds/v1/`; there is no "native" vs "portable"
+category. The sibling `takosumi-plugins/` repository ships only reference
+implementation bindings (it holds no descriptor source). Operator
+implementations and reference runtime helpers live in the reference/operator
+sections. Published catalog documents live under `/kinds/v1/*` and
+`/contexts/v1.jsonld`. Provider-selection descriptors under kernel implementation
+paths are reference internal metadata.
 
-| Key                              | Surface                                                                            | Owner                                             | Normative spec                                                                          | Repository source                                                                                                                              | Published reference                                                      |
-| -------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `takosumi-official-catalog-v1`   | portable kind schemas / native kind schemas / material kinds / projection examples | Takosumi official catalog, hosted at takosumi.com | [Takosumi Official Catalog](./catalog.md)                                               | `docs/kinds/v1/*.jsonld`; sibling `../takosumi-plugins/packages/kind-*/spec/kind.jsonld`; `spec/contexts/v1.jsonld`; `src/contract/catalog.ts` | `/kinds/v1/<name>`, `/kinds/v1/<name>.jsonld`, and `/contexts/v1.jsonld` |
-| `reference-native-kind-bindings` | backend-specific reference plugin factories and runtime bindings                   | `takosumi-plugins` native kind packages           | [Kind Packages](./kind-packages.md); [Kind Binding Implementations](./kind-bindings.md) | sibling `../takosumi-plugins/packages/kind-*/mod.ts`; sibling `../takosumi-plugins/packages/runtime-agent-connectors/`                         | implementation packages adopted by operator distributions                |
+| Key                              | Surface                                                                | Owner                                             | Normative spec                                                                          | Repository source                                                                                                             | Published reference                                                      |
+| -------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `takosumi-official-catalog-v1`   | kind schemas (base + extending) / material kinds / projection examples | Takosumi official catalog, hosted at takosumi.com | [Takosumi Official Catalog](./catalog.md)                                               | `docs/kinds/v1/*.jsonld` (single catalog: base + extending descriptors); `spec/contexts/v1.jsonld`; `src/contract/catalog.ts` | `/kinds/v1/<name>`, `/kinds/v1/<name>.jsonld`, and `/contexts/v1.jsonld` |
+| `reference-native-kind-bindings` | backend-specific reference plugin factories and runtime bindings       | `takosumi-plugins` native kind packages           | [Kind Packages](./kind-packages.md); [Kind Binding Implementations](./kind-bindings.md) | sibling `../takosumi-plugins/packages/kind-*/mod.ts`; sibling `../takosumi-plugins/packages/runtime-agent-connectors/`        | implementation packages adopted by operator distributions                |
 
-`takosumi/docs/kinds/v1/*.jsonld` is the repository storage path for the
-official portable kind schema source files (published spec, not framework
-source — the kernel imports none of them).
-`takosumi-plugins/packages/kind-*/spec/kind.jsonld` is the repository storage
-path for official native kind schema source files. `spec/contexts/v1.jsonld` is
-the repository storage path for `https://takosumi.com/contexts/v1.jsonld`.
+`takosumi/docs/kinds/v1/*.jsonld` is the repository storage path for the **single
+official kind catalog** — every descriptor, both the base kinds (`worker`,
+`postgres`, …) and the descriptors that extend them via `portableBase`
+(`cloudflare-worker`, `aws-rds-postgres`, …). They are published spec, not
+framework or plugin source: the kernel imports none of them, and
+`takosumi-plugins` packages are pure implementations that consume them.
+`spec/contexts/v1.jsonld` is the repository storage path for
+`https://takosumi.com/contexts/v1.jsonld`.
 `src/contract/catalog.ts` mirrors the official material kind, injection
 mode, access mode, sensitivity class, and material helper vocabulary for
 TypeScript callers. The public catalog surface is the published

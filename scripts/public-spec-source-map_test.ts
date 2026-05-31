@@ -43,7 +43,7 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/kinds/v1/message-queue.jsonld",
   "docs/kinds/v1/vector-store.jsonld",
   "docs/kinds/v1/gateway.jsonld",
-  "../takosumi-plugins/packages/kind-cloudflare-worker/spec/kind.jsonld",
+  "docs/kinds/v1/cloudflare-worker.jsonld",
   "deno.json",
 ];
 
@@ -73,9 +73,6 @@ Deno.test("public spec source map covers required public surfaces", async () => 
   assert.ok(source.includes("src/contract/app-spec.ts"));
   assert.ok(source.includes("src/contract/catalog.ts"));
   assert.ok(source.includes("docs/kinds/v1/*.jsonld"));
-  assert.ok(
-    source.includes("../takosumi-plugins/packages/kind-*/spec/kind.jsonld"),
-  );
   assert.ok(source.includes("../takosumi-cloud/docs/ja/spec.md"));
   assert.ok(source.includes("../takosumi-cloud/docs/en/spec.md"));
   assert.match(source, /Normative spec/);
