@@ -1,6 +1,6 @@
 import { Command } from "../command.ts";
 import { LIFECYCLE_AGENT_URL_ENV } from "takosumi-contract/reference/runtime-agent-lifecycle";
-import { currentRuntime } from "@takos/takosumi-kernel/runtime";
+import { currentRuntime } from "../../kernel/shared/runtime/index.ts";
 
 function createServerCommand(): Command {
   return new Command("server")
@@ -40,7 +40,7 @@ function createServerCommand(): Command {
       let agentShutdown: (() => Promise<void>) | undefined;
       if (!agentUrl && !agentDisabled) {
         const { startEmbeddedAgent } = await import(
-          "@takos/takosumi-runtime-agent/embed"
+          "../../runtime-agent/embed.ts"
         );
         const handle = startEmbeddedAgent({ port: agentPort });
         agentShutdown = handle.shutdown;
@@ -55,7 +55,7 @@ function createServerCommand(): Command {
         registerShutdownHandlers(agentShutdown);
       }
       runtime.env.set("PORT", String(port));
-      await import("@takos/takosumi-kernel");
+      await import("../../kernel/index.ts");
     });
 }
 

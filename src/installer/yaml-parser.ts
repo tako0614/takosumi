@@ -227,6 +227,13 @@ export function parseAppSpec(
   const text = typeof yamlBytes === "string"
     ? yamlBytes
     : decodeUtf8(yamlBytes);
+  if (text.includes("\0")) {
+    throw new AppSpecParseError(
+      "YAML syntax error: AppSpec source must not contain raw NUL bytes",
+      "syntax",
+      "$",
+    );
+  }
 
   let raw: unknown;
   try {
@@ -469,7 +476,20 @@ function validateComponent(
       ? undefined
       : validateSpecObject(c.spec, `${path}.spec`),
   };
+  rejectDuplicateBindingNames(component, path);
   return component;
+}
+
+function rejectDuplicateBindingNames(component: Component, path: string): void {
+  if (!component.connect || !component.listen) return;
+  for (const bindingName of Object.keys(component.listen)) {
+    if (component.connect[bindingName] === undefined) continue;
+    throw new AppSpecParseError(
+      `${path}.listen.${JSON.stringify(bindingName)} duplicates a connect binding name on the same component`,
+      "connection-resolution",
+      `${path}.listen.${JSON.stringify(bindingName)}`,
+    );
+  }
 }
 
 /**

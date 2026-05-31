@@ -25,13 +25,18 @@ function createDeployCommand(): Command {
     .argument("<installationId>", "Installation id")
     .option("--remote <url>", "Remote kernel URL")
     .option("--token <token>", "Installer bearer token")
-    .option("--source <source>", "Optional replacement source")
-    .action(async (installationId: string, opts: DeployFlags) => {
+    .option("--source <source>", "Optional replacement source");
+  dryRun.action(async (
+      installationId: string,
+      opts: DeployFlags | Command,
+      actionCommand?: Command,
+    ) => {
+      const flags = actionFlags(dryRun, opts, actionCommand);
       await runDeploy({
         installationId,
-        remote: opts.remote,
-        token: opts.token,
-        source: opts.source,
+        remote: flags.remote,
+        token: flags.token,
+        source: flags.source,
         dryRun: true,
       });
     });
@@ -55,23 +60,58 @@ function createDeployCommand(): Command {
       "--expected-current-deployment-id <deploymentId>",
       "Expected current Deployment pointer",
     )
-    .option("--dry-run", "Alias for `takosumi deploy dry-run`")
-    .action(async (installationId: string, opts: DeployFlags) => {
+    .option("--dry-run", "Alias for `takosumi deploy dry-run`");
+  command.action(async (
+      installationId: string,
+      opts: DeployFlags | Command,
+      actionCommand?: Command,
+    ) => {
+      const flags = actionFlags(command, opts, actionCommand);
       await runDeploy({
         installationId,
-        remote: opts.remote,
-        token: opts.token,
-        source: opts.source,
-        expectedCommit: opts.expectedCommit,
-        expectedManifestDigest: opts.expectedManifestDigest,
-        expectedSourceDigest: opts.expectedSourceDigest,
-        expectedCurrentDeploymentId: opts.expectedCurrentDeploymentId,
-        dryRun: opts.dryRun === true,
+        remote: flags.remote,
+        token: flags.token,
+        source: flags.source,
+        expectedCommit: flags.expectedCommit,
+        expectedManifestDigest: flags.expectedManifestDigest,
+        expectedSourceDigest: flags.expectedSourceDigest,
+        expectedCurrentDeploymentId: flags.expectedCurrentDeploymentId,
+        dryRun: flags.dryRun === true,
       });
     });
 
   command.addCommand(dryRun);
   return command;
+}
+
+function commandFlags(command: Command, opts: DeployFlags): DeployFlags {
+  const parent = (command as unknown as { readonly parent?: Command }).parent;
+  return {
+    ...((parent?.opts<Record<string, unknown>>() ?? {}) as DeployFlags),
+    ...(command.opts<Record<string, unknown>>() as DeployFlags),
+    ...definedOptions(opts),
+  };
+}
+
+function actionFlags(
+  fallbackCommand: Command,
+  opts: DeployFlags | Command | undefined,
+  actionCommand?: Command,
+): DeployFlags {
+  const command = actionCommand ??
+    (opts instanceof Command ? opts : fallbackCommand);
+  const values = opts instanceof Command || opts === undefined ? {} : opts;
+  return commandFlags(command, values);
+}
+
+function definedOptions<T extends object>(
+  value: T,
+): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(([, option]) =>
+      option !== undefined
+    ),
+  ) as Partial<T>;
 }
 
 async function runDeploy(input: {

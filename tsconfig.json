@@ -82,7 +82,9 @@
       "@takos/takosumi-contract/internal/rpc": [
         "./src/contract/internal-rpc.ts"
       ],
-      "@takos/takosumi-kernel/runtime": ["./src/kernel/shared/runtime/mod.ts"],
+      "@takos/takosumi-kernel/runtime": [
+        "./src/kernel/shared/runtime/index.ts"
+      ],
       "takosumi-contract": ["./src/contract/mod.ts"],
       "takosumi-contract/app-spec": ["./src/contract/app-spec.ts"],
       "takosumi-contract/catalog": ["./src/contract/catalog.ts"],

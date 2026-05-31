@@ -32,7 +32,8 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "bun test ./src/",
-    "test:scripts": "bun test ./scripts/"
+    "test:scripts": "bun test ./scripts/",
+    "live-provisioning-smoke": "bun scripts/live-provisioning-smoke.ts"
   },
   "dependencies": {
     "commander": "^12.1.0",

@@ -8,9 +8,9 @@ export {
   createPaaSApp,
   defaultBundledPlugins,
   registerDefaultArtifactKinds,
-} from "@takos/takosumi-kernel/bootstrap";
+} from "../kernel/bootstrap.ts";
 export type {
   CreatedPaaSApp,
   CreatePaaSAppOptions,
   TakosumiKernelFacade,
-} from "@takos/takosumi-kernel/bootstrap";
+} from "../kernel/bootstrap.ts";

@@ -26,7 +26,7 @@ function createServeCmd(): Command {
           await loadEnvFile(opts.envFile);
         }
         const { startEmbeddedAgent } = await import(
-          "@takos/takosumi-runtime-agent/embed"
+          "../../runtime-agent/embed.ts"
         );
         const explicitToken = opts.token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
         const handle = startEmbeddedAgent({

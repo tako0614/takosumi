@@ -329,7 +329,11 @@ export function assertListenMaterialKind(input: {
   const declared = input.options.kind;
   if (typeof declared !== "string" || declared.length === 0) return;
   if (declared === "*") return;
-  const actual = readMaterialKind(input.material);
+  const actual = readMaterialKind(input.material, {
+    component: input.component,
+    bindingName: input.bindingName,
+    sourceRef: input.sourceRef,
+  });
   if (actual === declared) return;
   // `many: true` discovery binds every match as ONE collection material whose
   // top-level kind is the wrapper "collection"; the declared kind constrains
@@ -337,8 +341,13 @@ export function assertListenMaterialKind(input: {
   if (input.options.many === true && actual === "collection") {
     const items = (input.material as Record<string, unknown>).items;
     if (Array.isArray(items)) {
-      for (const item of items) {
-        const itemKind = readMaterialKind(item as OutputMaterial);
+      for (const [itemIndex, item] of items.entries()) {
+        const itemKind = readMaterialKind(item as OutputMaterial, {
+          component: input.component,
+          bindingName: input.bindingName,
+          sourceRef: input.sourceRef,
+          itemIndex,
+        });
         if (itemKind !== undefined && itemKind !== declared) {
           throw new BindingResolutionError(
             "material_kind_mismatch",
@@ -352,6 +361,7 @@ export function assertListenMaterialKind(input: {
               sourceRef: input.sourceRef,
               expectedKind: declared,
               actualKind: itemKind,
+              itemIndex: String(itemIndex),
             },
           );
         }
@@ -375,9 +385,45 @@ export function assertListenMaterialKind(input: {
   );
 }
 
-function readMaterialKind(material: OutputMaterial): string | undefined {
-  const value = (material as Record<string, unknown>).kind;
-  return typeof value === "string" ? value : undefined;
+function readMaterialKind(
+  material: OutputMaterial,
+  context?: {
+    readonly component: string;
+    readonly bindingName: string;
+    readonly sourceRef: string;
+    readonly itemIndex?: number;
+  },
+): string | undefined {
+  const record = material as Record<string, unknown>;
+  const kind = typeof record.kind === "string" ? record.kind : undefined;
+  const materialKind = typeof record.materialKind === "string"
+    ? record.materialKind
+    : undefined;
+  if (kind && materialKind && kind !== materialKind) {
+    const itemSuffix = context?.itemIndex === undefined
+      ? ""
+      : ` item ${context.itemIndex}`;
+    throw new BindingResolutionError(
+      "material_kind_mismatch",
+      `${context?.component ?? "component"}.listen.${
+        context?.bindingName ?? "binding"
+      } material${itemSuffix} at ${
+        JSON.stringify(context?.sourceRef ?? "unknown")
+      } has conflicting kind fields: kind ${JSON.stringify(kind)} and ` +
+        `materialKind ${JSON.stringify(materialKind)}`,
+      {
+        ...(context?.component ? { component: context.component } : {}),
+        ...(context?.bindingName ? { bindingName: context.bindingName } : {}),
+        ...(context?.sourceRef ? { sourceRef: context.sourceRef } : {}),
+        ...(context?.itemIndex === undefined
+          ? {}
+          : { itemIndex: String(context.itemIndex) }),
+        kind,
+        materialKind,
+      },
+    );
+  }
+  return materialKind ?? kind;
 }
 
 /**
