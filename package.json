@@ -7,10 +7,26 @@
   "exports": {
     ".": "./src/all/mod.ts",
     "./contract": "./src/contract/mod.ts",
+    "./contract/app-spec": "./src/contract/app-spec.ts",
+    "./contract/catalog": "./src/contract/catalog.ts",
+    "./contract/installer-api": "./src/contract/installer-api.ts",
+    "./contract/reference/compat": "./src/contract/reference-compat.ts",
+    "./contract/reference/error-category": "./src/contract/error-category.ts",
+    "./contract/reference/plugin": "./src/contract/plugin.ts",
+    "./contract/reference/plugin-sdk": "./src/contract/plugin-sdk.ts",
+    "./contract/reference/runtime-agent": "./src/contract/runtime-agent.ts",
+    "./contract/reference/runtime-agent-lifecycle": "./src/contract/runtime-agent-lifecycle.ts",
+    "./contract/reference/runtime-capability": "./src/contract/runtime-capability.ts",
+    "./contract/reference/shape": "./src/contract/shape.ts",
+    "./contract/reference/shape-validators": "./src/contract/shape-validators.ts",
+    "./contract/reference/types": "./src/contract/types.ts",
     "./installer": "./src/installer/mod.ts",
     "./kernel": "./src/all/kernel.ts",
     "./cli": "./src/all/cli.ts",
     "./runtime-agent": "./src/runtime-agent/server.ts",
+    "./runtime-agent/connectors": "./src/runtime-agent/connectors/mod.ts",
+    "./runtime-agent/embed": "./src/runtime-agent/embed.ts",
+    "./runtime-agent/prepared-source-reader": "./src/runtime-agent/prepared_source_reader.ts",
     "./server": "./src/all/server.ts"
   },
   "scripts": {
@@ -19,6 +35,7 @@
     "test:scripts": "bun test ./scripts/"
   },
   "dependencies": {
+    "commander": "^12.1.0",
     "hono": "^4.12.4",
     "yaml": "^2.8.2"
   },

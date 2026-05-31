@@ -1,4 +1,4 @@
-import { Command } from "@cliffy/command";
+import { Command } from "../command.ts";
 import {
   callInstaller,
   deploymentExpectedGuardFromOptions,
@@ -8,76 +8,70 @@ import {
   requireRemoteInstaller,
 } from "../installer_client.ts";
 
-function createDeployCommand() {
-  const dryRun = new Command()
-    .description("Dry-run a Deployment for an existing Installation")
-    .arguments("<installationId:string>")
-    .option("--remote <url:string>", "Remote kernel URL")
-    .option("--token <token:string>", "Installer bearer token")
-    .option("--source <source:string>", "Optional replacement source")
-    .action(
-      async ({ remote, token, source }, installationId) => {
-        await runDeploy({
-          installationId,
-          remote,
-          token,
-          source,
-          dryRun: true,
-        });
-      },
-    );
+interface DeployFlags {
+  remote?: string;
+  token?: string;
+  source?: string;
+  expectedCommit?: string;
+  expectedManifestDigest?: string;
+  expectedSourceDigest?: string;
+  expectedCurrentDeploymentId?: string;
+  dryRun?: boolean;
+}
 
-  return new Command()
+function createDeployCommand(): Command {
+  const dryRun = new Command("dry-run")
+    .description("Dry-run a Deployment for an existing Installation")
+    .argument("<installationId>", "Installation id")
+    .option("--remote <url>", "Remote kernel URL")
+    .option("--token <token>", "Installer bearer token")
+    .option("--source <source>", "Optional replacement source")
+    .action(async (installationId: string, opts: DeployFlags) => {
+      await runDeploy({
+        installationId,
+        remote: opts.remote,
+        token: opts.token,
+        source: opts.source,
+        dryRun: true,
+      });
+    });
+
+  const command = new Command("deploy")
     .description("Apply a Deployment for an existing Installation")
-    .arguments("<installationId:string>")
-    .option("--remote <url:string>", "Remote kernel URL")
-    .option("--token <token:string>", "Installer bearer token")
-    .option("--source <source:string>", "Optional replacement source")
+    .argument("<installationId>", "Installation id")
+    .option("--remote <url>", "Remote kernel URL")
+    .option("--token <token>", "Installer bearer token")
+    .option("--source <source>", "Optional replacement source")
+    .option("--expected-commit <commit>", "Expected source commit pin")
     .option(
-      "--expected-commit <commit:string>",
-      "Expected source commit pin",
-    )
-    .option(
-      "--expected-manifest-digest <digest:string>",
+      "--expected-manifest-digest <digest>",
       "Expected .takosumi.yml digest pin",
     )
     .option(
-      "--expected-source-digest <digest:string>",
+      "--expected-source-digest <digest>",
       "Expected prepared source digest pin",
     )
     .option(
-      "--expected-current-deployment-id <deploymentId:string>",
+      "--expected-current-deployment-id <deploymentId>",
       "Expected current Deployment pointer",
     )
     .option("--dry-run", "Alias for `takosumi deploy dry-run`")
-    .action(
-      async (
-        {
-          remote,
-          token,
-          source,
-          expectedCommit,
-          expectedManifestDigest,
-          expectedSourceDigest,
-          expectedCurrentDeploymentId,
-          dryRun: dryRunFlag,
-        },
+    .action(async (installationId: string, opts: DeployFlags) => {
+      await runDeploy({
         installationId,
-      ) => {
-        await runDeploy({
-          installationId,
-          remote,
-          token,
-          source,
-          expectedCommit,
-          expectedManifestDigest,
-          expectedSourceDigest,
-          expectedCurrentDeploymentId,
-          dryRun: dryRunFlag === true,
-        });
-      },
-    )
-    .command("dry-run", dryRun);
+        remote: opts.remote,
+        token: opts.token,
+        source: opts.source,
+        expectedCommit: opts.expectedCommit,
+        expectedManifestDigest: opts.expectedManifestDigest,
+        expectedSourceDigest: opts.expectedSourceDigest,
+        expectedCurrentDeploymentId: opts.expectedCurrentDeploymentId,
+        dryRun: opts.dryRun === true,
+      });
+    });
+
+  command.addCommand(dryRun);
+  return command;
 }
 
 async function runDeploy(input: {
@@ -122,5 +116,4 @@ async function runDeploy(input: {
   }
 }
 
-export const deployCommand: ReturnType<typeof createDeployCommand> =
-  createDeployCommand();
+export const deployCommand: Command = createDeployCommand();

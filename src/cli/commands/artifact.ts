@@ -1,4 +1,4 @@
-import { Command } from "@cliffy/command";
+import { Command } from "../command.ts";
 import { ARTIFACTS_BASE_PATH } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { loadConfig, resolveMode } from "../config.ts";
 
@@ -9,150 +9,166 @@ import { loadConfig, resolveMode } from "../config.ts";
  * artifact kinds.
  */
 
-function createPushCmd() {
-  return new Command()
-    .description("Upload a file as a content-addressed artifact")
-    .arguments("<file:string>")
-    .option(
-      "--kind <kind:string>",
-      "Operator-defined artifact kind",
-      { required: true },
-    )
-    .option(
-      "--metadata <kv:string>",
-      "Metadata as key=value (repeat for multiple)",
-      { collect: true },
-    )
-    .option("--remote <url:string>", "Kernel base URL")
-    .option("--token <token:string>", "Bearer token")
-    .action(async ({ kind, metadata, remote, token }, filePath: string) => {
-      const target = await requireRemote(remote, token);
-      const bytes = await Deno.readFile(filePath);
-      const meta = parseMetadata(metadata);
-      const form = new FormData();
-      form.set("kind", kind);
-      if (meta) form.set("metadata", JSON.stringify(meta));
-      form.set(
-        "body",
-        new Blob([bytes as BlobPart], { type: "application/octet-stream" }),
-        baseName(filePath),
-      );
-      const response = await fetch(`${target.url}${ARTIFACTS_BASE_PATH}`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${target.token}` },
-        body: form,
-      });
-      const body = await readBody(response);
-      if (!response.ok) {
-        console.error(`kernel ${response.status}:`, body);
-        Deno.exit(1);
-      }
-      console.log(JSON.stringify(body, null, 2));
-    });
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
-const pushCmd: ReturnType<typeof createPushCmd> = createPushCmd();
 
-function createListCmd() {
-  return new Command()
-    .description("List artifacts stored in the kernel")
-    .option("--remote <url:string>", "Kernel base URL")
-    .option("--token <token:string>", "Bearer token")
+function createPushCmd(): Command {
+  return new Command("push")
+    .description("Upload a file as a content-addressed artifact")
+    .argument("<file>", "File to upload")
+    .requiredOption("--kind <kind>", "Operator-defined artifact kind")
     .option(
-      "--limit <n:number>",
-      "Per-page limit; CLI follows pagination automatically",
+      "--metadata <kv>",
+      "Metadata as key=value (repeat for multiple)",
+      collect,
+      [],
     )
-    .action(async ({ remote, token, limit }) => {
-      const target = await requireRemote(remote, token);
-      interface ListPage {
-        readonly artifacts?: readonly unknown[];
-        readonly nextCursor?: string;
-      }
-      const allArtifacts: unknown[] = [];
-      let cursor: string | undefined;
-      const pageLimit = typeof limit === "number" && limit > 0 ? limit : 100;
-      // The kernel endpoint enforces 1..1000; we just walk pages until
-      // nextCursor disappears or we exceed a sane upper bound.
-      for (let pages = 0; pages < 10_000; pages++) {
-        const url = new URL(`${target.url}${ARTIFACTS_BASE_PATH}`);
-        url.searchParams.set("limit", String(pageLimit));
-        if (cursor) url.searchParams.set("cursor", cursor);
-        const response = await fetch(url, {
+    .option("--remote <url>", "Kernel base URL")
+    .option("--token <token>", "Bearer token")
+    .action(
+      async (
+        filePath: string,
+        opts: {
+          kind: string;
+          metadata: string[];
+          remote?: string;
+          token?: string;
+        },
+      ) => {
+        const target = await requireRemote(opts.remote, opts.token);
+        const bytes = await Deno.readFile(filePath);
+        const meta = parseMetadata(opts.metadata);
+        const form = new FormData();
+        form.set("kind", opts.kind);
+        if (meta) form.set("metadata", JSON.stringify(meta));
+        form.set(
+          "body",
+          new Blob([bytes as BlobPart], { type: "application/octet-stream" }),
+          baseName(filePath),
+        );
+        const response = await fetch(`${target.url}${ARTIFACTS_BASE_PATH}`, {
+          method: "POST",
           headers: { authorization: `Bearer ${target.token}` },
+          body: form,
         });
-        const body = await readBody(response) as ListPage;
+        const body = await readBody(response);
         if (!response.ok) {
           console.error(`kernel ${response.status}:`, body);
           Deno.exit(1);
         }
-        const page = Array.isArray(body?.artifacts) ? body.artifacts : [];
-        for (const a of page) allArtifacts.push(a);
-        if (!body?.nextCursor) break;
-        cursor = body.nextCursor;
-      }
-      console.log(JSON.stringify({ artifacts: allArtifacts }, null, 2));
-    });
+        console.log(JSON.stringify(body, null, 2));
+      },
+    ) as Command;
 }
-const listCmd: ReturnType<typeof createListCmd> = createListCmd();
 
-function createRmCmd() {
-  return new Command()
+function createListCmd(): Command {
+  return new Command("list")
+    .description("List artifacts stored in the kernel")
+    .option("--remote <url>", "Kernel base URL")
+    .option("--token <token>", "Bearer token")
+    .option(
+      "--limit <n>",
+      "Per-page limit; CLI follows pagination automatically",
+      (v) => Number(v),
+    )
+    .action(
+      async (opts: { remote?: string; token?: string; limit?: number }) => {
+        const target = await requireRemote(opts.remote, opts.token);
+        interface ListPage {
+          readonly artifacts?: readonly unknown[];
+          readonly nextCursor?: string;
+        }
+        const allArtifacts: unknown[] = [];
+        let cursor: string | undefined;
+        const pageLimit = typeof opts.limit === "number" && opts.limit > 0
+          ? opts.limit
+          : 100;
+        // The kernel endpoint enforces 1..1000; we just walk pages until
+        // nextCursor disappears or we exceed a sane upper bound.
+        for (let pages = 0; pages < 10_000; pages++) {
+          const url = new URL(`${target.url}${ARTIFACTS_BASE_PATH}`);
+          url.searchParams.set("limit", String(pageLimit));
+          if (cursor) url.searchParams.set("cursor", cursor);
+          const response = await fetch(url, {
+            headers: { authorization: `Bearer ${target.token}` },
+          });
+          const body = await readBody(response) as ListPage;
+          if (!response.ok) {
+            console.error(`kernel ${response.status}:`, body);
+            Deno.exit(1);
+          }
+          const page = Array.isArray(body?.artifacts) ? body.artifacts : [];
+          for (const a of page) allArtifacts.push(a);
+          if (!body?.nextCursor) break;
+          cursor = body.nextCursor;
+        }
+        console.log(JSON.stringify({ artifacts: allArtifacts }, null, 2));
+      },
+    ) as Command;
+}
+
+function createRmCmd(): Command {
+  return new Command("rm")
     .description("Remove an artifact by hash")
-    .arguments("<hash:string>")
-    .option("--remote <url:string>", "Kernel base URL")
-    .option("--token <token:string>", "Bearer token")
-    .action(async ({ remote, token }, hash: string) => {
-      const target = await requireRemote(remote, token);
-      const response = await fetch(
-        `${target.url}${ARTIFACTS_BASE_PATH}/${encodeURIComponent(hash)}`,
-        {
-          method: "DELETE",
-          headers: { authorization: `Bearer ${target.token}` },
-        },
-      );
-      if (response.status === 204) {
-        console.log(`removed ${hash}`);
-        return;
-      }
-      const body = await readBody(response);
-      console.error(`kernel ${response.status}:`, body);
-      Deno.exit(1);
-    });
+    .argument("<hash>", "Artifact hash")
+    .option("--remote <url>", "Kernel base URL")
+    .option("--token <token>", "Bearer token")
+    .action(
+      async (hash: string, opts: { remote?: string; token?: string }) => {
+        const target = await requireRemote(opts.remote, opts.token);
+        const response = await fetch(
+          `${target.url}${ARTIFACTS_BASE_PATH}/${encodeURIComponent(hash)}`,
+          {
+            method: "DELETE",
+            headers: { authorization: `Bearer ${target.token}` },
+          },
+        );
+        if (response.status === 204) {
+          console.log(`removed ${hash}`);
+          return;
+        }
+        const body = await readBody(response);
+        console.error(`kernel ${response.status}:`, body);
+        Deno.exit(1);
+      },
+    ) as Command;
 }
-const rmCmd: ReturnType<typeof createRmCmd> = createRmCmd();
 
-function createKindsCmd() {
-  return new Command()
+function createKindsCmd(): Command {
+  return new Command("kinds")
     .description(
       "List DataAsset metadata kinds registered by the optional DataAsset " +
         "extension (GET /v1/artifacts/kinds)",
     )
-    .option("--remote <url:string>", "Kernel base URL")
-    .option("--token <token:string>", "Bearer token")
+    .option("--remote <url>", "Kernel base URL")
+    .option("--token <token>", "Bearer token")
     .option("--table", "Format output as a plain-text table instead of JSON")
-    .action(async ({ remote, token, table }) => {
-      const target = await requireRemote(remote, token);
-      const response = await fetch(
-        `${target.url}${ARTIFACTS_BASE_PATH}/kinds`,
-        {
-          headers: { authorization: `Bearer ${target.token}` },
-        },
-      );
-      const body = await readBody(response) as
-        | { readonly kinds?: readonly RegisteredArtifactKindRow[] }
-        | undefined;
-      if (!response.ok) {
-        console.error(`kernel ${response.status}:`, body);
-        Deno.exit(1);
-      }
-      const kinds = body?.kinds ?? [];
-      if (table) {
-        printKindsTable(kinds);
-        return;
-      }
-      console.log(JSON.stringify({ kinds }, null, 2));
-    });
+    .action(
+      async (opts: { remote?: string; token?: string; table?: boolean }) => {
+        const target = await requireRemote(opts.remote, opts.token);
+        const response = await fetch(
+          `${target.url}${ARTIFACTS_BASE_PATH}/kinds`,
+          {
+            headers: { authorization: `Bearer ${target.token}` },
+          },
+        );
+        const body = await readBody(response) as
+          | { readonly kinds?: readonly RegisteredArtifactKindRow[] }
+          | undefined;
+        if (!response.ok) {
+          console.error(`kernel ${response.status}:`, body);
+          Deno.exit(1);
+        }
+        const kinds = body?.kinds ?? [];
+        if (opts.table) {
+          printKindsTable(kinds);
+          return;
+        }
+        console.log(JSON.stringify({ kinds }, null, 2));
+      },
+    ) as Command;
 }
-const kindsCmd: ReturnType<typeof createKindsCmd> = createKindsCmd();
 
 interface RegisteredArtifactKindRow {
   readonly kind: string;
@@ -201,49 +217,56 @@ function printKindsTable(rows: readonly RegisteredArtifactKindRow[]): void {
   }
 }
 
-function createGcCmd() {
-  return new Command()
+function createGcCmd(): Command {
+  return new Command("gc")
     .description(
       "Garbage-collect artifacts not referenced by any persisted deployment",
     )
-    .option("--remote <url:string>", "Kernel base URL")
-    .option("--token <token:string>", "Bearer token")
+    .option("--remote <url>", "Kernel base URL")
+    .option("--token <token>", "Bearer token")
     .option(
       "--dry-run",
       "Report what would be deleted without actually deleting",
     )
-    .action(async ({ remote, token, dryRun }) => {
-      const target = await requireRemote(remote, token);
-      const url = new URL(`${target.url}${ARTIFACTS_BASE_PATH}/gc`);
-      if (dryRun) url.searchParams.set("dryRun", "1");
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { authorization: `Bearer ${target.token}` },
-      });
-      const body = await readBody(response);
-      if (!response.ok) {
-        console.error(`kernel ${response.status}:`, body);
-        Deno.exit(1);
-      }
-      console.log(JSON.stringify(body, null, 2));
-    });
+    .action(
+      async (opts: { remote?: string; token?: string; dryRun?: boolean }) => {
+        const target = await requireRemote(opts.remote, opts.token);
+        const url = new URL(`${target.url}${ARTIFACTS_BASE_PATH}/gc`);
+        if (opts.dryRun) url.searchParams.set("dryRun", "1");
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${target.token}` },
+        });
+        const body = await readBody(response);
+        if (!response.ok) {
+          console.error(`kernel ${response.status}:`, body);
+          Deno.exit(1);
+        }
+        console.log(JSON.stringify(body, null, 2));
+      },
+    ) as Command;
 }
-const gcCmd: ReturnType<typeof createGcCmd> = createGcCmd();
 
-function createArtifactCommand() {
-  return new Command()
+// Build every subcommand fresh per call. The CLI tests re-import this module
+// (`?<uuid>`) and expect an independent command tree each time; under one bun
+// process the module is shared, so module-level subcommand singletons would be
+// added to multiple parents and commander would corrupt their parse state
+// (a child's `.parent` is mutated by `addCommand`). Constructing children here
+// keeps each `artifactCommand` self-contained.
+function createArtifactCommand(): Command {
+  const command = new Command("artifact")
     .description(
       "Manage Takosumi-kernel artifact uploads (push / list / rm / gc / kinds)",
-    )
-    .command("push", pushCmd)
-    .command("list", listCmd)
-    .command("rm", rmCmd)
-    .command("gc", gcCmd)
-    .command("kinds", kindsCmd);
+    );
+  command.addCommand(createPushCmd());
+  command.addCommand(createListCmd());
+  command.addCommand(createRmCmd());
+  command.addCommand(createGcCmd());
+  command.addCommand(createKindsCmd());
+  return command;
 }
 
-export const artifactCommand: ReturnType<typeof createArtifactCommand> =
-  createArtifactCommand();
+export const artifactCommand: Command = createArtifactCommand();
 
 interface RemoteTarget {
   readonly url: string;

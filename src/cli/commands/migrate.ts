@@ -1,4 +1,4 @@
-import { Command } from "@cliffy/command";
+import { Command } from "../command.ts";
 import {
   exitProcess,
   readEnv,
@@ -131,19 +131,19 @@ export async function runMigrate(
   }
 }
 
-function createMigrateCommand() {
-  return new Command()
+function createMigrateCommand(): Command {
+  return new Command("migrate")
     .description("Run Takosumi DB migrations")
     .option("--dry-run", "Show planned migrations without applying")
     .option(
-      "--env <env:string>",
+      "--env <env>",
       "Target environment (local, staging, production)",
-      { default: "local" },
+      "local",
     )
-    .action(async ({ dryRun, env }) => {
+    .action(async (opts: { dryRun?: boolean; env: string }) => {
       const result = await runMigrate({
-        env: env as MigrateEnv,
-        dryRun: dryRun === true,
+        env: opts.env as MigrateEnv,
+        dryRun: opts.dryRun === true,
         readEnv: (key) => readEnv(key),
         resolveScript: defaultResolveScript,
         spawn: (cmd, args) => spawnMigrate(cmd, args),
@@ -152,8 +152,7 @@ function createMigrateCommand() {
       if (result.exitCode !== 0) {
         exitProcess(result.exitCode);
       }
-    });
+    }) as Command;
 }
 
-export const migrateCommand: ReturnType<typeof createMigrateCommand> =
-  createMigrateCommand();
+export const migrateCommand: Command = createMigrateCommand();
