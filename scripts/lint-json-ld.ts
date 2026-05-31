@@ -6,12 +6,12 @@
  * 1. **Vocabulary root** (= e.g. `spec/contexts/v1.jsonld`). Single
  *    top-level key `@context` whose value is a JSON-LD context object.
  *    `@id` / `@type` / `name` are NOT required.
- * 2. **Reference kind document** (= e.g.
- *    `src/kinds/worker/spec/kind.jsonld`).
- *    Must include a stable takosumi.com kind URI, a supported kind document
- *    type, `version`, `description`, suggested aliases, outputSlots, and
- *    capability terms. Portable kind documents own `spec` and `outputs`;
- *    native kind documents name their `family` and `portableBase`.
+ * 2. **Kind descriptor** (= e.g. `docs/kinds/v1/worker.jsonld`) from the single
+ *    official catalog. Must include a stable takosumi.com kind URI, a supported
+ *    kind document type, `version`, `description`, and suggested aliases. Base
+ *    descriptors own `spec` + `outputs` and declare `outputSlots`; descriptors
+ *    that extend a base name their `family` + `portableBase` and declare
+ *    `publications`. "native" is not a separate category — both are descriptors.
  *
  * This linter does not JSON-LD-expand documents. It pins the official
  * takosumi.com catalog envelope and vocabulary so descriptor drift is caught
@@ -129,8 +129,12 @@ async function main(): Promise<void> {
         issues,
       );
       checkReferenceAliases(obj["referenceAliases"], entry.path, issues);
-      checkOutputSlots(
-        obj["outputSlots"],
+      // Base kinds declare `outputSlots`; descriptors that extend a base
+      // (portableBase present) declare backend-specific `publications`.
+      const extendsBase = obj["portableBase"] !== undefined;
+      checkLocalOutputDeclaration(
+        extendsBase ? "publications" : "outputSlots",
+        extendsBase ? obj["publications"] : obj["outputSlots"],
         obj["outputs"],
         entry.path,
         issues,
@@ -385,32 +389,38 @@ function checkReferenceAliases(
   }
 }
 
-function checkOutputSlots(
+// Base descriptors declare local `outputSlots`; descriptors that extend a base
+// (portableBase present) declare backend-specific `publications`. The two fields
+// have identical validation shape — both name an official material kind via
+// `contract` and an `exampleMaterialMapping` — so one parameterized check
+// validates either, keyed by the field the descriptor actually uses.
+function checkLocalOutputDeclaration(
+  fieldName: "outputSlots" | "publications",
   value: unknown,
   outputsValue: unknown,
   path: string,
   issues: LintIssue[],
 ): void {
+  const unit = fieldName === "outputSlots" ? "output slot" : "publication";
   if (value === undefined) {
     issues.push({
       path,
       message:
-        "missing `outputSlots` (declare local outputSlots this kind can emit)",
+        `missing \`${fieldName}\` (declare local ${fieldName} this kind can emit)`,
     });
     return;
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     issues.push({
       path,
-      message:
-        "`outputSlots` must be an object keyed by local output slot name",
+      message: `\`${fieldName}\` must be an object keyed by local ${unit} name`,
     });
     return;
   }
   if (Object.keys(value).length === 0) {
     issues.push({
       path,
-      message: "`outputSlots` must declare at least one local output slot",
+      message: `\`${fieldName}\` must declare at least one local ${unit}`,
     });
     return;
   }
@@ -419,14 +429,14 @@ function checkOutputSlots(
     if (!isLocalName(key)) {
       issues.push({
         path,
-        message: "output slot keys must be local names",
+        message: `${fieldName} keys must be local names`,
       });
       continue;
     }
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       issues.push({
         path,
-        message: `outputSlots[${key}] must be an object`,
+        message: `${fieldName}[${key}] must be an object`,
       });
       continue;
     }
@@ -434,34 +444,35 @@ function checkOutputSlots(
     if (typeof e["contract"] !== "string" || e["contract"] === "") {
       issues.push({
         path,
-        message: `outputSlots[${key}].contract must be a non-empty string`,
+        message: `${fieldName}[${key}].contract must be a non-empty string`,
       });
     } else if (!OUTPUT_CONTRACTS.has(e["contract"])) {
       issues.push({
         path,
         message:
-          `outputSlots[${key}].contract must be an official material kind`,
+          `${fieldName}[${key}].contract must be an official material kind`,
       });
     }
     if ("from" in e) {
       issues.push({
         path,
         message:
-          `outputSlots[${key}].from is obsolete; use exampleMaterialMapping metadata`,
+          `${fieldName}[${key}].from is obsolete; use exampleMaterialMapping metadata`,
       });
     }
     if ("material" in e) {
       issues.push({
         path,
         message:
-          `outputSlots[${key}].material is ambiguous; use exampleMaterialMapping`,
+          `${fieldName}[${key}].material is ambiguous; use exampleMaterialMapping`,
       });
     }
     const mapping = e["exampleMaterialMapping"];
     if (!isRecord(mapping)) {
       issues.push({
         path,
-        message: `outputSlots[${key}].exampleMaterialMapping must be an object`,
+        message:
+          `${fieldName}[${key}].exampleMaterialMapping must be an object`,
       });
       continue;
     }
@@ -478,7 +489,7 @@ function checkOutputSlots(
         issues.push({
           path,
           message: formatMaterialMappingIssue(
-            `outputSlots[${key}].exampleMaterialMapping`,
+            `${fieldName}[${key}].exampleMaterialMapping`,
             issue.path,
             issue.message,
           ),
@@ -495,7 +506,7 @@ function checkOutputSlots(
           issues.push({
             path,
             message: formatMaterialMappingIssue(
-              `outputSlots[${key}].exampleMaterialMapping`,
+              `${fieldName}[${key}].exampleMaterialMapping`,
               issue.path,
               issue.message,
             ),

@@ -114,28 +114,42 @@ Deno.test("framework source imports no kind descriptor (kind-agnostic guard)", a
   }
 });
 
-Deno.test("published portable catalog has all 9 base descriptors with portable URIs", async () => {
-  const names: string[] = [];
+Deno.test("single official catalog holds base + extending descriptors; the 9 bases are portable", async () => {
+  // The one catalog mixes base descriptors (worker, postgres, …) and
+  // descriptors that extend them via portableBase (cloudflare-worker, …).
+  // "native" is not a separate category — they are all just JSON-LD descriptors.
+  const bases: string[] = [];
+  const extending: string[] = [];
   for await (const entry of Deno.readDir(CATALOG_ROOT)) {
-    if (entry.isFile && entry.name.endsWith(".jsonld")) {
-      names.push(entry.name.replace(/\.jsonld$/, ""));
-    }
-  }
-  assert.deepEqual(names.sort(), [...PORTABLE_KINDS]);
-
-  for (const name of PORTABLE_KINDS) {
+    if (!entry.isFile || !entry.name.endsWith(".jsonld")) continue;
+    const name = entry.name.replace(/\.jsonld$/, "");
     const descriptor = await readJson<KindDescriptor>(descriptorUrl(name));
+
     assert.equal(
       descriptor["@id"],
       `https://takosumi.com/kinds/v1/${name}`,
-      `${name}: descriptor @id must be the portable kind URI`,
+      `${name}: descriptor @id must be the catalog kind URI`,
     );
-    assert.equal(
-      descriptor.portableBase,
-      undefined,
-      `${name}: a portable base descriptor must not declare portableBase`,
-    );
+
+    if (descriptor.portableBase === undefined) {
+      bases.push(name);
+    } else {
+      extending.push(name);
+      assert.match(
+        descriptor.portableBase,
+        /^https:\/\/takosumi\.com\/kinds\/v1\/[a-z-]+$/,
+        `${name}: portableBase must reference a catalog base URI`,
+      );
+    }
   }
+
+  // The 9 base descriptors are exactly the portable kinds; everything else
+  // extends one of them.
+  assert.deepEqual(bases.sort(), [...PORTABLE_KINDS]);
+  assert.ok(
+    extending.length > 0,
+    "catalog should also host descriptors that extend the portable bases",
+  );
 });
 
 Deno.test("portable kind descriptors use implementation-neutral material wording", async () => {
