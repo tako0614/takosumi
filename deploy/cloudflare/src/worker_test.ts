@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { test } from "bun:test";
 import type { CreatedPaaSApp } from "../../../src/kernel/bootstrap.ts";
 import { type CloudflareWorkerEnv, createCloudflareWorker } from "./handler.ts";
 import type {
@@ -17,7 +18,7 @@ interface CapturedRequest {
   readonly body: string;
 }
 
-Deno.test("Cloudflare Worker dispatches kernel control-plane routes in-process", async () => {
+test("Cloudflare Worker dispatches kernel control-plane routes in-process", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
     createKernelApp: () => Promise.resolve(createdApp("kernel", calls)),
@@ -55,7 +56,7 @@ Deno.test("Cloudflare Worker dispatches kernel control-plane routes in-process",
   }
 });
 
-Deno.test("Cloudflare Worker dispatches runtime-agent routes to the runtime-agent app", async () => {
+test("Cloudflare Worker dispatches runtime-agent routes to the runtime-agent app", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
     createKernelApp: () => Promise.resolve(createdApp("kernel", calls)),
@@ -73,7 +74,7 @@ Deno.test("Cloudflare Worker dispatches runtime-agent routes to the runtime-agen
   assert.equal(calls[0].app, "runtime-agent");
 });
 
-Deno.test("Cloudflare Worker preserves method, query, headers, and body", async () => {
+test("Cloudflare Worker preserves method, query, headers, and body", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
     createKernelApp: () => Promise.resolve(createdApp("kernel", calls, 202)),
@@ -116,7 +117,7 @@ Deno.test("Cloudflare Worker preserves method, query, headers, and body", async 
   assert.equal(call.body, body);
 });
 
-Deno.test("Cloudflare Worker keeps edge-local routes outside the kernel app", async () => {
+test("Cloudflare Worker keeps edge-local routes outside the kernel app", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
     createKernelApp: () => Promise.resolve(createdApp("kernel", calls)),
@@ -164,7 +165,7 @@ Deno.test("Cloudflare Worker keeps edge-local routes outside the kernel app", as
   assert.equal(calls.length, 0);
 });
 
-Deno.test("Cloudflare Worker no longer exposes runtime container routing", async () => {
+test("Cloudflare Worker no longer exposes runtime container routing", async () => {
   const worker = createCloudflareWorker({
     createKernelApp: () => Promise.resolve(createdApp("kernel", [])),
   });

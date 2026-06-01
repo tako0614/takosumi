@@ -4,7 +4,7 @@
 本番環境のアップグレードコマンドはリリース固有の operator runbook に記載する。このページではパッケージ整合ルールを記録する。
 :::
 
-Takosumi の公開パッケージは product ごとに独立してバージョン管理される。公開適合面は manifest / Installation / Deployment と Installer API である。公式 kind descriptor は `takosumi/docs/kinds/v1/*.jsonld` と `https://takosumi.com/kinds/v1/*` の spec であり、個別 npm package ではない。operator が有効にする backend-specific implementation は `@takosjp/takosumi-plugins/kind/<alias>` subpath で選ぶ。
+Takosumi の公開パッケージは product ごとに独立してバージョン管理される。公開適合面は Source / Installation / Deployment / PlatformService / InstallPlan と Installer API である。operator が有効にする backend-specific implementation は `@takosjp/takosumi-plugins/kind/<alias>` subpath で選ぶ。
 
 ## パブリッシュ順序
 
@@ -22,13 +22,13 @@ Takosumi は npm に公開する(JSR は使わない)。エコシステムの公
 `@takosjp/takosumi-plugins`(backend 実装。`@takosjp/takosumi` を peer dependency に持つ)。それぞれ独立した
 version stream を持つ。
 
-source は Bun-first で、npm publish 用の `npm/` 出力を build して publish する。dnt 自体は JSR 配布のため、`build:npm` wrapper の内部だけ Deno を使う:
+source は Bun-first で、npm publish 用の `npm/` 出力を build して publish する。`build:npm` は Bun script で npm package layout を生成する:
 
 ```bash
 # 1) takosumi を先に publish(plugins の peer になるため順序が必須)
 cd takosumi && bun install --frozen-lockfile && bun run build:npm && cd npm && npm publish --access public
 # 2) takosumi が npm に乗ったら plugins を build(peer を解決)して publish
-cd takosumi-plugins && bun install --frozen-lockfile && bun run build:npm:typecheck && bun run build:npm && cd npm && npm publish --access public
+cd takosumi-plugins && bun install --frozen-lockfile && bun run build:npm && cd npm && npm publish --access public
 ```
 
 `npm publish --dry-run` で公開内容(version / files / peerDependencies)を事前確認できる。version は
@@ -43,10 +43,10 @@ cd takosumi-plugins && bun install --frozen-lockfile && bun run build:npm:typech
 | npm 公開状態         | npm registry と `npm publish --dry-run`                       |
 | public API スモーク  | `takosumi install dry-run --source . --remote ...`            |
 | スキーマ台帳         | リリース固有の operator evidence                              |
-| 有効 kind スモーク   | operator 固有のライブプロビジョニング evidence                |
+| 有効 adapter スモーク | operator 固有のライブプロビジョニング evidence                |
 
 ## 関連ページ
 
 - [Operator Bootstrap](./bootstrap.md)
-- [Kind Packages](../reference/kind-packages.md)
+- [Backend adapters](../reference/kind-packages.md)
 - [Operator-managed 運用](./operator-managed.md)

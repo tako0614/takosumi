@@ -2,122 +2,59 @@
 
 ## Takosumi とは
 
-Takosumi は `.takosumi.yml` という manifest (宣言ファイル) を読んで、アプリを丸ごとデプロイする PaaS です。
+Takosumi は source repo を Space に install し、apply のたびに Deployment を記録する PaaS substrate です。
 
-Docker Compose に似ていますが、大きな違いが 1 つあります。manifest には「何が必要か」だけを書き、「どこで動かすか」は書きません。実行先は operator (運用者) が決めるので、同じ manifest が Cloudflare でも AWS でも動きます。
+v1 は manifestless です。source root に Takosumi 専用ファイルや Takosumi 専用 metadata field を要求しません。表示名や
+identity hint は Git URL、commit、tag、`package.json` などの汎用 metadata から読みます。
 
-## manifest の中身
+## 公開概念
 
-```yaml
-# .takosumi.yml
-apiVersion: v1
-metadata:
-  id: com.example.my-app
-  name: my-app
-components:
-  web:
-    kind: worker
-    spec:
-      entrypoint: src/worker.ts
-  db:
-    kind: postgres
-    spec:
-      version: "16"
-```
+| 概念 | 役割 |
+| --- | --- |
+| Source | `git` / `prepared` / `local` source input。git は commit、prepared は archive digest を resolved identity として持つ。 |
+| Installation | Space に install された source record。current Deployment pointer を持つ。 |
+| Deployment | 1 回の apply result。source summary、InstallPlan snapshot、binding snapshot、outputs、status を持つ。 |
+| PlatformService | operator が inventory で提供する service。DB、OIDC、object store、queue、runtime endpoint など。 |
 
-| キー         | 意味                                                                      |
-| ------------ | ------------------------------------------------------------------------- |
-| `components` | アプリを構成する個々のパーツ。上の例では `web` と `db` の 2 つ            |
-| `kind`       | component が使う定義。`worker` は実行環境、`postgres` はデータベース      |
-| `spec`       | その kind に固有の設定。worker なら `entrypoint`、postgres なら `version` |
+## dry-run と apply
 
-## connect で component を接続する {#connect-components}
+dry-run は Installation を作らず、`InstallPlan` snapshot と `planSnapshotDigest` を返します。`InstallPlan` は persisted entity
+ではありません。review 用の response snapshot です。
 
-component 同士は `connect` で接続します。
-
-```yaml
-components:
-  db:
-    kind: postgres
-    spec:
-      version: "16"
-
-  web:
-    kind: worker
-    spec:
-      entrypoint: src/worker.ts
-    connect:
-      db:
-        output: db.connection
-        inject: env
-        prefix: DB
-```
-
-`web` が `db.connection` output を受け取ります。
-
-この接続の結果、`web` の worker には以下の環境変数が自動的に渡されます。
-
-```
-DB_HOST=...
-DB_PORT=5432
-DB_USER=...
-DB_PASSWORD=...
-```
-
-`prefix: DB` の値が環境変数名の先頭に付きます。worker のコードからは通常の環境変数として参照できます。
-
-manifest 外の operator service を使う場合、確定した 1 つの対象は
-`listen.path` を使います。
-
-```yaml
-listen:
-  identity:
-    path: identity.primary.oidc
-    inject: secret-env
-    prefix: IDENTITY
-```
-
-MCP server のように Space 内に複数存在してよい対象は、path を指定せず
-`listen.kind` と `many: true` でまとめて受け取れます。
-
-```yaml
-listen:
-  tools:
-    kind: mcp-server@v1
-    many: true
-    inject: config-mount
-```
-
-`path` は URL path ではなく、Space 内の 1 つの対象を名指しする名前です。同じ
-Space の同じ path は active provider を 1 つだけ持てます。MCP server
-のように全部欲しい対象は `path` ではなく `kind` + `many: true`
-で集合として受け取ります。`kind` は selector で、component でも publication
-でも同じ field 名を使います。manifest には別の `type` selector はありません。
-
-## Installation と Deployment {#installation-deployment}
-
-manifest をデプロイすると、2 つのレコードが作られます。
-
-| 概念                            | 役割                                                                                  |
-| ------------------------------- | ------------------------------------------------------------------------------------- |
-| Installation (インストール記録) | Space (デプロイ先のグループ) に紐づく管理レコード。manifest 1 つに対して 1 つ作られる |
-| Deployment (デプロイ履歴)       | apply (適用) するたびに 1 件ずつ増える履歴レコード                                    |
-
-1 つの Installation に何度もデプロイでき、各 Deployment が履歴として残ります。ロールバックは過去の成功した Deployment に戻す操作です。
+apply は Source を fetch / resolve し、operator inventory から PlatformService binding を解決し、Deployment に
+`planSnapshot` と `bindingsSnapshot` を保存します。dry-run から apply に進む場合、`expected.planSnapshotDigest` を渡すと
+review した Source / binding resolution と違う入力を 409 で止められます。
 
 ```text
-manifest
-  -> Installation を作成
-  -> Deployment #1 (初回)
-  -> Deployment #2 (コード更新)
-  -> Deployment #3 (設定変更)
-  -> ロールバック → Deployment #2 に戻す
+Source
+  -> dry-run: InstallPlan + planSnapshotDigest
+  -> apply: Installation + Deployment
+  -> deploy: new Deployment
+  -> rollback: current Deployment pointer を戻す
 ```
 
-デプロイは Installer API (5 つの HTTP エンドポイント) を通して行います。CLI、GitHub Actions、自前スクリプトのいずれからでも同じ API を呼び出せます。
+## PlatformService
 
-## 次に読む {#next}
+アプリが使う DB / OIDC / bucket / queue などは operator catalog の PlatformService として扱います。Terraform/OpenTofu や
+cloud provider API で何を作るかは operator distribution の責務です。Takosumi core は inventory を読み、どの
+PlatformService が選ばれたかを Deployment に記録します。
 
-- [クイックスタート](./quickstart.md) -- 実際にデプロイしてみる
-- [Manifest リファレンス](../reference/manifest.md) -- 全フィールドの詳細
-- [読む順序](./reading-paths.md) -- 目的別のおすすめ順路
+binding selection は install/deploy request、account-plane UI、operator policy のいずれかから渡されます。source repo 内の
+Takosumi DSL で dependency graph を宣言しません。
+
+## Terraform との関係
+
+Terraform/OpenTofu は resource graph と state management に強い IaC です。Takosumi は Terraform を置き換えません。
+
+推奨境界:
+
+- Terraform/OpenTofu/Helm/Pulumi: operator-owned infra materialization と state。
+- Takosumi: Source install/deploy ledger、Installation lifecycle、Deployment history、PlatformService binding snapshot。
+- takosumi: account plane、billing、OIDC、dashboard、deploy facade、PlatformService inventory。
+
+## 次に読む
+
+- [クイックスタート](./quickstart.md)
+- [Installer API](../reference/installer-api.md)
+- [Takosumi core 仕様](../reference/core-spec.md)
+- [プラットフォームサービス](../reference/platform-services.md)

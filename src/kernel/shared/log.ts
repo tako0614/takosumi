@@ -9,9 +9,9 @@
  *
  *  - zero-dependency (no contract / observability / runtime imports)
  *  - synchronous (one write per `info` / `warn` / `error` call)
- *  - free of module-level side effects (no `Deno.env.get` at load time;
+ *  - free of module-level side effects (no host env reads at load time;
  *    the format is resolved lazily on first emit so tests that scope env
- *    via `Deno.env.set` are not racing module evaluation)
+ *    are not racing module evaluation)
  *  - runtime-neutral (reads env through the RuntimeAdapter, so the same
  *    module works on Deno / Node / Cloudflare Workers without changes)
  *
@@ -181,9 +181,8 @@ class KernelLoggerImpl implements KernelLogger {
 }
 
 function defaultStdout(line: string): void {
-  // The kernel runs under Deno; node:console fallback is unnecessary.
   // Keep this as a single console.log so structured output is emitted
-  // even when `Deno.stdout` is replaced by the test harness.
+  // consistently under Bun, Node, Deno, and test harnesses.
   console.log(line);
 }
 

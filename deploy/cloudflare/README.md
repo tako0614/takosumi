@@ -1,10 +1,10 @@
-# Takosumi Cloudflare Worker Scaffold
+# Takosumiflare Worker Scaffold
 
 This directory is the Worker-first deployment scaffold for running the Takosumi control plane on Cloudflare without a container runtime. The Worker builds the kernel in-process with `createPaaSApp`, uses D1 for Worker-side kernel persistence and installer lifecycle records, and can use R2 for the optional operator DataAsset object store.
 
 ## Files
 
-- `wrangler.toml`: Worker, D1, R2, Queue, and coordination Durable Object binding template. Wrangler runs a Deno bundle custom build and uploads the bundled Worker without a second esbuild pass.
+- `wrangler.toml`: Worker, D1, R2, Queue, and coordination Durable Object binding template. Wrangler runs a Bun custom build and uploads the bundled Worker without a second esbuild pass.
 - `src/worker.ts`: Worker entrypoint.
 - `src/handler.ts`: route dispatcher that keeps edge-local health/storage probes local and dispatches Takosumi kernel routes to an in-process Hono app.
 - `src/d1_storage.ts`: D1-backed snapshot storage driver for kernel stores.
@@ -37,7 +37,7 @@ D1 is used in two places:
 - `CloudflareD1SnapshotStorageDriver` persists the kernel storage snapshot.
 - `createCloudflareD1DeployStores` persists deployment records, idempotency replay responses, WAL stage journal entries, deploy locks, and revoke-debt records.
 
-R2 is used only by the optional DataAsset routes through `CloudflareR2ObjectStorage`. The adapter stores Takosumi digests in R2 custom metadata and verifies digests on read. AppSpec, Installation, and Deployment do not require R2.
+R2 is used only by the optional DataAsset routes through `CloudflareR2ObjectStorage`. The adapter stores Takosumi digests in R2 custom metadata and verifies digests on read. Source, Installation, and Deployment do not require R2.
 
 ## Operator Steps
 

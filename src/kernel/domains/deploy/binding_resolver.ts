@@ -1,7 +1,7 @@
 // Binding resolver + access-path policy validator (Phase 10C / Wave 3).
 //
 // The resolver expands every component-level `bindings` declaration from the
-// AppSpec into a canonical `DeploymentBinding` with:
+// InternalDeploySpec into a canonical `DeploymentBinding` with:
 //   - explicit `source` (resource | output | secret | provider-output)
 //   - canonical `sourceAddress` (matches the access-path request projection)
 //   - access mode + injection target derived from the binding spec
@@ -16,7 +16,7 @@
 // rule (Core spec § 12 invariant): otherwise resolution is blocked.
 //
 // The resolver is a pure function over already-built artifacts (descriptor
-// closure + resolved graph + AppSpec), so apply consumes its output verbatim
+// closure + resolved graph + InternalDeploySpec), so apply consumes its output verbatim
 // without re-deriving binding shapes from raw descriptors.
 
 import { objectAddress } from "takosumi-contract/reference/compat";
@@ -39,8 +39,8 @@ import type {
   ObjectAddress,
 } from "takosumi-contract/reference/compat";
 import type {
-  AppSpec,
-  AppSpecComponent,
+  InternalDeploySpec,
+  InternalDeploySpecComponent,
   PublicComponentBindingSpec,
 } from "./types.ts";
 
@@ -49,26 +49,26 @@ import type {
 // ---------------------------------------------------------------------------
 
 export interface ResolveBindingsInput {
-  readonly appSpec: AppSpec;
+  readonly deploySpec: InternalDeploySpec;
   readonly resolvedGraph: DeploymentResolvedGraph;
   readonly descriptorClosure: DeploymentDescriptorClosure;
   readonly resolvedAt: IsoTimestamp;
 }
 
-/** Resolve every component binding declaration in the AppSpec into a
+/** Resolve every component binding declaration in the InternalDeploySpec into a
  *  canonical `DeploymentBinding`. Output is deterministic and sorted by
  *  component then binding name so apply consumes a stable shape. */
 export function resolveBindings(
   input: ResolveBindingsInput,
 ): readonly DeploymentBinding[] {
   const bindings: DeploymentBinding[] = [];
-  for (const component of input.appSpec.components) {
+  for (const component of input.deploySpec.components) {
     for (const [name, spec] of Object.entries(component.bindings)) {
       bindings.push(buildBinding({
         component,
         bindingName: name,
         spec,
-        appSpec: input.appSpec,
+        deploySpec: input.deploySpec,
         resolvedAt: input.resolvedAt,
       }));
     }
@@ -169,10 +169,10 @@ export function validateAccessPaths(
 // ---------------------------------------------------------------------------
 
 interface BuildBindingInput {
-  readonly component: AppSpecComponent;
+  readonly component: InternalDeploySpecComponent;
   readonly bindingName: string;
   readonly spec: PublicComponentBindingSpec;
-  readonly appSpec: AppSpec;
+  readonly deploySpec: InternalDeploySpec;
   readonly resolvedAt: IsoTimestamp;
 }
 
@@ -194,7 +194,7 @@ function buildBinding(input: BuildBindingInput): DeploymentBinding {
     injection,
     enforcement,
     sensitivity,
-    appSpec: input.appSpec,
+    deploySpec: input.deploySpec,
     spec: input.spec,
   });
   const resolvedVersion = stableHashLike({
@@ -313,7 +313,7 @@ interface BuildAccessPathInput {
   readonly injection: CoreInjectionTarget;
   readonly enforcement: CoreEnforcement;
   readonly sensitivity: CoreSensitivity;
-  readonly appSpec: AppSpec;
+  readonly deploySpec: InternalDeploySpec;
   readonly spec: PublicComponentBindingSpec;
 }
 

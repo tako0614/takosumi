@@ -91,7 +91,7 @@ shadow は production traffic を新 deployment に複製送付しますが prod
 - production request / response は previous pointer から同期された backend data plane assignment (前 deployment) が処理し、client に返る
 - shadow 先 (新 deployment) に同 request を mirror。結果は ObservationState に記録され、 production 側応答や副作用は変えない
 - drift 検出時は [Drift Detection](./drift-detection.md) flow。 severity `error` なら operator gate で `rolling-back` に遷移
-- shadow rollout は副作用 surface を持つ manifest を受け付けない。 `outputs` / `queue` delivery path / DB semantic write を含む shadow plan は `shadow-side-effects:forbidden` で resolution 時に `deny` (operator approval でも override 不可)
+- shadow rollout は副作用 surface を持つ resolved target state を受け付けない。 `outputs` / `queue` delivery path / DB semantic write を含む shadow plan は `shadow-side-effects:forbidden` で resolution 時に `deny` (operator approval でも override 不可)
 - read-side / invocation-side いずれも mirror。 shape 単位で適用範囲が違う場合は OperationPlan が固定
 
 ## RoutingPointer 更新のシリアライズ {#grouphead-update-serialization}

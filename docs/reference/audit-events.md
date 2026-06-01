@@ -55,7 +55,7 @@ interface AuditLogEvent {
 
 ### Reference / Operator Policy Events
 
-These events belong to a reference/operator policy profile. They are not additional manifest fields and do not expand the portable Installer API entity model.
+These events belong to a reference/operator policy profile. They are not additional Source metadata fields and do not expand the portable Installer API entity model.
 
 | Type                       | Severity | 説明                                                    |
 | -------------------------- | -------- | ------------------------------------------------------- |

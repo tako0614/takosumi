@@ -1,7 +1,7 @@
 /**
  * Kernel-internal re-exports for the canonical `KernelPlugin` contract.
  *
- * The contract itself lives in `@takos/takosumi-contract/reference/plugin`. This
+ * The contract itself lives in `@takosjp/takosumi/contract/reference/plugin`. This
  * shim keeps existing kernel imports stable and adds the kernel-internal
  * `KernelPluginRegistry` interface used by `InstallerPipeline`.
  */
@@ -15,8 +15,6 @@ export type {
 } from "takosumi-contract/reference/plugin";
 import type { KernelPlugin } from "takosumi-contract/reference/plugin";
 
-export type KindAliasMap = Readonly<Record<string, string>>;
-
 export interface KernelPluginRegistry {
   /** All registered plugins, in registration order. */
   list(): readonly KernelPlugin[];
@@ -28,8 +26,9 @@ export interface KernelPluginRegistry {
    */
   findByKindUri(kindUri: string): KernelPlugin | undefined;
   /**
-   * Resolve an AppSpec `Component.kind` value through the operator alias map
-   * and find the plugin that advertises the resulting kind URI.
+   * Find a plugin by the exact operator-selected kind reference. Takosumi core
+   * does not expand short aliases; operators pass the URI or opaque reference
+   * they want the plugin registry to resolve.
    */
   findByKindRef(kind: string): KernelPlugin | undefined;
   /** Lookup by `name`. Returns `undefined` if not registered. */

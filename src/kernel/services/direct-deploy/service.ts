@@ -3,16 +3,16 @@
 // Direct deploy (image / source / bundle workload inputs without a
 // repo-managed manifest) is implemented as a thin shell over
 // `DeploymentService.resolveDeployment` + `applyDeployment`. It generates
-// a synthetic public app manifest payload, marks it with a
-// `takosumi.directDeploy` override so manifest-managed groups can refuse silent
+// a synthetic reference deploy source payload, marks it with a
+// `takosumi.directDeploy` override so source-payload-managed groups can refuse silent
 // mutation, and feeds it through the canonical Deployment lifecycle.
 
-import { compileManifestToAppSpec } from "../../domains/deploy/compiler.ts";
+import { compileSourcePayloadToInternalDeploySpec } from "../../domains/deploy/compiler.ts";
 import type {
-  AppSpec,
+  InternalDeploySpec,
   DeploySourceRef,
   PublicComputeSpec,
-  PublicDeployManifest,
+  ReferenceDeploySourcePayload,
   PublicOutputSpec,
   PublicResourceSpec,
   PublicRouteSpec,
@@ -43,8 +43,8 @@ export interface DirectWorkloadBaseInput {
     | readonly PublicOutputSpec[];
   readonly overrides?: Record<string, unknown>;
   /**
-   * Direct deploys are generated manifests. If an existing group is currently
-   * owned by a non-generated manifest, callers must opt in before the service
+   * Direct deploys are generated source payloads. If an existing group is currently
+   * owned by a non-generated source payload, callers must opt in before the service
    * will create/apply a direct deploy for that group.
    */
   readonly allowManifestManagedGroupMutation?: boolean;
@@ -77,8 +77,8 @@ export type DirectWorkloadDeployInput =
   | DirectBundleWorkloadInput;
 
 export interface DirectWorkloadCompilation {
-  readonly manifest: PublicDeployManifest;
-  readonly appSpec: AppSpec;
+  readonly manifest: ReferenceDeploySourcePayload;
+  readonly deploySpec: InternalDeploySpec;
   readonly source: DeploySourceRef;
 }
 
@@ -109,7 +109,7 @@ export interface DirectDeployDeploymentClient {
 export interface DirectDeployResolveInput {
   readonly spaceId: string;
   readonly groupId: string;
-  readonly manifest: PublicDeployManifest;
+  readonly manifest: ReferenceDeploySourcePayload;
   readonly source: DeploySourceRef;
   readonly mode?: "resolve" | "apply";
   readonly createdBy?: string;
@@ -135,7 +135,7 @@ export class ManifestManagedGroupMutationBlockedError extends Error {
     readonly deploymentId: string;
   }) {
     super(
-      `direct deploy would mutate manifest-managed group ${input.spaceId}/${input.groupId}; set allowManifestManagedGroupMutation to proceed`,
+      `direct deploy would mutate source-payload-managed group ${input.spaceId}/${input.groupId}; set allowManifestManagedGroupMutation to proceed`,
     );
     this.name = "ManifestManagedGroupMutationBlockedError";
     this.spaceId = input.spaceId;
@@ -154,8 +154,8 @@ export class DirectDeployService {
   compile(input: DirectWorkloadDeployInput): DirectWorkloadCompilation {
     const manifest = buildDirectWorkloadManifest(input);
     const source = buildDirectWorkloadSource(input);
-    const appSpec = compileManifestToAppSpec(manifest, { source });
-    return Object.freeze({ manifest, appSpec, source });
+    const deploySpec = compileSourcePayloadToInternalDeploySpec(manifest, { source });
+    return Object.freeze({ manifest, deploySpec, source });
   }
 
   /**
@@ -237,7 +237,7 @@ export class DirectDeployService {
 
 export function buildDirectWorkloadManifest(
   input: DirectWorkloadDeployInput,
-): PublicDeployManifest {
+): ReferenceDeploySourcePayload {
   const componentName = input.workloadName ?? "web";
   const compute: PublicComputeSpec = {
     type: input.workloadType ?? defaultWorkloadType(input.kind),
@@ -291,7 +291,7 @@ export function buildDirectWorkloadSource(
 }
 
 export function isDirectDeployGeneratedManifest(
-  manifest: PublicDeployManifest,
+  manifest: ReferenceDeploySourcePayload,
 ): boolean {
   const marker = manifest.overrides?.["takosumi.directDeploy"];
   return !!marker && typeof marker === "object" &&
@@ -300,7 +300,7 @@ export function isDirectDeployGeneratedManifest(
 
 /**
  * Detects the `takosumi.directDeploy.generated: true` marker on the serialized
- * manifest snapshot stored in `Deployment.input.manifest_snapshot`. We accept
+ * source snapshot stored in `Deployment.input.manifest_snapshot`. We accept
  * either a JSON-encoded string snapshot or a YAML one that contains the
  * marker text; direct-deploy owns this snapshot marker convention.
  */

@@ -1,8 +1,8 @@
 # Takosumi Kernel — single-host reference distribution
 
-Substrate-neutral counterpart to `deploy/cloudflare/`. Brings up the full Takosumi PaaS kernel + runtime-agent + Postgres + MinIO + Caddy on any Docker host (single VM, container host, k8s pod via kompose).
+Substrate-neutral counterpart to `deploy/cloudflare/`. Brings up the Takosumi kernel + runtime-agent + Postgres + MinIO + Caddy on any Docker host (single VM, container host, k8s pod via kompose).
 
-The kernel here is the same `src/kernel/index.ts` that ships to Cloudflare Workers. It uses the runtime-neutral `RuntimeAdapter` under `src/kernel/shared/runtime/` and so runs identically on Deno (this distribution), Node 22+ (via Deno's Node compat), and Cloudflare Workers (via `deploy/cloudflare/`).
+The kernel here is the same `src/kernel/index.ts` that ships to Cloudflare Workers. It uses the runtime-neutral `RuntimeAdapter` under `src/kernel/shared/runtime/` and is run through the Node/Bun path in this distribution.
 
 ## Quick start
 
@@ -14,7 +14,7 @@ docker compose up -d
 # wait until kernel reports healthy
 curl -k https://localhost/healthz
 
-# install an AppSpec through the canonical installer entry point
+# install a Source through the canonical installer entry point
 curl -X POST https://localhost/v1/installations \
   -H "Authorization: Bearer $TAKOSUMI_INSTALLER_TOKEN" \
   -H "Content-Type: application/json" \
@@ -47,8 +47,8 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 ## Files
 
 - `compose.yml` — Postgres + MinIO + kernel + runtime-agent + Caddy stack
-- `Dockerfile.kernel` — kernel image (Deno + workspace bundle)
-- `Dockerfile.runtime-agent` — generic runtime-agent image (Deno + lifecycle host)
+- `Dockerfile.kernel` — kernel image (Bun + workspace bundle)
+- `Dockerfile.runtime-agent` — generic runtime-agent image (Bun + lifecycle host)
 - `Caddyfile.example` — reverse proxy + automatic HTTPS template
 - `schema.sql` — initial Postgres schema (loaded by `docker-entrypoint-initdb.d`)
 - `.env.example` — template for required secrets
@@ -70,7 +70,7 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 | AWS (ECS / Fargate + RDS + S3)    | n/a                              | spec-compliant, operator-owned |
 | GCP (Cloud Run + Cloud SQL + GCS) | n/a                              | spec-compliant, operator-owned |
 
-Native kind packages for AWS / GCP / Kubernetes and runtime-agent connectors for AWS / GCP / Azure / Kubernetes are available for operator-attached distributions (see `takosumi-plugins/packages/kind-aws-*`, `takosumi-plugins/packages/kind-gcp-*`, `takosumi-plugins/src/kinds/kubernetes-web-service/`, and `takosumi-plugins/packages/runtime-agent-connectors/src/connectors/{aws,gcp,azure,kubernetes}/`), but no production-grade default reference deploy package for the kernel itself ships there. Operators bring their own Terraform / Helm / Pulumi to land the kernel image and runtime-agent image on those substrates.
+Native kind implementations for AWS / GCP / Kubernetes and runtime-agent connectors for AWS / GCP / Azure / Kubernetes are available for operator-attached distributions (see `takosumi-plugins/packages/kind-aws-*`, `takosumi-plugins/packages/kind-gcp-*`, `takosumi-plugins/packages/kind-kubernetes-web-service/`, and `takosumi-plugins/packages/runtime-agent-connectors/src/connectors/{aws,gcp,azure,kubernetes}/`), but no production-grade default reference deploy package for the kernel itself ships there. Operators bring their own Terraform / Helm / Pulumi to land the kernel image and runtime-agent image on those substrates.
 
 ## Why two reference distributions
 

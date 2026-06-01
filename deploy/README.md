@@ -11,8 +11,8 @@ The directories under `deploy/` are therefore **reference examples and provider
 runbooks**, not part of the published framework surface and not the canonical operator
 distribution. The canonical reference **composer** that embeds the kernel app, extends it
 (dashboard / billing / install UI), and serves the one composed app from a single cloud
-URL is `takosumi-cloud/deploy/` (`cloudflare/`, `node-postgres/`). New operators should
-clone and adapt `takosumi-cloud/deploy/` rather than these examples.
+URL is `takosumi/deploy/` (`cloudflare/`, `node-postgres/`). New operators should
+clone and adapt `takosumi/deploy/` rather than these examples.
 
 ## What lives here
 
@@ -28,7 +28,7 @@ clone and adapt `takosumi-cloud/deploy/` rather than these examples.
 
 ## Why these stay here
 
-These examples are intentionally **not relocated** into `takosumi-cloud/deploy/`:
+These examples are intentionally **not relocated** into `takosumi/deploy/`:
 
 - The Takos product distribution profile (`takos/deploy/distributions/cloudflare.json`)
   pins the exact artifact refs `../takosumi/deploy/cloudflare` and
@@ -38,4 +38,4 @@ These examples are intentionally **not relocated** into `takosumi-cloud/deploy/`
   worker runner and compose wiring.
 
 Moving them would break those cross-submodule references. They remain reference examples;
-production composition and serving belong to `takosumi-cloud/deploy/`.
+production composition and serving belong to `takosumi/deploy/`.

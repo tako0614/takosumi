@@ -10,12 +10,11 @@
  *     `CORE_CONDITION_REASONS` catalog (`CoreConditionReason` /
  *     `isCoreConditionReason`). These are current and not slated for removal.
  *
- *  2. The legacy deploy-core projection DTOs (`CoreAppSpec`, `Deployment`,
+ *  2. The legacy deploy-core projection DTOs (`LegacyCoreAppDefinition`, `Deployment`,
  *     `ProviderObservation`, `GroupHead`, and the records collapsed onto them).
- *     These are NOT the current AppSpec / Installer API contract; new code
- *     should import those DTOs from `@takos/takosumi-contract/app-spec` and
- *     `@takos/takosumi-contract/installer-api` and implement materializers
- *     through `KernelPlugin`. They are deprecated as a group (see the removal
+ *     These are NOT the current Installer API contract; new code should import
+ *     DTOs from `@takosjp/takosumi/contract/installer-api`. They are deprecated
+ *     as a group (see the removal
  *     condition below); the `@deprecated` tag is scoped to this surface only,
  *     not to the live primitives in surface 1.
  *
@@ -27,13 +26,12 @@
  *                            Deployment)
  *
  * Removal condition for the projection DTOs (surface 2): the legacy
- * `Manifest` / `resources[]` deploy-core planning path is fully retired (the
- * default reference apply facade dispatches through the v1 AppSpec resolver
- * instead of the core-planning path) AND all kernel consumers have moved their
- * deployment-lifecycle DTOs into `packages/kernel/src/domains/deploy/`. The
+ * legacy `resources[]` deploy-core planning path is fully retired AND all
+ * kernel consumers have moved their
+ * deployment-lifecycle DTOs into `src/kernel/domains/deploy/`. The
  * live primitives in surface 1 must be relocated to a non-deprecated subpath
  * before that removal, since they are re-exported via
- * `@takos/takosumi-contract/reference/compat` today.
+ * `@takosjp/takosumi/contract/reference/compat` today.
  */
 
 import type { Digest, IsoTimestamp, JsonObject } from "./types.ts";
@@ -183,17 +181,16 @@ export function isCoreConditionReason(
 }
 
 // ---------------------------------------------------------------------------
-// 4. AppSpec / EnvSpec / PolicySpec authoring shapes (legacy deploy-core
+// 4. Legacy app/env/policy authoring shapes (legacy deploy-core
 //    projection — surface 2; see module header for the removal condition).
 // ---------------------------------------------------------------------------
 
 /**
- * @deprecated Legacy deploy-core authoring shape. Import the current AppSpec
- *             from `@takos/takosumi-contract/app-spec` instead. Removed once
- *             the legacy `Manifest` / `resources[]` planning path is retired
- *             (see module header).
+ * @deprecated Legacy deploy-core authoring shape. New code should use the
+ *             manifestless Installer API contract. Removed once the legacy
+ *             resources[] planning path is retired (see module header).
  */
-export interface CoreAppSpec {
+export interface LegacyCoreAppDefinition {
   apiVersion: "takosumi.com/v1";
   kind: "App";
   name: string;
@@ -455,7 +452,7 @@ export interface DeploymentResolvedGraph {
   digest: Digest;
   components: readonly CoreComponent[];
   projections: readonly CoreProjectionRecord[];
-  appSpecDigest?: Digest;
+  deploySpecDigest?: Digest;
   envSpecDigest?: Digest;
   policySpecDigest?: Digest;
 }
@@ -728,7 +725,7 @@ export type CoreResolvedContractInstance = CoreContractInstance;
 export interface CoreResolvedGraph {
   id: string;
   digest: Digest;
-  appSpecDigest: Digest;
+  deploySpecDigest: Digest;
   envSpecDigest: Digest;
   policySpecDigest: Digest;
   descriptorClosureDigest: Digest;

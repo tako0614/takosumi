@@ -7,7 +7,7 @@
  * machine that already has an admin / tenant skips creation.
  *
  * Usage:
- *   cd takos && deno task bootstrap:initial \
+ *   bun src/kernel/scripts/bootstrap-initial.ts \
  *     --admin-email=admin@example.com \
  *     [--tenant-name="Takos"] \
  *     [--env=staging|production|local] \
@@ -269,7 +269,7 @@ function isConformanceTier(value: unknown): value is ConformanceTier {
 }
 
 function buildPlan(args: CliArgs): BootstrapPlan {
-  const env = Deno.env.toObject();
+  const env = envObject();
   const defaultApps = loadDefaultApps(env);
   const trustRoots = loadTrustRoots(env);
   if (defaultApps.diagnostic) {
@@ -450,6 +450,26 @@ function reportOutcome(outcome: BootstrapOutcome): void {
   );
 }
 
+function runtimeArgs(): readonly string[] {
+  const bun = globalThis as typeof globalThis & {
+    Bun?: { argv?: readonly string[] };
+  };
+  if (Array.isArray(bun.Bun?.argv)) return bun.Bun.argv.slice(2);
+  return process.argv.slice(2);
+}
+
+function envObject(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === "string") out[key] = value;
+  }
+  return out;
+}
+
+function exitProcess(code: number): never {
+  process.exit(code);
+}
+
 export async function main(argv: readonly string[]): Promise<number> {
   let args: CliArgs;
   try {
@@ -479,6 +499,6 @@ export async function main(argv: readonly string[]): Promise<number> {
 }
 
 if (import.meta.main) {
-  const code = await main(Deno.args);
-  Deno.exit(code);
+  const code = await main(runtimeArgs());
+  exitProcess(code);
 }

@@ -2,7 +2,7 @@
 # Smoke for local workerd/D1/R2 code paths.
 #
 # What this script verifies:
-#   1. takosumi-cloud Accounts Worker runs on workerd with D1/R2.
+#   1. takosumi Accounts Worker runs on workerd with D1/R2.
 #   2. takosumi kernel Worker runs on workerd with D1/R2, Queue, and DO
 #      either as the postgres-profile mirror at kernel-worker.takosumi.test or
 #      as the workers-profile kernel at kernel.takosumi.test.
@@ -24,7 +24,7 @@ resolve_kernel_worker_host() {
 	if [[ -n "${KERNEL_WORKER_HOST:-}" ]]; then
 		candidates+=("$KERNEL_WORKER_HOST")
 	else
-		# postgres profile exposes the Worker mirror beside the Deno+Postgres
+		# postgres profile exposes the Worker mirror beside the Bun+Postgres
 		# kernel. workers profile replaces kernel.takosumi.test with the Worker.
 		candidates+=(kernel-worker.takosumi.test kernel.takosumi.test)
 	fi
@@ -53,7 +53,7 @@ raise SystemExit(0 if d.get('provider') == 'cloudflare-worker' else 1)
 KERNEL_HOST="$(resolve_kernel_worker_host)"
 
 # 1. Accounts workerd-edge sentinel
-HEALTH=$(curl -sk --cacert "$CA" https://cloud.takosumi.test/healthz)
+HEALTH=$(curl -sk --cacert "$CA" https://accounts.takosumi.test/healthz)
 echo "$HEALTH" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
@@ -108,12 +108,12 @@ DRY_RUN=$(curl -sk --cacert "$CA" -X POST \
 	-H "Authorization: Bearer $LOCAL_CLOUD_SESSION_ID" \
 	-H "Content-Type: application/json" \
 	-d '{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' \
-	https://cloud.takosumi.test/v1/installations/dry-run)
+	https://accounts.takosumi.test/v1/installations/dry-run)
 APP_ID=$(echo "$DRY_RUN" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('appId',''))")
 [[ -n "$APP_ID" ]] || { echo "FAIL: /v1/installations/dry-run did not return appId: $DRY_RUN" >&2; exit 1; }
 
 # 4. OIDC discovery shape
-DISC=$(curl -sk --cacert "$CA" https://cloud.takosumi.test/.well-known/openid-configuration)
+DISC=$(curl -sk --cacert "$CA" https://accounts.takosumi.test/.well-known/openid-configuration)
 ISSUER=$(echo "$DISC" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('issuer',''))")
 [[ -n "$ISSUER" ]] || { echo "FAIL: /.well-known/openid-configuration missing issuer" >&2; exit 1; }
 
@@ -124,7 +124,7 @@ EXPORT_ROUTE_STATUS=""
 EXPORT_ROUTE_BODY="/tmp/accounts-export-route-smoke.json"
 probe_export_route() {
 	EXPORT_ROUTE_STATUS=$(curl -sk --cacert "$CA" -o "$EXPORT_ROUTE_BODY" -w "%{http_code}" \
-		"https://cloud.takosumi.test/__takosumi/exports/missing-object.json?expires=4102444800000&sig=bad")
+		"https://accounts.takosumi.test/__takosumi/exports/missing-object.json?expires=4102444800000&sig=bad")
 	[[ "$EXPORT_ROUTE_STATUS" == "403" ]] || return 1
 	python3 - "$EXPORT_ROUTE_BODY" <<'PY'
 import json, sys
@@ -155,7 +155,7 @@ fi
 #    /tmp scratch path, exercise it with the host's python3 sqlite3
 #    module (always available, no apt-install needed), throw away the
 #    copy. Read-only on the in-container file.
-SQLITE_PATH=$(docker exec local-substrate-takosumi-cloud-worker-1 \
+SQLITE_PATH=$(docker exec local-substrate-takosumi-worker-1 \
 	sh -c "find /data/d1 -name '*.sqlite' | head -1" 2>/dev/null || true)
 if [[ -z "$SQLITE_PATH" ]]; then
 	echo "OK accounts worker + kernel worker healthy via $KERNEL_HOST (D1 semantics check SKIPPED — sqlite path not yet materialised); appId=$APP_ID issuer=$ISSUER"
@@ -163,7 +163,7 @@ if [[ -z "$SQLITE_PATH" ]]; then
 fi
 SCRATCH_DB=$(mktemp --suffix=.sqlite)
 trap 'rm -f "$SCRATCH_DB"' EXIT
-docker cp "local-substrate-takosumi-cloud-worker-1:$SQLITE_PATH" "$SCRATCH_DB" >/dev/null 2>&1
+docker cp "local-substrate-takosumi-worker-1:$SQLITE_PATH" "$SCRATCH_DB" >/dev/null 2>&1
 
 python3 - "$SCRATCH_DB" <<'PY' || { echo "FAIL: D1 binding semantics check" >&2; exit 1; }
 import sqlite3, sys, json

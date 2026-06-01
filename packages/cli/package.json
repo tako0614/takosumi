@@ -1,0 +1,14 @@
+{
+  "name": "@takosjp/takosumi-accounts-cli",
+  "version": "0.0.1",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/main.ts"
+  },
+  "dependencies": {
+    "@takosjp/takosumi-accounts-contract": "workspace:*",
+    "@takosjp/takosumi-accounts-service": "workspace:*",
+    "pg": "^8.11.0"
+  }
+}

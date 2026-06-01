@@ -5,7 +5,7 @@ import {
   DeploymentService,
   InMemoryDeploymentStore,
 } from "../domains/deploy/deployment_service.ts";
-import type { PublicDeployManifest } from "../domains/deploy/types.ts";
+import type { ReferenceDeploySourcePayload } from "../domains/deploy/types.ts";
 import { InMemoryOutboxStore } from "../shared/events.ts";
 import { ApplyWorker } from "./apply_worker.ts";
 
@@ -208,7 +208,7 @@ test("ApplyWorker maps DeploymentBlockedError to POLICY_BLOCKED on the failure e
   },
 );
 
-function sampleManifest(): PublicDeployManifest {
+function sampleManifest(): ReferenceDeploySourcePayload {
   return {
     name: "demo-app",
     version: "1.0.0",

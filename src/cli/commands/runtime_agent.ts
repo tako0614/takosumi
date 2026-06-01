@@ -1,4 +1,11 @@
 import { Command } from "../command.ts";
+import {
+  exitCli,
+  onCliSignal,
+  readEnv,
+  readTextFile,
+  setEnv,
+} from "../runtime.ts";
 
 function createServeCmd(): Command {
   return new Command("serve")
@@ -28,7 +35,7 @@ function createServeCmd(): Command {
         const { startEmbeddedAgent } = await import(
           "../../runtime-agent/embed.ts"
         );
-        const explicitToken = opts.token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
+        const explicitToken = opts.token ?? readEnv("TAKOSUMI_AGENT_TOKEN");
         const handle = startEmbeddedAgent({
           port: opts.port,
           hostname: opts.hostname,
@@ -54,13 +61,13 @@ function createListCmd(): Command {
       "Bearer token (defaults to TAKOSUMI_AGENT_TOKEN env)",
     )
     .action(async (opts: { url?: string; token?: string }) => {
-      const agentUrl = opts.url ?? Deno.env.get("TAKOSUMI_AGENT_URL");
-      const agentToken = opts.token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
+      const agentUrl = opts.url ?? readEnv("TAKOSUMI_AGENT_URL");
+      const agentToken = opts.token ?? readEnv("TAKOSUMI_AGENT_TOKEN");
       if (!agentUrl || !agentToken) {
         console.error(
           "Set --url + --token (or TAKOSUMI_AGENT_URL + TAKOSUMI_AGENT_TOKEN env)",
         );
-        Deno.exit(1);
+        exitCli(1);
       }
       const res = await fetch(`${agentUrl}/v1/connectors`, {
         headers: { authorization: `Bearer ${agentToken}` },
@@ -68,7 +75,7 @@ function createListCmd(): Command {
       if (!res.ok) {
         console.error(`agent ${agentUrl}/v1/connectors returned ${res.status}`);
         console.error(await res.text());
-        Deno.exit(1);
+        exitCli(1);
       }
       const body = await res.json() as {
         connectors: Array<{ shape: string; provider: string }>;
@@ -115,13 +122,13 @@ function createVerifyCmd(): Command {
           provider?: string;
         },
       ) => {
-        const agentUrl = opts.url ?? Deno.env.get("TAKOSUMI_AGENT_URL");
-        const agentToken = opts.token ?? Deno.env.get("TAKOSUMI_AGENT_TOKEN");
+        const agentUrl = opts.url ?? readEnv("TAKOSUMI_AGENT_URL");
+        const agentToken = opts.token ?? readEnv("TAKOSUMI_AGENT_TOKEN");
         if (!agentUrl || !agentToken) {
           console.error(
             "Set --url + --token (or TAKOSUMI_AGENT_URL + TAKOSUMI_AGENT_TOKEN env)",
           );
-          Deno.exit(1);
+          exitCli(1);
         }
         const filter: Record<string, string> = {};
         if (opts.shape) filter.shape = opts.shape;
@@ -139,7 +146,7 @@ function createVerifyCmd(): Command {
             `agent ${agentUrl}/v1/lifecycle/verify returned ${res.status}`,
           );
           console.error(await res.text());
-          Deno.exit(1);
+          exitCli(1);
         }
         const body = await res.json() as {
           results: Array<{
@@ -158,7 +165,7 @@ function createVerifyCmd(): Command {
         }
         renderVerifyTable(body.results);
         const anyFailed = body.results.some((r) => !r.ok);
-        if (anyFailed) Deno.exit(2);
+        if (anyFailed) exitCli(2);
       },
     ) as Command;
 }
@@ -204,7 +211,7 @@ function createRuntimeAgentCommand(): Command {
 export const runtimeAgentCommand: Command = createRuntimeAgentCommand();
 
 async function loadEnvFile(path: string): Promise<void> {
-  const text = await Deno.readTextFile(path);
+  const text = await readTextFile(path);
   for (const rawLine of text.split("\n")) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
@@ -218,17 +225,17 @@ async function loadEnvFile(path: string): Promise<void> {
     ) {
       value = value.slice(1, -1);
     }
-    Deno.env.set(key, value);
+    setEnv(key, value);
   }
 }
 
 function waitForShutdown(): Promise<void> {
   return new Promise<void>((resolve) => {
-    const handle = (signal: Deno.Signal) => {
+    const handle = (signal: "SIGINT" | "SIGTERM") => {
       console.log(`received ${signal}, shutting down`);
       resolve();
     };
-    Deno.addSignalListener("SIGINT", () => handle("SIGINT"));
-    Deno.addSignalListener("SIGTERM", () => handle("SIGTERM"));
+    onCliSignal("SIGINT", () => handle("SIGINT"));
+    onCliSignal("SIGTERM", () => handle("SIGTERM"));
   });
 }

@@ -13,7 +13,7 @@
  * (= `Provider<Spec, Outputs>` keyed by short-name shape id) — it
  * predates the namespace pub/sub `KernelPlugin` model and is retained
  * only for reference distribution backward-compat (= the
- * `@takos/takosumi-{aws,gcp,cloudflare,kubernetes,deno-deploy,selfhost}-providers`
+ * legacy provider packages under the pre-catalog provider naming model
  * packages still re-export factories from here). To unblock the Wave
  * N-A deletion, this file inlines the previously-imported spec /
  * outputs / capability type names so the shape-provider files keep

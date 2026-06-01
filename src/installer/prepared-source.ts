@@ -3,13 +3,13 @@
  *
  * A prepared source is an immutable tar snapshot of the source tree after any
  * external build/preparation step has run. The kernel verifies the archive
- * digest before reading `.takosumi.yml` and invoking materializers.
+ * digest before deriving the install plan.
  */
 
 import type {
   InstallerFs,
   TarRunner,
-} from "@takos/takosumi-contract/reference/runtime-capability";
+} from "takosumi-contract/reference/runtime-capability";
 import { assertHostNotBlocked, BlockedHostError } from "./host-blocklist.ts";
 import { defaultInstallerFs } from "./default-fs.ts";
 import { defaultTarRunner } from "./subprocess/tar-runner.ts";
@@ -20,16 +20,14 @@ export interface PreparedSourceFetchOptions {
   readonly destination?: string;
   /**
    * Injected `tar` capability. Defaults to a runner built over the installer's
-   * Deno-runtime `tar` primitive so standalone Deno behavior is unchanged; the
-   * reference kernel injects a runner routed through
-   * `currentRuntime().subprocess` so the same path runs on Node / Workers
-   * without this module referencing `Deno.Command`.
+   * local `tar` primitive so standalone behavior is unchanged; the reference
+   * kernel injects a runner routed through `currentRuntime().subprocess` so the
+   * same path runs on Bun / Node / Workers.
    */
   readonly tarRunner?: TarRunner;
   /**
-   * Injected temp-dir filesystem capability. Defaults to a Deno-backed FS so
-   * standalone Deno behavior is unchanged; the reference kernel injects
-   * `currentRuntime().fs`.
+   * Injected temp-dir filesystem capability. Defaults to a host-detected FS;
+   * the reference kernel injects `currentRuntime().fs`.
    */
   readonly fs?: InstallerFs;
 }
@@ -87,7 +85,12 @@ function preparedDecompressedMaxBytes(): number {
 }
 
 function readPositiveByteEnv(name: string, fallback: number): number {
-  const raw = Deno.env.get(name);
+  const processEnv = (globalThis as {
+    process?: { env?: Record<string, string | undefined> };
+  }).process?.env;
+  const raw = processEnv?.[name] ??
+    (globalThis as { Deno?: { env?: { get(name: string): string | undefined } } })
+      .Deno?.env?.get(name);
   if (raw === undefined || raw.length === 0) {
     return fallback;
   }

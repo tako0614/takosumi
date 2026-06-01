@@ -27,7 +27,7 @@ import {
   type InstallerErrorEnvelope,
   type RollbackRequest,
   type RollbackResponse,
-} from "@takos/takosumi-contract/installer-api";
+} from "takosumi-contract/installer-api";
 
 export interface InstallerClientOptions {
   readonly endpoint: string;

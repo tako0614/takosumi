@@ -34,21 +34,14 @@ test("registry exposes registered plugins in registration order", () => {
   );
 });
 
-test("registry resolves operator alias to kind URI lookup", () => {
+test("registry resolves exact kind URI lookup", () => {
   const workerPlugin = buildPlugin(
     "@takos/workers-reference",
     ["https://takosumi.com/kinds/v1/worker"],
   );
-  const registry = createKernelPluginRegistry([workerPlugin], {
-    kindAliases: {
-      worker: "https://takosumi.com/kinds/v1/worker",
-    },
-  });
+  const registry = createKernelPluginRegistry([workerPlugin]);
 
-  assert.equal(
-    findPluginForKind(registry, "worker")?.name,
-    "@takos/workers-reference",
-  );
+  assert.equal(findPluginForKind(registry, "worker"), undefined);
   assert.equal(
     findPluginForKind(registry, "https://takosumi.com/kinds/v1/worker")?.name,
     "@takos/workers-reference",
@@ -120,13 +113,7 @@ test("registry refuses plugin without apply()", () => {
   );
 });
 
-test("normalizeKindToUri resolves only operator-provided aliases", () => {
-  assert.equal(
-    normalizeKindToUri("worker", {
-      worker: "https://takosumi.com/kinds/v1/worker",
-    }),
-    "https://takosumi.com/kinds/v1/worker",
-  );
+test("normalizeKindToUri leaves bare tokens unresolved", () => {
   assert.equal(normalizeKindToUri("worker"), "worker");
   assert.equal(
     normalizeKindToUri("https://takosumi.com/kinds/v1/postgres"),

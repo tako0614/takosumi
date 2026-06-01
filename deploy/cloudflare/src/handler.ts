@@ -26,7 +26,7 @@ import {
 } from "../../../src/kernel/adapters/queue/mod.ts";
 import { InMemoryRouterConfigAdapter } from "../../../src/kernel/adapters/router/mod.ts";
 import { MemoryEncryptedSecretStore } from "../../../src/kernel/adapters/secret-store/mod.ts";
-import { ImmutableManifestSourceAdapter } from "../../../src/kernel/adapters/source/mod.ts";
+import { ImmutableSourceAdapter } from "../../../src/kernel/adapters/source/mod.ts";
 import { InMemoryObservabilitySink } from "../../../src/kernel/services/observability/mod.ts";
 import type { Queue } from "./bindings.ts";
 import type { CloudflareWorkerEnv } from "./bindings.ts";
@@ -150,7 +150,7 @@ function createWorkerAdapters(input: {
       idGenerator,
       env: input.runtimeEnv,
     }),
-    source: new ImmutableManifestSourceAdapter({ clock, idGenerator }),
+    source: new ImmutableSourceAdapter({ clock, idGenerator }),
     storage: input.storage,
     kms: new NoopTestKms({ clock, idGenerator }),
     observability: new InMemoryObservabilitySink(),

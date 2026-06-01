@@ -22,7 +22,7 @@ export interface ActorContext {
 }
 
 export interface SourceSnapshot {
-  kind: "git" | "manifest" | "archive" | "inline";
+  kind: "git" | "source" | "archive" | "inline";
   ref: string;
   digest: Digest;
   repositoryUrl?: string;
@@ -158,17 +158,14 @@ export interface GroupSummary {
 }
 
 /**
- * Legacy reference deploy-core authoring shape. Retained for historical
- * deploy-domain compatibility — this is NOT the current Takosumi AppSpec
- * contract. The v1 `AppSpec` contract lives in
- * `@takos/takosumi-contract/app-spec` (`packages/contract/src/app-spec.ts`)
- * and matches the `.takosumi.yml` envelope (`apiVersion: "v1"`, `metadata`,
- * `components`, optional `publish`). Do not introduce new consumers of this
- * shape; migrate to the v1 `AppSpec` instead.
+ * Legacy reference deploy-core authoring shape retained only for internal
+ * deploy-domain compatibility. The public v1 installer contract is
+ * manifestless and lives in `installer-api.ts`; do not introduce new consumers
+ * of this shape.
  *
- * @deprecated Use `AppSpec` from `@takos/takosumi-contract/app-spec`.
+ * @deprecated Use the manifestless Installer API contract instead.
  */
-export interface LegacyReferenceAppSpec {
+export interface LegacyReferenceAppDefinition {
   name: string;
   version?: string;
   source: SourceSnapshot;

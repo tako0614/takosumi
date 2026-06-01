@@ -1,226 +1,122 @@
 # Glossary {#glossary}
 
----
-
 ## Public Concepts
-
-### Manifest
-
-The `.takosumi.yml` declarative file at the source root (code: `AppSpec`).
-
-### Component
-
-An execution unit inside a manifest. Public fields are `kind`, `spec`,
-`connect`, and `listen`.
-
-### Kind
-
-The AppSpec selector word. Component `kind` selects what is created.
-`publish.kind` and `listen.kind` select the material kind being offered or
-consumed. The operator resolves short aliases or URIs to kind definitions and
-implementation bindings. AppSpec does not use a separate `type` selector.
-
-### Installation
-
-A manifest record in a Space. Holds a current Deployment pointer.
-
-### Deployment
-
-One apply result. Used for history, audit, and rollback. Rollback moves the
-current pointer back to a previous Deployment and does not create a new
-Deployment.
-
-### Space
-
-The isolation unit that contains Installations. Not written in the manifest.
 
 ### Source
 
-The source tree containing the manifest. Source kinds passed to the Installer
-API: `git`, `prepared`, or `local`.
+A repository or prepared artifact submitted to the Installer API. Takosumi
+accepts `git`, `prepared`, and `local` sources. Display metadata and source
+identity come from generic inputs such as Git URL, commit, tag, source digest,
+artifact digest, and `package.json`.
 
-### apply
+### Installation
 
-The operation that updates an Installation after dry-run. Applies manifest
-source to an Installation and records a Deployment.
+The record of a Source installed in a Space. It holds the current Deployment
+pointer, Space, repo metadata, and latest public outputs. Ownership, team
+membership, and billing belong to the operator distribution.
 
-### expected guard
+### Deployment
 
-The hash check from dry-run that verifies the reviewed source has not changed at
-apply time. Returned by dry-run as the reviewed-source guard. Passing it to
-apply rejects a different source with 409. Deploy expected guards also include
-`currentDeploymentId` so apply can reject base-pointer drift.
+One immutable record created by install or deploy apply. It stores source
+identity, `planSnapshotDigest`, `planSnapshot`, `bindingsSnapshot`, status, and
+non-secret outputs. Rollback moves the current pointer to a retained Deployment;
+it does not resolve the Source again.
 
-### connect / listen / publish
+### PlatformService
 
-Component connection language. `connect` consumes same-manifest component
-output, `listen` consumes external publications by exact path or material kind
-discovery, and root `publish` records component output as an Installation output
-publication.
+A service capability exposed by the operator catalog or inventory in a Space.
+Examples include OIDC issuers, Postgres, object storage, queues, MCP servers,
+and runtime targets. Takosumi core does not create these services; it resolves
+`BindingSelection` through the operator catalog resolver.
 
-### dry-run
+### InstallPlan
 
-Validation without apply. It returns planned changes and expected guards (hash
-checks). Two endpoints.
+The review snapshot returned only from dry-run. It is not persisted. Apply uses
+`planSnapshotDigest` to verify that the reviewed Source and binding selection
+are still the ones being applied.
 
-### Build service handoff
+### BindingSelection
 
-The convention where build service or CI prepares a source archive outside the
-manifest and submits it as `source.kind: "prepared"`.
-
-### Current Pointer
-
-The succeeded Deployment currently selected by an Installation. The Installer
-API field is `currentDeploymentId`; rollback moves this pointer back to an
-earlier succeeded Deployment.
-
-### Prepared Source
-
-A pre-built archive produced by CI or a build service. The Installer API records
-the archive byte digest as prepared source identity.
-
-### manifestDigest
-
-The digest of the selected `.takosumi.yml` bytes.
-
-### fail-closed
-
-A policy that explicitly rejects unknown input or unresolved dependencies before
-any side effects occur.
+The PlatformService selection supplied by an install/deploy request, operator
+policy, or account-plane UI. Takosumi resolves it through the operator catalog
+resolver and stores the resolved binding snapshot on the Deployment.
 
 ### Operator
 
-The party that runs Takosumi and chooses backend bindings, credentials, storage,
-and account management integration.
+The party running Takosumi and owning catalog/inventory, runtime adapters,
+storage, secret stores, Terraform/OpenTofu state, billing, OIDC, dashboards, and
+approval policy. Takosumi is one reference operator distribution.
 
----
+### Space
 
-## Catalog & Implementation Binding
+The operator-owned isolation unit containing Installations. Takosumi records
+`spaceId`; membership, quota, billing subject, and service visibility are
+operator concerns.
 
-### Material kind
+### dry-run
 
-The kind of output material offered by a component output slot or platform
-service. Examples: `http-endpoint`, `service-binding`, `object-store`, and
-`mcp-server@v1`. Manifests use this vocabulary in `publish.kind` and
-`listen.kind`.
+Validation without side effects. It fetches source, extracts metadata, resolves
+bindings, checks operator policy, and returns `InstallPlan`, `changes[]`, and
+`expected` guards.
 
-### Injection mode
+### apply
 
-How values are delivered (`env`, `secret-env`, etc.) to a consuming runtime.
-Selected by `connect.<name>.inject` or `listen.<name>.inject`. Examples: `env`,
-`secret-env`, `config-mount`, `upstream`. `mount` is used by path-based
-projections like `config-mount`.
+The operation that records a reviewed Source and binding selection as a
+Deployment. Apply rejects mismatched `expected.planSnapshotDigest` or current
+pointer guards with 409.
 
-### Implementation binding
+### expected guard
 
-The operator-side implementation that connects a kind URI and kind definition to
-a concrete backend runtime or resource creation/update. The mechanism for
-loading implementation bindings is chosen by the operator's configuration.
+A TOCTOU guard proving the reviewed input is the one being applied. It can hold
+`commit`, `sourceDigest`, `artifactDigest`, `planSnapshotDigest`, and
+`currentDeploymentId`.
 
-### Kind definition
+### Prepared source
 
-Metadata describing a component kind's input schema, output slots, projection
-capabilities, and output metadata. The Takosumi official catalog publishes kind
-definitions as JSON-LD. Runtime behavior lives in the implementation binding.
+A source handoff artifact produced by CI, a build service, or operator
+automation. The Installer API uses the fetched payload byte digest as source
+identity. Build recipes, cache keys, and provenance stay in operator or build
+service records.
 
-### Official Catalog
+### planSnapshotDigest
 
-Takosumi's reusable kind definition and material kind collection. Published at
-`https://takosumi.com/kinds/v1/*` as JSON-LD kind definitions. Operators opt in
-per Space; alternative catalogs use the same core contract.
+The digest of the `InstallPlan` snapshot returned by dry-run. Apply uses it to
+stop changes to Source or binding selection after review.
 
-### Platform service
+### sourceDigest / artifactDigest
 
-Space-scoped service material offered by an operator or another Installation.
-Known exact targets are consumed through `listen.path`; targets that may have
-many visible providers, such as MCP servers, are consumed through `listen.kind`
-with optional labels and `many: true`.
+Byte digests for prepared source or build artifacts. The Installer API request
+and operator policy decide which artifact is source identity.
 
-### PlatformServiceDeclaration
+## Boundaries
 
-The Space-scoped entry record for a platform service (code:
-`PlatformServiceDeclaration`). Describes what the operator provides to a Space.
+### Terraform / OpenTofu
 
-### Deployment record
+Infrastructure creation, provider state, locks, and credentials belong to
+operator distributions or `takos-private/`. Takosumi core does not run
+Terraform; it consumes PlatformServices published by the operator catalog.
 
-The selected kind definition, implementation binding, output data, and operator
-records linked to a Deployment (formerly: retained evidence). Public Deployment
-wire exposes only source identity, manifest digest, status, and non-secret
-outputs. Deployment records serve as the basis for subsequent rollback, audit,
-and current projection.
+### Operator catalog / inventory
 
-### Account management (account layer)
+The operator-owned source of truth for PlatformServices, runtime targets,
+binding implementations, and service visibility. Takosumi calls its resolver and
+stores selected binding snapshots on Deployments.
 
-The operator-side layer that handles account, billing, OIDC issuer, and customer
-onboarding (formerly: account-plane).
+### Runtime adapter
 
-### Operator distribution
+The boundary used by the reference kernel to abstract host runtime differences.
+Kernel core uses `src/kernel/shared/runtime/` for filesystem, env, server,
+subprocess, and clock access.
 
-The operator-owned distribution around Takosumi core: account management,
-kind/backend bindings, policy, admin/read APIs, and runtime behavior. Takosumi
-Cloud is the reference operator distribution.
+### Account layer
 
----
+The operator-owned layer for accounts, billing, OIDC issuers, dashboards,
+approval workflows, and deploy facades. Takosumi core public records remain
+Source, Installation, Deployment, and PlatformService.
 
-## Internal / Reference Implementation
+## Related Pages
 
-### TrafficSnapshot
-
-A routing assignment snapshot at activation time (code: `ActivationSnapshot`).
-Freezes the routing state of Installations in a Space at a single point in time.
-
-### ObservationState
-
-Accumulated state of runtime observations (code: `ObservationSet`). Aggregates
-observations reported by providers for kernel reconciliation.
-
-### ResolvedPlan
-
-A snapshot of the manifest resolution result (code: `ResolutionSnapshot`). Holds
-the result of resolving a manifest against kinds, bindings, and output material
-during dry-run or apply.
-
-### TargetState
-
-A snapshot of the desired runtime state (code: `DesiredSnapshot`). Describes the
-runtime state that an apply targets.
-
-### CleanupBacklog
-
-A management record for cleanup tasks that could not be revoked (code:
-`RevokeDebt`). Recorded when provider side-effect revocation fails, requiring
-operator action.
-
-### RoutingPointer
-
-A Space-local pointer to the current TrafficSnapshot (code: `GroupHead`). Points
-to the currently active TrafficSnapshot within a Space.
-
-### asset
-
-An operator extension blob storage target (code: `DataAsset`). Managed through a
-separate workflow from the worker kind.
-
-### expectedEffectsDigest
-
-The predicted effects digest from dry materialization (formerly:
-`predictedActualEffectsDigest`). The digest of materialization predictions
-returned by dry-run.
-
-### escalation timeout
-
-The deadline for a CleanupBacklog entry to transition to
-operator-action-required (formerly: aging window). After this deadline, the
-cleanup task transitions to a state requiring operator escalation.
-
-### snapshot creation
-
-The snapshot creation step during journal compaction (formerly:
-Snapshotization). An internal compaction process that aggregates journal entries
-into a snapshot.
-
-### before resource creation/update
-
-The fail-closed verification timing before resource creation/update begins.
-Rejects kind alias resolution misses and validation errors at this point,
-aborting the operation before any resources are created or modified.
+- [Core Specification](./core-spec.md)
+- [Installer API](./installer-api.md)
+- [Platform Services](./platform-services.md)
+- [Build Service Boundary](./build-spec.md)

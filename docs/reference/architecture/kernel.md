@@ -6,28 +6,37 @@
 
 ## Takosumi の責務 {#responsibility}
 
-| Concept      | 説明                                     |
-| ------------ | ---------------------------------------- |
-| manifest     | source root に置く `.takosumi.yml`       |
-| Installation | Space に入った manifest の current state |
-| Deployment   | 1 回の apply 結果。rollback の根拠       |
+| Concept | 説明 |
+| --- | --- |
+| Source | git / prepared / local source input と resolved identity |
+| Installation | Space に install された source record |
+| Deployment | 1 回の apply 結果。source summary、plan snapshot、binding snapshot、outputs、status を持つ |
+| PlatformService | operator inventory が提供し、install / deploy 時に選択される service capability |
 
-## Operator / application responsibilities {#operator-application-responsibilities}
+Takosumi core は Source を解決し、dry-run で `InstallPlan` と
+`planSnapshotDigest` を返し、apply で Deployment record を保存します。
 
-operator の設定または consumer application は次を扱います。
+## Operator / Application Responsibilities {#operator-application-responsibilities}
+
+operator distribution または consumer application は次を扱います。
 
 - user account / login / passkey
 - billing / subscription / invoice
 - OIDC issuer / consent screen
 - customer onboarding UI
 - workflow runner / cron / scheduler
+- Terraform/OpenTofu/Helm/Pulumi state
+- provider credential / secret store / runtime attachment
 - application-specific UI / DB schema / queue
 
-Takosumi docs では、これらの外部 surface が manifest component と接続する必要がある場合に platform service として扱います。
+これらを workload が使う場合、operator distribution が PlatformService
+inventory と binding policy として公開します。
 
 ## Space {#space}
 
-Space は Installation を置く install scope です。同じ manifest でも、Space が違えば Deployment history、resource state、platform service resolution、secret material は別になります。
+Space は Installation を置く install scope です。同じ Source でも、Space が違えば
+Deployment history、binding snapshot、secret material、account-plane projection
+は別になります。
 
 ```text
 Space
@@ -35,64 +44,40 @@ Space
         └── Deployment[]
 ```
 
-Space ID は request token / installer context から解決されます。Takosumi は `spaceId` を受け取り、その Space の中で manifest を apply します。
+Space ID は request token / installer context から解決されます。Takosumi は
+`spaceId` を受け取り、その Space の中で Source を install / deploy します。
 
-## Component と Resource {#component-and-resource}
-
-manifest の `components` は名前付き Component map です。Component は `kind` を持ち、kind ごとの `spec`、同一 manifest 接続の `connect`、platform service 接続の `listen` を宣言します。
-
-| manifest 内の公開構造 | 説明                                               |
-| --------------------- | -------------------------------------------------- |
-| Component             | manifest が宣言する kind / spec / connect / listen |
-
-| 内部概念 | 説明                                                           |
-| -------- | -------------------------------------------------------------- |
-| Resource | operator-selected execution が apply した runtime state record |
-| Material | connect / listen で解決される出力データ registry               |
-| Secret   | listen やリソースの作成・更新に使う secret reference           |
-| Event    | append-only audit event                                        |
-
-Resource は backend-specific です。manifest author は Resource を直接作らず、 Component を宣言します。
-
-## Installer pipeline {#installer-pipeline}
+## Installer Pipeline {#installer-pipeline}
 
 ```text
-1. caller or build service posts source to POST /v1/installations/dry-run
-2. Takosumi fetches source and parses resolved .takosumi.yml
-3. Takosumi validates syntax / schema / connection graph / Space context
-4. Takosumi computes changes[] and expected.{commit, manifestDigest, sourceDigest?}
-   plus currentDeploymentId for deploy dry-run
-5. caller posts apply with the same source and expected values
-6. Takosumi resolves the submitted source and verifies expected values
-7. Takosumi resolves connect / platform listen edges
-8. Takosumi creates the Deployment attempt / retained operation evidence before
-   resource side effects
-9. reference Takosumi dispatches the operator-selected binding for
-   each component
-10. Takosumi records terminal status and moves the current pointer only on success
+1. caller or build service posts Source to POST /v1/installations/dry-run
+2. Takosumi resolves source identity and generic repo metadata
+3. operator resolver evaluates requested BindingSelection against PlatformService inventory
+4. Takosumi returns InstallPlan + planSnapshotDigest
+5. caller posts apply with Source and expected guard values
+6. Takosumi verifies source pins / source digest / planSnapshotDigest
+7. Takosumi records the Deployment attempt before runtime side effects
+8. reference implementation dispatches operator-selected adapters or runtime-agent work
+9. Takosumi records terminal status and moves the current pointer only on success
 ```
 
-schema、auth、source guard、policy、バリデーションの失敗は resource side effect の前、かつ新しい public Deployment record の前にエラーレスポンスを返します。 lifecycle execution が開始されると、reference implementation は dispatch の前またはトランザクション的に attempt を記録します。この順序は implementation の durability rule であり、public な current-pointer semantics は Installer API に定義されます。
+schema、auth、source guard、policy、binding resolution の失敗は runtime side effect
+の前に closed error envelope で返します。lifecycle execution が始まった後の
+durability rule は reference implementation の内部設計ですが、public な
+current-pointer semantics は Installer API に従います。
 
-`manifestDigest` は Installer API の wire field name です。source root の `.takosumi.yml` raw file bytes の sha256 を指し、parsed manifest object の正規化 digest ではありません。
+## Execution Binding {#execution-binding}
 
-source を build / prepare する場合、build service が pipeline の前に prepared source archive を作り、`source.kind: "prepared"` として渡します。
+Takosumi core は provider を選びません。operator distribution が
+PlatformService inventory、binding policy、backend adapter、runtime-agent
+connector を選びます。reference implementation の adapter wiring は
+operator-facing docs に置きます。
 
-## Execution binding {#execution-binding}
-
-component `kind` は不透明な string。operator は alias / kind の定義 / policy を使って kind URI を解決し、その Space で利用できる execution binding を選ぶ。解決できない kind、許可されない kind の定義、対応する execution がない component は副作用前に失敗する。
-
-reference implementation の binding mechanism は operator-facing docs に置く。
-
-→ [Kind Binding Implementations](../kind-bindings.md)
-
-## Runtime routing {#runtime-routing}
-
-→ [Runtime routing](./runtime-routing.md)
+→ [Reference Backend Binding](../kind-bindings.md)
 
 ## Internal APIs {#internal-apis}
 
-Takosumi の public installer API は [Installer API](../installer-api.md) に定義されます。operator automation や runtime-agent 向けの internal route は、operator runtime surface として扱います。
+Takosumi の public Installer API は [Installer API](../installer-api.md) に定義されます。operator automation や runtime-agent 向けの internal route は、operator runtime surface として扱います。
 
 関連資料:
 

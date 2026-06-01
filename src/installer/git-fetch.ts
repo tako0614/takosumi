@@ -2,9 +2,8 @@
  * Git source fetcher for the installer.
  *
  * Clones a git URL at a specific ref (branch / tag / commit), returns the
- * resolved commit SHA and a path to the working tree. Caller is
- * responsible for cleanup after reading `.takosumi.yml` and building
- * artifacts.
+ * resolved commit SHA and a path to the working tree. Caller is responsible
+ * for cleanup after planning and applying the source.
  *
  * This module replaces the prior external git-source helper.
  */
@@ -13,7 +12,7 @@ import type {
   GitInvocationResult,
   GitRunner,
   InstallerFs,
-} from "@takos/takosumi-contract/reference/runtime-capability";
+} from "takosumi-contract/reference/runtime-capability";
 import { assertHostNotBlocked, BlockedHostError } from "./host-blocklist.ts";
 import { defaultInstallerFs } from "./default-fs.ts";
 import { defaultGitRunner } from "./subprocess/git-runner.ts";
@@ -28,7 +27,7 @@ export interface GitFetchOptions {
    * Deno-runtime `git` primitive so standalone Deno behavior is unchanged; the
    * reference kernel injects a runner routed through
    * `currentRuntime().subprocess` so the same path runs on Node / Workers
-   * without this module referencing `Deno.Command`.
+   * without this module referencing host subprocess globals.
    */
   readonly gitRunner?: GitRunner;
   /**

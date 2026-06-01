@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
   createSubprocessGitRunner,
   createSubprocessTarRunner,
@@ -12,11 +11,12 @@ import {
 import { isNode, nodeRuntime } from "./node.ts";
 import type { SubprocessAdapter, SubprocessOutput } from "./runtime.ts";
 
+const realDenoTest = isDeno() ? test : test.skip;
+
 // EXPECTED-FAIL UNDER BUN (skipped): these assert Deno-only fallback semantics
-// that cannot hold under the bun runtime. Under bun the `Deno` global is the
-// compat shim from tools/bun-migration/shims/deno-compat.ts, not the real Deno
-// runtime, so `isDeno()` is false and `Deno.serve` does not exist. They still
-// run unchanged under `deno test`. (See the per-test `ignore` comments below.)
+// that cannot hold under the Bun runtime. Under Bun there is intentionally no
+// global `Deno` compatibility preload, so `isDeno()` is false and `Deno.serve`
+// does not exist.
 test.skip("currentRuntime detects Deno when running on Deno", () => {
     resetRuntimeForTesting();
     expect(isDeno()).toBeTruthy();
@@ -37,16 +37,15 @@ test.skip("isDeno wins over isNode on the host (Deno also reports process.versio
     expect(currentRuntime().kind).toEqual("deno");
   });
 
-test("isDeno discriminator probes Deno.Command, rejecting the @deno/shim-deno shape", () => {
+test("isDeno discriminator probes Deno.Command, rejecting partial Deno globals", () => {
   // Mirror the exact `isDeno()` probe against synthetic globals to document the
-  // regression contract without touching the read-only host `Deno`. The dnt npm
-  // build injects `@deno/shim-deno`, so on Node `globalThis.Deno` is defined but
-  // lacks `Command`; the probe must return false for that shape. It must NOT
-  // also gate on Node being absent, since real Deno reports
-  // `process.versions.node`.
+  // regression contract without touching the host `Deno`. Partial compatibility
+  // globals may define `globalThis.Deno` without `Command`; the probe must
+  // return false for that shape. It must NOT also gate on Node being absent,
+  // since real Deno reports `process.versions.node`.
   const probesDenoCommand = (g: { Deno?: { Command?: unknown } }): boolean =>
     typeof g.Deno?.Command === "function";
-  // @deno/shim-deno on Node: Deno defined, no Command -> NOT Deno.
+  // Partial Deno global: Deno defined, no Command -> NOT Deno.
   expect(!probesDenoCommand({
       Deno: { readTextFile: () => {} } as { Command?: unknown },
     })).toBeTruthy();
@@ -83,7 +82,7 @@ test("nodeRuntime fs.makeTempDir nests inside the OS temp dir with no prefix", a
   }
 });
 
-test("denoRuntime env reader returns process env", () => {
+realDenoTest("denoRuntime env reader returns process env", () => {
   const sentinel = "TAKOSUMI_RUNTIME_ADAPTER_TEST";
   Deno.env.set(sentinel, "1");
   try {
@@ -94,13 +93,13 @@ test("denoRuntime env reader returns process env", () => {
   }
 });
 
-test("denoRuntime fs.isNotFoundError recognises Deno.errors.NotFound", () => {
+realDenoTest("denoRuntime fs.isNotFoundError recognises Deno.errors.NotFound", () => {
   const error = new Deno.errors.NotFound("missing");
   expect(denoRuntime.fs.isNotFoundError(error)).toBeTruthy();
   expect(!denoRuntime.fs.isNotFoundError(new Error("other"))).toBeTruthy();
 });
 
-test("denoRuntime env.set writes a process env var", () => {
+realDenoTest("denoRuntime env.set writes a process env var", () => {
   const sentinel = "TAKOSUMI_RUNTIME_ENV_SET_TEST";
   try {
     denoRuntime.env.set(sentinel, "value-x");
@@ -111,7 +110,7 @@ test("denoRuntime env.set writes a process env var", () => {
   }
 });
 
-test("denoRuntime execPath returns the Deno executable path", () => {
+realDenoTest("denoRuntime execPath returns the Deno executable path", () => {
   expect(denoRuntime.execPath()).toEqual(Deno.execPath());
 });
 
@@ -154,7 +153,7 @@ test.skip("denoRuntime serveHttp serves a fetch handler and shuts down", async (
     await handle.shutdown();
   });
 
-test("denoRuntime fs.makeTempDir + remove round-trips with prefix", async () => {
+realDenoTest("denoRuntime fs.makeTempDir + remove round-trips with prefix", async () => {
   const dir = await denoRuntime.fs.makeTempDir("takosumi-runtime-test-");
   try {
     const base = dir.split(/[\\/]/).pop() ?? "";
@@ -165,7 +164,7 @@ test("denoRuntime fs.makeTempDir + remove round-trips with prefix", async () => 
     await denoRuntime.fs.remove(dir, { recursive: true });
   }
   // After recursive remove the directory is gone.
-  await assertRejects(() => denoRuntime.fs.readTextFile(`${dir}/file.txt`));
+  await expect(denoRuntime.fs.readTextFile(`${dir}/file.txt`)).rejects.toThrow();
 });
 
 /**
@@ -261,9 +260,7 @@ test("createSubprocessTarRunner throws on non-zero exit", async () => {
     stderr: enc.encode("tar: broken archive"),
   });
   const runner = createSubprocessTarRunner(adapter);
-  await assertRejects(
-    () => runner.run(["-tv"], enc.encode("x")),
-    Error,
+  await expect(runner.run(["-tv"], enc.encode("x"))).rejects.toThrow(
     "tar -tv failed: tar: broken archive",
   );
 });

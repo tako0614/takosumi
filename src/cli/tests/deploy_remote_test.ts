@@ -64,11 +64,13 @@ test("installer source parser maps supported source refs", () => {
 test("deploy expected guard parses null current pointer", () => {
   assert.deepEqual(
     deploymentExpectedGuardFromOptions({
-      expectedManifestDigest: "sha256:manifest",
+      expectedPlanSnapshotDigest:
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       expectedCurrentDeploymentId: "null",
     }),
     {
-      manifestDigest: "sha256:manifest",
+      planSnapshotDigest:
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       currentDeploymentId: null,
     },
   );
@@ -148,8 +150,8 @@ test("deploy command posts to an installation deployment endpoint", async () => 
         "git:https://github.com/acme/app#v1.0.0",
         "--expected-commit",
         "abc123",
-        "--expected-manifest-digest",
-        "sha256:manifest",
+        "--expected-plan-snapshot-digest",
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         "--expected-current-deployment-id",
         "dep_current",
         "--remote",
@@ -172,7 +174,8 @@ test("deploy command posts to an installation deployment endpoint", async () => 
       },
       expected: {
         commit: "abc123",
-        manifestDigest: "sha256:manifest",
+        planSnapshotDigest:
+          "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         currentDeploymentId: "dep_current",
       },
     });
@@ -290,20 +293,20 @@ async function runCommandAgainstFakeKernel(
 }
 
 function isolateConfig(): void {
-  Deno.env.set("TAKOSUMI_CONFIG_FILE", "/tmp/takosumi-cli-missing-config.yml");
+  process.env["TAKOSUMI_CONFIG_FILE"] = "/tmp/takosumi-cli-missing-config.yml";
   __resetConfigFileCacheForTesting();
 }
 
 function snapshotEnv(): Record<string, string | undefined> {
-  return Object.fromEntries(ENV_KEYS.map((key) => [key, Deno.env.get(key)]));
+  return Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 }
 
 function restoreEnv(
   values: Readonly<Record<string, string | undefined>>,
 ): void {
   for (const [key, value] of Object.entries(values)) {
-    if (value === undefined) Deno.env.delete(key);
-    else Deno.env.set(key, value);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
   }
 }
 

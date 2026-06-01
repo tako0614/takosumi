@@ -1,107 +1,54 @@
-# 次のステップ — component 接続と HTTP 公開 {#next-steps}
+# 次のステップ {#next-steps}
 
 [クイックスタート](./quickstart.md) で Installation を作ったあとの追加手順です。
 
-## component を接続する {#connect-components}
+## PlatformService binding を選ぶ {#select-platform-service-bindings}
 
-最初の install が成功したあと、DB などの component を追加して接続できます。
+DB や OIDC issuer などは operator inventory の PlatformService として選びます。source repo に Takosumi 専用 DSL を追加するの
+ではなく、install / deploy request、operator dashboard、policy で binding selection を渡します。
 
-```yaml
-apiVersion: v1
-metadata:
-  id: com.example.hello
-  name: Hello Takosumi
-components:
-  db:
-    kind: postgres
-    spec:
-      version: "16"
-      size: small
-
-  web:
-    kind: worker
-    connect:
-      db:
-        output: db.connection
-        inject: secret-env
-        prefix: DB
-    spec:
-      entrypoint: src/worker.ts
+```json
+{
+  "bindings": [
+    {
+      "name": "db",
+      "serviceKind": "postgres",
+      "labels": { "tier": "primary" },
+      "required": true
+    }
+  ]
+}
 ```
 
-この manifest をデプロイすると、web の worker プロセスに以下の環境変数が自動で渡されます:
-
-```
-DB_HOST=<postgres の接続先>
-DB_PORT=5432
-DB_USER=<自動生成されたユーザー名>
-DB_PASSWORD=<自動生成されたパスワード>
-```
-
-worker のコードでは `Deno.env.get("DB_HOST")` のように通常の環境変数として使えます。
-
-保存したら既存 Installation に apply します:
-
-```bash
-takosumi deploy inst_... --source "$APP_ROOT"
-```
-
-## HTTP 公開を追加する {#add-http-exposure}
-
-Takosumi では、外部からの HTTP アクセスを受け付ける component を gateway と呼びます。
-
-web component の HTTP output を gateway が `connect` して public URL として公開します。
-
-```
-web (http output) --> gateway (connect) --> https://your-app.example.com
-```
-
-operator が `gateway` を提供している環境で、manifest に以下を追加します。 HTTP 公開の詳しい仕様は [HTTP 公開](../reference/http-exposure.md) を参照してください。
-
-```yaml
-components:
-  web:
-    kind: worker
-    spec:
-      entrypoint: src/worker.ts
-
-  public:
-    kind: gateway
-    connect:
-      app:
-        output: web.http
-        inject: upstream
-    spec:
-      listeners:
-        public:
-          protocol: https
-          tls: auto
-      routes:
-        - listener: public
-          path: /
-          to: app
-```
-
-gateway の `spec.listeners` に `host` を指定しなければ、operator が自動でホスト名を割り当てます。ローカル開発環境では `host: hello.takosumi.test` のように明示することもできます。browser から到達させるだけなら root `publish` は不要です。
-
-保存したら同じ Installation に apply します:
-
-```bash
-takosumi deploy inst_... --source "$APP_ROOT"
-```
+CLI での binding flag は operator distribution が提供する deploy facade の責務です。core Installer API の shape は
+[Installer API](../reference/installer-api.md) と [プラットフォームサービス](../reference/platform-services.md) を参照してください。
 
 ## 更新と rollback を試す {#update-and-roll-back}
 
-Manifest や `src/worker.ts` を変更したら、既存 Installation に次の Deployment を apply します。
+source を変更したら、既存 Installation に次の Deployment を apply します。
 
 ```bash
 takosumi deploy inst_... --source "$APP_ROOT"
 ```
 
-前の Deployment に戻すには、戻したい Deployment の id を指定します。この操作は現在のデプロイ状態を、指定した成功済み Deployment の時点に戻します。
+dry-run から apply へ進む場合は `--expected-plan-snapshot-digest` と必要な source pin を渡します。
+
+```bash
+takosumi deploy dry-run inst_... --source "$APP_ROOT"
+takosumi deploy inst_... --source "$APP_ROOT" \
+  --expected-current-deployment-id dep_... \
+  --expected-plan-snapshot-digest sha256:...
+```
+
+前の Deployment に戻すには、戻したい Deployment の id を指定します。rollback は current pointer を戻す操作で、workload data
+や provider resource を汎用 rollback しません。
 
 ```bash
 takosumi rollback inst_... dep_...
 ```
 
-→ [Manifest リファレンス](../reference/manifest.md)
+## 次に読む
+
+- [Installer API](../reference/installer-api.md)
+- [プラットフォームサービス](../reference/platform-services.md)
+- [仕様境界](../reference/spec-boundaries.md)

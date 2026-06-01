@@ -40,12 +40,12 @@ run_script() {
 bundle_freshness_gate() {
 	local repo_root
 	repo_root=$(cd "$SUBSTRATE_DIR/../../.." && pwd)
-	# Worker bundle: takosumi-cloud-accounts-worker.mjs is bundled from
-	# takosumi-cloud/packages/accounts-service/src + deploy/cloudflare/src.
-	local worker_bundle="$repo_root/takosumi-cloud/deploy/cloudflare/.wrangler/dist/takosumi-cloud-accounts-worker.mjs"
+	# Worker bundle: takosumi-accounts-worker.mjs is bundled from
+	# takosumi/packages/accounts-service/src + deploy/cloudflare/src.
+	local worker_bundle="$repo_root/takosumi/deploy/cloudflare/.wrangler/dist/takosumi-accounts-worker.mjs"
 	local worker_sources=(
-		"$repo_root/takosumi-cloud/packages/accounts-service/src"
-		"$repo_root/takosumi-cloud/deploy/cloudflare/src"
+		"$repo_root/takosumi/packages/accounts-service/src"
+		"$repo_root/takosumi/deploy/cloudflare/src"
 	)
 	if [[ -f "$worker_bundle" ]]; then
 		local newer
@@ -55,19 +55,19 @@ bundle_freshness_gate() {
 			echo "==> [bundle-gate] worker source newer than bundle, auto-rebuilding..."
 			echo "$newer" | sed 's/^/                   /'
 			docker compose -f compose.substrate.yml --profile postgres \
-				run --rm takosumi-cloud-worker-build >"$SMOKE_LOG_DIR/bundle-gate-worker.log" 2>&1 || {
+				run --rm takosumi-worker-build >"$SMOKE_LOG_DIR/bundle-gate-worker.log" 2>&1 || {
 				echo "==> [bundle-gate] worker rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-worker.log" >&2
 				exit 1
 			}
 			docker compose -f compose.substrate.yml --profile postgres \
-				up -d --force-recreate takosumi-cloud-worker >/dev/null 2>&1
+				up -d --force-recreate takosumi-worker >/dev/null 2>&1
 			sleep 3
 			echo "==> [bundle-gate] worker rebuilt + restarted"
 		fi
 	fi
 	# Takosumi kernel Worker bundle: takosumi/deploy/cloudflare runs the
 	# kernel in-process on workerd with D1/R2 bindings.
-	local kernel_worker_bundle="$repo_root/takosumi/deploy/cloudflare/.wrangler/dist/takosumi-cloudflare-worker.mjs"
+	local kernel_worker_bundle="$repo_root/takosumi/deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs"
 	local kernel_worker_sources=(
 		"$repo_root/takosumi/deploy/cloudflare/src"
 		"$repo_root/takosumi/src/kernel"
@@ -91,8 +91,8 @@ bundle_freshness_gate() {
 		fi
 	fi
 	# SPA bundle: .output/public/index.html is the entrypoint vinxi emits.
-	local spa_bundle="$repo_root/takosumi-cloud/packages/dashboard-ui/.output/public/index.html"
-	local spa_sources="$repo_root/takosumi-cloud/packages/dashboard-ui/src"
+	local spa_bundle="$repo_root/takosumi/packages/dashboard-ui/.output/public/index.html"
+	local spa_sources="$repo_root/takosumi/packages/dashboard-ui/src"
 	if [[ -f "$spa_bundle" ]]; then
 		local newer
 		newer=$(find "$spa_sources" -type f -newer "$spa_bundle" \
@@ -101,7 +101,7 @@ bundle_freshness_gate() {
 			echo "==> [bundle-gate] SPA source newer than bundle, auto-rebuilding..."
 			echo "$newer" | sed 's/^/                   /'
 			docker compose -f compose.substrate.yml --profile postgres \
-				run --rm takosumi-cloud-dashboard-build >"$SMOKE_LOG_DIR/bundle-gate-spa.log" 2>&1 || {
+				run --rm takosumi-dashboard-build >"$SMOKE_LOG_DIR/bundle-gate-spa.log" 2>&1 || {
 				echo "==> [bundle-gate] SPA rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-spa.log" >&2
 				exit 1
 			}
@@ -200,11 +200,11 @@ check "phase0.hello" "hello.takosumi.test" "/" "200"
 
 echo
 echo "==> Phase 1 — substrate"
-check "phase1.cloud.oidc-discovery" "cloud.takosumi.test" "/.well-known/openid-configuration" "200"
-check "phase1.cloud.health" "cloud.takosumi.test" "/healthz" "200"
+check "phase1.cloud.oidc-discovery" "accounts.takosumi.test" "/.well-known/openid-configuration" "200"
+check "phase1.cloud.health" "accounts.takosumi.test" "/healthz" "200"
 
 echo
-echo "==> Production mirror — takosumi.com / cloud.takosumi.com under .test"
+echo "==> Production mirror — takosumi.com / accounts.takosumi.com under .test"
 check "prod-mirror.landing.index" "takosumi.test" "/" "200"
 check "prod-mirror.landing.favicon" "takosumi.test" "/brand/favicon.svg" "200"
 check "prod-mirror.landing.geometric" "takosumi.test" "/brand/geometric.svg" "200"
@@ -221,21 +221,21 @@ else
 	echo "    FAIL [docs.link-check] see scripts/docs-link-check.sh"
 fi
 
-check_json "prod-mirror.cloud.oidc-discovery" "cloud.takosumi.test" "/.well-known/openid-configuration" "authorization_endpoint"
-check "prod-mirror.cloud.dashboard-index" "cloud.takosumi.test" "/" "200"
-check "prod-mirror.cloud.dashboard-signin" "cloud.takosumi.test" "/sign-in" "200"
-check "prod-mirror.cloud.dashboard-deeplink" "cloud.takosumi.test" "/apps/abc" "200"
-check "prod-mirror.cloud.use-takos-entry" "cloud.takosumi.test" "/dashboard/use-takos?takos_url=https%3A%2F%2Ftakos.test" "200"
-check "prod-mirror.cloud.use-takos-start-validation" "cloud.takosumi.test" "/start?takos_url=https%3A%2F%2Ftakos.test" "400"
+check_json "prod-mirror.cloud.oidc-discovery" "accounts.takosumi.test" "/.well-known/openid-configuration" "authorization_endpoint"
+check "prod-mirror.cloud.dashboard-index" "accounts.takosumi.test" "/" "200"
+check "prod-mirror.cloud.dashboard-signin" "accounts.takosumi.test" "/sign-in" "200"
+check "prod-mirror.cloud.dashboard-deeplink" "accounts.takosumi.test" "/apps/abc" "200"
+check "prod-mirror.cloud.use-takos-entry" "accounts.takosumi.test" "/dashboard/use-takos?takos_url=https%3A%2F%2Ftakos.test" "200"
+check "prod-mirror.cloud.use-takos-start-validation" "accounts.takosumi.test" "/start?takos_url=https%3A%2F%2Ftakos.test" "400"
 
 echo
 echo "==> Install flow — managed-offering bypass + installer dry-run mock"
 # managed-offering gate is flipped to 'open' for the local test bed, so the
 # dry-run endpoint should return 200 instead of 503 (launch_readiness_not_complete).
-check_post "install.dry-run.takos-docs" "cloud.takosumi.test" "/v1/installations/dry-run" \
+check_post "install.dry-run.takos-docs" "accounts.takosumi.test" "/v1/installations/dry-run" \
 	'{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/takos-docs.git","ref":"main"}}' "200"
 # yurucommu through the same wizard
-check_post "install.dry-run.yurucommu" "cloud.takosumi.test" "/v1/installations/dry-run" \
+check_post "install.dry-run.yurucommu" "accounts.takosumi.test" "/v1/installations/dry-run" \
 	'{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' "200"
 
 echo

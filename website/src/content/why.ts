@@ -12,11 +12,11 @@ export const PILLARS: readonly Pillar[] = [
   {
     title: "cloud でも VM でも同じ形",
     body:
-      "Cloudflare、AWS、GCP、Kubernetes、Docker Compose、systemd を同じ provider adapter model で扱う。構成ファイルは同じまま。",
+      "Cloudflare、AWS、GCP、Kubernetes、Docker Compose、systemd を operator-owned adapter model で扱う。Source と Deployment ledger は同じまま。",
   },
   {
     title: "lock-in しない、 引っ越せる、 終わらない",
     body:
-      "operator が実行先を差し替えても、AppSpec の入口は変わらない。cloud、VM、cluster のどれかに閉じ込めない。",
+      "operator が実行先を差し替えても、Source / Installation / Deployment の入口は変わらない。cloud、VM、cluster のどれかに閉じ込めない。",
   },
 ];

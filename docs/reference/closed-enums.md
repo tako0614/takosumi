@@ -50,7 +50,7 @@ WAL stage の意味は [WAL Stages](./wal-stages.md) 参照。
 read | read-write | admin | invoke-only | observe-only
 ```
 
-Access mode は official catalog vocabulary です。core は resolved value を Deployment の記録に残し、operator distribution が policy を enforce します。manifest の dependency expression は `publish` / `listen` とプラットフォームサービス path 参照で表します。詳細は [Access Modes](./access-modes.md) 参照。
+Access mode は official catalog vocabulary です。core は resolved value を Deployment の記録に残し、operator distribution が policy を enforce します。PlatformService binding selection と operator policy が access mode を解決します。詳細は [Access Modes](./access-modes.md) 参照。
 
 ## Approval lifecycle
 
@@ -89,7 +89,7 @@ open | operator-action-required | cleared
 
 ### asset metadata value
 
-asset metadata value は operator が optional asset extension の metadata として登録する open value です。current compatibility wire では descriptor の `kind` field と `acceptedArtifactKinds` field に現れますが、manifest component `kind` とは別の operator extension metadata です。
+asset metadata value は operator が optional asset extension の metadata として登録する open value です。current compatibility wire では descriptor の `kind` field と `acceptedArtifactKinds` field に現れますが、Source identity とは別の operator extension metadata です。
 
 asset の扱いは [asset Policy](./data-asset-policy.md) と [asset GC](./data-asset-gc.md) 参照。
 
@@ -117,7 +117,7 @@ HTTP status への対応は reference Takosumi の [Reference Takosumi Route Inv
 connector:<id>
 ```
 
-`connector:<id>` は current reference operator registry の compatibility wire format です。ユーザー manifest が mint / address する値ではありません。 runtime-agent lifecycle dispatch key は `(shape, provider)` です。詳細は [Connector Guide](./connector-contract.md) 参照。
+`connector:<id>` は current reference operator registry の compatibility wire format です。Source repository や Installer API caller が mint / address する値ではありません。 runtime-agent lifecycle dispatch key は `(shape, provider)` です。詳細は [Connector Guide](./connector-contract.md) 参照。
 
 ## 関連ページ
 

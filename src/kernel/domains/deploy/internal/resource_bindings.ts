@@ -1,12 +1,12 @@
 // Build the per-compute binding map projected from `resource.*.bindings`
-// declarations in the public manifest. The validation phase reuses
+// declarations in the reference deploy source payload. The validation phase reuses
 // `resourceBindingsFor` to assert each binding target exists; the
 // compile phase invokes `resourceBindingsByComputeFor` to fold the
 // expanded bindings into each component's binding map.
 
 import type {
   PublicComponentBindingSpec,
-  PublicDeployManifest,
+  ReferenceDeploySourcePayload,
   PublicResourceSpec,
 } from "../types.ts";
 import {
@@ -14,14 +14,14 @@ import {
   normalizeEnvName,
   PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR,
   stringField,
-} from "./manifest_common.ts";
+} from "./source_payload_common.ts";
 import {
   resourceContractRefFor,
   resourceDefaultAccessModeFor,
 } from "./contract_refs.ts";
 
 export function resourceBindingsByComputeFor(
-  resources: NonNullable<PublicDeployManifest["resources"]>,
+  resources: NonNullable<ReferenceDeploySourcePayload["resources"]>,
   computeNames: Set<string>,
   expansionDescriptors: Set<string>,
 ): Map<string, Record<string, PublicComponentBindingSpec>> {

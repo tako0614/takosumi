@@ -5,16 +5,16 @@
 # distributions add concrete connectors from takosumi-plugins or their own
 # package set.
 
-FROM denoland/deno:2.0.0
+FROM oven/bun:1
 WORKDIR /app
 
-COPY ../../packages/contract /app/packages/contract
-COPY ../../packages/runtime-agent /app/packages/runtime-agent
-COPY ../../deno.json /app/deno.json
+COPY ../../package.json ../../bun.lock ../../tsconfig.json ./
+COPY ../../src ./src
+COPY ../../shims ./shims
 
-RUN deno cache --node-modules-dir=auto /app/src/runtime-agent/server.ts
+RUN bun install --frozen-lockfile --production
 
 ENV TAKOSUMI_AGENT_PORT=8789
 EXPOSE 8789
 
-CMD ["deno", "run", "--allow-env", "--allow-net", "--allow-read", "--allow-write", "--allow-run", "--allow-sys", "/app/src/runtime-agent/server.ts"]
+CMD ["bun", "run", "src/runtime-agent/server.ts"]

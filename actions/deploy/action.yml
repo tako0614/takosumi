@@ -1,9 +1,9 @@
 name: Takosumi Deploy
-description: Submit an AppSpec source to the Takosumi installer API.
+description: Submit a Source to the Takosumi installer API.
 
 inputs:
   source:
-    description: AppSpec source (git:, catalog:, bundle:, or local path).
+    description: Source input (git URL, prepared source URL, or local path).
     required: true
     default: .
   space:
@@ -23,19 +23,19 @@ inputs:
     description: npm version of @takosjp/takosumi to run (provides the takosumi CLI bin).
     required: false
     default: 0.17.0
-  deno-version:
-    description: Deno version passed to denoland/setup-deno.
+  bun-version:
+    description: Bun version passed to oven-sh/setup-bun.
     required: false
-    default: v2.x
+    default: latest
 
 runs:
   using: composite
   steps:
-    - uses: denoland/setup-deno@v2
+    - uses: oven-sh/setup-bun@v2
       with:
-        deno-version: ${{ inputs.deno-version }}
+        bun-version: ${{ inputs.bun-version }}
 
-    - name: Deploy manifest
+    - name: Deploy source
       shell: bash
       env:
         TAKOSUMI_ACTION_SOURCE: ${{ inputs.source }}
@@ -60,7 +60,7 @@ runs:
             ;;
         esac
 
-        deno run -A "npm:@takosjp/takosumi@$TAKOSUMI_ACTION_CLI_VERSION" \
+        bunx --bun "@takosjp/takosumi@$TAKOSUMI_ACTION_CLI_VERSION" \
           "${subcommand[@]}" \
           --space "$TAKOSUMI_ACTION_SPACE" \
           --remote "$TAKOSUMI_ACTION_REMOTE_URL" \

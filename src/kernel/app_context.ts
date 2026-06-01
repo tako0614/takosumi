@@ -9,7 +9,7 @@ import {
   DeploymentService,
   type DeploymentServiceOptions,
   type DeploymentStore,
-  type PublicDeployManifest,
+  type ReferenceDeploySourcePayload,
 } from "./domains/deploy/mod.ts";
 import {
   DefaultRuntimeMaterializer,
@@ -74,10 +74,7 @@ import {
   MemoryEncryptedSecretStore,
   type SecretStorePort,
 } from "./adapters/secret-store/mod.ts";
-import {
-  ImmutableManifestSourceAdapter,
-  type SourcePort,
-} from "./adapters/source/mod.ts";
+import { ImmutableSourceAdapter, type SourcePort } from "./adapters/source/mod.ts";
 import {
   MemoryStorageDriver,
   type StorageDriver,
@@ -117,7 +114,6 @@ import type { UsageAggregateStore } from "./services/usage/mod.ts";
 import {
   createKernelPluginRegistry,
   type KernelPluginRegistry,
-  type KindAliasMap,
 } from "./plugins/mod.ts";
 
 export interface AppContextOptions {
@@ -139,7 +135,7 @@ export interface AppContextOptions {
   /**
    * Operator-injected managed-hosting service implementations. The kernel core
    * ships none by default — a plain import constructs zero managed-hosting
-   * services. Operator distributions (takosumi-cloud) inject them here. Only
+   * services. Operator distributions (takosumi) inject them here. Only
    * `entitlements` has a kernel consumer (the internal-mutation boundary gate);
    * usage / catalog-release / service-endpoint registries are owned and
    * consumed by the operator distribution, not the kernel, so they no longer
@@ -149,7 +145,6 @@ export interface AppContextOptions {
     readonly entitlements?: EntitlementPolicyPort;
   };
   readonly plugins?: readonly KernelPlugin[];
-  readonly kindAliases?: KindAliasMap;
   readonly pluginRegistry?: KernelPluginRegistry;
 }
 
@@ -253,7 +248,7 @@ const STRICT_RUNTIME_FALLBACK_LABELS: Record<keyof AppAdapters, string> = {
   notifications: "in-memory notification",
   operatorConfig: "local operator config",
   storage: "in-memory canonical storage",
-  source: "inline manifest source",
+  source: "inline source",
   provider: "noop provider",
   queue: "in-memory queue",
   objectStorage: "in-memory object storage",
@@ -278,7 +273,7 @@ export interface DeploymentPlanFacade {
 
 export interface CreateDeploymentPlanInput {
   readonly spaceId: string;
-  readonly manifest: PublicDeployManifest;
+  readonly manifest: ReferenceDeploySourcePayload;
   readonly env?: string;
   readonly envName?: string;
   readonly input?: DeploymentInput;
@@ -288,8 +283,8 @@ export interface CreateDeploymentPlanInput {
 }
 
 export interface DeploymentApplyFacade {
-  applyManifest(
-    input: ApplyDeploymentManifestInput,
+  applySourcePayload(
+    input: ApplyDeploymentSourcePayloadInput,
   ): Promise<ApplyDeploymentResult>;
   applyDeployment(
     input: ApplyDeploymentByIdInput,
@@ -301,9 +296,9 @@ export interface DeploymentApplyFacade {
   listDeployments(filter?: DeploymentFilter): Promise<readonly Deployment[]>;
 }
 
-export interface ApplyDeploymentManifestInput {
+export interface ApplyDeploymentSourcePayloadInput {
   readonly spaceId: string;
-  readonly manifest: PublicDeployManifest;
+  readonly manifest: ReferenceDeploySourcePayload;
   readonly env?: string;
   readonly envName?: string;
   readonly input?: DeploymentInput;
@@ -456,7 +451,7 @@ function createDeploymentApplyFacade(
   };
 
   return {
-    applyManifest: async (input) => {
+    applySourcePayload: async (input) => {
       const resolved = await deploymentService.resolveDeployment({
         spaceId: input.spaceId,
         manifest: input.manifest,
@@ -532,7 +527,7 @@ export function createDefaultAppAdapters(
         ...(options.runtimeEnv ? { env: options.runtimeEnv } : {}),
       }),
     source: options.adapters?.source ??
-      new ImmutableManifestSourceAdapter({
+      new ImmutableSourceAdapter({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
@@ -591,15 +586,13 @@ async function importRuntimeConfigModule(): Promise<
 /**
  * Build the canonical `KernelPluginRegistry` from the operator-supplied
  * `options.plugins` array. The registry is consulted by `InstallerPipeline`
- * to resolve `Component.kind` to a plugin that materializes it.
+ * to resolve exact kind references to plugins that materialize them.
  */
 export function buildKernelPluginRegistry(
   options: AppContextOptions = {},
 ): KernelPluginRegistry {
   return options.pluginRegistry ??
-    createKernelPluginRegistry(options.plugins ?? [], {
-      kindAliases: options.kindAliases,
-    });
+    createKernelPluginRegistry(options.plugins ?? []);
 }
 
 function assertNoStrictRuntimeAdapterFallbacks(

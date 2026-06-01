@@ -14,7 +14,7 @@ Operator distributions may carry approval prompts, approval records, and account
 2. **effect-detail change** — `approvedEffects` / `effectDetailsDigest` / generated authorization access / network egress shape の変更。
 3. **implementation change** —選択された implementation binding / connector binding の変更。
 4. **external freshness change** — operator-owned platform service snapshot の freshness
-5. **operator implementation config change** — Space に visible な kind alias / implementation binding / connector visibility の変更。
+5. **operator implementation config change** — Space に visible な PlatformService inventory / implementation binding / connector visibility の変更。
 6. **Space-context change** — Space membership / policy pack の変更。
 
 ### 1. digest change
@@ -43,7 +43,7 @@ Operator distributions may carry approval prompts, approval records, and account
 
 ### 5. operator implementation config change
 
-- **発火条件**: Space に visible な `kindAliases`、implementation binding、runtime-agent connector inventory、または operator policy による visibility が変更された。
+- **発火条件**: Space に visible な PlatformService inventory、implementation binding、runtime-agent connector inventory、または operator policy による visibility が変更された。
 - **検出 timing**: operator implementation config / Space visibility 操作の commit 完了直後。reference kernel / operator approval profile は当該 Space に紐づく approval を resolve し直す。
 - **再評価範囲**: 新 implementation config で binding が同一なら approval を保持、binding が変わるなら影響 binding subset を `invalidated`。
 

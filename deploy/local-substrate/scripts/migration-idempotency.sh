@@ -24,7 +24,7 @@ cd "$SUBSTRATE_DIR"
 snapshot() {
 	local out=$1
 	local sqlite_path
-	sqlite_path=$(docker exec local-substrate-takosumi-cloud-worker-1 sh -c \
+	sqlite_path=$(docker exec local-substrate-takosumi-worker-1 sh -c \
 		"find /data/d1 -name '*.sqlite' | head -1" 2>/dev/null)
 	if [[ -z "$sqlite_path" ]]; then
 		echo "FAIL: no .sqlite under /data/d1 in the worker container" >&2
@@ -33,10 +33,10 @@ snapshot() {
 	local tmpdir
 	tmpdir=$(mktemp -d)
 	trap 'rm -rf "$tmpdir" /tmp/d1-snap.sqlite' RETURN
-	docker cp "local-substrate-takosumi-cloud-worker-1:$sqlite_path" "$tmpdir/d1-snap.sqlite" >/dev/null
+	docker cp "local-substrate-takosumi-worker-1:$sqlite_path" "$tmpdir/d1-snap.sqlite" >/dev/null
 	for suffix in -wal -shm; do
-		if docker exec local-substrate-takosumi-cloud-worker-1 test -f "${sqlite_path}${suffix}"; then
-			docker cp "local-substrate-takosumi-cloud-worker-1:${sqlite_path}${suffix}" \
+		if docker exec local-substrate-takosumi-worker-1 test -f "${sqlite_path}${suffix}"; then
+			docker cp "local-substrate-takosumi-worker-1:${sqlite_path}${suffix}" \
 				"$tmpdir/d1-snap.sqlite${suffix}" >/dev/null
 		fi
 	done
@@ -59,7 +59,7 @@ if [[ "$SIZE_BEFORE" -lt 100 ]]; then
 fi
 
 # 2. Recreate the worker (forces initialize() to re-run against the same D1).
-docker compose -f compose.substrate.yml --profile postgres up -d --force-recreate takosumi-cloud-worker >/dev/null 2>&1
+docker compose -f compose.substrate.yml --profile postgres up -d --force-recreate takosumi-worker >/dev/null 2>&1
 # Give miniflare a moment to come up + run init.
 sleep 5
 

@@ -115,7 +115,7 @@ WAL stage は Takosumi のバリデーション / 記録収集を含みます。
 
 hook 的挙動が必要な workflow / repository automation は上流 product 側で行い、 installer API に source を渡す前に検査を済ませる前提です。
 
-`prepare` 詳細には manifest provenance / resource operation plan / Takosumi バリデーションの記録のみが含まれます。
+`prepare` 詳細には source provenance / resource operation plan / Takosumi バリデーションの記録のみが含まれます。
 
 ## Orphaned debt 経路
 

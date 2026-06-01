@@ -1,0 +1,135 @@
+# Takosumi Accounts — Bun + Postgres reference stack.
+#
+# Brings up Takosumi Accounts as a Bun service backed by Postgres,
+# fronted by Caddy for TLS termination. Mirrors the Cloudflare Workers
+# reference distribution but runs anywhere a Docker daemon does (single
+# VM, container host, k8s with kompose, etc.).
+#
+# Hardening defaults:
+#   - `accounts` and `migrations` run as the non-root `bun` user shipped
+#     by `oven/bun:1` (`USER bun` in the Dockerfile, uid/gid
+#     1000:1000). `user:` is repeated here so an operator who swaps the
+#     base image still gets a non-root runtime.
+#   - `accounts` mounts the root filesystem read-only with a tmpfs at
+#     `/tmp` for runtime pid files and any temporary archive material.
+#   - `cap_drop: [ALL]` removes every Linux capability the kernel grants
+#     containers by default; the accounts service only needs to bind to
+#     an unprivileged TCP port (>=1024) inside the docker network.
+#   - `security_opt: ["no-new-privileges:true"]` prevents setuid/setgid
+#     binaries inside the container from escalating, even on misconfigured
+#     hosts where the seccomp profile is permissive.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: takosumi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: takosumi_accounts
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U takosumi -d takosumi_accounts"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrations:
+    # Runs `takosumi accounts migrate` once against Postgres before
+    # the accounts service is allowed to start. See
+    # ../../packages/cli/src/cli-accounts-commands.ts and
+    # ../../packages/cli/src/cli-accounts-db.ts for the migration entry
+    # point. The container exits 0 on success, after which compose
+    # promotes `accounts` from waiting to running.
+    #
+    build:
+      context: ../..
+      dockerfile: deploy/node-postgres/Dockerfile
+    restart: "no"
+    user: "1000:1000"
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TAKOSUMI_ACCOUNTS_DATABASE_URL: postgres://takosumi:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/takosumi_accounts
+    entrypoint: ["bun"]
+    command:
+      - "/app/packages/cli/src/main.ts"
+      - "accounts"
+      - "migrate"
+
+  accounts:
+    build:
+      context: ../..
+      dockerfile: deploy/node-postgres/Dockerfile
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    volumes:
+      # Writable mount for the metadata-only installation export worker. The
+      # root filesystem is read-only (`read_only: true`), so the export
+      # output directory the accounts service writes archives to needs a
+      # dedicated writable mount. This matches the documented default
+      # TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR (.env.example) so enabling exports
+      # does not hit EROFS at runtime. Operators who serve exports through
+      # Caddy/nginx point that static server at this same volume (or override
+      # both EXPORT_OUTPUT_DIR and this mount to a bind-mount of their own).
+      - exports-data:/var/lib/takosumi-accounts/exports
+    environment:
+      TAKOSUMI_ACCOUNTS_ISSUER: ${TAKOSUMI_ACCOUNTS_ISSUER:-https://accounts.example.com}
+      TAKOSUMI_ACCOUNTS_BIND_HOST: ${TAKOSUMI_ACCOUNTS_BIND_HOST:-0.0.0.0}
+      TAKOSUMI_ACCOUNTS_DATABASE_URL: postgres://takosumi:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/takosumi_accounts
+      TAKOSUMI_ACCOUNTS_CLIENT_ID: ${TAKOSUMI_ACCOUNTS_CLIENT_ID:-}
+      TAKOSUMI_ACCOUNTS_REDIRECT_URIS: ${TAKOSUMI_ACCOUNTS_REDIRECT_URIS:-}
+      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: ${TAKOSUMI_ACCOUNTS_CLIENT_SECRET:-}
+      TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS: ${TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS:-closed}
+      TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST: ${TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST:-}
+    expose:
+      - "8787"
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "bun -e 'await fetch(\"http://127.0.0.1:8787/healthz\").then((r)=>{if(!r.ok)throw new Error(String(r.status))})'",
+      ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      accounts:
+        condition: service_healthy
+    environment:
+      # Caddyfile.example dereferences `{$TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME}`
+      # for the site label, which is the public hostname users dial.
+      # Operators must set this before running `docker compose up` so
+      # Caddy provisions the correct certificate over ACME.
+      TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME: ${TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME:-accounts.example.com}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.example:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
+  exports-data:

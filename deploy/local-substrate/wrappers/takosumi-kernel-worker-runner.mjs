@@ -24,7 +24,7 @@ if (process.env.LOCAL_SUBSTRATE_TEST_BED !== "1") {
 }
 
 const scriptPath = process.env.WORKER_SCRIPT ??
-  "/worker/takosumi-cloudflare-worker.mjs";
+  "/worker/takosumiflare-worker.mjs";
 const port = Number(process.env.WORKER_PORT ?? 8788);
 const scriptContents = readFileSync(scriptPath, "utf8");
 

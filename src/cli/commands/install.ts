@@ -8,6 +8,7 @@ import {
   requireRemoteInstaller,
   resolveSourceArg,
 } from "../installer_client.ts";
+import { exitCli } from "../runtime.ts";
 
 interface InstallFlags {
   source?: string;
@@ -15,7 +16,7 @@ interface InstallFlags {
   remote?: string;
   token?: string;
   expectedCommit?: string;
-  expectedManifestDigest?: string;
+  expectedPlanSnapshotDigest?: string;
   expectedSourceDigest?: string;
   dryRun?: boolean;
 }
@@ -44,7 +45,7 @@ function createInstallCommand(): Command {
     });
 
   const command = new Command("install")
-    .description("Create a new Installation from an AppSpec source")
+    .description("Create a new Installation from a source")
     .argument("[source]", "git:, prepared:, or local path")
     .option("--source <source>", "git:, prepared:, or local path")
     .option("--space <spaceId>", "Target Space id")
@@ -52,8 +53,8 @@ function createInstallCommand(): Command {
     .option("--token <token>", "Installer bearer token")
     .option("--expected-commit <commit>", "Expected source commit pin")
     .option(
-      "--expected-manifest-digest <digest>",
-      "Expected .takosumi.yml digest pin",
+      "--expected-plan-snapshot-digest <digest>",
+      "Expected dry-run plan snapshot digest",
     )
     .option(
       "--expected-source-digest <digest>",
@@ -72,7 +73,7 @@ function createInstallCommand(): Command {
         remote: flags.remote,
         token: flags.token,
         expectedCommit: flags.expectedCommit,
-        expectedManifestDigest: flags.expectedManifestDigest,
+        expectedPlanSnapshotDigest: flags.expectedPlanSnapshotDigest,
         expectedSourceDigest: flags.expectedSourceDigest,
         dryRun: flags.dryRun === true,
       });
@@ -88,7 +89,7 @@ async function runInstall(input: {
   readonly remote?: string;
   readonly token?: string;
   readonly expectedCommit?: string;
-  readonly expectedManifestDigest?: string;
+  readonly expectedPlanSnapshotDigest?: string;
   readonly expectedSourceDigest?: string;
   readonly dryRun: boolean;
 }): Promise<void> {
@@ -100,7 +101,7 @@ async function runInstall(input: {
       source,
       expected: expectedPinFromOptions({
         expectedCommit: input.expectedCommit,
-        expectedManifestDigest: input.expectedManifestDigest,
+        expectedPlanSnapshotDigest: input.expectedPlanSnapshotDigest,
         expectedSourceDigest: input.expectedSourceDigest,
       }),
     };
@@ -110,13 +111,13 @@ async function runInstall(input: {
     });
     if (status >= 400) {
       console.error(`kernel returned ${status}:`, responseBody);
-      Deno.exit(1);
+      exitCli(1);
     }
     console.log(JSON.stringify(responseBody, null, 2));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`error: ${message}`);
-    Deno.exit(1);
+    exitCli(1);
   }
 }
 

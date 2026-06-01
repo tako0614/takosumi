@@ -1,8 +1,8 @@
 // Reference deploy descriptor closure construction for Deployment.resolution.
 //
 // This module supports the reference kernel's internal deploy conformance
-// dataset. The public AppSpec / Installer API contract stays in
-// `packages/contract`; compatible implementations can use different internal
+// dataset. The public InternalDeploySpec / Installer API contract stays in
+// `src/contract`; compatible implementations can use different internal
 // metadata.
 //
 // Phase 10A (Wave 1): builds the immutable descriptor closure that pins every
@@ -67,7 +67,7 @@ import {
   REFERENCE_DESCRIPTOR_CONFORMANCE_RECORDS,
   type ReferenceDescriptorConformanceRecord,
 } from "./core_plan.ts";
-import type { AppSpec, AppSpecRoute } from "./types.ts";
+import type { InternalDeploySpec, InternalDeploySpecRoute } from "./types.ts";
 
 /** Canonical JSON-LD context URI shared by every reference descriptor. */
 const TAKOSUMI_CONTEXT_ID =
@@ -102,7 +102,7 @@ interface DescriptorRefSeed {
 }
 
 export interface BuildDescriptorClosureInput {
-  readonly appSpec: AppSpec;
+  readonly deploySpec: InternalDeploySpec;
   readonly resolvedAt: IsoTimestamp;
   /** Optional extra descriptor refs (e.g. composite expansion children). */
   readonly extraDescriptorRefs?: readonly DescriptorRefSeed[];
@@ -194,9 +194,9 @@ function canonicalUriFor(ref: string): { id: string; alias: string } {
   };
 }
 
-/** Build a `DeploymentDescriptorClosure` from the resolved AppSpec.
+/** Build a `DeploymentDescriptorClosure` from the resolved InternalDeploySpec.
  *
- * The closure is deterministic: identical AppSpecs (with identical authoring
+ * The closure is deterministic: identical InternalDeploySpecs (with identical authoring
  * expansion outcomes) produce byte-identical closures, byte-identical digests,
  * and byte-identical resolutions. Apply consumes the closure verbatim.
  *
@@ -205,7 +205,7 @@ function canonicalUriFor(ref: string): { id: string; alias: string } {
 export async function buildDescriptorClosure(
   input: BuildDescriptorClosureInput,
 ): Promise<DeploymentDescriptorClosure> {
-  const seeds = collectSeeds(input.appSpec, input.extraDescriptorRefs ?? []);
+  const seeds = collectSeeds(input.deploySpec, input.extraDescriptorRefs ?? []);
   const resolutions: CoreDescriptorResolution[] = [];
   const dependencies: CoreDescriptorDependency[] = [];
   const seenUris = new Set<string>();
@@ -256,7 +256,7 @@ export async function buildDescriptorClosure(
   // descriptor digest MUST be in the closure. We additionally record one
   // `shape-derivation` dependency per expanded descriptor so the closure is
   // self-describing.
-  const expansionAliases = authoringExpansionDescriptors(input.appSpec);
+  const expansionAliases = authoringExpansionDescriptors(input.deploySpec);
   if (expansionAliases.length > 0) {
     const expansionEntry = resolveRef(PUBLIC_MANIFEST_EXPANSION_ALIAS);
     const expansionUri = expansionEntry?.id ?? PUBLIC_MANIFEST_EXPANSION_ALIAS;
@@ -284,7 +284,7 @@ export async function buildDescriptorClosure(
   // capabilities produces a different digest even when the raw manifest text
   // is identical. The map is built deterministically by the compiler so the
   // resulting digest is stable.
-  const effectiveCapabilities = effectiveRuntimeCapabilitiesOf(input.appSpec);
+  const effectiveCapabilities = effectiveRuntimeCapabilitiesOf(input.deploySpec);
   const closureDigest = await digestOf({
     resolutions,
     dependencies,
@@ -333,17 +333,17 @@ async function buildResolution(input: {
 }
 
 function collectSeeds(
-  appSpec: AppSpec,
+  deploySpec: InternalDeploySpec,
   extra: readonly DescriptorRefSeed[],
 ): readonly DescriptorRefSeed[] {
   const seeds: DescriptorRefSeed[] = [];
   // Authoring expansion descriptor: when the compiler expanded a sugar form
   // we MUST pin its digest (spec § 5).
-  for (const alias of authoringExpansionDescriptors(appSpec)) {
+  for (const alias of authoringExpansionDescriptors(deploySpec)) {
     seeds.push({ ref: alias });
   }
   // Component runtimes + immutable source/runtime inputs.
-  for (const component of appSpec.components) {
+  for (const component of deploySpec.components) {
     seeds.push({ ref: component.type });
     if (usesSourceJsModule(component)) {
       seeds.push({ ref: "source.js-module@v1" });
@@ -353,15 +353,15 @@ function collectSeeds(
     }
   }
   // Declared resources.
-  for (const resource of appSpec.resources) {
+  for (const resource of deploySpec.resources) {
     seeds.push({ ref: resource.type });
   }
   // Interface contracts inferred from routes.
-  for (const route of appSpec.routes) {
+  for (const route of deploySpec.routes) {
     seeds.push({ ref: routeInterfaceRef(route) });
   }
   // Publication contracts.
-  for (const output of appSpec.outputs) {
+  for (const output of deploySpec.outputs) {
     seeds.push({ ref: output.type });
   }
   // Caller-provided extras (e.g. composite descriptor children, provider
@@ -370,28 +370,28 @@ function collectSeeds(
   return seeds;
 }
 
-function authoringExpansionDescriptors(appSpec: AppSpec): readonly string[] {
-  const maybe = (appSpec as AppSpec & {
+function authoringExpansionDescriptors(deploySpec: InternalDeploySpec): readonly string[] {
+  const maybe = (deploySpec as InternalDeploySpec & {
     authoringExpansionDescriptors?: readonly string[];
   }).authoringExpansionDescriptors;
   return Array.isArray(maybe) ? maybe : [];
 }
 
 function usesSourceJsModule(
-  component: AppSpec["components"][number],
+  component: InternalDeploySpec["components"][number],
 ): boolean {
   return component.type === "runtime.js-worker@v1" && !component.image;
 }
 
 /**
  * C2 — Read the post-composite-expansion / post-profile-merge effective
- * runtime capability set off the AppSpec. Returned in canonical sort order
+ * runtime capability set off the InternalDeploySpec. Returned in canonical sort order
  * so the digest input is stable regardless of insertion order.
  */
 function effectiveRuntimeCapabilitiesOf(
-  appSpec: AppSpec,
+  deploySpec: InternalDeploySpec,
 ): Record<string, readonly string[]> {
-  const maybe = appSpec.effectiveRuntimeCapabilities;
+  const maybe = deploySpec.effectiveRuntimeCapabilities;
   if (!maybe) return {};
   const out: Record<string, readonly string[]> = {};
   for (const name of Object.keys(maybe).sort()) {
@@ -402,8 +402,8 @@ function effectiveRuntimeCapabilitiesOf(
   return out;
 }
 
-function routeInterfaceRef(route: AppSpecRoute): string {
-  const explicit = (route as AppSpecRoute & { interfaceContractRef?: string })
+function routeInterfaceRef(route: InternalDeploySpecRoute): string {
+  const explicit = (route as InternalDeploySpecRoute & { interfaceContractRef?: string })
     .interfaceContractRef;
   if (explicit) return explicit;
   // Fall back to inferring from the protocol (the compiler always sets

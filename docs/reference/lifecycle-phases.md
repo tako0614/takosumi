@@ -27,7 +27,7 @@ recovery ◄── (kernel restart / lock re-acquire,
 
 ### `apply`
 
-- **Input**: manifest 由来 TargetState + 既存 Space の前回 `ResolvedPlan` (あれば)
+- **Input**: Source payload、PlatformService binding selection、operator policy から解決した TargetState + 既存 Space の前回 `ResolvedPlan` (あれば)
 - **Output**: 新 `ResolvedPlan` と bind 済 `OperationPlan`、リソースの作成・更新の記録
 - **Journal cursor**: operation ごとに新 `journalEntryId` を割当て、 `(spaceId, operationPlanDigest, journalEntryId)` を記録
 - **WAL stages**: `prepare` -> `pre-commit` -> `commit` -> `post-commit` -> `finalize`

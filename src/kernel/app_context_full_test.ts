@@ -4,7 +4,7 @@ import { createInMemoryAppContext } from "./app_context.ts";
 import { NoopTestKms } from "./adapters/kms/mod.ts";
 import { InMemoryRouterConfigAdapter } from "./adapters/router/mod.ts";
 import { NoopProviderMaterializer } from "./adapters/provider/mod.ts";
-import { ImmutableManifestSourceAdapter } from "./adapters/source/mod.ts";
+import { ImmutableSourceAdapter } from "./adapters/source/mod.ts";
 import { MemoryStorageDriver } from "./adapters/storage/mod.ts";
 import { MemoryQueueAdapter } from "./adapters/queue/mod.ts";
 import { MemoryObjectStorage } from "./adapters/object-storage/mod.ts";
@@ -87,7 +87,7 @@ test("full AppContext composition wires default adapters and services", () => {
   const context = createInMemoryAppContext();
 
   assert.ok(context.adapters.provider instanceof NoopProviderMaterializer);
-  assert.ok(context.adapters.source instanceof ImmutableManifestSourceAdapter);
+  assert.ok(context.adapters.source instanceof ImmutableSourceAdapter);
   assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
   assert.ok(context.services.core);
   assert.ok(context.services.deploy.plans);

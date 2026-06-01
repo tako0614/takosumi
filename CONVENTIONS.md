@@ -1,42 +1,44 @@
 # Takosumi Conventions
 
-`kind` is the selector word everywhere in AppSpec. `Component.kind` chooses what
-to create. Root `publish.kind` and `listen.kind` name the kind of material being
-offered or consumed. The manifest shape stays
-`{ apiVersion, metadata, components, publish? }`, and each component stays
-`{ kind, spec, connect, listen }`.
+Takosumi v1 is manifestless. A source repository is installed through `Source`
+input and generic repository metadata; it does not carry a Takosumi-specific
+metadata file, component graph, provider selector, or repository metadata
+field.
 
-Use `type` only for JSON Schema, JSON-LD `@type`, or TypeScript names. Public
-manifest and publication selectors use `kind`.
+## Public Words
 
-## Kind ownership
+- `Source`: `git`, `prepared`, or `local` source input plus resolved identity.
+- `Installation`: Space-scoped installed source record.
+- `Deployment`: one apply result with source summary, plan snapshot, binding
+  snapshot, outputs, and status.
+- `PlatformService`: operator-catalog service capability selected during install
+  or deploy.
+- `InstallPlan`: dry-run response snapshot only; not a persisted entity.
 
-- Official kind descriptors are JSON-LD spec documents in `docs/kinds/v1/<alias>.jsonld`, published at `https://takosumi.com/kinds/v1/<alias>`. They are not runtime package exports.
-- Native kind implementations are sourced in the sibling `takosumi-plugins` repository and exported as `@takosjp/takosumi-plugins/kind/<alias>` subpaths.
-- Kind families such as worker, postgres, object-store, gateway, and web-service are documentation groups, not an manifest field.
-- Backend-specific `spec` fields belong to native kinds. Do not hide them behind a portable kind.
+Use `type` only for JSON Schema, JSON-LD `@type`, or TypeScript names. Do not
+add a new public selector DSL under Takosumi core.
 
-## Publication paths
+## Operator Binding
 
-`path` is only for exact Space-visible names. One Space can have at most one
-active owner for the same publication path. Pathless publications are
-discoverable by `kind` and `labels`; multiple pathless publications with the
-same kind are valid. Consumers that intentionally want all visible matches use
-`listen.<binding>.kind` with `many: true`.
+Operator distributions own PlatformService inventory, provider credentials,
+Terraform/OpenTofu state, runtime attachment, and account-facing policy. A
+distribution may populate inventory from Terraform output, HCP Stacks publish
+output, static config, cloud APIs, or dashboard input. Takosumi core records the
+resolved binding snapshot on Deployment; it does not materialize provider
+infrastructure.
 
-## Adding a kind descriptor or binding
+Backend adapters and runtime-agent connectors live in `takosumi-plugins/` as
+optional reference implementation. Operators attach them through
+`createPaaSApp({ plugins })` or an equivalent distribution-local binding layer.
+Those adapter subpaths are package API, not Takosumi source authoring
+vocabulary.
 
-1. Choose a stable alias such as `cloudflare-worker` or `aws-rds-postgres`.
-2. Add or edit the descriptor JSON-LD in `docs/kinds/v1/<alias>.jsonld`.
-3. If the reference implementation needs a backend binding, add or update `takosumi-plugins/src/plugins/<alias>/`.
-4. Export `KIND_NAME`, `KIND_URI`, `KIND_ALIASES`, and a `KernelPlugin` factory from that plugin subpath only when the reference implementation has an adapter.
-5. Add the plugin export to `takosumi-plugins/package.json` and its npm subpath build.
-6. Update [Reference Plugin Exports](docs/reference/reference-plugin-exports.md) and examples.
+## Source And Build
 
-## Reference implementation binding
+Build recipes stay outside Takosumi core. CI or an operator build service can
+produce a prepared source archive and submit it as `source.kind: "prepared"`.
+Git and local source paths are accepted directly by the Installer API.
 
-The reference kernel accepts `KernelPlugin[]` through `createPaaSApp({ kindAliases, plugins })`. This is an implementation strategy. A compatible implementation can bind the same kind URI to a native controller, static registry, workflow engine, or SaaS adapter.
-
-## Build and source
-
-Build recipes live outside manifest. File paths consumed by runtime components live in kind-specific `spec` fields, such as `worker.spec.entrypoint`.
+`planSnapshotDigest` is the reviewed dry-run guard. Apply should pass it through
+`expected.planSnapshotDigest` when the caller wants to prevent source or binding
+resolution drift between dry-run and apply.

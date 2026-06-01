@@ -20,10 +20,7 @@ import {
   type SecretVersionRef,
   selectSecretBoundaryCrypto,
 } from "../../adapters/secret-store/mod.ts";
-import {
-  ImmutableManifestSourceAdapter,
-  type SourcePort,
-} from "../../adapters/source/mod.ts";
+import { ImmutableSourceAdapter, type SourcePort } from "../../adapters/source/mod.ts";
 import {
   InMemoryObservabilitySink,
   type ObservabilitySink,
@@ -65,7 +62,7 @@ const SELECTORS: readonly SelectorSpec[] = [
   {
     family: "source",
     key: "TAKOSUMI_BOOTSTRAP_SOURCE_ADAPTER",
-    defaultKind: "manifest",
+    defaultKind: "source",
   },
   {
     family: "secret",
@@ -313,13 +310,13 @@ export class StandaloneBootstrapService {
   }
 
   #createSource(kind: string, errors: BootstrapDiagnostic[]): SourcePort {
-    if (kind === "manifest" || kind === "immutable-manifest") {
-      return new ImmutableManifestSourceAdapter({ clock: this.#clock });
+    if (kind === "source" || kind === "immutable-source") {
+      return new ImmutableSourceAdapter({ clock: this.#clock });
     }
     errors.push(unsupportedAdapter("source", kind, [
-      "manifest",
+      "source",
     ]));
-    return new ImmutableManifestSourceAdapter({ clock: this.#clock });
+    return new ImmutableSourceAdapter({ clock: this.#clock });
   }
 
   #createSecretStore(

@@ -4,7 +4,8 @@
 
 - Node.js 20+ / npm または Bun
 
-この手順では、ローカル開発サーバーに manifest を渡して Installation と最初の Deployment の記録が作られるところまでを確認します。アプリを公開 URL で提供するには、gateway を備えた operator 環境が必要です。
+この手順では、ローカル Takosumi server に source を渡し、Installation と最初の Deployment が作られるところまでを確認します。
+public URL で提供するには、gateway や runtime を持つ operator 環境が必要です。
 
 ## 1. CLI をインストールする
 
@@ -13,54 +14,27 @@ npm install -g @takosjp/takosumi
 takosumi version
 ```
 
-## 2. ソースルートを作る
+## 2. source root を作る
 
 ```bash
 mkdir hello-takosumi && cd hello-takosumi
-mkdir -p src
+printf '{"name":"hello-takosumi","version":"0.1.0"}\n' > package.json
 ```
 
-`src/worker.ts`
+`package.json` は Takosumi 専用 metadata ではなく、repo の汎用 metadata です。
 
-```ts
-export default {
-  fetch() {
-    return new Response("hello from takosumi");
-  },
-};
-```
+## 3. ローカル server を起動する
 
-`.takosumi.yml`
-
-```yaml
-apiVersion: v1
-metadata:
-  id: com.example.hello
-  name: Hello Takosumi
-components:
-  web:
-    kind: worker
-    spec:
-      entrypoint: src/worker.ts
-```
-
-## 3. ローカル開発サーバーを起動する
-
-Takosumi はサーバーと CLI (クライアント) が分かれています。まずサーバーを 1 つの shell で起動し、CLI の操作は別の shell で行います。
-
-サーバー用の shell で以下を実行します:
+別 shell で起動します。
 
 ```bash
 export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
 TAKOSUMI_DEV_MODE=1 takosumi server --port 8788
 ```
 
-`TAKOSUMI_INSTALLER_TOKEN` は API の認証トークンです。ローカル開発ではこの固定値を使います。
-
-元の shell に戻り、環境変数を設定します:
+元の shell で接続先を設定します。
 
 ```bash
-cd /path/to/hello-takosumi
 export APP_ROOT="$PWD"
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
 export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
@@ -72,17 +46,22 @@ export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
 takosumi install dry-run --space space_personal --source "$APP_ROOT"
 ```
 
-成功すると、`changes[]` (予定差分) と `expected.manifestDigest` (ソースの識別子) が返されます。
+成功すると `installPlan`、`planSnapshotDigest`、`changes[]`、`expected` が返ります。
 
 ```json
 {
-  "manifestDigest": "sha256:...",
-  "changes": [{ "op": "create", "component": "web", "kind": "worker" }],
-  "expected": { "manifestDigest": "sha256:..." }
+  "source": { "kind": "local", "url": "/path/to/hello-takosumi" },
+  "planSnapshotDigest": "sha256:...",
+  "installPlan": {
+    "repo": { "id": "hello-takosumi", "name": "hello-takosumi", "version": "0.1.0" },
+    "requestedBindings": [],
+    "resolvedBindings": [],
+    "publications": [],
+    "changes": []
+  },
+  "expected": { "planSnapshotDigest": "sha256:..." }
 }
 ```
-
-`changes` は作成される component のリストです。apply 時に `manifestDigest` を照合し、dry-run 後にソースが変わっていないことを確認します。
 
 ## 5. Installation を作る
 
@@ -94,7 +73,7 @@ dry-run で得た digest を指定して apply するには:
 
 ```bash
 takosumi install --space space_personal --source "$APP_ROOT" \
-  --expected-manifest-digest sha256:<copied-from-dry-run>
+  --expected-plan-snapshot-digest sha256:<copied-from-dry-run>
 ```
 
 成功すると Installation id と Deployment id が返ります。
@@ -106,8 +85,8 @@ takosumi install --space space_personal --source "$APP_ROOT" \
 }
 ```
 
-ここまでがローカル環境でのクイックスタートの範囲です。
+## 次に読む
 
-次のステップ: [component 接続と HTTP 公開](./next-steps.md)
-
-→ [Manifest リファレンス](../reference/manifest.md)
+- [Installer API](../reference/installer-api.md)
+- [CLI](../reference/cli.md)
+- [プラットフォームサービス](../reference/platform-services.md)

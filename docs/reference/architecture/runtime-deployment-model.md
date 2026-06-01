@@ -1,7 +1,12 @@
 # Runtime Deployment モデル {#runtime-deployment-model}
 
 ::: info
-内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。Takosumi の public concept は
+`Source` / `Installation` / `Deployment` / `PlatformService` に閉じる。このページの `ResolvedPlan`、`TargetState`、
+`PlatformServiceDeclaration`、`PlatformServiceMaterialization`、OperationPlan、journal、生成 object は reference implementation
+内部の runtime primitive / evidence object であり、Source authoring vocabulary ではない。provider infrastructure の
+materialization workflow は operator distribution が所有し、Takosumi は PlatformService inventory を consume して
+Deployment の binding snapshot / evidence として記録する。
 :::
 
 ## Operation Plan と Write-Ahead Journal {#operation-plan--write-ahead-journal}
@@ -18,8 +23,8 @@ OperationPlan は同じ Space の `TargetState` と `ObservationState` から de
 apply-object
 delete-object
 verify-object
-materialize-link
-rematerialize-link
+record-link-binding
+refresh-link-binding
 revoke-link
 prepare-exposure
 activate-exposure
@@ -62,18 +67,18 @@ prepare      → pre-commit → commit → post-commit → observe → finalize
                                         → skip      (no-op resolution)
 ```
 
-| stage       | may write provider actual-effects | may queue CleanupBacklog | may re-validate approval |
-| ----------- | --------------------------------- | ------------------------ | ------------------------ |
-| prepare     | no                                | no                       | yes                      |
-| pre-commit  | no                                | no                       | yes                      |
-| commit      | yes                               | no                       | no                       |
-| post-commit | no                                | yes                      | no                       |
-| observe     | no                                | yes                      | no                       |
-| finalize    | no                                | no                       | no                       |
-| abort       | no                                | yes                      | no                       |
-| skip        | no                                | no                       | no                       |
+| stage       | may request operator-owned provider effects | may queue CleanupBacklog | may re-validate approval |
+| ----------- | ------------------------------------------- | ------------------------ | ------------------------ |
+| prepare     | no                                          | no                       | yes                      |
+| pre-commit  | no                                          | no                       | yes                      |
+| commit      | yes                                         | no                       | no                       |
+| post-commit | no                                          | yes                      | no                       |
+| observe     | no                                          | yes                      | no                       |
+| finalize    | no                                          | no                       | no                       |
+| abort       | no                                          | yes                      | no                       |
+| skip        | no                                          | no                       | no                       |
 
-`pre-commit` は operator asset extension policy gate ([Operator asset Extension Policy](../data-asset-policy.md) 参照) と [バインディングモデル](./binding-model.md) が上げる衝突 risk の canonical な enforcement point である。source build / preparation は Installer API submission 前の build-service / CI policy で扱う。`commit` は resource side effect を実行しうる唯一の stage である。`post-commit` は commit 後の evidence / projection を記録し、外部 cleanup が完了できないとき debt を queue する。新規 stage は RFC (CONVENTIONS.md §6) を要する。
+`pre-commit` は operator asset extension policy gate ([Operator asset Extension Policy](../data-asset-policy.md) 参照) と [バインディングモデル](./binding-model.md) が上げる衝突 risk の canonical な enforcement point である。source build / preparation は Installer API submission 前の build-service / CI policy で扱う。`commit` は operator-owned provider workflow に resource side effect を request しうる唯一の stage である。`post-commit` は commit 後の evidence / projection を記録し、外部 cleanup が完了できないとき debt を queue する。新規 stage は RFC (CONVENTIONS.md §6) を要する。
 
 ### 冪等性キー {#idempotency-keys}
 
@@ -87,11 +92,15 @@ idempotencyKey = (spaceId, operationPlanDigest, journalEntryId)
 
 ### Pre/post-commit の verification {#prepost-commit-verification}
 
-kind alias と binding は operator が与える resolution 入力である。 Takosumi は `ResolvedPlan` に記録した selection を pre-commit と post-commit で再検証する。selected binding が宣言する実行可能 hook package を実行する主体は operator binding です。kind の定義は kind identity / input schema / connect-listen / output slot などの semantic metadata に閉じます。Verification lifecycle:
+implementation binding と PlatformService inventory は operator が与える resolution 入力である。 Takosumi は reference-internal
+`ResolvedPlan` に記録した selection を pre-commit と post-commit で再検証し、Deployment の `bindingsSnapshot` / evidence に
+記録する。selected binding が宣言する実行可能 hook package や provider infrastructure workflow を実行する主体は operator
+distribution です。kind の定義は kind identity / input schema / output slot などの semantic metadata に閉じます。
+Verification lifecycle:
 
 ```text
-1. discovery        — Space-visible kind aliases and implementations
-2. selection check  — recorded kind aliases / selected implementations /
+1. discovery        — Space-visible operator-owned PlatformService inventory and implementations
+2. selection check  — recorded service selections / selected implementations /
                       connector visibility are revalidated
 3. result recorded  — verification outcome is journaled as evidence
 4. fail-closed      — pre-commit failure aborts before resource effects;
@@ -120,7 +129,7 @@ JournalEntry:
 
 ### 決定的な生成 id {#deterministic-generated-ids}
 
-生成 object の id は外部呼び出しの前に計算されるべきである。
+reference-internal 生成 object / evidence record の id は外部呼び出しの前に計算されるべきである。
 
 ```text
 authorization id = hash(spaceId, deploymentId, linkId, platformServiceSnapshotId, accessMode)
@@ -142,13 +151,13 @@ ingress reservation id = hash(spaceId, groupId, exposureId, host, path)
 
 ### Space 隔離 {#space-isolation}
 
-OperationPlan、OperationJournal、生成 object id、compensation record、 CleanupBacklog は厳密に 1 つの Space に属する。ある Space の journal entry を別 Space の recovery authority として使ってはならない。
+OperationPlan、OperationJournal、reference-internal 生成 object id、compensation record、 CleanupBacklog は厳密に 1 つの Space に属する。ある Space の journal entry を別 Space の recovery authority として使ってはならない。
 
 Space-global な state を変更する critical operation は Space 単位で直列化され、 global ingress 予約は operator-level の追加直列化を要しうる。
 
 ### OperationJournal の保持 {#operationjournal-retention}
 
-OperationJournal は side-effect と recovery の履歴を保持する。アクティブな生成 object、未解決の compensation、未解決の revoke debt、現在の activation に関連する entry は compaction で消してはならない。
+OperationJournal は side-effect と recovery の履歴を保持する。アクティブな reference-internal 生成 object / evidence、未解決の compensation、未解決の revoke debt、現在の activation に関連する entry は compaction で消してはならない。
 
 別 store が保持しうるもの:
 
@@ -168,11 +177,11 @@ CurrentStateIndex
 
 **2. Snapshot invariant** --- `ResolvedPlan` と `TargetState` は immutable である。新しい意味または desired graph は新しい snapshot を作る。
 
-**3. Identity invariant** --- すべての `Object`、`PlatformServiceDeclaration`、`Link`、`Exposure`、 `Operation`、operator asset extension record、generated object、activation item は安定したアドレスを持つ。
+**3. Identity invariant** --- すべての reference-internal `Object`、`PlatformServiceDeclaration`、`PlatformServiceMaterialization`、`Link`、`Exposure`、 `Operation`、operator asset extension record、generated object、activation item は安定したアドレスを持つ。これらは public concept ではなく、public surface は `Source` / `Installation` / `Deployment` / `PlatformService` と Deployment の snapshot / evidence に閉じる。
 
 #### Ownership / Security
 
-**4. Ownership invariant** --- lifecycle class は operation を制限する。
+**4. Ownership invariant** --- reference runtime object / evidence の lifecycle class は operation を制限する。provider infrastructure と materialization workflow の所有者は operator distribution であり、Takosumi core は binding snapshot / evidence を記録する。
 
 ```text
 managed:
@@ -205,9 +214,9 @@ imported:
 
 **6. Effects invariant** --- implementation は `approvedEffects` を超えてはならない。超えた場合は実行を一時停止し、overflow を journal し、可能なら compensation を実行し、承認を要求するか fail する。
 
-**7. Write-ahead journal invariant** --- side-effect を持つ operation は side effect の前に intent を記録する。生成 object identity は外部呼び出しの前に計画する。観測された handle は外部呼び出しの後に append する。
+**7. Write-ahead journal invariant** --- side-effect を持つ operation は side effect の前に intent を記録する。reference-internal 生成 object identity は外部呼び出しの前に計画する。観測された handle は外部呼び出しの後に append する。
 
-**8. Idempotency invariant** --- retry は同じ intent である。生成 object identity は、deployment id、link id、service snapshot id、access mode、exposure id、desired generation のような安定した入力から決定的に決まるべきである。
+**8. Idempotency invariant** --- retry は同じ intent である。reference-internal 生成 object identity は、deployment id、link id、service snapshot id、access mode、exposure id、desired generation のような安定した入力から決定的に決まるべきである。
 
 #### Activation / Observation
 
@@ -221,23 +230,25 @@ imported:
 
 - RoutingPointer 更新、activation 更新
 - ingress 予約
-- 生成 credential / authorization 変更
-- platform service registry 書込み
+- reference-internal 生成 credential / authorization 変更
+- operator-owned PlatformService inventory / binding registry 書込み
 - future cross-Space service sharing policy
-- kind alias / descriptor / binding set 更新
+- descriptor / implementation binding set 更新
 
 #### Space 境界
 
-**13. Space containment invariant** --- すべての Deployment、ResolvedPlan、TargetState、OperationJournal、 ObservationState、CleanupBacklog、TrafficSnapshot、approval、RoutingPointer は厳密に 1 つの Space に属する。deployment は自身の Space の外で resolve、 materialize、activate、observe、destroy してはならない。current v1 には Space 越えの service input はなく、将来 RFC が定義する明示的な sharing model なしに例外は許されない。
+**13. Space containment invariant** --- すべての Deployment、reference-internal ResolvedPlan、TargetState、OperationJournal、 ObservationState、CleanupBacklog、TrafficSnapshot、approval、RoutingPointer は厳密に 1 つの Space に属する。deployment は自身の Space の外で resolve、record binding evidence、activate、observe、destroy してはならない。provider infrastructure の materialization は operator distribution の Space / account policy に従う。current v1 には Space 越えの service input はなく、将来 RFC が定義する明示的な sharing model なしに例外は許されない。
 
-**14. Platform service isolation invariant** --- platform service path と publication discovery は Space scope である。外部 source は、Space に可視化された platform service declaration の exact match、または Space-visible publication の `kind` / labels selection でのみ解決できる。2 つの Space の同じ path や同じ material kind は current v1 では同一 material として扱わない。
+**14. Platform service isolation invariant** --- platform service path と publication discovery は Space scope である。外部 source は、Space に可視化された `PlatformService` inventory entry の exact match、または Space-visible publication の `kind` / labels selection でのみ解決できる。reference-internal `PlatformServiceDeclaration` / `PlatformServiceMaterialization` はその resolution evidence であり、public authoring object ではない。2 つの Space の同じ path や同じ provider material は current v1 では同一 material として扱わない。
 
 **15. Space data-boundary invariant** --- secret、operator asset extension record、operation journal、observation、 approval、audit event は Space scope である。Space を跨ぐ共有には明示的な operator policy が必要で、ResolvedPlan に記録する。
 
 ### Reference implementation internal primitives {#reference-implementation-internal-primitives}
 
+以下は reference implementation の内部 runtime primitive / evidence object であり、public concept や Source authoring vocabulary ではない。`PlatformServiceDeclaration` は Space-visible PlatformService inventory から解決した declaration evidence、`PlatformServiceMaterialization` は operator-owned provider workflow の結果として記録する materialization evidence を指す。
+
 ```text
-manifest
+SourcePayload
 Space
 IntentGraph
 ResolvedPlan

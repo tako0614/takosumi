@@ -3,11 +3,9 @@ import type { JsonObject, JsonValue } from "takosumi-contract/reference/types";
 /**
  * Legacy deploy-domain envelope identifier.
  *
- * This is not the public `.takosumi.yml` AppSpec (`apiVersion: "v1"`,
- * `metadata`, `components`, optional `publish`). It exists only for older
- * deploy-domain internals that still consume an expanded `resources[]` shape.
- * New installer / authoring code must use `AppSpec` from
- * `takosumi-contract/app-spec`.
+ * This exists only for older deploy-domain internals that still consume an
+ * expanded `resources[]` shape. New installer code uses the manifestless
+ * Source / InstallPlan pipeline.
  */
 export const MANIFEST_API_VERSION = "1.0" as const;
 export const MANIFEST_KIND = "Manifest" as const;
@@ -27,10 +25,10 @@ export interface ManifestMetadata {
 /**
  * Legacy internal deploy manifest shape.
  *
- * Public Takosumi manifests do not have root `kind`, `namespace`, or
- * `resources[]`; those fields belong to this compatibility path only.
+ * Public Takosumi v1 sources do not define this root `kind`, `namespace`, or
+ * `resources[]` shape; those fields belong to this compatibility path only.
  *
- * @deprecated Use `AppSpec` from `takosumi-contract/app-spec`.
+ * @deprecated Use the manifestless installer pipeline.
  */
 export interface Manifest {
   readonly "@context"?: ManifestJsonLdContext;

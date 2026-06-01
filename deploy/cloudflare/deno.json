@@ -1,9 +1,0 @@
-{
-  "name": "@takos/takosumi-cloudflare-worker",
-  "version": "0.0.0",
-  "exports": "./src/worker.ts",
-  "compilerOptions": {
-    "strict": true,
-    "lib": ["deno.window", "dom", "dom.iterable"]
-  }
-}

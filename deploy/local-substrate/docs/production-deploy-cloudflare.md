@@ -1,11 +1,11 @@
-# Production deploy to Cloudflare (takosumi.com / cloud.takosumi.com)
+# Production deploy to Cloudflare (takosumi.com / accounts.takosumi.com)
 
 The local-substrate mirrors production using `.test` TLDs:
 
 | Production                                 | Local mirror                           | Backend                                                                     |
 | ------------------------------------------ | -------------------------------------- | --------------------------------------------------------------------------- |
 | `https://takosumi.com/`                    | `https://takosumi.test/`               | Cloudflare Pages (prod) / Caddy file_server (local)                         |
-| `https://cloud.takosumi.com/`              | `https://cloud.takosumi.test/`         | Accounts Cloudflare Worker + D1 + R2 (prod) / Miniflare + SQLite/R2 (local) |
+| `https://accounts.takosumi.com/`              | `https://accounts.takosumi.test/`         | Accounts Cloudflare Worker + D1 + R2 (prod) / Miniflare + SQLite/R2 (local) |
 | operator-selected Takosumi kernel hostname | `https://kernel-worker.takosumi.test/` | Takosumi kernel Worker + D1/R2/Queues/DO (prod) / Miniflare local binds     |
 
 Once the local mirror passes `scripts/smoke.sh`, follow this runbook to push the same artifacts to real Cloudflare. The Worker code is byte-for- byte identical; only DNS / binding IDs / secrets differ.
@@ -18,19 +18,19 @@ Once the local mirror passes `scripts/smoke.sh`, follow this runbook to push the
 4. **wrangler** installed (`npm install -g wrangler` or `npx wrangler`).
 5. **Logged in**: `wrangler login` once.
 
-## Step 1 — takosumi-cloud Worker (cloud.takosumi.com)
+## Step 1 — takosumi Worker (accounts.takosumi.com)
 
 ```sh
-cd takosumi-cloud/
+cd takosumi/
 
 # Create D1 database and capture the UUID it returns.
-wrangler d1 create takosumi-cloud-accounts
+wrangler d1 create takosumi-accounts
 # → "database_id": "abcd1234-..."
 # Paste the UUID into deploy/cloudflare/wrangler.toml's [[d1_databases]]
 # database_id field, replacing the all-zeros placeholder.
 
 # Create the R2 bucket for metadata-only AppInstallation export artifacts.
-wrangler r2 bucket create takosumi-cloud-accounts-exports
+wrangler r2 bucket create takosumi-accounts-exports
 
 # Push secrets (interactive prompts).
 wrangler secret put TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK    --config deploy/cloudflare/wrangler.toml
@@ -43,12 +43,12 @@ wrangler secret put TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET --config deploy/clo
 wrangler deploy --config deploy/cloudflare/wrangler.toml
 ```
 
-The `[[routes]]` block in `wrangler.toml` already maps `cloud.takosumi.com/*` to this Worker. Cloudflare auto-creates the DNS record on first deploy as long as the zone is in your account.
+The `[[routes]]` block in `wrangler.toml` already maps `accounts.takosumi.com/*` to this Worker. Cloudflare auto-creates the DNS record on first deploy as long as the zone is in your account.
 
 Verify:
 
 ```sh
-curl https://cloud.takosumi.com/.well-known/openid-configuration
+curl https://accounts.takosumi.com/.well-known/openid-configuration
 ```
 
 ## Step 2 — Takosumi kernel Worker
@@ -77,7 +77,7 @@ wrangler secret put TAKOSUMI_AGENT_TOKEN --config deploy/cloudflare/wrangler.tom
 wrangler deploy --config deploy/cloudflare/wrangler.toml
 ```
 
-Add the operator-owned route or custom domain for the kernel Worker in Cloudflare after choosing the public/private API hostname. The local-substrate intentionally exposes the mirror as `kernel-worker.takosumi.test` so it can be checked beside the default Deno+Postgres kernel at `kernel.takosumi.test`.
+Add the operator-owned route or custom domain for the kernel Worker in Cloudflare after choosing the public/private API hostname. The local-substrate intentionally exposes the mirror as `kernel-worker.takosumi.test` so it can be checked beside the default Bun+Postgres kernel at `kernel.takosumi.test`.
 
 Verify:
 
@@ -107,9 +107,9 @@ Option B — `wrangler pages deploy` (one-shot from your laptop):
 
 ```sh
 cd takosumi
-deno task docs:install               # installs vitepress
+cd takosumi/docs && bun install      # installs vitepress
 (cd website && npm install)           # installs solid start + vinxi
-deno task website:deploy              # runs build.sh + wrangler pages deploy
+bun run website:deploy                # runs build.sh + wrangler pages deploy
 # Then in dashboard, add takosumi.com (and optionally www.takosumi.com)
 # as custom domains on the takosumi-website project.
 ```
@@ -129,16 +129,16 @@ In the `takosumi.com` Cloudflare zone you should now have:
 | Type              | Name                     | Target                         | Proxied                                                                                      |
 | ----------------- | ------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------- |
 | `A` / Pages route | `@` (takosumi.com)       | (managed by Pages)             | yes                                                                                          |
-| Worker route      | `cloud.takosumi.com`     | takosumi-cloud-accounts Worker | (no DNS record needed for `*.com/*` Worker routes — Cloudflare matches on the route pattern) |
+| Worker route      | `accounts.takosumi.com`     | takosumi-accounts Worker | (no DNS record needed for `*.com/*` Worker routes — Cloudflare matches on the route pattern) |
 | Worker route      | operator kernel hostname | takosumi kernel Worker         | choose operator-owned public/private hostname and route policy                               |
 
-If using a separate CNAME for `cloud.takosumi.com`, add it pointing anywhere — the Worker route intercepts before DNS resolution matters.
+If using a separate CNAME for `accounts.takosumi.com`, add it pointing anywhere — the Worker route intercepts before DNS resolution matters.
 
 ## Rollback
 
 ```sh
 # Accounts Worker
-wrangler rollback --config takosumi-cloud/deploy/cloudflare/wrangler.toml
+wrangler rollback --config takosumi/deploy/cloudflare/wrangler.toml
 
 # Kernel Worker
 wrangler rollback --config takosumi/deploy/cloudflare/wrangler.toml
@@ -152,10 +152,10 @@ wrangler rollback --config takosumi/deploy/cloudflare/wrangler.toml
 The local-substrate runs the **same bundled Worker files** that `wrangler deploy` ships:
 
 ```
-takosumi-cloud/deploy/cloudflare/.wrangler/dist/takosumi-cloud-accounts-worker.mjs
-takosumi/deploy/cloudflare/.wrangler/dist/takosumi-cloudflare-worker.mjs
+takosumi/deploy/cloudflare/.wrangler/dist/takosumi-accounts-worker.mjs
+takosumi/deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs
 ```
 
 The build containers produce them; Miniflare runs them locally with emulated D1/R2/Queues/DO bindings. The difference between local and prod is the provider-managed binding backend and the binding / secret values. Code path is identical.
 
-If `cloud.takosumi.test/.well-known/openid-configuration` returns 200 in local-substrate, the same Worker route should work on `cloud.takosumi.com` only after Cloudflare-side DNS/TLS, route, D1/R2 binding IDs, and secrets are validated and recorded as launch-readiness evidence. If `kernel-worker.takosumi.test/{healthz,storage/healthz,coordination/healthz,queue/test}` passes locally, the kernel Worker bundle has booted with the same Cloudflare binding contract that production uses.
+If `accounts.takosumi.test/.well-known/openid-configuration` returns 200 in local-substrate, the same Worker route should work on `accounts.takosumi.com` only after Cloudflare-side DNS/TLS, route, D1/R2 binding IDs, and secrets are validated and recorded as launch-readiness evidence. If `kernel-worker.takosumi.test/{healthz,storage/healthz,coordination/healthz,queue/test}` passes locally, the kernel Worker bundle has booted with the same Cloudflare binding contract that production uses.

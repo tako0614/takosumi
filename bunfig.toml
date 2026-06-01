@@ -1,9 +1,3 @@
-# Bun migration: install the Deno runtime compat globals before any module
-# evaluates, so existing Deno.* runtime call sites in src work under bun without
-# source edits. A few legacy script guard tests still register via Deno.test, so
-# the test preload maps those registrations onto bun:test.
-[test]
-preload = ["./shims/deno-compat.ts", "./shims/deno-test-preload.ts"]
-
-[run]
-preload = ["./shims/deno-compat.ts"]
+# Bun runs without a global Deno compatibility preload. Real Deno support lives
+# in src/kernel/shared/runtime/deno.ts and is selected only on a genuine Deno
+# host.

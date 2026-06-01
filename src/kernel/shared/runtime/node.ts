@@ -141,6 +141,13 @@ let cachedRequire: ((specifier: string) => unknown) | undefined;
 
 function nodeRequireSync(specifier: string): unknown {
   if (cachedRequire) return cachedRequire(specifier);
+  const proc = getProcess() as (NodeProcess & {
+    getBuiltinModule?: (specifier: string) => unknown;
+  }) | undefined;
+  if (typeof proc?.getBuiltinModule === "function") {
+    const module = proc.getBuiltinModule(specifier);
+    if (module !== undefined) return module;
+  }
   const builtin = (globalThis as {
     require?: (specifier: string) => unknown;
   }).require;

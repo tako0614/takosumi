@@ -6,18 +6,26 @@
     "ref": "v2.1.2",
     "commit": "b3e8638ba9be2c7924f25e1b5e65d33bf75e18f9"
   },
-  "manifestDigest": "sha256:fixture-takos-computer",
   "changes": [
-    { "op": "create", "component": "web", "kind": "worker" },
-    { "op": "create", "component": "auth", "kind": "oidc" }
+    {
+      "op": "create",
+      "component": "web",
+      "kind": "worker"
+    },
+    {
+      "op": "create",
+      "component": "auth",
+      "kind": "oidc"
+    }
   ],
   "expected": {
     "commit": "b3e8638ba9be2c7924f25e1b5e65d33bf75e18f9",
-    "manifestDigest": "sha256:fixture-takos-computer"
+    "planSnapshotDigest": "sha256:fixture-takos-computer"
   },
   "metadata": {
     "fixture": true,
-    "fromAppSpec": "/home/tako/Desktop/takos/takos-apps/takos-computer/.takosumi.yml",
-    "generatedAt": "2026-05-18T00:00:00Z"
-  }
+    "generatedAt": "2026-05-18T00:00:00Z",
+    "fromSourceFixture": "/home/tako/Desktop/takos/takos-apps/takos-computer"
+  },
+  "planSnapshotDigest": "sha256:fixture-takos-computer"
 }

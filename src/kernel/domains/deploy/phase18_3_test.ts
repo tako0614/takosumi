@@ -10,7 +10,7 @@ import {
   InMemoryGroupHeadHistoryStore,
   resolveRollbackTarget,
 } from "./group_head_history.ts";
-import type { PublicDeployManifest } from "./types.ts";
+import type { ReferenceDeploySourcePayload } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -29,7 +29,7 @@ function fixedClock(start: string): () => Date {
 // M6: multi-generation rollback via group_head_history
 // ---------------------------------------------------------------------------
 
-function sampleManifest(version = "1.0.0"): PublicDeployManifest {
+function sampleManifest(version = "1.0.0"): ReferenceDeploySourcePayload {
   return {
     name: "demo-app",
     version,

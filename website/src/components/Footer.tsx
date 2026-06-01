@@ -13,8 +13,10 @@ export default function Footer() {
           <a href="https://github.com/tako0614/takosumi" rel="noopener">
             GitHub
           </a>
-          <a href="https://jsr.io/@takos/takosumi" rel="noopener">JSR</a>
-          <a href="https://cloud.takosumi.com/" rel="noopener">Cloud</a>
+          <a href="https://www.npmjs.com/package/@takosjp/takosumi" rel="noopener">
+            npm
+          </a>
+          <a href="https://accounts.takosumi.com/" rel="noopener">Cloud</a>
         </nav>
       </div>
     </footer>

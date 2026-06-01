@@ -17,7 +17,7 @@ import type { Deployment, GroupHead } from "takosumi-contract/reference/compat";
 import type {
   DeployBlockerSource,
   DeploySourceRef,
-  PublicDeployManifest,
+  ReferenceDeploySourcePayload,
 } from "../../domains/deploy/types.ts";
 import type { ApprovalGateDecision } from "../approvals/mod.ts";
 import type { PackageConformanceResult } from "../conformance/mod.ts";
@@ -72,7 +72,7 @@ export class DeploymentPhaseBlockedError extends Error {
 
 export interface OrchestrateDeploymentInput {
   readonly spaceId: string;
-  readonly manifest: PublicDeployManifest;
+  readonly manifest: ReferenceDeploySourcePayload;
   readonly source?: DeploySourceRef;
   readonly groupId?: string;
   readonly deploymentId?: string;
@@ -113,7 +113,7 @@ export interface OrchestratorDeploymentClient {
 export interface OrchestratorResolveInput {
   readonly spaceId: string;
   readonly groupId?: string;
-  readonly manifest: PublicDeployManifest;
+  readonly manifest: ReferenceDeploySourcePayload;
   readonly source?: DeploySourceRef;
   readonly mode?: "resolve" | "apply";
   readonly deploymentId?: string;

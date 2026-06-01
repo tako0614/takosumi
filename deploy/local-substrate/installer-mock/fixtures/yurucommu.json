@@ -6,20 +6,36 @@
     "ref": "v1.2.6",
     "commit": "53bec9b4097aee10b032445568d74a450dbc875a"
   },
-  "manifestDigest": "sha256:952a5d1a0b661fef2c1faf482d7cc164c1aeb0a68cc29d9320d9a6f07f11a4d7",
   "changes": [
-    { "op": "create", "component": "web", "kind": "worker" },
-    { "op": "create", "component": "db", "kind": "postgres" },
-    { "op": "create", "component": "media", "kind": "object-store" },
-    { "op": "create", "component": "auth", "kind": "oidc" }
+    {
+      "op": "create",
+      "component": "web",
+      "kind": "worker"
+    },
+    {
+      "op": "create",
+      "component": "db",
+      "kind": "postgres"
+    },
+    {
+      "op": "create",
+      "component": "media",
+      "kind": "object-store"
+    },
+    {
+      "op": "create",
+      "component": "auth",
+      "kind": "oidc"
+    }
   ],
   "expected": {
     "commit": "53bec9b4097aee10b032445568d74a450dbc875a",
-    "manifestDigest": "sha256:952a5d1a0b661fef2c1faf482d7cc164c1aeb0a68cc29d9320d9a6f07f11a4d7"
+    "planSnapshotDigest": "sha256:952a5d1a0b661fef2c1faf482d7cc164c1aeb0a68cc29d9320d9a6f07f11a4d7"
   },
   "metadata": {
     "fixture": true,
-    "fromAppSpec": "/home/tako/Desktop/takos/yurucommu/.takosumi.yml",
-    "generatedAt": "2026-05-18T00:00:00Z"
-  }
+    "generatedAt": "2026-05-18T00:00:00Z",
+    "fromSourceFixture": "/home/tako/Desktop/takos/yurucommu"
+  },
+  "planSnapshotDigest": "sha256:952a5d1a0b661fef2c1faf482d7cc164c1aeb0a68cc29d9320d9a6f07f11a4d7"
 }

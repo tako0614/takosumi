@@ -1,0 +1,13 @@
+{
+  "name": "@takosjp/takosumi-accounts",
+  "version": "0.0.1",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/mod.ts"
+  },
+  "dependencies": {
+    "@takosjp/takosumi-accounts-contract": "workspace:*",
+    "@takosjp/takosumi-accounts-service": "workspace:*"
+  }
+}

@@ -11,13 +11,12 @@
  *
  * The runtime-agent sits UPSTREAM of the kernel in the dependency graph, so it
  * cannot reuse the kernel's `defaultTarRunner`
- * (`packages/kernel/src/shared/runtime/capability-runners.ts`) without
+ * (`src/kernel/shared/runtime/capability-runners.ts`) without
  * inverting the layering / creating an import cycle. The default here is
  * therefore built over the runtime-agent's own local subprocess primitive
  * (`./subprocess/tar-runner.ts`), which is a single runtime-detecting module:
  * it runs `tar` through `Deno.Command` on Deno and through `node:child_process`
- * on Node, selecting the path at call time (the npm build needs no dnt module
- * mapping / Node sibling). Behavior is byte-for-byte identical to the
+ * on Node, selecting the path at call time (the npm build keeps this local runtime boundary). Behavior is byte-for-byte identical to the
  * historical direct `runTarCommand` call: same args, same stdin piping, same
  * forced `LC_ALL=C` / `LANG=C` C locale, and the same `tar <args> failed:
  * <stderr>` error on a non-zero exit.

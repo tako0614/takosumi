@@ -10,7 +10,7 @@
  *
  * The reference kernel provides a default implementation built over the
  * `RuntimeAdapter` `SubprocessAdapter` (see
- * `packages/kernel/src/shared/runtime/capability-runners.ts`), so the Deno
+ * `src/kernel/shared/runtime/capability-runners.ts`), so the Deno
  * runtime behavior is unchanged: the default runner routes through
  * `currentRuntime().subprocess`, which already has Deno / Node / Workers
  * implementations.
@@ -58,15 +58,15 @@ export interface TarRunner {
 
 /**
  * Injected temp-dir filesystem capability the installer needs to stage a git /
- * prepared source checkout before reading `.takosumi.yml`. The installer must
+ * prepared source checkout before deriving an install plan. The installer must
  * not reach for `Deno.makeTempDir` / `node:fs` directly; the reference kernel
  * injects `currentRuntime().fs`, whose `FsAdapter` structurally satisfies this
  * subset (`makeTempDir` / `remove` / `mkdir`).
  *
  * The three members mirror the historical `Deno.makeTempDir({ prefix })` /
  * `Deno.remove(path, { recursive })` / `Deno.mkdir(path, { recursive })`
- * behavior exactly so wiring an FS is a drop-in and Deno runtime behavior is
- * unchanged.
+ * behavior exactly so wiring an FS is a drop-in and legacy filesystem behavior
+ * is unchanged.
  */
 export interface InstallerFs {
   /**

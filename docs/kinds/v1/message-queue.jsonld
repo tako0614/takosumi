@@ -30,7 +30,7 @@
       "deadLetterQueue": {
         "type": "string",
         "minLength": 1,
-        "description": "Dead-letter queue name for messages that exceed maxRetries. An opaque queue name; same-AppSpec wiring to another message-queue component is expressed at the AppSpec level via connect/listen rather than inside this spec."
+        "description": "Dead-letter queue name for messages that exceed maxRetries. An opaque queue name; wiring to another message-queue service is selected by the operator PlatformService binding policy rather than inside this spec."
       }
     }
   },

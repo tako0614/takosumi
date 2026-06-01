@@ -1,88 +1,55 @@
 # Takosumi を拡張する {#extending}
 
-Takosumi の拡張は 2 種類あります。
+Takosumi v1 の拡張は operator integration です。source repo に Takosumi 専用 DSL を増やすことではありません。
 
-| やりたいこと                                | 追加するもの                  |
-| ------------------------------------------- | ----------------------------- |
-| 採用済み kind を別 cloud / runtime で動かす | kind を実行環境に接続する設定 |
-| 新しい runtime / resource の仕様を作る      | kind の定義 + 実装            |
+| やりたいこと | 所有者 |
+| --- | --- |
+| DB / OIDC / bucket / queue などを使える service として出す | operator PlatformService inventory |
+| Terraform/OpenTofu output を inventory に取り込む | operator distribution or `takosumi-plugins` importer |
+| workload runtime へ credential / endpoint を渡す | runtime-agent connector / backend adapter |
+| account / billing / dashboard / deploy facade を出す | operator distribution |
 
-Manifest には component の kind 名と `spec` を書きます。Takosumi は kind の値を解釈しません。kind は operator が opt-in した short alias でも、直接 URI でもよく、operator が kind URI から kind の定義と実行環境への接続を解決します。接続の渡し方は実装や operator の設定が選びます。Takosumi 互換の実装は、同じ kind URI と出力データの仕様を満たす限り、別の配線方式でも実行できます。
+## PlatformService importer
 
-## 新しい kind を追加する
-
-再利用可能な kind は安定した kind URI と kind の定義で意味を公開します。 operator はその URI に実行環境への接続を別途追加して実行可能にします。公式カタログの定義は JSON-LD を公開形式として使います。
+Terraform output、HCP Stacks publish output、remote state、cloud API、static config などを読み、operator inventory に
+PlatformService を登録します。
 
 ```json
 {
-  "@context": "https://takosumi.com/contexts/v1.jsonld",
-  "@id": "https://example.com/kinds/cache",
-  "name": "cache",
-  "spec": {
-    "type": "object",
-    "properties": {
-      "engine": { "enum": ["redis", "valkey"] },
-      "size": { "type": "string" }
-    },
-    "required": ["engine"]
-  },
-  "outputSlots": {
-    "endpoint": {
-      "contract": "http-endpoint",
-      "exampleMaterialMapping": {
-        "targets": [
-          {
-            "name": "default",
-            "url": "$outputs.endpoint",
-            "visibility": "private"
-          }
-        ]
-      }
-    }
-  },
-  "outputs": [
-    { "name": "endpoint", "type": "string" }
-  ]
+  "path": "data.primary.postgres",
+  "kind": "postgres",
+  "labels": { "tier": "primary" },
+  "material": {
+    "host": "db.example.internal",
+    "port": 5432,
+    "credentialRef": "secret:postgres-primary"
+  }
 }
 ```
 
-Manifest 側では operator が解決できる `kind` を使います。
+## Runtime connector
 
-`exampleMaterialMapping` は kind の定義ドキュメント、生成された型、例示、ドキュメントチェックが参照する例示データです。実行時の出力データ生成は operator が選んだ接続設定が行い、結果は実装側の記録と公開 Deployment の出力データに分けて記録します。
+runtime-agent connector は selected PlatformService material や Deployment source summary を読み、operator が選んだ runtime
+へ env、mount、secret reference、gateway target などを渡します。
 
-```yaml
-components:
-  cache:
-    kind: https://example.com/kinds/cache
-    spec:
-      engine: valkey
-      size: small
-  api:
-    kind: https://example.com/kinds/worker
-    connect:
-      cache:
-        output: cache.endpoint
-        inject: env
-        prefix: CACHE
-```
+Connector は implementation detail です。Takosumi core の public v1 は Source / Installation / Deployment /
+PlatformService と Installer API に閉じます。
 
-## 実行環境への接続を追加する
+## Terraform との境界
 
-接続設定は、kind の定義とmaterial kind (`service-binding` 等) を具体的な backend runtime やリソースの作成・更新に結びつけます。公開仕様として共有されるのは、kind URI、kind の定義、material kind、出力データの生成方法、Deployment に出す non-secret な出力データです。
-
-接続設定の読み込み方法、別プロセス化、backend API への接続、credential 注入方法は実装や operator の設定が選びます。Manifest author が覚える component 語彙は `kind` / `spec` / `connect` / `listen` に閉じます。selected component output を Installation output service path declaration として記録する場合だけ root `publish` を使います。
+Terraform provider を Takosumi plugin で再実装しません。Terraform が state を持つべき resource は operator layer で
+materialize し、Takosumi は output inventory を参照します。
 
 ## 確認項目
 
-- spec のバリデーションエラーがリソースの作成・更新前に止まる。
-- dry-run が changes[] と dry-run 時のハッシュ照合値を返す。cost estimate は operator のアカウント管理レスポンスとして扱う。
-- apply が idempotent に成功する。
-- destroy / rollback が対象 resource だけを処理する。
-- secret value を log / audit / Deployment の記録に出さない。
+- provider credential を Takosumi core に入れない。
+- raw secret value を Deployment output / log / audit に出さない。
+- inventory importer は deterministic な service path / labels を出す。
+- binding resolver は absent / ambiguous / policy denied を apply 前に止める。
+- runtime connector は selected binding snapshot を説明できる evidence を残す。
 
 ## 関連ページ
 
-- [Manifest](./reference/manifest.md)
-- [公式カタログ](./reference/catalog.md)
+- [仕様境界](./reference/spec-boundaries.md)
 - [プラットフォームサービス](./reference/platform-services.md)
-- [ビルドサービス境界](./reference/build-spec.md)
+- [Installer API](./reference/installer-api.md)

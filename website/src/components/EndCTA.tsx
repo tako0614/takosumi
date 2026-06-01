@@ -18,7 +18,7 @@ export default function EndCTA() {
         <div class="cta-row" style="justify-content: center;">
           <a
             class="btn btn-primary"
-            href="https://cloud.takosumi.com/"
+            href="https://accounts.takosumi.com/"
             rel="noopener"
           >
             Cloud で 試す →

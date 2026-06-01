@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
 import {
   isOfficialMaterialKindName,
   isOutputFieldTypeName,
@@ -6,7 +8,7 @@ import {
   type OutputFieldTypeDefinition,
   validateOfficialMaterialMapping,
   validateOfficialMaterialMappingOutputFields,
-} from "takosumi-contract/catalog";
+} from "takosumi-contract/reference/catalog";
 
 const PORTABLE_KIND_PACKAGES = [
   "worker",
@@ -20,13 +22,13 @@ const PORTABLE_KIND_PACKAGES = [
   "vector-store",
 ] as const;
 
-Deno.test("portable kind descriptors publish official material mappings", async () => {
+test("portable kind descriptors publish official material mappings", async () => {
   for (const pkg of PORTABLE_KIND_PACKAGES) {
     const path = new URL(
       `../docs/kinds/v1/${pkg}.jsonld`,
       import.meta.url,
     );
-    const descriptor = JSON.parse(await Deno.readTextFile(path)) as {
+    const descriptor = JSON.parse(await readText(path)) as {
       readonly name?: string;
       readonly outputSlots?: Record<string, unknown>;
       readonly outputs?: readonly unknown[];
@@ -117,6 +119,10 @@ function declaredOutputs(
     fields.push({ name, type, required });
   }
   return fields;
+}
+
+async function readText(path: URL | string): Promise<string> {
+  return readFile(path, "utf8");
 }
 
 function assertDescriptorOutputs(

@@ -12,14 +12,14 @@ Account、billing、OIDC issuer、customer onboarding、support workflow の rec
 
 | Record         | 役割                                                                                                             |
 | -------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `Installation` | manifest が Space に installed された core record。current pointer を持つ。                                      |
+| `Installation` | Source が Space に installed された core record。current pointer を持つ。                                        |
 | `Deployment`   | 1 回の apply / rollback target になる result record。source identity、status、public/non-secret outputs を持つ。 |
 
 ## Reference Kernel Retained Evidence Records
 
 | Record            | 役割                                                                                              |
 | ----------------- | ------------------------------------------------------------------------------------------------- |
-| `ResolvedPlan`    | manifest component、kind、implementation binding、publish の出力 / binding の解決結果を固定する。 |
+| `ResolvedPlan`    | InstallPlan、implementation binding、PlatformService selection、output / binding の解決結果を固定する。 |
 | `TargetState`     | apply で実現したい desired state。resource side effect の input になる。                          |
 | `OperationPlan`   | Deployment で実行する operation の順序と依存関係。                                                |
 | `TrafficSnapshot` | active routing / traffic assignment。health は ObservationState と retained evidence 側に残す。   |
@@ -51,7 +51,7 @@ snapshot は Takosumi reference 実装が Deployment に紐づく記録を説明
 
 | Record                         | 役割                                                                                 |
 | ------------------------------ | ------------------------------------------------------------------------------------ |
-| `OperatorImplementationConfig` | operator が attach した kind alias / implementation binding / connector inventory。  |
+| `OperatorImplementationConfig` | operator が attach した implementation binding / connector inventory。               |
 | `ImplementationRegistry`       | operator が attach した implementation binding / connector の registry view。        |
 | `ConnectorDescriptor`          | runtime-agent connector の id、accepted asset metadata、health。                     |
 | `assetRecord`                  | optional operator asset extension の digest、size、retention metadata。              |

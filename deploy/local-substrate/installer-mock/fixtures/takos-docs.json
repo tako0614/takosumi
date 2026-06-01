@@ -6,19 +6,31 @@
     "ref": "v0.1.2",
     "commit": "8362022b8925a831f64cd0481efe7aa13561f7c2"
   },
-  "manifestDigest": "sha256:fixture-takos-docs",
   "changes": [
-    { "op": "create", "component": "web", "kind": "worker" },
-    { "op": "create", "component": "documents", "kind": "object-store" },
-    { "op": "create", "component": "auth", "kind": "oidc" }
+    {
+      "op": "create",
+      "component": "web",
+      "kind": "worker"
+    },
+    {
+      "op": "create",
+      "component": "documents",
+      "kind": "object-store"
+    },
+    {
+      "op": "create",
+      "component": "auth",
+      "kind": "oidc"
+    }
   ],
   "expected": {
     "commit": "8362022b8925a831f64cd0481efe7aa13561f7c2",
-    "manifestDigest": "sha256:fixture-takos-docs"
+    "planSnapshotDigest": "sha256:fixture-takos-docs"
   },
   "metadata": {
     "fixture": true,
-    "fromAppSpec": "/home/tako/Desktop/takos/takos-apps/takos-docs/.takosumi.yml",
-    "generatedAt": "2026-05-18T00:00:00Z"
-  }
+    "generatedAt": "2026-05-18T00:00:00Z",
+    "fromSourceFixture": "/home/tako/Desktop/takos/takos-apps/takos-docs"
+  },
+  "planSnapshotDigest": "sha256:fixture-takos-docs"
 }

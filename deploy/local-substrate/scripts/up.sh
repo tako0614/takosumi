@@ -2,7 +2,7 @@
 # Bring up local-substrate.
 #
 # Without --profile : Phase 0 ingress only (Pebble + CoreDNS + Caddy).
-# With --profile postgres : ingress + Deno/Postgres kernel + Accounts + cloud worker.
+# With --profile postgres : ingress + Bun/Postgres kernel + Accounts + cloud worker.
 # With --profile workers  : ingress + Worker kernel + Accounts + cloud worker.
 set -euo pipefail
 
@@ -131,7 +131,7 @@ if [[ -n "$PROFILE" ]]; then
 	echo "==> Waiting for static build outputs"
 	wait_for_completed_service takosumi-website-build
 	wait_for_completed_service takosumi-docs-build
-	wait_for_completed_service takosumi-cloud-dashboard-build
+	wait_for_completed_service takosumi-dashboard-build
 
 	# The static builders can replace .output/public after Caddy has already
 	# bind-mounted it. Recreate Caddy so it sees the final directories.
@@ -142,8 +142,8 @@ if [[ -n "$PROFILE" ]]; then
 	for _ in $(seq 1 120); do
 		# Check OIDC discovery via Caddy as a proxy for full readiness.
 		if curl -sk --cacert caddy/runtime/pebble-issuance-root.pem \
-			--resolve cloud.takosumi.test:443:127.0.0.1 \
-			https://cloud.takosumi.test/.well-known/openid-configuration \
+			--resolve accounts.takosumi.test:443:127.0.0.1 \
+			https://accounts.takosumi.test/.well-known/openid-configuration \
 			>/dev/null 2>&1; then
 			break
 		fi
@@ -169,13 +169,13 @@ Verify (Phase 0):
    curl https://hello.takosumi.test/
 
 Verify (profile=postgres):
-   curl https://cloud.takosumi.test/.well-known/openid-configuration
-   curl https://cloud.takosumi.test/healthz
+   curl https://accounts.takosumi.test/.well-known/openid-configuration
+   curl https://accounts.takosumi.test/healthz
    curl https://cloud-worker.takosumi.test/.well-known/openid-configuration
    curl https://kernel-worker.takosumi.test/healthz
 
 Verify (profile=workers):
-   curl https://cloud.takosumi.test/.well-known/openid-configuration
+   curl https://accounts.takosumi.test/.well-known/openid-configuration
    curl https://kernel.takosumi.test/healthz
    curl https://kernel.takosumi.test/storage/healthz
 EOF

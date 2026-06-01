@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: Takosumi
-  text: From Manifest to Deployment
-  tagline: An operator-portable PaaS toolkit that records application intent, installs it into a Space, and keeps every apply as Deployment history.
+  text: From Source To Deployment
+  tagline: A manifestless source install/deploy ledger. Operators own runtimes and PlatformService inventory.
   image:
     src: /logo.svg
     alt: Takosumi
@@ -16,59 +16,42 @@ hero:
       text: Quickstart
       link: ./getting-started/quickstart
     - theme: alt
-      text: Reading Paths
-      link: ./getting-started/reading-paths
+      text: Installer API
+      link: ./reference/installer-api
     - theme: alt
-      text: Manifest
-      link: ./reference/manifest
+      text: Boundaries
+      link: ./reference/spec-boundaries
 
 features:
-  - title: Three public concepts
-    details: Manifest, Installation, and Deployment are the portable Takosumi model.
-  - title: Small application manifests
-    details: A single YAML file declares your databases, APIs, workers, and how they connect.
-  - title: Deployment history
-    details: Each apply result is recorded as a Deployment that can be audited and used for rollback.
-  - title: Operator-owned execution
-    details: Your manifest is portable. The operator decides which cloud or runtime actually runs it.
+  - title: Four Public Concepts
+    details: |
+      Source, Installation, Deployment, and PlatformService.
+  - title: Manifestless v1
+    details: |
+      Source repositories do not need Takosumi-specific source metadata files or metadata fields.
+  - title: Deployment History
+    details: |
+      Each apply records a Deployment. Rollback moves the current pointer.
+  - title: Terraform Stays Operator-Owned
+    details: |
+      Terraform/OpenTofu state and provider credentials live in the operator distribution.
 ---
 
 ## Start Here
 
-| Reader                  | First page                                          |
-| ----------------------- | --------------------------------------------------- |
-| Choosing what to read   | [Reading Paths](./getting-started/reading-paths.md) |
-| New reader              | [Concepts](./getting-started/concepts.md)           |
-| Trying the local path   | [Quickstart](./getting-started/quickstart.md)       |
-| Writing `.takosumi.yml` | [Manifest](./reference/manifest.md)                 |
-| Operating Takosumi      | [Operator Overview](./operator/index.md)            |
-| Extending Takosumi      | [Extending Takosumi](./extending.md)                |
+| Reader | First page |
+| --- | --- |
+| First-time reader | [Concepts](./getting-started/concepts.md) |
+| Try it locally | [Quickstart](./getting-started/quickstart.md) |
+| Pick a path | [Reading Paths](./getting-started/reading-paths.md) |
+| Implement the API | [Installer API](./reference/installer-api.md) |
+| Operate Takosumi | [Operator](./operator/index.md) |
 
-For specification details, see
-[Specification Boundaries](./reference/spec-boundaries.md).
+## Public Concepts
 
-## Core Model
-
-See [Concepts](./getting-started/concepts.md) for details on the three public
-concepts: Manifest, Installation, and Deployment.
-
-| Concept      | Meaning                                                                        |
-| ------------ | ------------------------------------------------------------------------------ |
-| Manifest     | The `.takosumi.yml` file. Declares your app's components and connections.      |
-| Installation | The record of a Manifest installed into a Space. Holds current state.          |
-| Deployment   | One apply result. Kept as history; you can roll back to a previous Deployment. |
-
-## Common References
-
-| Goal                                                            | Page                                                       |
-| --------------------------------------------------------------- | ---------------------------------------------------------- |
-| Read the whole core contract                                    | [Core Specification](./reference/core-spec.md)             |
-| Write `.takosumi.yml`                                           | [Manifest](./reference/manifest.md)                        |
-| Look up available component kinds                               | [Official Catalog](./reference/catalog.md)                 |
-| Use services provided by the operator                           | [Platform Services](./reference/platform-services.md)      |
-| Read Takosumi Cloud account management APIs and facade behavior | [Takosumi Cloud](./reference/takosumi-cloud.md)            |
-| Check the core / catalog / Cloud boundary                       | [Specification Boundaries](./reference/spec-boundaries.md) |
-| Call install / deploy / rollback automation                     | [Installer API](./reference/installer-api.md)              |
-| Inspect CLI commands and environment variables                  | [CLI](./reference/cli.md)                                  |
-| Expose your app on a public URL                                 | [HTTP Exposure](./reference/http-exposure.md)              |
-| Deploy from CI or a build service                               | [Build Service Boundary](./reference/build-spec.md)        |
+| Concept | Meaning |
+| --- | --- |
+| Source | `git`, `prepared`, or `local` source plus resolved identity. |
+| Installation | A Space-scoped installed source record. |
+| Deployment | One apply result with plan snapshot, binding snapshot, outputs, and status. |
+| PlatformService | Operator-inventory service such as DB, OIDC, bucket, queue, or runtime endpoint. |

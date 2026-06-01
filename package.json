@@ -1,15 +1,26 @@
 {
   "name": "@takosjp/takosumi",
   "version": "0.17.0",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "module": "./src/all/mod.ts",
+  "workspaces": [
+    "packages/accounts-contract",
+    "packages/accounts-service",
+    "packages/cli",
+    "packages/all",
+    "packages/platform-services",
+    "deploy/node-postgres"
+  ],
   "exports": {
     ".": "./src/all/mod.ts",
+    "./accounts": "./packages/all/src/mod.ts",
+    "./accounts/contract": "./packages/accounts-contract/src/mod.ts",
+    "./accounts/service": "./packages/accounts-service/src/mod.ts",
+    "./accounts/platform-services": "./packages/platform-services/src/mod.ts",
     "./contract": "./src/contract/mod.ts",
-    "./contract/app-spec": "./src/contract/app-spec.ts",
-    "./contract/catalog": "./src/contract/catalog.ts",
     "./contract/installer-api": "./src/contract/installer-api.ts",
+    "./contract/reference/catalog": "./src/contract/catalog.ts",
     "./contract/reference/compat": "./src/contract/reference-compat.ts",
     "./contract/reference/error-category": "./src/contract/error-category.ts",
     "./contract/reference/plugin": "./src/contract/plugin.ts",
@@ -31,19 +42,41 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "bun test ./src/",
+    "test": "bun test ./src/ ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src",
+    "test:core": "bun test ./src/",
+    "test:accounts": "bun test ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src",
     "test:scripts": "bun test ./scripts/",
-    "lint:json-ld": "bun --preload ./shims/deno-compat.ts scripts/lint-json-ld.ts",
+    "lint:json-ld": "bun scripts/lint-json-ld.ts",
     "live-provisioning-smoke": "bun scripts/live-provisioning-smoke.ts",
-    "build:npm": "deno run -A scripts/build-npm.ts"
+    "db:migrate": "bun src/kernel/scripts/db-migrate.ts",
+    "db:migrate:dry-run": "bun src/kernel/scripts/db-migrate.ts --dry-run",
+    "db:migrate:down": "bun src/kernel/scripts/db-migrate-down.ts",
+    "db:migrate:rollback": "bun src/kernel/scripts/db-migrate-down.ts",
+    "accounts": "bun packages/cli/src/main.ts",
+    "deploy:accounts-cloudflare:render-config": "bun deploy/accounts-cloudflare/scripts/render-config.ts",
+    "deploy:accounts-cloudflare:validate-config": "bun deploy/accounts-cloudflare/scripts/validate-rendered-config.ts",
+    "deploy:accounts-cloudflare:probe": "bun deploy/accounts-cloudflare/scripts/probe.ts",
+    "deploy:accounts-cloudflare:ensure-dns": "bun deploy/accounts-cloudflare/scripts/ensure-dns.ts",
+    "deploy:accounts-cloudflare": "bun run deploy:accounts-cloudflare:validate-config -- --env production && bunx wrangler deploy --config deploy/accounts-cloudflare/.wrangler/takosumi-accounts.deploy.toml --env production",
+    "deploy:accounts-cloudflare:staging": "bun run deploy:accounts-cloudflare:validate-config -- --env staging && bunx wrangler deploy --config deploy/accounts-cloudflare/.wrangler/takosumi-accounts.deploy.toml --env staging",
+    "deploy:accounts-cloudflare:dryrun": "bun run deploy:accounts-cloudflare:validate-config -- --env production && bunx wrangler deploy --config deploy/accounts-cloudflare/.wrangler/takosumi-accounts.deploy.toml --env production --dry-run --outdir deploy/accounts-cloudflare/.wrangler/dryrun",
+    "deploy:accounts-cloudflare:dryrun:staging": "bun run deploy:accounts-cloudflare:validate-config -- --env staging && bunx wrangler deploy --config deploy/accounts-cloudflare/.wrangler/takosumi-accounts.deploy.toml --env staging --dry-run --outdir deploy/accounts-cloudflare/.wrangler/dryrun-staging",
+    "deploy:accounts-cloudflare:template": "bunx wrangler deploy --config deploy/accounts-cloudflare/wrangler.toml --env production",
+    "deploy:accounts-cloudflare:template:staging": "bunx wrangler deploy --config deploy/accounts-cloudflare/wrangler.toml --env staging",
+    "deploy:accounts-cloudflare:dryrun:template": "bunx wrangler deploy --config deploy/accounts-cloudflare/wrangler.toml --env production --dry-run --outdir deploy/accounts-cloudflare/.wrangler/dryrun-template",
+    "build:npm": "bun scripts/build-npm-bun.ts"
   },
   "dependencies": {
     "commander": "^12.1.0",
     "hono": "^4.12.4",
+    "pg": "^8.11.0",
     "yaml": "^2.8.2"
   },
   "devDependencies": {
+    "@types/bun": "^1.2.0",
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "@types/pg": "^8.11.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.61.0"
   }
 }

@@ -117,7 +117,7 @@ export async function startKernel(): Promise<StartedKernel> {
 // import this module, which forced `await loadRuntimeConfigFromEnv(...)`
 // to fire inside the isolate. The kernel now exposes `startKernel()` and
 // only runs it when the module is executed as the program entrypoint (e.g.
-// `deno run packages/kernel/src/index.ts` on long-running servers).
+// `bun run src/kernel/index.ts` on long-running servers).
 
 if (import.meta.main) {
   const started = await startKernel();
@@ -216,7 +216,7 @@ function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
  *
  * Failures are logged but do not crash boot, so a misconfigured DATABASE_URL
  * does not stop the API from starting up in degraded mode (deploys gated by
- * health check). For deterministic apply, prefer `deno task db:migrate`.
+ * health check). For deterministic apply, prefer `bun run db:migrate`.
  */
 async function maybeApplyDatabaseMigrations(
   env: Record<string, string | undefined>,
