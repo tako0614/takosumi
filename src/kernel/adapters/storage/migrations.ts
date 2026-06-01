@@ -1536,14 +1536,18 @@ create index if not exists takosumi_installer_installations_space_idx
 create index if not exists takosumi_installer_installations_created_at_idx
   on takosumi_installer_installations (created_at);
 create table if not exists takosumi_installer_deployments (
-  id              text   primary key,
-  installation_id text   not null,
-  source_json     jsonb  not null,
-  manifest_digest text   not null,
-  status          text   not null
+  id                     text   primary key,
+  installation_id        text   not null,
+  source_json            jsonb  not null,
+  source_digest          text,
+  artifact_digest        text,
+  plan_snapshot_digest   text   not null,
+  plan_snapshot_json     jsonb  not null,
+  bindings_snapshot_json jsonb  not null,
+  status                 text   not null
     check (status in ('running','succeeded','failed')),
-  outputs_json    jsonb  not null,
-  created_at      bigint not null
+  outputs_json           jsonb  not null,
+  created_at             bigint not null
 );
 create index if not exists takosumi_installer_deployments_installation_idx
   on takosumi_installer_deployments (installation_id);

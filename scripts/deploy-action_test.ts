@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
+import { test } from "bun:test";
 
 const root = new URL("../", import.meta.url);
 
-Deno.test("deploy action wraps the installer API", async () => {
-  const source = await Deno.readTextFile(
+test("deploy action wraps the installer API", async () => {
+  const source = await Bun.file(
     new URL("actions/deploy/action.yml", root),
-  );
+  ).text();
 
   assert.match(source, /name: Takosumi Deploy/);
-  assert.match(source, /npm:@takosjp\/takosumi@/);
+  assert.match(source, /oven-sh\/setup-bun@v2/);
+  assert.match(source, /bunx --bun "@takosjp\/takosumi@/);
   assert.match(source, /install "\$TAKOSUMI_ACTION_SOURCE"/);
   assert.match(source, /install dry-run "\$TAKOSUMI_ACTION_SOURCE"/);
   assert.match(source, /--space "\$TAKOSUMI_ACTION_SPACE"/);
@@ -18,31 +20,27 @@ Deno.test("deploy action wraps the installer API", async () => {
   assert.equal(source.includes(".takosumi"), false);
 });
 
-Deno.test("direct deploy sample uses the reusable installer action", async () => {
-  const workflow = await Deno.readTextFile(
+test("direct deploy sample uses the reusable installer action", async () => {
+  const workflow = await Bun.file(
     new URL(
       "examples/direct-deploy/.github/workflows/deploy.yml",
       root,
     ),
-  );
-  const manifest = await Deno.readTextFile(
-    new URL("examples/direct-deploy/.takosumi.yml", root),
-  );
-  const readme = await Deno.readTextFile(
+  ).text();
+  const metadata = await Bun.file(
+    new URL("examples/direct-deploy/package.json", root),
+  ).json() as { name?: string; description?: string };
+  const readme = await Bun.file(
     new URL("examples/direct-deploy/README.md", root),
-  );
+  ).text();
 
   assert.match(workflow, /tako0614\/takosumi\/actions\/deploy@v1/);
   assert.match(workflow, /source: \./);
   assert.match(workflow, /vars\.TAKOSUMI_SPACE_ID/);
   assert.match(workflow, /secrets\.TAKOSUMI_REMOTE_URL/);
   assert.match(workflow, /secrets\.TAKOSUMI_INSTALLER_TOKEN/);
-  // Wave K: AppSpec root no longer carries `kind: App` — assert
-  // canonical envelope fields (apiVersion + components) and ensure the
-  // legacy `kind: App` line is absent.
-  assert.match(manifest, /apiVersion: v1/);
-  assert.match(manifest, /components:/);
-  assert.equal(/^kind: App$/m.test(manifest), false);
+  assert.equal(metadata.name, "direct-deploy-sample");
+  assert.match(metadata.description ?? "", /Manifestless Takosumi source/);
   assert.match(readme, /\/v1\/installations/);
   assert.equal(workflow.includes(`takosumi-${"git"}`), false);
 });

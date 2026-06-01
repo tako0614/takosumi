@@ -14,13 +14,8 @@ import {
   TAKOSUMI_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
 } from "./runtime-agent.ts";
 
-// Reference deploy-core manifest shape used by adapter bridges.
-export type ReferenceDeployManifest = JsonObject;
-
-/**
- * @deprecated Use ReferenceDeployManifest for new reference adapter code.
- */
-export type PublicDeployManifest = ReferenceDeployManifest;
+// Reference deploy-core source payload used by adapter bridges.
+export type ReferenceDeploySourcePayload = JsonObject;
 
 export type TakosumiProcessRole =
   | "takosumi-api"
@@ -835,7 +830,7 @@ export namespace queue {
 }
 
 export namespace source {
-  export type SourceSnapshotKind = "manifest" | "git" | "local_upload";
+  export type SourceSnapshotKind = "source" | "git" | "local_upload";
 
   export interface SourceFileSnapshot {
     readonly path: string;
@@ -847,7 +842,7 @@ export namespace source {
   export interface SourceSnapshot {
     readonly id: string;
     readonly kind: SourceSnapshotKind;
-    readonly manifest: PublicDeployManifest;
+    readonly source: ReferenceDeploySourcePayload;
     readonly files: readonly SourceFileSnapshot[];
     readonly metadata: Record<string, unknown>;
     readonly createdAt: string;
@@ -858,10 +853,10 @@ export namespace source {
     snapshot(input: TInput): Promise<SourceSnapshot>;
   }
 
-  export class ImmutableManifestSourceAdapter implements
+  export class ImmutableSourceAdapter implements
     SourcePort<{
       readonly sourceId?: string;
-      readonly manifest: PublicDeployManifest;
+      readonly source: ReferenceDeploySourcePayload;
       readonly files?: readonly {
         readonly path: string;
         readonly body?: Uint8Array | string;
@@ -882,7 +877,7 @@ export namespace source {
 
     async snapshot(input: {
       readonly sourceId?: string;
-      readonly manifest: PublicDeployManifest;
+      readonly source: ReferenceDeploySourcePayload;
       readonly files?: readonly {
         readonly path: string;
         readonly body?: Uint8Array | string;
@@ -901,8 +896,8 @@ export namespace source {
       }));
       return {
         id: input.sourceId ?? `source_${this.#idGenerator()}`,
-        kind: "manifest",
-        manifest: input.manifest,
+        kind: "source",
+        source: input.source,
         files,
         metadata: {},
         createdAt: this.#clock().toISOString(),
@@ -2497,7 +2492,7 @@ function createDefaultAppAdapters(options: {
     }),
     provider: new NoopProviderMaterializer(options),
     secrets: new secretStore.MemoryEncryptedSecretStore(options),
-    source: new source.ImmutableManifestSourceAdapter(options),
+    source: new source.ImmutableSourceAdapter(options),
     storage: new storage.MemoryStorageDriver(),
     kms: new kms.NoopTestKms({ clock: options.clock }),
     observability: new InMemoryObservabilitySink(),

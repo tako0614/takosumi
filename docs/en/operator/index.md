@@ -1,10 +1,19 @@
-# Operator Overview {#operator-overview}
+# Operator {#operator}
 
-The operator's configuration chooses how Takosumi core is exposed and implemented. It supplies Space context, which kinds are enabled, backend credentials, account management APIs, and read APIs.
+An operator runs Takosumi core and decides which PlatformServices and runtime
+implementations a Source binds to. Accounts, billing, OIDC, approvals,
+dashboards, Terraform/OpenTofu state, and provider credentials belong to the
+operator distribution.
 
-The [public contract](../getting-started/concepts.md) stays centered on AppSpec, Installation, and Deployment regardless of operator choices.
+## Prerequisites
 
-## Reading Order {#reading-order}
+- Source / Installation / Deployment lifecycle
+- Installer API dry-run / apply / rollback
+- PlatformService inventory and `BindingSelection`
+- source handoff (`git` / `prepared` / `local`)
+- runtime targets, storage, secret stores, backup / restore
+
+## Reading Order
 
 1. [Concepts](../getting-started/concepts.md)
 2. [Specification Boundaries](../reference/spec-boundaries.md)
@@ -12,25 +21,26 @@ The [public contract](../getting-started/concepts.md) stays centered on AppSpec,
 4. [Platform Services](../reference/platform-services.md)
 5. [Build Service Boundary](../reference/build-spec.md)
 6. [Build Service Example](./build-service-profile.md)
-7. [Takosumi Cloud Entry](../reference/takosumi-cloud.md)
+7. [Takosumi Entry](../reference/accounts.md)
 
-## Operator Decisions {#operator-decisions}
+## Operator Decisions
 
-The operator controls:
+| Area                 | Examples                                                               |
+| -------------------- | ---------------------------------------------------------------------- |
+| source intake        | git source, prepared artifact, dev / operator-local source             |
+| PlatformService      | runtime target, database, object store, queue, OIDC issuer, MCP endpoint |
+| binding policy       | default binding, approval, quota, access mode, visibility              |
+| state / secret store | Postgres, D1, KMS, secret encryption, backup / restore                 |
+| infrastructure state | Terraform/OpenTofu state, provider credentials, locks                  |
+| account surface      | signup, billing, team, dashboard, deploy facade                        |
+| runtime execution    | container, worker, VM, local process, runtime-agent connector          |
 
-- account and Space ownership
-- identity, billing, dashboard, and deploy facade behavior
-- visible kind definitions and material kinds
-- provider/runtime configuration
-- read APIs, history, and support views around the write lifecycle
+Takosumi core records those selections as Deployment `bindingsSnapshot` and
+`outputs`. Infrastructure creation and provider state stay operator-owned.
 
-Reference operator-managed profiles and Takosumi Cloud profiles document their own runtime, database, object storage, and operations requirements.
-
-For Takosumi Cloud, the concrete account management specification lives in `takosumi-cloud/docs/`.
-
-## Related Pages {#related-pages}
+## Related Pages
 
 - [Installer API](../reference/installer-api.md)
+- [Platform Services](../reference/platform-services.md)
 - [Build Service Boundary](../reference/build-spec.md)
 - [HTTP Exposure](../reference/http-exposure.md)
-- [CLI](../reference/cli.md)

@@ -82,10 +82,8 @@ if [ -d "${SPEC_CONTEXTS}" ]; then
   cp -R "${SPEC_CONTEXTS}/." "${OUTPUT_PUBLIC}/contexts/"
 fi
 
-# 4. Kind descriptor overlay — packages/kind-*/spec/kind.jsonld is the
-#    descriptor catalog source. Portable descriptor sources live in takosumi;
-#    backend-specific native reference descriptors live in takosumi-plugins
-#    when that sibling checkout is available. Publish both `<name>.jsonld` and
+# 4. Kind descriptor overlay — docs/kinds/v1/*.jsonld is the single
+#    official descriptor catalog source. Publish both `<name>.jsonld` and
 #    extensionless `<name>` so `https://takosumi.com/kinds/v1/<name>` resolves
 #    as the stable kind URI while clients that prefer explicit JSON-LD can fetch
 #    `.jsonld`. Strip local codegen-only `x-ts*` annotations from the public

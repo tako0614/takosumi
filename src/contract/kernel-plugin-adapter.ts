@@ -3,13 +3,13 @@
  * `KernelPlugin`.
  *
  * The wrapper is intentionally thin: it forwards `component.spec` (passed
- * through the AppSpec installer pipeline as opaque JSON) to the underlying
+ * through the reference installer pipeline as opaque JSON) to the underlying
  * provider's `apply()` / `destroy()`, and surfaces the resource handle as
  * `resourceHandle` for the kernel's internal apply evidence.
  *
  * This bridge is retained for deploy-core compatibility code. `KernelPlugin`
  * is the current reference adapter API; `ProviderPlugin` is the older
- * shape/provider surface this file keeps isolated from native kind packages.
+ * shape/provider surface this file keeps isolated from native kind implementations.
  */
 
 import type { JsonObject } from "./types.ts";
@@ -207,7 +207,7 @@ function unavailable(port: string): Promise<never> {
  * adapters and the kernel `apply_service.ts` fallback do not maintain
  * byte-identical copies.
  *
- * The kernel's legacy shape-model apply path builds a per-resource ref resolver
+ * The kernel's legacy `resources[]` apply path builds a per-resource ref resolver
  * before dispatch; these stubs are intentionally fail-loud / fail-quiet
  * fallbacks for code paths that never exercise them.
  */

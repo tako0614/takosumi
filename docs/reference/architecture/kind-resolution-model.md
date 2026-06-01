@@ -1,93 +1,74 @@
-# Kind Resolution モデル {#kind-resolution-model}
+# Adapter Resolution モデル {#adapter-resolution-model}
 
-public manifest は `components.<name>.kind` と kind-specific な open `spec` から runtime intent を表す。component kind の意味と input schema は operator が選ぶ kind の定義 / catalog metadata が表し、implementation binding と Space policy は operator の設定が定義する。Takosumi 公式カタログの kind の定義は JSON-LD で公開される official catalog documents です。
+::: info
+内部設計メモ。public contract は [Installer API](../installer-api.md) と [Platform Services](../platform-services.md) を参照。
+:::
 
-## Public な component kind {#public-component-kind}
+Takosumi v1 の Source authoring は manifestless です。Repository identity は git / prepared / local Source input と generic metadata から解決され、依存先は operator が持つ PlatformService inventory と install / deploy request の `BindingSelection` から決まります。
 
-```yaml
-components:
-  api:
-    kind: worker
-    spec:
-      entrypoint: src/worker.ts
+## Public input {#public-input}
+
+Installer API の public input は Source と expected guard です。
+
+```json
+{
+  "spaceId": "space_acme",
+  "source": {
+    "kind": "git",
+    "url": "https://github.com/acme/app.git",
+    "ref": "main"
+  },
+  "bindings": {
+    "database": {
+      "serviceId": "svc_postgres_primary"
+    }
+  }
+}
 ```
 
-kind resolution は `components.<name>.kind` から始まる。値が absolute URI として parse できる場合、その URI が resolved kind URI です。それ以外の値は short alias として operator-provided alias map / profile で exact match 解決する。未解決 alias は resource side effect 前に fail-closed で拒否される。解決された operator-selected binding は deploy evidence として Deployment に紐づき、component kind の semantic identity とは別に記録される。
+Provider selection and adapter-specific runtime input are operator resolution concerns, not public v1 Source fields.
 
-## External kind schema {#external-kind-descriptor}
+## Operator resolution {#operator-resolution}
 
-external kind schema は operator / registry が必要に応じて採用する semantic data です。kind の定義は例えば次を定義できます。
+Resolution は operator-owned で、決定的かつ fail-closed にする。Takosumi core はその結果を Deployment evidence として記録します。
 
 ```text
-input schema
-output slot contracts
-projection vocabulary
-operation vocabulary
-mutation constraints
-compatibility hints
+1. Resolve Source identity:
+   - git commit
+   - prepared source digest
+   - local source snapshot digest
+2. Read operator PlatformService inventory visible to the Space.
+3. Apply request / account-plane BindingSelection and operator policy.
+4. Resolve selected PlatformService records and implementation bindings.
+5. Produce InstallPlan with source summary, binding preview, risk, and outputs.
+6. Apply persists Deployment with source summary, planSnapshot,
+   planSnapshotDigest, bindingsSnapshot, outputs, and status.
 ```
 
-asset を扱う場合、operator extension の policy として扱います。
+`InstallPlan` は review 用 response snapshot であり persisted public entity ではありません。`planSnapshotDigest` は dry-run で確認した source + binding resolution と apply 時の入力がずれていないことを守る expected guard です。
 
-## Kind / binding resolution {#kind-binding-resolution}
+## Reference adapter metadata {#reference-adapter-metadata}
 
-resolution は operator-owned で、決定的かつ fail-closed にする。Takosumi は manifest を受け、Installation に紐づく Deployment として resolution evidence を記録する。
+`https://takosumi.com/kinds/v1/*` JSON-LD documents は reference adapter metadata です。operator distribution はこの metadata を採用して adapter validation や connector discovery に使えますが、Source repo が直接書く public contract ではありません。
 
 ```text
-1. Read `components.<name>.kind`.
-2. If the value parses as an absolute URI, use it as the resolved kind URI.
-3. Otherwise resolve it through the operator-provided alias map / profile;
-   unresolved aliases fail before resource side effects.
-4. If the operator uses kind definition metadata, select the definition for the
-   resolved URI.
-5. If kind definition input schema is present, validate `spec` against that schema.
-6. Check that the operator has an execution binding visible to the Space and
-   apply binding support metadata and Space policy checks.
-7. Link the operator-selected implementation evidence to the Deployment as
-   deploy record, and expose only component JSON outputs
-   through public Deployment outputs.
+Reference adapter metadata:
+  descriptor identity
+  implementation helper terms
+  optional validation metadata
+  material / projection helper vocabulary
+
+Operator inventory:
+  PlatformService records visible to a Space
+  policy / approval / ownership metadata
+  provider credentials and implementation binding
 ```
 
-`https://takosumi.com/kinds/v1/*` official catalog の kind の定義 may be one input to this process. Operators can adopt those documents or publish their own catalog.
-
-## Component 入力スキーマ {#input-schema}
-
-Component input 検証は `components.<name>` を `components.<name>.kind` で選ばれた component kind contract に対して validate する。binding support metadata は kind / binding resolution の段階でチェックされる。
-
-```text
-JSON-LD / kind の定義:
-  identity and semantic relations
-
-Input schema:
-  component `spec` validation
-
-Policy:
-  allow / deny / approval
-
-Binding:
-  external consistency and smoke checks
-```
-
-## Mutation 制約 {#mutation-constraints}
-
-mutation 動作は external component kind / implementation contract が定義する。下記は official catalog の kind の定義で使える vocabulary の例です。
-
-| mutation-constraint | semantics                                                            | allowed lifecycle classes    |
-| ------------------- | -------------------------------------------------------------------- | ---------------------------- |
-| `immutable`         | object cannot change after create; replace required for any mutation | managed, generated           |
-| `replace-only`      | every mutation creates a new object and revokes the previous one     | managed, generated           |
-| `in-place`          | every mutation updates the same object identity                      | managed, generated, imported |
-| `append-only`       | mutations may only add; existing fields cannot change or be removed  | managed, generated, imported |
-| `ordered-replace`   | replaces are serialized; no concurrent replaces in one Space         | managed, generated           |
-| `reroute-only`      | object identity is fixed; mutations only re-point traffic / handles  | external, operator, imported |
-
-`external` と `operator` lifecycle class は external identity を参照するため、 `reroute-only` mutation を取る。
-
-Mutation 制約は kind の定義のメタデータである。operator-selected implementation binding は planning / apply 中にその制約を enforce します。 runtime operation planning は [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal) に記録され、[Object Model — Revoke participation matrix](./object-model.md) に従います。JSON-LD の kind の定義は runtime operation mechanism ではありません。
+Takosumi core は mandatory global kind catalog を要求しません。互換 operator は同じ Installer API と Deployment record を保ったまま、Terraform/OpenTofu output、native controller、workflow engine、SaaS adapter、static inventory などで PlatformService inventory を作れます。
 
 ## Access mode enum {#access-mode-enum}
 
-resolved link access は official catalog の [Access modes](../access-modes.md) で定義された closed v1 モードのいずれかである。manifest v1 の `listen` には `access` property は無く、operator policy、source output slot の `safeDefaultAccess`、selected component kind の slot policy から resolution 中に決まる。このページは access mode が resolution に参加する位置を説明する。 [バインディングモデル](./binding-model.md) と [Platform Service Model](./platform-service-model.md) は access mode vocabulary を再定義せずに [Access modes](../access-modes.md) を参照する。
+resolved access は official [Access modes](../access-modes.md) で定義された closed v1 モードのいずれかです。access は Source file ではなく、operator policy、BindingSelection、PlatformService policy、approval から resolution 中に決まります。
 
 ```text
 read         observation only; no authorization material is generated
@@ -97,8 +78,8 @@ invoke-only  may call the resource but cannot read or mutate underlying state
 observe-only may only receive notifications / metrics; no resource access
 ```
 
-operator policy が明示的に access mode を選ぶ場合は、この閉じた集合から選ぶ。 source output slot の `safeDefaultAccess` はそのうち `null | read | invoke-only | observe-only` だけを default にできる。 `read-write` と `admin` は default にできず、operator policy / approval が resolution 時に明示選択する。新規の access mode は RFC (CONVENTIONS.md §6) を要する。safe default の詳細は [Access Modes](../access-modes.md#safedefaultaccess) を参照。
+operator policy が明示的に access mode を選ぶ場合は、この閉じた集合から選びます。`read-write` と `admin` は default にせず、operator policy / approval が resolution 時に明示選択します。新規の access mode は RFC を要します。
 
-## Space 固有の availability {#space-specific-availability}
+## Space availability {#space-specific-availability}
 
-kind alias や implementation binding が operator registry に存在しても、ある Space では利用不可能であることがある。resolution は alias / implementation binding と Space policy の許可の両方を要求する。
+PlatformService や adapter implementation が operator distribution に存在しても、ある Space では利用不可能なことがあります。Resolution は service visibility、ownership、policy、approval、implementation readiness をすべて満たす必要があります。未解決、曖昧な selection、policy denial は resource side effect 前に fail-closed で返します。

@@ -52,15 +52,15 @@ jaeger.takosumi.test {
 	import proxy_site jaeger:16686
 }
 
-# ===== cloud.takosumi.com mirror — the ONE composed control plane ==========
-# Postgres profile: cloud.takosumi.test is the single composed app (account
+# ===== accounts.takosumi.com mirror — the ONE composed control plane ==========
+# Postgres profile: accounts.takosumi.test is the single composed app (account
 # plane + embedded kernel) served by the `cloud` service, mirroring production's
-# one cloud.takosumi.com. Wrap in `route { handle @api ... handle ... }` so the
+# one accounts.takosumi.com. Wrap in `route { handle @api ... handle ... }` so the
 # API handler is evaluated before the SPA fallback (Caddy's directive sorter
 # would otherwise put the catch-all `handle` first). The @api matcher (installer
 # / oauth / oidc / start / exports) goes to the composed app; the dashboard SPA
 # is served from static build output, exactly like the worker mirror below.
-cloud.takosumi.test {
+accounts.takosumi.test {
 	route {
 		@api path /v1/* /oauth/* /.well-known/* /healthz /start /__takosumi/exports/*
 		handle @api {
@@ -68,16 +68,16 @@ cloud.takosumi.test {
 		}
 		handle {
 			encode gzip
-			root * /srv/takosumi-cloud-dashboard
+			root * /srv/takosumi-dashboard
 			try_files {path} {path}/ /index.html
 			file_server
 		}
 	}
 }
 
-# NOTE: the Cloudflare Worker composed-app (takosumi-cloud-worker) is NOT given
-# a postgres-profile ingress host. On the postgres profile cloud.takosumi.test is
-# the Deno+Postgres `cloud` service; the Worker code path is exercised on the
+# NOTE: the Cloudflare Worker composed-app (takosumi-worker) is NOT given
+# a postgres-profile ingress host. On the postgres profile accounts.takosumi.test is
+# the Bun+Postgres `cloud` service; the Worker code path is exercised on the
 # `workers` profile (where the worker is primary) — consistent with the deferred
 # workers-profile collapse. Re-add a `cloud-worker.takosumi.test` block here only
 # alongside a matching CoreDNS record so its Pebble ACME challenge can resolve.
@@ -85,7 +85,7 @@ cloud.takosumi.test {
 # ===== Phase 1 substrate ===================================================
 # accounts.takosumi.test + kernel.takosumi.test are RETIRED: the postgres
 # profile consolidated the account plane + kernel into the single
-# cloud.takosumi.test composed app above (mirrors production). The Cloudflare
+# accounts.takosumi.test composed app above (mirrors production). The Cloudflare
 # kernel-worker mirror stays for the Workers code path.
 kernel-worker.takosumi.test {
 	reverse_proxy takosumi-kernel-worker:8788

@@ -171,17 +171,15 @@ export const denoRuntime: RuntimeAdapter = {
 };
 
 export function isDeno(): boolean {
-  // The npm build injects `@deno/shim-deno`, so on Node `globalThis.Deno` is a
-  // defined shim proxy that does NOT implement `Deno.Command`. Probe for a
-  // genuine `Deno.Command` (a function only on real Deno) instead of a bare
-  // `typeof Deno !== "undefined"`, so the shim proxy can never satisfy
-  // `isDeno()`.
+  // Probe for a genuine `Deno.Command` (a function only on real Deno) instead
+  // of a bare `typeof Deno !== "undefined"`, so partial compatibility globals
+  // in embedded hosts cannot satisfy `isDeno()`.
   //
   // NOTE: do NOT additionally gate on `process.versions.node` being absent —
   // Deno 2.x exposes a Node-compat `globalThis.process` with a faked
   // `versions.node` string, so a "Node absent" clause would reject real Deno.
   // The `Deno.Command === "function"` probe alone is the reliable
-  // discriminator: real Deno has it, the @deno/shim-deno proxy does not.
+  // discriminator.
   const deno = (globalThis as { Deno?: { Command?: unknown } }).Deno;
   return typeof deno?.Command === "function";
 }

@@ -8,7 +8,7 @@ Takosumi bootstrap が担うこと:
 - secret partition と master key を init する
 - cross-process lock store を init する
 - reference operator credential を発行し token を operator に渡す
-- operator binding / kind alias / connector inventory を確認する
+- operator binding / PlatformService inventory / connector inventory を確認する
 - audit chain の genesis event を書く
 - listener を open する
 
@@ -71,17 +71,17 @@ Bootstrap 完了後に operator が kernel を操作するための初期 creden
 - Token hash のみが storage に永続化される
 - 既に bootstrap operator credential が存在する場合は stage 4 を skip し、 token 平文は再出力しない (re-init 防止)
 
-将来 operator bootstrap CLI を追加する場合は、token を CLI 側にも copy して scrolloff 後に取り戻せるようにしてよい。現在の public `takosumi` CLI は manifest deploy engine であり、operator bootstrap は operator distribution の init flow として扱う。
+将来 operator bootstrap CLI を追加する場合は、token を CLI 側にも copy して scrolloff 後に取り戻せるようにしてよい。現在の public `takosumi` CLI は Installer API client であり、operator bootstrap は operator distribution の init flow として扱う。
 
 ## Stage 5 — operator-implementation-load
 
-operator distribution が kernel 起動時に渡した `kindAliases`、implementation binding、runtime-agent connector inventory を検証する。
+operator distribution が kernel 起動時に渡した implementation binding、runtime-agent connector inventory、PlatformService inventory resolver を検証する。
 
 - production / staging では selected implementation が 1 つ以上必要
-- short alias は operator-provided `kindAliases` にあるものだけ解決される
-- 同じ kind URI を複数 reference adapter が提供し、operator distribution / Space policy でも一意に選べない場合は stage abort
+- required PlatformService resolver が未設定なら stage abort
+- 同じ runtime capability を複数 reference adapter が提供し、operator distribution / Space policy でも一意に選べない場合は stage abort
 
-operator distribution が通常の TypeScript module として kind package を import し、reference kernel では reference adapter array (`plugins` option) に渡す。詳細は [Reference Adapter Loading](./plugin-loading.md)。
+operator distribution が通常の TypeScript module として backend implementation subpath を import し、reference kernel では reference adapter array (`plugins` option) に渡す。詳細は [Reference Adapter Loading](./plugin-loading.md)。
 
 ## Stage 6 — audit-genesis
 
@@ -133,7 +133,7 @@ Bootstrap は再起動で重複実行されない。
 
 ## CLI Exposure
 
-public な `takosumi` CLI は manifest deploy engine であり、この bootstrap protocol を **実行しない**。 bootstrap は現在、 kernel 起動 / operator 管理のデプロイ自動化 / 内部サービスによって駆動される。
+public な `takosumi` CLI は Source install / deploy flow のための利用者向け tooling であり、この bootstrap protocol を **実行しない**。 bootstrap は現在、 kernel 起動 / operator 管理のデプロイ自動化 / 内部サービスによって駆動される。
 
 現行 public CLI surface は [CLI](./cli.md) に文書化されている。
 

@@ -22,7 +22,7 @@ import { NoopProviderMaterializer } from "./adapters/provider/mod.ts";
 import { MemoryQueueAdapter } from "./adapters/queue/mod.ts";
 import { InMemoryRouterConfigAdapter } from "./adapters/router/mod.ts";
 import { MemoryEncryptedSecretStore } from "./adapters/secret-store/mod.ts";
-import { ImmutableManifestSourceAdapter } from "./adapters/source/mod.ts";
+import { ImmutableSourceAdapter } from "./adapters/source/mod.ts";
 import { MemoryStorageDriver } from "./adapters/storage/mod.ts";
 import { InMemoryRuntimeAgentRegistry } from "./agents/mod.ts";
 import { InMemoryObservabilitySink } from "./services/observability/mod.ts";
@@ -31,7 +31,7 @@ test("createInMemoryAppContext keeps default in-memory skeleton wiring", () => {
   const context = createInMemoryAppContext();
 
   assert.ok(context.adapters.provider instanceof NoopProviderMaterializer);
-  assert.ok(context.adapters.source instanceof ImmutableManifestSourceAdapter);
+  assert.ok(context.adapters.source instanceof ImmutableSourceAdapter);
   assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
 });
 
@@ -63,12 +63,12 @@ test("createConfiguredAppContext returns in-memory adapters when no overrides ar
   });
 
   assert.ok(context.adapters.provider instanceof NoopProviderMaterializer);
-  assert.ok(context.adapters.source instanceof ImmutableManifestSourceAdapter);
+  assert.ok(context.adapters.source instanceof ImmutableSourceAdapter);
   assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
 });
 
 test("createAppContext uses operator-injected adapters in production", async () => {
-  const customSource = new ImmutableManifestSourceAdapter({
+  const customSource = new ImmutableSourceAdapter({
     clock: () => new Date("2026-04-29T00:00:00.000Z"),
     idGenerator: () => "id",
   });
@@ -129,13 +129,14 @@ test("buildKernelPluginRegistry exposes operator-supplied plugins by kind URI", 
   );
 });
 
-test("buildKernelPluginRegistry resolves operator kind aliases", () => {
+test("buildKernelPluginRegistry leaves bare kind refs to operator plugins", () => {
   const plugin = buildExamplePlugin();
-  const registry = buildKernelPluginRegistry({
-    kindAliases: { test: "https://example.test/kinds/v1/test" },
-    plugins: [plugin],
-  });
-  assert.equal(registry.findByKindRef("test")?.name, "@example/test");
+  const registry = buildKernelPluginRegistry({ plugins: [plugin] });
+  assert.equal(registry.findByKindRef("test"), undefined);
+  assert.equal(
+    registry.findByKindRef("https://example.test/kinds/v1/test")?.name,
+    "@example/test",
+  );
 });
 
 function buildExamplePlugin(): KernelPlugin {
@@ -166,7 +167,7 @@ function buildProductionAdapters(
     operatorConfig: new LocalOperatorConfig({ clock }),
     provider: new NoopProviderMaterializer({ clock, idGenerator }),
     secrets: new MemoryEncryptedSecretStore({ clock, idGenerator }),
-    source: new ImmutableManifestSourceAdapter({ clock, idGenerator }),
+    source: new ImmutableSourceAdapter({ clock, idGenerator }),
     storage,
     kms: new NoopTestKms({ clock, idGenerator }),
     observability: new InMemoryObservabilitySink(),

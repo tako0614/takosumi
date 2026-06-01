@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-env --allow-read --allow-net
+#!/usr/bin/env bun
 /**
  * Phase 18.2 (H13): Takosumi DB rollback CLI.
  *
@@ -6,10 +6,10 @@
  * their `down` clause and removing the corresponding row from
  * `storage_migrations`. Each migration is rolled back inside a transaction.
  *
- *   deno task db:migrate:down                       # rollback the most recent migration
- *   deno task db:migrate:down --target=<version>    # rollback every migration with version > <version>
- *   deno task db:migrate:rollback --steps=<n>       # rollback the N most recent migrations
- *   deno task db:migrate:down --dry-run             # preview only, no writes
+ *   bun run db:migrate:down                       # rollback the most recent migration
+ *   bun run db:migrate:down --target=<version>    # rollback every migration with version > <version>
+ *   bun run db:migrate:rollback --steps=<n>       # rollback the N most recent migrations
+ *   bun run db:migrate:down --dry-run             # preview only, no writes
  *
  * Safety:
  *   - The default `--env` is `local` (in-memory SqlClient — no I/O against any
@@ -36,6 +36,8 @@ import type {
   SqlTransaction,
 } from "../adapters/storage/sql.ts";
 import { wrapPgResult } from "../adapters/storage/pg_result.ts";
+import { stdin as processStdin, stdout as processStdout } from "node:process";
+import { createInterface } from "node:readline/promises";
 
 // ---------------------------------------------------------------------------
 // CLI option parsing
@@ -124,9 +126,9 @@ function printHelp(): void {
       "takosumi db migrate-down runner",
       "",
       "Usage:",
-      "  deno task db:migrate:down [--env=local|staging|production] [--target=<v>|--steps=<n>] [--dry-run]",
-      "  deno task db:migrate:rollback --steps=<n>",
-      "  deno task db:migrate:down --env=production --allow-production-rollback --confirm=ROLLBACK",
+      "  bun run db:migrate:down [--env=local|staging|production] [--target=<v>|--steps=<n>] [--dry-run]",
+      "  bun run db:migrate:rollback --steps=<n>",
+      "  bun run db:migrate:down --env=production --allow-production-rollback --confirm=ROLLBACK",
       "",
       "Options:",
       "  --target=<version>           rollback every applied migration with version > <version>",
@@ -141,6 +143,18 @@ function printHelp(): void {
       "  --env=local        in-memory SqlClient (no network)",
     ].join("\n"),
   );
+}
+
+function runtimeArgs(): readonly string[] {
+  const bun = globalThis as typeof globalThis & {
+    Bun?: { argv?: readonly string[] };
+  };
+  if (Array.isArray(bun.Bun?.argv)) return bun.Bun.argv.slice(2);
+  return process.argv.slice(2);
+}
+
+function exitProcess(code: number): never {
+  process.exit(code);
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +392,7 @@ async function resolveTarget(env: EnvName): Promise<ResolvedTarget> {
     : ["TAKOSUMI_STAGING_DATABASE_URL", "DATABASE_URL"];
   let url: string | undefined;
   for (const key of candidates) {
-    const value = Deno.env.get(key);
+    const value = process.env[key];
     if (value && value.length > 0) {
       url = value;
       break;
@@ -455,17 +469,18 @@ export async function evaluateProductionGuard(
   };
 }
 
-function readLineFromStdin(): Promise<string | null> {
-  return new Promise<string | null>((resolve) => {
-    const buf = new Uint8Array(256);
-    Deno.stdin.read(buf).then((n) => {
-      if (n === null) {
-        resolve(null);
-        return;
-      }
-      resolve(new TextDecoder().decode(buf.subarray(0, n)).replace(/\n$/, ""));
-    }).catch(() => resolve(null));
+async function readLineFromStdin(): Promise<string | null> {
+  const readline = createInterface({
+    input: processStdin,
+    output: processStdout,
   });
+  try {
+    return await readline.question("");
+  } catch {
+    return null;
+  } finally {
+    readline.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -475,7 +490,7 @@ function readLineFromStdin(): Promise<string | null> {
 async function main(): Promise<number> {
   let options: DownCliOptions;
   try {
-    options = parseDownArgs(Deno.args);
+    options = parseDownArgs(runtimeArgs());
   } catch (error) {
     console.error(`error: ${(error as Error).message}`);
     printHelp();
@@ -505,7 +520,7 @@ async function main(): Promise<number> {
       );
       return readLineFromStdin();
     },
-    isInteractive: Deno.stdin.isTerminal?.() ?? false,
+    isInteractive: Boolean(processStdin.isTTY),
   });
   if (!guard.allowed) {
     console.error(`[db-migrate-down] ${guard.reason}`);
@@ -569,5 +584,5 @@ async function main(): Promise<number> {
 
 if (import.meta.main) {
   const code = await main();
-  Deno.exit(code);
+  exitProcess(code);
 }

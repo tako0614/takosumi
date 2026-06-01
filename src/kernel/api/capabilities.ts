@@ -100,12 +100,12 @@ function installerPublicEndpoints(): ApiEndpointDescription[] {
     [
       "POST",
       "/v1/installations/dry-run",
-      "Plans a fresh AppSpec install without persisting state.",
+      "Plans a fresh Source install without persisting state.",
     ],
     [
       "POST",
       "/v1/installations",
-      "Creates an Installation from a posted AppSpec.",
+      "Creates an Installation from a Source.",
     ],
     [
       "POST",

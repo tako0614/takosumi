@@ -14,7 +14,7 @@ import type {
   Deployment,
   IsoTimestamp,
 } from "takosumi-contract/reference/compat";
-import type { PublicDeployManifest } from "./types.ts";
+import type { ReferenceDeploySourcePayload } from "./types.ts";
 
 const DEMO_IMAGE =
   "registry.example.test/demo@sha256:1111111111111111111111111111111111111111111111111111111111111111";
@@ -46,8 +46,8 @@ function withRequiredApprovalPolicy(
 }
 
 function manifestWithExternalResource(
-  overrides: Partial<PublicDeployManifest> = {},
-): PublicDeployManifest {
+  overrides: Partial<ReferenceDeploySourcePayload> = {},
+): ReferenceDeploySourcePayload {
   return {
     name: "demo-app",
     version: "1.0.0",
@@ -390,7 +390,7 @@ test("core conformance: removed service import bindings are rejected", async () 
           overrides: {
             runtimeNetworkPolicy: { defaultEgress: "allow" },
           },
-        } as unknown as PublicDeployManifest,
+        } as unknown as ReferenceDeploySourcePayload,
       }),
     /compute\.web\.bindings\.OIDC_ISSUER_URL\.from must not include 'import'/,
   );
@@ -555,7 +555,7 @@ test("core conformance: unsupported runtime type is rejected at resolution witho
               port: 8080,
             } as unknown as Record<string, unknown>,
           },
-        } as unknown as PublicDeployManifest,
+        } as unknown as ReferenceDeploySourcePayload,
       }),
     // Compiler rejects unknown runtime type before we get to Core projection.
     /unsupported|unknown|invalid/i,
@@ -961,7 +961,7 @@ test("core conformance: native raw binding requires policy approval before apply
     clock: fixedClock("2026-04-27T00:00:00.000Z"),
   });
 
-  const rawBindingManifest: PublicDeployManifest = {
+  const rawBindingManifest: ReferenceDeploySourcePayload = {
     name: "native-raw",
     compute: {
       worker: {

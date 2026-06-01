@@ -1,0 +1,149 @@
+# Takosumi Accounts — Cloudflare Worker.
+#
+# This file is the **shared default** for every deploy profile. The top-level
+# block holds the values that production has historically expected; explicit
+# `[env.production]` / `[env.staging]` / `[env.local]` sections override `name`,
+# `routes`, and `vars` on a per-profile basis.
+#
+# Deploy profile selection:
+#   wrangler deploy                            # uses the top-level (= production-shaped)
+#                                              # block; production env vars must
+#                                              # already be filled by
+#                                              # `deploy:accounts-cloudflare:render-config --env production`.
+#   wrangler deploy --env staging              # uses [env.staging.*]
+#   wrangler dev --env local                   # uses [env.local.*]
+#
+# Operator-side prerequisites (not committed):
+#   - Cloudflare account with the `takosumi.com` zone added
+#   - Worker custom-domain route for `accounts.takosumi.com` (the
+#     [[routes]] block below + DNS record verified by deploy:accounts-cloudflare:ensure-dns)
+#   - D1 database created via `wrangler d1 create takosumi-accounts`
+#     and its UUID supplied to `deploy:accounts-cloudflare:render-config`
+#   - R2 bucket created via `wrangler r2 bucket create takosumi-accounts-exports`
+#     for metadata export artifacts
+#   - Secrets pushed via `wrangler secret put`:
+#       TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK
+#       TAKOSUMI_ACCOUNTS_ES256_KEY_ID            (optional)
+#       TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET
+#       TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET
+#       TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET
+#       TAKOSUMI_ACCOUNTS_INSTALLER_TOKEN           (if installer requires bearer auth)
+#       (Stripe / upstream OIDC / passkey secrets as needed)
+
+name = "takosumi-accounts"
+main = ".wrangler/dist/takosumi-accounts-worker.mjs"
+compatibility_date = "2026-04-15"
+workers_dev = false
+no_bundle = true
+
+[[routes]]
+pattern = "accounts.takosumi.com/*"
+zone_name = "takosumi.com"
+
+# Wrangler runs the custom build relative to the project root containing this
+# file (= `deploy/accounts-cloudflare/`). The build is invoked with this directory as
+# CWD whether `wrangler deploy --config deploy/accounts-cloudflare/wrangler.toml` is
+# launched from `takosumi/` or from a rendered config copy in
+# `deploy/accounts-cloudflare/.wrangler/...`. Use an explicit relative path from the
+# config directory and let wrangler handle CWD resolution rather than
+# probing the filesystem.
+[build]
+command = 'mkdir -p .wrangler/dist && bun build --target browser --format esm src/worker.ts --outfile .wrangler/dist/takosumi-accounts-worker.mjs'
+watch_dir = "deploy/accounts-cloudflare/src"
+
+[observability]
+enabled = true
+
+[vars]
+TAKOSUMI_ACCOUNTS_ISSUER = "https://accounts.takosumi.com"
+TAKOSUMI_ACCOUNTS_SUBJECT = "tsub_takosumi_prod"
+TAKOSUMI_ACCOUNTS_CLIENT_ID = "takos-private-production"
+TAKOSUMI_ACCOUNTS_REDIRECT_URIS = "https://takos.jp/auth/oidc/callback"
+TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
+TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
+TAKOSUMI_ACCOUNTS_INSTALLER_URL = ""
+
+# TODO(operator): keep the placeholder below in source control. Generate an
+# ignored deploy config with `bun run deploy:accounts-cloudflare:render-config` and a
+# real TAKOSUMI_ACCOUNTS_D1_DATABASE_ID before running `wrangler deploy`.
+# The placeholder is intentionally all-zeros so direct deploys fail fast if the
+# operator step is skipped.
+[[d1_databases]]
+binding = "TAKOSUMI_ACCOUNTS_DB"
+database_name = "takosumi-accounts"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[r2_buckets]]
+binding = "TAKOSUMI_ACCOUNTS_EXPORTS"
+bucket_name = "takosumi-accounts-exports"
+
+# ===== Production profile ==================================================
+#
+# `wrangler deploy --env production` selects this block. It pins the canonical
+# Worker name + route and re-states the production-facing vars so the rendered
+# deploy config remains self-describing per environment. Secrets, D1, R2, and
+# build inherit from the shared default block above.
+[env.production]
+name = "takosumi-accounts"
+
+[[env.production.routes]]
+pattern = "accounts.takosumi.com/*"
+zone_name = "takosumi.com"
+
+[env.production.vars]
+TAKOSUMI_ACCOUNTS_ISSUER = "https://accounts.takosumi.com"
+TAKOSUMI_ACCOUNTS_SUBJECT = "tsub_takosumi_prod"
+TAKOSUMI_ACCOUNTS_CLIENT_ID = "takos-private-production"
+TAKOSUMI_ACCOUNTS_REDIRECT_URIS = "https://takos.jp/auth/oidc/callback"
+TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
+TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
+TAKOSUMI_ACCOUNTS_INSTALLER_URL = ""
+
+# ===== Staging profile =====================================================
+#
+# `wrangler deploy --env staging` selects this block. Staging runs on a
+# separate Worker name + zone-mirrored hostname so production-grade evidence
+# (TLS, custom domain, real D1 + R2) can be exercised without touching live
+# production traffic. Routes/vars are kept distinct from production so that a
+# misconfigured staging run cannot accidentally answer for accounts.takosumi.com.
+[env.staging]
+name = "takosumi-accounts-staging"
+
+[[env.staging.routes]]
+pattern = "accounts-staging.takosumi.com/*"
+zone_name = "takosumi.com"
+
+[env.staging.vars]
+TAKOSUMI_ACCOUNTS_ISSUER = "https://accounts-staging.takosumi.com"
+TAKOSUMI_ACCOUNTS_SUBJECT = "tsub_takosumi_staging"
+TAKOSUMI_ACCOUNTS_CLIENT_ID = "takos-private-staging"
+TAKOSUMI_ACCOUNTS_REDIRECT_URIS = "https://staging.takos.jp/auth/oidc/callback"
+TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
+TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
+TAKOSUMI_ACCOUNTS_INSTALLER_URL = ""
+
+# ===== Local dev profile (Wave M-D) ========================================
+#
+# `wrangler dev --env local` で起動すると `accounts.takosumi.test` (= takosumi
+# local-substrate Caddy が TLS 終端する dev hostname) を issuer / redirect の
+# default に override する。 production `wrangler deploy` (= --env なし、または
+# --env production) は上の [vars] block を使うので影響受けない。
+#
+# 使い方:
+#   wrangler dev --env local
+#   # → http://localhost:8787 で起動、 dev hostname 経由で踏むときは
+#   #  takosumi local-substrate Caddy `accounts.takosumi.test` route を通す
+#
+# 詳細は takos-private/docs/operations/lan-dev-setup.md と takosumi の
+# deploy/local-substrate/docs/lan-host.md を参照。
+[env.local]
+name = "takosumi-accounts-local"
+
+[env.local.vars]
+TAKOSUMI_ACCOUNTS_ISSUER = "https://accounts.takosumi.test"
+TAKOSUMI_ACCOUNTS_SUBJECT = "tsub_takosumi_local"
+TAKOSUMI_ACCOUNTS_CLIENT_ID = "takos-private-local"
+TAKOSUMI_ACCOUNTS_REDIRECT_URIS = "https://app.takos.test/auth/oidc/callback,https://road.takos.test/api/v1/auth/oidc/callback,https://yurucommu.test/api/v1/auth/oidc/callback"
+TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
+TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
+TAKOSUMI_ACCOUNTS_INSTALLER_URL = ""

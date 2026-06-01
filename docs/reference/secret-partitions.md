@@ -101,7 +101,7 @@ secret reference 参照ルール:
 - `${secret:...}` などの reference は caller Space 内の partition entry だけを指す。effective `spaceId` が caller context と異なる secret URI は reject。
 - 同一 Space 内で別 partition を参照する場合も、operator policy が許可した credential class だけを connector / runtime-agent に渡す。
 - raw value を別 partition の entry として複製するのは禁止 (operator policy 違反として audit に記録される)
-- runtime-agent には decrypt 済み value がそのまま渡る。agent 側は manifest digest 単位で短命 buffer に置くだけで永続化しない
+- runtime-agent には decrypt 済み value がそのまま渡る。agent 側は Deployment / operation digest 単位で短命 buffer に置くだけで永続化しない
 - export/import で別 operator に移す場合、source operator の partition tag を target operator の tag に map するか、map できない entry を reject する。raw secret value を export bundle に入れて tag 差し替えで移植することはしない。
 
 ## Partition rotation

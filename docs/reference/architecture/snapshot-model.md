@@ -8,17 +8,17 @@ snapshot は Space scope の immutable な internal evidence record である。
 
 ## IntentGraph {#intentgraph}
 
-IntentGraph は parse 済みの authoring intent と deploy context です。deploy context から `spaceId` を持ちます。
+IntentGraph は resolved Source intent と deploy context です。deploy context から `spaceId` を持ちます。
 
 含まれる内容:
 
 ```text
-declared component intents (= manifest components[*].kind)
-Space-visible kind alias / descriptor provenance
-manifest connect/listen edge dependency provenance
-link intents derived from component kind connect/listen bindings
-exposure intents derived from kind-specific specs
-optional operator asset extension requirements / refs resolved by operator policy, kind schema, implementation binding, or connector binding
+resolved source identity and source snapshot provenance
+Space-visible PlatformService inventory provenance
+BindingSelection and operator policy provenance
+link intents derived from selected PlatformService records
+exposure intents derived from operator route policy
+optional operator asset extension requirements / refs resolved by operator policy, adapter metadata, implementation binding, or connector binding
 space id from deploy context
 ```
 

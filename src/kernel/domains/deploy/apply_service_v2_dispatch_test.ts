@@ -2,7 +2,7 @@ import { test } from "bun:test";
 // Integration tests for ApplyService dispatch into apply_v2.
 //
 // Verifies that:
-//   1. A manifest carrying the new shape-model `resources` array is routed
+//   1. A source payload carrying the legacy `resources` array is routed
 //      through `apply_v2` (observable via the fake provider apply log).
 //   2. Retired top-level `template` shorthand is rejected at this boundary.
 //   3. Internal `compute + resources(map) + routes` plan inputs continue to
@@ -28,7 +28,7 @@ import {
 } from "takosumi-contract/reference/shape";
 import { ApplyService } from "./apply_service.ts";
 import { InMemoryDeploymentStore } from "./deployment_service.ts";
-import type { PublicDeployManifest } from "./types.ts";
+import type { ReferenceDeploySourcePayload } from "./types.ts";
 
 const SHAPE = "test-dispatch-shape";
 const SHAPE_VERSION = "v1";
@@ -115,7 +115,7 @@ function platformAdapters() {
   };
 }
 
-function componentMapManifest(): PublicDeployManifest {
+function componentMapManifest(): ReferenceDeploySourcePayload {
   return {
     name: "demo-app-component-map",
     version: "1.0.0",
@@ -141,7 +141,7 @@ function componentMapManifest(): PublicDeployManifest {
   };
 }
 
-test("ApplyService dispatches shape-model resources to apply_v2", async () => {
+test("ApplyService dispatches legacy resources to apply_v2", async () => {
   setUp();
   try {
     const store = new InMemoryDeploymentStore();
@@ -150,7 +150,7 @@ test("ApplyService dispatches shape-model resources to apply_v2", async () => {
       platformAdapters: platformAdapters(),
     });
     const manifest = {
-      name: "shape-model-app",
+      name: "legacy-resources-app",
       resources: [
         {
           shape: `${SHAPE}@${SHAPE_VERSION}`,
@@ -165,9 +165,9 @@ test("ApplyService dispatches shape-model resources to apply_v2", async () => {
           spec: { upstream: "${ref:first.url}" },
         },
       ],
-    } as unknown as PublicDeployManifest;
+    } as unknown as ReferenceDeploySourcePayload;
 
-    const result = await service.applyManifest({
+    const result = await service.applySourcePayload({
       spaceId: "space_dispatch",
       manifest,
       createdAt: "2026-05-01T00:00:00.000Z",
@@ -186,7 +186,7 @@ test("ApplyService dispatches shape-model resources to apply_v2", async () => {
     // The synthesized Deployment record is persisted with status `applied`.
     assert.equal(result.deployment.status, "applied");
     assert.equal(result.deployment.space_id, "space_dispatch");
-    assert.equal(result.deployment.group_id, "shape-model-app");
+    assert.equal(result.deployment.group_id, "legacy-resources-app");
     assert.equal(result.deployment.applied_at, "2026-05-01T00:00:00.000Z");
     assert.ok(result.v2Outcome, "v2Outcome should be returned");
     assert.equal(result.v2Outcome!.status, "succeeded");
@@ -215,11 +215,11 @@ test("ApplyService rejects retired top-level template shorthand", async () => {
         template: "single-host@v1",
         inputs: {},
       },
-    } as unknown as PublicDeployManifest;
+    } as unknown as ReferenceDeploySourcePayload;
 
     await assert.rejects(
       () =>
-        service.applyManifest({
+        service.applySourcePayload({
           spaceId: "space_template",
           manifest,
         }),
@@ -241,7 +241,7 @@ test("ApplyService keeps component-map inputs on the plan/apply path", async () 
     });
     const manifest = componentMapManifest();
 
-    const result = await service.applyManifest({
+    const result = await service.applySourcePayload({
       spaceId: "space_component_map",
       manifest,
       createdAt: "2026-05-01T00:00:00.000Z",
@@ -263,7 +263,7 @@ test("ApplyService keeps component-map inputs on the plan/apply path", async () 
   }
 });
 
-test("ApplyService surfaces a clear error when shape-model is used without platformAdapters", async () => {
+test("ApplyService surfaces a clear error when legacy resources are used without platformAdapters", async () => {
   setUp();
   try {
     const store = new InMemoryDeploymentStore();
@@ -278,10 +278,10 @@ test("ApplyService surfaces a clear error when shape-model is used without platf
           spec: {},
         },
       ],
-    } as unknown as PublicDeployManifest;
+    } as unknown as ReferenceDeploySourcePayload;
 
     await assert.rejects(
-      service.applyManifest({ spaceId: "s", manifest }),
+      service.applySourcePayload({ spaceId: "s", manifest }),
       /platformAdapters/,
     );
   } finally {

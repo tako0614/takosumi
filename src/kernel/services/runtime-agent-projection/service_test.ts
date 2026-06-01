@@ -9,7 +9,7 @@ import {
   DeploymentService,
   InMemoryDeploymentStore,
 } from "../../domains/deploy/deployment_service.ts";
-import type { PublicDeployManifest } from "../../domains/deploy/types.ts";
+import type { ReferenceDeploySourcePayload } from "../../domains/deploy/types.ts";
 import { RuntimeAgentTerminalWorkProjector } from "./service.ts";
 import { InMemoryProviderMaterializationStore } from "./stores.ts";
 
@@ -132,7 +132,7 @@ function workItem(
   };
 }
 
-function simpleManifest(): PublicDeployManifest {
+function simpleManifest(): ReferenceDeploySourcePayload {
   return {
     name: "smoke-app",
     version: "1.0.0",

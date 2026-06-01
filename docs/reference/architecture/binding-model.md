@@ -1,37 +1,39 @@
-# バインディングモデル {#link-and-projection-model}
+# Binding Model {#link-and-projection-model}
 
-Component kind が定義する resource 配線は Link intent を作る。current manifest では `components.<name>.connect` と `components.<name>.listen` edge から発生する。manifest author は `connect.output`、`listen.path`、または `listen.kind` で source を選び、`inject` で injection mode を選ぶ。resolved access mode は operator policy、output slot declaration、consumer slot metadata から resolution 中に決まる。Link は 1 つの Space の中で consumer slot を producer output、PlatformServiceDeclaration snapshot、または `listen.kind` discovery で選ばれた publication collection に接続する。
+Takosumi v1 の public Source は binding graph DSL を持ちません。install / deploy
+request、operator policy、account-plane UI が `BindingSelection` を与え、
+operator distribution が PlatformService inventory で解決します。Takosumi core
+は解決結果を Deployment の `bindingsSnapshot` に保存します。
 
-## Link レコード {#link-record}
+## Binding Snapshot {#binding-snapshot}
+
+`bindingsSnapshot` は apply 時点で workload がどの PlatformService を使うかを
+説明する immutable evidence です。典型的には次の情報を含みます。
 
 ```yaml
-Link:
-  spaceId: space_acme_prod
-  id: link_api_DATABASE_URL
-  consumer: obj_api
-  slot: DATABASE_URL
-  sourceServiceSnapshotId: svcsnap_database.primary.connection@...
-  sourceSpaceId: space_acme_prod
+ResolvedBinding:
+  binding: DATABASE
+  platformServiceId: service_database_primary
+  platformServicePath: database.primary.connection
   access: read-write
-  selectedProjection:
+  projection:
     family: secret-env
-    name: DATABASE_URL
-    updateBehavior: restart-required
-  effectFamilies:
-    - authorization
-    - secret
-  effectDetailsDigest: sha256:...
-  selectedImplementation: implementation:...
-  policyDecisionRefs: []
+    target: DATABASE_URL
+  evidenceDigest: sha256:...
 ```
 
-ProjectionSelection は Link field として扱う internal selection record です。
+この形式は reference implementation の説明用です。public Installer API の安定
+surface は Source / Installation / Deployment / PlatformService / InstallPlan です。
 
-## Space ルール {#space-rule}
+## Space Rule {#space-rule}
 
-current public manifest の Link は、consumer Object を same-manifest component output、同じ Space に見える operator PlatformServiceDeclaration、または同じ Space に見える publication discovery result に接続する。 Space を跨ぐ Link は operator-internal / future sharing model であり、manifest v1 から直接作る construct ではない。
+binding resolution は常に Space の中で行われます。別 Space の同じ service path は
+別 subject です。cross-Space sharing は future RFC scope であり、current v1 の
+public Source surface にはありません。
 
-## Projection ファミリ {#projection-families}
+## Projection Families {#projection-families}
+
+Projection family は operator distribution と adapter が定義します。例:
 
 ```text
 env
@@ -40,111 +42,31 @@ upstream
 config-mount
 ```
 
-Secret-bearing output はプレーンな `env` に projection してはならない。 `upstream` は gateway / ingress kind が `connect` した HTTP 出力データを kind-specific route rule から参照する injection mode です。`routes[].to` は `connect` binding name を指し、別の route graph や public URL assignment を作る field ではありません。 `http-endpoint` は injection mode ではなく material kind です。 Operator distribution は独自の injection mode を追加できます。その family を portable official catalog term として扱う場合は、official catalog に意味と出力データの compatibility を追加します。`file-secret`、`runtime-capability`, `volume-mount` のような implementation-specific families は operator extension です。portable official catalog term として使うには official catalog で定義します。
+secret-bearing data を plain env や public URL へ落とす unsafe projection は
+fail-closed で拒否します。どの projection が利用できるかは PlatformService
+definition、operator policy、adapter capability で決まります。
 
-## Compatibility check {#compatibility-check}
+## Mutation Classes {#mutation-classes}
 
-Link resolution は resource side effect の前に次を検証します。
-
-1. `connect.output` が same-manifest output に解決するか、`listen.path` が Space-visible PlatformServiceDeclaration に exact match するか、`listen.kind` が Space-visible publication を kind / labels で選択する。
-2. source の material kind alias / URI が解決済みで、出力データの metadata、output slot declaration、operator policy、または採用済み kind の定義から version / sensitivity 相当の判断材料が取得できる。
-3. `inject` が source material kind で許可される。
-4. PlatformServiceDeclaration 由来の場合、resolved access mode が service declaration の `accessModes` と operator policy で許可される。
-5. service owner role、materialization evidence、operator policy、採用済み kind の定義が requested projection を許可する。特に `http-endpoint` を `inject: upstream` で受ける場合は、source が upstream として再利用可能かを backend / operator policy / kind の定義で確認する。
-6. secret / restricted 出力データを plain env や public URL へ落とす unsafe projection は fail-closed で拒否する。
-
-成功した selection は Deployment に紐づく deploy evidence に、output material / そのスナップショット、material kind、projection family、access mode として記録されます。
-
-## Access の既定値 {#access-defaults}
-
-credential や authorization の出力データを生み出す output slot は、その slot が `safeDefaultAccess` を宣言していない限り operator policy による明示的な access mode 選択を必要とする。closed な v1 access mode 語彙は [Kind Resolution Model — Access mode enum](./kind-resolution-model.md) にある。
-
-```yaml
-components:
-  db:
-    kind: postgres
-    spec:
-      version: "16"
-      size: small
-
-  api:
-    kind: worker
-    spec:
-      entrypoint: src/worker.ts
-    connect:
-      database:
-        output: db.connection
-        inject: secret-env
-        prefix: DATABASE
-```
-
-## Link の mutation {#link-mutation}
-
-v1 で closed な Link mutation 集合:
+Reference implementation は binding の変化を次の mutation class として記録できます。
 
 ```text
-rematerialize:
-  same source / access / projection, refresh material
-
-reproject:
-  injection mode or shape changes
-
-reauthorize:
-  access mode or authorization details change
-
-rewire:
-  source component output or platform service path changes
-
-revoke:
-  link removed; generated material revoked
-
-retain-generated:
-  generated material retained with approval after a rewire / revoke
-
-no-op:
-  resolution determined no change is required for this link
-
-repair:
-  recovery-driven mutation that reconciles a link from `failed` or `debt`
-  back to a healthy state without changing source / access / projection
+rematerialize
+reproject
+reauthorize
+rewire
+revoke
+retain-generated
+no-op
+repair
 ```
 
-RFC (CONVENTIONS.md §6) なしに新規 mutation 種別を追加しない。
+これらは Deployment evidence と operator recovery のための内部分類です。Takosumi
+v1 の Source authoring vocabulary ではありません。
 
-## Link mutation ×状態遷移 {#link-mutation--state-transition}
+## Collision Rules {#collision-rules}
 
-行は mutation、列は link の current state。各セルは mutation を適用したときの next state を記録する。`—` は mutation がその state で違法であることを意味する (resolution / plan は reject しなければならない)。`debt!` は mutation が [Drift Detection](../drift-detection.md) に従って `CleanupBacklog` レコードを queue しうることを意味する。
-
-| mutation \\ state | pending       | materializing | materialized    | stale           | rematerializing | revoking | revoked | failed           | debt             |
-| ----------------- | ------------- | ------------- | --------------- | --------------- | --------------- | -------- | ------- | ---------------- | ---------------- |
-| rematerialize     | materializing | —             | rematerializing | rematerializing | —               | —        | —       | rematerializing  | —                |
-| reproject         | materializing | —             | rematerializing | rematerializing | —               | —        | —       | rematerializing  | —                |
-| reauthorize       | materializing | —             | rematerializing | rematerializing | —               | —        | —       | rematerializing  | —                |
-| rewire            | materializing | —             | rematerializing | rematerializing | —               | —        | —       | rematerializing  | —                |
-| revoke            | revoked       | —             | revoking        | revoking        | revoking        | —        | —       | revoking · debt! | —                |
-| retain-generated  | —             | —             | materialized    | materialized    | —               | —        | —       | materialized     | —                |
-| no-op             | pending       | materializing | materialized    | stale           | rematerializing | revoking | revoked | failed           | debt             |
-| repair            | —             | —             | —               | —               | —               | —        | —       | rematerializing  | revoking · debt! |
-
-注記:
-
-- in-flight な state (`materializing`、`rematerializing`、`revoking`) を対象とする mutation は v1 では常に違法である。recovery は in-flight operation が `failed` または `debt` に着地した後に `repair` を経て進む。
-- `failed` からの `revoke` と `debt` からの `repair` は外部 cleanup が完了できないときに CleanupBacklog を queue しうる。[Object Model](./object-model.md) の Object revoke flow を参照。
-- `retain-generated` は [Approval invalidation triggers](./approval-model.md) をすべて満たす approval を伴うときのみ合法である。
-- `no-op` は常に state を保ち、journal effect を出さない。
-- 生成された子 object の lifecycle は [Object Model revoke participation matrix](./object-model.md) に従う。
-
-## 衝突ルール {#collision-rules}
-
-Link の projection が別の解決済み binding と衝突する場合、Takosumi は resolution の順序で precedence list を適用しなければならない。最初に一致したものが勝ち、先行 binding を上書きするような後続入力は resolution を失敗させる。
-
-```text
-1. literal target input field        (strongest)
-2. environment variable already set on the target
-3. runtime target declared by the target descriptor
-4. mount path already declared by the target
-5. reserved target name in the target's vocabulary
-6. projection produced by this link  (weakest)
-```
-
-検知された衝突は [承認モデル](./approval-model.md) の `collision-detected` Risk として surface し、resolution が決定的な precedence の一致を提供しない限り fail-closed する。public v1 には manifest-level の override 機構は無い。operator 側の override を後で導入する場合、別の RFC で入れる。
+Projection が runtime target の既存 input と衝突する場合、operator resolver は
+決定的な precedence を持つか fail-closed しなければなりません。public v1 には
+source-level override 機構はありません。operator 側の override を導入する場合は
+distribution-local policy または future RFC として扱います。

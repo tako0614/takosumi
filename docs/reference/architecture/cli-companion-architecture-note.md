@@ -1,13 +1,13 @@
 # CLI Surface アーキテクチャ {#cli-surface-architecture}
 
-`takosumi` CLI は Installer API と operator 参照 API の thin client。 authority は Takosumi と operator の設定側にあり、CLI は manifest source と command intent を運ぶだけである。
+`takosumi` CLI は Installer API と operator 参照 API の thin client。 authority は Takosumi と operator の設定側にあり、CLI は Source input と command intent を運ぶだけである。
 
 ## 権限境界 {#authority-boundary}
 
-- public source of truth は `.takosumi.yml` (= manifest)。
-- CLI は provider selection���Space entitlement、risk evaluation、quota decision を自前で確定しない。
+- public source identity は git / prepared / local Source input と generic repository metadata から決まる。
+- CLI は provider selection、Space entitlement、risk evaluation、quota decision を自前で確定しない。
 - Space / actor の��決は installer token issuer と Takosumi context の責務。
-- CLI は manifest source を Installer API に渡し、response を表示する。
+- CLI は Source input を Installer API に渡し、response を表示する。
 
 ## モード {#modes}
 

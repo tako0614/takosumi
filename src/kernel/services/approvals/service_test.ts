@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
 import {
   ApprovalService,
   InMemoryApprovalStore,
@@ -98,17 +97,16 @@ test("ApprovalService checks role gates for apply", async () => {
   expect(allowed.allowed).toEqual(true);
   expect(allowed.reason).toEqual("actor role satisfies approval gate");
 
-  await assertRejects(
-    () =>
-      service.recordRoleApproval({
-        spaceId: "space_a",
-        operation: "deploy.apply",
-        subjectId: "plan_1",
-        subject,
-        actor,
-        requiredRoles: ["owner"],
-      }),
-    TypeError,
+  const roleApprovalRejection = service.recordRoleApproval({
+    spaceId: "space_a",
+    operation: "deploy.apply",
+    subjectId: "plan_1",
+    subject,
+    actor,
+    requiredRoles: ["owner"],
+  });
+  await expect(roleApprovalRejection).rejects.toThrow(TypeError);
+  await expect(roleApprovalRejection).rejects.toThrow(
     "actor is missing approval role: owner",
   );
 

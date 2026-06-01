@@ -1,82 +1,111 @@
 # Takosumi
 
-Takosumi is an operator-portable PaaS contract for installing source into a Space and recording each apply as a Deployment. App authors write `.takosumi.yml`; operators decide which official catalog and implementation bindings materialize each component.
+Takosumi is a manifestless source-to-deployment substrate. It installs a `Source` into a Space, records an
+`Installation`, and stores each apply result as a `Deployment` with the reviewed install plan and operator-resolved
+PlatformService bindings.
 
 Docs: <https://takosumi.com/docs/>
 
 ## Quickstart
 
-Run this from a source root that contains `.takosumi.yml` and the files referenced by its kind-specific `spec`.
+Run a local kernel and install a local source root. The source root can be any repo; Takosumi reads generic metadata such
+as Git identity and `package.json`.
 
 ```bash
 npm install -g @takosjp/takosumi
 export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
 TAKOSUMI_DEV_MODE=1 takosumi server --port 8788 &
+
+mkdir hello-takosumi && cd hello-takosumi
+printf '{"name":"hello-takosumi","version":"0.1.0"}\n' > package.json
+
 takosumi install dry-run \
   --remote http://127.0.0.1:8788 \
-  --space space:personal \
+  --token "$TAKOSUMI_INSTALLER_TOKEN" \
+  --space space_personal \
   --source .
 ```
 
-Managed or remote operators use the operator-issued token and URL:
+Managed or remote operators use an operator-issued token and URL:
 
 ```bash
 export TAKOSUMI_INSTALLER_TOKEN=<operator-issued-installer-token>
 export TAKOSUMI_REMOTE_URL=https://kernel.example.com
+
 takosumi install --source git:https://github.com/example/notes#v1.2.3 \
-  --space space:personal
+  --space space_personal
 ```
-
-## Minimal Manifest
-
-This example assumes the operator adopts the Takosumi official aliases `postgres` and `worker`. Another operator can use its own aliases or full kind URIs.
-
-```yaml
-apiVersion: v1
-metadata:
-  id: com.example.notes
-  name: Example Notes
-components:
-  db:
-    kind: postgres
-    spec:
-      version: "16"
-      size: small
-  web:
-    kind: worker
-    spec:
-      entrypoint: src/worker.ts
-    connect:
-      db:
-        output: db.connection
-        inject: secret-env
-        prefix: DB
-```
-
-`web` connects to the `db.connection` output and receives runtime values such as `DB_HOST`, `DB_PORT`, and secretRef-mediated connection strings. Same-manifest component connections use `connect`. Operator platform services use `listen.path`, for example `path: identity.primary.oidc`. Root `publish` records an Installation output service path declaration for a component output.
 
 ## Core Concepts
 
-| Concept      | Meaning                                                                        |
-| ------------ | ------------------------------------------------------------------------------ |
-| manifest     | `.takosumi.yml` in the source root                                             |
-| Installation | the Space record for an installed manifest, including the current Deployment   |
-| Deployment   | one apply result, including history, audit evidence, and rollback target state |
+| Concept | Meaning |
+| --- | --- |
+| `Source` | `git`, `prepared`, or `local` input plus resolved identity such as commit or source digest. |
+| `Installation` | Space-scoped installed source record with a current Deployment pointer. |
+| `Deployment` | One apply result with source summary, plan snapshot, binding snapshot, outputs, and status. |
+| `PlatformService` | Operator-catalog service capability selected during install or deploy. |
 
-Takosumi's public lifecycle is centered on these three entities. Ownership, billing, account grants, dashboards, and deploy facades belong to operator distributions such as Takosumi Cloud.
+Dry-run returns an `InstallPlan` snapshot and `planSnapshotDigest`. The plan is review data, not a persisted public
+entity. Apply can send `expected.planSnapshotDigest` to guard that the reviewed source and binding resolution are still
+the ones being applied.
 
-## Kinds
+## Operator Boundary
 
-`Component.kind` is an operator-resolved alias or URI. Takosumi core treats it as opaque. The descriptor behind a kind defines the component's `spec` shape, outputs and listen compatibility. JSON-LD is the descriptor format for the official catalog; it is not a runtime plugin system.
+Takosumi core does not run Terraform/OpenTofu, own provider credentials, or manage IaC state locks. Operator
+distributions create and operate infrastructure, then publish databases, buckets, OIDC issuers, queues, runtimes, and
+other services into PlatformService inventory. Takosumi records which services were selected for an Installation.
 
-Takosumi kind packages are split by repository:
+The sibling `@takosjp/takosumi-plugins` package is an operator integration package for inventory importers,
+runtime-agent connectors, and backend adapters. It is not a Terraform provider replacement.
 
-- This repository ships portable kind packages that define author-facing shapes such as `worker`, `web-service`, `postgres`, `sqlite`, `object-store`, `kv-store`, `message-queue`, `vector-store`, and `gateway`.
-- The sibling `takosumi-plugins` repository ships native kind packages that bind a concrete backend into the reference kernel, such as `cloudflare-worker`, `aws-s3-object-store`, `docker-compose-web-service`, or `coredns-gateway`.
+## Takosumi Accounts
 
-The reference implementation wires native kind packages through `KernelPlugin` factories passed to `createPaaSApp({ kindAliases, plugins })`. Compatible implementations may bind the same kind URIs with another controller, registry, workflow engine, or SaaS adapter.
+This repository also contains the reference account/operator distribution surface under `packages/accounts-*` and
+`deploy/`. Takosumi Accounts owns account authorization, dashboard routes, OIDC/billing projection, and the
+AppInstallation ledger projection around the core Installer API. Customer-facing launch scope is tracked in
+[`docs/accounts/managed-offering-customer-boundary.md`](docs/accounts/managed-offering-customer-boundary.md).
 
-See [`docs/reference/kind-packages.md`](./docs/reference/kind-packages.md), [`docs/reference/catalog.md`](./docs/reference/catalog.md), and [`CONVENTIONS.md`](./CONVENTIONS.md).
+The Cloudflare Worker + D1 + R2 scaffold lives in `deploy/accounts-cloudflare/`. It is the Cloudflare Worker + D1 + R2
+reference deployment profile for Accounts; Cloudflare Container は不要 for the account-plane critical path.
+
+AppInstallation read examples use an account session bearer, while mutation examples use an owner session bearer or a
+scoped PAT:
+
+```bash
+takosumi accounts installations list \
+  --remote https://accounts.takosumi.com \
+  --token sess_owner \
+  --space space_personal
+
+takosumi accounts installations inspect inst_example \
+  --remote https://accounts.takosumi.com \
+  --token sess_owner
+
+takosumi accounts installations status inst_example \
+  --remote https://accounts.takosumi.com \
+  --token takpat_write \
+  --status ready
+```
+
+For Cloudflare operators, `deploy/accounts-cloudflare/` is the Cloudflare Worker + D1 + R2 reference deployment profile;
+Cloudflare Container は不要 for this Accounts path.
+
+Public managed access stays closed until the private readiness bundle, public summary, separate operator approval, and
+live audit all match. The open-gate dry-run is digest-bound:
+
+```bash
+takosumi accounts serve --dry-run \
+  --managed-offering-access open \
+  --managed-offering-readiness-file .managed-readiness/staging/rehearsal-YYYY-MM-DD.json \
+  --managed-offering-readiness-digest <validate-json evidenceDigest> \
+  --managed-offering-evidence-ref vault://managed-readiness/staging/rehearsal.json \
+  --managed-offering-approval-ref approval://managed-readiness/staging/operator-approval.json \
+  --managed-offering-public-summary "P0 evidence and one staged launch rehearsal passed."
+```
+
+The closed gate covers passkey register / authenticate route, core OAuth authorize/token, personal access token create,
+status ready/reopen patch, ready or installing status changes, dashboard deployment operations, upstream OAuth
+authorize/callback, installation dry-run/apply, launch-token creation/consume, and installation import.
 
 ## CLI
 
@@ -85,58 +114,52 @@ takosumi install --space <id> --source <source>
 takosumi install dry-run --space <id> --source <source>
 takosumi deploy <installation-id> [--source <source>]
 takosumi deploy dry-run <installation-id> [--source <source>]
-takosumi rollback <installation-id> <deploy-id>
+takosumi rollback <installation-id> <deployment-id>
 takosumi server [--port 8788]
 takosumi version
 ```
 
-Remote mode:
+Source syntax:
 
-```bash
-takosumi install --source git:https://github.com/example/notes#v1.2.3 \
-  --space space:personal \
-  --remote https://kernel.example.com \
-  --token "$TAKOSUMI_INSTALLER_TOKEN"
+```text
+git:<url>#<ref>
+prepared:<url>#<sha256:hex>
+<local-path>
 ```
-
-Configuration precedence is **flag > env > `~/.takosumi/config.yml`**.
 
 ## npm Package
 
-Everything in this repository ships as one npm package, [`@takosjp/takosumi`](https://www.npmjs.com/package/@takosjp/takosumi), reached through subpath exports:
+Everything in this repository ships as one npm package,
+[`@takosjp/takosumi`](https://www.npmjs.com/package/@takosjp/takosumi), reached through subpath exports:
 
-| Subpath                           | Purpose                                       |
-| --------------------------------- | --------------------------------------------- |
-| `@takosjp/takosumi`               | umbrella entry for core exports               |
-| `@takosjp/takosumi/contract`      | manifest and Installer API wire types         |
-| `@takosjp/takosumi/kernel`        | reference kernel and Installer API server     |
-| `@takosjp/takosumi/installer`     | `.takosumi.yml` parser, source fetch, client  |
-| `@takosjp/takosumi/cli`           | `takosumi` command                            |
-| `@takosjp/takosumi/runtime-agent` | lifecycle execution host for backend adapters |
-| `@takosjp/takosumi/server`        | Installer API server entry                    |
-
-Official kind descriptors are published spec, not package exports. Their source is `docs/kinds/v1/*.jsonld`, and the public URIs are `https://takosumi.com/kinds/v1/<name>`. Native kind implementations and runtime-agent connectors ship as subpaths of the sibling [`@takosjp/takosumi-plugins`](https://www.npmjs.com/package/@takosjp/takosumi-plugins) package (`/kind/<backend-name>`, `/connectors`), which depends on `@takosjp/takosumi` as a peer. Current implementation subpaths are listed in [`docs/reference/kind-packages.md`](./docs/reference/kind-packages.md).
+| Subpath | Purpose |
+| --- | --- |
+| `@takosjp/takosumi` | umbrella entry for core exports |
+| `@takosjp/takosumi/contract` | public Installer API DTOs and reference SDK types |
+| `@takosjp/takosumi/kernel` | reference kernel and Installer API server |
+| `@takosjp/takosumi/installer` | source fetchers and Installer API client |
+| `@takosjp/takosumi/cli` | `takosumi` command |
+| `@takosjp/takosumi/runtime-agent` | lifecycle execution host for operator adapters |
+| `@takosjp/takosumi/server` | Installer API server entry |
 
 ## Workspace Layout
 
 ```text
 takosumi/
-├── package.json                 @takosjp/takosumi exports
+├── package.json
 ├── src/
-│   ├── contract/                @takosjp/takosumi/contract
-│   ├── kernel/                  @takosjp/takosumi/kernel
-│   ├── installer/               @takosjp/takosumi/installer
-│   ├── cli/                     @takosjp/takosumi/cli
-│   ├── runtime-agent/           @takosjp/takosumi/runtime-agent
-│   └── all/                     @takosjp/takosumi umbrella wrappers
-├── docs/kinds/v1/*.jsonld       official kind catalog descriptors
-├── docs/                        VitePress docs site
-├── website/                     takosumi.com landing + merged publish artifact
-├── deploy/, fixtures/, scripts/
-└── AGENTS.md, CONVENTIONS.md, CHANGELOG.md
+│   ├── contract/
+│   ├── kernel/
+│   ├── installer/
+│   ├── cli/
+│   ├── runtime-agent/
+│   └── all/
+├── docs/
+├── website/
+├── deploy/
+├── fixtures/
+└── scripts/
 ```
-
-Canonical contract source is `src/contract/`; the public export is [`@takosjp/takosumi/contract`](https://www.npmjs.com/package/@takosjp/takosumi).
 
 ## Development
 
@@ -149,35 +172,15 @@ bun run lint:json-ld
 bun run build:npm
 ```
 
-Per-package examples:
-
-```bash
-bun test ./src/cli/tests
-bun --preload ./shims/deno-compat.ts src/kernel/scripts/db-migrate.ts --dry-run --env=local
-```
+The source is Bun-first. Keep host-specific compatibility behind the existing runtime-adapter and fetcher boundaries.
 
 ## Release
 
-Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace with Bun, builds the npm package through `bun run build:npm`, publishes `@takosjp/takosumi` to npm, and builds/pushes the `takosumi` OCI image to GHCR. Manual workflow runs stay dry-run unless the explicit `publish` input is set. `@takosjp/takosumi` carries its own single version stream; the sibling `@takosjp/takosumi-plugins` is released from its own repository with its own version stream, so there is no ecosystem-wide lockstep GA.
-
-The npm build produces output under `npm/`, and release publishing runs
-`npm publish` from that output. dnt itself still runs on Deno under the
-`build:npm` wrapper because dnt is distributed through JSR, but the package
-source, checks, tests, and release entry points are Bun/npm-owned.
+Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace with Bun, builds the npm
+package through `bun run build:npm`, publishes `@takosjp/takosumi` to npm, and builds/pushes the `takosumi` OCI image to
+GHCR. `@takosjp/takosumi` and `@takosjp/takosumi-plugins` have independent version streams.
 
 ## Docs Site
 
-`takosumi/docs/` is the VitePress site (`base: "/docs/"`). `takosumi/website/` is the Solid Start landing. The Pages output merges landing, docs, JSON-LD contexts, and kind descriptors under the same `takosumi.com` project.
-
-```bash
-npm --prefix docs install
-npm --prefix docs run dev
-npm --prefix docs run build
-
-npm --prefix website install
-bash website/build.sh
-npm --prefix website run preview
-wrangler pages deploy website/.output/public --project-name=takosumi-website
-```
-
-Pushing `master` deploys Cloudflare Pages project `takosumi-website` through `.github/workflows/website-deploy.yml`. See [`DEPLOY.md`](./DEPLOY.md) and [`website/README.md`](./website/README.md).
+`takosumi/docs/` is the VitePress site (`base: "/docs/"`). `takosumi/website/` is the Solid Start landing. The Pages
+output merges landing, docs, contexts, and operator-facing reference assets under the same `takosumi.com` project.

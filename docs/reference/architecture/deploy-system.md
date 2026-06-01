@@ -1,33 +1,32 @@
-# Deploy システム {#deploy-system}
+# Deploy System {#deploy-system}
 
 ::: info
 内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
 :::
 
-## ライフサイクル {#lifecycle}
+## Lifecycle {#lifecycle}
 
 ```text
-git source / prepared source archive
-  └─ .takosumi.yml (= manifest)
-      ↓ POST /v1/installations[/dry-run]
-    Installation
-      ↓ POST /v1/installations/{id}/deployments[/dry-run]
-    Deployment
+git source / prepared source archive / local source
+  ↓ POST /v1/installations[/dry-run]
+Installation
+  ↓ POST /v1/installations/{id}/deployments[/dry-run]
+Deployment
 ```
 
-- manifest は source root の `.takosumi.yml` 1 file。
-- Installation は Space 内に install された manifest source と current state。
-- Deployment は Installation に対する apply の履歴。
-- rollback は `POST /v1/installations/{id}/rollback` で過去 Deployment を入力に current pointer を戻す。
+- Source は git / prepared / local のいずれか。
+- Installation は Space 内に install された source record と current Deployment pointer。
+- Deployment は Installation に対する apply 履歴。
+- rollback は `POST /v1/installations/{id}/rollback` で current pointer を保持済み Deployment に戻す。
 
-Deployment の apply は operator-selected execution によって実体化されます。runtime-agent、backend connector、in-process controller などの packaging は operator implementation の選択です。
+Deployment の runtime side effect は operator-selected execution によって実体化されます。runtime-agent、backend connector、in-process controller、Terraform/OpenTofu workflow などの packaging は operator implementation の選択です。
 
-## Workflow placement {#workflow-placement}
+## Workflow Placement {#workflow-placement}
 
-workflow / webhook / cron / CI runner は upstream automation として source ref または prepared source archive を選び、Installer API に渡します。 `.takosumi.yml` が manifest の source of truth で、Deployment は Installer API lifecycle の結果として記録されます。
+workflow / webhook / cron / CI runner は upstream automation として source ref または prepared source archive を選び、Installer API に渡します。Takosumi core は build workflow を所有せず、Source identity、`InstallPlan` snapshot、`planSnapshotDigest`、Deployment record を保存します。
 
-## クロスリファレンス {#cross-references}
+## Cross References {#cross-references}
 
 - [Installer API](../installer-api.md)
-- [manifest](../manifest.md)
+- [Core Specification](../core-spec.md)
 - [Reference Kernel Route Inventory](../kernel-http-api.md)

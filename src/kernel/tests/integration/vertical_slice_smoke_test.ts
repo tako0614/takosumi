@@ -21,7 +21,7 @@ import {
   DeploymentService,
   InMemoryDeploymentStore,
 } from "../../domains/deploy/deployment_service.ts";
-import type { PublicDeployManifest } from "../../domains/deploy/types.ts";
+import type { ReferenceDeploySourcePayload } from "../../domains/deploy/types.ts";
 
 test("integration smoke: create space/group, resolve and apply Deployment, advance GroupHead", async () => {
   const actor = actorContext("acct_smoke_owner", "req_smoke");
@@ -136,7 +136,7 @@ test("integration smoke: create space/group, resolve and apply Deployment, advan
   assert.equal(listed[0].id, applied.id);
 });
 
-function simpleManifest(): PublicDeployManifest {
+function simpleManifest(): ReferenceDeploySourcePayload {
   return {
     name: "smoke-app",
     version: "1.0.0",

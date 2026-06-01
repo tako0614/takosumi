@@ -45,7 +45,7 @@ export interface OperationPlanPreviewOperation {
 const PLAN_KIND = "takosumi.public-operation-plan-preview@v1";
 
 /**
- * Build an `OperationPlanPreview` from a resolved manifest, planned resource
+ * Build an `OperationPlanPreview` from a planned resources, planned resource
  * list, and DAG edges. Now async because the underlying SHA-256 routine is
  * Web Crypto (`crypto.subtle`), which is async-only across every runtime the
  * kernel targets (Workers / Deno / Node 22 / Bun). Call sites that produced

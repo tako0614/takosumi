@@ -5,7 +5,7 @@
 --            operation exits. If the kernel pod dies, a later caller can take
 --            the lock after the lease expires.
 --
--- Spec:      packages/kernel/src/domains/deploy/takosumi_deployment_record_store_sql.ts
+-- Spec:      src/kernel/domains/deploy/takosumi_deployment_record_store_sql.ts
 -- Phase:     takosumi deployment cross-process lock
 -- Domain:    deploy
 

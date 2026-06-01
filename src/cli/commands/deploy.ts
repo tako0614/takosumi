@@ -7,13 +7,14 @@ import {
   parseSourceRef,
   requireRemoteInstaller,
 } from "../installer_client.ts";
+import { exitCli } from "../runtime.ts";
 
 interface DeployFlags {
   remote?: string;
   token?: string;
   source?: string;
   expectedCommit?: string;
-  expectedManifestDigest?: string;
+  expectedPlanSnapshotDigest?: string;
   expectedSourceDigest?: string;
   expectedCurrentDeploymentId?: string;
   dryRun?: boolean;
@@ -49,8 +50,8 @@ function createDeployCommand(): Command {
     .option("--source <source>", "Optional replacement source")
     .option("--expected-commit <commit>", "Expected source commit pin")
     .option(
-      "--expected-manifest-digest <digest>",
-      "Expected .takosumi.yml digest pin",
+      "--expected-plan-snapshot-digest <digest>",
+      "Expected dry-run plan snapshot digest",
     )
     .option(
       "--expected-source-digest <digest>",
@@ -73,7 +74,7 @@ function createDeployCommand(): Command {
         token: flags.token,
         source: flags.source,
         expectedCommit: flags.expectedCommit,
-        expectedManifestDigest: flags.expectedManifestDigest,
+        expectedPlanSnapshotDigest: flags.expectedPlanSnapshotDigest,
         expectedSourceDigest: flags.expectedSourceDigest,
         expectedCurrentDeploymentId: flags.expectedCurrentDeploymentId,
         dryRun: flags.dryRun === true,
@@ -120,7 +121,7 @@ async function runDeploy(input: {
   readonly token?: string;
   readonly source?: string;
   readonly expectedCommit?: string;
-  readonly expectedManifestDigest?: string;
+  readonly expectedPlanSnapshotDigest?: string;
   readonly expectedSourceDigest?: string;
   readonly expectedCurrentDeploymentId?: string;
   readonly dryRun: boolean;
@@ -132,7 +133,7 @@ async function runDeploy(input: {
       ...(input.dryRun ? {} : {
         expected: deploymentExpectedGuardFromOptions({
           expectedCommit: input.expectedCommit,
-          expectedManifestDigest: input.expectedManifestDigest,
+        expectedPlanSnapshotDigest: input.expectedPlanSnapshotDigest,
           expectedSourceDigest: input.expectedSourceDigest,
           expectedCurrentDeploymentId: input.expectedCurrentDeploymentId,
         }),
@@ -146,13 +147,13 @@ async function runDeploy(input: {
     });
     if (status >= 400) {
       console.error(`kernel returned ${status}:`, responseBody);
-      Deno.exit(1);
+      exitCli(1);
     }
     console.log(JSON.stringify(responseBody, null, 2));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`error: ${message}`);
-    Deno.exit(1);
+    exitCli(1);
   }
 }
 

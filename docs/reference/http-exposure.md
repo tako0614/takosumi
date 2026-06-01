@@ -1,73 +1,45 @@
 # HTTP 公開 {#http-exposure}
 
-HTTP 公開は component graph で表します。workload は HTTP output を持ち、gateway / ingress component がその output を `connect` して listener / route 設定で公開します。browser から到達できるかどうかは gateway kind の `spec` が決めます。root `publish` は reachability には不要です。
+Takosumi v1 では HTTP 公開を Source 内の Takosumi 専用 DSL では表しません。
+公開 endpoint、custom domain、TLS、route、runtime target は operator catalog が
+公開する PlatformService と、その operator が選んだ runtime / gateway
+implementation の責務です。
 
-```yaml
-apiVersion: v1
-metadata:
-  id: com.example.web
-  name: Example Web
-components:
-  web:
-    kind: worker
-    spec:
-      entrypoint: src/worker.ts
-
-  public:
-    kind: gateway
-    connect:
-      app:
-        output: web.http
-        inject: upstream
-    spec:
-      listeners:
-        public:
-          protocol: https
-          host: app.example.com
-          tls: auto
-      routes:
-        - listener: public
-          path: /
-          to: app
-```
-
-`listeners` と `routes` は gateway kind の `spec` schema です。`routes[].to` は `connect` binding key を指します。この例では key は `app`、injection mode は `upstream` です。
-
-root `publish` は、gateway が作った output を Deployment output の Installation output publication として記録するための任意の宣言です。HTTP listener、host、TLS、route rule は gateway / ingress kind の `spec` が扱います。
-
-operator / product distribution が公開 endpoint を Space-visible publication inventory に投影して discoverable にする場合だけ、root `publish` を追加します。stable exact name が必要な場合は `path` を付け、一覧 discovery だけでよい場合は `kind` / `labels` で十分です。
-
-```yaml
-publish:
-  public-endpoint:
-    output: public.public
-    kind: http-endpoint
-    path: acme.web.public
-```
-
-## Request Path
-
-install / deploy と runtime request は別の plane です。
+## Install 時の扱い
 
 ```text
-install / deploy:
-  manifest -> Installer API -> Deployment record / outputs
-          -> selected backend/operator binding
-
-runtime request:
-  client -> backend-native listener/route -> active workload
-         <- same backend data plane <- response
+Source
+  -> Installer API dry-run
+  -> operator catalog が HTTP / runtime PlatformService を解決
+  -> InstallPlan に公開予定 output と binding selection を表示
+  -> apply が Deployment に bindingsSnapshot / outputs を記録
 ```
 
-Takosumi は deploy 時に manifest validation、connection resolution、Deployment outputs、Deployment record を残します。選択された backend / operator binding が backend-native ingress config を実体化します。runtime HTTP request は backend-native listener / route が active workload に届けます。
+Takosumi core が保証するのは Deployment record です。HTTP request を実際に受ける
+data plane、host assignment、TLS certificate、DNS ownership proof、backend route
+object は operator distribution が管理します。
 
-runtime traffic authority は `Installation.currentDeploymentId` が指す `succeeded` Deployment です。`running` / `failed` Deployment は history です。rollback は current pointer を過去の `succeeded` Deployment に戻します。
+## Runtime request path
 
-## Domain Policy
+```text
+client
+  -> operator-managed listener / route / gateway
+  -> active runtime target selected by current Deployment
+  <- response
+```
 
-`spec.listeners.<name>.host` は gateway kind の ingress input です。default host、custom-domain proof、DNS ownership proof、TLS provisioning は採用した gateway kind、operator policy、backend-specific flow が扱います。manifest は backend object ID、DNS verification record、TLS certificate handle、generated object ref を直接書きません。
+traffic authority は Installation の current Deployment pointer です。rollback は
+retained `succeeded` Deployment を current pointer に戻します。Takosumi core は
+rollback 時に Source を再解決しません。
 
-## 関連ページ
+## Public output
 
-- [manifest](./manifest.md)
-- [Takosumi 公式カタログ仕様](./catalog.md)
+Deployment `outputs` には、operator が公開可能と判断した non-secret endpoint
+metadata だけを保存します。secret、provider object id、certificate private key、
+DNS verification token は operator evidence / secret store に置きます。
+
+## Related
+
+- [本体仕様](./core-spec.md)
+- [Installer API](./installer-api.md)
+- [プラットフォームサービス](./platform-services.md)

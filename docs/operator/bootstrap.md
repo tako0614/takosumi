@@ -1,29 +1,22 @@
 # Reference Bootstrap {#operator-bootstrap}
 
 ::: info
-Public contract は [Installer API](../reference/installer-api.md) です。このページは reference kernel の起動時 wiring だけを扱います。
+Public contract は [Installer API](../reference/installer-api.md) です。このページは
+reference kernel の起動時 wiring だけを扱います。
 :::
 
-Reference Takosumi は `createPaaSApp()` に `kindAliases` と `plugins` を渡して起動します。`kindAliases` は manifest の短い `kind` を kind URI に解決する map です。`plugins` は reference adapter array です。
+Reference Takosumi は `createPaaSApp()` に operator-selected adapter array
+を渡して起動します。Source payload は provider を選びません。
+install / deploy request、operator policy、account-plane UI が PlatformService
+binding selection を決め、operator distribution が実装 adapter を配線します。
 
-Native plugin package の source は `takosumi-plugins/` にあります。Takosumi core repo には manifest / Installer API / kernel と portable kind definition package だけを置きます。
-
-## Local example
+## Local Example
 
 ```ts
-import { createPaaSApp } from "@takos/takosumi-kernel/bootstrap";
-import {
-  dockerComposeWebServicePlugin,
-  KIND_URI as WEB_KIND,
-} from "@takos/takosumi-kind-docker-compose-web-service";
-import {
-  dockerPostgresPlugin,
-  KIND_URI as DB_KIND,
-} from "@takos/takosumi-kind-docker-postgres";
-import {
-  filesystemObjectStorePlugin,
-  KIND_URI as STORE_KIND,
-} from "@takos/takosumi-kind-filesystem-object-store";
+import { createPaaSApp } from "@takosjp/takosumi/kernel";
+import { dockerComposeWebServicePlugin } from "@takosjp/takosumi-plugins/kind/docker-compose-web-service";
+import { dockerPostgresPlugin } from "@takosjp/takosumi-plugins/kind/docker-postgres";
+import { filesystemObjectStorePlugin } from "@takosjp/takosumi-plugins/kind/filesystem-object-store";
 
 const webLifecycle = createDockerComposeLifecycleClient({
   hostBinding: "127.0.0.1",
@@ -34,11 +27,6 @@ const objectStoreLifecycle = createFilesystemObjectStoreLifecycleClient({
 });
 
 const { app } = await createPaaSApp({
-  kindAliases: {
-    "docker-compose-web-service": WEB_KIND,
-    "docker-postgres": DB_KIND,
-    "filesystem-object-store": STORE_KIND,
-  },
   plugins: [
     dockerComposeWebServicePlugin({
       hostBinding: "127.0.0.1",
@@ -49,43 +37,48 @@ const { app } = await createPaaSApp({
   ],
 });
 
-Deno.serve({ port: 8788 }, app.fetch);
+Bun.serve({ port: 8788, fetch: app.fetch });
 ```
 
-この bootstrap は native kind alias を有効にする例です。manifest が `docker-compose-web-service`、`docker-postgres`、`filesystem-object-store` を使う場合、それぞれの native schema が `spec` を所有します。manifest が portable `web-service`、`postgres`、`object-store` を使う場合は、それらの portable URI を `kindAliases` に入れ、その portable URI を提供する adapter で backend へ bind します。
+この bootstrap は local operator distribution が backend adapters を有効にする例
+です。実際の cloud や local substrate binding が必要な operator distribution
+は、同じような小さな TypeScript bootstrap を自前で用意してください。
 
-`takosumi server` は標準の dev 用 entrypoint です。実際の cloud や local substrate binding が必要な operator distribution は、上記のような小さな TypeScript bootstrap を自前で用意してください。
+## Adapter Subpaths
 
-## Kind package の entrypoint
+Reference adapter factory は `@takosjp/takosumi-plugins` 内の `./kind/*`
+compatibility subpath に実装されています。この subpath 名は package API であり、
+Takosumi v1 の source authoring vocabulary ではありません。
 
-Reference adapter factory は `takosumi-plugins` 内の native kind package に実装されています。operator distribution が有効にする package だけを install してください。
+- `@takosjp/takosumi-plugins/kind/cloudflare-worker`
+- `@takosjp/takosumi-plugins/kind/deno-deploy-worker`
+- `@takosjp/takosumi-plugins/kind/aws-fargate-web-service`
+- `@takosjp/takosumi-plugins/kind/gcp-cloud-run-web-service`
+- `@takosjp/takosumi-plugins/kind/kubernetes-web-service`
+- `@takosjp/takosumi-plugins/kind/docker-compose-web-service`
+- `@takosjp/takosumi-plugins/kind/systemd-web-service`
+- `@takosjp/takosumi-plugins/kind/aws-rds-postgres`
+- `@takosjp/takosumi-plugins/kind/gcp-cloud-sql-postgres`
+- `@takosjp/takosumi-plugins/kind/docker-postgres`
+- `@takosjp/takosumi-plugins/kind/cloudflare-r2-object-store`
+- `@takosjp/takosumi-plugins/kind/aws-s3-object-store`
+- `@takosjp/takosumi-plugins/kind/gcp-gcs-object-store`
+- `@takosjp/takosumi-plugins/kind/minio-object-store`
+- `@takosjp/takosumi-plugins/kind/filesystem-object-store`
+- `@takosjp/takosumi-plugins/kind/cloudflare-dns-gateway`
+- `@takosjp/takosumi-plugins/kind/aws-route53-gateway`
+- `@takosjp/takosumi-plugins/kind/gcp-cloud-dns-gateway`
+- `@takosjp/takosumi-plugins/kind/coredns-gateway`
 
-- `@takos/takosumi-kind-cloudflare-worker`
-- `@takos/takosumi-kind-deno-deploy-worker`
-- `@takos/takosumi-kind-aws-fargate-web-service`
-- `@takos/takosumi-kind-gcp-cloud-run-web-service`
-- `@takos/takosumi-kind-kubernetes-web-service`
-- `@takos/takosumi-kind-docker-compose-web-service`
-- `@takos/takosumi-kind-systemd-web-service`
-- `@takos/takosumi-kind-aws-rds-postgres`
-- `@takos/takosumi-kind-gcp-cloud-sql-postgres`
-- `@takos/takosumi-kind-docker-postgres`
-- `@takos/takosumi-kind-cloudflare-r2-object-store`
-- `@takos/takosumi-kind-aws-s3-object-store`
-- `@takos/takosumi-kind-gcp-gcs-object-store`
-- `@takos/takosumi-kind-minio-object-store`
-- `@takos/takosumi-kind-filesystem-object-store`
-- `@takos/takosumi-kind-cloudflare-dns-gateway`
-- `@takos/takosumi-kind-aws-route53-gateway`
-- `@takos/takosumi-kind-gcp-cloud-dns-gateway`
-- `@takos/takosumi-kind-coredns-gateway`
+## Runtime-Agent
 
-## Runtime-agent
-
-Credential や cloud SDK のアクセスは runtime-agent または operator host に留めます。kind package はテスト用の in-memory lifecycle と本番配線用の lifecycle-client option を公開できます。どの connector credential を配置するかは operator distribution が決定します。
+Credential や cloud SDK のアクセスは runtime-agent または operator host に留めます。
+adapter はテスト用の in-memory lifecycle と本番配線用の lifecycle-client option
+を公開できます。どの connector credential を配置するかは operator distribution
+が決定します。
 
 ## 関連ページ
 
-- [Kind Packages](../reference/kind-packages.md)
-- [Kind Binding Implementations](../reference/kind-bindings.md)
+- [Backend adapters](../reference/kind-packages.md)
+- [Adapter implementations](../reference/kind-bindings.md)
 - [Runtime-Agent API](../reference/runtime-agent-api.md)

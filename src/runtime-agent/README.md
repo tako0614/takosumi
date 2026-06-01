@@ -1,4 +1,4 @@
-# @takos/takosumi-runtime-agent
+# @takosjp/takosumi/runtime-agent
 
 Executor / data plane for the Takosumi reference runtime. Receives lifecycle envelopes (apply / destroy / describe / verify) from the kernel over HTTP and dispatches to the right per-provider connector, which makes the actual cloud REST API call (SigV4 / OAuth / Cloudflare API token / Azure ARM / Kubernetes / etc) or local OS call (`docker`, `systemd`, filesystem).
 
@@ -8,14 +8,14 @@ Cloud / OS credentials stay outside the kernel. In the takosumi.com reference to
 
 ```typescript
 // Standalone
-import { startEmbeddedAgent } from "@takos/takosumi-runtime-agent/embed";
-import { buildConnectorRegistry } from "@takos/takosumi-runtime-agent-connectors";
+import { startEmbeddedAgent } from "@takosjp/takosumi/runtime-agent/embed";
+import { buildConnectorRegistry } from "@takosjp/takosumi-plugins/connectors";
 
 const registry = buildConnectorRegistry({
   cloudflare: {
-    accountId: Deno.env.get("CLOUDFLARE_ACCOUNT_ID")!,
-    apiToken: Deno.env.get("CLOUDFLARE_API_TOKEN")!,
-    zoneId: Deno.env.get("CLOUDFLARE_ZONE_ID"),
+    accountId: process.env.CLOUDFLARE_ACCOUNT_ID!,
+    apiToken: process.env.CLOUDFLARE_API_TOKEN!,
+    zoneId: process.env.CLOUDFLARE_ZONE_ID,
   },
 });
 
@@ -47,12 +47,13 @@ takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
 
 Auth is a single bearer token, shared with the kernel via `TAKOSUMI_AGENT_TOKEN`.
 
-## Connector packages
+## Connector selectors
 
-`@takos/takosumi-runtime-agent` ships the lifecycle HTTP server, dispatcher,
+`@takosjp/takosumi/runtime-agent` ships the lifecycle HTTP server, dispatcher,
 `ConnectorRegistry`, and resilience wrapper. Concrete backend connectors live
-outside this package in `takosumi-plugins` as
-`@takos/takosumi-runtime-agent-connectors`.
+outside the core package in `takosumi-plugins` as
+`@takosjp/takosumi-plugins/connectors`. The values below are connector-local
+wire selectors, not npm package names.
 
 | Group                     | Connectors                                                                                                                                                                           |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -90,7 +91,7 @@ The `shape` and `provider` fields are connector-local wire selectors. The operat
 
 `LifecycleApplyRequest.spec` is connector-local lifecycle input. It is normally the public kind spec after descriptor validation plus adapter-projected runtime data such as binding-derived env or gateway targets. Connectors should validate a closed field set before calling backend APIs.
 
-Source-backed connectors, such as `worker@v1`, read files from `LifecycleApplyRequest.preparedSource` through `ctx.source`. DataAsset/artifact handling is an optional operator extension: connectors may use `ctx.fetcher` when their implementation-specific selector expects uploaded or external asset metadata, but DataAsset metadata values are connector-owned metadata rather than Takosumi AppSpec concepts. The compatibility wire may call that value `kind`.
+Source-backed connectors read files from `LifecycleApplyRequest.preparedSource` through `ctx.source`. DataAsset/artifact handling is an optional operator extension: connectors may use `ctx.fetcher` when their implementation-specific selector expects uploaded or external asset metadata, but DataAsset metadata values are connector-owned metadata rather than Takosumi public Installer API concepts. The compatibility wire may call that value `kind`.
 
 `compensate` is the recovery hook for partially applied effects recorded in the kernel WAL. Connectors that can reverse an effect more precisely than handle-keyed deletion should implement it. When the hook is absent, the dispatcher falls back to `destroy`; if cleanup cannot be completed, the response can set `revokeDebtRequired` so the kernel keeps operator-visible cleanup debt.
 
@@ -131,13 +132,13 @@ this wrapper by default unless `resilience: false` is supplied.
 The reference connectors make cloud REST calls via `fetch()` + `crypto.subtle`
 (Web Crypto). No npm SDK packages are pulled in; SigV4 / OAuth bearer /
 Service-account JWT signing is internal to
-`@takos/takosumi-runtime-agent-connectors`.
+`@takosjp/takosumi-plugins/connectors`.
 
 ## See also
 
-- [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel) — control plane that talks to this agent
-- [`@takos/takosumi-cli`](https://jsr.io/@takos/takosumi-cli) — runs `takosumi runtime-agent serve`
-- [`@takos/takosumi-runtime-agent-connectors`](https://jsr.io/@takos/takosumi-runtime-agent-connectors) — reference concrete connector package
-- [`@takos/takosumi-contract/reference/runtime-agent-lifecycle`](https://jsr.io/@takos/takosumi-contract/doc/reference/runtime-agent-lifecycle) — defines `LifecycleApplyRequest` etc. for the reference lifecycle envelope.
+- `@takosjp/takosumi/kernel` — control plane that talks to this agent
+- `@takosjp/takosumi/cli` — runs `takosumi runtime-agent serve`
+- `@takosjp/takosumi-plugins/connectors` — reference concrete connector package
+- `@takosjp/takosumi/contract/reference/runtime-agent-lifecycle` — defines `LifecycleApplyRequest` etc. for the reference lifecycle envelope.
 
-> The `@takos/` JSR scope is the reference Takosumi distribution published by Takos. The contract is the authority. Contract-compatible publishers such as `@example/takosumi-runtime-agent` can ship their own runtime-agent implementations; current verification covers the reference distribution.
+> The public npm package is `@takosjp/takosumi`. The contract is the authority. Contract-compatible publishers can ship their own runtime-agent implementations; current verification covers the reference distribution.

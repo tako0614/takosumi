@@ -1,68 +1,61 @@
-# サプライチェーン信頼 {#supply-chain-trust}
+# Supply Chain Trust {#supply-chain-trust}
 
 ::: info
 内部設計メモ。public contract は [Installer API](./installer-api.md) を参照。
 :::
 
-## 信頼境界 {#trust-boundaries}
+## Trust Boundaries {#trust-boundaries}
 
-| Boundary                | Evidence                                              | 取得機構                   | Owner                                                   |
-| ----------------------- | ----------------------------------------------------- | -------------------------- | ------------------------------------------------------- |
-| source identity         | git URL / immutable ref / commit SHA                  | git / HTTPS                | installer                                               |
-| manifest                | `.takosumi.yml` sha256                                | installer parse            | installer                                               |
-| publisher identity      | publisher id / homepage / optional verified status    | HTTPS + policy             | operator account layer / install-source policy          |
-| prepared source handoff | workflow run id / installer-computed archive digest   | build service + installer  | build service / installer                               |
-| operator inventory      | kind alias table / execution binding config           | operator bootstrap         | operator distribution                                   |
-| execution resolution    | resolved kind / execution / connector decision        | operator-recorded evidence | operator distribution; Takosumi links Deployment の記録 |
-| installation ownership  | owner / Space / binding / permission records          | append-only account ledger | operator account layer                                  |
-| Deployment record       | manifestDigest / source identity / non-secret outputs | kernel Deployment record   | kernel                                                  |
-| runtime bootstrap       | operator-distribution bootstrap 出力データ            | HTTPS + ledger             | operator distribution + app                             |
-| runtime session         | operator-distribution identity 出力データ             | distribution-defined       | operator distribution                                   |
+| Boundary | Evidence | Mechanism | Owner |
+| --- | --- | --- | --- |
+| source identity | git URL / resolved commit, prepared archive digest, or local source summary | git / HTTPS / local operator path | installer |
+| dry-run guard | `planSnapshotDigest` | Installer API dry-run | kernel |
+| prepared source handoff | workflow run id / installer-computed archive digest | build service + installer | build service / installer |
+| operator inventory | PlatformService inventory / adapter config | operator bootstrap | operator distribution |
+| binding resolution | selected PlatformService / binding snapshot | operator resolver | operator distribution + kernel record |
+| installation ownership | owner / Space / binding / permission records | append-only account ledger | operator account layer |
+| Deployment record | source summary / plan snapshot / binding snapshot / non-secret outputs | Installer API apply | kernel |
+| runtime bootstrap | launch token / OIDC / workload config | distribution-defined HTTPS + ledger | operator distribution |
 
-## チェーン・オブ・カストディ {#chain-of-custody}
+## Chain Of Custody {#chain-of-custody}
 
-1. Source input (`git` / `prepared` / dev or operator-local `local`) is selected.
-2. For `git` and `prepared`, the kernel Installer API resolves immutable source identity and reads `.takosumi.yml`. For dev/operator-local `local`, it records manifest drift guard only; `local` has no portable source byte digest.
-3. manifest schema and component graph are validated.
-4. For prepared source, build service / CI may record workflow, cache, and provenance evidence; the Installer-computed archive payload digest is the source identity recorded in the Deployment.
-5. Operator inventory and execution resolution are recorded as operator の記録。
+1. Source input (`git` / `prepared` / `local`) is selected.
+2. For `git` and `prepared`, the Installer API resolves immutable source identity. For `local`, it records an operator-local source summary and relies on `planSnapshotDigest` for dry-run/apply consistency.
+3. The operator resolver evaluates requested bindings against PlatformService inventory.
+4. Dry-run returns `InstallPlan` and `planSnapshotDigest`.
+5. Apply verifies source pins / source digest / `planSnapshotDigest`.
 6. `POST /v1/installations` records the first Deployment for an Installation, or `POST /v1/installations/{id}/deployments` records a later Deployment.
 7. Runtime bootstrap uses output data defined by the selected operator distribution.
 
-The chain records immutable source identity and operator execution decisions before apply.
+The chain records source identity and operator binding decisions before apply.
 
 ## Runtime Identity / HTTPS {#runtime-identity-https}
 
-runtime identity の出力データは operator distribution が定義します。Takosumi Cloud では OIDC と launch token を使いますが、それは Cloud distribution の仕様です。 operator execution code の取得・検証・lockfile・vendoring は operator policy で扱う。Takosumi v1 の public trust chain は HTTPS と recorded digest を基本にする。production / public surface と LAN dev hostname surface は HTTPS を使い、 `http://localhost` / `http://127.0.0.1` は single-host loopback dev だけで許容する。
+runtime identity の出力データは operator distribution が定義します。Takosumi では OIDC と launch token を使いますが、それは Cloud distribution の仕様です。operator execution code の取得・検証・lockfile・vendoring は operator policy で扱います。Takosumi v1 の public trust chain は HTTPS と recorded digest を基本にします。
 
-## Runtime Bootstrap {#runtime-bootstrap}
+## Digest Invariants {#digest-invariants}
 
-Install 直後の redirect、auto sign-in、runtime credential handoff は operator distribution が持つ runtime bootstrap の出力データで扱います。core Installer API が記録するのは Deployment、source identity、manifest digest、public non-secret outputs です。operator-selected implementation の記録は Deployment の記録として紐づきます。Takosumi Cloud の launch token / OIDC bootstrap は Cloud distribution spec と launch-token app spec が定義します。入口は [Takosumi Cloud](./takosumi-cloud.md) です。
+Public trust chain は source identity と `planSnapshotDigest` を guard として使います。operator account layer が projection ledger を持つ場合、その projection は current Deployment の source identity、plan snapshot、binding snapshot、public non-secret outputs を参照して説明します。
 
-## Digest 不変条件 {#digest-invariants}
+- source pin / digest: git source は commit SHA、prepared source は archive payload sha256。`local` source は portable source byte digest を持ちません。
+- `planSnapshotDigest`: dry-run で review した source summary、repo metadata、binding resolution、publication plan、changes の snapshot digest。
+- implementation / policy resolution evidence: operator / reference implementation が Deployment を説明するために保持する opaque evidence。
+- optional asset digest: operator-owned asset extension evidence。
 
-Public trust chain は source identity と `manifestDigest` を guard として使います。 operator account layer が projection ledger を持つ場合、その projection は current Deployment の source identity、`manifestDigest`、public non-secret outputs を参照して説明します。
+rollback は mutable ref を再解決しません。retained Deployment の source summary、plan snapshot、binding snapshot、public non-secret outputs を authority として current pointer を戻します。
 
-- `manifestDigest`: `.takosumi.yml` raw file bytes の sha256。parsed manifest object の normalized digest ではない。
-- source pin / digest: git source は commit SHA、prepared source は archive payload sha256。`expected.sourceDigest` は prepared source にだけ使う。 `local` source は portable source byte digest を持たず、`manifestDigest` だけを apply guard に使う dev/operator-local mode
-- implementation / policy resolution evidence: operator / reference implementation が Deployment を説明するために保持する opaque evidence。Reference kernel may store structured digest families for replay / restore, while public wire compatibility uses the source pin/digest and `manifestDigest`.
+## Operator Implementation Loading {#operator-implementation-loading}
 
-optional asset digest は operator-owned asset extension evidence です。 current reference asset extension は sha256 を使います。Installer API v1 の public digest set は `manifestDigest` と source pin / digest を正本にし、 asset evidence は operator extension evidence として記録します。
-
-rollback は mutable tag を再解決しない。retained Deployment の source pin、 `manifestDigest`、public non-secret outputs を authority として current pointer を戻し、operator / reference implementation は紐づく retained evidence で provider state を説明します。
-
-## Operator implementation loading {#operator-implementation-loading}
-
-component kind と binding は operator distribution が接続します。 Operator / reference implementation は、operator inventory を使って kind alias / kind の定義 / binding を解決し、deploy 時に解決結果を Deployment の記録として紐づけます。その記録は source pin、manifest digest、resolved kind URI、selected implementation binding、operator policy decision、materialized outputs を後から説明するための operator record です。
+Operator / reference implementation は PlatformService inventory と adapter wiring を使って binding を解決し、deploy 時に解決結果を Deployment の記録として紐づけます。
 
 Reference kernel example:
 
 ```text
-1. operator imports kind packages in its distribution
-2. operator boots reference kernel with kindAliases + reference adapter array
-3. kernel rejects unresolved aliases, missing kind bindings, and duplicate adapters
-4. reference runtime-agent topology resolves connector descriptors from operator inventory
-5. deploy record records implementation / connector resolution
+1. operator imports backend adapter subpaths in its distribution
+2. operator boots reference kernel with a plugin array
+3. kernel rejects unresolved required bindings before runtime side effects
+4. reference runtime-agent topology resolves connector work from operator inventory
+5. Deployment record stores source, plan, binding snapshot, outputs, and status
 ```
 
 operator が `/v1/artifacts` を mount する場合、その route は asset extension として扱います。

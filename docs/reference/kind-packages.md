@@ -1,164 +1,29 @@
-# Reference Kind Packages {#kind-packages}
+# Reference Backend Packages {#kind-packages}
 
-Takosumi core は kind-agnostic です。manifest は `kind` だけで component の種類を選び、operator distribution が catalog / alias / implementation binding を供給します。kind descriptor は **単一の公式カタログ** (`takosumi/docs/kinds/v1/*.jsonld`、公開 URI は `https://takosumi.com/kinds/v1/*`) に置きます。descriptor は npm package export ではありません。
+このページは reference implementation の package boundary だけを説明します。
+Takosumi v1 の public contract は Source / Installation / Deployment /
+PlatformService / InstallPlan です。
 
-kind descriptor は spec であり、すべて単一の公式カタログ `takosumi/docs/kinds/v1/<name>.jsonld` に置きます(base kind も、`portableBase` で base を継承する descriptor も区別なく)。`takosumi-plugins/packages/kind-*` は実装(`KernelPlugin` factory と生成 view)だけを持ち、descriptor source は持ちません。published export 上は backend-specific kind の実装が `@takosjp/takosumi-plugins/kind/<alias>` subpath で配られます。
+`@takosjp/takosumi-plugins` は operator distribution が選べる backend adapter と
+runtime-agent connector の package です。operator はこの package を使っても、
+Terraform/OpenTofu、native controller、workflow engine、SaaS adapter、自前
+connector を使ってもかまいません。
 
-`worker` のような portable kind は共通最小契約です。`cloudflare-worker` のような native kind は substrate 固有契約です。backend 固有の field や output shape が必要なら native kind を使います。`provider` field は manifest にはありません。
+## Ownership
 
-## Official catalog descriptors
+| Surface                    | Owner                                      |
+| -------------------------- | ------------------------------------------ |
+| Installer API DTO          | `@takosjp/takosumi`                        |
+| reference kernel runtime   | `@takosjp/takosumi`                        |
+| backend adapters           | `@takosjp/takosumi-plugins` or operator    |
+| runtime-agent connectors   | `@takosjp/takosumi-plugins` or operator    |
+| provider state / Terraform | operator distribution / `takos-private/`   |
 
-| Descriptor source                    | Published URI                                  | suggested alias |
-| ------------------------------------ | ---------------------------------------------- | --------------- |
-| `docs/kinds/v1/worker.jsonld`        | `https://takosumi.com/kinds/v1/worker`         | `worker`        |
-| `docs/kinds/v1/web-service.jsonld`   | `https://takosumi.com/kinds/v1/web-service`    | `web-service`   |
-| `docs/kinds/v1/postgres.jsonld`      | `https://takosumi.com/kinds/v1/postgres`       | `postgres`      |
-| `docs/kinds/v1/sqlite.jsonld`        | `https://takosumi.com/kinds/v1/sqlite`         | `sqlite`        |
-| `docs/kinds/v1/object-store.jsonld`  | `https://takosumi.com/kinds/v1/object-store`   | `object-store`  |
-| `docs/kinds/v1/kv-store.jsonld`      | `https://takosumi.com/kinds/v1/kv-store`       | `kv-store`      |
-| `docs/kinds/v1/message-queue.jsonld` | `https://takosumi.com/kinds/v1/message-queue`  | `message-queue` |
-| `docs/kinds/v1/vector-store.jsonld`  | `https://takosumi.com/kinds/v1/vector-store`   | `vector-store`  |
-| `docs/kinds/v1/gateway.jsonld`       | `https://takosumi.com/kinds/v1/gateway`        | `gateway`       |
+Backend package exports are implementation choices. They are not required for
+compatible Takosumi operators.
 
-Base kind の descriptor は単一カタログ `takosumi/docs/kinds/v1/` に置かれ、portable `spec` vocabulary、output slot、connection compatibility を定義します。alias は URI への短縮名で、解決後の kind URI が `spec` schema、output slot、connection compatibility を所有します。portable alias を portable URI に解決する場合、operator はその portable URI を実装する binding を attach します。native kind URI に解決する alias は native schema を選ぶ alias です。
+## Related
 
-## Native worker packages
-
-Native package の source は `takosumi-plugins/packages/kind-*` です。
-
-| Subpath export                                      | kind alias           |
-| --------------------------------------------------- | -------------------- |
-| `@takosjp/takosumi-plugins/kind/cloudflare-worker`  | `cloudflare-worker`  |
-| `@takosjp/takosumi-plugins/kind/deno-deploy-worker` | `deno-deploy-worker` |
-
-## Native web-service packages
-
-| Subpath export                                                    | kind alias                         |
-| ----------------------------------------------------------------- | ---------------------------------- |
-| `@takosjp/takosumi-plugins/kind/aws-fargate-web-service`          | `aws-fargate-web-service`          |
-| `@takosjp/takosumi-plugins/kind/gcp-cloud-run-web-service`        | `gcp-cloud-run-web-service`        |
-| `@takosjp/takosumi-plugins/kind/kubernetes-web-service`           | `kubernetes-web-service`           |
-| `@takosjp/takosumi-plugins/kind/docker-compose-web-service`       | `docker-compose-web-service`       |
-| `@takosjp/takosumi-plugins/kind/systemd-web-service`              | `systemd-web-service`              |
-| `@takosjp/takosumi-plugins/kind/cloudflare-container-web-service` | `cloudflare-container-web-service` |
-| `@takosjp/takosumi-plugins/kind/azure-container-apps-web-service` | `azure-container-apps-web-service` |
-
-## Native data packages
-
-| Subpath export                                                     | kind alias                          | family          |
-| ------------------------------------------------------------------ | ----------------------------------- | --------------- |
-| `@takosjp/takosumi-plugins/kind/aws-rds-postgres`                  | `aws-rds-postgres`                  | `postgres`      |
-| `@takosjp/takosumi-plugins/kind/gcp-cloud-sql-postgres`            | `gcp-cloud-sql-postgres`            | `postgres`      |
-| `@takosjp/takosumi-plugins/kind/docker-postgres`                   | `docker-postgres`                   | `postgres`      |
-| `@takosjp/takosumi-plugins/kind/cloudflare-d1-sqlite`              | `cloudflare-d1-sqlite`              | `sqlite`        |
-| `@takosjp/takosumi-plugins/kind/cloudflare-r2-object-store`        | `cloudflare-r2-object-store`        | `object-store`  |
-| `@takosjp/takosumi-plugins/kind/aws-s3-object-store`               | `aws-s3-object-store`               | `object-store`  |
-| `@takosjp/takosumi-plugins/kind/gcp-gcs-object-store`              | `gcp-gcs-object-store`              | `object-store`  |
-| `@takosjp/takosumi-plugins/kind/minio-object-store`                | `minio-object-store`                | `object-store`  |
-| `@takosjp/takosumi-plugins/kind/filesystem-object-store`           | `filesystem-object-store`           | `object-store`  |
-| `@takosjp/takosumi-plugins/kind/cloudflare-kv-store`               | `cloudflare-kv-store`               | `kv-store`      |
-| `@takosjp/takosumi-plugins/kind/cloudflare-queue-message-queue`    | `cloudflare-queue-message-queue`    | `message-queue` |
-| `@takosjp/takosumi-plugins/kind/cloudflare-vectorize-vector-store` | `cloudflare-vectorize-vector-store` | `vector-store`  |
-
-## Native gateway packages
-
-| Subpath export                                          | kind alias               |
-| ------------------------------------------------------- | ------------------------ |
-| `@takosjp/takosumi-plugins/kind/cloudflare-dns-gateway` | `cloudflare-dns-gateway` |
-| `@takosjp/takosumi-plugins/kind/aws-route53-gateway`    | `aws-route53-gateway`    |
-| `@takosjp/takosumi-plugins/kind/gcp-cloud-dns-gateway`  | `gcp-cloud-dns-gateway`  |
-| `@takosjp/takosumi-plugins/kind/coredns-gateway`        | `coredns-gateway`        |
-
-Native gateway packages は HTTP reachability を作る implementation binding を提供できます。`gateway` portable kind の route vocabulary は [公式カタログ](./catalog.md#gateway-portable-subset) にあります。`routes[].to` は local `connect` binding key を指します。native package は DNS / listener / TLS / route support の具体制約を持てます。
-
-## Reference adapter exports
-
-各 native kind package は、その kind URI を `KernelPlugin.provides[]` に入れる factory を export します。factory 名は package の対象に合わせた named export です。例:
-
-```ts
-import { createPaaSApp } from "@takosjp/takosumi/kernel";
-import {
-  cloudflareWorkerPlugin,
-  KIND_URI as WORKER_KIND,
-} from "@takosjp/takosumi-plugins/kind/cloudflare-worker";
-import {
-  awsRdsPostgresPlugin,
-  KIND_URI as DB_KIND,
-} from "@takosjp/takosumi-plugins/kind/aws-rds-postgres";
-
-const workerLifecycle = createCloudflareWorkersLifecycleClient({ accountId });
-const databaseLifecycle = createAwsRdsLifecycleClient({
-  region: "us-east-1",
-});
-
-const { app } = await createPaaSApp({
-  kindAliases: {
-    "cloudflare-worker": WORKER_KIND,
-    "aws-rds-postgres": DB_KIND,
-  },
-  plugins: [
-    cloudflareWorkerPlugin({ accountId, lifecycle: workerLifecycle }),
-    awsRdsPostgresPlugin({
-      region: "us-east-1",
-      lifecycle: databaseLifecycle,
-    }),
-  ],
-});
-```
-
-`plugins` は reference kernel の実装手段です。互換 implementation は同じ kind URI を native controller、static registry、workflow engine、SaaS adapter などに bind できます。
-
-## Provider live proof
-
-native kind package のローカル検証は `takosumi-plugins/` の check / test /
-publish dry-run で行います。実 provider への materialization proof は operator-owned
-infrastructure と credential を使う外部証跡です。Takosumi は proof shape
-と credential-free fixture gate を提供します。
-
-```sh
-cd takosumi
-bun run live-provisioning-smoke
-```
-
-この fixture gate は AWS、GCP、Kubernetes、Cloudflare、self-host、external
-provider shape を検証します。live proof は operator の provider gateway
-に対して同じ fixture を流します。
-
-```sh
-cd takosumi
-TAKOSUMI_PLUGIN_LIVE_PROOF_MODE=live \
-TAKOSUMI_PLUGIN_LIVE_PROVIDER=cloudflare \
-TAKOSUMI_PLUGIN_LIVE_PROOF_FIXTURE_FILE=fixtures/live-provisioning/cloudflare.shape-v1.json \
-TAKOSUMI_PLUGIN_GATEWAY_URL=https://<operator-provider-gateway> \
-TAKOSUMI_PLUGIN_GATEWAY_BEARER_TOKEN=<operator-token> \
-bun run live-provisioning-smoke
-```
-
-provider ごとの canonical fixture:
-
-| Provider   | Fixture                                               |
-| ---------- | ----------------------------------------------------- |
-| Cloudflare | `fixtures/live-provisioning/cloudflare.shape-v1.json` |
-| self-host  | `fixtures/live-provisioning/selfhosted.shape-v1.json` |
-| AWS        | `fixtures/live-provisioning/aws.shape-v1.json`        |
-| GCP        | `fixtures/live-provisioning/gcp.shape-v1.json`        |
-| Kubernetes | `fixtures/live-provisioning/kubernetes.shape-v1.json` |
-
-`TAKOSUMI_PLUGIN_LIVE_CLEANUP_ONLY=1` を付けると同じ desired state の teardown
-だけを実行します。live report は public docs に貼らず、operator の private
-evidence store に保存します。
-
-## Package ownership rule
-
-- 全 kind descriptor source は単一カタログ `takosumi/docs/kinds/v1/`。`takosumi-plugins/packages/kind-*` は実装のみ(descriptor source なし)。
-- descriptor の public identity は `https://takosumi.com/kinds/v1/<name>`。backend-specific implementation の public package identity は `@takosjp/takosumi-plugins/kind/<alias>`。
-- alias の有効化は operator の `kindAliases` が決めます。
-- 解決後の kind URI が `spec` schema、output slot、connection compatibility を所有します。
-- backend によって `spec` や material output が変わるなら別 native kind package にします。
-
-## Related pages
-
-- [Manifest](./manifest.md)
-- [公式カタログ](./catalog.md)
-- [Kind Binding 実装](./kind-bindings.md)
-- [Reference Adapter Loading](./plugin-loading.md)
+- [Reference Implementation Exports](./reference-plugin-exports.md)
+- [Platform Services](./platform-services.md)
+- [Extending Takosumi](../extending.md)

@@ -1,8 +1,9 @@
-import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
 
 test("kernel startup diagnostics reference current docs", async () => {
-  const source = await Deno.readTextFile(
+  const source = await readText(
     new URL("./index.ts", import.meta.url),
   );
 
@@ -22,3 +23,7 @@ test("kernel startup diagnostics reference current docs", async () => {
     );
   }
 });
+
+async function readText(path: URL | string): Promise<string> {
+  return readFile(path, "utf8");
+}

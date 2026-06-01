@@ -1,15 +1,15 @@
-# Takosumi Cloudflare Worker provider scaffold.
+# Takosumiflare Worker provider scaffold.
 # Replace placeholder resource identifiers and secrets from operator-managed config before deploy.
 
-name = "takosumi-cloudflare-provider"
-main = ".wrangler/dist/takosumi-cloudflare-worker.mjs"
+name = "takosumiflare-provider"
+main = ".wrangler/dist/takosumiflare-worker.mjs"
 compatibility_date = "2026-04-15"
 workers_dev = false
 compatibility_flags = ["nodejs_compat"]
 no_bundle = true
 
 [build]
-command = 'ROOT=.; if [ ! -f "$ROOT/deploy/cloudflare/deno.json" ]; then ROOT=../..; fi; mkdir -p "$ROOT/deploy/cloudflare/.wrangler/dist" && deno bundle --config "$ROOT/deploy/cloudflare/deno.json" --platform browser "$ROOT/deploy/cloudflare/src/worker.ts" -o "$ROOT/deploy/cloudflare/.wrangler/dist/takosumi-cloudflare-worker.mjs"'
+command = 'ROOT=.; if [ ! -f "$ROOT/deploy/cloudflare/wrangler.toml" ]; then ROOT=../..; fi; mkdir -p "$ROOT/deploy/cloudflare/.wrangler/dist" && bun build --target browser --format esm "$ROOT/deploy/cloudflare/src/worker.ts" --outfile "$ROOT/deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs"'
 watch_dir = "deploy/cloudflare/src"
 
 [observability]

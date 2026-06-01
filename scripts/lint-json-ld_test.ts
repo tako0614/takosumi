@@ -1,11 +1,11 @@
-import { assert, assertEquals } from "jsr:@std/assert@^1.0.6";
+import { expect, test } from "bun:test";
 import { checkSpecSchemaForTesting } from "./lint-json-ld.ts";
 
 function messagesFor(spec: unknown): readonly string[] {
   return checkSpecSchemaForTesting(spec).map((issue) => issue.message);
 }
 
-Deno.test("JSON-LD schema lint requires fixed object schemas to be closed", () => {
+test("JSON-LD schema lint requires fixed object schemas to be closed", () => {
   const messages = messagesFor({
     type: "object",
     properties: {
@@ -15,14 +15,12 @@ Deno.test("JSON-LD schema lint requires fixed object schemas to be closed", () =
       },
     },
   });
-  assert(
-    messages.includes(
-      "spec.additionalProperties must be false for object schemas with fixed properties",
-    ),
+  expect(messages).toContain(
+    "spec.additionalProperties must be false for object schemas with fixed properties",
   );
 });
 
-Deno.test("JSON-LD schema lint accepts map schemas with propertyNames and value schemas", () => {
+test("JSON-LD schema lint accepts map schemas with propertyNames and value schemas", () => {
   const messages = messagesFor({
     type: "object",
     additionalProperties: false,
@@ -49,10 +47,10 @@ Deno.test("JSON-LD schema lint accepts map schemas with propertyNames and value 
       },
     },
   });
-  assertEquals(messages, []);
+  expect(messages).toEqual([]);
 });
 
-Deno.test("JSON-LD schema lint validates keyword value types", () => {
+test("JSON-LD schema lint validates keyword value types", () => {
   const messages = messagesFor({
     type: "object",
     additionalProperties: false,
@@ -76,22 +74,16 @@ Deno.test("JSON-LD schema lint validates keyword value types", () => {
       },
     },
   });
-  assert(
-    messages.includes(
-      "spec.properties.name.pattern must be a valid regular expression",
-    ),
+  expect(messages).toContain(
+    "spec.properties.name.pattern must be a valid regular expression",
   );
-  assert(
-    messages.includes(
-      "spec.properties.name.minLength must be a non-negative integer",
-    ),
+  expect(messages).toContain(
+    "spec.properties.name.minLength must be a non-negative integer",
   );
-  assert(
-    messages.includes("spec.properties.count.minimum must be a finite number"),
+  expect(messages).toContain(
+    "spec.properties.count.minimum must be a finite number",
   );
-  assert(
-    messages.includes(
-      "spec.properties.tags.minItems must be a non-negative integer",
-    ),
+  expect(messages).toContain(
+    "spec.properties.tags.minItems must be a non-negative integer",
   );
 });

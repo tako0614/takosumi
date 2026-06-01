@@ -5,8 +5,11 @@ head:
       content: noindex
 ---
 
-# 移動済み: Takosumi 公式カタログ仕様 {#kind-registry}
+# Moved: Reference Adapter Metadata {#kind-registry}
 
-このページに集約していた kind 例は [Takosumi 公式カタログ仕様](./catalog.md) に移動しました。
+This page is kept only as a redirect-style compatibility note.
 
-Use that page for Takosumi-maintained descriptor vocabulary, material kinds, injection modes, and public JSON-LD catalog metadata. The Takosumi core specification remains [manifest / Installation / Deployment and Installer API](./core-spec.md).
+Takosumi v1 public concepts are Source / Installation / Deployment /
+PlatformService. Adapter metadata used by the reference implementation is
+covered by [Reference Backend Binding](./kind-bindings.md) and
+[Reference Backend Packages](./kind-packages.md).

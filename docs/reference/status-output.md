@@ -10,14 +10,14 @@ Takosumi core の public API は write 指向です: dry-run、install、deploy 
 | -------------------- | ----------------------------------------------------------------------------------------------- |
 | Installation inspect | `id`、`spaceId`、`appId`、`status`、`currentDeploymentId`、created / update timestamps。        |
 | Deployment list      | 1 つの Installation の Deployment を作成時刻順で、pagination または bounded retention 付き。    |
-| Deployment inspect   | `id`、`installationId`、`source`、`manifestDigest`、`status`、public / non-secret `outputs`。   |
+| Deployment inspect   | `id`、`installationId`、`source`、`planSnapshotDigest`、`status`、public / non-secret `outputs`。 |
 | Async polling        | `running` の Deployment を `succeeded` または `failed` になるまで observe できる。              |
 | Rollback eligibility | `succeeded` の Deployment が保持され rollback target として選択可能かどうか。                   |
 | Redaction            | raw credential、token、private key、provider secret は ref または operator 制御の背後に留める。 |
 
 Takosumi reference 実装は operator tooling 向けの internal read route を持ちますが、それらの route は reference implementation の詳細です。portable なクライアントは Installer API contract と public installer bearer を使い、operator tooling は自身の operator 向け credential と route inventory を使います。
 
-例えば Takosumi Cloud は、account-session / PAT で保護された Installation list、 inspect、event、launch、materialize、export view を Cloud account layer API surface として公開しています。その distribution については [Takosumi Cloud](./takosumi-cloud.md) を参照してください。
+例えば Takosumi は、account-session / PAT で保護された Installation list、 inspect、event、launch、materialize、export view を Cloud account layer API surface として公開しています。その distribution については [Takosumi](./accounts.md) を参照してください。
 
 ## 関連ページ
 

@@ -49,7 +49,7 @@ export interface DeploymentRouteGitSourceInput {
   readonly repository_id: string;
   readonly ref: string;
   readonly path?: string;
-  readonly manifest_path?: string;
+  readonly source_path?: string;
 }
 
 export interface DeploymentRouteGetInput extends ActorRouteInput {

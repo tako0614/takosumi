@@ -1,33 +1,29 @@
 // Reference compatibility umbrella for Takosumi implementation packages.
 //
-// The Takosumi v1 AppSpec / Installer API contract is owned by the package
-// root (`@takos/takosumi-contract`) and the focused `app-spec` /
-// `installer-api` subpaths. This umbrella re-exports the larger reference
+// The Takosumi v1 Installer API contract is owned by the package root
+// (`@takosjp/takosumi/contract`) and the focused `installer-api` subpath.
+// This umbrella re-exports the larger reference
 // implementation API used by kernel, runtime-agent, provider, and connector
 // packages while deploy-core compatibility types are being retired.
 //
 // Scope: the re-export list is an explicit allowlist of legacy reference
 // helpers (JSON value scalars, condition / reason enums, deploy-domain
-// projections, internal API headers, etc.). Names that collide with the v1
-// AppSpec contract or that are entirely unused outside this package are
-// intentionally NOT re-exported. In particular, the legacy `AppSpec` /
-// `ServiceSpec` / `EnvSpec` / `PolicySpec` / `ApprovalRequirement` /
+// projections, internal API headers, etc.). Retired authoring shapes and names
+// that are unused outside this package are intentionally NOT re-exported. In
+// particular, the legacy app-definition /
+// service / env / policy / approval /
 // `RolloutPolicy` / `ResourceSpec` / `ResourceInstance` /
 // `ProviderMaterialization` shapes from `./types.ts` are reachable only via
-// `@takos/takosumi-contract/reference/types`, and the legacy `AppSpec`
-// interface is exported there as `LegacyReferenceAppSpec`.
+// `@takosjp/takosumi/contract/reference/types`.
 //
-// New consumers should import directly from `@takos/takosumi-contract`,
-// `@takos/takosumi-contract/app-spec`, or
-// `@takos/takosumi-contract/installer-api`.
+// New consumers should import directly from `@takosjp/takosumi/contract`,
+// `@takosjp/takosumi/contract/installer-api`.
 
 // Selected scalar / DTO surface from ./types.ts (allowlist; no `export *`).
-// Names that collide with the v1 AppSpec contract (`AppSpec`, `ServiceSpec`,
+// Legacy authoring and materialization names (`ServiceSpec`,
 // `EnvSpec`, `PolicySpec`, `ApprovalRequirement`, `RolloutPolicy`,
 // `ResourceSpec`, `ResourceInstance`, `ProviderMaterialization`,
-// `RuntimeNetworkPolicy`) are intentionally NOT re-exported here. They remain
-// reachable via the `./reference/types` subpath, where the legacy AppSpec is
-// renamed to `LegacyReferenceAppSpec`.
+// `RuntimeNetworkPolicy`) are intentionally NOT re-exported here.
 export type {
   ActorContext,
   Condition,

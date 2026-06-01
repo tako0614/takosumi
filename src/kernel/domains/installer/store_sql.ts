@@ -178,21 +178,29 @@ export class SqlDeploymentStore implements DeploymentStore {
 
   async put(deployment: Deployment): Promise<Deployment> {
     const sql = "insert into takosumi_installer_deployments " +
-      "(id, installation_id, source_json, manifest_digest, status, outputs_json, created_at) " +
-      "values ($1, $2, $3::jsonb, $4, $5, $6::jsonb, $7) " +
+      "(id, installation_id, source_json, source_digest, artifact_digest, plan_snapshot_digest, plan_snapshot_json, bindings_snapshot_json, status, outputs_json, created_at) " +
+      "values ($1, $2, $3::jsonb, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10::jsonb, $11) " +
       "on conflict (id) do update set " +
       "installation_id = excluded.installation_id, " +
       "source_json = excluded.source_json, " +
-      "manifest_digest = excluded.manifest_digest, " +
+      "source_digest = excluded.source_digest, " +
+      "artifact_digest = excluded.artifact_digest, " +
+      "plan_snapshot_digest = excluded.plan_snapshot_digest, " +
+      "plan_snapshot_json = excluded.plan_snapshot_json, " +
+      "bindings_snapshot_json = excluded.bindings_snapshot_json, " +
       "status = excluded.status, " +
       "outputs_json = excluded.outputs_json, " +
       "created_at = excluded.created_at " +
-      "returning id, installation_id, source_json, manifest_digest, status, outputs_json, created_at";
+      "returning id, installation_id, source_json, source_digest, artifact_digest, plan_snapshot_digest, plan_snapshot_json, bindings_snapshot_json, status, outputs_json, created_at";
     const result = await this.#query<DeploymentRow>(sql, [
       deployment.id,
       deployment.installationId,
       JSON.stringify(deployment.source),
-      deployment.manifestDigest,
+      deployment.sourceDigest ?? null,
+      deployment.artifactDigest ?? null,
+      deployment.planSnapshotDigest,
+      JSON.stringify(deployment.planSnapshot),
+      JSON.stringify(deployment.bindingsSnapshot),
       deployment.status,
       JSON.stringify(deployment.outputs),
       deployment.createdAt,
@@ -203,7 +211,7 @@ export class SqlDeploymentStore implements DeploymentStore {
 
   async get(id: string): Promise<Deployment | undefined> {
     const result = await this.#query<DeploymentRow>(
-      "select id, installation_id, source_json, manifest_digest, status, outputs_json, created_at " +
+      "select id, installation_id, source_json, source_digest, artifact_digest, plan_snapshot_digest, plan_snapshot_json, bindings_snapshot_json, status, outputs_json, created_at " +
         "from takosumi_installer_deployments where id = $1",
       [id],
     );
@@ -215,7 +223,7 @@ export class SqlDeploymentStore implements DeploymentStore {
     installationId: string,
   ): Promise<readonly Deployment[]> {
     const result = await this.#query<DeploymentRow>(
-      "select id, installation_id, source_json, manifest_digest, status, outputs_json, created_at " +
+      "select id, installation_id, source_json, source_digest, artifact_digest, plan_snapshot_digest, plan_snapshot_json, bindings_snapshot_json, status, outputs_json, created_at " +
         "from takosumi_installer_deployments where installation_id = $1 " +
         "order by created_at asc",
       [installationId],
@@ -271,7 +279,11 @@ interface DeploymentRow extends Record<string, unknown> {
   readonly id: string;
   readonly installation_id: string;
   readonly source_json: unknown;
-  readonly manifest_digest: string;
+  readonly source_digest: string | null;
+  readonly artifact_digest: string | null;
+  readonly plan_snapshot_digest: string;
+  readonly plan_snapshot_json: unknown;
+  readonly bindings_snapshot_json: unknown;
   readonly status: string;
   readonly outputs_json: unknown;
   readonly created_at: number | string;
@@ -300,7 +312,13 @@ function rowToDeployment(row: DeploymentRow): Deployment {
     id: row.id,
     installationId: row.installation_id,
     source: parseJson(row.source_json) as Deployment["source"],
-    manifestDigest: row.manifest_digest,
+    ...(row.source_digest ? { sourceDigest: row.source_digest } : {}),
+    ...(row.artifact_digest ? { artifactDigest: row.artifact_digest } : {}),
+    planSnapshotDigest: row.plan_snapshot_digest,
+    planSnapshot: parseJson(row.plan_snapshot_json) as Deployment["planSnapshot"],
+    bindingsSnapshot: (parseJson(row.bindings_snapshot_json) ?? []) as Deployment[
+      "bindingsSnapshot"
+    ],
     status: row.status as Deployment["status"],
     outputs: (parseJson(row.outputs_json) ?? {}) as Deployment["outputs"],
     createdAt: toEpochMillis(row.created_at),

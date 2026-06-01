@@ -200,12 +200,12 @@ export { registerDefaultArtifactKinds };
  * KernelPlugin instances bundled with the kernel distribution.
  *
  * Cloud / host-specific factories live in the separate takosumi-plugins
- * repository as dedicated `kind-*` packages such as
- * `@takos/takosumi-kind-cloudflare-worker` or
- * `@takos/takosumi-kind-docker-compose-web-service`. Takosumi core no longer
+ * repository as `@takosjp/takosumi-plugins/kind/<alias>` subpaths such as
+ * `@takosjp/takosumi-plugins/kind/cloudflare-worker` or
+ * `@takosjp/takosumi-plugins/kind/docker-compose-web-service`. Takosumi core no longer
  * carries cloud SDK imports, so this function intentionally returns an empty
- * array: operators explicitly import the kind packages they want and pass their
- * factories to `createPaaSApp({ kindAliases, plugins: [...] })`.
+ * array: operators explicitly import the implementations they want and pass their
+ * factories to `createPaaSApp({ plugins: [...] })`.
  *
  * The function is retained as a no-op so existing callers don't break, but
  * its return value is `readonly []`. Future major versions may remove it.
@@ -420,11 +420,10 @@ export async function createPaaSApp(
   const tarRunner: TarRunner = options.runtime?.tarRunner ?? defaultTarRunner;
   // The single wired Installer pipeline instance. Reused for the public
   // Installer API routes AND the in-process operate facade so both share one
-  // Installation / Deployment ledger and one plugin / alias / platform-service
+  // Installation / Deployment ledger and one plugin / platform-service
   // wiring.
   const installerPipeline = new InstallerPipeline({
     ...(options.plugins ? { plugins: options.plugins } : {}),
-    ...(options.kindAliases ? { kindAliases: options.kindAliases } : {}),
     ...(platformServices ? { platformServices } : {}),
     ...(installerStores.installations
       ? { installations: installerStores.installations }

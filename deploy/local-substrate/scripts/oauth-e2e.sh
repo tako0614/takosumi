@@ -24,7 +24,7 @@ fi
 # 1. /v1/auth/upstream/authorize → 302 to mock /authorize
 LOC1=$(curl -sk --cacert "$CA" -o /dev/null -w "%{redirect_url}" \
 	-c "$COOKIE_JAR" -b "$COOKIE_JAR" \
-	"https://cloud.takosumi.test/v1/auth/upstream/authorize?provider=${PROVIDER}&state=${STATE}")
+	"https://accounts.takosumi.test/v1/auth/upstream/authorize?provider=${PROVIDER}&state=${STATE}")
 [[ -n "$LOC1" ]] || { echo "FAIL: worker /authorize returned no redirect" >&2; exit 1; }
 
 # 2. Follow mock /authorize → 302 to /sign-in/callback with code
@@ -36,7 +36,7 @@ CODE=$(echo "$LOC2" | sed -nE 's/.*[?&]code=([^&]*).*/\1/p')
 # 3. /v1/auth/upstream/callback with code+state+provider → 200 with session
 RESP=$(curl -sk --cacert "$CA" \
 	-c "$COOKIE_JAR" -b "$COOKIE_JAR" \
-	"https://cloud.takosumi.test/v1/auth/upstream/callback?provider=${PROVIDER}&code=${CODE}&state=${STATE}")
+	"https://accounts.takosumi.test/v1/auth/upstream/callback?provider=${PROVIDER}&code=${CODE}&state=${STATE}")
 SUBJECT=$(echo "$RESP" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('subject') or '')")
 SESSION_ID=$(echo "$RESP" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('session_id') or '')")
 if [[ -z "$SUBJECT" || -z "$SESSION_ID" ]]; then

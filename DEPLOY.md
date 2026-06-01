@@ -1,11 +1,11 @@
-# Takosumi Cloudflare deploy runbook
+# Takosumiflare deploy runbook
 
 Single entry point for deploying the two Takosumi-public properties to Cloudflare. Each section is self-contained: prerequisites, one-time setup, deploy command, smoke check.
 
 | Property             | Resource type               | Project / Worker name     | Source                              |
 | -------------------- | --------------------------- | ------------------------- | ----------------------------------- |
 | `takosumi.com`       | Cloudflare Pages            | `takosumi-website`        | `takosumi/website/` (merged build)  |
-| `cloud.takosumi.com` | Cloudflare Worker + D1 + R2 | `takosumi-cloud-accounts` | `takosumi-cloud/deploy/cloudflare/` |
+| `accounts.takosumi.com` | Cloudflare Worker + D1 + R2 | `takosumi-accounts` | `takosumi/deploy/accounts-cloudflare/` |
 
 > **Wave M-G (= 2026-05-20) architectural restructure**: the `takosumi.com` Pages project now serves the **whole property** — landing at `/`, VitePress reference docs at `/docs/*`, and the JSON-LD context catalog at `/contexts/*` — from a single deploy. The previous split into two Pages projects (`takosumi-site` minimal HTML landing, and `takosumi-docs` standalone `docs.takosumi.com` subdomain) is superseded. See [§Cleanup of legacy Pages projects](#cleanup-of-legacy-pages-projects) for the one-time operator-side dashboard cleanup.
 
@@ -18,7 +18,7 @@ Single entry point for deploying the two Takosumi-public properties to Cloudflar
    ```
    Or set the env vars `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` for non-interactive deploys (CI). The token needs: Workers Scripts:Edit, Workers Routes:Edit, D1:Edit, Pages:Edit, Account Settings:Read.
 
-DNS records for `takosumi.com`, `www.takosumi.com` and `cloud.takosumi.com` are created automatically when you attach each custom domain in the Cloudflare dashboard (Pages → Custom domains or Workers → Custom domains).
+DNS records for `takosumi.com`, `www.takosumi.com` and `accounts.takosumi.com` are created automatically when you attach each custom domain in the Cloudflare dashboard (Pages → Custom domains or Workers → Custom domains).
 
 ---
 
@@ -77,36 +77,36 @@ curl https://takosumi.com/contexts/v1.jsonld | jq '.["@context"]["@vocab"]'
 
 ---
 
-## 2. `cloud.takosumi.com` — Takosumi Accounts (Cloudflare Worker + D1 + R2)
+## 2. `accounts.takosumi.com` — Takosumi Accounts (Cloudflare Worker + D1 + R2)
 
-**Source**: `takosumi-cloud/deploy/cloudflare/` (worker + wrangler.toml).
+**Source**: `takosumi/deploy/accounts-cloudflare/` (worker + wrangler.toml).
 
 One-time setup:
 
 ```sh
-cd takosumi-cloud
+cd takosumi
 # Create the D1 database
-bunx wrangler d1 create takosumi-cloud-accounts
-# Copy the returned UUID into deploy/cloudflare/wrangler.toml's
+bunx wrangler d1 create takosumi-accounts
+# Copy the returned UUID into deploy/accounts-cloudflare/wrangler.toml's
 # `database_id` field (replacing the all-zeros placeholder).
 
 # Create the R2 bucket for metadata-only AppInstallation export artifacts.
-bunx wrangler r2 bucket create takosumi-cloud-accounts-exports
+bunx wrangler r2 bucket create takosumi-accounts-exports
 
 # Push secrets (replace each value with the real secret on prompt)
 bunx wrangler secret put TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK \
-  --config deploy/cloudflare/wrangler.toml
+  --config deploy/accounts-cloudflare/wrangler.toml
 bunx wrangler secret put TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET \
-  --config deploy/cloudflare/wrangler.toml
+  --config deploy/accounts-cloudflare/wrangler.toml
 bunx wrangler secret put TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET \
-  --config deploy/cloudflare/wrangler.toml
+  --config deploy/accounts-cloudflare/wrangler.toml
 bunx wrangler secret put TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET \
-  --config deploy/cloudflare/wrangler.toml
+  --config deploy/accounts-cloudflare/wrangler.toml
 # Optional: Stripe / passkey / upstream OIDC / OIDC client secret
 
 # In dashboard:
-#   Workers & Pages → takosumi-cloud-accounts → Triggers → Custom Domains
-#   Add `cloud.takosumi.com`
+#   Workers & Pages → takosumi-accounts → Triggers → Custom Domains
+#   Add `accounts.takosumi.com`
 # (The [[routes]] block in wrangler.toml binds the worker; the
 #  dashboard step wires DNS + TLS.)
 ```
@@ -117,19 +117,19 @@ Generate an ES256 private JWK with any operator-approved tool that emits
 Deploy:
 
 ```sh
-cd takosumi-cloud
-bun run deploy:cloudflare:dryrun   # validates bindings + env, no upload
-bun run deploy:cloudflare          # actual deploy
+cd takosumi
+bun run deploy:accounts-cloudflare:dryrun   # validates bindings + env, no upload
+bun run deploy:accounts-cloudflare          # actual deploy
 ```
 
 Smoke:
 
 ```sh
-curl https://cloud.takosumi.com/healthz
-# {"ok":true,"provider":"cloudflare","service":"takosumi-cloud-accounts","persistence":"d1+r2"}
+curl https://accounts.takosumi.com/healthz
+# {"ok":true,"provider":"cloudflare","service":"takosumi-accounts","persistence":"d1+r2"}
 
-curl https://cloud.takosumi.com/.well-known/openid-configuration | jq .issuer
-# "https://cloud.takosumi.com"
+curl https://accounts.takosumi.com/.well-known/openid-configuration | jq .issuer
+# "https://accounts.takosumi.com"
 ```
 
 ---
@@ -156,24 +156,24 @@ dig docs.takosumi.com   # expect NXDOMAIN
 curl -I https://takosumi.com/docs/    # 200 (served by takosumi-website)
 ```
 
-After cleanup, the only Takosumi-public Cloudflare resources are `takosumi-website` (this runbook §1) and `takosumi-cloud-accounts` (§2).
+After cleanup, the only Takosumi-public Cloudflare resources are `takosumi-website` (this runbook §1) and `takosumi-accounts` (§2).
 
 ---
 
 ## Updating downstream consumers
 
-When `cloud.takosumi.com` is live, downstream products that consume Takosumi Accounts need to point at it:
+When `accounts.takosumi.com` is live, downstream products that consume Takosumi Accounts need to point at it:
 
-- `takos-private/apps/control/cloudflare/wrangler.toml` — `OIDC_ISSUER_URL = "https://cloud.takosumi.com"` (already set by this deploy plan in both production and staging blocks).
+- `takos-private/apps/control/cloudflare/wrangler.toml` — `OIDC_ISSUER_URL = "https://accounts.takosumi.com"` (already set by this deploy plan in both production and staging blocks).
 - Any other operator distribution that maintains its own OIDC client registration with Takosumi Accounts must update its issuer URL.
 
-The OIDC client `takos-private-production` is registered with the Worker via the `TAKOSUMI_ACCOUNTS_CLIENT_ID` / `TAKOSUMI_ACCOUNTS_REDIRECT_URIS` vars in `takosumi-cloud/deploy/cloudflare/wrangler.toml`. Update there if the takos.jp callback URI changes.
+The OIDC client `takos-private-production` is registered with the Worker via the `TAKOSUMI_ACCOUNTS_CLIENT_ID` / `TAKOSUMI_ACCOUNTS_REDIRECT_URIS` vars in `takosumi/deploy/accounts-cloudflare/wrangler.toml`. Update there if the takos.jp callback URI changes.
 
 ## Rolling back
 
 - **Pages** (`takosumi.com`): redeploy the previous git commit with `bash website/build.sh` and `wrangler pages deploy website/.output/public --project-name=takosumi-website`. Cloudflare Pages also keeps deployment history in the dashboard for one-click rollback. Rolling back the website also rolls back `/docs/` and `/contexts/` because they ship from the same Pages artifact.
-- **Worker** (`cloud.takosumi.com`): `wrangler rollback` or redeploy the previous commit. D1 state is preserved across rollbacks.
+- **Worker** (`accounts.takosumi.com`): `wrangler rollback` or redeploy the previous commit. D1 state is preserved across rollbacks.
 
 ## CI
 
-`.github/workflows/website-deploy.yml` builds and pushes the merged Pages artifact on `master` (or via manual dispatch). Push-to-deploy for the Accounts Worker is intentionally not wired here — operators run the Bun deploy tasks from a workstation. To add GitHub Actions later for the Worker, wrap the same `takosumi-cloud` tasks with `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` exposed as repo secrets; the deploy commands themselves do not change.
+`.github/workflows/website-deploy.yml` builds and pushes the merged Pages artifact on `master` (or via manual dispatch). Push-to-deploy for the Accounts Worker is intentionally not wired here — operators run the Bun deploy tasks from a workstation. To add GitHub Actions later for the Worker, wrap the same `takosumi` tasks with `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` exposed as repo secrets; the deploy commands themselves do not change.

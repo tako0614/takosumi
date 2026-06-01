@@ -6,9 +6,9 @@
   "domain": "authoring",
   "lifecycleDomain": "shape-derivation",
   "changeEffect": "shape-derivation",
-  "description": "Reference kernel internal authoring expansion from deploy manifest input into AppSpec resolution input and operator policy snapshot before planning.",
+  "description": "Reference kernel internal authoring expansion from Source-derived payload into InternalDeploySpec resolution input and operator policy snapshot before planning.",
   "expandsTo": [
-    "AppSpec",
+    "InternalDeploySpec",
     "operator policy snapshot"
   ],
   "invariants": [

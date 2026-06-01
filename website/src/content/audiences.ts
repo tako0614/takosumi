@@ -18,14 +18,14 @@ export const AUDIENCES: readonly Audience[] = [
     persona:
       "自分のサービスを operator-owned runtime に置きたい。SaaS に閉じず、自分で書いた app も同じ Space に入れる。",
     exampleStack: "chat + agent + 自作 worker + DB",
-    cta: { label: "AppSpec を 書く", href: "/docs/reference/app-spec" },
+    cta: { label: "Source を install", href: "/docs/reference/installer-api" },
   },
   {
     name: "小チーム / コミュニティ",
     persona:
       "メンバー間で 共有する Space。 docs も slide も excel も、 全部 同じ Takosumi 上で。",
     exampleStack: "chat + docs + slide + excel + agent",
-    cta: { label: "Cloud で試す", href: "https://cloud.takosumi.com/" },
+    cta: { label: "Cloud で試す", href: "https://accounts.takosumi.com/" },
   },
   {
     name: "学校 / 組織 / 公共",

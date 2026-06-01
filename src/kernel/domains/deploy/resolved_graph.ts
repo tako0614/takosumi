@@ -6,7 +6,7 @@
 // types are deterministic compiler outputs; the wire shape per record is
 // `CoreProjectionRecord` (Core spec § 8 / `paas-contract/core-v1.ts`).
 //
-// Six projection families produced from the resolved AppSpec:
+// Six projection families produced from the resolved InternalDeploySpec:
 //   1. runtime-claim          — every component's runtime contract instance
 //   2. resource-claim         — every declared resource
 //   3. exposure-target        — component contracts that opt-in via descriptor
@@ -18,7 +18,7 @@
 //   6. access-path-request    — network boundary request per resource binding
 //                               (Core spec § 12: ResourceAccessPath)
 //
-// Determinism contract: identical AppSpec + descriptor closure inputs MUST
+// Determinism contract: identical InternalDeploySpec + descriptor closure inputs MUST
 // yield byte-identical projection records, in byte-identical order. Apply
 // reuses these projections without re-deriving them, so the digest is the
 // resolution-time witness consumed by Group head + read-set checks.
@@ -42,11 +42,11 @@ import type {
   ObjectAddress,
 } from "takosumi-contract/reference/compat";
 import type {
-  AppSpec,
-  AppSpecComponent,
-  AppSpecOutput,
-  AppSpecResource,
-  AppSpecRoute,
+  InternalDeploySpec,
+  InternalDeploySpecComponent,
+  InternalDeploySpecOutput,
+  InternalDeploySpecResource,
+  InternalDeploySpecRoute,
   PublicComponentBindingSpec,
 } from "./types.ts";
 
@@ -56,7 +56,7 @@ import type {
 
 /** Input bundle for `buildResolvedGraph`. */
 export interface BuildResolvedGraphInput {
-  readonly appSpec: AppSpec;
+  readonly deploySpec: InternalDeploySpec;
   readonly descriptorClosure: DeploymentDescriptorClosure;
   /** Manifest snapshot digest (folded into the resolved-graph digest). */
   readonly manifestSnapshot?: string;
@@ -65,9 +65,9 @@ export interface BuildResolvedGraphInput {
 /** Build the canonical `DeploymentResolvedGraph` for a resolved Deployment.
  *
  *  The returned graph carries the six projection families described above and
- *  pre-computed digests for the AppSpec and operator resolution inputs. The
+ *  pre-computed digests for the InternalDeploySpec and operator resolution inputs. The
  *  graph digest is a sha256 over the canonical-stringified projections plus
- *  manifest snapshot + closure digest, so two resolutions with identical
+ *  source snapshot + closure digest, so two resolutions with identical
  *  manifests + closures always produce identical graph digests.
  */
 export async function buildResolvedGraph(
@@ -75,35 +75,35 @@ export async function buildResolvedGraph(
 ): Promise<DeploymentResolvedGraph> {
   const closureIndex = indexClosure(input.descriptorClosure);
   const components = await Promise.all(
-    input.appSpec.components.map((component) =>
-      buildCoreComponent(component, input.appSpec.routes, closureIndex)
+    input.deploySpec.components.map((component) =>
+      buildCoreComponent(component, input.deploySpec.routes, closureIndex)
     ),
   );
 
   const projections: CoreProjectionRecord[] = [];
-  for (const component of input.appSpec.components) {
+  for (const component of input.deploySpec.components) {
     projections.push(
-      await buildRuntimeClaim(component, input.appSpec, closureIndex),
+      await buildRuntimeClaim(component, input.deploySpec, closureIndex),
     );
     projections.push(
       ...(await buildExposureTargets(
         component,
-        input.appSpec.routes,
+        input.deploySpec.routes,
         closureIndex,
       )),
     );
     projections.push(...(await buildBindingRequests(component, closureIndex)));
   }
-  for (const resource of input.appSpec.resources) {
+  for (const resource of input.deploySpec.resources) {
     projections.push(await buildResourceClaim(resource, closureIndex));
   }
-  for (const output of input.appSpec.outputs) {
+  for (const output of input.deploySpec.outputs) {
     projections.push(
-      await buildOutputDeclaration(input.appSpec, output, closureIndex),
+      await buildOutputDeclaration(input.deploySpec, output, closureIndex),
     );
   }
   for (
-    const access of await buildAccessPathRequests(input.appSpec, closureIndex)
+    const access of await buildAccessPathRequests(input.deploySpec, closureIndex)
   ) {
     projections.push(access);
   }
@@ -117,12 +117,12 @@ export async function buildResolvedGraph(
       : left.objectAddress.localeCompare(right.objectAddress);
   });
 
-  const appSpecDigest = await digestOf(input.appSpec);
+  const deploySpecDigest = await digestOf(input.deploySpec);
   const envSpecDigest = await digestOf({
-    env: input.appSpec.env,
-    runtimeNetworkPolicy: runtimeNetworkPolicyInput(input.appSpec),
+    env: input.deploySpec.env,
+    runtimeNetworkPolicy: runtimeNetworkPolicyInput(input.deploySpec),
   });
-  const policySpecDigest = await digestOf(policyInput(input.appSpec));
+  const policySpecDigest = await digestOf(policyInput(input.deploySpec));
 
   const digest = await digestOf({
     manifestSnapshot: input.manifestSnapshot ?? null,
@@ -135,7 +135,7 @@ export async function buildResolvedGraph(
     digest,
     components,
     projections,
-    appSpecDigest,
+    deploySpecDigest,
     envSpecDigest,
     policySpecDigest,
   };
@@ -179,8 +179,8 @@ function descriptorIdFor(ref: string, closure: ClosureIndex): string {
 // ---------------------------------------------------------------------------
 
 async function buildCoreComponent(
-  component: AppSpecComponent,
-  routes: readonly AppSpecRoute[],
+  component: InternalDeploySpecComponent,
+  routes: readonly InternalDeploySpecRoute[],
   closure: ClosureIndex,
 ): Promise<CoreComponent> {
   const componentAddr = componentAddress(component.name);
@@ -275,11 +275,11 @@ async function contractInstanceFor(input: {
   };
 }
 
-function usesSourceJsModule(component: AppSpecComponent): boolean {
+function usesSourceJsModule(component: InternalDeploySpecComponent): boolean {
   return component.type === "runtime.js-worker@v1" && !component.image;
 }
 
-function sourceJsModuleConfigFor(component: AppSpecComponent): JsonObject {
+function sourceJsModuleConfigFor(component: InternalDeploySpecComponent): JsonObject {
   return {
     bundleFormat: "esm",
     ...(component.entrypoint ? { entrypoint: component.entrypoint } : {}),
@@ -299,12 +299,12 @@ function ociImageDigest(image: string): string | undefined {
   return match?.[1];
 }
 
-function routeInterfaceLocalName(route: AppSpecRoute): string {
+function routeInterfaceLocalName(route: InternalDeploySpecRoute): string {
   return `interface.${route.name}`;
 }
 
-function routeInterfaceRef(route: AppSpecRoute): string {
-  const explicit = (route as AppSpecRoute & { interfaceContractRef?: string })
+function routeInterfaceRef(route: InternalDeploySpecRoute): string {
+  const explicit = (route as InternalDeploySpecRoute & { interfaceContractRef?: string })
     .interfaceContractRef;
   if (explicit) return explicit;
   const protocol = route.protocol.toLowerCase();
@@ -320,8 +320,8 @@ function routeInterfaceRef(route: AppSpecRoute): string {
 // ---------------------------------------------------------------------------
 
 async function buildRuntimeClaim(
-  component: AppSpecComponent,
-  appSpec: AppSpec,
+  component: InternalDeploySpecComponent,
+  deploySpec: InternalDeploySpec,
   closure: ClosureIndex,
 ): Promise<CoreProjectionRecord> {
   const descriptorId = descriptorIdFor(component.type, closure);
@@ -342,7 +342,7 @@ async function buildRuntimeClaim(
       args: component.args ?? null,
       requirements: component.requirements ?? null,
       effectiveRuntimeCapabilities:
-        appSpec.effectiveRuntimeCapabilities?.[component.name] ?? null,
+        deploySpec.effectiveRuntimeCapabilities?.[component.name] ?? null,
     }),
   };
 }
@@ -352,7 +352,7 @@ async function buildRuntimeClaim(
 // ---------------------------------------------------------------------------
 
 async function buildResourceClaim(
-  resource: AppSpecResource,
+  resource: InternalDeploySpecResource,
   closure: ClosureIndex,
 ): Promise<CoreProjectionRecord> {
   const descriptorId = descriptorIdFor(resource.type, closure);
@@ -384,8 +384,8 @@ async function buildResourceClaim(
 // ---------------------------------------------------------------------------
 
 async function buildExposureTargets(
-  component: AppSpecComponent,
-  routes: readonly AppSpecRoute[],
+  component: InternalDeploySpecComponent,
+  routes: readonly InternalDeploySpecRoute[],
   closure: ClosureIndex,
 ): Promise<readonly CoreProjectionRecord[]> {
   return await Promise.all(
@@ -427,13 +427,13 @@ function exposureNameFor(component: string, instance: string): string {
 // ---------------------------------------------------------------------------
 
 async function buildOutputDeclaration(
-  appSpec: AppSpec,
-  output: AppSpecOutput,
+  deploySpec: InternalDeploySpec,
+  output: InternalDeploySpecOutput,
   closure: ClosureIndex,
 ): Promise<CoreProjectionRecord> {
   const descriptorId = descriptorIdFor(output.type, closure);
-  const owner = output.from ?? appSpec.components[0]?.name ?? "group";
-  const outputName = outputFullName(appSpec.groupId, output.name);
+  const owner = output.from ?? deploySpec.components[0]?.name ?? "group";
+  const outputName = outputFullName(deploySpec.groupId, output.name);
   return {
     projectionType: "output-declaration",
     objectAddress: objectAddress("output", outputName),
@@ -442,7 +442,7 @@ async function buildOutputDeclaration(
     descriptorResolutionId: descriptorId,
     digest: await digestOf({
       kind: "output-declaration",
-      group: appSpec.groupId,
+      group: deploySpec.groupId,
       name: output.name,
       from: output.from ?? null,
       descriptor: descriptorId,
@@ -461,7 +461,7 @@ function outputFullName(group: string, name: string): string {
 // ---------------------------------------------------------------------------
 
 async function buildBindingRequests(
-  component: AppSpecComponent,
+  component: InternalDeploySpecComponent,
   closure: ClosureIndex,
 ): Promise<readonly CoreProjectionRecord[]> {
   const records: CoreProjectionRecord[] = [];
@@ -577,11 +577,11 @@ function stringArray(value: unknown): readonly string[] {
 // ---------------------------------------------------------------------------
 
 async function buildAccessPathRequests(
-  appSpec: AppSpec,
+  deploySpec: InternalDeploySpec,
   closure: ClosureIndex,
 ): Promise<readonly CoreProjectionRecord[]> {
   const records: CoreProjectionRecord[] = [];
-  for (const component of appSpec.components) {
+  for (const component of deploySpec.components) {
     for (const [_bindingName, spec] of Object.entries(component.bindings)) {
       const source = bindingSourceFor(spec);
       // Only resource / output bindings need a network-boundary access path;
@@ -641,14 +641,14 @@ function componentFingerprint(component: CoreComponent): JsonObject {
   };
 }
 
-function runtimeNetworkPolicyInput(appSpec: AppSpec): unknown {
-  const overrides = appSpec.overrides;
+function runtimeNetworkPolicyInput(deploySpec: InternalDeploySpec): unknown {
+  const overrides = deploySpec.overrides;
   const value = overrides.runtimeNetworkPolicy;
   return value ?? {};
 }
 
-function policyInput(appSpec: AppSpec): unknown {
-  const overrides = appSpec.overrides;
+function policyInput(deploySpec: InternalDeploySpec): unknown {
+  const overrides = deploySpec.overrides;
   if (
     typeof overrides === "object" && overrides !== null &&
     !Array.isArray(overrides) &&
@@ -682,7 +682,7 @@ function stableStringify(value: unknown): string {
 
 // Surface used by routes to attach a route exposure projection. We keep the
 // existing route-derived projection in `deployment_service.ts` (Wave 1) since
-// it is downstream of the AppSpec route shape rather than part of the six
+// it is downstream of the InternalDeploySpec route shape rather than part of the six
 // canonical families. Future waves may collapse it into `exposure-target`
 // once router materialisation moves into ResolvedGraph.
 export const RESOLVED_GRAPH_PROJECTION_TYPES = [

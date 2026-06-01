@@ -1,6 +1,6 @@
 # Kernel container for local-substrate.
 #
-# Base: denoland/deno (matches what the kernel expects at runtime).
+# Base: oven/bun (matches the Bun-first local-substrate runtime).
 # Adds: docker CLI + compose plugin so the embedded runtime-agent's
 # Docker Compose connector can spawn `docker compose` against
 # the host docker socket mounted at /var/run/docker.sock.
@@ -8,7 +8,7 @@
 # Source mounts: handled by docker compose; the wrapper script and the
 # takosumi/ workspace are bind-mounted at runtime, this image only
 # carries the binaries.
-FROM denoland/deno:2.7.10
+FROM oven/bun:1
 
 # Pull docker CLI (no daemon) from the official docker image. Compose
 # plugin lives under cli-plugins/ in the same image.

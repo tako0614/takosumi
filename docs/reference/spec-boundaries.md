@@ -1,87 +1,79 @@
 # 仕様境界 {#spec-boundaries}
 
-Takosumi docs は 3 つの仕様面に分かれます。これらは 1 つに混ざった仕様ではなく、owner と compatibility promise が異なる sibling contract です。
+Takosumi ecosystem の仕様面は owner と compatibility promise が異なります。
 
-| Surface               | 答える問い                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------ |
-| Takosumi core         | この source を install / deploy / rollback / record できるか。                       |
-| 公式カタログ          | Takosumi が定義する kind / material kind / projection / JSON-LD catalog 語彙は何か。 |
-| Operator distribution | この operator が提供する account layer / backend behavior は何か。                   |
+| Surface | 答える問い |
+| --- | --- |
+| Takosumi core | Source を install / deploy / rollback / record できるか。 |
+| Operator distribution | account plane、PlatformService inventory、backend behavior、Terraform state をどう提供するか。 |
+| Integration packages | runtime-agent connector、inventory importer、backend adapter をどう提供するか。 |
 
-公式カタログは、core 仕様に隣接する Takosumi-maintained vocabulary です。core manifest envelope は小さく保ち、component kind、material kind、projection、JSON-LD vocabulary は catalog docs に置きます。Takosumi Cloud などの operator distribution は core と catalog contract を採用し、自分の account layer behavior を自分の docs で定義します。
-
-## Takosumi 本体仕様 {#takosumi-core-specification}
-
-Core は「installer は何を受け取り、何を記録するか」に答えます。compatible installer が実装する portable contract です。
-
-入口: [Takosumi core 仕様](./core-spec.md)
+## Takosumi core {#takosumi-core}
 
 Core の範囲:
 
-- `.takosumi.yml` root shape: `apiVersion`, `metadata.id`, `metadata.name`, `components`, optional `publish`
-- component fields: `kind`, `spec`, `connect`, `listen`
-- same-manifest component output reference: `component.output`
-- publication reference grammar (`listen.path` / `listen.kind`)
-- Installation と Deployment lifecycle
-- Installer API endpoints
-- source input kind と digest guard
+- `Source` / `Installation` / `Deployment` / `PlatformService` DTO
+- Installer API 5 endpoint
+- `InstallPlan` dry-run snapshot
+- source pin、prepared digest、current pointer、`planSnapshotDigest` guard
+- Deployment record の `planSnapshot` / `bindingsSnapshot` / outputs
+- rollback pointer semantics
 
-Core は `kind`、material kind name、projection name、platform service path を string として parse し、resolution の記録を保存します。component kind / material kind / projection vocabulary は catalog が定義します。platform service path inventory と publication visibility は operator または product distribution spec が定義します。
+Core compatibility は Installer API behavior、source guard、Deployment record、closed error envelope に基づきます。
 
-Core compatibility は manifest shape、Installer API behavior、source / digest guard、Deployment record、connection resolution rule に基づきます。Takosumi 公式 catalog vocabulary を使う場合は catalog compatibility が加わります。operator-owned platform service path、publication visibility、account layer API を使う場合は、その operator distribution との compatibility が加わります。
+Core の範囲外:
 
-## Takosumi 公式カタログ仕様 {#takosumi-official-catalog-specification}
+- Terraform/OpenTofu/Helm/Pulumi execution
+- provider credential and state lock
+- account / billing / OIDC / dashboard
+- cloud-specific resource graph
+- source repo 内の Takosumi 専用 DSL
 
-公式カタログは「Takosumi が component と出力データを説明するために公開する語彙は何か」に答えます。
+## Operator distribution {#operator-distribution}
 
-入口: [Takosumi 公式カタログ仕様](./catalog.md)
+Operator distribution は Takosumi core の周辺で account-facing behavior と backend operation を定義します。
 
-Catalog の範囲:
-
-- `https://takosumi.com/kinds/v1/worker` などの kind schema URI
-- `spec`、output slot vocabulary、expected な material shape を説明する catalog の kind の定義 metadata
-- `http-endpoint`、`service-binding`、`identity.oidc@v1`、`mcp-server@v1` などの material kind
-- `env`、`secret-env`、`upstream` などの injection mode description
-- access mode enum、sensitivity class、safe default access などの access metadata vocabulary
-- `https://takosumi.com/contexts/v1.jsonld` と `https://takosumi.com/kinds/v1/*` の public JSON-LD catalog document
-
-catalog entry は reusable vocabulary と JSON-LD catalog metadata を説明します。service path root、account layer URL、billing lifecycle、identity issuer policy、dashboard behavior は、その service path や API を提供する operator / product distribution spec に置きます。
-
-## Operator distribution 仕様 {#operator-distribution-specifications}
-
-Operator distribution は「Takosumi core installer の周辺で、この operator はどの concrete account layer、backend、runtime behavior を提供するか」に答えます。
-
-Takosumi Cloud は operator distribution の 1 つです。normative docs は `takosumi-cloud/docs/` に置き、Takosumi docs site には入口だけを置きます: [Takosumi Cloud](./takosumi-cloud.md)
-
-Operator distribution 仕様の範囲:
+範囲:
 
 - account と Space ownership record
-- workload platform service path / publication visibility
-- account layer API、dashboard、launch flow
-- billing、identity、policy behavior
-- Installer API 周辺の deploy / admin facade
-- implementation binding / runtime implementation choice と Deployment の記録
+- installer token issuance と auth policy
+- PlatformService inventory
+- Terraform/OpenTofu/Helm/Pulumi state where used
+- OIDC / billing / dashboard / deploy facade
+- account-plane read model と audit projection
+- runtime / gateway / provider binding choice
 
-operator distribution は Takosumi 公式カタログの material kind を採用できます。 catalog は reusable な出力データの形を定義し、operator docs は concrete path、publication visibility、account layer lifecycle、approval flow、runtime delivery behavior を定義します。
+Takosumi は reference operator distribution の 1 つです。normative docs は `takosumi/docs/` に置きます。
+
+## Integration packages {#integration-packages}
+
+`takosumi-plugins` は operator が採用できる integration package です。
+
+範囲:
+
+- PlatformService inventory importer
+- runtime-agent connector
+- backend adapter
+- reference distribution の便利な wiring
+
+Terraform provider の代替ではありません。Terraform で作るべき infra は operator layer で作り、その output を
+PlatformService inventory に渡します。
 
 ## 置き場所の目安
 
-| 文書が触れるもの                                                                               | normative definition の置き場所 |
-| ---------------------------------------------------------------------------------------------- | ------------------------------- |
-| `apiVersion`, `metadata.id`, `metadata.name`, `components`, optional root `publish`            | Takosumi core / manifest        |
-| `connect`, `listen`, root `publish`, `component.output`, publication grammar                   | Takosumi core / manifest        |
-| `https://takosumi.com/kinds/v1/*`                                                              | Takosumi 公式カタログ           |
-| material kind と injection mode                                                                | Takosumi 公式カタログ           |
-| `https://takosumi.com/contexts/v1.jsonld` と `https://takosumi.com/kinds/v1/*` catalog JSON-LD | Takosumi 公式カタログ           |
-| operator が提供する workload platform service path / publication visibility                    | その operator distribution spec |
-| account API、billing flow、identity issuer endpoint、dashboard route                           | その operator distribution spec |
-| Installer API 周辺の deploy / admin facade                                                     | その operator distribution spec |
-| implementation-specific binding loading や kind package wiring                                 | implementation docs             |
+| 文書が触れるもの | normative definition の置き場所 |
+| --- | --- |
+| Source / Installation / Deployment / PlatformService DTO | Takosumi core |
+| Installer API 5 endpoint | Takosumi core |
+| `InstallPlan` / `planSnapshotDigest` | Takosumi core |
+| PlatformService concrete path / labels / lifecycle | operator distribution |
+| Terraform state / provider credentials | operator distribution or `takos-private/` |
+| account API / billing / OIDC / dashboard route | operator distribution |
+| runtime-agent connector implementation | integration package or operator distribution |
 
 ## 読む順序
 
 1. [Takosumi core 仕様](./core-spec.md)
-2. [manifest](./manifest.md)
-3. concrete kind / 出力データの語彙 が必要になったら [Takosumi 公式カタログ仕様](./catalog.md)
-4. manifest 外の 出力データを consume するときは [プラットフォームサービス](./platform-services.md)
-5. operator が管理するアカウント管理の出力 や API を使うときは operator distribution docs。Takosumi Cloud は [Takosumi Cloud](./takosumi-cloud.md) から読みます。
+2. [Installer API](./installer-api.md)
+3. [プラットフォームサービス](./platform-services.md)
+4. operator behavior が必要なときは operator distribution docs。Takosumi は [Takosumi](./accounts.md) から読む。

@@ -1,0 +1,64 @@
+# Caddy global options.
+#
+# The `email` directive controls the ACME account contact address that
+# Caddy registers with Let's Encrypt. Set this to a real operator inbox
+# before going to production; ACME providers send certificate expiry
+# warnings, revocation notices, and policy updates there.
+#
+# Replace `operator@example.com` with your operator email. You can also
+# override per-site with `tls <email>` inside the site block below.
+{
+    email operator@example.com
+
+    # Pin TLS to modern protocols. TLS 1.0 / 1.1 are removed from every
+    # major browser; refusing them here also short-circuits downgrade
+    # probes that would otherwise terminate at Caddy.
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
+# `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME` is the user-facing domain (eTLD+1)
+# served by Caddy. It is distinct from the in-container Bun listener
+# bind address (`TAKOSUMI_ACCOUNTS_BIND_HOST`, default `0.0.0.0`) which
+# only needs to be reachable on the docker-compose network. Set the
+# public hostname in your `.env` file before bringing the stack up.
+{$TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME:accounts.example.com} {
+    # `tls operator@example.com` here would override the global email for
+    # this specific site. The global `email` directive above is sufficient
+    # for a single-site Takosumi Accounts deploy; uncomment the directive
+    # below if you want to keep the contact address local to the site.
+    # tls operator@example.com
+
+    # Restrict the negotiated TLS protocol to 1.2 / 1.3. The global
+    # `servers.protocols` block above pins HTTP versions; the per-site
+    # `tls` block pins the TLS handshake itself.
+    tls {
+        protocols tls1.2 tls1.3
+    }
+
+    encode zstd gzip
+    reverse_proxy accounts:8787
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        # Default-deny CSP for the OIDC / dashboard surface. Operators
+        # that ship a richer dashboard payload should override this
+        # header with the exact `script-src`, `style-src`,
+        # `connect-src`, and `frame-src` they need rather than removing
+        # the policy. `frame-ancestors 'none'` doubles up with
+        # `X-Frame-Options DENY` for legacy browsers.
+        Content-Security-Policy "default-src 'self'; frame-ancestors 'none'"
+    }
+
+    log {
+        output stdout
+        # Structured JSON logs ship cleanly to operator log pipelines
+        # (Loki / Cloud Logging / Datadog). Switch to `format console`
+        # only for interactive debugging.
+        format json
+    }
+}

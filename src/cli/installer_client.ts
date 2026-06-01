@@ -20,7 +20,7 @@ export interface RemoteInstallerTarget {
 
 export interface ExpectedPinOptions {
   readonly expectedCommit?: string;
-  readonly expectedManifestDigest?: string;
+  readonly expectedPlanSnapshotDigest?: string;
   readonly expectedSourceDigest?: string;
 }
 
@@ -73,7 +73,7 @@ export function expectedPinFromOptions(
   options: ExpectedPinOptions,
 ): SourcePin | undefined {
   const hasCommit = options.expectedCommit !== undefined;
-  const hasDigest = options.expectedManifestDigest !== undefined;
+  const hasDigest = options.expectedPlanSnapshotDigest !== undefined;
   const hasSourceDigest = options.expectedSourceDigest !== undefined;
   if (!hasCommit && !hasDigest && !hasSourceDigest) return undefined;
   if (hasCommit && hasSourceDigest) {
@@ -83,22 +83,22 @@ export function expectedPinFromOptions(
   }
   if (!hasDigest) {
     throw new Error(
-      "--expected-manifest-digest is required when passing expected pins",
+      "--expected-plan-snapshot-digest is required when passing expected pins",
     );
   }
   if (hasCommit) {
     return {
-      manifestDigest: options.expectedManifestDigest!,
+      planSnapshotDigest: options.expectedPlanSnapshotDigest!,
       commit: options.expectedCommit!,
     };
   }
   if (hasSourceDigest) {
     return {
-      manifestDigest: options.expectedManifestDigest!,
+      planSnapshotDigest: options.expectedPlanSnapshotDigest!,
       sourceDigest: options.expectedSourceDigest!,
     };
   }
-  return { manifestDigest: options.expectedManifestDigest! };
+  return { planSnapshotDigest: options.expectedPlanSnapshotDigest! };
 }
 
 export function deploymentExpectedGuardFromOptions(
@@ -110,7 +110,7 @@ export function deploymentExpectedGuardFromOptions(
   }
   if (!sourcePin) {
     throw new Error(
-      "--expected-manifest-digest is required when passing expected deploy guards",
+      "--expected-plan-snapshot-digest is required when passing expected deploy guards",
     );
   }
   if (options.expectedCurrentDeploymentId === undefined) {

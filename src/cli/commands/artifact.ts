@@ -1,11 +1,12 @@
 import { Command } from "../command.ts";
 import { ARTIFACTS_BASE_PATH } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { loadConfig, resolveMode } from "../config.ts";
+import { exitCli, readFile } from "../runtime.ts";
 
 /**
  * `takosumi artifact push <file> --kind <kind>` — upload a file to the
  * kernel's content-addressed artifact store and print the resulting hash.
- * This is an optional operator data-asset store; AppSpec does not require
+ * This is an optional operator data-asset store; the installer does not require
  * artifact kinds.
  */
 
@@ -37,7 +38,7 @@ function createPushCmd(): Command {
         },
       ) => {
         const target = await requireRemote(opts.remote, opts.token);
-        const bytes = await Deno.readFile(filePath);
+        const bytes = await readFile(filePath);
         const meta = parseMetadata(opts.metadata);
         const form = new FormData();
         form.set("kind", opts.kind);
@@ -55,7 +56,7 @@ function createPushCmd(): Command {
         const body = await readBody(response);
         if (!response.ok) {
           console.error(`kernel ${response.status}:`, body);
-          Deno.exit(1);
+          exitCli(1);
         }
         console.log(JSON.stringify(body, null, 2));
       },
@@ -96,7 +97,7 @@ function createListCmd(): Command {
           const body = await readBody(response) as ListPage;
           if (!response.ok) {
             console.error(`kernel ${response.status}:`, body);
-            Deno.exit(1);
+            exitCli(1);
           }
           const page = Array.isArray(body?.artifacts) ? body.artifacts : [];
           for (const a of page) allArtifacts.push(a);
@@ -130,7 +131,7 @@ function createRmCmd(): Command {
         }
         const body = await readBody(response);
         console.error(`kernel ${response.status}:`, body);
-        Deno.exit(1);
+        exitCli(1);
       },
     ) as Command;
 }
@@ -158,7 +159,7 @@ function createKindsCmd(): Command {
           | undefined;
         if (!response.ok) {
           console.error(`kernel ${response.status}:`, body);
-          Deno.exit(1);
+          exitCli(1);
         }
         const kinds = body?.kinds ?? [];
         if (opts.table) {
@@ -240,7 +241,7 @@ function createGcCmd(): Command {
         const body = await readBody(response);
         if (!response.ok) {
           console.error(`kernel ${response.status}:`, body);
-          Deno.exit(1);
+          exitCli(1);
         }
         console.log(JSON.stringify(body, null, 2));
       },
@@ -286,7 +287,7 @@ async function requireRemote(
       "artifact commands require a remote kernel: pass --remote and --token, " +
         "or set TAKOSUMI_REMOTE_URL + TAKOSUMI_DEPLOY_TOKEN",
     );
-    Deno.exit(2);
+    exitCli(2);
   }
   return { url: target.url, token: target.token };
 }
@@ -300,7 +301,7 @@ function parseMetadata(
     const eq = entry.indexOf("=");
     if (eq <= 0) {
       console.error(`invalid --metadata entry "${entry}" (expected key=value)`);
-      Deno.exit(2);
+      exitCli(2);
     }
     out[entry.slice(0, eq)] = entry.slice(eq + 1);
   }

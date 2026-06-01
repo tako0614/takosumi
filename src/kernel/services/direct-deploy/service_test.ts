@@ -1,9 +1,9 @@
 import { test } from "bun:test";
 // Direct deploy service tests — Deployment-centric.
 //
-// Direct deploy generates a public app manifest payload from raw image / source
+// Direct deploy generates a reference deploy source payload from raw image / source
 // / bundle inputs, then runs it through `DeploymentService.resolveDeployment` +
-// `applyDeployment`. These tests validate the manifest and source synthesis
+// `applyDeployment`. These tests validate the source payload and source synthesis
 // helpers as well as the full DirectDeployService flow against a stub
 // DeploymentClient.
 
@@ -132,7 +132,7 @@ test("DirectDeployService.apply resolves and immediately applies", async () => {
   assert.equal(client.applyCalls.length, 1);
 });
 
-test("DirectDeployService rejects mutating a manifest-managed group without opt-in", async () => {
+test("DirectDeployService rejects mutating a source-payload-managed group without opt-in", async () => {
   const client = new StubDirectDeploymentClient({
     existingHead: {
       space_id: "space-a",

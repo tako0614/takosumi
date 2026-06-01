@@ -12,7 +12,7 @@ import {
   type DeploymentStore,
   type ResolveDeploymentInput,
 } from "./deployment_service.ts";
-import type { DeployBlocker, PublicDeployManifest } from "./types.ts";
+import type { DeployBlocker, ReferenceDeploySourcePayload } from "./types.ts";
 
 export interface PlanServiceOptions
   extends Omit<DeploymentServiceOptions, "store"> {
@@ -23,7 +23,7 @@ export interface PlanServiceOptions
 export interface DeploymentPlanBlockerProviderInput {
   readonly spaceId: string;
   readonly groupId: string;
-  readonly manifest: PublicDeployManifest;
+  readonly manifest: ReferenceDeploySourcePayload;
   readonly createdAt: IsoTimestamp;
 }
 
@@ -33,7 +33,7 @@ export type DeploymentPlanBlockerProvider = (
 
 export interface CreateDeploymentPlanInput {
   spaceId: string;
-  manifest: PublicDeployManifest;
+  manifest: ReferenceDeploySourcePayload;
   env?: string;
   envName?: string;
   input?: DeploymentInput;

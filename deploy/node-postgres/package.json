@@ -1,0 +1,19 @@
+{
+  "name": "@takosjp/takosumi-accounts-node-postgres",
+  "version": "0.0.1",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit --project ../../tsconfig.json",
+    "start": "bun src/server.ts"
+  },
+  "exports": {
+    ".": "./src/server.ts"
+  },
+  "dependencies": {
+    "@takosjp/takosumi-accounts-service": "workspace:*",
+    "@takosjp/takosumi-platform-services": "workspace:*",
+    "hono": "^4.12.4",
+    "pg": "^8.11.0"
+  }
+}

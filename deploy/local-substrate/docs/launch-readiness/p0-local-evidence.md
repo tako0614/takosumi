@@ -15,7 +15,7 @@ That string was hard-coded in two places (env file + a comment) and did not corr
 
 ## What the local-substrate uses this for
 
-The cloud worker's managed-offering policy (`takosumi-cloud/deploy/cloudflare/src/handler.ts::parseManagedOfferingAccess`) expects:
+The cloud worker's managed-offering policy (`takosumi/deploy/cloudflare/src/handler.ts::parseManagedOfferingAccess`) expects:
 
 | env var                                               | meaning                                                   |
 | ----------------------------------------------------- | --------------------------------------------------------- |
@@ -33,7 +33,7 @@ cd takosumi/deploy/local-substrate
 sha256sum docs/launch-readiness/p0-local-evidence.md
 # → <hash>  docs/launch-readiness/p0-local-evidence.md
 # Then update TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST in
-# env/takosumi-cloud-worker.env with `sha256:<hash>`.
+# env/takosumi-worker.env with `sha256:<hash>`.
 ```
 
 The substrate's `scripts/up.sh` does NOT auto-recompute this digest — that's intentional, because the whole point of pinning a digest is that the operator chose it deliberately at the moment they reviewed the file. If you change this file you must also update the env file by hand; otherwise the worker's managed-offering gate will refuse with `readiness_digest_mismatch`.

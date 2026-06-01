@@ -1,24 +1,33 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { fetchPreparedSource } from "./prepared-source.ts";
 
+const execFileAsync = promisify(execFile);
+
 test("fetchPreparedSource verifies sha256 and extracts tar snapshot", async () => {
-  const sourceDir = await Deno.makeTempDir({
-    prefix: "takosumi-prepared-source-src-",
-  });
-  const archive = await Deno.makeTempFile({
-    prefix: "takosumi-prepared-source-",
-    suffix: ".tar",
-  });
+  const sourceDir = await makeTempDir("takosumi-prepared-source-src-");
+  const archive = await makeTempFile("takosumi-prepared-source-", ".tar");
   try {
-    await Deno.writeTextFile(`${sourceDir}/.takosumi.yml`, "apiVersion: v1\n");
-    await Deno.mkdir(`${sourceDir}/src`);
-    await Deno.writeTextFile(
+    await writeFile(`${sourceDir}/package.json`, '{"name":"app"}\n');
+    await mkdir(`${sourceDir}/src`);
+    await writeFile(
       `${sourceDir}/src/worker.mjs`,
       "export default {}",
     );
-    await tar(["-c", "-f", archive, "-C", sourceDir, ".takosumi.yml", "src"]);
-    const bytes = await Deno.readFile(archive);
+    await tar(["-c", "-f", archive, "-C", sourceDir, "package.json", "src"]);
+    const bytes = await readFile(archive);
     const digest = await sha256Hex(bytes);
 
     const url = "https://example.test/prepared-source.tar";
@@ -27,11 +36,11 @@ test("fetchPreparedSource verifies sha256 and extracts tar snapshot", async () =
       try {
         assert.equal(result.digest, digest);
         assert.equal(
-          await Deno.readTextFile(`${result.workingDirectory}/.takosumi.yml`),
-          "apiVersion: v1\n",
+          await readText(`${result.workingDirectory}/package.json`),
+          '{"name":"app"}\n',
         );
         assert.equal(
-          await Deno.readTextFile(`${result.workingDirectory}/src/worker.mjs`),
+          await readText(`${result.workingDirectory}/src/worker.mjs`),
           "export default {}",
         );
       } finally {
@@ -39,8 +48,8 @@ test("fetchPreparedSource verifies sha256 and extracts tar snapshot", async () =
       }
     });
   } finally {
-    await Deno.remove(sourceDir, { recursive: true });
-    await Deno.remove(archive);
+    await rm(sourceDir, { recursive: true, force: true });
+    await rm(dirname(archive), { recursive: true, force: true });
   }
 });
 
@@ -99,27 +108,22 @@ test("fetchPreparedSource accepts regular file whose name literally contains ' -
   // to the same on-disk file. The fix only applies ` -> ` truncation to
   // entries whose tar type byte is `l` (symlink) or `h` (hardlink), so this
   // archive should now extract cleanly with the literal filename intact.
-  const sourceDir = await Deno.makeTempDir({
-    prefix: "takosumi-prepared-source-trick-src-",
-  });
-  const archive = await Deno.makeTempFile({
-    prefix: "takosumi-prepared-source-trick-",
-    suffix: ".tar",
-  });
+  const sourceDir = await makeTempDir("takosumi-prepared-source-trick-src-");
+  const archive = await makeTempFile("takosumi-prepared-source-trick-", ".tar");
   try {
-    await Deno.writeTextFile(`${sourceDir}/.takosumi.yml`, "apiVersion: v1\n");
+    await writeFile(`${sourceDir}/package.json`, '{"name":"app"}\n');
     // Regular file literally named `evil -> target`.
-    await Deno.writeTextFile(`${sourceDir}/evil -> target`, "regular file\n");
+    await writeFile(`${sourceDir}/evil -> target`, "regular file\n");
     await tar([
       "-c",
       "-f",
       archive,
       "-C",
       sourceDir,
-      ".takosumi.yml",
+      "package.json",
       "evil -> target",
     ]);
-    const bytes = await Deno.readFile(archive);
+    const bytes = await readFile(archive);
     const digest = await sha256Hex(bytes);
 
     const url = "https://example.test/prepared-source-trick.tar";
@@ -129,7 +133,7 @@ test("fetchPreparedSource accepts regular file whose name literally contains ' -
         // The literal filename must survive end-to-end — neither the listing
         // parser nor the extraction can re-interpret it as a symlink.
         assert.equal(
-          await Deno.readTextFile(
+          await readText(
             `${result.workingDirectory}/evil -> target`,
           ),
           "regular file\n",
@@ -139,8 +143,8 @@ test("fetchPreparedSource accepts regular file whose name literally contains ' -
       }
     });
   } finally {
-    await Deno.remove(sourceDir, { recursive: true });
-    await Deno.remove(archive);
+    await rm(sourceDir, { recursive: true, force: true });
+    await rm(dirname(archive), { recursive: true, force: true });
   }
 });
 
@@ -179,8 +183,8 @@ test("fetchPreparedSource rejects oversized prepared archive by Content-Length",
 test("fetchPreparedSource rejects oversized prepared archive by actual byte length", async () => {
   // Use the env var to lower the cap so the test can produce a real
   // payload that exceeds it without allocating tens of megabytes.
-  const previous = Deno.env.get("TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES");
-  Deno.env.set("TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES", "1024");
+  const previous = process.env["TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES"];
+  process.env["TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES"] = "1024";
   const url = "https://example.test/too-big-body.tar";
   const oversized = new Uint8Array(2048);
   try {
@@ -196,9 +200,9 @@ test("fetchPreparedSource rejects oversized prepared archive by actual byte leng
     });
   } finally {
     if (previous === undefined) {
-      Deno.env.delete("TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES");
+      delete process.env["TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES"];
     } else {
-      Deno.env.set("TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES", previous);
+      process.env["TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES"] = previous;
     }
   }
 });
@@ -263,19 +267,14 @@ test("fetchPreparedSource rejects redirect responses (SSRF-via-redirect)", async
 test("fetchPreparedSource rejects a gzip bomb by decompressed size", async () => {
   // Build a tar of a single large sparse-ish file, gzip it (high ratio), and
   // lower the decompressed cap so the listing-sum guard trips before extract.
-  const sourceDir = await Deno.makeTempDir({
-    prefix: "takosumi-prepared-source-bomb-src-",
-  });
-  const archive = await Deno.makeTempFile({
-    prefix: "takosumi-prepared-source-bomb-",
-    suffix: ".tar.gz",
-  });
-  const previous = Deno.env.get("TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES");
-  Deno.env.set("TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES", "1024");
+  const sourceDir = await makeTempDir("takosumi-prepared-source-bomb-src-");
+  const archive = await makeTempFile("takosumi-prepared-source-bomb-", ".tar.gz");
+  const previous = process.env["TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES"];
+  process.env["TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES"] = "1024";
   try {
-    await Deno.writeTextFile(`${sourceDir}/.takosumi.yml`, "apiVersion: v1\n");
+    await writeFile(`${sourceDir}/package.json`, '{"name":"app"}\n');
     // 1 MiB of highly compressible zeros -> tiny gzip, large decompressed.
-    await Deno.writeFile(`${sourceDir}/big`, new Uint8Array(1024 * 1024));
+    await writeFile(`${sourceDir}/big`, new Uint8Array(1024 * 1024));
     await tar([
       "-c",
       "-z",
@@ -283,10 +282,10 @@ test("fetchPreparedSource rejects a gzip bomb by decompressed size", async () =>
       archive,
       "-C",
       sourceDir,
-      ".takosumi.yml",
+      "package.json",
       "big",
     ]);
-    const bytes = await Deno.readFile(archive);
+    const bytes = await readFile(archive);
     const digest = await sha256Hex(bytes);
     const url = "https://example.test/bomb.tar.gz";
     await withFetchStub(url, bytes, async () => {
@@ -297,12 +296,12 @@ test("fetchPreparedSource rejects a gzip bomb by decompressed size", async () =>
     });
   } finally {
     if (previous === undefined) {
-      Deno.env.delete("TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES");
+      delete process.env["TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES"];
     } else {
-      Deno.env.set("TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES", previous);
+      process.env["TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES"] = previous;
     }
-    await Deno.remove(sourceDir, { recursive: true });
-    await Deno.remove(archive);
+    await rm(sourceDir, { recursive: true, force: true });
+    await rm(dirname(archive), { recursive: true, force: true });
   }
 });
 
@@ -312,26 +311,21 @@ test("fetchPreparedSource rejects symlink whose filename contains ' -> ' and esc
   // split(" -> ")[1] validated the fragment `b` (which passes) instead of the
   // real escaping target, letting it through. The unified parser must cut at
   // the FIRST separator and validate the real remainder.
-  const sourceDir = await Deno.makeTempDir({
-    prefix: "takosumi-prepared-source-symlink-src-",
-  });
-  const archive = await Deno.makeTempFile({
-    prefix: "takosumi-prepared-source-symlink-",
-    suffix: ".tar",
-  });
+  const sourceDir = await makeTempDir("takosumi-prepared-source-symlink-src-");
+  const archive = await makeTempFile("takosumi-prepared-source-symlink-", ".tar");
   try {
-    await Deno.writeTextFile(`${sourceDir}/.takosumi.yml`, "apiVersion: v1\n");
-    await Deno.symlink("../../../etc/evil", `${sourceDir}/a -> b`);
+    await writeFile(`${sourceDir}/package.json`, '{"name":"app"}\n');
+    await symlink("../../../etc/evil", `${sourceDir}/a -> b`);
     await tar([
       "-c",
       "-f",
       archive,
       "-C",
       sourceDir,
-      ".takosumi.yml",
+      "package.json",
       "a -> b",
     ]);
-    const bytes = await Deno.readFile(archive);
+    const bytes = await readFile(archive);
     const digest = await sha256Hex(bytes);
     const url = "https://example.test/symlink-trick.tar";
     await withFetchStub(url, bytes, async () => {
@@ -341,19 +335,26 @@ test("fetchPreparedSource rejects symlink whose filename contains ' -> ' and esc
       );
     });
   } finally {
-    await Deno.remove(sourceDir, { recursive: true });
-    await Deno.remove(archive);
+    await rm(sourceDir, { recursive: true, force: true });
+    await rm(dirname(archive), { recursive: true, force: true });
   }
 });
 
 async function tar(args: readonly string[]): Promise<void> {
-  const { code, stderr } = await new Deno.Command("tar", {
-    args: [...args],
-    stderr: "piped",
-  }).output();
-  if (code !== 0) {
-    throw new Error(new TextDecoder().decode(stderr));
-  }
+  await execFileAsync("tar", [...args]);
+}
+
+async function makeTempDir(prefix: string): Promise<string> {
+  return mkdtemp(join(tmpdir(), prefix));
+}
+
+async function makeTempFile(prefix: string, suffix: string): Promise<string> {
+  const dir = await makeTempDir(prefix);
+  return join(dir, `archive${suffix}`);
+}
+
+async function readText(path: URL | string): Promise<string> {
+  return readFile(path, "utf8");
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {

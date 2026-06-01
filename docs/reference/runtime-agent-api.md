@@ -2,7 +2,7 @@
 
 runtime-agent は reference Takosumi topology で使う execution host です。 operator が cloud / OS credential を握る host で起動し、Takosumi の下流 execution surface として connector-local selector 単位の lifecycle リクエストを受けます。
 
-このページは reference runtime-agent topology の HTTP surface を記述します。 Takosumi public conformance surface は manifest / Installation / Deployment と Installer API です。別 implementation はこの route set ではなく、同じ manifest resolution、Deployment の記録、lifecycle outcome を満たす別の execution boundary を持てます。
+このページは reference runtime-agent topology の HTTP surface を記述します。Takosumi public conformance surface は Source / Installation / Deployment / PlatformService と Installer API です。別 implementation はこの route set ではなく、同じ Deployment record、binding snapshot、lifecycle outcome を満たす別の execution boundary を持てます。
 
 逆方向の制御 (enroll / heartbeat / lease / drain / gateway manifest) は [Reference Kernel Route Inventory — Runtime-Agent control RPC](./kernel-http-api.md#runtime-agent-control-rpc) 参照。
 
@@ -14,7 +14,7 @@ runtime-agent は reference Takosumi topology で使う execution host です。
 
 `TAKOSUMI_AGENT_TOKEN` は Takosumi と runtime-agent が共有する shared secret。未設定起動の agent は lifecycle / connectors request 全部に 401。 `/v1/health` のみ無認証で orchestrator probe (Kubernetes / Nomad / docker healthcheck) を想定。
 
-prepared source を読む connector には、reference dispatcher / operator-configured Takosumi が `LifecycleApplyRequest.preparedSource` に resolved source view の runtime-agent transport locator を載せて渡す場合があります。 `workingDirectory` は co-located / operator-local dispatch 用の transport locator で、Installer API の `source.kind: "local"` ではありません。portable remote agent には `url` + `digest` を渡します。prepared handoff では Installer API は引き続き `source.kind: "prepared"` を受け取ります。runtime file path は常に manifest の kind-specific `spec` にある source-root-relative path です。
+prepared source を読む connector には、reference dispatcher / operator-configured Takosumi が `LifecycleApplyRequest.preparedSource` に resolved source view の runtime-agent transport locator を載せて渡す場合があります。`workingDirectory` は co-located / operator-local dispatch 用の transport locator で、Installer API の `source.kind: "local"` ではありません。portable remote agent には `url` + `digest` を渡します。prepared handoff では Installer API は引き続き `source.kind: "prepared"` を受け取ります。runtime file path は source-root-relative path です。
 
 operator が optional asset extension として `/v1/artifacts` を mount しており、asset bytes 取得が必要な connector には、 reference dispatcher / operator-configured Takosumi が `LifecycleApplyRequest.artifactStore` に `baseUrl` と `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を載せて渡す場合があります。この operator-mounted asset extension は agent token と別の credential family を使い、scope は optional asset extension の `GET /v1/artifacts/:hash` のみ ([Authentication](./kernel-http-api.md#authentication))。 `artifactStore.baseUrl` は operator-owned artifact endpoint を指してよく、 Takosumi Installer API process が blob data plane になることを要求しません。
 
@@ -71,7 +71,7 @@ interface LifecycleApplyResponse {
 
 `handle` は Takosumi reference 実装の deploy record state に Deployment と紐づけて persist され、以降の `destroy` / `describe` の key になります。
 
-`spec` は public AppSpec field ではなく、runtime-agent connector に渡す closed input です。通常は operator-selected adapter が public kind descriptor で component `spec` を検証し、listen 由来の env / target など実行時 injection を足してから作ります。connector はこの input を shape ごとの閉じた field set として検証し、未定義 field や typo を受け入れません。たとえば DNS gateway connector の `target` は AppSpec の gateway spec field ではなく、gateway adapter が listen 解決結果から作る connector-local target です。
+`spec` は public Source field ではなく、runtime-agent connector に渡す closed input です。通常は operator-selected adapter が source artifact、PlatformService binding snapshot、operator policy から connector-local input を作ります。connector はこの input を shape ごとの閉じた field set として検証し、未定義 field や typo を受け入れません。たとえば DNS gateway connector の `target` は Source authoring field ではなく、gateway adapter が resolved binding から作る connector-local target です。
 
 `spaceId` は caller Installation の Space を表します。runtime-agent connector はこの値を cloud tag、namespace、resource name prefix、audit metadata などの Space isolation boundary として扱います。別 Space の request で同じ handle を再利用してはいけません。
 
@@ -192,8 +192,8 @@ interface LifecycleVerifyResult {
 
 ## Connector retry / credential refresh {#connector-retry--credential-refresh}
 
-runtime-agent core は `withConnectorResilience()` を提供します。reference connector package
-(`@takos/takosumi-runtime-agent-connectors`) の `buildConnectorRegistry()` は connector の lifecycle operation をこの
+runtime-agent core は `withConnectorResilience()` を提供します。reference connector subpath
+(`@takosjp/takosumi-plugins/connectors`) の `buildConnectorRegistry()` は connector の lifecycle operation をこの
 wrapper で包みます。 retry 対象は次のみ:
 
 - `HTTP 408` / `425` / `429` / `500` / `502` / `503` / `504`

@@ -20,13 +20,13 @@ import type {
   Deployment,
   IsoTimestamp,
 } from "takosumi-contract/reference/compat";
-import type { DeployBlocker, PublicDeployManifest } from "./types.ts";
+import type { DeployBlocker, ReferenceDeploySourcePayload } from "./types.ts";
 import { InMemoryObservabilitySink } from "../../services/observability/mod.ts";
 
 const DEMO_IMAGE_1 =
   "registry.example.test/demo@sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
-function sampleManifest(): PublicDeployManifest {
+function sampleManifest(): ReferenceDeploySourcePayload {
   return {
     name: "demo-app",
     version: "1.0.0",

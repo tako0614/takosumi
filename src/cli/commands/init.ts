@@ -1,71 +1,33 @@
 import { Command } from "../command.ts";
+import { writeTextFile } from "../runtime.ts";
 
 const TEMPLATES = {
-  "worker-postgres": `apiVersion: v1
-
-metadata:
-  id: com.example.my-app
-  name: My App
-
-components:
-  web:
-    kind: worker
-    spec:
-      entrypoint: dist/worker.mjs
-      compatibilityDate: "2025-01-01"
-    connect:
-      db:
-        output: db.connection
-        inject: env
-        prefix: DB
-      assets:
-        output: assets.bucket
-        inject: env
-        prefix: ASSETS
-
-  db:
-    kind: postgres
-    spec:
-      version: "16"
-      size: small
-
-  assets:
-    kind: object-store
-    spec:
-      name: my-app-assets
-`,
-  empty: `apiVersion: v1
-
-metadata:
-  id: com.example.my-app
-  name: My App
-
-components:
-  app:
-    kind: worker
-    spec:
-      entrypoint: dist/worker.mjs
+  package: `{
+  "name": "my-app",
+  "version": "0.1.0",
+  "description": "Manifestless Takosumi source"
+}
 `,
 } as const;
 
 function createInitCommand(): Command {
   return new Command("init")
     .description(
-      "Scaffold a Takosumi AppSpec. Writes to <output> when given, " +
+      "Scaffold generic repository metadata. Writes to <output> when given, " +
         "otherwise prints to stdout.",
     )
     .argument("[output]", "Output file path (prints to stdout when omitted)")
     .option(
       "--template <name>",
-      "Scaffold preset (worker-postgres | empty)",
-      "worker-postgres",
+      "Scaffold preset (package)",
+      "package",
     )
     .action(
       async (output: string | undefined, opts: { template: string }) => {
         const content = TEMPLATES[opts.template as keyof typeof TEMPLATES] ??
-          TEMPLATES.empty;
+          TEMPLATES.package;
         if (output) {
-          await Deno.writeTextFile(output, content);
+          await writeTextFile(output, content);
           console.log(`wrote ${output}`);
         } else {
           console.log(content);

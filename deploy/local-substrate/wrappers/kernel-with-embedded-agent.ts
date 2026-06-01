@@ -15,6 +15,7 @@
  * reads its env at boot. Hence dynamic import of the kernel.
  */
 import { serveRuntimeAgent } from "/workspace/src/runtime-agent/server.ts";
+import { mkdir, writeFile } from "node:fs/promises";
 import {
   LIFECYCLE_AGENT_TOKEN_ENV,
   LIFECYCLE_AGENT_URL_ENV,
@@ -24,31 +25,21 @@ import { currentRuntime } from "/workspace/src/kernel/shared/runtime/index.ts";
 import { createPaaSApp } from "/workspace/src/kernel/bootstrap.ts";
 import {
   dockerPostgresPlugin,
-  KIND_URI as DOCKER_POSTGRES_KIND_URI,
   type SecretWriter,
 } from "/plugins/packages/kind-docker-postgres/mod.ts";
-import {
-  filesystemObjectStorePlugin,
-  KIND_URI as FILESYSTEM_OBJECT_STORE_KIND_URI,
-} from "/plugins/packages/kind-filesystem-object-store/mod.ts";
+import { filesystemObjectStorePlugin } from "/plugins/packages/kind-filesystem-object-store/mod.ts";
 import type {
   CoreDnsLifecycleClient,
   CoreDnsRecordDescriptor,
 } from "/plugins/packages/kind-coredns-gateway/mod.ts";
-import {
-  coreDnsGatewayPlugin,
-  KIND_URI as COREDNS_GATEWAY_KIND_URI,
-} from "/plugins/packages/kind-coredns-gateway/mod.ts";
-import {
-  dockerComposeWebServicePlugin,
-  KIND_URI as DOCKER_COMPOSE_WEB_SERVICE_KIND_URI,
-} from "/plugins/packages/kind-docker-compose-web-service/mod.ts";
+import { coreDnsGatewayPlugin } from "/plugins/packages/kind-coredns-gateway/mod.ts";
+import { dockerComposeWebServicePlugin } from "/plugins/packages/kind-docker-compose-web-service/mod.ts";
 import { buildLocalSubstrateRegistry } from "/local-substrate-factories/local-substrate-factories.ts";
 
-const agentPort = Number(Deno.env.get("TAKOSUMI_AGENT_PORT") ?? "8789");
-const kernelPort = Number(Deno.env.get("PORT") ?? "8788");
+const agentPort = Number(process.env.TAKOSUMI_AGENT_PORT ?? "8789");
+const kernelPort = Number(process.env.PORT ?? "8788");
 
-const env = Deno.env.toObject();
+const env = { ...process.env };
 const registry = buildLocalSubstrateRegistry(env);
 const token = env[LIFECYCLE_AGENT_TOKEN_ENV] ?? randomToken();
 
@@ -59,8 +50,8 @@ const agent = serveRuntimeAgent({
   hostname: "127.0.0.1",
 });
 
-Deno.env.set(LIFECYCLE_AGENT_URL_ENV, agent.url);
-Deno.env.set(LIFECYCLE_AGENT_TOKEN_ENV, token);
+process.env[LIFECYCLE_AGENT_URL_ENV] = agent.url;
+process.env[LIFECYCLE_AGENT_TOKEN_ENV] = token;
 
 const routeProjectionFile = env.TAKOSUMI_LOCAL_SUBSTRATE_GATEWAY_ROUTES_FILE ??
   "/local-substrate-runtime/gateway-routes.json";
@@ -72,13 +63,7 @@ console.log(
 );
 
 const created = await createPaaSApp({
-  runtimeEnv: Deno.env.toObject(),
-  kindAliases: {
-    postgres: DOCKER_POSTGRES_KIND_URI,
-    "object-store": FILESYSTEM_OBJECT_STORE_KIND_URI,
-    "web-service": DOCKER_COMPOSE_WEB_SERVICE_KIND_URI,
-    gateway: COREDNS_GATEWAY_KIND_URI,
-  },
+  runtimeEnv: { ...process.env },
   plugins: localSubstrateInstallerPlugins({
     agentUrl: agent.url,
     token,
@@ -99,7 +84,7 @@ console.log(
 const shutdown = (signal: string) => {
   console.log(`[local-substrate-wrapper] received ${signal}, draining...`);
   Promise.allSettled([agent.shutdown(), server.shutdown()]).finally(() => {
-    Deno.exit(0);
+    process.exit(0);
   });
 };
 runtime.onSignal("SIGINT", () => shutdown("SIGINT"));
@@ -194,9 +179,9 @@ async function writeGatewayProjection(
 ): Promise<void> {
   const dir = file.slice(0, file.lastIndexOf("/"));
   if (dir.length > 0) {
-    await Deno.mkdir(dir, { recursive: true });
+    await mkdir(dir, { recursive: true });
   }
-  await Deno.writeTextFile(
+  await writeFile(
     file,
     JSON.stringify(
       {
@@ -212,5 +197,6 @@ async function writeGatewayProjection(
       null,
       2,
     ) + "\n",
+    "utf8",
   );
 }

@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { compileManifestToAppSpec } from "./compiler.ts";
-import type { PublicDeployManifest } from "./types.ts";
+import { compileSourcePayloadToInternalDeploySpec } from "./compiler.ts";
+import type { ReferenceDeploySourcePayload } from "./types.ts";
 
 const IMAGE_A =
   "registry.example.test/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -12,11 +12,11 @@ const WORKER_IMAGE = IMAGE_A;
 
 // Wave J removed kernel-side route compilation; the
 // "accepts default-app style routes and outputs" test that asserted on
-// `appSpec.routes[].to/path` projections was deleted because the kernel no
+// `deploySpec.routes[].to/path` projections was deleted because the kernel no
 // longer projects routes.
 
-test("public manifest compiler infers image-backed compute as container runtime", () => {
-  const appSpec = compileManifestToAppSpec({
+test("source payload compiler infers image-backed compute as container runtime", () => {
+  const deploySpec = compileSourcePayloadToInternalDeploySpec({
     name: "image-app",
     compute: {
       api: {
@@ -26,17 +26,17 @@ test("public manifest compiler infers image-backed compute as container runtime"
     },
   });
 
-  assert.equal(appSpec.components[0].type, "runtime.oci-container@v1");
+  assert.equal(deploySpec.components[0].type, "runtime.oci-container@v1");
 });
 
 // Phase 10 Wave 4: enabled — this test only exercises the compiler-level
 // validation (the Plan-projection part is now covered by the
 // Deployment.resolution surface in deployment_service tests).
-test("public manifest compiler validates and projects worker attached containers",
+test("source payload compiler validates and projects worker attached containers",
   () => {
     assert.throws(
       () =>
-        compileManifestToAppSpec({
+        compileSourcePayloadToInternalDeploySpec({
           name: "bad-attached",
           compute: {
             web: {
@@ -56,7 +56,7 @@ test("public manifest compiler validates and projects worker attached containers
     );
     assert.throws(
       () =>
-        compileManifestToAppSpec({
+        compileSourcePayloadToInternalDeploySpec({
           name: "bad-attached-port",
           compute: {
             web: {
@@ -71,7 +71,7 @@ test("public manifest compiler validates and projects worker attached containers
     );
     assert.throws(
       () =>
-        compileManifestToAppSpec({
+        compileSourcePayloadToInternalDeploySpec({
           name: "bad-attached-parent",
           compute: {
             web: {
@@ -87,10 +87,10 @@ test("public manifest compiler validates and projects worker attached containers
 );
 
 // Workflow/trigger authoring is owned above the kernel by installer clients.
-test("public manifest compiler rejects compute triggers", () => {
+test("source payload compiler rejects compute triggers", () => {
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "bad-trigger",
         compute: {
           jobs: {
@@ -107,10 +107,10 @@ test("public manifest compiler rejects compute triggers", () => {
 
 // Wave J removed the kernel-side `routes`/`outputs` map projection that the
 // "keeps route and outputs map" test exercised; deleted because the kernel no
-// longer carries routes through `compileManifestToAppSpec`.
+// longer carries routes through `compileSourcePayloadToInternalDeploySpec`.
 
-test("public manifest compiler expands documented resource bindings", () => {
-  const appSpec = compileManifestToAppSpec({
+test("source payload compiler expands documented resource bindings", () => {
+  const deploySpec = compileSourcePayloadToInternalDeploySpec({
     name: "resource-app",
     compute: {
       web: {
@@ -158,7 +158,7 @@ test("public manifest compiler expands documented resource bindings", () => {
   });
 
   assert.deepEqual(
-    appSpec.resources.map((resource) => [resource.name, resource.type]),
+    deploySpec.resources.map((resource) => [resource.name, resource.type]),
     [
       ["db", "resource.sql.sqlite-serverless@v1"],
       ["media", "resource.object-store.s3@v1"],
@@ -168,7 +168,7 @@ test("public manifest compiler expands documented resource bindings", () => {
     ],
   );
   const webBindings =
-    appSpec.components.find((component) => component.name === "web")
+    deploySpec.components.find((component) => component.name === "web")
       ?.bindings ?? {};
   assert.deepEqual(
     Object.entries(webBindings).map(([name, spec]) => [
@@ -212,7 +212,7 @@ test("public manifest compiler expands documented resource bindings", () => {
     ],
   );
   const workerBindings =
-    appSpec.components.find((component) => component.name === "worker")
+    deploySpec.components.find((component) => component.name === "worker")
       ?.bindings ?? {};
   assert.deepEqual(
     Object.entries(workerBindings).map(([name, spec]) => [
@@ -231,8 +231,8 @@ test("public manifest compiler expands documented resource bindings", () => {
   );
 });
 
-test("public manifest compiler accepts every documented resource type", () => {
-  const appSpec = compileManifestToAppSpec({
+test("source payload compiler accepts every documented resource type", () => {
+  const deploySpec = compileSourcePayloadToInternalDeploySpec({
     name: "resource-types",
     resources: {
       sql: { type: "sql" },
@@ -247,7 +247,7 @@ test("public manifest compiler accepts every documented resource type", () => {
   });
 
   assert.deepEqual(
-    appSpec.resources.map((resource) => resource.type),
+    deploySpec.resources.map((resource) => resource.type),
     [
       "resource.sql.sqlite-serverless@v1",
       "resource.object-store.s3@v1",
@@ -261,10 +261,10 @@ test("public manifest compiler accepts every documented resource type", () => {
   );
 });
 
-test("public manifest compiler rejects removed publish field", () => {
+test("source payload compiler rejects removed publish field", () => {
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "invalid-app",
         publish: [],
       }),
@@ -273,22 +273,22 @@ test("public manifest compiler rejects removed publish field", () => {
 });
 
 // Wave J removed kernel-side route override projection; the "applies selected
-// environment overrides" test asserted on `appSpec.routes` produced by the
+// environment overrides" test asserted on `deploySpec.routes` produced by the
 // `overrides.production.routes[]` chain. Deleted because the kernel no longer
 // reads or projects `routes` in overrides.
 
-test("public manifest compiler rejects invalid documented manifest fields", () => {
+test("source payload compiler rejects invalid documented manifest fields", () => {
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "bad",
         extra: true,
       } as never),
-    /internal deployment manifest must not include 'extra'/,
+    /reference deploy source payload must not include 'extra'/,
   );
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "bad-image",
         compute: {
           web: { image: "registry.example.test/web:latest", port: 8080 },
@@ -298,7 +298,7 @@ test("public manifest compiler rejects invalid documented manifest fields", () =
   );
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "bad-port",
         compute: {
           web: { image: IMAGE_A },
@@ -308,7 +308,7 @@ test("public manifest compiler rejects invalid documented manifest fields", () =
   );
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "rejects-build-field",
         compute: {
           web: {
@@ -321,7 +321,7 @@ test("public manifest compiler rejects invalid documented manifest fields", () =
   );
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "bad-binding",
         compute: {
           web: {
@@ -340,8 +340,8 @@ test("public manifest compiler rejects invalid documented manifest fields", () =
   );
 });
 
-test("public manifest compiler validates route and output references", () => {
-  const base: PublicDeployManifest = {
+test("source payload compiler validates route and output references", () => {
+  const base: ReferenceDeploySourcePayload = {
     name: "route-app",
     compute: {
       web: {
@@ -353,7 +353,7 @@ test("public manifest compiler validates route and output references", () => {
 
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         ...base,
         routes: [{
           id: "web",
@@ -369,7 +369,7 @@ test("public manifest compiler validates route and output references", () => {
   );
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         ...base,
         routes: [{
           id: "a",
@@ -387,7 +387,7 @@ test("public manifest compiler validates route and output references", () => {
   );
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         ...base,
         routes: [{ id: "web", target: "web", path: "/" }],
         outputs: [{
@@ -400,7 +400,7 @@ test("public manifest compiler validates route and output references", () => {
   );
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         ...base,
         routes: [{ id: "web", target: "web", path: "/" }],
         outputs: [{
@@ -412,7 +412,7 @@ test("public manifest compiler validates route and output references", () => {
   );
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         ...base,
         overrides: {
           production: {
@@ -430,11 +430,11 @@ test("public manifest compiler validates route and output references", () => {
 // `interfaceContractRef` projections. Deleted because the kernel no longer
 // validates or normalizes route protocols.
 
-test("public manifest compiler validates bindings request/inject shape",
+test("source payload compiler validates bindings request/inject shape",
   () => {
     assert.throws(
       () =>
-        compileManifestToAppSpec({
+        compileSourcePayloadToInternalDeploySpec({
           name: "bad-binding-request",
           compute: {
             web: {
@@ -457,10 +457,10 @@ test("public manifest compiler validates bindings request/inject shape",
   },
 );
 
-test("public manifest compiler rejects env collisions after uppercase normalization", () => {
+test("source payload compiler rejects env collisions after uppercase normalization", () => {
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "bad-env",
         env: { log_level: "info" },
         compute: {
@@ -475,7 +475,7 @@ test("public manifest compiler rejects env collisions after uppercase normalizat
   );
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "bad-binding-env",
         compute: {
           web: {
@@ -501,7 +501,7 @@ test("public manifest compiler rejects env collisions after uppercase normalizat
   );
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "bad-resource-binding-env",
         compute: {
           web: {
@@ -518,8 +518,8 @@ test("public manifest compiler rejects env collisions after uppercase normalizat
   );
 });
 
-test("public manifest compiler validates OAuth redirect URI schemes", () => {
-  compileManifestToAppSpec({
+test("source payload compiler validates OAuth redirect URI schemes", () => {
+  compileSourcePayloadToInternalDeploySpec({
     name: "oauth-relative",
     compute: {
       web: {
@@ -543,7 +543,7 @@ test("public manifest compiler validates OAuth redirect URI schemes", () => {
 
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "oauth-relative-no-context",
         compute: {
           web: {
@@ -568,7 +568,7 @@ test("public manifest compiler validates OAuth redirect URI schemes", () => {
   );
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "oauth-http",
         compute: {
           web: {
@@ -592,7 +592,7 @@ test("public manifest compiler validates OAuth redirect URI schemes", () => {
     /redirectUris\[0\] must be HTTPS absolute URL/,
   );
 
-  const appSpec = compileManifestToAppSpec({
+  const deploySpec = compileSourcePayloadToInternalDeploySpec({
     name: "oauth-localhost",
     compute: {
       web: {
@@ -614,11 +614,11 @@ test("public manifest compiler validates OAuth redirect URI schemes", () => {
     },
   }, { localDevelopment: true });
 
-  assert.equal(appSpec.name, "oauth-localhost");
+  assert.equal(deploySpec.name, "oauth-localhost");
 });
 
-test("public manifest compiler accepts the canonical 'outputs' authoring key", () => {
-  const manifest: PublicDeployManifest = {
+test("source payload compiler accepts the canonical 'outputs' authoring key", () => {
+  const manifest: ReferenceDeploySourcePayload = {
     name: "outputs-canonical",
     version: "1.0.0",
     compute: {
@@ -631,17 +631,17 @@ test("public manifest compiler accepts the canonical 'outputs' authoring key", (
       outputs: { url: { kind: "url", routeRef: "web" } },
     }],
   };
-  const appSpec = compileManifestToAppSpec(manifest);
-  const searchOutput = appSpec.outputs?.find((spec) => spec.name === "search");
+  const deploySpec = compileSourcePayloadToInternalDeploySpec(manifest);
+  const searchOutput = deploySpec.outputs?.find((spec) => spec.name === "search");
   assert.ok(
     searchOutput,
-    "outputs[].search should resolve into appSpec.outputs",
+    "outputs[].search should resolve into deploySpec.outputs",
   );
   assert.equal(searchOutput?.type, "output.http-endpoint@v1");
 });
 
-test("public manifest compiler accepts component bindings authoring", () => {
-  const manifest: PublicDeployManifest = {
+test("source payload compiler accepts component bindings authoring", () => {
+  const manifest: ReferenceDeploySourcePayload = {
     name: "binding-canonical",
     version: "1.0.0",
     compute: {
@@ -660,8 +660,8 @@ test("public manifest compiler accepts component bindings authoring", () => {
       },
     },
   };
-  const appSpec = compileManifestToAppSpec(manifest);
-  const web = appSpec.components.find((component) => component.name === "web");
+  const deploySpec = compileSourcePayloadToInternalDeploySpec(manifest);
+  const web = deploySpec.components.find((component) => component.name === "web");
   assert.ok(web, "web component must exist after expansion");
   const binding = web?.bindings.TAKOSUMI_API_KEY;
   assert.ok(binding);
@@ -672,10 +672,10 @@ test("public manifest compiler accepts component bindings authoring", () => {
   assert.equal(binding!.inject.target, "TAKOSUMI_API_KEY");
 });
 
-test("public manifest compiler rejects removed service import bindings", () => {
+test("source payload compiler rejects removed service import bindings", () => {
   assert.throws(
     () =>
-      compileManifestToAppSpec({
+      compileSourcePayloadToInternalDeploySpec({
         name: "removed-service-import-binding",
         compute: {
           web: {
@@ -692,7 +692,7 @@ test("public manifest compiler rejects removed service import bindings", () => {
             },
           },
         },
-      } as unknown as PublicDeployManifest),
+      } as unknown as ReferenceDeploySourcePayload),
     /compute\.web\.bindings\.OIDC_ISSUER_URL\.from must not include 'import'/,
   );
 });

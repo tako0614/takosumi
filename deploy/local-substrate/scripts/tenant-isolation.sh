@@ -13,7 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
-BASE="https://cloud.takosumi.test"
+BASE="https://accounts.takosumi.test"
 
 mint_session() {
 	local provider=${1:-google}
@@ -65,7 +65,7 @@ PREVIEW=$(curl -sk --cacert "$CA" -X POST \
 	"$BASE/v1/installations/dry-run")
 APP_ID=$(echo "$PREVIEW" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('appId',''))")
 COMMIT=$(echo "$PREVIEW" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('source',{}).get('commit',''))")
-DIGEST=$(echo "$PREVIEW" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('manifestDigest') or d.get('source',{}).get('appManifestDigest',''))")
+DIGEST=$(echo "$PREVIEW" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('planSnapshotDigest',''))")
 
 INSTALL_PAYLOAD=$(cat <<JSON
 {
@@ -76,7 +76,7 @@ INSTALL_PAYLOAD=$(cat <<JSON
     "gitUrl": "https://github.com/tako0614/takos-docs.git",
     "ref": "main",
     "commit": "$COMMIT",
-    "appManifestDigest": "$DIGEST"
+    "planSnapshotDigest": "$DIGEST"
   },
   "mode": "shared-cell",
   "createdBySubject": "$SUB_A"

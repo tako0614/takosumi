@@ -21,7 +21,7 @@ export type OpenApiHttpMethod = "delete" | "get" | "head" | "post";
 
 /**
  * Canonical version emitted in `info.version`. Kept in lockstep with the
- * `@takos/takosumi-kernel` package version declared in `packages/kernel/deno.json`.
+ * `@takosjp/takosumi` package version declared in `package.json`.
  * Bump this when the kernel publishes a new minor/major release.
  */
 export const TAKOSUMI_OPENAPI_VERSION = "0.14.0" as const;
@@ -967,27 +967,40 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     },
     InstallerGitSourcePin: {
       type: "object",
-      required: ["manifestDigest", "commit"],
+      required: ["planSnapshotDigest", "commit"],
       properties: {
-        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        planSnapshotDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
         commit: { type: "string" },
+        sourceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        artifactDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
       },
       additionalProperties: false,
     },
     InstallerPreparedSourcePin: {
       type: "object",
-      required: ["manifestDigest", "sourceDigest"],
+      required: ["planSnapshotDigest", "sourceDigest"],
       properties: {
-        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        planSnapshotDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
         sourceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        artifactDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
       },
       additionalProperties: false,
     },
     InstallerLocalSourcePin: {
       type: "object",
-      required: ["manifestDigest"],
+      required: ["planSnapshotDigest"],
       properties: {
-        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        planSnapshotDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+        artifactDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
       },
       additionalProperties: false,
     },
@@ -1000,19 +1013,26 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     },
     InstallerDeploymentGitExpectedGuard: {
       type: "object",
-      required: ["manifestDigest", "commit", "currentDeploymentId"],
+      required: ["planSnapshotDigest", "commit", "currentDeploymentId"],
       properties: {
-        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        planSnapshotDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
         commit: { type: "string" },
+        sourceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
         currentDeploymentId: { type: "string", nullable: true },
       },
       additionalProperties: false,
     },
     InstallerDeploymentPreparedExpectedGuard: {
       type: "object",
-      required: ["manifestDigest", "sourceDigest", "currentDeploymentId"],
+      required: ["planSnapshotDigest", "sourceDigest", "currentDeploymentId"],
       properties: {
-        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        planSnapshotDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
         sourceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
         currentDeploymentId: { type: "string", nullable: true },
       },
@@ -1020,9 +1040,12 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     },
     InstallerDeploymentLocalExpectedGuard: {
       type: "object",
-      required: ["manifestDigest", "currentDeploymentId"],
+      required: ["planSnapshotDigest", "currentDeploymentId"],
       properties: {
-        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        planSnapshotDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
         currentDeploymentId: { type: "string", nullable: true },
       },
       additionalProperties: false,
@@ -1040,6 +1063,8 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         spaceId: { type: "string" },
         source: ref("InstallerSource"),
+        profile: { type: "string" },
+        bindings: { type: "array", items: ref("InstallerBindingSelection") },
       },
       additionalProperties: false,
     },
@@ -1049,6 +1074,8 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         spaceId: { type: "string" },
         source: ref("InstallerSource"),
+        profile: { type: "string" },
+        bindings: { type: "array", items: ref("InstallerBindingSelection") },
         expected: ref("InstallerSourcePin"),
       },
       additionalProperties: false,
@@ -1057,6 +1084,8 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       properties: {
         source: ref("InstallerSource"),
+        profile: { type: "string" },
+        bindings: { type: "array", items: ref("InstallerBindingSelection") },
       },
       additionalProperties: false,
     },
@@ -1064,28 +1093,81 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       properties: {
         source: ref("InstallerSource"),
+        profile: { type: "string" },
+        bindings: { type: "array", items: ref("InstallerBindingSelection") },
         expected: ref("InstallerDeploymentExpectedGuard"),
       },
       additionalProperties: false,
     },
     InstallerDryRunChange: {
       type: "object",
-      required: ["op", "component", "kind"],
+      required: ["op", "subject", "kind"],
       properties: {
         op: { enum: ["create", "update", "delete", "noop"] },
-        component: { type: "string" },
-        kind: { type: "string" },
+        subject: { type: "string" },
+        kind: {
+          enum: ["source", "binding", "publication", "deployment"],
+        },
         reason: { type: "string" },
       },
       additionalProperties: true,
     },
-    InstallerDryRunResponse: {
+    InstallerBindingSelection: {
       type: "object",
-      required: ["source", "manifestDigest", "appSpec", "changes", "expected"],
+      required: ["name"],
+      properties: {
+        name: { type: "string" },
+        servicePath: { type: "string" },
+        serviceKind: { type: "string" },
+        labels: { type: "object", additionalProperties: { type: "string" } },
+        many: { type: "boolean" },
+        required: { type: "boolean" },
+        inject: {},
+      },
+      additionalProperties: false,
+    },
+    InstallerInstallPlan: {
+      type: "object",
+      required: [
+        "source",
+        "repo",
+        "requestedBindings",
+        "resolvedBindings",
+        "publications",
+        "changes",
+        "warnings",
+      ],
       properties: {
         source: ref("InstallerSourceSummary"),
-        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-        appSpec: jsonObject,
+        repo: jsonObject,
+        selectedProfile: { type: "string" },
+        requestedBindings: {
+          type: "array",
+          items: ref("InstallerBindingSelection"),
+        },
+        resolvedBindings: { type: "array", items: jsonObject },
+        publications: { type: "array", items: jsonObject },
+        changes: { type: "array", items: ref("InstallerDryRunChange") },
+        warnings: { type: "array", items: { type: "string" } },
+      },
+      additionalProperties: false,
+    },
+    InstallerDryRunResponse: {
+      type: "object",
+      required: [
+        "source",
+        "installPlan",
+        "planSnapshotDigest",
+        "changes",
+        "expected",
+      ],
+      properties: {
+        source: ref("InstallerSourceSummary"),
+        installPlan: ref("InstallerInstallPlan"),
+        planSnapshotDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
         changes: { type: "array", items: ref("InstallerDryRunChange") },
         expected: {
           oneOf: [
@@ -1129,6 +1211,7 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         ref: { type: "string" },
         commit: { type: "string" },
         digest: { type: "string" },
+        sourceDigest: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -1138,7 +1221,9 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         "id",
         "installationId",
         "source",
-        "manifestDigest",
+        "planSnapshotDigest",
+        "planSnapshot",
+        "bindingsSnapshot",
         "status",
         "outputs",
         "createdAt",
@@ -1147,7 +1232,14 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         id: { type: "string" },
         installationId: { type: "string" },
         source: ref("InstallerSourceSummary"),
-        manifestDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        sourceDigest: { type: "string" },
+        artifactDigest: { type: "string" },
+        planSnapshotDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+        planSnapshot: ref("InstallerInstallPlan"),
+        bindingsSnapshot: { type: "array", items: jsonObject },
         status: { enum: ["running", "succeeded", "failed"] },
         outputs: jsonObject,
         createdAt: { type: "number" },

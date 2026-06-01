@@ -17,7 +17,7 @@
  *   (same for GITHUB)
  */
 
-const PORT = Number(Deno.env.get("PORT") ?? "8789");
+const PORT = Number(process.env.PORT ?? "8789");
 
 interface Provider {
   readonly id: "google" | "github";
@@ -66,7 +66,7 @@ function consumeCode(code: string): { providerId: string } | null {
   return { providerId: entry.providerId };
 }
 
-Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
+Bun.serve({ port: PORT, hostname: "0.0.0.0", fetch: async (req) => {
   const url = new URL(req.url);
   console.log(
     `[oauth-mock] ${req.method} ${url.pathname}${
@@ -179,6 +179,6 @@ Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
   return Response.json({ error: "not_found", path: url.pathname }, {
     status: 404,
   });
-});
+} });
 
 console.log(`[oauth-mock] listening on :${PORT}`);

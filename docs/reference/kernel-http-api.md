@@ -41,7 +41,7 @@ asset route は operator extension surface です。mount する operator は in
 | asset writer/admin bearer   | `TAKOSUMI_DEPLOY_TOKEN`         | upload / list / delete / GC / read |
 | asset read-only fetch token | `TAKOSUMI_ARTIFACT_FETCH_TOKEN` | single-hash `GET` / `HEAD` read    |
 
-asset URL や token は Deployment outputs に出さず、operator evidence / export policy で扱います。Installer API v1 の public digest set は `manifestDigest` と source pin / digest を正本にします。
+asset URL や token は Deployment outputs に出さず、operator evidence / export policy で扱います。Installer API v1 の public guard set は `planSnapshotDigest` と source pin / digest を正本にします。
 
 ## Public installer routes {#public-installer-routes}
 
@@ -71,7 +71,7 @@ The routes in this section are reference implementation inventory. Client applic
 | POST   | `/api/internal/v1/spaces`                           | Space 作成                        |
 | GET    | `/api/internal/v1/groups?spaceId=...`               | Space 内 Group summary 一覧       |
 | POST   | `/api/internal/v1/groups`                           | Group 作成                        |
-| POST   | `/api/internal/v1/deployments`                      | internal manifest resolve / plan  |
+| POST   | `/api/internal/v1/deployments`                      | internal source payload resolve / plan |
 | POST   | `/api/internal/v1/deployments/{deploymentId}/apply` | resolved deployment apply         |
 
 すべて internal HMAC 署名 (`TAKOSUMI_INTERNAL_API_SECRET`) が必須。署名失敗は 401 `unauthenticated`、 actor 拒否は 403 `permission_denied`。
@@ -114,12 +114,12 @@ public installer のエラーレスポンスの正本は [Installer API](./insta
 
 | `code`                   | HTTP | 主な発生要因                                                                                         |
 | ------------------------ | ---- | ---------------------------------------------------------------------------------------------------- |
-| `invalid_argument`       | 400  | manifest schema / form input / malformed local reference / connection-resolution cycle               |
+| `invalid_argument`       | 400  | source payload schema / form input / malformed local reference / connection-resolution cycle          |
 | `unauthenticated`        | 401  | bearer 不足、 internal HMAC 検証失敗                                                                 |
 | `permission_denied`      | 403  | space 越境、token claim 不足、operator policy による拒否                                             |
 | `not_found`              | 404  | endpoint disabled (token unset)、 Installation / Deployment 不在                                     |
 | `failed_precondition`    | 409  | expected guard mismatch、well-formed unresolved Space-visible term、active mutation conflict         |
-| `resource_exhausted`     | 413  | prepared source payload / request body / manifest size 上限超過                                      |
+| `resource_exhausted`     | 413  | prepared source payload / request body / source size 上限超過                                        |
 | `not_implemented`        | 501  | endpoint / optional extension / adopted descriptor binding がこの operator binary に実装されていない |
 | `readiness_probe_failed` | 503  | `/livez` / `/readyz` / dependent port が ready でない                                                |
 | `internal_error`         | 500  | unhandled exception                                                                                  |
@@ -129,8 +129,8 @@ public installer のエラーレスポンスの正本は [Installer API](./insta
 ## クロスリファレンス {#cross-references}
 
 - [Installer API](./installer-api.md) — Installer API の完全 spec
-- [manifest](./manifest.md) — `.takosumi.yml` 仕様
+- [Core Specification](./core-spec.md) — Source / Installation / Deployment / PlatformService
 - [Build service handoff](./build-spec.md) — build service と prepared source の handoff
-- [Takosumi 公式カタログ仕様](./catalog.md) — official kind schema and material kind vocabulary
+- [Reference Backend Binding](./kind-bindings.md) — adapter implementation metadata
 - [Reference Runtime-Agent Execution Surface](./runtime-agent-api.md)
 - [Enum and Value Index](./closed-enums.md)

@@ -2,7 +2,7 @@
 
 asset GC は optional asset extension の uploaded asset と、その裏付け object bytes を保守的に削除する operator extension worker です。rollback、 audit、CleanupBacklog の根拠になる asset を消さないことを優先します。
 
-This is an operational surface for the optional asset extension. Component kind and asset metadata values are handled by different layers: component kind belongs to manifest/catalog resolution, while asset metadata values belong to operator distribution / connector policy. Compatibility names are listed in [asset Policy](./data-asset-policy.md#compatibility-names).
+This is an operational surface for the optional asset extension. Source identity and asset metadata values are handled by different layers: Source belongs to the Installer API, while asset metadata values belong to operator distribution / connector policy. Compatibility names are listed in [asset Policy](./data-asset-policy.md#compatibility-names).
 
 ## Reachability
 

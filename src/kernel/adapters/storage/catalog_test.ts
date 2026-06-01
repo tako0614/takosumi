@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "bun:test";
 import {
   postgresStorageMigrationStatements,
@@ -173,11 +174,12 @@ test("migration SQL files do not drift from the storage catalog", () => {
       migration,
       `${entry.fileName} maps to missing catalog migration ${entry.migrationId}`,
     );
-    const fileSql = Deno.readTextFileSync(
+    const fileSql = readFileSync(
       new URL(
         entry.fileName,
         migrationFilesUrl,
       ),
+      "utf8",
     );
     assert(
       fileSql.startsWith(
@@ -282,8 +284,8 @@ function assertColumns(
 }
 
 function listMigrationSqlFiles(): readonly string[] {
-  return [...Deno.readDirSync(migrationFilesUrl)]
-    .filter((entry) => entry.isFile && entry.name.endsWith(".sql"))
+  return readdirSync(migrationFilesUrl, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
     .map((entry) => entry.name)
     .sort();
 }

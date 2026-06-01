@@ -6,6 +6,7 @@ import {
   requireRemoteInstaller,
   resolveSourceArg,
 } from "../installer_client.ts";
+import { exitCli } from "../runtime.ts";
 
 function createPlanCommand(): Command {
   return new Command("plan")
@@ -39,7 +40,7 @@ function createPlanCommand(): Command {
           });
           if (status >= 400) {
             console.error(`kernel returned ${status}:`, body);
-            Deno.exit(1);
+            exitCli(1);
           }
           console.log(JSON.stringify(body, null, 2));
         } catch (error) {
@@ -47,7 +48,7 @@ function createPlanCommand(): Command {
             ? error.message
             : String(error);
           console.error(`error: ${message}`);
-          Deno.exit(1);
+          exitCli(1);
         }
       },
     ) as Command;

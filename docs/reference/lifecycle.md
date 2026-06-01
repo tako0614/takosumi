@@ -1,6 +1,6 @@
 # Lifecycle プロトコル {#lifecycle-protocol}
 
-このページは Takosumi reference 実装の internal lifecycle note です。public lifecycle model は manifest / Installation / Deployment で、wire operation は Installer API の install / deploy / rollback です。WAL、OperationPlan、 runtime-agent、connector、cleanup worker は operator implementation の実行モデルです。
+このページは Takosumi reference 実装の internal lifecycle note です。public lifecycle model は Source / Installation / Deployment / PlatformService で、wire operation は Installer API の install / deploy / rollback です。WAL、OperationPlan、 runtime-agent、connector、cleanup worker は operator implementation の実行モデルです。
 
 Takosumi reference 実装の lifecycle は `apply / activate / destroy / rollback / recovery /
 observe` の 6 phase。 phase ごとの snapshot 対応や `LifecycleStatus` 遷移は [Lifecycle Phases](./lifecycle-phases.md)、 WAL stage は [WAL Stages](./wal-stages.md)、 approval 失効は [Approval Invalidation Triggers](./approval-invalidation.md) 参照。
@@ -26,7 +26,7 @@ Compensation: runtime-agent protocol は connector-native `compensate` を持ち
 Fail-closed のバリデーション: 最新の unfinished mutation WAL entry (`apply` / `destroy` / `rollback` / `recovery`) がある Installation への新規 apply / rollback は拒否します (backend 呼出なし、 WAL entry 追加なし)。long-lived `observe` entry は mutation blocker ではありません。recovery は internal lifecycle orchestration で駆動:
 
 - `inspect`: persist 済 WAL entries と latest stage summary を返す
-- `continue`: manifest / mode から再現した OperationPlan digest が一致する場合のみ backend fencing token 付きで replay。不一致は fail-closed
+- `continue`: recorded Source / resolved target state / mode から再現した OperationPlan digest が一致する場合のみ backend fencing token 付きで replay。不一致は fail-closed
 - `compensate`: `commit` 未到達の WAL は backend を呼ばず terminal `abort` に進める。`commit` 以降に到達した WAL は `activation-rollback` CleanupBacklog を enqueue し、cleanup worker が connector-native `compensate` または handle-keyed `destroy` fallback を呼ぶ
 
 `apply` / `destroy` は lock 取得→実行→ release を `try { ... } finally` で囲みます。 lock contention 時は client timeout で諦めるか、 operator が single-writer apply tier (control-plane mutation requests を 1 pod に固定する topology) を採用します。

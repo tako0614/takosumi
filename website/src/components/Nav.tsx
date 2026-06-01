@@ -25,7 +25,7 @@ export default function Nav() {
           <a href="#ecosystem">Ecosystem</a>
           <a href="#showcase">How</a>
           <a href="/docs/" rel="external">Docs</a>
-          <a href="https://cloud.takosumi.com/" rel="noopener">Cloud</a>
+          <a href="https://accounts.takosumi.com/" rel="noopener">Cloud</a>
         </nav>
         <div class="nav-actions">
           <a

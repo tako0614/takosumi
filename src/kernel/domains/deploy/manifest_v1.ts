@@ -10,8 +10,8 @@ export type { ManifestResource } from "./_internal_manifest_types.ts";
 /**
  * Resolve the legacy deploy-domain `resources[]` compatibility shape.
  *
- * Despite the historical name, this is not the public AppSpec v1 parser.
- * Public `.takosumi.yml` parsing lives in `src/installer/yaml-parser.ts`.
+ * Despite the historical name, this is not a public source parser.
+ * Manifestless v1 install/deploy uses `src/kernel/domains/installer/`.
  */
 export type ManifestV1Resolution =
   | { readonly ok: true; readonly value: readonly ManifestResource[] }

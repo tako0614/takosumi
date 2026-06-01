@@ -13,10 +13,10 @@ export const USE_CASES: readonly UseCase[] = [
   { role: "Sandbox computer", poweredBy: "takos-computer" },
   { role: "Goal tracker & coach", poweredBy: "road-to-me" },
   { role: "ActivityPub social", poweredBy: "yurucommu" },
-  { role: "Files & storage", poweredBy: "object-store kind" },
+  { role: "Files & storage", poweredBy: "PlatformService" },
   {
     role: "Custom resource",
-    poweredBy: ".takosumi.yml で自作",
-    note: "JSON-LD で 新 kind を 定義",
+    poweredBy: "operator adapter",
+    note: "PlatformService inventory と runtime adapter で追加",
   },
 ];

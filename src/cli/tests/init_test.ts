@@ -1,35 +1,32 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { initCommand } from "../commands/init.ts";
 
-test("init command prints an AppSpec scaffold by default", async () => {
+test("init command prints generic repository metadata by default", async () => {
   const output = await captureStdout(() => initCommand.parseAsync([]));
 
-  assert.match(output, /apiVersion: v1/);
-  assert.match(output, /components:/);
-  // Wave K: AppSpec root no longer carries `kind: App` — the scaffold
-  // must not regress and re-introduce it.
-  assert.equal(/^kind: App$/m.test(output), false);
-  assert.equal(output.includes("kind: Manifest"), false);
-  assert.equal(output.includes("${ref:"), false);
+  assert.match(output, /"name": "my-app"/);
+  assert.equal(output.includes("apiVersion"), false);
+  assert.equal(output.includes("components"), false);
 });
 
-test("init command writes the empty AppSpec template", async () => {
-  const tmp = await Deno.makeTempFile({ suffix: ".takosumi.yml" });
+test("init command writes the package template", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "takosumi-init-"));
+  const tmp = join(dir, "package.json");
   try {
     await captureStdout(() =>
-      initCommand.parseAsync(["--template", "empty", tmp])
+      initCommand.parseAsync(["--template", "package", tmp])
     );
 
-    const text = await Deno.readTextFile(tmp);
-    assert.match(text, /apiVersion: v1/);
-    assert.match(text, /components:/);
-    assert.match(text, /kind: worker/);
-    // Wave K: AppSpec root no longer carries `kind: App`.
-    assert.equal(/^kind: App$/m.test(text), false);
-    assert.equal(text.includes("kind: Manifest"), false);
+    const text = await readFile(tmp, "utf8");
+    assert.match(text, /"description": "Manifestless Takosumi source"/);
+    assert.equal(text.includes("apiVersion"), false);
+    assert.equal(text.includes("components"), false);
   } finally {
-    await Deno.remove(tmp);
+    await rm(dir, { recursive: true, force: true });
   }
 });
 

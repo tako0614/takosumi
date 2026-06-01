@@ -4,7 +4,7 @@
 内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
 :::
 
-Object は reference Takosumi graph の internal entity である。すべての Object は厳密に 1 つの Space に属する。public な manifest `components` entry は Object intent となり、その後 resolved な Object になる。
+Object は reference Takosumi graph の internal entity である。すべての Object は厳密に 1 つの Space に属する。Source から導出された InstallPlan / operator binding selection は Object intent となり、その後 resolved な Object になる。
 
 ## Space で qualify された identity {#space-qualified-identity}
 

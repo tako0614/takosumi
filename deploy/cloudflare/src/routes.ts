@@ -1,5 +1,5 @@
 export const TAKOSUMI_CLOUDFLARE_FRONT_HEADER =
-  "x-takosumi-cloudflare-front" as const;
+  "x-takosumiflare-front" as const;
 
 const KERNEL_CONTROL_PLANE_EXACT_PATHS = new Set([
   "/health",

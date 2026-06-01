@@ -23,19 +23,19 @@ let cached: RuntimeAdapter | undefined;
  *   2. Bun (`typeof Bun !== "undefined"`). Bun is mostly Node-compatible but
  *      surfaces its own marker; we still treat the adapter as `node`-shaped
  *      because Bun supports the same `node:fs` / `node:http` modules.
- *   3. Deno (`isDeno()` = `typeof Deno.Command === "function"`). The npm build
- *      injects `@deno/shim-deno`, so on Node `globalThis.Deno` is ALWAYS a
- *      defined shim proxy. A naive `typeof Deno !== "undefined"` probe would
- *      therefore misclassify Node as Deno and then call the shim's missing
- *      `Deno.Command` / `Deno.serve`. `isDeno()` instead probes a genuine
- *      `Deno.Command` (a function only on real Deno; the shim lacks it), which
- *      is the reliable discriminator. It deliberately does NOT also require
- *      `process.versions.node` absent, because Deno 2.x exposes a Node-compat
- *      `process.versions.node` string — that clause would reject real Deno.
+ *   3. Deno (`isDeno()` = `typeof Deno.Command === "function"`). A naive
+ *      `typeof Deno !== "undefined"` probe can be satisfied by partial
+ *      compatibility globals in embedded hosts and then misclassify them as
+ *      Deno before calling missing `Deno.Command` / `Deno.serve` APIs.
+ *      `isDeno()` instead probes a genuine `Deno.Command` (a function only on
+ *      real Deno), which is the reliable discriminator. It deliberately does
+ *      NOT also require `process.versions.node` absent, because Deno 2.x
+ *      exposes a Node-compat `process.versions.node` string — that clause
+ *      would reject real Deno.
  *   4. Node.js (`isNode()` = `process.versions.node` string). Checked AFTER
  *      Deno: Deno also reports `process.versions.node`, so Deno must be matched
  *      first via the `Deno.Command` probe; the only host that reaches this
- *      branch is genuine Node (where the shim's `Deno.Command` is absent).
+ *      branch is genuine Node.
  *
  * On Workers, callers MUST use `createWorkersRuntime(env)` per request
  * because env bindings arrive on the fetch invocation, not at module load.

@@ -22,7 +22,7 @@ import type {
  *
  * Runtime-agent lifecycle envelopes still carry `(shape, provider)` so older
  * connectors can dispatch work locally. Current operator distributions derive
- * those selectors from their kind/materializer mapping; AppSpec components
+ * those selectors from their materializer mapping; reference components
  * remain keyed by `Component.kind`, and new reference adapters should implement
  * `KernelPlugin` directly.
  */
@@ -125,9 +125,9 @@ export interface PlatformContext {
  * @deprecated Compatibility bridge for the pre-KernelPlugin provider surface.
  * The current reference adapter API is `KernelPlugin` (or the
  * `Materializer = KernelPlugin | InlineMaterializer` union) from
- * `packages/contract/src/plugin.ts`. `ProviderPlugin` remains as a transitional
+ * `src/contract/plugin.ts`. `ProviderPlugin` remains as a transitional
  * adapter wrapped by `kernelPluginFromProviderPlugin()`; new code should
- * implement `KernelPlugin` directly. First-party native kind packages use
+ * implement `KernelPlugin` directly. First-party native kind implementations use
  * `kernelPluginFromNativeKindOperations()` instead of this bridge.
  */
 export interface ProviderPlugin<

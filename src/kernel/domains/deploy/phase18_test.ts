@@ -20,18 +20,18 @@ import type {
   OperationOutcome,
   PlannedOperation,
 } from "./apply_orchestrator.ts";
-import { compileManifestToAppSpec } from "./compiler.ts";
+import { compileSourcePayloadToInternalDeploySpec } from "./compiler.ts";
 import { buildDescriptorClosure } from "./descriptor_closure.ts";
 import type {
   Deployment,
   IsoTimestamp,
 } from "takosumi-contract/reference/compat";
-import type { PublicDeployManifest } from "./types.ts";
+import type { ReferenceDeploySourcePayload } from "./types.ts";
 
 const DEMO_IMAGE_1 =
   "registry.example.test/demo@sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
-function sampleManifest(): PublicDeployManifest {
+function sampleManifest(): ReferenceDeploySourcePayload {
   return {
     name: "demo-app",
     version: "1.0.0",
@@ -442,13 +442,13 @@ test("C1: stale GroupHead CAS rolls back successful provider operations", async 
 
 // -- C2: descriptor closure determinism on profile switch -------------------
 
-test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a different descriptor_closure digest", async () => {
-  // Compile the same authoring manifest twice and then synthesise a
-  // post-profile-merge AppSpec by stamping `effectiveRuntimeCapabilities`
+test("C2: differing effectiveRuntimeCapabilities on InternalDeploySpec yields a different descriptor_closure digest", async () => {
+  // Compile the same source payload twice and then synthesise a
+  // post-profile-merge InternalDeploySpec by stamping `effectiveRuntimeCapabilities`
   // onto the second spec. The descriptor seeds (components / resources /
   // routes / outputs) are otherwise byte-identical, so any digest
   // delta must come from the C2 fold-in.
-  const manifest: PublicDeployManifest = {
+  const manifest: ReferenceDeploySourcePayload = {
     name: "demo-app",
     version: "1.0.0",
     compute: {
@@ -456,8 +456,8 @@ test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a different d
     },
   };
 
-  const baseSpec = compileManifestToAppSpec(manifest);
-  // Profile-merged AppSpec: same authoring shape, but the profile selection
+  const baseSpec = compileSourcePayloadToInternalDeploySpec(manifest);
+  // Profile-merged InternalDeploySpec: same authoring shape, but the profile selection
   // contributed a runtime capability.
   const profiledSpec = {
     ...baseSpec,
@@ -468,11 +468,11 @@ test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a different d
   assert.deepEqual(baseSpec.effectiveRuntimeCapabilities ?? {}, {});
 
   const baseClosure = await buildDescriptorClosure({
-    appSpec: baseSpec,
+    deploySpec: baseSpec,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });
   const profiledClosure = await buildDescriptorClosure({
-    appSpec: profiledSpec,
+    deploySpec: profiledSpec,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });
 
@@ -483,7 +483,7 @@ test("C2: differing effectiveRuntimeCapabilities on AppSpec yields a different d
 });
 
 test("C2: identical effective capability maps yield identical closure digests", async () => {
-  const manifest: PublicDeployManifest = {
+  const manifest: ReferenceDeploySourcePayload = {
     name: "demo-app",
     version: "1.0.0",
     compute: {
@@ -491,8 +491,8 @@ test("C2: identical effective capability maps yield identical closure digests", 
     },
   };
 
-  const baseSpec = compileManifestToAppSpec(manifest);
-  // Two AppSpecs with identical effective capability maps MUST collapse to
+  const baseSpec = compileSourcePayloadToInternalDeploySpec(manifest);
+  // Two InternalDeploySpecs with identical effective capability maps MUST collapse to
   // the same closure digest — the C2 fold-in is deterministic.
   const a = {
     ...baseSpec,
@@ -503,11 +503,11 @@ test("C2: identical effective capability maps yield identical closure digests", 
     effectiveRuntimeCapabilities: { web: ["edge-cdn"] },
   };
   const closureA = await buildDescriptorClosure({
-    appSpec: a,
+    deploySpec: a,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });
   const closureB = await buildDescriptorClosure({
-    appSpec: b,
+    deploySpec: b,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });
 
@@ -515,7 +515,7 @@ test("C2: identical effective capability maps yield identical closure digests", 
 });
 
 test("C2: capability ordering does not change the closure digest (canonical sort)", async () => {
-  const manifest: PublicDeployManifest = {
+  const manifest: ReferenceDeploySourcePayload = {
     name: "demo-app",
     version: "1.0.0",
     compute: {
@@ -523,7 +523,7 @@ test("C2: capability ordering does not change the closure digest (canonical sort
     },
   };
 
-  const baseSpec = compileManifestToAppSpec(manifest);
+  const baseSpec = compileSourcePayloadToInternalDeploySpec(manifest);
   // Insertion-order-different but value-identical capability maps must
   // produce the same digest — the closure builder sorts before folding.
   const a = {
@@ -535,11 +535,11 @@ test("C2: capability ordering does not change the closure digest (canonical sort
     effectiveRuntimeCapabilities: { web: ["kv", "edge-cdn"] },
   };
   const closureA = await buildDescriptorClosure({
-    appSpec: a,
+    deploySpec: a,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });
   const closureB = await buildDescriptorClosure({
-    appSpec: b,
+    deploySpec: b,
     resolvedAt: "2026-04-30T00:00:00.000Z" as IsoTimestamp,
   });
   assert.equal(closureA.closureDigest, closureB.closureDigest);

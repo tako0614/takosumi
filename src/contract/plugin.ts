@@ -1,7 +1,7 @@
 /**
  * KernelPlugin — the reference Takosumi kernel's Vite-style plain-array
- * materializer API for the component output / connect / platform-listen
- * material model.
+ * materializer API for reference implementation component output and input
+ * material wiring.
  *
  * A `KernelPlugin` advertises one or more component kind URIs in `provides`,
  * may expose short-name `aliases` for operator tooling,
@@ -10,10 +10,10 @@
  * into the component runtime via `applyBinding()`.
  *
  * The reference implementation wires plugins as a plain array to
- * `createPaaSApp({ kindAliases, plugins })`, matching the Vite plugin
- * authoring experience. A Takosumi-compatible implementation can bind the
- * same kind URI to materialization code through another mechanism. The kind
- * URI remains the coupling point between AppSpec and implementation.
+ * `createPaaSApp({ plugins })`, matching the Vite plugin authoring
+ * experience. A Takosumi-compatible implementation can bind the same backend
+ * adapter through another mechanism. This is implementation wiring, not the
+ * manifestless v1 public Source contract.
  *
  * # Materializer abstraction
  *
@@ -23,14 +23,6 @@
  * operator-defined raw code can attach to the same kernel surface as
  * full plugins via {@link InlineMaterializer}.
  */
-import type {
-  BindingName,
-  BindingOptions,
-  Component,
-  ListenSourceRef,
-  OutputSlotName,
-  PublishOptions,
-} from "./app-spec.ts";
 import type {
   Deployment,
   Installation,
@@ -42,8 +34,29 @@ import {
 } from "./catalog.ts";
 import type { JsonObject, JsonValue } from "./types.ts";
 
+export type BindingName = string;
+export type OutputSlotName = string;
+export type ListenSourceRef = string;
+
+export interface BindingOptions {
+  readonly inject?: string | JsonObject;
+  readonly prefix?: string;
+  readonly mount?: string;
+}
+
+export interface Component {
+  readonly kind: string;
+  readonly spec?: JsonValue;
+}
+
+export interface PublishOptions {
+  readonly kind?: string;
+  readonly path?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+}
+
 export interface KernelPlugin {
-  /** Plugin id, e.g. `"@takos/takosumi-kind-cloudflare-worker"`. */
+  /** Plugin id, e.g. `"@takosjp/takosumi-plugins/kind/cloudflare-worker"`. */
   readonly name: string;
   readonly version: string;
   /**
@@ -74,8 +87,8 @@ export interface KernelPlugin {
   readonly capabilities?: readonly string[];
 
   /**
-   * Validate a full AppSpec component before any component is applied.
-   * Native providers use this for constraints that depend on connect/listen
+   * Validate a full reference component before it is applied.
+   * Native providers use this for constraints that depend on resolved binding
    * declarations rather than only `component.spec` shape.
    */
   validateComponent?(component: Component): void | Promise<void>;
@@ -104,10 +117,9 @@ export interface KernelPlugin {
 
   /**
    * Compute the {@link OutputMaterial} for a component output slot.
-   * Invoked after `apply()` succeeds when another component connects to that
-   * output, when root `publish` declares it as an Installation output service
-   * path exposure, or when the kernel records implementation-visible outputs
-   * as Deployment evidence.
+   * Invoked after `apply()` succeeds when another reference component consumes
+   * that output, when an operator publication plan exposes it, or when the
+   * kernel records implementation-visible outputs as Deployment evidence.
    *
    * Optional — kinds that do not expose output material (e.g. pure
    * consumers) may omit this hook.
@@ -129,8 +141,8 @@ export interface KernelPlugin {
   /**
    * Surface a connected or listened {@link OutputMaterial} into the
    * component runtime as an env injection / mount / target descriptor. Invoked
-   * once per entry in `Component.connect` or `Component.listen` before
-   * `apply()` is called for the consuming component.
+   * once per resolved input binding before `apply()` is called for the
+   * consuming component.
    *
    * Optional — kinds that do not consume input material may omit
    * this hook (the installer treats absent hooks as no-op).
@@ -282,8 +294,8 @@ export interface KernelPluginApplyContext {
   readonly sourceDirectory: string;
   /**
    * Materials this component consumes, keyed by the local binding name as
-   * declared in `Component.connect` or `Component.listen`. Pre-resolved by the
-   * installer from same-AppSpec component outputs or Space-visible platform
+   * declared by the reference implementation wiring. Pre-resolved by the
+   * installer from reference component outputs or Space-visible platform
    * services; the consuming component's
    * `applyBinding` has
    * already been invoked and the resulting env / mount / target
@@ -333,7 +345,7 @@ export interface OutputMaterialContext {
   readonly component: Component;
   /** Component output slot this material is projected from. */
   readonly outputName: OutputSlotName;
-  /** Root publish options when this material serves an Installation output declaration. */
+  /** Publication options when this material serves an Installation output declaration. */
   readonly options?: PublishOptions;
   /** Outputs from the preceding `apply()` call for this component. */
   readonly outputs: Readonly<Record<string, JsonValue>>;
@@ -348,7 +360,7 @@ export interface ApplyInputBindingContext {
   readonly bindingName: BindingName;
   /** Source component output ref or platform service path being consumed. */
   readonly sourceRef: ListenSourceRef;
-  /** Per-connect or per-listen options as declared in AppSpec. */
+  /** Per-binding options from reference implementation wiring. */
   readonly options: BindingOptions;
   /** Material payload resolved from the source reference. */
   readonly material: OutputMaterial;
@@ -434,7 +446,7 @@ export type NativeKindOutputMaterialContext<Outputs = JsonObject> =
   };
 
 /**
- * Operations for a native kind package that wants the reference plugin shape
+ * Operations for a native kind implementation that wants the reference plugin shape
  * without using the retired shape/provider compatibility API.
  */
 export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
@@ -446,8 +458,8 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
   ): readonly NativeKindSpecValidationIssue[];
   validateComponent?(component: Component): void | Promise<void>;
   /**
-   * Receives the author-provided component spec unchanged. Runtime inputs
-   * derived from `connect` / `listen` live on `ctx.resolvedBindings`; implementations that
+   * Receives the reference component spec unchanged. Runtime inputs
+   * derived from selected bindings live on `ctx.resolvedBindings`; implementations that
    * need env-style injection can opt in with {@link mergeResolvedEnv}.
    */
   apply(
@@ -479,7 +491,7 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
 
 /**
  * Build a reference `KernelPlugin` from native kind operations. This is the
- * current helper for native kind packages in `takosumi-plugins`: the package
+ * current helper for native kind implementations in `takosumi-plugins`: the implementation
  * owns backend-specific operations, while the reference kernel still receives a
  * Vite-style plain-array `KernelPlugin`.
  */
