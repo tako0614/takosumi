@@ -1,7 +1,7 @@
 import type {
-  AppSpecComponent,
-  AppSpecResource,
-  AppSpecRoute,
+  InternalDeploySpecComponent,
+  InternalDeploySpecResource,
+  InternalDeploySpecRoute,
 } from "../deploy/types.ts";
 import type { Digest } from "takosumi-contract/reference/compat";
 
@@ -86,12 +86,12 @@ export interface RuntimeMaterializationInput {
   readonly activationId: string;
   readonly spaceId: string;
   readonly groupId: string;
-  readonly appSpec: {
+  readonly deploySpec: {
     readonly name: string;
     readonly version?: string;
-    readonly components: readonly AppSpecComponent[];
-    readonly resources: readonly AppSpecResource[];
-    readonly routes: readonly AppSpecRoute[];
+    readonly components: readonly InternalDeploySpecComponent[];
+    readonly resources: readonly InternalDeploySpecResource[];
+    readonly routes: readonly InternalDeploySpecRoute[];
     readonly env: Record<string, string>;
   };
   readonly materializedAt?: string;

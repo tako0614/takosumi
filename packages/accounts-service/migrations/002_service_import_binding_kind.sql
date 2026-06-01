@@ -1,0 +1,2 @@
+-- no-op retained for migration sequence compatibility.
+-- Service imports were removed after this migration slot was allocated.

@@ -49,7 +49,7 @@ def cleanup_billing(subject: str | None, customer: str | None) -> None:
 
 _state: dict[str, str | None] = {"subject": None, "customer": None}
 atexit.register(lambda: cleanup_billing(_state["subject"], _state["customer"]))
-BASE = "https://cloud.takosumi.test"
+BASE = "https://accounts.takosumi.test"
 WEBHOOK_SECRET = "whsec_local_substrate_fixture_v1"
 
 if not CA_PATH.exists():

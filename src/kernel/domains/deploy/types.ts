@@ -2,7 +2,7 @@
 //
 // The `Deployment` record (and its nested types) is canonical and lives in
 // `takosumi-contract`. Anything kept here is a deploy-domain-local helper
-// for: (1) client-submitted public app manifest payloads, and (2)
+// for: (1) reference deploy source payloads, and (2)
 // status-narrowed views over `Deployment` used inside the deploy-domain process
 // pipeline.
 
@@ -30,9 +30,9 @@ export type {
   ProviderObservation,
 } from "takosumi-contract/reference/compat";
 
-// Public app manifest payloads. All shapes are open (index-signature) because
-// manifest fields are validated downstream by the compiler/normalizer, not by
-// these types.
+// Reference deploy source payloads. All shapes are open (index-signature)
+// because authoring fields are validated downstream by the compiler/normalizer,
+// not by these types.
 
 export type DeploySourceKind = "manifest" | "git_ref" | "package";
 export type DeployPhase = "plan" | "apply";
@@ -99,15 +99,15 @@ export interface PublicOutputSpec extends Record<string, unknown> {
   spec?: JsonObject;
 }
 
-export interface PublicDeployManifest extends Record<string, unknown> {
+export interface ReferenceDeploySourcePayload extends Record<string, unknown> {
   name: string;
   version?: string;
   compute?: Record<string, PublicComputeSpec>;
   resources?: Record<string, PublicResourceSpec>;
   /**
    * Routes field — retained as a type-level vestige for legacy override
-   * tooling, but the kernel pipeline drops it at `compileManifestToAppSpec`
-   * (= post Wave J Component contract minimization, the AppSpec / kernel
+   * tooling, but the kernel pipeline drops it at `compileSourcePayloadToInternalDeploySpec`
+   * (= post Wave J Component contract minimization, the InternalDeploySpec / kernel
    * layer doesn't process routes; each worker materializer reads its own
    * `spec.routes` convention if it cares).
    */
@@ -118,7 +118,7 @@ export interface PublicDeployManifest extends Record<string, unknown> {
   overrides?: JsonObject;
 }
 
-export interface AppSpecComponent {
+export interface InternalDeploySpecComponent {
   name: string;
   type: string;
   image?: string;
@@ -133,7 +133,7 @@ export interface AppSpecComponent {
   raw: PublicComputeSpec;
 }
 
-export interface AppSpecResource {
+export interface InternalDeploySpecResource {
   name: string;
   type: string;
   env: Record<string, string>;
@@ -146,10 +146,10 @@ export interface AppSpecResource {
  * routes are a worker-materializer convention, not a kernel concern).
  * Retained as a type only so downstream provider consumers continue to
  * compile against `DesiredState.routes` and `DeploymentRoute`. The
- * compiler always emits an empty `AppSpec.routes`, so this type is
+ * compiler always emits an empty `InternalDeploySpec.routes`, so this type is
  * never instantiated in practice.
  */
-export interface AppSpecRoute {
+export interface InternalDeploySpecRoute {
   name: string;
   to: string;
   host?: string;
@@ -163,7 +163,7 @@ export interface AppSpecRoute {
   raw: PublicRouteSpec;
 }
 
-export interface AppSpecOutput {
+export interface InternalDeploySpecOutput {
   name: string;
   type: string;
   from?: string;
@@ -172,31 +172,31 @@ export interface AppSpecOutput {
   raw: PublicOutputSpec;
 }
 
-export interface AppSpec {
+export interface InternalDeploySpec {
   groupId: string;
   name: string;
   version?: string;
   source: DeploySourceRef;
-  components: AppSpecComponent[];
-  resources: AppSpecResource[];
+  components: InternalDeploySpecComponent[];
+  resources: InternalDeploySpecResource[];
   /**
    * Always empty after Wave J Component contract minimization — kernel
    * does not compile or iterate routes. Retained for type-level
    * compatibility with descriptor closure / resolved graph / provider
    * materializers (which all see empty arrays).
    */
-  routes: AppSpecRoute[];
-  outputs: AppSpecOutput[];
+  routes: InternalDeploySpecRoute[];
+  outputs: InternalDeploySpecOutput[];
   env: Record<string, string>;
   overrides: JsonObject;
   /**
    * C2 — Composite expansion / profile merge result. Each entry maps a
    * component name to the union of `requirements.runtimeCapabilities` from
-   * the authoring manifest plus capabilities contributed by the composite
+   * the source payload plus capabilities contributed by the composite
    * resolver and provider-profile selection. The descriptor-closure builder
    * folds this map into the closure digest so a profile switch that injects
    * different capabilities produces a different digest even when the raw
-   * manifest text is identical (Core spec § 6 — closure determinism).
+   * source payload text is identical (Core spec § 6 — closure determinism).
    *
    * Empty / omitted means "no extra capabilities beyond what the component
    * already declared". Always sorted (stable digest input).

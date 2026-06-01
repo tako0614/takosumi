@@ -1,23 +1,19 @@
 # Takosumi kernel image — single-host reference distribution.
 #
-# Runs the substrate-neutral kernel (`src/kernel/index.ts`)
-# on Deno. The kernel reads env via the RuntimeAdapter, so the same
-# code path runs on Deno here, on Node via Deno's Node compat, and on
-# Cloudflare Workers via the deploy/cloudflare/ scaffold.
+# Runs the substrate-neutral kernel (`src/kernel/index.ts`) on Bun.
+# The kernel reads env via the RuntimeAdapter, so the same code path is also
+# used by the Cloudflare Workers profile through the deploy/cloudflare scaffold.
 
-FROM denoland/deno:2.0.0
+FROM oven/bun:1
 WORKDIR /app
 
-COPY ../../packages/contract /app/packages/contract
-COPY ../../packages/kernel /app/packages/kernel
-COPY ../../packages/kind-* /app/packages/
-COPY ../../packages/runtime-agent /app/packages/runtime-agent
-COPY ../../packages/all /app/packages/all
-COPY ../../deno.json /app/deno.json
+COPY ../../package.json ../../bun.lock ../../tsconfig.json ./
+COPY ../../src ./src
+COPY ../../shims ./shims
 
-RUN deno cache --node-modules-dir=auto /app/src/kernel/index.ts
+RUN bun install --frozen-lockfile --production
 
 ENV PORT=8788
 EXPOSE 8788
 
-CMD ["deno", "run", "--allow-env", "--allow-net", "--allow-read", "--allow-write", "--allow-sys", "/app/src/kernel/index.ts"]
+CMD ["bun", "run", "src/kernel/index.ts"]

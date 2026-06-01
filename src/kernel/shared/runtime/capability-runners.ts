@@ -6,7 +6,7 @@
  * *injected* rather than reached through `Deno.*` / `node:*` in the library
  * surface. These defaults route every git / tar invocation through the runtime
  * adapter's subprocess primitive, which already has Deno / Node / Workers
- * implementations, so the Deno runtime behavior is byte-for-byte identical to
+ * implementations, so the legacy subprocess behavior is byte-for-byte identical to
  * the historical `Deno.Command`-based `runGitCommand` / `runTarCommand` while
  * the same code path now also runs on Node WITHOUT calling `Deno.Command`
  * directly. This is the seam the reference kernel injects so callers never

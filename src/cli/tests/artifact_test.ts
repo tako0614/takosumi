@@ -1,5 +1,8 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const ORIGINAL_FETCH = globalThis.fetch;
 
@@ -35,11 +38,13 @@ test("artifact push posts multipart with kind + body", async () => {
       { status: 200, headers: { "content-type": "application/json" } },
     );
   });
+  let tmpDir: string | undefined;
   try {
-    const tmp = await Deno.makeTempFile({ suffix: ".js" });
-    await Deno.writeTextFile(tmp, "console.log('x');");
-    Deno.env.set("TAKOSUMI_REMOTE_URL", "http://example.test");
-    Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", "T");
+    tmpDir = await mkdtemp(join(tmpdir(), "takosumi-artifact-"));
+    const tmp = join(tmpDir, "body.js");
+    await writeFile(tmp, "console.log('x');");
+    process.env["TAKOSUMI_REMOTE_URL"] = "http://example.test";
+    process.env["TAKOSUMI_DEPLOY_TOKEN"] = "T";
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
@@ -56,8 +61,11 @@ test("artifact push posts multipart with kind + body", async () => {
     assert.ok(file instanceof File);
   } finally {
     restore();
-    Deno.env.delete("TAKOSUMI_REMOTE_URL");
-    Deno.env.delete("TAKOSUMI_DEPLOY_TOKEN");
+    if (tmpDir !== undefined) {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+    delete process.env["TAKOSUMI_REMOTE_URL"];
+    delete process.env["TAKOSUMI_DEPLOY_TOKEN"];
   }
 });
 
@@ -76,8 +84,8 @@ test("artifact list GETs /v1/artifacts with bearer token", async () => {
     });
   });
   try {
-    Deno.env.set("TAKOSUMI_REMOTE_URL", "http://example.test");
-    Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", "T");
+    process.env["TAKOSUMI_REMOTE_URL"] = "http://example.test";
+    process.env["TAKOSUMI_DEPLOY_TOKEN"] = "T";
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
@@ -90,8 +98,8 @@ test("artifact list GETs /v1/artifacts with bearer token", async () => {
     assert.equal(observed.auth, "Bearer T");
   } finally {
     restore();
-    Deno.env.delete("TAKOSUMI_REMOTE_URL");
-    Deno.env.delete("TAKOSUMI_DEPLOY_TOKEN");
+    delete process.env["TAKOSUMI_REMOTE_URL"];
+    delete process.env["TAKOSUMI_DEPLOY_TOKEN"];
   }
 });
 
@@ -118,8 +126,8 @@ test("artifact list follows pagination cursor automatically", async () => {
     );
   });
   try {
-    Deno.env.set("TAKOSUMI_REMOTE_URL", "http://example.test");
-    Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", "T");
+    process.env["TAKOSUMI_REMOTE_URL"] = "http://example.test";
+    process.env["TAKOSUMI_DEPLOY_TOKEN"] = "T";
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
@@ -133,8 +141,8 @@ test("artifact list follows pagination cursor automatically", async () => {
     assert.ok(calls[1].url.includes("cursor=page-2"));
   } finally {
     restore();
-    Deno.env.delete("TAKOSUMI_REMOTE_URL");
-    Deno.env.delete("TAKOSUMI_DEPLOY_TOKEN");
+    delete process.env["TAKOSUMI_REMOTE_URL"];
+    delete process.env["TAKOSUMI_DEPLOY_TOKEN"];
   }
 });
 
@@ -153,8 +161,8 @@ test("artifact gc POSTs /v1/artifacts/gc", async () => {
     );
   });
   try {
-    Deno.env.set("TAKOSUMI_REMOTE_URL", "http://example.test");
-    Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", "T");
+    process.env["TAKOSUMI_REMOTE_URL"] = "http://example.test";
+    process.env["TAKOSUMI_DEPLOY_TOKEN"] = "T";
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
@@ -164,8 +172,8 @@ test("artifact gc POSTs /v1/artifacts/gc", async () => {
     assert.equal(observed.auth, "Bearer T");
   } finally {
     restore();
-    Deno.env.delete("TAKOSUMI_REMOTE_URL");
-    Deno.env.delete("TAKOSUMI_DEPLOY_TOKEN");
+    delete process.env["TAKOSUMI_REMOTE_URL"];
+    delete process.env["TAKOSUMI_DEPLOY_TOKEN"];
   }
 });
 
@@ -180,8 +188,8 @@ test("artifact gc --dry-run sets dryRun query param", async () => {
     );
   });
   try {
-    Deno.env.set("TAKOSUMI_REMOTE_URL", "http://example.test");
-    Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", "T");
+    process.env["TAKOSUMI_REMOTE_URL"] = "http://example.test";
+    process.env["TAKOSUMI_DEPLOY_TOKEN"] = "T";
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
@@ -191,8 +199,8 @@ test("artifact gc --dry-run sets dryRun query param", async () => {
     assert.equal(url.searchParams.get("dryRun"), "1");
   } finally {
     restore();
-    Deno.env.delete("TAKOSUMI_REMOTE_URL");
-    Deno.env.delete("TAKOSUMI_DEPLOY_TOKEN");
+    delete process.env["TAKOSUMI_REMOTE_URL"];
+    delete process.env["TAKOSUMI_DEPLOY_TOKEN"];
   }
 });
 
@@ -204,8 +212,8 @@ test("artifact rm DELETEs /v1/artifacts/:hash", async () => {
     return new Response(null, { status: 204 });
   });
   try {
-    Deno.env.set("TAKOSUMI_REMOTE_URL", "http://example.test");
-    Deno.env.set("TAKOSUMI_DEPLOY_TOKEN", "T");
+    process.env["TAKOSUMI_REMOTE_URL"] = "http://example.test";
+    process.env["TAKOSUMI_DEPLOY_TOKEN"] = "T";
     const { artifactCommand } = await import(
       `../commands/artifact.ts?${crypto.randomUUID()}`
     );
@@ -214,7 +222,7 @@ test("artifact rm DELETEs /v1/artifacts/:hash", async () => {
     assert.equal(observed.url, "http://example.test/v1/artifacts/sha256%3Aabc");
   } finally {
     restore();
-    Deno.env.delete("TAKOSUMI_REMOTE_URL");
-    Deno.env.delete("TAKOSUMI_DEPLOY_TOKEN");
+    delete process.env["TAKOSUMI_REMOTE_URL"];
+    delete process.env["TAKOSUMI_DEPLOY_TOKEN"];
   }
 });

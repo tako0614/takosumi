@@ -7,12 +7,12 @@
 コントロールプレーンは Takosumi が管理する内部層であり、Installation と Deployment の状態管理、参照 API の提供、およびライフサイクルイベントの記録を担います。外部から見える public API surface は Installer API の 5 endpoint に限定されますが、コントロールプレーン内部では以下の責務を持ちます:
 
 - **Installation 状態管理**: Space ごとの Installation record を保持し、current Deployment pointer と public status (`installing` / `ready` / `failed` / `suspended`) を追跡する
-- **Deployment 履歴**: apply ごとに Deployment record を作成し、manifest digest、 source 情報、apply 結果を時系列で記録する。rollback は current pointer を過去の `succeeded` Deployment に戻す操作として実装される
+- **Deployment 履歴**: apply ごとに Deployment record を作成し、source identity、`planSnapshotDigest`、plan snapshot、binding snapshot、apply 結果を時系列で記録する。rollback は current pointer を過去の `succeeded` Deployment に戻す操作として実装される
 - **ObservationState / OperationJournal**: runtime-agent が報告する現在状態の観測結果と、recovery に必要な操作履歴を保持する ([Observation の保持](../observation-retention.md) 参照)
 
 ## Kernel との関係 {#relationship-to-kernel}
 
-[Kernel アーキテクチャ](./kernel.md) はコントロールプレーンの実装そのものです。Takosumi の installer pipeline が Installer API request を受け取り、manifest validation、source resolution、implementation binding への apply delegation、Deployment record の書き込みまでを一貫して実行します。コントロールプレーンという語は、この一連の状態管理と参照 API を論理層として参照するときに使います。
+[Kernel アーキテクチャ](./kernel.md) はコントロールプレーンの実装そのものです。Takosumi の installer pipeline が Installer API request を受け取り、Source validation、InstallPlan resolution、implementation binding への apply delegation、Deployment record の書き込みまでを一貫して実行します。コントロールプレーンという語は、この一連の状態管理と参照 API を論理層として参照するときに使います。
 
 implementation binding (= reference `KernelPlugin`) は operator が Takosumi に attach する implementation であり、コントロールプレーンの一部ではありません。コントロールプレーンは kind-agnostic な状態管理に専念し、kind ごとのリソースの作成・更新は binding に委譲します。
 

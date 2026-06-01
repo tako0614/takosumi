@@ -1,87 +1,50 @@
-# RFC 0001: Kernel kind-agnostic 化 {#rfc-0001-kernel-kind-agnostic}
+# RFC 0001: Kernel Kind-Agnostic Source v1 {#rfc-0001-kernel-kind-agnostic}
 
-> **Status**: Draft\
+> **Status**: Accepted\
 > **Date**: 2026-05-21\
-> **Wave**: N\
-> **Implementation**: component kind externalization implemented; BuildSpec parser / remote build service production implementation pending
+> **Current revision**: 2026-06-01
 
-この RFC は Takosumi をさらに小さくし、specific kind の semantics を Official Catalog または operator-adopted catalog に移すための設計です。 Public contract の正本は [Installer API](../reference/installer-api.md) です。 takosumi.com の kind schemas は Takosumi Official Catalog の kind の定義 documents であり、operator の設定が opt-in して Space に公開します。
-
-この文書では、`manifestDigest` など既存 wire field の名前を除き、source root の `.takosumi.yml` を **manifest** と呼びます。
+This RFC records the current Takosumi v1 boundary after the Source v1 reset.
+It replaces the earlier source-file driven design with a manifestless source
+installation model.
 
 ## Summary {#summary}
 
-この RFC の current end state では、manifest contract は次の形まで縮小されます。
+Takosumi v1 has four public concepts:
 
-```ts
-type Manifest = {
-  apiVersion: "v1";
-  metadata: Metadata;
-  components: Record<string, Component>;
-  publish?: Record<string, InstallationOutputPublication>;
-};
+- `Source`: git / prepared / local input plus resolved source identity.
+- `Installation`: a Space-scoped installed source record.
+- `Deployment`: one apply result with source summary, install plan snapshot,
+  binding snapshot, outputs, and status.
+- `PlatformService`: an operator-catalog service capability selected during
+  install or deploy.
 
-type Component = {
-  kind: string;
-  spec?: unknown;
-  connect?: Record<string, ConnectTarget>;
-  listen?: Record<string, ListenTarget>;
-};
+Source repositories do not carry Takosumi-specific metadata files. Display and
+identity hints come from generic repository metadata such as Git URL, commit,
+tag, and package metadata. Binding choices come from the install/deploy request,
+account-plane policy, and operator-owned PlatformService inventory.
 
-type ConnectTarget = {
-  output: `${string}.${string}`;
-  inject: string;
-  prefix?: string;
-  mount?: string;
-};
+## Decision {#decision}
 
-type ListenTarget = {
-  path?: string;
-  kind?: string;
-  labels?: Record<string, string>;
-  many?: boolean;
-  inject: string;
-  prefix?: string;
-  mount?: string;
-  required?: boolean;
-};
+Takosumi core is a contract executor. It resolves Source identity, produces an
+InstallPlan during dry-run, records Deployment evidence during apply, and
+validates binding snapshots against operator-supplied PlatformService inventory.
 
-type InstallationOutputPublication = {
-  output: `${string}.${string}`;
-  kind?: string;
-  path?: string;
-  labels?: Record<string, string>;
-};
-```
+Takosumi core does not own infrastructure resource lifecycle, provider state,
+backend credentials, billing, OIDC issuer operation, or dashboard policy. Those
+belong to operator distributions such as Takosumi, which may use
+Terraform, OpenTofu, Helm, cloud APIs, HCP Stacks output, static config, or
+another workflow to maintain PlatformService inventory.
 
-Wave N は、この縮小のために次を目標にします。
+## Kind Binding Model {#kind-binding-model}
 
-- component kind resolution を operator の設定に移す。
-- `Component.build` を Takosumi contract から外し、BuildSpec / build service に分離する。
-- specific kind は Official Catalog または operator-adopted catalog が kind の定義として表し、operator の設定が implementation binding で実行可能にする。Takosumi Official Catalog は JSON-LD を公開形式として使う。
-- Takosumi は kind URI、connect/listen graph、root publish service path、operator binding dispatch を扱う pure contract executor に近づける。
-
-## Non-goals {#non-goals}
-
-Wave N は次を扱いません。
-
-- runtime-agent の hardcoded worker types を完全分離すること。
-- workflow runner、cron、scheduler を Takosumi に入れること。
-- account layer、billing、OIDC issuer、customer onboarding を Takosumi に入れること。
-- existing Installer API の endpoint を増やすこと。
-
-runtime-agent の完全 Takosumi-decouple は別 RFC で扱います。
-
-## End state {#end-state}
-
-Wave N 後の Takosumi は、operator が起動時に渡す alias map と implementation binding で kind を解決します。kind schema は operator tooling / docs / validation layer が持ちます。Takosumi reference implementation では implementation binding を reference adapter array で渡します。
+The reference kernel remains kind-agnostic. Component kinds are implementation
+selectors inside the reference apply pipeline, not public Source metadata.
+Operator distributions attach implementation bindings through a plain plugin
+array, and each binding declares the kind URI it can materialize.
 
 ```ts
 const { app } = await createPaaSApp({
-  kindAliases: {
-    worker: "https://takosumi.com/kinds/v1/worker",
-    postgres: "https://takosumi.com/kinds/v1/postgres",
-  },
   plugins: [
     cloudflareWorkerPlugin({ lifecycle: workerLifecycle }),
     cloudflareR2ObjectStorePlugin({ lifecycle: objectStoreLifecycle }),
@@ -89,101 +52,46 @@ const { app } = await createPaaSApp({
 });
 ```
 
-manifest author は short alias を使えます。未解決 alias はリソースの作成・更新の前に reject されます。ここでいう **fail-closed** は、Takosumi が不明な入力を黙って fallback せず、副作用の前に明示的に失敗することです。
+The `https://takosumi.com/kinds/v1/*` URIs are Takosumi official catalog
+descriptor URIs. Compatible implementations can bind those descriptors to
+native controllers, static registries, workflow engines, SaaS adapters, or
+operator-specific code.
 
-## Decisions {#decisions}
+## Source Preparation {#source-preparation}
 
-### 1. Alias resolution {#alias-resolution}
+Build and packaging are operator or CI responsibilities. A prepared source is a
+content-addressed source view handed to Takosumi through the Installer API.
+Takosumi records the resolved source identity and the Deployment evidence
+needed to prove what was reviewed and applied.
 
-Decision: operator-injected alias map を採用します。
+Dry-run returns an `InstallPlan` plus `planSnapshotDigest`. Apply includes an
+expected guard so callers do not review one source or plan and apply a different
+one. Takosumi does not expose a caller-supplied idempotency header; internal
+idempotency is an implementation detail.
 
-- `worker` のような short alias は operator が完全 URI に解決する。
-- unresolved alias はリソースの作成・更新の前に fail-closed。
-- manifest は完全 URI を直接書くこともできる。
+## Platform Service Binding {#platform-service-binding}
 
-Takosumi は `https://takosumi.com/kinds/v1/worker` のような reference URI を特別扱いしません。
+Same-installation dependencies and external services are resolved into binding
+snapshots during install or deploy. The source does not declare provider
+credentials or resource lifecycle operations. Operator distributions publish
+PlatformService inventory, and Takosumi records which PlatformService outputs
+were selected for a Deployment.
 
-### 2. Worker source shape {#worker-source-shape}
+## Non-Goals {#non-goals}
 
-Decision: reference worker kind は `spec.entrypoint` を resolved source view 内の source-root-relative path として読む。
+- Add workflow runner, cron, or scheduler ownership to Takosumi core.
+- Add account, billing, OIDC issuer, dashboard, or onboarding ownership to
+  Takosumi core.
+- Make Takosumi core run Terraform, OpenTofu, Helm, or cloud provider CLIs.
+- Introduce product-specific Takos behavior into the substrate.
 
-理由:
+## Consequences {#consequences}
 
-- manifest 上に asset metadata value / hash を要求すると build service の出力形式が kind contract に漏れる。
-- build 後 file path は worker kind の `spec` に置く方が、image / env / route 等と同じ system で扱える。
-- implementation binding / runtime-agent は resolved source view locator を受け取り、必要な file だけを読む。
-
-### 3. Build sandbox {#build-sandbox}
-
-Current direction: build sandbox は operator / build-service responsibility に移す。`.takosumi.build.yml` は Takosumi core manifest ではなく、build-service の設定が採用できる input convention の一例です。
-
-Wave N 後の manifest component は `kind` / `spec` / `connect` / `listen` の 4 field だけです。same-AppSpec component output は `connect.<binding>.output: component.outputSlot` で参照し、operator-provided platform service のうち確定した対象は `listen.<binding>.path: dotted.service.path`、未確定または複数候補の対象は `listen.<binding>.kind` + optional labels + `many` で参照します。Installation output publication として記録する必要がある component output だけ、root `publish.<name>: { output: component.outputSlot, kind, path?, labels? }` に置きます。path を持つ publication は exact name として Space 内で一意、path を持たない publication は `listen.kind` discovery の候補です。
-
-source を準備する recipe は build-service の設定 / CI / operator automation が定義します。build service は `.takosumi.yml` と自分の build recipe input を読み、Linux container などの build runner profile を実行し、build 後 source tree を prepared source archive として固定します。Takosumi はその archive を `source.kind: "prepared"` として受け取り、取得した archive payload bytes の sha256 を計算し、`manifestDigest` と prepared archive payload digest を Deployment に記録します。
-
-Example operator-local build runner profile name: `linux-container`. This is build-service vocabulary, not a Takosumi core kind URI and not official catalog vocabulary.
-
-BuildSpec は `nodes` map に build graph node を持ちます。各 node は `kind` / `spec` / `dependsOn` を使います。BuildSpec graph は build-time DAG で、runtime component connection は manifest component graph が所有します。
-
-### 4. Resolved source view model {#resolved-source-view-follow-up}
-
-Decision: artifact / build の最終形は resolved source view model に寄せます。
-
-- manifest public contract and build-service input docs から generic `artifact` concept を消す。
-- build service は build 後 source tree / git state を content-addressed prepared source archive として固定する。
-- implementation binding は lifecycle apply 時に resolved source view locator を受け取り、自分の kind contract に従って必要な file / path / metadata を読む。
-- `spec` 内の parameter は Takosumi が意味解釈しない implementation-owned variables として扱う。
-- Takosumi の public Deployment record が記録するのは resolved source identity / `manifestDigest` / non-secret outputs。provenance や implementation output の詳細は deploy record として扱う。asset extension を使う provider は、その metadata value を operator / connector policy として扱う。
-
-### 5. Reference distribution wording {#reference-distribution-wording}
-
-Decision: takosumi-cloud は 1 つの reference operator の設定として扱います。
-
-別 distribution も同じ contract を満たせば置き換え可能です。docs では「current Takosumi contract」と「operator の設定 / reference Takosumi の実装例」を混ぜません。
-
-### 6. Package architecture {#package-architecture}
-
-Decision: official descriptors and reference bindings are package-owned under `@takos/takosumi-kind-*`.
-
-Portable kind packages define catalog descriptors and helper types. Native kind packages provide reference kernel bindings for concrete backends. The package name now tells readers which kind they are importing.
-
-### 7. Runtime-agent decoupling {#runtime-agent-decoupling}
-
-Decision: runtime-agent decoupling は別 RFC で扱います。
-
-runtime-agent が持つ worker-specific type の完全分離は別 RFC で扱います。Wave N の実装は kernel registry と build responsibility の切り離しに集中します。
-
-## Migration outline {#migration-outline}
-
-1. operator config に alias map を追加する。
-2. current reference kind を Official Catalog descriptor として移す。
-3. Takosumi validation を alias map + binding lookup に切り替える。
-4. reference adapter が完全 URI の `provides[]` を宣言するようにする。
-5. `Component.build` の Takosumi-owned execution を削除し、BuildSpec / build service / prepared source handoff へ移す。
-6. `.takosumi.build.yml` の parser と build service handoff を追加する。
-7. resolved source view locator model を導入し、worker source input を `spec.entrypoint` に統一する。
-8. current short alias を operator migration alias map として保持し、unresolved alias は fail-closed にする。
-
-## Migration {#migration}
-
-Wave N implementation は breaking change です。ただし migration 中は operator が migration alias map と build migration tool を提供すれば、既存 manifest の short alias と previous build recipe は移行できます。最終状態では `components.<name>.build` は fail-closed で reject されます。
-
-`manifestDigest` は Installer API の existing wire field name として残ります。これは `.takosumi.yml` raw file bytes の sha256 です。
-
-## Open follow-up RFCs {#open-follow-up-rfcs}
-
-- RFC 0002: runtime-agent hardcoded worker spec の完全分離。
-- RFC 0003: Takos CLI app packaging contract の再整理。
-- RFC 0004: worker source inputs の richer bundle / multi-file contract。
-- RFC 0005: build service provenance / cache / remote execution policy。
-
-## Implementation notes {#implementation-notes}
-
-2026-05-23 時点で、component kind definitions の contract 外部化、`Component.build` 削除、prepared source handoff、reference worker の `spec.entrypoint` 化は実装済みです。BuildSpec parser / remote build service の production implementation は operator の設定の follow-up です。
-
-## History {#history}
-
-- Wave J: `Component.routes`、`manifest.interfaces`、`manifest.permissions` を削除。
-- Wave K: manifest root の `kind: "App"` を削除。
-- Wave L: `apiVersion: "takosumi.dev/v1"` を `apiVersion: "v1"` に変更。
-- Wave N: Takosumi kind-agnostic 化、kind schema は official catalog / operator の設定が決める形へ、 `Component.build` 削除、prepared source / worker entrypoint model へ移行。
+- Public docs and current code should use Source / Installation / Deployment /
+  PlatformService vocabulary.
+- Provider and infrastructure lifecycle wording belongs to operator
+  distributions or private operations docs.
+- The official catalog can describe portable material contracts without forcing
+  one implementation binding.
+- Takos remains a product consumer running on Takosumi, not part of the
+  Takosumi substrate.

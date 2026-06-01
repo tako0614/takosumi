@@ -1,5 +1,11 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import {
+  currentRuntime,
+  resetRuntimeForTesting,
+  setRuntimeForTesting,
+  type RuntimeAdapter,
+} from "../../kernel/shared/runtime/index.ts";
 import { runtimeAgentCommand } from "../commands/runtime_agent.ts";
 
 interface CapturedRequest {
@@ -28,7 +34,7 @@ async function runVerifyAgainstFakeAgent(
   const originalFetch = globalThis.fetch;
   const originalLog = console.log;
   const originalErr = console.error;
-  const originalExit = Deno.exit;
+  const runtime = currentRuntime();
   globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string"
       ? input
@@ -59,13 +65,15 @@ async function runVerifyAgainstFakeAgent(
   console.error = (...parts: unknown[]) => {
     errors.push(parts.map((p) => String(p)).join(" "));
   };
-  // Stop the action from terminating the test process when the CLI tries to
-  // exit on a non-zero verify result.
-  // deno-lint-ignore no-explicit-any
-  (Deno as any).exit = (code?: number): never => {
-    exitCode = code;
-    throw new Error(`__test_exit__:${code ?? 0}`);
-  };
+  setRuntimeForTesting({
+    ...runtime,
+    exit: ((code: number): never => {
+      exitCode = code;
+      throw new Error(`__test_exit__:${code ?? 0}`);
+    }) as RuntimeAdapter["exit"],
+  });
+  // Stop the action from terminating the test process when the CLI exits on a
+  // non-zero verify result.
   try {
     await runtimeAgentCommand.parseAsync(args);
   } catch (error) {
@@ -74,11 +82,10 @@ async function runVerifyAgainstFakeAgent(
       !error.message.startsWith("__test_exit__:")
     ) throw error;
   } finally {
+    resetRuntimeForTesting();
     globalThis.fetch = originalFetch;
     console.log = originalLog;
     console.error = originalErr;
-    // deno-lint-ignore no-explicit-any
-    (Deno as any).exit = originalExit;
   }
   if (captured.length !== 1) {
     throw new Error(

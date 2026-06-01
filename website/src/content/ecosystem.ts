@@ -27,7 +27,7 @@ export const PROVIDERS: readonly Chip[] = [
 export const SUBSTRATE = {
   label: "Takosumi",
   description:
-    "共通 PaaS 基盤。同じ AppSpec を cloud、VM、cluster、管理サービスへ apply。",
+    "共通 source-to-deployment substrate。Source / Installation / Deployment を cloud、VM、cluster、管理サービスへ apply。",
 };
 
 export const ACCOUNTS = {

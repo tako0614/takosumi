@@ -62,7 +62,7 @@ services:
       - ./caddy/runtime:/runtime:ro
       - ../../../takosumi/website/.output/public:/srv/takosumi-marketing:ro
       - ../../../takosumi/docs/.vitepress/dist:/srv/takosumi-docs:ro
-      - ../../../takosumi-cloud/packages/dashboard-ui/.output/public:/srv/takosumi-cloud-dashboard:ro
+      - ../../../takosumi/packages/dashboard-ui/.output/public:/srv/takosumi-dashboard:ro
       - caddy-data:/data
       - caddy-config:/config
     ports:
@@ -88,7 +88,7 @@ services:
           - kernel.takosumi.test
           - kernel-worker.takosumi.test
           - takosumi.test
-          - cloud.takosumi.test
+          - accounts.takosumi.test
           - takos.app.takosumi.test
           - oauth-mock.test
           - mailpit.takosumi.test

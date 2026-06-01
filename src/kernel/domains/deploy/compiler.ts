@@ -1,12 +1,12 @@
 import type {
-  AppSpec,
-  AppSpecOutput,
-  AppSpecRoute,
+  InternalDeploySpec,
+  InternalDeploySpecOutput,
+  InternalDeploySpecRoute,
   DeploySourceRef,
   PublicComponentBindingSpec,
   PublicComputeRequirements,
   PublicComputeSpec,
-  PublicDeployManifest,
+  ReferenceDeploySourcePayload,
   PublicOutputSpec,
   PublicRouteSpec,
 } from "./types.ts";
@@ -14,10 +14,10 @@ import {
   isRecord,
   namedCollectionEntries,
   PUBLIC_MANIFEST_EXPANSION_DESCRIPTOR,
-} from "./internal/manifest_common.ts";
+} from "./internal/source_payload_common.ts";
 import { resourceBindingsByComputeFor } from "./internal/resource_bindings.ts";
-import { validateManifestShape } from "./internal/manifest_validate.ts";
-import { preparePublicDeployManifest } from "./internal/manifest_overrides.ts";
+import { validateSourcePayloadShape } from "./internal/source_payload_validate.ts";
+import { prepareReferenceDeploySourcePayload } from "./internal/source_payload_overrides.ts";
 import {
   inferComputeType,
   interfaceContractRefFor,
@@ -33,7 +33,7 @@ import {
   portForCompute,
 } from "./internal/route_helpers.ts";
 
-export interface CompileManifestOptions {
+export interface CompileSourcePayloadOptions {
   source?: DeploySourceRef;
   env?: string;
   envName?: string;
@@ -41,13 +41,13 @@ export interface CompileManifestOptions {
   localDevelopment?: boolean;
 }
 
-export function compileManifestToAppSpec(
-  manifest: PublicDeployManifest,
-  options: CompileManifestOptions = {},
-): AppSpec {
+export function compileSourcePayloadToInternalDeploySpec(
+  manifest: ReferenceDeploySourcePayload,
+  options: CompileSourcePayloadOptions = {},
+): InternalDeploySpec {
   const expansionDescriptors = new Set<string>();
-  const expandedManifest = preparePublicDeployManifest(manifest, options);
-  validateManifestShape(expandedManifest, options);
+  const expandedManifest = prepareReferenceDeploySourcePayload(manifest, options);
+  validateSourcePayloadShape(expandedManifest, options);
   const computeNames = new Set(Object.keys(expandedManifest.compute ?? {}));
   const resourceBindingsByCompute = resourceBindingsByComputeFor(
     expandedManifest.resources ?? {},
@@ -67,7 +67,7 @@ export function compileManifestToAppSpec(
     }
   }
 
-  const appSpec = {
+  const deploySpec = {
     groupId: expandedManifest.name,
     name: expandedManifest.name,
     version: expandedManifest.version,
@@ -117,7 +117,7 @@ export function compileManifestToAppSpec(
     }),
     // Post Wave J Component contract minimization: kernel does not
     // compile, iterate, or project routes. Each worker materializer reads
-    // its own `spec.routes` convention if it cares. The AppSpec route
+    // its own `spec.routes` convention if it cares. The InternalDeploySpec route
     // array is always empty so descriptor closure / resolved graph /
     // provider materializers all see no routes.
     routes: [],
@@ -133,21 +133,21 @@ export function compileManifestToAppSpec(
   // single deterministic map. The descriptor-closure builder folds this map
   // into the closure digest so a profile switch that injects different
   // capabilities produces a different closure digest even when the raw
-  // manifest text is unchanged.
+  // source payload text is unchanged.
   const effectiveRuntimeCapabilities = computeEffectiveRuntimeCapabilities(
-    appSpec.components,
+    deploySpec.components,
     expandedManifest.overrides,
   );
   const baseSpec = expansionDescriptors.size > 0
     ? {
-      ...appSpec,
+      ...deploySpec,
       authoringExpansionDescriptors: [...expansionDescriptors].sort(),
     }
-    : appSpec;
+    : deploySpec;
   return {
     ...baseSpec,
     effectiveRuntimeCapabilities,
-  } as AppSpec;
+  } as InternalDeploySpec;
 }
 
 /**
@@ -166,7 +166,7 @@ function computeEffectiveRuntimeCapabilities(
     name: string;
     requirements?: { runtimeCapabilities?: readonly string[] };
   }[],
-  overrides: PublicDeployManifest["overrides"],
+  overrides: ReferenceDeploySourcePayload["overrides"],
 ): Record<string, readonly string[]> {
   const profileMap =
     isRecord(overrides) && isRecord(overrides.runtimeCapabilities)
@@ -189,31 +189,31 @@ function computeEffectiveRuntimeCapabilities(
   return out;
 }
 
-export function validatePublicDeployManifest(
-  manifest: PublicDeployManifest,
+export function validateReferenceDeploySourcePayload(
+  manifest: ReferenceDeploySourcePayload,
   options: Pick<
-    CompileManifestOptions,
+    CompileSourcePayloadOptions,
     "env" | "envName" | "autoHostnameAvailable" | "localDevelopment"
   > = {},
 ): void {
-  const preparedManifest = preparePublicDeployManifest(manifest, options);
-  validateManifestShape(preparedManifest, options);
+  const preparedManifest = prepareReferenceDeploySourcePayload(manifest, options);
+  validateSourcePayloadShape(preparedManifest, options);
 }
 
-export function resolvePublicDeployManifest(
-  manifest: PublicDeployManifest,
+export function resolveReferenceDeploySourcePayload(
+  manifest: ReferenceDeploySourcePayload,
   options: Pick<
-    CompileManifestOptions,
+    CompileSourcePayloadOptions,
     "env" | "envName" | "autoHostnameAvailable" | "localDevelopment"
   > = {},
-): PublicDeployManifest {
-  const preparedManifest = preparePublicDeployManifest(manifest, options);
-  validateManifestShape(preparedManifest, options);
+): ReferenceDeploySourcePayload {
+  const preparedManifest = prepareReferenceDeploySourcePayload(manifest, options);
+  validateSourcePayloadShape(preparedManifest, options);
   return preparedManifest;
 }
 
 function publicOutputCollection(
-  manifest: PublicDeployManifest,
+  manifest: ReferenceDeploySourcePayload,
 ): Record<string, PublicOutputSpec> | PublicOutputSpec[] {
   return manifest.outputs ?? {};
 }
@@ -223,12 +223,12 @@ function normalizeNamedCollection(
   kind: "route",
   expansionDescriptors: Set<string>,
   compute?: Record<string, PublicComputeSpec>,
-): AppSpecRoute[];
+): InternalDeploySpecRoute[];
 function normalizeNamedCollection(
   value: Record<string, PublicOutputSpec> | PublicOutputSpec[],
   kind: "output",
   expansionDescriptors: Set<string>,
-): AppSpecOutput[];
+): InternalDeploySpecOutput[];
 function normalizeNamedCollection(
   value:
     | Record<string, PublicRouteSpec>
@@ -238,7 +238,7 @@ function normalizeNamedCollection(
   kind: "route" | "output",
   expansionDescriptors: Set<string>,
   compute: Record<string, PublicComputeSpec> = {},
-): AppSpecRoute[] | AppSpecOutput[] {
+): InternalDeploySpecRoute[] | InternalDeploySpecOutput[] {
   if (kind === "route") {
     const entries = namedCollectionEntries(
       value as Record<string, PublicRouteSpec> | PublicRouteSpec[],
@@ -270,7 +270,7 @@ function normalizeNamedCollection(
           : route.source,
         raw: structuredClone(route),
         interfaceContractRef,
-      } as AppSpecRoute;
+      } as InternalDeploySpecRoute;
     });
   }
 
@@ -292,7 +292,7 @@ function normalizeNamedCollection(
       spec: { ...(output.spec ?? {}) },
       raw: structuredClone(output),
       outputContractRef,
-    } as AppSpecOutput;
+    } as InternalDeploySpecOutput;
   });
 }
 

@@ -14,8 +14,8 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "案内",
       items: [
         {
-          text: "Manifest を書く",
-          link: "/getting-started/reading-paths#appspec-authors",
+          text: "Source を install する",
+          link: "/getting-started/reading-paths#source-installers",
         },
         {
           text: "Operator として動かす",
@@ -26,7 +26,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           link: "/getting-started/reading-paths#provider-extension-authors",
         },
         {
-          text: "Takosumi Cloud を読む",
+          text: "Takosumi を読む",
           link: "/getting-started/reading-paths#cloud-operators",
         },
         {
@@ -43,7 +43,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           link: "/reference/spec-boundaries",
         },
         { text: "本体仕様", link: "/reference/core-spec" },
-        { text: "Manifest", link: "/reference/manifest" },
         { text: "Installer API", link: "/reference/installer-api" },
         {
           text: "プラットフォームサービス",
@@ -53,24 +52,18 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
-      text: "公式カタログ",
+      text: "Integration",
       items: [
-        { text: "公式カタログ仕様", link: "/reference/catalog" },
-        { text: "Kind Packages", link: "/reference/kind-packages" },
-        { text: "Kind Binding 実装", link: "/reference/kind-bindings" },
-        {
-          text: "Reference Adapter Loading",
-          link: "/reference/plugin-loading",
-        },
+        { text: "Takosumi を拡張する", link: "/extending" },
         { text: "アクセスモード", link: "/reference/access-modes" },
       ],
     },
     {
-      text: "Takosumi Cloud",
+      text: "Takosumi",
       items: [
         {
-          text: "Takosumi Cloud 入口",
-          link: "/reference/takosumi-cloud",
+          text: "Takosumi 入口",
+          link: "/reference/takosumi",
         },
       ],
     },
@@ -125,15 +118,15 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Guide",
       items: [
         {
-          text: "Writing Manifests",
-          link: "/en/getting-started/reading-paths#appspec-authors",
+          text: "Installing Sources",
+          link: "/en/getting-started/reading-paths#source-installers",
         },
         {
           text: "Operating Takosumi",
           link: "/en/getting-started/reading-paths#operators",
         },
         {
-          text: "Reading Takosumi Cloud",
+          text: "Reading Takosumi",
           link: "/en/getting-started/reading-paths#cloud-operators",
         },
         {
@@ -154,7 +147,6 @@ const enSidebar: DefaultTheme.SidebarMulti = {
           link: "/en/reference/spec-boundaries",
         },
         { text: "Core Specification", link: "/en/reference/core-spec" },
-        { text: "Manifest", link: "/en/reference/manifest" },
         { text: "Installer API", link: "/en/reference/installer-api" },
         {
           text: "Platform Services",
@@ -164,25 +156,16 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
-      text: "Official Catalog",
+      text: "Integration",
       items: [
-        { text: "Official Catalog", link: "/en/reference/catalog" },
-        { text: "Kind Packages", link: "/en/reference/kind-packages" },
-        {
-          text: "Kind Binding Implementations",
-          link: "/en/reference/kind-bindings",
-        },
-        {
-          text: "Reference Adapter Loading",
-          link: "/en/reference/plugin-loading",
-        },
+        { text: "Extending Takosumi", link: "/en/extending" },
         { text: "Access Modes", link: "/en/reference/access-modes" },
       ],
     },
     {
-      text: "Takosumi Cloud",
+      text: "Takosumi",
       items: [
-        { text: "Takosumi Cloud Entry", link: "/en/reference/takosumi-cloud" },
+        { text: "Takosumi Entry", link: "/en/reference/takosumi" },
       ],
     },
     {
@@ -230,7 +213,6 @@ const jaNav: DefaultTheme.NavItem[] = [
   { text: "コンセプト", link: "/getting-started/concepts" },
   { text: "クイックスタート", link: "/getting-started/quickstart" },
   { text: "読む順序", link: "/getting-started/reading-paths" },
-  { text: "Manifest", link: "/reference/manifest" },
   { text: "リファレンス", link: "/reference/" },
   { text: "運用", link: "/operator/" },
 ];
@@ -240,14 +222,14 @@ const enNav: DefaultTheme.NavItem[] = [
   { text: "Concepts", link: "/en/getting-started/concepts" },
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
   { text: "Reading Paths", link: "/en/getting-started/reading-paths" },
-  { text: "Manifest", link: "/en/reference/manifest" },
   { text: "Reference", link: "/en/reference/" },
   { text: "Operations", link: "/en/operator/" },
 ];
 
 export default defineConfig({
   title: "Takosumi",
-  description: "Manifest, Installation, Deployment を中心にした PaaS toolkit",
+  description:
+    "Source, Installation, Deployment, PlatformService を中心にした PaaS toolkit",
   lang: "ja",
   // Served under /docs/ on takosumi.com (and takosumi.test mirror); the
   // root path serves a separate marketing landing page. Override via
@@ -283,7 +265,7 @@ export default defineConfig({
       lang: "ja",
       title: "Takosumi",
       description:
-        "Manifest, Installation, Deployment を中心にした PaaS toolkit",
+        "Source, Installation, Deployment, PlatformService を中心にした PaaS toolkit",
       themeConfig: {
         nav: jaNav,
         sidebar: jaSidebar,
@@ -309,7 +291,7 @@ export default defineConfig({
       lang: "en-US",
       title: "Takosumi",
       description:
-        "A PaaS toolkit centered on Manifest, Installation, and Deployment",
+        "A PaaS toolkit centered on Source, Installation, Deployment, and PlatformService",
       themeConfig: {
         nav: enNav,
         sidebar: enSidebar,

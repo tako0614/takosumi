@@ -17,7 +17,7 @@ import {
   type OutputMaterialContext,
   outputsToOutputMaterial,
 } from "./plugin.ts";
-import type { Component } from "./app-spec.ts";
+import type { Component } from "./plugin.ts";
 import type { Deployment, Installation } from "./installer-api.ts";
 
 test("kernelPluginFromNativeKindOperations wraps native operations without provider bridge", async () => {
@@ -348,8 +348,19 @@ test("KernelPlugin lifecycle hook signatures accept Installation + Deployment", 
   const deployment: Deployment = {
     id: "dep_1",
     installationId: "ins_1",
-    source: { kind: "local", commit: "" },
-    manifestDigest: "sha256:test",
+    source: { kind: "local", url: "/tmp/app" },
+    planSnapshotDigest:
+      "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    planSnapshot: {
+      source: { kind: "local", url: "/tmp/app" },
+      repo: { id: "app_1", name: "app" },
+      requestedBindings: [],
+      resolvedBindings: [],
+      publications: [],
+      changes: [],
+      warnings: [],
+    },
+    bindingsSnapshot: [],
     status: "succeeded",
     outputs: {},
     createdAt: 0,

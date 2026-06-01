@@ -24,14 +24,16 @@
  * Idempotent on restart. No bootstrap step needed.
  */
 
-const KERNEL_URL = Deno.env.get("KERNEL_URL") ?? "http://kernel:8788";
-const CADDY_ADMIN_URL = Deno.env.get("CADDY_ADMIN_URL") ??
+import { readFile } from "node:fs/promises";
+
+const KERNEL_URL = process.env.KERNEL_URL ?? "http://kernel:8788";
+const CADDY_ADMIN_URL = process.env.CADDY_ADMIN_URL ??
   "http://caddy:2019";
-const POLL_INTERVAL_MS = Number(Deno.env.get("POLL_INTERVAL_MS") ?? "5000");
-const DYNAMIC_HOST_SUFFIX = Deno.env.get("DYNAMIC_HOST_SUFFIX") ??
+const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? "5000");
+const DYNAMIC_HOST_SUFFIX = process.env.DYNAMIC_HOST_SUFFIX ??
   ".app.takosumi.test";
 const GATEWAY_ROUTE_PROJECTION_FILE =
-  Deno.env.get("GATEWAY_ROUTE_PROJECTION_FILE") ??
+  process.env.GATEWAY_ROUTE_PROJECTION_FILE ??
     "/local-substrate-runtime/gateway-routes.json";
 
 interface KernelDeploymentRoute {
@@ -193,9 +195,9 @@ async function readGatewayProjection(
 ): Promise<readonly ProjectedGatewayRecord[]> {
   let text: string;
   try {
-    text = await Deno.readTextFile(file);
+    text = await readFile(file, "utf8");
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return [];
+    if ((error as { readonly code?: string })?.code === "ENOENT") return [];
     throw error;
   }
   const parsed = JSON.parse(text) as GatewayProjection;

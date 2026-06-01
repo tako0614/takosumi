@@ -4,7 +4,7 @@ export { startKernel };
 
 // Derive the runtime adapter / serve-handle types from the kernel's public
 // `startKernel` return so this module routes HTTP serving through the kernel
-// `RuntimeAdapter` (packages/kernel/src/shared/runtime/) instead of touching
+// `RuntimeAdapter` (`src/kernel/shared/runtime/`) instead of touching
 // `Deno.*` directly. This keeps the substrate-neutral boundary intact and the
 // npm build typeable on Node.
 type StartedKernel = Awaited<ReturnType<typeof startKernel>>;

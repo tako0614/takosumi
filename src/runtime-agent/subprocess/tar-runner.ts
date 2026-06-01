@@ -4,17 +4,14 @@
  *
  * Runs `tar` through `Deno.Command` on Deno and through `node:child_process`
  * on Node, piping the archive bytes to stdin and selecting the path at call
- * time. No dnt module mapping is required.
+ * time. No build-time module mapping is required.
  *
- * Runtime detection: the npm build injects `@deno/shim-deno`, so on Node
- * `globalThis.Deno` is ALWAYS a defined shim proxy. A naive
- * `typeof globalThis.Deno !== "undefined"` probe therefore picks the Deno
- * branch on Node and then calls the shim's missing `Deno.Command` →
- * ReferenceError. {@link denoCommand} returns the genuine `Deno.Command`
- * constructor only when it is actually a function and Node is absent, so the
- * Node path is selected on Node. The Deno API is reached through
- * `globalThis.Deno` (not a bare `declare const Deno` identifier) so the emitted
- * npm code contains no unbound `Deno.Command` reference.
+ * Runtime detection: {@link denoCommand} returns the genuine `Deno.Command`
+ * constructor only when it is actually a function, so Node / Bun / Workers
+ * select the Node path instead of mistaking a partial `globalThis.Deno` shape
+ * for real Deno. The Deno API is reached through `globalThis.Deno` (not a bare
+ * `declare const Deno` identifier) so the emitted npm code contains no unbound
+ * `Deno.Command` reference.
  */
 
 import { spawn } from "node:child_process";
@@ -41,13 +38,13 @@ type DenoCommandCtor = new (
 };
 
 /**
- * The genuine `Deno.Command` constructor, or `undefined` on Node / Workers /
- * under the `@deno/shim-deno` proxy (which does not implement `Command`).
+ * The genuine `Deno.Command` constructor, or `undefined` on Node / Bun /
+ * Workers / partial compatibility globals that do not implement `Command`.
  * Reached through `globalThis` so the npm build emits no unbound `Deno`
  * identifier. Probing `Deno.Command === "function"` (a function only on real
- * Deno) is the reliable discriminator: real Deno has it, the shim proxy does
- * not. It does NOT also gate on Node being absent — Deno 2.x exposes a
- * Node-compat `process.versions.node`, so such a clause would reject real Deno.
+ * Deno) is the reliable discriminator. It does NOT also gate on Node being
+ * absent — Deno 2.x exposes a Node-compat `process.versions.node`, so such a
+ * clause would reject real Deno.
  */
 function denoCommand(): DenoCommandCtor | undefined {
   const deno = (globalThis as { Deno?: { Command?: unknown } }).Deno;

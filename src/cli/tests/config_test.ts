@@ -1,5 +1,8 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   __resetConfigFileCacheForTesting,
   loadConfig,
@@ -36,20 +39,20 @@ test("resolveMode returns local when no URL configured", () => {
 });
 
 test("loadConfig reads ~/.takosumi/config.yml when env unset", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "takosumi-cfg-" });
+  const dir = await mkdtemp(join(tmpdir(), "takosumi-cfg-"));
   try {
     const path = `${dir}/config.yml`;
-    await Deno.writeTextFile(
+    await writeFile(
       path,
       "remote_url: https://from-file.local\ntoken: file-token\n",
     );
 
-    const previousFile = Deno.env.get("TAKOSUMI_CONFIG_FILE");
-    const previousRemote = Deno.env.get("TAKOSUMI_REMOTE_URL");
-    const previousInstallerToken = Deno.env.get("TAKOSUMI_INSTALLER_TOKEN");
-    Deno.env.set("TAKOSUMI_CONFIG_FILE", path);
-    Deno.env.delete("TAKOSUMI_REMOTE_URL");
-    Deno.env.delete("TAKOSUMI_INSTALLER_TOKEN");
+    const previousFile = process.env["TAKOSUMI_CONFIG_FILE"];
+    const previousRemote = process.env["TAKOSUMI_REMOTE_URL"];
+    const previousInstallerToken = process.env["TAKOSUMI_INSTALLER_TOKEN"];
+    process.env["TAKOSUMI_CONFIG_FILE"] = path;
+    delete process.env["TAKOSUMI_REMOTE_URL"];
+    delete process.env["TAKOSUMI_INSTALLER_TOKEN"];
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
@@ -57,38 +60,38 @@ test("loadConfig reads ~/.takosumi/config.yml when env unset", async () => {
       assert.equal(config.token, "file-token");
     } finally {
       if (previousFile === undefined) {
-        Deno.env.delete("TAKOSUMI_CONFIG_FILE");
+        delete process.env["TAKOSUMI_CONFIG_FILE"];
       } else {
-        Deno.env.set("TAKOSUMI_CONFIG_FILE", previousFile);
+        process.env["TAKOSUMI_CONFIG_FILE"] = previousFile;
       }
       if (previousRemote !== undefined) {
-        Deno.env.set("TAKOSUMI_REMOTE_URL", previousRemote);
+        process.env["TAKOSUMI_REMOTE_URL"] = previousRemote;
       }
       if (previousInstallerToken !== undefined) {
-        Deno.env.set("TAKOSUMI_INSTALLER_TOKEN", previousInstallerToken);
+        process.env["TAKOSUMI_INSTALLER_TOKEN"] = previousInstallerToken;
       }
       __resetConfigFileCacheForTesting();
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
 test("loadConfig env wins over config file", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "takosumi-cfg-" });
+  const dir = await mkdtemp(join(tmpdir(), "takosumi-cfg-"));
   try {
     const path = `${dir}/config.yml`;
-    await Deno.writeTextFile(
+    await writeFile(
       path,
       "remote_url: https://from-file.local\ntoken: file-token\n",
     );
 
-    const previousFile = Deno.env.get("TAKOSUMI_CONFIG_FILE");
-    const previousRemote = Deno.env.get("TAKOSUMI_REMOTE_URL");
-    const previousInstallerToken = Deno.env.get("TAKOSUMI_INSTALLER_TOKEN");
-    Deno.env.set("TAKOSUMI_CONFIG_FILE", path);
-    Deno.env.set("TAKOSUMI_REMOTE_URL", "https://from-env.local");
-    Deno.env.set("TAKOSUMI_INSTALLER_TOKEN", "env-token");
+    const previousFile = process.env["TAKOSUMI_CONFIG_FILE"];
+    const previousRemote = process.env["TAKOSUMI_REMOTE_URL"];
+    const previousInstallerToken = process.env["TAKOSUMI_INSTALLER_TOKEN"];
+    process.env["TAKOSUMI_CONFIG_FILE"] = path;
+    process.env["TAKOSUMI_REMOTE_URL"] = "https://from-env.local";
+    process.env["TAKOSUMI_INSTALLER_TOKEN"] = "env-token";
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
@@ -96,37 +99,37 @@ test("loadConfig env wins over config file", async () => {
       assert.equal(config.token, "env-token");
     } finally {
       if (previousFile === undefined) {
-        Deno.env.delete("TAKOSUMI_CONFIG_FILE");
+        delete process.env["TAKOSUMI_CONFIG_FILE"];
       } else {
-        Deno.env.set("TAKOSUMI_CONFIG_FILE", previousFile);
+        process.env["TAKOSUMI_CONFIG_FILE"] = previousFile;
       }
       if (previousRemote === undefined) {
-        Deno.env.delete("TAKOSUMI_REMOTE_URL");
+        delete process.env["TAKOSUMI_REMOTE_URL"];
       } else {
-        Deno.env.set("TAKOSUMI_REMOTE_URL", previousRemote);
+        process.env["TAKOSUMI_REMOTE_URL"] = previousRemote;
       }
       if (previousInstallerToken === undefined) {
-        Deno.env.delete("TAKOSUMI_INSTALLER_TOKEN");
+        delete process.env["TAKOSUMI_INSTALLER_TOKEN"];
       } else {
-        Deno.env.set("TAKOSUMI_INSTALLER_TOKEN", previousInstallerToken);
+        process.env["TAKOSUMI_INSTALLER_TOKEN"] = previousInstallerToken;
       }
       __resetConfigFileCacheForTesting();
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
 test("loadConfig returns empty when neither env nor file present", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "takosumi-cfg-" });
+  const dir = await mkdtemp(join(tmpdir(), "takosumi-cfg-"));
   try {
     const path = `${dir}/missing-config.yml`;
-    const previousFile = Deno.env.get("TAKOSUMI_CONFIG_FILE");
-    const previousRemote = Deno.env.get("TAKOSUMI_REMOTE_URL");
-    const previousInstallerToken = Deno.env.get("TAKOSUMI_INSTALLER_TOKEN");
-    Deno.env.set("TAKOSUMI_CONFIG_FILE", path);
-    Deno.env.delete("TAKOSUMI_REMOTE_URL");
-    Deno.env.delete("TAKOSUMI_INSTALLER_TOKEN");
+    const previousFile = process.env["TAKOSUMI_CONFIG_FILE"];
+    const previousRemote = process.env["TAKOSUMI_REMOTE_URL"];
+    const previousInstallerToken = process.env["TAKOSUMI_INSTALLER_TOKEN"];
+    process.env["TAKOSUMI_CONFIG_FILE"] = path;
+    delete process.env["TAKOSUMI_REMOTE_URL"];
+    delete process.env["TAKOSUMI_INSTALLER_TOKEN"];
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
@@ -134,19 +137,19 @@ test("loadConfig returns empty when neither env nor file present", async () => {
       assert.equal(config.token, undefined);
     } finally {
       if (previousFile === undefined) {
-        Deno.env.delete("TAKOSUMI_CONFIG_FILE");
+        delete process.env["TAKOSUMI_CONFIG_FILE"];
       } else {
-        Deno.env.set("TAKOSUMI_CONFIG_FILE", previousFile);
+        process.env["TAKOSUMI_CONFIG_FILE"] = previousFile;
       }
       if (previousRemote !== undefined) {
-        Deno.env.set("TAKOSUMI_REMOTE_URL", previousRemote);
+        process.env["TAKOSUMI_REMOTE_URL"] = previousRemote;
       }
       if (previousInstallerToken !== undefined) {
-        Deno.env.set("TAKOSUMI_INSTALLER_TOKEN", previousInstallerToken);
+        process.env["TAKOSUMI_INSTALLER_TOKEN"] = previousInstallerToken;
       }
       __resetConfigFileCacheForTesting();
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await rm(dir, { recursive: true, force: true });
   }
 });

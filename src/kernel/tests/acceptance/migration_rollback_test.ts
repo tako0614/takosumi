@@ -9,7 +9,7 @@ import {
   DeploymentService,
   InMemoryDeploymentStore,
 } from "../../domains/deploy/deployment_service.ts";
-import type { PublicDeployManifest } from "../../domains/deploy/types.ts";
+import type { ReferenceDeploySourcePayload } from "../../domains/deploy/types.ts";
 import {
   InMemoryBindingSetRevisionStore,
   InMemoryMigrationLedgerStore,
@@ -123,7 +123,7 @@ test("acceptance migration: rollback does not reverse durable resource generatio
   assert.equal(migrated?.lifecycle.generation, 2);
 });
 
-function manifest(version: string): PublicDeployManifest {
+function manifest(version: string): ReferenceDeploySourcePayload {
   return {
     name: "demo-app",
     version,

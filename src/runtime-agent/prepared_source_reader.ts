@@ -24,6 +24,12 @@
 import type { PreparedSourceLocator } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import type { TarRunner } from "takosumi-contract/reference/runtime-capability";
 import { defaultTarRunner } from "./capability_runners.ts";
+import {
+  makeRuntimeTempDir,
+  readRuntimeEnv,
+  readRuntimeFile,
+  removeRuntimePath,
+} from "./runtime.ts";
 
 export interface PreparedSourceReader {
   readFile(path: string): Promise<Uint8Array>;
@@ -67,7 +73,7 @@ function preparedDecompressedMaxBytes(): number {
 }
 
 function readPositiveByteEnv(name: string, fallback: number): number {
-  const raw = Deno.env.get(name);
+  const raw = readRuntimeEnv(name);
   if (raw === undefined || raw.length === 0) {
     return fallback;
   }
@@ -82,7 +88,7 @@ export async function sourceContextFromLocator(
   locator: PreparedSourceLocator | undefined,
   // `tar` is an injected runtime capability rather than a direct subprocess
   // call in the library surface; defaults to the runtime-agent's local
-  // subprocess-backed runner so the Deno runtime behavior is unchanged.
+  // subprocess-backed runner so existing runtime behavior is unchanged.
   tarRunner: TarRunner = defaultTarRunner,
 ): Promise<PreparedSourceContext | undefined> {
   if (!locator) return undefined;
@@ -118,9 +124,9 @@ export async function sourceContextFromLocator(
       `preparedSource digest mismatch: expected ${locator.digest}, got ${actualDigest}`,
     );
   }
-  const destination = await Deno.makeTempDir({
-    prefix: "takosumi-runtime-agent-source-",
-  });
+  const destination = await makeRuntimeTempDir(
+    "takosumi-runtime-agent-source-",
+  );
   try {
     // The gzip magic bytes are authoritative; the URL suffix is consulted only
     // when the body is too short to carry the 2-byte magic so a misleading
@@ -147,12 +153,12 @@ export async function sourceContextFromLocator(
       bytes,
     );
   } catch (err) {
-    await Deno.remove(destination, { recursive: true }).catch(() => {});
+    await removeRuntimePath(destination, { recursive: true }).catch(() => {});
     throw err;
   }
   return {
     reader: new LocalPreparedSourceReader(destination),
-    cleanup: () => Deno.remove(destination, { recursive: true }),
+    cleanup: () => removeRuntimePath(destination, { recursive: true }),
   };
 }
 
@@ -164,7 +170,7 @@ export class LocalPreparedSourceReader implements PreparedSourceReader {
   }
 
   readFile(path: string): Promise<Uint8Array> {
-    return Deno.readFile(`${this.#root}/${normalizeRelativePath(path)}`);
+    return readRuntimeFile(`${this.#root}/${normalizeRelativePath(path)}`);
   }
 }
 

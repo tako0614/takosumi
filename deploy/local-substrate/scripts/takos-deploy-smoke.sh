@@ -18,7 +18,7 @@ CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 TOKEN="${TAKOSUMI_INSTALLER_TOKEN:-local-substrate-installer-token}"
 SPACE_ID="${TAKOS_DEPLOY_SMOKE_SPACE_ID:-space_takos_smoke_$(date +%Y%m%d%H%M%S)}"
 SOURCE_PATH="${TAKOS_DEPLOY_SMOKE_SOURCE_PATH:-/sources/takos}"
-KERNEL_URL="${TAKOSUMI_KERNEL_URL:-https://cloud.takosumi.test}"
+KERNEL_URL="${TAKOSUMI_KERNEL_URL:-https://accounts.takosumi.test}"
 GATEWAY_URL="${TAKOS_DEPLOY_SMOKE_GATEWAY_URL:-https://takos.app.takosumi.test}"
 GATEWAY_TIMEOUT_SECONDS="${TAKOS_DEPLOY_SMOKE_GATEWAY_TIMEOUT_SECONDS:-480}"
 BUILD_IMAGES="${TAKOS_DEPLOY_SMOKE_BUILD_IMAGES:-auto}"
@@ -87,7 +87,7 @@ post_json() {
 	local path="$1"
 	local body="$2"
 	curl -skS --max-time 900 --cacert "$CA" \
-		--resolve cloud.takosumi.test:443:127.0.0.1 \
+		--resolve accounts.takosumi.test:443:127.0.0.1 \
 		-H "Authorization: Bearer $TOKEN" \
 		-H "Content-Type: application/json" \
 		-d "$body" \
@@ -188,7 +188,7 @@ DRY_RESPONSE="$(post_json "/v1/installations/dry-run" "$INSTALL_REQUEST")"
 require_code "Takos installation dry-run" "$DRY_RESPONSE" "200"
 DRY_BODY="$(response_body "$DRY_RESPONSE")"
 EXPECTED_PIN="$(printf '%s' "$DRY_BODY" | json_get 'body["expected"]')"
-MANIFEST_DIGEST="$(printf '%s' "$DRY_BODY" | json_get 'body.get("manifestDigest", "")')"
+PLAN_DIGEST="$(printf '%s' "$DRY_BODY" | json_get 'body.get("planSnapshotDigest", "")')"
 
 APPLY_REQUEST="$(printf '%s' "$INSTALL_REQUEST" | python3 -c '
 import json
@@ -221,5 +221,5 @@ fi
 echo "==> Waiting for $GATEWAY_URL/health"
 HEALTH_BODY="$(wait_gateway)"
 
-echo "OK Takos deployed installation=$INSTALLATION_ID deployment=$DEPLOYMENT_ID digest=$MANIFEST_DIGEST"
+echo "OK Takos deployed installation=$INSTALLATION_ID deployment=$DEPLOYMENT_ID digest=$PLAN_DIGEST"
 echo "OK gateway $GATEWAY_URL/health -> $HEALTH_BODY"

@@ -6,7 +6,7 @@
 --            the kernel rejects mismatching effect digests before advancing
 --            a side-effecting stage.
 --
--- Spec:      packages/kernel/src/domains/deploy/operation_journal.ts
+-- Spec:      src/kernel/domains/deploy/operation_journal.ts
 -- Phase:     deployment OperationPlan WAL
 -- Domain:    deploy
 

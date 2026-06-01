@@ -8,7 +8,7 @@
 
 ## 境界の宣言
 
-Takosumi core/control-plane role は state を orchestrate する。Space、 ResolvedPlan、TargetState、 OperationPlan、Write-Ahead Journal、policy evaluation evidence、operator の approval 設定から渡された approval evidence、 CleanupBacklog を管理する。approval decision と account layer policy state は operator の設定が決める。Takosumi core は cloud / OS credential を保持せず、resource を materialize する side-effecting な外部 I/O も実行しない。
+Takosumi core/control-plane role は state を orchestrate する。`spaceId` に属する ResolvedPlan、TargetState、 OperationPlan、Write-Ahead Journal、policy evaluation evidence、operator の approval 設定から渡された approval evidence、 CleanupBacklog を管理する。Space membership / ownership と approval decision、account layer policy state は operator の設定が決める。Takosumi core は cloud / OS credential を保持せず、resource を materialize する side-effecting な外部 I/O も実行しない。
 
 runtime-agent は実行を担当する。connector code を host し、自身が動いている host 環境の cloud SDK / OS API credential を保持し、すべての外部 I/O を実行し、観測された state を `describe` で Takosumi に返す。runtime-agent は credential を正当に持つ host 上で動作する—典型的には operator の deploy account 上で動くため、credential の blast radius は runtime-agent host に閉じ、Takosumi には及ばない。
 
@@ -18,7 +18,7 @@ runtime-agent は実行を担当する。connector code を host し、自身が
 
 reference Takosumi runtime-agent topology では、Takosumi と runtime-agent の間で lifecycle / connectors RPC surface と operation envelope を使います。 packaging は operator が選びます。connector 実装は Deno バイナリ、in-process module、HTTP service、WASM module、コンテナ、SaaS をラップする外部 gateway、 operator-private daemon のいずれでもよい。operator は自身の credential 境界と fleet topology を選ぶ。同一 binary / host に co-locate する場合も、credential を持つ execution role は Takosumi core/control-plane role から分けて扱う。production 推奨 topology は runtime-agent 分離で、embedded execution は dev、credential-free minimal profile、または operator が明示的に管理する単一 host profile に限定する。 operator は自身のセキュリティ要件に合った packaging を選ぶ。
 
-compatible implementation は別の execution boundary を使えます。守る public contract は manifest と Installer API、そして Installation / Deployment の observable lifecycle です。
+compatible implementation は別の execution boundary を使えます。守る public contract は Source / Installer API / Installation / Deployment / PlatformService の observable lifecycle です。
 
 ## Operation envelope
 
@@ -115,7 +115,7 @@ reference runtime-agent の `verify` request は登録済み connector に対す
 
 ## Runtime-agent auth chain
 
-Takosumi → runtime-agent 方向の認証方式は operator の設定の internal runtime auth です。kind package は通常の operator import として読み込まれ、 runtime-agent の host 権限は enrollment / heartbeat / lease material に bind された `(shape, provider)` ペアで表す。runtime-agent はその material に基づいて lifecycle request を受けます。
+Takosumi → runtime-agent 方向の認証方式は operator の設定の internal runtime auth です。backend implementation は通常の operator import として読み込まれ、 runtime-agent の host 権限は enrollment / heartbeat / lease material に bind された `(shape, provider)` ペアで表す。runtime-agent はその material に基づいて lifecycle request を受けます。
 
 runtime-agent → Takosumi 方向は別の auth path である: enrollment token が identity を確立し、heartbeat / lease token で runtime-agent を attach し続け、agent bearer (`TAKOSUMI_AGENT_TOKEN`) が lifecycle / connectors RPC を保護する。両方向は鍵素材を分け、blast radius を片側の auth path に閉じる。
 

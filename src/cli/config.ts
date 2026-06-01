@@ -16,6 +16,7 @@
  */
 
 import { parse as parseYaml } from "yaml";
+import { isNotFoundError, readEnv, readTextFile } from "./runtime.ts";
 
 export interface CliConfig {
   readonly kernelUrl?: string;
@@ -80,7 +81,7 @@ async function loadConfigFile(): Promise<TakosumiConfigFile | undefined> {
     return undefined;
   }
   try {
-    const text = await Deno.readTextFile(path);
+    const text = await readTextFile(path);
     const trimmed = text.trim();
     if (!trimmed) {
       configFileCache = null;
@@ -98,7 +99,7 @@ async function loadConfigFile(): Promise<TakosumiConfigFile | undefined> {
     configFileCache = file;
     return file;
   } catch (err) {
-    if (err instanceof Deno.errors.NotFound) {
+    if (isNotFoundError(err)) {
       configFileCache = null;
       return undefined;
     }
@@ -110,9 +111,9 @@ async function loadConfigFile(): Promise<TakosumiConfigFile | undefined> {
 }
 
 function configFilePath(): string | undefined {
-  const override = Deno.env.get("TAKOSUMI_CONFIG_FILE");
+  const override = readEnv("TAKOSUMI_CONFIG_FILE");
   if (override) return override;
-  const home = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE");
+  const home = readEnv("HOME") ?? readEnv("USERPROFILE");
   if (!home) return undefined;
   return `${home}/.takosumi/config.yml`;
 }
@@ -120,7 +121,7 @@ function configFilePath(): string | undefined {
 function resolveKernelUrl(
   file: TakosumiConfigFile | undefined,
 ): string | undefined {
-  const fresh = Deno.env.get("TAKOSUMI_REMOTE_URL");
+  const fresh = readEnv("TAKOSUMI_REMOTE_URL");
   if (fresh) return fresh;
   if (file?.remote_url) return file.remote_url;
   return undefined;
@@ -131,11 +132,11 @@ function resolveToken(
   tokenEnv: ConfigTokenEnv,
 ): string | undefined {
   if (tokenEnv === "installer" || tokenEnv === "auto") {
-    const installerToken = Deno.env.get("TAKOSUMI_INSTALLER_TOKEN");
+    const installerToken = readEnv("TAKOSUMI_INSTALLER_TOKEN");
     if (installerToken) return installerToken;
   }
   if (tokenEnv === "deploy" || tokenEnv === "auto") {
-    const deployToken = Deno.env.get("TAKOSUMI_DEPLOY_TOKEN");
+    const deployToken = readEnv("TAKOSUMI_DEPLOY_TOKEN");
     if (deployToken) return deployToken;
   }
   if (file?.token) return file.token;

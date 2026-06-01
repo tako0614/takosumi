@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { test } from "bun:test";
 import {
   OFFICIAL_MATERIAL_KIND_NAMES,
   PROJECTION_FAMILY_NAMES,
-} from "takosumi-contract/catalog";
+} from "takosumi-contract/reference/catalog";
 
 // Takosumi is a kind-agnostic framework. The official portable kind catalog is
 // published *spec*, not framework source: each descriptor is flat JSON-LD under
@@ -72,10 +74,10 @@ function descriptorUrl(name: string): URL {
   return new URL(`${name}.jsonld`, CATALOG_ROOT);
 }
 
-Deno.test("takosumi framework ships no kind source packages", async () => {
+test("takosumi framework ships no kind source packages", async () => {
   // No src/kinds tree: kinds are not framework source.
   await assert.rejects(
-    () => Deno.stat(new URL("src/kinds", ROOT)),
+    () => stat(new URL("src/kinds", ROOT)),
     "src/kinds must not exist — the official catalog is published JSON-LD in docs/kinds/v1",
   );
 
@@ -97,22 +99,24 @@ Deno.test("takosumi framework ships no kind source packages", async () => {
   const packageImports = Object.keys(manifest.imports ?? {});
   const compilerPaths = Object.keys(tsconfig.compilerOptions?.paths ?? {});
   const kindImports = [...packageImports, ...compilerPaths]
-    .filter((specifier) => specifier.startsWith("@takos/takosumi-kind-"));
+    .filter((specifier) =>
+      specifier.startsWith("@takos/" + "takosumi-" + "kind-")
+    );
   assert.deepEqual(
     kindImports,
     [],
-    "the framework import map must not self-map any @takos/takosumi-kind-* alias",
+    "the framework import map must not self-map any legacy per-kind shortcut",
   );
 });
 
-Deno.test("framework source imports no kind descriptor (kind-agnostic guard)", async () => {
+test("framework source imports no kind descriptor (kind-agnostic guard)", async () => {
   for (const dir of FRAMEWORK_SOURCE_DIRS) {
     const files = await listTsFiles(new URL(dir, ROOT));
     for (const file of files) {
-      const source = await Deno.readTextFile(file);
+      const source = await readText(file);
       for (const specifier of importSpecifiers(source)) {
         assert.equal(
-          specifier.includes("takosumi-kind-") ||
+          specifier.includes("takosumi-" + "kind-") ||
             /(?:^|\/)kinds\//.test(specifier),
           false,
           `${
@@ -124,14 +128,14 @@ Deno.test("framework source imports no kind descriptor (kind-agnostic guard)", a
   }
 });
 
-Deno.test("single official catalog holds base + extending descriptors; the 9 bases are portable", async () => {
+test("single official catalog holds base + extending descriptors; the 9 bases are portable", async () => {
   // The one catalog mixes base descriptors (worker, postgres, …) and
   // descriptors that extend them via portableBase (cloudflare-worker, …).
   // "native" is not a separate category — they are all just JSON-LD descriptors.
   const bases: string[] = [];
   const extending: string[] = [];
-  for await (const entry of Deno.readDir(CATALOG_ROOT)) {
-    if (!entry.isFile || !entry.name.endsWith(".jsonld")) continue;
+  for (const entry of await readdir(CATALOG_ROOT, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonld")) continue;
     const name = entry.name.replace(/\.jsonld$/, "");
     const descriptor = await readJson<KindDescriptor>(descriptorUrl(name));
 
@@ -162,9 +166,9 @@ Deno.test("single official catalog holds base + extending descriptors; the 9 bas
   );
 });
 
-Deno.test("portable kind descriptors use implementation-neutral material wording", async () => {
+test("portable kind descriptors use implementation-neutral material wording", async () => {
   for (const name of PORTABLE_KINDS) {
-    const descriptorSource = await Deno.readTextFile(descriptorUrl(name));
+    const descriptorSource = await readText(descriptorUrl(name));
     assertNoProviderLocalWording(
       descriptorSource,
       `docs/kinds/v1/${name}.jsonld`,
@@ -172,9 +176,9 @@ Deno.test("portable kind descriptors use implementation-neutral material wording
   }
 });
 
-Deno.test("portable kind descriptors use closed official spec schemas", async () => {
+test("portable kind descriptors use closed official spec schemas", async () => {
   for (const name of PORTABLE_KINDS) {
-    const descriptorSource = await Deno.readTextFile(descriptorUrl(name));
+    const descriptorSource = await readText(descriptorUrl(name));
     assertNoOpenAdditionalProperties(
       descriptorSource,
       `docs/kinds/v1/${name}.jsonld`,
@@ -182,7 +186,7 @@ Deno.test("portable kind descriptors use closed official spec schemas", async ()
   }
 });
 
-Deno.test("portable kind descriptors match family listen contracts", async () => {
+test("portable kind descriptors match family listen contracts", async () => {
   for (const name of PORTABLE_KINDS) {
     const descriptor = await readJson<KindDescriptor>(descriptorUrl(name));
     assert.deepEqual(
@@ -193,7 +197,7 @@ Deno.test("portable kind descriptors match family listen contracts", async () =>
   }
 });
 
-Deno.test("portable kind descriptors do not advertise backend-specific capabilities", async () => {
+test("portable kind descriptors do not advertise backend-specific capabilities", async () => {
   const forbiddenCapabilities: Readonly<Record<string, readonly string[]>> = {
     "gateway": ["sni", "alpn-acme", "http3", "redirects"],
     "kv-store": [],
@@ -234,7 +238,7 @@ Deno.test("portable kind descriptors do not advertise backend-specific capabilit
   }
 });
 
-Deno.test("portable object-store descriptor keeps backend controls out of spec", async () => {
+test("portable object-store descriptor keeps backend controls out of spec", async () => {
   const descriptor = await readJson<KindDescriptor>(
     descriptorUrl("object-store"),
   );
@@ -244,10 +248,10 @@ Deno.test("portable object-store descriptor keeps backend controls out of spec",
   );
 });
 
-Deno.test("runtime-agent package uses narrow contract subpaths", async () => {
+test("runtime-agent package uses narrow contract subpaths", async () => {
   const files = await listTsFiles(new URL("src/runtime-agent/", ROOT));
   for (const file of files) {
-    const source = await Deno.readTextFile(file);
+    const source = await readText(file);
     assert.equal(
       source.includes("takosumi-contract/reference/compat"),
       false,
@@ -258,7 +262,7 @@ Deno.test("runtime-agent package uses narrow contract subpaths", async () => {
   }
 });
 
-Deno.test("takosumi scripts use narrow contract subpaths", async () => {
+test("takosumi scripts use narrow contract subpaths", async () => {
   const broadCompatSubpath = "takosumi-contract/reference/" + "compat";
   const files = await listTsFiles(new URL("scripts/", ROOT));
   for (const file of files) {
@@ -269,7 +273,7 @@ Deno.test("takosumi scripts use narrow contract subpaths", async () => {
     ) {
       continue;
     }
-    const source = await Deno.readTextFile(file);
+    const source = await readText(file);
     assert.equal(
       source.includes(broadCompatSubpath),
       false,
@@ -278,11 +282,11 @@ Deno.test("takosumi scripts use narrow contract subpaths", async () => {
   }
 });
 
-Deno.test("kernel plugin registry uses the plugin contract subpath", async () => {
+test("kernel plugin registry uses the plugin contract subpath", async () => {
   const broadCompatSubpath = "takosumi-contract/reference/" + "compat";
   const files = await listTsFiles(new URL("src/kernel/plugins/", ROOT));
   for (const file of files) {
-    const source = await Deno.readTextFile(file);
+    const source = await readText(file);
     assert.equal(
       source.includes(broadCompatSubpath),
       false,
@@ -293,8 +297,8 @@ Deno.test("kernel plugin registry uses the plugin contract subpath", async () =>
   }
 });
 
-Deno.test("reference compat does not expose legacy provider bridge", async () => {
-  const compat = await Deno.readTextFile(
+test("reference compat does not expose legacy provider bridge", async () => {
+  const compat = await readText(
     new URL("src/contract/reference-compat.ts", ROOT),
   );
   assert.equal(
@@ -306,10 +310,10 @@ Deno.test("reference compat does not expose legacy provider bridge", async () =>
   const tsconfig = await readJson<TsConfig>(new URL("tsconfig.json", ROOT));
   assert.deepEqual(
     tsconfig.compilerOptions?.paths?.[
-      "@takos/takosumi-contract/internal/provider-plugin"
+      "@takos/" + "takosumi-contract/internal/provider-plugin"
     ],
     ["./src/contract/provider-plugin.ts"],
-    "legacy provider bridge stays reachable only via the internal @takos contract alias",
+    "legacy provider bridge stays reachable only via the internal compatibility contract alias",
   );
   assert.deepEqual(
     tsconfig.compilerOptions?.paths?.[
@@ -320,7 +324,7 @@ Deno.test("reference compat does not expose legacy provider bridge", async () =>
   );
 });
 
-Deno.test("kind alias docs state that the resolved URI owns the schema", async () => {
+test("reference adapter docs stay outside public source vocabulary", async () => {
   const docs = [
     "docs/reference/kind-bindings.md",
     "docs/reference/kind-packages.md",
@@ -332,13 +336,13 @@ Deno.test("kind alias docs state that the resolved URI owns the schema", async (
     "operator が `worker` を `cloudflare-worker` に map",
     "portable alias を特定の native kind に map",
     "map a portable alias to a native kind",
-    "kindAliases: { worker: WORKER_KIND }",
+    "kind" + "Aliases: { worker: WORKER_KIND }",
     "worker: WORKER_KIND",
     "postgres: DB_KIND",
   ] as const;
 
   for (const doc of docs) {
-    const source = await Deno.readTextFile(new URL(doc, ROOT));
+    const source = await readText(new URL(doc, ROOT));
     for (const phrase of forbiddenPhrases) {
       assert.equal(
         source.includes(phrase),
@@ -349,22 +353,22 @@ Deno.test("kind alias docs state that the resolved URI owns the schema", async (
   }
 
   assert.match(
-    await Deno.readTextFile(new URL("docs/reference/kind-bindings.md", ROOT)),
-    /解決後の kind URI が `spec` schema、output slot、connection compatibility を所有します/,
+    await readText(new URL("docs/reference/kind-bindings.md", ROOT)),
+    /public\s+v1\s+contract ではありません/,
   );
   assert.match(
-    await Deno.readTextFile(
+    await readText(
       new URL("docs/en/reference/kind-packages.md", ROOT),
     ),
-    /The resolved kind URI owns the `spec` schema, output slots, and connection compatibility/,
+    /Backend package exports are implementation choices/,
   );
   assert.match(
-    await Deno.readTextFile(new URL("docs/operator/bootstrap.md", ROOT)),
-    /native kind alias を有効にする例です/,
+    await readText(new URL("docs/operator/bootstrap.md", ROOT)),
+    /backend adapters を有効にする例/,
   );
 });
 
-Deno.test("reference plugin docs show explicit operator lifecycle clients", async () => {
+test("reference plugin docs show explicit operator lifecycle clients", async () => {
   const docs = [
     "AGENTS.md",
     "src/contract/README.md",
@@ -392,7 +396,7 @@ Deno.test("reference plugin docs show explicit operator lifecycle clients", asyn
   ] as const;
 
   for (const doc of docs) {
-    const source = await Deno.readTextFile(new URL(doc, ROOT));
+    const source = await readText(new URL(doc, ROOT));
     for (const phrase of forbiddenPhrases) {
       assert.equal(
         source.includes(phrase),
@@ -403,11 +407,11 @@ Deno.test("reference plugin docs show explicit operator lifecycle clients", asyn
   }
 
   assert.match(
-    await Deno.readTextFile(new URL("docs/reference/plugin-loading.md", ROOT)),
-    /cloudflareWorkerPlugin\(\{ accountId, lifecycle \}\)/,
+    await readText(new URL("docs/reference/plugin-loading.md", ROOT)),
+    /operator-supplied backend adapter/,
   );
   assert.match(
-    await Deno.readTextFile(new URL("docs/operator/bootstrap.md", ROOT)),
+    await readText(new URL("docs/operator/bootstrap.md", ROOT)),
     /dockerPostgresPlugin\(\{ lifecycle: databaseLifecycle \}\)/,
   );
 });
@@ -431,11 +435,11 @@ function importSpecifiers(source: string): readonly string[] {
 
 async function listTsFiles(root: URL): Promise<readonly URL[]> {
   const files: URL[] = [];
-  for await (const entry of Deno.readDir(root)) {
-    const url = new URL(`${entry.name}${entry.isDirectory ? "/" : ""}`, root);
-    if (entry.isDirectory) {
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const url = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, root);
+    if (entry.isDirectory()) {
       files.push(...await listTsFiles(url));
-    } else if (entry.isFile && entry.name.endsWith(".ts")) {
+    } else if (entry.isFile() && entry.name.endsWith(".ts")) {
       files.push(url);
     }
   }
@@ -445,7 +449,11 @@ async function listTsFiles(root: URL): Promise<readonly URL[]> {
 }
 
 async function readJson<T>(url: URL): Promise<T> {
-  return JSON.parse(await Deno.readTextFile(url)) as T;
+  return JSON.parse(await readText(url)) as T;
+}
+
+async function readText(path: URL | string): Promise<string> {
+  return readFile(path, "utf8");
 }
 
 function assertNoProviderLocalWording(source: string, label: string): void {

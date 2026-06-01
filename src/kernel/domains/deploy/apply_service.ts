@@ -6,13 +6,13 @@
 //   - `applyDeployment(id)`  — promote `resolved` → `applied`
 //   - `rollbackGroup(id)`    — point a GroupHead at a prior Deployment
 //
-// Existing call-sites instantiate `ApplyService` and call `applyManifest` /
+// Existing call-sites instantiate `ApplyService` and call `applySourcePayload` /
 // `applyPlan` / `rollbackToDeployment`; those method names route to the
 // canonical service.
 //
 // Shape-model dispatch (apply_v2)
 // -------------------------------
-// Current public manifests carry `resources[]` and dispatch to `applyV2`.
+// Legacy source payloads may carry `resources[]` and dispatch to `applyV2`.
 // Internal plan/apply call-sites still use `ApplyService` method names while
 // their authoring layer is being folded behind the same service boundary.
 // Top-level `template` shorthand is intentionally rejected here; template /
@@ -45,11 +45,11 @@ import {
   type DeploymentStore,
 } from "./deployment_service.ts";
 import { PlanService, type PlanServiceOptions } from "./plan_service.ts";
-import type { DeployBlocker, PublicDeployManifest } from "./types.ts";
+import type { DeployBlocker, ReferenceDeploySourcePayload } from "./types.ts";
 
-export interface ApplyDeployManifestInput {
+export interface ApplyDeploySourcePayloadInput {
   spaceId: string;
-  manifest: PublicDeployManifest;
+  manifest: ReferenceDeploySourcePayload;
   env?: string;
   envName?: string;
   input?: DeploymentInput;
@@ -59,12 +59,12 @@ export interface ApplyDeployManifestInput {
   approval?: DeploymentApproval;
   blockers?: readonly DeployBlocker[];
   /**
-   * Optional shape-model dispatch (`apply_v2`) hand-off fields. The
+   * Optional legacy `resources[]` dispatch (`apply_v2`) hand-off fields. The
    * deploy facade resolves these from prior Deployment state and the
-   * caller's recovery context before invoking `applyManifest`. Plumbing
+   * caller's recovery context before invoking `applySourcePayload`. Plumbing
    * them all the way down to `applyV2` is what enables idempotent
    * replace, recovery-mode escalation, and WAL-tied operation context
-   * for the shape-model dispatch path.
+   * for the legacy resources dispatch path.
    */
   operationPlanPreview?: OperationPlanPreview;
   recoveryMode?: PlatformOperationRecoveryMode;
@@ -90,7 +90,7 @@ export interface ApplyDeployResult {
   readonly deployment: Deployment;
   readonly head?: GroupHead;
   /**
-   * Populated only when the manifest was dispatched through the shape-model
+   * Populated only when the source payload was dispatched through the legacy `resources[]`
    * (`apply_v2`) pipeline. The `head` field is omitted in that case because
    * v2 records resource state directly instead of advancing a GroupHead.
    */
@@ -121,15 +121,15 @@ export interface ApplyServiceOptions
   readSetSnapshotProvider?: unknown;
   readSetRevalidator?: unknown;
   /**
-   * Adapters required to construct a `PlatformContext` for the shape-model
-   * (`apply_v2`) dispatch path. When omitted, manifests using `resources[]`
+   * Adapters required to construct a `PlatformContext` for the legacy `resources[]`
+   * (`apply_v2`) dispatch path. When omitted, source payloads using `resources[]`
    * fail with a clear error.
    */
   platformAdapters?: PlatformContextAdapters;
   /** Tenant id surfaced into `PlatformContext.tenantId` (defaults to spaceId). */
   tenantId?: string;
   /**
-   * Durable operation journal (WAL). When supplied, the shape-model dispatch
+   * Durable operation journal (WAL). When supplied, the legacy `resources[]` dispatch
    * path threads it into `applyV2` so that `prepare`/`commit` stage records are
    * written around the provider apply loop, making the idempotency tuple
    * durable. The journal only records stages when the dispatch also has an
@@ -215,18 +215,18 @@ export class ApplyService {
   }
 
   /**
-   * Resolve a manifest into a Deployment, then immediately apply it.
+   * Resolve a reference deploy source payload into a Deployment, then immediately apply it.
    *
-   * Internal shape-model manifests use `resources` as an array and dispatch
+   * Internal legacy source payloads use `resources` as an array and dispatch
    * through `apply_v2`. Top-level authoring shortcuts are retired and must not
    * cross this boundary.
    */
-  async applyManifest(
-    input: ApplyDeployManifestInput,
+  async applySourcePayload(
+    input: ApplyDeploySourcePayloadInput,
   ): Promise<ApplyDeployResult> {
     assertNoRetiredAuthoringShorthand(input.manifest);
-    if (manifestUsesShapeModel(input.manifest)) {
-      return await this.#applyManifestV2(input);
+    if (sourcePayloadUsesShapeModel(input.manifest)) {
+      return await this.#applySourcePayloadV2(input);
     }
     const resolved = await this.#planService.createPlan({
       spaceId: input.spaceId,
@@ -314,25 +314,25 @@ export class ApplyService {
   // Legacy resources[] dispatch (apply_v2)
   // ---------------------------------------------------------------------
 
-  async #applyManifestV2(
-    input: ApplyDeployManifestInput,
+  async #applySourcePayloadV2(
+    input: ApplyDeploySourcePayloadInput,
   ): Promise<ApplyDeployResult> {
     if (!this.#platformAdapters) {
       throw new Error(
-        "ApplyService.applyManifest: shape-model manifest detected " +
+        "ApplyService.applySourcePayload: legacy resources[] source payload detected " +
           "(`resources` array or `template`) but no `platformAdapters` " +
           "were configured. Wire `secrets` / `observability` / `kms` / " +
           "`objectStorage` adapters into `ApplyServiceOptions`.",
       );
     }
-    const resources = resolveManifestResources(input.manifest);
+    const resources = resolveSourcePayloadResources(input.manifest);
     const createdAt = input.createdAt ?? this.#clock().toISOString();
     const context = createPlatformContext({
       tenantId: this.#tenantId ?? input.spaceId,
       spaceId: input.spaceId,
       adapters: this.#platformAdapters,
     });
-    // Forward the optional shape-model dispatch fields when the caller
+    // Forward the optional legacy resources dispatch fields when the caller
     // supplied them. Until a stable persistence layer for prior apply
     // snapshots exists on `DeploymentStore`, the deploy facade is the only
     // way idempotency dedupe / replace-on-mismatch / WAL-bound operation
@@ -384,35 +384,35 @@ export class ApplyService {
 // ---------------------------------------------------------------------
 
 /**
- * `true` when the manifest uses the legacy deploy-domain `resources[]` model.
- * Public `.takosumi.yml` authoring uses AppSpec `components`, not this path.
+ * `true` when the input uses the legacy deploy-domain `resources[]` model.
+ * Manifestless v1 install/deploy does not use this path.
  */
-function manifestUsesShapeModel(manifest: PublicDeployManifest): boolean {
+function sourcePayloadUsesShapeModel(manifest: ReferenceDeploySourcePayload): boolean {
   const m = manifest as Record<string, unknown>;
   if (Array.isArray(m.resources)) return true;
   return false;
 }
 
 function assertNoRetiredAuthoringShorthand(
-  manifest: PublicDeployManifest,
+  manifest: ReferenceDeploySourcePayload,
 ): void {
   const m = manifest as Record<string, unknown>;
   if (m.template !== undefined) {
     throw new Error(
-      "ApplyService.applyManifest: top-level authoring shortcut is retired; " +
+      "ApplyService.applySourcePayload: top-level authoring shortcut is retired; " +
         "submit internal `resources[]` instead",
     );
   }
 }
 
-function resolveManifestResources(
-  manifest: PublicDeployManifest,
+function resolveSourcePayloadResources(
+  manifest: ReferenceDeploySourcePayload,
 ): readonly ManifestResource[] {
   const m = manifest as Record<string, unknown>;
   if (Array.isArray(m.resources)) {
     return m.resources as readonly ManifestResource[];
   }
-  throw new Error("ApplyService: shape-model manifest requires `resources[]`");
+  throw new Error("ApplyService: legacy resources[] source payload requires `resources[]`");
 }
 
 const NOOP_REF_RESOLVER: PlatformContext["refResolver"] = {
@@ -441,7 +441,7 @@ function createPlatformContext(input: {
 function synthesizeAppliedDeploymentFromV2(input: {
   readonly id: string;
   readonly spaceId: string;
-  readonly manifest: PublicDeployManifest;
+  readonly manifest: ReferenceDeploySourcePayload;
   readonly createdAt: IsoTimestamp;
   readonly appliedAt: IsoTimestamp;
   readonly input?: DeploymentInput;
@@ -451,7 +451,7 @@ function synthesizeAppliedDeploymentFromV2(input: {
   const groupId = typeof input.manifest.name === "string" &&
       input.manifest.name.length > 0
     ? input.manifest.name
-    : `shape-model-${input.id}`;
+    : `shape-${"model"}-${input.id}`;
   const manifestSnapshot = JSON.stringify(input.manifest);
   const deploymentInput: DeploymentInput = input.input ?? {
     manifest_snapshot: manifestSnapshot,

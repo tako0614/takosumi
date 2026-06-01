@@ -112,7 +112,7 @@ storage
 | `storage`                  | SQL ping (`SELECT 1`) 成功 / migration version が compat range 内                     |
 | `lock-store`               | lock store backend に書き込み + 読み戻し成功                                          |
 | `secret-partition`         | global / tag-specific master passphrase resolver の derive 成功                       |
-| `implementation-bootstrap` | operator-provided `kindAliases` / binding set の parse と重複検査が成功               |
+| `implementation-bootstrap` | operator-provided adapter / PlatformService resolver set の parse と重複検査が成功   |
 | `runtime-agent-registry`   | embedded agent (有る場合) の self-enrollment 成功 / external agent registry sync 完了 |
 | `control-plane-listener`   | Takosumi API listener bind + TLS handshake (有効な場合) 成功                          |
 

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { test } from "bun:test";
 import {
   INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
   INSTALLER_INSTALLATION_DEPLOYMENTS_PATH,
@@ -20,11 +22,9 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/spec-boundaries.md",
   "docs/reference/runtime-agent-api.md",
   "docs/reference/kind-bindings.md",
-  "docs/reference/takosumi-cloud.md",
-  "docs/reference/catalog.md",
-  "../takosumi-cloud/docs/ja/spec.md",
-  "../takosumi-cloud/docs/en/spec.md",
-  "src/contract/catalog.ts",
+  "docs/reference/takosumi.md",
+  "../takosumi/docs/ja/spec.md",
+  "../takosumi/docs/en/spec.md",
   "src/kernel/domains/deploy/_internal_manifest_types.ts",
   "src/kernel/domains/deploy/manifest_v1.ts",
   "src/kernel/api/app.ts",
@@ -49,19 +49,19 @@ const TAKOSUMI_OWNED_PATHS = [
 ];
 
 const REQUIRED_SPEC_KEYS = [
-  "appspec-v1",
-  "contract-catalog-v1",
   "installer-api-v1",
+  "source-contract-v1",
+  "platform-service-v1",
   "build-service-input",
-  "takosumi-official-catalog-v1",
-  "takosumi-cloud-spec-v1",
+  "reference-adapter-metadata-v1",
+  "takosumi-spec-v1",
   "kernel-route-inventory",
   "runtime-agent-envelope",
-  "reference-kind-binding-guide",
+  "reference-adapter-guide",
   "takosumi-npm-package",
 ];
 
-Deno.test("public spec source map covers required public surfaces", async () => {
+test("public spec source map covers required public surfaces", async () => {
   const source = await read("docs/reference/public-spec-source-map.md");
 
   for (const specKey of REQUIRED_SPEC_KEYS) {
@@ -71,19 +71,20 @@ Deno.test("public spec source map covers required public surfaces", async () => 
   assert.equal(source.includes("deploy-public-api-v1"), false);
   assert.equal(source.includes(`takosumi-${"git"}-workflow-ref-v1`), false);
   assert.equal(source.includes(`takosumi-${"git"}-artifact-uri-v1`), false);
-  assert.ok(source.includes("src/contract/app-spec.ts"));
-  assert.ok(source.includes("src/contract/catalog.ts"));
+  assert.equal(source.includes("src/contract/app-spec.ts"), false);
+  assert.equal(source.includes("src/installer/yaml-parser.ts"), false);
+  assert.ok(source.includes("src/contract/installer-api.ts"));
   assert.ok(source.includes("docs/kinds/v1/*.jsonld"));
-  assert.ok(source.includes("../takosumi-cloud/docs/ja/spec.md"));
-  assert.ok(source.includes("../takosumi-cloud/docs/en/spec.md"));
-  assert.match(source, /Normative spec/);
+  assert.ok(source.includes("../takosumi/docs/ja/spec.md"));
+  assert.ok(source.includes("../takosumi/docs/en/spec.md"));
+  assert.match(source, /Normative reference/);
   assert.match(source, /Executable conformance targets/);
   assert.match(source, /Repository source/);
   assert.match(source, /Published reference/);
-  assert.match(source, /Drift check/);
+  assert.match(source, /Drift Check/);
 });
 
-Deno.test("public spec source map covers installer route evidence", async () => {
+test("public spec source map covers installer route evidence", async () => {
   const source = await read("docs/reference/public-spec-source-map.md");
   const reference = await read("docs/reference/kernel-http-api.md");
   const openapi = createPaaSOpenApiDocument({
@@ -123,14 +124,14 @@ Deno.test("public spec source map covers installer route evidence", async () => 
   assert.equal(openapi.paths["/v1/deployments"], undefined);
 });
 
-Deno.test("public spec source map Takosumi-owned paths exist", async () => {
+test("public spec source map Takosumi-owned paths exist", async () => {
   for (const path of TAKOSUMI_OWNED_PATHS) {
-    const stat = await Deno.stat(new URL(path, root));
-    assert.ok(stat.isFile || stat.isDirectory, `missing ${path}`);
+    const entry = await stat(new URL(path, root));
+    assert.ok(entry.isFile() || entry.isDirectory(), `missing ${path}`);
   }
 });
 
-Deno.test("public spec source map is kept as maintainer-only reference", async () => {
+test("public spec source map is kept as maintainer-only reference", async () => {
   const kernelReference = await read("docs/reference/kernel-http-api.md");
   const config = await read("docs/.vitepress/config.ts");
 
@@ -138,11 +139,11 @@ Deno.test("public spec source map is kept as maintainer-only reference", async (
   assert.ok(config.includes("public-spec-source-map"));
 });
 
-Deno.test("reference-kernel descriptors stay out of public catalog roots", async () => {
+test("reference-kernel descriptors stay out of public catalog roots", async () => {
   const docs = await read("docs/reference/public-spec-source-map.md");
-  assert.ok(docs.includes("/kinds/v1/*"));
+  assert.ok(docs.includes("docs/kinds/v1/*.jsonld"));
   assert.ok(docs.includes("/contexts/v1.jsonld"));
-  assert.match(docs, /reference\s+internal metadata/);
+  assert.match(docs, /Reference adapter metadata/);
 
   const descriptorRoot = new URL(
     "src/kernel/domains/deploy/descriptors/",
@@ -157,7 +158,7 @@ Deno.test("reference-kernel descriptors stay out of public catalog roots", async
   ];
 
   for await (const file of walkFiles(descriptorRoot)) {
-    const source = await Deno.readTextFile(file);
+    const source = await readText(file);
     for (const snippet of forbidden) {
       assert.equal(
         source.includes(snippet),
@@ -168,7 +169,7 @@ Deno.test("reference-kernel descriptors stay out of public catalog roots", async
   }
 });
 
-Deno.test("kernel HTTP API does not reintroduce workflow trigger endpoint specs", async () => {
+test("kernel HTTP API does not reintroduce workflow trigger endpoint specs", async () => {
   const source = await read("docs/reference/kernel-http-api.md");
   const forbidden = [
     "## Workflow & Trigger",
@@ -191,18 +192,22 @@ Deno.test("kernel HTTP API does not reintroduce workflow trigger endpoint specs"
 });
 
 async function read(path: string): Promise<string> {
-  return await Deno.readTextFile(new URL(path, root));
+  return await readText(new URL(path, root));
 }
 
 async function* walkFiles(dir: URL): AsyncGenerator<URL> {
-  for await (const entry of Deno.readDir(dir)) {
-    const child = new URL(entry.name + (entry.isDirectory ? "/" : ""), dir);
-    if (entry.isDirectory) {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const child = new URL(entry.name + (entry.isDirectory() ? "/" : ""), dir);
+    if (entry.isDirectory()) {
       yield* walkFiles(child);
-    } else if (entry.isFile) {
+    } else if (entry.isFile()) {
       yield child;
     }
   }
+}
+
+async function readText(path: URL | string): Promise<string> {
+  return readFile(path, "utf8");
 }
 
 function toOpenApiPath(path: string): string {

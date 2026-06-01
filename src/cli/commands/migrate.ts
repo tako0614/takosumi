@@ -66,7 +66,7 @@ function readDatabaseUrl(
 
 /**
  * Default `resolveScript` implementation. Resolves
- * `packages/kernel/scripts/db-migrate.ts` relative to this CLI package.
+ * `src/kernel/scripts/db-migrate.ts` relative to this CLI package.
  * Returns `undefined` when the file cannot be located on disk.
  */
 export function defaultResolveScript(): string | undefined {
@@ -104,20 +104,20 @@ export async function runMigrate(
   if (!script) {
     options.write(
       "error: could not locate kernel scripts/db-migrate.ts; ensure " +
-        "@takos/takosumi-kernel is installed alongside the CLI.",
+        "@takosjp/takosumi kernel sources are installed alongside the CLI.",
     );
     options.write(
-      "hint: cd packages/kernel && deno task " +
-        (dryRun ? "db:migrate:dry-run" : "db:migrate"),
+      "hint: run takosumi migrate from the @takosjp/takosumi package root, or run " +
+        `bun run ${dryRun ? "db:migrate:dry-run" : "db:migrate"}`,
     );
     return { status: "missing-script", exitCode: 1 };
   }
 
-  const args: string[] = ["run", "-A", script, `--env=${options.env}`];
+  const args: string[] = [script, `--env=${options.env}`];
   if (dryRun) args.push("--dry-run");
 
   try {
-    const result = await options.spawn("deno", args);
+    const result = await options.spawn("bun", args);
     if (result.code !== 0) {
       const message = `kernel db-migrate exited with code ${result.code}`;
       options.write(`error: ${message}`);
@@ -126,7 +126,7 @@ export async function runMigrate(
     return { status: "ok", exitCode: 0 };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    options.write(`error: failed to spawn deno: ${message}`);
+    options.write(`error: failed to spawn bun: ${message}`);
     return { status: "spawn-failed", exitCode: 1, message };
   }
 }

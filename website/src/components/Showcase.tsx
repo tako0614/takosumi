@@ -5,7 +5,7 @@ interface Tab {
   readonly key: string;
   readonly label: string;
   readonly subtitle: string;
-  readonly manifest: () => JSX.Element;
+  readonly source: () => JSX.Element;
   readonly output: () => JSX.Element;
 }
 
@@ -14,7 +14,7 @@ const TABS: readonly Tab[] = [
     key: "space",
     label: "1. Space を作る",
     subtitle: "bundled apps が auto-install",
-    manifest: () => (
+    source: () => (
       <>
         <span class="c"># 新しい Space を作るだけで、 bundled apps が立つ</span>
         {"\n"}
@@ -43,16 +43,18 @@ const TABS: readonly Tab[] = [
   {
     key: "app",
     label: "2. 自分の app を 1 つ追加",
-    subtitle: "manifest 1 本",
-    manifest: () => (
+    subtitle: "Source を install",
+    source: () => (
       <>
-        <span class="c"># 1 つの .takosumi.yml で 自分の app を追加</span>
+        <span class="c"># Git repo を Source として install</span>
         {"\n"}
-        apiVersion: v1{"\n"}
-        metadata:{"\n"}{"  "}id: com.example.diary{"\n"}
-        components:{"\n"}{"  "}web:{"\n"}{"    "}kind: worker{"\n"}{"    "}
-        spec:{"\n"}{"      "}routes: [/]{"\n"}{"  "}db:{"\n"}{"    "}
-        kind: postgres{"\n"}{"    "}publish: [my-app.db]
+        <span class="k">$</span> takosumi install git+https://example.com/diary
+        {"\n"}
+        <span class="c">{" ".repeat(2)}source: git</span>
+        {"\n"}
+        <span class="c">{" ".repeat(2)}binding: database.primary.connection</span>
+        {"\n"}
+        <span class="c">{" ".repeat(2)}expected: planSnapshotDigest</span>
       </>
     ),
     output: () => (
@@ -68,24 +70,24 @@ const TABS: readonly Tab[] = [
     key: "deploy",
     label: "3. deploy 先を切り替える",
     subtitle: "cloud でも VM でも cluster でも",
-    manifest: () => (
+    source: () => (
       <>
-        <span class="c"># provider を 1 行差し替えるだけ</span>
+        <span class="c"># operator inventory を差し替える</span>
         {"\n"}
-        <span class="k">$</span> takosumi deploy my-home --provider cloudflare
+        <span class="k">$</span> takosumi deploy diary --profile cloudflare
         {"\n"}
         <span class="c">{" ".repeat(2)}✓ deployed to Cloudflare Workers</span>
         {"\n"}
         {"\n"}
         <span class="k">$</span>{" "}
-        takosumi deploy my-home --provider docker-compose
+        takosumi deploy diary --profile docker-compose
         {"\n"}
         <span class="c">{" ".repeat(2)}✓ deployed to an operator VM</span>
       </>
     ),
     output: () => (
       <>
-        <span class="c">同じ Space が、 同じ manifest で。</span>
+        <span class="c">同じ Source を、違う operator profile で。</span>
         {"\n"}
         <span class="c">cloud に出しても、 VM や cluster に戻しても、</span>
         {"\n"}
@@ -105,10 +107,8 @@ export default function Showcase() {
         <span class="eyebrow">how it works</span>
         <h2>Space を 1 つ作ると、 必要なもの 全部 揃う。</h2>
         <p class="lede">
-          Space を作る → 自分の app を 1 つ足す → deploy 先を選ぶ。3 step、 同じ
-          {" "}
-          <code>.takosumi.yml</code>{" "}
-          が cloud でも VM でも cluster でも動きます。
+          Space を作る → 自分の app を Source として足す → deploy 先を選ぶ。3 step、
+          operator inventory が cloud / VM / cluster の違いを受け持ちます。
         </p>
         <div class="showcase">
           <div class="showcase-tabs" role="tablist">
@@ -128,11 +128,11 @@ export default function Showcase() {
           </div>
           <div class="showcase-body">
             <div>
-              <div class="label">.takosumi.yml</div>
+              <div class="label">Source</div>
               <Show when={current()}>
                 {(t) => (
                   <div class="codeblock">
-                    <pre>{t().manifest()}</pre>
+                    <pre>{t().source()}</pre>
                   </div>
                 )}
               </Show>

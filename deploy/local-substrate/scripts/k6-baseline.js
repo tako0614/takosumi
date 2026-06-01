@@ -48,8 +48,8 @@ export const options = {
 };
 
 const INSTALLATION_DRY_RUN_URL =
-  "https://cloud.takosumi.test/v1/installations/dry-run";
-const OIDC_URL = "https://cloud.takosumi.test/.well-known/openid-configuration";
+  "https://accounts.takosumi.test/v1/installations/dry-run";
+const OIDC_URL = "https://accounts.takosumi.test/.well-known/openid-configuration";
 const LOCAL_CLOUD_SESSION_ID = __ENV.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID ||
   "sess_local_substrate";
 

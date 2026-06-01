@@ -1,8 +1,10 @@
 # Build Service Boundary {#build-service-boundary}
 
-Takosumi core does not run builds. A build service, CI system, or operator automation can prepare source before calling the Installer API.
+Takosumi core does not run builds. A build service, CI system, or operator
+automation can prepare source before calling the Installer API. Core receives
+only the URL, digest, and metadata submitted as `source.kind: "prepared"`.
 
-The core Installer API defines the source handoff contract and Deployment source identity. The build service handles build recipes, command execution, cache metadata, provenance, and how the source handoff payload is produced.
+## Handoff Flow
 
 ```text
 source root
@@ -10,42 +12,60 @@ source root
   -> build service creates a prepared source payload
   -> build service computes the payload digest
   -> caller invokes the Installer API with prepared source URL + digest
-  -> Installer verifies the payload and reads .takosumi.yml
+  -> Installer verifies payload digest / path safety / size caps
   -> Installer records Deployment source identity
 ```
 
-`source.digest` is the sha256 of the payload bytes fetched by the Installer. It is not a build graph digest, package manager lock digest, cache key, or provenance digest.
+`source.digest` is the sha256 of the payload bytes fetched by the Installer. It
+is not a build graph digest, lockfile digest, cache key, or provenance digest.
+For gzip-compressed tar archives, the digest covers the fetched compressed
+payload bytes.
 
-Portable Installer API v1 prepared source payloads are POSIX tar archives. Uncompressed tar and gzip-compressed tar (`.tar.gz` / gzip magic bytes) are accepted. The digest covers the exact fetched payload bytes, including compression when present.
+## Prepared Source Archive Contract
 
-Runtime file paths stay in kind-specific `spec` fields. Build commands, container images, dependency caches, generated intermediate outputs, and provenance records stay outside the manifest.
+- Prepared source is a POSIX tar payload representing a resolved source root.
+- Path traversal, absolute paths, NUL bytes, source-root escapes, and operator
+  size cap violations are rejected before side effects.
+- Repo metadata comes from generic inputs such as Git URL, commit, tag, and
+  `package.json`. Takosumi does not require a source-specific metadata field.
+- Build recipes, commands, caches, provenance, and approval workflows are
+  recorded by the build service or operator automation.
+- Deployment source identity is the source input verified by the Installer, not
+  the build recipe.
 
-## Core Handoff Rules {#core-handoff-rules}
+## Build Service Profile
 
-Prepared source is a source handoff payload produced by an operator build service, CI system, or automation. Takosumi core sees the source input passed to the Installer API.
+Operators may define any build-service profile. It can be YAML, JSON, hosted CI
+workflow configuration, repository convention, or UI input. Takosumi core does
+not make that profile part of the public contract.
 
-- The payload represents a resolved source root and includes `.takosumi.yml`.
-- Runtime file paths in the manifest are relative to the resolved source root.
-- The Installer validates payload digest, path safety, size caps, and manifest parsing before resource creation.
-- Deployment source identity records the verified source input, not the build recipe or cache key.
+Information a build service may keep:
 
-Component kind definition metadata can mark fields as source path fields. Those paths must exist inside the resolved source root, must not escape that root, and must not violate projection policy.
+- build recipe and command
+- dependency cache key
+- source checkout and lockfile evidence
+- build artifact digest
+- provenance, SBOM, or signature
+- approval workflow record
 
-## Manifest Relationship {#appspec-relationship}
+Information submitted to Takosumi core:
 
-The manifest carries runtime and install intent. A runtime file path belongs in a kind-specific `spec` field, such as `worker.spec.entrypoint`. Build command, build node, container image, dependency cache, intermediate output, and provenance record belong outside the manifest.
+- prepared source URL
+- payload digest
+- optional artifact digest
+- source label / display metadata
+- operator-selected `BindingSelection`
 
-| Data                            | Surface                                           |
-| ------------------------------- | ------------------------------------------------- |
-| runtime / install intent        | manifest                                          |
-| runtime file path               | kind-specific `spec`                              |
-| build recipe / build graph      | build-service profile / CI                        |
-| prepared source URL             | Installer API source input                        |
-| resolved prepared source digest | dry-run / apply response and Deployment           |
-| workflow / trigger / approval   | operator automation / account management workflow |
+## Terraform / OpenTofu
 
-## Related Pages {#related-pages}
+Terraform and OpenTofu are infrastructure tools for operator distributions or
+`takos-private/`. If a build service creates a Terraform plan, provider state,
+locks, credentials, and apply permission still remain operator-owned. Takosumi
+core does not run Terraform; it resolves PlatformServices exposed by the
+operator catalog.
 
-- [Manifest](./manifest.md)
+## Related Pages
+
 - [Installer API](./installer-api.md)
+- [Platform Services](./platform-services.md)
 - [Build Service Example](../operator/build-service-profile.md)

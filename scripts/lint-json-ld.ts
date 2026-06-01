@@ -17,8 +17,9 @@
  * takosumi.com catalog envelope and vocabulary so descriptor drift is caught
  * before docs or package publication.
  */
-import { walk } from "jsr:@std/fs@^1.0.5/walk";
-import { fromFileUrl } from "jsr:@std/path@^1.0.6";
+import { readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   ACCESS_MODES as OFFICIAL_ACCESS_MODES,
   allowedProjectionFamiliesForMaterialKind,
@@ -31,26 +32,26 @@ import {
   SAFE_DEFAULT_ACCESS_MODES as OFFICIAL_SAFE_DEFAULT_ACCESS_MODES,
   validateOfficialMaterialMapping,
   validateOfficialMaterialMappingOutputFields,
-} from "takosumi-contract/catalog";
+} from "takosumi-contract/reference/catalog";
 
 export interface LintIssue {
   readonly path: string;
   readonly message: string;
 }
 
-const VOCABULARY_ROOT_PATH = fromFileUrl(
+const VOCABULARY_ROOT_PATH = fileURLToPath(
   new URL("../spec/contexts/v1.jsonld", import.meta.url),
 );
 
 // Official kind descriptors are published spec, not framework source: the
 // canonical JSON-LD lives under docs/kinds/v1/<name>.jsonld and is served at
 // https://takosumi.com/kinds/v1/<name>. The framework imports none of them.
-const KIND_CATALOG_ROOT = fromFileUrl(
+const KIND_CATALOG_ROOT = fileURLToPath(
   new URL("../docs/kinds/v1", import.meta.url),
 );
 
 const ROOTS = [
-  fromFileUrl(new URL("../spec/contexts", import.meta.url)),
+  fileURLToPath(new URL("../spec/contexts", import.meta.url)),
   KIND_CATALOG_ROOT,
 ] as const;
 
@@ -81,54 +82,52 @@ async function main(): Promise<void> {
   }
   for (const root of ROOTS) {
     try {
-      const stat = await Deno.stat(root);
-      if (!stat.isDirectory) {
+      const info = await stat(root);
+      if (!info.isDirectory()) {
         console.error(`[lint:json-ld] not a directory: ${root}`);
-        Deno.exit(2);
+        process.exit(2);
       }
     } catch (_err) {
       console.error(`[lint:json-ld] missing directory: ${root}`);
-      Deno.exit(2);
+      process.exit(2);
     }
 
-    for await (
-      const entry of walk(root, { includeDirs: false, exts: [".jsonld"] })
-    ) {
+    for await (const path of walkJsonLdFiles(root)) {
       fileCount++;
-      const text = await Deno.readTextFile(entry.path);
+      const text = await Bun.file(path).text();
       let doc: unknown;
       try {
         doc = JSON.parse(text);
       } catch (err) {
         const cause = err instanceof Error ? err.message : String(err);
-        issues.push({ path: entry.path, message: `invalid JSON: ${cause}` });
+        issues.push({ path, message: `invalid JSON: ${cause}` });
         continue;
       }
       if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
         issues.push({
-          path: entry.path,
+          path,
           message: "top-level document must be an object",
         });
         continue;
       }
       const obj = doc as Record<string, unknown>;
       if (obj["@context"] === undefined) {
-        issues.push({ path: entry.path, message: "missing @context" });
+        issues.push({ path, message: "missing @context" });
         continue;
       }
       if (isVocabularyRoot(obj)) continue;
-      requireNonEmptyString(obj["@id"], "@id", entry.path, issues);
-      requireNonEmptyString(obj["@type"], "@type", entry.path, issues);
-      requireNonEmptyString(obj["name"], "name", entry.path, issues);
-      checkKindIdentity(obj, entry.path, issues);
-      requireNonEmptyString(obj["version"], "version", entry.path, issues);
+      requireNonEmptyString(obj["@id"], "@id", path, issues);
+      requireNonEmptyString(obj["@type"], "@type", path, issues);
+      requireNonEmptyString(obj["name"], "name", path, issues);
+      checkKindIdentity(obj, path, issues);
+      requireNonEmptyString(obj["version"], "version", path, issues);
       requireNonEmptyString(
         obj["description"],
         "description",
-        entry.path,
+        path,
         issues,
       );
-      checkReferenceAliases(obj["referenceAliases"], entry.path, issues);
+      checkReferenceAliases(obj["referenceAliases"], path, issues);
       // Base kinds declare `outputSlots`; descriptors that extend a base
       // (portableBase present) declare backend-specific `publications`.
       const extendsBase = obj["portableBase"] !== undefined;
@@ -136,21 +135,21 @@ async function main(): Promise<void> {
         extendsBase ? "publications" : "outputSlots",
         extendsBase ? obj["publications"] : obj["outputSlots"],
         obj["outputs"],
-        entry.path,
+        path,
         issues,
       );
-      checkSpecAndInheritance(obj, entry.path, issues);
-      checkOutputs(obj["outputs"], obj["portableBase"], entry.path, issues);
-      checkCapabilityTerms(obj["capabilityTerms"], entry.path, issues);
+      checkSpecAndInheritance(obj, path, issues);
+      checkOutputs(obj["outputs"], obj["portableBase"], path, issues);
+      checkCapabilityTerms(obj["capabilityTerms"], path, issues);
       checkNoLegacyAcceptedProjectionFamilies(
         obj["acceptedProjectionFamilies"],
-        entry.path,
+        path,
         issues,
       );
-      checkListens(obj["listens"], entry.path, issues);
+      checkListens(obj["listens"], path, issues);
       crossCheckContextTerms(
         obj,
-        entry.path,
+        path,
         contextSnapshot,
         issues,
         warnings,
@@ -168,7 +167,7 @@ async function main(): Promise<void> {
     console.error(
       `[lint:json-ld] FAIL — ${issues.length} issue(s) across ${fileCount} file(s)`,
     );
-    Deno.exit(1);
+    process.exit(1);
   }
   if (warnings.length > 0) {
     console.log(
@@ -176,6 +175,20 @@ async function main(): Promise<void> {
     );
   } else {
     console.log(`[lint:json-ld] OK — ${fileCount} file(s) clean`);
+  }
+}
+
+async function* walkJsonLdFiles(root: string): AsyncIterableIterator<string> {
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) {
+      yield* walkJsonLdFiles(path);
+      continue;
+    }
+    if (entry.isFile() && path.endsWith(".jsonld")) {
+      yield path;
+    }
   }
 }
 
@@ -188,7 +201,7 @@ interface ContextSnapshot {
 async function loadContextSnapshot(): Promise<ContextSnapshot> {
   let text: string;
   try {
-    text = await Deno.readTextFile(VOCABULARY_ROOT_PATH);
+    text = await Bun.file(VOCABULARY_ROOT_PATH).text();
   } catch (err) {
     const cause = err instanceof Error ? err.message : String(err);
     return {

@@ -1,7 +1,7 @@
 /**
  * Runtime-agent HTTP server.
  *
- * Implements the lifecycle protocol from `@takos/takosumi-contract` and
+ * Implements the lifecycle protocol from `@takosjp/takosumi/contract` and
  * dispatches to per-provider connectors. Operators run this on the host that
  * has the cloud credentials (`AWS_ACCESS_KEY_ID`, etc.) or the OS access
  * (docker daemon, systemd) for local adapter resources.
@@ -35,6 +35,7 @@ import {
   type PreparedSourceReader,
   sourceContextFromLocator,
 } from "./prepared_source_reader.ts";
+import { readRuntimeEnv } from "./runtime.ts";
 
 export interface RuntimeAgentServerOptions {
   readonly registry: ConnectorRegistry;
@@ -45,7 +46,7 @@ export interface RuntimeAgentServerOptions {
    * Injected `tar` capability used to verify and extract a remote
    * prepared-source snapshot. Optional: when omitted, the prepared-source
    * reader falls back to the runtime-agent's local subprocess-backed default,
-   * so the Deno runtime behavior is unchanged. Operators may inject an
+   * so the legacy subprocess behavior is unchanged. Operators may inject an
    * alternative implementation (the contract `TarRunner`).
    */
   readonly tarRunner?: TarRunner;
@@ -329,14 +330,13 @@ export interface ServeHandle {
 /**
  * Bind a {@link createRuntimeAgentApp} instance to an HTTP port using the
  * runtime-agent's local `serve` capability primitive (`./subprocess/serve.ts`),
- * a single runtime-detecting module that binds through `Deno.serve` on Deno and
- * `node:http` on Node (the npm build needs no dnt module mapping / Node
- * sibling).
+ * a single runtime-detecting module that binds through the host HTTP server
+ * primitive available at runtime.
  *
  * The pure `createRuntimeAgentApp` factory above never touches the serve
  * primitive — it returns only the `Hono` app — so consumers that wire the app
  * into their own server (tests, embedders supplying their own bind) do not pull
- * the `Deno.serve` / `node:http` boundary into their graph. This helper, the
+ * the host server boundary into their graph. This helper, the
  * in-process `startEmbeddedAgent` (`./embed.ts`), and the `import.meta.main`
  * dev-runner below are the only paths that bind a port.
  */
@@ -370,8 +370,8 @@ export {
 } from "./artifact_fetcher.ts";
 
 /**
- * Optional dev-runner: `deno run -A src/server.ts` starts a bare runtime-agent
- * with an empty connector registry, binding the local serve primitive. This is
+ * Optional dev-runner: running this module directly starts a bare runtime-agent
+ * with an empty connector registry and the local serve primitive. This is
  * a convenience for local development only — production operators run a
  * standalone agent through the CLI (`takosumi runtime-agent serve`) or embed
  * one in-process via `startEmbeddedAgent` so they can pass their connector
@@ -379,9 +379,9 @@ export {
  * running it directly does.
  */
 if (import.meta.main) {
-  const port = Number(Deno.env.get("TAKOSUMI_AGENT_PORT") ?? "8789");
-  const hostname = Deno.env.get("TAKOSUMI_AGENT_HOSTNAME") ?? "127.0.0.1";
-  const token = Deno.env.get("TAKOSUMI_AGENT_TOKEN") ?? crypto.randomUUID();
+  const port = Number(readRuntimeEnv("TAKOSUMI_AGENT_PORT") ?? "8789");
+  const hostname = readRuntimeEnv("TAKOSUMI_AGENT_HOSTNAME") ?? "127.0.0.1";
+  const token = readRuntimeEnv("TAKOSUMI_AGENT_TOKEN") ?? crypto.randomUUID();
   const handle = serveRuntimeAgent({
     registry: new ConnectorRegistry(),
     token,

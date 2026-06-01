@@ -2,12 +2,10 @@
  * Author-facing kind descriptor type and connector-local shape registry.
  *
  * `Shape<Spec, Outputs, CapabilityTerm>` is the current contract every official
- * portable kind package uses to declare its kind descriptor: `kind-worker`,
- * `kind-web-service`, `kind-postgres`, `kind-sqlite`, `kind-object-store`,
- * `kind-kv-store`, `kind-message-queue`, `kind-vector-store`, and
- * `kind-gateway` each export their `KIND_DESCRIPTOR` typed as a `Shape<...>`.
+ * catalog-derived implementation can use to declare its descriptor-derived
+ * validation surface.
  * It captures the kind's spec/outputs validation surface and catalog
- * capability terms; it is not the AppSpec component envelope (a component's
+ * capability terms; it is not the v1 public source envelope (a component's
  * runtime meaning is resolved from `Component.kind` through the operator's
  * `KernelPlugin.provides[]` bindings).
  *

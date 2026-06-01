@@ -1,11 +1,11 @@
 // Resolve-phase pipeline for `DeploymentService.resolveDeploymentWithMode`.
 //
 // `buildDeploymentArtifacts` is the canonical Deployment compiler: it takes
-// a public manifest plus deployment input and produces the
+// a reference deploy source payload plus deployment input and produces the
 // (`groupId`, `resolution`, `desired`, `policyDecisions`) tuple that the
 // orchestrator wraps into a persisted Deployment record. The policy gate
 // validators (native binding approval, required provider features, resource
-// safety, canary safety) and the supporting AppSpec projection helpers all
+// safety, canary safety) and the supporting InternalDeploySpec projection helpers all
 // live here so the resolve phase is self-contained.
 //
 // Extracted from `deployment_service.ts` so the orchestrator no longer
@@ -25,20 +25,20 @@ import type {
   IsoTimestamp,
 } from "takosumi-contract/reference/compat";
 import { resolveBindings, validateAccessPaths } from "../binding_resolver.ts";
-import { compileManifestToAppSpec } from "../compiler.ts";
+import { compileSourcePayloadToInternalDeploySpec } from "../compiler.ts";
 import { buildDescriptorClosure } from "../descriptor_closure.ts";
 import { buildResolvedGraph } from "../resolved_graph.ts";
 import type {
-  AppSpec,
-  AppSpecResource,
-  AppSpecRoute,
+  InternalDeploySpec,
+  InternalDeploySpecResource,
+  InternalDeploySpecRoute,
   PublicComponentBindingSpec,
-  PublicDeployManifest,
+  ReferenceDeploySourcePayload,
 } from "../types.ts";
 import { stableHash } from "./hash.ts";
 
 export async function buildDeploymentArtifacts(input: {
-  readonly manifest: PublicDeployManifest;
+  readonly manifest: ReferenceDeploySourcePayload;
   readonly createdAt: IsoTimestamp;
   readonly env?: string;
   readonly envName?: string;
@@ -49,7 +49,7 @@ export async function buildDeploymentArtifacts(input: {
   readonly desired: DeploymentDesired;
   readonly policyDecisions: readonly DeploymentPolicyDecision[];
 }> {
-  const appSpec = compileManifestToAppSpec(input.manifest, {
+  const deploySpec = compileSourcePayloadToInternalDeploySpec(input.manifest, {
     env: input.env,
     envName: input.envName,
     source: {
@@ -58,7 +58,7 @@ export async function buildDeploymentArtifacts(input: {
     },
   });
   // Phase 10A — Authoring expansion already happened inside
-  // `compileManifestToAppSpec`. The expansion descriptor digest plus every
+  // `compileSourcePayloadToInternalDeploySpec`. The expansion descriptor digest plus every
   // referenced runtime/artifact/interface/resource/output descriptor
   // (and their JSON-LD context dependencies) is pinned by the descriptor
   // closure builder. Apply consumes this closure verbatim and does not
@@ -68,14 +68,14 @@ export async function buildDeploymentArtifacts(input: {
   // `buildResolvedGraph` became async after the kernel switched from
   // `node:crypto` to Web Crypto for SHA-256; we await both here.
   const descriptorClosure = await buildDescriptorClosure({
-    appSpec,
+    deploySpec,
     resolvedAt: input.createdAt,
   });
   // Phase 10B — ResolvedGraph projections (six canonical families) are emitted
   // here so controllers consume the projection records instead of re-deriving
   // them from raw descriptors (Core spec § 8).
   const resolvedGraph = await buildResolvedGraph({
-    appSpec,
+    deploySpec,
     descriptorClosure,
     manifestSnapshot: input.input.manifest_snapshot,
   });
@@ -87,14 +87,14 @@ export async function buildDeploymentArtifacts(input: {
   // invariant). Denied decisions force the Deployment to status `failed` in
   // the caller above.
   const bindings = resolveBindings({
-    appSpec,
+    deploySpec,
     resolvedGraph,
     descriptorClosure,
     resolvedAt: input.createdAt,
   });
-  const resources = resourceClaimsFor(appSpec, bindings);
-  const routes = routeRecordsFor(appSpec);
-  const runtimeNetworkPolicy = runtimeNetworkPolicyFor(appSpec);
+  const resources = resourceClaimsFor(deploySpec, bindings);
+  const routes = routeRecordsFor(deploySpec);
+  const runtimeNetworkPolicy = runtimeNetworkPolicyFor(deploySpec);
   const runtimeNetworkPolicyRecord: DeploymentRuntimeNetworkPolicy = {
     ...runtimeNetworkPolicy,
     policyDigest: stableHash(runtimeNetworkPolicy),
@@ -105,19 +105,19 @@ export async function buildDeploymentArtifacts(input: {
     resolvedAt: input.createdAt,
   });
   const nativeBindingDecisions = validateNativeBindingApproval({
-    appSpec,
+    deploySpec,
     resolvedAt: input.createdAt,
   });
   const providerFeatureDecisions = validateRequiredProviderFeatures({
-    appSpec,
+    deploySpec,
     resolvedAt: input.createdAt,
   });
   const resourceSafetyDecisions = validateResourceSafetyPolicies({
-    appSpec,
+    deploySpec,
     resolvedAt: input.createdAt,
   });
   const canarySafetyDecisions = validateCanarySafetyPolicies({
-    appSpec,
+    deploySpec,
     resolvedAt: input.createdAt,
   });
   const desired: DeploymentDesired = {
@@ -125,10 +125,10 @@ export async function buildDeploymentArtifacts(input: {
     bindings,
     resources,
     runtime_network_policy: runtimeNetworkPolicyRecord,
-    activation_envelope: activationEnvelopeFor(appSpec, routes),
+    activation_envelope: activationEnvelopeFor(deploySpec, routes),
   };
   return {
-    groupId: appSpec.groupId,
+    groupId: deploySpec.groupId,
     resolution: {
       descriptor_closure: descriptorClosure,
       resolved_graph: resolvedGraph,
@@ -145,11 +145,11 @@ export async function buildDeploymentArtifacts(input: {
 }
 
 function validateNativeBindingApproval(input: {
-  readonly appSpec: AppSpec;
+  readonly deploySpec: InternalDeploySpec;
   readonly resolvedAt: IsoTimestamp;
 }): readonly DeploymentPolicyDecision[] {
   const decisions: DeploymentPolicyDecision[] = [];
-  for (const component of input.appSpec.components) {
+  for (const component of input.deploySpec.components) {
     for (const [bindingName, spec] of Object.entries(component.bindings)) {
       if (!requestsRawNativeBinding(spec)) continue;
       const sourceName = bindingSourceNameFor(spec);
@@ -195,16 +195,16 @@ function bindingSourceNameFor(spec: PublicComponentBindingSpec): string {
 }
 
 function validateRequiredProviderFeatures(input: {
-  readonly appSpec: AppSpec;
+  readonly deploySpec: InternalDeploySpec;
   readonly resolvedAt: IsoTimestamp;
 }): readonly DeploymentPolicyDecision[] {
-  const supported = providerFeatureSupport(input.appSpec);
+  const supported = providerFeatureSupport(input.deploySpec);
   const decisions: DeploymentPolicyDecision[] = [];
 
-  for (const component of input.appSpec.components) {
+  for (const component of input.deploySpec.components) {
     const caps = new Set([
       ...(component.requirements?.runtimeCapabilities ?? []),
-      ...(input.appSpec.effectiveRuntimeCapabilities?.[component.name] ?? []),
+      ...(input.deploySpec.effectiveRuntimeCapabilities?.[component.name] ?? []),
     ]);
     for (const capability of caps) {
       if (supported.runtimeCapabilities.has(capability)) continue;
@@ -220,7 +220,7 @@ function validateRequiredProviderFeatures(input: {
     }
   }
 
-  for (const resource of input.appSpec.resources) {
+  for (const resource of input.deploySpec.resources) {
     if (supported.resourceContracts.has(resource.type)) continue;
     decisions.push(policyDecision({
       id: `policy-decision:provider-feature:resource:${resource.name}`,
@@ -233,7 +233,7 @@ function validateRequiredProviderFeatures(input: {
     }));
   }
 
-  for (const route of input.appSpec.routes) {
+  for (const route of input.deploySpec.routes) {
     const contract = routeDescriptorId(route);
     if (supported.interfaceContracts.has(contract)) continue;
     decisions.push(policyDecision({
@@ -248,7 +248,7 @@ function validateRequiredProviderFeatures(input: {
   }
 
   const required = stringArrayFromUnknown(
-    providerTargetOverride(input.appSpec).requiredFeatures,
+    providerTargetOverride(input.deploySpec).requiredFeatures,
   );
   for (const feature of required) {
     if (supported.genericFeatures.has(feature)) continue;
@@ -267,15 +267,15 @@ function validateRequiredProviderFeatures(input: {
 }
 
 function validateResourceSafetyPolicies(input: {
-  readonly appSpec: AppSpec;
+  readonly deploySpec: InternalDeploySpec;
   readonly resolvedAt: IsoTimestamp;
 }): readonly DeploymentPolicyDecision[] {
   const decisions: DeploymentPolicyDecision[] = [];
   const resourcesByName = new Map(
-    input.appSpec.resources.map((resource) => [resource.name, resource]),
+    input.deploySpec.resources.map((resource) => [resource.name, resource]),
   );
 
-  for (const resource of input.appSpec.resources) {
+  for (const resource of input.deploySpec.resources) {
     for (const previous of previousNames(resource.raw)) {
       const previousContract = previous.contract;
       const currentAtPreviousName = resourcesByName.get(previous.name);
@@ -330,34 +330,34 @@ function validateResourceSafetyPolicies(input: {
 }
 
 function validateCanarySafetyPolicies(input: {
-  readonly appSpec: AppSpec;
+  readonly deploySpec: InternalDeploySpec;
   readonly resolvedAt: IsoTimestamp;
 }): readonly DeploymentPolicyDecision[] {
-  const rollout = input.appSpec.overrides?.rollout;
+  const rollout = input.deploySpec.overrides?.rollout;
   if (!isRecord(rollout)) return [];
   const decisions: DeploymentPolicyDecision[] = [];
   const kind = typeof rollout.kind === "string" ? rollout.kind : "canary";
 
-  if (kind === "canary" && hasCandidateScopedEgress(input.appSpec)) {
+  if (kind === "canary" && hasCandidateScopedEgress(input.deploySpec)) {
     decisions.push(policyDecision({
       id: "policy-decision:canary:candidate-scoped-egress",
       gate: "access-path-selection",
       decision: "require-approval",
       ruleRef: "canary-egress:candidate-scoped-manual-approval-required",
-      subjectAddress: objectAddress("rollout", input.appSpec.groupId),
-      subject: { group: input.appSpec.groupId, kind },
+      subjectAddress: objectAddress("rollout", input.deploySpec.groupId),
+      subject: { group: input.deploySpec.groupId, kind },
       decidedAt: input.resolvedAt,
     }));
   }
 
-  if (hasShadowRollout(rollout) && hasSideEffectSurface(input.appSpec)) {
+  if (hasShadowRollout(rollout) && hasSideEffectSurface(input.deploySpec)) {
     decisions.push(policyDecision({
       id: "policy-decision:canary:shadow-side-effects",
       gate: "operation-planning",
       decision: "deny",
       ruleRef: "shadow-side-effects:forbidden",
-      subjectAddress: objectAddress("rollout", input.appSpec.groupId),
-      subject: { group: input.appSpec.groupId, kind },
+      subjectAddress: objectAddress("rollout", input.deploySpec.groupId),
+      subject: { group: input.deploySpec.groupId, kind },
       decidedAt: input.resolvedAt,
     }));
   }
@@ -365,8 +365,8 @@ function validateCanarySafetyPolicies(input: {
   return decisions.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function routeRecordsFor(appSpec: AppSpec): readonly DeploymentRoute[] {
-  return appSpec.routes.map((route) => ({
+function routeRecordsFor(deploySpec: InternalDeploySpec): readonly DeploymentRoute[] {
+  return deploySpec.routes.map((route) => ({
     id: route.name,
     exposureAddress: routeAddress(route.name),
     routeDescriptorId: routeDescriptorId(route),
@@ -387,10 +387,10 @@ function routeRecordsFor(appSpec: AppSpec): readonly DeploymentRoute[] {
 }
 
 function resourceClaimsFor(
-  appSpec: AppSpec,
+  deploySpec: InternalDeploySpec,
   bindings: readonly DeploymentBinding[],
 ): readonly DeploymentResourceClaim[] {
-  return appSpec.resources.map((resource) => {
+  return deploySpec.resources.map((resource) => {
     const claimAddress = resourceAddress(resource.name);
     return {
       claimAddress,
@@ -403,9 +403,9 @@ function resourceClaimsFor(
 }
 
 function runtimeNetworkPolicyFor(
-  appSpec: AppSpec,
+  deploySpec: InternalDeploySpec,
 ): Omit<DeploymentRuntimeNetworkPolicy, "policyDigest"> {
-  const configured = runtimeNetworkPolicyInput(appSpec);
+  const configured = runtimeNetworkPolicyInput(deploySpec);
   const defaultEgress = configured.defaultEgress;
   return {
     defaultEgress: defaultEgress === "allow" || defaultEgress === "deny" ||
@@ -431,31 +431,31 @@ function runtimeNetworkPolicyFor(
         }))
       : undefined,
     serviceIdentity: {
-      group: appSpec.groupId,
-      components: appSpec.components.map((component) => component.name).sort(),
+      group: deploySpec.groupId,
+      components: deploySpec.components.map((component) => component.name).sort(),
     },
   };
 }
 
 function activationEnvelopeFor(
-  appSpec: AppSpec,
+  deploySpec: InternalDeploySpec,
   routes: readonly DeploymentRoute[],
 ): DeploymentDesired["activation_envelope"] {
-  const assignments = appSpec.components.map((component) => ({
+  const assignments = deploySpec.components.map((component) => ({
     componentAddress: componentAddress(component.name),
     weight: 1,
     labels: { component: component.name },
   }));
   const primary = assignments[0] ?? {
-    componentAddress: objectAddress("group", appSpec.groupId),
+    componentAddress: objectAddress("group", deploySpec.groupId),
     weight: 0,
-    labels: { group: appSpec.groupId },
+    labels: { group: deploySpec.groupId },
   };
-  const rolloutOverride = rolloutStrategyOverride(appSpec);
+  const rolloutOverride = rolloutStrategyOverride(deploySpec);
   const envelope = {
     primary_assignment: primary,
     assignments,
-    route_assignments: routeAssignmentsFor(appSpec, routes, rolloutOverride),
+    route_assignments: routeAssignmentsFor(deploySpec, routes, rolloutOverride),
     rollout_strategy: rolloutOverride.strategy,
     non_routed_defaults: assignments[0]
       ? {
@@ -487,7 +487,7 @@ function activationEnvelopeFor(
  * Deployment carry route-level canary weight assignments rather than the
  * default `weightPermille: 1000` immediate strategy.
  */
-function rolloutStrategyOverride(appSpec: AppSpec): {
+function rolloutStrategyOverride(deploySpec: InternalDeploySpec): {
   readonly kind: string;
   readonly strategy: { kind: string; steps?: readonly unknown[] };
   readonly routeWeights: ReadonlyMap<
@@ -495,7 +495,7 @@ function rolloutStrategyOverride(appSpec: AppSpec): {
     readonly { readonly target: string; readonly weightPermille: number }[]
   >;
 } {
-  const overrideValue = appSpec.overrides?.rollout;
+  const overrideValue = deploySpec.overrides?.rollout;
   const empty = new Map<
     string,
     readonly { readonly target: string; readonly weightPermille: number }[]
@@ -558,7 +558,7 @@ function rolloutStrategyOverride(appSpec: AppSpec): {
 }
 
 function routeAssignmentsFor(
-  appSpec: AppSpec,
+  deploySpec: InternalDeploySpec,
   routes: readonly DeploymentRoute[],
   override: ReturnType<typeof rolloutStrategyOverride>,
 ): readonly {
@@ -571,7 +571,7 @@ function routeAssignmentsFor(
 }[] {
   return routes.map((route) => {
     const targetName = stringField(route.match, "target") ??
-      appSpec.components[0]?.name ?? appSpec.groupId;
+      deploySpec.components[0]?.name ?? deploySpec.groupId;
     const overrideAssignments = override.routeWeights.get(route.id);
     if (overrideAssignments && overrideAssignments.length > 0) {
       // Map app-release labels onto the canonical primary component. The
@@ -600,25 +600,25 @@ function routeAssignmentsFor(
   });
 }
 
-function runtimeNetworkPolicyInput(appSpec: AppSpec): Record<string, unknown> {
-  const overrides = appSpec.overrides;
+function runtimeNetworkPolicyInput(deploySpec: InternalDeploySpec): Record<string, unknown> {
+  const overrides = deploySpec.overrides;
   const value = overrides.runtimeNetworkPolicy;
   return isRecord(value) ? value : {};
 }
 
-function providerTargetOverride(appSpec: AppSpec): Record<string, unknown> {
-  const value = appSpec.overrides?.providerTarget ??
-    appSpec.overrides?.providerSupport;
+function providerTargetOverride(deploySpec: InternalDeploySpec): Record<string, unknown> {
+  const value = deploySpec.overrides?.providerTarget ??
+    deploySpec.overrides?.providerSupport;
   return isRecord(value) ? value : {};
 }
 
-function providerFeatureSupport(appSpec: AppSpec): {
+function providerFeatureSupport(deploySpec: InternalDeploySpec): {
   readonly runtimeCapabilities: ReadonlySet<string>;
   readonly resourceContracts: ReadonlySet<string>;
   readonly interfaceContracts: ReadonlySet<string>;
   readonly genericFeatures: ReadonlySet<string>;
 } {
-  const override = providerTargetOverride(appSpec);
+  const override = providerTargetOverride(deploySpec);
   const supports = isRecord(override.supports) ? override.supports : override;
   const runtimeCapabilities = supportedSet(supports, "runtimeCapabilities", [
     "always-on-container",
@@ -711,7 +711,7 @@ function isNativeFeature(feature: string): boolean {
     normalized.startsWith("extension:");
 }
 
-function requestsDbSemanticWrites(resource: AppSpecResource): boolean {
+function requestsDbSemanticWrites(resource: InternalDeploySpecResource): boolean {
   if (!resource.type.includes("sql")) return false;
   const raw = resource.raw;
   if (
@@ -740,8 +740,8 @@ function requestsDbSemanticWrites(resource: AppSpecResource): boolean {
   return isRecord(migrations) && migrations.writes === true;
 }
 
-function hasCandidateScopedEgress(appSpec: AppSpec): boolean {
-  const policy = runtimeNetworkPolicyInput(appSpec);
+function hasCandidateScopedEgress(deploySpec: InternalDeploySpec): boolean {
+  const policy = runtimeNetworkPolicyInput(deploySpec);
   const rules = Array.isArray(policy.egressRules) ? policy.egressRules : [];
   return rules.some((rule) =>
     isRecord(rule) &&
@@ -756,14 +756,14 @@ function hasShadowRollout(rollout: Record<string, unknown>): boolean {
     rollout.shadowTraffic === true || isRecord(rollout.shadowTraffic);
 }
 
-function hasSideEffectSurface(appSpec: AppSpec): boolean {
-  if (appSpec.outputs.length > 0) return true;
+function hasSideEffectSurface(deploySpec: InternalDeploySpec): boolean {
+  if (deploySpec.outputs.length > 0) return true;
   if (
-    appSpec.routes.some((route) => route.protocol.toLowerCase() === "queue")
+    deploySpec.routes.some((route) => route.protocol.toLowerCase() === "queue")
   ) {
     return true;
   }
-  return appSpec.resources.some((resource) =>
+  return deploySpec.resources.some((resource) =>
     requestsDbSemanticWrites(resource)
   );
 }
@@ -797,8 +797,8 @@ function stringArrayFromUnknown(value: unknown): readonly string[] {
     : [];
 }
 
-function routeDescriptorId(route: AppSpecRoute): string {
-  const value = (route as AppSpecRoute & { interfaceContractRef?: string })
+function routeDescriptorId(route: InternalDeploySpecRoute): string {
+  const value = (route as InternalDeploySpecRoute & { interfaceContractRef?: string })
     .interfaceContractRef;
   return value ?? "interface.http@v1";
 }

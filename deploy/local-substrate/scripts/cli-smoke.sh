@@ -4,7 +4,7 @@
 # without this smoke, a regression in the public installer pipeline would only
 # be caught in production.
 #
-#   1. POST /v1/installations/dry-run for the mounted AppSpec fixture.
+#   1. POST /v1/installations/dry-run for the mounted source fixture fixture.
 #   2. POST /v1/installations and assert deployment.status == "succeeded".
 #   3. POST /v1/installations/{id}/deployments[/dry-run].
 #   4. POST /v1/installations/{id}/rollback.
@@ -19,7 +19,7 @@ TOKEN="${TAKOSUMI_INSTALLER_TOKEN:-local-substrate-installer-token}"
 LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
 SPACE_ID="${TAKOSUMI_INSTALLER_SPACE_ID:-local-substrate-space}"
 SOURCE_PATH="${TAKOSUMI_INSTALLER_SOURCE_PATH:-/workspace/examples/direct-deploy}"
-KERNEL_URL="${TAKOSUMI_KERNEL_URL:-https://cloud.takosumi.test}"
+KERNEL_URL="${TAKOSUMI_KERNEL_URL:-https://accounts.takosumi.test}"
 
 if [[ ! -f "$CA" ]]; then
 	echo "Pebble CA not found at $CA — run scripts/up.sh first" >&2
@@ -77,9 +77,9 @@ import json, sys
 body = json.load(sys.stdin)
 print(json.dumps(body["expected"], separators=(",", ":")))
 ')"
-MANIFEST_DIGEST="$(printf '%s' "$DRY_BODY" | python3 -c '
+PLAN_DIGEST="$(printf '%s' "$DRY_BODY" | python3 -c '
 import json, sys
-print(json.load(sys.stdin).get("manifestDigest", ""))
+print(json.load(sys.stdin).get("planSnapshotDigest", ""))
 ')"
 
 APPLY_REQUEST="$(printf '%s' "$INSTALL_REQUEST" | python3 -c '
@@ -143,15 +143,15 @@ ROLLBACK_REQUEST="{\"deploymentId\":\"$DEPLOYMENT_ID\"}"
 ROLLBACK_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/rollback" "$ROLLBACK_REQUEST")"
 require_code "rollback" "$ROLLBACK_RESPONSE" "200"
 
-echo "OK installer installation=$INSTALLATION_ID deployment=$DEPLOYMENT_ID status=$DEPLOYMENT_STATUS digest=$MANIFEST_DIGEST"
+echo "OK installer installation=$INSTALLATION_ID deployment=$DEPLOYMENT_ID status=$DEPLOYMENT_STATUS digest=$PLAN_DIGEST"
 
-# B6: also assert installer-mock returns real AppSpec-derived changes
+# B6: also assert installer-mock returns real source fixture-derived changes
 # (fixture-hit path, not the empty fallback).
 PREVIEW=$(curl -sk --cacert "$CA" \
 	-H "Authorization: Bearer $LOCAL_CLOUD_SESSION_ID" \
 	-H "Content-Type: application/json" \
 	-d '{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' \
-	"https://cloud.takosumi.test/v1/installations/dry-run")
+	"https://accounts.takosumi.test/v1/installations/dry-run")
 CHANGE_COUNT=$(echo "$PREVIEW" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(len(d.get('changes') or []))")
 if [[ "$CHANGE_COUNT" -lt 3 ]]; then
 	echo "FAIL: installer dry-run returned $CHANGE_COUNT changes for yurucommu (expected >=3)" >&2
@@ -159,4 +159,4 @@ if [[ "$CHANGE_COUNT" -lt 3 ]]; then
 	exit 1
 fi
 
-echo "OK installer dry-run yurucommu → $CHANGE_COUNT AppSpec changes (fixture-hit)"
+echo "OK installer dry-run yurucommu → $CHANGE_COUNT source fixture changes (fixture-hit)"

@@ -108,7 +108,7 @@ export class PackageConformanceService {
     input: AssessProviderInput,
   ): Promise<PackageConformanceResult> {
     if (!this.#registry) {
-      throw new TypeError("registry is required to assess kind packages");
+      throw new TypeError("registry is required to assess kind implementations");
     }
 
     const resolution = await this.#registry.resolve(
@@ -523,7 +523,7 @@ function validateSupportReportCompatibility(
     report.kindPackageRef === resolution.ref &&
       report.kindPackageDigest === resolution.digest,
     "blocked",
-    "Capability support report matches kind package ref and digest",
+    "Capability support report matches implementation ref and digest",
     "capability-support-report-incompatible",
     resolution.ref,
   );

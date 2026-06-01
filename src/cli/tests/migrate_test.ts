@@ -49,12 +49,12 @@ test("runMigrate returns missing-script when kernel script unreachable", async (
   assert.equal(result.exitCode, 1);
   assert.ok(lines.some((line) => /db-migrate\.ts/.test(line)));
   assert.ok(
-    lines.some((line) => /deno task db:migrate/.test(line)),
+    lines.some((line) => /bun run db:migrate/.test(line)),
     "must print the exact command operators should run",
   );
 });
 
-test("runMigrate spawns deno run against resolved script", async () => {
+test("runMigrate spawns bun against resolved script", async () => {
   let spawnedCmd: string | undefined;
   let spawnedArgs: readonly string[] | undefined;
   const result = await runMigrate({
@@ -70,10 +70,9 @@ test("runMigrate spawns deno run against resolved script", async () => {
     write: () => {},
   });
   assert.equal(result.status, "ok");
-  assert.equal(spawnedCmd, "deno");
+  assert.equal(spawnedCmd, "bun");
   assert.ok(spawnedArgs);
-  assert.equal(spawnedArgs![0], "run");
-  assert.ok(spawnedArgs!.includes("/path/to/db-migrate.ts"));
+  assert.equal(spawnedArgs![0], "/path/to/db-migrate.ts");
   assert.ok(spawnedArgs!.includes("--env=local"));
   assert.ok(!spawnedArgs!.includes("--dry-run"));
 });

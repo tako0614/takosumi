@@ -8,7 +8,7 @@
   "changeEffect": "shape-derivation",
   "description": "Reference kernel internal authoring expansion that replaces a composite.* input with runtime, resource, and output contract instances before planning.",
   "expandsTo": [
-    "AppSpec",
+    "InternalDeploySpec",
     "runtime contract input",
     "resource contract input"
   ],

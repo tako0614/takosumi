@@ -1,12 +1,12 @@
 /**
  * Mock installer service for local-substrate.
  *
- * Returns the v1 InstallationDryRunResponse shape (source + manifestDigest +
- * changes[] + expected.{commit, manifestDigest}) per the AppSpec /
- * Installation / Deployment contract.
+ * Returns the v1 InstallationDryRunResponse shape (source + InstallPlan +
+ * planSnapshotDigest + expected guards) per the Source / Installation /
+ * Deployment contract.
  *
  * Primary path: load pre-baked fixtures from /srv/fixtures/<repo>.json
- * (one per bundled app, mirroring the real `.takosumi.yml`).
+ * (one per bundled app source fixture).
  *
  * Fallback path: if no fixture matches the repo, derive deterministic fake
  * values from sha256(gitUrl+ref) so smoke tests against arbitrary URLs
@@ -17,7 +17,9 @@
  *   TAKOSUMI_ACCOUNTS_INSTALLER_URL=http://installer-mock:8788
  */
 
-const PORT = Number(Deno.env.get("PORT") ?? "8788");
+import { readFile } from "node:fs/promises";
+
+const PORT = Number(process.env.PORT ?? "8788");
 const installations = new Map<string, Record<string, unknown>>();
 const deployments = new Map<string, Record<string, unknown>>();
 
@@ -46,7 +48,7 @@ async function loadFixture(
   repoBasename: string,
 ): Promise<Record<string, unknown> | null> {
   try {
-    const text = await Deno.readTextFile(`${FIXTURE_DIR}/${repoBasename}.json`);
+    const text = await readFile(`${FIXTURE_DIR}/${repoBasename}.json`, "utf8");
     return JSON.parse(text);
   } catch {
     return null;
@@ -68,7 +70,7 @@ async function dryRunPayload(
 
   const repoBasename = appIdFromGitUrl(gitUrl);
 
-  // Fixture path: real .takosumi.yml-derived response if we have one.
+  // Fixture path: prepared source dry-run response if we have one.
   const fixture = await loadFixture(repoBasename);
   if (fixture) {
     const next = structuredClone(fixture);
@@ -81,9 +83,10 @@ async function dryRunPayload(
         ref,
         commit,
       };
-      next.expected = { commit, manifestDigest: `sha256:${fp}` };
-      next.manifestDigest = `sha256:${fp}`;
+      next.expected = { commit, planSnapshotDigest: `sha256:${fp}` };
+      next.planSnapshotDigest = `sha256:${fp}`;
     }
+    normalizeDryRunDigest(next);
     const changes = ((next.changes ?? []) as unknown[]).length;
     console.log(
       `[installer-mock] fixture-hit ${repoBasename} → appId=${next.appId} ` +
@@ -104,12 +107,13 @@ async function dryRunPayload(
   );
 
   return {
-    appSpec: { metadata: { id: repoBasename } },
+    repo: { name: repoBasename },
     appId: repoBasename,
     source: { kind: "git", url: gitUrl, ref, commit },
-    manifestDigest: digest,
+    planSnapshotDigest: digest,
+    plan: { source: { kind: "git", url: gitUrl, ref, commit } },
     changes: [],
-    expected: { commit, manifestDigest: digest },
+    expected: { commit, planSnapshotDigest: digest },
     metadata: {
       mock: true,
       fixture: false,
@@ -117,6 +121,11 @@ async function dryRunPayload(
       generatedAt: new Date().toISOString(),
     },
   };
+}
+
+function normalizeDryRunDigest(payload: Record<string, unknown>): void {
+  const expected = (payload.expected ?? {}) as Record<string, unknown>;
+  payload.expected = expected;
 }
 
 function installApplyPayload(
@@ -132,14 +141,13 @@ function installApplyPayload(
   }
   const source = (dryRun.source ?? {}) as Record<string, unknown>;
   const expected = (dryRun.expected ?? {}) as Record<string, unknown>;
-  const appSpec = (dryRun.appSpec ?? {}) as Record<string, unknown>;
-  const metadata = (appSpec.metadata ?? {}) as Record<string, unknown>;
-  const appId = String(dryRun.appId ?? metadata.id ?? "fake-app");
+  const repo = (dryRun.repo ?? {}) as Record<string, unknown>;
+  const appId = String(dryRun.appId ?? repo.name ?? "fake-app");
   const commit = String(source.commit ?? expected.commit ?? "");
-  const manifestDigest = String(
-    dryRun.manifestDigest ?? expected.manifestDigest ?? "",
+  const planSnapshotDigest = String(
+    dryRun.planSnapshotDigest ?? expected.planSnapshotDigest ?? "",
   );
-  const fingerprintBase = `${spaceId}:${appId}:${commit}:${manifestDigest}`;
+  const fingerprintBase = `${spaceId}:${appId}:${commit}:${planSnapshotDigest}`;
   const idSuffix = crypto.randomUUID().slice(0, 8);
   const safeAppId = appId.replace(/[^a-zA-Z0-9_-]/g, "_");
   const installationId = `inst_${safeAppId}_${idSuffix}`;
@@ -157,7 +165,7 @@ function installApplyPayload(
       id: deploymentId,
       installationId,
       source,
-      manifestDigest,
+      planSnapshotDigest,
       status: "succeeded",
       outputs: { extensions: { mockFingerprint: fingerprintBase } },
       createdAt: Date.now(),
@@ -234,13 +242,13 @@ async function deploymentApplyPayload(
     }, { status: 409 });
   }
   if (
-    expected.manifestDigest && dryRunExpected.manifestDigest &&
-    expected.manifestDigest !== dryRunExpected.manifestDigest
+    expected.planSnapshotDigest && dryRunExpected.planSnapshotDigest &&
+    expected.planSnapshotDigest !== dryRunExpected.planSnapshotDigest
   ) {
     return Response.json({
       error: {
         code: "failed_precondition",
-        message: "manifestDigest mismatch",
+        message: "planSnapshotDigest mismatch",
       },
     }, { status: 409 });
   }
@@ -252,7 +260,7 @@ async function deploymentApplyPayload(
     id: deploymentId,
     installationId,
     source: dryRun.source,
-    manifestDigest: dryRun.manifestDigest,
+    planSnapshotDigest: dryRun.planSnapshotDigest,
     status: "succeeded",
     outputs: { extensions: { mockDeployment: true } },
     createdAt: Date.now(),
@@ -308,7 +316,7 @@ function rollbackPayload(
   };
 }
 
-Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
+Bun.serve({ port: PORT, hostname: "0.0.0.0", fetch: async (req) => {
   const url = new URL(req.url);
   if (url.pathname === "/healthz") {
     return new Response("ok", { headers: { "content-type": "text/plain" } });
@@ -375,6 +383,6 @@ Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
   installations.set(String(installation.id), installation);
   deployments.set(String(deployment.id), deployment);
   return Response.json(apply, { status: 201 });
-});
+} });
 
 console.log(`[installer-mock] listening on :${PORT}`);

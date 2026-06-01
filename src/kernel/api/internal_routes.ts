@@ -52,7 +52,7 @@ export interface InternalRouteServices {
     }): Promise<readonly unknown[]>;
   };
   readonly applyService: {
-    applyManifest(input: {
+    applySourcePayload(input: {
       spaceId: string;
       manifest: unknown;
       input?: DeploymentInput;
@@ -234,7 +234,7 @@ export function registerInternalRoutes(
       return c.json(apiError("invalid_argument", "spaceId is required"), 400);
     }
     const groupId = optionalString(request.group) ??
-      groupIdFromManifest(request.manifest);
+      groupIdFromSourcePayload(request.manifest);
     const authorization = await authorizeInternalServiceCall({
       auth,
       services: options.services,
@@ -449,7 +449,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function groupIdFromManifest(manifest: unknown): string | undefined {
+function groupIdFromSourcePayload(manifest: unknown): string | undefined {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     return undefined;
   }

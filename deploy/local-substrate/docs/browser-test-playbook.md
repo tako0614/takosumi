@@ -14,7 +14,7 @@ sudo bash scripts/ca-install.sh         # trust Pebble issuance root
 sudo bash scripts/configure-dns.sh      # *.takosumi.test → 127.0.0.1
 ```
 
-After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warning). After `configure-dns.sh` the host resolves `accounts.takosumi.test`, `kernel.takosumi.test`, `cloud.takosumi.test`, etc. via CoreDNS.
+After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warning). After `configure-dns.sh` the host resolves `accounts.takosumi.test`, `kernel.takosumi.test`, `accounts.takosumi.test`, etc. via CoreDNS.
 
 ## Smoke flow A — accounts OIDC discovery
 
@@ -38,12 +38,12 @@ After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warni
 6. Navigate with the same host: `/coordination/healthz`
 7. Expect: 200 with `{"ok":true,"role":"coordination"}`
 
-## Smoke flow D — Takosumi Cloud upstream OAuth
+## Smoke flow D — Takosumi upstream OAuth
 
-1. Navigate: `https://cloud.takosumi.test/sign-in`
+1. Navigate: `https://accounts.takosumi.test/sign-in`
 2. Expect: redirect to `https://oauth-mock.test/{google|github}/authorize?...` when a provider is selected.
 3. Complete the local mock backend flow.
-4. Expect: redirect back to `https://cloud.takosumi.test/sign-in/callback?code=...`
+4. Expect: redirect back to `https://accounts.takosumi.test/sign-in/callback?code=...`
 5. Expect: the dashboard session is established.
 
 ## Smoke flow E — installer API

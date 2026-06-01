@@ -2,7 +2,7 @@
 // the validation phase (`validateRoutes`) and the spec-emit phase
 // (`normalizeNamedCollection` for routes).
 
-import { HTTP_METHOD_PATTERN } from "./manifest_common.ts";
+import { HTTP_METHOD_PATTERN } from "./source_payload_common.ts";
 import type { PublicComputeSpec } from "../types.ts";
 import { interfaceContractRefFor } from "./contract_refs.ts";
 

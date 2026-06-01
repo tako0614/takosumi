@@ -2,13 +2,13 @@
 
 `Space` は operator account layer が提供する install scope です。Takosumi core
 は `spaceId` を request context と record field として扱い、その Space に見える
-kind の定義 / platform service / policy を使って apply を解決します。
+PlatformService inventory / policy / adapter implementation を使って apply を解決します。
 
-manifest は Space を宣言しない。deploy / preview / apply リクエストは、actor
+Source は Space を宣言しない。deploy / preview / apply リクエストは、actor
 auth、API path、operator context、CLI profile が選んだ Space で実行される。各
-Space は独自の platform service visibility、policy、kind alias / kind の定義の
+Space は独自の PlatformService visibility、policy、adapter metadata の
 visibility、secret partition、operator asset extension policy、 approval context
-を持つため、同じ manifest が Space ごとに異なる resolve 結果になりうる。
+を持つため、同じ Source が Space ごとに異なる resolve 結果になりうる。
 
 ## 包含関係 {#containment}
 
@@ -17,7 +17,7 @@ Operator distribution / account registry
   └─ defines Account / Space membership and grants actor access
 
 Takosumi core records
-  └─ Installation (spaceId + manifest source)
+  └─ Installation (spaceId + Source)
        ├─ Deployment (= 1 apply result)
        └─ Deployment ...
 
@@ -41,10 +41,6 @@ approval、`RoutingPointer` は厳密に 1 つの Space に属する。
 Space:
   id: space_acme_prod
   displayName: Acme Production
-  kindAliases:
-    worker: https://takosumi.com/kinds/v1/worker
-    postgres: https://takosumi.com/kinds/v1/postgres
-  kindVisibilityPolicy: prod/strict
   policyPack: prod/strict
   platformServiceDigest: sha256:...
   secretPartition: space_acme_prod
@@ -86,12 +82,7 @@ event で有用である。
 
 ## Platform service scope {#platform-service-scope}
 
-public manifest v1 の platform service resolution は Space の中で行われます。
-確定した対象は Space に可視化された platform service declaration を `listen.path`
-で exact match し、複数存在しうる対象は Space-visible publication を
-`listen.kind` と labels で選択します。以下の scope は reference implementation
-が内部 record を整理するために使える vocabulary であり、manifest author が
-`listen.path` / `listen.kind` で選ぶ public source ではありません。
+PlatformService resolution は Space の中で行われます。確定した対象は Space に可視化された PlatformService record を binding selection と operator policy で exact match します。以下の scope は reference implementation が内部 record を整理するために使える vocabulary であり、Source authoring surface ではありません。
 
 ```text
 public:
@@ -144,15 +135,13 @@ PlatformServiceVisibility:
     state: fresh
 ```
 
-public v1 の依存は、同じ manifest 内の `component.output` と、対象 Space
-に可視化された platform service declaration `platformServicePath` を exact match
-で解決する platform service path です。
+public v1 の依存は、対象 Space に可視化された PlatformService record を binding selection で解決する model です。
 
 ## Space 跨ぎ sharing {#cross-space-sharing}
 
-current public v1 の platform service resolution は同一 Space 内で完結します。別
+current public v1 の PlatformService resolution は同一 Space 内で完結します。別
 Space の service entry を使う sharing model は将来 RFC の scope です。current v1
-manifest から cross-Space service input を直接作る construct はありません。将来
+Source から cross-Space service input を直接作る construct はありません。将来
 RFC では owner、TTL、revocation、audit、cleanup debt をまとめて定義します。
 
 将来 RFC の lifecycle sketch:
@@ -239,43 +228,34 @@ Activation isolation invariant:
 
 ## 最小例 {#minimal-example}
 
-manifest は Space を言及しない。 Space は installer request の `spaceId`
+Source は Space を言及しない。 Space は installer request の `spaceId`
 で決まる。
 
-```yaml
-apiVersion: v1
-
-metadata:
-  id: com.example.api
-  name: API
-
-components:
-  db:
-    kind: postgres
-    spec:
-      version: "16"
-      size: small
-
-  api:
-    kind: worker
-    connect:
-      database:
-        output: db.connection
-        inject: secret-env
-        prefix: DATABASE
-    spec:
-      entrypoint: src/worker.ts
+```json
+{
+  "spaceId": "space_acme_prod",
+  "source": {
+    "kind": "git",
+    "url": "https://github.com/acme/api.git",
+    "ref": "main"
+  },
+  "bindings": {
+    "database": {
+      "serviceId": "svc_postgres_primary"
+    }
+  }
+}
 ```
 
-`space_acme_prod` で apply すると、connect/listen resolution、選ばれた
-provider、 output ref、policy、secret、prepared source、RoutingPointer はすべて
+`space_acme_prod` で apply すると、binding resolution、選ばれた
+PlatformService、output ref、policy、secret、prepared source、RoutingPointer はすべて
 production Space に対して resolve される。
 
 ```text
 space_acme_prod/db.connection
 ```
 
-`space_acme_dev` で apply すると、同じ manifest が development Space に対して
+`space_acme_dev` で apply すると、同じ Source が development Space に対して
 resolve される。
 
 ```text

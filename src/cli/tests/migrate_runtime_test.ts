@@ -35,7 +35,7 @@ function fakeRuntime(overrides: {
     reads: [] as string[],
   };
   const runtime = {
-    kind: "deno",
+    kind: "bun",
     env: {
       get: (name: string) => overrides.env?.[name],
       set: () => {},
@@ -60,7 +60,7 @@ function fakeRuntime(overrides: {
         });
       },
     },
-    execPath: () => "/usr/bin/deno",
+    execPath: () => "/usr/bin/bun",
     exit: ((code: number) => {
       calls.exit.push(code);
       throw new Error(`__exit__:${code}`);
@@ -77,11 +77,11 @@ test("spawnMigrate routes through the runtime SubprocessAdapter", async () => {
   const { runtime, calls } = fakeRuntime({ subprocessCode: 0 });
   setRuntimeForTesting(runtime);
   try {
-    const result = await spawnMigrate("deno", ["run", "-A", "/x.ts"]);
+    const result = await spawnMigrate("bun", ["/x.ts"]);
     assert.equal(result.code, 0);
     assert.equal(calls.subprocess.length, 1);
-    assert.equal(calls.subprocess[0].command, "deno");
-    assert.deepEqual(calls.subprocess[0].args, ["run", "-A", "/x.ts"]);
+    assert.equal(calls.subprocess[0].command, "bun");
+    assert.deepEqual(calls.subprocess[0].args, ["/x.ts"]);
   } finally {
     resetRuntimeForTesting();
   }
@@ -91,7 +91,7 @@ test("spawnMigrate surfaces a non-zero exit code", async () => {
   const { runtime } = fakeRuntime({ subprocessCode: 7 });
   setRuntimeForTesting(runtime);
   try {
-    const result = await spawnMigrate("deno", ["run", "/x.ts"]);
+    const result = await spawnMigrate("bun", ["/x.ts"]);
     assert.equal(result.code, 7);
   } finally {
     resetRuntimeForTesting();

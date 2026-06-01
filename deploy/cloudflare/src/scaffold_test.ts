@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
 
 const cloudflareRoot = new URL("../", import.meta.url);
 
-Deno.test("Cloudflare scaffold is Worker-only and keeps D1/R2 bindings", async () => {
-  const wrangler = await Deno.readTextFile(
+test("Cloudflare scaffold is Worker-only and keeps D1/R2 bindings", async () => {
+  const wrangler = await readText(
     new URL("wrangler.toml", cloudflareRoot),
   );
 
@@ -11,7 +13,7 @@ Deno.test("Cloudflare scaffold is Worker-only and keeps D1/R2 bindings", async (
   assert.doesNotMatch(wrangler, /TAKOS_WORKLOAD_CONTAINER/);
   assert.doesNotMatch(wrangler, /TAKOS_KERNEL_CONTAINER/);
   assert.match(wrangler, /no_bundle = true/);
-  assert.match(wrangler, /deno bundle/);
+  assert.match(wrangler, /bun build --target browser/);
   assert.match(wrangler, /binding = "TAKOS_D1"/);
   assert.match(wrangler, /binding = "TAKOS_ARTIFACTS"/);
   assert.match(wrangler, /name = "TAKOS_COORDINATION"/);
@@ -21,8 +23,8 @@ Deno.test("Cloudflare scaffold is Worker-only and keeps D1/R2 bindings", async (
   );
 });
 
-Deno.test("Cloudflare scaffold docs describe Worker-first D1/R2 routing", async () => {
-  const readme = await Deno.readTextFile(
+test("Cloudflare scaffold docs describe Worker-first D1/R2 routing", async () => {
+  const readme = await readText(
     new URL("README.md", cloudflareRoot),
   );
 
@@ -33,3 +35,7 @@ Deno.test("Cloudflare scaffold docs describe Worker-first D1/R2 routing", async 
   assert.match(readme, /R2/);
   assert.doesNotMatch(readme, /Cloudflare Container/);
 });
+
+async function readText(path: URL | string): Promise<string> {
+  return readFile(path, "utf8");
+}

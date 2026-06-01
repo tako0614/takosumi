@@ -15,9 +15,9 @@
  * store emits a warning unless the host is provably a non-durable-safe
  * *development* shape:
  *
- *   - When process env is readable (Deno / Node) and does NOT look like a
- *     production deployment (`DENO_DEPLOYMENT_ID` / `PRODUCTION` /
- *     `NODE_ENV=production`), we stay quiet — local dev / test.
+ *   - When process env is readable and does NOT look like a production
+ *     deployment (`PRODUCTION` / `NODE_ENV=production`), we stay quiet —
+ *     local dev / test.
  *   - When env says production, OR env is unreadable (Cloudflare Workers /
  *     unknown runtime, where durability also cannot be confirmed and an
  *     isolate recycle silently drops the ledger), we warn.
@@ -36,6 +36,7 @@
  * 503 from inside the store layer itself.
  */
 import type { Deployment, Installation } from "takosumi-contract/installer-api";
+import { currentRuntime } from "../../shared/runtime/index.ts";
 
 /**
  * Decide whether an in-memory store construction should warn about
@@ -49,7 +50,6 @@ function shouldWarnInMemoryStore(): boolean {
     // isolate recycle silently drops the ledger, so warn.
     return true;
   }
-  if (env.get("DENO_DEPLOYMENT_ID")) return true;
   if (env.get("PRODUCTION")) return true;
   const nodeEnv = env.get("NODE_ENV");
   if (typeof nodeEnv === "string" && nodeEnv.toLowerCase() === "production") {
@@ -59,33 +59,18 @@ function shouldWarnInMemoryStore(): boolean {
   return false;
 }
 
-interface ProcessLike {
-  readonly env?: Readonly<Record<string, string | undefined>>;
-}
-
-interface DenoLike {
-  readonly env?: { get(name: string): string | undefined };
-}
-
 /**
- * Return a reader over process env on Deno / Node, or `undefined` when no
- * env surface is available (Workers / unknown runtime). The distinction
- * matters: an unreadable env is treated as "cannot confirm durability"
- * rather than "definitely not production".
+ * Return a reader over the runtime env surface, or `undefined` when no env
+ * surface is available (Workers / unknown runtime). The distinction matters:
+ * an unreadable env is treated as "cannot confirm durability" rather than
+ * "definitely not production".
  */
 function readEnvMap(): { get(name: string): string | undefined } | undefined {
-  // Deno path: `Deno.env.get` is read-only metadata.
-  const deno = (globalThis as { Deno?: DenoLike }).Deno;
-  if (deno?.env && typeof deno.env.get === "function") {
-    return { get: (name: string) => deno.env!.get(name) };
+  const runtime = currentRuntime();
+  if (runtime.kind === "workers" || runtime.kind === "unknown") {
+    return undefined;
   }
-  // Node path: `process.env` is a plain dictionary.
-  const proc = (globalThis as { process?: ProcessLike }).process;
-  if (proc?.env) {
-    return { get: (name: string) => proc.env?.[name] };
-  }
-  // Workers / unknown runtime — no env access.
-  return undefined;
+  return runtime.env;
 }
 
 function maybeWarnInMemoryStore(storeName: string): void {

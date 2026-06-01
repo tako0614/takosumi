@@ -19,7 +19,7 @@ function createServerCommand(): Command {
     .option(
       "--detach",
       "Print a recommended systemd unit for production daemonization and " +
-        "exit immediately. Deno does not provide a portable detach primitive, " +
+        "exit immediately. The CLI does not provide a portable detach primitive, " +
         "so we surface the supervisor template instead of half-baked daemonising.",
     )
     .action(async (
@@ -77,8 +77,8 @@ function registerShutdownHandlers(shutdown: () => Promise<void>): void {
 /**
  * Render a recommended systemd unit + docker compose snippet for
  * production daemonization. We deliberately do NOT spawn a detached
- * child process: Deno lacks a portable detach primitive
- * (`Deno.Command` keeps the parent attached on Linux even with
+ * child process: host subprocess APIs differ enough that some keep the parent
+ * attached on Linux even with
  * `stdin: "null"`), and a half-baked `nohup`-equivalent would silently
  * drop signals, lose stdout, and re-attach to the controlling tty on
  * some shells. systemd / docker / nohup are the right tools for this
@@ -102,7 +102,7 @@ function printDaemonizationTemplate(port: number): void {
     "   After=network-online.target",
     "",
     "   [Service]",
-    `   ExecStart=${exec} run -A npm:@takosjp/takosumi server --port ${port}`,
+    `   ExecStart=${exec} x @takosjp/takosumi server --port ${port}`,
     "   Environment=TAKOSUMI_DEPLOY_TOKEN=...",
     "   Environment=TAKOSUMI_DATABASE_URL=postgres://...",
     "   Restart=always",
@@ -117,8 +117,8 @@ function printDaemonizationTemplate(port: number): void {
     "",
     "   services:",
     "     takosumi-api:",
-    "       image: denoland/deno:alpine",
-    `       command: run -A npm:@takosjp/takosumi server --port ${port}`,
+    "       image: oven/bun:1",
+    `       command: bun x @takosjp/takosumi server --port ${port}`,
     "       environment:",
     "         TAKOSUMI_DEPLOY_TOKEN: ${TAKOSUMI_DEPLOY_TOKEN}",
     "         TAKOSUMI_DATABASE_URL: ${TAKOSUMI_DATABASE_URL}",
@@ -129,7 +129,7 @@ function printDaemonizationTemplate(port: number): void {
     "",
     `   nohup takosumi server --port ${port} > /var/log/takosumi.log 2>&1 &`,
     "",
-    "(Deno lacks a portable detach primitive; a CLI-level daemoniser would " +
+    "(A CLI-level daemoniser would " +
     "silently drop signals and stdout. Use a real supervisor.)",
   ];
   for (const line of lines) console.log(line);

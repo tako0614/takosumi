@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Regenerate installer-mock/fixtures/*.json from each bundled app's
-# .takosumi.yml (AppSpec v1).
+# source fixture (source fixture v1).
 #
 # The mock looks up these fixtures by git URL at request time, so the
 # install wizard sees real changes[] / app id / commit instead of
-# sha256-derived fake values. Re-run this when an app's .takosumi.yml
+# sha256-derived fake values. Re-run this when an app's source fixture
 # changes, OR when the bundled-apps set changes.
 set -euo pipefail
 
@@ -26,7 +26,7 @@ mkdir -p "$FIXTURE_DIR"
 
 for name in "${!REPOS[@]}"; do
 	repo="${REPOS[$name]}"
-	app_spec="$repo/.takosumi.yml"
+	app_spec="$repo/source fixture"
 	if [[ ! -f "$app_spec" ]]; then
 		echo "skip $name: $app_spec not found"
 		continue
@@ -56,16 +56,16 @@ out = {
         'ref': 'main',
         'commit': '$commit',
     },
-    'manifestDigest': 'sha256:$digest',
+    'planSnapshotDigest': 'sha256:$digest',
     'changes': changes,
     'expected': {
         'commit': '$commit',
-        'manifestDigest': 'sha256:$digest',
+        'planSnapshotDigest': 'sha256:$digest',
     },
     'metadata': {
         'fixture': True,
         'generatedAt': '$(date -u +%FT%TZ)',
-        'fromAppSpec': sys.argv[1],
+        'fromsource fixture': sys.argv[1],
     },
 }
 out_path = sys.argv[2]

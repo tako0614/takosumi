@@ -1,6 +1,4 @@
-export * from "./app-spec.ts";
 export * from "./installer-api.ts";
-export * from "./catalog.ts";
 export type {
   Digest,
   IsoTimestamp,

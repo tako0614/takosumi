@@ -7,7 +7,7 @@ import type { AppContext } from "../app_context.ts";
 import type { SourcePort, SourceSnapshot } from "../adapters/source/mod.ts";
 import { InMemoryRuntimeAgentRegistry } from "../agents/registry.ts";
 import { createCoreDomainServices } from "../domains/core/mod.ts";
-import type { PublicDeployManifest } from "../domains/deploy/mod.ts";
+import type { ReferenceDeploySourcePayload } from "../domains/deploy/mod.ts";
 import { assertRoleCapability, type PaaSProcessRole } from "../process/mod.ts";
 import { currentRuntime } from "../shared/runtime/index.ts";
 import { createApiCapabilitiesDescription } from "./capabilities.ts";
@@ -230,15 +230,15 @@ async function createDefaultRouteServices(
         createPlan: (input) =>
           context.services.deploy.plans.createPlan({
             spaceId: input.spaceId,
-            manifest: input.manifest as PublicDeployManifest,
+            manifest: input.manifest as ReferenceDeploySourcePayload,
             input: input.input,
           }),
       },
       applyService: {
-        applyManifest: (input) =>
-          context.services.deploy.apply.applyManifest({
+        applySourcePayload: (input) =>
+          context.services.deploy.apply.applySourcePayload({
             spaceId: input.spaceId,
-            manifest: input.manifest as PublicDeployManifest,
+            manifest: input.manifest as ReferenceDeploySourcePayload,
             input: input.input,
             createdBy: input.createdBy,
             actor: input.actor as ActorContext,
@@ -290,10 +290,10 @@ function createDefaultDeploymentService(
   deployStore?: import("../domains/deploy/mod.ts").DeploymentStore,
   sourceAdapters: DeploymentSourceAdapters = {},
 ): DeploymentRouteService {
-  const manifestFrom = (
+  const sourcePayloadFrom = (
     input: DeploymentRouteCreateInput,
-  ): PublicDeployManifest => {
-    if (isPublicDeployManifest(input.manifest)) return input.manifest;
+  ): ReferenceDeploySourcePayload => {
+    if (isReferenceDeploySourcePayload(input.manifest)) return input.manifest;
     return {
       name: input.group ?? "default",
       version: "0.0.0",
@@ -329,10 +329,10 @@ function createDefaultDeploymentService(
   return {
     async resolveDeployment(input: DeploymentRouteCreateInput) {
       const source = await snapshotPublicDeploySource(input, sourceAdapters);
-      const manifest = source?.manifest ?? manifestFrom(input);
+      const sourcePayload = source?.source ?? sourcePayloadFrom(input);
       const deployment = await services.planService.createPlan({
         spaceId: input.space_id ?? input.actor.spaceId ?? "default",
-        manifest,
+        manifest: sourcePayload,
         env: input.env,
         input: undefined,
       });
@@ -340,10 +340,10 @@ function createDefaultDeploymentService(
     },
     async applyDeployment(input: DeploymentRouteCreateInput) {
       const source = await snapshotPublicDeploySource(input, sourceAdapters);
-      const manifest = source?.manifest ?? manifestFrom(input);
-      const result = await services.applyService.applyManifest({
+      const sourcePayload = source?.source ?? sourcePayloadFrom(input);
+      const result = await services.applyService.applySourcePayload({
         spaceId: input.space_id ?? input.actor.spaceId ?? "default",
-        manifest,
+        manifest: sourcePayload,
         input: undefined,
         createdBy: input.actor.actorAccountId,
         actor: input.actor,
@@ -454,7 +454,7 @@ function deploymentVisibleToActor(
   return deployment;
 }
 
-function isPublicDeployManifest(value: unknown): value is PublicDeployManifest {
+function isReferenceDeploySourcePayload(value: unknown): value is ReferenceDeploySourcePayload {
   return isRecord(value) && typeof value.name === "string" &&
     value.name.trim().length > 0;
 }

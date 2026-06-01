@@ -118,11 +118,10 @@ export function isWorkers(): boolean {
   // non-Deno/non-Node host that exposes `WebSocketPair`; the userAgent signal
   // above is preferred whenever available.
   //
-  // Probe for a genuine `Deno.Command` rather than a bare `typeof Deno`: the
-  // npm build injects `@deno/shim-deno`, so on Node `globalThis.Deno` is a
-  // defined shim proxy without `Command`. (`hasNodeProcess` already excludes
-  // Node here, but the hardened probe keeps the discriminator consistent with
-  // `isDeno()`.)
+  // Probe for a genuine `Deno.Command` rather than a bare `typeof Deno`, so a
+  // partial compatibility global without `Command` cannot be mistaken for real
+  // Deno. (`hasNodeProcess` already excludes Node here, but the hardened probe
+  // keeps the discriminator consistent with `isDeno()`.)
   const hasDeno =
     typeof (globalThis as { Deno?: { Command?: unknown } }).Deno?.Command ===
       "function";

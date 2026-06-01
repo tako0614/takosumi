@@ -12,8 +12,8 @@ Execution は Space scope であり、snapshot に裏付けられ、journal さ�
 
 ```text
 1. determine Space from actor auth / API path / operator context
-2. parse manifest into IntentGraph
-3. resolve component kinds through Space-visible aliases, kind definitions, and bindings
+2. resolve Source into an InstallPlan snapshot
+3. resolve implementation bindings through operator inventory and recorded PlatformService selection
 4. resolve Space-scoped platform services and optional operator asset extension requirements
 5. create ResolvedPlan
 6. create TargetState
@@ -131,5 +131,5 @@ generated credential mutation
 generated authorization mutation
 platform service registry writes
 future cross-Space service sharing policy
-kind alias / descriptor / binding set updates
+descriptor / implementation binding set updates
 ```

@@ -8,10 +8,10 @@ import {
 import { startEmbeddedAgent } from "./embed.ts";
 
 test("startEmbeddedAgent serves /v1/health and exports env", async () => {
-  const prevUrl = Deno.env.get(LIFECYCLE_AGENT_URL_ENV);
-  const prevToken = Deno.env.get(LIFECYCLE_AGENT_TOKEN_ENV);
-  Deno.env.delete(LIFECYCLE_AGENT_URL_ENV);
-  Deno.env.delete(LIFECYCLE_AGENT_TOKEN_ENV);
+  const prevUrl = process.env[LIFECYCLE_AGENT_URL_ENV];
+  const prevToken = process.env[LIFECYCLE_AGENT_TOKEN_ENV];
+  delete process.env[LIFECYCLE_AGENT_URL_ENV];
+  delete process.env[LIFECYCLE_AGENT_TOKEN_ENV];
   const handle = startEmbeddedAgent({ port: 0, env: {} });
   try {
     const res = await fetch(`${handle.url}${LIFECYCLE_HEALTH_PATH}`);
@@ -19,30 +19,30 @@ test("startEmbeddedAgent serves /v1/health and exports env", async () => {
     const body = await res.json();
     assert.equal(body.status, "ok");
     assert.equal(typeof body.connectors, "number");
-    assert.equal(Deno.env.get(LIFECYCLE_AGENT_URL_ENV), handle.url);
-    assert.equal(Deno.env.get(LIFECYCLE_AGENT_TOKEN_ENV), handle.token);
+    assert.equal(process.env[LIFECYCLE_AGENT_URL_ENV], handle.url);
+    assert.equal(process.env[LIFECYCLE_AGENT_TOKEN_ENV], handle.token);
     assert.equal(handle.token.length, 64);
   } finally {
     await handle.shutdown();
-    if (prevUrl) Deno.env.set(LIFECYCLE_AGENT_URL_ENV, prevUrl);
-    else Deno.env.delete(LIFECYCLE_AGENT_URL_ENV);
-    if (prevToken) Deno.env.set(LIFECYCLE_AGENT_TOKEN_ENV, prevToken);
-    else Deno.env.delete(LIFECYCLE_AGENT_TOKEN_ENV);
+    if (prevUrl) process.env[LIFECYCLE_AGENT_URL_ENV] = prevUrl;
+    else delete process.env[LIFECYCLE_AGENT_URL_ENV];
+    if (prevToken) process.env[LIFECYCLE_AGENT_TOKEN_ENV] = prevToken;
+    else delete process.env[LIFECYCLE_AGENT_TOKEN_ENV];
   }
 });
 
 test("startEmbeddedAgent does not export env when exportToProcessEnv=false", async () => {
-  const prevUrl = Deno.env.get(LIFECYCLE_AGENT_URL_ENV);
-  Deno.env.delete(LIFECYCLE_AGENT_URL_ENV);
+  const prevUrl = process.env[LIFECYCLE_AGENT_URL_ENV];
+  delete process.env[LIFECYCLE_AGENT_URL_ENV];
   const handle = startEmbeddedAgent({
     port: 0,
     env: {},
     exportToProcessEnv: false,
   });
   try {
-    assert.equal(Deno.env.get(LIFECYCLE_AGENT_URL_ENV), undefined);
+    assert.equal(process.env[LIFECYCLE_AGENT_URL_ENV], undefined);
   } finally {
     await handle.shutdown();
-    if (prevUrl) Deno.env.set(LIFECYCLE_AGENT_URL_ENV, prevUrl);
+    if (prevUrl) process.env[LIFECYCLE_AGENT_URL_ENV] = prevUrl;
   }
 });

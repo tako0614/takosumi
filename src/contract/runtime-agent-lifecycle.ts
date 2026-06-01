@@ -27,7 +27,7 @@ import type { JsonObject, JsonValue } from "./types.ts";
  *   pointing at a `takosumi artifact push`-uploaded blob
  *
  * DataAsset / artifact handling is an optional operator extension, not an
- * AppSpec concept. `kind` is intentionally open: operator connectors can
+ * public Installer API concept. `kind` is intentionally open: operator connectors can
  * introduce new DataAsset metadata kinds while keeping the same wire shape.
  */
 export interface Artifact {
@@ -43,7 +43,7 @@ export interface Artifact {
 /**
  * DataAsset reference in implementation-specific specs.
  *
- * Source-backed AppSpec components receive a prepared source snapshot.
+ * Source-backed reference components receive a prepared source snapshot.
  * DataAsset-backed implementations can carry an external pointer or a
  * content-addressed object through this compatibility alias.
  */
@@ -152,7 +152,7 @@ export interface LifecycleApplyRequest {
   readonly shape: string;
   /**
    * Legacy connector-local provider selector (e.g. `aws-s3`, `filesystem`).
-   * This is runtime-agent dispatch metadata, not an AppSpec field.
+   * This is runtime-agent dispatch metadata, not a public Installer API field.
    */
   readonly provider: string;
   readonly resourceName: string;
@@ -160,7 +160,7 @@ export interface LifecycleApplyRequest {
    * Connector-local lifecycle input projected by the operator-selected
    * implementation adapter. It may be the public kind spec unchanged, or the
    * validated kind spec plus binding-derived runtime fields such as env or
-   * gateway targets. It is not an open AppSpec extension point.
+   * gateway targets. It is not an open public Installer API extension point.
    */
   readonly spec: JsonValue;
   readonly spaceId: string;

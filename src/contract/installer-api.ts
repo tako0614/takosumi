@@ -1,24 +1,11 @@
 /**
- * Installer API — Takosumi's public source-to-deployment API.
+ * Installer API - Takosumi v1 manifestless source-to-deployment API.
  *
- * 5 endpoints, 3 public concepts (AppSpec / Installation / Deployment).
- *
- *   POST /v1/installations/dry-run
- *   POST /v1/installations
- *   POST /v1/installations/{id}/deployments/dry-run
- *   POST /v1/installations/{id}/deployments
- *   POST /v1/installations/{id}/rollback
- *
- * No persisted plan entity — dry-run
- * results are returned in the response and never persisted as entities.
+ * Public concepts are Source, Installation, Deployment, and PlatformService.
+ * Dry-run returns an InstallPlan snapshot for review. The plan is not a
+ * persisted public entity; apply stores the reviewed snapshot on Deployment.
  */
 
-import type {
-  AppSpec,
-  ComponentOutputRef,
-  PlatformServicePath,
-  PublicationLabelMap,
-} from "./app-spec.ts";
 import type { JsonValue } from "./types.ts";
 
 export const INSTALLATIONS_PATH = "/v1/installations" as const;
@@ -30,9 +17,7 @@ export const INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH = (id: string): string =>
 export const INSTALLATION_ROLLBACK_PATH = (id: string): string =>
   `/v1/installations/${encodeURIComponent(id)}/rollback`;
 
-// ──────────────────────────────────────────────
 // Source descriptors
-// ──────────────────────────────────────────────
 
 export type RemoteSourceKind = "git" | "prepared";
 export type SourceKind = RemoteSourceKind | "local";
@@ -48,13 +33,7 @@ export interface GitSourceInput {
 export interface PreparedSourceInput {
   readonly kind: "prepared";
   readonly url: string;
-  /**
-   * Digest of the prepared source archive payload bytes.
-   *
-   * Prepared sources are immutable source snapshots produced by an
-   * operator-owned build/preparation service. The kernel verifies this digest
-   * before reading `.takosumi.yml`.
-   */
+  /** Digest of the prepared source archive payload bytes. */
   readonly digest: string;
   readonly ref?: never;
   readonly commit?: never;
@@ -72,21 +51,24 @@ export interface LocalSourceInput {
 export type Source = GitSourceInput | PreparedSourceInput | LocalSourceInput;
 
 export interface GitSourcePin {
-  readonly manifestDigest: string;
   readonly commit: string;
-  readonly sourceDigest?: never;
+  readonly planSnapshotDigest: string;
+  readonly sourceDigest?: string;
+  readonly artifactDigest?: string;
 }
 
 export interface PreparedSourcePin {
-  readonly manifestDigest: string;
   readonly sourceDigest: string;
+  readonly planSnapshotDigest: string;
   readonly commit?: never;
+  readonly artifactDigest?: string;
 }
 
 export interface LocalSourcePin {
-  readonly manifestDigest: string;
+  readonly planSnapshotDigest: string;
   readonly commit?: never;
   readonly sourceDigest?: never;
+  readonly artifactDigest?: string;
 }
 
 export type SourcePin = GitSourcePin | PreparedSourcePin | LocalSourcePin;
@@ -97,33 +79,7 @@ export interface CurrentDeploymentGuard {
 
 export type DeploymentExpectedGuard = SourcePin & CurrentDeploymentGuard;
 
-// ──────────────────────────────────────────────
-// Dry-run (new install)
-// ──────────────────────────────────────────────
-
-export interface InstallationDryRunRequest {
-  readonly spaceId: string;
-  readonly source: Source;
-}
-
-export type ChangeOp = "create" | "update" | "delete" | "noop";
-
-export interface ChangeEntry {
-  readonly op: ChangeOp;
-  readonly component: string;
-  readonly kind: string;
-  readonly reason?: string;
-}
-
-export interface DryRunResponse<TExpected extends SourcePin = SourcePin> {
-  readonly source: SourceSummary;
-  readonly manifestDigest: string;
-  readonly appSpec: AppSpec;
-  readonly changes: readonly ChangeEntry[];
-  readonly expected: TExpected;
-}
-
-export type InstallationDryRunResponse = DryRunResponse<SourcePin>;
+// Manifestless planning
 
 export interface SourceSummary {
   readonly kind: SourceKind;
@@ -131,15 +87,101 @@ export interface SourceSummary {
   readonly ref?: string;
   readonly commit?: string;
   readonly digest?: string;
+  readonly sourceDigest?: string;
 }
 
-// ──────────────────────────────────────────────
-// Apply (new install)
-// ──────────────────────────────────────────────
+export interface RepoMetadata {
+  readonly id: string;
+  readonly name: string;
+  readonly version?: string;
+  readonly description?: string;
+  readonly homepage?: string;
+  readonly repositoryUrl?: string;
+}
+
+export interface BindingSelection {
+  readonly name: string;
+  readonly servicePath?: string;
+  readonly serviceKind?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly many?: boolean;
+  readonly required?: boolean;
+  readonly inject?: JsonValue;
+}
+
+export type DeploymentOutputMaterial = Readonly<Record<string, JsonValue>>;
+
+export interface PlatformService {
+  readonly path?: string;
+  readonly kind: string;
+  readonly name?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly material?: DeploymentOutputMaterial;
+}
+
+export interface ResolvedBinding {
+  readonly name: string;
+  readonly selection: BindingSelection;
+  readonly services: readonly PlatformService[];
+}
+
+export interface PublicationPlan {
+  readonly name: string;
+  readonly kind: string;
+  readonly path?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+}
+
+export type ChangeOp = "create" | "update" | "delete" | "noop";
+
+export type ChangeSubjectKind =
+  | "source"
+  | "binding"
+  | "publication"
+  | "deployment";
+
+export interface ChangeEntry {
+  readonly op: ChangeOp;
+  readonly subject: string;
+  readonly kind: ChangeSubjectKind;
+  readonly reason?: string;
+}
+
+export interface InstallPlan {
+  readonly source: SourceSummary;
+  readonly repo: RepoMetadata;
+  readonly selectedProfile?: string;
+  readonly requestedBindings: readonly BindingSelection[];
+  readonly resolvedBindings: readonly ResolvedBinding[];
+  readonly publications: readonly PublicationPlan[];
+  readonly changes: readonly ChangeEntry[];
+  readonly warnings: readonly string[];
+}
+
+// Dry-run / apply requests
+
+export interface InstallationDryRunRequest {
+  readonly spaceId: string;
+  readonly source: Source;
+  readonly profile?: string;
+  readonly bindings?: readonly BindingSelection[];
+}
+
+export interface DryRunResponse<TExpected extends SourcePin = SourcePin> {
+  readonly source: SourceSummary;
+  readonly installPlan: InstallPlan;
+  readonly planSnapshotDigest: string;
+  readonly changes: readonly ChangeEntry[];
+  readonly expected: TExpected;
+}
+
+export type InstallationDryRunResponse = DryRunResponse<SourcePin>;
 
 export interface InstallationApplyRequest {
   readonly spaceId: string;
   readonly source: Source;
+  readonly profile?: string;
+  readonly bindings?: readonly BindingSelection[];
   readonly expected?: SourcePin;
 }
 
@@ -148,18 +190,18 @@ export interface InstallationApplyResponse {
   readonly deployment: Deployment;
 }
 
-// ──────────────────────────────────────────────
-// Deployment (upgrade)
-// ──────────────────────────────────────────────
-
 export interface DeploymentDryRunRequest {
   readonly source?: Source;
+  readonly profile?: string;
+  readonly bindings?: readonly BindingSelection[];
 }
 
 export type DeploymentDryRunResponse = DryRunResponse<DeploymentExpectedGuard>;
 
 export interface DeploymentApplyRequest {
   readonly source?: Source;
+  readonly profile?: string;
+  readonly bindings?: readonly BindingSelection[];
   readonly expected?: DeploymentExpectedGuard;
 }
 
@@ -167,9 +209,7 @@ export interface DeploymentApplyResponse {
   readonly deployment: Deployment;
 }
 
-// ──────────────────────────────────────────────
 // Rollback
-// ──────────────────────────────────────────────
 
 export interface RollbackRequest {
   readonly deploymentId: string;
@@ -184,42 +224,16 @@ export interface RollbackResponse {
 export interface RollbackMetadata {
   readonly rolledBackFrom: string | null;
   readonly rolledBackTo: string;
-  /**
-   * Scope of what a rollback actually reverts. A Takosumi rollback re-points
-   * the Installation's current Deployment to a prior retained Deployment. It
-   * is a control-plane pointer operation, NOT a workload-state rollback.
-   * These fields are first-class so a caller can never mistake a Deployment
-   * rollback for a data/state rollback. See {@link RollbackScope}.
-   */
   readonly scope: RollbackScope;
 }
 
-/**
- * The three axes a rollback could in principle touch, and what Takosumi
- * actually does to each. Encoded as fixed literals (not free strings) so the
- * boundary is part of the wire contract and survives client codegen:
- *
- * - `pointer`: ALWAYS `"reverted"` — the Installation's `currentDeploymentId`
- *   is flipped back to the rollback target.
- * - `resourceMaterialization`: `"not-reapplied"` — provider resources are NOT
- *   re-materialized by rollback. Backend state is whatever the most recent
- *   apply left in place; to make resources match the target, follow the
- *   rollback with a fresh `deploymentApply` against the target source.
- * - `workloadState`: ALWAYS `"not-reverted"` — the deployed workload's data
- *   and database schema are NEVER rolled back. There is no generic inverse of
- *   forward migrations / data writes across heterogeneous providers. Data
- *   recovery is the application's responsibility via backup/restore and
- *   expand-contract migration discipline, never the kernel's.
- */
 export interface RollbackScope {
   readonly pointer: "reverted";
   readonly resourceMaterialization: "not-reapplied";
   readonly workloadState: "not-reverted";
 }
 
-// ──────────────────────────────────────────────
-// Entities (3 public)
-// ──────────────────────────────────────────────
+// Entities
 
 export type InstallationStatus =
   | "installing"
@@ -230,6 +244,7 @@ export type InstallationStatus =
 export interface Installation {
   readonly id: string;
   readonly spaceId: string;
+  /** Stable repo-derived identity, not Takosumi-specific source metadata. */
   readonly appId: string;
   readonly currentDeploymentId: string | null;
   readonly status: InstallationStatus;
@@ -245,32 +260,26 @@ export interface Deployment {
   readonly id: string;
   readonly installationId: string;
   readonly source: SourceSummary;
-  readonly manifestDigest: string;
+  readonly sourceDigest?: string;
+  readonly artifactDigest?: string;
+  readonly planSnapshotDigest: string;
+  readonly planSnapshot: InstallPlan;
+  readonly bindingsSnapshot: readonly ResolvedBinding[];
   readonly status: DeploymentStatus;
   readonly outputs: DeploymentOutputs;
   readonly createdAt: number;
 }
 
 export interface DeploymentOutputs {
-  readonly components?: Readonly<
-    Record<string, Readonly<Record<string, DeploymentComponentOutput>>>
-  >;
+  readonly public?: Readonly<Record<string, DeploymentOutputMaterial>>;
   readonly extensions?: Readonly<Record<string, JsonValue>>;
 }
 
-export type DeploymentComponentOutput = Readonly<Record<string, JsonValue>>;
-
-export type DeploymentServicePathExposure = Readonly<{
-  readonly output: ComponentOutputRef;
-  readonly kind?: string;
-  readonly path?: PlatformServicePath;
-  readonly labels?: PublicationLabelMap;
-  readonly material: DeploymentComponentOutput;
+export type DeploymentServicePathExposure = PublicationPlan & Readonly<{
+  readonly material: DeploymentOutputMaterial;
 }>;
 
-// ──────────────────────────────────────────────
 // Error envelope
-// ──────────────────────────────────────────────
 
 export type InstallerErrorCode =
   | "invalid_argument"

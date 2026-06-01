@@ -1,14 +1,15 @@
-FROM denoland/deno:2.7.10
+FROM oven/bun:1
 
 WORKDIR /workspace/takosumi
 
 # Build this Dockerfile from the takosumi repository root:
-#   docker build -f packages/kernel/Dockerfile.local .
+#   docker build -f src/kernel/Dockerfile.local .
 COPY . .
+RUN bun install --frozen-lockfile --production
 
 ENV TAKOSUMI_PROCESS_ROLE=takosumi-api
 ENV PORT=8788
 
 EXPOSE 8788
 
-CMD ["deno", "run", "--config", "deno.json", "--allow-all", "packages/kernel/src/index.ts"]
+CMD ["bun", "run", "src/kernel/index.ts"]

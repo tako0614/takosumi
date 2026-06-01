@@ -37,7 +37,7 @@ import {
   type GroupHeadHistoryStore,
   resolveRollbackTarget,
 } from "./group_head_history.ts";
-import type { DeployBlocker, PublicDeployManifest } from "./types.ts";
+import type { DeployBlocker, ReferenceDeploySourcePayload } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Public service surface
@@ -61,7 +61,7 @@ export interface DeploymentFilter {
  */
 export interface ResolveDeploymentInput {
   readonly spaceId: string;
-  readonly manifest: PublicDeployManifest;
+  readonly manifest: ReferenceDeploySourcePayload;
   readonly env?: string;
   readonly envName?: string;
   readonly input?: DeploymentInput;
@@ -406,7 +406,7 @@ export class DeploymentService {
   }
 
   /**
-   * Resolve a Deployment from a public manifest. Produces a Deployment in
+   * Resolve a Deployment from a reference deploy source payload. Produces a Deployment in
    * status `resolved` (preview/preflight). Performs descriptor closure
    * resolution, graph projection, binding resolution, and policy gate
    * evaluation — none of which mutate provider state.

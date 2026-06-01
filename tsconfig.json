@@ -4,44 +4,37 @@
     "module": "Preserve",
     "moduleResolution": "bundler",
     "target": "ESNext",
-    "types": ["bun", "node", "deno"],
+    "types": ["bun", "node"],
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
     "strict": true,
     "skipLibCheck": true,
+    "baseUrl": ".",
     "paths": {
-      "@std/assert": ["./shims/std/assert.ts"],
-      "@std/fmt/colors": ["./shims/std/colors.ts"],
-      "@std/testing/mock": ["./shims/std/mock.ts"],
-      "@std/yaml": ["./shims/std/yaml.ts"],
-      "@std/path": ["./shims/std/path.ts"],
-      "@std/path/*": ["./shims/std/path.ts"],
-      "@std/fs/walk": ["./shims/std/fs.ts"],
-      "@std/fs": ["./shims/std/fs.ts"],
-
-      "jsr:@std/assert": ["./shims/std/assert.ts"],
-      "jsr:@std/assert@*": ["./shims/std/assert.ts"],
-      "jsr:@std/assert@^1.0.0": ["./shims/std/assert.ts"],
-      "jsr:@std/assert@^1.0.5": ["./shims/std/assert.ts"],
-      "jsr:@std/assert@^1.0.6": ["./shims/std/assert.ts"],
-      "jsr:@std/yaml": ["./shims/std/yaml.ts"],
-      "jsr:@std/yaml@*": ["./shims/std/yaml.ts"],
-      "jsr:@std/yaml@^1.0.0": ["./shims/std/yaml.ts"],
-      "jsr:@std/yaml@^1.0.5": ["./shims/std/yaml.ts"],
-      "jsr:@std/path@*": ["./shims/std/path.ts"],
-      "jsr:@std/path@^1.0.6": ["./shims/std/path.ts"],
-      "jsr:@std/fs@*": ["./shims/std/fs.ts"],
-      "jsr:@std/fs@^1.0.5/walk": ["./shims/std/fs.ts"],
-
+      "@takosjp/takosumi": ["./src/all/mod.ts"],
+      "@takosjp/takosumi/kernel": ["./src/all/kernel.ts"],
+      "@takosjp/takosumi/contract": ["./src/contract/mod.ts"],
+      "@takosjp/takosumi-accounts-contract": [
+        "./packages/accounts-contract/src/mod.ts"
+      ],
+      "@takosjp/takosumi-accounts-service": [
+        "./packages/accounts-service/src/mod.ts"
+      ],
+      "@takosjp/takosumi-accounts-cli": ["./packages/cli/src/main.ts"],
+      "@takosjp/takosumi-accounts": ["./packages/all/src/mod.ts"],
+      "@takosjp/takosumi-platform-services": [
+        "./packages/platform-services/src/mod.ts"
+      ],
       "@takos/takosumi-contract": ["./src/contract/mod.ts"],
-      "@takos/takosumi-contract/app-spec": ["./src/contract/app-spec.ts"],
-      "@takos/takosumi-contract/catalog": ["./src/contract/catalog.ts"],
       "@takos/takosumi-contract/installer-api": [
         "./src/contract/installer-api.ts"
       ],
       "@takos/takosumi-contract/reference/compat": [
         "./src/contract/reference-compat.ts"
+      ],
+      "@takos/takosumi-contract/reference/catalog": [
+        "./src/contract/catalog.ts"
       ],
       "@takos/takosumi-contract/reference/error-category": [
         "./src/contract/error-category.ts"
@@ -86,12 +79,11 @@
         "./src/kernel/shared/runtime/index.ts"
       ],
       "takosumi-contract": ["./src/contract/mod.ts"],
-      "takosumi-contract/app-spec": ["./src/contract/app-spec.ts"],
-      "takosumi-contract/catalog": ["./src/contract/catalog.ts"],
       "takosumi-contract/installer-api": ["./src/contract/installer-api.ts"],
       "takosumi-contract/reference/compat": [
         "./src/contract/reference-compat.ts"
       ],
+      "takosumi-contract/reference/catalog": ["./src/contract/catalog.ts"],
       "takosumi-contract/reference/error-category": [
         "./src/contract/error-category.ts"
       ],
@@ -120,7 +112,6 @@
       "takosumi-contract/internal/rpc": ["./src/contract/internal-rpc.ts"],
 
       "takosumi-installer": ["./src/installer/mod.ts"],
-      "takosumi-installer/yaml-parser": ["./src/installer/yaml-parser.ts"],
       "takosumi-installer/git-fetch": ["./src/installer/git-fetch.ts"],
       "takosumi-installer/deploy-client": ["./src/installer/deploy-client.ts"],
       "takosumi-runtime-agent/connectors": [
@@ -131,9 +122,20 @@
       ]
     }
   },
-  "include": ["src", "shims"],
+  "include": [
+    "src",
+    "packages/accounts-contract",
+    "packages/accounts-service",
+    "packages/cli",
+    "packages/all",
+    "packages/platform-services",
+    "deploy/accounts-cloudflare",
+    "deploy/node-postgres",
+    "shims"
+  ],
   "exclude": [
     "**/*_test.ts",
+    "packages/dashboard-ui",
     "src/cli/tests",
     "src/kernel/scripts"
   ]

@@ -26,10 +26,10 @@ export class DefaultRuntimeMaterializer implements RuntimeMaterializer {
       spaceId: input.spaceId,
       groupId: input.groupId,
       activationId: input.activationId,
-      appName: input.appSpec.name,
-      appVersion: input.appSpec.version,
+      appName: input.deploySpec.name,
+      appVersion: input.deploySpec.version,
       materializedAt,
-      workloads: input.appSpec.components.map((component) =>
+      workloads: input.deploySpec.components.map((component) =>
         Object.freeze<RuntimeWorkloadSpec>({
           id: runtimeScopedId(input, "workload", component.name),
           spaceId: input.spaceId,
@@ -42,11 +42,11 @@ export class DefaultRuntimeMaterializer implements RuntimeMaterializer {
           entrypoint: component.entrypoint,
           command: [...(component.command ?? [])],
           args: [...(component.args ?? [])],
-          env: { ...input.appSpec.env, ...component.env },
+          env: { ...input.deploySpec.env, ...component.env },
           depends: [...component.depends],
         })
       ),
-      resources: input.appSpec.resources.map((resource) =>
+      resources: input.deploySpec.resources.map((resource) =>
         Object.freeze<RuntimeResourceSpec>({
           id: runtimeScopedId(input, "resource", resource.name),
           spaceId: input.spaceId,
@@ -55,13 +55,13 @@ export class DefaultRuntimeMaterializer implements RuntimeMaterializer {
           resourceName: resource.name,
           runtimeName: `${input.groupId}-${resource.name}`,
           type: resource.type,
-          env: { ...input.appSpec.env, ...resource.env },
+          env: { ...input.deploySpec.env, ...resource.env },
         })
       ),
       // Post Wave J: kernel does not project routes (compiler emits
       // empty `routes: []`). The materializer iterates the empty array
       // so the projection result carries an empty `routes` slot.
-      routes: input.appSpec.routes.map((route) =>
+      routes: input.deploySpec.routes.map((route) =>
         Object.freeze<RuntimeRouteBindingSpec>({
           id: runtimeScopedId(input, "route", route.name),
           spaceId: input.spaceId,

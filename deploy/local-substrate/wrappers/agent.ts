@@ -17,8 +17,7 @@
  * public-DNS providers (route53 / cloud-dns / cloudflare-dns) are import-time
  * denied — see /local-substrate-factories/local-substrate-factories.ts.
  *
- * Runs with `--config /workspace/deno.json` (takosumi root) — the same config /
- * mounts the proven kernel wrapper used, so /plugins specifier resolution is
+ * Runs with the local workspace mounts so /plugins specifier resolution is
  * unchanged.
  */
 import { serveRuntimeAgent } from "/workspace/src/runtime-agent/server.ts";
@@ -26,12 +25,12 @@ import { LIFECYCLE_AGENT_TOKEN_ENV } from "/workspace/src/contract/runtime-agent
 import { currentRuntime } from "/workspace/src/kernel/shared/runtime/index.ts";
 import { buildLocalSubstrateRegistry } from "/local-substrate-factories/local-substrate-factories.ts";
 
-const agentPort = Number(Deno.env.get("TAKOSUMI_AGENT_PORT") ?? "8789");
+const agentPort = Number(process.env.TAKOSUMI_AGENT_PORT ?? "8789");
 // Bind 0.0.0.0 (NOT 127.0.0.1 like the in-process embed) so the `cloud`
 // container reaches the agent across the compose network at http://agent:8789.
-const hostname = Deno.env.get("TAKOSUMI_AGENT_HOSTNAME") ?? "0.0.0.0";
+const hostname = process.env.TAKOSUMI_AGENT_HOSTNAME ?? "0.0.0.0";
 
-const env = Deno.env.toObject();
+const env = { ...process.env };
 const registry = buildLocalSubstrateRegistry(env);
 // The token MUST match the `cloud` service's TAKOSUMI_AGENT_TOKEN; both env
 // files set the same fixture value. The random fallback only guards a missing
@@ -53,7 +52,7 @@ console.log(
 const runtime = currentRuntime();
 const shutdown = (signal: string) => {
   console.log(`[local-substrate-agent] received ${signal}, draining...`);
-  agent.shutdown().finally(() => Deno.exit(0));
+  agent.shutdown().finally(() => process.exit(0));
 };
 runtime.onSignal("SIGINT", () => shutdown("SIGINT"));
 runtime.onSignal("SIGTERM", () => shutdown("SIGTERM"));

@@ -3,7 +3,7 @@
 --            post-commit cleanup paths. `source_key` makes enqueue idempotent
 --            for a single generated object / WAL tuple.
 --
--- Spec:      packages/kernel/src/domains/deploy/revoke_debt_store.ts
+-- Spec:      src/kernel/domains/deploy/revoke_debt_store.ts
 -- Phase:     deployment recovery / RevokeDebt
 -- Domain:    deploy
 

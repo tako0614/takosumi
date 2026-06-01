@@ -1,71 +1,68 @@
-# 公式カタログモデル {#external-descriptor-registry-model}
+# Reference Metadata モデル {#external-descriptor-registry-model}
 
 ::: info
-内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。
+内部設計メモ。public contract は [Installer API](../installer-api.md) と [Platform Services](../platform-services.md) を参照。
 :::
 
-Component kind の semantics は operator の設定が kind の定義と alias として取り込み、 runtime behavior は operator-selected execution binding として接続する。
+Takosumi v1 は Source DSL や mandatory kind catalog を要求しません。`https://takosumi.com/kinds/v1/*` の JSON-LD documents は reference adapter metadata であり、operator が採用できる reusable semantic input です。Source authoring vocabulary ではありません。
 
-`https://takosumi.com/kinds/v1/*` の kind の定義は official catalog の documents である。operator が採用できる reusable semantic input として扱う。 `https://takosumi.com/reference/kernel/**` は reference Takosumi の内部 conformance metadata の identity であり、この registry model の public catalog source ではない。
-
-## Kind の定義のソースと runtime authority {#descriptor-source-vs-runtime-authority}
+## Metadata source と runtime authority {#descriptor-source-vs-runtime-authority}
 
 ```text
-Kind の定義 (descriptor documents):
-  external semantic source, often JSON-LD
+Reference metadata documents:
+  optional semantic / validation input for reference adapters
 
 Operator registry:
-  select kind definitions, validate shape, apply operator policy
+  PlatformService inventory, visibility, policy, ownership, credentials
 
 Execution bindings:
-  kind URI -> implementation binding
+  service capability / adapter metadata -> implementation binding
 
-ResolvedPlan:
-  deployment-specific evidence recorded by the operator/Takosumi implementation
+Deployment record:
+  source summary, plan snapshot, binding snapshot, outputs, status
 ```
 
-JSON-LD は kind の定義の表現形式です。kind の定義の取り込み、alias 採用、Space ごとの許可は operator の設定が管理します。
+JSON-LD は reference adapter metadata の表現形式です。metadata の採用、Space ごとの許可、implementation binding、provider credentials は operator distribution が管理します。
 
 ## Operator registry の例 {#operator-registry-example}
 
 operator は registry をどのように分割してもよい。以下は implementation pattern の例です。
 
 ```text
-Kind Alias Registry:
-  short alias -> external kind URI
+PlatformService Registry:
+  space-scoped service capability records
 
-Descriptor Registry:
-  catalog descriptor URI/document -> normalized descriptor metadata
-
-Platform Service Registry:
-  space-scoped platform service path -> PlatformServiceDeclaration snapshot
+Reference Metadata Registry:
+  optional adapter metadata documents adopted by the operator
 
 Execution Registry:
-  kind URI -> implementation binding
+  selected service / adapter identity -> implementation binding
 
 Deployment Policy:
   allow / deny / approval defaults
 
-asset Policy:
+Asset Policy:
   optional operator extension limits, if the distribution exposes asset routes
 ```
 
-## Kind の定義ドキュメント {#descriptor-documents}
+## Reference metadata documents {#descriptor-documents}
 
-Kind の定義は semantic data を表す。runtime behavior は operator-selected execution binding が持つ。
+Reference metadata は runtime behavior そのものではありません。runtime behavior は operator-selected execution binding が持ちます。
 
-Kind の定義の family:
+Reference metadata が表せるもの:
 
 ```text
-ComponentKind
-Protocol
-AccessSurface
-Compatibility
-InputSchema
+adapter identity
+optional validation metadata
+material helper vocabulary
+projection helper vocabulary
+compatibility hints
 ```
 
-Implementation packaging は operator implementation 側に置く。Takosumi reference implementation は kind の定義の identity を runtime behavior に bind するための registry / adapter を持つ。別実装は同じ kind の定義の identity を別の registry / controller / adapter に bind できる。
+Implementation packaging は operator implementation 側に置きます。Takosumi reference implementation は metadata identity を runtime behavior に bind するための registry / adapter を持てます。別実装は同じ Installer API と Deployment record を保ったまま、別の registry / controller / adapter に bind できます。
 
-## Manifest との関係 {#relationship-to-appspec}
+## Source との関係 {#relationship-to-source}
 
-Public v1 manifest は `components.<name>.kind` に不透明な string を置く。URI を直接置いてもよいし、operator が `kindAliases` で opt-in した short alias を置いてもよい。どちらの場合も、kind の意味、input schema、implementation binding、policy は operator の設定が与える。
+Source repo は Takosumi 専用 metadata field、component kind、provider selector、root publication を書きません。Source identity は git / prepared / local input から決まり、依存先は operator PlatformService inventory と install / deploy request の binding selection から決まります。
+
+Reference metadata は operator が resolution と validation を実装するときの補助です。公開 v1 contract の正本は Source / Installation / Deployment / PlatformService と Installer API です。

@@ -1,83 +1,72 @@
-# @takos/takosumi-cli
+# @takosjp/takosumi/cli
 
-Operator CLI for the Takosumi operator-portable PaaS toolkit. Wraps the kernel HTTP API and the runtime-agent embed for a single-command dev experience.
+Operator CLI for the manifestless Takosumi Installer API.
 
 ## Install
 
 ```bash
-deno install -gA -n takosumi npm:@takosjp/takosumi
+npm install -g @takosjp/takosumi
 takosumi version
 ```
 
-## Quickstart (single VM dev)
+## Quickstart
 
 ```bash
 export TAKOSUMI_DEV_MODE=1
-export TAKOSUMI_INSTALLER_TOKEN=$(openssl rand -hex 32)
+export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
 
-# Boot the stock kernel + generic embedded runtime-agent on the same machine.
-# This validates AppSpec and records Installation / Deployment metadata.
-# Runtime resources require an operator bootstrap with connector bindings.
 takosumi server --port 8788 &
 
-# Create the AppSpec scaffold and the referenced runtime file.
-takosumi init .takosumi.yml
-mkdir -p dist
-printf 'export default { fetch() { return new Response("ok") } };\\n' > dist/worker.mjs
+mkdir hello-takosumi && cd hello-takosumi
+printf '{"name":"hello-takosumi","version":"0.1.0"}\n' > package.json
 
-# Install + deploy metadata through the Installer API.
-takosumi install --source . --space space:personal
+takosumi install dry-run --source . --space space_personal
+takosumi install --source . --space space_personal
 takosumi deploy <installation-id> --source .
 takosumi rollback <installation-id> <deployment-id>
 ```
 
-> The public surface is AppSpec (`.takosumi.yml`), Installation, and Deployment. The CLI calls the five installer endpoints under `/v1/installations/*`.
+The public surface is Source, Installation, Deployment, and PlatformService. The CLI calls the five installer endpoints
+under `/v1/installations/*`.
 
 ## Commands
 
-| Command                                                             | Purpose                                                          |
-| ------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `takosumi install <source>`                                         | create an Installation and first Deployment                      |
-| `takosumi install dry-run <source>`                                 | dry-run a new Installation                                       |
-| `takosumi deploy <installation-id> [--source <source>]`             | apply a new Deployment to an Installation                        |
-| `takosumi deploy dry-run <installation-id> [--source <source>]`     | dry-run an Installation update                                   |
-| `takosumi rollback <installation-id> <deployment-id>`               | move current pointer to a retained Deployment                    |
-| `takosumi server [--port] [--no-agent]`                             | boot kernel + generic embedded agent                             |
-| `takosumi runtime-agent serve`                                      | standalone generic agent host                                    |
-| `takosumi runtime-agent list`                                       | show registered connectors on an agent                           |
-| `takosumi runtime-agent verify`                                     | smoke-test connectors (read-only API call per cloud)             |
-| `takosumi artifact push <file> --kind <kind>`                       | optional DataAsset upload                                        |
-| `takosumi artifact list [--limit]` / `rm <hash>` / `gc [--dry-run]` | optional DataAsset store management                              |
-| `takosumi artifact kinds`                                           | compatibility command listing operator DataAsset metadata values |
-| `takosumi migrate [--dry-run]`                                      | run kernel DB migrations                                         |
-| `takosumi init [<output>] [--template]`                             | AppSpec scaffold (stdout if no `<output>`)                       |
-| `takosumi version`                                                  | print version                                                    |
+| Command | Purpose |
+| --- | --- |
+| `takosumi install <source>` | create an Installation and first Deployment |
+| `takosumi install dry-run <source>` | dry-run a new Installation |
+| `takosumi deploy <installation-id> [--source <source>]` | apply a new Deployment to an Installation |
+| `takosumi deploy dry-run <installation-id> [--source <source>]` | dry-run an Installation update |
+| `takosumi rollback <installation-id> <deployment-id>` | move current pointer to a retained Deployment |
+| `takosumi server [--port] [--no-agent]` | boot the local kernel server |
+| `takosumi runtime-agent serve` | standalone generic agent host |
+| `takosumi runtime-agent list` | show registered connectors on an agent |
+| `takosumi runtime-agent verify` | smoke-test connectors |
+| `takosumi artifact push <file> --kind <kind>` | optional DataAsset upload |
+| `takosumi migrate [--dry-run]` | run kernel DB migrations |
+| `takosumi init [<output>] [--template]` | generic repo metadata starter |
+| `takosumi version` | print version |
 
 ## Env vars
 
-Priority (highest first):
+Priority:
 
 1. CLI flag (`--remote` / `--token`)
 2. Command-specific env (`TAKOSUMI_INSTALLER_TOKEN`, `TAKOSUMI_AGENT_TOKEN`)
 3. Remote URL env (`TAKOSUMI_REMOTE_URL`)
 4. Config file (`~/.takosumi/config.yml`)
 
-| Env var                                       | Used by                                                           |
-| --------------------------------------------- | ----------------------------------------------------------------- |
-| `TAKOSUMI_REMOTE_URL`                         | default kernel URL for remote CLI commands                        |
-| `TAKOSUMI_INSTALLER_TOKEN`                    | bearer token for `/v1/installations/*`                            |
-| `TAKOSUMI_DEPLOY_TOKEN`                       | bearer token for optional DataAsset write endpoints               |
-| `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target                     |
-| `TAKOSUMI_DEV_MODE=1`                         | dev opt-out: plaintext secrets / unencrypted DB / unsafe defaults |
-| `TAKOSUMI_LOG_LEVEL=warn`                     | suppress dev-mode in-memory fallback notices                      |
-
-See [`docs/getting-started/quickstart.md`](../../docs/getting-started/quickstart.md) for full multi-host production setup, cloud credential placement, and troubleshooting.
+| Env var | Used by |
+| --- | --- |
+| `TAKOSUMI_REMOTE_URL` | default kernel URL for remote CLI commands |
+| `TAKOSUMI_INSTALLER_TOKEN` | bearer token for `/v1/installations/*` |
+| `TAKOSUMI_DEPLOY_TOKEN` | bearer token for optional DataAsset write endpoints |
+| `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target |
+| `TAKOSUMI_DEV_MODE=1` | dev opt-out for strict production guards |
 
 ## See also
 
-- [`@takos/takosumi-kernel`](https://jsr.io/@takos/takosumi-kernel)
-- [`@takos/takosumi-runtime-agent`](https://jsr.io/@takos/takosumi-runtime-agent)
-- [`@takos/takosumi-runtime-agent-connectors`](https://jsr.io/@takos/takosumi-runtime-agent-connectors)
-
-> The `@takos/` JSR scope is the reference Takosumi distribution published by Takos. The contract is the authority. Alternative publishers such as `@example/takosumi-cli` can ship compatible CLI implementations; current verification covers the reference distribution.
+- `@takosjp/takosumi/kernel`
+- `@takosjp/takosumi/runtime-agent`
+- `@takosjp/takosumi-plugins/connectors`

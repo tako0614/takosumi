@@ -18,7 +18,7 @@ import {
   type OrchestratorResolveInput,
 } from "./mod.ts";
 import type { Deployment, GroupHead } from "takosumi-contract/reference/compat";
-import type { PublicDeployManifest } from "../../domains/deploy/types.ts";
+import type { ReferenceDeploySourcePayload } from "../../domains/deploy/types.ts";
 import {
   InMemoryPreparedArtifactStore,
   InMemoryProtectedReferenceStore,
@@ -351,7 +351,7 @@ function makeDeployment(
   };
 }
 
-function sampleManifest(): PublicDeployManifest {
+function sampleManifest(): ReferenceDeploySourcePayload {
   return {
     name: "demo-app",
     version: "1.0.0",

@@ -1,4 +1,4 @@
-// apply_v2 — shape-model (`resources[]`) apply with provider compensate /
+// apply_v2 — legacy `resources[]` apply with provider compensate /
 // destroy rollback, fingerprint idempotency, replace-on-mismatch, and the
 // durable operation journal (WAL).
 //
@@ -12,7 +12,7 @@
 //      DeploymentService apply facade. Routes through the
 //      graph-projection / GroupHead-pointer path (apply_phase /
 //      apply_orchestrator), NOT through `applyV2`.
-//   3. `applyV2` (this module), reached only via `ApplyService.applyManifest`
+//   3. `applyV2` (this module), reached only via `ApplyService.applySourcePayload`
 //      for a `resources[]` manifest.
 //
 // Consequently the richer guarantees implemented here — provider

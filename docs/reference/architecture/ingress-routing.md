@@ -1,43 +1,32 @@
 # イングレスルーティング {#exposure-activation-model}
 
-Exposure は runtime routing の内部 record です。public manifest では `gateway` のような component の `connect` と kind-specific `spec` として表現します。Exposure は public ingress intent と activation state を記録し、runtime request は backend-native data plane が処理します。
+Exposure は runtime routing の内部 record です。Takosumi v1 の public Source authoring は manifestless です。Public ingress intent は operator PlatformService inventory、account-plane UI / API、BindingSelection、または operator policy から解決されます。
 
-public ingress を持つ component は 1 つの Space の中に Exposure intent を作成する。public manifest では、`gateway` のような component が upstream output を `connect` し、listener / route rule を `spec` に持つ形で表現します。Exposure は Link と別の runtime object です。
+Exposure は public ingress intent と activation state を記録し、runtime request は backend-native data plane が処理します。
 
-## Exposure
-
-```yaml
-components:
-  web:
-    kind: worker
-    spec:
-      entrypoint: src/worker.ts
-  public:
-    kind: gateway
-    connect:
-      app:
-        output: web.http
-        inject: upstream
-    spec:
-      listeners:
-        public:
-          protocol: https
-          host: app.example.com
-          tls: auto
-      routes:
-        - listener: public
-          path: /
-          to: app
-publish:
-  public-endpoint:
-    output: public.public
-    kind: http-endpoint
-    path: acme.web.public
+```text
+Source + BindingSelection + operator route policy
+  -> Exposure intent
+  -> ProviderIngressObject / route materialization
+  -> TrafficSnapshot / RoutingPointer
 ```
 
-resolver はこれを `web.http` を `app` binding として connect する `app.example.com` の Exposure record に変換する。`web.http` は upstream の出力データです。root `publish` は `public.public` output を `acme.web.public` service path として discoverable にする任意の宣言で、browser ingress の reachability には不要です。Exposure は外部 ingress を準備するが、それだけで deployment を current にはしない。selected execution binding は Exposure から Cloudflare route、Kubernetes Gateway / HTTPRoute、Caddy / Nginx config、load balancer rule、edge runtime binding などの data plane object を作ります。
+## Exposure {#exposure}
 
-`host` は gateway の kind の定義が持つ ingress input です。reservation、 custom-domain proof、DNS ownership proof、TLS provisioning は採用済みの kind の定義、operator policy、backend-specific flow が扱います。manifest はその proof protocol を埋め込まない。
+Exposure は Installation / Deployment の内部 evidence です。例:
+
+```json
+{
+  "name": "public-web",
+  "spaceId": "space_acme",
+  "deploymentId": "dep_123",
+  "hostname": "app.example.com",
+  "upstreamOutput": "web.http",
+  "selectedServiceId": "svc_gateway_public"
+}
+```
+
+`hostname` reservation、custom-domain proof、DNS ownership proof、TLS provisioning は operator policy、PlatformService implementation、backend-specific flow が扱います。Source repo はその proof protocol を埋め込みません。
 
 ```text
 runtime request:
@@ -47,14 +36,15 @@ runtime request:
 
 ## Installer API と activation {#installer-api-and-activation}
 
-public operation は Installer API の install / deploy / rollback です。reference Takosumi はその内側で resolve → apply → activate → observe の phase を進めます。別の public activate endpoint は作りません。Installer API が `Deployment.status: "succeeded"` を返す時点では、current Deployment として使うために必要な apply と activation の同期部分が完了しています。observe は後続で backend-native data plane を確認し、health annotation を更新します。
+public operation は Installer API の install / deploy / rollback です。reference Takosumi はその内側で resolve → apply → activate → observe の phase を進めます。別の public activate endpoint は作りません。
 
 ```text
 resolve:
-  read source, parse manifest, resolve connect/listen, choose implementations
+  resolve Source, selected PlatformServices, policy, and implementation bindings
 
 apply:
-  prepare objects, links, generated authorization records, generated credentials, exposure material
+  prepare objects, generated authorization records, generated credentials,
+  and exposure material
 
 activate:
   update traffic assignment, activation snapshot, and Space-local RoutingPointer
@@ -63,11 +53,11 @@ post-activate observe:
   verify route health and active assignment
 ```
 
-Activation は traffic assignment / TrafficSnapshot / RoutingPointer を更新する内部 phase です。runtime request path は backend data plane のままです。
+Installer API が `Deployment.status: "succeeded"` を返す時点では、current Deployment として使うために必要な apply と activation の同期部分が完了しています。observe は後続で backend-native data plane を確認し、health annotation を更新します。
 
 ## Space ルール {#space-rule}
 
-Exposure 所有権、ingress 予約、route execution、TrafficSnapshot、RoutingPointer は Space-local である。operator の route policy が explicit delegation を許可しない限り、2 つの Space が同じ global ingress を主張することはできない。
+Exposure 所有権、ingress 予約、route execution、TrafficSnapshot、RoutingPointer は Space-local です。operator の route policy が explicit delegation を許可しない限り、2 つの Space が同じ global ingress を主張することはできません。
 
 ```text
 RoutingPointer identity = spaceId + groupId
@@ -86,13 +76,11 @@ TlsMaterialization
 ProviderIngressObject
 ```
 
-TrafficAssignment は Exposure materialization ではなく、TrafficSnapshot / RoutingPointer 側が所有する activation state です。
-
-各 generated object は owner、reason、決定的 id、delete policy を持つ。
+TrafficAssignment は Exposure materialization ではなく、TrafficSnapshot / RoutingPointer 側が所有する activation state です。各 generated object は owner、reason、決定的 id、delete policy を持ちます。
 
 ```yaml
 GeneratedObject:
-  owner: exposure:public.public
+  owner: exposure:public-web
   reason: tls-materialization
   deletePolicy: delete-with-owner | retain-with-approval
 ```
@@ -113,16 +101,16 @@ TrafficSnapshot の `assignments` が split / shadow を含む routing authority
 
 ## Activate 後の health state {#post-activate-health-state}
 
-activation 後、exposure は closed v1 persisted health enum を通じて runtime reality を追跡する。`observing` は worker 内部の transient state で、persisted health enum は `unknown | healthy | degraded | unhealthy` です。状態遷移は [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal) の `observe` stage が ObservationState に append する entry によってのみ駆動される。どの状態遷移も TargetState を変更しない。
+activation 後、exposure は closed v1 persisted health enum を通じて runtime reality を追跡します。`observing` は worker 内部の transient state で、persisted health enum は `unknown | healthy | degraded | unhealthy` です。状態遷移は [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal) の `observe` stage が ObservationState に append する entry によってのみ駆動されます。どの状態遷移も TargetState を変更しません。
 
 observe は backend-native data plane を観測しますが、response path は担当しません。
 
 ```text
-unknown → healthy
-       \ → degraded
-       \ → unhealthy
+unknown -> healthy
+       -> degraded
+       -> unhealthy
 
-healthy   ↔ degraded ↔ unhealthy   (re-entry on observation change)
+healthy <-> degraded <-> unhealthy
 ```
 
 | state       | meaning                                               |
@@ -135,7 +123,7 @@ healthy   ↔ degraded ↔ unhealthy   (re-entry on observation change)
 `unhealthy` の effect:
 
 - `unhealthy` は TargetState を書き換えない。DriftIndex と TrafficSnapshot 上の注記に流れるだけ。
-- `unhealthy` は将来の activation が開始する新規 traffic shift を block する (approval で明示的に override されない限り)。既存の RoutingPointer pointer は自動的には rollback されない (fail-safe-not-fail-closed)。
+- `unhealthy` は将来の activation が開始する新規 traffic shift を block する (approval で明示的に override されない限り)。既存の RoutingPointer pointer は自動的には rollback されない。
 - この state から drift entry がどう作られるかは [Drift Detection](../drift-detection.md) を参照。
 
 ## クロスリファレンス {#cross-references}

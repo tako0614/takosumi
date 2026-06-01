@@ -1,15 +1,15 @@
-#!/usr/bin/env -S deno run --allow-env --allow-read --allow-net
+#!/usr/bin/env bun
 /**
  * Phase 11A: Takosumi DB migration runner CLI.
  *
  * Wraps the array-based StorageMigrationRunner so operators can apply the
  * canonical postgresStorageMigrationStatements catalog from a CLI:
  *
- *   deno task db:migrate                      # apply pending against $DATABASE_URL
- *   deno task db:migrate --env=staging        # apply pending against $TAKOSUMI_STAGING_DATABASE_URL
- *   deno task db:migrate --env=production     # apply pending against $TAKOSUMI_PRODUCTION_DATABASE_URL
- *   deno task db:migrate --env=local          # apply pending against an in-memory SqlClient
- *   deno task db:migrate:dry-run              # print SQL preview only, do not apply
+ *   bun run db:migrate                      # apply pending against $DATABASE_URL
+ *   bun run db:migrate --env=staging        # apply pending against $TAKOSUMI_STAGING_DATABASE_URL
+ *   bun run db:migrate --env=production     # apply pending against $TAKOSUMI_PRODUCTION_DATABASE_URL
+ *   bun run db:migrate --env=local          # apply pending against an in-memory SqlClient
+ *   bun run db:migrate:dry-run              # print SQL preview only, do not apply
  *
  * The script is intentionally small: catalog + checksum + ordering live in
  * StorageMigrationRunner. This file only routes a SqlClient and prints output.
@@ -46,7 +46,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
   let help = false;
   for (const arg of argv) {
     if (arg === "--") {
-      // Forwarded by `deno task <name> -- ...`; ignore.
+      // Forwarded by some task runners; ignore.
       continue;
     } else if (arg === "--dry-run") {
       dryRun = true;
@@ -74,8 +74,8 @@ function printHelp(): void {
       "takosumi db migrate runner",
       "",
       "Usage:",
-      "  deno task db:migrate [--env=local|staging|production] [--dry-run]",
-      "  deno task db:migrate:dry-run",
+      "  bun run db:migrate [--env=local|staging|production] [--dry-run]",
+      "  bun run db:migrate:dry-run",
       "",
       "Env vars (read by --env):",
       "  --env=production   $TAKOSUMI_PRODUCTION_DATABASE_URL or $DATABASE_URL",
@@ -83,6 +83,18 @@ function printHelp(): void {
       "  --env=local        in-memory SqlClient (no network)",
     ].join("\n"),
   );
+}
+
+function runtimeArgs(): readonly string[] {
+  const bun = globalThis as typeof globalThis & {
+    Bun?: { argv?: readonly string[] };
+  };
+  if (Array.isArray(bun.Bun?.argv)) return bun.Bun.argv.slice(2);
+  return process.argv.slice(2);
+}
+
+function exitProcess(code: number): never {
+  process.exit(code);
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +329,7 @@ async function resolveTarget(env: EnvName): Promise<ResolvedTarget> {
     : ["TAKOSUMI_STAGING_DATABASE_URL", "DATABASE_URL"];
   let url: string | undefined;
   for (const key of candidates) {
-    const value = Deno.env.get(key);
+    const value = process.env[key];
     if (value && value.length > 0) {
       url = value;
       break;
@@ -353,7 +365,7 @@ function formatPreview(migration: StorageMigrationStatement): string {
 async function main(): Promise<number> {
   let options: CliOptions;
   try {
-    options = parseArgs(Deno.args);
+    options = parseArgs(runtimeArgs());
   } catch (error) {
     console.error(`error: ${(error as Error).message}`);
     printHelp();
@@ -429,5 +441,5 @@ async function main(): Promise<number> {
 
 if (import.meta.main) {
   const code = await main();
-  Deno.exit(code);
+  exitProcess(code);
 }

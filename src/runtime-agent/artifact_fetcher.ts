@@ -29,6 +29,7 @@
  */
 
 import type { JsonObject } from "takosumi-contract/reference/types";
+import { readRuntimeEnv } from "./runtime.ts";
 
 export interface FetchedArtifact {
   readonly bytes: Uint8Array;
@@ -95,10 +96,7 @@ function artifactMaxBytes(): number {
 }
 
 function readPositiveIntEnv(name: string, fallback: number): number {
-  // Env reads go through the runtime adapter boundary in kernel core; the
-  // runtime-agent host is a Deno process, so a direct guarded read is fine
-  // here. Mirrors prepared_source_reader.ts's env helper.
-  const raw = Deno.env.get(name);
+  const raw = readRuntimeEnv(name);
   if (raw === undefined || raw.length === 0) return fallback;
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;

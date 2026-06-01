@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-env --allow-net
+#!/usr/bin/env bun
 
 import { fileURLToPath } from "node:url";
 import { basename, join } from "node:path";
@@ -49,9 +49,9 @@ export interface AggregateProviderProofReport {
   readonly reports: readonly ProviderProofReport[];
 }
 
-export async function main(args = Deno.args): Promise<number> {
+export async function main(args = process.argv.slice(2)): Promise<number> {
   try {
-    const options = parseOptions(args, Deno.env.toObject());
+    const options = parseOptions(args, envObject());
     const report = await runFromOptions(options);
     console.log(JSON.stringify(report, null, 2));
     return report.status === "passed" ? 0 : 1;
@@ -118,7 +118,7 @@ export async function runBundledFixtureProof(): Promise<
 export async function loadProofFixture(
   fixtureFile: string,
 ): Promise<ProviderProofFixture> {
-  const raw = JSON.parse(await Deno.readTextFile(fixtureFile));
+  const raw = JSON.parse(await Bun.file(fixtureFile).text());
   if (isProviderProofEnvelope(raw)) {
     assertProviderProofFixture(raw);
     return normalizeProofFixture(raw);
@@ -965,5 +965,13 @@ function now(): string {
 }
 
 if (import.meta.main) {
-  Deno.exit(await main());
+  process.exit(await main());
+}
+
+function envObject(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] =>
+      typeof entry[1] === "string"
+    ),
+  );
 }

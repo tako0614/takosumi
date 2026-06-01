@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
 import {
   loadProofFixture,
   manifestToProofFixture,
@@ -8,9 +10,9 @@ import {
 } from "./live-provisioning-smoke.ts";
 import type { ProviderProofFixture } from "./provider-proof.ts";
 
-Deno.test("manifestToProofFixture maps bundled manifests to runtime desired state", async () => {
+test("manifestToProofFixture maps bundled manifests to runtime desired state", async () => {
   const manifest = JSON.parse(
-    await Deno.readTextFile("fixtures/live-provisioning/aws.shape-v1.json"),
+    await readFile("fixtures/live-provisioning/aws.shape-v1.json", "utf8"),
   );
   const fixture = manifestToProofFixture(manifest, "aws.shape-v1.json");
 
@@ -26,7 +28,7 @@ Deno.test("manifestToProofFixture maps bundled manifests to runtime desired stat
   ]);
 });
 
-Deno.test("runBundledFixtureProof validates all credential-free provider fixtures", async () => {
+test("runBundledFixtureProof validates all credential-free provider fixtures", async () => {
   const report = await runBundledFixtureProof();
 
   assert.equal(report.status, "passed");
@@ -42,7 +44,7 @@ Deno.test("runBundledFixtureProof validates all credential-free provider fixture
   ]);
 });
 
-Deno.test("selfhost fixture is first-class provider proof", async () => {
+test("selfhost fixture is first-class provider proof", async () => {
   const fixture = await loadProofFixture(
     "fixtures/live-provisioning/selfhosted.shape-v1.json",
   );
@@ -56,15 +58,17 @@ Deno.test("selfhost fixture is first-class provider proof", async () => {
   ]);
 });
 
-Deno.test("manifestToProofFixture treats local DNS as a support provider", async () => {
+test("manifestToProofFixture treats local DNS as a support provider", async () => {
   const kubernetesManifest = JSON.parse(
-    await Deno.readTextFile(
+    await readFile(
       "fixtures/live-provisioning/kubernetes.shape-v1.json",
+      "utf8",
     ),
   );
   const selfhostManifest = JSON.parse(
-    await Deno.readTextFile(
+    await readFile(
       "fixtures/live-provisioning/selfhosted.shape-v1.json",
+      "utf8",
     ),
   );
 
@@ -78,7 +82,7 @@ Deno.test("manifestToProofFixture treats local DNS as a support provider", async
   );
 });
 
-Deno.test("runFixtureProof materializes verifies and tears down expected descriptors", async () => {
+test("runFixtureProof materializes verifies and tears down expected descriptors", async () => {
   const fixture = await loadProofFixture(
     "fixtures/live-provisioning/cloudflare.shape-v1.json",
   );
@@ -89,7 +93,7 @@ Deno.test("runFixtureProof materializes verifies and tears down expected descrip
   assert.equal(report.operations.length, fixture.expectedDescriptors.length);
 });
 
-Deno.test("runLiveProof posts to gateway and validates returned descriptors", async () => {
+test("runLiveProof posts to gateway and validates returned descriptors", async () => {
   const fixture = proofFixture();
   const calls: string[] = [];
   const report = await runLiveProof(fixture, { baseUrl: "https://gw.test" }, {
@@ -131,7 +135,7 @@ Deno.test("runLiveProof posts to gateway and validates returned descriptors", as
   ]);
 });
 
-Deno.test("runLiveProof cleanup-only tears down and clears gateway operations", async () => {
+test("runLiveProof cleanup-only tears down and clears gateway operations", async () => {
   const fixture = proofFixture();
   const calls: string[] = [];
   const report = await runLiveProof(fixture, { baseUrl: "https://gw.test" }, {

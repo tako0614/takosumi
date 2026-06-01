@@ -1,6 +1,6 @@
 /**
- * Public installer HTTP surface — 5 endpoints exposing the AppSpec /
- * Installation / Deployment public concept set.
+ * Public installer HTTP surface — 5 endpoints exposing the manifestless
+ * Source / Installation / Deployment / PlatformService concept set.
  *
  * Wave 5 implementation: handlers delegate to `InstallerPipeline`. When
  * no pipeline is injected, the routes fall back to 501 not_implemented so
@@ -12,7 +12,7 @@
  *   POST /v1/installations/{id}/deployments
  *   POST /v1/installations/{id}/rollback
  *
- * Wire shape is the 1:1 mirror of `@takos/takosumi-contract/installer-api`.
+ * Wire shape is the 1:1 mirror of `@takosjp/takosumi/contract/installer-api`.
  *
  * Hardening (Wave M-Fix Agent 3):
  *
@@ -112,10 +112,16 @@ const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
  * sees which key was rejected.
  */
 const ALLOWED_KEYS: Record<InstallerRouteName, ReadonlySet<string>> = {
-  installationDryRun: new Set(["spaceId", "source"]),
-  installationApply: new Set(["spaceId", "source", "expected"]),
-  deploymentDryRun: new Set(["source"]),
-  deploymentApply: new Set(["source", "expected"]),
+  installationDryRun: new Set(["spaceId", "source", "profile", "bindings"]),
+  installationApply: new Set([
+    "spaceId",
+    "source",
+    "profile",
+    "bindings",
+    "expected",
+  ]),
+  deploymentDryRun: new Set(["source", "profile", "bindings"]),
+  deploymentApply: new Set(["source", "profile", "bindings", "expected"]),
   rollback: new Set(["deploymentId"]),
 };
 

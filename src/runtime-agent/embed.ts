@@ -18,6 +18,7 @@ import {
   LIFECYCLE_AGENT_URL_ENV,
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { ConnectorRegistry } from "./connectors/mod.ts";
+import { setRuntimeEnv } from "./runtime.ts";
 import { type ServeHandle, serveRuntimeAgent } from "./server.ts";
 
 export interface EmbedOptions {
@@ -32,7 +33,7 @@ export interface EmbedOptions {
   readonly env?: Record<string, string | undefined>;
   /** Override token (default: random hex). */
   readonly token?: string;
-  /** When true, mutate `Deno.env` so the kernel picks up agentUrl/token automatically. */
+  /** When true, export agentUrl/token to the current process env. */
   readonly exportToProcessEnv?: boolean;
 }
 
@@ -52,8 +53,8 @@ export function startEmbeddedAgent(
     token,
   });
   if (options.exportToProcessEnv !== false) {
-    Deno.env.set(LIFECYCLE_AGENT_URL_ENV, handle.url);
-    Deno.env.set(LIFECYCLE_AGENT_TOKEN_ENV, token);
+    setRuntimeEnv(LIFECYCLE_AGENT_URL_ENV, handle.url);
+    setRuntimeEnv(LIFECYCLE_AGENT_TOKEN_ENV, token);
   }
   return Object.freeze({ ...handle, token });
 }

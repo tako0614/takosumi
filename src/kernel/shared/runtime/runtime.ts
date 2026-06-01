@@ -53,7 +53,7 @@ export interface FsAdapter {
   /**
    * Create a uniquely-named temporary directory and return its absolute
    * path. Used by the installer pipeline to stage git / prepared source
-   * checkouts before reading the AppSpec. Available on Deno and Node;
+   * checkouts before reading the InternalDeploySpec. Available on Deno and Node;
    * throws on Workers (`makeTempDir` → `Deno.makeTempDir` /
    * `node:fs/promises#mkdtemp`).
    */
