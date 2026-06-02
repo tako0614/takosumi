@@ -17,7 +17,7 @@
 - [ビルドサービス例](../operator/build-service-profile.md) — Linux container を使う build service profile の非規定例。
 - Runtime-agent details live in repository-local operator notes; public v1
   focuses on PlatformService bindings.
-- [Takosumi を拡張する](../extending.md) — PlatformService inventory importer / runtime-agent connector / backend adapter の境界。
+- [Takosumi を拡張する](../extending.md) — PlatformService inventory importer / runtime-agent runtime handler / backend adapter の境界。
 
 ## Retired material
 

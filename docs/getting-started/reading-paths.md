@@ -33,7 +33,7 @@
 5. [Takosumi Accounts workload platform services](https://accounts.takosumi.com/docs/ja/workload-platform-services)
 6. [Deploy Facade](https://accounts.takosumi.com/docs/ja/deploy-facade)
 
-## Extension / connector を作る人 {#provider-extension-authors}
+## Extension / runtime handler を作る人 {#provider-extension-authors}
 
 1. [Takosumi を拡張する](../extending.md)
 2. [仕様境界](../reference/spec-boundaries.md)

@@ -47,17 +47,17 @@ snapshot は Takosumi reference 実装が Deployment に紐づく記録を説明
 
 これらは reference implementation が apply / observe / recovery を fail-safe に進めるための record です。顧客向け approval UI や account role model は operator account layer に置きます。
 
-## Reference Implementation, Connector, And asset Records
+## Reference Implementation, Runtime handler, And asset Records
 
 | Record                         | 役割                                                                                 |
 | ------------------------------ | ------------------------------------------------------------------------------------ |
-| `OperatorImplementationConfig` | operator が attach した implementation binding / connector inventory。               |
-| `ImplementationRegistry`       | operator が attach した implementation binding / connector の registry view。        |
-| `ConnectorDescriptor`          | runtime-agent connector の id、accepted asset metadata、health。                     |
+| `OperatorImplementationConfig` | operator が attach した implementation binding / runtime handler inventory。               |
+| `ImplementationRegistry`       | operator が attach した implementation binding / runtime handler の registry view。        |
+| `Runtime handlerDescriptor`          | runtime-agent runtime handler の id、accepted asset metadata、health。                     |
 | `assetRecord`                  | optional operator asset extension の digest、size、retention metadata。              |
 | `SecretPartitionReference`     | secret store partition の logical reference。secret value は secret backend に置く。 |
 
-asset retention は [asset GC](./data-asset-gc.md)、connector envelope は [Connector Guide](./connector-contract.md)。
+asset retention は [asset GC](./data-asset-gc.md)、runtime handler envelope は [Runtime Handler Guide](./runtime-handler-contract.md)。
 
 ## Audit
 

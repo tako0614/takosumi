@@ -7,7 +7,7 @@
 # Cloudflare Workers.
 #
 # The service and runtime-agent here do NOT depend on Cloudflare D1 or
-# R2; they use Postgres + MinIO via local adapter connectors.
+# R2; they use Postgres + MinIO via local adapter handlers.
 
 services:
   postgres:

@@ -1,6 +1,6 @@
 # Takosumi AWS Kind Runbook
 
-This directory documents the AWS surface as **operator-owned scope**. AWS lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent connector wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on AWS infrastructure is also the operator's responsibility.
+This directory documents the AWS surface as **operator-owned scope**. AWS lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent runtime handler wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on AWS infrastructure is also the operator's responsibility.
 
 ## Why no reference deploy here
 
@@ -8,7 +8,7 @@ The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy
 
 ## Required runtime shape
 
-The AWS connectors talk to the AWS API directly via SigV4-signed fetch calls (no AWS SDK dependency). They expect:
+The AWS runtime handlers talk to the AWS API directly via SigV4-signed fetch calls (no AWS SDK dependency). They expect:
 
 - AWS credentials supplied via `TAKOSUMI_AWS_ACCESS_KEY_ID` / `TAKOSUMI_AWS_SECRET_ACCESS_KEY` env vars on the runtime-agent process, or via instance role / IRSA when running on AWS compute.
 - A Postgres database for service state (`TAKOSUMI_DATABASE_URL`).

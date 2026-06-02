@@ -19,7 +19,7 @@ Deployment
 - Deployment は Installation に対する apply 履歴。
 - rollback は `POST /v1/installations/{id}/rollback` で current pointer を保持済み Deployment に戻す。
 
-Deployment の runtime side effect は operator-selected execution によって実体化されます。runtime-agent、backend connector、in-process controller、OpenTofu workflow などの packaging は operator implementation の選択です。
+Deployment の runtime side effect は operator-selected execution によって実体化されます。runtime-agent、backend runtime handler、in-process controller、OpenTofu workflow などの packaging は operator implementation の選択です。
 
 ## Workflow Placement {#workflow-placement}
 

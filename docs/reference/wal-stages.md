@@ -9,7 +9,7 @@ apply pipeline の各 phase は本ページの stage を駆動し、 recovery / 
 | Stage         | actual-effects 書き込み         | CleanupBacklog キュー | approval re-validation               | 失敗時の遷移先                          |
 | ------------- | ------------------------------- | --------------------- | ------------------------------------ | --------------------------------------- |
 | `prepare`     | no                              | no                    | yes (entry 起動時)                   | `abort`                                 |
-| `pre-commit`  | no                              | no                    | yes (backend connector verification) | `abort`                                 |
+| `pre-commit`  | no                              | no                    | yes (backend runtime handler verification) | `abort`                                 |
 | `commit`      | yes                             | no                    | no                                   | `abort` / `commit` retry                |
 | `post-commit` | no (evidence / projection only) | yes                   | no                                   | `observe` 続行 / CleanupBacklog enqueue |
 | `observe`     | no (read-only)                  | yes                   | no                                   | `finalize` / `observe` 継続             |
@@ -20,8 +20,8 @@ apply pipeline の各 phase は本ページの stage を駆動し、 recovery / 
 stage 意味:
 
 - `prepare`: OperationPlan 確定 / idempotency key 割当 / approval binding 再評価。 actual-effects 書込なし。失敗は `abort`。
-- `pre-commit`: backend connector verification と external バリデーション (credential reachability / collision check / freshness re-confirm) を fail-closed で確認。 actual-effects 書込なし。失敗は `abort`。
-- `commit`: connector / runtime-agent 経由で external system を実際に変更。 actual-effects はこの stage のみで書込。 retry は idempotency key 一致前提で冪等。回復不能失敗は `abort`。
+- `pre-commit`: backend runtime handler verification と external バリデーション (credential reachability / collision check / freshness re-confirm) を fail-closed で確認。 actual-effects 書込なし。失敗は `abort`。
+- `commit`: runtime handler / runtime-agent 経由で external system を実際に変更。 actual-effects はこの stage のみで書込。 retry は idempotency key 一致前提で冪等。回復不能失敗は `abort`。
 - `post-commit`: commit 後の evidence / projection / metadata sync を記録する。resource side effect は新規に実行しない。external cleanup が完了できないときは CleanupBacklog を `external-revoke` / `link-revoke` reason で enqueue。
 - `observe`: long-lived な read-only stage。 runtime-agent describe を吸って health 観測 / DriftIndex / CleanupBacklog 候補を更新。 stage 自身は actual-effects を変更しません。
 - `finalize`: managed / generated lifecycle class の cleanup 完了。 external / operator / imported は触らず、 cleanup 不能な generated material は CleanupBacklog に残します。
@@ -90,7 +90,7 @@ WAL を読み直すときの規則:
 2. 同じ tuple + 異なる effect digest → hard-fail。 Takosumi は `failed_precondition` で reject (ResolvedPlan 変化で `operationPlanDigest` も変わる invariant に依拠)
 3. tuple 一部欠損 (例: WAL header は読めるが entry body 破損) → recovery mode 経由でしか進行不可。 mode 選択は [Recovery modes](./lifecycle.md#recovery-modes) 参照
 
-`actual-effects-overflow` Risk 発火 entry は replay 時必ず `inspect` mode で確認してから他 mode に進めます。 `continue` で進める前に overflow の origin connector を operator が手動 resolve する必要があります。
+`actual-effects-overflow` Risk 発火 entry は replay 時必ず `inspect` mode で確認してから他 mode に進めます。 `continue` で進める前に overflow の origin runtime handler を operator が手動 resolve する必要があります。
 
 Reference internal recovery modes:
 

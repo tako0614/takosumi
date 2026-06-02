@@ -32,7 +32,7 @@ Bun.serve({ port: 8788, fetch: app.fetch });
 
 Credential や cloud SDK のアクセスは runtime-agent または operator host に留めます。
 adapter はテスト用の in-memory lifecycle と本番配線用の lifecycle-client option
-を公開できます。どの connector credential を配置するかは operator distribution
+を公開できます。どの runtime handler credential を配置するかは operator distribution
 が決定します。
 
 ## 関連ページ

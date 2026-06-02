@@ -99,7 +99,7 @@ asset の扱いは [asset Policy](./data-asset-policy.md) と [asset GC](./data-
 unknown | healthy | degraded | unhealthy
 ```
 
-connector / runtime observation の reference value です。
+runtime handler / runtime observation の reference value です。
 
 ## Domain error code
 
@@ -111,13 +111,13 @@ readiness_probe_failed | internal_error
 
 HTTP status への対応は reference Takosumi の [Reference Takosumi Route Inventory](./service-http-api.md) にあります。Installer API が返す public error code subset は [Installer API](./installer-api.md#error-envelope) が正本です。
 
-## Connector identity
+## Runtime handler identity
 
 ```txt
-connector:<id>
+runtime-handler:<id>
 ```
 
-`connector:<id>` は current reference operator registry の compatibility wire format です。Source repository や Installer API caller が mint / address する値ではありません。 runtime-agent lifecycle dispatch key は `(shape, provider)` です。詳細は [Connector Guide](./connector-contract.md) 参照。
+`runtime-handler:<id>` は current reference operator registry の compatibility wire format です。Source repository や Installer API caller が mint / address する値ではありません。 runtime-agent lifecycle dispatch key は `(shape, provider)` です。詳細は [Runtime Handler Guide](./runtime-handler-contract.md) 参照。
 
 ## 関連ページ
 
@@ -125,4 +125,4 @@ connector:<id>
 - [WAL Stages](./wal-stages.md)
 - [Reference Takosumi Route Inventory](./service-http-api.md)
 - [Risk Taxonomy](./risk-taxonomy.md)
-- [Connector Guide](./connector-contract.md)
+- [Runtime Handler Guide](./runtime-handler-contract.md)

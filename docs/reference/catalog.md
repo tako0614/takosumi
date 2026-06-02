@@ -20,7 +20,7 @@ Takosumi が catalog から受け取るもの:
 - Deployment `bindingsSnapshot`
 - Deployment `outputs`
 
-backend-specific adapters、runtime-agent connectors、OpenTofu modules、provider
+backend-specific adapters、runtime-agent handlers、OpenTofu modules、provider
 controllers は operator implementation です。Takosumi の public v1 は
 Source / Installation / Deployment / PlatformService / InstallPlan に閉じます。
 

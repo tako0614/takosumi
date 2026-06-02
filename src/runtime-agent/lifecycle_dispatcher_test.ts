@@ -1,14 +1,14 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { ConnectorRegistry } from "./connectors/mod.ts";
+import { RuntimeHandlerRegistry } from "./handlers.ts";
 import {
   ArtifactKindMismatchError,
-  ConnectorNotFoundError,
+  RuntimeHandlerNotFoundError,
   LifecycleDispatcher,
 } from "./lifecycle_dispatcher.ts";
 
-test("dispatcher throws ConnectorNotFoundError for unknown shape/provider", () => {
-  const dispatcher = new LifecycleDispatcher(new ConnectorRegistry());
+test("dispatcher throws RuntimeHandlerNotFoundError for unknown shape/provider", () => {
+  const dispatcher = new LifecycleDispatcher(new RuntimeHandlerRegistry());
   assert.throws(
     () =>
       dispatcher.apply({
@@ -18,12 +18,12 @@ test("dispatcher throws ConnectorNotFoundError for unknown shape/provider", () =
         resourceName: "x",
         spec: {},
       }),
-    ConnectorNotFoundError,
+    RuntimeHandlerNotFoundError,
   );
 });
 
 test("dispatcher rejects request whose artifact.kind is not accepted", () => {
-  const reg = new ConnectorRegistry();
+  const reg = new RuntimeHandlerRegistry();
   reg.register({
     provider: "lambda",
     shape: "function@v1",
@@ -54,7 +54,7 @@ test("dispatcher rejects request whose artifact.kind is not accepted", () => {
 });
 
 test("dispatcher accepts spec.image shorthand as oci-image kind", async () => {
-  const reg = new ConnectorRegistry();
+  const reg = new RuntimeHandlerRegistry();
   let received: unknown;
   reg.register({
     provider: "fargate-fake",
@@ -87,7 +87,7 @@ test("dispatcher accepts spec.image shorthand as oci-image kind", async () => {
 });
 
 test("dispatcher accepts new artifact.kind matching accepted list", async () => {
-  const reg = new ConnectorRegistry();
+  const reg = new RuntimeHandlerRegistry();
   reg.register({
     provider: "static-host",
     shape: "web-service@v1",
@@ -111,8 +111,8 @@ test("dispatcher accepts new artifact.kind matching accepted list", async () => 
   assert.equal(res.handle, "h");
 });
 
-test("dispatcher passes ConnectorContext through to connector.apply", async () => {
-  const reg = new ConnectorRegistry();
+test("dispatcher passes RuntimeHandlerContext through to handler.apply", async () => {
+  const reg = new RuntimeHandlerRegistry();
   let seenCtx: { fetcher?: unknown } | undefined;
   reg.register({
     provider: "ctx-test",
@@ -142,7 +142,7 @@ test("dispatcher passes ConnectorContext through to connector.apply", async () =
 });
 
 test("dispatcher skips kind validation when spec has no artifact and no image", async () => {
-  const reg = new ConnectorRegistry();
+  const reg = new RuntimeHandlerRegistry();
   reg.register({
     provider: "no-artifact",
     shape: "postgres@v1",
@@ -162,8 +162,8 @@ test("dispatcher skips kind validation when spec has no artifact and no image", 
   assert.equal(res.handle, "h");
 });
 
-test("dispatcher routes compensate to connector hook when present", async () => {
-  const reg = new ConnectorRegistry();
+test("dispatcher routes compensate to handler hook when present", async () => {
+  const reg = new RuntimeHandlerRegistry();
   let seenHandle = "";
   reg.register({
     provider: "compensating",
@@ -189,7 +189,7 @@ test("dispatcher routes compensate to connector hook when present", async () => 
 });
 
 test("dispatcher falls back to destroy when compensate hook is absent", async () => {
-  const reg = new ConnectorRegistry();
+  const reg = new RuntimeHandlerRegistry();
   let destroyed = "";
   reg.register({
     provider: "destroy-fallback",

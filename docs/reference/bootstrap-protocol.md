@@ -8,7 +8,7 @@ Takosumi bootstrap が担うこと:
 - secret partition と master key を init する
 - cross-process lock store を init する
 - reference operator credential を発行し token を operator に渡す
-- operator binding / PlatformService inventory / connector inventory を確認する
+- operator binding / PlatformService inventory / runtime handler inventory を確認する
 - audit chain の genesis event を書く
 - listener を open する
 
@@ -75,7 +75,7 @@ Bootstrap 完了後に operator が service を操作するための初期 crede
 
 ## Stage 5 — operator-implementation-load
 
-operator distribution が service 起動時に渡した implementation binding、runtime-agent connector inventory、PlatformService inventory resolver を検証する。
+operator distribution が service 起動時に渡した implementation binding、runtime-agent runtime handler inventory、PlatformService inventory resolver を検証する。
 
 - production / staging では selected implementation が 1 つ以上必要
 - required PlatformService resolver が未設定なら stage abort

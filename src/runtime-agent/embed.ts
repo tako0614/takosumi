@@ -2,9 +2,9 @@
  * Embedded runtime-agent.
  *
  * Allows the service (or CLI) to spawn an in-process runtime-agent for
- * single-VM development. Operators pass the connector registry they want to
+ * single-VM development. Operators pass the handler registry they want to
  * expose; the runtime-agent package itself does not auto-load backend
- * connectors. A random bearer token is generated and exported via
+ * handlers. A random bearer token is generated and exported via
  * `TAKOSUMI_AGENT_TOKEN` so the service's implementation client picks it up
  * automatically.
  *
@@ -17,17 +17,17 @@ import {
   LIFECYCLE_AGENT_TOKEN_ENV,
   LIFECYCLE_AGENT_URL_ENV,
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
-import { ConnectorRegistry } from "./connectors/mod.ts";
+import { RuntimeHandlerRegistry } from "./handlers.ts";
 import { setRuntimeEnv } from "./runtime.ts";
 import { type ServeHandle, serveRuntimeAgent } from "./server.ts";
 
 export interface EmbedOptions {
   readonly port?: number;
   readonly hostname?: string;
-  /** Optional explicit connector registry. Defaults to an empty registry. */
-  readonly registry?: ConnectorRegistry;
+  /** Optional explicit handler registry. Defaults to an empty registry. */
+  readonly registry?: RuntimeHandlerRegistry;
   /**
-   * Deprecated compatibility field. Connector discovery is operator-owned;
+   * Deprecated compatibility field. RuntimeHandler discovery is operator-owned;
    * this value is no longer inspected by the generic runtime-agent package.
    */
   readonly env?: Record<string, string | undefined>;
@@ -45,7 +45,7 @@ export function startEmbeddedAgent(
   options: EmbedOptions = {},
 ): EmbeddedAgentHandle {
   const token = options.token ?? randomToken();
-  const registry = options.registry ?? new ConnectorRegistry();
+  const registry = options.registry ?? new RuntimeHandlerRegistry();
   const handle = serveRuntimeAgent({
     port: options.port,
     hostname: options.hostname,

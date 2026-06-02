@@ -6,8 +6,8 @@ import type {
   LifecycleDescribeResponse,
   LifecycleDestroyResponse,
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
-import type { Connector } from "./connector.ts";
-import { withConnectorResilience } from "./resilience.ts";
+import type { RuntimeHandler } from "./handlers.ts";
+import { withRuntimeHandlerResilience } from "./handler_resilience.ts";
 
 const applyReq: LifecycleApplyRequest = {
   shape: "object-store@v1",
@@ -17,17 +17,17 @@ const applyReq: LifecycleApplyRequest = {
   spec: { name: "bucket" },
 };
 
-test("withConnectorResilience retries transient connector errors", async () => {
+test("withRuntimeHandlerResilience retries transient handler errors", async () => {
   const delays: number[] = [];
   let calls = 0;
-  const connector = testConnector({
+  const handler = testRuntimeHandler({
     apply: () => {
       calls++;
       if (calls === 1) return Promise.reject(new Error("HTTP 503"));
       return Promise.resolve({ handle: "ok", outputs: {} });
     },
   });
-  const wrapped = withConnectorResilience(connector, {
+  const wrapped = withRuntimeHandlerResilience(handler, {
     attempts: 3,
     baseDelayMs: 10,
     sleep: (delayMs) => {
@@ -43,15 +43,15 @@ test("withConnectorResilience retries transient connector errors", async () => {
   assert.deepEqual(delays, [10]);
 });
 
-test("withConnectorResilience does not retry non-transient errors", async () => {
+test("withRuntimeHandlerResilience does not retry non-transient errors", async () => {
   let calls = 0;
-  const connector = testConnector({
+  const handler = testRuntimeHandler({
     apply: () => {
       calls++;
       return Promise.reject(new Error("HTTP 400 invalid spec"));
     },
   });
-  const wrapped = withConnectorResilience(connector, {
+  const wrapped = withRuntimeHandlerResilience(handler, {
     attempts: 3,
     sleep: () => {
       throw new Error("should not sleep");
@@ -65,17 +65,17 @@ test("withConnectorResilience does not retry non-transient errors", async () => 
   assert.equal(calls, 1);
 });
 
-test("withConnectorResilience refreshes credentials before retry", async () => {
+test("withRuntimeHandlerResilience refreshes credentials before retry", async () => {
   let calls = 0;
   let refreshes = 0;
-  const connector = testConnector({
+  const handler = testRuntimeHandler({
     apply: () => {
       calls++;
       if (calls === 1) return Promise.reject(new Error("HTTP 401 expired"));
       return Promise.resolve({ handle: "fresh", outputs: {} });
     },
   });
-  const wrapped = withConnectorResilience(connector, {
+  const wrapped = withRuntimeHandlerResilience(handler, {
     attempts: 2,
     refreshCredentials: (ctx) => {
       refreshes++;
@@ -92,15 +92,15 @@ test("withConnectorResilience refreshes credentials before retry", async () => {
   assert.equal(refreshes, 1);
 });
 
-test("withConnectorResilience surfaces the final retry error", async () => {
+test("withRuntimeHandlerResilience surfaces the final retry error", async () => {
   let calls = 0;
-  const connector = testConnector({
+  const handler = testRuntimeHandler({
     apply: () => {
       calls++;
       return Promise.reject(new TypeError("network offline"));
     },
   });
-  const wrapped = withConnectorResilience(connector, {
+  const wrapped = withRuntimeHandlerResilience(handler, {
     attempts: 2,
     sleep: () => Promise.resolve(),
   });
@@ -112,12 +112,12 @@ test("withConnectorResilience surfaces the final retry error", async () => {
   assert.equal(calls, 2);
 });
 
-test("withConnectorResilience can be disabled", () => {
-  const connector = testConnector();
-  assert.equal(withConnectorResilience(connector, false), connector);
+test("withRuntimeHandlerResilience can be disabled", () => {
+  const handler = testRuntimeHandler();
+  assert.equal(withRuntimeHandlerResilience(handler, false), handler);
 });
 
-function testConnector(overrides: Partial<Connector> = {}): Connector {
+function testRuntimeHandler(overrides: Partial<RuntimeHandler> = {}): RuntimeHandler {
   return {
     provider: "@takos/test",
     shape: "object-store@v1",

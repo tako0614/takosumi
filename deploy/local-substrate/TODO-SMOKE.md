@@ -8,9 +8,9 @@ Takosumi-only 化に伴い `yurucommu-a` / `yurucommu-b` の直起動 + federati
 
 必要な infra:
 
-1. **`@takos/local-miniflare-workers` connector** — `factories/local-substrate-factories.ts` に register。 source fixture の `worker` component spec を受けて miniflare instance を spawn し、source fixture が要求する D1 / R2 / KV / Queue / DO binding を動的 allocate する。現状 hand-rolled な `takosumi-worker` / `takosumi-service-worker` と同じ pattern を generic 化する。
-2. **prepared source pipeline** — yurucommu / takos-app の repo に対して build service / CI が通常の package scripts を実行し、build 後の source tree を `source.kind: prepared` として installer に渡す。connector は build command を起動しない。
-3. **installer-mock の本物化** — 今は fixture JSON を返してるだけ。本物の Takosumi service の installer dry-run に寄せて connector の解決パスを通す。
+1. **`@takos/local-miniflare-workers` runtime handler** — `factories/local-substrate-factories.ts` に register。 source fixture の `worker` component spec を受けて miniflare instance を spawn し、source fixture が要求する D1 / R2 / KV / Queue / DO binding を動的 allocate する。現状 hand-rolled な `takosumi-worker` / `takosumi-service-worker` と同じ pattern を generic 化する。
+2. **prepared source pipeline** — yurucommu / takos-app の repo に対して build service / CI が通常の package scripts を実行し、build 後の source tree を `source.kind: prepared` として installer に渡す。runtime handler は build command を起動しない。
+3. **installer-mock の本物化** — 今は fixture JSON を返してるだけ。本物の Takosumi service の installer dry-run に寄せて runtime handler の解決パスを通す。
 4. **federation 復活 smoke** — `yurucommu install x2 → allocated subdomain x2
    → Follow→Accept poll` を新 federation-follow.sh で実現。
 

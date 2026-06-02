@@ -1,7 +1,7 @@
 /**
- * Prepared source reader for runtime-agent connectors.
+ * Prepared source reader for runtime-agent handlers.
  *
- * Source-backed connectors read files from an already-prepared source snapshot
+ * Source-backed handlers read files from an already-prepared source snapshot
  * instead of fetching artifact payloads by hash. Co-located agents can receive
  * a `workingDirectory`; remote agents can receive `url` + `digest` for a tar
  * snapshot that is verified and extracted per apply request.

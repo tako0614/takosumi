@@ -129,7 +129,7 @@ test("runtime-agent verify POSTs to /v1/lifecycle/verify and renders an ok row",
   },
 );
 
-test("runtime-agent verify exits non-zero and renders FAIL when any connector fails",
+test("runtime-agent verify exits non-zero and renders FAIL when any handler fails",
   async () => {
     const fakeResponse = {
       results: [

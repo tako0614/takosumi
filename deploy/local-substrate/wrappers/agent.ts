@@ -13,7 +13,7 @@
  *
  * The local substrate no longer imports a sibling provider package. OpenTofu /
  * provider materialization is operator-owned, so this agent starts with an
- * empty connector registry unless the operator wrapper supplies its own
+ * empty runtime handler registry unless the operator wrapper supplies its own
  * registry implementation.
  */
 import { serveRuntimeAgent } from "/workspace/src/runtime-agent/server.ts";
@@ -42,7 +42,7 @@ const agent = serveRuntimeAgent({
 
 console.log(
   `[local-substrate-agent] runtime-agent at ${agent.url} ` +
-    `(${registry.size()} connectors)`,
+    `(${registry.size()} runtime handlers)`,
 );
 
 const runtime = currentRuntime();

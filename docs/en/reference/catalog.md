@@ -19,7 +19,7 @@ Takosumi receives:
 - Deployment `bindingsSnapshot`
 - Deployment `outputs`
 
-Backend-specific adapters, runtime-agent connectors, OpenTofu modules, and
+Backend-specific adapters, runtime-agent handlers, OpenTofu modules, and
 provider controllers are operator implementation. Takosumi public v1 stays
 limited to Source, Installation, Deployment, PlatformService, and InstallPlan.
 

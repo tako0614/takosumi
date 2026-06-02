@@ -2,9 +2,8 @@
  * Runtime-agent lifecycle protocol.
  *
  * Service-side reference adapters are paper-thin HTTP clients. They post these
- * envelopes to a runtime-agent service which dispatches to a per-provider
- * connector (cloud SDK call or local OS call). Credentials live ONLY on the
- * runtime-agent host.
+ * envelopes to a runtime-agent service which dispatches to an operator-owned
+ * runtime handler. Credentials live ONLY on the runtime-agent host.
  *
  * Endpoints (runtime-agent HTTP API):
  *   POST /v1/lifecycle/apply
@@ -27,8 +26,8 @@ import type { JsonObject, JsonValue } from "./types.ts";
  *   pointing at a `takosumi artifact push`-uploaded blob
  *
  * DataAsset / artifact handling is an optional operator extension, not an
- * public Installer API concept. `kind` is intentionally open: operator connectors can
- * introduce new DataAsset metadata kinds while keeping the same wire shape.
+ * public Installer API concept. `kind` is intentionally open: operator handlers
+ * can introduce new DataAsset metadata kinds while keeping the same wire shape.
  */
 export interface Artifact {
   readonly kind: string;
@@ -36,7 +35,7 @@ export interface Artifact {
   readonly hash?: string;
   /** External pointer (OCI registry URI, https URL, etc). */
   readonly uri?: string;
-  /** DataAsset-backed connector metadata (handler / mime / abi / compatibility-date / …). */
+  /** DataAsset-backed handler metadata (handler / mime / abi / compatibility-date / ...). */
   readonly metadata?: JsonObject;
 }
 
@@ -60,7 +59,7 @@ export interface ArtifactStored {
 
 /**
  * Locator for an operator DataAsset endpoint. Reference dispatchers include
- * this only when the optional DataAsset extension is enabled and the connector
+ * this only when the optional DataAsset extension is enabled and the handler
  * may need to fetch uploaded bytes by hash. Token is scoped to read-only
  * DataAsset access.
  */
@@ -71,7 +70,7 @@ export interface ArtifactStoreLocator {
 
 /**
  * Locator for the already-prepared source snapshot used by source-backed
- * connectors. `workingDirectory` is for co-located service/agent setups;
+ * handlers. `workingDirectory` is for co-located service/agent setups;
  * `url` + `digest` is the portable form for remote agents.
  */
 export interface PreparedSourceLocator {
@@ -146,18 +145,18 @@ export function formatPlatformOperationIdempotencyKey(
 
 export interface LifecycleApplyRequest {
   /**
-   * Legacy connector-local shape selector (e.g. `object-store@v1`), derived by
+   * Runtime-handler-local shape selector (e.g. `object-store@v1`), derived by
    * the operator adapter from the component kind/materializer mapping.
    */
   readonly shape: string;
   /**
-   * Legacy connector-local provider selector (e.g. `aws-s3`, `filesystem`).
+   * Runtime-handler-local provider selector (e.g. `aws-s3`, `filesystem`).
    * This is runtime-agent dispatch metadata, not a public Installer API field.
    */
   readonly provider: string;
   readonly resourceName: string;
   /**
-   * Connector-local lifecycle input projected by the operator-selected
+   * Runtime-handler-local lifecycle input projected by the operator-selected
    * implementation adapter. It may be the public kind spec unchanged, or the
    * validated kind spec plus binding-derived runtime fields such as env or
    * gateway targets. It is not an open public Installer API extension point.
@@ -170,7 +169,7 @@ export interface LifecycleApplyRequest {
    * forwarded to external cloud APIs that accept their own idempotency
    * keys (= AWS S3 / GCP / etc). This is separate from the retired public
    * `X-Idempotency-Key` HTTP header: installer replay protection is via source
-   * pin + expected digest, while connector-level idempotency belongs to this
+   * pin + expected digest, while handler-level idempotency belongs to this
    * service ↔ runtime-agent RPC envelope.
    */
   readonly idempotencyKey?: string;
@@ -178,10 +177,10 @@ export interface LifecycleApplyRequest {
   readonly operationRequest?: PlatformOperationRequest;
   /** Optional metadata forwarded by service (audit trail, request id). */
   readonly metadata?: JsonObject;
-  /** Where the connector can fetch DataAsset bytes by hash, when spec carries
+  /** Where the handler can fetch DataAsset bytes by hash, when spec carries
    *  `artifact.hash`. Absent for pure pointer-based deploys. */
   readonly artifactStore?: ArtifactStoreLocator;
-  /** Prepared source snapshot locator for source-backed connectors. */
+  /** Prepared source snapshot locator for source-backed handlers. */
   readonly preparedSource?: PreparedSourceLocator;
 }
 
@@ -193,9 +192,9 @@ export interface LifecycleApplyResponse {
 }
 
 export interface LifecycleDestroyRequest {
-  /** Legacy connector-local shape selector for runtime-agent dispatch. */
+  /** Runtime-handler-local shape selector for runtime-agent dispatch. */
   readonly shape: string;
-  /** Legacy connector-local provider selector for runtime-agent dispatch. */
+  /** Runtime-handler-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
   readonly spaceId: string;
@@ -205,7 +204,7 @@ export interface LifecycleDestroyRequest {
    * forwarded to external cloud APIs that accept their own idempotency
    * keys (= AWS S3 / GCP / etc). This is separate from the retired public
    * `X-Idempotency-Key` HTTP header: installer replay protection is via source
-   * pin + expected digest, while connector-level idempotency belongs to this
+   * pin + expected digest, while handler-level idempotency belongs to this
    * service ↔ runtime-agent RPC envelope.
    */
   readonly idempotencyKey?: string;
@@ -221,9 +220,9 @@ export interface LifecycleDestroyResponse {
 }
 
 export interface LifecycleCompensateRequest {
-  /** Legacy connector-local shape selector for runtime-agent dispatch. */
+  /** Runtime-handler-local shape selector for runtime-agent dispatch. */
   readonly shape: string;
-  /** Legacy connector-local provider selector for runtime-agent dispatch. */
+  /** Runtime-handler-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
   readonly spaceId: string;
@@ -241,7 +240,7 @@ export interface LifecycleCompensateResponse {
   readonly ok: boolean;
   readonly note?: string;
   /**
-   * True when the connector could not fully reverse the effect and the service
+   * True when the handler could not fully reverse the effect and the service
    * must keep or open RevokeDebt for operator-visible cleanup.
    */
   readonly revokeDebtRequired?: boolean;
@@ -249,9 +248,9 @@ export interface LifecycleCompensateResponse {
 }
 
 export interface LifecycleDescribeRequest {
-  /** Legacy connector-local shape selector for runtime-agent dispatch. */
+  /** Runtime-handler-local shape selector for runtime-agent dispatch. */
   readonly shape: string;
-  /** Legacy connector-local provider selector for runtime-agent dispatch. */
+  /** Runtime-handler-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
   readonly spaceId: string;
@@ -301,7 +300,7 @@ export const LIFECYCLE_AGENT_URL_ENV = "TAKOSUMI_AGENT_URL" as const;
  * deployed distribution understands.
  *
  * `kind` is intentionally an open string at the protocol level; this
- * registry is purely a discovery / documentation layer. Connectors do
+ * registry is purely a discovery / documentation layer. Runtime handlers do
  * not have to consult it before producing or consuming an artifact —
  * but registering a kind makes it visible to operators and lets the
  * optional operator artifact extension apply per-kind size overrides.

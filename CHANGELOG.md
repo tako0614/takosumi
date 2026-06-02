@@ -16,8 +16,8 @@ The current package is the single npm stream `@takosjp/takosumi`.
 - Terraform/OpenTofu, provider credentials, account plane, billing, OIDC,
   dashboard, deploy facade, and PlatformService inventory are operator
   distribution responsibilities.
-- Reference backend adapters and runtime-agent connectors live in the sibling
-  `operator implementation` single package and are optional implementation pieces, not
+- Backend adapters, runtime-agent implementation code, and inventory importers
+  are operator distribution responsibilities, not a Takosumi package split or
   public Source authoring vocabulary.
 - Build and npm publication tasks are Bun-first.
 

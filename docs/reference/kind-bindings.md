@@ -15,7 +15,7 @@ implementation は同じ Deployment record を保ったまま、OpenTofu workflo
 
 - `src/contract/installer-api.ts` — public DTO
 - `src/service/domains/installer/` — Source / InstallPlan / Deployment lifecycle
-- operator distribution — optional adapters, connectors, inventory importers
+- operator distribution — optional adapters, runtime handlers, inventory importers
 
 ## Related
 

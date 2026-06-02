@@ -4,10 +4,10 @@ This page describes the operator backend implementation boundary.
 Takosumi v1 public contract is Source, Installation, Deployment,
 PlatformService, and InstallPlan.
 
-Takosumi does not publish a backend adapter package. Operators use OpenTofu,
-Helm, native controllers, workflow engines, SaaS adapters, or their own
-connectors, then connect the output to PlatformService inventory and Deployment
-evidence.
+Takosumi does not publish a backend adapter or runtime handler package. Operators use
+OpenTofu, Helm, native controllers, workflow engines, SaaS adapters, or their
+own runtime-agent implementation, then connect the output to PlatformService
+inventory and Deployment evidence.
 
 ## Ownership
 
@@ -15,12 +15,12 @@ evidence.
 | -------------------------- | ---------------------------------------- |
 | Installer API DTO          | `@takosjp/takosumi`                      |
 | Takosumi service runtime   | `@takosjp/takosumi`                      |
-| backend adapters           | operator distribution                 |
-| runtime-agent connectors   | operator distribution                 |
+| backend / runtime implementation | operator distribution            |
 | provider state / OpenTofu  | operator distribution / `takos-private/` |
 
-Backend implementation exports are operator choices. They are not required for
-compatible Takosumi operators and are not part of the public source contract.
+Backend / runtime implementation exports are operator choices. They are not
+required for compatible Takosumi operators and are not part of the public source
+contract.
 
 ## Related Pages
 

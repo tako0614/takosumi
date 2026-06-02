@@ -4,7 +4,7 @@
 内部設計メモ。public contract は [Installer API](./installer-api.md) を参照。
 :::
 
-Takosumi audit events cover install / deploy / rollback lifecycle の Deployment の記録。Reference/operator extension event families can add リソースの作成・更新、connector、and asset の記録。
+Takosumi audit events cover install / deploy / rollback lifecycle の Deployment の記録。Reference/operator extension event families can add リソースの作成・更新、runtime handler、and asset の記録。
 
 ## 共通 envelope
 
@@ -66,17 +66,17 @@ These events belong to a reference/operator policy profile. They are not additio
 | `cleanup-backlog-resolved` | notice   | CleanupBacklog が解消された。                           |
 | `drift-detected`           | warning  | observed state と desired state の drift が検出された。 |
 
-### Reference asset / Connector
+### Reference asset / Runtime handler
 
 | Type                       | Severity | 説明                                          |
 | -------------------------- | -------- | --------------------------------------------- |
 | `artifact-uploaded`        | info     | optional asset が受け付けられた。             |
 | `artifact-gc-marked`       | info     | asset GC が live set を mark した。           |
 | `artifact-gc-swept`        | notice   | asset GC が unreferenced asset を削除した。   |
-| `connector-registered`     | notice   | runtime-agent connector が登録された。        |
-| `connector-replaced`       | notice   | runtime-agent connector record が置換された。 |
-| `connector-revoked`        | notice   | runtime-agent connector が無効化された。      |
-| `connector-health-changed` | warning  | connector health が変化した。                 |
+| `runtime-handler-registered`     | notice   | runtime-agent runtime handler が登録された。        |
+| `runtime-handler-replaced`       | notice   | runtime-agent runtime handler record が置換された。 |
+| `runtime-handler-revoked`        | notice   | runtime-agent runtime handler が無効化された。      |
+| `runtime-handler-health-changed` | warning  | runtime handler health が変化した。                 |
 | `journal-compacted`        | info     | WAL base snapshot digest pair が更新された。  |
 
 ## Redaction

@@ -63,7 +63,7 @@ operator-selected adapters, not a Takosumi source authoring contract.
 | Key | Surface | Owner | Normative reference | Repository source | Published reference |
 | --- | --- | --- | --- | --- | --- |
 | `reference-adapter-metadata-v1` | adapter metadata / material helper vocabulary | reference implementation maintainers | [Reference Backend Binding](./kind-bindings.md) | `docs/kinds/v1/*.jsonld`, `spec/contexts/v1.jsonld`, `src/contract/catalog.ts` | `/kinds/v1/<name>.jsonld`, `/contexts/v1.jsonld` |
-| `reference-adapter-guide` | backend adapter and connector guide | operator-owned implementation wiring | [Reference Backend Packages](./kind-packages.md); [Reference Backend Binding](./kind-bindings.md) | operator distribution OpenTofu/native controller/runtime-agent connector code | implementation wiring adopted by operator distributions |
+| `reference-adapter-guide` | backend adapter and runtime handler guide | operator-owned implementation wiring | [Reference Backend Packages](./kind-packages.md); [Reference Backend Binding](./kind-bindings.md) | operator distribution OpenTofu/native controller/runtime-agent runtime handler code | implementation wiring adopted by operator distributions |
 
 ## Operator Profile Spec Map
 

@@ -24,7 +24,7 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 - `takos/` — Takos product 固有の test (`bun test` / Playwright 等)
 - `yurucommu/` — yurucommu 固有の test
 
-外部 app の `source fixture` 由来 fixture を installer mock で使うことはあるが、それは Takosumi の install contract を検証するための入力 fixture です。該当 product を local-substrate の service として直起動する運用は扱わない。「Takosumi 経由で yurucommu / takos-app を install して deploy する」統合シナリオは別タスク (`@takos/local-miniflare-workers` connector 実装が前提、 TODO-SMOKE.md 筆頭参照)。
+外部 app の `source fixture` 由来 fixture を installer mock で使うことはあるが、それは Takosumi の install contract を検証するための入力 fixture です。該当 product を local-substrate の service として直起動する運用は扱わない。「Takosumi 経由で yurucommu / takos-app を install して deploy する」統合シナリオは別タスク (`@takos/local-miniflare-workers` runtime handler 実装が前提、 TODO-SMOKE.md 筆頭参照)。
 
 ## Current smoke coverage (30 checks)
 
