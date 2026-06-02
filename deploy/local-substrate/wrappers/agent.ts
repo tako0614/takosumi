@@ -1,7 +1,7 @@
 /**
  * Boots the takosumi runtime-agent (execution plane) for the local-substrate.
  *
- * This is the execution half split out of `service-with-embedded-agent.ts`. In
+ * This is the execution half of the local substrate, paired with `cloud.ts`. In
  * the redesigned substrate the `cloud` control-plane service runs the composed
  * service + account-plane and dispatches source / lifecycle / capability
  * execution HERE over `TAKOSUMI_AGENT_URL` (+ `TAKOSUMI_AGENT_TOKEN`). Running

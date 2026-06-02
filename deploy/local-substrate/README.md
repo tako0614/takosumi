@@ -133,7 +133,8 @@ takosumi/deploy/local-substrate/
 ├── factories/
 │   └── local-substrate-factories.ts   # 公開 DNS provider import-time deny
 ├── wrappers/
-│   ├── service-with-embedded-agent.ts  # postgres profile service + agent in-process
+│   ├── cloud.ts                    # composed control-plane service + account-plane
+│   ├── agent.ts                    # runtime-agent (execution plane) over TAKOSUMI_AGENT_URL
 │   └── takosumi-service-worker-runner.mjs # local-only Miniflare D1/R2/Queue/DO runner
 ├── route-registrar/
 │   ├── package.json
