@@ -178,8 +178,9 @@ The source is Bun-first. Keep host-specific compatibility behind the existing ru
 ## Release
 
 Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace with Bun, builds the npm
-package through `bun run build:npm`, publishes `@takosjp/takosumi` to npm, and builds/pushes the `takosumi` OCI image to
-GHCR. Backend-specific implementation bundles are released by each operator distribution, not by this public package.
+package through `bun run build:npm`, and publishes `@takosjp/takosumi` to npm. Container images and backend-specific
+implementation bundles are materialized and released by each operator distribution (via OpenTofu), not by this public
+package.
 
 ## Docs Site
 

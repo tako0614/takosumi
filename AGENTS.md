@@ -38,7 +38,7 @@ takosumi/
 │   ├── service/          reference service implementation
 │   ├── runtime-agent/   runtime-agent host and lifecycle wire
 │   ├── cli/             CLI implementation
-│   └── entrypoints/     package subpath wrappers
+│   └── all/             package subpath wrappers
 ├── docs/
 ├── website/
 ├── deploy/
