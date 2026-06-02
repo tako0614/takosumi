@@ -1,6 +1,6 @@
 # Takosumi GCP Kind Runbook
 
-This directory documents the GCP surface as **operator-owned scope**. GCP lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent runtime handler wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on GCP infrastructure is also the operator's responsibility.
+This directory documents the GCP surface as **operator-owned scope**. GCP lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent handler wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on GCP infrastructure is also the operator's responsibility.
 
 ## Why no reference deploy here
 

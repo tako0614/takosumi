@@ -75,7 +75,7 @@ Bootstrap 完了後に operator が service を操作するための初期 crede
 
 ## Stage 5 — operator-implementation-load
 
-operator distribution が service 起動時に渡した implementation binding、runtime-agent runtime handler inventory、PlatformService inventory resolver を検証する。
+operator distribution が service 起動時に渡した implementation binding、runtime-agent handler inventory、PlatformService inventory resolver を検証する。
 
 - production / staging では selected implementation が 1 つ以上必要
 - required PlatformService resolver が未設定なら stage abort

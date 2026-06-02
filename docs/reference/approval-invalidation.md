@@ -43,7 +43,7 @@ Operator distributions may carry approval prompts, approval records, and account
 
 ### 5. operator implementation config change
 
-- **発火条件**: Space に visible な PlatformService inventory、implementation binding、runtime-agent runtime handler inventory、または operator policy による visibility が変更された。
+- **発火条件**: Space に visible な PlatformService inventory、implementation binding、runtime-agent handler inventory、または operator policy による visibility が変更された。
 - **検出 timing**: operator implementation config / Space visibility 操作の commit 完了直後。Takosumi service / operator approval profile は当該 Space に紐づく approval を resolve し直す。
 - **再評価範囲**: 新 implementation config で binding が同一なら approval を保持、binding が変わるなら影響 binding subset を `invalidated`。
 
