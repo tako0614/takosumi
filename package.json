@@ -39,8 +39,9 @@
     "./server": "./src/all/server.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit",
-    "test": "bun test ./src/ ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./packages/platform-services/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src",
+    "check": "tsc --noEmit && bun run check:cloudflare-worker-build",
+    "check:cloudflare-worker-build": "bun build --target browser --format esm deploy/cloudflare/src/worker.ts --outfile /tmp/takosumi-cloudflare-worker-check.mjs",
+    "test": "bun test ./src/ ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./packages/platform-services/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src ./deploy/cloudflare/src",
     "test:service": "bun test ./src/",
     "test:accounts": "bun test ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src",
     "test:scripts": "bun test ./scripts/",

@@ -249,7 +249,7 @@ services:
     profiles: ["postgres"]
     build:
       context: .
-      dockerfile: wrappers/Dockerfile.takosumi-worker
+      dockerfile: wrappers/Dockerfile.takosumi-accounts-worker
     restart: unless-stopped
     depends_on:
       takosumi-service-worker-build:
@@ -281,7 +281,7 @@ services:
     profiles: ["workers"]
     build:
       context: .
-      dockerfile: wrappers/Dockerfile.takosumi-worker
+      dockerfile: wrappers/Dockerfile.takosumi-accounts-worker
     restart: unless-stopped
     depends_on:
       takosumi-service-worker-build:
@@ -482,7 +482,7 @@ services:
     profiles: ["postgres", "workers"]
     build:
       context: .
-      dockerfile: wrappers/Dockerfile.takosumi-worker
+      dockerfile: wrappers/Dockerfile.takosumi-accounts-worker
     restart: unless-stopped
     depends_on:
       takosumi-worker-build:

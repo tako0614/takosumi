@@ -8,34 +8,10 @@ import {
   resetRuntimeForTesting,
   setRuntimeForTesting,
 } from "./index.ts";
-import { isNode, nodeRuntime } from "./node.ts";
+import { nodeRuntime } from "./node.ts";
 import type { SubprocessAdapter, SubprocessOutput } from "./runtime.ts";
 
 const realDenoTest = isDeno() ? test : test.skip;
-
-// EXPECTED-FAIL UNDER BUN (skipped): these assert Deno-only fallback semantics
-// that cannot hold under the Bun runtime. Under Bun there is intentionally no
-// global `Deno` compatibility preload, so `isDeno()` is false and `Deno.serve`
-// does not exist.
-test.skip("currentRuntime detects Deno when running on Deno", () => {
-    resetRuntimeForTesting();
-    expect(isDeno()).toBeTruthy();
-    const runtime = currentRuntime();
-    expect(runtime.kind).toEqual("deno");
-  });
-
-test.skip("isDeno wins over isNode on the host (Deno also reports process.versions.node)", () => {
-    // Deno 2.x exposes a Node-compat `globalThis.process` with a faked
-    // `versions.node`, so `isNode()` is TRUE on Deno too. `isDeno()` (which
-    // probes a genuine `Deno.Command`) is therefore the authoritative
-    // discriminator and `currentRuntime()` checks it FIRST. Asserting this here
-    // locks in that `currentRuntime()` must never route a Deno host to the Node
-    // adapter just because `process.versions.node` is present.
-    resetRuntimeForTesting();
-    expect(isDeno()).toBeTruthy();
-    expect(isNode()).toBeTruthy();
-    expect(currentRuntime().kind).toEqual("deno");
-  });
 
 test("isDeno discriminator probes Deno.Command, rejecting partial Deno globals", () => {
   // Mirror the exact `isDeno()` probe against synthetic globals to document the
@@ -123,35 +99,6 @@ test("setRuntimeForTesting overrides detection", () => {
     resetRuntimeForTesting();
   }
 });
-
-test.skip("nodeRuntime fs.readTextFileSync works without a global require (createRequire warm-up)", async () => {
-    // Under Deno's node-compat shim (and pure-ESM Node) there is no
-    // `globalThis.require`. The sync read must still work via the `require`
-    // pre-warmed from `node:module#createRequire(import.meta.url)`. Yield to the
-    // microtask/event loop so the warm-up `import("node:module")` has resolved.
-    expect(typeof (globalThis as { require?: unknown }).require).toEqual("undefined");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const file = await Deno.makeTempFile({ suffix: ".json" });
-    try {
-      await Deno.writeTextFile(file, '{"ok":true}');
-      const text = nodeRuntime.fs.readTextFileSync(file);
-      expect(JSON.parse(text).ok).toEqual(true);
-    } finally {
-      await Deno.remove(file);
-    }
-  });
-
-test.skip("denoRuntime serveHttp serves a fetch handler and shuts down", async () => {
-    const handler = (req: Request): Response => {
-      return new Response(`hello ${new URL(req.url).pathname}`, { status: 200 });
-    };
-    const handle = denoRuntime.serveHttp(handler, {
-      port: 0,
-      hostname: "127.0.0.1",
-    });
-    await handle.shutdown();
-  });
 
 realDenoTest("denoRuntime fs.makeTempDir + remove round-trips with prefix", async () => {
   const dir = await denoRuntime.fs.makeTempDir("takosumi-runtime-test-");
