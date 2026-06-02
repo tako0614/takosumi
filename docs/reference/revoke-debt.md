@@ -69,7 +69,7 @@ Retry attempt の結果は次のように status に反映される:
 - `retryable-failure`: `retryAttempts` を増やし、policy が許す間は `open` のまま `nextRetryAt` を更新する。`maxAttempts` 到達後は `operator-action-required` に進む。
 - `blocked`: policy block / permanent failure として即座に `operator-action-required` に進む。
 
-Takosumi の connector-backed cleanup worker は `open` かつ `nextRetryAt <= now` の debt を対象にする。Public deploy 由来の debt は `(ownerSpaceId,
+Takosumi の runtime handler-backed cleanup worker は `open` かつ `nextRetryAt <= now` の debt を対象にする。Public deploy 由来の debt は `(ownerSpaceId,
 deploymentName, resourceName, providerId)` から persisted deployment record の handle を解決し、provider の `compensate` operation を呼ぶ。 `compensate` が無い provider では handle-keyed `destroy` を fallback として実行する。成功時は `cleared`、一時失敗は `retryable-failure`、handle / provider が解決できない場合は `blocked` として `operator-action-required` に進む。
 
 `takosumi-worker` role の worker daemon は persistent `CleanupBacklogStore` から open debt を持つ owner Space を列挙し、`cleanup-backlog-cleanup` task として cleanup worker を周期実行する。cadence と batch size は `TAKOSUMI_REVOKE_DEBT_CLEANUP_INTERVAL_MS` / `TAKOSUMI_REVOKE_DEBT_CLEANUP_LIMIT` で調整する。

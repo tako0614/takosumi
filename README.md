@@ -55,9 +55,9 @@ Takosumi does not run Terraform/OpenTofu, own provider credentials, or manage Ia
 distributions create and operate infrastructure, then publish databases, buckets, OIDC issuers, queues, runtimes, and
 other services into PlatformService inventory. Takosumi records which services were selected for an Installation.
 
-Backend adapters, runtime-agent connectors, inventory importers, and OpenTofu state handling are operator-owned
+Backend adapters, runtime-agent implementation code, inventory importers, and OpenTofu state handling are operator-owned
 implementation details. Takosumi consumes the resulting PlatformService inventory and Deployment outputs; it is not a
-Terraform/OpenTofu provider replacement.
+Terraform/OpenTofu provider replacement and does not publish a separate runtime handler package.
 
 ## Takosumi Accounts
 

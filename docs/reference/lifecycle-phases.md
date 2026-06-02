@@ -33,7 +33,7 @@ recovery ◄── (service restart / lock re-acquire,
 - **WAL stages**: `prepare` -> `pre-commit` -> `commit` -> `post-commit` -> `finalize`
 - **Failure**: `prepare` / `pre-commit` 失敗は副作用なく `abort`。`commit` 失敗は同じ internal WAL idempotency key で retry するか、operator が recovery mode を選ぶ
 - **Blocking**: 期間中 `(spaceId, operationPlanDigest)` lock を保持。同 Space の他 intentional phase は queue
-- **Typical duration**: 数秒〜数分。 OCI image pull / Transform 含む plan は connector apply 待ちが支配的
+- **Typical duration**: 数秒〜数分。 OCI image pull / Transform 含む plan は runtime handler apply 待ちが支配的
 
 ### `activate`
 
@@ -43,7 +43,7 @@ recovery ◄── (service restart / lock re-acquire,
 - **WAL stages**: `post-commit` -> `observe`
 - **Failure**: `post-commit` 失敗は resource side effect を rollback せず CleanupBacklog を enqueue し、observe loop が reconcile。`compensate` recovery 選択時は `activation-rollback` CleanupBacklog を emit
 - **Blocking**: 元 `apply` と同じ lock を保持
-- **Typical duration**: 1 分未満。 connector traffic flip / DNS / readiness 伝播が支配的
+- **Typical duration**: 1 分未満。 runtime handler traffic flip / DNS / readiness 伝播が支配的
 
 ### `destroy`
 
@@ -51,7 +51,7 @@ recovery ◄── (service restart / lock re-acquire,
 - **Output**: 新しい destroy operation の記録 / WAL cleanup result / activation state。旧 `ResolvedPlan` は変更しない。external / operator-owned input refs は不変
 - **Journal cursor**: destroy plan digest の下で新 `journalEntryId` を割当て
 - **WAL stages**: `pre-commit` -> `commit` -> `finalize`
-- **Failure**: `commit` 失敗で部分削除が残り、 recovery は resume (idempotent) か pre-destroy snapshot への compensate を選択。 `finalize` で external connector が削除を拒否すれば `external-revoke` `CleanupBacklog` を emit
+- **Failure**: `commit` 失敗で部分削除が残り、 recovery は resume (idempotent) か pre-destroy snapshot への compensate を選択。 `finalize` で external runtime handler が削除を拒否すれば `external-revoke` `CleanupBacklog` を emit
 - **Blocking**: 同 lock。 `apply` と相互排他
 - **Typical duration**: `apply` 相当。削除が緩慢な external resource で長くなりうる
 
@@ -88,7 +88,7 @@ recovery ◄── (service restart / lock re-acquire,
 
 ## `LifecycleStatus` enum
 
-`LifecycleStatus` は runtime-agent が backing connector 上の managed object について報告する 5 値の観測 state です。control plane phase は上記 Lifecycle Phase で扱います。
+`LifecycleStatus` は runtime-agent が backing runtime handler 上の managed object について報告する 5 値の観測 state です。control plane phase は上記 Lifecycle Phase で扱います。
 
 ```text
 running | stopped | missing | error | unknown
@@ -96,11 +96,11 @@ running | stopped | missing | error | unknown
 
 | 値        | 意味                                                                                             |
 | --------- | ------------------------------------------------------------------------------------------------ |
-| `running` | object が存在し、 component kind contract に従って connector の「live」状態にある。              |
+| `running` | object が存在し、 component kind contract に従って runtime handler の「live」状態にある。              |
 | `stopped` | object は存在するが意図的に動作していない (例: paused worker、 drained gateway)。                |
-| `missing` | connector 視点で object が不在。未 apply か、外部から削除されたかのいずれか。                    |
-| `error`   | object は存在するが connector が通常動作不能の fault を報告している。                            |
-| `unknown` | connector が応答しない、未知の state を返した、または runtime-agent がまだ describe していない。 |
+| `missing` | runtime handler 視点で object が不在。未 apply か、外部から削除されたかのいずれか。                    |
+| `error`   | object は存在するが runtime handler が通常動作不能の fault を報告している。                            |
+| `unknown` | runtime handler が応答しない、未知の state を返した、または runtime-agent がまだ describe していない。 |
 
 ### Trigger transitions
 
@@ -114,10 +114,10 @@ apply trigger:
 describe trigger:
   running -> running     (steady-state confirm)
   running -> stopped     (intentional drain detected)
-  running -> error       (connector now reports fault)
+  running -> error       (runtime handler now reports fault)
   running -> missing     (external delete; emits CleanupBacklog of reason
                           external-revoke)
-  any     -> unknown     (describe failed / connector unreachable)
+  any     -> unknown     (describe failed / runtime handler unreachable)
 
 destroy trigger:
   running -> missing     (managed delete completed)
@@ -129,16 +129,16 @@ verify trigger:
   no transition          (verify never mutates LifecycleStatus)
 ```
 
-`verify` は read-only trigger で、 connector 自体について `connector_not_found` / `connector_failed` を返すのみ。 managed object の `LifecycleStatus` は更新しません。
+`verify` は read-only trigger で、 runtime handler 自体について `runtime_handler_not_found` / `runtime_handler_failed` を返すのみ。 managed object の `LifecycleStatus` は更新しません。
 
 ### 報告ルール
 
 runtime-agent は describe ごと、および `apply` / `destroy` の lifecycle response で `LifecycleStatus` を返します。ルール:
 
-- component kind contract に従い connector が live と確認したときのみ `running` (accept されただけでは不可)
-- connector が応答しない / 未知 state を返したら推測せず `unknown`
-- connector が「object 不在」を権威的に保証した場合のみ `missing` (沈黙は missing としない)
-- connector が明示的に fault を報告したときのみ `error`。 fault detail は describe envelope で伝搬
+- component kind contract に従い runtime handler が live と確認したときのみ `running` (accept されただけでは不可)
+- runtime handler が応答しない / 未知 state を返したら推測せず `unknown`
+- runtime handler が「object 不在」を権威的に保証した場合のみ `missing` (沈黙は missing としない)
+- runtime handler が明示的に fault を報告したときのみ `error`。 fault detail は describe envelope で伝搬
 
 ## 関連 architecture notes
 

@@ -252,7 +252,7 @@ const ARTIFACT_HASH_REGEX = /^sha256:[0-9a-f]{64}$/;
 /**
  * Walks an arbitrary JSON tree and adds every `sha256:<64-hex>` string it
  * sees to the accumulator. We accept BOTH legacy/internal evidence shapes:
- *  - `{ artifact: { hash: "sha256:..." } }` — DataAsset-backed connector
+ *  - `{ artifact: { hash: "sha256:..." } }` — DataAsset-backed handler
  *    evidence used by optional operator extensions.
  *  - bare `sha256:...` strings anywhere in the tree — covers nested legacy
  *    ref-resolved values that the service substitutes before persisting.

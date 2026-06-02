@@ -108,5 +108,5 @@ unknown:
 | --- | --- |
 | source input / prepared source | [Installer API](../installer-api.md) and [Build Service Handoff](../build-spec.md) |
 | optional asset blob extension | [Operator asset Extension Policy](../data-asset-policy.md) |
-| runtime-agent connector inventory | [Connector Guide](../connector-contract.md) |
+| runtime-agent runtime handler inventory | [Runtime Handler Guide](../runtime-handler-contract.md) |
 | public ingress activation | [Ingress routing](./ingress-routing.md) |

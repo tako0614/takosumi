@@ -18,7 +18,7 @@ test("startEmbeddedAgent serves /v1/health and exports env", async () => {
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.status, "ok");
-    assert.equal(typeof body.connectors, "number");
+    assert.equal(typeof body.handlers, "number");
     assert.equal(process.env[LIFECYCLE_AGENT_URL_ENV], handle.url);
     assert.equal(process.env[LIFECYCLE_AGENT_TOKEN_ENV], handle.token);
     assert.equal(handle.token.length, 64);

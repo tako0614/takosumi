@@ -56,7 +56,7 @@ function createServeCmd(): Command {
 
 function createListCmd(): Command {
   return new Command("list")
-    .description("List connectors registered on a runtime-agent")
+    .description("List handlers registered on a runtime-agent")
     .option("--url <url>", "Agent URL (defaults to TAKOSUMI_AGENT_URL env)")
     .option(
       "--token <token>",
@@ -71,25 +71,25 @@ function createListCmd(): Command {
         );
         exitCli(1);
       }
-      const res = await fetch(`${agentUrl}/v1/connectors`, {
+      const res = await fetch(`${agentUrl}/v1/runtime-handlers`, {
         headers: { authorization: `Bearer ${agentToken}` },
       });
       if (!res.ok) {
-        console.error(`agent ${agentUrl}/v1/connectors returned ${res.status}`);
+        console.error(`agent ${agentUrl}/v1/runtime-handlers returned ${res.status}`);
         console.error(await res.text());
         exitCli(1);
       }
       const body = await res.json() as {
-        connectors: Array<{ shape: string; provider: string }>;
+        handlers: Array<{ shape: string; provider: string }>;
       };
-      if (body.connectors.length === 0) {
+      if (body.handlers.length === 0) {
         console.log(
-          "no connectors registered (operator must pass a registry in their distribution)",
+          "no handlers registered (operator must pass a registry in their distribution)",
         );
         return;
       }
       const grouped = new Map<string, string[]>();
-      for (const c of body.connectors) {
+      for (const c of body.handlers) {
         const list = grouped.get(c.shape) ?? [];
         list.push(c.provider);
         grouped.set(c.shape, list);
@@ -106,14 +106,14 @@ function createListCmd(): Command {
 function createVerifyCmd(): Command {
   return new Command("verify")
     .description(
-      "Smoke-test connector credentials & connectivity (read-only API call per connector)",
+      "Smoke-test handler credentials & connectivity (read-only API call per handler)",
     )
     .option("--url <url>", "Agent URL (defaults to TAKOSUMI_AGENT_URL env)")
     .option(
       "--token <token>",
       "Bearer token (defaults to TAKOSUMI_AGENT_TOKEN env)",
     )
-    .option("--shape <shape>", "Restrict to connectors implementing this shape")
+    .option("--shape <shape>", "Restrict to handlers implementing this shape")
     .option("--provider <provider>", "Restrict to a single provider id")
     .action(
       async (
@@ -161,7 +161,7 @@ function createVerifyCmd(): Command {
         };
         if (body.results.length === 0) {
           console.log(
-            "no connectors registered (operator must pass a registry in their distribution)",
+            "no handlers registered (operator must pass a registry in their distribution)",
           );
           return;
         }

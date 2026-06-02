@@ -13,7 +13,7 @@ Backend adapter attachment and credentials
 OpenTofu state and provider locks
 Profile and policy packs
 Secret store and Space partitions
-Runtime / connector credentials
+Runtime / runtime handler credentials
 Optional asset API policy and Space visibility
 Public API enablement
 Audit and observability
@@ -49,14 +49,14 @@ source DSL. Implementation binding is configured by the operator distribution.
 ## Credential Boundary {#credential-boundary}
 
 Takosumi canonical state stores references and handles, not raw secret values.
-External I/O and credentials stay inside implementation / connector / runtime
+External I/O and credentials stay inside implementation / runtime handler / runtime
 boundaries. Secret partitions are Space-scoped unless operator policy explicitly
 shares them.
 
-## Connector Boundary {#connector-boundary}
+## Runtime handler Boundary {#runtime-handler-boundary}
 
-connectors are installed and managed by the operator. [Connector Guide](../connector-contract.md)
-describes the reference connector inventory. Connector visibility and accepted
+runtime handlers are installed and managed by the operator. [Runtime Handler Guide](../runtime-handler-contract.md)
+describes the reference runtime handler inventory. Runtime handler visibility and accepted
 asset metadata are operator-governed and Space-scoped.
 
 ## Production Mode {#production-mode}

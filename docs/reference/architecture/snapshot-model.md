@@ -18,7 +18,7 @@ Space-visible PlatformService inventory provenance
 BindingSelection and operator policy provenance
 link intents derived from selected PlatformService records
 exposure intents derived from operator route policy
-optional operator asset extension requirements / refs resolved by operator policy, adapter metadata, implementation binding, or connector binding
+optional operator asset extension requirements / refs resolved by operator policy, adapter metadata, implementation binding, or runtime handler binding
 space id from deploy context
 ```
 

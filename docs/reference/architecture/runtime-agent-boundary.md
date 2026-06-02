@@ -10,13 +10,13 @@
 
 Takosumi/control-plane role は state を orchestrate する。`spaceId` に属する ResolvedPlan、TargetState、 OperationPlan、Write-Ahead Journal、policy evaluation evidence、operator の approval 設定から渡された approval evidence、 CleanupBacklog を管理する。Space membership / ownership と approval decision、account layer policy state は operator の設定が決める。Takosumi は cloud / OS credential を保持せず、resource を materialize する side-effecting な外部 I/O も実行しない。
 
-runtime-agent は実行を担当する。connector code を host し、自身が動いている host 環境の cloud SDK / OS API credential を保持し、すべての外部 I/O を実行し、観測された state を `describe` で Takosumi に返す。runtime-agent は credential を正当に持つ host 上で動作する—典型的には operator の deploy account 上で動くため、credential の blast radius は runtime-agent host に閉じ、Takosumi には及ばない。
+runtime-agent は実行を担当する。runtime handler code を host し、自身が動いている host 環境の cloud SDK / OS API credential を保持し、すべての外部 I/O を実行し、観測された state を `describe` で Takosumi に返す。runtime-agent は credential を正当に持つ host 上で動作する—典型的には operator の deploy account 上で動くため、credential の blast radius は runtime-agent host に閉じ、Takosumi には及ばない。
 
-この分割は構造的な境界です。cloud SDK、docker socket、systemd unit に触れるものは runtime-agent の connector に存在し、そのような操作が許されるかどうかを判断するものは Takosumi に存在する。
+この分割は構造的な境界です。cloud SDK、docker socket、systemd unit に触れるものは runtime-agent の runtime handler に存在し、そのような操作が許されるかどうかを判断するものは Takosumi に存在する。
 
 ## Packaging の自由度
 
-reference Takosumi runtime-agent topology では、Takosumi と runtime-agent の間で lifecycle / connectors RPC surface と operation envelope を使います。 packaging は operator が選びます。connector 実装は Bun/Node process、in-process module、HTTP service、WASM module、コンテナ、SaaS をラップする外部 gateway、 operator-private daemon のいずれでもよい。operator は自身の credential 境界と fleet topology を選ぶ。同一 binary / host に co-locate する場合も、credential を持つ execution role は Takosumi/control-plane role から分けて扱う。production 推奨 topology は runtime-agent 分離で、embedded execution は dev、credential-free minimal profile、または operator が明示的に管理する単一 host profile に限定する。 operator は自身のセキュリティ要件に合った packaging を選ぶ。
+reference Takosumi runtime-agent topology では、Takosumi と runtime-agent の間で lifecycle / runtime-handlers RPC surface と operation envelope を使います。 packaging は operator が選びます。runtime handler 実装は Bun/Node process、in-process module、HTTP service、WASM module、コンテナ、SaaS をラップする外部 gateway、 operator-private daemon のいずれでもよい。operator は自身の credential 境界と fleet topology を選ぶ。同一 binary / host に co-locate する場合も、credential を持つ execution role は Takosumi/control-plane role から分けて扱う。production 推奨 topology は runtime-agent 分離で、embedded execution は dev、credential-free minimal profile、または operator が明示的に管理する単一 host profile に限定する。 operator は自身のセキュリティ要件に合った packaging を選ぶ。
 
 compatible implementation は別の execution boundary を使えます。守る public contract は Source / Installer API / Installation / Deployment / PlatformService の observable lifecycle です。
 
@@ -46,9 +46,9 @@ Field の責務:
 
 - `spaceId` —隔離キー。runtime-agent は外部呼び出し、生成 object、secret をすべてこの Space に scope する。
 - `operationId` / `operationAttempt` / `journalCursor` — WAL 座標。同じ三組の replay は idempotent でなければならない。
-- `idempotencyKey` — Takosumi が導出する `(spaceId, operationPlanDigest, journalEntryId)` 三組を connector の idempotency 空間に projection したもの。
+- `idempotencyKey` — Takosumi が導出する `(spaceId, operationPlanDigest, journalEntryId)` 三組を runtime handler の idempotency 空間に projection したもの。
 - `desiredGeneration` / `desiredSnapshotId` / `resolutionSnapshotId` — Takosumi が commit した snapshot。runtime-agent は手渡されていない snapshot を読んではならない。
-- `operationKind` — connector の lifecycle operation を選ぶ。
+- `operationKind` — runtime handler の lifecycle operation を選ぶ。
 - `inputRefs` / `preRecordedGeneratedObjectIds` / `expectedExternalIdempotencyKeys` — Takosumi 側の事前確保。retry で生成 object が重複しないようにする。
 - `approvedEffects` —この operation の policy 上限。
 - `recoveryMode` —後述の Recovery mode を参照。
@@ -82,7 +82,7 @@ Status enum の責務 (closed、5 値):
 
 ## Effect rule
 
-`actualEffects` は `approvedEffects` を超えてはならない。WAL の `pre-commit` stage では runtime-agent の dry / predicted effect 集合を `approvedEffects` と比較し、`commit` への遷移を許可するか判断する (= バリデーション)。`actualEffects` は `commit` / `post-commit` で観測・記録される。actual が承認範囲を超えた場合は `actual-effects-overflow` risk として journal に記録し、pause / compensate / debt handling に進める。`approvedEffects` 内に収まらない connector は、dry materialization 中に `requires-approval` を返さなければならず、commit して overflow させてはならない。
+`actualEffects` は `approvedEffects` を超えてはならない。WAL の `pre-commit` stage では runtime-agent の dry / predicted effect 集合を `approvedEffects` と比較し、`commit` への遷移を許可するか判断する (= バリデーション)。`actualEffects` は `commit` / `post-commit` で観測・記録される。actual が承認範囲を超えた場合は `actual-effects-overflow` risk として journal に記録し、pause / compensate / debt handling に進める。`approvedEffects` 内に収まらない runtime handler は、dry materialization 中に `requires-approval` を返さなければならず、commit して overflow させてはならない。
 
 ## Dry materialization
 
@@ -99,34 +99,34 @@ Approval が replay されたとき、Takosumi は dry materialization を再実
 - `compensate` —以前 commit された effect を逆操作で巻き戻す。該当時には `activation-rollback` 理由で CleanupBacklog を open する。
 - `inspect` — effect を適用せず WAL と live state の diff を出力する。
 
-Takosumi は WAL の証拠—最後に記録された stage、partial effect の有無、recovery 中の operator override —から mode を選ぶ。runtime-agent は mode を選ばず、 Takosumi が渡したものを実行する。connector の既知 state と `recoveryMode` が矛盾するリクエストは reject する。operator 向けの選択ガイダンスは [Lifecycle Protocol — Recovery modes](../lifecycle.md#recovery-modes) に固定されている。
+Takosumi は WAL の証拠—最後に記録された stage、partial effect の有無、recovery 中の operator override —から mode を選ぶ。runtime-agent は mode を選ばず、 Takosumi が渡したものを実行する。runtime handler の既知 state と `recoveryMode` が矛盾するリクエストは reject する。operator 向けの選択ガイダンスは [Lifecycle Protocol — Recovery modes](../lifecycle.md#recovery-modes) に固定されている。
 
 ## Idempotency contract
 
-`(spaceId, operationPlanDigest, journalEntryId)` の 3 つ組は Takosumi 側で `prepare` 時に生成され、canonical idempotency key となる。同じ 3 つ組を 2 回受け取った runtime-agent は同じ effect 集合を返さなければならない: 同じ生成 object ID、同じ handle、同じ secret ref。connector はこの 3 つ組を backend の idempotency 機構 (cloud-native idempotency token、決定的 resource name、 connector 側の dedupe ledger) に projection することでこれを実現する。 v1 connector はこの決定性を満たす。
+`(spaceId, operationPlanDigest, journalEntryId)` の 3 つ組は Takosumi 側で `prepare` 時に生成され、canonical idempotency key となる。同じ 3 つ組を 2 回受け取った runtime-agent は同じ effect 集合を返さなければならない: 同じ生成 object ID、同じ handle、同じ secret ref。runtime handler はこの 3 つ組を backend の idempotency 機構 (cloud-native idempotency token、決定的 resource name、 runtime handler 側の dedupe ledger) に projection することでこれを実現する。 v1 runtime handler はこの決定性を満たす。
 
-## Connector と implementation
+## Runtime handler と implementation
 
-`connector:<id>` と `(shape, provider)` は runtime-agent 内で別 role です。 `connector:<id>` は operator inventory identity であり、install / replace / revoke の対象になる。lifecycle RPC の dispatch key は `(shape, provider)` で、 connector module はその pair の asset / handle shape と lifecycle operation を公開する。implementation は connector の上で OperationPlan の step を実行する operation-level のロジックである。両 role とも同じ runtime-agent プロセスに host されるが、責務は混ざらない: connector lifecycle は永続的で handle-key 付きの object であり、implementation は connector を借りて下層 SDK を駆動する per-operation の実行である。
+`runtime-handler:<id>` と `(shape, provider)` は runtime-agent 内で別 role です。 `runtime-handler:<id>` は operator inventory identity であり、install / replace / revoke の対象になる。lifecycle RPC の dispatch key は `(shape, provider)` で、 runtime handler module はその pair の asset / handle shape と lifecycle operation を公開する。implementation は runtime handler の上で OperationPlan の step を実行する operation-level のロジックである。両 role とも同じ runtime-agent プロセスに host されるが、責務は混ざらない: runtime handler lifecycle は永続的で handle-key 付きの object であり、implementation は runtime handler を借りて下層 SDK を駆動する per-operation の実行である。
 
 ## Verify semantics
 
-reference runtime-agent の `verify` request は登録済み connector に対する credential / reachability の smoke test である。WAL を進めず、Snapshot を materialize せず、`LifecycleStatus` を変えない。`describe` は「この handle の live state は何か」に答え、`verify` は「この connector は backend に到達できるか」に答える。 health は `LifecycleVerifyResult.ok` をもとに Takosumi / operator UI で判定され、runtime-agent は報告するだけである。意図される配置は pre-flight、 `apply` の前であり、`connector_not_found` や `connector-extended:*` の失敗が WAL stage に触れる前に surface するようにする。
+reference runtime-agent の `verify` request は登録済み runtime handler に対する credential / reachability の smoke test である。WAL を進めず、Snapshot を materialize せず、`LifecycleStatus` を変えない。`describe` は「この handle の live state は何か」に答え、`verify` は「この runtime handler は backend に到達できるか」に答える。 health は `LifecycleVerifyResult.ok` をもとに Takosumi / operator UI で判定され、runtime-agent は報告するだけである。意図される配置は pre-flight、 `apply` の前であり、`runtime_handler_not_found` や `runtime-handler-extended:*` の失敗が WAL stage に触れる前に surface するようにする。
 
 ## Runtime-agent auth chain
 
 Takosumi → runtime-agent 方向の認証方式は operator の設定の internal runtime auth です。backend implementation は通常の operator import として読み込まれ、 runtime-agent の host 権限は enrollment / heartbeat / lease material に bind された `(shape, provider)` ペアで表す。runtime-agent はその material に基づいて lifecycle request を受けます。
 
-runtime-agent → Takosumi 方向は別の auth path である: enrollment token が identity を確立し、heartbeat / lease token で runtime-agent を attach し続け、agent bearer (`TAKOSUMI_AGENT_TOKEN`) が lifecycle / connectors RPC を保護する。両方向は鍵素材を分け、blast radius を片側の auth path に閉じる。
+runtime-agent → Takosumi 方向は別の auth path である: enrollment token が identity を確立し、heartbeat / lease token で runtime-agent を attach し続け、agent bearer (`TAKOSUMI_AGENT_TOKEN`) が lifecycle / runtime-handlers RPC を保護する。両方向は鍵素材を分け、blast radius を片側の auth path に閉じる。
 
 ## Space 隔離
 
-`spaceId` はすべての envelope とすべての lifecycle request に届く。 implementation と connector は、別 Space の object、secret、asset、authorization material、platform service を読み書きしてはならない。current v1 には cross-Space service input はない。将来 RFC が明示的な cross-Space service sharing を導入するまで、Space 越えのアクセスは contract 違反であり、`actual-effects-overflow` risk に closed される。
+`spaceId` はすべての envelope とすべての lifecycle request に届く。 implementation と runtime handler は、別 Space の object、secret、asset、authorization material、platform service を読み書きしてはならない。current v1 には cross-Space service input はない。将来 RFC が明示的な cross-Space service sharing を導入するまで、Space 越えのアクセスは contract 違反であり、`actual-effects-overflow` risk に closed される。
 
 ## Failure mode
 
 - **Partial failure.** runtime-agent が承認済み effect の一部を commit したが全部ではなかった。status は `partial` となり、Takosumi はどの effect が landed したかを journal し、同じ idempotency key で欠けている subset を retry するか、 leak した subset に対して CleanupBacklog を open する。
-- **Compensation.** runtime-agent が `compensation-required` を返すか、 `recoveryMode: compensate` が有効である。Takosumi は記録済み effect に対して connector の compensate operation を実行し、`activation-rollback` 理由で CleanupBacklog を emit する。
+- **Compensation.** runtime-agent が `compensation-required` を返すか、 `recoveryMode: compensate` が有効である。Takosumi は記録済み effect に対して runtime handler の compensate operation を実行し、`activation-rollback` 理由で CleanupBacklog を emit する。
 - **Debt.** effect が適用されたが desired state と reconcile できないとき (overflow、partial、完全 reverse なしの compensate) — Takosumi は CleanupBacklog entry を open する。debt の status enum と reason enum は closed である。解決には、compensate の成功、operator による手動 close-out、または landing 済み effect を明示的に認める新しい approval / debt-clearance record が必要である。 historical `approvedEffects` は遡って変更しない。Debt は Takosumi が「何が approved か」と「何が実在するか」を矛盾を黙って drop せずに sync 状態に保つための v1 機構である。
 
 ## クロスリファレンス {#cross-references}

@@ -118,8 +118,8 @@ runtime-agent process は cloud SDK credential を保持します。`AWS_*`、 `
 | Variable                                       | Type   | Default           | Required             | 説明                             |
 | ---------------------------------------------- | ------ | ----------------- | -------------------- | -------------------------------- |
 | `TAKOSUMI_AGENT_TOKEN`                         | secret | random when unset | remote topology      | runtime-agent HTTP bearer。      |
-| `TAKOSUMI_KUBERNETES_API_SERVER_URL`           | URL    | unset             | Kubernetes connector | k8s API server URL。             |
-| `TAKOSUMI_KUBERNETES_BEARER_TOKEN`             | secret | unset             | Kubernetes connector | k8s bearer token。               |
+| `TAKOSUMI_KUBERNETES_API_SERVER_URL`           | URL    | unset             | Kubernetes runtime handler | k8s API server URL。             |
+| `TAKOSUMI_KUBERNETES_BEARER_TOKEN`             | secret | unset             | Kubernetes runtime handler | k8s bearer token。               |
 | `TAKOSUMI_KUBERNETES_NAMESPACE`                | string | `takosumi`        | no                   | k8s namespace。                  |
 | `TAKOSUMI_LOCAL_ADAPTER_OBJECT_STORE_ROOT`     | path   | unset             | no                   | filesystem object-store root。   |
 | `TAKOSUMI_LOCAL_ADAPTER_DOCKER_SOCKET`         | path   | unset             | no                   | docker socket path。             |

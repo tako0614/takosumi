@@ -33,7 +33,7 @@ operator distribution.
 | state / secret store | Postgres, D1, KMS, secret encryption, backup / restore                 |
 | infrastructure state | OpenTofu state, provider credentials, locks                  |
 | account surface      | signup, billing, team, dashboard, deploy facade                        |
-| runtime execution    | container, worker, VM, local process, runtime-agent connector          |
+| runtime execution    | container, worker, VM, local process, runtime-agent runtime handler          |
 
 Takosumi records those selections as Deployment `bindingsSnapshot` and
 `outputs`. Infrastructure creation and provider state stay operator-owned.

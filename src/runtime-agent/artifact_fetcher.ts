@@ -1,14 +1,14 @@
 /**
- * `ArtifactFetcher` — connector-side port for retrieving DataAsset bytes from
+ * `ArtifactFetcher` — handler-side port for retrieving DataAsset bytes from
  * an operator-mounted `/v1/artifacts` endpoint.
  *
  * When the optional DataAsset extension is enabled, the dispatcher may include
  * an `ArtifactStoreLocator` (`baseUrl`, `token`) in `LifecycleApplyRequest`.
  * The runtime-agent server materialises that into a `HttpArtifactFetcher` and
- * threads it through `ConnectorContext.fetcher` so connectors that need to push
+ * threads it through `RuntimeHandlerContext.fetcher` so handlers that need to push
  * bytes to a downstream registry / runtime can stream them on demand.
  *
- * Connectors that take only pointer artifacts (`oci-image` URI, managed
+ * RuntimeHandlers that take only pointer artifacts (`oci-image` URI, managed
  * services with no artifact at all) can ignore the fetcher entirely.
  *
  * # Request bounds

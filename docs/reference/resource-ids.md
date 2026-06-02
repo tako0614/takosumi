@@ -42,4 +42,4 @@ Changing the public API field names (`spaceId`, `installation.id`, `deployment.i
 - [Enum and Value Index](./closed-enums.md)
 - [Storage Schema](./storage-schema.md)
 - [Digest Computation](./digest-computation.md)
-- [Connector Guide](./connector-contract.md)
+- [Runtime Handler Guide](./runtime-handler-contract.md)

@@ -136,7 +136,7 @@ services:
   # The `cloud` control plane dispatches source / lifecycle / capability
   # execution here over TAKOSUMI_AGENT_URL. This is the execution half split out
   # of the old monolithic `service` service; it carries docker.sock + subprocess
-  # privilege so connectors can spawn `docker compose`. Image is a thin overlay
+  # privilege so handlers can spawn `docker compose`. Image is a thin overlay
   # on a Bun base that adds the docker CLI.
   agent:
     profiles: ["postgres"]

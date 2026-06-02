@@ -41,8 +41,8 @@ under `/v1/installations/*`.
 | `takosumi rollback <installation-id> <deployment-id>` | move current pointer to a retained Deployment |
 | `takosumi server [--port] [--no-agent]` | boot the local Takosumi service |
 | `takosumi runtime-agent serve` | standalone generic agent host |
-| `takosumi runtime-agent list` | show registered connectors on an agent |
-| `takosumi runtime-agent verify` | smoke-test connectors |
+| `takosumi runtime-agent list` | show registered handlers on an agent |
+| `takosumi runtime-agent verify` | smoke-test handlers |
 | `takosumi artifact push <file> --kind <kind>` | optional DataAsset upload |
 | `takosumi migrate [--dry-run]` | run Takosumi service DB migrations |
 | `takosumi init [<output>] [--template]` | generic repo metadata starter |
@@ -69,4 +69,4 @@ Priority:
 
 - `@takosjp/takosumi`
 - `@takosjp/takosumi/runtime-agent`
-- operator-owned runtime-agent connector code
+- operator-owned runtime-agent handler code

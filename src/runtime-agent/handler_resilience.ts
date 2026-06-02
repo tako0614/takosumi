@@ -9,31 +9,31 @@ import type {
   LifecycleDestroyResponse,
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import type {
-  Connector,
-  ConnectorContext,
-  ConnectorVerifyResult,
-} from "./connector.ts";
+  RuntimeHandler,
+  RuntimeHandlerContext,
+  RuntimeHandlerVerifyResult,
+} from "./handlers.ts";
 
-export type ConnectorOperation =
+export type RuntimeHandlerOperation =
   | "apply"
   | "destroy"
   | "compensate"
   | "describe"
   | "verify";
 
-export interface ConnectorRetryContext {
+export interface RuntimeHandlerRetryContext {
   readonly shape: string;
   readonly provider: string;
-  readonly operation: ConnectorOperation;
+  readonly operation: RuntimeHandlerOperation;
   readonly attempt: number;
 }
 
-export interface ConnectorCredentialRefreshContext
-  extends ConnectorRetryContext {
+export interface RuntimeHandlerCredentialRefreshContext
+  extends RuntimeHandlerRetryContext {
   readonly error: unknown;
 }
 
-export interface ConnectorResilienceOptions {
+export interface RuntimeHandlerResilienceOptions {
   readonly attempts?: number;
   readonly baseDelayMs?: number;
   readonly maxDelayMs?: number;
@@ -41,19 +41,19 @@ export interface ConnectorResilienceOptions {
   readonly credentialRefreshStatuses?: readonly number[];
   readonly sleep?: (delayMs: number) => Promise<void>;
   readonly refreshCredentials?: (
-    ctx: ConnectorCredentialRefreshContext,
+    ctx: RuntimeHandlerCredentialRefreshContext,
   ) => Promise<void>;
   readonly shouldRetry?: (
     error: unknown,
-    ctx: ConnectorRetryContext,
+    ctx: RuntimeHandlerRetryContext,
   ) => boolean;
   readonly shouldRefreshCredentials?: (
     error: unknown,
-    ctx: ConnectorRetryContext,
+    ctx: RuntimeHandlerRetryContext,
   ) => boolean;
 }
 
-interface NormalizedConnectorResilience {
+interface NormalizedRuntimeHandlerResilience {
   readonly attempts: number;
   readonly baseDelayMs: number;
   readonly maxDelayMs: number;
@@ -61,15 +61,15 @@ interface NormalizedConnectorResilience {
   readonly credentialRefreshStatuses: ReadonlySet<number>;
   readonly sleep: (delayMs: number) => Promise<void>;
   readonly refreshCredentials?: (
-    ctx: ConnectorCredentialRefreshContext,
+    ctx: RuntimeHandlerCredentialRefreshContext,
   ) => Promise<void>;
   readonly shouldRetry: (
     error: unknown,
-    ctx: ConnectorRetryContext,
+    ctx: RuntimeHandlerRetryContext,
   ) => boolean;
   readonly shouldRefreshCredentials: (
     error: unknown,
-    ctx: ConnectorRetryContext,
+    ctx: RuntimeHandlerRetryContext,
   ) => boolean;
 }
 
@@ -93,78 +93,78 @@ const NETWORK_ERROR_CODES = new Set([
 ]);
 const NETWORK_ERROR_NAMES = new Set(["NetworkError", "TimeoutError"]);
 
-export function withConnectorResilience(
-  connector: Connector,
-  options: false | ConnectorResilienceOptions | undefined = {},
-): Connector {
-  if (options === false) return connector;
-  const resilience = normalizeConnectorResilience(options);
+export function withRuntimeHandlerResilience(
+  handler: RuntimeHandler,
+  options: false | RuntimeHandlerResilienceOptions | undefined = {},
+): RuntimeHandler {
+  if (options === false) return handler;
+  const resilience = normalizeRuntimeHandlerResilience(options);
   const wrapped: {
     provider: string;
     shape: string;
     acceptedArtifactKinds: readonly string[];
     apply: (
       req: LifecycleApplyRequest,
-      ctx: ConnectorContext,
+      ctx: RuntimeHandlerContext,
     ) => Promise<LifecycleApplyResponse>;
     destroy: (
       req: LifecycleDestroyRequest,
-      ctx: ConnectorContext,
+      ctx: RuntimeHandlerContext,
     ) => Promise<LifecycleDestroyResponse>;
     compensate?: (
       req: LifecycleCompensateRequest,
-      ctx: ConnectorContext,
+      ctx: RuntimeHandlerContext,
     ) => Promise<LifecycleCompensateResponse>;
     describe: (
       req: LifecycleDescribeRequest,
-      ctx: ConnectorContext,
+      ctx: RuntimeHandlerContext,
     ) => Promise<LifecycleDescribeResponse>;
-    verify?: (ctx: ConnectorContext) => Promise<ConnectorVerifyResult>;
+    verify?: (ctx: RuntimeHandlerContext) => Promise<RuntimeHandlerVerifyResult>;
   } = {
-    provider: connector.provider,
-    shape: connector.shape,
-    acceptedArtifactKinds: connector.acceptedArtifactKinds,
+    provider: handler.provider,
+    shape: handler.shape,
+    acceptedArtifactKinds: handler.acceptedArtifactKinds,
     apply: (req, ctx) =>
       runWithResilience(
-        connector,
+        handler,
         resilience,
         "apply",
-        () => connector.apply(req, ctx),
+        () => handler.apply(req, ctx),
       ),
     destroy: (req, ctx) =>
       runWithResilience(
-        connector,
+        handler,
         resilience,
         "destroy",
-        () => connector.destroy(req, ctx),
+        () => handler.destroy(req, ctx),
       ),
     describe: (req, ctx) =>
       runWithResilience(
-        connector,
+        handler,
         resilience,
         "describe",
-        () => connector.describe(req, ctx),
+        () => handler.describe(req, ctx),
       ),
   };
-  if (connector.compensate) {
+  if (handler.compensate) {
     wrapped.compensate = (req, ctx) =>
       runWithResilience(
-        connector,
+        handler,
         resilience,
         "compensate",
         () =>
-          connector.compensate?.(req, ctx) ??
+          handler.compensate?.(req, ctx) ??
             Promise.resolve({ ok: false, note: "compensate hook missing" }),
       );
   }
-  if (connector.verify) {
+  if (handler.verify) {
     wrapped.verify = (ctx) =>
       runWithResilience(
-        connector,
+        handler,
         resilience,
         "verify",
         () =>
-          connector.verify?.(ctx) ??
+          handler.verify?.(ctx) ??
             Promise.resolve({ ok: true, note: "no verify hook" }),
       );
   }
@@ -172,9 +172,9 @@ export function withConnectorResilience(
 }
 
 async function runWithResilience<T>(
-  connector: Connector,
-  resilience: NormalizedConnectorResilience,
-  operation: ConnectorOperation,
+  handler: RuntimeHandler,
+  resilience: NormalizedRuntimeHandlerResilience,
+  operation: RuntimeHandlerOperation,
   fn: () => Promise<T>,
 ): Promise<T> {
   let credentialsRefreshed = false;
@@ -183,8 +183,8 @@ async function runWithResilience<T>(
       return await fn();
     } catch (error) {
       const ctx = {
-        shape: connector.shape,
-        provider: connector.provider,
+        shape: handler.shape,
+        provider: handler.provider,
         operation,
         attempt,
       };
@@ -203,13 +203,13 @@ async function runWithResilience<T>(
     }
   }
   throw new Error(
-    `connector resilience exhausted for ${connector.shape}/${connector.provider} ${operation}`,
+    `handler resilience exhausted for ${handler.shape}/${handler.provider} ${operation}`,
   );
 }
 
-function normalizeConnectorResilience(
-  options: ConnectorResilienceOptions,
-): NormalizedConnectorResilience {
+function normalizeRuntimeHandlerResilience(
+  options: RuntimeHandlerResilienceOptions,
+): NormalizedRuntimeHandlerResilience {
   const retryStatuses = new Set(
     options.retryStatuses ?? DEFAULT_RETRY_STATUSES,
   );
@@ -225,7 +225,7 @@ function normalizeConnectorResilience(
     sleep: options.sleep ?? defaultSleep,
     refreshCredentials: options.refreshCredentials,
     shouldRetry: options.shouldRetry ??
-      ((error) => isRetryableConnectorError(error, retryStatuses)),
+      ((error) => isRetryableRuntimeHandlerError(error, retryStatuses)),
     shouldRefreshCredentials: options.shouldRefreshCredentials ??
       ((error) => isCredentialRefreshError(error, credentialRefreshStatuses)),
   };
@@ -233,7 +233,7 @@ function normalizeConnectorResilience(
 
 function backoffDelay(
   attempt: number,
-  resilience: NormalizedConnectorResilience,
+  resilience: NormalizedRuntimeHandlerResilience,
 ): number {
   return Math.min(
     resilience.maxDelayMs,
@@ -245,7 +245,7 @@ function defaultSleep(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
-function isRetryableConnectorError(
+function isRetryableRuntimeHandlerError(
   error: unknown,
   retryStatuses: ReadonlySet<number>,
 ): boolean {

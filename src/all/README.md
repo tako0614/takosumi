@@ -14,4 +14,4 @@ Space exports:
 Takosumi v1 is manifestless. Space public concepts are Source, Installation, Deployment, and PlatformService.
 
 This package does not replace Terraform/OpenTofu and does not own provider credentials. Operator distributions provide
-PlatformService inventory and choose runtime-agent connectors or backend adapters.
+PlatformService inventory and choose runtime-agent handlers or backend adapters.

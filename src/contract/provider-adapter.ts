@@ -18,10 +18,10 @@ import type {
 } from "./implementation-sdk.ts";
 
 /**
- * Legacy connector-local selector for shape-based backend adapters.
+ * Legacy runtime-handler-local selector for shape-based backend adapters.
  *
  * Runtime-agent lifecycle envelopes still carry `(shape, provider)` so older
- * connectors can dispatch work locally. Current operator distributions derive
+ * handlers can dispatch work locally. Current operator distributions derive
  * those selectors from their materializer mapping; reference components
  * remain keyed by `Component.kind`, and new reference adapters should implement
  * `OperatorImplementation` directly.
@@ -94,7 +94,7 @@ export interface PlatformContext {
   /**
    * Prepared source snapshot for source-backed providers. Present when the
    * service can expose the Deployment source tree to a materializer or
-   * runtime-agent connector.
+   * runtime-agent handler.
    */
   readonly preparedSource?: PreparedSourceLocator;
   /**

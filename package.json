@@ -34,7 +34,6 @@
     "./installer": "./src/installer/mod.ts",
     "./cli": "./src/all/cli.ts",
     "./runtime-agent": "./src/runtime-agent/server.ts",
-    "./runtime-agent/connectors": "./src/runtime-agent/connectors/mod.ts",
     "./runtime-agent/embed": "./src/runtime-agent/embed.ts",
     "./runtime-agent/prepared-source-reader": "./src/runtime-agent/prepared_source_reader.ts",
     "./server": "./src/all/server.ts"

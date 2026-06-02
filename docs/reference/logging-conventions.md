@@ -108,9 +108,9 @@ CLI は自身のログ発行に同じ環境変数を読む。CLI 行は `subsyst
 共有 envelope に加えて、各 subsystem は次の狭い追加規則に従う。
 
 - **service** (Takosumi 本体) — HTTP 境界を跨ぐすべての行は `route` (一致した route template、resolved URL ではない) と `status` (整数としての HTTP status code) を持つ。
-- **runtime-agent** — すべての行は `agentId` を持ち、外部 connector が scope にあるときは `connector` (credential ではなく `kubernetes`、`docker`、 `cloudflare` のような短い識別子) を持つ。
+- **runtime-agent** — すべての行は `agentId` を持ち、外部 runtime handler が scope にあるときは `runtime handler` (credential ではなく `kubernetes`、`docker`、 `cloudflare` のような短い識別子) を持つ。
 - **cli** — すべての行は `command` (dotted CLI command path、例: `deploy.run`、`audit.verify`) と `argvDigest` (redaction 後の argument vector の digest、raw argv ではない) を持つ。
-- **implementation** — operator が attach した binding code から emit されるすべての行は `implementationBindingId` を持ち、関連する場合は resolved kind URI / connector id を持つ。
+- **implementation** — operator が attach した binding code から emit されるすべての行は `implementationBindingId` を持ち、関連する場合は resolved kind URI / runtime handler id を持つ。
 
 これらのフィールドは付加的: HTTP `requestId` を既に持つ行も、`service` subsystem から発行される際は `route` と `status` を持つ。
 

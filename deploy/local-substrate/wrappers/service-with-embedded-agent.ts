@@ -53,7 +53,7 @@ await writeGatewayProjection(routeProjectionFile, []);
 
 console.log(
   `[local-substrate-wrapper] embedded runtime-agent at ${agent.url} ` +
-    `(${registry.size()} connectors)`,
+    `(${registry.size()} runtime handlers)`,
 );
 
 const created = await createTakosumiService({

@@ -1,6 +1,6 @@
 # Takosumi Kubernetes Kind Runbook
 
-This directory documents the Kubernetes surface as **operator-owned scope**. Kubernetes lifecycle coverage comes from the operator's Helm/GitOps/native controller stack plus runtime-agent connector wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on a Kubernetes cluster is also the operator's responsibility.
+This directory documents the Kubernetes surface as **operator-owned scope**. Kubernetes lifecycle coverage comes from the operator's Helm/GitOps/native controller stack plus runtime-agent runtime handler wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on a Kubernetes cluster is also the operator's responsibility.
 
 ## Why no reference Helm chart
 
@@ -8,7 +8,7 @@ The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy
 
 ## Required runtime shape
 
-The k8s connector talks to the kube-apiserver via REST. It expects:
+The k8s runtime handler talks to the kube-apiserver via REST. It expects:
 
 - A `KUBECONFIG` mounted into the runtime-agent pod, OR
 - An in-cluster service account with cluster-wide apply permissions (or namespace-scoped if the runtime-agent only deploys into one namespace).

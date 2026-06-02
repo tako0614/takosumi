@@ -1,6 +1,6 @@
 /**
  * Lifecycle dispatcher — routes apply/destroy/describe requests to the
- * connector registered for `(shape, provider)`. Returns a typed response or
+ * handler registered for `(shape, provider)`. Returns a typed response or
  * a structured error.
  */
 
@@ -14,22 +14,22 @@ import type {
   LifecycleDestroyRequest,
   LifecycleDestroyResponse,
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
-import type { Connector, ConnectorContext } from "./connectors/connector.ts";
-import type { ConnectorRegistry } from "./connectors/mod.ts";
+import type { RuntimeHandler, RuntimeHandlerContext } from "./handlers.ts";
+import type { RuntimeHandlerRegistry } from "./handlers.ts";
 
-export class ConnectorNotFoundError extends Error {
+export class RuntimeHandlerNotFoundError extends Error {
   readonly shape: string;
   readonly provider: string;
   constructor(shape: string, provider: string) {
-    super(`no connector registered for shape=${shape} provider=${provider}`);
+    super(`no handler registered for shape=${shape} provider=${provider}`);
     this.shape = shape;
     this.provider = provider;
-    this.name = "ConnectorNotFoundError";
+    this.name = "RuntimeHandlerNotFoundError";
   }
 }
 
 /**
- * Thrown when an artifact-backed request's kind is not in the connector's
+ * Thrown when an artifact-backed request's kind is not in the handler's
  * `acceptedArtifactKinds` list.
  */
 export class ArtifactKindMismatchError extends Error {
@@ -44,7 +44,7 @@ export class ArtifactKindMismatchError extends Error {
     got: string,
   ) {
     super(
-      `connector ${provider} for shape=${shape} does not accept artifact kind ${got}; ` +
+      `handler ${provider} for shape=${shape} does not accept artifact kind ${got}; ` +
         `accepted=[${expected.join(", ")}]`,
     );
     this.shape = shape;
@@ -56,57 +56,57 @@ export class ArtifactKindMismatchError extends Error {
 }
 
 export class LifecycleDispatcher {
-  readonly #registry: ConnectorRegistry;
+  readonly #registry: RuntimeHandlerRegistry;
 
-  constructor(registry: ConnectorRegistry) {
+  constructor(registry: RuntimeHandlerRegistry) {
     this.#registry = registry;
   }
 
   apply(
     req: LifecycleApplyRequest,
-    ctx: ConnectorContext = {},
+    ctx: RuntimeHandlerContext = {},
   ): Promise<LifecycleApplyResponse> {
-    const connector = this.#registry.get(req.shape, req.provider);
-    if (!connector) throw new ConnectorNotFoundError(req.shape, req.provider);
-    validateArtifactKind(connector, req);
-    return connector.apply(req, ctx);
+    const handler = this.#registry.get(req.shape, req.provider);
+    if (!handler) throw new RuntimeHandlerNotFoundError(req.shape, req.provider);
+    validateArtifactKind(handler, req);
+    return handler.apply(req, ctx);
   }
 
   destroy(
     req: LifecycleDestroyRequest,
-    ctx: ConnectorContext = {},
+    ctx: RuntimeHandlerContext = {},
   ): Promise<LifecycleDestroyResponse> {
-    const connector = this.#registry.get(req.shape, req.provider);
-    if (!connector) throw new ConnectorNotFoundError(req.shape, req.provider);
-    return connector.destroy(req, ctx);
+    const handler = this.#registry.get(req.shape, req.provider);
+    if (!handler) throw new RuntimeHandlerNotFoundError(req.shape, req.provider);
+    return handler.destroy(req, ctx);
   }
 
   async compensate(
     req: LifecycleCompensateRequest,
-    ctx: ConnectorContext = {},
+    ctx: RuntimeHandlerContext = {},
   ): Promise<LifecycleCompensateResponse> {
-    const connector = this.#registry.get(req.shape, req.provider);
-    if (!connector) throw new ConnectorNotFoundError(req.shape, req.provider);
-    if (connector.compensate) return await connector.compensate(req, ctx);
-    const result = await connector.destroy(req, ctx);
+    const handler = this.#registry.get(req.shape, req.provider);
+    if (!handler) throw new RuntimeHandlerNotFoundError(req.shape, req.provider);
+    if (handler.compensate) return await handler.compensate(req, ctx);
+    const result = await handler.destroy(req, ctx);
     return { ok: result.ok, ...(result.note ? { note: result.note } : {}) };
   }
 
   describe(
     req: LifecycleDescribeRequest,
-    ctx: ConnectorContext = {},
+    ctx: RuntimeHandlerContext = {},
   ): Promise<LifecycleDescribeResponse> {
-    const connector = this.#registry.get(req.shape, req.provider);
-    if (!connector) throw new ConnectorNotFoundError(req.shape, req.provider);
-    return connector.describe(req, ctx);
+    const handler = this.#registry.get(req.shape, req.provider);
+    if (!handler) throw new RuntimeHandlerNotFoundError(req.shape, req.provider);
+    return handler.describe(req, ctx);
   }
 }
 
 function validateArtifactKind(
-  connector: Connector,
+  handler: RuntimeHandler,
   req: LifecycleApplyRequest,
 ): void {
-  const accepted = connector.acceptedArtifactKinds;
+  const accepted = handler.acceptedArtifactKinds;
   const declared = inferArtifactKind(req.spec);
   if (declared === undefined) return;
   if (!accepted.includes(declared)) {

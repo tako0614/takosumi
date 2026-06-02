@@ -1,5 +1,5 @@
 /**
- * Author-facing kind descriptor type and connector-local shape registry.
+ * Author-facing kind descriptor type and legacy runtime-handler-local shape registry.
  *
  * `Shape<Spec, Outputs, CapabilityTerm>` is the current contract every official
  * catalog-derived implementation can use to declare its descriptor-derived
@@ -10,7 +10,7 @@
  * `OperatorImplementation.provides[]` bindings).
  *
  * `SHAPE_REGISTRY` (`registerShape` / `getShape` / `getShapeByRef`) is a
- * separate, optional connector-local lookup used by the legacy deploy-space
+ * separate, optional runtime-handler-local lookup used by the legacy deploy-space
  * `Manifest` / `resources[]` resolution path. The default reference apply
  * facade resolves kinds through `OperatorImplementation`, not this registry, so it is
  * left empty in that path; only callers that opt into the legacy resolver

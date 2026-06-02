@@ -9,7 +9,7 @@ import {
   type LifecycleCompensateRequest,
   type LifecycleDestroyRequest,
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
-import { ConnectorRegistry } from "./connectors/mod.ts";
+import { RuntimeHandlerRegistry } from "./handlers.ts";
 import { createRuntimeAgentApp } from "./server.ts";
 
 function authHeaders(token: string) {
@@ -19,18 +19,18 @@ function authHeaders(token: string) {
   };
 }
 
-test("health returns ok with connector count", async () => {
-  const registry = new ConnectorRegistry();
+test("health returns ok with handler count", async () => {
+  const registry = new RuntimeHandlerRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const res = await app.request(LIFECYCLE_HEALTH_PATH);
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.status, "ok");
-  assert.equal(body.connectors, 0);
+  assert.equal(body.handlers, 0);
 });
 
 test("lifecycle endpoints reject missing auth header", async () => {
-  const registry = new ConnectorRegistry();
+  const registry = new RuntimeHandlerRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const res = await app.request(LIFECYCLE_APPLY_PATH, {
     method: "POST",
@@ -41,7 +41,7 @@ test("lifecycle endpoints reject missing auth header", async () => {
 });
 
 test("lifecycle endpoints reject wrong token", async () => {
-  const registry = new ConnectorRegistry();
+  const registry = new RuntimeHandlerRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const res = await app.request(LIFECYCLE_APPLY_PATH, {
     method: "POST",
@@ -52,7 +52,7 @@ test("lifecycle endpoints reject wrong token", async () => {
 });
 
 test("apply returns 400 on missing fields", async () => {
-  const registry = new ConnectorRegistry();
+  const registry = new RuntimeHandlerRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const res = await app.request(LIFECYCLE_APPLY_PATH, {
     method: "POST",
@@ -62,8 +62,8 @@ test("apply returns 400 on missing fields", async () => {
   assert.equal(res.status, 400);
 });
 
-test("apply returns 404 for unknown connector", async () => {
-  const registry = new ConnectorRegistry();
+test("apply returns 404 for unknown handler", async () => {
+  const registry = new RuntimeHandlerRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const req: LifecycleApplyRequest = {
     shape: "object-store@v1",
@@ -79,11 +79,11 @@ test("apply returns 404 for unknown connector", async () => {
   });
   assert.equal(res.status, 404);
   const body = await res.json();
-  assert.equal(body.code, "connector_not_found");
+  assert.equal(body.code, "runtime_handler_not_found");
 });
 
-test("apply dispatches to registered connector", async () => {
-  const registry = new ConnectorRegistry();
+test("apply dispatches to registered handler", async () => {
+  const registry = new RuntimeHandlerRegistry();
   registry.register({
     provider: "memory",
     shape: "object-store@v1",
@@ -112,8 +112,8 @@ test("apply dispatches to registered connector", async () => {
   assert.deepEqual(body.outputs, { bucket: "x" });
 });
 
-test("GET /v1/connectors lists registered connectors with auth", async () => {
-  const registry = new ConnectorRegistry();
+test("GET /v1/runtime-handlers lists registered handlers with auth", async () => {
+  const registry = new RuntimeHandlerRegistry();
   registry.register({
     provider: "memory",
     shape: "object-store@v1",
@@ -132,17 +132,17 @@ test("GET /v1/connectors lists registered connectors with auth", async () => {
   });
   const app = createRuntimeAgentApp({ registry, token: "tok" });
 
-  const unauthorized = await app.request("/v1/connectors");
+  const unauthorized = await app.request("/v1/runtime-handlers");
   assert.equal(unauthorized.status, 401);
 
-  const ok = await app.request("/v1/connectors", {
+  const ok = await app.request("/v1/runtime-handlers", {
     headers: { authorization: "Bearer tok" },
   });
   assert.equal(ok.status, 200);
   const body = await ok.json();
-  assert.equal(body.connectors.length, 2);
+  assert.equal(body.handlers.length, 2);
   assert.deepEqual(
-    body.connectors.map((c: { shape: string; provider: string }) =>
+    body.handlers.map((c: { shape: string; provider: string }) =>
       `${c.shape}/${c.provider}`
     ).sort(),
     ["object-store@v1/memory", "web-service@v1/alt"],
@@ -150,7 +150,7 @@ test("GET /v1/connectors lists registered connectors with auth", async () => {
 });
 
 test("/v1/lifecycle/verify rejects missing auth", async () => {
-  const registry = new ConnectorRegistry();
+  const registry = new RuntimeHandlerRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
   const res = await app.request("/v1/lifecycle/verify", {
     method: "POST",
@@ -160,9 +160,9 @@ test("/v1/lifecycle/verify rejects missing auth", async () => {
   assert.equal(res.status, 401);
 });
 
-test("/v1/lifecycle/verify reports `no verify hook` for connectors without verify",
+test("/v1/lifecycle/verify reports `no verify hook` for handlers without verify",
   async () => {
-    const registry = new ConnectorRegistry();
+    const registry = new RuntimeHandlerRegistry();
     registry.register({
       provider: "memory",
       shape: "object-store@v1",
@@ -189,8 +189,8 @@ test("/v1/lifecycle/verify reports `no verify hook` for connectors without verif
   },
 );
 
-test("/v1/lifecycle/verify aggregates ok + fail connectors", async () => {
-  const registry = new ConnectorRegistry();
+test("/v1/lifecycle/verify aggregates ok + fail handlers", async () => {
+  const registry = new RuntimeHandlerRegistry();
   registry.register({
     provider: "good",
     shape: "object-store@v1",
@@ -242,7 +242,7 @@ test("/v1/lifecycle/verify aggregates ok + fail connectors", async () => {
 
 test("/v1/lifecycle/verify catches thrown errors as network_error",
   async () => {
-    const registry = new ConnectorRegistry();
+    const registry = new RuntimeHandlerRegistry();
     registry.register({
       provider: "throws",
       shape: "object-store@v1",
@@ -272,7 +272,7 @@ test("/v1/lifecycle/verify catches thrown errors as network_error",
 
 test("/v1/lifecycle/verify filters by shape + provider when supplied",
   async () => {
-    const registry = new ConnectorRegistry();
+    const registry = new RuntimeHandlerRegistry();
     registry.register({
       provider: "memory",
       shape: "object-store@v1",
@@ -306,8 +306,8 @@ test("/v1/lifecycle/verify filters by shape + provider when supplied",
   },
 );
 
-test("destroy dispatches to registered connector", async () => {
-  const registry = new ConnectorRegistry();
+test("destroy dispatches to registered handler", async () => {
+  const registry = new RuntimeHandlerRegistry();
   let destroyed: string | undefined;
   registry.register({
     provider: "memory",
@@ -336,8 +336,8 @@ test("destroy dispatches to registered connector", async () => {
   assert.equal(destroyed, "memory://x");
 });
 
-test("compensate dispatches to registered connector", async () => {
-  const registry = new ConnectorRegistry();
+test("compensate dispatches to registered handler", async () => {
+  const registry = new RuntimeHandlerRegistry();
   let compensated: string | undefined;
   registry.register({
     provider: "memory",
