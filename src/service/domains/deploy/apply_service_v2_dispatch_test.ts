@@ -11,16 +11,16 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   type ApplyResult,
-  type ProviderPlugin,
+  type ProviderAdapter,
   registerProvider,
   unregisterProvider,
-} from "takosumi-contract/internal/provider-plugin";
+} from "takosumi-contract/internal/provider-adapter";
 import {
   InMemoryObservabilitySink,
   kms,
   objectStorage,
   secretStore,
-} from "takosumi-contract/reference/plugin-sdk";
+} from "takosumi-contract/reference/implementation-sdk";
 import {
   registerShape,
   type Shape,
@@ -59,7 +59,7 @@ function shape(): Shape {
   };
 }
 
-function provider(): ProviderPlugin {
+function provider(): ProviderAdapter {
   return {
     id: PROV_OK,
     version: "0.0.1",

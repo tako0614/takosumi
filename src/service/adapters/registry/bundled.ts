@@ -250,13 +250,13 @@ export class BundledRegistrySeedAdapter implements BundledRegistry {
     const record = cloneTrustRecord(this.#trustRecordsById.get(id));
     if (record) return Promise.resolve(record);
     const legacy = cloneTrustRecord(
-      this.#trustRecordsById.get(id.replace(":backend-plugin:", ":kind-package:")),
+      this.#trustRecordsById.get(id.replace(":backend-implementation:", ":kind-package:")),
     );
     if (!legacy) return Promise.resolve(undefined);
     return Promise.resolve({
       ...legacy,
       id,
-      packageKind: "backend-plugin",
+      packageKind: "backend-implementation",
     });
   }
 
@@ -295,8 +295,8 @@ function providerSupportReport(
   return {
     kindPackageRef: resolution.ref,
     kindPackageDigest: resolution.digest,
-    backendPluginRef: resolution.ref,
-    backendPluginDigest: resolution.digest,
+    backendImplementationRef: resolution.ref,
+    backendImplementationDigest: resolution.digest,
     resourceContracts: [
       "resource.sql.postgres@v1",
       "resource.object-store.s3@v1",
@@ -318,14 +318,14 @@ function keyFor(kind: PackageKind, ref: string, digest: Digest): string {
 }
 
 function storagePackageKind(kind: PackageKind): PackageKind {
-  return kind === "backend-plugin" ? "kind-package" : kind;
+  return kind === "backend-implementation" ? "kind-package" : kind;
 }
 
 function exposePackageResolution(
   resolution: PackageResolution,
   requestedKind: PackageKind,
 ): PackageResolution {
-  if (requestedKind !== "backend-plugin") return resolution;
+  if (requestedKind !== "backend-implementation") return resolution;
   return {
     ...resolution,
     kind: requestedKind,
@@ -339,7 +339,7 @@ function exposePackageDescriptor(
   descriptor: PackageDescriptor,
   requestedKind: PackageKind,
 ): PackageDescriptor {
-  return requestedKind === "backend-plugin"
+  return requestedKind === "backend-implementation"
     ? { ...descriptor, kind: requestedKind }
     : descriptor;
 }

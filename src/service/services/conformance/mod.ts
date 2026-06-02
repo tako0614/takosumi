@@ -1,4 +1,4 @@
 export * from "./service.ts";
 export {
-  PackageConformanceService as BackendPluginConformanceService,
+  PackageConformanceService as BackendImplementationConformanceService,
 } from "./service.ts";

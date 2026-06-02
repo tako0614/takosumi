@@ -454,10 +454,10 @@ export { canonicalUriFor as canonicaliseDescriptorRef };
  * verbatim and never re-reads descriptor documents during provider effects.
  *
  * Risk: between resolve and apply, an operator might upgrade a provider
- * plugin from `provider.aws.rds@v1` to `provider.aws.rds@v2`. The closure
+ * implementation from `provider.aws.rds@v1` to `provider.aws.rds@v2`. The closure
  * still pins the v1 alias and v1 raw digest, but the live adapter now consumes
  * a v2 descriptor. If apply silently uses the v1-pinned digest against a v2
- * plugin, the deployment ends up with the wrong artifact pinned and may
+ * implementation, the deployment ends up with the wrong artifact pinned and may
  * exhibit subtle behavioural drift.
  *
  * The verification function below compares the closure's pinned descriptors
@@ -503,9 +503,9 @@ export interface ClosureVersionMismatch {
   readonly pinnedAlias: string;
   /** Closure-pinned raw digest. */
   readonly pinnedDigest: string;
-  /** Live plugin alias when known. */
+  /** Live implementation alias when known. */
   readonly liveAlias?: string;
-  /** Live plugin raw digest when known. */
+  /** Live implementation raw digest when known. */
   readonly liveDigest?: string;
   /** Human-readable upgrade guide. */
   readonly upgradeGuide: string;
@@ -525,10 +525,10 @@ export interface ClosureVersionCompatibilityReport {
  * than proceeding with stale pins.
  *
  * Aliases the live adapter set does not know about are reported as
- * `alias-not-loaded` — typical when an operator disables a plugin between
+ * `alias-not-loaded` — typical when an operator disables a implementation between
  * resolve and apply. The closure still pins the alias; we cannot proceed
- * without the plugin so we fail-closed and ask the user to either re-enable
- * the plugin or rebuild the closure.
+ * without the implementation so we fail-closed and ask the user to either re-enable
+ * the implementation or rebuild the closure.
  */
 export function verifyClosureVersionCompatibility(
   closure: DeploymentDescriptorClosure,
@@ -541,7 +541,7 @@ export function verifyClosureVersionCompatibility(
     // descriptors the live adapter set is expected to know about. The shared
     // JSON-LD context, authoring expansion descriptors, and synthetic
     // unknown descriptors are not provider-supplied and thus not checked.
-    if (!isPluginOwnedDescriptorAlias(alias)) continue;
+    if (!isImplementationOwnedDescriptorAlias(alias)) continue;
     const live = liveDescriptors.get(alias);
     if (!live) {
       // Try lookup by canonical id as a fallback.
@@ -555,7 +555,7 @@ export function verifyClosureVersionCompatibility(
           upgradeGuide:
             `Descriptor '${alias}' is pinned in the deployment closure but ` +
             `no loaded provider adapter currently consumes it. Either re-enable ` +
-            `the plugin that supplies '${alias}', or redeploy the manifest so a ` +
+            `the implementation that supplies '${alias}', or redeploy the manifest so a ` +
             `fresh closure is built against the currently loaded adapter set.`,
         });
         continue;
@@ -609,7 +609,7 @@ function verifyAliasMatch(
       liveAlias: live.alias,
       liveDigest: live.rawDigest,
       upgradeGuide: `Descriptor '${alias}' raw digest pinned in the closure ` +
-        `(${resolution.rawDigest}) does not match the digest the loaded plugin ` +
+        `(${resolution.rawDigest}) does not match the digest the loaded implementation ` +
         `currently consumes (${live.rawDigest}). The descriptor body changed ` +
         `(likely an apiVersion bump that did not change the alias). Rebuild ` +
         `the descriptor closure with \`takos deploy plan --refresh\` and re-apply.`,
@@ -665,7 +665,7 @@ export function verifyDescriptorClosureCompatibility(
  * to consume should be verified. Authoring-expansion descriptors and the
  * shared JSON-LD context are service-owned.
  */
-function isPluginOwnedDescriptorAlias(alias: string): boolean {
+function isImplementationOwnedDescriptorAlias(alias: string): boolean {
   if (alias === TAKOSUMI_CONTEXT_ID) return false;
   if (alias.startsWith("authoring.")) return false;
   if (alias.startsWith("https://takosumi.com/contexts/")) return false;

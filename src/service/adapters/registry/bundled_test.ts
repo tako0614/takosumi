@@ -12,8 +12,8 @@ test("bundled registry seed adapter resolves built-in packages by kind and ref",
   const expected = [
     ["resource-contract-package", "resource.sql.postgres@v1"],
     ["resource-contract-package", "resource.object-store.s3@v1"],
-    ["backend-plugin", "provider.noop@v1"],
-    ["backend-plugin", "provider.local-docker@v1"],
+    ["backend-implementation", "provider.noop@v1"],
+    ["backend-implementation", "provider.local-docker@v1"],
     ["data-contract-package", "data.json@v1"],
     ["output-contract-package", "output.route@v1"],
   ] as const;
@@ -48,7 +48,7 @@ test("bundled registry seed adapter only resolves digest-pinned built-ins", asyn
   const registry = new BundledRegistrySeedAdapter();
 
   assert.equal(
-    await registry.resolve("backend-plugin", "missing@v1"),
+    await registry.resolve("backend-implementation", "missing@v1"),
     undefined,
   );
   assert.equal(
@@ -57,7 +57,7 @@ test("bundled registry seed adapter only resolves digest-pinned built-ins", asyn
   );
 
   const resolution = await registry.resolve(
-    "backend-plugin",
+    "backend-implementation",
     "provider.noop@v1",
   );
   assert.ok(resolution);
@@ -93,7 +93,7 @@ test("bundled registry seed adapter reports provider support", async () => {
   const reports = await registry.listProviderSupport();
   assert.equal(reports.length, 2);
   assert.deepEqual(
-    reports.map((report) => report.backendPluginRef).sort(),
+    reports.map((report) => report.backendImplementationRef).sort(),
     ["provider.local-docker@v1", "provider.noop@v1"],
   );
   for (const report of reports) {

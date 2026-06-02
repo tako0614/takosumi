@@ -12,7 +12,7 @@ import { log } from "../shared/log.ts";
  *    to the placeholder crypto if no encryption key is configured)
  *  - unencrypted databases are allowed
  *  - unsafe production-shaped defaults are allowed (reference / noop
- *    plugin selections, in-memory adapters, missing audit replication
+ *    implementation selections, in-memory adapters, missing audit replication
  *    sink in non-production environments)
  *  - the service logs a single startup warning so operators are aware
  *    that the running process is not production-hardened

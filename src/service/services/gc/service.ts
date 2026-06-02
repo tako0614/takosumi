@@ -11,7 +11,7 @@ export type GcRefType =
   | "PreparedArtifact"
   | "WorkloadRevision"
   | "ResourceInstance"
-  | "BackendPlugin"
+  | "BackendImplementation"
   | "KindPackage"
   | "MirroredArtifact"
   | "RetainedDeployArtifact";
@@ -87,7 +87,7 @@ export interface GcDryRunPlanInput {
   readonly workloadRevisions?: readonly WorkloadRevisionRetentionCandidate[];
   readonly resources?: readonly ResourceRetentionCandidate[];
   /** @deprecated Use `kindPackages`. Kept for migration compatibility. */
-  readonly backendPlugins?: readonly KindPackageRetentionCandidate[];
+  readonly backendImplementations?: readonly KindPackageRetentionCandidate[];
   readonly kindPackages?: readonly KindPackageRetentionCandidate[];
   readonly mirroredArtifacts?: readonly MirroredArtifactRetentionCandidate[];
   readonly retainedDeployArtifacts?: readonly RetainedDeployArtifact[];
@@ -126,8 +126,8 @@ export class GcRetentionService {
     for (const resource of input.resources ?? []) {
       decisions.push(await this.decideResource(resource, now));
     }
-    for (const backendPlugin of input.backendPlugins ?? []) {
-      decisions.push(await this.decideBackendPlugin(backendPlugin, now));
+    for (const backendImplementation of input.backendImplementations ?? []) {
+      decisions.push(await this.decideBackendImplementation(backendImplementation, now));
     }
     for (const kindPackage of input.kindPackages ?? []) {
       decisions.push(await this.decideKindPackage(kindPackage, now));
@@ -248,24 +248,24 @@ export class GcRetentionService {
   }
 
   /** @deprecated Use `decideKindPackage`. Kept for migration compatibility. */
-  async decideBackendPlugin(
-    backendPlugin: KindPackageRetentionCandidate,
+  async decideBackendImplementation(
+    backendImplementation: KindPackageRetentionCandidate,
     now: IsoTimestamp = this.#clock().toISOString(),
   ): Promise<GcRetentionDecision> {
     return await this.#decideKindPackageLike({
-      candidate: backendPlugin,
-      refType: "BackendPlugin",
+      candidate: backendImplementation,
+      refType: "BackendImplementation",
       activeMessage:
-        "BackendPlugin digest is referenced by active materialization.",
+        "BackendImplementation digest is referenced by active materialization.",
       rollbackMessage:
-        "BackendPlugin digest is referenced by rollback-window materialization.",
+        "BackendImplementation digest is referenced by rollback-window materialization.",
       now,
     });
   }
 
   async #decideKindPackageLike(input: {
     readonly candidate: KindPackageRetentionCandidate;
-    readonly refType: "BackendPlugin" | "KindPackage";
+    readonly refType: "BackendImplementation" | "KindPackage";
     readonly activeMessage: string;
     readonly rollbackMessage: string;
     readonly now: IsoTimestamp;

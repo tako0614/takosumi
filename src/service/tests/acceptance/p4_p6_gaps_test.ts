@@ -36,7 +36,7 @@ test("acceptance P4: registry resolution carries active trust for selected packa
     "1.1.0",
   );
   const currentResolution: PackageResolution = {
-    kind: "backend-plugin",
+    kind: "backend-implementation",
     ref: "providers/postgres",
     digest: currentDescriptor.digest,
     registry: "bundled",
@@ -60,7 +60,7 @@ test("acceptance P4: registry resolution carries active trust for selected packa
   await resolutions.record(currentResolution);
   await trustRecords.put({
     id: "trust_provider_old",
-    packageKind: "backend-plugin",
+    packageKind: "backend-implementation",
     packageRef: "providers/postgres",
     packageDigest: oldDescriptor.digest,
     trustLevel: "reference",
@@ -77,8 +77,8 @@ test("acceptance P4: registry resolution carries active trust for selected packa
     resolutions,
     trustRecords,
     [{
-      backendPluginRef: "providers/postgres",
-      backendPluginDigest: currentDescriptor.digest,
+      backendImplementationRef: "providers/postgres",
+      backendImplementationDigest: currentDescriptor.digest,
       resourceContracts: ["postgres.v1"],
       capabilityProfiles: ["runtime.worker.v1"],
       conformanceTier: "tested",
@@ -86,13 +86,13 @@ test("acceptance P4: registry resolution carries active trust for selected packa
   );
 
   const resolution = await registry.resolve(
-    "backend-plugin",
+    "backend-implementation",
     "providers/postgres",
   );
   assert.deepEqual(resolution, currentResolution);
   assert.equal(
     (await registry.getDescriptor(
-      "backend-plugin",
+      "backend-implementation",
       "providers/postgres",
       resolution?.digest ?? "",
     ))?.version,
@@ -106,7 +106,7 @@ test("acceptance P4: registry resolution carries active trust for selected packa
   );
   assert.equal(
     (await trustRecords.findForPackage(
-      "backend-plugin",
+      "backend-implementation",
       "providers/postgres",
       currentDescriptor.digest,
     ))?.status,
@@ -114,8 +114,8 @@ test("acceptance P4: registry resolution carries active trust for selected packa
   );
   assert.deepEqual(
     (await registry.listProviderSupport()).map((report) => ({
-      ref: report.backendPluginRef,
-      digest: report.backendPluginDigest,
+      ref: report.backendImplementationRef,
+      digest: report.backendImplementationDigest,
       tier: report.conformanceTier,
     })),
     [{
@@ -277,7 +277,7 @@ function providerDescriptor(
   version: string,
 ): PackageDescriptor {
   return {
-    kind: "backend-plugin",
+    kind: "backend-implementation",
     ref: "providers/postgres",
     digest,
     publisher: "takos",

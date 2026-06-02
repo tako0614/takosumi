@@ -55,7 +55,7 @@ console.log(
 // Blocks on serveOnAnyRuntime (port 8787 from config). The service's bootstrap
 // agent detection reads TAKOSUMI_AGENT_URL/TOKEN from this process env.
 await buildComposedServer({
-  plugins: [],
+  implementations: [],
 });
 
 async function writeGatewayProjection(

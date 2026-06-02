@@ -20,7 +20,7 @@ import { log } from "../shared/log.ts";
 import type {
   PlatformContext,
   RefResolver,
-} from "takosumi-contract/internal/provider-plugin";
+} from "takosumi-contract/internal/provider-adapter";
 import type { JsonObject } from "takosumi-contract/reference/types";
 
 export interface RoleWorkerDaemonOptions {

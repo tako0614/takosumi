@@ -91,7 +91,7 @@ test("acceptance P1: revoked registry trust degrades group and blocks security",
   const resolutions = new InMemoryPackageResolutionStore();
   const trustRecords = new InMemoryTrustRecordStore();
   const descriptor: PackageDescriptor = {
-    kind: "backend-plugin",
+    kind: "backend-implementation",
     ref: "providers/noop",
     digest: "sha256:revoked",
     publisher: "takos",
@@ -126,7 +126,7 @@ test("acceptance P1: revoked registry trust degrades group and blocks security",
 
   const securityCondition = trustCondition(
     await trustRecords.findForPackage(
-      "backend-plugin",
+      "backend-implementation",
       "providers/noop",
       "sha256:revoked",
     ),

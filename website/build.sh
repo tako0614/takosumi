@@ -33,10 +33,10 @@ OUTPUT_PUBLIC="${WEBSITE_DIR}/.output/public"
 DOCS_DIR="${REPO_ROOT}/docs"
 DOCS_DIST="${DOCS_DIR}/.vitepress/dist"
 SPEC_CONTEXTS="${REPO_ROOT}/spec/contexts"
-# Kind descriptors are published spec, not framework or plugin source. The single
+# Kind descriptors are published spec, not framework or implementation source. The single
 # official catalog is flat JSON-LD under docs/kinds/v1/<name>.jsonld — both base
 # kinds (worker, postgres, …) and the descriptors that extend them via
-# portableBase (cloudflare-worker, aws-rds-postgres, …). Plugins are pure
+# portableBase (cloudflare-worker, aws-rds-postgres, …). Implementations are pure
 # implementations that consume these descriptors; they hold no descriptor source.
 KIND_CATALOG="${REPO_ROOT}/docs/kinds/v1"
 

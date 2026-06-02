@@ -15,7 +15,7 @@ import type {
   objectStorage,
   ObservabilitySink,
   secretStore,
-} from "./plugin-sdk.ts";
+} from "./implementation-sdk.ts";
 
 /**
  * Legacy connector-local selector for shape-based backend adapters.
@@ -24,7 +24,7 @@ import type {
  * connectors can dispatch work locally. Current operator distributions derive
  * those selectors from their materializer mapping; reference components
  * remain keyed by `Component.kind`, and new reference adapters should implement
- * `TakosumiPlugin` directly.
+ * `OperatorImplementation` directly.
  */
 export interface ShapeRef {
   readonly id: string;
@@ -122,15 +122,15 @@ export interface PlatformContext {
  * type-parameterize this generic catch capability typos at compile time;
  * untyped adapters fall back to `string`.
  *
- * @deprecated Compatibility bridge for the pre-TakosumiPlugin provider surface.
- * The current reference adapter API is `TakosumiPlugin` (or the
- * `Materializer = TakosumiPlugin | InlineMaterializer` union) from
- * `src/contract/plugin.ts`. `ProviderPlugin` remains as a transitional
- * adapter wrapped by `takosumiPluginFromProviderPlugin()`; new code should
- * implement `TakosumiPlugin` directly. First-party native kind implementations use
- * `takosumiPluginFromNativeKindOperations()` instead of this bridge.
+ * @deprecated Compatibility bridge for the pre-OperatorImplementation provider surface.
+ * The current reference adapter API is `OperatorImplementation` (or the
+ * `Materializer = OperatorImplementation | InlineMaterializer` union) from
+ * `src/contract/implementation.ts`. `ProviderAdapter` remains as a transitional
+ * adapter wrapped by `operatorImplementationFromProviderAdapter()`; new code should
+ * implement `OperatorImplementation` directly. First-party native kind implementations use
+ * `operatorImplementationFromNativeKindOperations()` instead of this bridge.
  */
-export interface ProviderPlugin<
+export interface ProviderAdapter<
   Spec = JsonObject,
   Outputs = JsonObject,
   CapabilityTerm extends string = string,
@@ -152,7 +152,7 @@ export interface ProviderPlugin<
   ): Promise<ResourceStatus<Outputs>>;
 }
 
-const PROVIDER_REGISTRY = new Map<string, ProviderPlugin>();
+const PROVIDER_REGISTRY = new Map<string, ProviderAdapter>();
 
 /**
  * Options for {@link registerProvider}. Pass `allowOverride: true` to
@@ -164,14 +164,14 @@ export interface RegisterProviderOptions {
 }
 
 export function registerProvider(
-  provider: ProviderPlugin,
+  provider: ProviderAdapter,
   options?: RegisterProviderOptions,
-): ProviderPlugin | undefined {
+): ProviderAdapter | undefined {
   const previous = PROVIDER_REGISTRY.get(provider.id);
   // Same-value re-registration (idempotent boot) is silent — only warn
   // when the new entry differs from the prior. Reference equality is the
   // cheapest comparison and good enough: the legacy shape/provider path passes
-  // the same `Shape` / `ProviderPlugin` instance every time.
+  // the same `Shape` / `ProviderAdapter` instance every time.
   if (
     previous !== undefined &&
     previous !== provider &&
@@ -188,7 +188,7 @@ export function registerProvider(
   return previous;
 }
 
-function describeProvider(provider: ProviderPlugin): string {
+function describeProvider(provider: ProviderAdapter): string {
   return `${provider.id}@${provider.version}`;
 }
 
@@ -196,25 +196,25 @@ export function unregisterProvider(id: string): boolean {
   return PROVIDER_REGISTRY.delete(id);
 }
 
-export function getProvider(id: string): ProviderPlugin | undefined {
+export function getProvider(id: string): ProviderAdapter | undefined {
   return PROVIDER_REGISTRY.get(id);
 }
 
-export function listProviders(): readonly ProviderPlugin[] {
+export function listProviders(): readonly ProviderAdapter[] {
   return Array.from(PROVIDER_REGISTRY.values());
 }
 
 export function listProvidersForShape(
   shapeId: string,
   shapeVersion: string,
-): readonly ProviderPlugin[] {
-  const matches: ProviderPlugin[] = [];
-  for (const plugin of PROVIDER_REGISTRY.values()) {
+): readonly ProviderAdapter[] {
+  const matches: ProviderAdapter[] = [];
+  for (const implementation of PROVIDER_REGISTRY.values()) {
     if (
-      plugin.implements.id === shapeId &&
-      plugin.implements.version === shapeVersion
+      implementation.implements.id === shapeId &&
+      implementation.implements.version === shapeVersion
     ) {
-      matches.push(plugin);
+      matches.push(implementation);
     }
   }
   return matches;

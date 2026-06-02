@@ -2,7 +2,7 @@
 import type { ActorContext, Digest, JsonObject } from "./types.ts";
 import type { ObjectAddress } from "./takosumi-v1.ts";
 import type { TakosumiActorContext } from "./internal-api.ts";
-import type { TakosumiPlugin } from "./plugin.ts";
+import type { OperatorImplementation } from "./implementation.ts";
 import {
   RUNTIME_AGENT_RPC_PATHS,
   type SignedGatewayManifest,
@@ -2202,7 +2202,7 @@ export interface CreateTakosumiServiceOptions {
   readonly role?: TakosumiProcessRole;
   readonly runtimeEnv?: Record<string, string | undefined>;
   readonly runtimeConfig?: AppRuntimeConfig;
-  readonly plugins?: readonly TakosumiPlugin[];
+  readonly implementations?: readonly OperatorImplementation[];
   readonly dateClock?: () => Date;
   readonly uuidFactory?: () => string;
   readonly context?: AppContext;

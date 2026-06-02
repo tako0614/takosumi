@@ -1,9 +1,9 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import type { TakosumiPlugin } from "takosumi-contract/reference/compat";
+import type { OperatorImplementation } from "takosumi-contract/reference/compat";
 import {
   type AppAdapters,
-  buildTakosumiPluginRegistry,
+  buildOperatorImplementationRegistry,
   createAppContext,
   createConfiguredAppContext,
   createInMemoryAppContext,
@@ -120,18 +120,18 @@ test("createAppContext rejects staging runtime without explicit adapters", async
   );
 });
 
-test("buildTakosumiPluginRegistry exposes operator-supplied plugins by kind URI", () => {
-  const plugin = buildExamplePlugin();
-  const registry = buildTakosumiPluginRegistry({ plugins: [plugin] });
+test("buildOperatorImplementationRegistry exposes operator-supplied implementations by kind URI", () => {
+  const implementation = buildExampleImplementation();
+  const registry = buildOperatorImplementationRegistry({ implementations: [implementation] });
   assert.equal(
     registry.findByKindUri("https://example.test/kinds/v1/test")?.name,
     "@example/test",
   );
 });
 
-test("buildTakosumiPluginRegistry leaves bare kind refs to operator plugins", () => {
-  const plugin = buildExamplePlugin();
-  const registry = buildTakosumiPluginRegistry({ plugins: [plugin] });
+test("buildOperatorImplementationRegistry leaves bare kind refs to operator implementations", () => {
+  const implementation = buildExampleImplementation();
+  const registry = buildOperatorImplementationRegistry({ implementations: [implementation] });
   assert.equal(registry.findByKindRef("test"), undefined);
   assert.equal(
     registry.findByKindRef("https://example.test/kinds/v1/test")?.name,
@@ -139,7 +139,7 @@ test("buildTakosumiPluginRegistry leaves bare kind refs to operator plugins", ()
   );
 });
 
-function buildExamplePlugin(): TakosumiPlugin {
+function buildExampleImplementation(): OperatorImplementation {
   return {
     name: "@example/test",
     version: "1.0.0",

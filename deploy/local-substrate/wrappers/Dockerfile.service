@@ -1,7 +1,7 @@
 # Service container for local-substrate.
 #
 # Base: oven/bun (matches the Bun-first local-substrate runtime).
-# Adds: docker CLI + compose plugin so the embedded runtime-agent's
+# Adds: docker CLI + compose implementation so the embedded runtime-agent's
 # Docker Compose connector can spawn `docker compose` against
 # the host docker socket mounted at /var/run/docker.sock.
 #
@@ -11,9 +11,9 @@
 FROM oven/bun:1
 
 # Pull docker CLI (no daemon) from the official docker image. Compose
-# plugin lives under cli-plugins/ in the same image.
+# implementation lives under cli-implementations/ in the same image.
 COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=docker:29-cli /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
+COPY --from=docker:29-cli /usr/local/libexec/docker/cli-implementations /usr/local/libexec/docker/cli-implementations
 
 # Sanity check at build time.
 RUN docker --version && docker compose version

@@ -1,53 +1,53 @@
 /**
- * Adapter helper that wraps an existing `ProviderPlugin` instance as a
- * `TakosumiPlugin`.
+ * Adapter helper that wraps an existing `ProviderAdapter` instance as a
+ * `OperatorImplementation`.
  *
  * The wrapper is intentionally thin: it forwards `component.spec` (passed
  * through the reference installer pipeline as opaque JSON) to the underlying
  * provider's `apply()` / `destroy()`, and surfaces the resource handle as
  * `resourceHandle` for the service's internal apply evidence.
  *
- * This bridge is retained for deploy-space compatibility code. `TakosumiPlugin`
- * is the current reference adapter API; `ProviderPlugin` is the older
+ * This bridge is retained for deploy-space compatibility code. `OperatorImplementation`
+ * is the current reference adapter API; `ProviderAdapter` is the older
  * shape/provider surface this file keeps isolated from native kind implementations.
  */
 
 import type { JsonObject } from "./types.ts";
-import type { PlatformContext, ProviderPlugin } from "./provider-plugin.ts";
+import type { PlatformContext, ProviderAdapter } from "./provider-adapter.ts";
 import type { PreparedSourceLocator } from "./runtime-agent-lifecycle.ts";
-import { outputsToOutputMaterial } from "./plugin.ts";
+import { outputsToOutputMaterial } from "./implementation.ts";
 import type {
   EnvValue,
-  TakosumiPlugin,
-  TakosumiPluginApplyContext,
+  OperatorImplementation,
+  OperatorImplementationApplyContext,
   ResolvedInputBinding,
-} from "./plugin.ts";
+} from "./implementation.ts";
 
 /**
- * Build a `TakosumiPlugin` that delegates `apply()` / `destroy()` to an
- * underlying `ProviderPlugin`. The kind URI must match the descriptor URI
+ * Build an `OperatorImplementation` that delegates `apply()` / `destroy()` to an
+ * underlying `ProviderAdapter`. The kind URI must match the descriptor URI
  * the underlying provider materializes.
  *
- * `ProviderPlugin` is generic over `Spec` / `Outputs` types; this compatibility
+ * `ProviderAdapter` is generic over `Spec` / `Outputs` types; this compatibility
  * adapter erases to the generic JsonObject form before entering the current
- * `TakosumiPlugin` pipeline.
+ * `OperatorImplementation` pipeline.
  */
-export function takosumiPluginFromProviderPlugin(
+export function operatorImplementationFromProviderAdapter(
   opts: {
     // deno-lint-ignore no-explicit-any
-    readonly provider: ProviderPlugin<any, any, any>;
+    readonly provider: ProviderAdapter<any, any, any>;
     readonly kindUri: string;
     readonly name?: string;
     readonly version?: string;
     readonly capabilities?: readonly string[];
   },
-): TakosumiPlugin {
-  const provider = opts.provider as unknown as ProviderPlugin;
+): OperatorImplementation {
+  const provider = opts.provider as unknown as ProviderAdapter;
   const capabilities = opts.capabilities ??
     (provider.capabilities as readonly string[]);
   const materializeOutput = (
     ctx: Parameters<
-      NonNullable<TakosumiPlugin["materializeOutput"]>
+      NonNullable<OperatorImplementation["materializeOutput"]>
     >[0],
   ) =>
     Promise.resolve(
@@ -163,7 +163,7 @@ function sameEnvValue(a: EnvValue, b: EnvValue): boolean {
  */
 function synthesizePlatformContext(input: {
   readonly installationId: string;
-  readonly source?: TakosumiPluginApplyContext["source"];
+  readonly source?: OperatorImplementationApplyContext["source"];
   readonly sourceDirectory?: string;
 }): PlatformContext {
   return {
@@ -180,7 +180,7 @@ function synthesizePlatformContext(input: {
 }
 
 function preparedSourceLocator(input: {
-  readonly source?: TakosumiPluginApplyContext["source"];
+  readonly source?: OperatorImplementationApplyContext["source"];
   readonly sourceDirectory?: string;
 }): PreparedSourceLocator | undefined {
   if (input.source?.kind === "prepared" && input.source.url) {

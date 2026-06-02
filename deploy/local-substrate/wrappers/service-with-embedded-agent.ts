@@ -58,7 +58,7 @@ console.log(
 
 const created = await createTakosumiService({
   runtimeEnv: { ...process.env },
-  plugins: [],
+  implementations: [],
 });
 const app = created.app;
 

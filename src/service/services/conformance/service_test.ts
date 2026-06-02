@@ -4,10 +4,10 @@ import {
   BundledRegistrySeedAdapter,
   bundledRegistrySeedTrustRecords,
 } from "../../adapters/registry/mod.ts";
-import { BackendPluginConformanceService } from "./mod.ts";
+import { BackendImplementationConformanceService } from "./mod.ts";
 
-test("backend plugin conformance accepts trusted provider with required support", async () => {
-  const service = new BackendPluginConformanceService({
+test("backend implementation conformance accepts trusted provider with required support", async () => {
+  const service = new BackendImplementationConformanceService({
     registry: new BundledRegistrySeedAdapter(),
   });
 
@@ -28,8 +28,8 @@ test("backend plugin conformance accepts trusted provider with required support"
   assert.ok(result.checks.every((check) => check.passed));
 });
 
-test("backend plugin conformance blocks providers missing required features", async () => {
-  const service = new BackendPluginConformanceService({
+test("backend implementation conformance blocks providers missing required features", async () => {
+  const service = new BackendImplementationConformanceService({
     registry: new BundledRegistrySeedAdapter(),
   });
 
@@ -53,7 +53,7 @@ test("backend plugin conformance blocks providers missing required features", as
   );
 });
 
-test("backend plugin conformance blocks revoked trust records", async () => {
+test("backend implementation conformance blocks revoked trust records", async () => {
   const trustRecords = bundledRegistrySeedTrustRecords.map((record) =>
     record.packageRef === "provider.noop@v1"
       ? {
@@ -64,7 +64,7 @@ test("backend plugin conformance blocks revoked trust records", async () => {
       }
       : record
   );
-  const service = new BackendPluginConformanceService({
+  const service = new BackendImplementationConformanceService({
     registry: new BundledRegistrySeedAdapter(
       undefined,
       undefined,

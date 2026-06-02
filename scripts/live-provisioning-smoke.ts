@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import type {
   provider,
   RuntimeDesiredState,
-} from "takosumi-contract/reference/plugin-sdk";
+} from "takosumi-contract/reference/implementation-sdk";
 import {
   assertProviderProofFixture,
   operationDescriptor,

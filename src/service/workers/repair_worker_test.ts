@@ -9,12 +9,12 @@ import {
   InMemoryRuntimeDesiredStateStore,
   type RuntimeDesiredState,
 } from "../domains/runtime/mod.ts";
-import { BackendPluginConformanceService } from "../services/conformance/mod.ts";
+import { BackendImplementationConformanceService } from "../services/conformance/mod.ts";
 import { ProviderOperationService } from "../services/provider-operations/mod.ts";
 import { InMemoryOutboxStore } from "../shared/events.ts";
 import { RepairWorker } from "./repair_worker.ts";
 
-test("RepairWorker rematerializes with a trusted backend plugin", async () => {
+test("RepairWorker rematerializes with a trusted backend implementation", async () => {
   const desiredStates = new InMemoryRuntimeDesiredStateStore();
   await desiredStates.put(desiredState());
   const outbox = new InMemoryOutboxStore();
@@ -30,7 +30,7 @@ test("RepairWorker rematerializes with a trusted backend plugin", async () => {
   const worker = new RepairWorker({
     desiredStates,
     outboxStore: outbox,
-    providerAssessor: new BackendPluginConformanceService({
+    providerAssessor: new BackendImplementationConformanceService({
       registry: new BundledRegistrySeedAdapter(),
     }),
     providerOperations: {
@@ -38,7 +38,7 @@ test("RepairWorker rematerializes with a trusted backend plugin", async () => {
     },
   });
 
-  const result = await worker.rematerializeWithTrustedPlugin({
+  const result = await worker.rematerializeWithTrustedImplementation({
     spaceId: "space-a",
     groupId: "group-a",
     providerRef: "provider.noop@v1",
@@ -77,7 +77,7 @@ test("RepairWorker blocks rematerialization when provider trust is revoked", asy
   );
   const worker = new RepairWorker({
     desiredStates,
-    providerAssessor: new BackendPluginConformanceService({
+    providerAssessor: new BackendImplementationConformanceService({
       registry: new BundledRegistrySeedAdapter(
         undefined,
         undefined,
@@ -92,7 +92,7 @@ test("RepairWorker blocks rematerialization when provider trust is revoked", asy
     },
   });
 
-  const result = await worker.rematerializeWithTrustedPlugin({
+  const result = await worker.rematerializeWithTrustedImplementation({
     spaceId: "space-a",
     groupId: "group-a",
     providerRef: "provider.noop@v1",
@@ -100,7 +100,7 @@ test("RepairWorker blocks rematerialization when provider trust is revoked", asy
   });
 
   assert.equal(result.plan.status, "blocked");
-  assert.equal(result.plan.reason, "backend-plugin-conformance-blocked");
+  assert.equal(result.plan.reason, "backend-implementation-conformance-blocked");
   assert.equal(result.plan.trustStatus, "revoked");
   assert.equal(result.operation, undefined);
   assert.equal(materializer.callCount, 0);
