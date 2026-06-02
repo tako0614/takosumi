@@ -55,8 +55,9 @@ Takosumi does not run Terraform/OpenTofu, own provider credentials, or manage Ia
 distributions create and operate infrastructure, then publish databases, buckets, OIDC issuers, queues, runtimes, and
 other services into PlatformService inventory. Takosumi records which services were selected for an Installation.
 
-The sibling `@takosjp/takosumi-plugins` package is an operator integration package for inventory importers,
-runtime-agent connectors, and backend adapters. It is not a Terraform provider replacement.
+Backend adapters, runtime-agent connectors, inventory importers, and OpenTofu state handling are operator-owned
+implementation details. Takosumi consumes the resulting PlatformService inventory and Deployment outputs; it is not a
+Terraform/OpenTofu provider replacement.
 
 ## Takosumi Accounts
 
@@ -178,7 +179,7 @@ The source is Bun-first. Keep host-specific compatibility behind the existing ru
 
 Semver tags (`v*.*.*`) run `.github/workflows/release.yml`. The workflow checks the workspace with Bun, builds the npm
 package through `bun run build:npm`, publishes `@takosjp/takosumi` to npm, and builds/pushes the `takosumi` OCI image to
-GHCR. `@takosjp/takosumi` and `@takosjp/takosumi-plugins` have independent version streams.
+GHCR. Backend-specific implementation bundles are released by each operator distribution, not by this public package.
 
 ## Docs Site
 

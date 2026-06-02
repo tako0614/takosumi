@@ -61,11 +61,11 @@ test("selfhost fixture is first-class provider proof", async () => {
 
 test("selfhosted provider alias maps to selfhost proof provider", () => {
   const options = parseOptions([], {
-    TAKOSUMI_PLUGIN_LIVE_PROVIDER: "selfhosted",
-    TAKOSUMI_PLUGIN_LIVE_PROOF_MODE: "live",
-    TAKOSUMI_PLUGIN_LIVE_PROOF_FIXTURE_FILE:
+    TAKOSUMI_PROVIDER_LIVE_PROVIDER: "selfhosted",
+    TAKOSUMI_PROVIDER_LIVE_PROOF_MODE: "live",
+    TAKOSUMI_PROVIDER_LIVE_PROOF_FIXTURE_FILE:
       "fixtures/live-provisioning/selfhosted.shape-v1.json",
-    TAKOSUMI_PLUGIN_SELFHOSTED_GATEWAY_URL: "https://gw.test",
+    TAKOSUMI_PROVIDER_SELFHOSTED_GATEWAY_URL: "https://gw.test",
   });
 
   assert.equal(options.provider, "selfhost");

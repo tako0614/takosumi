@@ -3,10 +3,9 @@
  *
  * The service reads only minimal env-derived knobs here: environment
  * (`local` / `development` / `test` / `staging` / `production`) and
- * process role. Adapter / plugin selection is no longer driven by env
- * vars — operators inject adapters and `TakosumiPlugin[]` directly via
- * `createTakosumiService({ adapters, plugins })`. Legacy backend / adapter
- * selectors are rejected to keep configuration clean-cut.
+ * process role. Backend implementation selection is no longer driven by env
+ * vars; operators inject implementation bindings through service construction.
+ * Legacy backend / adapter selectors are rejected to keep configuration clean.
  */
 import {
   EnvOperatorConfig,
@@ -68,9 +67,9 @@ export const PROCESS_ROLE_ENV_KEYS = [
 
 /**
  * Hard-break selectors retained as runtime errors so existing operator
- * configurations get a clear message ("inject adapters directly") instead
+ * configurations get a clear message ("inject implementation bindings") instead
  * of silently doing the wrong thing. Includes both legacy adapter
- * selectors and the (now retired) port-based plugin selectors.
+ * selectors and the now-retired env-based implementation selectors.
  */
 const STALE_SELECTOR_KEYS = [
   "TAKOSUMI_STORAGE_BACKEND",
@@ -115,10 +114,6 @@ const STALE_SELECTOR_KEYS = [
   "TAKOSUMI_OBSERVABILITY_PLUGIN_ID",
   "TAKOSUMI_RUNTIME_AGENT_PLUGIN",
   "TAKOSUMI_RUNTIME_AGENT_PLUGIN_ID",
-  "TAKOSUMI_KERNEL_PLUGIN_SELECTIONS",
-  "TAKOSUMI_KERNEL_PLUGIN_MAP",
-  "TAKOSUMI_KERNEL_PLUGIN_CONFIG",
-  "TAKOSUMI_KERNEL_PLUGIN_CONFIG_JSON",
   "DATABASE_SECRET_REF",
   "TAKOSUMI_REDIS_URL",
   "REDIS_URL",
@@ -196,7 +191,7 @@ async function rejectStaleSelectors(
       code: "stale_runtime_selector",
       key,
       message:
-        `${key} is no longer accepted by the Takosumi service; inject adapters / TakosumiPlugin instances directly via createTakosumiService({ adapters, plugins }) instead`,
+        `${key} is no longer accepted by the Takosumi service; inject operator-owned implementation bindings through service construction instead`,
     });
   }
 }

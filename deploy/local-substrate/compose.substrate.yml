@@ -157,7 +157,6 @@ services:
       - env/agent.env
     volumes:
       - ../../../takosumi:/workspace
-      - ../../../takosumi-plugins:/plugins
       - ../../../takos:/sources/takos:ro
       - ./wrappers:/wrappers:ro
       - ./factories:/local-substrate-factories:ro
@@ -185,8 +184,8 @@ services:
   # service (wrappers/cloud.ts -> buildComposedServer). Mirrors production's one
   # accounts.takosumi.com; replaces the old separate accounts + service services.
   # Holds NO docker.sock — execution is dispatched to `agent`. Imports straddle
-  # /workspace (takosumi), /takosumi (the dev-seam @takosjp/takosumi
-  # target), and /plugins (native kinds), run under the takosumi config.
+  # /workspace (takosumi) and /takosumi (the dev-seam @takosjp/takosumi
+  # target), run under the takosumi config.
   cloud:
     profiles: ["postgres"]
     image: oven/bun:1
@@ -205,7 +204,6 @@ services:
     volumes:
       - ../../../takosumi:/workspace
       - ../../../takosumi:/takosumi:ro
-      - ../../../takosumi-plugins:/plugins:ro
       - ./wrappers:/wrappers:ro
       - ./factories:/local-substrate-factories:ro
       - ./caddy/runtime:/local-substrate-runtime
@@ -454,7 +452,7 @@ services:
             npm install --no-fund --no-audit
           fi
           export VITE_TAKOSUMI_DASHBOARD_DEV_SIGN_IN="true"
-          export VITE_TAKOSUMI_DASHBOARD_DEV_SUBJECT="tsub_takosumi_cloud_local"
+          export VITE_TAKOSUMI_DASHBOARD_DEV_SUBJECT="tsub_takosumi_accounts_local"
           export VITE_TAKOSUMI_DASHBOARD_DEV_SESSION_ID="sess_local_substrate"
           export VITE_TAKOSUMI_DASHBOARD_DEV_ACCOUNT_ID="acct_local"
           export VITE_TAKOSUMI_DASHBOARD_DEV_SPACE_ID="space_local"

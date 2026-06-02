@@ -40,17 +40,8 @@ another workflow to maintain PlatformService inventory.
 
 The Takosumi service remains kind-agnostic. Component kinds are implementation
 selectors inside the reference apply pipeline, not public Source metadata.
-Operator distributions attach implementation bindings through a plain plugin
-array, and each binding declares the kind URI it can materialize.
-
-```ts
-const { app } = await createTakosumiService({
-  plugins: [
-    cloudflareWorkerPlugin({ lifecycle: workerLifecycle }),
-    cloudflareR2ObjectStorePlugin({ lifecycle: objectStoreLifecycle }),
-  ],
-});
-```
+Operator distributions attach implementation bindings through operator-owned
+service wiring, and each binding declares the kind URI it can materialize.
 
 The `https://takosumi.com/kinds/v1/*` URIs are Takosumi official catalog
 descriptor URIs. Compatible implementations can bind those descriptors to

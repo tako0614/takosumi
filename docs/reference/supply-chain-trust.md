@@ -52,7 +52,7 @@ Reference service example:
 
 ```text
 1. operator imports backend adapter subpaths in its distribution
-2. operator boots Takosumi service with a plugin array
+2. operator boots Takosumi service with operator-owned implementation bindings
 3. service rejects unresolved required bindings before runtime side effects
 4. reference runtime-agent topology resolves connector work from operator inventory
 5. Deployment record stores source, plan, binding snapshot, outputs, and status

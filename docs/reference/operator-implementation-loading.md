@@ -1,12 +1,12 @@
-# Reference Adapter Loading {#plugin-loading}
+# Operator Implementation Loading {#operator-implementation-loading}
 
-Takosumi service は operator-supplied backend adapter を plain array で受け取れます。
-これは `@takosjp/takosumi` の実装手段であり、Takosumi-compatible operator に必須
-の mechanism ではありません。
+Takosumi service は operator-supplied backend adapter を起動時 wiring として受け取れます。
+これは `@takosjp/takosumi` reference service の実装手段であり、
+Takosumi-compatible operator に必須の mechanism ではありません。
 
 operator が決めること:
 
-- adapter package の取得、lockfile、vendoring、private registry policy
+- adapter code の取得、lockfile、vendoring、private registry policy
 - provider credential と secret store
 - OpenTofu state や provider controller との接続
 - PlatformService inventory と binding policy

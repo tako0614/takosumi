@@ -9,7 +9,7 @@ Cloud / OS credentials stay outside the service. In the takosumi.com reference t
 ```typescript
 // Standalone
 import { startEmbeddedAgent } from "@takosjp/takosumi/runtime-agent/embed";
-import { buildConnectorRegistry } from "@takosjp/takosumi-plugins/connectors";
+import { buildConnectorRegistry } from "./operator-connectors.ts";
 
 const registry = buildConnectorRegistry({
   cloudflare: {
@@ -50,10 +50,9 @@ Auth is a single bearer token, shared with the service via `TAKOSUMI_AGENT_TOKEN
 ## Connector selectors
 
 `@takosjp/takosumi/runtime-agent` ships the lifecycle HTTP server, dispatcher,
-`ConnectorRegistry`, and resilience wrapper. Concrete backend connectors live
-outside the space package in `takosumi-plugins` as
-`@takosjp/takosumi-plugins/connectors`. The values below are connector-local
-wire selectors, not npm package names.
+`ConnectorRegistry`, and resilience wrapper. Concrete backend connectors live in
+the operator distribution as local implementation code. The values below are
+connector-local wire selectors, not npm package names.
 
 | Group                     | Connectors                                                                                                                                                                           |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -64,8 +63,7 @@ wire selectors, not npm package names.
 | Deno                      | `@takos/deno-deploy`                                                                                                                                                                 |
 | Local / external adapters | `@takos/filesystem-object-store`, `@takos/minio-object-store`, `@takos/docker-compose-web-service`, `@takos/systemd-web-service`, `@takos/docker-postgres`, `@takos/coredns-gateway` |
 
-Operators can use the reference connector package or provide their own
-connectors that implement the same interface:
+Operator distributions provide connectors that implement the same interface:
 
 Each connector implements:
 
@@ -101,8 +99,8 @@ The generic runtime-agent does not auto-load cloud connectors from env. An
 operator-owned boot module reads env or config, constructs a `ConnectorRegistry`,
 and passes it to `serveRuntimeAgent(...)` or `startEmbeddedAgent(...)`.
 
-The reference connector package exposes `buildConnectorRegistry(...)` for
-common provider families. A typical boot module maps env vars to that function:
+An operator-owned boot module maps env vars or secret mounts to a
+`ConnectorRegistry`:
 
 | Connector group | Env vars                                                                                                  |
 | --------------- | --------------------------------------------------------------------------------------------------------- |
@@ -124,21 +122,20 @@ verify` against the running agent to confirm which connectors are live.
 Operators that can rotate or refresh credentials may pass
 `ConnectorResilienceOptions.refreshCredentials`; the wrapper invokes it before
 retrying one credential-looking failure such as `HTTP 401` or an expired token
-error. The reference connector package's `buildConnectorRegistry(...)` applies
-this wrapper by default unless `resilience: false` is supplied.
+error. Operator boot code should apply this wrapper to provider connectors
+unless the distribution has an equivalent retry/credential-refresh layer.
 
 ## Implementation note
 
 The reference connectors make cloud REST calls via `fetch()` + `crypto.subtle`
 (Web Crypto). No npm SDK packages are pulled in; SigV4 / OAuth bearer /
-Service-account JWT signing is internal to
-`@takosjp/takosumi-plugins/connectors`.
+Service-account JWT signing stays inside operator-owned connector code.
 
 ## See also
 
 - `@takosjp/takosumi` — control plane that talks to this agent
 - `@takosjp/takosumi/cli` — runs `takosumi runtime-agent serve`
-- `@takosjp/takosumi-plugins/connectors` — reference concrete connector package
+- operator-owned connector code — concrete provider lifecycle implementations
 - `@takosjp/takosumi/contract/reference/runtime-agent-lifecycle` — defines `LifecycleApplyRequest` etc. for the reference lifecycle envelope.
 
 > The public npm package is `@takosjp/takosumi`. The contract is the authority. Contract-compatible publishers can ship their own runtime-agent implementations; current verification covers the reference distribution.

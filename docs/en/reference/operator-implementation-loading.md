@@ -1,4 +1,4 @@
-# Reference Adapter Loading {#plugin-loading}
+# Operator Implementation Loading {#operator-implementation-loading}
 
 The Takosumi service can receive operator-supplied backend adapters as a plain
 array. This is an implementation mechanism in `@takosjp/takosumi`, not a

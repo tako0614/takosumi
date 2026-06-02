@@ -15,8 +15,7 @@
 #   3. Copies the JSON-LD context catalog (`takosumi/spec/contexts/`)
 #      onto `.output/public/contexts/`
 #   4. Copies package-owned kind descriptor JSON-LD documents from
-#      takosumi portable packages and, when present, sibling
-#      takosumi-plugins native packages onto `.output/public/kinds/v1/`
+#      takosumi portable catalog sources onto `.output/public/kinds/v1/`
 #      so canonical kind URIs resolve.
 #
 # The merged `.output/public/` is the `pages_build_output_dir` declared

@@ -1,16 +1,16 @@
-# Reference Implementation Exports {#reference-plugin-exports}
+# Operator Implementation Exports {#operator-implementation-exports}
 
-`@takosjp/takosumi-plugins` is a reference implementation package an operator
-distribution may choose. It is not the v1 public source contract.
+Operator implementation exports are distribution-local APIs. They are not a
+Takosumi npm package and are not the v1 public source contract.
 
-The package provides:
+An operator implementation can provide:
 
 - backend adapters
 - runtime-agent connectors
 - operator inventory import helpers
 - local / cloud provider integration helpers
 
-The package does not provide:
+An operator implementation does not provide:
 
 - a Takosumi-specific source DSL
 - an OpenTofu provider replacement

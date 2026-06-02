@@ -10,7 +10,7 @@ Accounts (identity, billing, Installation ownership, OIDC issuer).
 - **Checksum**: each applied migration records `sha256:<hex>` of the SQL
   file. The runner refuses to re-apply if the file is later edited.
 - **Concurrency guard**: the runner takes a Postgres advisory lock keyed by
-  `hashtext('takosumi_cloud_migrations')` before reading the ledger.
+  `hashtext('takosumi_accounts_migrations')` before reading the ledger.
 - **Runner source**: `takosumi/packages/cli/src/cli-accounts-db.ts`
   (`loadAccountsMigrations`, `applyAccountsMigrations`).
 

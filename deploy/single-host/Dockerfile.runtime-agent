@@ -2,7 +2,7 @@
 #
 # The runtime-agent holds credentials and translates service lifecycle calls
 # into connector dispatch. This image carries the generic host; operator
-# distributions add concrete connectors from takosumi-plugins or their own
+# distributions add concrete connectors from operator implementation or their own
 # package set.
 
 FROM oven/bun:1

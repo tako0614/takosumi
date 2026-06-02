@@ -71,7 +71,7 @@ export async function runFromOptions(
 
   const fixtureFile = options.fixtureFile;
   if (!fixtureFile) {
-    throw new Error("TAKOSUMI_PLUGIN_LIVE_PROOF_FIXTURE_FILE is required");
+    throw new Error("TAKOSUMI_PROVIDER_LIVE_PROOF_FIXTURE_FILE is required");
   }
   const fixture = await loadProofFixture(fixtureFile);
   const provider = options.provider ?? fixture.provider;
@@ -85,7 +85,7 @@ export async function runFromOptions(
     return runFixtureProof(fixture);
   }
   if (!options.gateway) {
-    throw new Error("TAKOSUMI_PLUGIN_GATEWAY_URL is required in live mode");
+    throw new Error("TAKOSUMI_PROVIDER_GATEWAY_URL is required in live mode");
   }
   return runLiveProof(fixture, options.gateway, {
     cleanupOnly: options.cleanupOnly === true,
@@ -371,10 +371,10 @@ export function parseOptions(
   }
 
   const provider = providerFromEnv(env);
-  const mode = executionMode(env.TAKOSUMI_PLUGIN_LIVE_PROOF_MODE);
-  const fixtureFile = env.TAKOSUMI_PLUGIN_LIVE_PROOF_FIXTURE_FILE;
-  const cleanupOnly = env.TAKOSUMI_PLUGIN_LIVE_CLEANUP_ONLY === "1" ||
-    env.TAKOSUMI_PLUGIN_LIVE_CLEANUP_ONLY === "true";
+  const mode = executionMode(env.TAKOSUMI_PROVIDER_LIVE_PROOF_MODE);
+  const fixtureFile = env.TAKOSUMI_PROVIDER_LIVE_PROOF_FIXTURE_FILE;
+  const cleanupOnly = env.TAKOSUMI_PROVIDER_LIVE_CLEANUP_ONLY === "1" ||
+    env.TAKOSUMI_PROVIDER_LIVE_CLEANUP_ONLY === "true";
   const gateway = mode === "live" ? gatewayFromEnv(provider, env) : undefined;
   return { mode, fixtureFile, provider, cleanupOnly, gateway };
 }
@@ -382,7 +382,7 @@ export function parseOptions(
 function providerFromEnv(
   env: Record<string, string | undefined>,
 ): ProviderProofProvider | undefined {
-  const value = env.TAKOSUMI_PLUGIN_LIVE_PROVIDER;
+  const value = env.TAKOSUMI_PROVIDER_LIVE_PROVIDER;
   if (value === undefined || value === "") return undefined;
   if (value === "selfhosted") return "selfhost";
   if (!isProvider(value)) {
@@ -403,18 +403,18 @@ function gatewayFromEnv(
 ): GatewayConfig {
   const prefixes = envPrefixes(providerName);
   const baseUrl = firstEnv(env, [
-    "TAKOSUMI_PLUGIN_GATEWAY_URL",
+    "TAKOSUMI_PROVIDER_GATEWAY_URL",
     ...prefixes.map((prefix) => `${prefix}_GATEWAY_URL`),
   ]);
   if (!baseUrl) {
-    throw new Error("TAKOSUMI_PLUGIN_GATEWAY_URL is required in live mode");
+    throw new Error("TAKOSUMI_PROVIDER_GATEWAY_URL is required in live mode");
   }
   const bearerToken = firstEnv(env, [
-    "TAKOSUMI_PLUGIN_GATEWAY_BEARER_TOKEN",
+    "TAKOSUMI_PROVIDER_GATEWAY_BEARER_TOKEN",
     ...prefixes.map((prefix) => `${prefix}_GATEWAY_BEARER_TOKEN`),
   ]);
   const headersJson = firstEnv(env, [
-    "TAKOSUMI_PLUGIN_GATEWAY_HEADERS",
+    "TAKOSUMI_PROVIDER_GATEWAY_HEADERS",
     ...prefixes.map((prefix) => `${prefix}_GATEWAY_HEADERS`),
   ]);
   const headers = headersJson ? parseHeaders(headersJson) : undefined;
@@ -427,25 +427,25 @@ function envPrefixes(
   if (!providerName) return [];
   const upper = providerName.toUpperCase();
   if (providerName === "k8s") {
-    return ["TAKOSUMI_PLUGIN_K8S", "TAKOSUMI_PLUGIN_KUBERNETES"];
+    return ["TAKOSUMI_PROVIDER_K8S", "TAKOSUMI_PROVIDER_KUBERNETES"];
   }
   if (providerName === "kubernetes") {
-    return ["TAKOSUMI_PLUGIN_KUBERNETES", "TAKOSUMI_PLUGIN_K8S"];
+    return ["TAKOSUMI_PROVIDER_KUBERNETES", "TAKOSUMI_PROVIDER_K8S"];
   }
   if (providerName === "selfhost") {
     return [
-      "TAKOSUMI_PLUGIN_SELFHOSTED",
-      "TAKOSUMI_PLUGIN_SELFHOST",
-      "TAKOSUMI_PLUGIN_SELF_HOST",
+      "TAKOSUMI_PROVIDER_SELFHOSTED",
+      "TAKOSUMI_PROVIDER_SELFHOST",
+      "TAKOSUMI_PROVIDER_SELF_HOST",
     ];
   }
-  return [`TAKOSUMI_PLUGIN_${upper}`];
+  return [`TAKOSUMI_PROVIDER_${upper}`];
 }
 
 function parseHeaders(headersJson: string): HeadersInit {
   const value = JSON.parse(headersJson);
   if (!isRecord(value)) {
-    throw new Error("TAKOSUMI_PLUGIN_GATEWAY_HEADERS must be a JSON object");
+    throw new Error("TAKOSUMI_PROVIDER_GATEWAY_HEADERS must be a JSON object");
   }
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [

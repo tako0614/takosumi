@@ -27,11 +27,11 @@ test("takosumiPluginFromProviderPlugin injects resolved env into legacy spec", a
   const plugin = takosumiPluginFromProviderPlugin({
     provider,
     kindUri: "https://takosumi.com/kinds/v1/gateway",
-    name: "@takosjp/takosumi-plugins/kind/test-gateway",
+    name: "operator.takosumi.provider.test-gateway",
     version: "0.1.0",
   });
 
-  assert.equal(plugin.name, "@takosjp/takosumi-plugins/kind/test-gateway");
+  assert.equal(plugin.name, "operator.takosumi.provider.test-gateway");
   assert.equal(plugin.version, "0.1.0");
 
   await plugin.apply({

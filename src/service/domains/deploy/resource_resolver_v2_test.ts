@@ -243,7 +243,7 @@ test("resolveResourcesV2 rejects bare provider id with a namespaced suggestion",
     registerShape(fakeShape("object-store"));
     registerProvider(
       fakeProvider(
-        "@takosjp/takosumi-plugins/kind/aws-s3-object-store",
+        "operator.takosumi.provider.aws-s3-object-store",
         { id: "object-store", version: "v1" },
         ["c1", "c2"],
       ),
@@ -262,7 +262,7 @@ test("resolveResourcesV2 rejects bare provider id with a namespaced suggestion",
       assert.ok(
         issue.message.includes("aws-s3") &&
           issue.message.includes(
-            "@takosjp/takosumi-plugins/kind/aws-s3-object-store",
+            "operator.takosumi.provider.aws-s3-object-store",
           ),
         `expected rejection message naming both the bare id and the ` +
           `namespaced replacement, got: ${issue.message}`,
@@ -270,7 +270,7 @@ test("resolveResourcesV2 rejects bare provider id with a namespaced suggestion",
     } finally {
       unregisterShape("object-store", "v1");
       unregisterProvider(
-        "@takosjp/takosumi-plugins/kind/aws-s3-object-store",
+        "operator.takosumi.provider.aws-s3-object-store",
       );
     }
   },

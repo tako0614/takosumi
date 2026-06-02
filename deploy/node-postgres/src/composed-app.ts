@@ -63,9 +63,9 @@ export interface ComposedAppInput {
    */
   readonly sqlClient?: CreateTakosumiServiceArg["sqlClient"];
   /**
-   * Native adapter plugins (Docker Compose / systemd / etc.) attached to the
+   * Native adapter implementation bindings (Docker Compose / systemd / etc.) attached to the
    * embedded Takosumi service. The reference Bun profile ships none by default; the
-   * substrate-redesign composer wiring forwards operator-supplied plugins into
+   * substrate-redesign composer wiring forwards operator-supplied bindings into
    * the embedded service.
    */
   readonly plugins?: CreateTakosumiServiceArg["plugins"];
@@ -128,7 +128,7 @@ export async function buildComposedApp(
   };
 
   const created = await createTakosumiService({
-    // Operators add native adapter plugins (Docker Compose / systemd / etc.)
+    // Operators add native adapter implementation bindings (Docker Compose / systemd / etc.)
     // here; the reference Bun profile ships none by default but forwards
     // whatever the caller supplies.
     plugins: input.plugins ?? [],

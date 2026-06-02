@@ -266,7 +266,7 @@ function parseOptionalIsoDateOption(
  * Acquired before reading the ledger and released after the last migration
  * commits. See `docs/quality/migration-runner-contract.md` for the contract.
  */
-const ADVISORY_LOCK_LABEL = "takosumi_cloud_migrations";
+const ADVISORY_LOCK_LABEL = "takosumi_accounts_migrations";
 
 /**
  * Plan + report shape for the `accounts migrate-d1` subcommand.

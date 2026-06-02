@@ -37,7 +37,7 @@ tooling. They are not Source authoring vocabulary.
 
 | Export key | Status | Repository source |
 | --- | --- | --- |
-| `contract-reference-plugin` | reference implementation helpers | `src/contract/plugin*.ts` |
+| `contract-reference-implementation` | reference implementation helpers | reference contract implementation helper modules |
 | `contract-reference-runtime` | reference runtime-agent shape | `src/contract/runtime-agent*.ts` |
 | `contract-reference-catalog` | reference adapter metadata helpers | `src/contract/catalog.ts` |
 | `contract-reference-metadata` | reference metadata helpers | `src/contract/{error-category,shape}.ts` |
@@ -57,13 +57,13 @@ Current public docs and examples use `installer-api` or a narrow `reference/*` /
 ## Adapter Metadata Map
 
 Reference adapter metadata lives in `takosumi/docs/kinds/v1/` and is consumed by
-`takosumi-plugins/` generation and validation. It is compatibility metadata for
+`operator distribution/` generation and validation. It is compatibility metadata for
 operator-selected adapters, not a Takosumi source authoring contract.
 
 | Key | Surface | Owner | Normative reference | Repository source | Published reference |
 | --- | --- | --- | --- | --- | --- |
 | `reference-adapter-metadata-v1` | adapter metadata / material helper vocabulary | reference implementation maintainers | [Reference Backend Binding](./kind-bindings.md) | `docs/kinds/v1/*.jsonld`, `spec/contexts/v1.jsonld`, `src/contract/catalog.ts` | `/kinds/v1/<name>.jsonld`, `/contexts/v1.jsonld` |
-| `reference-adapter-guide` | backend adapter and connector guide | `takosumi-plugins` implementation subpaths | [Reference Backend Packages](./kind-packages.md); [Reference Backend Binding](./kind-bindings.md) | sibling `../takosumi-plugins/packages/kind-*/mod.ts`, sibling `../takosumi-plugins/packages/runtime-agent-connectors/` | implementation subpaths adopted by operator distributions |
+| `reference-adapter-guide` | backend adapter and connector guide | operator-owned implementation wiring | [Reference Backend Packages](./kind-packages.md); [Reference Backend Binding](./kind-bindings.md) | operator distribution OpenTofu/native controller/runtime-agent connector code | implementation wiring adopted by operator distributions |
 
 ## Operator Profile Spec Map
 

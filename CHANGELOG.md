@@ -17,7 +17,7 @@ The current package is the single npm stream `@takosjp/takosumi`.
   dashboard, deploy facade, and PlatformService inventory are operator
   distribution responsibilities.
 - Reference backend adapters and runtime-agent connectors live in the sibling
-  `takosumi-plugins` single package and are optional implementation pieces, not
+  `operator implementation` single package and are optional implementation pieces, not
   public Source authoring vocabulary.
 - Build and npm publication tasks are Bun-first.
 

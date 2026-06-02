@@ -69,4 +69,4 @@ Priority:
 
 - `@takosjp/takosumi`
 - `@takosjp/takosumi/runtime-agent`
-- `@takosjp/takosumi-plugins/connectors`
+- operator-owned runtime-agent connector code

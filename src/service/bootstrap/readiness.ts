@@ -64,7 +64,7 @@ export function createRoleReadinessProbes(
             ? {
               ok: false,
               error:
-                "strict implementation binding mode requires at least one TakosumiPlugin",
+                "strict implementation binding mode requires at least one operator implementation binding",
             }
             : {}),
         };
