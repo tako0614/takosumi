@@ -19,7 +19,7 @@ import { parse as parseYaml } from "yaml";
 import { isNotFoundError, readEnv, readTextFile } from "./runtime.ts";
 
 export interface CliConfig {
-  readonly kernelUrl?: string;
+  readonly serviceUrl?: string;
   readonly token?: string;
 }
 
@@ -46,8 +46,9 @@ export async function loadConfig(
   options: LoadConfigOptions = {},
 ): Promise<CliConfig> {
   const file = await loadConfigFile();
+  const serviceUrl = resolveServiceUrl(file);
   return {
-    kernelUrl: resolveKernelUrl(file),
+    serviceUrl,
     token: resolveToken(file, options.tokenEnv ?? "installer"),
   };
 }
@@ -56,7 +57,7 @@ export function resolveMode(
   flags: { remote?: string; token?: string },
   config: CliConfig,
 ): { mode: "local" } | { mode: "remote"; url: string; token?: string } {
-  const url = flags.remote ?? config.kernelUrl;
+  const url = flags.remote ?? config.serviceUrl;
   if (!url) return { mode: "local" };
   return { mode: "remote", url, token: flags.token ?? config.token };
 }
@@ -118,7 +119,7 @@ function configFilePath(): string | undefined {
   return `${home}/.takosumi/config.yml`;
 }
 
-function resolveKernelUrl(
+function resolveServiceUrl(
   file: TakosumiConfigFile | undefined,
 ): string | undefined {
   const fresh = readEnv("TAKOSUMI_REMOTE_URL");

@@ -19,7 +19,7 @@ TOKEN="${TAKOSUMI_INSTALLER_TOKEN:-local-substrate-installer-token}"
 LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
 SPACE_ID="${TAKOSUMI_INSTALLER_SPACE_ID:-local-substrate-space}"
 SOURCE_PATH="${TAKOSUMI_INSTALLER_SOURCE_PATH:-/workspace/examples/direct-deploy}"
-KERNEL_URL="${TAKOSUMI_KERNEL_URL:-https://accounts.takosumi.test}"
+SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://accounts.takosumi.test}"
 
 if [[ ! -f "$CA" ]]; then
 	echo "Pebble CA not found at $CA — run scripts/up.sh first" >&2
@@ -45,7 +45,7 @@ post_json() {
 		-H "Content-Type: application/json" \
 		-d "$body" \
 		-w "\n%{http_code}\n" \
-		"$KERNEL_URL$path"
+		"$SERVICE_URL$path"
 }
 
 response_body() {

@@ -801,7 +801,7 @@ export const productionTopologyRequiredRoles = [
   "accounts",
   "dashboard",
   "takosumi-installer",
-  "kernel",
+  "service",
   "shared-cell-runtime",
   "object-storage",
   "dns-tls",
@@ -812,7 +812,7 @@ export const productionTopologyDeployableRoles = new Set([
   "accounts",
   "dashboard",
   "takosumi-installer",
-  "kernel",
+  "service",
   "shared-cell-runtime",
   "background-worker",
 ]);

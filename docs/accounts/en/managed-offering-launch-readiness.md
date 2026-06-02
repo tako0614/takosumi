@@ -3,7 +3,7 @@
 This page explains what an operator must prove before opening a public managed Takos offering through `takosumi`.
 It is not the Takosumi base compatibility contract, and it is not evidence that public signup is open.
 
-Takosumi core remains the Source / Installation / Deployment substrate. `takosumi` is the replaceable operator
+Takosumi remains the Source / Installation / Deployment substrate. `takosumi` is the replaceable operator
 account plane that owns accounts, OIDC, billing, dashboard, install UI, launch tokens, and the account-facing deployment
 facade. The managed offering gate is an operator launch gate layered on top of that distribution.
 

@@ -15,5 +15,5 @@ Installation ownership projection を提供します。
 - Cloud Installation projection ledger
 - launch token issue / consume
 
-これらの責務は Takosumi core には移しません。core は Source、Installation、
+これらの責務は Takosumi には移しません。Takosumi は Source、Installation、
 Deployment、Installer API に集中します。

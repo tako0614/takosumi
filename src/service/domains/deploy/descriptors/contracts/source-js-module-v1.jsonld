@@ -1,0 +1,25 @@
+{
+  "@context": "https://takosumi.com/reference/service/contexts/deploy.jsonld",
+  "@id": "https://takosumi.com/reference/service/contracts/source/js-module/v1",
+  "@type": "SourceInputDescriptor",
+  "shortRef": "source.js-module@v1",
+  "domain": "source",
+  "lifecycleDomain": "revisioned-runtime",
+  "changeEffect": "app-release",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "bundleFormat": {
+        "enum": [
+          "esm"
+        ]
+      },
+      "entrypoint": {
+        "type": "string"
+      },
+      "sourceDigest": {
+        "type": "string"
+      }
+    }
+  }
+}

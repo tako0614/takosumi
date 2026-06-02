@@ -4,7 +4,7 @@
 内部設計メモ。public contract は [Installer API](./installer-api.md) を参照。
 :::
 
-Operator distributions may carry approval prompts, approval records, and account layer policy state outside the core Installer API.
+Operator distributions may carry approval prompts, approval records, and account layer policy state outside the Takosumi Installer API.
 
 ## Trigger 6 値
 
@@ -33,24 +33,24 @@ Operator distributions may carry approval prompts, approval records, and account
 
 - **発火条件**: implementation binding / connector binding が approval bind 時と異なる。implementation binding、connector visibility、operator policy を operator が swap した場合に起きる。
 - **検出 timing**: `prepare` stage の resolve、および `pre-commit` verification の直前。
-- **再評価範囲**: plan を保ったまま `invalidated`。kernel は影響範囲を **当該 implementation に依存する binding subset** に絞って propagate する。
+- **再評価範囲**: plan を保ったまま `invalidated`。service は影響範囲を **当該 implementation に依存する binding subset** に絞って propagate する。
 
 ### 4. external freshness change
 
 - **発火条件**: operator-owned platform service snapshot の freshness state が `fresh` から `stale` または `revoked` に遷移。`fresh → refresh-required` は warning 相当 (Risk emit のみ) で trigger 4 を **発火させない** — approval は `approved` のまま保持される ([Observation Retention — Approval invalidation との関係](./observation-retention.md#approval-invalidation-relationship))。
-- **検出 timing**: external freshness は kernel observe loop が継続的に監視し、`stale` / `revoked` への遷移を検出した瞬間に対応 approval を再評価する。`prepare` stage 起動時の最初の確認も含む。
+- **検出 timing**: external freshness は service observe loop が継続的に監視し、`stale` / `revoked` への遷移を検出した瞬間に対応 approval を再評価する。`prepare` stage 起動時の最初の確認も含む。
 - **再評価範囲**: 当該 platform service path / snapshot を消費する binding subset に絞って propagate。監視しない。
 
 ### 5. operator implementation config change
 
 - **発火条件**: Space に visible な PlatformService inventory、implementation binding、runtime-agent connector inventory、または operator policy による visibility が変更された。
-- **検出 timing**: operator implementation config / Space visibility 操作の commit 完了直後。reference kernel / operator approval profile は当該 Space に紐づく approval を resolve し直す。
+- **検出 timing**: operator implementation config / Space visibility 操作の commit 完了直後。Takosumi service / operator approval profile は当該 Space に紐づく approval を resolve し直す。
 - **再評価範囲**: 新 implementation config で binding が同一なら approval を保持、binding が変わるなら影響 binding subset を `invalidated`。
 
 ### 6. Authorization-context change
 
 - **発火条件**: operator account layer membership version、scoped installer context、policy pack の変更。
-- **検出 timing**: 該当 mutation の commit 完了直後。reference kernel / operator approval profile は operator から渡された authorization-context digest に紐づく approval を walk する。
+- **検出 timing**: 該当 mutation の commit 完了直後。Takosumi service / operator approval profile は operator から渡された authorization-context digest に紐づく approval を walk する。
 - **再評価範囲**: context に依存する binding subset に絞って propagate。actor removal は `actor` field が消えた approval だけを invalidate する。
 
 ## Propagation 規則
@@ -74,7 +74,7 @@ approval の lifecycle 上の状態:
 | `invalidated` | trigger 1-6 のいずれかで binding が崩れた               | server      |
 | `consumed`    | apply で正常消費され、対応する OperationPlan が完了した | server      |
 
-`reviewing` は client UX のソフト状態で、reference kernel / operator approval profile は永続化しない。
+`reviewing` は client UX のソフト状態で、Takosumi service / operator approval profile は永続化しない。
 
 reference profile 側 state machine が永続化する server state は `pending | approved | denied | expired | invalidated | consumed` の 6 値です。 terminal subset は `denied | expired | invalidated | consumed` で、`approved` は apply に消費されるまで再検証対象として残ります。
 

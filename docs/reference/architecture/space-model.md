@@ -1,6 +1,6 @@
 # Space モデル {#space-model}
 
-`Space` は operator account layer が提供する install scope です。Takosumi core
+`Space` は operator account layer が提供する install scope です。Takosumi
 は `spaceId` を request context と record field として扱い、その Space に見える
 PlatformService inventory / policy / adapter implementation を使って apply を解決します。
 
@@ -16,7 +16,7 @@ visibility、secret partition、operator asset extension policy、 approval cont
 Operator distribution / account registry
   └─ defines Account / Space membership and grants actor access
 
-Takosumi core records
+Takosumi records
   └─ Installation (spaceId + Source)
        ├─ Deployment (= 1 apply result)
        └─ Deployment ...
@@ -104,7 +104,7 @@ fail-closed にします。
 ## Service roots {#publisher-roots}
 
 platform service path の first segment は service root
-です。名前はグローバルに見えても、可視性は Space scope です。Takosumi core の
+です。名前はグローバルに見えても、可視性は Space scope です。Takosumi の
 grammar は service root を plain segment として扱います。operator distribution
 や product distribution が、自分の公開する platform service path を distribution
 spec で定義します。
@@ -117,7 +117,7 @@ database.primary.connection
 `database.primary.connection` のような path も、resolution で使う前にその Space
 で visible になり、operator policy が access を許可する必要がある。Takosumi
 Cloud の concrete workload platform service paths と account layer API / facade
-identifiers は Cloud distribution spec が定義するものであり、Takosumi core
+identifiers は Cloud distribution spec が定義するものであり、Takosumi
 の特別な組み込み path ではありません。
 
 operator が offer する platform service は Space に明示的に visible

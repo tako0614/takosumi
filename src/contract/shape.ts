@@ -7,12 +7,12 @@
  * It captures the kind's spec/outputs validation surface and catalog
  * capability terms; it is not the v1 public source envelope (a component's
  * runtime meaning is resolved from `Component.kind` through the operator's
- * `KernelPlugin.provides[]` bindings).
+ * `TakosumiPlugin.provides[]` bindings).
  *
  * `SHAPE_REGISTRY` (`registerShape` / `getShape` / `getShapeByRef`) is a
- * separate, optional connector-local lookup used by the legacy deploy-core
+ * separate, optional connector-local lookup used by the legacy deploy-space
  * `Manifest` / `resources[]` resolution path. The default reference apply
- * facade resolves kinds through `KernelPlugin`, not this registry, so it is
+ * facade resolves kinds through `TakosumiPlugin`, not this registry, so it is
  * left empty in that path; only callers that opt into the legacy resolver
  * populate it.
  */

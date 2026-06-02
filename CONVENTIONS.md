@@ -16,26 +16,26 @@ field.
 - `InstallPlan`: dry-run response snapshot only; not a persisted entity.
 
 Use `type` only for JSON Schema, JSON-LD `@type`, or TypeScript names. Do not
-add a new public selector DSL under Takosumi core.
+add a new public selector DSL under Takosumi.
 
 ## Operator Binding
 
 Operator distributions own PlatformService inventory, provider credentials,
 Terraform/OpenTofu state, runtime attachment, and account-facing policy. A
 distribution may populate inventory from Terraform output, HCP Stacks publish
-output, static config, cloud APIs, or dashboard input. Takosumi core records the
+output, static config, cloud APIs, or dashboard input. Takosumi records the
 resolved binding snapshot on Deployment; it does not materialize provider
 infrastructure.
 
 Backend adapters and runtime-agent connectors live in `takosumi-plugins/` as
 optional reference implementation. Operators attach them through
-`createPaaSApp({ plugins })` or an equivalent distribution-local binding layer.
+`createTakosumiService({ plugins })` or an equivalent distribution-local binding layer.
 Those adapter subpaths are package API, not Takosumi source authoring
 vocabulary.
 
 ## Source And Build
 
-Build recipes stay outside Takosumi core. CI or an operator build service can
+Build recipes stay outside Takosumi. CI or an operator build service can
 produce a prepared source archive and submit it as `source.kind: "prepared"`.
 Git and local source paths are accepted directly by the Installer API.
 

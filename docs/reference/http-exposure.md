@@ -15,7 +15,7 @@ Source
   -> apply が Deployment に bindingsSnapshot / outputs を記録
 ```
 
-Takosumi core が保証するのは Deployment record です。HTTP request を実際に受ける
+Takosumi が保証するのは Deployment record です。HTTP request を実際に受ける
 data plane、host assignment、TLS certificate、DNS ownership proof、backend route
 object は operator distribution が管理します。
 
@@ -29,7 +29,7 @@ client
 ```
 
 traffic authority は Installation の current Deployment pointer です。rollback は
-retained `succeeded` Deployment を current pointer に戻します。Takosumi core は
+retained `succeeded` Deployment を current pointer に戻します。Takosumi は
 rollback 時に Source を再解決しません。
 
 ## Public output
@@ -40,6 +40,6 @@ DNS verification token は operator evidence / secret store に置きます。
 
 ## Related
 
-- [本体仕様](./core-spec.md)
+- [Takosumi v1](./takosumi-v1.md)
 - [Installer API](./installer-api.md)
 - [プラットフォームサービス](./platform-services.md)

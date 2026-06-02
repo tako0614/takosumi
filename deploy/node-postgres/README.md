@@ -85,7 +85,7 @@ When `EXPORT_DOWNLOAD_BASE_URL` points at this server, the `accounts` service ha
 The compose stack runs `accounts` and `migrations` under the non-root `bun` user (uid/gid `1000:1000`) shipped by `oven/bun:1`:
 
 - `user: "1000:1000"` on every container that runs application code.
-- `cap_drop: ["ALL"]` removes every Linux capability the kernel grants by default.
+- `cap_drop: ["ALL"]` removes every Linux capability the service grants by default.
 - `security_opt: ["no-new-privileges:true"]` prevents setuid/setgid escalation.
 - `accounts` mounts the root filesystem `read_only: true` with a 64 MiB tmpfs at `/tmp` for transient writes.
 

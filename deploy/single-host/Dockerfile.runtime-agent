@@ -1,6 +1,6 @@
 # Takosumi runtime-agent image — single-host reference distribution.
 #
-# The runtime-agent holds credentials and translates kernel lifecycle calls
+# The runtime-agent holds credentials and translates service lifecycle calls
 # into connector dispatch. This image carries the generic host; operator
 # distributions add concrete connectors from takosumi-plugins or their own
 # package set.

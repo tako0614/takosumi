@@ -2,7 +2,7 @@
 # Defense-in-depth assertion that the local-substrate cannot leak to
 # public DNS / ACME endpoints. Three checks:
 #
-#   1. kernel: removed legacy public deploy routes return 404, so raw Manifest
+#   1. service: removed legacy public deploy routes return 404, so raw Manifest
 #      posts cannot bypass the installer contract.
 #   2. CoreDNS: any letsencrypt.org name returns NXDOMAIN.
 #   3. host firewall: the script *recommends* nftables / iptables egress
@@ -18,7 +18,7 @@ PASS=0
 FAIL=0
 
 assert_legacy_public_deploy_closed() {
-	echo "==> [kernel] Verifying legacy public deploy routes are closed"
+	echo "==> [service] Verifying legacy public deploy routes are closed"
 	local leaked=0
 	local paths=(
 		"/v1/deployments"
@@ -68,7 +68,7 @@ recommend_egress_filter() {
 ==> [recommendation] Network egress filter (host nftables)
 
 The Docker network blocks DNS queries that try to leak to public Let's Encrypt,
-but a fully isolated runbook should also nft-block egress from kernel/runtime-agent
+but a fully isolated runbook should also nft-block egress from service/runtime-agent
 container subnet to public ACME directories. Example:
 
    sudo nft add table inet takos-deny
@@ -95,7 +95,7 @@ assert_mocks_not_host_published() {
 		otel-collector
 		minio
 		takosumi-worker
-		takosumi-kernel-worker
+		takosumi-service-worker
 	)
 	for svc in "${services[@]}"; do
 		local cid

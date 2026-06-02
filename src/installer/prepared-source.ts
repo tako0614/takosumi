@@ -2,7 +2,7 @@
  * Prepared source fetcher for operator-owned build/preparation services.
  *
  * A prepared source is an immutable tar snapshot of the source tree after any
- * external build/preparation step has run. The kernel verifies the archive
+ * external build/preparation step has run. The service verifies the archive
  * digest before deriving the install plan.
  */
 
@@ -21,13 +21,13 @@ export interface PreparedSourceFetchOptions {
   /**
    * Injected `tar` capability. Defaults to a runner built over the installer's
    * local `tar` primitive so standalone behavior is unchanged; the reference
-   * kernel injects a runner routed through `currentRuntime().subprocess` so the
+   * service injects a runner routed through `currentRuntime().subprocess` so the
    * same path runs on Bun / Node / Workers.
    */
   readonly tarRunner?: TarRunner;
   /**
    * Injected temp-dir filesystem capability. Defaults to a host-detected FS;
-   * the reference kernel injects `currentRuntime().fs`.
+   * the reference service injects `currentRuntime().fs`.
    */
   readonly fs?: InstallerFs;
 }

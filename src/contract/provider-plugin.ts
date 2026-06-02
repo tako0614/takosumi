@@ -24,7 +24,7 @@ import type {
  * connectors can dispatch work locally. Current operator distributions derive
  * those selectors from their materializer mapping; reference components
  * remain keyed by `Component.kind`, and new reference adapters should implement
- * `KernelPlugin` directly.
+ * `TakosumiPlugin` directly.
  */
 export interface ShapeRef {
   readonly id: string;
@@ -93,19 +93,19 @@ export interface PlatformContext {
   readonly resolvedOutputs: ReadonlyMap<string, JsonObject>;
   /**
    * Prepared source snapshot for source-backed providers. Present when the
-   * kernel can expose the Deployment source tree to a materializer or
+   * service can expose the Deployment source tree to a materializer or
    * runtime-agent connector.
    */
   readonly preparedSource?: PreparedSourceLocator;
   /**
-   * Operation metadata attached by the kernel while executing a WAL
+   * Operation metadata attached by the service while executing a WAL
    * commit. Providers should forward `idempotencyKeyString` to external APIs
    * that support request tokens and use the tuple to dedupe local side effects.
    * Absent outside WAL-backed apply / destroy paths.
    */
   readonly operation?: PlatformOperationContext;
   /**
-   * Active trace context attached by the kernel when a provider operation is
+   * Active trace context attached by the service when a provider operation is
    * executed under an HTTP request or another operation span.
    */
   readonly trace?: PlatformTraceContext;
@@ -122,13 +122,13 @@ export interface PlatformContext {
  * type-parameterize this generic catch capability typos at compile time;
  * untyped adapters fall back to `string`.
  *
- * @deprecated Compatibility bridge for the pre-KernelPlugin provider surface.
- * The current reference adapter API is `KernelPlugin` (or the
- * `Materializer = KernelPlugin | InlineMaterializer` union) from
+ * @deprecated Compatibility bridge for the pre-TakosumiPlugin provider surface.
+ * The current reference adapter API is `TakosumiPlugin` (or the
+ * `Materializer = TakosumiPlugin | InlineMaterializer` union) from
  * `src/contract/plugin.ts`. `ProviderPlugin` remains as a transitional
- * adapter wrapped by `kernelPluginFromProviderPlugin()`; new code should
- * implement `KernelPlugin` directly. First-party native kind implementations use
- * `kernelPluginFromNativeKindOperations()` instead of this bridge.
+ * adapter wrapped by `takosumiPluginFromProviderPlugin()`; new code should
+ * implement `TakosumiPlugin` directly. First-party native kind implementations use
+ * `takosumiPluginFromNativeKindOperations()` instead of this bridge.
  */
 export interface ProviderPlugin<
   Spec = JsonObject,

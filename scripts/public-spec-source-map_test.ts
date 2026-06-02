@@ -7,8 +7,8 @@ import {
   INSTALLER_INSTALLATION_ROLLBACK_PATH,
   INSTALLER_INSTALLATIONS_DRY_RUN_PATH,
   INSTALLER_INSTALLATIONS_PATH,
-} from "../src/kernel/api/installer_public_routes.ts";
-import { createPaaSOpenApiDocument } from "../src/kernel/api/openapi.ts";
+} from "../src/service/api/installer_public_routes.ts";
+import { createTakosumiOpenApiDocument } from "../src/service/api/openapi.ts";
 
 const root = new URL("../", import.meta.url);
 
@@ -16,24 +16,24 @@ const TAKOSUMI_OWNED_PATHS = [
   "docs/reference/public-spec-source-map.md",
   "docs/reference/manifest.md",
   "docs/reference/build-spec.md",
-  "docs/reference/core-spec.md",
+  "docs/reference/takosumi-v1.md",
   "docs/reference/installer-api.md",
-  "docs/reference/kernel-http-api.md",
+  "docs/reference/service-http-api.md",
   "docs/reference/spec-boundaries.md",
   "docs/reference/runtime-agent-api.md",
   "docs/reference/kind-bindings.md",
-  "docs/reference/takosumi.md",
-  "../takosumi/docs/ja/spec.md",
-  "../takosumi/docs/en/spec.md",
-  "src/kernel/domains/deploy/_internal_manifest_types.ts",
-  "src/kernel/domains/deploy/manifest_v1.ts",
-  "src/kernel/api/app.ts",
-  "src/kernel/api/installer_public_routes.ts",
-  "src/kernel/api/artifact_routes.ts",
-  "src/kernel/api/internal_routes.ts",
-  "src/kernel/api/runtime_agent_routes.ts",
-  "src/kernel/api/readiness_routes.ts",
-  "src/kernel/api/openapi.ts",
+  "docs/reference/accounts.md",
+  "docs/accounts/ja/spec.md",
+  "docs/accounts/en/spec.md",
+  "src/service/domains/deploy/_internal_manifest_types.ts",
+  "src/service/domains/deploy/manifest_v1.ts",
+  "src/service/api/app.ts",
+  "src/service/api/installer_public_routes.ts",
+  "src/service/api/artifact_routes.ts",
+  "src/service/api/internal_routes.ts",
+  "src/service/api/runtime_agent_routes.ts",
+  "src/service/api/readiness_routes.ts",
+  "src/service/api/openapi.ts",
   "docs/kinds/v1/worker.jsonld",
   "docs/kinds/v1/web-service.jsonld",
   "docs/kinds/v1/postgres.jsonld",
@@ -55,7 +55,7 @@ const REQUIRED_SPEC_KEYS = [
   "build-service-input",
   "reference-adapter-metadata-v1",
   "takosumi-spec-v1",
-  "kernel-route-inventory",
+  "service-route-inventory",
   "runtime-agent-envelope",
   "reference-adapter-guide",
   "takosumi-npm-package",
@@ -75,8 +75,8 @@ test("public spec source map covers required public surfaces", async () => {
   assert.equal(source.includes("src/installer/yaml-parser.ts"), false);
   assert.ok(source.includes("src/contract/installer-api.ts"));
   assert.ok(source.includes("docs/kinds/v1/*.jsonld"));
-  assert.ok(source.includes("../takosumi/docs/ja/spec.md"));
-  assert.ok(source.includes("../takosumi/docs/en/spec.md"));
+  assert.ok(source.includes("docs/accounts/ja/spec.md"));
+  assert.ok(source.includes("docs/accounts/en/spec.md"));
   assert.match(source, /Normative reference/);
   assert.match(source, /Executable conformance targets/);
   assert.match(source, /Repository source/);
@@ -86,19 +86,19 @@ test("public spec source map covers required public surfaces", async () => {
 
 test("public spec source map covers installer route evidence", async () => {
   const source = await read("docs/reference/public-spec-source-map.md");
-  const reference = await read("docs/reference/kernel-http-api.md");
-  const openapi = createPaaSOpenApiDocument({
+  const reference = await read("docs/reference/service-http-api.md");
+  const openapi = createTakosumiOpenApiDocument({
     installerPublicRoutesMounted: true,
   });
 
-  assert.match(source, /`kernel-route-inventory`/);
+  assert.match(source, /`service-route-inventory`/);
   assert.match(source, /`installer-api-v1`/);
   assert.ok(
-    source.includes("src/kernel/api/installer_public_routes.ts"),
+    source.includes("src/service/api/installer_public_routes.ts"),
   );
   assert.ok(
     source.includes(
-      "src/kernel/api/installer_public_routes_e2e_test.ts",
+      "src/service/api/installer_public_routes_e2e_test.ts",
     ),
   );
   assert.ok(openapi.paths[INSTALLER_INSTALLATIONS_DRY_RUN_PATH]?.post);
@@ -132,21 +132,21 @@ test("public spec source map Takosumi-owned paths exist", async () => {
 });
 
 test("public spec source map is kept as maintainer-only reference", async () => {
-  const kernelReference = await read("docs/reference/kernel-http-api.md");
+  const serviceReference = await read("docs/reference/service-http-api.md");
   const config = await read("docs/.vitepress/config.ts");
 
-  assert.ok(kernelReference.includes("./public-spec-source-map.md"));
+  assert.ok(serviceReference.includes("./public-spec-source-map.md"));
   assert.ok(config.includes("public-spec-source-map"));
 });
 
-test("reference-kernel descriptors stay out of public catalog roots", async () => {
+test("reference service descriptors stay out of public catalog roots", async () => {
   const docs = await read("docs/reference/public-spec-source-map.md");
   assert.ok(docs.includes("docs/kinds/v1/*.jsonld"));
   assert.ok(docs.includes("/contexts/v1.jsonld"));
   assert.match(docs, /Reference adapter metadata/);
 
   const descriptorRoot = new URL(
-    "src/kernel/domains/deploy/descriptors/",
+    "src/service/domains/deploy/descriptors/",
     root,
   );
   const forbidden = [
@@ -169,8 +169,8 @@ test("reference-kernel descriptors stay out of public catalog roots", async () =
   }
 });
 
-test("kernel HTTP API does not reintroduce workflow trigger endpoint specs", async () => {
-  const source = await read("docs/reference/kernel-http-api.md");
+test("service HTTP API does not reintroduce workflow trigger endpoint specs", async () => {
+  const source = await read("docs/reference/service-http-api.md");
   const forbidden = [
     "## Workflow & Trigger",
     "### `POST /v1/triggers/manual`",

@@ -171,7 +171,7 @@ test("H6: Cloudflare native errors normalise onto ProviderErrorCategory", () => 
 test("H6: unknown provider name returns 'unknown' (fail-closed)", () => {
   withStubsRegistered();
   // No classifier registered for 'azure' — must collapse to 'unknown' so the
-  // kernel-side retry loop fails closed.
+  // service-side retry loop fails closed.
   assert.equal(
     normalizeProviderError({ httpStatus: 503 }, "azure"),
     "unknown",

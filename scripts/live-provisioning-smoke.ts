@@ -362,7 +362,7 @@ async function runLiveCleanupOnly(
   });
 }
 
-function parseOptions(
+export function parseOptions(
   args: readonly string[],
   env: Record<string, string | undefined>,
 ): SmokeOptions {
@@ -384,6 +384,7 @@ function providerFromEnv(
 ): ProviderProofProvider | undefined {
   const value = env.TAKOSUMI_PLUGIN_LIVE_PROVIDER;
   if (value === undefined || value === "") return undefined;
+  if (value === "selfhosted") return "selfhost";
   if (!isProvider(value)) {
     throw new Error(`unsupported provider: ${value}`);
   }
@@ -432,7 +433,11 @@ function envPrefixes(
     return ["TAKOSUMI_PLUGIN_KUBERNETES", "TAKOSUMI_PLUGIN_K8S"];
   }
   if (providerName === "selfhost") {
-    return ["TAKOSUMI_PLUGIN_SELFHOST", "TAKOSUMI_PLUGIN_SELF_HOST"];
+    return [
+      "TAKOSUMI_PLUGIN_SELFHOSTED",
+      "TAKOSUMI_PLUGIN_SELFHOST",
+      "TAKOSUMI_PLUGIN_SELF_HOST",
+    ];
   }
   return [`TAKOSUMI_PLUGIN_${upper}`];
 }
@@ -671,7 +676,7 @@ function normalizeProofFixture(
 ): ProviderProofFixture {
   // ProviderProofDesiredState has a `[key: string]: unknown` index signature
   // for cross-provider serialization, so we narrow to the typed
-  // RuntimeDesiredState the kernel consumes via a structural parser before
+  // RuntimeDesiredState the service consumes via a structural parser before
   // synthesising the `materializedAt` default.
   const desiredState = parseRuntimeDesiredState(fixture.desiredState);
   return {

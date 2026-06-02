@@ -54,7 +54,7 @@ jaeger.takosumi.test {
 
 # ===== accounts.takosumi.com mirror — the ONE composed control plane ==========
 # Postgres profile: accounts.takosumi.test is the single composed app (account
-# plane + embedded kernel) served by the `cloud` service, mirroring production's
+# plane + embedded service) served by the `cloud` service, mirroring production's
 # one accounts.takosumi.com. Wrap in `route { handle @api ... handle ... }` so the
 # API handler is evaluated before the SPA fallback (Caddy's directive sorter
 # would otherwise put the catch-all `handle` first). The @api matcher (installer
@@ -83,12 +83,12 @@ accounts.takosumi.test {
 # alongside a matching CoreDNS record so its Pebble ACME challenge can resolve.
 
 # ===== Phase 1 substrate ===================================================
-# accounts.takosumi.test + kernel.takosumi.test are RETIRED: the postgres
-# profile consolidated the account plane + kernel into the single
+# accounts.takosumi.test + service.takosumi.test are RETIRED: the postgres
+# profile consolidated the account plane + service into the single
 # accounts.takosumi.test composed app above (mirrors production). The Cloudflare
-# kernel-worker mirror stays for the Workers code path.
-kernel-worker.takosumi.test {
-	reverse_proxy takosumi-kernel-worker:8788
+# service-worker mirror stays for the Workers code path.
+service-worker.takosumi.test {
+	reverse_proxy takosumi-service-worker:8788
 }
 
 # Phase 3 で route-registrar が *.app.takosumi.test に動的 route を追加する。

@@ -1,3 +1,3 @@
 # Bun runs without a global Deno compatibility preload. Real Deno support lives
-# in src/kernel/shared/runtime/deno.ts and is selected only on a genuine Deno
+# in src/service/shared/runtime/deno.ts and is selected only on a genuine Deno
 # host.

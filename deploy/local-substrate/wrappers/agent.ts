@@ -1,9 +1,9 @@
 /**
  * Boots the takosumi runtime-agent (execution plane) for the local-substrate.
  *
- * This is the execution half split out of `kernel-with-embedded-agent.ts`. In
+ * This is the execution half split out of `service-with-embedded-agent.ts`. In
  * the redesigned substrate the `cloud` control-plane service runs the composed
- * kernel + account-plane and dispatches source / lifecycle / capability
+ * service + account-plane and dispatches source / lifecycle / capability
  * execution HERE over `TAKOSUMI_AGENT_URL` (+ `TAKOSUMI_AGENT_TOKEN`). Running
  * the agent in its own container:
  *   - mirrors production — a Cloudflare Worker control plane cannot embed a
@@ -11,7 +11,7 @@
  *   - isolates docker.sock / subprocess privilege OFF the control plane that
  *     also serves OIDC / billing / dashboard.
  *
- * Like the old kernel wrapper this imports the runtime-agent + native
+ * Like the old service wrapper this imports the runtime-agent + native
  * connectors from local /workspace + /plugins (under active development) rather
  * than the JSR/npm-pinned cli, and uses `buildLocalSubstrateRegistry` so
  * public-DNS providers (route53 / cloud-dns / cloudflare-dns) are import-time
@@ -22,7 +22,7 @@
  */
 import { serveRuntimeAgent } from "/workspace/src/runtime-agent/server.ts";
 import { LIFECYCLE_AGENT_TOKEN_ENV } from "/workspace/src/contract/runtime-agent-lifecycle.ts";
-import { currentRuntime } from "/workspace/src/kernel/shared/runtime/index.ts";
+import { currentRuntime } from "/workspace/src/service/shared/runtime/index.ts";
 import { buildLocalSubstrateRegistry } from "/local-substrate-factories/local-substrate-factories.ts";
 
 const agentPort = Number(process.env.TAKOSUMI_AGENT_PORT ?? "8789");

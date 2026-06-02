@@ -5,7 +5,7 @@ import { exitCli, readFile } from "../runtime.ts";
 
 /**
  * `takosumi artifact push <file> --kind <kind>` — upload a file to the
- * kernel's content-addressed artifact store and print the resulting hash.
+ * Takosumi service's content-addressed artifact store and print the resulting hash.
  * This is an optional operator data-asset store; the installer does not require
  * artifact kinds.
  */
@@ -25,7 +25,7 @@ function createPushCmd(): Command {
       collect,
       [],
     )
-    .option("--remote <url>", "Kernel base URL")
+    .option("--remote <url>", "Takosumi service base URL")
     .option("--token <token>", "Bearer token")
     .action(
       async (
@@ -55,7 +55,7 @@ function createPushCmd(): Command {
         });
         const body = await readBody(response);
         if (!response.ok) {
-          console.error(`kernel ${response.status}:`, body);
+          console.error(`Takosumi service ${response.status}:`, body);
           exitCli(1);
         }
         console.log(JSON.stringify(body, null, 2));
@@ -65,8 +65,8 @@ function createPushCmd(): Command {
 
 function createListCmd(): Command {
   return new Command("list")
-    .description("List artifacts stored in the kernel")
-    .option("--remote <url>", "Kernel base URL")
+    .description("List artifacts stored in the Takosumi service")
+    .option("--remote <url>", "Takosumi service base URL")
     .option("--token <token>", "Bearer token")
     .option(
       "--limit <n>",
@@ -85,7 +85,7 @@ function createListCmd(): Command {
         const pageLimit = typeof opts.limit === "number" && opts.limit > 0
           ? opts.limit
           : 100;
-        // The kernel endpoint enforces 1..1000; we just walk pages until
+        // The service endpoint enforces 1..1000; we just walk pages until
         // nextCursor disappears or we exceed a sane upper bound.
         for (let pages = 0; pages < 10_000; pages++) {
           const url = new URL(`${target.url}${ARTIFACTS_BASE_PATH}`);
@@ -96,7 +96,7 @@ function createListCmd(): Command {
           });
           const body = await readBody(response) as ListPage;
           if (!response.ok) {
-            console.error(`kernel ${response.status}:`, body);
+            console.error(`Takosumi service ${response.status}:`, body);
             exitCli(1);
           }
           const page = Array.isArray(body?.artifacts) ? body.artifacts : [];
@@ -113,7 +113,7 @@ function createRmCmd(): Command {
   return new Command("rm")
     .description("Remove an artifact by hash")
     .argument("<hash>", "Artifact hash")
-    .option("--remote <url>", "Kernel base URL")
+    .option("--remote <url>", "Takosumi service base URL")
     .option("--token <token>", "Bearer token")
     .action(
       async (hash: string, opts: { remote?: string; token?: string }) => {
@@ -130,7 +130,7 @@ function createRmCmd(): Command {
           return;
         }
         const body = await readBody(response);
-        console.error(`kernel ${response.status}:`, body);
+        console.error(`Takosumi service ${response.status}:`, body);
         exitCli(1);
       },
     ) as Command;
@@ -142,7 +142,7 @@ function createKindsCmd(): Command {
       "List DataAsset metadata kinds registered by the optional DataAsset " +
         "extension (GET /v1/artifacts/kinds)",
     )
-    .option("--remote <url>", "Kernel base URL")
+    .option("--remote <url>", "Takosumi service base URL")
     .option("--token <token>", "Bearer token")
     .option("--table", "Format output as a plain-text table instead of JSON")
     .action(
@@ -158,7 +158,7 @@ function createKindsCmd(): Command {
           | { readonly kinds?: readonly RegisteredArtifactKindRow[] }
           | undefined;
         if (!response.ok) {
-          console.error(`kernel ${response.status}:`, body);
+          console.error(`Takosumi service ${response.status}:`, body);
           exitCli(1);
         }
         const kinds = body?.kinds ?? [];
@@ -223,7 +223,7 @@ function createGcCmd(): Command {
     .description(
       "Garbage-collect artifacts not referenced by any persisted deployment",
     )
-    .option("--remote <url>", "Kernel base URL")
+    .option("--remote <url>", "Takosumi service base URL")
     .option("--token <token>", "Bearer token")
     .option(
       "--dry-run",
@@ -240,7 +240,7 @@ function createGcCmd(): Command {
         });
         const body = await readBody(response);
         if (!response.ok) {
-          console.error(`kernel ${response.status}:`, body);
+          console.error(`Takosumi service ${response.status}:`, body);
           exitCli(1);
         }
         console.log(JSON.stringify(body, null, 2));
@@ -257,7 +257,7 @@ function createGcCmd(): Command {
 function createArtifactCommand(): Command {
   const command = new Command("artifact")
     .description(
-      "Manage Takosumi-kernel artifact uploads (push / list / rm / gc / kinds)",
+      "Manage Takosumi service artifact uploads (push / list / rm / gc / kinds)",
     );
   command.addCommand(createPushCmd());
   command.addCommand(createListCmd());
@@ -284,7 +284,7 @@ async function requireRemote(
   );
   if (target.mode !== "remote" || !target.url || !target.token) {
     console.error(
-      "artifact commands require a remote kernel: pass --remote and --token, " +
+      "artifact commands require a remote Takosumi service: pass --remote and --token, " +
         "or set TAKOSUMI_REMOTE_URL + TAKOSUMI_DEPLOY_TOKEN",
     );
     exitCli(2);

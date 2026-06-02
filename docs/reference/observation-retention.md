@@ -17,7 +17,7 @@
 - **更新タイミング**: observe phase が runtime-agent describe を取り終え、platform service snapshot freshness を annotate した時点。
 - **TTL**: 次の ObservationState が書かれるまで保持する。明示的 expiry は operator policy で扱う。
 - **読者**: resolution / planning / approval invalidation の input。
-- **operator 制御**: disable できない。kernel が動く以上、observe loop は ObservationState を更新し続ける。
+- **operator 制御**: disable できない。Takosumi service が動く以上、observe loop は ObservationState を更新し続ける。
 
 ### `ObservationHistory`
 
@@ -57,7 +57,7 @@ history は **read-only な observability source** として扱う。
 
 ### ストレージ / 破棄 {#storage--drop}
 
-history entry の drop は operator policy。kernel は default で history を trim せず、operator が age / count cap を policy で指定する。 compliance 対象外なので regime 制約は受けない。
+history entry の drop は operator policy。service は default で history を trim せず、operator が age / count cap を policy で指定する。 compliance 対象外なので regime 制約は受けない。
 
 ## Freshness の伝播 {#freshness-propagation}
 

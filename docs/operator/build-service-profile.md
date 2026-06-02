@@ -1,6 +1,6 @@
 # ビルドサービス例 {#operator-build-service-profile}
 
-このページは非規定の operator 設定例です。Takosumi core は build profile を
+このページは非規定の operator 設定例です。Takosumi は build profile を
 解釈しません。operator build service は任意の profile を読み、prepared source
 payload を作り、Installer API に URL と digest を渡します。
 
@@ -21,7 +21,7 @@ nodes:
     dependsOn: []
 ```
 
-この `kind` は build service 内の語彙です。Takosumi core の public source
+この `kind` は build service 内の語彙です。Takosumi の public source
 contract ではありません。
 
 ## Handoff の責務
@@ -37,7 +37,7 @@ build service は次を行います。
 
 Installer apply は resource side effect 前に payload digest、path safety、size
 cap、operator binding selection を検証します。build failure、container image
-verification、secret mount、network policy、Terraform/OpenTofu plan は operator
+verification、secret mount、network policy、OpenTofu plan は operator
 scope です。
 
 ## Example Handoff

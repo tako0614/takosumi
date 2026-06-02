@@ -9,9 +9,9 @@
  * module provides the default the runtime-agent wires in when an operator does
  * not supply one.
  *
- * The runtime-agent sits UPSTREAM of the kernel in the dependency graph, so it
- * cannot reuse the kernel's `defaultTarRunner`
- * (`src/kernel/shared/runtime/capability-runners.ts`) without
+ * The runtime-agent sits UPSTREAM of the service in the dependency graph, so it
+ * cannot reuse the service's `defaultTarRunner`
+ * (`src/service/shared/runtime/capability-runners.ts`) without
  * inverting the layering / creating an import cycle. The default here is
  * therefore built over the runtime-agent's own local subprocess primitive
  * (`./subprocess/tar-runner.ts`), which is a single runtime-detecting module:

@@ -4,7 +4,7 @@
 
 1. [コンセプト](./concepts.md)
 2. [クイックスタート](./quickstart.md)
-3. [Takosumi core 仕様](../reference/core-spec.md)
+3. [Takosumi v1](../reference/takosumi-v1.md)
 4. [Installer API](../reference/installer-api.md)
 5. [仕様境界](../reference/spec-boundaries.md)
 
@@ -40,10 +40,10 @@
 3. [プラットフォームサービス](../reference/platform-services.md)
 4. implementation notes in the operator distribution or `takosumi-plugins`
 
-## Core に関わる人 {#core-contributors}
+## Takosumi v1 に関わる人 {#takosumi-v1-contributors}
 
 1. [仕様境界](../reference/spec-boundaries.md)
-2. [Takosumi core 仕様](../reference/core-spec.md)
+2. [Takosumi v1](../reference/takosumi-v1.md)
 3. [Installer API](../reference/installer-api.md)
 4. [プラットフォームサービス](../reference/platform-services.md)
 5. 実装資料が必要になったら repository-local の内部設計メモを読む

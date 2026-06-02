@@ -1,8 +1,8 @@
 # オペレーター {#operator}
 
-operator は Takosumi core を起動し、Source をどの PlatformService と runtime
+operator は Takosumi を起動し、Source をどの PlatformService と runtime
 implementation に bind するかを決めます。account、billing、OIDC、approval、
-dashboard、Terraform/OpenTofu state、provider credential は operator
+dashboard、OpenTofu state、provider credential は operator
 distribution の責務です。
 
 ## 前提知識
@@ -31,11 +31,11 @@ distribution の責務です。
 | PlatformService       | runtime target、database、object store、queue、OIDC issuer、MCP endpoint |
 | binding policy        | default binding、approval、quota、access mode、visibility                 |
 | state / secret store  | Postgres、D1、KMS、secret encryption、backup / restore                    |
-| infrastructure state  | Terraform/OpenTofu state、provider credentials、lock                      |
+| infrastructure state  | OpenTofu state、provider credentials、lock                      |
 | account surface       | signup、billing、team、dashboard、deploy facade                           |
 | runtime execution     | container、worker、VM、local process、runtime-agent connector             |
 
-Takosumi core はこの選択を `bindingsSnapshot` と `outputs` として Deployment
+Takosumi はこの選択を `bindingsSnapshot` と `outputs` として Deployment
 record に残します。infrastructure creation と provider state は operator 側に
 残します。
 

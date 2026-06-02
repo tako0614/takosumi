@@ -9,7 +9,7 @@ Phases:           apply | activate | destroy | rollback | recovery | observe
 LifecycleStatus:  running | stopped | missing | error | unknown
 ```
 
-phase は `(spaceId, operationPlanDigest, journalEntryId)` を key に WAL stage 進行を駆動します。 `LifecycleStatus` は runtime-agent describe / kernel observe loop の報告値で、 apply pipeline の入力にはなりません。
+phase は `(spaceId, operationPlanDigest, journalEntryId)` を key に WAL stage 進行を駆動します。 `LifecycleStatus` は runtime-agent describe / service observe loop の報告値で、 apply pipeline の入力にはなりません。
 
 ## Phase enum
 
@@ -19,7 +19,7 @@ apply  ──►  activate  ──►  observe   (steady state)
                 └──►  destroy
                 │
 rollback ◄──────┘     (pointer move to retained Deployment)
-recovery ◄── (kernel restart / lock re-acquire,
+recovery ◄── (service restart / lock re-acquire,
               resumes from last persisted WAL stage)
 ```
 

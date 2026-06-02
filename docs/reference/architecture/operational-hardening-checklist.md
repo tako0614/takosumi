@@ -23,7 +23,7 @@ consume して binding snapshot / evidence を Deployment に記録する。
 - apply は resource effect 実行中に catalog document や platform service registry を再解決せず、記録済みの resolution evidence と snapshot を使う。
 - すべての graph entity は安定したアドレスを持つ。
 - lifecycle class は operation 種別を制限する。
-- core canonical state は raw secret 値ではなく secret reference を保存する。
+- Takosumi canonical state は raw secret 値ではなく secret reference を保存する。
 - actual effect は pause / compensation / approval なしに approved effect を超えてはならない。
 - side effect を持つ operation は write-ahead journal される。
 - reference-internal 生成 object / evidence record の id は可能な限り決定的である。
@@ -44,7 +44,7 @@ Reference / operator production の設定:
 
 - 実行ターゲットは operator が選択した binding set から決まる。
 - runtime-agent や backend inventory の drift は operator / Deployment evidence として記録され、Source authoring vocabulary としては扱わない。
-- provider resource creation、Terraform/OpenTofu/Helm/Pulumi apply、credential provisioning は operator distribution の materialization workflow であり、Takosumi core の public concept ではない。
+- provider resource creation、OpenTofu/Helm/Pulumi apply、credential provisioning は operator distribution の materialization workflow であり、Takosumi の public concept ではない。
 
 ## Platform service {#platform-services}
 

@@ -12,12 +12,12 @@
  * `declare const Deno` identifier) so the emitted npm code contains no unbound
  * `Deno.serve` reference.
  *
- * The runtime-agent package sits upstream of the kernel in the dependency
- * graph, so it cannot route through the kernel `RuntimeAdapter.serveHttp`
+ * The runtime-agent package sits upstream of the service in the dependency
+ * graph, so it cannot route through the service `RuntimeAdapter.serveHttp`
  * without inverting the layering; this local primitive is the runtime-agent's
  * own serve boundary. The fetch-handler <-> `node:http` bridge mirrors the
- * kernel runtime adapter's Node server
- * (`src/kernel/shared/runtime/node.ts`).
+ * service runtime adapter's Node server
+ * (`src/service/shared/runtime/node.ts`).
  */
 
 import { createServer } from "node:http";

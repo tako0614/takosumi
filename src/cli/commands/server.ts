@@ -1,10 +1,10 @@
 import { Command } from "../command.ts";
 import { LIFECYCLE_AGENT_URL_ENV } from "takosumi-contract/reference/runtime-agent-lifecycle";
-import { currentRuntime } from "../../kernel/shared/runtime/index.ts";
+import { currentRuntime } from "../../service/shared/runtime/index.ts";
 
 function createServerCommand(): Command {
   return new Command("server")
-    .description("Start the Takosumi kernel HTTP server")
+    .description("Start the Takosumi service HTTP server")
     .option("--port <port>", "Port to listen on", (v) => Number(v), 8788)
     .option(
       "--agent-port <port>",
@@ -55,7 +55,7 @@ function createServerCommand(): Command {
         registerShutdownHandlers(agentShutdown);
       }
       runtime.env.set("PORT", String(port));
-      await import("../../kernel/index.ts");
+      await import("../../service/index.ts");
     });
 }
 
@@ -98,7 +98,7 @@ function printDaemonizationTemplate(port: number): void {
     "",
     "   # /etc/systemd/system/takosumi-api.service",
     "   [Unit]",
-    "   Description=Takosumi kernel",
+    "   Description=Takosumi service",
     "   After=network-online.target",
     "",
     "   [Service]",

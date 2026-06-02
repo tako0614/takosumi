@@ -1,6 +1,6 @@
 # Account-Plane Profile {#operator-account-plane-profile}
 
-This profile is the Cloud-compatible account layer surface. Takosumi core
+This profile is the Cloud-compatible account layer surface. Takosumi
 manages Source / Installation / Deployment / Installer API records, while
 Takosumi manages account behavior.
 
@@ -13,7 +13,7 @@ Takosumi manages account behavior.
 | Account API | sessions, PATs, Space ownership, projections, events, export/import, dashboard |
 | OIDC | issuer, upstream identity, per-Installation clients, key rotation |
 | Billing | owner records, portal, usage reporting, metering authorization |
-| Projection ledger | account-facing projection of core Installation / Deployment state |
+| Projection ledger | account-facing projection of Takosumi Installation / Deployment state |
 
 Credentials are not reused across families. Public responses and export bundles
 carry refs or public fields instead of raw secret values.

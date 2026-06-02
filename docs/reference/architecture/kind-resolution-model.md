@@ -30,7 +30,7 @@ Provider selection and adapter-specific runtime input are operator resolution co
 
 ## Operator resolution {#operator-resolution}
 
-Resolution は operator-owned で、決定的かつ fail-closed にする。Takosumi core はその結果を Deployment evidence として記録します。
+Resolution は operator-owned で、決定的かつ fail-closed にする。Takosumi はその結果を Deployment evidence として記録します。
 
 ```text
 1. Resolve Source identity:
@@ -64,7 +64,7 @@ Operator inventory:
   provider credentials and implementation binding
 ```
 
-Takosumi core は mandatory global kind catalog を要求しません。互換 operator は同じ Installer API と Deployment record を保ったまま、Terraform/OpenTofu output、native controller、workflow engine、SaaS adapter、static inventory などで PlatformService inventory を作れます。
+Takosumi は mandatory global kind catalog を要求しません。互換 operator は同じ Installer API と Deployment record を保ったまま、OpenTofu output、native controller、workflow engine、SaaS adapter、static inventory などで PlatformService inventory を作れます。
 
 ## Access mode enum {#access-mode-enum}
 

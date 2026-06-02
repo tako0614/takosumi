@@ -45,7 +45,9 @@ function createServeCmd(): Command {
         console.log(`takosumi runtime-agent listening at ${handle.url}`);
         console.log(`  TAKOSUMI_AGENT_URL=${handle.url}`);
         console.log(`  TAKOSUMI_AGENT_TOKEN=${handle.token}`);
-        console.log("Set the above env on the kernel host to wire it through.");
+        console.log(
+          "Set the above env on the Takosumi service host to wire it through.",
+        );
         await waitForShutdown();
         await handle.shutdown();
       },

@@ -2,7 +2,7 @@
 
 Takosumi v1 の public Source は binding graph DSL を持ちません。install / deploy
 request、operator policy、account-plane UI が `BindingSelection` を与え、
-operator distribution が PlatformService inventory で解決します。Takosumi core
+operator distribution が PlatformService inventory で解決します。Takosumi
 は解決結果を Deployment の `bindingsSnapshot` に保存します。
 
 ## Binding Snapshot {#binding-snapshot}

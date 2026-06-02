@@ -5,7 +5,7 @@ import {
   resetRuntimeForTesting,
   setRuntimeForTesting,
   type RuntimeAdapter,
-} from "../../kernel/shared/runtime/index.ts";
+} from "../../service/shared/runtime/index.ts";
 import { runtimeAgentCommand } from "../commands/runtime_agent.ts";
 
 interface CapturedRequest {

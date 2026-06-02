@@ -23,15 +23,15 @@ Apply fetches and resolves the Source, resolves PlatformService bindings through
 `planSnapshot` plus `bindingsSnapshot` on Deployment. Passing `expected.planSnapshotDigest` prevents applying a source
 or binding resolution that differs from the reviewed dry-run.
 
-## Terraform Boundary
+## OpenTofu Boundary
 
-Terraform/OpenTofu is operator-owned infrastructure tooling. Takosumi does not replace Terraform. Operators may create
-resources with Terraform, then publish outputs into PlatformService inventory. Takosumi records which services were
+OpenTofu is operator-owned infrastructure tooling. Takosumi does not replace OpenTofu. Operators may create
+resources with OpenTofu, then publish outputs into PlatformService inventory. Takosumi records which services were
 selected for each Deployment.
 
 ## Next
 
 - [Quickstart](./quickstart.md)
 - [Installer API](../reference/installer-api.md)
-- [Core Specification](../reference/core-spec.md)
+- [Takosumi v1](../reference/takosumi-v1.md)
 - [Platform Services](../reference/platform-services.md)

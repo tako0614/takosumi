@@ -13,8 +13,10 @@
     "baseUrl": ".",
     "paths": {
       "@takosjp/takosumi": ["./src/all/mod.ts"],
-      "@takosjp/takosumi/kernel": ["./src/all/kernel.ts"],
       "@takosjp/takosumi/contract": ["./src/contract/mod.ts"],
+      "@takosjp/takosumi/contract/installer-api": [
+        "./src/contract/installer-api.ts"
+      ],
       "@takosjp/takosumi-accounts-contract": [
         "./packages/accounts-contract/src/mod.ts"
       ],
@@ -75,8 +77,8 @@
       "@takos/takosumi-contract/internal/rpc": [
         "./src/contract/internal-rpc.ts"
       ],
-      "@takos/takosumi-kernel/runtime": [
-        "./src/kernel/shared/runtime/index.ts"
+      "@takos/takosumi-service/runtime": [
+        "./src/service/shared/runtime/index.ts"
       ],
       "takosumi-contract": ["./src/contract/mod.ts"],
       "takosumi-contract/installer-api": ["./src/contract/installer-api.ts"],
@@ -137,6 +139,6 @@
     "**/*_test.ts",
     "packages/dashboard-ui",
     "src/cli/tests",
-    "src/kernel/scripts"
+    "src/service/scripts"
   ]
 }

@@ -4,7 +4,7 @@
 
 1. [Concepts](./concepts.md)
 2. [Quickstart](./quickstart.md)
-3. [Core Specification](../reference/core-spec.md)
+3. [Takosumi v1](../reference/takosumi-v1.md)
 4. [Installer API](../reference/installer-api.md)
 5. [Specification Boundaries](../reference/spec-boundaries.md)
 
@@ -23,9 +23,9 @@
 4. [Installer API](../reference/installer-api.md)
 5. [Platform Services](../reference/platform-services.md)
 
-## Core Contributors {#core-contributors}
+## Takosumi v1 Contributors {#takosumi-v1-contributors}
 
 1. [Specification Boundaries](../reference/spec-boundaries.md)
-2. [Core Specification](../reference/core-spec.md)
+2. [Takosumi v1](../reference/takosumi-v1.md)
 3. [Installer API](../reference/installer-api.md)
 4. [Platform Services](../reference/platform-services.md)

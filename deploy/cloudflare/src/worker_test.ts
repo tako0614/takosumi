@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import type { CreatedPaaSApp } from "../../../src/kernel/bootstrap.ts";
+import type { CreatedTakosumiService } from "../../../src/service/bootstrap.ts";
 import { type CloudflareWorkerEnv, createCloudflareWorker } from "./handler.ts";
 import type {
   D1Database,
@@ -18,10 +18,10 @@ interface CapturedRequest {
   readonly body: string;
 }
 
-test("Cloudflare Worker dispatches kernel control-plane routes in-process", async () => {
+test("Cloudflare Worker dispatches service control-plane routes in-process", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
-    createKernelApp: () => Promise.resolve(createdApp("kernel", calls)),
+    createServiceApp: () => Promise.resolve(createdApp("service", calls)),
   });
   const env = createEnv();
 
@@ -47,7 +47,7 @@ test("Cloudflare Worker dispatches kernel control-plane routes in-process", asyn
     );
     assert.equal(response.status, 200);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].app, "kernel");
+    assert.equal(calls[0].app, "service");
     assert.equal(calls[0].url, `https://worker.example${path}`);
     assert.equal(
       calls[0].headers.get(TAKOSUMI_CLOUDFLARE_FRONT_HEADER),
@@ -59,7 +59,7 @@ test("Cloudflare Worker dispatches kernel control-plane routes in-process", asyn
 test("Cloudflare Worker dispatches runtime-agent routes to the runtime-agent app", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
-    createKernelApp: () => Promise.resolve(createdApp("kernel", calls)),
+    createServiceApp: () => Promise.resolve(createdApp("service", calls)),
     createRuntimeAgentApp: () =>
       Promise.resolve(createdApp("runtime-agent", calls)),
   });
@@ -77,7 +77,7 @@ test("Cloudflare Worker dispatches runtime-agent routes to the runtime-agent app
 test("Cloudflare Worker preserves method, query, headers, and body", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
-    createKernelApp: () => Promise.resolve(createdApp("kernel", calls, 202)),
+    createServiceApp: () => Promise.resolve(createdApp("service", calls, 202)),
   });
   const body = JSON.stringify({
     spaceId: "space_test",
@@ -117,10 +117,10 @@ test("Cloudflare Worker preserves method, query, headers, and body", async () =>
   assert.equal(call.body, body);
 });
 
-test("Cloudflare Worker keeps edge-local routes outside the kernel app", async () => {
+test("Cloudflare Worker keeps edge-local routes outside the service app", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
-    createKernelApp: () => Promise.resolve(createdApp("kernel", calls)),
+    createServiceApp: () => Promise.resolve(createdApp("service", calls)),
   });
   const env = createEnv();
 
@@ -167,7 +167,7 @@ test("Cloudflare Worker keeps edge-local routes outside the kernel app", async (
 
 test("Cloudflare Worker no longer exposes runtime container routing", async () => {
   const worker = createCloudflareWorker({
-    createKernelApp: () => Promise.resolve(createdApp("kernel", [])),
+    createServiceApp: () => Promise.resolve(createdApp("service", [])),
   });
 
   const response = await worker.fetch(
@@ -182,7 +182,7 @@ function createdApp(
   name: string,
   calls: CapturedRequest[],
   status = 200,
-): CreatedPaaSApp {
+): CreatedTakosumiService {
   return {
     app: {
       fetch: async (request: Request) => {
@@ -192,7 +192,7 @@ function createdApp(
     },
     context: {},
     role: name === "runtime-agent" ? "takosumi-runtime-agent" : "takosumi-api",
-  } as unknown as CreatedPaaSApp;
+  } as unknown as CreatedTakosumiService;
 }
 
 async function captureRequest(

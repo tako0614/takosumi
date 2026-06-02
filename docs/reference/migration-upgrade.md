@@ -11,7 +11,7 @@ Takosumi pod の process replacement は SIGTERM → graceful drain → restart 
 | cross minor (x.y) | mutation pause invariant | schema change 中は mutation を受け付けない  |
 | major (x)         | outside this reference   | release-specific private runbook でのみ扱う |
 
-process replacement 中の kernel pod 群は [Cross-Process Locks](./cross-process-locks.md) を共有することで直列化される。 schema 不整合が発生する process replacement は後述の rollback gate によって rejection される。
+process replacement 中の service pod 群は [Cross-Process Locks](./cross-process-locks.md) を共有することで直列化される。 schema 不整合が発生する process replacement は後述の rollback gate によって rejection される。
 
 ### Graceful drain
 
@@ -128,8 +128,8 @@ migration / upgrade 関連の audit event は [Audit Events](./audit-events.md) 
 | `migration-completed`      | 全 step 完了時。`db-current` を確定値で記録            |
 | `migration-rollback`       | down migration 実行時。`from-version` / `to-version`   |
 | `migration-aborted`        | migration が途中で失敗した場合。失敗 step / error code |
-| `kernel-upgrade-started`   | process replacement で先頭 pod が drain 開始した時     |
-| `kernel-upgrade-completed` | 全 pod が new binary で steady state に達した時        |
+| `service-upgrade-started`   | process replacement で先頭 pod が drain 開始した時     |
+| `service-upgrade-completed` | 全 pod が new binary で steady state に達した時        |
 | `agent-skew-rejected`      | enrollment / heartbeat で skew check が reject した時  |
 
 audit event は migration の各 phase で emit され、 operator UI が tracking に使う。
@@ -139,8 +139,8 @@ audit event は migration の各 phase で emit され、 operator UI が tracki
 | 状況                                      | error code                     | 復旧                                                                       |
 | ----------------------------------------- | ------------------------------ | -------------------------------------------------------------------------- |
 | `db-current` が `code-supported-range` 外 | `schema_incompatible`          | release-specific runbook に従って schema / binary を整合させる             |
-| migration 途中で kernel crash             | recovery 経路で resume         | recovery path に任せる。Current public CLI は `--resume` flag を公開しない |
-| agent skew が range 外                    | `agent_skew_out_of_range`      | current kernel の supported range に合う agent を enroll する              |
+| migration 途中で service crash             | recovery 経路で resume         | recovery path に任せる。Current public CLI は `--resume` flag を公開しない |
+| agent skew が range 外                    | `agent_skew_out_of_range`      | current service の supported range に合う agent を enroll する              |
 | drain timeout 超過                        | `kernel_drain_timeout`         | `SIGKILL` 後 recovery、operator が原因調査                                 |
 | cross-minor rollback で down が無い       | `down_migration_not_supported` | rollback 不可。forward-only で対処                                         |
 
@@ -156,5 +156,5 @@ audit event は migration の各 phase で emit され、 operator UI が tracki
 - [Cross-Process Locks](./cross-process-locks.md)
 - [Audit Events](./audit-events.md)
 - [Readiness Probes](./readiness-probes.md)
-- [Reference Kernel Route Inventory](./kernel-http-api.md)
+- [Reference Takosumi Route Inventory](./service-http-api.md)
 - [Enum and Value Index](./closed-enums.md)

@@ -25,14 +25,14 @@ export interface GitFetchOptions {
   /**
    * Injected `git` capability. Defaults to a runner built over the installer's
    * Deno-runtime `git` primitive so standalone Deno behavior is unchanged; the
-   * reference kernel injects a runner routed through
+   * reference service injects a runner routed through
    * `currentRuntime().subprocess` so the same path runs on Node / Workers
    * without this module referencing host subprocess globals.
    */
   readonly gitRunner?: GitRunner;
   /**
    * Injected temp-dir filesystem capability. Defaults to a Deno-backed FS so
-   * standalone Deno behavior is unchanged; the reference kernel injects
+   * standalone Deno behavior is unchanged; the reference service injects
    * `currentRuntime().fs`.
    */
   readonly fs?: InstallerFs;
@@ -65,7 +65,7 @@ export interface GitFetchResult {
  *   rejected so they cannot smuggle a newline / NUL into the argv.
  * - Host literals that resolve to loopback, RFC1918 private, link-local,
  *   or cloud metadata IPs are rejected up front. DNS hostnames are not
- *   resolved here; operators are expected to constrain the kernel's
+ *   resolved here; operators are expected to constrain the service's
  *   network egress to trusted destinations.
  */
 export async function fetchGitSource(

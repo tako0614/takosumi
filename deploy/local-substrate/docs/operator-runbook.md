@@ -8,11 +8,11 @@ cd takosumi/deploy/local-substrate
 # 起動 (Pebble + CoreDNS + Caddy。 minica と issuance root を auto-capture)
 bash scripts/up.sh
 
-# Postgres profile: Bun+Postgres Takosumi kernel + Accounts + cloud worker.
+# Postgres profile: Bun+Postgres Takosumi service + Accounts + cloud worker.
 bash scripts/up.sh --profile postgres
 
-# Workers profile: Accounts Worker on D1/R2 + Takosumi kernel Worker on
-# D1/R2/Queue/DO. In this profile kernel.takosumi.test is the Worker endpoint.
+# Workers profile: Accounts Worker on D1/R2 + Takosumi service Worker on
+# D1/R2/Queue/DO. In this profile service.takosumi.test is the Worker endpoint.
 bash scripts/up.sh --profile workers
 
 # 停止 (volume は残る)
@@ -79,11 +79,11 @@ curl -sk https://127.0.0.1:15000/dir
 # CoreDNS 経由の wildcard 解決
 dig random-name.takosumi.test @127.0.0.1 +short
 
-# Postgres profile kernel + Worker mirror
-curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel.takosumi.test/health
-curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel-worker.takosumi.test/healthz
+# Postgres profile service + Worker mirror
+curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://service.takosumi.test/health
+curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://service-worker.takosumi.test/healthz
 
-# Workers profile kernel Worker
-curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel.takosumi.test/healthz
-curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://kernel.takosumi.test/storage/healthz
+# Workers profile service Worker
+curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://service.takosumi.test/healthz
+curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://service.takosumi.test/storage/healthz
 ```

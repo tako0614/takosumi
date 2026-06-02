@@ -7,7 +7,11 @@ This page moved to the language-specific docs.
 
 ## Quick Reference
 
-Takosumi Installer API exposes the canonical 4 public statuses for core
+AppInstallation status uses the canonical 5 public statuses: `installing`,
+`ready`, `failed`, `suspended`, and `exported`. Runtime materialization and
+export are operation phases, not extra public statuses.
+
+Takosumi Installer API exposes the canonical 4 public statuses for Takosumi
 `Installation.status`: `installing`, `ready`, `failed`, and `suspended`.
 Takosumi account-plane projection statuses are separate Cloud-owned
 metadata and events.

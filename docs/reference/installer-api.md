@@ -38,7 +38,7 @@ token は operator が actor 単位に発行する scoped credential です。
 | field | required | 説明 |
 | --- | --- | --- |
 | `kind` | yes | `git` / `prepared` / dev・operator-local の `local` |
-| `url` | yes | git URL、prepared archive URL、または kernel-local path |
+| `url` | yes | git URL、prepared archive URL、または Takosumi service から見える local path |
 | `ref` | conditional | `git` 時に必須 |
 | `digest` | conditional | `prepared` 時に必須。archive payload digest guard |
 
@@ -240,4 +240,5 @@ Response は pointer rollback scope を返します。
 | 404 | `not_found` | Installation / rollback target が見つからない |
 | 409 | `failed_precondition` | source pin、prepared digest、current pointer、`planSnapshotDigest` mismatch |
 | 413 | `resource_exhausted` | source payload / request size 超過 |
-| 500 | `internal` | operator implementation error |
+| 501 | `not_implemented` | endpoint / optional operator extension がこの binary に実装されていない |
+| 500 | `internal_error` | operator implementation error |

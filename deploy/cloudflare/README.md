@@ -1,19 +1,19 @@
 # Takosumiflare Worker Scaffold
 
-This directory is the Worker-first deployment scaffold for running the Takosumi control plane on Cloudflare without a container runtime. The Worker builds the kernel in-process with `createPaaSApp`, uses D1 for Worker-side kernel persistence and installer lifecycle records, and can use R2 for the optional operator DataAsset object store.
+This directory is the Worker-first deployment scaffold for running the Takosumi control plane on Cloudflare without a container runtime. The Worker builds the service in-process with `createTakosumiService`, uses D1 for Worker-side service persistence and installer lifecycle records, and can use R2 for the optional operator DataAsset object store.
 
 ## Files
 
 - `wrangler.toml`: Worker, D1, R2, Queue, and coordination Durable Object binding template. Wrangler runs a Bun custom build and uploads the bundled Worker without a second esbuild pass.
 - `src/worker.ts`: Worker entrypoint.
-- `src/handler.ts`: route dispatcher that keeps edge-local health/storage probes local and dispatches Takosumi kernel routes to an in-process Hono app.
-- `src/d1_storage.ts`: D1-backed snapshot storage driver for kernel stores.
+- `src/handler.ts`: route dispatcher that keeps edge-local health/storage probes local and dispatches Takosumi service routes to an in-process Hono app.
+- `src/d1_storage.ts`: D1-backed snapshot storage driver for service stores.
 - `src/d1_deploy_stores.ts`: D1-backed installer/deployment record, idempotency, operation journal, and revoke-debt stores.
 - `src/r2_object_storage.ts`: R2-backed `ObjectStoragePort` used when the operator enables DataAsset routes.
 
 ## Routing Shape
 
-The Worker directly handles the kernel control-plane paths. Method, path, query, body, and auth headers are preserved:
+The Worker directly handles the service control-plane paths. Method, path, query, body, and auth headers are preserved:
 
 - `/v1/installations/*` for the five public installer endpoints.
 - optional `/v1/artifacts*` routes when the operator enables the DataAsset extension.
@@ -34,7 +34,7 @@ There is no `/runtime/*` container routing in this scaffold. Workload runtimes m
 
 D1 is used in two places:
 
-- `CloudflareD1SnapshotStorageDriver` persists the kernel storage snapshot.
+- `CloudflareD1SnapshotStorageDriver` persists the service storage snapshot.
 - `createCloudflareD1DeployStores` persists deployment records, idempotency replay responses, WAL stage journal entries, deploy locks, and revoke-debt records.
 
 R2 is used only by the optional DataAsset routes through `CloudflareR2ObjectStorage`. The adapter stores Takosumi digests in R2 custom metadata and verifies digests on read. Source, Installation, and Deployment do not require R2.
@@ -45,4 +45,4 @@ R2 is used only by the optional DataAsset routes through `CloudflareR2ObjectStor
 2. Configure Worker secrets/vars such as `TAKOSUMI_INSTALLER_TOKEN`, `TAKOSUMI_INTERNAL_API_SECRET`, `TAKOSUMI_SECRET_STORE_PASSPHRASE`, and optional `TAKOSUMI_METRICS_SCRAPE_TOKEN`. Add `TAKOSUMI_DEPLOY_TOKEN` only when this operator distribution mounts DataAsset write routes.
 3. Deploy with either `wrangler deploy --config deploy/cloudflare/wrangler.toml` from the product root or `wrangler deploy` from this directory.
 
-Do not replace kernel `/readyz` with a Worker-local response. Kernel readiness checks still come from the in-process kernel app.
+Do not replace service `/readyz` with a Worker-local response. Service readiness checks still come from the in-process service app.

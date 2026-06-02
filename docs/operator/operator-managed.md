@@ -9,11 +9,11 @@ Public contract は [Installer API](../reference/installer-api.md) を参照。
 
 | 役割                       | 例                                                               |
 | -------------------------- | ---------------------------------------------------------------- |
-| Takosumi server            | `createPaaSApp()` bootstrap server with selected adapter array   |
+| Takosumi server            | `createTakosumiService()` bootstrap server with selected adapter array   |
 | metadata store             | Postgres                                                         |
 | optional data blob storage | local filesystem または object store                             |
 | runtime execution          | runtime-agent、または明示的に分離した embedded execution role    |
-| PlatformService inventory  | static config、Terraform output、cloud API、account-plane record |
+| PlatformService inventory  | static config、OpenTofu output、cloud API、account-plane record |
 
 ## 本番必須設定 {#production-required-settings}
 
@@ -31,7 +31,7 @@ execution は runtime-agent に分離するのが推奨です。
 
 本番は `takosumi server` ではなく、以下のどちらかを使います:
 
-- `createPaaSApp()` に operator-selected adapter array を渡す bootstrap server
+- `createTakosumiService()` に operator-selected adapter array を渡す bootstrap server
 - `takosumi` reference distribution
 
 ## Source Install Flow

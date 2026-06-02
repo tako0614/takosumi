@@ -50,7 +50,7 @@ WAL stage の意味は [WAL Stages](./wal-stages.md) 参照。
 read | read-write | admin | invoke-only | observe-only
 ```
 
-Access mode は official catalog vocabulary です。core は resolved value を Deployment の記録に残し、operator distribution が policy を enforce します。PlatformService binding selection と operator policy が access mode を解決します。詳細は [Access Modes](./access-modes.md) 参照。
+Access mode は official catalog vocabulary です。Takosumi は resolved value を Deployment の記録に残し、operator distribution が policy を enforce します。PlatformService binding selection と operator policy が access mode を解決します。詳細は [Access Modes](./access-modes.md) 参照。
 
 ## Approval lifecycle
 
@@ -109,7 +109,7 @@ failed_precondition | resource_exhausted | not_implemented |
 readiness_probe_failed | internal_error
 ```
 
-HTTP status への対応は reference Takosumi の [Reference Takosumi Route Inventory](./kernel-http-api.md) にあります。Installer API が返す public error code subset は [Installer API](./installer-api.md#error-envelope) が正本です。
+HTTP status への対応は reference Takosumi の [Reference Takosumi Route Inventory](./service-http-api.md) にあります。Installer API が返す public error code subset は [Installer API](./installer-api.md#error-envelope) が正本です。
 
 ## Connector identity
 
@@ -123,6 +123,6 @@ connector:<id>
 
 - [Lifecycle Protocol](./lifecycle.md)
 - [WAL Stages](./wal-stages.md)
-- [Reference Takosumi Route Inventory](./kernel-http-api.md)
+- [Reference Takosumi Route Inventory](./service-http-api.md)
 - [Risk Taxonomy](./risk-taxonomy.md)
 - [Connector Guide](./connector-contract.md)

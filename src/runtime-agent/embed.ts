@@ -1,11 +1,11 @@
 /**
  * Embedded runtime-agent.
  *
- * Allows the kernel (or CLI) to spawn an in-process runtime-agent for
+ * Allows the service (or CLI) to spawn an in-process runtime-agent for
  * single-VM development. Operators pass the connector registry they want to
  * expose; the runtime-agent package itself does not auto-load backend
  * connectors. A random bearer token is generated and exported via
- * `TAKOSUMI_AGENT_TOKEN` so the kernel's plugin client picks it up
+ * `TAKOSUMI_AGENT_TOKEN` so the service's plugin client picks it up
  * automatically.
  *
  * For multi-host production, operators run a standalone agent (`takosumi

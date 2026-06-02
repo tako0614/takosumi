@@ -1,7 +1,7 @@
 # 内部設計の概要 {#architecture-overview}
 
 ::: info
-内部設計メモ。public contract は [Installer API](../installer-api.md) と [Core Specification](../core-spec.md) を参照。
+内部設計メモ。public contract は [Installer API](../installer-api.md) と [Takosumi v1](../takosumi-v1.md) を参照。
 :::
 
 この directory は Takosumi / operator implementation author 向けです。Takosumi v1 は manifestless です。current public input は Source、Installation、Deployment、PlatformService、InstallPlan です。
@@ -48,7 +48,7 @@ Dry-run response は `InstallPlan` と `planSnapshotDigest` を返します。`I
 
 | Doc                                                           | Question                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------- |
-| [Kernel](./kernel.md)                                         | Takosumi と operator / application の責務境界はどこか。       |
+| [Takosumi service](./takosumi-service.md)                               | Takosumi と operator / application の責務境界はどこか。       |
 | [Object Model](./object-model.md)                             | Takosumi が扱う object の lifecycle class と revoke flow。    |
 | [Snapshot Model](./snapshot-model.md)                         | snapshot 体系と各 snapshot の役割。                           |
 | [Space Model](./space-model.md)                               | Space scope で何が分離されるか。                              |

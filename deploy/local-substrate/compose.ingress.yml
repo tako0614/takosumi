@@ -85,8 +85,8 @@ services:
           - caddy
           - hello.takosumi.test
           - accounts.takosumi.test
-          - kernel.takosumi.test
-          - kernel-worker.takosumi.test
+          - service.takosumi.test
+          - service-worker.takosumi.test
           - takosumi.test
           - accounts.takosumi.test
           - takos.app.takosumi.test

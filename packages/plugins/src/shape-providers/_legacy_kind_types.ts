@@ -4,14 +4,14 @@
  * Wave N-A deleted the curated 4-kind catalog under
  * `spec/contexts/kinds/v1/` along with the hand-written
  * `Shape<Spec, Outputs, Capability>` descriptors at
- * `packages/plugins/src/kinds/*.ts`. The Takosumi kernel no longer
+ * `packages/plugins/src/kinds/*.ts`. The Takosumi service no longer
  * knows about `worker / postgres / object-store / custom-domain` as
  * privileged kinds.
  *
  * The shape-providers tree under `packages/plugins/src/shape-providers/`
  * is **legacy code** that uses the older `ProviderPlugin` contract
  * (= `Provider<Spec, Outputs>` keyed by short-name shape id) — it
- * predates the namespace pub/sub `KernelPlugin` model and is retained
+ * predates the namespace pub/sub `TakosumiPlugin` model and is retained
  * only for reference distribution backward-compat (= the
  * legacy provider packages under the pre-catalog provider naming model
  * packages still re-export factories from here). To unblock the Wave
@@ -22,10 +22,10 @@
  * These types reproduce the deleted `*.generated.ts` schemas verbatim
  * — the goal is bytewise-equivalent surfaces for legacy callers, not
  * new API. Future waves will migrate the shape-provider tree to the
- * namespace pub/sub `KernelPlugin` contract (or remove it) and these
+ * namespace pub/sub `TakosumiPlugin` contract (or remove it) and these
  * type stubs will go with it.
  *
- * Authority: kernel ships **no** built-in kinds. Operator-defined
+ * Authority: service ships **no** built-in kinds. Operator-defined
  * kinds are the only authorized path forward.
  */
 

@@ -181,7 +181,7 @@ CurrentStateIndex
 
 #### Ownership / Security
 
-**4. Ownership invariant** --- reference runtime object / evidence の lifecycle class は operation を制限する。provider infrastructure と materialization workflow の所有者は operator distribution であり、Takosumi core は binding snapshot / evidence を記録する。
+**4. Ownership invariant** --- reference runtime object / evidence の lifecycle class は operation を制限する。provider infrastructure と materialization workflow の所有者は operator distribution であり、Takosumi は binding snapshot / evidence を記録する。
 
 ```text
 managed:
@@ -206,7 +206,7 @@ imported:
 
 この invariant を強制する revoke flow は [Object Model — Object revoke flow](./object-model.md) に詳しい。
 
-**5. Secret invariant** --- raw secret 値は core canonical state に保存されない。core state には secret reference、handle、projection metadata、audit event を保存できる。
+**5. Secret invariant** --- raw secret 値は Takosumi canonical state に保存されない。Takosumi state には secret reference、handle、projection metadata、audit event を保存できる。
 
 **11. External ownership invariant** --- 外部 source object は deployment destroy で破壊されない。link が所有する生成 authorization、credential、endpoint、projection は revoke または削除される。 revoke 失敗は `CleanupBacklog` を作る。
 

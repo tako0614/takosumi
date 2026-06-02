@@ -3,14 +3,14 @@
  *
  * Both the git source fetcher and the prepared-source fetcher accept a
  * caller-supplied URL and reach out over the network on the operator's
- * behalf. To avoid the kernel being used as a confused deputy against
+ * behalf. To avoid the service being used as a confused deputy against
  * loopback / RFC1918 / link-local / cloud-metadata addresses, every IP
  * literal in a source URL is classified here and rejected before any
  * subprocess (`git clone`) or `fetch()` runs.
  *
  * Hostnames are deliberately NOT resolved here. DNS resolution would itself
  * be a network side-effect and is racy (DNS rebinding), so operators are
- * expected to constrain the kernel's network egress to trusted destinations.
+ * expected to constrain the service's network egress to trusted destinations.
  * This module only closes the literal-IP hole that egress policy alone is
  * awkward to express.
  */

@@ -20,7 +20,7 @@ DB や OIDC issuer などは operator inventory の PlatformService として選
 }
 ```
 
-CLI での binding flag は operator distribution が提供する deploy facade の責務です。core Installer API の shape は
+CLI での binding flag は operator distribution が提供する deploy facade の責務です。Takosumi Installer API の shape は
 [Installer API](../reference/installer-api.md) と [プラットフォームサービス](../reference/platform-services.md) を参照してください。
 
 ## 更新と rollback を試す {#update-and-roll-back}

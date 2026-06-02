@@ -1,26 +1,26 @@
 /**
- * KernelPlugin — the reference Takosumi kernel's Vite-style plain-array
+ * TakosumiPlugin — the reference Takosumi service's Vite-style plain-array
  * materializer API for reference implementation component output and input
  * material wiring.
  *
- * A `KernelPlugin` advertises one or more component kind URIs in `provides`,
+ * A `TakosumiPlugin` advertises one or more component kind URIs in `provides`,
  * may expose short-name `aliases` for operator tooling,
  * materializes those components via `apply()`, projects component output slots
  * into output material via `materializeOutput()`, and surfaces input materials
  * into the component runtime via `applyBinding()`.
  *
  * The reference implementation wires plugins as a plain array to
- * `createPaaSApp({ plugins })`, matching the Vite plugin authoring
+ * `createTakosumiService({ plugins })`, matching the Vite plugin authoring
  * experience. A Takosumi-compatible implementation can bind the same backend
  * adapter through another mechanism. This is implementation wiring, not the
  * manifestless v1 public Source contract.
  *
  * # Materializer abstraction
  *
- * A `KernelPlugin` is one packaging of a more general concept: a
+ * A `TakosumiPlugin` is one packaging of a more general concept: a
  * **Materializer** is any code that turns a kind URI into a concrete
  * resource and emits / consumes materials. Inline functions and
- * operator-defined raw code can attach to the same kernel surface as
+ * operator-defined raw code can attach to the same service surface as
  * full plugins via {@link InlineMaterializer}.
  */
 import type {
@@ -55,7 +55,7 @@ export interface PublishOptions {
   readonly labels?: Readonly<Record<string, string>>;
 }
 
-export interface KernelPlugin {
+export interface TakosumiPlugin {
   /** Plugin id, e.g. `"@takosjp/takosumi-plugins/kind/cloudflare-worker"`. */
   readonly name: string;
   readonly version: string;
@@ -99,27 +99,27 @@ export interface KernelPlugin {
    * topological order. Resolved input materials are made available via
    * `inputMaterials` (`listenedMaterials` is kept as a compatibility alias).
    */
-  apply(ctx: KernelPluginApplyContext): Promise<KernelPluginApplyResult>;
+  apply(ctx: TakosumiPluginApplyContext): Promise<TakosumiPluginApplyResult>;
 
   /**
    * Destroy a previously-materialized component. Called on Installation
    * deletion / rollback. Optional — plugins that have no destroyable
    * state can omit this hook.
    */
-  destroy?(ctx: KernelPluginDestroyContext): Promise<void>;
+  destroy?(ctx: TakosumiPluginDestroyContext): Promise<void>;
 
   /**
    * Observe a previously-materialized component. Optional — plugins that can
    * cheaply read backend state return a normalized status for operator
    * dashboards and repair loops.
    */
-  status?(ctx: KernelPluginStatusContext): Promise<KernelPluginResourceStatus>;
+  status?(ctx: TakosumiPluginStatusContext): Promise<TakosumiPluginResourceStatus>;
 
   /**
    * Compute the {@link OutputMaterial} for a component output slot.
    * Invoked after `apply()` succeeds when another reference component consumes
    * that output, when an operator publication plan exposes it, or when the
-   * kernel records implementation-visible outputs as Deployment evidence.
+   * service records implementation-visible outputs as Deployment evidence.
    *
    * Optional — kinds that do not expose output material (e.g. pure
    * consumers) may omit this hook.
@@ -152,7 +152,7 @@ export interface KernelPlugin {
   /**
    * @deprecated Renamed to `applyBinding`. The installer reads
    * `applyBinding ?? applyListen`. Remove once no plugin in `takosumi-plugins`
-   * and no kernel binding handler defines `applyListen`.
+   * and no service binding handler defines `applyListen`.
    */
   applyListen?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
 
@@ -162,28 +162,28 @@ export interface KernelPlugin {
   // ---------------------------------------------------------------------
 
   /** Fires before the first Deployment of a brand-new Installation. */
-  onInstallStart?(ctx: KernelPluginInstallationContext): Promise<void>;
+  onInstallStart?(ctx: TakosumiPluginInstallationContext): Promise<void>;
   /** Fires after the first Deployment of a brand-new Installation succeeds. */
-  onInstallComplete?(ctx: KernelPluginInstallationContext): Promise<void>;
+  onInstallComplete?(ctx: TakosumiPluginInstallationContext): Promise<void>;
   /** Fires before every Deployment apply (including the first one). */
-  onDeploymentStart?(ctx: KernelPluginDeploymentContext): Promise<void>;
+  onDeploymentStart?(ctx: TakosumiPluginDeploymentContext): Promise<void>;
   /** Fires after every successful Deployment apply. */
-  onDeploymentComplete?(ctx: KernelPluginDeploymentContext): Promise<void>;
+  onDeploymentComplete?(ctx: TakosumiPluginDeploymentContext): Promise<void>;
 }
 
 /**
  * Materializer = arbitrary code that materializes a kind URI and
- * participates in the component output / input material registry. {@link KernelPlugin} is
+ * participates in the component output / input material registry. {@link TakosumiPlugin} is
  * the conventional packaging — `name` / `version` / lifecycle hooks — but
  * inline functions and operator-defined raw code can attach to the same
- * kernel surface via {@link InlineMaterializer}.
+ * service surface via {@link InlineMaterializer}.
  */
-export type Materializer = KernelPlugin | InlineMaterializer;
+export type Materializer = TakosumiPlugin | InlineMaterializer;
 
 /**
  * Minimal materializer surface — the smallest contract the installer
  * recognizes. Useful for inline materializers in tests, examples, and
- * operator-defined raw code. A `KernelPlugin` is structurally a superset
+ * operator-defined raw code. A `TakosumiPlugin` is structurally a superset
  * of `InlineMaterializer`.
  */
 export interface InlineMaterializer {
@@ -192,14 +192,14 @@ export interface InlineMaterializer {
   /** Optional short-name aliases supplied by operator tooling / alias maps. */
   readonly aliases?: readonly string[];
   validateComponent?(component: Component): void | Promise<void>;
-  apply(ctx: KernelPluginApplyContext): Promise<KernelPluginApplyResult>;
-  status?(ctx: KernelPluginStatusContext): Promise<KernelPluginResourceStatus>;
+  apply(ctx: TakosumiPluginApplyContext): Promise<TakosumiPluginApplyResult>;
+  status?(ctx: TakosumiPluginStatusContext): Promise<TakosumiPluginResourceStatus>;
   materializeOutput?(
     ctx: OutputMaterialContext,
   ): Promise<OutputMaterial>;
   /**
    * @deprecated Renamed to `materializeOutput`; kept for pre-rename inline
-   * materializers. Remove together with `KernelPlugin.publishMaterial`.
+   * materializers. Remove together with `TakosumiPlugin.publishMaterial`.
    */
   publishMaterial?(
     ctx: OutputMaterialContext,
@@ -207,7 +207,7 @@ export interface InlineMaterializer {
   applyBinding?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
   /**
    * @deprecated Renamed to `applyBinding`; kept for pre-rename inline
-   * materializers. Remove together with `KernelPlugin.applyListen`.
+   * materializers. Remove together with `TakosumiPlugin.applyListen`.
    */
   applyListen?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
 }
@@ -218,7 +218,7 @@ export interface InlineMaterializer {
  * material values or `{ secretRef }` references to entries in the operator
  * secret store.
  *
- * Treated as opaque by the kernel; consumers (= input-binding handlers)
+ * Treated as opaque by the service; consumers (= input-binding handlers)
  * interpret the payload through the source material contract,
  * operator descriptor metadata, and implementation binding. JSON-LD is the
  * takosumi.com reference metadata form when an operator chooses to use it.
@@ -284,7 +284,7 @@ export interface ResolvedInputBinding {
  */
 export type ResolvedListenBinding = ResolvedInputBinding;
 
-export interface KernelPluginApplyContext {
+export interface TakosumiPluginApplyContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly component: Component;
@@ -310,7 +310,7 @@ export interface KernelPluginApplyContext {
   /**
    * @deprecated Renamed to `inputMaterials`. The installer still populates this
    * field with the same map, so it is required for now. Make it optional and
-   * then remove once no kernel binding code or `takosumi-plugins` package reads
+   * then remove once no service binding code or `takosumi-plugins` package reads
    * `ctx.listenedMaterials`.
    */
   readonly listenedMaterials: Readonly<
@@ -318,15 +318,15 @@ export interface KernelPluginApplyContext {
   >;
   /**
    * Env / mount / target descriptors produced by `applyBinding` for each input
-   * edge. Native KernelPlugin implementations should use this field
+   * edge. Native TakosumiPlugin implementations should use this field
    * when they need the actual runtime injection plan instead of raw materials.
    */
   readonly resolvedBindings: readonly ResolvedInputBinding[];
 }
 
-export interface KernelPluginApplyResult {
+export interface TakosumiPluginApplyResult {
   /**
-   * Backend-side resource handle. The kernel treats it as opaque
+   * Backend-side resource handle. The service treats it as opaque
    * implementation evidence and passes it back to `destroy()` when needed.
    */
   readonly resourceHandle: string;
@@ -372,38 +372,38 @@ export interface ApplyInputBindingContext {
  */
 export type ApplyListenContext = ApplyInputBindingContext;
 
-export interface KernelPluginDestroyContext {
+export interface TakosumiPluginDestroyContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly resourceHandle: string;
 }
 
-export interface KernelPluginStatusContext {
+export interface TakosumiPluginStatusContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly resourceHandle: string;
 }
 
-export type KernelPluginResourceStatusKind =
+export type TakosumiPluginResourceStatusKind =
   | "pending"
   | "ready"
   | "degraded"
   | "failed"
   | "deleted";
 
-export interface KernelPluginResourceStatus {
-  readonly kind: KernelPluginResourceStatusKind;
+export interface TakosumiPluginResourceStatus {
+  readonly kind: TakosumiPluginResourceStatusKind;
   readonly outputs?: Readonly<Record<string, JsonValue>>;
   readonly reason?: string;
   readonly observedAt: string;
 }
 
-export interface KernelPluginInstallationContext {
+export interface TakosumiPluginInstallationContext {
   readonly installation: Installation;
   readonly deployment?: Deployment;
 }
 
-export interface KernelPluginDeploymentContext {
+export interface TakosumiPluginDeploymentContext {
   readonly installation: Installation;
   readonly deployment: Deployment;
 }
@@ -422,7 +422,7 @@ export interface NativeKindApplyResult<Outputs = JsonObject> {
   readonly diagnostics?: readonly NativeKindApplyDiagnostic[];
 }
 
-export type NativeKindResourceStatusKind = KernelPluginResourceStatusKind;
+export type NativeKindResourceStatusKind = TakosumiPluginResourceStatusKind;
 
 export interface NativeKindSpecValidationIssue {
   readonly path: string;
@@ -464,22 +464,22 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
    */
   apply(
     spec: Spec,
-    ctx: KernelPluginApplyContext,
+    ctx: TakosumiPluginApplyContext,
   ): Promise<NativeKindApplyResult<Outputs>>;
   destroy?(
     handle: NativeResourceHandle,
-    ctx: KernelPluginDestroyContext,
+    ctx: TakosumiPluginDestroyContext,
   ): Promise<void>;
   status?(
     handle: NativeResourceHandle,
-    ctx: KernelPluginStatusContext,
+    ctx: TakosumiPluginStatusContext,
   ): Promise<NativeKindResourceStatus<Outputs>>;
   materializeOutput?(
     ctx: NativeKindOutputMaterialContext<Outputs>,
   ): Promise<OutputMaterial> | OutputMaterial;
   /**
    * @deprecated Renamed to `materializeOutput`;
-   * `kernelPluginFromNativeKindOperations` reads
+   * `takosumiPluginFromNativeKindOperations` reads
    * `materializeOutput ?? publishMaterial`. Remove once the cloudflare D1 /
    * KV / queue / vectorize providers in `takosumi-plugins` define
    * `materializeOutput` instead of `publishMaterial`.
@@ -490,12 +490,12 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
 }
 
 /**
- * Build a reference `KernelPlugin` from native kind operations. This is the
+ * Build a reference `TakosumiPlugin` from native kind operations. This is the
  * current helper for native kind implementations in `takosumi-plugins`: the implementation
- * owns backend-specific operations, while the reference kernel still receives a
- * Vite-style plain-array `KernelPlugin`.
+ * owns backend-specific operations, while the reference service still receives a
+ * Vite-style plain-array `TakosumiPlugin`.
  */
-export function kernelPluginFromNativeKindOperations<Spec, Outputs>(
+export function takosumiPluginFromNativeKindOperations<Spec, Outputs>(
   opts: {
     readonly operations: NativeKindOperations<Spec, Outputs>;
     readonly kindUri: string;
@@ -503,7 +503,7 @@ export function kernelPluginFromNativeKindOperations<Spec, Outputs>(
     readonly version?: string;
     readonly capabilities?: readonly string[];
   },
-): KernelPlugin {
+): TakosumiPlugin {
   const operations = opts.operations;
   const capabilities = opts.capabilities ?? operations.capabilities;
   const materializeOutput = async (
@@ -830,7 +830,7 @@ function secretRefMaterial(
 /**
  * Merge explicit `spec.env` values with env descriptors produced by input
  * binding resolution. Native implementations call this intentionally when
- * their runtime accepts env variables; the generic KernelPlugin wrapper does
+ * their runtime accepts env variables; the generic TakosumiPlugin wrapper does
  * not mutate `component.spec`.
  */
 export function mergeResolvedEnv(
