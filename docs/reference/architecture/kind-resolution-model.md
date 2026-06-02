@@ -49,7 +49,7 @@ Resolution は operator-owned で、決定的かつ fail-closed にする。Tako
 
 ## Reference adapter metadata {#reference-adapter-metadata}
 
-`https://takosumi.com/kinds/v1/*` JSON-LD documents は reference adapter metadata です。operator distribution はこの metadata を採用して adapter validation や connector discovery に使えますが、Source repo が直接書く public contract ではありません。
+`https://takosumi.com/kinds/v1/*` JSON-LD documents は reference adapter metadata です。operator distribution はこの metadata を採用して adapter validation や runtime handler discovery に使えますが、Source repo が直接書く public contract ではありません。
 
 ```text
 Reference adapter metadata:

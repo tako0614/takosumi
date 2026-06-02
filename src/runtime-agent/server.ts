@@ -2,7 +2,7 @@
  * Runtime-agent HTTP server.
  *
  * Implements the lifecycle protocol from `@takosjp/takosumi/contract` and
- * dispatches to per-provider connectors. Operators run this on the host that
+ * dispatches to per-provider handlers. Operators run this on the host that
  * has the cloud credentials (`AWS_ACCESS_KEY_ID`, etc.) or the OS access
  * (docker daemon, systemd) for local adapter resources.
  */
@@ -24,11 +24,11 @@ import {
 import type { TarRunner } from "takosumi-contract/reference/runtime-capability";
 import { HttpArtifactFetcher } from "./artifact_fetcher.ts";
 import { serveHttp } from "./subprocess/serve.ts";
-import type { ConnectorContext } from "./connectors/connector.ts";
-import { ConnectorRegistry } from "./connectors/mod.ts";
+import type { RuntimeHandlerContext } from "./handlers.ts";
+import { RuntimeHandlerRegistry } from "./handlers.ts";
 import {
   ArtifactKindMismatchError,
-  ConnectorNotFoundError,
+  RuntimeHandlerNotFoundError,
   LifecycleDispatcher,
 } from "./lifecycle_dispatcher.ts";
 import {
@@ -38,7 +38,7 @@ import {
 import { readRuntimeEnv } from "./runtime.ts";
 
 export interface RuntimeAgentServerOptions {
-  readonly registry: ConnectorRegistry;
+  readonly registry: RuntimeHandlerRegistry;
   /** Bearer token operators share with the service. If unset, the agent
    *  refuses all lifecycle requests. */
   readonly token: string;
@@ -62,26 +62,26 @@ export function createRuntimeAgentApp(
   app.get(LIFECYCLE_HEALTH_PATH, (c) => {
     return c.json({
       status: "ok",
-      connectors: options.registry.size(),
+      handlers: options.registry.size(),
     });
   });
 
   // Authenticated registry inspection: which (shape, provider) tuples
   // were wired at boot, given the operator-supplied credentials? Operators
   // should hit this after starting the agent to verify their env vars
-  // produced the expected connector set BEFORE running an apply that fails
-  // with `connector_not_found`.
-  app.get("/v1/connectors", (c) => {
+  // produced the expected handler set BEFORE running an apply that fails
+  // with `runtime_handler_not_found`.
+  app.get("/v1/runtime-handlers", (c) => {
     const auth = c.req.header("authorization");
     if (!auth || auth !== expectedAuth) {
       return c.json(errorBody("unauthorized"), 401);
     }
-    const connectors = options.registry.list().map((connector) => ({
-      shape: connector.shape,
-      provider: connector.provider,
-      acceptedArtifactKinds: connector.acceptedArtifactKinds,
+    const handlers = options.registry.list().map((handler) => ({
+      shape: handler.shape,
+      provider: handler.provider,
+      acceptedArtifactKinds: handler.acceptedArtifactKinds,
     }));
-    return c.json({ connectors }, 200);
+    return c.json({ handlers }, 200);
   });
 
   app.use("/v1/lifecycle/*", async (c, next) => {
@@ -146,11 +146,11 @@ export function createRuntimeAgentApp(
     }
   });
 
-  // Smoke-test every registered connector by calling its read-only `verify`
+  // Smoke-test every registered handler by calling its read-only `verify`
   // hook. Operators run this before doing an actual `apply` to catch
   // missing creds / wrong region / firewall errors. Body is optional and
   // may carry `{ shape?, provider? }` to filter; both fall through to all
-  // connectors when absent. Connectors without a `verify` hook are
+  // handlers when absent. RuntimeHandlers without a `verify` hook are
   // reported as `{ ok: true, note: "no verify hook" }` so the table shows
   // them as "credentials cannot be checked" but not failed.
   app.post("/v1/lifecycle/verify", async (c) => {
@@ -178,15 +178,15 @@ export function createRuntimeAgentApp(
         code?: string;
       }
     > = [];
-    for (const connector of options.registry.list()) {
-      if (filter.shape && filter.shape !== connector.shape) continue;
-      if (filter.provider && filter.provider !== connector.provider) continue;
-      const verifyResult = connector.verify
-        ? await safeVerify(connector)
+    for (const handler of options.registry.list()) {
+      if (filter.shape && filter.shape !== handler.shape) continue;
+      if (filter.provider && filter.provider !== handler.provider) continue;
+      const verifyResult = handler.verify
+        ? await safeVerify(handler)
         : { ok: true, note: "no verify hook" };
       results.push({
-        shape: connector.shape,
-        provider: connector.provider,
+        shape: handler.shape,
+        provider: handler.provider,
         ok: verifyResult.ok,
         ...(verifyResult.note !== undefined ? { note: verifyResult.note } : {}),
         ...(verifyResult.code !== undefined ? { code: verifyResult.code } : {}),
@@ -199,11 +199,11 @@ export function createRuntimeAgentApp(
 }
 
 async function safeVerify(
-  connector: { verify?: (ctx: ConnectorContext) => Promise<unknown> },
+  handler: { verify?: (ctx: RuntimeHandlerContext) => Promise<unknown> },
 ): Promise<{ ok: boolean; note?: string; code?: string }> {
-  if (!connector.verify) return { ok: true, note: "no verify hook" };
+  if (!handler.verify) return { ok: true, note: "no verify hook" };
   try {
-    const out: unknown = await connector.verify({});
+    const out: unknown = await handler.verify({});
     if (!isRecord(out) || typeof out.ok !== "boolean") {
       return {
         ok: false,
@@ -223,7 +223,7 @@ async function safeVerify(
 function buildContext(
   artifactStore: { baseUrl: string; token: string } | undefined,
   source: PreparedSourceReader | undefined,
-): ConnectorContext {
+): RuntimeHandlerContext {
   return {
     ...(artifactStore
       ? {
@@ -285,11 +285,11 @@ function errorBody(error: string, code?: string): LifecycleErrorBody {
 }
 
 function errorResponse(c: Context, err: unknown) {
-  if (err instanceof ConnectorNotFoundError) {
+  if (err instanceof RuntimeHandlerNotFoundError) {
     return c.json(
       {
         error: err.message,
-        code: "connector_not_found",
+        code: "runtime_handler_not_found",
         details: { shape: err.shape, provider: err.provider },
       } satisfies LifecycleErrorBody,
       404,
@@ -311,13 +311,13 @@ function errorResponse(c: Context, err: unknown) {
     );
   }
   const message = err instanceof Error ? err.message : String(err);
-  return c.json({ error: message, code: "connector_failed" }, 500);
+  return c.json({ error: message, code: "runtime_handler_failed" }, 500);
 }
 
 export interface ServeOptions {
   readonly port?: number;
   readonly hostname?: string;
-  readonly registry: ConnectorRegistry;
+  readonly registry: RuntimeHandlerRegistry;
   readonly token: string;
 }
 
@@ -356,13 +356,13 @@ export function serveRuntimeAgent(options: ServeOptions): ServeHandle {
   };
 }
 
-export { ConnectorRegistry } from "./connectors/mod.ts";
+export { RuntimeHandlerRegistry } from "./handlers.ts";
 export {
   ArtifactKindMismatchError,
-  ConnectorNotFoundError,
+  RuntimeHandlerNotFoundError,
   LifecycleDispatcher,
 } from "./lifecycle_dispatcher.ts";
-export type { Connector, ConnectorContext } from "./connectors/connector.ts";
+export type { RuntimeHandler, RuntimeHandlerContext } from "./handlers.ts";
 export {
   type ArtifactFetcher,
   type FetchedArtifact,
@@ -371,10 +371,10 @@ export {
 
 /**
  * Optional dev-runner: running this module directly starts a bare runtime-agent
- * with an empty connector registry and the local serve primitive. This is
+ * with an empty handler registry and the local serve primitive. This is
  * a convenience for local development only — production operators run a
  * standalone agent through the CLI (`takosumi runtime-agent serve`) or embed
- * one in-process via `startEmbeddedAgent` so they can pass their connector
+ * one in-process via `startEmbeddedAgent` so they can pass their handler
  * registry. Importing this module (the package entry) never binds a port; only
  * running it directly does.
  */
@@ -383,7 +383,7 @@ if (import.meta.main) {
   const hostname = readRuntimeEnv("TAKOSUMI_AGENT_HOSTNAME") ?? "127.0.0.1";
   const token = readRuntimeEnv("TAKOSUMI_AGENT_TOKEN") ?? crypto.randomUUID();
   const handle = serveRuntimeAgent({
-    registry: new ConnectorRegistry(),
+    registry: new RuntimeHandlerRegistry(),
     token,
     port,
     hostname,

@@ -6,7 +6,7 @@ Takosumi npm package and are not the v1 public source contract.
 An operator implementation can provide:
 
 - backend adapters
-- runtime-agent connectors
+- runtime-agent implementation code
 - operator inventory import helpers
 - local / cloud provider integration helpers
 
@@ -16,6 +16,7 @@ An operator implementation does not provide:
 - an OpenTofu provider replacement
 - a Takosumi-owned PlatformService catalog
 - a mandatory implementation binding mechanism
+- a Takosumi package subpath export
 
 A compatible operator can keep the same Installer API and Deployment record
 while materializing PlatformServices through OpenTofu, native

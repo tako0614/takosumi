@@ -1,8 +1,8 @@
 # Takosumi runtime-agent image — single-host reference distribution.
 #
 # The runtime-agent holds credentials and translates service lifecycle calls
-# into connector dispatch. This image carries the generic host; operator
-# distributions add concrete connectors from operator implementation or their own
+# into runtime handler dispatch. This image carries the generic host; operator
+# distributions add concrete handlers from operator implementation or their own
 # package set.
 
 FROM oven/bun:1

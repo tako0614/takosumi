@@ -1,6 +1,6 @@
 # Lifecycle プロトコル {#lifecycle-protocol}
 
-このページは Takosumi reference 実装の internal lifecycle note です。public lifecycle model は Source / Installation / Deployment / PlatformService で、wire operation は Installer API の install / deploy / rollback です。WAL、OperationPlan、 runtime-agent、connector、cleanup worker は operator implementation の実行モデルです。
+このページは Takosumi reference 実装の internal lifecycle note です。public lifecycle model は Source / Installation / Deployment / PlatformService で、wire operation は Installer API の install / deploy / rollback です。WAL、OperationPlan、 runtime-agent、cleanup worker は operator implementation の実行モデルです。
 
 Takosumi reference 実装の lifecycle は `apply / activate / destroy / rollback / recovery /
 observe` の 6 phase。 phase ごとの snapshot 対応や `LifecycleStatus` 遷移は [Lifecycle Phases](./lifecycle-phases.md)、 WAL stage は [WAL Stages](./wal-stages.md)、 approval 失効は [Approval Invalidation Triggers](./approval-invalidation.md) 参照。
@@ -19,15 +19,15 @@ installer apply / rollback は同一 Installation への並行変更を直列化
 
 WAL 書込: installer lifecycle は `takosumi_operation_journal_entries` に WAL stage record を書きます。resource side effect 前に `prepare` / `pre-commit` / `commit`、成功で `post-commit` / `observe` / `finalize`、失敗で `abort`。同じ `(spaceId, operationPlanDigest, journalEntryId, stage)` + 同一 effect digest の replay は冪等、異なる effect digest は hard-fail。
 
-Operator implementation verification: `AppContext` は operator-provided alias table、implementation bindings、runtime-agent connector inventory から構成されます。WAL は implementation / connector resolution input を pre/post-commit verification として扱います。pre-commit 失敗は backend 呼出前に terminal `abort`。post-commit 失敗は verification failure を journal し、committed effect に対する CleanupBacklog を enqueue して observe / finalize evidence を残します。
+Operator implementation verification: `AppContext` は operator-provided alias table、implementation bindings、runtime-agent runtime handler inventory から構成されます。WAL は implementation / runtime handler resolution input を pre/post-commit verification として扱います。pre-commit 失敗は backend 呼出前に terminal `abort`。post-commit 失敗は verification failure を journal し、committed effect に対する CleanupBacklog を enqueue して observe / finalize evidence を残します。
 
-Compensation: runtime-agent protocol は connector-native `compensate` を持ち、専用 operation が無い connector は handle-keyed `destroy` を fallback。CleanupBacklog store は retry attempt / policy-controlled aging / manual reopen / clearance を実装。cleanup worker (`takosumi-worker` role daemon) が open debt owner Space を周期列挙し、Deployment record から handle を解決して compensate / destroy fallback を呼び、成功時に debt を `cleared` に進めます。
+Compensation: runtime-agent protocol は runtime handler-native `compensate` を持ち、専用 operation が無い runtime handler は handle-keyed `destroy` を fallback。CleanupBacklog store は retry attempt / policy-controlled aging / manual reopen / clearance を実装。cleanup worker (`takosumi-worker` role daemon) が open debt owner Space を周期列挙し、Deployment record から handle を解決して compensate / destroy fallback を呼び、成功時に debt を `cleared` に進めます。
 
 Fail-closed のバリデーション: 最新の unfinished mutation WAL entry (`apply` / `destroy` / `rollback` / `recovery`) がある Installation への新規 apply / rollback は拒否します (backend 呼出なし、 WAL entry 追加なし)。long-lived `observe` entry は mutation blocker ではありません。recovery は internal lifecycle orchestration で駆動:
 
 - `inspect`: persist 済 WAL entries と latest stage summary を返す
 - `continue`: recorded Source / resolved target state / mode から再現した OperationPlan digest が一致する場合のみ backend fencing token 付きで replay。不一致は fail-closed
-- `compensate`: `commit` 未到達の WAL は backend を呼ばず terminal `abort` に進める。`commit` 以降に到達した WAL は `activation-rollback` CleanupBacklog を enqueue し、cleanup worker が connector-native `compensate` または handle-keyed `destroy` fallback を呼ぶ
+- `compensate`: `commit` 未到達の WAL は backend を呼ばず terminal `abort` に進める。`commit` 以降に到達した WAL は `activation-rollback` CleanupBacklog を enqueue し、cleanup worker が runtime handler-native `compensate` または handle-keyed `destroy` fallback を呼ぶ
 
 `apply` / `destroy` は lock 取得→実行→ release を `try { ... } finally` で囲みます。 lock contention 時は client timeout で諦めるか、 operator が single-writer apply tier (control-plane mutation requests を 1 pod に固定する topology) を採用します。
 
@@ -57,9 +57,9 @@ finalize`、終端 `abort / skip`)。
 
 ## Verify トリガー {#verify-trigger}
 
-Takosumi reference runtime-agent の `verify` request は optional reference operator preflight であり、Installer API や public lifecycle の一部ではありません。WAL stage を進めず、 Snapshot を materialize せず、connector ごとの credential / network reachability の確認だけを行います。
+Takosumi reference runtime-agent の `verify` request は optional reference operator preflight であり、Installer API や public lifecycle の一部ではありません。WAL stage を進めず、 Snapshot を materialize せず、runtime handler ごとの credential / network reachability の確認だけを行います。
 
-推奨フロー: `apply` の前に `verify` を投げて `connector_not_found` / `connector-extended:*` を切り分けます。 Takosumi apply pipeline は結果を直接消費しませんが、 operator automation が pre-flight gate として扱う運用が想定です。 `verify` で `connector_failed` を返した connector には `apply` request を送らず、 OperationPlan を `prepare` で止める選択を operator が取れます。
+推奨フロー: `apply` の前に `verify` を投げて `runtime_handler_not_found` / `runtime-handler-extended:*` を切り分けます。 Takosumi apply pipeline は結果を直接消費しませんが、 operator automation が pre-flight gate として扱う運用が想定です。 `verify` で `runtime_handler_failed` を返した runtime handler には `apply` request を送らず、 OperationPlan を `prepare` で止める選択を operator が取れます。
 
 field 仕様は [Reference Runtime-Agent Execution Surface — `POST /v1/lifecycle/verify`](./runtime-agent-api.md#post-v1-lifecycle-verify) 参照。
 
@@ -87,10 +87,10 @@ Takosumi restart や lock 失効後に `recovery` phase が走るとき、operat
 
 - `inspect`: 副作用なし WAL dump。未完了 WAL は新規 apply / destroy を block。
 - `continue`: 要求 phase と OperationPlan digest が unfinished WAL と一致時のみ resume。
-- `compensate`: `commit` 未到達なら副作用なしで `abort` を追記。`commit` 以降到達の WAL entry は `activation-rollback` CleanupBacklog を open し、 cleanup worker が connector compensate / destroy fallback を実行。
-- runtime-agent protocol は connector-native `compensate` を destroy fallback 付きで公開。 apply rollback は provider compensate operation を優先。
-- CleanupBacklog store: retry attempt / policy-controlled aging / manual reopen / clearance / connector-backed cleanup worker / worker daemon 周期実行を実装済み。
-- operator implementation config / connector resolution は fail-closed な pre/post-commit verification として扱う。
+- `compensate`: `commit` 未到達なら副作用なしで `abort` を追記。`commit` 以降到達の WAL entry は `activation-rollback` CleanupBacklog を open し、 cleanup worker が runtime handler compensate / destroy fallback を実行。
+- runtime-agent protocol は runtime handler-native `compensate` を destroy fallback 付きで公開。 apply rollback は provider compensate operation を優先。
+- CleanupBacklog store: retry attempt / policy-controlled aging / manual reopen / clearance / runtime handler-backed cleanup worker / worker daemon 周期実行を実装済み。
+- operator implementation config / runtime handler resolution は fail-closed な pre/post-commit verification として扱う。
 - apply / destroy commit 呼出には WAL idempotency tuple が `PlatformContext.operation` と runtime-agent `idempotencyKey` 経由で渡る。
 
 ## クロスリファレンス {#cross-references}

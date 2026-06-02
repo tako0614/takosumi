@@ -101,7 +101,7 @@ Verification lifecycle:
 ```text
 1. discovery        — Space-visible operator-owned PlatformService inventory and implementations
 2. selection check  — recorded service selections / selected implementations /
-                      connector visibility are revalidated
+                      runtime handler visibility are revalidated
 3. result recorded  — verification outcome is journaled as evidence
 4. fail-closed      — pre-commit failure aborts before resource effects;
                       post-commit failure records CleanupBacklog and continues

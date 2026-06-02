@@ -2,7 +2,7 @@
 #
 # Base: oven/bun (matches the Bun-first local-substrate runtime).
 # Adds: docker CLI + compose implementation so the embedded runtime-agent's
-# Docker Compose connector can spawn `docker compose` against
+# Docker Compose handler can spawn `docker compose` against
 # the host docker socket mounted at /var/run/docker.sock.
 #
 # Source mounts: handled by docker compose; the wrapper script and the

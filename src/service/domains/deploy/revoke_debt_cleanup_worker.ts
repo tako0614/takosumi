@@ -171,7 +171,7 @@ export class RevokeDebtCleanupWorker {
           code: result.revokeDebtRequired === true
             ? "revoke_debt_required"
             : "compensate_failed",
-          message: result.note ?? "connector did not clear revoke debt",
+          message: result.note ?? "runtime handler did not clear revoke debt",
           detail: result.detail,
         }),
         now,
@@ -190,7 +190,7 @@ export class RevokeDebtCleanupWorker {
         id: debt.id,
         ownerSpaceId: debt.ownerSpaceId,
         result: "retryable-failure",
-        error: cleanupError({ code: "connector_failed", message }),
+        error: cleanupError({ code: "runtime_handler_failed", message }),
         now,
       });
       return {

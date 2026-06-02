@@ -1,6 +1,6 @@
 # Takosumi GCP Kind Runbook
 
-This directory documents the GCP surface as **operator-owned scope**. GCP lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent connector wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on GCP infrastructure is also the operator's responsibility.
+This directory documents the GCP surface as **operator-owned scope**. GCP lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent runtime handler wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on GCP infrastructure is also the operator's responsibility.
 
 ## Why no reference deploy here
 
@@ -8,7 +8,7 @@ The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy
 
 ## Required runtime shape
 
-The GCP connectors talk to the GCP API directly via OAuth-bearer tokens (no GCP SDK dependency). They expect:
+The GCP runtime handlers talk to the GCP API directly via OAuth-bearer tokens (no GCP SDK dependency). They expect:
 
 - A service account with the relevant roles (`roles/storage.admin`, `roles/run.admin`, `roles/cloudsql.admin`, `roles/dns.admin`) and either a JSON key or workload identity.
 - A Postgres database for service state (`TAKOSUMI_DATABASE_URL` — Cloud SQL with Cloud SQL Auth Proxy is the typical choice).

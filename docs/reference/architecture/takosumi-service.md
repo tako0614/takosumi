@@ -70,7 +70,7 @@ current-pointer semantics は Installer API に従います。
 
 Takosumi は provider を選びません。operator distribution が
 PlatformService inventory、binding policy、backend adapter、runtime-agent
-connector を選びます。reference implementation の adapter wiring は
+runtime handler を選びます。reference implementation の adapter wiring は
 operator-facing docs に置きます。
 
 → [Reference Backend Binding](../kind-bindings.md)

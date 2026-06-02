@@ -109,6 +109,27 @@ test("takosumi framework ships no kind source packages", async () => {
   );
 });
 
+test("runtime-agent implementation internals stay off the package subpath surface", async () => {
+  const manifest = await readJson<PackageManifest>(
+    new URL("package.json", ROOT),
+  );
+  const tsconfig = await readJson<TsConfig>(new URL("tsconfig.json", ROOT));
+  const retiredRuntimeAgentSubpath = "./runtime-agent/" + "connec" + "tors";
+  const retiredRuntimeAgentAlias = "takosumi-runtime-agent/" + "connec" +
+    "tors";
+
+  assert.equal(
+    retiredRuntimeAgentSubpath in (manifest.exports ?? {}),
+    false,
+    "runtime-agent implementation wiring must not be a public package subpath",
+  );
+  assert.equal(
+    retiredRuntimeAgentAlias in (tsconfig.compilerOptions?.paths ?? {}),
+    false,
+    "runtime-agent implementation wiring must not be exposed as a local package-style alias",
+  );
+});
+
 test("framework source imports no kind descriptor (kind-agnostic guard)", async () => {
   for (const dir of FRAMEWORK_SOURCE_DIRS) {
     const files = await listTsFiles(new URL(dir, ROOT));
@@ -360,7 +381,7 @@ test("reference adapter docs stay outside public source vocabulary", async () =>
     await readText(
       new URL("docs/en/reference/kind-packages.md", ROOT),
     ),
-    /Backend implementation exports are operator choices/,
+    /Backend \/ runtime implementation exports are operator choices/,
   );
   assert.match(
     await readText(new URL("docs/operator/bootstrap.md", ROOT)),
