@@ -21,7 +21,7 @@ agent host には backend credential と connector 設定を置きます。
 
 ```ts
 import { serveRuntimeAgent } from "@takosjp/takosumi/runtime-agent";
-import { buildConnectorRegistry } from "@takosjp/takosumi-plugins/connectors";
+import { buildConnectorRegistry } from "./operator-connectors.ts";
 
 const registry = buildConnectorRegistry({
   aws: {
@@ -52,7 +52,7 @@ export TAKOSUMI_AGENT_TOKEN=...
 bun ./server.ts
 ```
 
-`server.ts` は [operator bootstrap](./bootstrap.md) の reference adapter array (`plugins` option) 例を使い、native implementation subpath を Takosumi に attach します。実際の副作用は runtime-agent 側の connector が実行します。stock `takosumi server` は connectivity / dev smoke 用で、operator の implementation array を読み込まないため実 backend 操作の例には使いません。agent URL は private network 上の HTTPS endpoint にしてください。
+`server.ts` は [operator bootstrap](./bootstrap.md) の operator-owned implementation wiring 例を使い、Takosumi に PlatformService inventory と execution binding を渡します。実際の副作用は runtime-agent 側の connector が実行します。stock `takosumi server` は connectivity / dev smoke 用で、operator の implementation wiring を読み込まないため実 backend 操作の例には使いません。agent URL は private network 上の HTTPS endpoint にしてください。
 
 ## Network と token {#network-and-token}
 

@@ -144,7 +144,7 @@ function structuredLog(
  * Operator-supplied overrides forwarded into the embedded service via
  * {@link buildComposedApp}. The published reference distribution passes none
  * (so `main()` behaves exactly as before); a composer that wants to attach
- * native adapter plugins or a durable SQL ledger — e.g. the
+   * native adapter implementation bindings or a durable SQL ledger — e.g. the
  * local-substrate `cloud` wrapper — supplies them here without duplicating the
  * pool / store / accounts-handler / serve plumbing.
  */

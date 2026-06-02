@@ -14,7 +14,7 @@
 
 [Takosumi service](./takosumi-service.md) はコントロールプレーンの実装そのものです。Takosumi の installer pipeline が Installer API request を受け取り、Source validation、InstallPlan resolution、implementation binding への apply delegation、Deployment record の書き込みまでを一貫して実行します。コントロールプレーンという語は、この一連の状態管理と参照 API を論理層として参照するときに使います。
 
-implementation binding (= reference `TakosumiPlugin`) は operator が Takosumi に attach する implementation であり、コントロールプレーンの一部ではありません。コントロールプレーンは kind-agnostic な状態管理に専念し、kind ごとのリソースの作成・更新は binding に委譲します。
+implementation binding は operator が Takosumi に attach する implementation であり、コントロールプレーンの一部ではありません。コントロールプレーンは kind-agnostic な状態管理に専念し、kind ごとのリソースの作成・更新は binding に委譲します。
 
 ## Read Projection と Reference Internal Surface {#internal-surfaces}
 

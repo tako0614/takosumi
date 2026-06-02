@@ -10,8 +10,8 @@ import {
 // published *spec*, not framework source: each descriptor is flat JSON-LD under
 // docs/kinds/v1/<name>.jsonld, served at https://takosumi.com/kinds/v1/<name>.
 // The service / contract / installer / cli / runtime-agent import none of them.
-// Backend-specific native kind descriptors + their TakosumiPlugin implementations
-// live in the sibling ../takosumi-plugins repository.
+// Backend-specific native descriptors and execution bindings live in operator
+// distributions, not in this public package.
 const ROOT = new URL("../", import.meta.url);
 const CATALOG_ROOT = new URL("docs/kinds/v1/", ROOT);
 
@@ -269,7 +269,7 @@ test("takosumi scripts use narrow contract subpaths", async () => {
   for (const file of files) {
     const relative = relativeToRoot(file);
     if (
-      relative === "scripts/catalog-plugin-boundary_test.ts" ||
+      relative === "scripts/catalog-implementation-boundary_test.ts" ||
       relative === "scripts/kind-package-ownership_test.ts"
     ) {
       continue;
@@ -328,9 +328,9 @@ test("reference compat does not expose legacy provider bridge", async () => {
 test("reference adapter docs stay outside public source vocabulary", async () => {
   const docs = [
     "docs/reference/kind-bindings.md",
-    "docs/reference/reference-plugin-exports.md",
-    "docs/en/reference/reference-plugin-exports.md",
-    "docs/reference/plugin-loading.md",
+    "docs/reference/operator-implementation-exports.md",
+    "docs/en/reference/operator-implementation-exports.md",
+    "docs/reference/operator-implementation-loading.md",
     "docs/operator/bootstrap.md",
   ] as const;
   const forbiddenPhrases = [
@@ -359,29 +359,29 @@ test("reference adapter docs stay outside public source vocabulary", async () =>
   );
   assert.match(
     await readText(
-      new URL("docs/en/reference/reference-plugin-exports.md", ROOT),
+      new URL("docs/en/reference/operator-implementation-exports.md", ROOT),
     ),
-    /reference implementation package an operator\s+distribution may choose/,
+    /distribution-local APIs/,
   );
   assert.match(
     await readText(new URL("docs/operator/bootstrap.md", ROOT)),
-    /backend adapters を有効にする例/,
+    /operator-selected binding/,
   );
 });
 
-test("reference plugin docs show explicit operator lifecycle clients", async () => {
+test("reference implementation docs show explicit operator lifecycle clients", async () => {
   const docs = [
     "AGENTS.md",
     "src/contract/README.md",
     "docs/rfc/0001-kernel-kind-agnostic.md",
-    "docs/reference/plugin-loading.md",
+    "docs/reference/operator-implementation-loading.md",
     "docs/reference/catalog.md",
     "docs/reference/kind-bindings.md",
-    "docs/reference/reference-plugin-exports.md",
+    "docs/reference/operator-implementation-exports.md",
     "docs/operator/bootstrap.md",
-    "docs/en/reference/plugin-loading.md",
+    "docs/en/reference/operator-implementation-loading.md",
     "docs/en/reference/kind-bindings.md",
-    "docs/en/reference/reference-plugin-exports.md",
+    "docs/en/reference/operator-implementation-exports.md",
   ] as const;
   const forbiddenPhrases = [
     "cloudflareWorkerPlugin()",
@@ -402,18 +402,18 @@ test("reference plugin docs show explicit operator lifecycle clients", async () 
       assert.equal(
         source.includes(phrase),
         false,
-        `${doc}: reference plugin examples must pass operator-owned lifecycle clients explicitly`,
+        `${doc}: reference implementation examples must pass operator-owned lifecycle clients explicitly`,
       );
     }
   }
 
   assert.match(
-    await readText(new URL("docs/reference/plugin-loading.md", ROOT)),
+    await readText(new URL("docs/reference/operator-implementation-loading.md", ROOT)),
     /operator-supplied backend adapter/,
   );
   assert.match(
     await readText(new URL("docs/operator/bootstrap.md", ROOT)),
-    /dockerPostgresPlugin\(\{ lifecycle: databaseLifecycle \}\)/,
+    /OpenTofu \/ Helm \/ native/,
   );
 });
 

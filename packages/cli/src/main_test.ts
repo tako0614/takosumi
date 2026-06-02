@@ -4161,7 +4161,7 @@ test("accounts serve rejects dev sessions with Postgres persistence", async () =
     "--dev-session-id",
     "sess_dev_test",
     "--database-url",
-    "postgres://accounts:secret@db.internal:5432/takosumi_cloud",
+    "postgres://accounts:secret@db.internal:5432/takosumi_accounts",
   ], {
     stdout: (line) => stdout.push(line),
     stderr: (line) => stderr.push(line),
@@ -4946,7 +4946,7 @@ test("accounts serve dry-run redacts Postgres persistence URL", async () => {
     "serve",
     "--dry-run",
     "--database-url",
-    "postgres://accounts:secret@db.internal:5432/takosumi_cloud",
+    "postgres://accounts:secret@db.internal:5432/takosumi_accounts",
   ], {
     stdout: (line) => stdout.push(line),
     stderr: (line) => stderr.push(line),
@@ -5296,7 +5296,7 @@ test("accounts serve rejects invalid database URLs", async () => {
     "serve",
     "--dry-run",
     "--database-url",
-    "http://db.internal/takosumi_cloud",
+    "http://db.internal/takosumi_accounts",
   ], {
     stdout: (line) => stdout.push(line),
     stderr: (line) => stderr.push(line),
@@ -5407,7 +5407,7 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
     "migrate",
     "--dry-run",
     "--database-url",
-    "postgres://accounts:secret@db.internal:5432/takosumi_cloud",
+    "postgres://accounts:secret@db.internal:5432/takosumi_accounts",
   ], {
     stdout: (line) => stdout.push(line),
     stderr: (line) => stderr.push(line),
@@ -5455,7 +5455,7 @@ test("accounts launch-tokens cleanup dry-run prints retention cutoffs", async ()
     "cleanup",
     "--dry-run",
     "--database-url",
-    "postgres://accounts:secret@db.internal:5432/takosumi_cloud",
+    "postgres://accounts:secret@db.internal:5432/takosumi_accounts",
     "--now",
     "2026-05-13T12:00:00Z",
     "--expired-retention-hours",

@@ -1,10 +1,10 @@
 # Takosumi GCP Kind Runbook
 
-This directory documents the GCP surface as **operator-owned scope**: GCP native kind implementations (`takosumi-plugins/packages/kind-gcp-*`) and runtime-agent connectors (`takosumi-plugins/packages/runtime-agent-connectors/src/connectors/gcp/`) provide GCP lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Terraform / Pulumi / Deployment Manager that lands the Takosumi service image and runtime-agent image on GCP infrastructure) is also the operator's responsibility. Operators provide the production-grade GCP IaC stack for their distribution.
+This directory documents the GCP surface as **operator-owned scope**. GCP lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent connector wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on GCP infrastructure is also the operator's responsibility.
 
 ## Why no reference deploy here
 
-The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. GCP / AWS / Azure / k8s are operator-owned targets: operators run the service image on whatever GCP compute they prefer (Cloud Run / GKE / GCE), point the service at a Postgres database (Cloud SQL), and attach the needed GCP implementation subpaths such as `@takosjp/takosumi-plugins/kind/gcp-cloud-run-web-service`, `@takosjp/takosumi-plugins/kind/gcp-cloud-sql-postgres`, `@takosjp/takosumi-plugins/kind/gcp-gcs-object-store`, or `@takosjp/takosumi-plugins/kind/gcp-cloud-dns-gateway`.
+The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. GCP / AWS / Azure / k8s are operator-owned targets: operators run the service image on whatever GCP compute they prefer (Cloud Run / GKE / GCE), point the service at a Postgres database (Cloud SQL), and expose the resulting databases, buckets, queues, DNS routes, and runtimes through PlatformService inventory.
 
 ## Required runtime shape
 
@@ -32,13 +32,13 @@ Both service and runtime-agent are stateless; Cloud Run scales them horizontally
 
 ```sh
 TAKOSUMI_GCP_SERVICE_ACCOUNT_JSON='{...}' \
-TAKOSUMI_PLUGIN_LIVE_PROVIDER=gcp \
-TAKOSUMI_PLUGIN_LIVE_PROOF_FIXTURE_FILE=fixtures/live-provisioning/gcp.shape-v1.json \
+TAKOSUMI_PROVIDER_LIVE_PROVIDER=gcp \
+TAKOSUMI_PROVIDER_LIVE_PROOF_FIXTURE_FILE=fixtures/live-provisioning/gcp.shape-v1.json \
 bun run live-provisioning-smoke
 ```
 
-Use `TAKOSUMI_PLUGIN_LIVE_PROOF_MODE=live` plus
-`TAKOSUMI_PLUGIN_GATEWAY_URL` / provider-specific gateway credentials when
+Use `TAKOSUMI_PROVIDER_LIVE_PROOF_MODE=live` plus
+`TAKOSUMI_PROVIDER_GATEWAY_URL` / provider-specific gateway credentials when
 running the destructive live proof. Without live mode, the command runs the
 credential-free fixture proof and reports `"live": false`.
 

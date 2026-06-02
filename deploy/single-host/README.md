@@ -56,7 +56,7 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 ## Operator notes
 
 - The service exposes `/v1/installations*` as the canonical installer API. CLI / GitHub Actions / custom CI all use that 5 endpoint surface with an installer bearer token.
-- `runtime-agent` receives apply / destroy calls from the service and dispatches them through a connector registry. The generic runtime-agent host lives in `takosumi/src/runtime-agent/`; concrete local and cloud connectors live in `takosumi-plugins/packages/runtime-agent-connectors/` and must be wired by the operator distribution.
+- `runtime-agent` receives apply / destroy calls from the service and dispatches them through a connector registry. The generic runtime-agent host lives in `takosumi/src/runtime-agent/`; concrete local and cloud connectors are operator-owned code and must be wired by the operator distribution.
 - The runtime-agent needs `/var/run/docker.sock` mounted to drive user-deployed containers via the Docker Compose web-service adapter. Lock this down with rootless Docker or Podman in production.
 - For multi-host deployments, replace the `runtime-agent` service with one runtime-agent process per host and configure the service with `TAKOSUMI_AGENT_REGISTRY` to fan out apply calls. See `docs/operator/operator-managed.md` for the multi-agent topology.
 
@@ -70,7 +70,7 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 | AWS (ECS / Fargate + RDS + S3)    | n/a                              | spec-compliant, operator-owned |
 | GCP (Cloud Run + Cloud SQL + GCS) | n/a                              | spec-compliant, operator-owned |
 
-Native kind implementations for AWS / GCP / Kubernetes and runtime-agent connectors for AWS / GCP / Azure / Kubernetes are available for operator-attached distributions (see `takosumi-plugins/packages/kind-aws-*`, `takosumi-plugins/packages/kind-gcp-*`, `takosumi-plugins/packages/kind-kubernetes-web-service/`, and `takosumi-plugins/packages/runtime-agent-connectors/src/connectors/{aws,gcp,azure,kubernetes}/`), but no production-grade default reference deploy package for the service itself ships there. Operators bring their own Terraform / Helm / Pulumi to land the service image and runtime-agent image on those substrates.
+Native provider implementations for AWS / GCP / Kubernetes are operator-owned. No production-grade default reference deploy package for those substrates ships here. Operators bring their own OpenTofu / Helm / Pulumi / native controller wiring to land the service image and runtime-agent image, then publish PlatformService inventory for Takosumi to consume.
 
 ## Why two reference distributions
 
