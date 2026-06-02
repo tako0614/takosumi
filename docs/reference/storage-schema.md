@@ -53,7 +53,7 @@ snapshot は Takosumi reference 実装が Deployment に紐づく記録を説明
 | ------------------------------ | ------------------------------------------------------------------------------------ |
 | `OperatorImplementationConfig` | operator が attach した implementation binding / runtime handler inventory。               |
 | `ImplementationRegistry`       | operator が attach した implementation binding / runtime handler の registry view。        |
-| `Runtime handlerDescriptor`          | runtime-agent runtime handler の id、accepted asset metadata、health。                     |
+| `RuntimeHandlerDescriptor`          | runtime-agent handler の id、accepted asset metadata、health。                     |
 | `assetRecord`                  | optional operator asset extension の digest、size、retention metadata。              |
 | `SecretPartitionReference`     | secret store partition の logical reference。secret value は secret backend に置く。 |
 

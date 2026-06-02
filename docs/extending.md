@@ -6,7 +6,7 @@ Takosumi v1 の拡張は operator integration です。source repo に Takosumi 
 | --- | --- |
 | DB / OIDC / bucket / queue などを使える service として出す | operator PlatformService inventory |
 | OpenTofu output を inventory に取り込む | operator distribution importer |
-| workload runtime へ credential / endpoint を渡す | runtime-agent runtime handler / backend adapter |
+| workload runtime へ credential / endpoint を渡す | runtime-agent handler / backend adapter |
 | account / billing / dashboard / deploy facade を出す | operator distribution |
 
 ## PlatformService importer
@@ -27,9 +27,9 @@ PlatformService を登録します。
 }
 ```
 
-## Runtime runtime handler
+## Runtime handler
 
-runtime-agent runtime handler は selected PlatformService material や Deployment source summary を読み、operator が選んだ runtime
+runtime-agent handler は selected PlatformService material や Deployment source summary を読み、operator が選んだ runtime
 へ env、mount、secret reference、gateway target などを渡します。
 
 Runtime handler は implementation detail です。Takosumi の public v1 は Source / Installation / Deployment /
@@ -46,7 +46,7 @@ materialize し、Takosumi は output inventory を参照します。
 - raw secret value を Deployment output / log / audit に出さない。
 - inventory importer は deterministic な service path / labels を出す。
 - binding resolver は absent / ambiguous / policy denied を apply 前に止める。
-- runtime runtime handler は selected binding snapshot を説明できる evidence を残す。
+- runtime handler は selected binding snapshot を説明できる evidence を残す。
 
 ## 関連ページ
 

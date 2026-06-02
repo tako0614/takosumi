@@ -1,6 +1,6 @@
 # Takosumi AWS Kind Runbook
 
-This directory documents the AWS surface as **operator-owned scope**. AWS lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent runtime handler wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on AWS infrastructure is also the operator's responsibility.
+This directory documents the AWS surface as **operator-owned scope**. AWS lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent handler wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on AWS infrastructure is also the operator's responsibility.
 
 ## Why no reference deploy here
 

@@ -73,9 +73,9 @@ These events belong to a reference/operator policy profile. They are not additio
 | `artifact-uploaded`        | info     | optional asset が受け付けられた。             |
 | `artifact-gc-marked`       | info     | asset GC が live set を mark した。           |
 | `artifact-gc-swept`        | notice   | asset GC が unreferenced asset を削除した。   |
-| `runtime-handler-registered`     | notice   | runtime-agent runtime handler が登録された。        |
-| `runtime-handler-replaced`       | notice   | runtime-agent runtime handler record が置換された。 |
-| `runtime-handler-revoked`        | notice   | runtime-agent runtime handler が無効化された。      |
+| `runtime-handler-registered`     | notice   | runtime-agent handler が登録された。        |
+| `runtime-handler-replaced`       | notice   | runtime-agent handler record が置換された。 |
+| `runtime-handler-revoked`        | notice   | runtime-agent handler が無効化された。      |
 | `runtime-handler-health-changed` | warning  | runtime handler health が変化した。                 |
 | `journal-compacted`        | info     | WAL base snapshot digest pair が更新された。  |
 
