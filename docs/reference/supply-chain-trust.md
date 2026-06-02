@@ -9,12 +9,12 @@
 | Boundary | Evidence | Mechanism | Owner |
 | --- | --- | --- | --- |
 | source identity | git URL / resolved commit, prepared archive digest, or local source summary | git / HTTPS / local operator path | installer |
-| dry-run guard | `planSnapshotDigest` | Installer API dry-run | kernel |
+| dry-run guard | `planSnapshotDigest` | Installer API dry-run | service |
 | prepared source handoff | workflow run id / installer-computed archive digest | build service + installer | build service / installer |
 | operator inventory | PlatformService inventory / adapter config | operator bootstrap | operator distribution |
-| binding resolution | selected PlatformService / binding snapshot | operator resolver | operator distribution + kernel record |
+| binding resolution | selected PlatformService / binding snapshot | operator resolver | operator distribution + service record |
 | installation ownership | owner / Space / binding / permission records | append-only account ledger | operator account layer |
-| Deployment record | source summary / plan snapshot / binding snapshot / non-secret outputs | Installer API apply | kernel |
+| Deployment record | source summary / plan snapshot / binding snapshot / non-secret outputs | Installer API apply | service |
 | runtime bootstrap | launch token / OIDC / workload config | distribution-defined HTTPS + ledger | operator distribution |
 
 ## Chain Of Custody {#chain-of-custody}
@@ -48,12 +48,12 @@ rollback は mutable ref を再解決しません。retained Deployment の sour
 
 Operator / reference implementation は PlatformService inventory と adapter wiring を使って binding を解決し、deploy 時に解決結果を Deployment の記録として紐づけます。
 
-Reference kernel example:
+Reference service example:
 
 ```text
 1. operator imports backend adapter subpaths in its distribution
-2. operator boots reference kernel with a plugin array
-3. kernel rejects unresolved required bindings before runtime side effects
+2. operator boots Takosumi service with a plugin array
+3. service rejects unresolved required bindings before runtime side effects
 4. reference runtime-agent topology resolves connector work from operator inventory
 5. Deployment record stores source, plan, binding snapshot, outputs, and status
 ```

@@ -12,7 +12,7 @@
 
 response body には `checks` object が含まれます。 `200` は body をそのまま返し、 `503` は Takosumi HTTP API のエラーレスポンスに probe result を `error.details` として埋めて返します。
 
-`503` 時の `error.code` は `readiness_probe_failed` ([Reference Route Inventory](./kernel-http-api.md))。
+`503` 時の `error.code` は `readiness_probe_failed` ([Reference Route Inventory](./service-http-api.md))。
 
 ## Current operator visibility
 
@@ -80,7 +80,7 @@ response body には `checks` object が含まれます。 `200` は body をそ
 
 ## Reference implementation checks
 
-`createPaaSApp()` が `/readyz` を mount し、 request ごとに lightweight check を実行します:
+`createTakosumiService()` が `/readyz` を mount し、 request ごとに lightweight check を実行します:
 
 - `role`: runtime config role と process role の一致
 - `storage`: storage adapter transaction の成功
@@ -176,13 +176,13 @@ Steady state failure cascade:
 
 関連 architecture notes:
 
-- `docs/reference/architecture/operator-boundaries.md` — readiness DAG が Takosumi core / runtime-agent / control-plane-listener の trust 境界に沿う rationale
+- `docs/reference/architecture/operator-boundaries.md` — readiness DAG が Takosumi / runtime-agent / control-plane-listener の trust 境界に沿う rationale
 - `docs/reference/architecture/execution-lifecycle.md` — readiness と lifecycle phase の interplay、boot recovery 経路の選定背景
 - `docs/reference/architecture/operational-hardening-checklist.md` — readiness を運用 signal として活用する checklist
 
 ## 関連ページ
 
-- [Reference Kernel Route Inventory](./kernel-http-api.md)
+- [Reference Takosumi Route Inventory](./service-http-api.md)
 - [Lifecycle Protocol](./lifecycle.md)
 - [Cross-Process Locks](./cross-process-locks.md)
 - [Schema Evolution](./migration-upgrade.md)

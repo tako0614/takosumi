@@ -11,7 +11,7 @@ import {
   INSTALLATIONS_PATH,
 } from "takosumi-contract/installer-api";
 import { loadConfig, resolveMode } from "./config.ts";
-import { callKernel } from "./remote_client.ts";
+import { callTakosumiService } from "./remote_client.ts";
 
 export interface RemoteInstallerTarget {
   readonly url: string;
@@ -152,7 +152,7 @@ export async function requireRemoteInstaller(
   );
   if (target.mode !== "remote") {
     throw new Error(
-      "installer commands require a remote kernel: pass --remote or set TAKOSUMI_REMOTE_URL",
+      "installer commands require a remote Takosumi service: pass --remote or set TAKOSUMI_REMOTE_URL",
     );
   }
   return { url: target.url, token: target.token };
@@ -165,7 +165,7 @@ export async function callInstaller(
     readonly body: unknown;
   },
 ): Promise<{ readonly status: number; readonly body: unknown }> {
-  return await callKernel({
+  return await callTakosumiService({
     url: target.url,
     token: target.token,
     path: input.path,

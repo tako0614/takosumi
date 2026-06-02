@@ -16,7 +16,7 @@ The examples above are conventional opaque strings, not a grammar that clients m
 
 ## Reference Evidence IDs
 
-Reference kernel evidence, operator tooling, and optional extensions can use their own opaque IDs. These IDs are outside the portable public Installer API shape.
+Reference service evidence, operator tooling, and optional extensions can use their own opaque IDs. These IDs are outside the portable public Installer API shape.
 
 Examples:
 

@@ -1,7 +1,7 @@
 # アクセスモード {#access-modes}
 
 access mode は operator catalog が PlatformService binding に付ける権限の強さ
-です。Takosumi core は enum の意味を wire record として扱い、どの binding に
+です。Takosumi は enum の意味を wire record として扱い、どの binding に
 どの access を許すかは operator policy が決めます。
 
 ```text

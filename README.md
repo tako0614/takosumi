@@ -8,7 +8,7 @@ Docs: <https://takosumi.com/docs/>
 
 ## Quickstart
 
-Run a local kernel and install a local source root. The source root can be any repo; Takosumi reads generic metadata such
+Run a local service and install a local source root. The source root can be any repo; Takosumi reads generic metadata such
 as Git identity and `package.json`.
 
 ```bash
@@ -30,13 +30,13 @@ Managed or remote operators use an operator-issued token and URL:
 
 ```bash
 export TAKOSUMI_INSTALLER_TOKEN=<operator-issued-installer-token>
-export TAKOSUMI_REMOTE_URL=https://kernel.example.com
+export TAKOSUMI_REMOTE_URL=https://service.example.com
 
 takosumi install --source git:https://github.com/example/notes#v1.2.3 \
   --space space_personal
 ```
 
-## Core Concepts
+## Takosumi Concepts
 
 | Concept | Meaning |
 | --- | --- |
@@ -51,7 +51,7 @@ the ones being applied.
 
 ## Operator Boundary
 
-Takosumi core does not run Terraform/OpenTofu, own provider credentials, or manage IaC state locks. Operator
+Takosumi does not run Terraform/OpenTofu, own provider credentials, or manage IaC state locks. Operator
 distributions create and operate infrastructure, then publish databases, buckets, OIDC issuers, queues, runtimes, and
 other services into PlatformService inventory. Takosumi records which services were selected for an Installation.
 
@@ -62,7 +62,7 @@ runtime-agent connectors, and backend adapters. It is not a Terraform provider r
 
 This repository also contains the reference account/operator distribution surface under `packages/accounts-*` and
 `deploy/`. Takosumi Accounts owns account authorization, dashboard routes, OIDC/billing projection, and the
-AppInstallation ledger projection around the core Installer API. Customer-facing launch scope is tracked in
+AppInstallation ledger projection around the Takosumi Installer API. Customer-facing launch scope is tracked in
 [`docs/accounts/managed-offering-customer-boundary.md`](docs/accounts/managed-offering-customer-boundary.md).
 
 The Cloudflare Worker + D1 + R2 scaffold lives in `deploy/accounts-cloudflare/`. It is the Cloudflare Worker + D1 + R2
@@ -134,9 +134,9 @@ Everything in this repository ships as one npm package,
 
 | Subpath | Purpose |
 | --- | --- |
-| `@takosjp/takosumi` | umbrella entry for core exports |
+| `@takosjp/takosumi` | umbrella entry for Takosumi exports |
 | `@takosjp/takosumi/contract` | public Installer API DTOs and reference SDK types |
-| `@takosjp/takosumi/kernel` | reference kernel and Installer API server |
+| `@takosjp/takosumi` | reference service and Installer API server |
 | `@takosjp/takosumi/installer` | source fetchers and Installer API client |
 | `@takosjp/takosumi/cli` | `takosumi` command |
 | `@takosjp/takosumi/runtime-agent` | lifecycle execution host for operator adapters |
@@ -149,7 +149,7 @@ takosumi/
 ├── package.json
 ├── src/
 │   ├── contract/
-│   ├── kernel/
+│   ├── service/
 │   ├── installer/
 │   ├── cli/
 │   ├── runtime-agent/

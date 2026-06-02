@@ -2,7 +2,7 @@
 
 The Takosumi Accounts deploy facade is a Takosumi account management / admin API surface. It is not workload output data or a platform service path.
 
-The facade brokers approved calls to the Takosumi core Installer API:
+The facade brokers approved calls to the Takosumi Installer API:
 
 ```text
 POST /v1/installations/dry-run
@@ -16,7 +16,7 @@ POST /v1/installations/{id}/rollback
 
 | Surface                            | Managed by                     |
 | ---------------------------------- | ------------------------------ |
-| Installer API endpoint contract    | Takosumi core                  |
+| Installer API endpoint contract    | Takosumi                  |
 | account authorization              | Takosumi                 |
 | approval / budget / billing policy | Takosumi                 |
 | dashboard or admin workflow        | Takosumi                 |
@@ -37,7 +37,7 @@ Mutating facade requests carry Cloud-only confirmation:
 }
 ```
 
-`source` and `expected` are forwarded using the core Installer API contract. `confirm.*` is consumed by Cloud and is not manifest or core Installer API surface.
+`source` and `expected` are forwarded using the Takosumi Installer API contract. `confirm.*` is consumed by Cloud and is not manifest or Takosumi Installer API surface.
 
 `approvalDigest` must match the reviewed operation, Installation, app id, next source, requested bindings, and policy/cost impact. Metered or paid changes require `confirm.costAck: true`.
 

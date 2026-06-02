@@ -100,7 +100,7 @@ Takosumi restart や lock 失効後に `recovery` phase が走るとき、operat
 - [Approval Invalidation Triggers](./approval-invalidation.md)
 - [CleanupBacklog Model](./revoke-debt.md)
 - [Enum and Value Index](./closed-enums.md)
-- [Reference Kernel Route Inventory](./kernel-http-api.md)
+- [Reference Takosumi Route Inventory](./service-http-api.md)
 - [Reference Runtime-Agent Execution Surface](./runtime-agent-api.md)
 - [Readiness Probes](./readiness-probes.md)
 - [Cross-Process Locks](./cross-process-locks.md)

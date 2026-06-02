@@ -2,8 +2,8 @@
 # Bring up local-substrate.
 #
 # Without --profile : Phase 0 ingress only (Pebble + CoreDNS + Caddy).
-# With --profile postgres : ingress + Bun/Postgres kernel + Accounts + cloud worker.
-# With --profile workers  : ingress + Worker kernel + Accounts + cloud worker.
+# With --profile postgres : ingress + Bun/Postgres service + Accounts + cloud worker.
+# With --profile workers  : ingress + Worker service + Accounts + cloud worker.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -172,10 +172,10 @@ Verify (profile=postgres):
    curl https://accounts.takosumi.test/.well-known/openid-configuration
    curl https://accounts.takosumi.test/healthz
    curl https://cloud-worker.takosumi.test/.well-known/openid-configuration
-   curl https://kernel-worker.takosumi.test/healthz
+   curl https://service-worker.takosumi.test/healthz
 
 Verify (profile=workers):
    curl https://accounts.takosumi.test/.well-known/openid-configuration
-   curl https://kernel.takosumi.test/healthz
-   curl https://kernel.takosumi.test/storage/healthz
+   curl https://service.takosumi.test/healthz
+   curl https://service.takosumi.test/storage/healthz
 EOF

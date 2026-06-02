@@ -16,7 +16,7 @@ operator-provided services.
 }
 ```
 
-Core binding shape is documented in [Installer API](../reference/installer-api.md) and
+Takosumi binding shape is documented in [Installer API](../reference/installer-api.md) and
 [Platform Services](../reference/platform-services.md). Operator distributions may expose richer deploy facade commands
 or dashboards.
 

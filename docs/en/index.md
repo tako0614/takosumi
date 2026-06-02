@@ -32,9 +32,9 @@ features:
   - title: Deployment History
     details: |
       Each apply records a Deployment. Rollback moves the current pointer.
-  - title: Terraform Stays Operator-Owned
+  - title: OpenTofu Stays Operator-Owned
     details: |
-      Terraform/OpenTofu state and provider credentials live in the operator distribution.
+      OpenTofu state and provider credentials live in the operator distribution.
 ---
 
 ## Start Here

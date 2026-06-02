@@ -1,6 +1,6 @@
 # バックアップとリストア {#backup-and-restore}
 
-operator-managed deployment 向けの reference backup / restore profile。Takosumi core の portability surface は Installation / Deployment、source identity、`planSnapshotDigest`、binding snapshot、non-secret outputs、Deployment の記録の可用性で説明します。このページは current reference operator がその surface を復元するために保存する logical record set、backup フォーマット、point-in-time 整合性 invariant、audit chain 整合性を保つ順序付き restore 手順を説明します。
+operator-managed deployment 向けの reference backup / restore profile。Takosumi の portability surface は Installation / Deployment、source identity、`planSnapshotDigest`、binding snapshot、non-secret outputs、Deployment の記録の可用性で説明します。このページは current reference operator がその surface を復元するために保存する logical record set、backup フォーマット、point-in-time 整合性 invariant、audit chain 整合性を保つ順序付き restore 手順を説明します。
 
 protocol は logical record stream を扱う。snapshot は Takosumi の storage 抽象から取得する。operator は冗長性のために SQL / object store / filesystem level の物理 backup を下に重ねてよいが、Takosumi 適合な restore はここで定義する logical path を通る。
 
@@ -164,7 +164,7 @@ backup と restore は runtime Takosumi event と同じ hash chain に専用 aud
 | `backup-started`    | Lock acquired, before record export begins.                     |
 | `backup-completed`  | Final record written and lock released.                         |
 | `restore-started`   | Storage initialized and master key accepted.                    |
-| `restore-completed` | Step 6 finished and the kernel transitions to normal operation. |
+| `restore-completed` | Step 6 finished and the service transitions to normal operation. |
 
 各 event は payload に backup export 時点の `backupChainHead` を運ぶ。restore を backup に対して検証することは、 `restore-completed` payload の `backupChainHead` が `backup-completed` payload の `backupChainHead` と一致することの確認に等しい。restore event 自体を同じ audit chain に append する場合、 restore 後の current chain head は当然別の値になる。
 
@@ -183,5 +183,5 @@ backup と restore は runtime Takosumi event と同じ hash chain に専用 aud
 - [Secret Partitions](./secret-partitions.md)
 - [Schema Evolution](./migration-upgrade.md)
 - [CLI](./cli.md)
-- [Reference Kernel Route Inventory](./kernel-http-api.md)
+- [Reference Takosumi Route Inventory](./service-http-api.md)
 - [Enum and Value Index](./closed-enums.md)

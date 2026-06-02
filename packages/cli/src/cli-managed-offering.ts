@@ -1583,7 +1583,7 @@ function productionTopologyEvidenceEntry(input: {
       {
         type: `${input.environment}-migration-transcript`,
         ref: input.migrationTranscriptRef,
-        summary: "Accounts/kernel migration transcript is attached.",
+        summary: "Accounts/service migration transcript is attached.",
         private: true,
         publicSummary:
           `Migration transcript evidence was attached for ${input.environment}.`,

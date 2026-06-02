@@ -99,7 +99,7 @@ function shouldBuild(rel: string): boolean {
   if (!rel.endsWith(".ts")) return false;
   if (rel.endsWith("_test.ts")) return false;
   if (rel.startsWith("src/cli/tests/")) return false;
-  if (rel.startsWith("src/kernel/scripts/")) return false;
+  if (rel.startsWith("src/service/scripts/")) return false;
   return true;
 }
 
@@ -122,6 +122,11 @@ await mkdir(ESM_OUT, { recursive: true });
 
 const files = [
   ...await listFiles("src"),
+  ...await listFiles("packages/accounts-contract/src"),
+  ...await listFiles("packages/accounts-service/src"),
+  ...await listFiles("packages/cli/src"),
+  ...await listFiles("packages/all/src"),
+  ...await listFiles("packages/platform-services/src"),
   ...await listFiles("shims"),
 ].filter(shouldBuild);
 
@@ -149,7 +154,7 @@ const npmPackage = {
   name: sourcePackage.name,
   version: sourcePackage.version,
   description:
-    "Takosumi core contract, kernel, installer, CLI, and runtime-agent.",
+    "Takosumi contract, service, installer, CLI, and runtime-agent.",
   license: sourcePackage.license ?? "MIT",
   type: "module",
   module: "./esm/src/all/mod.js",

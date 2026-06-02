@@ -55,10 +55,10 @@ interface PgPool {
 }
 
 type PgPoolConstructor = new (cfg: PgPoolConfig) => PgPool;
-type KernelSqlClient = NonNullable<
+type ServiceSqlClient = NonNullable<
   Parameters<typeof buildComposedApp>[0]["sqlClient"]
 >;
-type KernelSqlParameters = Parameters<KernelSqlClient["query"]>[1];
+type ServiceSqlParameters = Parameters<ServiceSqlClient["query"]>[1];
 
 type Es256PrivateJwk = JsonWebKey & {
   readonly kid?: string;
@@ -141,7 +141,7 @@ function structuredLog(
 }
 
 /**
- * Operator-supplied overrides forwarded into the embedded kernel via
+ * Operator-supplied overrides forwarded into the embedded service via
  * {@link buildComposedApp}. The published reference distribution passes none
  * (so `main()` behaves exactly as before); a composer that wants to attach
  * native adapter plugins or a durable SQL ledger — e.g. the
@@ -155,8 +155,8 @@ export interface ComposedServerOverrides {
 
 /**
  * Build and serve the one composed app this distribution runs: embed the
- * Takosumi kernel (`createPaaSApp`) and extend it with the Takosumi Accounts
- * surfaces. healthz + signed export downloads run ahead of the kernel +
+ * Takosumi service (`createTakosumiService`) and extend it with the Takosumi Accounts
+ * surfaces. healthz + signed export downloads run ahead of the service +
  * accounts fallback via `preHandle`. Blocks on `serveOnAnyRuntime`.
  */
 export async function buildComposedServer(
@@ -173,9 +173,9 @@ export async function buildComposedServer(
     createAccountsHandler: (installer) =>
       buildAccountsHandler(config, store, installer),
     preHandle: (req) =>
-      preHandleNonKernelRequest(req, pool, config.exportDownload),
+      preHandleNonServiceRequest(req, pool, config.exportDownload),
     ...(overrides.plugins ? { plugins: overrides.plugins } : {}),
-    sqlClient: overrides.sqlClient ?? wrapKernelSqlClient(pool),
+    sqlClient: overrides.sqlClient ?? wrapServiceSqlClient(pool),
   });
 
   const port = config.port;
@@ -196,11 +196,11 @@ async function main(): Promise<void> {
 }
 
 /**
- * Pre-kernel request handling shared by the composed app: `/healthz` and signed
+ * Pre-service request handling shared by the composed app: `/healthz` and signed
  * installation export downloads. Returns a `Response` to short-circuit, or
- * `undefined` to fall through to the embedded kernel app + accounts fallback.
+ * `undefined` to fall through to the embedded service app + accounts fallback.
  */
-async function preHandleNonKernelRequest(
+async function preHandleNonServiceRequest(
   req: Request,
   pool: PgPool,
   exportDownload: NodeAccountsExportDownloadConfig | undefined,
@@ -610,15 +610,15 @@ function wrapPool(pool: PgPool): PostgresQueryClient {
   };
 }
 
-function wrapKernelSqlClient(pool: PgPool): KernelSqlClient {
+function wrapServiceSqlClient(pool: PgPool): ServiceSqlClient {
   return {
     async query<Row extends Record<string, unknown> = Record<string, unknown>>(
       sql: string,
-      parameters?: KernelSqlParameters,
+      parameters?: ServiceSqlParameters,
     ): Promise<{ rows: readonly Row[]; rowCount: number }> {
       if (parameters !== undefined && !Array.isArray(parameters)) {
         throw new TypeError(
-          "node-postgres kernel SQL adapter expects positional parameters",
+          "node-postgres service SQL adapter expects positional parameters",
         );
       }
       const result = await pool.query(sql, parameters as readonly unknown[]);

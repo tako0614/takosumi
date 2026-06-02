@@ -6,7 +6,7 @@ PlatformService, and InstallPlan.
 
 `@takosjp/takosumi-plugins` is a package of backend adapters and runtime-agent
 connectors an operator distribution may choose. Operators may also use
-Terraform/OpenTofu, native controllers, workflow engines, SaaS adapters, or
+OpenTofu, native controllers, workflow engines, SaaS adapters, or
 their own connectors.
 
 ## Ownership
@@ -14,10 +14,10 @@ their own connectors.
 | Surface                    | Owner                                    |
 | -------------------------- | ---------------------------------------- |
 | Installer API DTO          | `@takosjp/takosumi`                      |
-| reference kernel runtime   | `@takosjp/takosumi`                      |
+| Takosumi service runtime   | `@takosjp/takosumi`                      |
 | backend adapters           | `@takosjp/takosumi-plugins` or operator  |
 | runtime-agent connectors   | `@takosjp/takosumi-plugins` or operator  |
-| provider state / Terraform | operator distribution / `takos-private/` |
+| provider state / OpenTofu  | operator distribution / `takos-private/` |
 
 Backend package exports are implementation choices. They are not required for
 compatible Takosumi operators.

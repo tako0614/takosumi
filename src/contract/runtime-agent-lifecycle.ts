@@ -1,7 +1,7 @@
 /**
  * Runtime-agent lifecycle protocol.
  *
- * Kernel-side reference adapters are paper-thin HTTP clients. They post these
+ * Service-side reference adapters are paper-thin HTTP clients. They post these
  * envelopes to a runtime-agent service which dispatches to a per-provider
  * connector (cloud SDK call or local OS call). Credentials live ONLY on the
  * runtime-agent host.
@@ -13,7 +13,7 @@
  *   POST /v1/lifecycle/describe
  *   GET  /v1/health
  *
- * Auth: bearer token shared between kernel and runtime-agent.
+ * Auth: bearer token shared between service and runtime-agent.
  */
 
 import type { JsonObject, JsonValue } from "./types.ts";
@@ -71,7 +71,7 @@ export interface ArtifactStoreLocator {
 
 /**
  * Locator for the already-prepared source snapshot used by source-backed
- * connectors. `workingDirectory` is for co-located kernel/agent setups;
+ * connectors. `workingDirectory` is for co-located service/agent setups;
  * `url` + `digest` is the portable form for remote agents.
  */
 export interface PreparedSourceLocator {
@@ -166,17 +166,17 @@ export interface LifecycleApplyRequest {
   readonly spaceId: string;
   readonly tenantId?: string;
   /**
-   * @internal kernel ↔ runtime-agent RPC only. WAL-derived request token
+   * @internal service ↔ runtime-agent RPC only. WAL-derived request token
    * forwarded to external cloud APIs that accept their own idempotency
    * keys (= AWS S3 / GCP / etc). This is separate from the retired public
    * `X-Idempotency-Key` HTTP header: installer replay protection is via source
    * pin + expected digest, while connector-level idempotency belongs to this
-   * kernel ↔ runtime-agent RPC envelope.
+   * service ↔ runtime-agent RPC envelope.
    */
   readonly idempotencyKey?: string;
-  /** WAL / recovery envelope projected from the kernel OperationPlan. */
+  /** WAL / recovery envelope projected from the service OperationPlan. */
   readonly operationRequest?: PlatformOperationRequest;
-  /** Optional metadata forwarded by kernel (audit trail, request id). */
+  /** Optional metadata forwarded by service (audit trail, request id). */
   readonly metadata?: JsonObject;
   /** Where the connector can fetch DataAsset bytes by hash, when spec carries
    *  `artifact.hash`. Absent for pure pointer-based deploys. */
@@ -201,15 +201,15 @@ export interface LifecycleDestroyRequest {
   readonly spaceId: string;
   readonly tenantId?: string;
   /**
-   * @internal kernel ↔ runtime-agent RPC only. WAL-derived request token
+   * @internal service ↔ runtime-agent RPC only. WAL-derived request token
    * forwarded to external cloud APIs that accept their own idempotency
    * keys (= AWS S3 / GCP / etc). This is separate from the retired public
    * `X-Idempotency-Key` HTTP header: installer replay protection is via source
    * pin + expected digest, while connector-level idempotency belongs to this
-   * kernel ↔ runtime-agent RPC envelope.
+   * service ↔ runtime-agent RPC envelope.
    */
   readonly idempotencyKey?: string;
-  /** WAL / recovery envelope projected from the kernel OperationPlan. */
+  /** WAL / recovery envelope projected from the service OperationPlan. */
   readonly operationRequest?: PlatformOperationRequest;
   readonly metadata?: JsonObject;
 }
@@ -230,7 +230,7 @@ export interface LifecycleCompensateRequest {
   readonly tenantId?: string;
   /** WAL-derived request token for the compensating operation. */
   readonly idempotencyKey?: string;
-  /** WAL / recovery envelope projected from the kernel OperationPlan. */
+  /** WAL / recovery envelope projected from the service OperationPlan. */
   readonly operationRequest?: PlatformOperationRequest;
   readonly metadata?: JsonObject;
   /** Recorded effect detail from the WAL, when available. */
@@ -241,7 +241,7 @@ export interface LifecycleCompensateResponse {
   readonly ok: boolean;
   readonly note?: string;
   /**
-   * True when the connector could not fully reverse the effect and the kernel
+   * True when the connector could not fully reverse the effect and the service
    * must keep or open RevokeDebt for operator-visible cleanup.
    */
   readonly revokeDebtRequired?: boolean;
@@ -279,7 +279,7 @@ export interface LifecycleErrorBody {
   readonly details?: JsonObject;
 }
 
-/** HTTP path constants — single source of truth for kernel client + agent server. */
+/** HTTP path constants — single source of truth for service client + agent server. */
 export const LIFECYCLE_APPLY_PATH = "/v1/lifecycle/apply" as const;
 export const LIFECYCLE_DESTROY_PATH = "/v1/lifecycle/destroy" as const;
 export const LIFECYCLE_COMPENSATE_PATH = "/v1/lifecycle/compensate" as const;
@@ -310,7 +310,7 @@ export interface RegisteredArtifactKind {
   readonly kind: string;
   readonly description: string;
   readonly contentTypeHint?: string;
-  /** Override the kernel's TAKOSUMI_ARTIFACT_MAX_BYTES on a per-kind basis. */
+  /** Override the service's TAKOSUMI_ARTIFACT_MAX_BYTES on a per-kind basis. */
   readonly maxSize?: number;
 }
 

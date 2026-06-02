@@ -32,9 +32,9 @@ features:
   - title: Deployment が履歴になる
     details: |
       apply の結果は Deployment として残り、rollback は current pointer を戻す。
-  - title: Terraform は operator 側
+  - title: OpenTofu は operator 側
     details: |
-      Terraform/OpenTofu state と provider credential は operator distribution が持つ。
+      OpenTofu state と provider credential は operator distribution が持つ。
 ---
 
 ## 最初に読むもの
@@ -60,10 +60,10 @@ features:
 
 | 目的 | ページ |
 | --- | --- |
-| Takosumi 仕様全体を読む | [Takosumi core 仕様](./reference/core-spec.md) |
+| Takosumi v1 を読む | [Takosumi v1](./reference/takosumi-v1.md) |
 | install / deploy / rollback API を叩く | [Installer API](./reference/installer-api.md) |
 | PlatformService inventory を理解する | [プラットフォームサービス](./reference/platform-services.md) |
-| core / operator / Takosumi の境界を確認する | [仕様境界](./reference/spec-boundaries.md) |
+| Takosumi / operator surface の境界を確認する | [仕様境界](./reference/spec-boundaries.md) |
 | CLI の subcommand と env を見る | [CLI](./reference/cli.md) |
 | CI やビルドサービスからデプロイする | [Build service 境界](./reference/build-spec.md) |
 | Takosumi を本番環境で運用する | [Operator](./operator/index.md) |

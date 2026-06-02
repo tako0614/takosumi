@@ -1,9 +1,9 @@
 # Reference {#reference}
 
-## Core
+## Takosumi v1
 
 - [Specification Boundaries](./spec-boundaries.md)
-- [Core Specification](./core-spec.md)
+- [Takosumi v1](./takosumi-v1.md)
 - [Installer API](./installer-api.md)
 - [Platform Services](./platform-services.md)
 - [Digest Computation](./digest-computation.md)

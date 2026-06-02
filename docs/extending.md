@@ -5,13 +5,13 @@ Takosumi v1 の拡張は operator integration です。source repo に Takosumi 
 | やりたいこと | 所有者 |
 | --- | --- |
 | DB / OIDC / bucket / queue などを使える service として出す | operator PlatformService inventory |
-| Terraform/OpenTofu output を inventory に取り込む | operator distribution or `takosumi-plugins` importer |
+| OpenTofu output を inventory に取り込む | operator distribution or `takosumi-plugins` importer |
 | workload runtime へ credential / endpoint を渡す | runtime-agent connector / backend adapter |
 | account / billing / dashboard / deploy facade を出す | operator distribution |
 
 ## PlatformService importer
 
-Terraform output、HCP Stacks publish output、remote state、cloud API、static config などを読み、operator inventory に
+OpenTofu output、HCP Stacks publish output、remote state、cloud API、static config などを読み、operator inventory に
 PlatformService を登録します。
 
 ```json
@@ -32,17 +32,17 @@ PlatformService を登録します。
 runtime-agent connector は selected PlatformService material や Deployment source summary を読み、operator が選んだ runtime
 へ env、mount、secret reference、gateway target などを渡します。
 
-Connector は implementation detail です。Takosumi core の public v1 は Source / Installation / Deployment /
+Connector は implementation detail です。Takosumi の public v1 は Source / Installation / Deployment /
 PlatformService と Installer API に閉じます。
 
-## Terraform との境界
+## OpenTofu との境界
 
-Terraform provider を Takosumi plugin で再実装しません。Terraform が state を持つべき resource は operator layer で
+OpenTofu provider を Takosumi plugin で再実装しません。OpenTofu が state を持つべき resource は operator layer で
 materialize し、Takosumi は output inventory を参照します。
 
 ## 確認項目
 
-- provider credential を Takosumi core に入れない。
+- provider credential を Takosumi に入れない。
 - raw secret value を Deployment output / log / audit に出さない。
 - inventory importer は deterministic な service path / labels を出す。
 - binding resolver は absent / ambiguous / policy denied を apply 前に止める。

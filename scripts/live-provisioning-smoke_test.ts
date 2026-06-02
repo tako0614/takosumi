@@ -4,6 +4,7 @@ import { test } from "bun:test";
 import {
   loadProofFixture,
   manifestToProofFixture,
+  parseOptions,
   runBundledFixtureProof,
   runFixtureProof,
   runLiveProof,
@@ -56,6 +57,19 @@ test("selfhost fixture is first-class provider proof", async () => {
     "web-service@v1:systemd-unit:api",
     "gateway@v1:coredns-local:primary",
   ]);
+});
+
+test("selfhosted provider alias maps to selfhost proof provider", () => {
+  const options = parseOptions([], {
+    TAKOSUMI_PLUGIN_LIVE_PROVIDER: "selfhosted",
+    TAKOSUMI_PLUGIN_LIVE_PROOF_MODE: "live",
+    TAKOSUMI_PLUGIN_LIVE_PROOF_FIXTURE_FILE:
+      "fixtures/live-provisioning/selfhosted.shape-v1.json",
+    TAKOSUMI_PLUGIN_SELFHOSTED_GATEWAY_URL: "https://gw.test",
+  });
+
+  assert.equal(options.provider, "selfhost");
+  assert.equal(options.gateway?.baseUrl, "https://gw.test");
 });
 
 test("manifestToProofFixture treats local DNS as a support provider", async () => {

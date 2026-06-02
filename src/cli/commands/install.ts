@@ -27,7 +27,7 @@ function createInstallCommand(): Command {
     .argument("[source]", "git:, prepared:, or local path")
     .option("--source <source>", "git:, prepared:, or local path")
     .option("--space <spaceId>", "Target Space id")
-    .option("--remote <url>", "Remote kernel URL")
+    .option("--remote <url>", "Remote Takosumi service URL")
     .option("--token <token>", "Installer bearer token");
   dryRun.action(async (
       sourceArg: string | undefined,
@@ -49,7 +49,7 @@ function createInstallCommand(): Command {
     .argument("[source]", "git:, prepared:, or local path")
     .option("--source <source>", "git:, prepared:, or local path")
     .option("--space <spaceId>", "Target Space id")
-    .option("--remote <url>", "Remote kernel URL")
+    .option("--remote <url>", "Remote Takosumi service URL")
     .option("--token <token>", "Installer bearer token")
     .option("--expected-commit <commit>", "Expected source commit pin")
     .option(
@@ -110,7 +110,7 @@ async function runInstall(input: {
       body,
     });
     if (status >= 400) {
-      console.error(`kernel returned ${status}:`, responseBody);
+      console.error(`Takosumi service returned ${status}:`, responseBody);
       exitCli(1);
     }
     console.log(JSON.stringify(responseBody, null, 2));

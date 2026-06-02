@@ -4,7 +4,7 @@ This is an operational overlay for a managed Takos offering on top of Takosumi. 
 
 ## Boundary
 
-The managed offering can add customer-facing signup, terms, support, evidence, and product-profile routes. Those routes do not become Takosumi core surfaces and do not change the Cloud base profile.
+The managed offering can add customer-facing signup, terms, support, evidence, and product-profile routes. Those routes do not become Takosumi surfaces and do not change the Cloud base profile.
 
 ## Base Cloud Surfaces
 

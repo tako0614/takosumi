@@ -1,14 +1,14 @@
 /**
  * Reference/operator-internal runtime-agent RPC DTOs — Phase 17B.
  *
- * The kernel ↔ remote runtime-agent JSON / HTTP RPC. A runtime-agent is a
+ * The service ↔ remote runtime-agent JSON / HTTP RPC. A runtime-agent is a
  * lightweight process that runs *inside* the operator-owned tenant cloud
- * (AWS EC2 / GCP Compute / k8s pod / etc.). It pulls work from the kernel,
+ * (AWS EC2 / GCP Compute / k8s pod / etc.). It pulls work from the service,
  * executes long-running provider operations (RDS create, ECS deploy, Cloud
  * SQL provision, ...) using operator-owned credentials, and reports the
  * outcome back via the same RPC.
  *
- * The kernel never reaches a tenant cloud directly. It only:
+ * The service never reaches a tenant cloud directly. It only:
  *   1. accepts an `enroll` registration from a remote agent,
  *   2. distributes work `lease` records,
  *   3. consumes `heartbeat` and `report` records from the agent.
@@ -43,7 +43,7 @@ export const RUNTIME_AGENT_RPC_PATHS = {
 } as const;
 
 /**
- * Header carrying the kernel-trusted Ed25519 signature of the gateway's
+ * Header carrying the service-trusted Ed25519 signature of the gateway's
  * identity claim on every RPC response. The agent verifies it against the
  * pinned {@link GatewayManifest.pubkey} before trusting the response.
  *
@@ -86,7 +86,7 @@ export function resolveRuntimeAgentRpcPath(
 }
 
 /**
- * Capabilities a runtime-agent exposes at enrollment time. The kernel uses
+ * Capabilities a runtime-agent exposes at enrollment time. The service uses
  * these to filter work leases:
  *
  *   - `providers` is the list of legacy connector-local provider selectors the
@@ -94,7 +94,7 @@ export function resolveRuntimeAgentRpcPath(
  *     these from the current kind/materializer mapping. A queued work item
  *     without an explicit provider is leasable by any agent.
  *   - `maxConcurrentLeases` (optional) caps in-flight leases per agent. The
- *     kernel never grants more than this many active leases at once.
+ *     service never grants more than this many active leases at once.
  *   - `labels` are operator-defined tags (region, instance class, ...) used
  *     for routing.
  */
@@ -107,9 +107,9 @@ export interface RuntimeAgentCapabilitiesPayload {
 /**
  * `POST /api/internal/v1/runtime/agents/enroll` — registration request.
  *
- * The agent supplies a host-key digest so the kernel can detect impersonation
+ * The agent supplies a host-key digest so the service can detect impersonation
  * across re-enrollments (the same `agentId` must always present the same
- * digest; mismatch ⇒ kernel revokes the prior identity and refuses the
+ * digest; mismatch ⇒ service revokes the prior identity and refuses the
  * enrollment until operator intervention).
  */
 export interface RuntimeAgentRegistration {
@@ -117,7 +117,7 @@ export interface RuntimeAgentRegistration {
   readonly agentId: string;
   /** Legacy connector-local provider selector this agent primarily serves. */
   readonly provider: string;
-  /** Optional public callback URL the kernel could later push work to. */
+  /** Optional public callback URL the service could later push work to. */
   readonly endpoint?: string;
   readonly capabilities: RuntimeAgentCapabilitiesPayload;
   /**
@@ -144,26 +144,26 @@ export interface RuntimeAgentRegistrationResponse {
   };
   /**
    * Renew window in ms — the agent must heartbeat at least this often or it
-   * will be marked `expired` by the kernel and have its leases revoked.
+   * will be marked `expired` by the service and have its leases revoked.
    */
   readonly renewAfterMs: number;
 }
 
 /**
  * `POST /api/internal/v1/runtime/agents/:agentId/heartbeat` — periodic
- * liveness ping. Carries lightweight TTL metadata so the kernel can detect
+ * liveness ping. Carries lightweight TTL metadata so the service can detect
  * stale agents without a long-poll connection.
  */
 export interface RuntimeAgentHeartbeat {
   readonly agentId: string;
-  /** Optional diagnostic wall-clock timestamp at the agent; liveness uses kernel time. */
+  /** Optional diagnostic wall-clock timestamp at the agent; liveness uses service time. */
   readonly heartbeatAt?: string;
   /** Optional new status — agent can voluntarily drain. */
   readonly status?: "ready" | "draining";
   /** Total leases currently held by the agent. */
   readonly inFlightLeases?: number;
   /**
-   * Suggested TTL in ms. The kernel treats this as advisory only and caps
+   * Suggested TTL in ms. The service treats this as advisory only and caps
    * the effective heartbeat/lease window.
    */
   readonly ttlMs?: number;
@@ -176,26 +176,26 @@ export interface RuntimeAgentHeartbeatResponse {
     readonly status: "ready" | "draining" | "revoked" | "expired";
     readonly lastHeartbeatAt: string;
   };
-  /** Effective TTL the kernel granted. Heartbeat before this elapses. */
+  /** Effective TTL the service granted. Heartbeat before this elapses. */
   readonly renewAfterMs: number;
 }
 
 /**
  * `POST /api/internal/v1/runtime/agents/:agentId/leases` — work lease pull.
  *
- * The kernel responds with at most one lease. If no work is available,
+ * The service responds with at most one lease. If no work is available,
  * `lease` is `null` and the agent retries after a short backoff.
  */
 export interface RuntimeAgentLeaseRequest {
   readonly agentId: string;
-  /** Requested lease TTL in ms; the kernel caps this if too long. */
+  /** Requested lease TTL in ms; the service caps this if too long. */
   readonly leaseTtlMs?: number;
-  /** Optional diagnostic wall-clock at agent; lease timestamps use kernel time. */
+  /** Optional diagnostic wall-clock at agent; lease timestamps use service time. */
   readonly now?: string;
 }
 
 /**
- * Work item shape carried inside a lease. Mirrors the kernel's
+ * Work item shape carried inside a lease. Mirrors the service's
  * `RuntimeAgentWorkItem` projection but with the JSON-safe fields the agent
  * needs.
  */
@@ -237,7 +237,7 @@ export type RuntimeAgentLeaseResponse = {
  *     and optional structured progress (e.g. `{ stage: "rds.creating" }`).
  *   - `completed` — terminal success. Carries `result` payload.
  *   - `failed` — terminal failure. Carries `reason` and optional `retry`
- *     flag; the kernel re-queues the work if `retry === true`.
+ *     flag; the service re-queues the work if `retry === true`.
  */
 export type RuntimeAgentReportStatus =
   | "progress"
@@ -254,7 +254,7 @@ export interface RuntimeAgentProgressReport extends RuntimeAgentReportBase {
   readonly status: "progress";
   /** Optional structured progress (stage, percent, condition snapshot, ...). */
   readonly progress?: JsonObject;
-  /** Suggested new expiry; the kernel caps it relative to kernel receipt time. */
+  /** Suggested new expiry; the service caps it relative to service receipt time. */
   readonly extendUntil?: string;
 }
 
@@ -268,7 +268,7 @@ export interface RuntimeAgentCompletedReport extends RuntimeAgentReportBase {
 export interface RuntimeAgentFailedReport extends RuntimeAgentReportBase {
   readonly status: "failed";
   readonly reason: string;
-  /** Whether the kernel should re-queue this work item. */
+  /** Whether the service should re-queue this work item. */
   readonly retry?: boolean;
   readonly failedAt?: string;
   readonly result?: JsonObject;
@@ -292,7 +292,7 @@ export interface RuntimeAgentReportResponse {
 /**
  * `POST /api/internal/v1/runtime/agents/:agentId/drain` — operator-initiated
  * drain. The agent is allowed to finish its current leases but will not be
- * granted new ones. Kernel caller signs the request as usual.
+ * granted new ones. Service caller signs the request as usual.
  */
 export interface RuntimeAgentDrainRequest {
   readonly agentId: string;
@@ -301,19 +301,19 @@ export interface RuntimeAgentDrainRequest {
 }
 
 /**
- * Signed claim that binds a gateway URL to a kernel-trusted Ed25519 public
- * key. The runtime-agent fetches this manifest from the kernel at startup
+ * Signed claim that binds a gateway URL to a service-trusted Ed25519 public
+ * key. The runtime-agent fetches this manifest from the service at startup
  * (via {@link RUNTIME_AGENT_RPC_PATHS.gatewayManifest}) and pins
  * `gatewayUrl` + `pubkey` for the lifetime of the agent process.
  *
  * Why: an operator-injected gateway URL (`https://aws-gateway.example.com`)
  * is otherwise un-authenticated. A malicious operator that controls
  * deployment configuration can swap the URL for an attacker-owned host,
- * harvest signed RPC requests, and then forward them to the real kernel —
+ * harvest signed RPC requests, and then forward them to the real service —
  * stealing whatever credentials the agent later signs with.
  *
- * The manifest closes that gap: the kernel's control plane signs the
- * manifest with a **kernel-trusted Ed25519 key** the agent learns out-of-
+ * The manifest closes that gap: the service's control plane signs the
+ * manifest with a **service-trusted Ed25519 key** the agent learns out-of-
  * band (operator bootstrap secret), so the agent can detect tampering and
  * fail-closed before it enrolls.
  *
@@ -354,9 +354,9 @@ export interface GatewayManifest {
 }
 
 /**
- * Envelope the kernel returns to the agent's `gateway-manifest` RPC. The
+ * Envelope the service returns to the agent's `gateway-manifest` RPC. The
  * `signature` is `Ed25519(bytes(JSON.stringify(manifest, sortKeys)))` using
- * the kernel-trusted private key.
+ * the service-trusted private key.
  */
 export interface SignedGatewayManifest {
   readonly manifest: GatewayManifest;
@@ -521,7 +521,7 @@ export async function verifyGatewayResponseSignature(
 
 /**
  * Sign a per-RPC gateway-identity response signature on the gateway side.
- * The kernel uses this when forwarding a response to a runtime agent.
+ * The service uses this when forwarding a response to a runtime agent.
  */
 export async function signGatewayResponse(input: {
   readonly privateKey: CryptoKey;
@@ -626,7 +626,7 @@ export interface LongRunningOperationEnqueue {
   readonly payload: JsonObject;
   /** Operator priority (higher first). Default 0. */
   readonly priority?: number;
-  /** Idempotency key — kernel deduplicates equal keys to one queued item. */
+  /** Idempotency key — service deduplicates equal keys to one queued item. */
   readonly idempotencyKey?: string;
   readonly enqueuedAt?: string;
 }

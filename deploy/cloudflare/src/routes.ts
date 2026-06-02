@@ -11,7 +11,7 @@ const KERNEL_CONTROL_PLANE_EXACT_PATHS = new Set([
   "/metrics",
 ]);
 
-export function isKernelControlPlanePath(pathname: string): boolean {
+export function isServiceControlPlanePath(pathname: string): boolean {
   const normalized = normalizePathname(pathname);
   if (KERNEL_CONTROL_PLANE_EXACT_PATHS.has(normalized)) return true;
   return normalized === "/v1" ||
@@ -20,7 +20,7 @@ export function isKernelControlPlanePath(pathname: string): boolean {
     normalized.startsWith("/api/internal/v1/");
 }
 
-export function createKernelWorkerRequest(request: Request): Request {
+export function createServiceWorkerRequest(request: Request): Request {
   const headers = new Headers(request.headers);
   headers.set(TAKOSUMI_CLOUDFLARE_FRONT_HEADER, "worker");
   return new Request(request, { headers });

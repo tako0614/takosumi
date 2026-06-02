@@ -4,12 +4,12 @@ WriteAheadOperationJournal は WAL stage 進行とともに単調増大する。
 
 ## Compaction triggers
 
-A compaction pass starts when any of the following conditions hold. The kernel evaluates the conditions on a periodic timer and opportunistically at the end of any deploy.
+A compaction pass starts when any of the following conditions hold. The service evaluates the conditions on a periodic timer and opportunistically at the end of any deploy.
 
 - Operation-completed thresholds: the count of `operation-completed` entries since the last compaction exceeds `TAKOSUMI_JOURNAL_COMPACTION_OP_THRESHOLD` (default `1024`).
 - Storage size threshold: the on-disk size of the journal partition exceeds `TAKOSUMI_JOURNAL_COMPACTION_SIZE_THRESHOLD_MB` (default `512`).
 - Age threshold: the oldest non-compacted journal entry is older than `TAKOSUMI_JOURNAL_COMPACTION_MAX_AGE_HOURS` (default `168`).
-- Manual operator instruction through internal operator tooling or the equivalent kernel HTTP API endpoint.
+- Manual operator instruction through internal operator tooling or the equivalent service HTTP API endpoint.
 
 trigger は OR で結合される。最初に発火した条件が勝つ。journal に対して 1 度に動く compaction pass は 1 つだけで、並行 trigger は合一される。
 
@@ -39,12 +39,12 @@ A compaction pass that drops a contiguous prefix of journal entries must record 
 
 Compaction must be crash-safe. A crash mid-pass must not lose journal entries and must not leave the base snapshot pair in a partially written state.
 
-- The kernel writes the new base snapshot pair before truncating the compacted prefix. The two writes are coupled by a compacted-journal descriptor that names both the new base and the truncated prefix range.
+- The service writes the new base snapshot pair before truncating the compacted prefix. The two writes are coupled by a compacted-journal descriptor that names both the new base and the truncated prefix range.
 - The journal cursor that names the active base snapshot pair is advanced atomically: readers either see the previous base with the full journal, or the new base with the truncated tail, never an intermediate state.
 - A crash before the cursor advance leaves the pre-compaction state intact; a restart re-runs the compaction pass.
 - A crash after the cursor advance but before the prefix truncation completes leaves orphan compacted entries; the next compaction pass recognizes the orphan range by its position before the active cursor and reclaims it.
 
-journal cursor 自体は kernel の recovery state の一部で、再起動を跨いで durable である。
+journal cursor 自体は service の recovery state の一部で、再起動を跨いで durable である。
 
 ## Relationship with retention regimes
 
@@ -58,7 +58,7 @@ See [Audit Events](./audit-events.md) for the regime taxonomy and event-level re
 
 ## Operator controls
 
-Operators tune compaction frequency through env vars on the kernel host:
+Operators tune compaction frequency through env vars on the service host:
 
 - `TAKOSUMI_JOURNAL_COMPACTION_OP_THRESHOLD` — operation-completed count that triggers a pass. Default `1024`. Set to `0` to disable the operation-count trigger.
 - `TAKOSUMI_JOURNAL_COMPACTION_SIZE_THRESHOLD_MB` — on-disk size threshold in mebibytes. Default `512`. Set to `0` to disable the size trigger.

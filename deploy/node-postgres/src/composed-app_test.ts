@@ -12,22 +12,22 @@ const globalWithRequire = globalThis as {
 };
 globalWithRequire.require ??= createRequire(import.meta.url);
 
-// The embedded kernel's in-memory secret store refuses to start in the default
+// The embedded service's in-memory secret store refuses to start in the default
 // `local` environment without an encryption key or an explicit dev opt-in. These
 // route tests never exercise the secret store, so opt into dev mode so
-// `createPaaSApp` boots the in-memory adapters.
+// `createTakosumiService` boots the in-memory adapters.
 process.env.TAKOSUMI_DEV_MODE = "1";
 
 /**
  * Regression coverage for the composed-app route-shadowing bug. The embedded
- * kernel (`createPaaSApp`) registers the Installer API on the SAME
+ * service (`createTakosumiService`) registers the Installer API on the SAME
  * `/v1/installations/*` paths the account-plane projection owns, and Hono
- * composes matched handlers in registration order, so the kernel routes used to
+ * composes matched handlers in registration order, so the service routes used to
  * permanently shadow the account-plane (account-plane mints `inst_<uuid>` ids,
- * which the kernel's `^ins_[0-9a-zA-Z]{16,32}$` guard rejects with 400, or 401s
+ * which the service's `^ins_[0-9a-zA-Z]{16,32}$` guard rejects with 400, or 401s
  * outright without the internal installer bearer). `buildComposedApp` now wraps
- * the kernel app so account-plane installation requests reach the accounts
- * handler first while non-installation kernel routes stay reachable.
+ * the service app so account-plane installation requests reach the accounts
+ * handler first while non-installation service routes stay reachable.
  */
 
 function stubQueryClient(): PostgresQueryClient {
@@ -71,8 +71,8 @@ function accountsHandlerSpy(): AccountsHandlerSpy {
     handler: (req: Request) => {
       const url = new URL(req.url);
       calls.push({ method: req.method, pathname: url.pathname });
-      // A sentinel body + header the kernel never emits, so a test can prove the
-      // account-plane handler — not the embedded kernel — produced the response.
+      // A sentinel body + header the service never emits, so a test can prove the
+      // account-plane handler — not the embedded service — produced the response.
       return Promise.resolve(
         new Response(JSON.stringify({ handledBy: "accounts" }), {
           status: 299,
@@ -97,7 +97,7 @@ async function buildTestApp() {
   return { app: created.app, spy };
 }
 
-test("composed app routes POST /v1/installations to the account plane, not the kernel", async () => {
+test("composed app routes POST /v1/installations to the account plane, not the service", async () => {
   const { app, spy } = await buildTestApp();
   const res = await app.fetch(
     new Request("http://localhost/v1/installations", {
@@ -106,7 +106,7 @@ test("composed app routes POST /v1/installations to the account plane, not the k
       body: JSON.stringify({ spaceId: "space_1" }),
     }),
   );
-  // Account-plane sentinel proves the request was NOT shadowed by the kernel
+  // Account-plane sentinel proves the request was NOT shadowed by the service
   // installer route (which would 401 without the internal installer bearer).
   assert.equal(res.headers.get("x-handled-by"), "accounts");
   assert.deepEqual(spy.calls, [{
@@ -115,7 +115,7 @@ test("composed app routes POST /v1/installations to the account plane, not the k
   }]);
 });
 
-test("composed app builds accounts handler with an in-process kernel installer proxy", async () => {
+test("composed app builds accounts handler with an in-process service installer proxy", async () => {
   const spy = accountsHandlerSpy();
   let installerEndpointReached = false;
   const { buildComposedApp } = await import("./composed-app.ts");
@@ -150,7 +150,7 @@ test("composed app builds accounts handler with an in-process kernel installer p
 
 test("composed app routes per-installation deployment mutation to the account plane", async () => {
   const { app, spy } = await buildTestApp();
-  // `inst_<uuid>` is the account-plane id shape; the kernel id guard rejects it.
+  // `inst_<uuid>` is the account-plane id shape; the service id guard rejects it.
   const res = await app.fetch(
     new Request(
       "http://localhost/v1/installations/inst_abc123/deployments",
@@ -178,22 +178,22 @@ test("composed app routes GET /v1/installations list to the account plane", asyn
   assert.equal(spy.calls[0].pathname, "/v1/installations");
 });
 
-test("composed app still serves the embedded kernel /health route", async () => {
+test("composed app still serves the embedded service /health route", async () => {
   const { app, spy } = await buildTestApp();
   const res = await app.fetch(new Request("http://localhost/health"));
   assert.equal(res.status, 200);
-  // Kernel health, not the account-plane sentinel.
+  // Service health, not the account-plane sentinel.
   assert.equal(res.headers.get("x-handled-by"), null);
   const body = await res.json();
   assert.equal(body.service, "takosumi");
-  // The account-plane handler must NOT have seen the kernel health probe.
+  // The account-plane handler must NOT have seen the service health probe.
   assert.equal(spy.calls.length, 0);
 });
 
 test("composed app delegates non-installation paths to the account-plane fallback", async () => {
   const { app, spy } = await buildTestApp();
-  // `/dashboard` is an account-plane surface the kernel never registers; it
-  // reaches the accounts handler via the kernel app's catch-all fallback.
+  // `/dashboard` is an account-plane surface the service never registers; it
+  // reaches the accounts handler via the service app's catch-all fallback.
   const res = await app.fetch(new Request("http://localhost/dashboard"));
   assert.equal(res.headers.get("x-handled-by"), "accounts");
   assert.deepEqual(spy.calls, [{ method: "GET", pathname: "/dashboard" }]);

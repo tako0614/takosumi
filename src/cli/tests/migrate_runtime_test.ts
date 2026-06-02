@@ -4,7 +4,7 @@ import {
   resetRuntimeForTesting,
   type RuntimeAdapter,
   setRuntimeForTesting,
-} from "../../kernel/shared/runtime/index.ts";
+} from "../../service/shared/runtime/index.ts";
 import {
   exitProcess,
   readEnv,

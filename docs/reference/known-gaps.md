@@ -1,8 +1,8 @@
-# Known gaps — reference kernel deploy pipeline
+# Known gaps — Takosumi service deploy pipeline
 
 ::: info
 内部実装メモ。public contract は [Installer API](./installer-api.md) を参照。
-ここに列挙するのは reference kernel (`src/kernel`) の deploy / apply
+ここに列挙するのは Takosumi service (`src/service`) の deploy / apply
 pipeline で「仕様・docstring 上は存在するが production caller に未配線」あるいは
 「意図的に粗い」挙動です。各項目は honest な現状記録であり、解消するまで上位 docs
 が durability / diff / per-resource recovery を約束しすぎないようにするための正本です。
@@ -10,7 +10,7 @@ pipeline で「仕様・docstring 上は存在するが production caller に未
 
 ## 1. apply pipeline が 3 経路に分岐し、`applyV2` は production 未到達
 
-reference kernel には 3 つの apply 経路があります:
+Takosumi service には 3 つの apply 経路があります:
 
 1. **InstallerPipeline** (`domains/installer/mod.ts`) — public Installer API の
    実体。rollback は GroupHead pointer move のみで、apply 途中失敗時の provider

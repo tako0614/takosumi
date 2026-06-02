@@ -1,4 +1,4 @@
-# RFC 0001: Kernel Kind-Agnostic Source v1 {#rfc-0001-kernel-kind-agnostic}
+# RFC 0001: Service Kind-Agnostic Source v1 {#rfc-0001-service-kind-agnostic}
 
 > **Status**: Accepted\
 > **Date**: 2026-05-21\
@@ -26,25 +26,25 @@ account-plane policy, and operator-owned PlatformService inventory.
 
 ## Decision {#decision}
 
-Takosumi core is a contract executor. It resolves Source identity, produces an
+Takosumi is a contract executor. It resolves Source identity, produces an
 InstallPlan during dry-run, records Deployment evidence during apply, and
 validates binding snapshots against operator-supplied PlatformService inventory.
 
-Takosumi core does not own infrastructure resource lifecycle, provider state,
+Takosumi does not own infrastructure resource lifecycle, provider state,
 backend credentials, billing, OIDC issuer operation, or dashboard policy. Those
 belong to operator distributions such as Takosumi, which may use
-Terraform, OpenTofu, Helm, cloud APIs, HCP Stacks output, static config, or
+OpenTofu, OpenTofu, Helm, cloud APIs, HCP Stacks output, static config, or
 another workflow to maintain PlatformService inventory.
 
 ## Kind Binding Model {#kind-binding-model}
 
-The reference kernel remains kind-agnostic. Component kinds are implementation
+The Takosumi service remains kind-agnostic. Component kinds are implementation
 selectors inside the reference apply pipeline, not public Source metadata.
 Operator distributions attach implementation bindings through a plain plugin
 array, and each binding declares the kind URI it can materialize.
 
 ```ts
-const { app } = await createPaaSApp({
+const { app } = await createTakosumiService({
   plugins: [
     cloudflareWorkerPlugin({ lifecycle: workerLifecycle }),
     cloudflareR2ObjectStorePlugin({ lifecycle: objectStoreLifecycle }),
@@ -79,10 +79,10 @@ were selected for a Deployment.
 
 ## Non-Goals {#non-goals}
 
-- Add workflow runner, cron, or scheduler ownership to Takosumi core.
+- Add workflow runner, cron, or scheduler ownership to Takosumi.
 - Add account, billing, OIDC issuer, dashboard, or onboarding ownership to
-  Takosumi core.
-- Make Takosumi core run Terraform, OpenTofu, Helm, or cloud provider CLIs.
+  Takosumi.
+- Make Takosumi run OpenTofu, OpenTofu, Helm, or cloud provider CLIs.
 - Introduce product-specific Takos behavior into the substrate.
 
 ## Consequences {#consequences}

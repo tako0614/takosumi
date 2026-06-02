@@ -158,7 +158,7 @@ export interface GroupSummary {
 }
 
 /**
- * Legacy reference deploy-core authoring shape retained only for internal
+ * Legacy reference deploy-space authoring shape retained only for internal
  * deploy-domain compatibility. The public v1 installer contract is
  * manifestless and lives in `installer-api.ts`; do not introduce new consumers
  * of this shape.

@@ -1,8 +1,8 @@
 # @takosjp/takosumi/runtime-agent
 
-Executor / data plane for the Takosumi reference runtime. Receives lifecycle envelopes (apply / destroy / describe / verify) from the kernel over HTTP and dispatches to the right per-provider connector, which makes the actual cloud REST API call (SigV4 / OAuth / Cloudflare API token / Azure ARM / Kubernetes / etc) or local OS call (`docker`, `systemd`, filesystem).
+Executor / data plane for the Takosumi reference runtime. Receives lifecycle envelopes (apply / destroy / describe / verify) from the service over HTTP and dispatches to the right per-provider connector, which makes the actual cloud REST API call (SigV4 / OAuth / Cloudflare API token / Azure ARM / Kubernetes / etc) or local OS call (`docker`, `systemd`, filesystem).
 
-Cloud / OS credentials stay outside the kernel. In the takosumi.com reference topology they typically live in the runtime-agent process; another operator-owned execution host can enforce the same boundary.
+Cloud / OS credentials stay outside the service. In the takosumi.com reference topology they typically live in the runtime-agent process; another operator-owned execution host can enforce the same boundary.
 
 ## Install
 
@@ -30,7 +30,7 @@ console.log(`agent listening at ${handle.url}`);
 # The CLI starts the generic runtime-agent host. Operator distributions that
 # need concrete connectors should provide their own boot wrapper and pass a
 # ConnectorRegistry to startEmbeddedAgent(...) or serveRuntimeAgent(...).
-takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
+takosumi runtime-agent serve --port 8789 --token <shared-with-service>
 ```
 
 ## Reference operator-internal HTTP API
@@ -45,13 +45,13 @@ takosumi runtime-agent serve --port 8789 --token <shared-with-kernel>
 | `POST` | `/v1/lifecycle/describe`   | bearer-auth: query resource state                                                   |
 | `POST` | `/v1/lifecycle/verify`     | bearer-auth: read-only credential check per connector (optionally filtered by body) |
 
-Auth is a single bearer token, shared with the kernel via `TAKOSUMI_AGENT_TOKEN`.
+Auth is a single bearer token, shared with the service via `TAKOSUMI_AGENT_TOKEN`.
 
 ## Connector selectors
 
 `@takosjp/takosumi/runtime-agent` ships the lifecycle HTTP server, dispatcher,
 `ConnectorRegistry`, and resilience wrapper. Concrete backend connectors live
-outside the core package in `takosumi-plugins` as
+outside the space package in `takosumi-plugins` as
 `@takosjp/takosumi-plugins/connectors`. The values below are connector-local
 wire selectors, not npm package names.
 
@@ -93,7 +93,7 @@ The `shape` and `provider` fields are connector-local wire selectors. The operat
 
 Source-backed connectors read files from `LifecycleApplyRequest.preparedSource` through `ctx.source`. DataAsset/artifact handling is an optional operator extension: connectors may use `ctx.fetcher` when their implementation-specific selector expects uploaded or external asset metadata, but DataAsset metadata values are connector-owned metadata rather than Takosumi public Installer API concepts. The compatibility wire may call that value `kind`.
 
-`compensate` is the recovery hook for partially applied effects recorded in the kernel WAL. Connectors that can reverse an effect more precisely than handle-keyed deletion should implement it. When the hook is absent, the dispatcher falls back to `destroy`; if cleanup cannot be completed, the response can set `revokeDebtRequired` so the kernel keeps operator-visible cleanup debt.
+`compensate` is the recovery hook for partially applied effects recorded in the service WAL. Connectors that can reverse an effect more precisely than handle-keyed deletion should implement it. When the hook is absent, the dispatcher falls back to `destroy`; if cleanup cannot be completed, the response can set `revokeDebtRequired` so the service keeps operator-visible cleanup debt.
 
 ## Boot wiring
 
@@ -136,7 +136,7 @@ Service-account JWT signing is internal to
 
 ## See also
 
-- `@takosjp/takosumi/kernel` — control plane that talks to this agent
+- `@takosjp/takosumi` — control plane that talks to this agent
 - `@takosjp/takosumi/cli` — runs `takosumi runtime-agent serve`
 - `@takosjp/takosumi-plugins/connectors` — reference concrete connector package
 - `@takosjp/takosumi/contract/reference/runtime-agent-lifecycle` — defines `LifecycleApplyRequest` etc. for the reference lifecycle envelope.

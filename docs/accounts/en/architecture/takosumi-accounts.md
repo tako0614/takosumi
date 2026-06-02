@@ -15,5 +15,5 @@ billing owner records, launch tokens, and Installation ownership projection.
 - Cloud Installation projection ledger
 - launch token issue / consume
 
-These responsibilities do not move into Takosumi core. Core stays focused on
+These responsibilities do not move into Takosumi. Takosumi stays focused on
 Source, Installation, Deployment, and Installer API.

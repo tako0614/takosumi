@@ -11,7 +11,7 @@ function createRollbackCommand(): Command {
     .description("Rollback an Installation to a prior Deployment")
     .argument("<installationId>", "Installation id")
     .argument("<deploymentId>", "Deployment id to roll back to")
-    .option("--remote <url>", "Remote kernel URL")
+    .option("--remote <url>", "Remote Takosumi service URL")
     .option("--token <token>", "Installer bearer token")
     .action(
       async (
@@ -26,7 +26,7 @@ function createRollbackCommand(): Command {
             body: { deploymentId },
           });
           if (status >= 400) {
-            console.error(`kernel returned ${status}:`, body);
+            console.error(`Takosumi service returned ${status}:`, body);
             exitCli(1);
           }
           console.log(JSON.stringify(body, null, 2));

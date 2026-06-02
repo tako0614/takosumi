@@ -19,14 +19,14 @@ Deployment
 - Deployment は Installation に対する apply 履歴。
 - rollback は `POST /v1/installations/{id}/rollback` で current pointer を保持済み Deployment に戻す。
 
-Deployment の runtime side effect は operator-selected execution によって実体化されます。runtime-agent、backend connector、in-process controller、Terraform/OpenTofu workflow などの packaging は operator implementation の選択です。
+Deployment の runtime side effect は operator-selected execution によって実体化されます。runtime-agent、backend connector、in-process controller、OpenTofu workflow などの packaging は operator implementation の選択です。
 
 ## Workflow Placement {#workflow-placement}
 
-workflow / webhook / cron / CI runner は upstream automation として source ref または prepared source archive を選び、Installer API に渡します。Takosumi core は build workflow を所有せず、Source identity、`InstallPlan` snapshot、`planSnapshotDigest`、Deployment record を保存します。
+workflow / webhook / cron / CI runner は upstream automation として source ref または prepared source archive を選び、Installer API に渡します。Takosumi は build workflow を所有せず、Source identity、`InstallPlan` snapshot、`planSnapshotDigest`、Deployment record を保存します。
 
 ## Cross References {#cross-references}
 
 - [Installer API](../installer-api.md)
-- [Core Specification](../core-spec.md)
-- [Reference Kernel Route Inventory](../kernel-http-api.md)
+- [Takosumi v1](../takosumi-v1.md)
+- [Reference Takosumi Route Inventory](../service-http-api.md)

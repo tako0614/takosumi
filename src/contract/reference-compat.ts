@@ -3,8 +3,8 @@
 // The Takosumi v1 Installer API contract is owned by the package root
 // (`@takosjp/takosumi/contract`) and the focused `installer-api` subpath.
 // This umbrella re-exports the larger reference
-// implementation API used by kernel, runtime-agent, provider, and connector
-// packages while deploy-core compatibility types are being retired.
+// implementation API used by service, runtime-agent, provider, and connector
+// packages while deploy-space compatibility types are being retired.
 //
 // Scope: the re-export list is an explicit allowlist of legacy reference
 // helpers (JSON value scalars, condition / reason enums, deploy-domain
@@ -53,7 +53,7 @@ export type {
   TrustLevel,
 } from "./types.ts";
 
-export * from "./core-v1.ts";
+export * from "./takosumi-v1.ts";
 export * from "./internal-api.ts";
 export {
   EnvTakosumiServiceDirectory,

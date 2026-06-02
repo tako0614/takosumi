@@ -13,12 +13,12 @@ implementation package です。v1 public source contract ではありません�
 この package が提供しないもの:
 
 - Takosumi-specific source authoring DSL
-- Terraform provider replacement
-- core-owned PlatformService catalog
+- OpenTofu provider replacement
+- Takosumi-owned PlatformService catalog
 - mandatory implementation binding mechanism
 
 compatible operator は同じ Installer API と Deployment record を保ちながら、
-Terraform/OpenTofu、native controller、workflow engine、SaaS adapter、自前 runtime
+OpenTofu、native controller、workflow engine、SaaS adapter、自前 runtime
 agent のいずれでも PlatformService を materialize できます。
 
 ## Related

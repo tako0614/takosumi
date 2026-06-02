@@ -6,7 +6,7 @@ export interface RemoteCallOptions {
   readonly body?: unknown;
 }
 
-export async function callKernel(
+export async function callTakosumiService(
   options: RemoteCallOptions,
 ): Promise<{ status: number; body: unknown }> {
   const headers: Record<string, string> = {

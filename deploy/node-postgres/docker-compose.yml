@@ -12,7 +12,7 @@
 #     base image still gets a non-root runtime.
 #   - `accounts` mounts the root filesystem read-only with a tmpfs at
 #     `/tmp` for runtime pid files and any temporary archive material.
-#   - `cap_drop: [ALL]` removes every Linux capability the kernel grants
+#   - `cap_drop: [ALL]` removes every Linux capability the service grants
 #     containers by default; the accounts service only needs to bind to
 #     an unprivileged TCP port (>=1024) inside the docker network.
 #   - `security_opt: ["no-new-privileges:true"]` prevents setuid/setgid

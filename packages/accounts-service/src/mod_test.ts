@@ -494,7 +494,7 @@ test("accounts handler proxies installation dry-run to installer", async () => {
   });
 });
 
-test("accounts handler applies installation through core installer when configured", async () => {
+test("accounts handler applies installation through space installer when configured", async () => {
   const proxiedRequests: Request[] = [];
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(store, "tsub_core_apply", "acct_core_apply", "space_core");
@@ -603,7 +603,7 @@ test("accounts handler applies installation through core installer when configur
   });
 });
 
-test("accounts handler validates installation facade request before core installer apply", async () => {
+test("accounts handler validates installation facade request before space installer apply", async () => {
   const proxiedRequests: Request[] = [];
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(
@@ -647,7 +647,7 @@ test("accounts handler validates installation facade request before core install
   expect(proxiedRequests.length).toEqual(0);
 });
 
-test("accounts handler applies local source through core installer with local expected guard", async () => {
+test("accounts handler applies local source through space installer with local expected guard", async () => {
   const proxiedRequests: Request[] = [];
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(store, "tsub_core_local", "acct_core_local", "space_core");
@@ -1317,6 +1317,111 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
     const body = await response.text();
     expect(body.includes("launch_readiness_not_complete")).toEqual(false);
   }
+});
+
+test("accounts reference operator distribution exposes Accounts, OIDC, billing, and dashboard routes", async () => {
+  const store = new InMemoryAccountsStore();
+  seedOwnedSpace(store, "tsub_operator", "acct_operator", "space_operator");
+  const sessionId = seedAccountSession(
+    store,
+    "tsub_operator",
+    "sess_operator_distribution",
+  );
+  store.saveAccount({
+    subject: "tsub_operator",
+    email: "operator@example.test",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  const stripeRequests: Request[] = [];
+  const handler = createAccountsHandler({
+    issuer: "https://accounts.example.test",
+    store,
+    jwks: {
+      keys: [{
+        kty: "EC",
+        crv: "P-256",
+        kid: "operator-key",
+        use: "sig",
+        alg: "ES256",
+        x: "x",
+        y: "y",
+      }],
+    },
+    stripeBilling: {
+      secretKey: "sk_test_operator",
+      webhookSecret: "whsec_operator",
+      fetch: (input, init) => {
+        stripeRequests.push(new Request(input, init));
+        return Promise.resolve(Response.json({
+          id: "cs_test_operator",
+          url: "https://checkout.stripe.test/cs_operator",
+        }));
+      },
+      stripeApiBase: "https://api.stripe.test/v1",
+    },
+    billingRedirectAllowlist: ["https://dashboard.example.test"],
+  });
+
+  const health = await handler(new Request(`${testIssuer}/healthz`));
+  const discovery = await handler(
+    new Request(`${testIssuer}/.well-known/openid-configuration`),
+  );
+  const jwks = await handler(new Request(`${testIssuer}/oauth/jwks`));
+  const session = await handler(
+    new Request(`${testIssuer}/v1/account/session/me`, {
+      headers: accountSessionHeaders(sessionId),
+    }),
+  );
+  const dashboardInstall = await handler(
+    new Request(`${testIssuer}/dashboard/install`, {
+      headers: accountSessionHeaders(sessionId),
+    }),
+  );
+  const dashboardInstallations = await handler(
+    new Request(`${testIssuer}/dashboard/installations?space_id=space_operator`, {
+      headers: accountSessionHeaders(sessionId),
+    }),
+  );
+  const checkout = await handler(
+    new Request(`${testIssuer}/v1/billing/stripe/checkout`, {
+      method: "POST",
+      headers: {
+        ...accountSessionHeaders(sessionId),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        subject: "tsub_operator",
+        priceId: "price_operator",
+        mode: "subscription",
+        successUrl: "https://dashboard.example.test/billing/success",
+        cancelUrl: "https://dashboard.example.test/billing/cancel",
+      }),
+    }),
+  );
+
+  expect(health.status).toEqual(200);
+  expect((await health.json()).service).toEqual("takosumi-accounts");
+  expect(discovery.status).toEqual(200);
+  expect((await discovery.json()).issuer).toEqual(
+    "https://accounts.example.test",
+  );
+  expect(jwks.status).toEqual(200);
+  expect((await jwks.json()).keys[0].kid).toEqual("operator-key");
+  expect(session.status).toEqual(200);
+  expect((await session.json()).subject).toEqual("tsub_operator");
+  expect(dashboardInstall.status).toEqual(200);
+  expect(await dashboardInstall.text()).toContain("Takosumi Accounts");
+  expect(dashboardInstallations.status).toEqual(200);
+  expect(await dashboardInstallations.text()).toContain("Installations");
+  expect(checkout.status).toEqual(200);
+  expect((await checkout.json()).url).toEqual(
+    "https://checkout.stripe.test/cs_operator",
+  );
+  expect(stripeRequests.length).toEqual(1);
+  expect(stripeRequests[0].url).toEqual(
+    "https://api.stripe.test/v1/checkout/sessions",
+  );
 });
 
 test("accounts dashboard rechecks budget guard before install apply", async () => {
@@ -3902,7 +4007,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   ]);
 });
 
-test("accounts handler brokers deployment and rollback through core installer", async () => {
+test("accounts handler brokers deployment and rollback through space installer", async () => {
   const store = new InMemoryAccountsStore();
   const now = Date.now();
   store.saveAppInstallation({

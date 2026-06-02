@@ -41,7 +41,7 @@ serveRuntimeAgent({
 
 `takosumi runtime-agent serve` は generic host だけを起動し、connector を自動 discovery しません。実 backend を操作する operator distribution は上のような boot wrapper で `ConnectorRegistry` を渡します。`--env-file` は generic host の env を読むだけで、connector package を自動 import する仕組みではありません。
 
-## Takosumi host {#kernel-host}
+## Takosumi host {#service-host}
 
 Takosumi host は agent endpoint と token だけを知ります。
 

@@ -1,8 +1,8 @@
 // deno-lint-ignore-file no-namespace no-slow-types
 import type { ActorContext, Digest, JsonObject } from "./types.ts";
-import type { ObjectAddress } from "./core-v1.ts";
+import type { ObjectAddress } from "./takosumi-v1.ts";
 import type { TakosumiActorContext } from "./internal-api.ts";
-import type { KernelPlugin } from "./plugin.ts";
+import type { TakosumiPlugin } from "./plugin.ts";
 import {
   RUNTIME_AGENT_RPC_PATHS,
   type SignedGatewayManifest,
@@ -14,7 +14,7 @@ import {
   TAKOSUMI_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
 } from "./runtime-agent.ts";
 
-// Reference deploy-core source payload used by adapter bridges.
+// Reference deploy-space source payload used by adapter bridges.
 export type ReferenceDeploySourcePayload = JsonObject;
 
 export type TakosumiProcessRole =
@@ -1194,7 +1194,7 @@ export namespace secretStore {
 
 export namespace storage {
   export type StorageDomain =
-    | "core"
+    | "space"
     | "deploy"
     | "runtime"
     | "resources"
@@ -1223,7 +1223,7 @@ export namespace storage {
   }
 
   export interface StorageStatementCatalog {
-    readonly core: readonly StorageStatementDescription[];
+    readonly space: readonly StorageStatementDescription[];
     readonly deploy: readonly StorageStatementDescription[];
     readonly runtime: readonly StorageStatementDescription[];
     readonly resources: readonly StorageStatementDescription[];
@@ -1235,7 +1235,7 @@ export namespace storage {
   }
 
   export const storageStatementCatalog: StorageStatementCatalog = {
-    core: [],
+    space: [],
     deploy: [],
     runtime: [],
     resources: [],
@@ -1253,7 +1253,7 @@ export namespace storage {
     ): Promise<T>;
   }
 
-  export interface CoreStorageStores {
+  export interface SpaceStorageStores {
     readonly spaces: AnyStore;
     readonly groups: AnyStore;
     readonly spaceMemberships: AnyStore;
@@ -1291,7 +1291,7 @@ export namespace storage {
   }
 
   export interface StorageTransaction {
-    readonly core: CoreStorageStores;
+    readonly space: SpaceStorageStores;
     readonly deploy: DeployStorageStores;
     readonly runtime: RuntimeStorageStores;
     readonly resources: ResourceStorageStores;
@@ -1324,7 +1324,7 @@ export namespace storage {
       get: () => () => undefined,
     }) as AnyStore;
     return {
-      core: { spaces: anyStore, groups: anyStore, spaceMemberships: anyStore },
+      space: { spaces: anyStore, groups: anyStore, spaceMemberships: anyStore },
       deploy: { deploys: anyStore },
       runtime: {
         desiredStates: anyStore,
@@ -2198,25 +2198,25 @@ export interface AppContext {
   readonly runtimeConfig?: AppRuntimeConfig;
 }
 
-export interface CreatePaaSAppOptions {
+export interface CreateTakosumiServiceOptions {
   readonly role?: TakosumiProcessRole;
   readonly runtimeEnv?: Record<string, string | undefined>;
   readonly runtimeConfig?: AppRuntimeConfig;
-  readonly plugins?: readonly KernelPlugin[];
+  readonly plugins?: readonly TakosumiPlugin[];
   readonly dateClock?: () => Date;
   readonly uuidFactory?: () => string;
   readonly context?: AppContext;
 }
 
-export interface CreatedPaaSApp {
+export interface CreatedTakosumiService {
   readonly app: unknown;
   readonly context: AppContext;
   readonly role: TakosumiProcessRole;
 }
 
-export function createPaaSApp(
-  options: CreatePaaSAppOptions = {},
-): Promise<CreatedPaaSApp> {
+export function createTakosumiService(
+  options: CreateTakosumiServiceOptions = {},
+): Promise<CreatedTakosumiService> {
   const role = options.role ?? processRoleFromEnv(options.runtimeEnv);
   if (options.context) {
     return Promise.resolve({ app: undefined, context: options.context, role });

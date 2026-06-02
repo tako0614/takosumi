@@ -80,21 +80,21 @@ test("install command posts source to /v1/installations", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
-    const captured = await runCommandAgainstFakeKernel(() =>
+    const captured = await runCommandAgainstFakeService(() =>
       installCommand.parseAsync([
         "--space",
         "space_personal",
         "--source",
         "git:https://github.com/acme/app#main",
         "--remote",
-        "https://kernel.example",
+        "https://service.example",
         "--token",
         "installer-token",
       ])
     );
 
     assert.equal(captured.method, "POST");
-    assert.equal(captured.url, "https://kernel.example/v1/installations");
+    assert.equal(captured.url, "https://service.example/v1/installations");
     assert.equal(captured.authorization, "Bearer installer-token");
     assert.deepEqual(captured.body, {
       spaceId: "space_personal",
@@ -110,7 +110,7 @@ test("install dry-run posts source to /v1/installations/dry-run", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
-    const captured = await runCommandAgainstFakeKernel(() =>
+    const captured = await runCommandAgainstFakeService(() =>
       installCommand.parseAsync([
         "dry-run",
         "--space",
@@ -118,7 +118,7 @@ test("install dry-run posts source to /v1/installations/dry-run", async () => {
         "--source",
         "./",
         "--remote",
-        "https://kernel.example/",
+        "https://service.example/",
         "--token",
         "installer-token",
       ])
@@ -127,7 +127,7 @@ test("install dry-run posts source to /v1/installations/dry-run", async () => {
     assert.equal(captured.method, "POST");
     assert.equal(
       captured.url,
-      "https://kernel.example/v1/installations/dry-run",
+      "https://service.example/v1/installations/dry-run",
     );
     assert.deepEqual(captured.body, {
       spaceId: "space_personal",
@@ -143,7 +143,7 @@ test("deploy command posts to an installation deployment endpoint", async () => 
   const env = snapshotEnv();
   try {
     isolateConfig();
-    const captured = await runCommandAgainstFakeKernel(() =>
+    const captured = await runCommandAgainstFakeService(() =>
       deployCommand.parseAsync([
         "ins_123",
         "--source",
@@ -155,7 +155,7 @@ test("deploy command posts to an installation deployment endpoint", async () => 
         "--expected-current-deployment-id",
         "dep_current",
         "--remote",
-        "https://kernel.example",
+        "https://service.example",
         "--token",
         "installer-token",
       ])
@@ -164,7 +164,7 @@ test("deploy command posts to an installation deployment endpoint", async () => 
     assert.equal(captured.method, "POST");
     assert.equal(
       captured.url,
-      "https://kernel.example/v1/installations/ins_123/deployments",
+      "https://service.example/v1/installations/ins_123/deployments",
     );
     assert.deepEqual(captured.body, {
       source: {
@@ -189,14 +189,14 @@ test("deploy dry-run posts to the deployment dry-run endpoint", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
-    const captured = await runCommandAgainstFakeKernel(() =>
+    const captured = await runCommandAgainstFakeService(() =>
       deployCommand.parseAsync([
         "dry-run",
         "ins_123",
         "--source",
         "./",
         "--remote",
-        "https://kernel.example",
+        "https://service.example",
         "--token",
         "installer-token",
       ])
@@ -205,7 +205,7 @@ test("deploy dry-run posts to the deployment dry-run endpoint", async () => {
     assert.equal(captured.method, "POST");
     assert.equal(
       captured.url,
-      "https://kernel.example/v1/installations/ins_123/deployments/dry-run",
+      "https://service.example/v1/installations/ins_123/deployments/dry-run",
     );
     assert.deepEqual(captured.body, {
       source: { kind: "local", url: "./" },
@@ -220,12 +220,12 @@ test("rollback command posts deploymentId to rollback endpoint", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
-    const captured = await runCommandAgainstFakeKernel(() =>
+    const captured = await runCommandAgainstFakeService(() =>
       rollbackCommand.parseAsync([
         "ins_123",
         "dep_old",
         "--remote",
-        "https://kernel.example",
+        "https://service.example",
         "--token",
         "installer-token",
       ])
@@ -234,7 +234,7 @@ test("rollback command posts deploymentId to rollback endpoint", async () => {
     assert.equal(captured.method, "POST");
     assert.equal(
       captured.url,
-      "https://kernel.example/v1/installations/ins_123/rollback",
+      "https://service.example/v1/installations/ins_123/rollback",
     );
     assert.deepEqual(captured.body, { deploymentId: "dep_old" });
   } finally {
@@ -243,7 +243,7 @@ test("rollback command posts deploymentId to rollback endpoint", async () => {
   }
 });
 
-async function runCommandAgainstFakeKernel(
+async function runCommandAgainstFakeService(
   run: () => Promise<unknown>,
 ): Promise<CapturedRequest> {
   const captured: CapturedRequest[] = [];

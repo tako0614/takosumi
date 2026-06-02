@@ -67,7 +67,7 @@ export function isSha256HexDigest(value: string): boolean {
  * this only asserts the `sha256:` scheme and a non-empty digest body. That is
  * enough to reject a digest-typed field carrying arbitrary junk (e.g. "x")
  * while still accepting both the real base64url digests and the shorter forms
- * used in fixtures. Strong provenance still comes from the kernel installer
+ * used in fixtures. Strong provenance still comes from the service installer
  * (which supplies `planSnapshotDigest` from `coreApply.planSnapshotDigest`); this is
  * a format guard on the caller-supplied value recorded in the ledger.
  */

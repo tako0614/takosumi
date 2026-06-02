@@ -39,12 +39,12 @@ under `/v1/installations/*`.
 | `takosumi deploy <installation-id> [--source <source>]` | apply a new Deployment to an Installation |
 | `takosumi deploy dry-run <installation-id> [--source <source>]` | dry-run an Installation update |
 | `takosumi rollback <installation-id> <deployment-id>` | move current pointer to a retained Deployment |
-| `takosumi server [--port] [--no-agent]` | boot the local kernel server |
+| `takosumi server [--port] [--no-agent]` | boot the local Takosumi service |
 | `takosumi runtime-agent serve` | standalone generic agent host |
 | `takosumi runtime-agent list` | show registered connectors on an agent |
 | `takosumi runtime-agent verify` | smoke-test connectors |
 | `takosumi artifact push <file> --kind <kind>` | optional DataAsset upload |
-| `takosumi migrate [--dry-run]` | run kernel DB migrations |
+| `takosumi migrate [--dry-run]` | run Takosumi service DB migrations |
 | `takosumi init [<output>] [--template]` | generic repo metadata starter |
 | `takosumi version` | print version |
 
@@ -59,7 +59,7 @@ Priority:
 
 | Env var | Used by |
 | --- | --- |
-| `TAKOSUMI_REMOTE_URL` | default kernel URL for remote CLI commands |
+| `TAKOSUMI_REMOTE_URL` | default Takosumi service URL for remote CLI commands |
 | `TAKOSUMI_INSTALLER_TOKEN` | bearer token for `/v1/installations/*` |
 | `TAKOSUMI_DEPLOY_TOKEN` | bearer token for optional DataAsset write endpoints |
 | `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target |
@@ -67,6 +67,6 @@ Priority:
 
 ## See also
 
-- `@takosjp/takosumi/kernel`
+- `@takosjp/takosumi`
 - `@takosjp/takosumi/runtime-agent`
 - `@takosjp/takosumi-plugins/connectors`

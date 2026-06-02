@@ -4,7 +4,7 @@ runtime-agent は reference Takosumi topology で使う execution host です。
 
 このページは reference runtime-agent topology の HTTP surface を記述します。Takosumi public conformance surface は Source / Installation / Deployment / PlatformService と Installer API です。別 implementation はこの route set ではなく、同じ Deployment record、binding snapshot、lifecycle outcome を満たす別の execution boundary を持てます。
 
-逆方向の制御 (enroll / heartbeat / lease / drain / gateway manifest) は [Reference Kernel Route Inventory — Runtime-Agent control RPC](./kernel-http-api.md#runtime-agent-control-rpc) 参照。
+逆方向の制御 (enroll / heartbeat / lease / drain / gateway manifest) は [Reference Takosumi Route Inventory — Runtime-Agent control RPC](./service-http-api.md#runtime-agent-control-rpc) 参照。
 
 ## 認証 {#authentication}
 
@@ -16,7 +16,7 @@ runtime-agent は reference Takosumi topology で使う execution host です。
 
 prepared source を読む connector には、reference dispatcher / operator-configured Takosumi が `LifecycleApplyRequest.preparedSource` に resolved source view の runtime-agent transport locator を載せて渡す場合があります。`workingDirectory` は co-located / operator-local dispatch 用の transport locator で、Installer API の `source.kind: "local"` ではありません。portable remote agent には `url` + `digest` を渡します。prepared handoff では Installer API は引き続き `source.kind: "prepared"` を受け取ります。runtime file path は source-root-relative path です。
 
-operator が optional asset extension として `/v1/artifacts` を mount しており、asset bytes 取得が必要な connector には、 reference dispatcher / operator-configured Takosumi が `LifecycleApplyRequest.artifactStore` に `baseUrl` と `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を載せて渡す場合があります。この operator-mounted asset extension は agent token と別の credential family を使い、scope は optional asset extension の `GET /v1/artifacts/:hash` のみ ([Authentication](./kernel-http-api.md#authentication))。 `artifactStore.baseUrl` は operator-owned artifact endpoint を指してよく、 Takosumi Installer API process が blob data plane になることを要求しません。
+operator が optional asset extension として `/v1/artifacts` を mount しており、asset bytes 取得が必要な connector には、 reference dispatcher / operator-configured Takosumi が `LifecycleApplyRequest.artifactStore` に `baseUrl` と `TAKOSUMI_ARTIFACT_FETCH_TOKEN` を載せて渡す場合があります。この operator-mounted asset extension は agent token と別の credential family を使い、scope は optional asset extension の `GET /v1/artifacts/:hash` のみ ([Authentication](./service-http-api.md#authentication))。 `artifactStore.baseUrl` は operator-owned artifact endpoint を指してよく、 Takosumi Installer API process が blob data plane になることを要求しません。
 
 ## エンドポイント {#endpoints}
 
@@ -192,7 +192,7 @@ interface LifecycleVerifyResult {
 
 ## Connector retry / credential refresh {#connector-retry--credential-refresh}
 
-runtime-agent core は `withConnectorResilience()` を提供します。reference connector subpath
+runtime-agent Takosumi は `withConnectorResilience()` を提供します。reference connector subpath
 (`@takosjp/takosumi-plugins/connectors`) の `buildConnectorRegistry()` は connector の lifecycle operation をこの
 wrapper で包みます。 retry 対象は次のみ:
 

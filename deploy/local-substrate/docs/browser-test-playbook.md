@@ -7,14 +7,14 @@ Manually reproducible end-to-end test of the local-substrate's user-facing flows
 ```bash
 cd takosumi/deploy/local-substrate
 bash scripts/up.sh --profile postgres
-# Or use the Worker-first mirror where kernel.takosumi.test is the Takosumi
-# kernel Worker on D1/R2/Queue/DO:
+# Or use the Worker-first mirror where service.takosumi.test is the Takosumi
+# service Worker on D1/R2/Queue/DO:
 # bash scripts/up.sh --profile workers
 sudo bash scripts/ca-install.sh         # trust Pebble issuance root
 sudo bash scripts/configure-dns.sh      # *.takosumi.test → 127.0.0.1
 ```
 
-After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warning). After `configure-dns.sh` the host resolves `accounts.takosumi.test`, `kernel.takosumi.test`, `accounts.takosumi.test`, etc. via CoreDNS.
+After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warning). After `configure-dns.sh` the host resolves `accounts.takosumi.test`, `service.takosumi.test`, `accounts.takosumi.test`, etc. via CoreDNS.
 
 ## Smoke flow A — accounts OIDC discovery
 
@@ -22,16 +22,16 @@ After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warni
 2. Expect: 200 with valid OIDC config JSON, `issuer` = `https://accounts.takosumi.test`
 3. Verify cert chain: chrome:lock → certificate → root = `Pebble Root CA`
 
-## Smoke flow B — kernel admin probe
+## Smoke flow B — service admin probe
 
-1. Navigate: `https://kernel.takosumi.test/health`
-2. Expect with `--profile postgres`: 200 with `{"ok":true,"service":"takosumi","domains":["core","deploy"]}`
-3. Expect with `--profile workers`: 200 from the Takosumi kernel Worker routed through Cloudflare Worker bindings
+1. Navigate: `https://service.takosumi.test/health`
+2. Expect with `--profile postgres`: 200 with `{"ok":true,"service":"takosumi","domains":["space","deploy"]}`
+3. Expect with `--profile workers`: 200 from the Takosumi service Worker routed through Cloudflare Worker bindings
 
-## Smoke flow C — Takosumi kernel Worker probe
+## Smoke flow C — Takosumi service Worker probe
 
-1. Navigate with `--profile postgres`: `https://kernel-worker.takosumi.test/healthz`
-2. Navigate with `--profile workers`: `https://kernel.takosumi.test/healthz`
+1. Navigate with `--profile postgres`: `https://service-worker.takosumi.test/healthz`
+2. Navigate with `--profile workers`: `https://service.takosumi.test/healthz`
 3. Expect: 200 with `{"ok":true,"provider":"cloudflare-worker"}`
 4. Navigate with the same host: `/storage/healthz`
 5. Expect: 200 with `{"ok":true,"storage":"cloudflare-d1-r2"}`

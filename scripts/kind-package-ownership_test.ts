@@ -9,8 +9,8 @@ import {
 // Takosumi is a kind-agnostic framework. The official portable kind catalog is
 // published *spec*, not framework source: each descriptor is flat JSON-LD under
 // docs/kinds/v1/<name>.jsonld, served at https://takosumi.com/kinds/v1/<name>.
-// The kernel / contract / installer / cli / runtime-agent import none of them.
-// Backend-specific native kind descriptors + their KernelPlugin implementations
+// The service / contract / installer / cli / runtime-agent import none of them.
+// Backend-specific native kind descriptors + their TakosumiPlugin implementations
 // live in the sibling ../takosumi-plugins repository.
 const ROOT = new URL("../", import.meta.url);
 const CATALOG_ROOT = new URL("docs/kinds/v1/", ROOT);
@@ -31,7 +31,7 @@ const PORTABLE_KINDS = [
 // descriptor (that is what "kind-agnostic" means, RFC 0001).
 const FRAMEWORK_SOURCE_DIRS = [
   "src/contract/",
-  "src/kernel/",
+  "src/service/",
   "src/installer/",
   "src/cli/",
   "src/runtime-agent/",
@@ -282,9 +282,9 @@ test("takosumi scripts use narrow contract subpaths", async () => {
   }
 });
 
-test("kernel plugin registry uses the plugin contract subpath", async () => {
+test("service plugin registry uses the plugin contract subpath", async () => {
   const broadCompatSubpath = "takosumi-contract/reference/" + "compat";
-  const files = await listTsFiles(new URL("src/kernel/plugins/", ROOT));
+  const files = await listTsFiles(new URL("src/service/plugins/", ROOT));
   for (const file of files) {
     const source = await readText(file);
     assert.equal(

@@ -4,14 +4,14 @@
  * The old implementation polled the removed legacy deployment route
  * (`/v1/deployments`) for `desired.routes[]`. Takosumi v1's public surface is
  * now the installer API; it intentionally does not expose a deployment list.
- * The postgres-profile kernel wrapper writes a local operator projection file
+ * The postgres-profile service wrapper writes a local operator projection file
  * whenever the CoreDNS gateway adapter applies a gateway component. This
  * process reads that local projection and turns it into Caddy routes.
  *
  * Static / dynamic partition strategy (no Caddy @id required):
  *
  *   - Static routes (owned by Caddyfile): hosts like accounts.takosumi.test and
- *     kernel.takosumi.test — these do not use the dynamic app suffix.
+ *     service.takosumi.test — these do not use the dynamic app suffix.
  *   - Dynamic routes (owned by us): any route whose first matcher's host
  *     ends in `.app.takosumi.test`.
  *
@@ -26,7 +26,7 @@
 
 import { readFile } from "node:fs/promises";
 
-const KERNEL_URL = process.env.KERNEL_URL ?? "http://kernel:8788";
+const SERVICE_URL = process.env.SERVICE_URL ?? "http://service:8788";
 const CADDY_ADMIN_URL = process.env.CADDY_ADMIN_URL ??
   "http://caddy:2019";
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? "5000");
@@ -36,16 +36,16 @@ const GATEWAY_ROUTE_PROJECTION_FILE =
   process.env.GATEWAY_ROUTE_PROJECTION_FILE ??
     "/local-substrate-runtime/gateway-routes.json";
 
-interface KernelDeploymentRoute {
+interface ServiceDeploymentRoute {
   readonly host?: string;
   readonly pathPrefix?: string;
   readonly upstreamDial?: string;
 }
 
-interface KernelDeployment {
+interface ServiceDeployment {
   readonly id: string;
   readonly status: string;
-  readonly desired?: { readonly routes?: readonly KernelDeploymentRoute[] };
+  readonly desired?: { readonly routes?: readonly ServiceDeploymentRoute[] };
 }
 
 interface CaddyMatcher {
@@ -59,8 +59,8 @@ interface CaddyRoute {
   readonly terminal?: boolean;
 }
 
-async function fetchAppliedDeployments(): Promise<readonly KernelDeployment[]> {
-  void KERNEL_URL;
+async function fetchAppliedDeployments(): Promise<readonly ServiceDeployment[]> {
+  void SERVICE_URL;
   const records = await readGatewayProjection(GATEWAY_ROUTE_PROJECTION_FILE);
   return records.map((record) => ({
     id: record.recordName,
@@ -98,11 +98,11 @@ function isDynamicRoute(route: CaddyRoute): boolean {
   );
 }
 
-function caddyRouteFor(route: KernelDeploymentRoute): CaddyRoute | null {
+function caddyRouteFor(route: ServiceDeploymentRoute): CaddyRoute | null {
   if (!route.host || !route.upstreamDial) return null;
   if (!route.host.endsWith(DYNAMIC_HOST_SUFFIX)) {
     console.warn(
-      `[route-registrar] kernel emitted route for host=${route.host} which does not end in ${DYNAMIC_HOST_SUFFIX}; skipping`,
+      `[route-registrar] service emitted route for host=${route.host} which does not end in ${DYNAMIC_HOST_SUFFIX}; skipping`,
     );
     return null;
   }
@@ -167,7 +167,7 @@ async function tick(): Promise<void> {
 }
 
 console.log(
-  `[route-registrar] watching ${KERNEL_URL} -> ${CADDY_ADMIN_URL} every ${POLL_INTERVAL_MS}ms ` +
+  `[route-registrar] watching ${SERVICE_URL} -> ${CADDY_ADMIN_URL} every ${POLL_INTERVAL_MS}ms ` +
     `(dynamic host suffix=${DYNAMIC_HOST_SUFFIX}, projection=${GATEWAY_ROUTE_PROJECTION_FILE})`,
 );
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Object round-trip against the local MinIO (R2-compatible) to make sure
-# the kernel's object-store provider has a working backend.
+# the service's object-store provider has a working backend.
 #
 # Uses minio/mc inside the substrate docker network. Writes a deterministic
 # blob, reads it back, asserts sha256 matches, then cleans up.

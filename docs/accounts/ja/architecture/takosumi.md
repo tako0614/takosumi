@@ -1,10 +1,10 @@
 # Takosumi アーキテクチャ {#takosumi-architecture}
 
-Takosumi は Takosumi core と account/operator 実装を組み合わせます。
+Takosumi は Takosumi と account/operator 実装を組み合わせます。
 
 | Component | Responsibility |
 | --- | --- |
-| Takosumi core | Source guard、Installation / Deployment、Installer API |
+| Takosumi | Source guard、Installation / Deployment、Installer API |
 | Takosumi Accounts | account session、OIDC、billing、projection ledger、launch token、facade |
 | Dashboard | Accounts API と projection record の UI |
 | Provider/runtime adapters | PlatformService の materialization と provider evidence |

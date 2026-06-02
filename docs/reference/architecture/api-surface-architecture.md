@@ -1,7 +1,7 @@
 # API Surface アーキテクチャ {#api-surface-architecture}
 
 ::: info
-内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。endpoint reference は [Reference Kernel Route Inventory](../kernel-http-api.md) が一次資料。
+内部設計メモ。public contract は [Installer API](../installer-api.md) を参照。endpoint reference は [Reference Takosumi Route Inventory](../service-http-api.md) が一次資料。
 :::
 
 本ページは surface split の設計判断だけを扱う。
@@ -49,7 +49,7 @@ Installation / Deployment の参照 API は operator が公開する互換 surfa
 
 ## クロスリファレンス {#cross-references}
 
-- [Reference Kernel Route Inventory](../kernel-http-api.md)
+- [Reference Takosumi Route Inventory](../service-http-api.md)
 - [Installer API](../installer-api.md)
 - [Reference Runtime-Agent Execution Surface](../runtime-agent-api.md)
 - [Lifecycle Protocol](../lifecycle.md)

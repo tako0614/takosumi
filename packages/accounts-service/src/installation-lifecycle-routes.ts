@@ -121,7 +121,7 @@ import {
 
 /**
  * Whitelist the fields we are willing to echo from an upstream installer
- * error envelope back to the Cloud caller. The installer (Takosumi core)
+ * error envelope back to the Cloud caller. The installer (Takosumi)
  * may include implementation details, stack traces, or operator-private
  * context in its `payload`; surfacing those verbatim was an information
  * leak (Round 1 finding). Only `code`, `message`, the non-sensitive
@@ -237,7 +237,7 @@ async function applyCoreInstallationForCloudProjection(input: {
     const upstream = sanitizeUpstreamErrorPayload(result.payload);
     return json({
       error: "failed_precondition",
-      error_description: "Takosumi core installation apply failed",
+      error_description: "Takosumi installation apply failed",
       ...(upstream ? { upstream } : {}),
     }, result.status);
   }
@@ -262,7 +262,7 @@ async function dryRunCoreDeploymentForCloudProjection(input: {
     const upstream = sanitizeUpstreamErrorPayload(result.payload);
     return json({
       error: "failed_precondition",
-      error_description: "Takosumi core deployment dry-run failed",
+      error_description: "Takosumi deployment dry-run failed",
       ...(upstream ? { upstream } : {}),
     }, result.status);
   }
@@ -284,7 +284,7 @@ async function applyCoreDeploymentForCloudProjection(input: {
     return json({
       error: "invalid_request",
       error_description:
-        "deployment apply through the Takosumi core installer requires expected from deployment dry-run",
+        "deployment apply through the Takosumi installer requires expected from deployment dry-run",
     }, 400);
   }
   const result = await requestDeploymentApply({
@@ -296,7 +296,7 @@ async function applyCoreDeploymentForCloudProjection(input: {
     const upstream = sanitizeUpstreamErrorPayload(result.payload);
     return json({
       error: "failed_precondition",
-      error_description: "Takosumi core deployment apply failed",
+      error_description: "Takosumi deployment apply failed",
       ...(upstream ? { upstream } : {}),
     }, result.status);
   }
@@ -312,7 +312,7 @@ async function rollbackCoreDeploymentForCloudProjection(input: {
     return json({
       error: "invalid_request",
       error_description:
-        "rollback through the Takosumi core installer requires deploymentId",
+        "rollback through the Takosumi installer requires deploymentId",
     }, 400);
   }
   const result = await requestRollback({
@@ -324,7 +324,7 @@ async function rollbackCoreDeploymentForCloudProjection(input: {
     const upstream = sanitizeUpstreamErrorPayload(result.payload);
     return json({
       error: "failed_precondition",
-      error_description: "Takosumi core rollback failed",
+      error_description: "Takosumi rollback failed",
       ...(upstream ? { upstream } : {}),
     }, result.status);
   }
@@ -393,7 +393,7 @@ function coreInstallationProjectionFromApply(
     return json({
       error: "feature_unavailable",
       error_description:
-        "Takosumi core installation apply returned a non-object response",
+        "Takosumi installation apply returned a non-object response",
     }, 502);
   }
   const installation = isRecord(payload.installation)
@@ -430,7 +430,7 @@ function coreInstallationProjectionFromApply(
     return json({
       error: "feature_unavailable",
       error_description:
-        "Takosumi core installation apply response is missing installation/deployment projection fields",
+        "Takosumi installation apply response is missing installation/deployment projection fields",
     }, 502);
   }
   return {
@@ -453,7 +453,7 @@ function coreDeploymentProjectionFromDryRun(
     return json({
       error: "feature_unavailable",
       error_description:
-        "Takosumi core deployment dry-run returned a non-object response",
+        "Takosumi deployment dry-run returned a non-object response",
     }, 502);
   }
   const projection = coreDeploymentProjectionFromDeploymentLike({
@@ -473,7 +473,7 @@ function coreDeploymentProjectionFromApply(
     return json({
       error: "feature_unavailable",
       error_description:
-        "Takosumi core deployment apply returned a non-object response",
+        "Takosumi deployment apply returned a non-object response",
     }, 502);
   }
   const deployment = isRecord(payload.deployment)
@@ -489,7 +489,7 @@ function coreDeploymentProjectionFromRollback(
     return json({
       error: "feature_unavailable",
       error_description:
-        "Takosumi core rollback returned a non-object response",
+        "Takosumi rollback returned a non-object response",
     }, 502);
   }
   const deployment = isRecord(payload.deployment)
@@ -529,7 +529,7 @@ function coreDeploymentProjectionFromDeploymentLike(input: {
     return json({
       error: "feature_unavailable",
       error_description:
-        "Takosumi core deployment response is missing deployment projection fields",
+        "Takosumi deployment response is missing deployment projection fields",
     }, 502);
   }
   return {
@@ -802,7 +802,7 @@ export async function handleCreateAppInstallation(input: {
     return json({
       error: "invalid_request",
       error_description:
-        "installationId is assigned by the Takosumi core installer for this Takosumi Accounts facade",
+        "installationId is assigned by the Takosumi installer for this Takosumi Accounts facade",
     }, 400);
   }
   if (
@@ -873,9 +873,9 @@ export async function handleCreateAppInstallation(input: {
   // (D1 `INSERT OR REPLACE`; Postgres `ON CONFLICT DO UPDATE`), so two
   // concurrent creates with the same caller-influenced installationId can
   // both pass this check and the second silently overwrites the first. The
-  // common path is safe: when `input.installer` is wired the core installer
+  // common path is safe: when `input.installer` is wired the space installer
   // assigns the id (a caller-supplied requestedInstallationId is rejected
-  // above), and core-assigned/random ids do not collide. Fully closing the
+  // above), and space-assigned/random ids do not collide. Fully closing the
   // no-installer + caller-supplied-id race requires an atomic putIfAbsent
   // on `saveAppInstallation` in the store implementations.
   if (await input.store.findAppInstallation(installationId)) {
@@ -2281,7 +2281,7 @@ async function handleCoreInstallerBackedRevision(input: {
     return json({
       error: "invalid_request",
       error_description:
-        "deployment through the Takosumi core installer requires source.ref plus expected.commit and expected.planSnapshotDigest from deployment dry-run",
+        "deployment through the Takosumi installer requires source.ref plus expected.commit and expected.planSnapshotDigest from deployment dry-run",
     }, 400);
   }
   if (

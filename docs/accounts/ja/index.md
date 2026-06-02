@@ -1,14 +1,14 @@
 # Takosumi Docs {#takosumi-accounts-docs}
 
-Takosumi は Takosumi core を使う reference operator distribution です。
+Takosumi は Takosumi を使う reference operator distribution です。
 Cloud 固有の account、OIDC、billing、dashboard、approval、deploy facade、
 PlatformService inventory、provider evidence を定義します。
 
 まず [Takosumi Distribution Contract v1](./spec.md) を読んでください。
-Takosumi core の Source / Installation / Deployment / Installer API は
+Takosumi の Source / Installation / Deployment / Installer API は
 Takosumi docs が正本です。
 
-## Core Contract
+## Takosumi Contract
 
 - [Cloud Distribution Contract v1](./spec.md)
 - [Account-Plane Profile](./operator-account-plane-profile.md)
