@@ -1,20 +1,20 @@
 # Takosumi {#takosumi-distribution}
 
-Takosumi は Takosumi core を使う reference operator distribution です。
+Takosumi は Takosumi を使う reference operator distribution です。
 Cloud は account、billing、OIDC、dashboard、approval、deploy facade、
-PlatformService inventory、Terraform/OpenTofu state を持ちます。
+PlatformService inventory、OpenTofu state を持ちます。
 
 ## Ownership
 
 | Surface                                      | Owner                                    |
 | -------------------------------------------- | ---------------------------------------- |
-| Source / Installation / Deployment           | [Takosumi core](./core-spec.md)          |
+| Source / Installation / Deployment           | [Takosumi](./takosumi-v1.md)          |
 | Installer API                                | [Installer API](./installer-api.md)      |
 | PlatformService inventory / binding policy   | Takosumi distribution              |
 | Accounts / OIDC / billing / dashboard        | Takosumi distribution              |
-| Terraform/OpenTofu state / provider evidence | Takosumi distribution / operator   |
+| OpenTofu state / provider evidence | Takosumi distribution / operator   |
 
-Takosumi core は Cloud の inventory を通じて PlatformService を resolve し、
+Takosumi は Cloud の inventory を通じて PlatformService を resolve し、
 Deployment に binding snapshot と outputs を記録します。Cloud 固有の service
 path、account-facing projection、approval record、launch token、billing behavior、
 dashboard API は Cloud docs が正本です。

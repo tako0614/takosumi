@@ -17,7 +17,7 @@ Accounts API base URL 上の facade endpoint は Installer API endpoint と同�
 | Upstream identity / passkey | `/v1/auth/upstream/*`, `/v1/auth/passkeys/*`                                                                                                    |
 | Account / PAT               | `GET/POST /v1/account/tokens`, `POST /v1/account/tokens/{tokenId}/revoke`                                                                       |
 | Billing usage               | `POST /v1/installations/{id}/billing/usage-reports`                                                                                             |
-| Installer facade            | five `/v1/installations*` core workflow routes                                                                                                  |
+| Installer facade            | five `/v1/installations*` Takosumi workflow routes                                                                                                  |
 | Lifecycle read/mutation     | list/get/delete/status/materialize/export/import/events                                                                                         |
 | Launch token                | `POST /v1/installations/{id}/launch-token/consume`                                                                                              |
 | Dashboard                   | account session で guard された browser-rendered view                                                                                           |
@@ -69,7 +69,7 @@ bundle に紐づけます。
 閉じたままにする public surface は `/start`、`/dashboard/use-takos`、core OAuth authorize/token、personal access token
 create、`/v1/installations/dry-run`、`/v1/installations`、`/v1/installations/import`、dashboard install dry-run/apply、
 deployment/materialize/export access mutations、install/deployment 内の OIDC client / permission scope materialization、
-status ready/reopen patch、dashboard deployment operations、launch-token creation/consume、upstream OAuth authorize/callback、
+status ready/reopen patch、ready or installing、dashboard deployment operations、launch-token creation/consume、upstream OAuth authorize/callback、
 `/v1/billing/stripe/checkout`、passkey register / authenticate route です。
 
 ## Projection And Events

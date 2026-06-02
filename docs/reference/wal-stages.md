@@ -76,7 +76,7 @@ WAL の各 entry は次の tuple で一意識別:
 
 - `spaceId`: entry の Space ID。 Cross-Space で同 tuple は出現しません。
 - `operationPlanDigest`: prepare stage で確定した OperationPlan content digest。 OperationPlan が変われば必ず別値。
-- `journalEntryId`: OperationPlan 内 entry を識別する ULID。 kernel が prepare 時に発行し、 retry 中も保持。
+- `journalEntryId`: OperationPlan 内 entry を識別する ULID。 Takosumi service が prepare 時に発行し、 retry 中も保持。
 
 生成 timing は prepare stage の最初の WAL append。 retry でも同じ `journalEntryId` を再利用し、新規 ULID は発行しません。 Takosumi が prepare 時に発行します。
 
@@ -97,7 +97,7 @@ Reference internal recovery modes:
 - `continue`: requested phase と `operationPlanDigest` が unfinished WAL と一致時のみ同 OperationPlan を再実行。 idempotency tuple が変わらず外部 request token も同じ。 digest 変化は recovery ではなく新 intent として `failed_precondition`
 - `compensate`: 同 digest / phase の unfinished WAL が `commit` / `post-commit` / `observe` まで進んでいる場合のみ terminal `abort` を追記し、各 OperationPlan entry に `activation-rollback` CleanupBacklog を enqueue。 `prepare` / `pre-commit` だけの WAL は actual effect が無いため compensate 対象外で `failed_precondition`
 
-Installer API の public route は install / deploy / rollback を扱います。`continue` / `compensate` は reference kernel の internal recovery tooling が使う mode であり、Installer API request body の mode ではありません。
+Installer API の public route は install / deploy / rollback を扱います。`continue` / `compensate` は Takosumi service の internal recovery tooling が使う mode であり、Installer API request body の mode ではありません。
 
 ## Deployment provenance
 
@@ -107,7 +107,7 @@ operator automation may supply source / provenance の記録を reference Takosu
 - operator が provenance を operation identity に含めたい場合は `operationPlanDigest` の入力 evidence として記録する
 - status / recovery inspect response は audit consumer 向けに記録済 provenance digest を返せる
 
-これで upstream automation は prepared source digest → workflow run id → git commit SHA → step log digest の traceability を、kernel に workflow を持ち込まずに永続化できます。
+これで upstream automation は prepared source digest → workflow run id → git commit SHA → step log digest の traceability を、service に workflow を持ち込まずに永続化できます。
 
 ## Pre/post-commit verification lifecycle {#prepost-commit-verification-lifecycle}
 

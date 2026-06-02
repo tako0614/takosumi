@@ -6,7 +6,7 @@ The local-substrate mirrors production using `.test` TLDs:
 | ------------------------------------------ | -------------------------------------- | --------------------------------------------------------------------------- |
 | `https://takosumi.com/`                    | `https://takosumi.test/`               | Cloudflare Pages (prod) / Caddy file_server (local)                         |
 | `https://accounts.takosumi.com/`              | `https://accounts.takosumi.test/`         | Accounts Cloudflare Worker + D1 + R2 (prod) / Miniflare + SQLite/R2 (local) |
-| operator-selected Takosumi kernel hostname | `https://kernel-worker.takosumi.test/` | Takosumi kernel Worker + D1/R2/Queues/DO (prod) / Miniflare local binds     |
+| operator-selected Takosumi service hostname | `https://service-worker.takosumi.test/` | Takosumi service Worker + D1/R2/Queues/DO (prod) / Miniflare local binds     |
 
 Once the local mirror passes `scripts/smoke.sh`, follow this runbook to push the same artifacts to real Cloudflare. The Worker code is byte-for- byte identical; only DNS / binding IDs / secrets differ.
 
@@ -51,9 +51,9 @@ Verify:
 curl https://accounts.takosumi.com/.well-known/openid-configuration
 ```
 
-## Step 2 — Takosumi kernel Worker
+## Step 2 — Takosumi service Worker
 
-The Takosumi kernel Worker is owned by `takosumi/deploy/cloudflare/`. It is Worker-first and uses Cloudflare bindings directly: D1 for kernel snapshots / Installation and Deployment records, R2 for artifacts, Queues for enqueue, and Durable Objects for coordination.
+The Takosumi service Worker is owned by `takosumi/deploy/cloudflare/`. It is Worker-first and uses Cloudflare bindings directly: D1 for service snapshots / Installation and Deployment records, R2 for artifacts, Queues for enqueue, and Durable Objects for coordination.
 
 ```sh
 cd takosumi/
@@ -77,17 +77,17 @@ wrangler secret put TAKOSUMI_AGENT_TOKEN --config deploy/cloudflare/wrangler.tom
 wrangler deploy --config deploy/cloudflare/wrangler.toml
 ```
 
-Add the operator-owned route or custom domain for the kernel Worker in Cloudflare after choosing the public/private API hostname. The local-substrate intentionally exposes the mirror as `kernel-worker.takosumi.test` so it can be checked beside the default Bun+Postgres kernel at `kernel.takosumi.test`.
+Add the operator-owned route or custom domain for the service Worker in Cloudflare after choosing the public/private API hostname. The local-substrate intentionally exposes the mirror as `service-worker.takosumi.test` so it can be checked beside the default Bun+Postgres service at `service.takosumi.test`.
 
 Verify:
 
 ```sh
-curl https://<kernel-host>/healthz
-curl https://<kernel-host>/storage/healthz
-curl https://<kernel-host>/coordination/healthz
+curl https://<service-host>/healthz
+curl https://<service-host>/storage/healthz
+curl https://<service-host>/coordination/healthz
 curl -X POST -H "Content-Type: application/json" \
   -d '{"kind":"smoke"}' \
-  https://<kernel-host>/queue/test
+  https://<service-host>/queue/test
 ```
 
 ## Step 3 — takosumi.com website (landing + /docs/ + /contexts/, Cloudflare Pages)
@@ -130,7 +130,7 @@ In the `takosumi.com` Cloudflare zone you should now have:
 | ----------------- | ------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------- |
 | `A` / Pages route | `@` (takosumi.com)       | (managed by Pages)             | yes                                                                                          |
 | Worker route      | `accounts.takosumi.com`     | takosumi-accounts Worker | (no DNS record needed for `*.com/*` Worker routes — Cloudflare matches on the route pattern) |
-| Worker route      | operator kernel hostname | takosumi kernel Worker         | choose operator-owned public/private hostname and route policy                               |
+| Worker route      | operator service hostname | takosumi service Worker         | choose operator-owned public/private hostname and route policy                               |
 
 If using a separate CNAME for `accounts.takosumi.com`, add it pointing anywhere — the Worker route intercepts before DNS resolution matters.
 
@@ -140,7 +140,7 @@ If using a separate CNAME for `accounts.takosumi.com`, add it pointing anywhere 
 # Accounts Worker
 wrangler rollback --config takosumi/deploy/cloudflare/wrangler.toml
 
-# Kernel Worker
+# Service Worker
 wrangler rollback --config takosumi/deploy/cloudflare/wrangler.toml
 
 # Pages
@@ -158,4 +158,4 @@ takosumi/deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs
 
 The build containers produce them; Miniflare runs them locally with emulated D1/R2/Queues/DO bindings. The difference between local and prod is the provider-managed binding backend and the binding / secret values. Code path is identical.
 
-If `accounts.takosumi.test/.well-known/openid-configuration` returns 200 in local-substrate, the same Worker route should work on `accounts.takosumi.com` only after Cloudflare-side DNS/TLS, route, D1/R2 binding IDs, and secrets are validated and recorded as launch-readiness evidence. If `kernel-worker.takosumi.test/{healthz,storage/healthz,coordination/healthz,queue/test}` passes locally, the kernel Worker bundle has booted with the same Cloudflare binding contract that production uses.
+If `accounts.takosumi.test/.well-known/openid-configuration` returns 200 in local-substrate, the same Worker route should work on `accounts.takosumi.com` only after Cloudflare-side DNS/TLS, route, D1/R2 binding IDs, and secrets are validated and recorded as launch-readiness evidence. If `service-worker.takosumi.test/{healthz,storage/healthz,coordination/healthz,queue/test}` passes locally, the service Worker bundle has booted with the same Cloudflare binding contract that production uses.

@@ -91,7 +91,7 @@ data restore:
 
 ## Internal dry materialization and approval carry {#internal-dry-materialization-and-approval-carry}
 
-このセクションは operator / reference kernel の approval 実装を記述します。core の dry-run response は `changes[]` と `expected` に留まります。account layer の approval prompt、prediction digest、approval token、risk summary は operator extension field または account layer API record です。
+このセクションは operator / Takosumi service の approval 実装を記述します。Takosumi v1 の dry-run response は `changes[]` と `expected` に留まります。account layer の approval prompt、prediction digest、approval token、risk summary は operator extension field または account layer API record です。
 
 resolution が `require-approval` Risk を surface したとき、reference Takosumi / operator の approval 設定は **dry-materialized prediction** を生成し、承認者に同意を求める effect digest を捕捉する。
 

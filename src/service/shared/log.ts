@@ -1,0 +1,210 @@
+/**
+ * Substrate-level structured logger for the Takosumi service.
+ *
+ * The Takosumi service is the deploy substrate: it boots before apps are
+ * wired and emits diagnostics before `createTakosumiService` returns. A logger
+ * that depended on the runtime context would not be reachable from the
+ * earliest startup hooks (env validation, encryption guards, retention
+ * GC) so this module is intentionally:
+ *
+ *  - zero-dependency (no contract / observability / runtime imports)
+ *  - synchronous (one write per `info` / `warn` / `error` call)
+ *  - free of module-level side effects (no host env reads at load time;
+ *    the format is resolved lazily on first emit so tests that scope env
+ *    are not racing module evaluation)
+ *  - runtime-neutral (reads env through the RuntimeAdapter, so the same
+ *    module works on Deno / Node / Cloudflare Workers without changes)
+ *
+ * Output shape (`json` format, one line per event):
+ *
+ *   {
+ *     "level": "info",
+ *     "msg": "takosumi.service.boot.starting",
+ *     "ts":  "2026-05-14T09:00:00.000Z",
+ *     "service": "takosumi-service",
+ *     "event": "takosumi.service.boot.starting",
+ *     ...keys
+ *   }
+ *
+ * `event` is the stable dot-separated identifier (`takosumi.service.<area>.<verb>`)
+ * that downstream pipelines key on. The free-form `msg` field mirrors it
+ * so a single string column captures both human-readable and machine
+ * filtering needs (matches the yurucommu logger contract).
+ *
+ * Format selection:
+ *  - `TAKOSUMI_LOG_FORMAT=json|pretty` overrides explicitly
+ *  - otherwise: `pretty` when `TAKOSUMI_ENVIRONMENT` / `NODE_ENV` is
+ *    `local` or `development` (or unset), `json` everywhere else.
+ *
+ * Stderr vs stdout:
+ *  - `warn` / `error` → stderr (so operator log scrapers can separate)
+ *  - `info` → stdout (standard convention; service boot diagnostics are
+ *    informational unless they include `level=error`)
+ *
+ * Migration note: pre-logger boot diagnostics used inline strings such
+ * as `[takosumi-init] storage migrations up-to-date (3 applied)`. Each such
+ * call site now becomes
+ * `log.info("takosumi.service.boot.storage_migrations_up_to_date", { applied: 3 })`
+ * — the prefix-style tag is encoded structurally instead of textually.
+ */
+
+import { currentRuntime } from "./runtime/index.ts";
+
+export type TakosumiLogLevel = "info" | "warn" | "error";
+
+export interface TakosumiLogFields {
+  readonly [key: string]: unknown;
+}
+
+export interface TakosumiLogger {
+  info(event: string, fields?: TakosumiLogFields): void;
+  warn(event: string, fields?: TakosumiLogFields): void;
+  error(event: string, fields?: TakosumiLogFields): void;
+}
+
+export type TakosumiLogFormat = "json" | "pretty";
+
+export interface TakosumiLoggerOptions {
+  readonly service?: string;
+  readonly format?: TakosumiLogFormat;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly now?: () => Date;
+  readonly stdout?: (line: string) => void;
+  readonly stderr?: (line: string) => void;
+}
+
+const DEFAULT_SERVICE = "takosumi-service";
+
+function normalizeError(value: unknown): Record<string, unknown> {
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+  }
+  return { message: String(value) };
+}
+
+function normalizeFields(
+  fields: TakosumiLogFields | undefined,
+): Record<string, unknown> {
+  if (!fields) return {};
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    out[key] = value instanceof Error ? normalizeError(value) : value;
+  }
+  return out;
+}
+
+function resolveDefaultFormat(
+  env: Readonly<Record<string, string | undefined>>,
+): TakosumiLogFormat {
+  const explicit = env.TAKOSUMI_LOG_FORMAT?.toLowerCase();
+  if (explicit === "json" || explicit === "pretty") return explicit;
+  const environment = (env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? "local")
+    .toLowerCase();
+  if (
+    environment === "local" || environment === "development" ||
+    environment === "dev" || environment === "test"
+  ) {
+    return "pretty";
+  }
+  return "json";
+}
+
+function safeEnv(): Readonly<Record<string, string | undefined>> {
+  // Read env via the runtime adapter so this module compiles and runs
+  // on Deno, Node, Cloudflare Workers, or any Web-standard JS runtime.
+  // The adapter wraps the underlying API in try/catch, so a sandboxed
+  // context (e.g. plugin unit tests without --allow-env) gets an empty
+  // object instead of an exception.
+  try {
+    return currentRuntime().env.toObject();
+  } catch (_error) {
+    return {};
+  }
+}
+
+class TakosumiLoggerImpl implements TakosumiLogger {
+  readonly #service: string;
+  readonly #format: TakosumiLogFormat;
+  readonly #now: () => Date;
+  readonly #stdout: (line: string) => void;
+  readonly #stderr: (line: string) => void;
+
+  constructor(options: TakosumiLoggerOptions = {}) {
+    const env = options.env ?? safeEnv();
+    this.#service = options.service ?? DEFAULT_SERVICE;
+    this.#format = options.format ?? resolveDefaultFormat(env);
+    this.#now = options.now ?? (() => new Date());
+    this.#stdout = options.stdout ?? defaultStdout;
+    this.#stderr = options.stderr ?? defaultStderr;
+  }
+
+  info(event: string, fields?: TakosumiLogFields): void {
+    this.#emit("info", event, fields);
+  }
+
+  warn(event: string, fields?: TakosumiLogFields): void {
+    this.#emit("warn", event, fields);
+  }
+
+  error(event: string, fields?: TakosumiLogFields): void {
+    this.#emit("error", event, fields);
+  }
+
+  #emit(
+    level: TakosumiLogLevel,
+    event: string,
+    fields: TakosumiLogFields | undefined,
+  ): void {
+    const ts = this.#now().toISOString();
+    const data = normalizeFields(fields);
+    const sink = level === "info" ? this.#stdout : this.#stderr;
+    if (this.#format === "json") {
+      sink(JSON.stringify({
+        level,
+        msg: event,
+        ts,
+        service: this.#service,
+        event,
+        ...data,
+      }));
+      return;
+    }
+    const extra = Object.keys(data).length > 0
+      ? " " + JSON.stringify(data)
+      : "";
+    sink(`${ts} ${level.toUpperCase()} [${this.#service}] ${event}${extra}`);
+  }
+}
+
+function defaultStdout(line: string): void {
+  // Keep this as a single console.log so structured output is emitted
+  // consistently under Bun, Node, Deno, and test harnesses.
+  console.log(line);
+}
+
+function defaultStderr(line: string): void {
+  console.error(line);
+}
+
+/**
+ * Create a Takosumi service logger. Each top-level boot hook / handler should
+ * obtain its own instance (or share the default `log` export below) so
+ * that test harnesses can inject a sink without monkey-patching
+ * `console.*`.
+ */
+export function createTakosumiLogger(
+  options: TakosumiLoggerOptions = {},
+): TakosumiLogger {
+  return new TakosumiLoggerImpl(options);
+}
+
+/**
+ * Default Takosumi service logger. Intended for top-level boot diagnostics in
+ * `index.ts` and other module-load-time call sites; service-internal
+ * components should accept an injected `TakosumiLogger` for testability.
+ */
+export const log: TakosumiLogger = createTakosumiLogger();

@@ -1,10 +1,17 @@
-# Retired v0 Manifest Page {#retired-v0-manifest}
+# Retired Takosumi Manifest Page {#retired-v0-manifest}
 
-Takosumi v1 is manifestless. A source repository does not need a Takosumi-specific source DSL or metadata field.
+Takosumi v1 does not use `.takosumi` or any Takosumi-specific source metadata
+file. Source repositories use generic repo metadata, and operator-owned
+OpenTofu modules can publish evaluated outputs such as app metadata or
+PlatformService inventory.
+
+Takosumi consumes the result as Source / Installation / Deployment /
+PlatformService evidence. It does not parse HCL, run `tofu apply`, or own
+OpenTofu state locks.
 
 Use these current pages instead:
 
-- [Takosumi core 仕様](./core-spec.md)
+- [Takosumi v1](./takosumi-v1.md)
 - [Installer API](./installer-api.md)
 - [プラットフォームサービス](./platform-services.md)
 

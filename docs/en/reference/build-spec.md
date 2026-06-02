@@ -1,7 +1,7 @@
 # Build Service Boundary {#build-service-boundary}
 
-Takosumi core does not run builds. A build service, CI system, or operator
-automation can prepare source before calling the Installer API. Core receives
+Takosumi does not run builds. A build service, CI system, or operator
+automation can prepare source before calling the Installer API. Takosumi receives
 only the URL, digest, and metadata submitted as `source.kind: "prepared"`.
 
 ## Handoff Flow
@@ -36,7 +36,7 @@ payload bytes.
 ## Build Service Profile
 
 Operators may define any build-service profile. It can be YAML, JSON, hosted CI
-workflow configuration, repository convention, or UI input. Takosumi core does
+workflow configuration, repository convention, or UI input. Takosumi does
 not make that profile part of the public contract.
 
 Information a build service may keep:
@@ -48,7 +48,7 @@ Information a build service may keep:
 - provenance, SBOM, or signature
 - approval workflow record
 
-Information submitted to Takosumi core:
+Information submitted to Takosumi:
 
 - prepared source URL
 - payload digest
@@ -56,12 +56,12 @@ Information submitted to Takosumi core:
 - source label / display metadata
 - operator-selected `BindingSelection`
 
-## Terraform / OpenTofu
+## OpenTofu
 
-Terraform and OpenTofu are infrastructure tools for operator distributions or
-`takos-private/`. If a build service creates a Terraform plan, provider state,
+OpenTofu are infrastructure tools for operator distributions or
+`takos-private/`. If a build service creates an OpenTofu plan, provider state,
 locks, credentials, and apply permission still remain operator-owned. Takosumi
-core does not run Terraform; it resolves PlatformServices exposed by the
+Takosumi does not run OpenTofu; it resolves PlatformServices exposed by the
 operator catalog.
 
 ## Related Pages

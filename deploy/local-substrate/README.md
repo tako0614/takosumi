@@ -11,7 +11,7 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 | Phase | scope                                                                                       | DoD                                                                          |
 | ----- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | 0     | Pebble (ACME staging) + CoreDNS + Caddy で `*.takosumi.test` を local TLS termination       | `curl https://hello.takosumi.test/` が 200                                   |
-| 1     | takosumi kernel + Accounts + cloud worker / dashboard を同 stack に統合                     | OIDC discovery 解決 + installer API 成功                                     |
+| 1     | takosumi service + Accounts + cloud worker / dashboard を同 stack に統合                     | OIDC discovery 解決 + installer API 成功                                     |
 | 2     | LocalStack / k3d / fake-gcs / Azurite / miniflare を `compose.emulators.yml` 1 本で並行統合 | `scripts/smoke.sh` 全 cloud fixture が pass                                  |
 | 3     | factory で endpoint override + Caddy admin route registrar + 公開面 deny 多重防御           | dynamic subdomain が deploy 直後に hit する + `prove-no-public-leak.sh` pass |
 
@@ -19,7 +19,7 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 
 ## Scope — Takosumi-only
 
-この test bed は **Takosumi (kernel + Accounts + cloud worker + dashboard)** の integration test 専用。 Takos product (`takos-app`) や bundled app (yurucommu) の動作確認は各 repo 内の test に任せる:
+この test bed は **Takosumi (service + Accounts + cloud worker + dashboard)** の integration test 専用。 Takos product (`takos-app`) や bundled app (yurucommu) の動作確認は各 repo 内の test に任せる:
 
 - `takos/` — Takos product 固有の test (`bun test` / Playwright 等)
 - `yurucommu/` — yurucommu 固有の test
@@ -32,7 +32,7 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 
 | 範疇            | 件数 | 代表 check                                                                                                |
 | --------------- | ---: | --------------------------------------------------------------------------------------------------------- |
-| ingress         |    3 | `phase0.hello`, `accounts.oidc-discovery`, `kernel.health`                                                |
+| ingress         |    3 | `phase0.hello`, `accounts.oidc-discovery`, `service.health`                                                |
 | prod-mirror     |    9 | `prod-mirror.landing.*` (4) + `prod-mirror.docs.index` + `prod-mirror.cloud.*` (4)                        |
 | install flow    |    2 | `install.dry-run.{takos-docs,yurucommu}` (fixture data; Takosumi API)                                     |
 | OAuth           |    4 | `oauth.e2e.{google,github}`, `oauth.tls-negative`, `oauth.csrf-replay`                                    |
@@ -40,8 +40,8 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 | docs            |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                               |
 | passkey         |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                                |
 | installer API   |    1 | `installer.api.e2e` (install dry-run/apply, deployment dry-run/apply, rollback)                           |
-| workers         |    1 | `workers.cli-smoke` (Accounts + kernel Worker on workerd with D1/R2/Queue/DO)                             |
-| route-registrar |    1 | `registrar.alive` (kernel → Caddy admin sync via internal network)                                        |
+| workers         |    1 | `workers.cli-smoke` (Accounts + service Worker on workerd with D1/R2/Queue/DO)                             |
+| route-registrar |    1 | `registrar.alive` (service → Caddy admin sync via internal network)                                        |
 | object store    |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                                    |
 | migrations      |    1 | `migration.idempotency` (Accounts Worker D1 restart preserves schema byte-identical)                      |
 | otel            |    1 | `otel.pipeline` (synthetic OTLP trace lands in Jaeger)                                                    |
@@ -65,12 +65,12 @@ cd takosumi/deploy/local-substrate
 # Phase 0: ingress only (Pebble + CoreDNS + Caddy)
 bash scripts/up.sh
 
-# Phase 1+: substrate (kernel + accounts + cloud worker + dashboard +
+# Phase 1+: substrate (service + accounts + cloud worker + dashboard +
 # route-registrar) on top of Phase 0 ingress
 bash scripts/up.sh --profile postgres
 
 # Worker-first substrate mirror: Accounts Worker on D1/R2 plus Takosumi
-# kernel Worker on D1/R2/Queue/DO. Here kernel.takosumi.test is the Worker.
+# service Worker on D1/R2/Queue/DO. Here service.takosumi.test is the Worker.
 bash scripts/up.sh --profile workers
 
 # one-time per host
@@ -82,8 +82,8 @@ bash scripts/smoke.sh
 bash scripts/prove-no-public-leak.sh
 curl https://hello.takosumi.test/
 curl https://accounts.takosumi.test/.well-known/openid-configuration
-curl https://kernel-worker.takosumi.test/healthz  # postgres profile mirror
-curl https://kernel.takosumi.test/healthz         # workers profile
+curl https://service-worker.takosumi.test/healthz  # postgres profile mirror
+curl https://service.takosumi.test/healthz         # workers profile
 ```
 
 Dashboard browser E2E uses the static dashboard artifact served by Caddy, so
@@ -121,7 +121,7 @@ takosumi/deploy/local-substrate/
 │   ├── operator-runbook.md
 │   └── browser-test-playbook.md
 ├── compose.ingress.yml          # Pebble + CoreDNS + Caddy
-├── compose.substrate.yml        # kernel + accounts + cloud worker + dashboard + route-registrar
+├── compose.substrate.yml        # service + accounts + cloud worker + dashboard + route-registrar
 ├── compose.emulators.yml        # opt-in: localstack, k3d
 ├── caddy/
 │   ├── Caddyfile
@@ -133,8 +133,8 @@ takosumi/deploy/local-substrate/
 ├── factories/
 │   └── local-substrate-factories.ts   # 公開 DNS provider import-time deny
 ├── wrappers/
-│   ├── kernel-with-embedded-agent.ts  # postgres profile kernel + agent in-process
-│   └── takosumi-kernel-worker-runner.mjs # local-only Miniflare D1/R2/Queue/DO runner
+│   ├── service-with-embedded-agent.ts  # postgres profile service + agent in-process
+│   └── takosumi-service-worker-runner.mjs # local-only Miniflare D1/R2/Queue/DO runner
 ├── route-registrar/
 │   ├── package.json
 │   └── mod.ts                   # preserve Caddy dynamic-route partition

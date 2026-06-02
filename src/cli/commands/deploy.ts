@@ -24,7 +24,7 @@ function createDeployCommand(): Command {
   const dryRun = new Command("dry-run")
     .description("Dry-run a Deployment for an existing Installation")
     .argument("<installationId>", "Installation id")
-    .option("--remote <url>", "Remote kernel URL")
+    .option("--remote <url>", "Remote Takosumi service URL")
     .option("--token <token>", "Installer bearer token")
     .option("--source <source>", "Optional replacement source");
   dryRun.action(async (
@@ -45,7 +45,7 @@ function createDeployCommand(): Command {
   const command = new Command("deploy")
     .description("Apply a Deployment for an existing Installation")
     .argument("<installationId>", "Installation id")
-    .option("--remote <url>", "Remote kernel URL")
+    .option("--remote <url>", "Remote Takosumi service URL")
     .option("--token <token>", "Installer bearer token")
     .option("--source <source>", "Optional replacement source")
     .option("--expected-commit <commit>", "Expected source commit pin")
@@ -146,7 +146,7 @@ async function runDeploy(input: {
       body,
     });
     if (status >= 400) {
-      console.error(`kernel returned ${status}:`, responseBody);
+      console.error(`Takosumi service returned ${status}:`, responseBody);
       exitCli(1);
     }
     console.log(JSON.stringify(responseBody, null, 2));

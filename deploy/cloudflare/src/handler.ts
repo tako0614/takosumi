@@ -1,18 +1,18 @@
 import {
-  type CreatedPaaSApp,
-  createPaaSApp,
-} from "../../../src/kernel/bootstrap.ts";
-import type { AppAdapters } from "../../../src/kernel/app_context.ts";
+  type CreatedTakosumiService,
+  createTakosumiService,
+} from "../../../src/service/bootstrap.ts";
+import type { AppAdapters } from "../../../src/service/app_context.ts";
 import {
   InMemoryRuntimeAgentRegistry,
   StorageBackedWorkLedger,
-} from "../../../src/kernel/agents/mod.ts";
-import { LocalActorAdapter } from "../../../src/kernel/adapters/auth/mod.ts";
-import { MemoryCoordinationAdapter } from "../../../src/kernel/adapters/coordination/mod.ts";
-import { NoopTestKms } from "../../../src/kernel/adapters/kms/mod.ts";
-import { MemoryNotificationSink } from "../../../src/kernel/adapters/notification/mod.ts";
-import { LocalOperatorConfig } from "../../../src/kernel/adapters/operator-config/mod.ts";
-import { NoopProviderMaterializer } from "../../../src/kernel/adapters/provider/mod.ts";
+} from "../../../src/service/agents/mod.ts";
+import { LocalActorAdapter } from "../../../src/service/adapters/auth/mod.ts";
+import { MemoryCoordinationAdapter } from "../../../src/service/adapters/coordination/mod.ts";
+import { NoopTestKms } from "../../../src/service/adapters/kms/mod.ts";
+import { MemoryNotificationSink } from "../../../src/service/adapters/notification/mod.ts";
+import { LocalOperatorConfig } from "../../../src/service/adapters/operator-config/mod.ts";
+import { NoopProviderMaterializer } from "../../../src/service/adapters/provider/mod.ts";
 import {
   type AckInput,
   type DeadLetterInput,
@@ -23,19 +23,19 @@ import {
   type QueueLease,
   type QueueMessage,
   type QueuePort,
-} from "../../../src/kernel/adapters/queue/mod.ts";
-import { InMemoryRouterConfigAdapter } from "../../../src/kernel/adapters/router/mod.ts";
-import { MemoryEncryptedSecretStore } from "../../../src/kernel/adapters/secret-store/mod.ts";
-import { ImmutableSourceAdapter } from "../../../src/kernel/adapters/source/mod.ts";
-import { InMemoryObservabilitySink } from "../../../src/kernel/services/observability/mod.ts";
+} from "../../../src/service/adapters/queue/mod.ts";
+import { InMemoryRouterConfigAdapter } from "../../../src/service/adapters/router/mod.ts";
+import { MemoryEncryptedSecretStore } from "../../../src/service/adapters/secret-store/mod.ts";
+import { ImmutableSourceAdapter } from "../../../src/service/adapters/source/mod.ts";
+import { InMemoryObservabilitySink } from "../../../src/service/services/observability/mod.ts";
 import type { Queue } from "./bindings.ts";
 import type { CloudflareWorkerEnv } from "./bindings.ts";
 import { createCloudflareD1DeployStores } from "./d1_deploy_stores.ts";
 import { CloudflareD1SnapshotStorageDriver } from "./d1_storage.ts";
 import { CloudflareR2ObjectStorage } from "./r2_object_storage.ts";
 import {
-  createKernelWorkerRequest,
-  isKernelControlPlanePath,
+  createServiceWorkerRequest,
+  isServiceControlPlanePath,
 } from "./routes.ts";
 
 export type { CloudflareWorkerEnv } from "./bindings.ts";
@@ -45,19 +45,19 @@ export interface CloudflareWorkerHandler {
 }
 
 export interface CreateCloudflareWorkerOptions {
-  readonly createKernelApp?: (
+  readonly createServiceApp?: (
     env: CloudflareWorkerEnv,
-  ) => Promise<CreatedPaaSApp>;
+  ) => Promise<CreatedTakosumiService>;
   readonly createRuntimeAgentApp?: (
     env: CloudflareWorkerEnv,
-  ) => Promise<CreatedPaaSApp>;
+  ) => Promise<CreatedTakosumiService>;
 }
 
 export function createCloudflareWorker(
   options: CreateCloudflareWorkerOptions = {},
 ): CloudflareWorkerHandler {
-  let kernelApp: Promise<CreatedPaaSApp> | undefined;
-  let runtimeAgentApp: Promise<CreatedPaaSApp> | undefined;
+  let kernelApp: Promise<CreatedTakosumiService> | undefined;
+  let runtimeAgentApp: Promise<CreatedTakosumiService> | undefined;
 
   return {
     async fetch(
@@ -89,14 +89,14 @@ export function createCloudflareWorker(
           ? options.createRuntimeAgentApp(env)
           : createWorkerPaaSApp(env, "takosumi-runtime-agent");
         const created = await runtimeAgentApp;
-        return created.app.fetch(createKernelWorkerRequest(request));
+        return created.app.fetch(createServiceWorkerRequest(request));
       }
-      if (isKernelControlPlanePath(url.pathname)) {
-        kernelApp ??= options.createKernelApp
-          ? options.createKernelApp(env)
+      if (isServiceControlPlanePath(url.pathname)) {
+        kernelApp ??= options.createServiceApp
+          ? options.createServiceApp(env)
           : createWorkerPaaSApp(env, "takosumi-api");
         const created = await kernelApp;
-        return created.app.fetch(createKernelWorkerRequest(request));
+        return created.app.fetch(createServiceWorkerRequest(request));
       }
       return Response.json({ error: "not found" }, { status: 404 });
     },
@@ -106,7 +106,7 @@ export function createCloudflareWorker(
 async function createWorkerPaaSApp(
   env: CloudflareWorkerEnv,
   role: "takosumi-api" | "takosumi-runtime-agent",
-): Promise<CreatedPaaSApp> {
+): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
   const storage = new CloudflareD1SnapshotStorageDriver(env.TAKOS_D1);
   const deployStores = createCloudflareD1DeployStores(env.TAKOS_D1);
@@ -115,7 +115,7 @@ async function createWorkerPaaSApp(
     runtimeEnv,
     storage,
   });
-  return await createPaaSApp({
+  return await createTakosumiService({
     role,
     runtimeEnv,
     adapters,

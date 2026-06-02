@@ -3,9 +3,9 @@
 #
 # What this script verifies:
 #   1. takosumi Accounts Worker runs on workerd with D1/R2.
-#   2. takosumi kernel Worker runs on workerd with D1/R2, Queue, and DO
-#      either as the postgres-profile mirror at kernel-worker.takosumi.test or
-#      as the workers-profile kernel at kernel.takosumi.test.
+#   2. takosumi service Worker runs on workerd with D1/R2, Queue, and DO
+#      either as the postgres-profile mirror at service-worker.takosumi.test or
+#      as the workers-profile service at service.takosumi.test.
 #   3. The Accounts installation dry-run and OIDC discovery surfaces still answer.
 #   4. D1 binding semantics: the sqlite file underneath miniflare's D1
 #      emulator supports json_extract on the document column AND a
@@ -25,8 +25,8 @@ resolve_kernel_worker_host() {
 		candidates+=("$KERNEL_WORKER_HOST")
 	else
 		# postgres profile exposes the Worker mirror beside the Bun+Postgres
-		# kernel. workers profile replaces kernel.takosumi.test with the Worker.
-		candidates+=(kernel-worker.takosumi.test kernel.takosumi.test)
+		# service. workers profile replaces service.takosumi.test with the Worker.
+		candidates+=(service-worker.takosumi.test service.takosumi.test)
 	fi
 
 	local host body
@@ -46,7 +46,7 @@ raise SystemExit(0 if d.get('provider') == 'cloudflare-worker' else 1)
 		fi
 	done
 
-	echo "FAIL: no Takosumi kernel Worker host answered /healthz as provider=cloudflare-worker" >&2
+	echo "FAIL: no Takosumi service Worker host answered /healthz as provider=cloudflare-worker" >&2
 	return 1
 }
 
@@ -61,7 +61,7 @@ assert d.get('provider') == 'cloudflare', f'expected provider=cloudflare, got {d
 assert d.get('persistence') == 'd1+r2', f'expected persistence=d1+r2, got {d!r}'
 " || { echo "FAIL: /healthz did not look workerd-local: $HEALTH" >&2; exit 1; }
 
-# 2. Kernel Worker sentinel + D1/R2 storage probe.
+# 2. Service Worker sentinel + D1/R2 storage probe.
 KERNEL_HEALTH=$(curl -sk --cacert "$CA" --resolve "${KERNEL_HOST}:443:127.0.0.1" "https://${KERNEL_HOST}/healthz")
 echo "$KERNEL_HEALTH" | python3 -c "
 import json, sys
@@ -158,7 +158,7 @@ fi
 SQLITE_PATH=$(docker exec local-substrate-takosumi-worker-1 \
 	sh -c "find /data/d1 -name '*.sqlite' | head -1" 2>/dev/null || true)
 if [[ -z "$SQLITE_PATH" ]]; then
-	echo "OK accounts worker + kernel worker healthy via $KERNEL_HOST (D1 semantics check SKIPPED — sqlite path not yet materialised); appId=$APP_ID issuer=$ISSUER"
+	echo "OK accounts worker + service worker healthy via $KERNEL_HOST (D1 semantics check SKIPPED — sqlite path not yet materialised); appId=$APP_ID issuer=$ISSUER"
 	exit 0
 fi
 SCRATCH_DB=$(mktemp --suffix=.sqlite)
@@ -185,4 +185,4 @@ assert r[0] == ":x\"y{z}", f"expected ':x\\\"y{{z}}', got {r[0]!r}"
 db.close()
 PY
 
-echo "OK accounts worker + kernel worker healthy via $KERNEL_HOST; Accounts D1 health + R2 signed-route and kernel D1/R2/Queue/DO smoke passed; D1 json1 + INSERT/SELECT semantics intact; appId=$APP_ID issuer=$ISSUER"
+echo "OK accounts worker + service worker healthy via $KERNEL_HOST; Accounts D1 health + R2 signed-route and service D1/R2/Queue/DO smoke passed; D1 json1 + INSERT/SELECT semantics intact; appId=$APP_ID issuer=$ISSUER"

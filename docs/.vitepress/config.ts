@@ -30,19 +30,19 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           link: "/getting-started/reading-paths#cloud-operators",
         },
         {
-          text: "仕様に関わる",
-          link: "/getting-started/reading-paths#core-contributors",
+          text: "Takosumi v1 に関わる",
+          link: "/getting-started/reading-paths#takosumi-v1-contributors",
         },
       ],
     },
     {
-      text: "本体仕様",
+      text: "Takosumi v1",
       items: [
         {
           text: "仕様境界",
           link: "/reference/spec-boundaries",
         },
-        { text: "本体仕様", link: "/reference/core-spec" },
+        { text: "Takosumi v1", link: "/reference/takosumi-v1" },
         { text: "Installer API", link: "/reference/installer-api" },
         {
           text: "プラットフォームサービス",
@@ -62,8 +62,8 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Takosumi",
       items: [
         {
-          text: "Takosumi 入口",
-          link: "/reference/takosumi",
+          text: "Operator surface",
+          link: "/reference/accounts",
         },
       ],
     },
@@ -134,19 +134,19 @@ const enSidebar: DefaultTheme.SidebarMulti = {
           link: "/en/getting-started/reading-paths#provider-extension-authors",
         },
         {
-          text: "Working on the Spec",
-          link: "/en/getting-started/reading-paths#core-contributors",
+          text: "Working on Takosumi v1",
+          link: "/en/getting-started/reading-paths#takosumi-v1-contributors",
         },
       ],
     },
     {
-      text: "Core Specification",
+      text: "Takosumi v1",
       items: [
         {
           text: "Specification Boundaries",
           link: "/en/reference/spec-boundaries",
         },
-        { text: "Core Specification", link: "/en/reference/core-spec" },
+        { text: "Takosumi v1", link: "/en/reference/takosumi-v1" },
         { text: "Installer API", link: "/en/reference/installer-api" },
         {
           text: "Platform Services",
@@ -165,7 +165,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
     {
       text: "Takosumi",
       items: [
-        { text: "Takosumi Entry", link: "/en/reference/takosumi" },
+        { text: "Operator Surface", link: "/en/reference/accounts" },
       ],
     },
     {
@@ -256,7 +256,7 @@ export default defineConfig({
   srcExclude: [
     "operator/{bootstrap,runtime-agent,operator-managed,upgrade}.md",
     "reference/architecture/**",
-    "reference/{approval-invalidation,audit-events,backup-restore,bootstrap-protocol,closed-enums,connector-contract,cross-process-locks,data-asset-gc,data-asset-policy,drift-detection,env-vars,group-head-rollout,journal-compaction,kernel-http-api,kind-registry,lifecycle,lifecycle-phases,logging-conventions,migration-upgrade,observability-stack,observation-retention,plan-output,public-spec-source-map,readiness-probes,resource-ids,revoke-debt,risk-taxonomy,runtime-agent-api,secret-partitions,status-output,storage-schema,supply-chain-trust,telemetry-metrics,time-clock-model,wal-stages,workers-backend}.md",
+    "reference/{approval-invalidation,audit-events,backup-restore,bootstrap-protocol,closed-enums,connector-contract,cross-process-locks,data-asset-gc,data-asset-policy,drift-detection,env-vars,group-head-rollout,journal-compaction,service-http-api,kind-registry,lifecycle,lifecycle-phases,logging-conventions,migration-upgrade,observability-stack,observation-retention,plan-output,public-spec-source-map,readiness-probes,resource-ids,revoke-debt,risk-taxonomy,runtime-agent-api,secret-partitions,status-output,storage-schema,supply-chain-trust,telemetry-metrics,time-clock-model,wal-stages,workers-backend}.md",
     "rfc/**",
   ],
   locales: {

@@ -1,6 +1,6 @@
 /**
  * Boots the redesigned local-substrate `cloud` control plane: the single
- * composed app this distribution serves (account-plane + embedded kernel +
+ * composed app this distribution serves (account-plane + embedded service +
  * dashboard / OIDC / billing / install UI), mirroring production's one
  * `accounts.takosumi.com`.
  *
@@ -14,7 +14,7 @@
  *   - the CoreDNS gateway projection writer that hands routes to Caddy.
  *
  * Execution is EXTERNAL: `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN` (set in
- * env/cloud.env, pointing at the `agent` service) are read by the kernel's
+ * env/cloud.env, pointing at the `agent` service) are read by the service's
  * bootstrap agent detection, so source / lifecycle / capability operations are
  * dispatched to the `agent` container. This process holds NO docker.sock and
  * never spawns subprocesses — that privilege lives only on the agent, which
@@ -24,14 +24,14 @@
  *   - /workspace        = takosumi (the composer; buildComposedServer)
  *   - /takosumi         = takosumi source (the dev-seam `@takosjp/takosumi`
  *                         target the node-postgres import map points at, and
- *                         the KernelPlugin contract type)
+ *                         the TakosumiPlugin contract type)
  *   - /plugins          = takosumi-plugins (the native kind plugins)
  * and run under the takosumi workspace config so the composer graph
  * resolves; the kind-plugin specifier scopes are supplied by that config.
  */
 import { buildComposedServer } from "/workspace/deploy/node-postgres/src/server.ts";
 import { mkdir, writeFile } from "node:fs/promises";
-import type { KernelPlugin } from "/takosumi/src/contract/plugin.ts";
+import type { TakosumiPlugin } from "/takosumi/src/contract/plugin.ts";
 import {
   dockerPostgresPlugin,
   type SecretWriter,
@@ -55,7 +55,7 @@ await writeGatewayProjection(routeProjectionFile, []);
 if (!env.TAKOSUMI_AGENT_URL || !env.TAKOSUMI_AGENT_TOKEN) {
   console.warn(
     "[local-substrate-cloud] TAKOSUMI_AGENT_URL/TOKEN unset — the embedded " +
-      "kernel will register no providers and applies will fail until the " +
+      "service will register no providers and applies will fail until the " +
       "external agent is configured.",
   );
 }
@@ -64,10 +64,10 @@ console.log(
     `${env.TAKOSUMI_AGENT_URL ?? "(no agent)"}`,
 );
 
-// Blocks on serveOnAnyRuntime (port 8787 from config). The kernel's bootstrap
+// Blocks on serveOnAnyRuntime (port 8787 from config). The service's bootstrap
 // agent detection reads TAKOSUMI_AGENT_URL/TOKEN from this process env.
 await buildComposedServer({
-  // Cross-mount KernelPlugin type identity (takosumi-plugins' contract dep vs
+  // Cross-mount TakosumiPlugin type identity (takosumi-plugins' contract dep vs
   // the composer's @takosjp/takosumi contract) differs structurally-equal but
   // nominally; bridge with a cast at the boundary.
   plugins: localSubstrateInstallerPlugins({
@@ -82,7 +82,7 @@ function localSubstrateInstallerPlugins(input: {
   readonly routeProjectionFile: string;
   readonly defaultGatewayHost: string;
   readonly ingressTarget: string;
-}): readonly KernelPlugin[] {
+}): readonly TakosumiPlugin[] {
   return [
     dockerPostgresPlugin({
       secretStore: createMemorySecretStore(),

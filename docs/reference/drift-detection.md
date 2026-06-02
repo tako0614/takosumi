@@ -2,7 +2,7 @@
 
 ## DriftIndex
 
-DriftIndex は reference kernel internal drift model の集約 record です。1 つの ResolvedPlan に対して 0 件以上の drift entry を保持し、status surface と TrafficSnapshot annotation 経由で operator に可視化されます。Provider / operator 独自の observation taxonomy は、この reference model の外側に追加できます。
+DriftIndex は Takosumi service internal drift model の集約 record です。1 つの ResolvedPlan に対して 0 件以上の drift entry を保持し、status surface と TrafficSnapshot annotation 経由で operator に可視化されます。Provider / operator 独自の observation taxonomy は、この reference model の外側に追加できます。
 
 DriftIndex 自身は **TargetState を mutate しません**。これは v1 invariant です。TargetState は operator-authored を起点にした WAL stage 経由でしか書き換わらず、drift によって自動上書きされることはありません。
 
@@ -63,7 +63,7 @@ approval invalidation (binding が崩れた場合)
 
 ## CleanupBacklog との関係
 
-drift によって「TargetState 上は無い管理外 object が observed 上に残っている」「逆に TargetState 上は generated として宣言した object が observed 上に存在しない」といった状況が見つかった場合、kernel は [CleanupBacklog](./revoke-debt.md) を生成して cleanup queue に乗せます。
+drift によって「TargetState 上は無い管理外 object が observed 上に残っている」「逆に TargetState 上は generated として宣言した object が observed 上に存在しない」といった状況が見つかった場合、service は [CleanupBacklog](./revoke-debt.md) を生成して cleanup queue に乗せます。
 
 - drift で発見された missing object (declared generated だが observed missing) は、対応する CleanupBacklog entry を `reason: activation-rollback` または `reason: external-revoke` で生成します。
 - drift で discovered な unmanaged collision は、`collision-detected` Risk と CleanupBacklog 生成の両経路に分岐します。CleanupBacklog 化するか Risk 表示にとどめるかは drift entry の severity に従います。
@@ -86,14 +86,14 @@ DriftIndex は以下の operator surface に露出します。
 
 - **status 表示**: `takosumi status` 系コマンドで Space 単位の drift 件数と severity 別 breakdown を表示します。
 - **plan / preview 表示**: 次 apply の plan 出力時に、現 ResolvedPlan に紐づく DriftIndex を annotation として併記します。operator が drift を承知の上で apply を進めるかを判断する材料になります。
-- **operator deploy gate**: production 配置では `error` severity の drift entry が 1 件でもあると deploy gate 失敗扱いにします。`/readyz` は kernel control-plane readiness であり、workload / exposure drift 判定には使いません。
+- **operator deploy gate**: production 配置では `error` severity の drift entry が 1 件でもあると deploy gate 失敗扱いにします。`/readyz` は service control-plane readiness であり、workload / exposure drift 判定には使いません。
 - **audit events**: drift entry の発生・解消は `drift-detected` audit event として記録されます (詳細は [Audit Events](./audit-events.md))。
 
 ## Operator-initiated re-observe
 
 operator が手動で re-observe を要求する経路は internal control-plane tooling で提供します。current public `takosumi` CLI には observe / drift subcommand はありません。
 
-- 対象 ResolvedPlan に対して observe phase の再起動を要求する。kernel は通常 observe loop と同じ path を使い、completion 後に DriftIndex compute を走らせる。
+- 対象 ResolvedPlan に対して observe phase の再起動を要求する。service は通常 observe loop と同じ path を使い、completion 後に DriftIndex compute を走らせる。
 - 手動 re-observe は WAL stage を進めない。`observe` stage の中で observation を refresh するだけで、`finalize` 等への遷移を引かない。
 - operator は手動 re-observe の結果を internal drift query で確認できる。
 
@@ -107,7 +107,7 @@ operator が手動で re-observe を要求する経路は internal control-plane
 | --------------------------- | -------------------------------------------------------------- |
 | `missing-managed-object`    | TargetState 上は present な managed object が observed missing |
 | `unexpected-managed-object` | TargetState 上は absent だが observed が当該 address を返す    |
-| `field-mismatch`            | object は present だが kernel-fixed 比較 field 集合に差分      |
+| `field-mismatch`            | object は present だが service-fixed 比較 field 集合に差分      |
 | `stale-secret-projection`   | secret projection が observed 上で expired / rotated 状態      |
 | `unmanaged-collision`       | 同名 unmanaged object が observed 上で衝突している             |
 | `lifecycle-class-mismatch`  | declared lifecycle class と observed lifecycle class が不一致  |

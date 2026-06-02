@@ -4,18 +4,18 @@
 内部設計メモ。public contract は [Installer API](./installer-api.md) を参照。
 :::
 
-このページは Takosumi core records と reference/operator extension records の索引です。実際の storage backend は Postgres / SQLite / D1 / in-memory など operator が選べます。
+このページは Takosumi records と reference/operator extension records の索引です。実際の storage backend は Postgres / SQLite / D1 / in-memory など operator が選べます。
 
 Account、billing、OIDC issuer、customer onboarding、support workflow の record は operator account layer 側の storage schema に置きます。
 
-## Core Records
+## Takosumi Records
 
 | Record         | 役割                                                                                                             |
 | -------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `Installation` | Source が Space に installed された core record。current pointer を持つ。                                        |
+| `Installation` | Source が Space に installed された Takosumi record。current pointer を持つ。                                        |
 | `Deployment`   | 1 回の apply / rollback target になる result record。source identity、status、public/non-secret outputs を持つ。 |
 
-## Reference Kernel Retained Evidence Records
+## Reference Takosumi Service Retained Evidence Records
 
 | Record            | 役割                                                                                              |
 | ----------------- | ------------------------------------------------------------------------------------------------- |
@@ -26,7 +26,7 @@ Account、billing、OIDC issuer、customer onboarding、support workflow の rec
 
 snapshot は Takosumi reference 実装が Deployment に紐づく記録を説明するための内部 record です。public Deployment wire に portable な top-level `evidence` field はありません。rollback は retained Deployment を current pointer として再選択し、rollback metadata / audit を記録します。 Deployment record は追加しません。
 
-## Core Journal And Lock Records
+## Takosumi Journal And Lock Records
 
 | Record               | 役割                                                                      |
 | -------------------- | ------------------------------------------------------------------------- |
@@ -61,16 +61,16 @@ asset retention は [asset GC](./data-asset-gc.md)、connector envelope は [Con
 
 ## Audit
 
-`AuditLogEvent` は kernel operation の audit envelope です。event type と payload の詳細は [Audit Events](./audit-events.md) にあります。
+`AuditLogEvent` は service operation の audit envelope です。event type と payload の詳細は [Audit Events](./audit-events.md) にあります。
 
 ## 実装の自由度
 
-この schema は logical model です。backend 固有の table 名、index 名、 partitioning、compaction strategy は実装の自由度に含まれます。Takosumi core の portable record は Installation と Deployment です。下の項目は reference kernel や operator ledger が採用する consistency / audit pattern です。
+この schema は logical model です。backend 固有の table 名、index 名、 partitioning、compaction strategy は実装の自由度に含まれます。Takosumi の portable record は Installation と Deployment です。下の項目は Takosumi service や operator ledger が採用する consistency / audit pattern です。
 
 - Deployment を再構成できる snapshot と journal を保持する。
 - apply / rollback の同時実行を lock で防ぐ。
 - audit event は hash chain または同等の tamper-evident 証跡を持つ。
-- secret value を kernel record に平文保存しない。
+- secret value を service record に平文保存しない。
 
 ## 関連ページ
 

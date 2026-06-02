@@ -5,7 +5,7 @@ apps can consume through Cloud-managed binding selection. Source repositories do
 not declare these services in a Takosumi-specific metadata file.
 
 The path is managed by Cloud. Output materialization is Cloud distribution
-state, not a Takosumi core authoring vocabulary.
+state, not a Takosumi authoring vocabulary.
 
 | Service path | Capability | Cloud behavior |
 | --- | --- | --- |
@@ -13,7 +13,7 @@ state, not a Takosumi core authoring vocabulary.
 | `billing.primary.default` | Billing usage port | Billing owner, portal, usage endpoint, metering credential ref. |
 
 Reference deployments resolve these paths through the operator-private
-`POST /internal/workload-platform-services/resolve` route. The Takosumi core
+`POST /internal/workload-platform-services/resolve` route. The Takosumi
 Installer API receives the selected binding snapshot and records it on
 Deployment.
 
@@ -32,7 +32,7 @@ Deployment.
 ```
 
 The concrete request shape belongs to the Takosumi Accounts deploy facade or account-plane
-UI. Takosumi core only records the resolved binding snapshot.
+UI. Takosumi only records the resolved binding snapshot.
 
 ## OIDC Materialization
 
@@ -63,7 +63,7 @@ payment-provider credentials.
 
 ## Failure Behavior
 
-Required service checks run before Cloud calls the core Installer API apply
+Required service checks run before Cloud calls the Takosumi Installer API apply
 path. Missing, invisible, or unauthorized required services fail with
 `409 failed_precondition`. No workload lifecycle attempt starts.
 

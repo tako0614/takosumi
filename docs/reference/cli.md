@@ -29,7 +29,7 @@ prepared:<url>#<sha256:hex>
 <local-path>
 ```
 
-managed remote operator では `git:` または `prepared:` を使います。`<local-path>` は kernel process から同じ path が見える
+managed remote operator では `git:` または `prepared:` を使います。`<local-path>` は service process から同じ path が見える
 single-host dev / operator-local 用です。
 
 Dry-run の expected guard を apply に渡す場合:

@@ -18,7 +18,7 @@ CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 TOKEN="${TAKOSUMI_INSTALLER_TOKEN:-local-substrate-installer-token}"
 SPACE_ID="${TAKOS_DEPLOY_SMOKE_SPACE_ID:-space_takos_smoke_$(date +%Y%m%d%H%M%S)}"
 SOURCE_PATH="${TAKOS_DEPLOY_SMOKE_SOURCE_PATH:-/sources/takos}"
-KERNEL_URL="${TAKOSUMI_KERNEL_URL:-https://accounts.takosumi.test}"
+SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://accounts.takosumi.test}"
 GATEWAY_URL="${TAKOS_DEPLOY_SMOKE_GATEWAY_URL:-https://takos.app.takosumi.test}"
 GATEWAY_TIMEOUT_SECONDS="${TAKOS_DEPLOY_SMOKE_GATEWAY_TIMEOUT_SECONDS:-480}"
 BUILD_IMAGES="${TAKOS_DEPLOY_SMOKE_BUILD_IMAGES:-auto}"
@@ -92,7 +92,7 @@ post_json() {
 		-H "Content-Type: application/json" \
 		-d "$body" \
 		-w "\n%{http_code}\n" \
-		"$KERNEL_URL$path"
+		"$SERVICE_URL$path"
 }
 
 response_body() {

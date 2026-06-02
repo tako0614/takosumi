@@ -2,9 +2,9 @@
  * Takosumi workload platform service helpers.
  *
  * This package intentionally exports a platform service resolver, not an
- * OIDC component kind. Operators that run Takosumi core and Takosumi in
+ * OIDC component kind. Operators that run Takosumi and Takosumi in
  * one distribution can pass the returned object to
- * `createPaaSApp({ platformServices })`.
+ * `createTakosumiService({ platformServices })`.
  */
 export {
   createTakosumiWorkloadPlatformServiceResolver,

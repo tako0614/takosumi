@@ -1,26 +1,26 @@
-import { startKernel } from "../kernel/index.ts";
+import { startTakosumiService } from "../service/index.ts";
 
-export { startKernel };
+export { startTakosumiService };
 
-// Derive the runtime adapter / serve-handle types from the kernel's public
-// `startKernel` return so this module routes HTTP serving through the kernel
-// `RuntimeAdapter` (`src/kernel/shared/runtime/`) instead of touching
+// Derive the runtime adapter / serve-handle types from the service's public
+// `startTakosumiService` return so this module routes HTTP serving through the service
+// `RuntimeAdapter` (`src/service/shared/runtime/`) instead of touching
 // `Deno.*` directly. This keeps the substrate-neutral boundary intact and the
 // npm build typeable on Node.
-type StartedKernel = Awaited<ReturnType<typeof startKernel>>;
-type KernelRuntime = StartedKernel["runtime"];
-type KernelServeHandle = ReturnType<KernelRuntime["serveHttp"]>;
+type StartedTakosumiService = Awaited<ReturnType<typeof startTakosumiService>>;
+type ServiceRuntime = StartedTakosumiService["runtime"];
+type ServiceServeHandle = ReturnType<ServiceRuntime["serveHttp"]>;
 
 if (import.meta.main) {
-  const { app, runtime } = await startKernel();
+  const { app, runtime } = await startTakosumiService();
   const port = Number(runtime.env.get("PORT") ?? "8788");
   const server = runtime.serveHttp(app.fetch, { port });
   registerShutdownHandlers(runtime, server);
 }
 
 function registerShutdownHandlers(
-  runtime: KernelRuntime,
-  server: KernelServeHandle,
+  runtime: ServiceRuntime,
+  server: ServiceServeHandle,
 ): void {
   let shuttingDown = false;
   const handler = (signal: "SIGINT" | "SIGTERM") => {

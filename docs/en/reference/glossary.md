@@ -26,7 +26,7 @@ it does not resolve the Source again.
 
 A service capability exposed by the operator catalog or inventory in a Space.
 Examples include OIDC issuers, Postgres, object storage, queues, MCP servers,
-and runtime targets. Takosumi core does not create these services; it resolves
+and runtime targets. Takosumi does not create these services; it resolves
 `BindingSelection` through the operator catalog resolver.
 
 ### InstallPlan
@@ -44,7 +44,7 @@ resolver and stores the resolved binding snapshot on the Deployment.
 ### Operator
 
 The party running Takosumi and owning catalog/inventory, runtime adapters,
-storage, secret stores, Terraform/OpenTofu state, billing, OIDC, dashboards, and
+storage, secret stores, OpenTofu state, billing, OIDC, dashboards, and
 approval policy. Takosumi is one reference operator distribution.
 
 ### Space
@@ -90,11 +90,11 @@ and operator policy decide which artifact is source identity.
 
 ## Boundaries
 
-### Terraform / OpenTofu
+### OpenTofu
 
 Infrastructure creation, provider state, locks, and credentials belong to
-operator distributions or `takos-private/`. Takosumi core does not run
-Terraform; it consumes PlatformServices published by the operator catalog.
+operator distributions or `takos-private/`. Takosumi does not run
+OpenTofu; it consumes PlatformServices published by the operator catalog.
 
 ### Operator catalog / inventory
 
@@ -104,19 +104,19 @@ stores selected binding snapshots on Deployments.
 
 ### Runtime adapter
 
-The boundary used by the reference kernel to abstract host runtime differences.
-Kernel core uses `src/kernel/shared/runtime/` for filesystem, env, server,
+The boundary used by the Takosumi service to abstract host runtime differences.
+Takosumi service uses `src/service/shared/runtime/` for filesystem, env, server,
 subprocess, and clock access.
 
 ### Account layer
 
 The operator-owned layer for accounts, billing, OIDC issuers, dashboards,
-approval workflows, and deploy facades. Takosumi core public records remain
+approval workflows, and deploy facades. Takosumi public records remain
 Source, Installation, Deployment, and PlatformService.
 
 ## Related Pages
 
-- [Core Specification](./core-spec.md)
+- [Takosumi v1](./takosumi-v1.md)
 - [Installer API](./installer-api.md)
 - [Platform Services](./platform-services.md)
 - [Build Service Boundary](./build-spec.md)

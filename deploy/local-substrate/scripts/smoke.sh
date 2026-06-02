@@ -65,29 +65,29 @@ bundle_freshness_gate() {
 			echo "==> [bundle-gate] worker rebuilt + restarted"
 		fi
 	fi
-	# Takosumi kernel Worker bundle: takosumi/deploy/cloudflare runs the
-	# kernel in-process on workerd with D1/R2 bindings.
+	# Takosumi service Worker bundle: takosumi/deploy/cloudflare runs the
+	# service in-process on workerd with D1/R2 bindings.
 	local kernel_worker_bundle="$repo_root/takosumi/deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs"
 	local kernel_worker_sources=(
 		"$repo_root/takosumi/deploy/cloudflare/src"
-		"$repo_root/takosumi/src/kernel"
+		"$repo_root/takosumi/src/service"
 	)
 	if [[ -f "$kernel_worker_bundle" ]]; then
 		local kernel_newer
 		kernel_newer=$(find "${kernel_worker_sources[@]}" -type f -newer "$kernel_worker_bundle" \
 			\( -name '*.ts' -o -name '*.tsx' \) 2>/dev/null | head -3)
 		if [[ -n "$kernel_newer" ]]; then
-			echo "==> [bundle-gate] kernel worker source newer than bundle, auto-rebuilding..."
+			echo "==> [bundle-gate] service worker source newer than bundle, auto-rebuilding..."
 			echo "$kernel_newer" | sed 's/^/                   /'
 			docker compose -f compose.substrate.yml --profile postgres \
-				run --rm takosumi-kernel-worker-build >"$SMOKE_LOG_DIR/bundle-gate-kernel-worker.log" 2>&1 || {
-				echo "==> [bundle-gate] kernel worker rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-kernel-worker.log" >&2
+				run --rm takosumi-service-worker-build >"$SMOKE_LOG_DIR/bundle-gate-service-worker.log" 2>&1 || {
+				echo "==> [bundle-gate] service worker rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-service-worker.log" >&2
 				exit 1
 			}
 			docker compose -f compose.substrate.yml --profile postgres \
-				up -d --force-recreate takosumi-kernel-worker >/dev/null 2>&1
+				up -d --force-recreate takosumi-service-worker >/dev/null 2>&1
 			sleep 3
-			echo "==> [bundle-gate] kernel worker rebuilt + restarted"
+			echo "==> [bundle-gate] service worker rebuilt + restarted"
 		fi
 	fi
 	# SPA bundle: .output/public/index.html is the entrypoint vinxi emits.
@@ -309,7 +309,7 @@ else
 fi
 
 echo
-echo "==> Worker-first mirrors (accounts worker + kernel worker on workerd + D1/R2/Queue/DO)"
+echo "==> Worker-first mirrors (accounts worker + service worker on workerd + D1/R2/Queue/DO)"
 if run_script "workers.cli-smoke" "bash $SCRIPT_DIR/workers-cli-smoke.sh"; then
 	echo "    PASS [workers.cli-smoke] workers healthy via workerd + D1/R2/Queue/DO"
 	PASS=$((PASS + 1))
@@ -319,7 +319,7 @@ else
 fi
 
 echo
-echo "==> Phase 3 route-registrar (kernel → Caddy admin sync)"
+echo "==> Phase 3 route-registrar (service → Caddy admin sync)"
 if run_script "registrar.alive" "bash $SCRIPT_DIR/route-registrar-smoke.sh"; then
 	echo "    PASS [registrar.alive] container running + ticking + static routes preserved"
 	PASS=$((PASS + 1))

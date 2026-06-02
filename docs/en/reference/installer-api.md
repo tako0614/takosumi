@@ -73,6 +73,16 @@ Rollback moves the Installation current pointer to a retained Deployment. It doe
 
 ## Errors
 
+```json
+{
+  "error": {
+    "code": "failed_precondition",
+    "message": "expected planSnapshotDigest does not match reviewed plan",
+    "requestId": "018f3c85-3f60-7110-8f15-7c0c17d5f9c8"
+  }
+}
+```
+
 | HTTP | code | Example |
 | --- | --- | --- |
 | 400 | `invalid_argument` | Invalid source or binding shape |
@@ -81,3 +91,5 @@ Rollback moves the Installation current pointer to a retained Deployment. It doe
 | 404 | `not_found` | Installation or rollback target missing |
 | 409 | `failed_precondition` | Source pin, current pointer, or `planSnapshotDigest` mismatch |
 | 413 | `resource_exhausted` | Source or request too large |
+| 501 | `not_implemented` | Endpoint or optional operator extension is not implemented by this binary |
+| 500 | `internal_error` | Operator implementation error |

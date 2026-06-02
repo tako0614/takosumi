@@ -29,7 +29,7 @@ boolean は `1 / true / yes / on / enabled` を真、 `0 / false / no / off / di
 
 ## Platform service resolver
 
-Reference kernel が BindingSelection の PlatformService path を operator account-plane に問い合わせるための設定です。これは implementation wiring であり、Source grammar や Cloud 固有 path を kernel contract に追加するものではありません。
+Reference Takosumi service が BindingSelection の PlatformService path を operator account-plane に問い合わせるための設定です。これは implementation wiring であり、Source grammar や Cloud 固有 path を service contract に追加するものではありません。
 
 | Variable                                   | Type   | Default | Required                          | 説明                                                                |
 | ------------------------------------------ | ------ | ------- | --------------------------------- | ------------------------------------------------------------------- |
@@ -65,7 +65,7 @@ Reference kernel が BindingSelection の PlatformService path を operator acco
 | `TAKOSUMI_BOOT_TIMEOUT_STORAGE_SEC`                | seconds | `30`    | no       | storage readiness timeout。                                        |
 | `TAKOSUMI_BOOT_TIMEOUT_LOCK_STORE_SEC`             | seconds | `30`    | no       | lock store readiness timeout。                                     |
 | `TAKOSUMI_BOOT_TIMEOUT_SECRET_PARTITION_SEC`       | seconds | `15`    | no       | secret partition readiness timeout。                               |
-| `TAKOSUMI_BOOT_TIMEOUT_PUBLIC_LISTENER_SEC`        | seconds | `15`    | no       | kernel control-plane listener bind timeout (historical env name)。 |
+| `TAKOSUMI_BOOT_TIMEOUT_PUBLIC_LISTENER_SEC`        | seconds | `15`    | no       | service control-plane listener bind timeout (historical env name)。 |
 | `TAKOSUMI_BOOT_TIMEOUT_PLUGIN_BOOTSTRAP_SEC`       | seconds | `60`    | no       | binding bootstrap timeout (historical env name)。                  |
 | `TAKOSUMI_BOOT_TIMEOUT_RUNTIME_AGENT_REGISTRY_SEC` | seconds | `60`    | no       | runtime-agent registry timeout。                                   |
 
@@ -77,7 +77,7 @@ Reference kernel が BindingSelection の PlatformService path を operator acco
 | `TAKOSUMI_OTLP_METRICS_ENDPOINT`       | URL          | unset             | no          | OTLP/HTTP metric export endpoint。                         |
 | `TAKOSUMI_OTLP_TRACES_ENDPOINT`        | URL          | unset             | no          | OTLP/HTTP trace export endpoint。                          |
 | `TAKOSUMI_OTLP_HEADERS_JSON`           | JSON object  | `{}`              | no          | OTLP export extra headers。                                |
-| `TAKOSUMI_OTLP_SERVICE_NAME`           | string       | `takosumi-kernel` | no          | OTLP `service.name`。                                      |
+| `TAKOSUMI_OTLP_SERVICE_NAME`           | string       | `takosumi-service` | no          | OTLP `service.name`。                                      |
 | `TAKOSUMI_OTLP_FAIL_CLOSED`            | boolean      | `false`           | no          | collector export failure を recording failure として扱う。 |
 | `TAKOSUMI_LOG_LEVEL`                   | enum         | `info`            | no          | structured log minimum level。                             |
 | `TAKOSUMI_LOG_FORMAT`                  | enum         | env-derived       | no          | `json` / `text`。                                          |
@@ -114,7 +114,7 @@ Reference kernel が BindingSelection の PlatformService path を operator acco
 
 ## Runtime-Agent
 
-runtime-agent process は cloud SDK credential を保持します。`AWS_*`、 `GOOGLE_APPLICATION_CREDENTIALS`、`CLOUDFLARE_API_TOKEN`、`AZURE_*` などの backend-specific env は runtime-agent host または native kind implementation 側で読み、 kernel host には置きません。
+runtime-agent process は cloud SDK credential を保持します。`AWS_*`、 `GOOGLE_APPLICATION_CREDENTIALS`、`CLOUDFLARE_API_TOKEN`、`AZURE_*` などの backend-specific env は runtime-agent host または native kind implementation 側で読み、 service host には置きません。
 
 | Variable                                       | Type   | Default           | Required             | 説明                             |
 | ---------------------------------------------- | ------ | ----------------- | -------------------- | -------------------------------- |
@@ -131,7 +131,7 @@ runtime-agent process は cloud SDK credential を保持します。`AWS_*`、 `
 
 ## Binding Config
 
-An operator using the reference kernel passes a reference adapter array through the `plugins` option to `createPaaSApp({ plugins })`. adapter が必要とする credential / config は factory option か runtime-agent host env から読みます。implementation package の取得方法は operator distribution の責務です。
+An operator using the Takosumi service passes a reference adapter array through the `plugins` option to `createTakosumiService({ plugins })`. adapter が必要とする credential / config は factory option か runtime-agent host env から読みます。implementation package の取得方法は operator distribution の責務です。
 
 ## 関連ページ
 

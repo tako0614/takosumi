@@ -5,8 +5,8 @@
 # Sends a synthetic trace via otel-collector's OTLP/HTTP receiver, polls
 # Jaeger's /api/services for the span's service name to land.
 #
-# No application is instrumented yet — when accounts-service / kernel /
-# kernel start exporting OTLP they'll appear in the same Jaeger UI
+# No application is instrumented yet — when accounts-service / service /
+# service start exporting OTLP they'll appear in the same Jaeger UI
 # without further plumbing.
 set -euo pipefail
 

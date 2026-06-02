@@ -1,15 +1,15 @@
 export * from "../contract/mod.ts";
 // The umbrella entry surfaces the embeddable framework so operator distributions
-// (e.g. takosumi) can `import { createPaaSApp } from "@takosjp/takosumi"`.
-// `createPaaSApp` returns the kernel Hono `app` + operate facade; the framework
+// (e.g. takosumi) can `import { createTakosumiService } from "@takosjp/takosumi"`.
+// `createTakosumiService` returns the service Hono `app` + operate facade; the framework
 // never self-serves, so the composer owns serving and route extension.
 export {
-  createPaaSApp,
+  createTakosumiService,
   defaultBundledPlugins,
   registerDefaultArtifactKinds,
-} from "../kernel/bootstrap.ts";
+} from "../service/bootstrap.ts";
 export type {
-  CreatedPaaSApp,
-  CreatePaaSAppOptions,
-  TakosumiKernelFacade,
-} from "../kernel/bootstrap.ts";
+  CreatedTakosumiService,
+  CreateTakosumiServiceOptions,
+  TakosumiOperations,
+} from "../service/bootstrap.ts";

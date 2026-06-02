@@ -1,8 +1,8 @@
 # Operator {#operator}
 
-An operator runs Takosumi core and decides which PlatformServices and runtime
+An operator runs Takosumi and decides which PlatformServices and runtime
 implementations a Source binds to. Accounts, billing, OIDC, approvals,
-dashboards, Terraform/OpenTofu state, and provider credentials belong to the
+dashboards, OpenTofu state, and provider credentials belong to the
 operator distribution.
 
 ## Prerequisites
@@ -31,11 +31,11 @@ operator distribution.
 | PlatformService      | runtime target, database, object store, queue, OIDC issuer, MCP endpoint |
 | binding policy       | default binding, approval, quota, access mode, visibility              |
 | state / secret store | Postgres, D1, KMS, secret encryption, backup / restore                 |
-| infrastructure state | Terraform/OpenTofu state, provider credentials, locks                  |
+| infrastructure state | OpenTofu state, provider credentials, locks                  |
 | account surface      | signup, billing, team, dashboard, deploy facade                        |
 | runtime execution    | container, worker, VM, local process, runtime-agent connector          |
 
-Takosumi core records those selections as Deployment `bindingsSnapshot` and
+Takosumi records those selections as Deployment `bindingsSnapshot` and
 `outputs`. Infrastructure creation and provider state stay operator-owned.
 
 ## Related Pages

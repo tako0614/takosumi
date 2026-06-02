@@ -1,20 +1,20 @@
 # Takosumi {#takosumi-distribution}
 
-Takosumi is a reference operator distribution built on Takosumi core. It
+Takosumi is a reference operator distribution built on Takosumi. It
 owns accounts, billing, OIDC, dashboards, approvals, deploy facades,
-PlatformService inventory, and Terraform/OpenTofu state.
+PlatformService inventory, and OpenTofu state.
 
 ## Ownership
 
 | Surface                                      | Owner                                |
 | -------------------------------------------- | ------------------------------------ |
-| Source / Installation / Deployment           | [Takosumi core](./core-spec.md)      |
+| Source / Installation / Deployment           | [Takosumi](./takosumi-v1.md)      |
 | Installer API                                | [Installer API](./installer-api.md)  |
 | PlatformService inventory / binding policy   | Takosumi distribution          |
 | Accounts / OIDC / billing / dashboard        | Takosumi distribution          |
-| Terraform/OpenTofu state / provider evidence | Takosumi distribution/operator |
+| OpenTofu state / provider evidence | Takosumi distribution/operator |
 
-Takosumi core resolves PlatformServices through Cloud inventory and records
+Takosumi resolves PlatformServices through Cloud inventory and records
 binding snapshots and outputs on Deployments. Cloud-specific service paths,
 account-facing projections, approval records, launch tokens, billing behavior,
 and dashboard APIs are canonical in the Cloud docs.

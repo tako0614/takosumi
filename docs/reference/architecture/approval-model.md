@@ -143,7 +143,7 @@ reference / operator の trigger vocabulary です。各 trigger は独立して
 
 ## Error モデル {#error-model}
 
-Reference resolution / operation planning の失敗は次のような structured detail を返せます。Core Installer API の互換エラーレスポンスは [Installer API](../installer-api.md#errors) が定義します。
+Reference resolution / operation planning の失敗は次のような structured detail を返せます。Takosumi Installer API の互換エラーレスポンスは [Installer API](../installer-api.md#errors) が定義します。
 
 ```yaml
 Error:
@@ -207,5 +207,5 @@ API surface 側のエラーレスポンス `{ code, message, requestId, details?
 - Architecture: [Operation Plan & Write-Ahead Journal](./runtime-deployment-model.md#operation-plan--write-ahead-journal)
 - Architecture: [Space Model](./space-model.md)
 - Architecture: [Drift Detection](../drift-detection.md)
-- Reference: [Reference Kernel Route Inventory](../kernel-http-api.md)
+- Reference: [Reference Takosumi Route Inventory](../service-http-api.md)
 - Reference: [Reference Runtime-Agent Execution Surface](../runtime-agent-api.md)

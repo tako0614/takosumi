@@ -4,13 +4,13 @@ import {
   type ApplyListenContext,
   type EnvInjection,
   type InlineMaterializer,
-  type KernelPlugin,
-  type KernelPluginApplyContext,
-  type KernelPluginApplyResult,
-  type KernelPluginDeploymentContext,
-  type KernelPluginDestroyContext,
-  kernelPluginFromNativeKindOperations,
-  type KernelPluginInstallationContext,
+  type TakosumiPlugin,
+  type TakosumiPluginApplyContext,
+  type TakosumiPluginApplyResult,
+  type TakosumiPluginDeploymentContext,
+  type TakosumiPluginDestroyContext,
+  takosumiPluginFromNativeKindOperations,
+  type TakosumiPluginInstallationContext,
   type Materializer,
   mergeResolvedEnv,
   type OutputMaterial,
@@ -20,9 +20,9 @@ import {
 import type { Component } from "./plugin.ts";
 import type { Deployment, Installation } from "./installer-api.ts";
 
-test("kernelPluginFromNativeKindOperations wraps native operations without provider bridge", async () => {
+test("takosumiPluginFromNativeKindOperations wraps native operations without provider bridge", async () => {
   const seenSpecs: unknown[] = [];
-  const plugin = kernelPluginFromNativeKindOperations({
+  const plugin = takosumiPluginFromNativeKindOperations({
     kindUri: "https://takosumi.com/kinds/v1/worker",
     operations: {
       id: "@example/native-worker",
@@ -126,9 +126,9 @@ test("kernelPluginFromNativeKindOperations wraps native operations without provi
   });
 });
 
-test("kernelPluginFromNativeKindOperations validates author spec before apply", async () => {
+test("takosumiPluginFromNativeKindOperations validates author spec before apply", async () => {
   let applied = false;
-  const plugin = kernelPluginFromNativeKindOperations({
+  const plugin = takosumiPluginFromNativeKindOperations({
     kindUri: "https://takosumi.com/kinds/v1/worker",
     operations: {
       id: "@example/native-worker",
@@ -168,10 +168,10 @@ test("kernelPluginFromNativeKindOperations validates author spec before apply", 
   assert.equal(applied, false);
 });
 
-test("kernelPluginFromNativeKindOperations keeps listen env out of spec validation", async () => {
+test("takosumiPluginFromNativeKindOperations keeps listen env out of spec validation", async () => {
   let applied = false;
   let seenSpec: unknown;
-  const plugin = kernelPluginFromNativeKindOperations({
+  const plugin = takosumiPluginFromNativeKindOperations({
     kindUri: "https://takosumi.com/kinds/v1/postgres",
     operations: {
       id: "@example/native-postgres",
@@ -313,13 +313,13 @@ test("mergeResolvedEnv rejects listen env collisions", () => {
   );
 });
 
-test("KernelPlugin is a plain-array shape: name + provides + apply suffice", () => {
-  const plugin: KernelPlugin = {
+test("TakosumiPlugin is a plain-array shape: name + provides + apply suffice", () => {
+  const plugin: TakosumiPlugin = {
     name: "@takos/cloudflare-workers",
     version: "1.0.0",
     provides: ["https://takosumi.com/kinds/v1/worker"],
-    apply: (ctx: KernelPluginApplyContext) =>
-      Promise.resolve<KernelPluginApplyResult>({
+    apply: (ctx: TakosumiPluginApplyContext) =>
+      Promise.resolve<TakosumiPluginApplyResult>({
         resourceHandle: `cf-worker:${ctx.componentName}`,
         outputs: { workerUrl: "https://app.example.test" },
       }),
@@ -335,7 +335,7 @@ test("KernelPlugin is a plain-array shape: name + provides + apply suffice", () 
   assert.equal(plugin.applyListen, undefined);
 });
 
-test("KernelPlugin lifecycle hook signatures accept Installation + Deployment", async () => {
+test("TakosumiPlugin lifecycle hook signatures accept Installation + Deployment", async () => {
   const calls: string[] = [];
   const installation: Installation = {
     id: "ins_1",
@@ -366,28 +366,28 @@ test("KernelPlugin lifecycle hook signatures accept Installation + Deployment", 
     createdAt: 0,
   };
 
-  const plugin: KernelPlugin = {
+  const plugin: TakosumiPlugin = {
     name: "@example/test",
     version: "0.0.0",
     provides: ["https://example.test/kinds/v1/test"],
     apply: () => Promise.resolve({ resourceHandle: "test://x", outputs: {} }),
-    destroy: (_ctx: KernelPluginDestroyContext) => {
+    destroy: (_ctx: TakosumiPluginDestroyContext) => {
       calls.push("destroy");
       return Promise.resolve();
     },
-    onInstallStart: (_ctx: KernelPluginInstallationContext) => {
+    onInstallStart: (_ctx: TakosumiPluginInstallationContext) => {
       calls.push("onInstallStart");
       return Promise.resolve();
     },
-    onInstallComplete: (_ctx: KernelPluginInstallationContext) => {
+    onInstallComplete: (_ctx: TakosumiPluginInstallationContext) => {
       calls.push("onInstallComplete");
       return Promise.resolve();
     },
-    onDeploymentStart: (_ctx: KernelPluginDeploymentContext) => {
+    onDeploymentStart: (_ctx: TakosumiPluginDeploymentContext) => {
       calls.push("onDeploymentStart");
       return Promise.resolve();
     },
-    onDeploymentComplete: (_ctx: KernelPluginDeploymentContext) => {
+    onDeploymentComplete: (_ctx: TakosumiPluginDeploymentContext) => {
       calls.push("onDeploymentComplete");
       return Promise.resolve();
     },
@@ -412,15 +412,15 @@ test("KernelPlugin lifecycle hook signatures accept Installation + Deployment", 
   ]);
 });
 
-test("KernelPlugin.apply receives Component + source + input materials", async () => {
+test("TakosumiPlugin.apply receives Component + source + input materials", async () => {
   const component: Component = {
     kind: "worker",
     connect: {
       db: { output: "database.connection", inject: "env", prefix: "DB" },
     },
   };
-  const seen: KernelPluginApplyContext[] = [];
-  const plugin: KernelPlugin = {
+  const seen: TakosumiPluginApplyContext[] = [];
+  const plugin: TakosumiPlugin = {
     name: "@example/recording",
     version: "0.0.0",
     provides: ["worker"],
@@ -468,11 +468,11 @@ test("KernelPlugin.apply receives Component + source + input materials", async (
   assert.equal(seen[0].sourceDirectory, "/tmp/prepared-source");
 });
 
-test("KernelPlugin.materializeOutput emits output material", async () => {
+test("TakosumiPlugin.materializeOutput emits output material", async () => {
   const component: Component = {
     kind: "worker",
   };
-  const plugin: KernelPlugin = {
+  const plugin: TakosumiPlugin = {
     name: "@example/worker",
     version: "0.0.0",
     provides: ["worker"],
@@ -500,14 +500,14 @@ test("KernelPlugin.materializeOutput emits output material", async () => {
   assert.equal(material.id, "w_1");
 });
 
-test("KernelPlugin.applyListen returns an EnvInjection", async () => {
+test("TakosumiPlugin.applyListen returns an EnvInjection", async () => {
   const component: Component = {
     kind: "worker",
     connect: {
       db: { output: "database.connection", inject: "env", prefix: "DB" },
     },
   };
-  const plugin: KernelPlugin = {
+  const plugin: TakosumiPlugin = {
     name: "@example/worker",
     version: "0.0.0",
     provides: ["worker"],
@@ -553,7 +553,7 @@ test("KernelPlugin.applyListen returns an EnvInjection", async () => {
 });
 
 test("InlineMaterializer is the minimal Materializer packaging", () => {
-  // `Materializer = KernelPlugin | InlineMaterializer` — both attach to
+  // `Materializer = TakosumiPlugin | InlineMaterializer` — both attach to
   // the same installer surface; this test exercises the inline form to
   // pin the type contract.
   const inline: InlineMaterializer = {

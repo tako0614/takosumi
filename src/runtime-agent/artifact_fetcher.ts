@@ -22,7 +22,7 @@
  * `arrayBuffer()`: it rejects before reading when `Content-Length` (or a
  * prior `head()`-reported size) exceeds the cap, and otherwise streams the
  * body with a running byte counter that aborts once the cap is crossed. The
- * cap reuses the producing kernel artifact store's own `TAKOSUMI_ARTIFACT_MAX_BYTES`
+ * cap reuses the producing service artifact store's own `TAKOSUMI_ARTIFACT_MAX_BYTES`
  * (default 50 MiB) so the consumer bound matches the producer bound exactly;
  * this is symmetry / defense-in-depth, not SSRF or gzip-bomb hardening (the
  * endpoint is operator-supplied, read-only-token-scoped, and itself capped).
@@ -46,7 +46,7 @@ export interface ArtifactFetcher {
 export interface HttpArtifactFetcherOptions {
   /** Base URL for the artifact endpoint, including `/v1/artifacts`. */
   readonly baseUrl: string;
-  /** Bearer token shared with the kernel artifact store. */
+  /** Bearer token shared with the service artifact store. */
   readonly token: string;
   /** Override `globalThis.fetch` (tests, custom transport). */
   readonly fetch?: typeof fetch;
@@ -75,7 +75,7 @@ const HEADER_SIZE = "x-takosumi-artifact-size";
 const DEFAULT_ARTIFACT_FETCH_TIMEOUT_MS = 60_000;
 
 /**
- * Default body cap. Reuses the producing kernel artifact store's
+ * Default body cap. Reuses the producing service artifact store's
  * `TAKOSUMI_ARTIFACT_MAX_BYTES` (50 MiB = 52428800) so the consumer bound
  * matches the producer bound exactly, instead of inventing a new policy.
  */

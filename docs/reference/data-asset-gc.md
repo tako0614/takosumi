@@ -6,7 +6,7 @@ This is an operational surface for the optional asset extension. Source identity
 
 ## Reachability
 
-current reference asset extension は、GC 時に asset を次のいずれかに分類します。Core は Deployment history を保持しますが、asset-specific reachability class や GC event 名は要求しません。
+current reference asset extension は、GC 時に asset を次のいずれかに分類します。Takosumi は Deployment history を保持しますが、asset-specific reachability class や GC event 名は要求しません。
 
 | Class                | 意味                                                        |
 | -------------------- | ----------------------------------------------------------- |

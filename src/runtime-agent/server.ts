@@ -39,7 +39,7 @@ import { readRuntimeEnv } from "./runtime.ts";
 
 export interface RuntimeAgentServerOptions {
   readonly registry: ConnectorRegistry;
-  /** Bearer token operators share with the kernel. If unset, the agent
+  /** Bearer token operators share with the service. If unset, the agent
    *  refuses all lifecycle requests. */
   readonly token: string;
   /**

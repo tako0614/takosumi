@@ -16,7 +16,7 @@ function createPlanCommand(): Command {
     .argument("[source]", "git:, prepared:, or local path")
     .option("--source <source>", "git:, prepared:, or local path")
     .requiredOption("--space <spaceId>", "Target Space id")
-    .option("--remote <url>", "Remote kernel URL")
+    .option("--remote <url>", "Remote Takosumi service URL")
     .option("--token <token>", "Installer bearer token")
     .action(
       async (
@@ -39,7 +39,7 @@ function createPlanCommand(): Command {
             body: { spaceId: opts.space, source: parseSourceRef(sourceRef) },
           });
           if (status >= 400) {
-            console.error(`kernel returned ${status}:`, body);
+            console.error(`Takosumi service returned ${status}:`, body);
             exitCli(1);
           }
           console.log(JSON.stringify(body, null, 2));

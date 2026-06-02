@@ -93,7 +93,7 @@ export async function sourceContextFromLocator(
 ): Promise<PreparedSourceContext | undefined> {
   if (!locator) return undefined;
   if (locator.workingDirectory) {
-    // Co-located kernel/agent setups: the source tree is already on disk and
+    // Co-located service/agent setups: the source tree is already on disk and
     // trusted, so no fetch / SSRF / extraction step runs. Left unchanged.
     return {
       reader: new LocalPreparedSourceReader(locator.workingDirectory),

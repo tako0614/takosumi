@@ -36,7 +36,7 @@ test("runMigrate dry-run does not require DATABASE_URL", async () => {
   assert.ok(spawnedArgs!.includes("--env=production"));
 });
 
-test("runMigrate returns missing-script when kernel script unreachable", async () => {
+test("runMigrate returns missing-script when service script unreachable", async () => {
   const lines: string[] = [];
   const result = await runMigrate({
     env: "local",
@@ -77,7 +77,7 @@ test("runMigrate spawns bun against resolved script", async () => {
   assert.ok(!spawnedArgs!.includes("--dry-run"));
 });
 
-test("runMigrate surfaces non-zero exit codes from kernel script", async () => {
+test("runMigrate surfaces non-zero exit codes from service script", async () => {
   const result = await runMigrate({
     env: "local",
     readEnv: (key) =>

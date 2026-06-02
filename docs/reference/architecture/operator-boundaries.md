@@ -10,7 +10,7 @@ Space creation, deletion, and membership
 PlatformService inventory and visibility
 Future cross-Space service sharing policy
 Backend adapter attachment and credentials
-Terraform/OpenTofu state and provider locks
+OpenTofu state and provider locks
 Profile and policy packs
 Secret store and Space partitions
 Runtime / connector credentials
@@ -20,7 +20,7 @@ Audit and observability
 Production coordination
 ```
 
-Takosumi core records Source, Installation, Deployment, plan snapshot, binding
+Takosumi records Source, Installation, Deployment, plan snapshot, binding
 snapshot, outputs, and status. Operator-owned PlatformService inventory and
 account-plane projection explain which external services were selected and who
 can use them.
@@ -48,7 +48,7 @@ source DSL. Implementation binding is configured by the operator distribution.
 
 ## Credential Boundary {#credential-boundary}
 
-core canonical state stores references and handles, not raw secret values.
+Takosumi canonical state stores references and handles, not raw secret values.
 External I/O and credentials stay inside implementation / connector / runtime
 boundaries. Secret partitions are Space-scoped unless operator policy explicitly
 shares them.

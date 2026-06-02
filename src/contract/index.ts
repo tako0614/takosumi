@@ -1,4 +1,5 @@
 export * from "./installer-api.ts";
+export * from "./installer-api_contract.ts";
 export type {
   Digest,
   IsoTimestamp,

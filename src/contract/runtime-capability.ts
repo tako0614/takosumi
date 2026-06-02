@@ -8,9 +8,9 @@
  * These interfaces are the contract between the installer (which consumes a
  * git / tar runner) and whatever the operator wires in.
  *
- * The reference kernel provides a default implementation built over the
+ * The reference service provides a default implementation built over the
  * `RuntimeAdapter` `SubprocessAdapter` (see
- * `src/kernel/shared/runtime/capability-runners.ts`), so the Deno
+ * `src/service/shared/runtime/capability-runners.ts`), so the Deno
  * runtime behavior is unchanged: the default runner routes through
  * `currentRuntime().subprocess`, which already has Deno / Node / Workers
  * implementations.
@@ -59,7 +59,7 @@ export interface TarRunner {
 /**
  * Injected temp-dir filesystem capability the installer needs to stage a git /
  * prepared source checkout before deriving an install plan. The installer must
- * not reach for `Deno.makeTempDir` / `node:fs` directly; the reference kernel
+ * not reach for `Deno.makeTempDir` / `node:fs` directly; the reference service
  * injects `currentRuntime().fs`, whose `FsAdapter` structurally satisfies this
  * subset (`makeTempDir` / `remove` / `mkdir`).
  *

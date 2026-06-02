@@ -1,12 +1,12 @@
-# Takosumi Kernel — single-host reference distribution.
+# Takosumi Service — single-host reference distribution.
 #
 # Substrate-neutral counterpart to deploy/cloudflare/. Brings up the
-# full Takosumi PaaS kernel + runtime-agent + Postgres + MinIO (S3
+# full Takosumi PaaS service + runtime-agent + Postgres + MinIO (S3
 # compatible) + Caddy (TLS) on any Docker host. Use this on a single
 # VM, container host, or Kubernetes pod (via kompose) instead of
 # Cloudflare Workers.
 #
-# The kernel and runtime-agent here do NOT depend on Cloudflare D1 or
+# The service and runtime-agent here do NOT depend on Cloudflare D1 or
 # R2; they use Postgres + MinIO via local adapter connectors.
 
 services:
@@ -41,10 +41,10 @@ services:
       timeout: 5s
       retries: 10
 
-  kernel:
+  service:
     build:
       context: ../..
-      dockerfile: deploy/single-host/Dockerfile.kernel
+      dockerfile: deploy/single-host/Dockerfile.service
     restart: unless-stopped
     depends_on:
       postgres:
@@ -92,7 +92,7 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on:
-      - kernel
+      - service
     ports:
       - "80:80"
       - "443:443"

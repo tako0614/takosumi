@@ -2,11 +2,11 @@
 
 Compatibility entrypoints for the single `@takosjp/takosumi` package.
 
-Core exports:
+Space exports:
 
 - `@takosjp/takosumi/contract`
 - `@takosjp/takosumi/installer`
-- `@takosjp/takosumi/kernel`
+- `@takosjp/takosumi`
 - `@takosjp/takosumi/runtime-agent`
 - `@takosjp/takosumi/cli`
 - `@takosjp/takosumi/server`

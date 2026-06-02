@@ -66,14 +66,14 @@ function readDatabaseUrl(
 
 /**
  * Default `resolveScript` implementation. Resolves
- * `src/kernel/scripts/db-migrate.ts` relative to this CLI package.
+ * `src/service/scripts/db-migrate.ts` relative to this CLI package.
  * Returns `undefined` when the file cannot be located on disk.
  */
 export function defaultResolveScript(): string | undefined {
   try {
     const here = new URL(import.meta.url);
     const candidate = new URL(
-      "../../../kernel/scripts/db-migrate.ts",
+      "../../../service/scripts/db-migrate.ts",
       here,
     );
     if (candidate.protocol !== "file:") return candidate.toString();
@@ -103,8 +103,8 @@ export async function runMigrate(
   const script = options.resolveScript();
   if (!script) {
     options.write(
-      "error: could not locate kernel scripts/db-migrate.ts; ensure " +
-        "@takosjp/takosumi kernel sources are installed alongside the CLI.",
+      "error: could not locate service scripts/db-migrate.ts; ensure " +
+        "@takosjp/takosumi service sources are installed alongside the CLI.",
     );
     options.write(
       "hint: run takosumi migrate from the @takosjp/takosumi package root, or run " +
@@ -119,7 +119,7 @@ export async function runMigrate(
   try {
     const result = await options.spawn("bun", args);
     if (result.code !== 0) {
-      const message = `kernel db-migrate exited with code ${result.code}`;
+      const message = `service db-migrate exited with code ${result.code}`;
       options.write(`error: ${message}`);
       return { status: "failed", exitCode: result.code, message };
     }

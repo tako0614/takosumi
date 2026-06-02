@@ -14,7 +14,7 @@
  * `declare const Deno` identifier) so the emitted npm code contains no unbound
  * `Deno.Command` reference.
  *
- * In production the reference kernel injects a `TarRunner` routed through
+ * In production the reference service injects a `TarRunner` routed through
  * `currentRuntime().subprocess`, so callers no longer reference this fallback.
  */
 

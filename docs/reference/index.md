@@ -1,9 +1,9 @@
 # リファレンス {#reference}
 
-## Takosumi 本体仕様
+## Takosumi v1
 
-- [仕様境界](./spec-boundaries.md) — Takosumi core、operator distribution、integration package の責務分離。
-- [Takosumi core 仕様](./core-spec.md) — Source / Installation / Deployment / PlatformService、Installer API、guard、ledger。
+- [仕様境界](./spec-boundaries.md) — Takosumi、operator distribution、integration package の責務分離。
+- [Takosumi v1](./takosumi-v1.md) — Source / Installation / Deployment / PlatformService、Installer API、guard、ledger。
 - [Installer API](./installer-api.md) — Installation / Deployment を作成・更新・rollback する public API。
 - [プラットフォームサービス](./platform-services.md) — operator inventory から service binding を選択し、Deployment に記録する model。
 - [ダイジェスト計算](./digest-computation.md) — source pin、prepared source digest、`planSnapshotDigest`。

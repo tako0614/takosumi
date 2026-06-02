@@ -11,20 +11,20 @@ import {
 
 test("resolveMode prefers explicit --remote flag", () => {
   const result = resolveMode(
-    { remote: "https://kernel.local", token: "t1" },
-    { kernelUrl: "https://config.local", token: "tcfg" },
+    { remote: "https://service.local", token: "t1" },
+    { serviceUrl: "https://config.local", token: "tcfg" },
   );
   assert.deepEqual(result, {
     mode: "remote",
-    url: "https://kernel.local",
+    url: "https://service.local",
     token: "t1",
   });
 });
 
-test("resolveMode falls back to config kernelUrl", () => {
+test("resolveMode falls back to config serviceUrl", () => {
   const result = resolveMode(
     {},
-    { kernelUrl: "https://config.local", token: "tcfg" },
+    { serviceUrl: "https://config.local", token: "tcfg" },
   );
   assert.deepEqual(result, {
     mode: "remote",
@@ -56,7 +56,7 @@ test("loadConfig reads ~/.takosumi/config.yml when env unset", async () => {
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
-      assert.equal(config.kernelUrl, "https://from-file.local");
+      assert.equal(config.serviceUrl, "https://from-file.local");
       assert.equal(config.token, "file-token");
     } finally {
       if (previousFile === undefined) {
@@ -95,7 +95,7 @@ test("loadConfig env wins over config file", async () => {
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
-      assert.equal(config.kernelUrl, "https://from-env.local");
+      assert.equal(config.serviceUrl, "https://from-env.local");
       assert.equal(config.token, "env-token");
     } finally {
       if (previousFile === undefined) {
@@ -133,7 +133,7 @@ test("loadConfig returns empty when neither env nor file present", async () => {
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
-      assert.equal(config.kernelUrl, undefined);
+      assert.equal(config.serviceUrl, undefined);
       assert.equal(config.token, undefined);
     } finally {
       if (previousFile === undefined) {

@@ -6,7 +6,7 @@ import {
   operationJournalEffectDigest,
   type OperationJournalEntry,
   type OperationJournalStore,
-} from "../../../src/kernel/domains/deploy/operation_journal.ts";
+} from "../../../src/service/domains/deploy/operation_journal.ts";
 import {
   ageRevokeDebtIfDue,
   clearRevokeDebt,
@@ -23,12 +23,12 @@ import {
   revokeDebtSourceKey,
   type RevokeDebtStore,
   type RevokeDebtTransitionInput,
-} from "../../../src/kernel/domains/deploy/revoke_debt_store.ts";
+} from "../../../src/service/domains/deploy/revoke_debt_store.ts";
 import type {
   TakosumiDeploymentRecord,
   TakosumiDeploymentRecordStore,
   TakosumiDeploymentUpsertInput,
-} from "../../../src/kernel/domains/deploy/takosumi_deployment_record_store.ts";
+} from "../../../src/service/domains/deploy/takosumi_deployment_record_store.ts";
 import type { D1Database } from "./bindings.ts";
 
 const DEPLOYMENT_NAMESPACE = "takosumi-deployment";
@@ -250,7 +250,7 @@ class D1RevokeDebtStore implements RevokeDebtStore {
   constructor(private readonly records: D1RecordTable) {}
 
   async enqueue(input: RevokeDebtEnqueueInput): Promise<RevokeDebtRecord> {
-    // `revokeDebtSourceKey` became async after the kernel switched off
+    // `revokeDebtSourceKey` became async after the service switched off
     // `node:crypto` to Web Crypto (`crypto.subtle.digest`).
     const sourceKey = await revokeDebtSourceKey(input);
     const existing = await this.records.get<RevokeDebtRecord>(

@@ -5,7 +5,7 @@ Operator platform service compatibility model:
 
 PlatformService は Space-visible な service capability です。operator distribution
 または product distribution が inventory entry を offer し、install / deploy 時に
-BindingSelection を解決します。Takosumi core は resolved binding snapshot を
+BindingSelection を解決します。Takosumi は resolved binding snapshot を
 Deployment record に保存します。
 
 ## Platform Service Path Grammar {#platform-service-path-grammar}
@@ -64,7 +64,7 @@ BindingMaterialization:
   runtimeHandles: []
 ```
 
-Takosumi core records the selected binding snapshot; external resource state and
+Takosumi records the selected binding snapshot; external resource state and
 credential rotation stay with the operator distribution.
 
 ## Space-Scoped Resolution {#space-scoped-resolution}

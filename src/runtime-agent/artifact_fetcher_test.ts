@@ -21,7 +21,7 @@ test("HttpArtifactFetcher.fetch returns bytes and kind from header", async () =>
   let seenAuth: string | null = null;
   let seenUrl = "";
   const fetcher = new HttpArtifactFetcher({
-    baseUrl: "https://kernel.example.com/v1/artifacts",
+    baseUrl: "https://service.example.com/v1/artifacts",
     token: "tk",
     fetch: mockFetch((url, init) => {
       seenUrl = url;
@@ -39,7 +39,7 @@ test("HttpArtifactFetcher.fetch returns bytes and kind from header", async () =>
   const got = await fetcher.fetch("sha256:abc");
   assert.equal(
     seenUrl,
-    "https://kernel.example.com/v1/artifacts/sha256%3Aabc",
+    "https://service.example.com/v1/artifacts/sha256%3Aabc",
   );
   assert.equal(seenAuth, "Bearer tk");
   assert.equal(got.kind, "lambda-zip");
@@ -49,7 +49,7 @@ test("HttpArtifactFetcher.fetch returns bytes and kind from header", async () =>
 
 test("HttpArtifactFetcher.fetch throws on non-200", async () => {
   const fetcher = new HttpArtifactFetcher({
-    baseUrl: "https://kernel.example.com/v1/artifacts",
+    baseUrl: "https://service.example.com/v1/artifacts",
     token: "tk",
     fetch: mockFetch(() =>
       new Response("nope", { status: 500, statusText: "Server Error" })
@@ -64,7 +64,7 @@ test("HttpArtifactFetcher.fetch throws on non-200", async () => {
 test("HttpArtifactFetcher.fetch rejects when content-length exceeds cap", async () => {
   let cancelled = false;
   const fetcher = new HttpArtifactFetcher({
-    baseUrl: "https://kernel.example.com/v1/artifacts",
+    baseUrl: "https://service.example.com/v1/artifacts",
     token: "tk",
     maxBytes: 16,
     fetch: mockFetch(() => {
@@ -92,7 +92,7 @@ test("HttpArtifactFetcher.fetch rejects when content-length exceeds cap", async 
 
 test("HttpArtifactFetcher.fetch streams and aborts past cap when length absent", async () => {
   const fetcher = new HttpArtifactFetcher({
-    baseUrl: "https://kernel.example.com/v1/artifacts",
+    baseUrl: "https://service.example.com/v1/artifacts",
     token: "tk",
     maxBytes: 8,
     fetch: mockFetch(() => {
@@ -117,7 +117,7 @@ test("HttpArtifactFetcher.fetch streams and aborts past cap when length absent",
 test("HttpArtifactFetcher.fetch accepts a body at the cap boundary", async () => {
   const payload = new Uint8Array(8).fill(1);
   const fetcher = new HttpArtifactFetcher({
-    baseUrl: "https://kernel.example.com/v1/artifacts",
+    baseUrl: "https://service.example.com/v1/artifacts",
     token: "tk",
     maxBytes: 8,
     fetch: mockFetch(() =>
@@ -133,7 +133,7 @@ test("HttpArtifactFetcher.fetch accepts a body at the cap boundary", async () =>
 
 test("HttpArtifactFetcher.head returns kind+size from headers", async () => {
   const fetcher = new HttpArtifactFetcher({
-    baseUrl: "https://kernel.example.com/v1/artifacts/",
+    baseUrl: "https://service.example.com/v1/artifacts/",
     token: "tk",
     fetch: mockFetch(() =>
       new Response(null, {
@@ -151,7 +151,7 @@ test("HttpArtifactFetcher.head returns kind+size from headers", async () => {
 
 test("HttpArtifactFetcher.head returns undefined on 404", async () => {
   const fetcher = new HttpArtifactFetcher({
-    baseUrl: "https://kernel.example.com/v1/artifacts",
+    baseUrl: "https://service.example.com/v1/artifacts",
     token: "tk",
     fetch: mockFetch(() => new Response(null, { status: 404 })),
   });
@@ -161,7 +161,7 @@ test("HttpArtifactFetcher.head returns undefined on 404", async () => {
 
 test("HttpArtifactFetcher.head throws on other errors", async () => {
   const fetcher = new HttpArtifactFetcher({
-    baseUrl: "https://kernel.example.com/v1/artifacts",
+    baseUrl: "https://service.example.com/v1/artifacts",
     token: "tk",
     fetch: mockFetch(() =>
       new Response(null, { status: 503, statusText: "Unavailable" })

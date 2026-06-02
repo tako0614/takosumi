@@ -1,6 +1,6 @@
 # Phase 1 — Takosumi integration test bed on top of Phase 0 ingress.
 #
-# Scope: Takosumi 製品群のみ (kernel + Accounts + cloud worker +
+# Scope: Takosumi 製品群のみ (service + Accounts + cloud worker +
 # dashboard SPA + takosumi-worker)。 Takos product (takos-app /
 # takos-git) と yurucommu の direct service は外してある。 各 product
 # の動作確認は各 repo 内の test に委ねる。 「Takosumi 経由で
@@ -8,9 +8,9 @@
 # 筆頭参照。
 #
 # Profiles:
-#   postgres   Takosumi kernel (Bun + Postgres + MinIO) + Accounts
-#              + cloud worker + kernel worker (Miniflare mirror)
-#   workers    Takosumi kernel (workerd / Miniflare + D1 + R2) + 同上
+#   postgres   Takosumi service (Bun + Postgres + MinIO) + Accounts
+#              + cloud worker + service worker (Miniflare mirror)
+#   workers    Takosumi service (workerd / Miniflare + D1 + R2) + 同上
 #
 # Source mount + Bun command pattern を採用 (image build 不要)。 production
 # image でないのは「test bed」 のために意図的。 ファイル変更が即反映される。
@@ -135,14 +135,14 @@ services:
   #
   # The `cloud` control plane dispatches source / lifecycle / capability
   # execution here over TAKOSUMI_AGENT_URL. This is the execution half split out
-  # of the old monolithic `kernel` service; it carries docker.sock + subprocess
+  # of the old monolithic `service` service; it carries docker.sock + subprocess
   # privilege so connectors can spawn `docker compose`. Image is a thin overlay
   # on a Bun base that adds the docker CLI.
   agent:
     profiles: ["postgres"]
     build:
       context: .
-      dockerfile: wrappers/Dockerfile.kernel
+      dockerfile: wrappers/Dockerfile.service
     restart: unless-stopped
     depends_on:
       substrate-postgres-init:
@@ -182,8 +182,8 @@ services:
   #
   # The ONE composed app this profile serves at accounts.takosumi.test: account
   # plane (OIDC issuer, billing, dashboard, install UI) + the embedded Takosumi
-  # kernel (wrappers/cloud.ts -> buildComposedServer). Mirrors production's one
-  # accounts.takosumi.com; replaces the old separate accounts + kernel services.
+  # service (wrappers/cloud.ts -> buildComposedServer). Mirrors production's one
+  # accounts.takosumi.com; replaces the old separate accounts + service services.
   # Holds NO docker.sock — execution is dispatched to `agent`. Imports straddle
   # /workspace (takosumi), /takosumi (the dev-seam @takosjp/takosumi
   # target), and /plugins (native kinds), run under the takosumi config.
@@ -224,13 +224,13 @@ services:
         aliases:
           - cloud
 
-  # ---- Takosumi kernel (Cloudflare Worker profile) ----
+  # ---- Takosumi service (Cloudflare Worker profile) ----
   # Builds and runs takosumi/deploy/cloudflare's Worker-first scaffold under
   # Miniflare with D1/R2 bindings. The postgres profile also starts a mirror
-  # at kernel-worker.takosumi.test so default smoke can verify the Worker code
-  # path without replacing the Bun+Postgres kernel used by the Takos product
+  # at service-worker.takosumi.test so default smoke can verify the Worker code
+  # path without replacing the Bun+Postgres service used by the Takos product
   # stack.
-  takosumi-kernel-worker-build:
+  takosumi-service-worker-build:
     profiles: ["postgres", "workers"]
     image: oven/bun:1
     restart: "no"
@@ -247,23 +247,23 @@ services:
     volumes:
       - ../../../takosumi:/work
 
-  takosumi-kernel-worker:
+  takosumi-service-worker:
     profiles: ["postgres"]
     build:
       context: .
       dockerfile: wrappers/Dockerfile.takosumi-worker
     restart: unless-stopped
     depends_on:
-      takosumi-kernel-worker-build:
+      takosumi-service-worker-build:
         condition: service_completed_successfully
     working_dir: /app
     command: ["node", "/app/runner.mjs"]
     env_file:
-      - ./env/takosumi-kernel-worker.env
+      - ./env/takosumi-service-worker.env
     volumes:
       - ../../../takosumi/deploy/cloudflare/.wrangler/dist:/worker:ro
-      - ./wrappers/takosumi-kernel-worker-runner.mjs:/app/runner.mjs:ro
-      - takosumi-kernel-worker-data:/data
+      - ./wrappers/takosumi-service-worker-runner.mjs:/app/runner.mjs:ro
+      - takosumi-service-worker-data:/data
     healthcheck:
       test:
         - CMD
@@ -277,25 +277,25 @@ services:
     networks:
       takos-local-internal:
         aliases:
-          - takosumi-kernel-worker
+          - takosumi-service-worker
 
-  kernel-workers:
+  service-workers:
     profiles: ["workers"]
     build:
       context: .
       dockerfile: wrappers/Dockerfile.takosumi-worker
     restart: unless-stopped
     depends_on:
-      takosumi-kernel-worker-build:
+      takosumi-service-worker-build:
         condition: service_completed_successfully
     working_dir: /app
     command: ["node", "/app/runner.mjs"]
     env_file:
-      - ./env/takosumi-kernel-worker.env
+      - ./env/takosumi-service-worker.env
     volumes:
       - ../../../takosumi/deploy/cloudflare/.wrangler/dist:/worker:ro
-      - ./wrappers/takosumi-kernel-worker-runner.mjs:/app/runner.mjs:ro
-      - takosumi-kernel-workers-data:/data
+      - ./wrappers/takosumi-service-worker-runner.mjs:/app/runner.mjs:ro
+      - takosumi-service-workers-data:/data
     healthcheck:
       test:
         - CMD
@@ -309,8 +309,8 @@ services:
     networks:
       takos-local-internal:
         aliases:
-          - kernel
-          - kernel-workers
+          - service
+          - service-workers
 
   # ---- takosumi landing (SolidStart, mirrors takosumi.com root) ----
   takosumi-website-build:
@@ -375,7 +375,7 @@ services:
 
   # ---- OpenTelemetry collector + Jaeger (trace + metric sink) ----
   # No service emits OTel today, but the collector + UI are sitting here so
-  # the moment instrumentation lands (accounts-service / kernel)
+  # the moment instrumentation lands (accounts-service / service)
   # you can verify traces flow end-to-end:
   #   1. service exports OTLP → collector at otel-collector:4317 (gRPC) /
   #      4318 (HTTP)
@@ -522,7 +522,7 @@ services:
     working_dir: /app
     command: ["bun", "mod.ts"]
     environment:
-      KERNEL_URL: http://cloud:8787
+      SERVICE_URL: http://cloud:8787
       CADDY_ADMIN_URL: http://caddy:2019
       POLL_INTERVAL_MS: "5000"
       GATEWAY_ROUTE_PROJECTION_FILE: /local-substrate-runtime/gateway-routes.json
@@ -537,12 +537,12 @@ services:
     image: oven/bun:1
     restart: unless-stopped
     depends_on:
-      kernel-workers:
+      service-workers:
         condition: service_healthy
     working_dir: /app
     command: ["bun", "mod.ts"]
     environment:
-      KERNEL_URL: http://kernel-workers:8788
+      SERVICE_URL: http://service-workers:8788
       CADDY_ADMIN_URL: http://caddy:2019
       POLL_INTERVAL_MS: "5000"
       GATEWAY_ROUTE_PROJECTION_FILE: /local-substrate-runtime/gateway-routes.json
@@ -557,8 +557,8 @@ volumes:
   substrate-redis-data:
   substrate-minio-data:
   takosumi-worker-data:
-  takosumi-kernel-worker-data:
-  takosumi-kernel-workers-data:
+  takosumi-service-worker-data:
+  takosumi-service-workers-data:
 
 networks:
   takos-local-internal:

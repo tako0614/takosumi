@@ -1,6 +1,6 @@
 # Operator Catalog {#catalog}
 
-Takosumi v1 does not expose core-owned backend vocabulary as a public source
+Takosumi v1 does not expose Takosumi-owned backend vocabulary as a public source
 contract. Catalogs are operator-owned PlatformService and binding inventories.
 
 An operator catalog decides:
@@ -9,18 +9,18 @@ An operator catalog decides:
 - runtime targets, databases, object storage, queues, OIDC issuers, and other
   service capabilities
 - aliases, labels, service paths, and visibility
-- implementations backed by Terraform/OpenTofu or cloud provider state
+- implementations backed by OpenTofu or cloud provider state
 - access modes, approval, quota, and billing subject
 
-Takosumi core receives:
+Takosumi receives:
 
 - `PlatformService`
 - `ResolvedBinding`
 - Deployment `bindingsSnapshot`
 - Deployment `outputs`
 
-Backend-specific adapters, runtime-agent connectors, Terraform modules, and
-provider controllers are operator implementation. Takosumi core public v1 stays
+Backend-specific adapters, runtime-agent connectors, OpenTofu modules, and
+provider controllers are operator implementation. Takosumi public v1 stays
 limited to Source, Installation, Deployment, PlatformService, and InstallPlan.
 
 ## Related Pages

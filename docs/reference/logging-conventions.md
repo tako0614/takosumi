@@ -16,7 +16,7 @@ Takosumi HTTP request correlation middleware は current:
 すべてのログ行は 1 行の JSON object で、`\n` で終端します。複数行のログ行、本番での plaintext fallback、埋め込み null バイトは許可されません。
 
 ```text
-{"ts":"2026-05-05T10:00:00.123Z","level":"info","subsystem":"kernel","msg":"apply started","spaceId":"sp_01H...","operationId":"op_01H..."}
+{"ts":"2026-05-05T10:00:00.123Z","level":"info","subsystem":"service","msg":"apply started","spaceId":"sp_01H...","operationId":"op_01H..."}
 ```
 
 Takosumi は process 終了を跨いでログ行を buffer しない。shutdown を ack する前にすべての行が flush される。
@@ -30,7 +30,7 @@ Takosumi は process 終了を跨いでログ行を buffer しない。shutdown 
 | `ts`        | string | RFC 3339 UTC、ミリ秒精度 (Time / Clock Model 参照)。                                                                           |
 | `level`     | string | closed enum: `debug`、`info`、`warn`、`error`、`fatal`。                                                                       |
 | `msg`       | string | event の human-readable summary。命令形、現在時制。                                                                            |
-| `subsystem` | string | closed enum: `kernel`(Takosumi 本体)、`runtime-agent`、`cli`、`implementation`。reference adapter は `implementation` を使う。 |
+| `subsystem` | string | closed enum: `service`(Takosumi 本体)、`runtime-agent`、`cli`、`implementation`。reference adapter は `implementation` を使う。 |
 
 加えて、operation に関連する行は以下の correlation field のうち**少なくとも 1 つ** を持ちます:
 
@@ -107,12 +107,12 @@ CLI は自身のログ発行に同じ環境変数を読む。CLI 行は `subsyst
 
 共有 envelope に加えて、各 subsystem は次の狭い追加規則に従う。
 
-- **kernel** (Takosumi 本体) — HTTP 境界を跨ぐすべての行は `route` (一致した route template、resolved URL ではない) と `status` (整数としての HTTP status code) を持つ。
+- **service** (Takosumi 本体) — HTTP 境界を跨ぐすべての行は `route` (一致した route template、resolved URL ではない) と `status` (整数としての HTTP status code) を持つ。
 - **runtime-agent** — すべての行は `agentId` を持ち、外部 connector が scope にあるときは `connector` (credential ではなく `kubernetes`、`docker`、 `cloudflare` のような短い識別子) を持つ。
 - **cli** — すべての行は `command` (dotted CLI command path、例: `deploy.run`、`audit.verify`) と `argvDigest` (redaction 後の argument vector の digest、raw argv ではない) を持つ。
-- **implementation** — operator が attach した binding code から emit されるすべての行は `implementationBindingId` を持ち、関連する場合は resolved kind URI / connector id を持つ。reference kernel は reference-adapter 固有のフィールドとして `pluginId` も含みうる。
+- **implementation** — operator が attach した binding code から emit されるすべての行は `implementationBindingId` を持ち、関連する場合は resolved kind URI / connector id を持つ。Takosumi service は reference-adapter 固有のフィールドとして `pluginId` も含みうる。
 
-これらのフィールドは付加的: HTTP `requestId` を既に持つ行も、`kernel` subsystem から発行される際は `route` と `status` を持つ。
+これらのフィールドは付加的: HTTP `requestId` を既に持つ行も、`service` subsystem から発行される際は `route` と `status` を持つ。
 
 ## サンプリング {#sampling}
 

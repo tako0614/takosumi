@@ -1,6 +1,6 @@
 # Build Service Example {#operator-build-service-profile}
 
-This page is a non-normative operator configuration example. Takosumi core does
+This page is a non-normative operator configuration example. Takosumi does
 not interpret build profiles. An operator build service can read any profile,
 produce a prepared source payload, and submit its URL and digest to the
 Installer API.
@@ -22,7 +22,7 @@ nodes:
     dependsOn: []
 ```
 
-This `kind` is build-service vocabulary. It is not a Takosumi core public source
+This `kind` is build-service vocabulary. It is not a Takosumi public source
 contract.
 
 ## Handoff Responsibilities
@@ -38,7 +38,7 @@ The build service:
 
 Installer apply verifies payload digest, path safety, size caps, and operator
 binding selection before resource side effects. Build failures, container image
-verification, secret mounts, network policy, and Terraform/OpenTofu plans are
+verification, secret mounts, network policy, and OpenTofu plans are
 operator scope.
 
 ## Example Handoff

@@ -20,11 +20,11 @@ plan snapshot and binding snapshot on Deployment.
 
 ## Operator Boundary
 
-Takosumi core does not run Terraform/OpenTofu, own provider state, or manage backend credentials. Operator distributions
+Takosumi does not run Terraform/OpenTofu, own provider state, or manage backend credentials. Operator distributions
 own infra materialization and may use Terraform output, HCP Stacks publish output, remote state, cloud APIs, or static
 config to populate PlatformService inventory.
 
-`takosumi` is the reference operator distribution. It composes the kernel app, injects stores/capabilities, owns
+`takosumi` is the reference operator distribution. It composes the service app, injects stores/capabilities, owns
 account-plane APIs, and exposes dashboard / billing / OIDC / deploy facade surfaces.
 
 ## Workspace
@@ -35,7 +35,7 @@ takosumi/
 ├── src/
 │   ├── contract/        public DTOs and reference SDK types
 │   ├── installer/       source fetchers and Installer API client
-│   ├── kernel/          reference kernel implementation
+│   ├── service/          reference service implementation
 │   ├── runtime-agent/   runtime-agent host and lifecycle wire
 │   ├── cli/             CLI implementation
 │   └── entrypoints/     package subpath wrappers
@@ -63,7 +63,7 @@ Idempotency-Key header.
 ## Runtime Neutrality And Bun
 
 Source is Bun-native TypeScript. Keep host-specific compatibility behind existing runtime-adapter/fetcher boundaries.
-Kernel runtime primitives go through `src/kernel/shared/runtime/`.
+Service runtime primitives go through `src/service/shared/runtime/`.
 
 ## Commands
 
@@ -77,8 +77,8 @@ bun run lint:json-ld
 ## Work Rules
 
 - Keep public contract changes in `src/contract/` and update docs/tests in the same change.
-- Keep kernel-specific changes in `src/kernel/`.
+- Keep service-specific changes in `src/service/`.
 - Keep source fetch / Installer API client behavior in `src/installer/`.
-- Keep account-plane features in operator distribution docs/code, not Takosumi core.
-- Keep Terraform/OpenTofu ownership outside Takosumi core.
+- Keep account-plane features in operator distribution docs/code, not Takosumi.
+- Keep Terraform/OpenTofu ownership outside Takosumi.
 - Retired v0 source-DSL vocabulary must not be reintroduced as public v1 doctrine.

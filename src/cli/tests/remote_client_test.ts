@@ -1,13 +1,13 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { callKernel } from "../remote_client.ts";
+import { callTakosumiService } from "../remote_client.ts";
 
-test("callKernel sends auth + JSON body on write requests", async () => {
+test("callTakosumiService sends auth + JSON body on write requests", async () => {
   const originalFetch = globalThis.fetch;
   let observedHeaders: Headers | undefined;
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     observedHeaders = new Headers(init?.headers);
-    assert.equal(String(input), "https://kernel.example/v1/installations");
+    assert.equal(String(input), "https://service.example/v1/installations");
     return Promise.resolve(
       new Response(JSON.stringify({ status: "ok" }), {
         status: 200,
@@ -16,8 +16,8 @@ test("callKernel sends auth + JSON body on write requests", async () => {
     );
   }) as typeof fetch;
   try {
-    const result = await callKernel({
-      url: "https://kernel.example/",
+    const result = await callTakosumiService({
+      url: "https://service.example/",
       token: "installer-token",
       path: "/v1/installations",
       body: { spaceId: "space_1", source: { kind: "local", url: "./" } },
@@ -35,7 +35,7 @@ test("callKernel sends auth + JSON body on write requests", async () => {
   }
 });
 
-test("callKernel passes through GET requests without idempotency residue", async () => {
+test("callTakosumiService passes through GET requests without idempotency residue", async () => {
   const originalFetch = globalThis.fetch;
   let observedHeaders: Headers | undefined;
   globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
@@ -48,8 +48,8 @@ test("callKernel passes through GET requests without idempotency residue", async
     );
   }) as typeof fetch;
   try {
-    const result = await callKernel({
-      url: "https://kernel.example",
+    const result = await callTakosumiService({
+      url: "https://service.example",
       token: "installer-token",
       method: "GET",
       path: "/health",

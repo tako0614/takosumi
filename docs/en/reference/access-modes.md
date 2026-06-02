@@ -1,7 +1,7 @@
 # Access Modes {#access-modes}
 
 Access modes describe the strength of permission attached to a PlatformService
-binding in the operator catalog. Takosumi core treats the enum as recorded wire
+binding in the operator catalog. Takosumi treats the enum as recorded wire
 data; operator policy decides which binding may receive which access.
 
 ```text

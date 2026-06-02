@@ -15,7 +15,7 @@ Source
   -> apply records bindingsSnapshot and outputs on the Deployment
 ```
 
-Takosumi core guarantees the Deployment record. The data plane that receives
+Takosumi guarantees the Deployment record. The data plane that receives
 HTTP requests, host assignment, TLS certificates, DNS ownership proof, and
 backend route objects are managed by the operator distribution.
 
@@ -29,7 +29,7 @@ client
 ```
 
 Traffic authority is the Installation current Deployment pointer. Rollback
-moves that pointer back to a retained `succeeded` Deployment. Takosumi core does
+moves that pointer back to a retained `succeeded` Deployment. Takosumi does
 not resolve the Source again during rollback.
 
 ## Public Output
@@ -40,6 +40,6 @@ DNS verification tokens stay in operator evidence or secret storage.
 
 ## Related Pages
 
-- [Core Specification](./core-spec.md)
+- [Takosumi v1](./takosumi-v1.md)
 - [Installer API](./installer-api.md)
 - [Platform Services](./platform-services.md)

@@ -1,7 +1,7 @@
 /**
  * Installer-local default {@link InstallerFs}.
  *
- * The reference kernel injects its runtime adapter filesystem. This fallback
+ * The reference service injects its runtime adapter filesystem. This fallback
  * exists for standalone installer consumers and tests; it detects the host at
  * call time and uses the compatible filesystem API available there.
  */

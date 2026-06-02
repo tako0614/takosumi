@@ -1,14 +1,14 @@
 # Takosumi Docs {#takosumi-accounts-docs}
 
-Takosumi is the reference operator distribution built on Takosumi core.
+Takosumi is the reference operator distribution built on Takosumi.
 Cloud defines accounts, OIDC, billing, dashboards, approvals, deploy facades,
 PlatformService inventory, and provider evidence.
 
-Start with [Takosumi Distribution Contract v1](./spec.md). Takosumi core
+Start with [Takosumi Distribution Contract v1](./spec.md). Takosumi
 Source / Installation / Deployment / Installer API docs are canonical in the
 Takosumi docs site.
 
-## Core Contract
+## Takosumi Contract
 
 - [Cloud Distribution Contract v1](./spec.md)
 - [Account-Plane Profile](./operator-account-plane-profile.md)

@@ -1,6 +1,6 @@
 # Account Management Ownership Ledger {#account-plane-ownership-ledger}
 
-The ownership ledger is Takosumi's account management projection around core Installation (a record of an installed app) and Deployment (a record of a deployed version) records. It answers account-facing questions that OAuth alone cannot answer: who installed this app, who pays for it, who can revoke it, and what can be exported.
+The ownership ledger is Takosumi's account management projection around Takosumi Installation (a record of an installed app) and Deployment (a record of a deployed version) records. It answers account-facing questions that OAuth alone cannot answer: who installed this app, who pays for it, who can revoke it, and what can be exported.
 
 ## Ownership Chain
 
@@ -13,7 +13,7 @@ TakosumiAccount
       -> InstallationEvent[]
 ```
 
-Takosumi core remains the authority for source guard, install/deploy lifecycle, Deployment apply/rollback, and current Deployment pointer. Cloud manages account, Space, billing owner, launch token, capability, PlatformService inventory, and projection state.
+Takosumi remains the authority for source guard, install/deploy lifecycle, Deployment apply/rollback, and current Deployment pointer. Cloud manages account, Space, billing owner, launch token, capability, PlatformService inventory, and projection state.
 
 ## Projection Status
 
@@ -31,7 +31,7 @@ In-flight work such as deploying, rolling back, materializing, exporting, or imp
 shared-cell | dedicated | self-hosted
 ```
 
-Runtime mode is Cloud projection state. It is not a manifest field and not a Takosumi core Installer API status.
+Runtime mode is Cloud projection state. It is not a manifest field and not a Takosumi Installer API status.
 
 ## Capability Grants
 

@@ -14,7 +14,7 @@
  *   bodies.
  *
  * Rather than hard-coding a backend-specific switch in every retry / fail-closed
- * code path, the kernel and backend adapters MUST normalise their native error
+ * code path, the service and backend adapters MUST normalise their native error
  * shape onto this enum. Retry policy is then expressed in terms of the
  * normalised category, not the provider dialect, so a "retry on transient"
  * rule applies uniformly across all four clouds.
@@ -25,7 +25,7 @@
  * fail-closed.
  *
  * Backend adapters expose a `classifyXxxError(err) → ProviderErrorCategory`
- * helper alongside their native classifier so kernel-side code that does not
+ * helper alongside their native classifier so service-side code that does not
  * know which cloud it is talking to can still take a retry decision via
  * {@link isRetryableErrorCategory}.
  */
@@ -51,7 +51,7 @@ export type ProviderErrorCategory =
   | "unknown";
 
 /**
- * Categories that the kernel-side retry loop should retry on.
+ * Categories that the service-side retry loop should retry on.
  *
  * Note that `conflict` is intentionally NOT retried by this default policy —
  * conflicts are commonly retried at a higher level after re-fetching state
@@ -97,20 +97,20 @@ export interface NormalisedProviderError {
   readonly message: string;
   /** HTTP status when the underlying transport surfaced one. */
   readonly httpStatus?: number;
-  /** True when the kernel-side retry loop is allowed to retry this error. */
+  /** True when the service-side retry loop is allowed to retry this error. */
   readonly retryable: boolean;
 }
 
 /**
  * Phase 18.2 / H6 — Provider-agnostic classifier registry. Each provider
  * adapter registers its `classifyXxxErrorAsProviderCategory` adapter under its
- * provider key (`aws` / `gcp` / `k8s` / `cloudflare`). Kernel-side
+ * provider key (`aws` / `gcp` / `k8s` / `cloudflare`). Service-side
  * code that holds an error + a provider name (e.g. an apply orchestrator
  * routing operations through multiple adapters) can then call
  * {@link normalizeProviderError} once, without sniffing error shapes.
  *
  * The registry is mutated at adapter-load time and read by {@link
- * normalizeProviderError}; no runtime mutation is expected after the kernel
+ * normalizeProviderError}; no runtime mutation is expected after the service
  * has finished loading adapters. Callers that want a snapshot should copy the
  * result of {@link listRegisteredProviders}.
  */
@@ -141,7 +141,7 @@ export function listRegisteredProviders(): readonly string[] {
  * `"unknown"` so callers fail-closed (per the enum contract — `unknown` is
  * non-retryable).
  *
- * This is the single entry point that kernel code SHOULD use; provider
+ * This is the single entry point that service code SHOULD use; provider
  * adapters continue to expose their native classifier for tests / debugging.
  */
 export function normalizeProviderError(
@@ -153,7 +153,7 @@ export function normalizeProviderError(
   try {
     return classifier(error);
   } catch {
-    // A classifier throwing on a malformed input is itself a kernel bug; we
+    // A classifier throwing on a malformed input is itself a service bug; we
     // fall back to `unknown` so the apply path still fails-closed cleanly.
     return "unknown";
   }

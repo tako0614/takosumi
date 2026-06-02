@@ -13,12 +13,12 @@ The package provides:
 The package does not provide:
 
 - a Takosumi-specific source DSL
-- a Terraform provider replacement
-- a core-owned PlatformService catalog
+- an OpenTofu provider replacement
+- a Takosumi-owned PlatformService catalog
 - a mandatory implementation binding mechanism
 
 A compatible operator can keep the same Installer API and Deployment record
-while materializing PlatformServices through Terraform/OpenTofu, native
+while materializing PlatformServices through OpenTofu, native
 controllers, workflow engines, SaaS adapters, or its own runtime agent.
 
 ## Related Pages

@@ -28,7 +28,7 @@ OTLP exporter が読む Takosumi 環境変数:
 TAKOSUMI_OTLP_METRICS_ENDPOINT        URL of the collector /v1/metrics endpoint
 TAKOSUMI_OTLP_TRACES_ENDPOINT         URL of the collector /v1/traces endpoint
 TAKOSUMI_OTLP_HEADERS_JSON            extra headers (JSON object)
-TAKOSUMI_OTLP_SERVICE_NAME            OTLP service.name (default takosumi-kernel)
+TAKOSUMI_OTLP_SERVICE_NAME            OTLP service.name (default takosumi-service)
 TAKOSUMI_OTLP_FAIL_CLOSED             fail telemetry recording when export fails
 OTEL_EXPORTER_OTLP_METRICS_ENDPOINT   standard OTEL metrics endpoint fallback
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT    standard OTEL traces endpoint fallback
@@ -156,7 +156,7 @@ service.namespace         operator-set
 service.instance.id       pod / process identifier
 takosumi.role             takosumi-{api,worker,router,runtime-agent,log-worker}
 takosumi.environment      local | development | test | staging | production
-takosumi.release          kernel package version
+takosumi.release          service package version
 ```
 
 resource attribute は export batch ごとに 1 回付く。 metric point 単位の region / cluster 付与は OTLP collector の resource processor で operator 側が行う。

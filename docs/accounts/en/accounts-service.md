@@ -5,9 +5,9 @@ This page records the Cloud-compatible wire surface exposed by Takosumi Accounts
 ## API Base URLs
 
 - `Accounts API base URL`: Takosumi account management service.
-- `Takosumi Installer API base URL`: Takosumi core service.
+- `Takosumi Installer API base URL`: Takosumi service.
 
-Facade endpoints on the Accounts API base URL may share path names with core Installer API endpoints. They are still Takosumi Accounts facade routes because they add account authorization, approval, billing, and projection behavior before brokering to Takosumi core.
+Facade endpoints on the Accounts API base URL may share path names with Takosumi Installer API endpoints. They are still Takosumi Accounts facade routes because they add account authorization, approval, billing, and projection behavior before brokering to Takosumi.
 
 ## Endpoint Groups
 
@@ -17,7 +17,7 @@ Facade endpoints on the Accounts API base URL may share path names with core Ins
 | Upstream identity / passkey | `/v1/auth/upstream/*`, `/v1/auth/passkeys/*`                                                                                                    |
 | Account / PAT               | `GET/POST /v1/account/tokens`, `POST /v1/account/tokens/{tokenId}/revoke`                                                                       |
 | Billing usage               | `POST /v1/installations/{id}/billing/usage-reports`                                                                                             |
-| Installer facade            | five `/v1/installations*` core workflow routes                                                                                                  |
+| Installer facade            | five `/v1/installations*` Takosumi workflow routes                                                                                                  |
 | Lifecycle read/mutation     | list/get/delete/status/materialize/export/import/events                                                                                         |
 | Launch token                | `POST /v1/installations/{id}/launch-token/consume`                                                                                              |
 | Dashboard                   | browser-rendered views guarded by account session                                                                                               |

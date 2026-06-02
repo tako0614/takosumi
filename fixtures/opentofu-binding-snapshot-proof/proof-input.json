@@ -1,0 +1,50 @@
+{
+  "kind": "takosumi.opentofu-binding-snapshot-proof-input@v1",
+  "live": false,
+  "spaceId": "space_opentofu_fixture",
+  "source": {
+    "kind": "local",
+    "url": "source"
+  },
+  "bindings": [
+    {
+      "name": "oidc",
+      "serviceKind": "identity.oidc@v1",
+      "required": true
+    },
+    {
+      "name": "assets",
+      "servicePath": "storage.fixture.assets",
+      "required": true
+    }
+  ],
+  "services": [
+    {
+      "path": "identity.fixture.oidc",
+      "kind": "identity.oidc@v1",
+      "material": {
+        "issuerUrl": "oidc_issuer_url",
+        "clientId": "oidc_client_id",
+        "clientSecret": "oidc_client_secret"
+      }
+    },
+    {
+      "path": "storage.fixture.assets",
+      "kind": "object-store@v1",
+      "labels": {
+        "profile": "assets"
+      },
+      "material": {
+        "bucket": "assets_bucket",
+        "endpoint": "assets_endpoint"
+      }
+    }
+  ],
+  "outputs": {
+    "file": "tofu-output.json",
+    "ref": "fixture://opentofu-binding-snapshot-proof/tofu-output.json"
+  },
+  "operator": {
+    "opentofuApplyRef": "fixture://opentofu-binding-snapshot-proof/apply"
+  }
+}
