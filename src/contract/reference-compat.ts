@@ -3,8 +3,8 @@
 // The Takosumi v1 Installer API contract is owned by the package root
 // (`@takosjp/takosumi/contract`) and the focused `installer-api` subpath.
 // This umbrella re-exports the larger reference
-// implementation API used by service, runtime-agent, provider, and handler
-// packages while deploy-space compatibility types are being retired.
+// implementation API used by the service and runtime-agent surfaces while
+// deploy-space compatibility types are being retired.
 //
 // Scope: the re-export list is an explicit allowlist of legacy reference
 // helpers (JSON value scalars, condition / reason enums, deploy-domain
