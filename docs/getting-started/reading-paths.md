@@ -38,7 +38,7 @@
 1. [Takosumi を拡張する](../extending.md)
 2. [仕様境界](../reference/spec-boundaries.md)
 3. [プラットフォームサービス](../reference/platform-services.md)
-4. implementation notes in the operator distribution or `takosumi-plugins`
+4. implementation notes in the operator distribution
 
 ## Takosumi v1 に関わる人 {#takosumi-v1-contributors}
 

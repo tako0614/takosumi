@@ -6,7 +6,7 @@ Takosumi ecosystem surfaces have different owners and compatibility promises.
 | --- | --- |
 | Takosumi | Can this Source be installed, deployed, rolled back, and recorded? |
 | Operator distribution | How are account plane, PlatformService inventory, backend behavior, and OpenTofu state provided? |
-| Integration packages | How are runtime-agent connectors, inventory importers, and backend adapters provided? |
+| Operator implementation | How are runtime-agent connectors, inventory importers, and backend adapters provided? |
 
 ## Takosumi
 
@@ -22,9 +22,9 @@ Operator distributions own account-facing behavior and backend operation: accoun
 PlatformService inventory, OpenTofu state where used, OIDC, billing, dashboard, deploy facade, runtime and
 gateway choices.
 
-## Integration Packages
+## Operator Implementation
 
-`takosumi-plugins` contains operator-adoptable inventory importers, runtime-agent connectors, and backend adapters. It
+Operator implementation contains operator-owned inventory importers, runtime-agent connectors, and backend adapters. It
 is not an OpenTofu provider replacement.
 
 ## Related

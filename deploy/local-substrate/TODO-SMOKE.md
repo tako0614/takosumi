@@ -19,17 +19,17 @@ Takosumi-only 化に伴い `yurucommu-a` / `yurucommu-b` の直起動 + federati
 既存 worker kind implementations:
 
 - `takosumi/docs/kinds/v1/worker.jsonld` — portable worker descriptor
-- `takosumi-plugins/packages/kind-cloudflare-worker/` — Cloudflare Workers native binding
-- `takosumi-plugins/packages/kind-deno-deploy-worker/` — Deno Deploy native binding
+- operator-owned Cloudflare Workers native binding
+- operator-owned deploy-target native binding
 
-native binding は `TakosumiPlugin` factory を返し、必要な lifecycle client は DI できる (= mock 化容易)。
+native binding は operator-owned execution binding として実装し、必要な lifecycle client は DI できる (= mock 化容易)。
 
 **必要な新規 module + 工数見積もり**:
 
 | Sub-task                               | 内容                                                                                                                                                                                                                                                                                        |                 工数 |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------: |
 | (1) `local-miniflare-worker` kind 実装 | `packages/kind-local-miniflare-worker/` 新規: `MiniflareLifecycleClient` impl — prepared source の `spec.entrypoint` を読み、miniflare subprocess を spawn + component `spec` の D1/R2/KV/Queue/DO bindings を flag 解釈 + Caddy admin API で `<scriptName>.app.takosumi.test` route 追加。 |                 4-6h |
-| (2) factory wire                       | local-substrate bootstrap で local implementation subpath を import し、`createTakosumiService({ plugins })` に渡す。 local mode (= TAKOSUMI_DEV_MODE=1) なら Cloudflare Workers kind の代わりに local-miniflare kind を使う。                                                           |                   1h |
+| (2) factory wire                       | local-substrate bootstrap で operator-owned local implementation を wire する。 local mode (= TAKOSUMI_DEV_MODE=1) なら Cloudflare Workers kind の代わりに local-miniflare kind を使う。                                                           |                   1h |
 | (3) installer-mock の本物化            | 現状 `installer-mock/main.ts` は fixture JSON 返すだけ。 service installer dry-run を呼ぶ shim に refactor、または Accounts 側の dry-run contract を `/v1/installations/dry-run` と統合                                                                                                      |                 2-4h |
 | (4) prepared source pipeline (簡易版)  | yurucommu repo で通常の package scripts を事前に実行し、生成済み source tree を prepared source snapshot として pin する shim service は follow-up                                                                                                                                          |                 1-2h |
 | (5) federation 復活 smoke              | 新 `scripts/yurucommu-install-federation.sh`: yurucommu source fixture を 2 つ複製 (metadata.id + route 差別化) → POST /v1/installations x 2 → allocated subdomain 2 個取得 → 旧 federation-follow.sh のロジックで Follow → Accept poll                                                            |                 2-3h |

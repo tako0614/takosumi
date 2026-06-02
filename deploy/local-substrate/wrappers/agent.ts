@@ -11,14 +11,10 @@
  *   - isolates docker.sock / subprocess privilege OFF the control plane that
  *     also serves OIDC / billing / dashboard.
  *
- * Like the old service wrapper this imports the runtime-agent + native
- * connectors from local /workspace + /plugins (under active development) rather
- * than the JSR/npm-pinned cli, and uses `buildLocalSubstrateRegistry` so
- * public-DNS providers (route53 / cloud-dns / cloudflare-dns) are import-time
- * denied — see /local-substrate-factories/local-substrate-factories.ts.
- *
- * Runs with the local workspace mounts so /plugins specifier resolution is
- * unchanged.
+ * The local substrate no longer imports a sibling provider package. OpenTofu /
+ * provider materialization is operator-owned, so this agent starts with an
+ * empty connector registry unless the operator wrapper supplies its own
+ * registry implementation.
  */
 import { serveRuntimeAgent } from "/workspace/src/runtime-agent/server.ts";
 import { LIFECYCLE_AGENT_TOKEN_ENV } from "/workspace/src/contract/runtime-agent-lifecycle.ts";
@@ -46,7 +42,7 @@ const agent = serveRuntimeAgent({
 
 console.log(
   `[local-substrate-agent] runtime-agent at ${agent.url} ` +
-    `(${registry.size()} connectors, public DNS providers denied at import time)`,
+    `(${registry.size()} connectors)`,
 );
 
 const runtime = currentRuntime();

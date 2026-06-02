@@ -1,10 +1,10 @@
 # Takosumi AWS Kind Runbook
 
-This directory documents the AWS surface as **operator-owned scope**: AWS native kind implementations (`takosumi-plugins/packages/kind-aws-*`) and runtime-agent connectors (`takosumi-plugins/packages/runtime-agent-connectors/src/connectors/aws/`) provide AWS lifecycle coverage when the operator wires them into their distribution. The deploy artifact (the Terraform / CDK / Pulumi that lands the Takosumi service image and runtime-agent image on AWS infrastructure) is also the operator's responsibility. Operators provide the production-grade AWS IaC stack for their distribution.
+This directory documents the AWS surface as **operator-owned scope**. AWS lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent connector wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on AWS infrastructure is also the operator's responsibility.
 
 ## Why no reference deploy here
 
-The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. AWS / GCP / Azure / k8s are operator-owned targets: operators run the service image on whatever AWS compute they prefer (ECS / Fargate / EC2 / EKS), point the service at a Postgres database (RDS / Aurora), and attach the needed AWS implementation subpaths such as `@takosjp/takosumi-plugins/kind/aws-fargate-web-service`, `@takosjp/takosumi-plugins/kind/aws-rds-postgres`, `@takosjp/takosumi-plugins/kind/aws-s3-object-store`, or `@takosjp/takosumi-plugins/kind/aws-route53-gateway`.
+The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. AWS / GCP / Azure / k8s are operator-owned targets: operators run the service image on whatever AWS compute they prefer (ECS / Fargate / EC2 / EKS), point the service at a Postgres database (RDS / Aurora), and expose the resulting databases, buckets, queues, DNS routes, and runtimes through PlatformService inventory.
 
 ## Required runtime shape
 
@@ -33,13 +33,13 @@ Both service and runtime-agent are stateless; scale horizontally with Fargate se
 ```sh
 TAKOSUMI_AWS_ACCESS_KEY_ID=... \
 TAKOSUMI_AWS_SECRET_ACCESS_KEY=... \
-TAKOSUMI_PLUGIN_LIVE_PROVIDER=aws \
-TAKOSUMI_PLUGIN_LIVE_PROOF_FIXTURE_FILE=fixtures/live-provisioning/aws.shape-v1.json \
+TAKOSUMI_PROVIDER_LIVE_PROVIDER=aws \
+TAKOSUMI_PROVIDER_LIVE_PROOF_FIXTURE_FILE=fixtures/live-provisioning/aws.shape-v1.json \
 bun run live-provisioning-smoke
 ```
 
-Use `TAKOSUMI_PLUGIN_LIVE_PROOF_MODE=live` plus
-`TAKOSUMI_PLUGIN_GATEWAY_URL` / provider-specific gateway credentials when
+Use `TAKOSUMI_PROVIDER_LIVE_PROOF_MODE=live` plus
+`TAKOSUMI_PROVIDER_GATEWAY_URL` / provider-specific gateway credentials when
 running the destructive live proof. Without live mode, the command runs the
 credential-free fixture proof and reports `"live": false`.
 

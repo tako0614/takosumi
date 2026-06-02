@@ -27,7 +27,7 @@ output, static config, cloud APIs, or dashboard input. Takosumi records the
 resolved binding snapshot on Deployment; it does not materialize provider
 infrastructure.
 
-Backend adapters and runtime-agent connectors live in `takosumi-plugins/` as
+Backend adapters and runtime-agent connectors live in `operator distribution/` as
 optional reference implementation. Operators attach them through
 `createTakosumiService({ plugins })` or an equivalent distribution-local binding layer.
 Those adapter subpaths are package API, not Takosumi source authoring

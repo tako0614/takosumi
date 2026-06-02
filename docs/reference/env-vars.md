@@ -66,7 +66,6 @@ Reference Takosumi service が BindingSelection の PlatformService path を ope
 | `TAKOSUMI_BOOT_TIMEOUT_LOCK_STORE_SEC`             | seconds | `30`    | no       | lock store readiness timeout。                                     |
 | `TAKOSUMI_BOOT_TIMEOUT_SECRET_PARTITION_SEC`       | seconds | `15`    | no       | secret partition readiness timeout。                               |
 | `TAKOSUMI_BOOT_TIMEOUT_PUBLIC_LISTENER_SEC`        | seconds | `15`    | no       | service control-plane listener bind timeout (historical env name)。 |
-| `TAKOSUMI_BOOT_TIMEOUT_PLUGIN_BOOTSTRAP_SEC`       | seconds | `60`    | no       | binding bootstrap timeout (historical env name)。                  |
 | `TAKOSUMI_BOOT_TIMEOUT_RUNTIME_AGENT_REGISTRY_SEC` | seconds | `60`    | no       | runtime-agent registry timeout。                                   |
 
 ## Observability
@@ -131,7 +130,7 @@ runtime-agent process は cloud SDK credential を保持します。`AWS_*`、 `
 
 ## Binding Config
 
-An operator using the Takosumi service passes a reference adapter array through the `plugins` option to `createTakosumiService({ plugins })`. adapter が必要とする credential / config は factory option か runtime-agent host env から読みます。implementation package の取得方法は operator distribution の責務です。
+An operator using the Takosumi service wires operator-owned implementation bindings at service construction time. Adapter が必要とする credential / config は factory option か runtime-agent host env から読みます。implementation code の取得方法は operator distribution の責務です。
 
 ## 関連ページ
 

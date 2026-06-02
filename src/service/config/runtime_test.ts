@@ -80,21 +80,20 @@ test("runtime config loader rejects stale backend selectors", async () => {
   );
 });
 
-test("runtime config loader rejects retired port-based plugin selectors", async () => {
+test("runtime config loader rejects retired env-based implementation selectors", async () => {
   await assert.rejects(
     () =>
       loadRuntimeConfigFromEnv({
         env: {
           TAKOSUMI_STORAGE_PLUGIN: "takos.storage.test",
           TAKOSUMI_PROVIDER_PLUGIN: "takos.provider.test",
-          TAKOSUMI_KERNEL_PLUGIN_SELECTIONS: '{"storage":"foo"}',
         },
       }),
     (error) => {
       assert.ok(error instanceof RuntimeConfigError);
       const codes = error.diagnostics.map((diagnostic) => diagnostic.code);
       assert.ok(codes.every((code) => code === "stale_runtime_selector"));
-      assert.equal(codes.length, 3);
+      assert.equal(codes.length, 2);
       return true;
     },
   );

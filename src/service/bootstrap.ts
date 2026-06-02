@@ -199,13 +199,10 @@ export { registerDefaultArtifactKinds };
 /**
  * TakosumiPlugin instances bundled with the service distribution.
  *
- * Cloud / host-specific factories live in the separate takosumi-plugins
- * repository as `@takosjp/takosumi-plugins/kind/<alias>` subpaths such as
- * `@takosjp/takosumi-plugins/kind/cloudflare-worker` or
- * `@takosjp/takosumi-plugins/kind/docker-compose-web-service`. Takosumi no longer
- * carries cloud SDK imports, so this function intentionally returns an empty
- * array: operators explicitly import the implementations they want and pass their
- * factories to `createTakosumiService({ plugins: [...] })`.
+ * Cloud / host-specific factories live in operator distributions. Takosumi no
+ * longer carries cloud SDK imports or a sibling implementation package, so this
+ * function intentionally returns an empty array: operators explicitly pass the
+ * implementation bindings they own to `createTakosumiService({ plugins: [...] })`.
  *
  * The function is retained as a no-op so existing callers don't break, but
  * its return value is `readonly []`. Future major versions may remove it.

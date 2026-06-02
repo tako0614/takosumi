@@ -56,7 +56,7 @@ export interface PublishOptions {
 }
 
 export interface TakosumiPlugin {
-  /** Plugin id, e.g. `"@takosjp/takosumi-plugins/kind/cloudflare-worker"`. */
+  /** Operator-scoped implementation id, e.g. `"operator.takosumi.provider.cloudflare-worker"`. */
   readonly name: string;
   readonly version: string;
   /**
@@ -131,8 +131,8 @@ export interface TakosumiPlugin {
   /**
    * @deprecated Renamed to `materializeOutput`. The installer reads
    * `materializeOutput ?? publishMaterial`, so this alias only exists to accept
-   * pre-rename plugins. Remove once no plugin in `takosumi-plugins` defines
-   * `publishMaterial` (track via `grep -rl 'publishMaterial' takosumi-plugins`).
+   * pre-rename implementations. Remove once no operator implementation defines
+   * `publishMaterial`.
    */
   publishMaterial?(
     ctx: OutputMaterialContext,
@@ -151,7 +151,7 @@ export interface TakosumiPlugin {
 
   /**
    * @deprecated Renamed to `applyBinding`. The installer reads
-   * `applyBinding ?? applyListen`. Remove once no plugin in `takosumi-plugins`
+   * `applyBinding ?? applyListen`. Remove once no operator implementation
    * and no service binding handler defines `applyListen`.
    */
   applyListen?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
@@ -229,7 +229,7 @@ export type OutputMaterial = Readonly<
 
 /**
  * @deprecated Renamed to {@link OutputMaterial}. Remove once no consumer in
- * `takosumi-plugins` imports `PublicationMaterial`.
+ * operator implementation imports `PublicationMaterial`.
  */
 export type PublicationMaterial = OutputMaterial;
 
@@ -280,7 +280,7 @@ export interface ResolvedInputBinding {
 
 /**
  * @deprecated Renamed to {@link ResolvedInputBinding}. Remove once no consumer
- * in `takosumi-plugins` imports `ResolvedListenBinding`.
+ * operator implementation imports `ResolvedListenBinding`.
  */
 export type ResolvedListenBinding = ResolvedInputBinding;
 
@@ -310,7 +310,7 @@ export interface TakosumiPluginApplyContext {
   /**
    * @deprecated Renamed to `inputMaterials`. The installer still populates this
    * field with the same map, so it is required for now. Make it optional and
-   * then remove once no service binding code or `takosumi-plugins` package reads
+   * then remove once no service binding code or operator implementation reads
    * `ctx.listenedMaterials`.
    */
   readonly listenedMaterials: Readonly<
@@ -446,7 +446,7 @@ export type NativeKindOutputMaterialContext<Outputs = JsonObject> =
   };
 
 /**
- * Operations for a native kind implementation that wants the reference plugin shape
+ * Operations for a native kind implementation that wants the reference implementation binding shape
  * without using the retired shape/provider compatibility API.
  */
 export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
@@ -481,7 +481,7 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
    * @deprecated Renamed to `materializeOutput`;
    * `takosumiPluginFromNativeKindOperations` reads
    * `materializeOutput ?? publishMaterial`. Remove once the cloudflare D1 /
-   * KV / queue / vectorize providers in `takosumi-plugins` define
+   * KV / queue / vectorize provider implementations define
    * `materializeOutput` instead of `publishMaterial`.
    */
   publishMaterial?(
@@ -491,7 +491,7 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
 
 /**
  * Build a reference `TakosumiPlugin` from native kind operations. This is the
- * current helper for native kind implementations in `takosumi-plugins`: the implementation
+ * current helper for native kind implementations: the implementation
  * owns backend-specific operations, while the reference service still receives a
  * Vite-style plain-array `TakosumiPlugin`.
  */

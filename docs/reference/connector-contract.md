@@ -102,15 +102,15 @@ envelope version は Connector record の一部です。Connector は envelope u
 
 operator 専用 operation は Installer bearer や asset writer token ではなく operator bearer で gate される。 runtime-agent はユーザーに代わってこれらの operation を実行しない。
 
-## Reference service adapter からの利用 {#kernelplugin-consumption}
+## Reference service adapter からの利用 {#implementation-adapter-consumption}
 
-Reference service adapter (`TakosumiPlugin`) は Connector の下流 consumer (= service 側の implementation adapter) です。Source author は Connector を直接選ばず、 operator distribution の resolution が implementation binding / Connector binding を選びます。
+Reference service adapter は Connector の下流 consumer (= service 側の implementation adapter) です。Source author は Connector を直接選ばず、 operator distribution の resolution が implementation binding / Connector binding を選びます。
 
 - reference adapter は依存する `connector:<id>` identity を宣言する。current reference resolver は apply 時に各宣言済み identity を確認し、宣言された Connector が active Space に不可視であれば apply を reject する。
 - reference adapter は resolved Connector record (`id`、connector-local selector field、`acceptedArtifactKinds`、`envelopeVersion`) を受け取るが、 Connector の credential は受け取らない。credential は runtime-agent host または operator implementation が選択した別の service-external execution host に留まる。
 - reference adapter は新しい `connector:<id>` identity を作成してはならない。新しい Connector が必要な adapter は operator の `install` operation を通じて要求する。
 
-service-side implementation adapter (`TakosumiPlugin`) の record schema と registration API は [Kind Binding Implementations](./kind-bindings.md) を参照。
+service-side implementation adapter の record schema と registration API は [Kind Binding Implementations](./kind-bindings.md) を参照。
 
 ## Runtime-Agent ホスティング {#runtime-agent-hosting}
 

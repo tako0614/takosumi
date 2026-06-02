@@ -1,13 +1,12 @@
-# Reference Backend Packages {#kind-packages}
+# Operator Backend Implementations {#kind-packages}
 
-このページは reference implementation の package boundary だけを説明します。
+このページは operator backend implementation の境界を説明します。
 Takosumi v1 の public contract は Source / Installation / Deployment /
 PlatformService / InstallPlan です。
 
-`@takosjp/takosumi-plugins` は operator distribution が選べる backend adapter と
-runtime-agent connector の package です。operator はこの package を使っても、
-OpenTofu、native controller、workflow engine、SaaS adapter、自前
-connector を使ってもかまいません。
+Takosumi は backend adapter package を publish しません。operator は OpenTofu、
+Helm、native controller、workflow engine、SaaS adapter、自前 connector を使い、
+その output を PlatformService inventory と Deployment evidence に接続します。
 
 ## Ownership
 
@@ -15,15 +14,15 @@ connector を使ってもかまいません。
 | -------------------------- | ------------------------------------------ |
 | Installer API DTO          | `@takosjp/takosumi`                        |
 | Takosumi service runtime   | `@takosjp/takosumi`                        |
-| backend adapters           | `@takosjp/takosumi-plugins` or operator    |
-| runtime-agent connectors   | `@takosjp/takosumi-plugins` or operator    |
+| backend adapters           | operator distribution                     |
+| runtime-agent connectors   | operator distribution                     |
 | provider state / OpenTofu  | operator distribution / `takos-private/`   |
 
-Backend package exports are implementation choices. They are not required for
-compatible Takosumi operators.
+Backend implementation exports are operator choices. They are not required for
+compatible Takosumi operators and are not part of the public source contract.
 
 ## Related
 
-- [Reference Implementation Exports](./reference-plugin-exports.md)
+- [Operator Implementation Exports](./operator-implementation-exports.md)
 - [Platform Services](./platform-services.md)
 - [Extending Takosumi](../extending.md)

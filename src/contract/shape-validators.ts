@@ -1,8 +1,8 @@
 /**
  * Shared shape-validation primitives for catalog-derived kind implementations.
  *
- * Every `@takosjp/takosumi-plugins/kind/*` implementation validates its
- * component `spec` and `outputs` with the same small set of predicates and issue-pushers. These
+ * Operator-owned kind implementations validate their component `spec` and
+ * `outputs` with the same small set of predicates and issue-pushers. These
  * helpers used to be copy-pasted into a per-package `src/_validators.ts`
  * (nine near-identical copies that had already drifted, including the
  * security-relevant credential checks). They now live here, in the
@@ -11,8 +11,7 @@
  * and the copies cannot diverge.
  *
  * Only helpers with at least one consumer are exported. Kind-specific
- * validation that is not shared (for example gateway route grammar or the
- * postgres size-class enum) stays in the owning implementation package.
+ * validation stays in the owning operator implementation.
  */
 import type { ShapeValidationIssue } from "./shape.ts";
 

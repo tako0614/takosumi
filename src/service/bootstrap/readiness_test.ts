@@ -31,7 +31,7 @@ test("worker readiness reports booting before the daemon completes an initial ti
   );
 });
 
-test("readiness fails strict implementation binding mode when no plugins are wired", async () => {
+test("readiness fails strict implementation binding mode when no implementation bindings are wired", async () => {
   const probes = createRoleReadinessProbes({
     role: "takosumi-api",
     context: createInMemoryAppContext(),
@@ -50,6 +50,6 @@ test("readiness fails strict implementation binding mode when no plugins are wir
   assert.equal(ready.ok, false);
   assert.match(
     String(ready.reason),
-    /implementationBindings: strict implementation binding mode requires at least one TakosumiPlugin/,
+    /implementationBindings: strict implementation binding mode requires at least one operator implementation binding/,
   );
 });

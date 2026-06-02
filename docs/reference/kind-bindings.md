@@ -1,4 +1,4 @@
-# Reference Backend Binding {#kind-binding-implementations}
+# Operator Backend Binding {#kind-binding-implementations}
 
 このページは Takosumi service に backend adapter を接続する実装メモです。public
 v1 contract ではありません。
@@ -8,18 +8,16 @@ operator は install / deploy request や account-plane UI で選ばれた
 service は resolver から `ResolvedBinding` を受け取り、Deployment
 `bindingsSnapshot` に保存します。
 
-Takosumi service では backend adapter を plain array で渡せます。compatible
-implementation は同じ Deployment record を保ったまま、別の controller や
-OpenTofu workflow で実装できます。
+Takosumi service では operator-owned binding implementation を plain array で渡せます。compatible
+implementation は同じ Deployment record を保ったまま、OpenTofu workflow、native controller、SaaS adapter で実装できます。
 
 ## Source roots
 
 - `src/contract/installer-api.ts` — public DTO
 - `src/service/domains/installer/` — Source / InstallPlan / Deployment lifecycle
-- `takosumi-plugins/` — optional reference adapters and connectors
+- operator distribution — optional adapters, connectors, inventory importers
 
 ## Related
 
-- [Reference Backend Packages](./kind-packages.md)
-- [Reference Adapter Loading](./plugin-loading.md)
+- [Operator Backend Implementations](./kind-packages.md)
 - [Platform Services](./platform-services.md)

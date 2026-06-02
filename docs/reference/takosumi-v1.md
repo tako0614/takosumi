@@ -100,7 +100,7 @@ provider resource や workload data を汎用 rollback する責務は Takosumi 
 | --- | --- |
 | Takosumi | Source / Installation / Deployment / PlatformService DTO、Installer API、guard、ledger。 |
 | Operator distribution | account plane、PlatformService inventory、provider binding、OpenTofu state、dashboard、deploy facade。 |
-| takosumi-plugins | operator-adoptable inventory importers、runtime-agent connectors、backend adapters。 |
+| operator implementation | operator-adoptable inventory importers、runtime-agent connectors、backend adapters。 |
 
 ## 関連ページ
 

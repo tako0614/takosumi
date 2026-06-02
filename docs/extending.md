@@ -5,7 +5,7 @@ Takosumi v1 の拡張は operator integration です。source repo に Takosumi 
 | やりたいこと | 所有者 |
 | --- | --- |
 | DB / OIDC / bucket / queue などを使える service として出す | operator PlatformService inventory |
-| OpenTofu output を inventory に取り込む | operator distribution or `takosumi-plugins` importer |
+| OpenTofu output を inventory に取り込む | operator distribution importer |
 | workload runtime へ credential / endpoint を渡す | runtime-agent connector / backend adapter |
 | account / billing / dashboard / deploy facade を出す | operator distribution |
 
@@ -37,7 +37,7 @@ PlatformService と Installer API に閉じます。
 
 ## OpenTofu との境界
 
-OpenTofu provider を Takosumi plugin で再実装しません。OpenTofu が state を持つべき resource は operator layer で
+OpenTofu provider を Takosumi-specific adapter で再実装しません。OpenTofu が state を持つべき resource は operator layer で
 materialize し、Takosumi は output inventory を参照します。
 
 ## 確認項目
