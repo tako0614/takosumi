@@ -5,7 +5,7 @@ export * from "../contract/mod.ts";
 // never self-serves, so the composer owns serving and route extension.
 export {
   createTakosumiService,
-  defaultBundledPlugins,
+  defaultBundledImplementations,
   registerDefaultArtifactKinds,
 } from "../service/bootstrap.ts";
 export type {

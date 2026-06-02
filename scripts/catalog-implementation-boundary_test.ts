@@ -283,9 +283,9 @@ test("takosumi scripts use narrow contract subpaths", async () => {
   }
 });
 
-test("service plugin registry uses the plugin contract subpath", async () => {
+test("service implementation registry uses the implementation contract subpath", async () => {
   const broadCompatSubpath = "takosumi-contract/reference/" + "compat";
-  const files = await listTsFiles(new URL("src/service/plugins/", ROOT));
+  const files = await listTsFiles(new URL("src/service/implementation-bindings/", ROOT));
   for (const file of files) {
     const source = await readText(file);
     assert.equal(
@@ -293,7 +293,7 @@ test("service plugin registry uses the plugin contract subpath", async () => {
       false,
       `${
         relativeToRoot(file)
-      }: plugin registry code must import reference/plugin directly`,
+      }: implementation registry code must import reference/implementation directly`,
     );
   }
 });
@@ -303,24 +303,24 @@ test("reference compat does not expose legacy provider bridge", async () => {
     new URL("src/contract/reference-compat.ts", ROOT),
   );
   assert.equal(
-    compat.includes("./provider-plugin.ts"),
+    compat.includes("./provider-adapter.ts"),
     false,
-    "reference/compat must not re-export the legacy ProviderPlugin bridge",
+    "reference/compat must not re-export the legacy ProviderAdapter bridge",
   );
 
   const tsconfig = await readJson<TsConfig>(new URL("tsconfig.json", ROOT));
   assert.deepEqual(
     tsconfig.compilerOptions?.paths?.[
-      "takosumi-contract/internal/provider-plugin"
+      "takosumi-contract/internal/provider-adapter"
     ],
-    ["./src/contract/provider-plugin.ts"],
+    ["./src/contract/provider-adapter.ts"],
     "legacy provider bridge stays reachable only via the internal workspace-local contract alias",
   );
   assert.deepEqual(
     tsconfig.compilerOptions?.paths?.[
-      "@takos/" + "takosumi-contract/internal/provider-plugin"
+      "@takos/" + "takosumi-contract/internal/provider-adapter"
     ],
-    ["./src/contract/provider-plugin.ts"],
+    ["./src/contract/provider-adapter.ts"],
     "legacy provider bridge stays reachable only via the internal compatibility contract alias",
   );
 });
@@ -384,16 +384,16 @@ test("reference implementation docs show explicit operator lifecycle clients", a
     "docs/en/reference/operator-implementation-exports.md",
   ] as const;
   const forbiddenPhrases = [
-    "cloudflareWorkerPlugin()",
-    "cloudflareR2ObjectStorePlugin()",
-    "cloudflareWorkerPlugin(...)",
-    "cloudflareR2ObjectStorePlugin(...)",
-    "cloudflareWorkerPlugin({ accountId })",
-    'awsS3ObjectStorePlugin({ region: "us-east-1" })',
-    'awsRdsPostgresPlugin({ region: "us-east-1" })',
-    'dockerComposeWebServicePlugin({ hostBinding: "127.0.0.1" })',
-    "dockerPostgresPlugin()",
-    "filesystemObjectStorePlugin()",
+    "cloudflareWorkerImplementation()",
+    "cloudflareR2ObjectStoreImplementation()",
+    "cloudflareWorkerImplementation(...)",
+    "cloudflareR2ObjectStoreImplementation(...)",
+    "cloudflareWorkerImplementation({ accountId })",
+    'awsS3ObjectStoreImplementation({ region: "us-east-1" })',
+    'awsRdsPostgresImplementation({ region: "us-east-1" })',
+    'dockerComposeWebServiceImplementation({ hostBinding: "127.0.0.1" })',
+    "dockerPostgresImplementation()",
+    "filesystemObjectStoreImplementation()",
   ] as const;
 
   for (const doc of docs) {

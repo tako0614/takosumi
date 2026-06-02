@@ -17,7 +17,7 @@ test("BootstrapMigrationService treats storage migrations as adapter-owned", asy
   }).run();
 
   assert.equal(report.ok, true);
-  assert.equal(report.storageBackend, "plugin");
+  assert.equal(report.storageBackend, "implementation");
   assert.equal(report.skipped, true);
   assert.equal(report.skipReason, "adapter-owned");
   assert.equal(report.migrations, undefined);

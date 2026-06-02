@@ -27,7 +27,7 @@ import type {
   IsoTimestamp,
   JsonObject,
 } from "takosumi-contract/reference/compat";
-import type { PlatformContext } from "takosumi-contract/internal/provider-plugin";
+import type { PlatformContext } from "takosumi-contract/internal/provider-adapter";
 import type { PlatformOperationRecoveryMode } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { objectAddress } from "takosumi-contract/reference/compat";
 import type { ManifestResource } from "./_internal_manifest_types.ts";

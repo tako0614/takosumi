@@ -117,7 +117,7 @@ function safeEnv(): Readonly<Record<string, string | undefined>> {
   // Read env via the runtime adapter so this module compiles and runs
   // on Deno, Node, Cloudflare Workers, or any Web-standard JS runtime.
   // The adapter wraps the underlying API in try/catch, so a sandboxed
-  // context (e.g. plugin unit tests without --allow-env) gets an empty
+  // context (e.g. implementation unit tests without --allow-env) gets an empty
   // object instead of an exception.
   try {
     return currentRuntime().env.toObject();

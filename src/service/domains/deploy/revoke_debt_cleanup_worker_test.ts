@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import {
   type ApplyResult,
   type PlatformContext,
-  type ProviderPlugin,
+  type ProviderAdapter,
   registerProvider,
   type ResourceHandle,
   unregisterProvider,
-} from "takosumi-contract/internal/provider-plugin";
+} from "takosumi-contract/internal/provider-adapter";
 import type {
   PlatformOperationContext,
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
@@ -36,7 +36,7 @@ function provider(input: {
     handle: ResourceHandle,
     ctx: PlatformContext,
   ) => Promise<void>;
-}): ProviderPlugin {
+}): ProviderAdapter {
   return {
     id: input.id,
     version: "0.0.1",

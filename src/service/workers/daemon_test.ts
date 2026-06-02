@@ -105,7 +105,7 @@ test("worker task factories adapt apply, outbox, registry, and repair workers", 
   });
   const registryTask = createRegistrySyncWorkerTask({
     intervalMs: 1,
-    refs: [{ kind: "backend-plugin", ref: "demo@1.0.0" }],
+    refs: [{ kind: "backend-implementation", ref: "demo@1.0.0" }],
     syncProviderSupport: true,
     worker: {
       syncPackages: (refs) => {

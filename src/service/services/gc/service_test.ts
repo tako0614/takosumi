@@ -60,7 +60,7 @@ test("GC keeps old WorkloadRevision during rollback window", async () => {
   assert.equal(expired.deleteOperation?.dryRun, true);
 });
 
-test("GC plans prepared artifact/resource/plugin binding decisions without deleting", async () => {
+test("GC plans prepared artifact/resource/implementation binding decisions without deleting", async () => {
   const service = new GcRetentionService({
     protectedReferences: new InMemoryProtectedReferenceStore(),
   });
@@ -98,7 +98,7 @@ test("GC plans prepared artifact/resource/plugin binding decisions without delet
       activeBindingCount: 0,
       providerResourceActive: false,
     }],
-    backendPlugins: [{
+    backendImplementations: [{
       digest: "sha256:provider-active",
       activeMaterializationIds: ["materialization_current"],
     }, {
@@ -141,7 +141,7 @@ test("GC plans prepared artifact/resource/plugin binding decisions without delet
     [
       ["PreparedArtifact", "artifact_expired"],
       ["ResourceInstance", "resource_deleted"],
-      ["BackendPlugin", "sha256:provider-unused"],
+      ["BackendImplementation", "sha256:provider-unused"],
     ],
   );
 });

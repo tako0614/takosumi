@@ -19,7 +19,7 @@ test("registry resolves package descriptors and exposes trust records", async ()
   const newDescriptor = descriptor("sha256:new", "1.1.0");
   const resolution: PackageResolution = {
     ref: "providers/postgres",
-    kind: "backend-plugin",
+    kind: "backend-implementation",
     digest: newDescriptor.digest,
     registry: "bundled",
     trustRecordId: "trust_new",
@@ -49,12 +49,12 @@ test("registry resolves package descriptors and exposes trust records", async ()
   );
 
   assert.equal(
-    (await registry.resolve("backend-plugin", "providers/postgres"))?.digest,
+    (await registry.resolve("backend-implementation", "providers/postgres"))?.digest,
     "sha256:new",
   );
   assert.equal(
     (await registry.getDescriptor(
-      "backend-plugin",
+      "backend-implementation",
       "providers/postgres",
       "sha256:new",
     ))?.version,
@@ -62,7 +62,7 @@ test("registry resolves package descriptors and exposes trust records", async ()
   );
   assert.equal(
     (await trustRecords.findForPackage(
-      "backend-plugin",
+      "backend-implementation",
       "providers/postgres",
       "sha256:new",
     ))?.trustLevel,
@@ -141,7 +141,7 @@ test("registry resolves resource contract packages through PackageResolution", a
 function descriptor(digest: string, version: string): PackageDescriptor {
   return {
     ref: "providers/postgres",
-    kind: "backend-plugin",
+    kind: "backend-implementation",
     digest,
     publisher: "takos",
     version,

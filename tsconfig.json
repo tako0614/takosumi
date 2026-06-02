@@ -41,9 +41,9 @@
       "@takos/takosumi-contract/reference/error-category": [
         "./src/contract/error-category.ts"
       ],
-      "@takos/takosumi-contract/reference/plugin": ["./src/contract/plugin.ts"],
-      "@takos/takosumi-contract/reference/plugin-sdk": [
-        "./src/contract/plugin-sdk.ts"
+      "@takos/takosumi-contract/reference/implementation": ["./src/contract/implementation.ts"],
+      "@takos/takosumi-contract/reference/implementation-sdk": [
+        "./src/contract/implementation-sdk.ts"
       ],
       "@takos/takosumi-contract/reference/runtime-agent": [
         "./src/contract/runtime-agent.ts"
@@ -71,8 +71,8 @@
       "@takos/takosumi-contract/internal/material-validators": [
         "./src/contract/internal-material-validators.ts"
       ],
-      "@takos/takosumi-contract/internal/provider-plugin": [
-        "./src/contract/provider-plugin.ts"
+      "@takos/takosumi-contract/internal/provider-adapter": [
+        "./src/contract/provider-adapter.ts"
       ],
       "@takos/takosumi-contract/internal/rpc": [
         "./src/contract/internal-rpc.ts"
@@ -89,9 +89,9 @@
       "takosumi-contract/reference/error-category": [
         "./src/contract/error-category.ts"
       ],
-      "takosumi-contract/reference/plugin": ["./src/contract/plugin.ts"],
-      "takosumi-contract/reference/plugin-sdk": [
-        "./src/contract/plugin-sdk.ts"
+      "takosumi-contract/reference/implementation": ["./src/contract/implementation.ts"],
+      "takosumi-contract/reference/implementation-sdk": [
+        "./src/contract/implementation-sdk.ts"
       ],
       "takosumi-contract/reference/runtime-agent": [
         "./src/contract/runtime-agent.ts"
@@ -108,8 +108,8 @@
       ],
       "takosumi-contract/reference/types": ["./src/contract/types.ts"],
       "takosumi-contract/internal/api": ["./src/contract/internal-api.ts"],
-      "takosumi-contract/internal/provider-plugin": [
-        "./src/contract/provider-plugin.ts"
+      "takosumi-contract/internal/provider-adapter": [
+        "./src/contract/provider-adapter.ts"
       ],
       "takosumi-contract/internal/rpc": ["./src/contract/internal-rpc.ts"],
 

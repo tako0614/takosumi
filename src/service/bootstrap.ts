@@ -66,7 +66,7 @@ import {
   SqlInstallationStore as SqlInstallerInstallationStore,
 } from "./domains/installer/store_sql.ts";
 import { log } from "./shared/log.ts";
-import type { TakosumiPlugin } from "takosumi-contract/reference/plugin";
+import type { OperatorImplementation } from "takosumi-contract/reference/implementation";
 
 function resolveTakosumiDeploymentRecordStore(input: {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
@@ -197,17 +197,17 @@ function assertDurableInstallerStoreOrWarn(input: {
 export { registerDefaultArtifactKinds };
 
 /**
- * TakosumiPlugin instances bundled with the service distribution.
+ * OperatorImplementation instances bundled with the service distribution.
  *
  * Cloud / host-specific factories live in operator distributions. Takosumi no
  * longer carries cloud SDK imports or a sibling implementation package, so this
  * function intentionally returns an empty array: operators explicitly pass the
- * implementation bindings they own to `createTakosumiService({ plugins: [...] })`.
+ * implementation bindings they own to `createTakosumiService({ implementations: [...] })`.
  *
  * The function is retained as a no-op so existing callers don't break, but
  * its return value is `readonly []`. Future major versions may remove it.
  */
-export function defaultBundledPlugins(): readonly TakosumiPlugin[] {
+export function defaultBundledImplementations(): readonly OperatorImplementation[] {
   return [];
 }
 
@@ -336,7 +336,7 @@ export async function createTakosumiService(
     ...options,
     runtimeEnv,
     runtimeConfig,
-    plugins: options.plugins ?? [],
+    implementations: options.implementations ?? [],
     ...(billing ? { billing } : {}),
   });
   const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
@@ -417,10 +417,10 @@ export async function createTakosumiService(
   const tarRunner: TarRunner = options.runtime?.tarRunner ?? defaultTarRunner;
   // The single wired Installer pipeline instance. Reused for the public
   // Installer API routes AND the in-process operate facade so both share one
-  // Installation / Deployment ledger and one plugin / platform-service
+  // Installation / Deployment ledger and one implementation / platform-service
   // wiring.
   const installerPipeline = new InstallerPipeline({
-    ...(options.plugins ? { plugins: options.plugins } : {}),
+    ...(options.implementations ? { implementations: options.implementations } : {}),
     ...(platformServices ? { platformServices } : {}),
     ...(installerStores.installations
       ? { installations: installerStores.installations }
@@ -469,7 +469,7 @@ export async function createTakosumiService(
       context,
       runtimeConfig,
       runtimeEnv,
-      implementationBindingCount: options.plugins?.length ?? 0,
+      implementationBindingCount: options.implementations?.length ?? 0,
       strictImplementationBindings:
         runtimeConfig.environment === "production" ||
         runtimeConfig.environment === "staging",

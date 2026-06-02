@@ -2,9 +2,9 @@ import {
   type CompensateResult,
   getProvider,
   type PlatformContext,
-  type ProviderPlugin,
+  type ProviderAdapter,
   type ResourceHandle,
-} from "takosumi-contract/internal/provider-plugin";
+} from "takosumi-contract/internal/provider-adapter";
 import {
   formatPlatformOperationIdempotencyKey,
   type PlatformOperationContext,
@@ -23,7 +23,7 @@ export interface RevokeDebtCleanupWorkerOptions {
     | ((ownerSpaceId: string) => PlatformContext);
   readonly providerResolver?: (
     providerId: string,
-  ) => ProviderPlugin | undefined;
+  ) => ProviderAdapter | undefined;
   readonly clock?: () => Date;
 }
 
@@ -65,7 +65,7 @@ export class RevokeDebtCleanupWorker {
     | ((ownerSpaceId: string) => PlatformContext);
   readonly #providerResolver: (
     providerId: string,
-  ) => ProviderPlugin | undefined;
+  ) => ProviderAdapter | undefined;
   readonly #clock: () => Date;
 
   constructor(options: RevokeDebtCleanupWorkerOptions) {
@@ -209,7 +209,7 @@ export class RevokeDebtCleanupWorker {
   ): Promise<
     | {
       readonly ok: true;
-      readonly provider: ProviderPlugin;
+      readonly provider: ProviderAdapter;
       readonly handle: ResourceHandle;
     }
     | { readonly ok: false; readonly error: JsonObject }

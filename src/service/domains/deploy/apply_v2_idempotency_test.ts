@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import {
   type ApplyResult,
   type PlatformContext,
-  type ProviderPlugin,
+  type ProviderAdapter,
   registerProvider,
   unregisterProvider,
-} from "takosumi-contract/internal/provider-plugin";
+} from "takosumi-contract/internal/provider-adapter";
 import type { JsonObject } from "takosumi-contract/reference/types";
 import {
   registerShape,
@@ -40,7 +40,7 @@ function shape(): Shape {
 }
 
 interface CountingProvider {
-  readonly plugin: ProviderPlugin;
+  readonly implementation: ProviderAdapter;
   applyCount(): number;
   destroyedHandles(): readonly string[];
   resetCount(): void;
@@ -49,7 +49,7 @@ interface CountingProvider {
 function counting(id: string): CountingProvider {
   let count = 0;
   const destroyed: string[] = [];
-  const plugin: ProviderPlugin = {
+  const implementation: ProviderAdapter = {
     id,
     version: "0.0.1",
     implements: { id: SHAPE, version: "v1" },
@@ -77,7 +77,7 @@ function counting(id: string): CountingProvider {
     },
   };
   return {
-    plugin,
+    implementation,
     applyCount: () => count,
     destroyedHandles: () => destroyed.slice(),
     resetCount: () => {
@@ -87,7 +87,7 @@ function counting(id: string): CountingProvider {
   };
 }
 
-function failingProvider(): ProviderPlugin {
+function failingProvider(): ProviderAdapter {
   return {
     id: FAIL_PROVIDER,
     version: "0.0.1",
@@ -111,7 +111,7 @@ function failingProvider(): ProviderPlugin {
 function setUp(): CountingProvider {
   registerShape(shape());
   const provider = counting(PROVIDER);
-  registerProvider(provider.plugin);
+  registerProvider(provider.implementation);
   return provider;
 }
 

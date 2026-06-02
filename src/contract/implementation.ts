@@ -1,27 +1,27 @@
 /**
- * TakosumiPlugin — the reference Takosumi service's Vite-style plain-array
+ * OperatorImplementation — the reference Takosumi service's Vite-style plain-array
  * materializer API for reference implementation component output and input
  * material wiring.
  *
- * A `TakosumiPlugin` advertises one or more component kind URIs in `provides`,
+ * An `OperatorImplementation` advertises one or more component kind URIs in `provides`,
  * may expose short-name `aliases` for operator tooling,
  * materializes those components via `apply()`, projects component output slots
  * into output material via `materializeOutput()`, and surfaces input materials
  * into the component runtime via `applyBinding()`.
  *
- * The reference implementation wires plugins as a plain array to
- * `createTakosumiService({ plugins })`, matching the Vite plugin authoring
+ * The reference implementation wires implementations as a plain array to
+ * `createTakosumiService({ implementations })`, matching the plain-array implementation authoring
  * experience. A Takosumi-compatible implementation can bind the same backend
  * adapter through another mechanism. This is implementation wiring, not the
  * manifestless v1 public Source contract.
  *
  * # Materializer abstraction
  *
- * A `TakosumiPlugin` is one packaging of a more general concept: a
+ * An `OperatorImplementation` is one packaging of a more general concept: a
  * **Materializer** is any code that turns a kind URI into a concrete
  * resource and emits / consumes materials. Inline functions and
  * operator-defined raw code can attach to the same service surface as
- * full plugins via {@link InlineMaterializer}.
+ * full implementations via {@link InlineMaterializer}.
  */
 import type {
   Deployment,
@@ -55,12 +55,12 @@ export interface PublishOptions {
   readonly labels?: Readonly<Record<string, string>>;
 }
 
-export interface TakosumiPlugin {
+export interface OperatorImplementation {
   /** Operator-scoped implementation id, e.g. `"operator.takosumi.provider.cloudflare-worker"`. */
   readonly name: string;
   readonly version: string;
   /**
-   * Operator-resolved kind URIs this plugin can materialize.
+   * Operator-resolved kind URIs this implementation can materialize.
    * The installer resolves `Component.kind` through the operator alias map
    * and matches the resulting URI against `provides[]` during `apply`.
    * JSON-LD is the takosumi.com reference descriptor metadata format, not a
@@ -99,21 +99,21 @@ export interface TakosumiPlugin {
    * topological order. Resolved input materials are made available via
    * `inputMaterials` (`listenedMaterials` is kept as a compatibility alias).
    */
-  apply(ctx: TakosumiPluginApplyContext): Promise<TakosumiPluginApplyResult>;
+  apply(ctx: OperatorImplementationApplyContext): Promise<OperatorImplementationApplyResult>;
 
   /**
    * Destroy a previously-materialized component. Called on Installation
-   * deletion / rollback. Optional — plugins that have no destroyable
+   * deletion / rollback. Optional — implementations that have no destroyable
    * state can omit this hook.
    */
-  destroy?(ctx: TakosumiPluginDestroyContext): Promise<void>;
+  destroy?(ctx: OperatorImplementationDestroyContext): Promise<void>;
 
   /**
-   * Observe a previously-materialized component. Optional — plugins that can
+   * Observe a previously-materialized component. Optional — implementations that can
    * cheaply read backend state return a normalized status for operator
    * dashboards and repair loops.
    */
-  status?(ctx: TakosumiPluginStatusContext): Promise<TakosumiPluginResourceStatus>;
+  status?(ctx: OperatorImplementationStatusContext): Promise<OperatorImplementationResourceStatus>;
 
   /**
    * Compute the {@link OutputMaterial} for a component output slot.
@@ -158,32 +158,32 @@ export interface TakosumiPlugin {
 
   // ---------------------------------------------------------------------
   // Lifecycle hooks — Vite-style optional callbacks. All are awaited
-  // serially across the plugin array in registration order.
+  // serially across the implementation array in registration order.
   // ---------------------------------------------------------------------
 
   /** Fires before the first Deployment of a brand-new Installation. */
-  onInstallStart?(ctx: TakosumiPluginInstallationContext): Promise<void>;
+  onInstallStart?(ctx: OperatorImplementationInstallationContext): Promise<void>;
   /** Fires after the first Deployment of a brand-new Installation succeeds. */
-  onInstallComplete?(ctx: TakosumiPluginInstallationContext): Promise<void>;
+  onInstallComplete?(ctx: OperatorImplementationInstallationContext): Promise<void>;
   /** Fires before every Deployment apply (including the first one). */
-  onDeploymentStart?(ctx: TakosumiPluginDeploymentContext): Promise<void>;
+  onDeploymentStart?(ctx: OperatorImplementationDeploymentContext): Promise<void>;
   /** Fires after every successful Deployment apply. */
-  onDeploymentComplete?(ctx: TakosumiPluginDeploymentContext): Promise<void>;
+  onDeploymentComplete?(ctx: OperatorImplementationDeploymentContext): Promise<void>;
 }
 
 /**
  * Materializer = arbitrary code that materializes a kind URI and
- * participates in the component output / input material registry. {@link TakosumiPlugin} is
+ * participates in the component output / input material registry. {@link OperatorImplementation} is
  * the conventional packaging — `name` / `version` / lifecycle hooks — but
  * inline functions and operator-defined raw code can attach to the same
  * service surface via {@link InlineMaterializer}.
  */
-export type Materializer = TakosumiPlugin | InlineMaterializer;
+export type Materializer = OperatorImplementation | InlineMaterializer;
 
 /**
  * Minimal materializer surface — the smallest contract the installer
  * recognizes. Useful for inline materializers in tests, examples, and
- * operator-defined raw code. A `TakosumiPlugin` is structurally a superset
+ * operator-defined raw code. An `OperatorImplementation` is structurally a superset
  * of `InlineMaterializer`.
  */
 export interface InlineMaterializer {
@@ -192,14 +192,14 @@ export interface InlineMaterializer {
   /** Optional short-name aliases supplied by operator tooling / alias maps. */
   readonly aliases?: readonly string[];
   validateComponent?(component: Component): void | Promise<void>;
-  apply(ctx: TakosumiPluginApplyContext): Promise<TakosumiPluginApplyResult>;
-  status?(ctx: TakosumiPluginStatusContext): Promise<TakosumiPluginResourceStatus>;
+  apply(ctx: OperatorImplementationApplyContext): Promise<OperatorImplementationApplyResult>;
+  status?(ctx: OperatorImplementationStatusContext): Promise<OperatorImplementationResourceStatus>;
   materializeOutput?(
     ctx: OutputMaterialContext,
   ): Promise<OutputMaterial>;
   /**
    * @deprecated Renamed to `materializeOutput`; kept for pre-rename inline
-   * materializers. Remove together with `TakosumiPlugin.publishMaterial`.
+   * materializers. Remove together with `OperatorImplementation.publishMaterial`.
    */
   publishMaterial?(
     ctx: OutputMaterialContext,
@@ -207,7 +207,7 @@ export interface InlineMaterializer {
   applyBinding?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
   /**
    * @deprecated Renamed to `applyBinding`; kept for pre-rename inline
-   * materializers. Remove together with `TakosumiPlugin.applyListen`.
+   * materializers. Remove together with `OperatorImplementation.applyListen`.
    */
   applyListen?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
 }
@@ -284,7 +284,7 @@ export interface ResolvedInputBinding {
  */
 export type ResolvedListenBinding = ResolvedInputBinding;
 
-export interface TakosumiPluginApplyContext {
+export interface OperatorImplementationApplyContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly component: Component;
@@ -301,7 +301,7 @@ export interface TakosumiPluginApplyContext {
    * already been invoked and the resulting env / mount / target
    * descriptors are merged into the runtime environment.
    *
-   * This map is for plugins that need access to the raw material payload
+   * This map is for implementations that need access to the raw material payload
    * (e.g. to inspect specific fields beyond what `applyBinding` emitted).
    */
   readonly inputMaterials?: Readonly<
@@ -318,13 +318,13 @@ export interface TakosumiPluginApplyContext {
   >;
   /**
    * Env / mount / target descriptors produced by `applyBinding` for each input
-   * edge. Native TakosumiPlugin implementations should use this field
+   * edge. Native OperatorImplementation implementations should use this field
    * when they need the actual runtime injection plan instead of raw materials.
    */
   readonly resolvedBindings: readonly ResolvedInputBinding[];
 }
 
-export interface TakosumiPluginApplyResult {
+export interface OperatorImplementationApplyResult {
   /**
    * Backend-side resource handle. The service treats it as opaque
    * implementation evidence and passes it back to `destroy()` when needed.
@@ -332,7 +332,7 @@ export interface TakosumiPluginApplyResult {
   readonly resourceHandle: string;
   /**
    * Outputs persisted on Deployment evidence and surfaced to the material
-   * registry via subsequent `materializeOutput()` calls. Plugins may return any
+   * registry via subsequent `materializeOutput()` calls. Implementations may return any
    * JSON-valued map; the keys typically match the kind descriptor's
    * `outputs[].name`.
    */
@@ -372,38 +372,38 @@ export interface ApplyInputBindingContext {
  */
 export type ApplyListenContext = ApplyInputBindingContext;
 
-export interface TakosumiPluginDestroyContext {
+export interface OperatorImplementationDestroyContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly resourceHandle: string;
 }
 
-export interface TakosumiPluginStatusContext {
+export interface OperatorImplementationStatusContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly resourceHandle: string;
 }
 
-export type TakosumiPluginResourceStatusKind =
+export type OperatorImplementationResourceStatusKind =
   | "pending"
   | "ready"
   | "degraded"
   | "failed"
   | "deleted";
 
-export interface TakosumiPluginResourceStatus {
-  readonly kind: TakosumiPluginResourceStatusKind;
+export interface OperatorImplementationResourceStatus {
+  readonly kind: OperatorImplementationResourceStatusKind;
   readonly outputs?: Readonly<Record<string, JsonValue>>;
   readonly reason?: string;
   readonly observedAt: string;
 }
 
-export interface TakosumiPluginInstallationContext {
+export interface OperatorImplementationInstallationContext {
   readonly installation: Installation;
   readonly deployment?: Deployment;
 }
 
-export interface TakosumiPluginDeploymentContext {
+export interface OperatorImplementationDeploymentContext {
   readonly installation: Installation;
   readonly deployment: Deployment;
 }
@@ -422,7 +422,7 @@ export interface NativeKindApplyResult<Outputs = JsonObject> {
   readonly diagnostics?: readonly NativeKindApplyDiagnostic[];
 }
 
-export type NativeKindResourceStatusKind = TakosumiPluginResourceStatusKind;
+export type NativeKindResourceStatusKind = OperatorImplementationResourceStatusKind;
 
 export interface NativeKindSpecValidationIssue {
   readonly path: string;
@@ -464,22 +464,22 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
    */
   apply(
     spec: Spec,
-    ctx: TakosumiPluginApplyContext,
+    ctx: OperatorImplementationApplyContext,
   ): Promise<NativeKindApplyResult<Outputs>>;
   destroy?(
     handle: NativeResourceHandle,
-    ctx: TakosumiPluginDestroyContext,
+    ctx: OperatorImplementationDestroyContext,
   ): Promise<void>;
   status?(
     handle: NativeResourceHandle,
-    ctx: TakosumiPluginStatusContext,
+    ctx: OperatorImplementationStatusContext,
   ): Promise<NativeKindResourceStatus<Outputs>>;
   materializeOutput?(
     ctx: NativeKindOutputMaterialContext<Outputs>,
   ): Promise<OutputMaterial> | OutputMaterial;
   /**
    * @deprecated Renamed to `materializeOutput`;
-   * `takosumiPluginFromNativeKindOperations` reads
+   * `operatorImplementationFromNativeKindOperations` reads
    * `materializeOutput ?? publishMaterial`. Remove once the cloudflare D1 /
    * KV / queue / vectorize provider implementations define
    * `materializeOutput` instead of `publishMaterial`.
@@ -490,12 +490,12 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
 }
 
 /**
- * Build a reference `TakosumiPlugin` from native kind operations. This is the
+ * Build a reference `OperatorImplementation` from native kind operations. This is the
  * current helper for native kind implementations: the implementation
  * owns backend-specific operations, while the reference service still receives a
- * Vite-style plain-array `TakosumiPlugin`.
+ * Vite-style plain-array `OperatorImplementation`.
  */
-export function takosumiPluginFromNativeKindOperations<Spec, Outputs>(
+export function operatorImplementationFromNativeKindOperations<Spec, Outputs>(
   opts: {
     readonly operations: NativeKindOperations<Spec, Outputs>;
     readonly kindUri: string;
@@ -503,7 +503,7 @@ export function takosumiPluginFromNativeKindOperations<Spec, Outputs>(
     readonly version?: string;
     readonly capabilities?: readonly string[];
   },
-): TakosumiPlugin {
+): OperatorImplementation {
   const operations = opts.operations;
   const capabilities = opts.capabilities ?? operations.capabilities;
   const materializeOutput = async (
@@ -590,7 +590,7 @@ function validatePublishedOutputMaterial(
   const issues = validateOfficialMaterial(contract, material);
   if (issues.length > 0) {
     throw new Error(
-      `plugin produced invalid ${contract} output material: ${
+      `implementation produced invalid ${contract} output material: ${
         issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
       }`,
     );
@@ -610,7 +610,7 @@ export function outputsToOutputMaterial(
   const issues = validateOfficialMaterial(contract, material);
   if (issues.length > 0) {
     throw new Error(
-      `plugin outputs cannot be projected to ${contract} material: ${
+      `implementation outputs cannot be projected to ${contract} material: ${
         issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
       }`,
     );
@@ -830,7 +830,7 @@ function secretRefMaterial(
 /**
  * Merge explicit `spec.env` values with env descriptors produced by input
  * binding resolution. Native implementations call this intentionally when
- * their runtime accepts env variables; the generic TakosumiPlugin wrapper does
+ * their runtime accepts env variables; the generic OperatorImplementation wrapper does
  * not mutate `component.spec`.
  */
 export function mergeResolvedEnv(

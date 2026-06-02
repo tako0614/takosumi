@@ -2,8 +2,8 @@ import {
   capabilitySubsetIssues,
   getProvider,
   listProvidersForShape,
-  type ProviderPlugin,
-} from "takosumi-contract/internal/provider-plugin";
+  type ProviderAdapter,
+} from "takosumi-contract/internal/provider-adapter";
 import {
   getShapeByRef,
   parseShapeRef,
@@ -14,7 +14,7 @@ import type { ManifestResource } from "./_internal_manifest_types.ts";
 export interface ResolvedResourceV2 {
   readonly resource: ManifestResource;
   readonly shape: Shape;
-  readonly provider: ProviderPlugin;
+  readonly provider: ProviderAdapter;
 }
 
 export interface ResourceResolutionIssue {
@@ -58,7 +58,7 @@ const BARE_PROVIDER_SUGGESTIONS: Readonly<Record<string, string>> = {
 };
 
 type ProviderSelection = {
-  readonly provider?: ProviderPlugin;
+  readonly provider?: ProviderAdapter;
   readonly suggested?: string;
   readonly issue?: string;
 };

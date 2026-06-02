@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import {
   type ApplyResult,
   type PlatformContext,
-  type ProviderPlugin,
+  type ProviderAdapter,
   registerProvider,
   unregisterProvider,
-} from "takosumi-contract/internal/provider-plugin";
+} from "takosumi-contract/internal/provider-adapter";
 import {
   formatPlatformOperationIdempotencyKey,
   type PlatformOperationContext,
@@ -55,7 +55,7 @@ function shape(): Shape {
   };
 }
 
-function provider(id: string, behavior: "ok" | "fail"): ProviderPlugin {
+function provider(id: string, behavior: "ok" | "fail"): ProviderAdapter {
   return {
     id,
     version: "0.0.1",
@@ -89,7 +89,7 @@ function provider(id: string, behavior: "ok" | "fail"): ProviderPlugin {
   };
 }
 
-function destroyFailingProvider(): ProviderPlugin {
+function destroyFailingProvider(): ProviderAdapter {
   return {
     ...provider(PROV_DESTROY_FAIL, "ok"),
     destroy(_handle, _ctx) {
@@ -98,7 +98,7 @@ function destroyFailingProvider(): ProviderPlugin {
   };
 }
 
-function compensatingProvider(): ProviderPlugin {
+function compensatingProvider(): ProviderAdapter {
   return {
     ...provider(PROV_COMPENSATE, "ok"),
     compensate(handle, _ctx) {
@@ -108,7 +108,7 @@ function compensatingProvider(): ProviderPlugin {
   };
 }
 
-function compensateFailingProvider(): ProviderPlugin {
+function compensateFailingProvider(): ProviderAdapter {
   return {
     ...provider(PROV_COMPENSATE_FAIL, "ok"),
     compensate(_handle, _ctx) {

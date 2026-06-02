@@ -66,8 +66,8 @@ export {
   type TakosumiInternalTraceSink,
   type TakosumiInternalTraceSpanEvent,
 } from "./internal-rpc.ts";
-export * from "./plugin.ts";
-export * from "./plugin-sdk.ts";
+export * from "./implementation.ts";
+export * from "./implementation-sdk.ts";
 export * from "./runtime-agent.ts";
 export * from "./runtime-agent-lifecycle.ts";
 export * from "./error-category.ts";

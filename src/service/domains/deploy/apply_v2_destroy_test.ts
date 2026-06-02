@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import {
   type ApplyResult,
   type PlatformContext,
-  type ProviderPlugin,
+  type ProviderAdapter,
   registerProvider,
   unregisterProvider,
-} from "takosumi-contract/internal/provider-plugin";
+} from "takosumi-contract/internal/provider-adapter";
 import {
   formatPlatformOperationIdempotencyKey,
   type PlatformOperationContext,
@@ -44,7 +44,7 @@ function shape(): Shape {
   };
 }
 
-function provider(id: string, behavior: "ok" | "fail"): ProviderPlugin {
+function provider(id: string, behavior: "ok" | "fail"): ProviderAdapter {
   return {
     id,
     version: "0.0.1",
@@ -305,7 +305,7 @@ test("destroyV2 honors handleFor override for handle resolution", async () => {
   setUp();
   try {
     const captured: string[] = [];
-    const provider2: ProviderPlugin = {
+    const provider2: ProviderAdapter = {
       id: "test-destroy-provider-handle",
       version: "0.0.1",
       implements: { id: SHAPE, version: "v1" },

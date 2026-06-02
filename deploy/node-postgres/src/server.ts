@@ -149,7 +149,7 @@ function structuredLog(
  * pool / store / accounts-handler / serve plumbing.
  */
 export interface ComposedServerOverrides {
-  readonly plugins?: Parameters<typeof buildComposedApp>[0]["plugins"];
+  readonly implementations?: Parameters<typeof buildComposedApp>[0]["implementations"];
   readonly sqlClient?: Parameters<typeof buildComposedApp>[0]["sqlClient"];
 }
 
@@ -174,7 +174,7 @@ export async function buildComposedServer(
       buildAccountsHandler(config, store, installer),
     preHandle: (req) =>
       preHandleNonServiceRequest(req, pool, config.exportDownload),
-    ...(overrides.plugins ? { plugins: overrides.plugins } : {}),
+    ...(overrides.implementations ? { implementations: overrides.implementations } : {}),
     sqlClient: overrides.sqlClient ?? wrapServiceSqlClient(pool),
   });
 

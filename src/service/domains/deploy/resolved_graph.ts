@@ -163,7 +163,7 @@ function indexClosure(closure: DeploymentDescriptorClosure): ClosureIndex {
 }
 
 /** Resolve a descriptor alias-or-URI to its closure resolution id. Falls back
- *  to the input ref when the closure has no entry (e.g. plugin descriptor
+ *  to the input ref when the closure has no entry (e.g. implementation descriptor
  *  shipped out-of-tree); the caller still produces a deterministic projection
  *  record because the closure builder always emits a synthetic resolution for
  *  unknown aliases. */
