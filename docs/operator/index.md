@@ -33,7 +33,7 @@ distribution の責務です。
 | state / secret store  | Postgres、D1、KMS、secret encryption、backup / restore                    |
 | infrastructure state  | OpenTofu state、provider credentials、lock                      |
 | account surface       | signup、billing、team、dashboard、deploy facade                           |
-| runtime execution     | container、worker、VM、local process、runtime-agent runtime handler             |
+| runtime execution     | container、worker、VM、local process、runtime-agent handler             |
 
 Takosumi はこの選択を `bindingsSnapshot` と `outputs` として Deployment
 record に残します。infrastructure creation と provider state は operator 側に

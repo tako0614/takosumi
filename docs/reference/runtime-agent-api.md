@@ -71,9 +71,9 @@ interface LifecycleApplyResponse {
 
 `handle` は Takosumi reference 実装の deploy record state に Deployment と紐づけて persist され、以降の `destroy` / `describe` の key になります。
 
-`spec` は public Source field ではなく、runtime-agent runtime handler に渡す closed input です。通常は operator-selected adapter が source artifact、PlatformService binding snapshot、operator policy から runtime-handler-local input を作ります。runtime handler はこの input を shape ごとの閉じた field set として検証し、未定義 field や typo を受け入れません。たとえば DNS gateway runtime handler の `target` は Source authoring field ではなく、gateway adapter が resolved binding から作る runtime-handler-local target です。
+`spec` は public Source field ではなく、runtime-agent handler に渡す closed input です。通常は operator-selected adapter が source artifact、PlatformService binding snapshot、operator policy から runtime-handler-local input を作ります。runtime handler はこの input を shape ごとの閉じた field set として検証し、未定義 field や typo を受け入れません。たとえば DNS gateway runtime handler の `target` は Source authoring field ではなく、gateway adapter が resolved binding から作る runtime-handler-local target です。
 
-`spaceId` は caller Installation の Space を表します。runtime-agent runtime handler はこの値を cloud tag、namespace、resource name prefix、audit metadata などの Space isolation boundary として扱います。別 Space の request で同じ handle を再利用してはいけません。
+`spaceId` は caller Installation の Space を表します。runtime-agent handler はこの値を cloud tag、namespace、resource name prefix、audit metadata などの Space isolation boundary として扱います。別 Space の request で同じ handle を再利用してはいけません。
 
 WAL-backed lifecycle apply では Takosumi が internal `PlatformContext.operation` から `idempotencyKey` / `operationRequest` / `metadata.takosumiOperation` をリクエストに転送します。runtime handler は外部 API が idempotency / client request token を受け付ける場合、この internal WAL-derived `idempotencyKey` をそのまま渡します。Installer API には caller-supplied idempotency header はなく、caller は `expected` guard だけを使います。
 

@@ -19,7 +19,7 @@ installer apply / rollback は同一 Installation への並行変更を直列化
 
 WAL 書込: installer lifecycle は `takosumi_operation_journal_entries` に WAL stage record を書きます。resource side effect 前に `prepare` / `pre-commit` / `commit`、成功で `post-commit` / `observe` / `finalize`、失敗で `abort`。同じ `(spaceId, operationPlanDigest, journalEntryId, stage)` + 同一 effect digest の replay は冪等、異なる effect digest は hard-fail。
 
-Operator implementation verification: `AppContext` は operator-provided alias table、implementation bindings、runtime-agent runtime handler inventory から構成されます。WAL は implementation / runtime handler resolution input を pre/post-commit verification として扱います。pre-commit 失敗は backend 呼出前に terminal `abort`。post-commit 失敗は verification failure を journal し、committed effect に対する CleanupBacklog を enqueue して observe / finalize evidence を残します。
+Operator implementation verification: `AppContext` は operator-provided alias table、implementation bindings、runtime-agent handler inventory から構成されます。WAL は implementation / runtime handler resolution input を pre/post-commit verification として扱います。pre-commit 失敗は backend 呼出前に terminal `abort`。post-commit 失敗は verification failure を journal し、committed effect に対する CleanupBacklog を enqueue して observe / finalize evidence を残します。
 
 Compensation: runtime-agent protocol は runtime handler-native `compensate` を持ち、専用 operation が無い runtime handler は handle-keyed `destroy` を fallback。CleanupBacklog store は retry attempt / policy-controlled aging / manual reopen / clearance を実装。cleanup worker (`takosumi-worker` role daemon) が open debt owner Space を周期列挙し、Deployment record から handle を解決して compensate / destroy fallback を呼び、成功時に debt を `cleared` に進めます。
 

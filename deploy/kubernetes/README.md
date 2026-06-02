@@ -1,6 +1,6 @@
 # Takosumi Kubernetes Kind Runbook
 
-This directory documents the Kubernetes surface as **operator-owned scope**. Kubernetes lifecycle coverage comes from the operator's Helm/GitOps/native controller stack plus runtime-agent runtime handler wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on a Kubernetes cluster is also the operator's responsibility.
+This directory documents the Kubernetes surface as **operator-owned scope**. Kubernetes lifecycle coverage comes from the operator's Helm/GitOps/native controller stack plus runtime-agent handler wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on a Kubernetes cluster is also the operator's responsibility.
 
 ## Why no reference Helm chart
 
