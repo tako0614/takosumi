@@ -598,7 +598,7 @@ test("space conformance: provider capabilities reject unsupported runtime capabi
   });
 
   // The runtime-claim projection is emitted with a stable digest; provider
-  // plugins MUST consult the projection + descriptor closure to decide
+  // implementations MUST consult the projection + descriptor closure to decide
   // whether the capability is supported. Provider rejection lives on
   // policy_decisions[] (gate=provider-selection) — capabilities are NEVER
   // silently rewritten.
@@ -804,7 +804,7 @@ test("space conformance: missing read-set snapshots are stale", async () => {
     manifest: manifestWithExternalResource(),
   });
 
-  // Provider plugin reports no snapshot for one of the pinned descriptors.
+  // Provider implementation reports no snapshot for one of the pinned descriptors.
   // The read-set validator translates "missing snapshot" into a stale
   // signal so apply aborts with must-replan / must-revalidate.
   await assert.rejects(

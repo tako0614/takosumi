@@ -1,11 +1,11 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { takosumiPluginFromProviderPlugin } from "./takosumi-plugin-adapter.ts";
-import type { ProviderPlugin } from "./provider-plugin.ts";
+import { operatorImplementationFromProviderAdapter } from "./provider-adapter-bridge.ts";
+import type { ProviderAdapter } from "./provider-adapter.ts";
 
-test("takosumiPluginFromProviderPlugin injects resolved env into legacy spec", async () => {
+test("operatorImplementationFromProviderAdapter injects resolved env into legacy spec", async () => {
   let seenSpec: unknown;
-  const provider: ProviderPlugin = {
+  const provider: ProviderAdapter = {
     id: "@test/gateway",
     version: "1.0.0",
     implements: { id: "gateway", version: "v1" },
@@ -24,17 +24,17 @@ test("takosumiPluginFromProviderPlugin injects resolved env into legacy spec", a
         observedAt: "2026-05-21T00:00:00.000Z",
       }),
   };
-  const plugin = takosumiPluginFromProviderPlugin({
+  const implementation = operatorImplementationFromProviderAdapter({
     provider,
     kindUri: "https://takosumi.com/kinds/v1/gateway",
     name: "operator.takosumi.provider.test-gateway",
     version: "0.1.0",
   });
 
-  assert.equal(plugin.name, "operator.takosumi.provider.test-gateway");
-  assert.equal(plugin.version, "0.1.0");
+  assert.equal(implementation.name, "operator.takosumi.provider.test-gateway");
+  assert.equal(implementation.version, "0.1.0");
 
-  await plugin.apply({
+  await implementation.apply({
     installationId: "ins_1",
     componentName: "domain",
     component: {
@@ -89,8 +89,8 @@ test("takosumiPluginFromProviderPlugin injects resolved env into legacy spec", a
   });
 });
 
-test("takosumiPluginFromProviderPlugin projects provider outputs as output material", async () => {
-  const provider: ProviderPlugin = {
+test("operatorImplementationFromProviderAdapter projects provider outputs as output material", async () => {
+  const provider: ProviderAdapter = {
     id: "@test/postgres",
     version: "1.0.0",
     implements: { id: "postgres", version: "v1" },
@@ -112,12 +112,12 @@ test("takosumiPluginFromProviderPlugin projects provider outputs as output mater
         observedAt: "2026-05-21T00:00:00.000Z",
       }),
   };
-  const plugin = takosumiPluginFromProviderPlugin({
+  const implementation = operatorImplementationFromProviderAdapter({
     provider,
     kindUri: "https://takosumi.com/kinds/v1/postgres",
   });
 
-  const material = await plugin.materializeOutput!({
+  const material = await implementation.materializeOutput!({
     installationId: "ins_1",
     componentName: "db",
     component: { kind: "postgres" },
@@ -138,8 +138,8 @@ test("takosumiPluginFromProviderPlugin projects provider outputs as output mater
   });
 });
 
-test("takosumiPluginFromProviderPlugin projects object-store outputs to official material", async () => {
-  const provider: ProviderPlugin = {
+test("operatorImplementationFromProviderAdapter projects object-store outputs to official material", async () => {
+  const provider: ProviderAdapter = {
     id: "@test/object-store",
     version: "1.0.0",
     implements: { id: "object-store", version: "v1" },
@@ -162,12 +162,12 @@ test("takosumiPluginFromProviderPlugin projects object-store outputs to official
         observedAt: "2026-05-21T00:00:00.000Z",
       }),
   };
-  const plugin = takosumiPluginFromProviderPlugin({
+  const implementation = operatorImplementationFromProviderAdapter({
     provider,
     kindUri: "https://takosumi.com/kinds/v1/object-store",
   });
 
-  const material = await plugin.materializeOutput!({
+  const material = await implementation.materializeOutput!({
     installationId: "ins_1",
     componentName: "bucket",
     component: { kind: "object-store" },
@@ -189,7 +189,7 @@ test("takosumiPluginFromProviderPlugin projects object-store outputs to official
     secretAccessKeyRef: { secretRef: "secret://bucket/secret-access-key" },
   });
 
-  const legacyAliasMaterial = await plugin.materializeOutput!({
+  const legacyAliasMaterial = await implementation.materializeOutput!({
     installationId: "ins_1",
     componentName: "bucket",
     component: { kind: "object-store" },
@@ -209,8 +209,8 @@ test("takosumiPluginFromProviderPlugin projects object-store outputs to official
   });
 });
 
-test("takosumiPluginFromProviderPlugin projects HTTP outputs to endpoint material", async () => {
-  const provider: ProviderPlugin = {
+test("operatorImplementationFromProviderAdapter projects HTTP outputs to endpoint material", async () => {
+  const provider: ProviderAdapter = {
     id: "@test/worker",
     version: "1.0.0",
     implements: { id: "worker", version: "v1" },
@@ -227,12 +227,12 @@ test("takosumiPluginFromProviderPlugin projects HTTP outputs to endpoint materia
         observedAt: "2026-05-21T00:00:00.000Z",
       }),
   };
-  const plugin = takosumiPluginFromProviderPlugin({
+  const implementation = operatorImplementationFromProviderAdapter({
     provider,
     kindUri: "https://takosumi.com/kinds/v1/worker",
   });
 
-  const material = await plugin.materializeOutput!({
+  const material = await implementation.materializeOutput!({
     installationId: "ins_1",
     componentName: "web",
     component: { kind: "worker" },
@@ -246,8 +246,8 @@ test("takosumiPluginFromProviderPlugin projects HTTP outputs to endpoint materia
   });
 });
 
-test("takosumiPluginFromProviderPlugin rejects explicit env collision", async () => {
-  const provider: ProviderPlugin = {
+test("operatorImplementationFromProviderAdapter rejects explicit env collision", async () => {
+  const provider: ProviderAdapter = {
     id: "@test/web",
     version: "1.0.0",
     implements: { id: "web-service", version: "v1" },
@@ -264,14 +264,14 @@ test("takosumiPluginFromProviderPlugin rejects explicit env collision", async ()
         observedAt: "2026-05-21T00:00:00.000Z",
       }),
   };
-  const plugin = takosumiPluginFromProviderPlugin({
+  const implementation = operatorImplementationFromProviderAdapter({
     provider,
     kindUri: "https://takosumi.com/kinds/v1/web-service",
   });
 
   await assert.rejects(
     () =>
-      plugin.apply({
+      implementation.apply({
         installationId: "ins_1",
         componentName: "web",
         component: {

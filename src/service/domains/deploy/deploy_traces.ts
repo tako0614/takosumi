@@ -1,7 +1,7 @@
 import type {
   PlatformContext,
   PlatformTraceContext,
-} from "takosumi-contract/internal/provider-plugin";
+} from "takosumi-contract/internal/provider-adapter";
 import type {
   PlatformOperationContext,
 } from "takosumi-contract/reference/runtime-agent-lifecycle";

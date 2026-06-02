@@ -4,25 +4,25 @@ import {
   type ApplyListenContext,
   type EnvInjection,
   type InlineMaterializer,
-  type TakosumiPlugin,
-  type TakosumiPluginApplyContext,
-  type TakosumiPluginApplyResult,
-  type TakosumiPluginDeploymentContext,
-  type TakosumiPluginDestroyContext,
-  takosumiPluginFromNativeKindOperations,
-  type TakosumiPluginInstallationContext,
+  type OperatorImplementation,
+  type OperatorImplementationApplyContext,
+  type OperatorImplementationApplyResult,
+  type OperatorImplementationDeploymentContext,
+  type OperatorImplementationDestroyContext,
+  operatorImplementationFromNativeKindOperations,
+  type OperatorImplementationInstallationContext,
   type Materializer,
   mergeResolvedEnv,
   type OutputMaterial,
   type OutputMaterialContext,
   outputsToOutputMaterial,
-} from "./plugin.ts";
-import type { Component } from "./plugin.ts";
+} from "./implementation.ts";
+import type { Component } from "./implementation.ts";
 import type { Deployment, Installation } from "./installer-api.ts";
 
-test("takosumiPluginFromNativeKindOperations wraps native operations without provider bridge", async () => {
+test("operatorImplementationFromNativeKindOperations wraps native operations without provider bridge", async () => {
   const seenSpecs: unknown[] = [];
-  const plugin = takosumiPluginFromNativeKindOperations({
+  const implementation = operatorImplementationFromNativeKindOperations({
     kindUri: "https://takosumi.com/kinds/v1/worker",
     operations: {
       id: "@example/native-worker",
@@ -56,7 +56,7 @@ test("takosumiPluginFromNativeKindOperations wraps native operations without pro
     },
   });
 
-  const result = await plugin.apply({
+  const result = await implementation.apply({
     installationId: "ins_1",
     componentName: "web",
     component: {
@@ -83,17 +83,17 @@ test("takosumiPluginFromNativeKindOperations wraps native operations without pro
     }],
   });
 
-  assert.equal(plugin.name, "@example/native-worker");
-  assert.equal(plugin.version, "1.0.0");
-  assert.deepEqual(plugin.provides, ["https://takosumi.com/kinds/v1/worker"]);
-  assert.deepEqual(plugin.capabilities, ["scale-to-zero"]);
+  assert.equal(implementation.name, "@example/native-worker");
+  assert.equal(implementation.version, "1.0.0");
+  assert.deepEqual(implementation.provides, ["https://takosumi.com/kinds/v1/worker"]);
+  assert.deepEqual(implementation.capabilities, ["scale-to-zero"]);
   assert.equal(result.resourceHandle, "worker://web");
   assert.deepEqual(seenSpecs, [{
     entrypoint: "src/main.ts",
     env: { EXPLICIT: "yes" },
   }]);
 
-  const material = await plugin.materializeOutput!({
+  const material = await implementation.materializeOutput!({
     installationId: "ins_1",
     componentName: "web",
     component: { kind: "worker" },
@@ -105,13 +105,13 @@ test("takosumiPluginFromNativeKindOperations wraps native operations without pro
     id: "web",
   });
 
-  await plugin.destroy?.({
+  await implementation.destroy?.({
     installationId: "ins_1",
     componentName: "web",
     resourceHandle: "worker://web",
   });
 
-  const status = await plugin.status?.({
+  const status = await implementation.status?.({
     installationId: "ins_1",
     componentName: "web",
     resourceHandle: "worker://web",
@@ -126,9 +126,9 @@ test("takosumiPluginFromNativeKindOperations wraps native operations without pro
   });
 });
 
-test("takosumiPluginFromNativeKindOperations validates author spec before apply", async () => {
+test("operatorImplementationFromNativeKindOperations validates author spec before apply", async () => {
   let applied = false;
-  const plugin = takosumiPluginFromNativeKindOperations({
+  const implementation = operatorImplementationFromNativeKindOperations({
     kindUri: "https://takosumi.com/kinds/v1/worker",
     operations: {
       id: "@example/native-worker",
@@ -151,7 +151,7 @@ test("takosumiPluginFromNativeKindOperations validates author spec before apply"
 
   await assert.rejects(
     () =>
-      plugin.apply({
+      implementation.apply({
         installationId: "ins_1",
         componentName: "web",
         component: {
@@ -168,10 +168,10 @@ test("takosumiPluginFromNativeKindOperations validates author spec before apply"
   assert.equal(applied, false);
 });
 
-test("takosumiPluginFromNativeKindOperations keeps listen env out of spec validation", async () => {
+test("operatorImplementationFromNativeKindOperations keeps listen env out of spec validation", async () => {
   let applied = false;
   let seenSpec: unknown;
-  const plugin = takosumiPluginFromNativeKindOperations({
+  const implementation = operatorImplementationFromNativeKindOperations({
     kindUri: "https://takosumi.com/kinds/v1/postgres",
     operations: {
       id: "@example/native-postgres",
@@ -193,7 +193,7 @@ test("takosumiPluginFromNativeKindOperations keeps listen env out of spec valida
     },
   });
 
-  await plugin.apply({
+  await implementation.apply({
     installationId: "ins_1",
     componentName: "db",
     component: {
@@ -292,7 +292,7 @@ test("outputsToOutputMaterial rejects retired object-store credential aliases", 
         accessKeyRef: "secret://bucket/access-key",
         secretKeyRef: "secret://bucket/secret-key",
       }, "object-store"),
-    /plugin outputs cannot be projected to object-store material: \$\.accessKeyRef unknown field; \$\.secretKeyRef unknown field/,
+    /implementation outputs cannot be projected to object-store material: \$\.accessKeyRef unknown field; \$\.secretKeyRef unknown field/,
   );
 });
 
@@ -313,29 +313,29 @@ test("mergeResolvedEnv rejects listen env collisions", () => {
   );
 });
 
-test("TakosumiPlugin is a plain-array shape: name + provides + apply suffice", () => {
-  const plugin: TakosumiPlugin = {
+test("OperatorImplementation is a plain-array shape: name + provides + apply suffice", () => {
+  const implementation: OperatorImplementation = {
     name: "@takos/cloudflare-workers",
     version: "1.0.0",
     provides: ["https://takosumi.com/kinds/v1/worker"],
-    apply: (ctx: TakosumiPluginApplyContext) =>
-      Promise.resolve<TakosumiPluginApplyResult>({
+    apply: (ctx: OperatorImplementationApplyContext) =>
+      Promise.resolve<OperatorImplementationApplyResult>({
         resourceHandle: `cf-worker:${ctx.componentName}`,
         outputs: { workerUrl: "https://app.example.test" },
       }),
   };
 
-  assert.equal(plugin.name, "@takos/cloudflare-workers");
-  assert.deepEqual([...plugin.provides], [
+  assert.equal(implementation.name, "@takos/cloudflare-workers");
+  assert.deepEqual([...implementation.provides], [
     "https://takosumi.com/kinds/v1/worker",
   ]);
-  assert.equal(plugin.destroy, undefined);
-  assert.equal(plugin.onInstallStart, undefined);
-  assert.equal(plugin.materializeOutput, undefined);
-  assert.equal(plugin.applyListen, undefined);
+  assert.equal(implementation.destroy, undefined);
+  assert.equal(implementation.onInstallStart, undefined);
+  assert.equal(implementation.materializeOutput, undefined);
+  assert.equal(implementation.applyListen, undefined);
 });
 
-test("TakosumiPlugin lifecycle hook signatures accept Installation + Deployment", async () => {
+test("OperatorImplementation lifecycle hook signatures accept Installation + Deployment", async () => {
   const calls: string[] = [];
   const installation: Installation = {
     id: "ins_1",
@@ -366,38 +366,38 @@ test("TakosumiPlugin lifecycle hook signatures accept Installation + Deployment"
     createdAt: 0,
   };
 
-  const plugin: TakosumiPlugin = {
+  const implementation: OperatorImplementation = {
     name: "@example/test",
     version: "0.0.0",
     provides: ["https://example.test/kinds/v1/test"],
     apply: () => Promise.resolve({ resourceHandle: "test://x", outputs: {} }),
-    destroy: (_ctx: TakosumiPluginDestroyContext) => {
+    destroy: (_ctx: OperatorImplementationDestroyContext) => {
       calls.push("destroy");
       return Promise.resolve();
     },
-    onInstallStart: (_ctx: TakosumiPluginInstallationContext) => {
+    onInstallStart: (_ctx: OperatorImplementationInstallationContext) => {
       calls.push("onInstallStart");
       return Promise.resolve();
     },
-    onInstallComplete: (_ctx: TakosumiPluginInstallationContext) => {
+    onInstallComplete: (_ctx: OperatorImplementationInstallationContext) => {
       calls.push("onInstallComplete");
       return Promise.resolve();
     },
-    onDeploymentStart: (_ctx: TakosumiPluginDeploymentContext) => {
+    onDeploymentStart: (_ctx: OperatorImplementationDeploymentContext) => {
       calls.push("onDeploymentStart");
       return Promise.resolve();
     },
-    onDeploymentComplete: (_ctx: TakosumiPluginDeploymentContext) => {
+    onDeploymentComplete: (_ctx: OperatorImplementationDeploymentContext) => {
       calls.push("onDeploymentComplete");
       return Promise.resolve();
     },
   };
 
-  await plugin.onInstallStart?.({ installation });
-  await plugin.onDeploymentStart?.({ installation, deployment });
-  await plugin.onDeploymentComplete?.({ installation, deployment });
-  await plugin.onInstallComplete?.({ installation, deployment });
-  await plugin.destroy?.({
+  await implementation.onInstallStart?.({ installation });
+  await implementation.onDeploymentStart?.({ installation, deployment });
+  await implementation.onDeploymentComplete?.({ installation, deployment });
+  await implementation.onInstallComplete?.({ installation, deployment });
+  await implementation.destroy?.({
     installationId: "ins_1",
     componentName: "web",
     resourceHandle: "test://x",
@@ -412,15 +412,15 @@ test("TakosumiPlugin lifecycle hook signatures accept Installation + Deployment"
   ]);
 });
 
-test("TakosumiPlugin.apply receives Component + source + input materials", async () => {
+test("OperatorImplementation.apply receives Component + source + input materials", async () => {
   const component: Component = {
     kind: "worker",
     connect: {
       db: { output: "database.connection", inject: "env", prefix: "DB" },
     },
   };
-  const seen: TakosumiPluginApplyContext[] = [];
-  const plugin: TakosumiPlugin = {
+  const seen: OperatorImplementationApplyContext[] = [];
+  const implementation: OperatorImplementation = {
     name: "@example/recording",
     version: "0.0.0",
     provides: ["worker"],
@@ -439,7 +439,7 @@ test("TakosumiPlugin.apply receives Component + source + input materials", async
     passwordSecretRef: "secret://db/password",
   };
 
-  const result = await plugin.apply({
+  const result = await implementation.apply({
     installationId: "ins_1",
     componentName: "web",
     component,
@@ -468,11 +468,11 @@ test("TakosumiPlugin.apply receives Component + source + input materials", async
   assert.equal(seen[0].sourceDirectory, "/tmp/prepared-source");
 });
 
-test("TakosumiPlugin.materializeOutput emits output material", async () => {
+test("OperatorImplementation.materializeOutput emits output material", async () => {
   const component: Component = {
     kind: "worker",
   };
-  const plugin: TakosumiPlugin = {
+  const implementation: OperatorImplementation = {
     name: "@example/worker",
     version: "0.0.0",
     provides: ["worker"],
@@ -488,7 +488,7 @@ test("TakosumiPlugin.materializeOutput emits output material", async () => {
       }),
   };
 
-  const material = await plugin.materializeOutput!({
+  const material = await implementation.materializeOutput!({
     installationId: "ins_1",
     componentName: "web",
     component,
@@ -500,14 +500,14 @@ test("TakosumiPlugin.materializeOutput emits output material", async () => {
   assert.equal(material.id, "w_1");
 });
 
-test("TakosumiPlugin.applyListen returns an EnvInjection", async () => {
+test("OperatorImplementation.applyListen returns an EnvInjection", async () => {
   const component: Component = {
     kind: "worker",
     connect: {
       db: { output: "database.connection", inject: "env", prefix: "DB" },
     },
   };
-  const plugin: TakosumiPlugin = {
+  const implementation: OperatorImplementation = {
     name: "@example/worker",
     version: "0.0.0",
     provides: ["worker"],
@@ -533,7 +533,7 @@ test("TakosumiPlugin.applyListen returns an EnvInjection", async () => {
     },
   };
 
-  const injection = await plugin.applyListen!({
+  const injection = await implementation.applyListen!({
     installationId: "ins_1",
     componentName: "web",
     component,
@@ -553,7 +553,7 @@ test("TakosumiPlugin.applyListen returns an EnvInjection", async () => {
 });
 
 test("InlineMaterializer is the minimal Materializer packaging", () => {
-  // `Materializer = TakosumiPlugin | InlineMaterializer` — both attach to
+  // `Materializer = OperatorImplementation | InlineMaterializer` — both attach to
   // the same installer surface; this test exercises the inline form to
   // pin the type contract.
   const inline: InlineMaterializer = {

@@ -5,10 +5,10 @@ import { test } from "bun:test";
 // classifier that maps its error dialect onto a private enum, plus a bridge
 // (`classifyXxxErrorAsProviderCategory`) that further normalises onto the
 // provider-agnostic `ProviderErrorCategory`. The bridges live with the
-// plugins; the contract only owns the enum + the registry-backed
+// implementations; the contract only owns the enum + the registry-backed
 // {@link normalizeProviderError} entry point. These tests cover the
 // contract-side behaviour using stub classifiers — the per-cloud
-// classification logic is exercised by each plugin's own test suite.
+// classification logic is exercised by each implementation's own test suite.
 
 import assert from "node:assert/strict";
 import {
@@ -23,7 +23,7 @@ import {
 // Shared fixture: a hand-rolled stub classifier per cloud that maps a small
 // set of synthetic errors onto categories. This lets us verify the four
 // clouds collapse onto a uniform shape via `normalizeProviderError` without
-// pulling in plugin-level dependencies.
+// pulling in implementation-level dependencies.
 
 interface SyntheticAwsError {
   readonly code: string;

@@ -398,7 +398,7 @@ function pascalCaseKind(kind: PlannedOperationKind): string {
 // ---------------------------------------------------------------------------
 
 /** Default adapter — succeeds for every operation. Used ONLY when no provider
- *  plugin is wired in dev / test / in-memory bootstrap. Provides the synthetic
+ *  implementation is wired in dev / test / in-memory bootstrap. Provides the synthetic
  *  apply path so a Deployment can transition resolved → applied without a
  *  real cloud round-trip.
  *

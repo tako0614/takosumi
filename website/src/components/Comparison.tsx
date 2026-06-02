@@ -32,7 +32,7 @@ const ROWS = [
   {
     axis: "拡張 / 自作",
     us: "JSON-LD で 新 kind を 追加",
-    saas: "vendor が出した plugin のみ",
+    saas: "vendor が出した連携だけ",
     paas: "vendor の SDK の範囲内",
   },
 ];

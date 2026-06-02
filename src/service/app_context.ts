@@ -94,7 +94,7 @@ import type {
   DeploymentInput,
   GroupHead,
   IsoTimestamp,
-  TakosumiPlugin,
+  OperatorImplementation,
 } from "takosumi-contract/reference/compat";
 import {
   InMemoryRuntimeAgentRegistry,
@@ -112,9 +112,9 @@ import {
 } from "./services/entitlements/mod.ts";
 import type { UsageAggregateStore } from "./services/usage/mod.ts";
 import {
-  createTakosumiPluginRegistry,
-  type TakosumiPluginRegistry,
-} from "./plugins/mod.ts";
+  createOperatorImplementationRegistry,
+  type OperatorImplementationRegistry,
+} from "./implementation-bindings/mod.ts";
 
 export interface AppContextOptions {
   readonly clock?: Clock;
@@ -144,8 +144,8 @@ export interface AppContextOptions {
   readonly managedHosting?: {
     readonly entitlements?: EntitlementPolicyPort;
   };
-  readonly plugins?: readonly TakosumiPlugin[];
-  readonly pluginRegistry?: TakosumiPluginRegistry;
+  readonly implementations?: readonly OperatorImplementation[];
+  readonly implementationRegistry?: OperatorImplementationRegistry;
 }
 
 export interface AppRuntimeConfig {
@@ -584,15 +584,15 @@ async function importRuntimeConfigModule(): Promise<
 }
 
 /**
- * Build the canonical `TakosumiPluginRegistry` from the operator-supplied
- * `options.plugins` array. The registry is consulted by `InstallerPipeline`
- * to resolve exact kind references to plugins that materialize them.
+ * Build the canonical `OperatorImplementationRegistry` from the operator-supplied
+ * `options.implementations` array. The registry is consulted by `InstallerPipeline`
+ * to resolve exact kind references to implementations that materialize them.
  */
-export function buildTakosumiPluginRegistry(
+export function buildOperatorImplementationRegistry(
   options: AppContextOptions = {},
-): TakosumiPluginRegistry {
-  return options.pluginRegistry ??
-    createTakosumiPluginRegistry(options.plugins ?? []);
+): OperatorImplementationRegistry {
+  return options.implementationRegistry ??
+    createOperatorImplementationRegistry(options.implementations ?? []);
 }
 
 function assertNoStrictRuntimeAdapterFallbacks(

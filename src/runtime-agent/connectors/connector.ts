@@ -2,7 +2,7 @@
  * Connector interface — implemented per-provider inside the runtime-agent.
  * Connectors hold the actual SDK call code (cloud REST APIs, Deno.Command, etc.).
  *
- * Plugins NEVER instantiate connectors. They post lifecycle envelopes to the
+ * Implementations NEVER instantiate connectors. They post lifecycle envelopes to the
  * agent's HTTP server, which routes to the registered connector.
  */
 

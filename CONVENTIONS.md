@@ -29,7 +29,7 @@ infrastructure.
 
 Backend adapters and runtime-agent connectors live in `operator distribution/` as
 optional reference implementation. Operators attach them through
-`createTakosumiService({ plugins })` or an equivalent distribution-local binding layer.
+`createTakosumiService({ implementations })` or an equivalent distribution-local binding layer.
 Those adapter subpaths are package API, not Takosumi source authoring
 vocabulary.
 

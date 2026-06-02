@@ -399,7 +399,7 @@ export class StandaloneBootstrapService {
           code: "production_provider_bootstrap_forbidden",
           key: selection.configuredBy[0],
           message:
-            `${input.environment} cannot bootstrap provider adapter ${selection.kind}; select a non-reference provider service plugin or inject an operator-owned provider`,
+            `${input.environment} cannot bootstrap provider adapter ${selection.kind}; select a non-reference provider service implementation or inject an operator-owned provider`,
         });
         continue;
       }
@@ -454,7 +454,7 @@ export class StandaloneBootstrapService {
         code: "stale_bootstrap_selector",
         key,
         message:
-          `${key} is a stale standalone bootstrap selector; select a service plugin port with TAKOSUMI_*_PLUGIN instead`,
+          `${key} is a stale standalone bootstrap selector; select a service implementation port with TAKOSUMI_*_PLUGIN instead`,
       });
     }
   }

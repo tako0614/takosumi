@@ -243,7 +243,7 @@ export class RepairWorker {
     return { plan, operation, event };
   }
 
-  async rematerializeWithTrustedPlugin(
+  async rematerializeWithTrustedImplementation(
     input: RepairRematerializeInput,
   ): Promise<RepairRematerializeResult> {
     const result = await this.rematerializeWithTrustedPackage(input);
@@ -252,7 +252,7 @@ export class RepairWorker {
       ...result,
       plan: {
         ...result.plan,
-        reason: "backend-plugin-conformance-blocked",
+        reason: "backend-implementation-conformance-blocked",
       },
     };
   }

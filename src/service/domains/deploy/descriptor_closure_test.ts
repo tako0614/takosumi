@@ -151,14 +151,14 @@ test("H9: closure incompatible when alias exists but raw digest changed (apiVers
   assert.equal(report.mismatches[0].kind, "digest-mismatch");
 });
 
-test("H9: closure incompatible when pinned alias not present in live registry (plugin disabled)", () => {
+test("H9: closure incompatible when pinned alias not present in live registry (implementation disabled)", () => {
   const closure = buildClosure([
     {
       alias: "provider.cloudflare.workers@v1",
       rawDigest: "sha256:cf-w-v1",
     },
   ]);
-  // Cloudflare plugin disabled between resolve and apply → empty registry.
+  // Cloudflare implementation disabled between resolve and apply → empty registry.
   const live = liveMap([]);
 
   const report = verifyClosureVersionCompatibility(closure, live);
@@ -171,6 +171,6 @@ test("H9: closure incompatible when pinned alias not present in live registry (p
   );
   assert.match(
     report.mismatches[0].upgradeGuide,
-    /re-enable the plugin/,
+    /re-enable the implementation/,
   );
 });

@@ -7,16 +7,16 @@ import {
   listProviders,
   listProvidersForShape,
   type PlatformContext,
-  type ProviderPlugin,
+  type ProviderAdapter,
   registerProvider,
   unregisterProvider,
-} from "./provider-plugin.ts";
+} from "./provider-adapter.ts";
 
 function fakeProvider(
   id: string,
   shape: { id: string; version: string },
   capabilities: readonly string[] = [],
-): ProviderPlugin {
+): ProviderAdapter {
   return {
     id,
     version: "0.0.1",
@@ -190,7 +190,7 @@ test("registerProvider with allowOverride suppresses the warning", () => {
   }
 });
 
-test("ProviderPlugin apply returns ApplyResult shape", async () => {
+test("ProviderAdapter apply returns ApplyResult shape", async () => {
   const provider = fakeProvider("test-provider-apply", {
     id: "object-store",
     version: "v1",

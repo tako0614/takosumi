@@ -39,9 +39,9 @@ import {
 import {
   getProvider,
   type PlatformContext,
-  type ProviderPlugin,
+  type ProviderAdapter,
   type ResourceHandle,
-} from "takosumi-contract/internal/provider-plugin";
+} from "takosumi-contract/internal/provider-adapter";
 import type { JsonObject } from "takosumi-contract/reference/types";
 import type { ManifestResource } from "./_internal_manifest_types.ts";
 import {
@@ -818,7 +818,7 @@ function withOperationContext(
  * `provider.apply` replaces it. The prior provider is looked up by
  * `snapshot.providerId` in the provider registry. When the registry no
  * longer carries that id (e.g. a deployment moved across distributions
- * and the legacy plugin was uninstalled), we fall back to the current
+ * and the legacy implementation was uninstalled), we fall back to the current
  * provider only when it is the same id; otherwise we record a
  * `prior_provider_not_found` warning and skip destroy so the apply can
  * still proceed.
@@ -831,7 +831,7 @@ async function destroyPriorSnapshot(args: {
   readonly resourceName: string;
   readonly snapshot: PriorAppliedSnapshot;
   readonly currentProviderId: string;
-  readonly currentProvider: ProviderPlugin;
+  readonly currentProvider: ProviderAdapter;
   readonly currentFingerprint: string;
   readonly context: PlatformContext;
   readonly deploymentName?: string;
@@ -852,7 +852,7 @@ async function destroyPriorSnapshot(args: {
 
   // Prefer the prior provider so the destroy targets the same backend that
   // created the resource; fall back to the current provider when ids match.
-  let priorProvider: ProviderPlugin | undefined = getProvider(
+  let priorProvider: ProviderAdapter | undefined = getProvider(
     snapshot.providerId,
   );
   if (!priorProvider && snapshot.providerId === currentProviderId) {

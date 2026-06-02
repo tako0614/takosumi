@@ -68,7 +68,7 @@ export interface ComposedAppInput {
    * substrate-redesign composer wiring forwards operator-supplied bindings into
    * the embedded service.
    */
-  readonly plugins?: CreateTakosumiServiceArg["plugins"];
+  readonly implementations?: CreateTakosumiServiceArg["implementations"];
   /**
    * Extra request handling that must run before the embedded Takosumi app and
    * the accounts fallback (e.g. `/healthz`, signed export downloads). Returns
@@ -131,7 +131,7 @@ export async function buildComposedApp(
     // Operators add native adapter implementation bindings (Docker Compose / systemd / etc.)
     // here; the reference Bun profile ships none by default but forwards
     // whatever the caller supplies.
-    plugins: input.plugins ?? [],
+    implementations: input.implementations ?? [],
     runtimeEnv,
     platformServices,
     // Default runtime git/tar runners are subprocess-backed, so this profile

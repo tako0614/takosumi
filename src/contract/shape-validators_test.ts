@@ -45,7 +45,7 @@ test("requireEnum / optionalEnum share one diagnostic format", () => {
 
 test("shared validators export exactly the consumed helper set", () => {
   // Guard against dead exports creeping back in: every exported helper has a
-  // consumer in either a backend plugin or another helper in this module. If a
+  // consumer in either a backend implementation or another helper in this module. If a
   // helper is added without a consumer, prune it or wire it up.
   const exported = Object.keys(validators).sort();
   expect(exported).toEqual([

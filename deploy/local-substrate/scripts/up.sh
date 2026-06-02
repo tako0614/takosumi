@@ -38,7 +38,7 @@ esac
 
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 docker compose version >/dev/null 2>&1 || {
-	echo "docker compose plugin is required" >&2; exit 1;
+	echo "docker compose implementation is required" >&2; exit 1;
 }
 
 wait_for_completed_service() {

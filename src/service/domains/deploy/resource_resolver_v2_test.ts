@@ -1,10 +1,10 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  type ProviderPlugin,
+  type ProviderAdapter,
   registerProvider,
   unregisterProvider,
-} from "takosumi-contract/internal/provider-plugin";
+} from "takosumi-contract/internal/provider-adapter";
 import {
   registerShape,
   type Shape,
@@ -35,7 +35,7 @@ function fakeProvider(
   id: string,
   shape: { id: string; version: string },
   capabilities: readonly string[] = ["c1", "c2"],
-): ProviderPlugin {
+): ProviderAdapter {
   return {
     id,
     version: "0.0.1",

@@ -33,7 +33,7 @@ import type {
   SourcePin,
   SourceSummary,
 } from "takosumi-contract/installer-api";
-import type { TakosumiPlugin } from "takosumi-contract/reference/plugin";
+import type { OperatorImplementation } from "takosumi-contract/reference/implementation";
 import type {
   GitRunner,
   TarRunner,
@@ -160,7 +160,7 @@ export interface InstallerPipelineDependencies {
    * component kinds in space; operator distributions may use these values inside
    * their own provider implementation.
    */
-  readonly plugins?: readonly TakosumiPlugin[];
+  readonly implementations?: readonly OperatorImplementation[];
   readonly platformServices?: PlatformServiceResolver;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => number;
@@ -193,7 +193,7 @@ export class InstallerPipeline {
     this.#localSourceRoot = dependencies.localSourceRoot;
     this.#gitRunner = dependencies.gitRunner;
     this.#tarRunner = dependencies.tarRunner;
-    void dependencies.plugins;
+    void dependencies.implementations;
   }
 
   async installationDryRun(
@@ -673,8 +673,8 @@ export class InstallerPipeline {
   }
 }
 
-export function installerProviderRegistryFromPlugins(
-  _plugins: readonly TakosumiPlugin[],
+export function installerProviderRegistryFromImplementations(
+  _implementations: readonly OperatorImplementation[],
 ): InstallerProviderRegistry {
   return {};
 }
