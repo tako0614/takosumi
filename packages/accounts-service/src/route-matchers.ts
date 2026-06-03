@@ -14,6 +14,13 @@ export type InstallationRoute =
   | { kind: "export-operation"; installationId: string; operationId: string }
   | { kind: "export-download"; installationId: string; operationId: string }
   | { kind: "events"; installationId: string }
+  | { kind: "events-ingest"; installationId: string }
+  | { kind: "services"; installationId: string }
+  | {
+    kind: "service-rotate-token";
+    installationId: string;
+    serviceId: string;
+  }
   | { kind: "billing-usage-reports"; installationId: string }
   | { kind: "launch-token-consume"; installationId: string };
 
@@ -76,6 +83,22 @@ export function matchInstallationRoute(
   }
   if (parts.length === 2 && parts[1] === "events") {
     return { kind: "events", installationId };
+  }
+  if (parts.length === 3 && parts[1] === "events" && parts[2] === "ingest") {
+    return { kind: "events-ingest", installationId };
+  }
+  if (parts.length === 2 && parts[1] === "services") {
+    return { kind: "services", installationId };
+  }
+  if (
+    parts.length === 4 && parts[1] === "services" && parts[2] &&
+    parts[3] === "rotate-token"
+  ) {
+    return {
+      kind: "service-rotate-token",
+      installationId,
+      serviceId: decodeURIComponent(parts[2]),
+    };
   }
   if (
     parts.length === 3 && parts[1] === "billing" &&

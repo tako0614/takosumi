@@ -8,6 +8,7 @@ import {
   subjectCanAccessInstallation,
 } from "./installation-routes.ts";
 import type { AccountsStore } from "./store.ts";
+import { requireSameSpaceWorkloadControlForInstallation } from "./workload-service-tokens.ts";
 import {
   json,
   readJsonObject,
@@ -154,6 +155,25 @@ export async function requireAppInstallationAccountAccess(input: {
   return undefined;
 }
 
+export async function requireAppInstallationAccountOrWorkloadControlAccess(
+  input: {
+    request: Request;
+    store: AccountsStore;
+    installationId: string;
+    scope: AccountsBearerRequiredScope;
+  },
+): Promise<Response | undefined> {
+  const accountBlocked = await requireAppInstallationAccountAccess(input);
+  if (!accountBlocked) return undefined;
+  const workloadControl = await requireSameSpaceWorkloadControlForInstallation({
+    request: input.request,
+    store: input.store,
+    targetInstallationId: input.installationId,
+  });
+  if (workloadControl.ok) return undefined;
+  return preferredCompositeAuthResponse(accountBlocked, workloadControl.response);
+}
+
 async function requireAccountCreateWriteAccess(input: {
   request: Request;
   store: AccountsStore;
@@ -185,4 +205,14 @@ async function requireAccountCreateWriteAccess(input: {
     return json({ error: "account_not_found" }, 404);
   }
   return undefined;
+}
+
+function preferredCompositeAuthResponse(
+  accountResponse: Response,
+  workloadResponse: Response,
+): Response {
+  if (accountResponse.status === 401 && workloadResponse.status !== 401) {
+    return workloadResponse;
+  }
+  return accountResponse;
 }

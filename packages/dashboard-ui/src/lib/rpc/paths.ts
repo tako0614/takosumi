@@ -27,6 +27,7 @@ export const PASSKEY_REGISTER_COMPLETE = "/v1/auth/passkeys/register/complete";
 
 export const INSTALLATIONS = "/v1/installations";
 export const INSTALLATION_PLAN_RUNS = "/v1/installations/plan-runs";
+export const WORKLOAD_SERVICES = "/v1/workload-services";
 export const installation = (id: string): string => `${INSTALLATIONS}/${enc(id)}`;
 export const installationMaterialize = (id: string): string =>
   `${installation(id)}/materialize`;
@@ -42,3 +43,9 @@ export const installationExportDownload = (
 ): string => `${installationExportOperation(id, operationId)}/download`;
 export const installationEvents = (id: string): string =>
   `${installation(id)}/events`;
+export const installationServices = (id: string): string =>
+  `${installation(id)}/services`;
+export const installationServiceRotateToken = (
+  id: string,
+  serviceId: string,
+): string => `${installationServices(id)}/${enc(serviceId)}/rotate-token`;

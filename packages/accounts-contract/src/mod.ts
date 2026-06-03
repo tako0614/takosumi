@@ -36,8 +36,83 @@ export const TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH =
 export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH = "/v1/installations";
 export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH =
   "/v1/installations/import";
+export const TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH =
+  "/v1/workload-services";
 export const TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND =
   "takosumi.accounts.installation-export-bundle@v1";
+
+export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC =
+  "identity.primary.oidc";
+export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT =
+  "billing.primary.default";
+export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_DEPLOYMENT_OUTPUTS_HTTP =
+  "deployment.outputs.http";
+export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT =
+  "events.webhook.default";
+export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOSUMI_CONTROL_SPACE =
+  "takosumi.control.space";
+
+export const TAKOSUMI_ACCOUNTS_MATERIAL_IDENTITY_OIDC_V1 =
+  "identity.oidc@v1";
+export const TAKOSUMI_ACCOUNTS_MATERIAL_BILLING_PORT_V1 =
+  "billing.port@v1";
+export const TAKOSUMI_ACCOUNTS_MATERIAL_DEPLOYMENT_OUTPUTS_HTTP_V1 =
+  "deployment.outputs.http@v1";
+export const TAKOSUMI_ACCOUNTS_MATERIAL_EVENTS_WEBHOOK_V1 =
+  "events.webhook@v1";
+export const TAKOSUMI_ACCOUNTS_MATERIAL_TAKOSUMI_CONTROL_V1 =
+  "takosumi.control@v1";
+
+export const TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICE_IDS = [
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_DEPLOYMENT_OUTPUTS_HTTP,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOSUMI_CONTROL_SPACE,
+] as const;
+
+export type TakosumiAccountsWorkloadServiceId =
+  typeof TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICE_IDS[number];
+
+export type TakosumiAccountsWorkloadServiceStatus =
+  | "ready"
+  | "not_configured"
+  | "unavailable";
+
+export interface TakosumiAccountsWorkloadServiceDescriptor {
+  readonly id: TakosumiAccountsWorkloadServiceId;
+  readonly material_kind: string;
+  readonly title: string;
+  readonly description: string;
+  readonly secret_backed: boolean;
+}
+
+export interface TakosumiAccountsWorkloadServiceProjection {
+  readonly id: TakosumiAccountsWorkloadServiceId;
+  readonly material_kind: string;
+  readonly status: TakosumiAccountsWorkloadServiceStatus;
+  readonly endpoint?: string;
+  readonly material?: Record<string, unknown>;
+  readonly secret_ref?: string;
+  readonly token_expires_at?: string;
+  readonly rotate_token_url?: string;
+}
+
+export interface TakosumiAccountsListWorkloadServicesResponse {
+  readonly services: readonly TakosumiAccountsWorkloadServiceDescriptor[];
+}
+
+export interface TakosumiAccountsListInstallationServicesResponse {
+  readonly installation_id: string;
+  readonly services: readonly TakosumiAccountsWorkloadServiceProjection[];
+}
+
+export interface TakosumiAccountsRotateInstallationServiceTokenResponse {
+  readonly token: string;
+  readonly token_type: "Bearer";
+  readonly expires_at: string;
+  readonly service: TakosumiAccountsWorkloadServiceProjection;
+}
 
 export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = [
   "read",
@@ -104,6 +179,10 @@ export function takosumiAccountsInstallationsImportPath(): string {
   return TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH;
 }
 
+export function takosumiAccountsWorkloadServicesPath(): string {
+  return TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH;
+}
+
 export function takosumiAccountsInstallationStatusPath(
   installationId: string,
 ): string {
@@ -167,6 +246,27 @@ export function takosumiAccountsInstallationEventsPath(
   installationId: string,
 ): string {
   return `${takosumiAccountsInstallationPath(installationId)}/events`;
+}
+
+export function takosumiAccountsInstallationEventsIngestPath(
+  installationId: string,
+): string {
+  return `${takosumiAccountsInstallationEventsPath(installationId)}/ingest`;
+}
+
+export function takosumiAccountsInstallationServicesPath(
+  installationId: string,
+): string {
+  return `${takosumiAccountsInstallationPath(installationId)}/services`;
+}
+
+export function takosumiAccountsInstallationServiceRotateTokenPath(
+  installationId: string,
+  serviceId: string,
+): string {
+  return `${takosumiAccountsInstallationServicesPath(installationId)}/${
+    pathSegment(serviceId, "serviceId")
+  }/rotate-token`;
 }
 
 export function takosumiAccountsInstallationBillingUsageReportsPath(
