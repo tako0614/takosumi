@@ -1,11 +1,9 @@
-# takosumi/deploy — reference deploy examples (not the framework surface)
+# takosumi/deploy — operator deployment profiles
 
-Takosumi is a **framework library** you import (`@takosjp/takosumi`): it exposes a
-programmatic operate-the-service API plus an **embeddable Hono `app`** (the 5 installer
-endpoints + service API), and it **never self-serves**. Serving, route extension, and
-production composition are the implementation's job. See
-[`../AGENTS.md`](../AGENTS.md) and the ecosystem
-[`ARCHITECTURE.md`](../../ARCHITECTURE.md) for the framework / composer boundary.
+Takosumi ships the OpenTofu-native Deploy Control contract, service entry, CLI,
+and reference operator deployment profiles. The public service surface is
+centered on RunnerProfile, PlanRun, ApplyRun, Installation, Deployment, and
+DeploymentOutput.
 
 The directories under `deploy/` are therefore **reference examples and provider
 runbooks**, not part of the published framework surface and not the canonical operator
@@ -19,10 +17,13 @@ clone and adapt `takosumi/deploy/` rather than these examples.
 | Directory          | Role                                                                                                                                                                                                                   |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cloudflare/`      | Worker-first service scaffold example: builds the service in-process with `createTakosumiService`, D1 persistence, optional R2 object store. Referenced by the Takos distribution profile and the local-substrate worker runner. |
-| `single-host/`     | Substrate-neutral Docker compose example: service + runtime-agent + Postgres + MinIO + Caddy on one host.                                                                                                               |
-| `aws/`             | Operator-owned AWS provider runbook (README only; native kinds + runtime handlers live in `operator distribution/`).                                                                                                              |
-| `gcp/`             | Operator-owned GCP provider runbook (README only).                                                                                                                                                                     |
-| `kubernetes/`      | Operator-owned Kubernetes provider runbook (README only).                                                                                                                                                              |
+| `single-host/`     | Substrate-neutral Docker compose example: service + Postgres + MinIO + Caddy on one host; OpenTofu execution is attached through RunnerProfile.                                                                          |
+| `aws/`             | Operator-owned AWS OpenTofu provider profile runbook (README only).                                                                                                              |
+| `gcp/`             | Operator-owned GCP OpenTofu provider profile runbook (README only).                                                                                                                                                                     |
+| `azure/`           | Operator-owned Azure OpenTofu provider profile runbook (README only).                                                                                                                                                                  |
+| `kubernetes/`      | Operator-owned Kubernetes / Helm OpenTofu provider profile runbook (README only).                                                                                                                                                              |
+| `github/`          | Operator-owned GitHub OpenTofu provider profile runbook (README only).                                                                                                                                                              |
+| `digitalocean/`    | Operator-owned DigitalOcean OpenTofu provider profile runbook (README only).                                                                                                                                                              |
 | `local-substrate/` | Local Pebble + CoreDNS + Caddy dev substrate for production-equivalent hostname access.                                                                                                                                |
 | `observability/`   | Reference observability wiring.                                                                                                                                                                                        |
 

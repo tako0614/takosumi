@@ -1,5 +1,5 @@
 -- Migration: 20260430000016_custom_domain_reservations
--- Purpose:   Introduce a kernel-side custom domain registry so cross-tenant
+-- Purpose:   Introduce a service-side custom domain registry so cross-tenant
 --            hostname collisions (e.g. tenant-A and tenant-B both requesting
 --            `api.example.com`) are detected before a provider materializer
 --            mutates upstream DNS / SSL state.

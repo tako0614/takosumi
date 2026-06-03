@@ -9,14 +9,10 @@ test("service startup diagnostics reference current docs", async () => {
 
   assert.equal(source.includes("docs/hosting/"), false);
 
-  for (
-    const docPath of [
-      "docs/operator/operator-managed.md",
-      "docs/reference/secret-partitions.md",
-      "docs/reference/env-vars.md",
-      "docs/reference/audit-events.md",
-    ]
-  ) {
+  for (const docPath of [
+    "docs/reference/operator.md",
+    "docs/reference/runner-profiles.md",
+  ]) {
     assert.ok(
       source.includes(docPath),
       `expected index.ts to mention ${docPath}`,

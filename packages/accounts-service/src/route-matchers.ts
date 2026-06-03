@@ -3,14 +3,11 @@ import {
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
 } from "@takosjp/takosumi-accounts-contract";
 
-const TAKOSUMI_ACCOUNTS_DASHBOARD_INSTALLATIONS_PATH =
-  "/dashboard/installations";
-
 export type InstallationRoute =
   | { kind: "installation"; installationId: string }
   | { kind: "status"; installationId: string }
   | { kind: "deployment"; installationId: string }
-  | { kind: "deployment-dry-run"; installationId: string }
+  | { kind: "deployment-plan-run"; installationId: string }
   | { kind: "rollback"; installationId: string }
   | { kind: "materialize"; installationId: string }
   | { kind: "export"; installationId: string }
@@ -20,11 +17,6 @@ export type InstallationRoute =
   | { kind: "billing-usage-reports"; installationId: string }
   | { kind: "launch-token-consume"; installationId: string };
 
-export type DashboardInstallationRoute =
-  | { kind: "detail"; installationId: string }
-  | { kind: "materialize"; installationId: string }
-  | { kind: "export"; installationId: string };
-
 export function matchAccountTokenRevokeRoute(
   pathname: string,
 ): { tokenId: string } | null {
@@ -33,24 +25,6 @@ export function matchAccountTokenRevokeRoute(
   const parts = pathname.slice(prefix.length).split("/");
   if (parts.length !== 2 || parts[1] !== "revoke" || !parts[0]) return null;
   return { tokenId: parts[0] };
-}
-
-export function matchDashboardInstallationRoute(
-  pathname: string,
-): DashboardInstallationRoute | null {
-  const prefix = `${TAKOSUMI_ACCOUNTS_DASHBOARD_INSTALLATIONS_PATH}/`;
-  if (!pathname.startsWith(prefix)) return null;
-  const parts = pathname.slice(prefix.length).split("/");
-  const installationId = parts[0];
-  if (!installationId) return null;
-  if (parts.length === 1) return { kind: "detail", installationId };
-  if (parts.length === 2 && parts[1] === "materialize") {
-    return { kind: "materialize", installationId };
-  }
-  if (parts.length === 2 && parts[1] === "export") {
-    return { kind: "export", installationId };
-  }
-  return null;
 }
 
 export function matchInstallationRoute(
@@ -70,9 +44,9 @@ export function matchInstallationRoute(
   }
   if (
     parts.length === 3 && parts[1] === "deployments" &&
-    parts[2] === "dry-run"
+    parts[2] === "plan-runs"
   ) {
-    return { kind: "deployment-dry-run", installationId };
+    return { kind: "deployment-plan-run", installationId };
   }
   if (parts.length === 2 && parts[1] === "rollback") {
     return { kind: "rollback", installationId };

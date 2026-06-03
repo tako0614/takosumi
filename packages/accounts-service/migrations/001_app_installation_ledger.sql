@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS installation_v1.app_installations (
   source_git_url text NOT NULL,
   source_ref text NOT NULL,
   source_commit text NOT NULL,
-  plan_snapshot_digest text NOT NULL CHECK (plan_snapshot_digest LIKE 'sha256:%'),
+  plan_digest text NOT NULL CHECK (plan_digest LIKE 'sha256:%'),
   artifact_digest text CHECK (artifact_digest IS NULL OR artifact_digest LIKE 'sha256:%'),
   mode installation_v1.app_installation_mode_v1 NOT NULL,
   runtime_binding_id text,

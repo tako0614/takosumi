@@ -3,8 +3,7 @@ import { CreditCard, ExternalLink } from "lucide-solid";
 import { createSignal, Show } from "solid-js";
 import AppShell from "~/components/shell/AppShell";
 import AuthGuard from "~/components/auth/AuthGuard";
-import { startStripeCheckout } from "~/lib/api/billing";
-import { ApiError } from "~/lib/api/client";
+import { ApiError, rpc } from "~/lib/rpc";
 
 /**
  * Origins that Stripe checkout / billing portal redirect URLs are
@@ -51,7 +50,7 @@ function Inner() {
     setBusy(true);
     setErr(null);
     try {
-      const result = await startStripeCheckout({
+      const result = await rpc.billing.checkout({
         planId: planId() || undefined,
         successUrl: location.origin + "/account/billing?status=success",
         cancelUrl: location.origin + "/account/billing?status=cancelled",

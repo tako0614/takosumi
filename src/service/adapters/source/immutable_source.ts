@@ -1,9 +1,9 @@
-import type { ReferenceDeploySourcePayload } from "../../domains/deploy/mod.ts";
+import type { JsonObject } from "takosumi-contract/reference/compat";
 import { deepFreeze, stableJsonDigest } from "./digest.ts";
 import type { SourcePort, SourceSnapshot } from "./types.ts";
 
 export interface ImmutableSourceInput {
-  readonly source: ReferenceDeploySourcePayload;
+  readonly source: JsonObject;
   readonly sourceId?: string;
   readonly metadata?: Record<string, unknown>;
 }

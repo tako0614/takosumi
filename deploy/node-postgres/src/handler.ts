@@ -86,11 +86,7 @@ export function parseEnv(
       parseIntOr(env.PORT, 8787)
     }`;
   return {
-    // `TAKOSUMI_ACCOUNTS_BIND_HOST` is the canonical bind address; the
-    // legacy `TAKOSUMI_ACCOUNTS_HOSTNAME` is accepted for backwards
-    // compatibility with operators upgrading from the pre-split env layout.
-    bindHost: optional(env, "TAKOSUMI_ACCOUNTS_BIND_HOST") ??
-      optional(env, "TAKOSUMI_ACCOUNTS_HOSTNAME") ?? "0.0.0.0",
+    bindHost: optional(env, "TAKOSUMI_ACCOUNTS_BIND_HOST") ?? "0.0.0.0",
     port: parseIntOr(env.PORT ?? env.TAKOSUMI_ACCOUNTS_PORT, 8787),
     issuer,
     databaseUrl,
@@ -227,18 +223,17 @@ function parseWorkloadPlatformServices(
     ...(internalUrl ? { internalUrl } : {}),
     ...(bool(
         env,
-        "TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICES_ALLOW_DIRECT_INSTALLER",
+        "TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICES_ALLOW_DIRECT_DEPLOY_CONTROL",
       )
-      ? { allowDirectInstallerInstallations: true }
+      ? { allowDeployControlInstallations: true }
       : {}),
   };
 }
 
 /**
  * Parse Stripe billing config. Mirrors the Cloudflare worker's
- * `parseStripeBilling`. The Node profile prefers `_STRIPE_API_KEY` as
- * the spec-required name and accepts the legacy `_STRIPE_SECRET_KEY`
- * for parity with operators migrating from Cloudflare.
+ * `parseStripeBilling`. The Node profile uses `_STRIPE_API_KEY` as
+ * the spec-required name.
  *
  * `TAKOSUMI_ACCOUNTS_STRIPE_PUBLIC_KEY` is intentionally **not** wired
  * into the returned `StripeBillingOptions`: the upstream
@@ -255,8 +250,7 @@ function parseWorkloadPlatformServices(
 export function parseStripeBilling(
   env: Record<string, string | undefined>,
 ): StripeBillingOptions | undefined {
-  const secretKey = optional(env, "TAKOSUMI_ACCOUNTS_STRIPE_API_KEY") ??
-    optional(env, "TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY");
+  const secretKey = optional(env, "TAKOSUMI_ACCOUNTS_STRIPE_API_KEY");
   const webhookSecret = optional(
     env,
     "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
@@ -272,7 +266,7 @@ export function parseStripeBilling(
   }
   if (!secretKey || !webhookSecret) {
     throw new TypeError(
-      "Stripe billing requires TAKOSUMI_ACCOUNTS_STRIPE_API_KEY (or legacy TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY) and TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
+      "Stripe billing requires TAKOSUMI_ACCOUNTS_STRIPE_API_KEY and TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
     );
   }
   if (publicKey && !publicKey.startsWith("pk_")) {

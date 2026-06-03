@@ -1,6 +1,6 @@
 # Takosumi Accounts — Cloudflare Worker reference
 
-Reference Cloudflare deployment scaffold for Takosumi Accounts. Operators can use it for hostnames such as `https://accounts.takosumi.com/` after recording live DNS, route, D1/R2 binding, secret, and health evidence. The scaffold is **Worker-only**: the Worker runs `createAccountsHandler` directly with a `D1AccountsStore` and an R2-backed metadata export worker, so OIDC discovery, OAuth, passkeys, Stripe webhooks, install dry-run/apply/import/export, dashboard, launch tokens, and personal access token routes all live in one edge process.
+Reference Cloudflare deployment scaffold for Takosumi Accounts. Operators can use it for hostnames such as `https://accounts.takosumi.com/` after recording live DNS, route, D1/R2 binding, secret, and health evidence. The scaffold is **Worker-only**: the Worker runs `createAccountsHandler` directly with a `D1AccountsStore` and an R2-backed metadata export worker, so OIDC discovery, OAuth, passkeys, Stripe webhooks, PlanRun / ApplyRun / import / export, dashboard, launch tokens, and personal access token routes all live in one edge process.
 
 ## Files
 
@@ -18,7 +18,7 @@ Reference Cloudflare deployment scaffold for Takosumi Accounts. Operators can us
    Keep the returned UUID in the operator environment as `TAKOSUMI_ACCOUNTS_D1_DATABASE_ID`. Do not edit the tracked `wrangler.toml`; render an ignored deploy config instead:
    ```sh
    TAKOSUMI_ACCOUNTS_D1_DATABASE_ID=<uuid> \
-   TAKOSUMI_ACCOUNTS_INSTALLER_URL=https://<takosumi-installer-host> \
+   TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL=https://<takosumi-deploy-control-host> \
     bun run deploy:accounts-cloudflare:render-config
    ```
 3. **Create the R2 export bucket**:
@@ -36,16 +36,16 @@ Reference Cloudflare deployment scaffold for Takosumi Accounts. Operators can us
      --config deploy/accounts-cloudflare/.wrangler/takosumi-accounts.deploy.toml
    wrangler secret put TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET \
      --config deploy/accounts-cloudflare/.wrangler/takosumi-accounts.deploy.toml
-   wrangler secret put TAKOSUMI_ACCOUNTS_INSTALLER_TOKEN \
+   wrangler secret put TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN \
      --config deploy/accounts-cloudflare/.wrangler/takosumi-accounts.deploy.toml
    ```
    Add Stripe (`TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY`, `TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET`), passkey (`TAKOSUMI_ACCOUNTS_PASSKEY_*`), upstream OIDC (`TAKOSUMI_ACCOUNTS_UPSTREAM_*`), and OIDC client secret (`TAKOSUMI_ACCOUNTS_CLIENT_SECRET`) only if you need those features.
 5. **Attach the custom domain** in the Cloudflare dashboard:
    - Workers & Pages → `takosumi-accounts` → Triggers → Custom Domains → `accounts.takosumi.com`.
    - The `[[routes]]` block in `wrangler.toml` ensures the worker accepts requests at that hostname. Treat DNS/TLS as accepted evidence only after `deploy:accounts-cloudflare:ensure-dns -- --check --fail-on-not-ready` and `deploy:accounts-cloudflare:probe -- --fail-on-not-ready` pass.
-6. **Re-render when installer or route settings change**. The Accounts Worker proxies install dry-run/apply to the Takosumi installer and must know that base URL before Store / dashboard install controls can work:
+6. **Re-render when deployControl or route settings change**. The Accounts Worker proxies PlanRun and ApplyRun requests to the Takosumi deployControl and must know that base URL before Store / dashboard install controls can work:
    ```sh
-   export TAKOSUMI_ACCOUNTS_INSTALLER_URL=https://<takosumi-installer-host>
+   export TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL=https://<takosumi-deploy-control-host>
    bun run deploy:accounts-cloudflare:render-config
    ```
 
@@ -59,17 +59,17 @@ From `takosumi/` root:
 
 ```sh
 TAKOSUMI_ACCOUNTS_D1_DATABASE_ID=<uuid> \
-TAKOSUMI_ACCOUNTS_INSTALLER_URL=https://<takosumi-installer-host> \
+TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL=https://<takosumi-deploy-control-host> \
   bun run deploy:accounts-cloudflare:render-config
 bun run deploy:accounts-cloudflare:dryrun   # validates bindings + env without uploading
 bun run deploy:accounts-cloudflare          # uploads the worker
 ```
 
-Both deploy tasks first run `deploy:accounts-cloudflare:validate-config`, then use the ignored rendered config at `deploy/accounts-cloudflare/.wrangler/takosumi-accounts.deploy.toml`. The validation rejects placeholder D1 UUIDs, example/test installer URLs, missing D1/R2 bindings, and any Container or Durable Object persistence block. Its JSON includes a `configDigest` and boolean D1/R2/Worker-only checks so the rendered config can be referenced from private topology evidence without exposing the raw D1 database UUID. For the real D1 database, render it first:
+Both deploy tasks first run `deploy:accounts-cloudflare:validate-config`, then use the ignored rendered config at `deploy/accounts-cloudflare/.wrangler/takosumi-accounts.deploy.toml`. The validation rejects placeholder D1 UUIDs, example/test deploy control URLs, missing D1/R2 bindings, and any Container or Durable Object persistence block. Its JSON includes a `configDigest` and boolean D1/R2/Worker-only checks so the rendered config can be referenced from private topology evidence without exposing the raw D1 database UUID. For the real D1 database, render it first:
 
 ```sh
 TAKOSUMI_ACCOUNTS_D1_DATABASE_ID=<uuid> \
-TAKOSUMI_ACCOUNTS_INSTALLER_URL=https://<takosumi-installer-host> \
+TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL=https://<takosumi-deploy-control-host> \
   bun run deploy:accounts-cloudflare:render-config
 bun run deploy:accounts-cloudflare:dryrun
 bun run deploy:accounts-cloudflare
@@ -79,7 +79,7 @@ For a closed Workers.dev bootstrap before the custom domain exists, render the s
 
 ```sh
 TAKOSUMI_ACCOUNTS_D1_DATABASE_ID=<uuid> \
-TAKOSUMI_ACCOUNTS_INSTALLER_URL=https://<takosumi-installer-host> \
+TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL=https://<takosumi-deploy-control-host> \
   bun run deploy:accounts-cloudflare:render-config -- --workers-dev
 bun run deploy:accounts-cloudflare
 ```
@@ -88,7 +88,7 @@ When attaching the custom-domain route before DNS is fixed, keep Workers.dev ena
 
 ```sh
 TAKOSUMI_ACCOUNTS_D1_DATABASE_ID=<uuid> \
-TAKOSUMI_ACCOUNTS_INSTALLER_URL=https://<takosumi-installer-host> \
+TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL=https://<takosumi-deploy-control-host> \
   bun run deploy:accounts-cloudflare:render-config -- --workers-dev-with-routes
 bun run deploy:accounts-cloudflare
 ```
@@ -143,10 +143,10 @@ The probe emits `takosumi.cloudflare-accounts-probe@v1` JSON with separate Worke
 - `TAKOSUMI_ACCOUNTS_ISSUER` — `https://accounts.takosumi.com` (canonical issuer)
 - `TAKOSUMI_ACCOUNTS_CLIENT_ID` — primary OIDC client (`takos-private-production`)
 - `TAKOSUMI_ACCOUNTS_REDIRECT_URIS` — comma-separated allow-list (currently `https://takos.jp/auth/oidc/callback`)
-- `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS` — `closed` until managed-offering readiness evidence is filed. Opening access requires `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST` plus the evidence / approval / public-summary refs produced by the final live audit. For Worker deploys, map the audit output's `accountsServeManagedOfferingArgs` to `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST`, `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF`, `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF`, and `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY`; do not hand-create alternate values.
+- `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS` — `closed` until managed-offering readiness evidence is filed. Opening managed-offering access requires `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST` plus the evidence / approval / public-summary refs produced by the final live audit. For Worker deploys, map the audit output's `accountsServeManagedOfferingArgs` to `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST`, `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF`, `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF`, and `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY`; do not hand-create alternate values.
 - `TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS` — signed R2 export download URL TTL in milliseconds. Defaults to 24 hours when omitted.
-- `TAKOSUMI_ACCOUNTS_INSTALLER_URL` — Takosumi installer base URL used by the Accounts Worker install dry-run/apply proxy. `deploy:accounts-cloudflare:render-config` requires this value for real deploy configs.
-- `TAKOSUMI_ACCOUNTS_INSTALLER_TOKEN` — optional bearer secret for the installer proxy. Set it with `wrangler secret put`; do not commit it to wrangler config.
+- `TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL` — Takosumi deployControl base URL used by the Accounts Worker PlanRun / ApplyRun proxy. `deploy:accounts-cloudflare:render-config` requires this value for real deploy configs.
+- `TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN` — optional bearer secret for the deploy control proxy. Set it with `wrangler secret put`; do not commit it to wrangler config.
 
 No container runtime package, Durable Object container binding, Dockerfile, or container migration is used by this scaffold — the Accounts handler runs entirely in the V8 isolate against D1, with R2 used only for export artifacts. The "no Queue, no DO" stance applies specifically to the Cloudflare-side mirror of the service-Worker boundary that this distribution implements: Accounts identity, billing, and AppInstallation ledger persistence land in D1, edge export artifacts land in R2, and that is the entire set of Cloudflare runtime primitives used by this account-plane mirror. The takosumi service itself runs in a separate process (and may live on a substrate that uses queues or Durable Objects); service-side substrate choices are scoped to the service deployment, not to this Accounts Worker.
 
@@ -177,4 +177,4 @@ The schema version is verified once per Worker isolate (cached alongside the han
 - `bun run deploy:accounts-cloudflare:render-config -- --env staging` — same strict checks; the rendered config targets the staging Worker name + zone-mirrored hostname (`accounts-staging.takosumi.com`).
 - `bun run deploy:accounts-cloudflare:render-config -- --env local` — lenient; accepts `workers_dev` defaults and lets `wrangler dev --env local` run against the local substrate stack without operator secrets.
 
-`deploy:accounts-cloudflare:validate-config` also asserts that the rendered `[vars]` block contains every required production-facing key (`TAKOSUMI_ACCOUNTS_ISSUER`, `TAKOSUMI_ACCOUNTS_CLIENT_ID`, `TAKOSUMI_ACCOUNTS_REDIRECT_URIS`, `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS`, `TAKOSUMI_ACCOUNTS_INSTALLER_URL`) so an operator hand-edit that removes one cannot reach production.
+`deploy:accounts-cloudflare:validate-config` also asserts that the rendered `[vars]` block contains every required production-facing key (`TAKOSUMI_ACCOUNTS_ISSUER`, `TAKOSUMI_ACCOUNTS_CLIENT_ID`, `TAKOSUMI_ACCOUNTS_REDIRECT_URIS`, `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS`, `TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL`) so an operator hand-edit that removes one cannot reach production.

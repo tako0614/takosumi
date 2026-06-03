@@ -5,7 +5,7 @@ const TEMPLATES = {
   package: `{
   "name": "my-app",
   "version": "0.1.0",
-  "description": "Manifestless Takosumi source"
+  "description": "OpenTofu-native Takosumi source"
 }
 `,
 } as const;

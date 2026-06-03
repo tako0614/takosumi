@@ -12,7 +12,7 @@ import type {
   AccountsHandler,
   AccountsJsonWebKey,
   AppInstallationExportWorker,
-  InstallerProxyOptions,
+  DeployControlProxyOptions,
   JsonWebKeySet,
   PostgresQueryClient,
 } from "@takosjp/takosumi-accounts-service";
@@ -34,6 +34,7 @@ import {
   parseEnv,
 } from "./handler.ts";
 import { buildComposedApp } from "./composed-app.ts";
+import { resolveStaticAssetsDir } from "./static-assets.ts";
 
 interface PgPoolConfig {
   connectionString: string;
@@ -166,14 +167,26 @@ export async function buildComposedServer(
   const pool = createPostgresPool(config);
   const queryClient = wrapPool(pool);
   const store = new PostgresAccountsStore(queryClient);
+  const staticAssets = await resolveStaticAssetsDir(readEnv());
+  if (!staticAssets) {
+    // The server-HTML dashboard was removed, so a missing SPA build means the
+    // dashboard UI is simply absent (non-API GETs fall through to a JSON 404).
+    // Surface it loudly rather than silently degrading to API-only.
+    structuredLog(
+      "error",
+      "dashboard SPA build not found; static asset serving disabled (set TAKOSUMI_ACCOUNTS_STATIC_DIR or build packages/dashboard-ui)",
+      { event: "assets.resolution.failed" },
+    );
+  }
 
   const { app } = await buildComposedApp({
     config,
     store,
-    createAccountsHandler: (installer) =>
-      buildAccountsHandler(config, store, installer),
+    createAccountsHandler: (deployControl) =>
+      buildAccountsHandler(config, store, deployControl),
     preHandle: (req) =>
       preHandleNonServiceRequest(req, pool, config.exportDownload),
+    ...(staticAssets ? { staticAssets } : {}),
     ...(overrides.implementations ? { implementations: overrides.implementations } : {}),
     sqlClient: overrides.sqlClient ?? wrapServiceSqlClient(pool),
   });
@@ -215,7 +228,7 @@ async function preHandleNonServiceRequest(
 async function buildAccountsHandler(
   config: NodeAccountsServerConfig,
   store: PostgresAccountsStore,
-  installer?: InstallerProxyOptions,
+  deployControl?: DeployControlProxyOptions,
 ): Promise<AccountsHandler> {
   const exportWorker = buildExportWorker(config.exportDownload);
   const commonOptions = {
@@ -229,7 +242,7 @@ async function buildAccountsHandler(
     ...(config.stripeBilling ? { stripeBilling: config.stripeBilling } : {}),
     ...(config.passkeys ? { passkeys: config.passkeys } : {}),
     ...(config.upstreamOAuth ? { upstreamOAuth: config.upstreamOAuth } : {}),
-    ...(installer ? { installer } : {}),
+    ...(deployControl ? { deployControl } : {}),
     ...(exportWorker ? { exportWorker } : {}),
   };
   const stableOidc = await buildStableOidc(config.stableOidc);

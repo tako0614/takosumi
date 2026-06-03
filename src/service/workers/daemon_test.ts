@@ -1,8 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  type ApplyWorkerLike,
-  createApplyWorkerTask,
   createOutboxDispatcherTask,
   createRegistrySyncWorkerTask,
   createRepairWorkerTask,
@@ -76,23 +74,8 @@ test("WorkerDaemon applies backoff after failed ticks and stops on cancellation"
   assert.equal(results[0].nextDelayMs, 25);
 });
 
-test("worker task factories adapt apply, outbox, registry, and repair workers", async () => {
+test("worker task factories adapt outbox, registry, repair, runtime-agent, and cleanup workers", async () => {
   const calls: string[] = [];
-  const applyTask = createApplyWorkerTask({
-    intervalMs: 1,
-    worker: {
-      process: (job) => {
-        calls.push(`apply:${job.operationId}`);
-        return Promise.resolve();
-      },
-    },
-    nextJob: () => ({
-      plan: fakePlan() as unknown as Parameters<
-        ApplyWorkerLike["process"]
-      >[0]["plan"],
-      operationId: "op_1",
-    }),
-  });
   const outboxTask = createOutboxDispatcherTask({
     intervalMs: 1,
     limit: 2,
@@ -162,7 +145,6 @@ test("worker task factories adapt apply, outbox, registry, and repair workers", 
 
   const results = await new WorkerDaemon({
     tasks: [
-      applyTask,
       outboxTask,
       registryTask,
       repairTask,
@@ -176,7 +158,6 @@ test("worker task factories adapt apply, outbox, registry, and repair workers", 
   assert.deepEqual(
     calls.sort(),
     [
-      "apply:op_1",
       "outbox:2",
       "registry-support",
       "registry:1",
@@ -187,16 +168,3 @@ test("worker task factories adapt apply, outbox, registry, and repair workers", 
     ].sort(),
   );
 });
-
-function fakePlan() {
-  return {
-    id: "plan_1",
-    spaceId: "space_1",
-    groupId: "group_1",
-    manifestHash: "sha256:plan",
-    manifest: { name: "demo", version: "1.0.0" },
-    changes: [],
-    readSet: [],
-    createdAt: "2026-04-27T00:00:00.000Z",
-  };
-}

@@ -1,17 +1,15 @@
 # @takosjp/takosumi
 
-Umbrella package for the Takosumi contract, installer, service, CLI, and runtime-agent.
+Umbrella package for the Takosumi deploy-control contract, client helpers, CLI, and service entry.
 
 Space exports:
 
 - `@takosjp/takosumi/contract`
-- `@takosjp/takosumi/installer`
 - `@takosjp/takosumi`
-- `@takosjp/takosumi/runtime-agent`
 - `@takosjp/takosumi/cli`
 - `@takosjp/takosumi/server`
 
-Takosumi v1 is manifestless. Space public concepts are Source, Installation, Deployment, and PlatformService.
+Takosumi v1 is OpenTofu-native. Public concepts are Installation, Deployment, PlanRun, ApplyRun, RunnerProfile, and
+DeploymentOutput.
 
-This package does not replace Terraform/OpenTofu and does not own provider credentials. Operator distributions provide
-PlatformService inventory and choose runtime-agent handlers or backend adapters.
+Operator distributions provide runner profiles, state backends, secret delivery, and hosted execution.

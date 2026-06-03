@@ -1,10 +1,11 @@
--- Wave 6 / v1 contract reset: drop the legacy AppBinding, AppGrant, and
+-- Wave 6 / v1 contract reset: drop the removed AppBinding, AppGrant, and
 -- RuntimeBinding tables. These three concepts have been removed from the
--- public Takosumi Accounts contract; PlatformService binding selections and
--- account-plane permission checks declare the equivalent intent at install time.
+-- public Takosumi Accounts contract; workload platform service binding
+-- selections and account-plane permission checks declare the equivalent intent
+-- at install time.
 --
 -- This migration is intentionally BACKWARD-INCOMPATIBLE. Per the v1 contract
--- reset mandate ("no legacy / no migration guidance / clean cut"), operators
+-- reset mandate ("clean cut"), operators
 -- must export installation state with the v0 surface before applying this
 -- migration if they need to retain binding/grant/runtime-binding rows.
 --

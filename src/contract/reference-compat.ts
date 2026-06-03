@@ -1,29 +1,21 @@
-// Reference compatibility umbrella for Takosumi implementation packages.
+// Internal compatibility umbrella for Takosumi reference implementation code.
 //
-// The Takosumi v1 Installer API contract is owned by the package root
-// (`@takosjp/takosumi/contract`) and the focused `installer-api` subpath.
-// This umbrella re-exports the larger reference
-// implementation API used by the service and runtime-agent surfaces while
-// deploy-space compatibility types are being retired.
+// The Takosumi v1 Deploy Control API contract is owned by the package root
+// (`@takosjp/takosumi/contract`) and the focused `deploy-control-api` subpath.
+// This file is intentionally not exported from package.json; it exists for
+// service-local compatibility imports while legacy implementation modules are
+// being retired behind RunnerProfile/OpenTofu execution.
 //
-// Scope: the re-export list is an explicit allowlist of legacy reference
-// helpers (JSON value scalars, condition / reason enums, deploy-domain
-// projections, internal API headers, etc.). Retired authoring shapes and names
-// that are unused outside this package are intentionally NOT re-exported. In
-// particular, the legacy app-definition /
-// service / env / policy / approval /
-// `RolloutPolicy` / `ResourceSpec` / `ResourceInstance` /
-// `ProviderMaterialization` shapes from `./types.ts` are reachable only via
-// `@takosjp/takosumi/contract/reference/types`.
+// Scope: the re-export list is an explicit allowlist of reference helpers:
+// JSON value scalars, condition / reason enums, internal API headers, runtime
+// agent contracts. This file deliberately
+// avoids re-exporting the retired takosumi-v1 component / descriptor / binding
+// surface or reference materializer API as a public umbrella.
 //
-// New consumers should import directly from `@takosjp/takosumi/contract`,
-// `@takosjp/takosumi/contract/installer-api`.
+// New consumers must import directly from `@takosjp/takosumi/contract` or
+// `@takosjp/takosumi/contract/deploy-control-api`.
 
 // Selected scalar / DTO surface from ./types.ts (allowlist; no `export *`).
-// Legacy authoring and materialization names (`ServiceSpec`,
-// `EnvSpec`, `PolicySpec`, `ApprovalRequirement`, `RolloutPolicy`,
-// `ResourceSpec`, `ResourceInstance`, `ProviderMaterialization`,
-// `RuntimeNetworkPolicy`) are intentionally NOT re-exported here.
 export type {
   ActorContext,
   Condition,
@@ -39,21 +31,31 @@ export type {
   JsonObject,
   JsonPrimitive,
   JsonValue,
-  NetworkPeer,
-  NetworkRule,
   PrincipalKind,
   ServiceEndpoint,
   ServiceEndpointProtocol,
   ServiceEndpointTrust,
   ServiceGrant,
-  SourceSnapshot,
   SpaceCreateRequest,
   SpaceSummary,
   SpaceUpdateRequest,
   TrustLevel,
 } from "./types.ts";
 
-export * from "./takosumi-v1.ts";
+export {
+  assertObjectAddress,
+  CORE_CONDITION_REASONS,
+  encodeObjectAddressName,
+  isCoreConditionReason,
+  isObjectAddress,
+  joinObjectAddressSegments,
+  objectAddress,
+  objectAddressSegment,
+  type CoreBindingResolutionInput,
+  type CoreBindingValueResolution,
+  type CoreConditionReason,
+  type ObjectAddress,
+} from "./takosumi-v1.ts";
 export * from "./internal-api.ts";
 export {
   EnvTakosumiServiceDirectory,
@@ -66,9 +68,6 @@ export {
   type TakosumiInternalTraceSink,
   type TakosumiInternalTraceSpanEvent,
 } from "./internal-rpc.ts";
-export * from "./implementation.ts";
-export * from "./implementation-sdk.ts";
 export * from "./runtime-agent.ts";
 export * from "./runtime-agent-lifecycle.ts";
 export * from "./error-category.ts";
-export * from "./shape.ts";

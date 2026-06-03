@@ -128,7 +128,7 @@ test("verifyTakosumiInternalRequestFromHeaders rejects tamper and policy mismatc
       body: "",
       secret: "test-secret",
       headers: new Headers(signed.headers),
-      expectedAudience: "audience-paas",
+      expectedAudience: "audience-deploy-control",
       now: () => new Date("2026-05-01T00:01:00.000Z"),
     }),
     undefined,
@@ -383,28 +383,27 @@ test("TakosumiInternalClient propagates trace context and records client spans",
 
 test("EnvTakosumiServiceDirectory resolves operator-namespaced env URLs", () => {
   const directory = new EnvTakosumiServiceDirectory({
-    TAKOSUMI_PAAS_INTERNAL_URL: "https://paas.internal",
-    TAKOSUMI_APP_INTERNAL_URL: "https://app.internal",
-    TAKOSUMI_GIT_INTERNAL_URL: "https://git.internal",
-    TAKOSUMI_AGENT_INTERNAL_URL: "https://agent.internal",
+    TAKOSUMI_DEPLOY_CONTROL_INTERNAL_URL: "https://deploy-control.internal",
+    TAKOSUMI_ACCOUNTS_INTERNAL_URL: "https://accounts.internal",
+    TAKOSUMI_RUNTIME_AGENT_INTERNAL_URL: "https://runtime-agent.internal",
   });
 
-  assert.deepEqual(directory.resolve("paas"), {
-    serviceId: "paas",
-    audience: "paas",
-    url: "https://paas.internal",
+  assert.deepEqual(directory.resolve("deploy-control"), {
+    serviceId: "deploy-control",
+    audience: "deploy-control",
+    url: "https://deploy-control.internal",
   });
-  assert.deepEqual(directory.resolve("app"), {
-    serviceId: "app",
-    audience: "app",
-    url: "https://app.internal",
+  assert.deepEqual(directory.resolve("accounts"), {
+    serviceId: "accounts",
+    audience: "accounts",
+    url: "https://accounts.internal",
   });
-  assert.deepEqual(directory.resolve("git"), {
-    serviceId: "git",
-    audience: "git",
-    url: "https://git.internal",
+  assert.deepEqual(directory.resolve("runtime-agent"), {
+    serviceId: "runtime-agent",
+    audience: "runtime-agent",
+    url: "https://runtime-agent.internal",
   });
-  assert.equal(directory.resolve("runtime"), undefined);
+  assert.equal(directory.resolve("git"), undefined);
 });
 
 test("EnvTakosumiServiceDirectory respects custom envPrefix", () => {

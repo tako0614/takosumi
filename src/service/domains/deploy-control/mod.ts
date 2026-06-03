@@ -43,6 +43,10 @@ import {
   type OpenTofuDeploymentStore,
 } from "./store.ts";
 import { redactString } from "../../services/observability/redaction.ts";
+import {
+  assertHostNotBlocked,
+  BlockedHostError,
+} from "../../../deploy-control/host-blocklist.ts";
 
 export type OpenTofuControllerErrorCode = DeployControlErrorCode;
 
@@ -952,6 +956,8 @@ const DEFAULT_CLOUDFLARE_CONTAINER_EXECUTION: NonNullable<
 
 const DEFAULT_RESOURCE_LIMITS: NonNullable<RunnerProfile["resourceLimits"]> = {
   maxRunSeconds: 900,
+  maxSourceArchiveBytes: 100 * 1024 * 1024,
+  maxSourceDecompressedBytes: 1000 * 1024 * 1024,
   cpu: "1",
   memoryMb: 1024,
 };
@@ -1540,19 +1546,22 @@ function validateSource(source: OpenTofuModuleSource): void {
   switch (source.kind) {
     case "git":
       requireNonEmptyString(source.url, "source.url");
+      validateHttpsSourceUrl(source.url, "git source url");
       if (source.ref !== undefined) requireNonEmptyString(source.ref, "source.ref");
       if (source.commit !== undefined) {
         requireNonEmptyString(source.commit, "source.commit");
+        if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(source.commit)) {
+          throw new OpenTofuControllerError(
+            "invalid_argument",
+            "source.commit must be a full git object id",
+          );
+        }
       }
+      if (source.ref !== undefined) validateSafeGitSelector(source.ref, "source.ref");
       break;
     case "prepared":
       requireNonEmptyString(source.url, "source.url");
-      if (!source.url.startsWith("https://")) {
-        throw new OpenTofuControllerError(
-          "invalid_argument",
-          "prepared source url must use https://",
-        );
-      }
+      validateHttpsSourceUrl(source.url, "prepared source url");
       requireNonEmptyString(source.digest, "source.digest");
       if (!SHA256_DIGEST_RE.test(source.digest)) {
         throw new OpenTofuControllerError(
@@ -1572,6 +1581,67 @@ function validateSource(source: OpenTofuModuleSource): void {
   }
   if (source.modulePath !== undefined) {
     requireNonEmptyString(source.modulePath, "source.modulePath");
+    validateSafeModulePath(source.modulePath);
+  }
+}
+
+function validateHttpsSourceUrl(url: string, label: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${label} must be a valid URL`,
+    );
+  }
+  if (parsed.protocol !== "https:") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${label} must use https://`,
+    );
+  }
+  if (!parsed.hostname) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${label} must include a host`,
+    );
+  }
+  if (parsed.username || parsed.password) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${label} must not embed credentials`,
+    );
+  }
+  try {
+    assertHostNotBlocked(parsed.hostname, `${label} host`);
+  } catch (error) {
+    if (error instanceof BlockedHostError) {
+      throw new OpenTofuControllerError("invalid_argument", error.message);
+    }
+    throw error;
+  }
+}
+
+function validateSafeGitSelector(value: string, label: string): void {
+  if (value.startsWith("-") || /[\r\n\0]/.test(value)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${label} must not start with '-' or contain control characters`,
+    );
+  }
+}
+
+function validateSafeModulePath(modulePath: string): void {
+  if (
+    modulePath.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/.test(modulePath) ||
+    modulePath.split(/[\\/]+/).some((part) => part === "..")
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "source.modulePath must stay inside the source root",
+    );
   }
 }
 

@@ -6,8 +6,8 @@
  * a `workingDirectory`; remote agents can receive `url` + `digest` for a tar
  * snapshot that is verified and extracted per apply request.
  *
- * The remote (`url` + `digest`) path mirrors the installer's prepared-source
- * fetcher hardening (`packages/installer/src/prepared-source.ts`): the apply
+ * The remote (`url` + `digest`) path mirrors the deploy control prepared-source
+ * fetcher hardening (`packages/deployControl/src/prepared-source.ts`): the apply
  * route materializes operator/tenant-influenced locators, and the digest pin
  * alone does NOT mitigate SSRF (the request still reaches the host and the
  * body is buffered before the digest is computed) nor a gzip bomb. The wire is
@@ -15,8 +15,8 @@
  * fetch, redirects are rejected, the download is size-capped while streaming,
  * the decompressed size is bounded, and extraction uses the same anti-tar-slip
  * flags and link-target parsing. The blocklist logic is intentionally inlined
- * (rather than imported from the installer) because per the ecosystem layering
- * runtime-agent must not depend on the installer; the clean long-term fix is to
+ * (rather than imported from the deployControl) because per the ecosystem layering
+ * runtime-agent must not depend on the deployControl; the clean long-term fix is to
  * promote the blocklist into `takosumi-contract` and import it from both, which
  * is a coordinated cross-package + JSR-version change beyond this file's scope.
  */
@@ -42,8 +42,8 @@ export interface PreparedSourceContext {
 
 /**
  * Default cap on the prepared-source archive wire size. Operators may override
- * via `TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES`. 50 MiB matches the installer twin
- * and the public Installer API source size limit guidance.
+ * via `TAKOSUMI_PREPARED_ARCHIVE_MAX_BYTES`. 50 MiB matches the deploy control twin
+ * and the public Deploy Control API source size limit guidance.
  */
 const DEFAULT_PREPARED_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -53,7 +53,7 @@ const DEFAULT_PREPARED_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024;
  * could inflate to many GiB during extraction (gzip bomb). Operators may
  * override via `TAKOSUMI_PREPARED_DECOMPRESSED_MAX_BYTES`. Defaults to 10x the
  * wire cap so legitimate well-compressed sources are not rejected. Matches the
- * installer twin's defaults so behavior stays in parity.
+ * deploy control twin's defaults so behavior stays in parity.
  */
 const DEFAULT_PREPARED_DECOMPRESSED_MAX_BYTES = 10 *
   DEFAULT_PREPARED_ARCHIVE_MAX_BYTES;
@@ -291,7 +291,7 @@ function isAllowedHttpsUrl(value: string): boolean {
 }
 
 /**
- * SSRF guard, symmetric with the installer's prepared-source fetcher: reject
+ * SSRF guard, symmetric with the deploy control prepared-source fetcher: reject
  * loopback / RFC1918 / link-local / cloud-metadata IP literals before reaching
  * out. The digest pin does NOT mitigate SSRF — the request itself reaches the
  * internal host, and the caller supplies the matching digest in the same
@@ -512,7 +512,9 @@ async function assertSafeTarEntries(
   //   lrwxrwxrwx user/group  size date time path -> target
   //   hrw-r--r-- user/group  size date time path link to target
   const verbose = await tarRunner.run(
-    compressed ? ["-t", "-v", "-z", "-f", "-"] : ["-t", "-v", "-f", "-"],
+    compressed
+      ? ["-t", "-v", "--quoting-style=literal", "-z", "-f", "-"]
+      : ["-t", "-v", "--quoting-style=literal", "-f", "-"],
     bytes,
   );
   const seen = new Set<string>();

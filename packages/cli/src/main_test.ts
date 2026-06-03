@@ -603,11 +603,11 @@ function structuredEvidenceFieldsForTest(
         contactTestId: "security_contact_rehearsal",
         result: "delivered",
       };
-    case "installer-abuse-blocked":
+    case "deploy-control-abuse-blocked":
       return {
-        scenarioId: "installer_abuse_scenario",
-        blockEventId: "installer_abuse_block",
-        policyRef: "policy://installer/abuse-controls",
+        scenarioId: "deploy_control_abuse_scenario",
+        blockEventId: "deploy_control_abuse_block",
+        policyRef: "policy://deploy-control/abuse-controls",
       };
     case "dashboard-link":
       return {
@@ -733,15 +733,15 @@ function structuredEvidenceFieldsForTest(
         appId: "takos-docs",
         uninstallEventId: "uninstall_event",
       };
-    case "installation-dry-run":
+    case "installation-plan-run":
       return {
         sourceUrl: "https://github.com/tako0614/takos-docs.git",
         commitSha: "abcdef0123456789abcdef0123456789abcdef01",
-        planSnapshotDigest: testSha256Digest,
+        planDigest: testSha256Digest,
       };
     case "cost-review":
       return {
-        planSnapshotDigest: testSha256Digest,
+        planDigest: testSha256Digest,
         costEstimateId: "cost_estimate_rehearsal",
         approvedBy: "release-owner",
       };
@@ -750,7 +750,7 @@ function structuredEvidenceFieldsForTest(
         installationId: "inst_rehearsal",
         deploymentId: "dep_rehearsal",
         applyEventId: "install_apply_event",
-        planSnapshotDigest: testSha256Digest,
+        planDigest: testSha256Digest,
       };
     case "oidc-login":
       return {
@@ -960,9 +960,9 @@ function completeWranglerConfigValidationForTest(): Record<string, unknown> {
     d1DatabaseIdPlaceholder: false,
     r2BindingPresent: true,
     r2BucketBlockPresent: true,
-    installerUrlPresent: true,
-    installerUrlValid: true,
-    installerUrlPlaceholder: false,
+    deployControlUrlPresent: true,
+    deployControlUrlValid: true,
+    deployControlUrlPlaceholder: false,
     containerConfigured: false,
     durableObjectPersistenceConfigured: false,
     workersDev: true,
@@ -994,13 +994,10 @@ function completeProductionTopologyForTest(
     components: [
       "accounts",
       "dashboard",
-      "takosumi-installer",
+      "takosumi-deploy-control",
       "service",
-      "shared-cell-runtime",
       "object-storage",
       "dns-tls",
-      "queue",
-      "background-worker",
     ].map((role) => ({
       id: role,
       role,
@@ -1018,7 +1015,7 @@ function completeProductionTopologyForTest(
           ],
         }
         : {}),
-      ...(role === "object-storage" || role === "dns-tls" || role === "queue"
+      ...(role === "object-storage" || role === "dns-tls"
         ? {}
         : { artifactDigest: testSha256Digest }),
     })),
@@ -1777,7 +1774,7 @@ test("launch-readiness template prints all required evidence ids as blocked", as
         "secret-inventory",
         "secret-rotation-run-log",
         "security-contact",
-        "installer-abuse-blocked",
+        "deploy-control-abuse-blocked",
       ],
       "legal-privacy-support": [
         "legal-signoff",
@@ -1814,7 +1811,7 @@ test("launch-readiness template prints all required evidence ids as blocked", as
         "default-app-reinstall",
       ],
       "git-url-install": [
-        "installation-dry-run",
+        "installation-plan-run",
         "cost-review",
         "install-apply",
         "oidc-login",
@@ -2309,7 +2306,7 @@ test("launch-readiness validate requires structured staged rehearsal evidence", 
   ) => entry.type === "client-secret-rotation")!.revocationEventId;
   delete (gitInstall.evidence as Array<Record<string, unknown>>).find((
     entry,
-  ) => entry.type === "install-apply")!.planSnapshotDigest;
+  ) => entry.type === "install-apply")!.planDigest;
   delete (billingOperation.evidence as Array<Record<string, unknown>>).find((
     entry,
   ) => entry.type === "recovery-refund-credit")!.creditNoteId;
@@ -2365,7 +2362,7 @@ test("launch-readiness validate rejects malformed structured evidence field shap
   const gitInstallEvidence = document.rehearsal.find((entry) =>
     entry.id === "git-url-install"
   )!.evidence as Record<string, unknown>[];
-  gitInstallEvidence.find((entry) => entry.type === "installation-dry-run")!
+  gitInstallEvidence.find((entry) => entry.type === "installation-plan-run")!
     .commitSha = "main";
   const freshSignupEvidence = document.rehearsal.find((entry) =>
     entry.id === "fresh-signup"
@@ -3298,7 +3295,7 @@ test("launch-readiness production-topology preflight emits production-topology e
     expect(report.missingRoles).toEqual([]);
     expect(report.evidenceEntry.id).toEqual("production-topology");
     expect(report.evidenceEntry.evidence[0].topologyEnvironment).toEqual("staging");
-    expect(report.evidenceEntry.evidence[0].componentCount).toEqual(9);
+    expect(report.evidenceEntry.evidence[0].componentCount).toEqual(6);
     expect(report.evidenceEntry.evidence[1].ref).toEqual("vault://topology/staging/artifact-digests");
     expect(report.evidenceEntry.evidence[3].ref).toEqual("vault://topology/staging/health-probes");
     expect(report.evidenceEntry.evidence[5].rollbackRole).toEqual("accounts");
@@ -3340,17 +3337,14 @@ test("launch-readiness production-topology template prints preflight input shape
   expect(template.artifactDigestEvidenceRef).toEqual("vault://managed-readiness/<rehearsal-run-id>/production-topology/production/artifact-digests");
   expect(template.healthProbeEvidenceRef).toEqual("vault://managed-readiness/<rehearsal-run-id>/production-topology/production/health-probes");
   expect(template.rollbackTarget.role).toEqual("accounts");
-  expect(template.components.length).toEqual(9);
+  expect(template.components.length).toEqual(6);
   expect(template.components.map((entry: { role: string }) => entry.role)).toEqual([
       "accounts",
       "dashboard",
-      "takosumi-installer",
+      "takosumi-deploy-control",
       "service",
-      "shared-cell-runtime",
       "object-storage",
       "dns-tls",
-      "queue",
-      "background-worker",
     ]);
   const accountsTemplate = template.components.find((
     entry: { role: string },
@@ -3881,7 +3875,7 @@ test("launch-readiness production-topology preflight rejects duplicate component
     expect(report.errors.includes(
         "rollbackTarget.role must be a deployable component role",
       )).toBeTruthy();
-    expect(report.errors.includes("components[9] must be an object")).toBeTruthy();
+    expect(report.errors.includes("components[6] must be an object")).toBeTruthy();
   } finally {
     await removePath(file);
   }
@@ -3892,7 +3886,7 @@ test("launch-readiness production-topology preflight rejects placeholders and mi
   const topology = completeProductionTopologyForTest();
   topology.manifestRef = "evidence://todo";
   topology.components = (topology.components as Record<string, unknown>[])
-    .filter((component) => component.role !== "queue");
+    .filter((component) => component.role !== "dns-tls");
   await writeTextFile(file, JSON.stringify(topology));
   try {
     const stdout: string[] = [];
@@ -3913,7 +3907,7 @@ test("launch-readiness production-topology preflight rejects placeholders and mi
     expect(stderr).toEqual([]);
     const report = JSON.parse(stdout.join("\n"));
     expect(report.ready).toEqual(false);
-    expect(report.missingRoles).toEqual(["queue"]);
+    expect(report.missingRoles).toEqual(["dns-tls"]);
     expect(report.errors.includes("manifestRef must not be a placeholder")).toBeTruthy();
   } finally {
     await removePath(file);
@@ -5076,17 +5070,17 @@ test("accounts serve dry-run prints passkey relying party config", async () => {
   });
 });
 
-test("accounts serve dry-run redacts installer token", async () => {
+test("accounts serve dry-run redacts deploy control token", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const code = await main([
     "accounts",
     "serve",
     "--dry-run",
-    "--installer-url",
+    "--deploy-control-url",
     "http://takosumi.internal:8788",
-    "--installer-token",
-    "installer-secret",
+    "--deploy-control-token",
+    "deploy-control-secret",
   ], {
     stdout: (line) => stdout.push(line),
     stderr: (line) => stderr.push(line),
@@ -5095,12 +5089,12 @@ test("accounts serve dry-run redacts installer token", async () => {
   expect(code).toEqual(0);
   expect(stderr).toEqual([]);
   const plan = JSON.parse(stdout.join("\n"));
-  expect(plan.installer).toEqual({
+  expect(plan.deployControl).toEqual({
     configured: true,
     url: "http://takosumi.internal:8788",
     tokenConfigured: true,
   });
-  expect(stdout.join("\n").includes("installer-secret")).toEqual(false);
+  expect(stdout.join("\n").includes("deploy-control-secret")).toEqual(false);
 });
 
 test("accounts serve dry-run redacts static use edge materials", async () => {

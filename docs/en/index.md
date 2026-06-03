@@ -1,57 +1,26 @@
----
-layout: home
+# Takosumi
 
-hero:
-  name: Takosumi
-  text: From Source To Deployment
-  tagline: A manifestless source install/deploy ledger. Operators own runtimes and PlatformService inventory.
-  image:
-    src: /logo.svg
-    alt: Takosumi
-  actions:
-    - theme: brand
-      text: Concepts
-      link: ./getting-started/concepts
-    - theme: alt
-      text: Quickstart
-      link: ./getting-started/quickstart
-    - theme: alt
-      text: Installer API
-      link: ./reference/installer-api
-    - theme: alt
-      text: Boundaries
-      link: ./reference/spec-boundaries
+Takosumi is an OpenTofu-native deploy control plane, UI, and audit ledger.
 
-features:
-  - title: Four Public Concepts
-    details: |
-      Source, Installation, Deployment, and PlatformService.
-  - title: Manifestless v1
-    details: |
-      Source repositories do not need Takosumi-specific source metadata files or metadata fields.
-  - title: Deployment History
-    details: |
-      Each apply records a Deployment. Rollback moves the current pointer.
-  - title: OpenTofu Stays Operator-Owned
-    details: |
-      OpenTofu state and provider credentials live in the operator distribution.
----
+OpenTofu configuration is the resource definition. Takosumi does not introduce a second infrastructure definition format. It records Git identity, source digest, variables digest, provider policy, plan digest, apply result, Deployment ledger entries, and non-sensitive OpenTofu outputs.
 
-## Start Here
+## What Takosumi does
 
-| Reader | First page |
-| --- | --- |
-| First-time reader | [Concepts](./getting-started/concepts.md) |
-| Try it locally | [Quickstart](./getting-started/quickstart.md) |
-| Pick a path | [Reading Paths](./getting-started/reading-paths.md) |
-| Implement the API | [Installer API](./reference/installer-api.md) |
-| Operate Takosumi | [Operator](./operator/index.md) |
+1. An operator defines RunnerProfiles.
+2. A user or dashboard registers a plain OpenTofu module repository as an Installation.
+3. Takosumi creates a PlanRun and records policy, source, variables, provider lock, and plan digests.
+4. A reviewed PlanRun creates an ApplyRun only when its expected guard matches.
+5. A successful apply becomes a Deployment and publishes non-sensitive DeploymentOutput records.
 
-## Public Concepts
+## Public v1 surface
 
 | Concept | Meaning |
 | --- | --- |
-| Source | `git`, `prepared`, or `local` source plus resolved identity. |
-| Installation | A Space-scoped installed source record. |
-| Deployment | One apply result with plan snapshot, binding snapshot, outputs, and status. |
-| PlatformService | Operator-inventory service such as DB, OIDC, bucket, queue, or runtime endpoint. |
+| Installation | Space-scoped installed OpenTofu module record |
+| PlanRun | One `tofu plan` attempt and reviewable digest record |
+| ApplyRun | One `tofu apply` or destroy attempt |
+| Deployment | Successful apply result |
+| DeploymentOutput | Non-sensitive output projection |
+| RunnerProfile | Operator execution, tenant runtime, and secret exposure boundary |
+
+Start with the [Quickstart](./getting-started/quickstart.md).

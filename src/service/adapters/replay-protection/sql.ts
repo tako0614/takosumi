@@ -8,7 +8,7 @@ import type {
  * SQL-backed replay protection store.
  *
  * Used by production deploys where multiple Takosumi replicas (k8s pods,
- * Cloudflare Worker isolates, Deno hosts behind a load balancer) terminate
+ * Cloudflare Worker isolates, Bun/Node hosts behind a load balancer) terminate
  * signed internal RPC traffic. Each verifier inserts the observed
  * `(namespace, request_id)` pair into the shared
  * `internal_request_replay_log` table; the conflict on the composite

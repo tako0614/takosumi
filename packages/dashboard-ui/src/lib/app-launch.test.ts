@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Installation } from "./api/installations";
+import type { Installation } from "./rpc";
 import { appDetailLaunchState } from "./app-launch";
 
 const baseInstallation: Installation = {
@@ -19,7 +19,7 @@ describe("app detail launch state", () => {
     });
     expect(state.label).toBe("Launch Takos");
     const url = new URL(state.href ?? "");
-    expect(url.pathname).toBe("/dashboard/use-takos");
+    expect(url.pathname).toBe("/takos/start");
     expect(url.searchParams.get("takos_url")).toBe("https://takos.test");
     expect(url.searchParams.get("account_id")).toBe("acct_local");
     expect(url.searchParams.get("space_id")).toBe("space_local");

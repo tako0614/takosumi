@@ -2,7 +2,6 @@ import type {
   PreparedArtifact,
   ProtectedReferenceStore,
 } from "../../domains/supply-chain/mod.ts";
-import type { RetainedDeployArtifact } from "../../domains/deploy/mod.ts";
 import type { ResourceInstance } from "../../domains/resources/mod.ts";
 import type { Digest } from "../../domains/supply-chain/mod.ts";
 import type { IsoTimestamp } from "../../shared/time.ts";
@@ -13,8 +12,7 @@ export type GcRefType =
   | "ResourceInstance"
   | "BackendImplementation"
   | "KindPackage"
-  | "MirroredArtifact"
-  | "RetainedDeployArtifact";
+  | "MirroredArtifact";
 
 export type GcRetentionReasonCode =
   | "protected-reference"
@@ -90,7 +88,6 @@ export interface GcDryRunPlanInput {
   readonly backendImplementations?: readonly KindPackageRetentionCandidate[];
   readonly kindPackages?: readonly KindPackageRetentionCandidate[];
   readonly mirroredArtifacts?: readonly MirroredArtifactRetentionCandidate[];
-  readonly retainedDeployArtifacts?: readonly RetainedDeployArtifact[];
 }
 
 export interface GcDryRunPlan {
@@ -135,10 +132,6 @@ export class GcRetentionService {
     for (const mirror of input.mirroredArtifacts ?? []) {
       decisions.push(await this.decideMirroredArtifact(mirror, now));
     }
-    for (const artifact of input.retainedDeployArtifacts ?? []) {
-      decisions.push(await this.decideRetainedDeployArtifact(artifact, now));
-    }
-
     const deleteOperations = decisions.flatMap((decision) =>
       decision.deleteOperation ? [decision.deleteOperation] : []
     );
@@ -316,29 +309,6 @@ export class GcRetentionService {
           message:
             "Mirrored external artifact is retained through rollback window.",
           until: mirror.retentionDeadline,
-        }]
-        : [],
-    });
-  }
-
-  async decideRetainedDeployArtifact(
-    artifact: RetainedDeployArtifact,
-    now: IsoTimestamp = this.#clock().toISOString(),
-  ): Promise<GcRetentionDecision> {
-    return await this.#decideBase({
-      refType: "RetainedDeployArtifact",
-      refId: artifact.id,
-      now,
-      reasons: artifact.retainedUntil === undefined ||
-          artifact.retainedUntil > now
-        ? [{
-          code: "rollback-window",
-          message:
-            "Deploy retained artifact is required for activation rollback.",
-          until: artifact.retainedUntil,
-          referenceIds: artifact.sourceActivationId
-            ? [artifact.sourceActivationId]
-            : undefined,
         }]
         : [],
     });

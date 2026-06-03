@@ -14,7 +14,7 @@ import {
   customOidcOAuthProvider,
   InMemorySharedCellWarmPool,
   type InstallationExportArchiveDataFile,
-  type InstallerProxyOptions,
+  type DeployControlProxyOptions,
   isAppBindingKind,
   type ManagedOfferingAccessPolicy,
   type PasskeyHttpOptions,
@@ -343,21 +343,21 @@ export function buildPasskeyOptions(
   };
 }
 
-export async function buildInstallerProxyOptions(
+export async function buildDeployControlProxyOptions(
   options: Record<string, string | boolean>,
-): Promise<InstallerProxyOptions | undefined> {
-  const url = optionalStringOption(options, "installerUrl") ??
-    await optionalEnvString("TAKOSUMI_ACCOUNTS_INSTALLER_URL");
-  const token = optionalStringOption(options, "installerToken") ??
-    await optionalEnvString("TAKOSUMI_ACCOUNTS_INSTALLER_TOKEN");
+): Promise<DeployControlProxyOptions | undefined> {
+  const url = optionalStringOption(options, "deployControlUrl") ??
+    await optionalEnvString("TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL");
+  const token = optionalStringOption(options, "deployControlToken") ??
+    await optionalEnvString("TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN");
   if (!url && !token) return undefined;
   if (!url) {
     throw new TypeError(
-      "--installer-url or TAKOSUMI_ACCOUNTS_INSTALLER_URL is required when configuring installer proxy",
+      "--deploy-control-url or TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL is required when configuring deploy control proxy",
     );
   }
   return {
-    url: validateHttpUrl(url, "--installer-url"),
+    url: validateHttpUrl(url, "--deploy-control-url"),
     ...(token ? { token } : {}),
   };
 }

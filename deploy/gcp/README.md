@@ -1,47 +1,45 @@
-# Takosumi GCP Kind Runbook
+# Takosumi GCP OpenTofu Profile Runbook
 
-This directory documents the GCP surface as **operator-owned scope**. GCP lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent handler wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on GCP infrastructure is also the operator's responsibility.
+GCP support is an OpenTofu provider profile, not a separate Takosumi runtime
+layer. The default profile is `gcp-default`.
 
-## Why no reference deploy here
+## Profile
 
-The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. GCP / AWS / Azure / k8s are operator-owned targets: operators run the service image on whatever GCP compute they prefer (Cloud Run / GKE / GCE), point the service at a Postgres database (Cloud SQL), and expose the resulting databases, buckets, queues, DNS routes, and runtimes through PlatformService inventory.
+| Field | Value |
+| --- | --- |
+| Provider | `registry.opentofu.org/hashicorp/google` |
+| Credential ref | `secret://takosumi/gcp-default` |
+| Runner substrate | `cloudflare-containers` by default |
+| State ref | `state://takosumi/gcp-default` |
+| Lock ref | `lock://takosumi/gcp-default` |
 
-## Required runtime shape
+The profile allows the Google provider and records GCP control-plane egress
+through exact hosts such as `oauth2.googleapis.com`,
+`cloudresourcemanager.googleapis.com`, `serviceusage.googleapis.com`, and
+`iam.googleapis.com`, plus the suffix pattern `*.googleapis.com`.
 
-The GCP runtime handlers talk to the GCP API directly via OAuth-bearer tokens (no GCP SDK dependency). They expect:
+## Operator Duties
 
-- A service account with the relevant roles (`roles/storage.admin`, `roles/run.admin`, `roles/cloudsql.admin`, `roles/dns.admin`) and either a JSON key or workload identity.
-- A Postgres database for service state (`TAKOSUMI_DATABASE_URL` — Cloud SQL with Cloud SQL Auth Proxy is the typical choice).
-- Network reachability from the runtime-agent to the GCP API endpoints in the relevant region.
+- Resolve `secret://takosumi/gcp-default` inside the runner only.
+- Prefer workload identity federation or short-lived service account tokens over
+  long-lived JSON keys.
+- Store OpenTofu state and locks in the operator-managed backend referenced by
+  the RunnerProfile.
+- Do not expose GCP credentials through dashboard JSON, DeploymentOutput,
+  diagnostics, audit payloads, or tenant Workers.
+- Clone the RunnerProfile when a workload needs a narrower project, region,
+  API host list, or state backend.
 
-## Recommended topology
+## Live Evidence Required
 
-```
-Internet → Cloud Load Balancer
-              │
-              ▼
-      service (Cloud Run service) ── Cloud SQL
-              │
-              ▼
-  runtime-agent (Cloud Run service) ── GCP API (GCS, Run, SQL, DNS)
-```
+Before marking GCP ready for an operator, capture non-production evidence for:
 
-Both service and runtime-agent are stateless; Cloud Run scales them horizontally. State lives in Cloud SQL.
+1. `tofu init`, `tofu plan`, `tofu apply`, `tofu output -json`, and destroy.
+2. state backend ref and lock evidence recorded on ApplyRun.
+3. sensitive output omitted from DeploymentOutput.
+4. runner diagnostics and failure audit messages redacted.
+5. GCP credential material unavailable from tenant runtime surfaces.
 
-## Smoke check
-
-```sh
-TAKOSUMI_GCP_SERVICE_ACCOUNT_JSON='{...}' \
-TAKOSUMI_PROVIDER_LIVE_PROVIDER=gcp \
-TAKOSUMI_PROVIDER_LIVE_PROOF_FIXTURE_FILE=fixtures/live-provisioning/gcp.shape-v1.json \
-bun run live-provisioning-smoke
-```
-
-Use `TAKOSUMI_PROVIDER_LIVE_PROOF_MODE=live` plus
-`TAKOSUMI_PROVIDER_GATEWAY_URL` / provider-specific gateway credentials when
-running the destructive live proof. Without live mode, the command runs the
-credential-free fixture proof and reports `"live": false`.
-
-## Substrate-neutral references
-
-If you want a reference Docker image to base your Cloud Run / GKE deployments on, copy `deploy/single-host/Dockerfile.service` and `deploy/single-host/Dockerfile.runtime-agent`. They are substrate-neutral and run unmodified on any container runtime, including Cloud Run and GKE.
+This directory intentionally does not ship a GCP production reference
+distribution. Running Takosumi itself on Cloud Run / GKE / GCE remains an
+operator-owned deployment choice.

@@ -166,17 +166,17 @@ test("Cloudflare Accounts scaffold docs describe direct Worker routes", async ()
   assert.match(readme, /takosumi\.cloudflare-dns-record-plan@v1/);
   assert.match(readme, /deploy:accounts-cloudflare:probe[\s\S]*--fail-on-not-ready/);
   assert.match(readme, /TAKOSUMI_ACCOUNTS_WORKERS_DEV_HOSTNAME/);
-  assert.match(readme, /TAKOSUMI_ACCOUNTS_INSTALLER_URL/);
+  assert.match(readme, /TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL/);
   assert.match(
     readme,
-    /TAKOSUMI_ACCOUNTS_D1_DATABASE_ID=<uuid>[\s\S]+TAKOSUMI_ACCOUNTS_INSTALLER_URL=https:\/\/<takosumi-installer-host>[\s\S]+deploy:accounts-cloudflare:render-config/,
+    /TAKOSUMI_ACCOUNTS_D1_DATABASE_ID=<uuid>[\s\S]+TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL=https:\/\/<takosumi-deploy-control-host>[\s\S]+deploy:accounts-cloudflare:render-config/,
   );
   assert.match(
     readme,
     /Both deploy tasks first run `deploy:accounts-cloudflare:validate-config`/,
   );
   assert.match(readme, /rejects placeholder D1 UUIDs/);
-  assert.match(readme, /TAKOSUMI_ACCOUNTS_INSTALLER_TOKEN/);
+  assert.match(readme, /TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN/);
   assert.match(readme, /cloudflareApiBaseUrlDefault|live default/);
   assert.match(readme, /readyForLaunch:false/);
   assert.match(readme, /createEphemeralAccountsHandler/);
@@ -265,7 +265,7 @@ test("Cloudflare rendered config validation rejects template placeholders", asyn
   );
   assert(
     report.errors?.some((error) =>
-      error.includes("TAKOSUMI_ACCOUNTS_INSTALLER_URL")
+      error.includes("TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL")
     ),
   );
 });
@@ -1066,7 +1066,7 @@ test("Cloudflare render-config writes an ignored deploy config with real D1 bind
   await removePath(output);
   const script = new URL("scripts/render-config.ts", cloudflareRoot).pathname;
   const databaseId = "804a6bce-5c37-4792-be3f-0c2d87cc5a6e";
-  const installerUrl = "https://installer.takosumi.com";
+  const deployControlUrl = "https://deploy-control.takosumi.com";
   const command = bunCommand( {
     args: [
       "run",
@@ -1076,8 +1076,8 @@ test("Cloudflare render-config writes an ignored deploy config with real D1 bind
       script,
       "--database-id",
       databaseId,
-      "--installer-url",
-      installerUrl,
+      "--deploy-control-url",
+      deployControlUrl,
       "--output",
       output,
       "--workers-dev",
@@ -1094,7 +1094,7 @@ test("Cloudflare render-config writes an ignored deploy config with real D1 bind
     assert.match(rendered, new RegExp(`database_id = "${databaseId}"`));
     assert.match(
       rendered,
-      new RegExp(`TAKOSUMI_ACCOUNTS_INSTALLER_URL = "${installerUrl}"`),
+      new RegExp(`TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL = "${deployControlUrl}"`),
     );
     assert.match(rendered, /workers_dev = true/);
     assert.match(rendered, /main = ".*takosumi-accounts-worker\.mjs"/);
@@ -1116,7 +1116,7 @@ test("Cloudflare rendered config validation accepts a live-shaped rendered confi
     cloudflareRoot,
   ).pathname;
   const databaseId = "804a6bce-5c37-4792-be3f-0c2d87cc5a6e";
-  const installerUrl = "https://installer.takosumi.com";
+  const deployControlUrl = "https://deploy-control.takosumi.com";
   const render = await bunCommand( {
     args: [
       "run",
@@ -1126,8 +1126,8 @@ test("Cloudflare rendered config validation accepts a live-shaped rendered confi
       renderScript,
       "--database-id",
       databaseId,
-      "--installer-url",
-      installerUrl,
+      "--deploy-control-url",
+      deployControlUrl,
       "--output",
       output,
       "--workers-dev",
@@ -1163,9 +1163,9 @@ test("Cloudflare rendered config validation accepts a live-shaped rendered confi
       d1DatabaseIdPlaceholder?: boolean;
       r2BindingPresent?: boolean;
       r2BucketBlockPresent?: boolean;
-      installerUrlPresent?: boolean;
-      installerUrlValid?: boolean;
-      installerUrlPlaceholder?: boolean;
+      deployControlUrlPresent?: boolean;
+      deployControlUrlValid?: boolean;
+      deployControlUrlPlaceholder?: boolean;
       containerConfigured?: boolean;
       durableObjectPersistenceConfigured?: boolean;
       workersDev?: boolean | null;
@@ -1183,9 +1183,9 @@ test("Cloudflare rendered config validation accepts a live-shaped rendered confi
     assert.equal(report.d1DatabaseIdPlaceholder, false);
     assert.equal(report.r2BindingPresent, true);
     assert.equal(report.r2BucketBlockPresent, true);
-    assert.equal(report.installerUrlPresent, true);
-    assert.equal(report.installerUrlValid, true);
-    assert.equal(report.installerUrlPlaceholder, false);
+    assert.equal(report.deployControlUrlPresent, true);
+    assert.equal(report.deployControlUrlValid, true);
+    assert.equal(report.deployControlUrlPlaceholder, false);
     assert.equal(report.containerConfigured, false);
     assert.equal(report.durableObjectPersistenceConfigured, false);
     assert.equal(report.workersDev, true);
@@ -1200,7 +1200,7 @@ test("Cloudflare render-config can keep Workers.dev while attaching routes", asy
   await removePath(output);
   const script = new URL("scripts/render-config.ts", cloudflareRoot).pathname;
   const databaseId = "804a6bce-5c37-4792-be3f-0c2d87cc5a6e";
-  const installerUrl = "https://installer.takosumi.com";
+  const deployControlUrl = "https://deploy-control.takosumi.com";
   const command = bunCommand( {
     args: [
       "run",
@@ -1210,8 +1210,8 @@ test("Cloudflare render-config can keep Workers.dev while attaching routes", asy
       script,
       "--database-id",
       databaseId,
-      "--installer-url",
-      installerUrl,
+      "--deploy-control-url",
+      deployControlUrl,
       "--output",
       output,
       "--workers-dev-with-routes",

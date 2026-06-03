@@ -4,18 +4,21 @@ import {
   TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract/reference/compat";
 import {
-  INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
-  INSTALLER_INSTALLATION_DEPLOYMENTS_PATH,
-  INSTALLER_INSTALLATION_ROLLBACK_PATH,
-  INSTALLER_INSTALLATIONS_DRY_RUN_PATH,
-  INSTALLER_INSTALLATIONS_PATH,
-} from "./installer_public_routes.ts";
+  TAKOSUMI_APPLY_RUN_ROUTE,
+  TAKOSUMI_APPLY_RUNS_ROUTE,
+  TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
+  TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE,
+  TAKOSUMI_INSTALLATION_ROUTE,
+  TAKOSUMI_PLAN_RUN_ROUTE,
+  TAKOSUMI_PLAN_RUNS_ROUTE,
+  TAKOSUMI_RUNNER_PROFILES_ROUTE,
+} from "./deploy_control_public_routes.ts";
 import {
   PROMETHEUS_CONTENT_TYPE,
   TAKOSUMI_METRICS_PATH,
 } from "./metrics_routes.ts";
-import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
-import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
+import { TAKOSUMI_SERVICE_READINESS_PATHS } from "./readiness_routes.ts";
+import { TAKOSUMI_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
 export type OpenApiHttpMethod = "delete" | "get" | "head" | "post";
 
@@ -63,7 +66,7 @@ export interface OpenApiOperation {
 }
 
 export interface CreateTakosumiOpenApiDocumentOptions {
-  readonly installerPublicRoutesMounted?: boolean;
+  readonly deployControlPublicRoutesMounted?: boolean;
   readonly artifactRoutesMounted?: boolean;
   readonly internalRoutesMounted?: boolean;
   readonly runtimeAgentRoutesMounted?: boolean;
@@ -76,8 +79,8 @@ export interface CreateTakosumiOpenApiDocumentOptions {
   readonly metricsRoutesMounted?: boolean;
   /**
    * Mounted by default on `takosumi-api` as reference process route
-   * inventory. Public Installer API docs remain the source of truth for
-   * source-to-deployment contract semantics.
+   * inventory. Public deploy API docs remain the source of truth for
+   * OpenTofu plan/apply/destroy contract semantics.
    */
   readonly openApiRouteMounted?: boolean;
   /**
@@ -102,7 +105,7 @@ export function createTakosumiOpenApiDocument(
       title: "Takosumi API",
       version: TAKOSUMI_OPENAPI_VERSION,
       description:
-        "Dependency-free OpenAPI-ish description for mounted Takosumi process, installer, internal, runtime-agent, readiness, and status route families.",
+        "Dependency-free OpenAPI-ish description for mounted Takosumi process, deployControl, internal, runtime-agent, readiness, and status route families.",
     },
     servers,
     "x-takos-service": "takosumi",
@@ -178,65 +181,94 @@ export function createTakosumiOpenApiDocument(
           "x-takos-mounted-path": "/openapi.json",
         } satisfies OpenApiOperation,
       },
-      [INSTALLER_INSTALLATIONS_DRY_RUN_PATH]: {
+      [TAKOSUMI_RUNNER_PROFILES_ROUTE]: {
+        get: operation({
+          operationId: "listRunnerProfiles",
+          summary: "Lists OpenTofu runner profiles and provider allowlists.",
+          tag: "deployControl-public",
+          auth: "deploy-control-token",
+          okSchema: "ListRunnerProfilesResponse",
+          mountedPath: TAKOSUMI_RUNNER_PROFILES_ROUTE,
+        }),
+      },
+      [TAKOSUMI_PLAN_RUNS_ROUTE]: {
         post: operation({
-          operationId: "dryRunInstallation",
+          operationId: "createPlanRun",
+          summary: "Creates an OpenTofu plan run for a plain module source.",
+          tag: "deployControl-public",
+          auth: "deploy-control-token",
+          requestSchema: "CreatePlanRunRequest",
+          okStatus: "201",
+          okSchema: "PlanRunResponse",
+          mountedPath: TAKOSUMI_PLAN_RUNS_ROUTE,
+        }),
+      },
+      [toOpenApiPath(TAKOSUMI_PLAN_RUN_ROUTE)]: {
+        get: operation({
+          operationId: "getPlanRun",
+          summary: "Reads an OpenTofu PlanRun.",
+          tag: "deployControl-public",
+          auth: "deploy-control-token",
+          pathParams: ["planRunId"],
+          okSchema: "PlanRunResponse",
+          mountedPath: TAKOSUMI_PLAN_RUN_ROUTE,
+        }),
+      },
+      [TAKOSUMI_APPLY_RUNS_ROUTE]: {
+        post: operation({
+          operationId: "createApplyRun",
+          summary: "Creates an apply run from a succeeded PlanRun.",
+          tag: "deployControl-public",
+          auth: "deploy-control-token",
+          requestSchema: "CreateApplyRunRequest",
+          okStatus: "201",
+          okSchema: "ApplyRunResponse",
+          mountedPath: TAKOSUMI_APPLY_RUNS_ROUTE,
+        }),
+      },
+      [toOpenApiPath(TAKOSUMI_APPLY_RUN_ROUTE)]: {
+        get: operation({
+          operationId: "getApplyRun",
+          summary: "Reads an OpenTofu ApplyRun.",
+          tag: "deployControl-public",
+          auth: "deploy-control-token",
+          pathParams: ["applyRunId"],
+          okSchema: "ApplyRunResponse",
+          mountedPath: TAKOSUMI_APPLY_RUN_ROUTE,
+        }),
+      },
+      [toOpenApiPath(TAKOSUMI_INSTALLATION_ROUTE)]: {
+        get: operation({
+          operationId: "getInstallation",
+          summary: "Reads an Installation ledger record.",
+          tag: "deployControl-public",
+          auth: "deploy-control-token",
+          pathParams: ["installationId"],
+          okSchema: "GetInstallationResponse",
+          mountedPath: TAKOSUMI_INSTALLATION_ROUTE,
+        }),
+      },
+      [toOpenApiPath(TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE)]: {
+        get: operation({
+          operationId: "listInstallationDeployments",
+          summary: "Lists Deployment records for an Installation.",
+          tag: "deployControl-public",
+          auth: "deploy-control-token",
+          pathParams: ["installationId"],
+          okSchema: "ListDeploymentsResponse",
+          mountedPath: TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE,
+        }),
+      },
+      [toOpenApiPath(TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE)]: {
+        get: operation({
+          operationId: "listInstallationDeploymentOutputs",
           summary:
-            "Plans a fresh Installation from a source descriptor without persisting state.",
-          tag: "installer-public",
-          auth: "installer-token",
-          requestSchema: "InstallerInstallationDryRunRequest",
-          okSchema: "InstallerDryRunResponse",
-          mountedPath: INSTALLER_INSTALLATIONS_DRY_RUN_PATH,
-        }),
-      },
-      [INSTALLER_INSTALLATIONS_PATH]: {
-        post: operation({
-          operationId: "createInstallation",
-          summary: "Creates an Installation from a source descriptor.",
-          tag: "installer-public",
-          auth: "installer-token",
-          requestSchema: "InstallerInstallationApplyRequest",
-          okStatus: "201",
-          okSchema: "InstallerInstallationApplyResponse",
-          mountedPath: INSTALLER_INSTALLATIONS_PATH,
-        }),
-      },
-      [toOpenApiPath(INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH)]: {
-        post: operation({
-          operationId: "dryRunInstallationDeployment",
-          summary: "Plans a re-deploy against an existing Installation.",
-          tag: "installer-public",
-          auth: "installer-token",
+            "Lists non-sensitive DeploymentOutput records for the current Deployment of an Installation.",
+          tag: "deployControl-public",
+          auth: "deploy-control-token",
           pathParams: ["installationId"],
-          requestSchema: "InstallerDeploymentDryRunRequest",
-          okSchema: "InstallerDryRunResponse",
-          mountedPath: INSTALLER_INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
-        }),
-      },
-      [toOpenApiPath(INSTALLER_INSTALLATION_DEPLOYMENTS_PATH)]: {
-        post: operation({
-          operationId: "applyInstallationDeployment",
-          summary: "Applies a Deployment against an existing Installation.",
-          tag: "installer-public",
-          auth: "installer-token",
-          pathParams: ["installationId"],
-          requestSchema: "InstallerDeploymentApplyRequest",
-          okStatus: "201",
-          okSchema: "InstallerDeploymentApplyResponse",
-          mountedPath: INSTALLER_INSTALLATION_DEPLOYMENTS_PATH,
-        }),
-      },
-      [toOpenApiPath(INSTALLER_INSTALLATION_ROLLBACK_PATH)]: {
-        post: operation({
-          operationId: "rollbackInstallation",
-          summary: "Rolls an Installation back to a prior Deployment.",
-          tag: "installer-public",
-          auth: "installer-token",
-          pathParams: ["installationId"],
-          requestSchema: "InstallerRollbackRequest",
-          okSchema: "InstallerRollbackResponse",
-          mountedPath: INSTALLER_INSTALLATION_ROLLBACK_PATH,
+          okSchema: "ListDeploymentOutputsResponse",
+          mountedPath: TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
         }),
       },
       [ARTIFACTS_BASE_PATH]: {
@@ -257,16 +289,6 @@ export function createTakosumiOpenApiDocument(
           query: ["cursor", "limit"],
           okSchema: "ArtifactListResponse",
           mountedPath: ARTIFACTS_BASE_PATH,
-        }),
-      },
-      [`${ARTIFACTS_BASE_PATH}/kinds`]: {
-        get: operation({
-          operationId: "listArtifactKinds",
-          summary: "Lists artifact kinds registered in the service.",
-          tag: "artifact",
-          auth: "deploy-token",
-          okSchema: "ArtifactKindsResponse",
-          mountedPath: `${ARTIFACTS_BASE_PATH}/kinds`,
         }),
       },
       [toOpenApiPath(`${ARTIFACTS_BASE_PATH}/:hash`)]: {
@@ -348,31 +370,7 @@ export function createTakosumiOpenApiDocument(
           okSchema: "GroupResponse",
         }),
       },
-      [TAKOSUMI_INTERNAL_PATHS.deployments]: {
-        post: operation({
-          operationId: "resolveInternalDeployment",
-          summary:
-            "Resolves a Deployment through the internal service API (mode=resolve).",
-          tag: "internal",
-          auth: "internal-service",
-          requestSchema: "InternalDeploymentRequest",
-          okSchema: "DeploymentMutationResponse",
-        }),
-      },
-      [toOpenApiPath(TAKOSUMI_INTERNAL_PATHS.deploymentApply)]: {
-        post: operation({
-          operationId: "applyInternalDeployment",
-          summary:
-            "Applies a resolved Deployment through the internal service API.",
-          tag: "internal",
-          auth: "internal-service",
-          pathParams: ["deploymentId"],
-          requestSchema: "InternalDeploymentApplyRequest",
-          okStatus: "201",
-          okSchema: "DeploymentMutationResponse",
-        }),
-      },
-      [TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll]: {
+      [TAKOSUMI_RUNTIME_AGENT_PATHS.enroll]: {
         post: operation({
           operationId: "enrollRuntimeAgent",
           summary: "Enrolls a runtime agent for provider work leasing.",
@@ -383,7 +381,7 @@ export function createTakosumiOpenApiDocument(
           okSchema: "RuntimeAgentResponse",
         }),
       },
-      [toOpenApiPath(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.heartbeat)]: {
+      [toOpenApiPath(TAKOSUMI_RUNTIME_AGENT_PATHS.heartbeat)]: {
         post: operation({
           operationId: "heartbeatRuntimeAgent",
           summary: "Records a runtime agent heartbeat.",
@@ -394,7 +392,7 @@ export function createTakosumiOpenApiDocument(
           okSchema: "RuntimeAgentResponse",
         }),
       },
-      [toOpenApiPath(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.lease)]: {
+      [toOpenApiPath(TAKOSUMI_RUNTIME_AGENT_PATHS.lease)]: {
         post: operation({
           operationId: "leaseRuntimeAgentWork",
           summary: "Leases work to a runtime agent.",
@@ -405,7 +403,7 @@ export function createTakosumiOpenApiDocument(
           okSchema: "RuntimeAgentLeaseResponse",
         }),
       },
-      [toOpenApiPath(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.report)]: {
+      [toOpenApiPath(TAKOSUMI_RUNTIME_AGENT_PATHS.report)]: {
         post: operation({
           operationId: "reportRuntimeAgentWork",
           summary: "Reports runtime-agent work completion or failure.",
@@ -416,7 +414,7 @@ export function createTakosumiOpenApiDocument(
           okSchema: "RuntimeAgentWorkResponse",
         }),
       },
-      [toOpenApiPath(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.drain)]: {
+      [toOpenApiPath(TAKOSUMI_RUNTIME_AGENT_PATHS.drain)]: {
         post: operation({
           operationId: "drainRuntimeAgent",
           summary: "Requests runtime-agent drain.",
@@ -427,7 +425,7 @@ export function createTakosumiOpenApiDocument(
           okSchema: "RuntimeAgentResponse",
         }),
       },
-      [toOpenApiPath(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.gatewayManifest)]: {
+      [toOpenApiPath(TAKOSUMI_RUNTIME_AGENT_PATHS.gatewayManifest)]: {
         post: operation({
           operationId: "issueGatewayManifest",
           summary:
@@ -438,7 +436,7 @@ export function createTakosumiOpenApiDocument(
           okSchema: "GatewayManifestResponse",
         }),
       },
-      [TAKOSUMI_PAAS_READINESS_PATHS.ready]: {
+      [TAKOSUMI_SERVICE_READINESS_PATHS.ready]: {
         get: operation({
           operationId: "getReadyz",
           summary: "Readiness probe for the current Takosumi role.",
@@ -447,7 +445,7 @@ export function createTakosumiOpenApiDocument(
           okSchema: "HealthProbeResponse",
         }),
       },
-      [TAKOSUMI_PAAS_READINESS_PATHS.live]: {
+      [TAKOSUMI_SERVICE_READINESS_PATHS.live]: {
         get: operation({
           operationId: "getLivez",
           summary: "Liveness probe for the current Takosumi role.",
@@ -456,7 +454,7 @@ export function createTakosumiOpenApiDocument(
           okSchema: "HealthProbeResponse",
         }),
       },
-      [TAKOSUMI_PAAS_READINESS_PATHS.statusSummary]: {
+      [TAKOSUMI_SERVICE_READINESS_PATHS.statusSummary]: {
         get: operation({
           operationId: "getStatusSummary",
           summary: "Returns the current group summary status projection.",
@@ -492,11 +490,11 @@ export function createTakosumiOpenApiDocument(
           description:
             "Prometheus scrape bearer from TAKOSUMI_METRICS_SCRAPE_TOKEN. Required for the Prometheus exposition `/metrics` endpoint.",
         },
-        installerBearer: {
+        deployControlBearer: {
           type: "http",
           scheme: "bearer",
           description:
-            "Installer bearer from TAKOSUMI_INSTALLER_TOKEN for /v1/installations and /v1/installations/{id}/deployments routes.",
+            "DeployControl bearer from TAKOSUMI_DEPLOY_CONTROL_TOKEN for OpenTofu plan/apply/destroy routes.",
         },
       },
       schemas: createSchemas(),
@@ -511,7 +509,7 @@ function filterMountedRouteFamilies(
 ): OpenApiDocument {
   const mountedTags = new Set([
     "process",
-    ...(options.installerPublicRoutesMounted ? ["installer-public"] : []),
+    ...(options.deployControlPublicRoutesMounted ? ["deployControl-public"] : []),
     ...(options.artifactRoutesMounted ? ["artifact"] : []),
     ...(options.internalRoutesMounted ? ["internal"] : []),
     ...(options.runtimeAgentRoutesMounted ? ["runtime-agent"] : []),
@@ -551,7 +549,7 @@ function operation(input: {
   readonly summary: string;
   readonly tag:
     | "process"
-    | "installer-public"
+    | "deployControl-public"
     | "artifact"
     | "internal"
     | "runtime-agent"
@@ -561,7 +559,7 @@ function operation(input: {
     | "none"
     | "deploy-token"
     | "artifact-read"
-    | "installer-token"
+    | "deploy-control-token"
     | "internal-service";
   readonly okSchema: string;
   readonly okStatus?: "200" | "201" | "204";
@@ -593,7 +591,7 @@ function operation(input: {
       ...(input.requestSchema || input.requestBody
         ? { "400": errorResponse() }
         : {}),
-      ...(input.tag === "installer-public"
+      ...(input.tag === "deployControl-public"
         ? {
           "403": errorResponse(),
           "404": errorResponse(),
@@ -615,11 +613,11 @@ function securityRequirements(
     | "actor"
     | "deploy-token"
     | "artifact-read"
-    | "installer-token"
+    | "deploy-control-token"
     | "internal-service",
 ): readonly Record<string, readonly string[]>[] {
   if (auth === "deploy-token") return [{ deployBearer: [] }];
-  if (auth === "installer-token") return [{ installerBearer: [] }];
+  if (auth === "deploy-control-token") return [{ deployControlBearer: [] }];
   if (auth === "artifact-read") {
     return [{ deployBearer: [] }, { artifactFetchBearer: [] }];
   }
@@ -775,99 +773,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     },
     additionalProperties: false,
   };
-  // InternalDeploymentRecord / GroupHead / ProviderObservation schemas track
-  // the internal deploy-domain records. They are intentionally separate from
-  // the public Installer API `Deployment` entity.
-  const internalDeploymentRecord = {
-    type: "object",
-    required: [
-      "id",
-      "group_id",
-      "space_id",
-      "input",
-      "resolution",
-      "desired",
-      "status",
-      "conditions",
-      "created_at",
-    ],
-    properties: {
-      id: { type: "string" },
-      group_id: { type: "string" },
-      space_id: { type: "string" },
-      input: jsonObject,
-      resolution: jsonObject,
-      desired: jsonObject,
-      status: {
-        enum: [
-          "preview",
-          "resolved",
-          "applying",
-          "applied",
-          "failed",
-          "rolled-back",
-        ],
-      },
-      conditions: { type: "array", items: ref("Condition") },
-      policy_decisions: { type: "array", items: jsonObject },
-      approval: { ...jsonObject, nullable: true },
-      rollback_target: { type: "string", nullable: true },
-      created_at: { type: "string", format: "date-time" },
-      applied_at: { type: "string", format: "date-time", nullable: true },
-      finalized_at: { type: "string", format: "date-time", nullable: true },
-    },
-    additionalProperties: true,
-  };
-  const groupHead = {
-    type: "object",
-    required: [
-      "space_id",
-      "group_id",
-      "current_deployment_id",
-      "generation",
-      "advanced_at",
-    ],
-    properties: {
-      space_id: { type: "string" },
-      group_id: { type: "string" },
-      current_deployment_id: { type: "string" },
-      previous_deployment_id: { type: "string", nullable: true },
-      generation: { type: "number" },
-      advanced_at: { type: "string", format: "date-time" },
-    },
-    additionalProperties: false,
-  };
-  const providerObservation = {
-    type: "object",
-    required: [
-      "id",
-      "deployment_id",
-      "provider_id",
-      "object_address",
-      "observed_state",
-      "observed_at",
-    ],
-    properties: {
-      id: { type: "string" },
-      deployment_id: { type: "string" },
-      provider_id: { type: "string" },
-      object_address: { type: "string" },
-      observed_state: { enum: ["present", "missing", "drifted", "unknown"] },
-      drift_status: {
-        enum: [
-          "provider-object-missing",
-          "config-drift",
-          "status-drift",
-          "security-drift",
-          "ownership-drift",
-          "cache-drift",
-        ],
-      },
-      observed_digest: { type: "string" },
-      observed_at: { type: "string", format: "date-time" },
-    },
-    additionalProperties: false,
-  };
   return {
     CoreConditionReason: {
       enum: [...CORE_CONDITION_REASONS],
@@ -875,9 +780,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         "Canonical condition reason catalog exported by takosumi-contract. CLI, app UI, API clients, controllers, and status projections must use these values for condition.reason.",
     },
     Condition: condition,
-    InternalDeploymentRecord: internalDeploymentRecord,
-    GroupHead: groupHead,
-    ProviderObservation: providerObservation,
     HealthResponse: {
       type: "object",
       required: ["ok", "service", "domains"],
@@ -927,394 +829,573 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: true,
     },
-    InstallerGitSourceInput: {
+    OpenTofuGitModuleSource: {
       type: "object",
-      required: ["kind", "url", "ref"],
+      required: ["kind", "url"],
       properties: {
         kind: { const: "git" },
         url: { type: "string" },
         ref: { type: "string" },
+        commit: { type: "string" },
+        modulePath: { type: "string" },
       },
       additionalProperties: false,
     },
-    InstallerPreparedSourceInput: {
+    OpenTofuPreparedModuleSource: {
       type: "object",
       required: ["kind", "url", "digest"],
       properties: {
         kind: { const: "prepared" },
         url: { type: "string" },
         digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        modulePath: { type: "string" },
       },
       additionalProperties: false,
     },
-    InstallerLocalSourceInput: {
+    OpenTofuLocalModuleSource: {
       type: "object",
-      required: ["kind", "url"],
+      required: ["kind", "path"],
       properties: {
         kind: { const: "local" },
-        url: { type: "string" },
+        path: { type: "string" },
+        modulePath: { type: "string" },
       },
       additionalProperties: false,
     },
-    InstallerSource: {
+    OpenTofuModuleSource: {
       oneOf: [
-        ref("InstallerGitSourceInput"),
-        ref("InstallerPreparedSourceInput"),
-        ref("InstallerLocalSourceInput"),
+        ref("OpenTofuGitModuleSource"),
+        ref("OpenTofuPreparedModuleSource"),
+        ref("OpenTofuLocalModuleSource"),
       ],
       description:
-        "Installer source descriptor. `git` and `prepared` are remote source inputs; `local` is for dev / operator-local profiles.",
+        "Plain OpenTofu module source. Display metadata comes from Git identity, module path, and OpenTofu outputs.",
     },
-    InstallerGitSourcePin: {
+    RunnerProfile: {
       type: "object",
-      required: ["planSnapshotDigest", "commit"],
-      properties: {
-        planSnapshotDigest: {
-          type: "string",
-          pattern: "^sha256:[0-9a-f]{64}$",
-        },
-        commit: { type: "string" },
-        sourceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-        artifactDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-      },
-      additionalProperties: false,
-    },
-    InstallerPreparedSourcePin: {
-      type: "object",
-      required: ["planSnapshotDigest", "sourceDigest"],
-      properties: {
-        planSnapshotDigest: {
-          type: "string",
-          pattern: "^sha256:[0-9a-f]{64}$",
-        },
-        sourceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-        artifactDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-      },
-      additionalProperties: false,
-    },
-    InstallerLocalSourcePin: {
-      type: "object",
-      required: ["planSnapshotDigest"],
-      properties: {
-        planSnapshotDigest: {
-          type: "string",
-          pattern: "^sha256:[0-9a-f]{64}$",
-        },
-        artifactDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-      },
-      additionalProperties: false,
-    },
-    InstallerSourcePin: {
-      oneOf: [
-        ref("InstallerGitSourcePin"),
-        ref("InstallerPreparedSourcePin"),
-        ref("InstallerLocalSourcePin"),
+      required: [
+        "id",
+        "name",
+        "substrate",
+        "stateBackend",
+        "allowedProviders",
+        "createdAt",
       ],
-    },
-    InstallerDeploymentGitExpectedGuard: {
-      type: "object",
-      required: ["planSnapshotDigest", "commit", "currentDeploymentId"],
       properties: {
-        planSnapshotDigest: {
-          type: "string",
-          pattern: "^sha256:[0-9a-f]{64}$",
+        id: { type: "string" },
+        name: { type: "string" },
+        substrate: { type: "string" },
+        description: { type: "string" },
+        tofuVersion: { type: "string" },
+        stateBackend: ref("RunnerStateBackend"),
+        allowedProviders: { type: "array", items: { type: "string" } },
+        deniedProviders: { type: "array", items: { type: "string" } },
+        credentialRefs: {
+          type: "array",
+          items: ref("RunnerCredentialReference"),
         },
-        commit: { type: "string" },
-        sourceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-        currentDeploymentId: { type: "string", nullable: true },
+        requireCredentialRefs: { type: "boolean" },
+        sourcePolicy: ref("RunnerSourcePolicy"),
+        resourceLimits: ref("RunnerResourceLimits"),
+        networkPolicy: ref("RunnerNetworkPolicy"),
+        cloudflareContainer: ref("CloudflareContainerExecution"),
+        cloudflareWorkersForPlatforms: ref(
+          "CloudflareWorkersForPlatformsExecution",
+        ),
+        secretExposurePolicy: ref("RunnerSecretExposurePolicy"),
+        concurrency: { type: "number" },
+        labels: { type: "object", additionalProperties: { type: "string" } },
+        createdAt: { type: "number" },
       },
       additionalProperties: false,
     },
-    InstallerDeploymentPreparedExpectedGuard: {
+    RunnerStateLockPolicy: {
       type: "object",
-      required: ["planSnapshotDigest", "sourceDigest", "currentDeploymentId"],
+      required: ["kind"],
       properties: {
-        planSnapshotDigest: {
-          type: "string",
-          pattern: "^sha256:[0-9a-f]{64}$",
-        },
-        sourceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-        currentDeploymentId: { type: "string", nullable: true },
+        kind: { type: "string" },
+        ref: { type: "string" },
       },
       additionalProperties: false,
     },
-    InstallerDeploymentLocalExpectedGuard: {
+    RunnerStateBackend: {
       type: "object",
-      required: ["planSnapshotDigest", "currentDeploymentId"],
+      required: ["kind"],
       properties: {
-        planSnapshotDigest: {
-          type: "string",
-          pattern: "^sha256:[0-9a-f]{64}$",
-        },
-        currentDeploymentId: { type: "string", nullable: true },
+        kind: { type: "string" },
+        ref: { type: "string" },
+        lock: ref("RunnerStateLockPolicy"),
       },
       additionalProperties: false,
     },
-    InstallerDeploymentExpectedGuard: {
-      oneOf: [
-        ref("InstallerDeploymentGitExpectedGuard"),
-        ref("InstallerDeploymentPreparedExpectedGuard"),
-        ref("InstallerDeploymentLocalExpectedGuard"),
+    RunnerCredentialReference: {
+      type: "object",
+      required: ["provider", "ref"],
+      properties: {
+        provider: { type: "string" },
+        ref: { type: "string" },
+        required: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    RunnerSourcePolicy: {
+      type: "object",
+      properties: {
+        allowLocalSource: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    RunnerResourceLimits: {
+      type: "object",
+      properties: {
+        maxRunSeconds: { type: "number" },
+        maxSourceArchiveBytes: { type: "number" },
+        maxSourceDecompressedBytes: { type: "number" },
+        cpu: { type: "string" },
+        memoryMb: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+    RunnerNetworkPolicy: {
+      type: "object",
+      required: ["mode"],
+      properties: {
+        mode: { type: "string" },
+        allowedHosts: { type: "array", items: { type: "string" } },
+        allowedHostPatterns: { type: "array", items: { type: "string" } },
+      },
+      additionalProperties: false,
+    },
+    CloudflareContainerExecution: {
+      type: "object",
+      required: ["image"],
+      properties: {
+        image: { type: "string" },
+        queueName: { type: "string" },
+        durableObjectBinding: { type: "string" },
+        workDir: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    CloudflareWorkersForPlatformsExecution: {
+      type: "object",
+      required: ["dispatchNamespace"],
+      properties: {
+        dispatchNamespace: { type: "string" },
+        dispatchWorkerBinding: { type: "string" },
+        outboundWorker: ref("CloudflareOutboundWorkerPolicy"),
+        userWorkerBindings: ref("CloudflareUserWorkerBindingPolicy"),
+      },
+      additionalProperties: false,
+    },
+    CloudflareOutboundWorkerPolicy: {
+      type: "object",
+      properties: {
+        serviceBinding: { type: "string" },
+        enforceNetworkPolicy: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    CloudflareUserWorkerBindingPolicy: {
+      type: "object",
+      required: ["mode"],
+      properties: {
+        mode: { type: "string" },
+        allowedBindingKinds: { type: "array", items: { type: "string" } },
+      },
+      additionalProperties: false,
+    },
+    RunnerSecretExposurePolicy: {
+      type: "object",
+      required: ["providerCredentials", "tenantWorkerOperatorSecrets"],
+      properties: {
+        providerCredentials: { type: "string" },
+        tenantWorkerOperatorSecrets: { type: "string" },
+        redactLogs: { type: "boolean" },
+        blockSensitiveOutputs: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    ListRunnerProfilesResponse: {
+      type: "object",
+      required: ["runnerProfiles"],
+      properties: {
+        runnerProfiles: { type: "array", items: ref("RunnerProfile") },
+      },
+      additionalProperties: false,
+    },
+    PolicyDecision: {
+      type: "object",
+      required: ["status", "reasons", "checkedAt"],
+      properties: {
+        status: { enum: ["passed", "blocked"] },
+        reasons: { type: "array", items: { type: "string" } },
+        checkedAt: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+    DeployControlAuditEvent: {
+      type: "object",
+      required: ["id", "type", "at"],
+      properties: {
+        id: { type: "string" },
+        type: { type: "string" },
+        at: { type: "number" },
+        actor: { type: "string" },
+        message: { type: "string" },
+        data: jsonObject,
+      },
+      additionalProperties: false,
+    },
+    RunDiagnostic: {
+      type: "object",
+      required: ["severity", "message"],
+      properties: {
+        severity: { enum: ["info", "warning", "error"] },
+        message: { type: "string" },
+        detail: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    PlanRunSummary: {
+      type: "object",
+      properties: {
+        add: { type: "number" },
+        change: { type: "number" },
+        destroy: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+    OpenTofuPlanArtifact: {
+      type: "object",
+      required: ["kind", "ref", "digest"],
+      properties: {
+        kind: { type: "string" },
+        ref: { type: "string" },
+        digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        contentType: { type: "string" },
+        sizeBytes: { type: "number" },
+        createdAt: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+    PlanRun: {
+      type: "object",
+      required: [
+        "id",
+        "spaceId",
+        "source",
+        "sourceDigest",
+        "operation",
+        "runnerProfileId",
+        "variablesDigest",
+        "requiredProviders",
+        "status",
+        "policy",
+        "policyDecisionDigest",
+        "auditEvents",
+        "createdAt",
+        "updatedAt",
       ],
+      properties: {
+        id: { type: "string" },
+        spaceId: { type: "string" },
+        installationId: { type: "string" },
+        installationCurrentDeploymentId: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+        },
+        source: ref("OpenTofuModuleSource"),
+        sourceDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+        operation: { enum: ["create", "update", "destroy"] },
+        runnerProfileId: { type: "string" },
+        variablesDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+        requiredProviders: { type: "array", items: { type: "string" } },
+        status: {
+          enum: ["queued", "running", "succeeded", "failed", "blocked", "cancelled"],
+        },
+        policy: ref("PolicyDecision"),
+        policyDecisionDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+        planDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+        planArtifact: ref("OpenTofuPlanArtifact"),
+        sourceCommit: { type: "string" },
+        providerLockDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+        summary: ref("PlanRunSummary"),
+        diagnostics: { type: "array", items: ref("RunDiagnostic") },
+        auditEvents: {
+          type: "array",
+          items: ref("DeployControlAuditEvent"),
+        },
+        createdAt: { type: "number" },
+        updatedAt: { type: "number" },
+        finishedAt: { type: "number" },
+      },
+      additionalProperties: false,
     },
-    InstallerInstallationDryRunRequest: {
+    CreatePlanRunRequest: {
       type: "object",
       required: ["spaceId", "source"],
       properties: {
         spaceId: { type: "string" },
-        source: ref("InstallerSource"),
-        profile: { type: "string" },
-        bindings: { type: "array", items: ref("InstallerBindingSelection") },
+        source: ref("OpenTofuModuleSource"),
+        runnerProfileId: { type: "string" },
+        installationId: { type: "string" },
+        operation: { enum: ["create", "update", "destroy"] },
+        variables: jsonObject,
+        requiredProviders: { type: "array", items: { type: "string" } },
       },
       additionalProperties: false,
     },
-    InstallerInstallationApplyRequest: {
+    PlanRunResponse: {
       type: "object",
-      required: ["spaceId", "source"],
+      required: ["planRun"],
       properties: {
-        spaceId: { type: "string" },
-        source: ref("InstallerSource"),
-        profile: { type: "string" },
-        bindings: { type: "array", items: ref("InstallerBindingSelection") },
-        expected: ref("InstallerSourcePin"),
+        planRun: ref("PlanRun"),
       },
       additionalProperties: false,
     },
-    InstallerDeploymentDryRunRequest: {
+    ApplyExpectedGuard: {
       type: "object",
+      required: [
+        "planRunId",
+        "runnerProfileId",
+        "sourceDigest",
+        "variablesDigest",
+        "policyDecisionDigest",
+        "planDigest",
+        "planArtifactDigest",
+      ],
       properties: {
-        source: ref("InstallerSource"),
-        profile: { type: "string" },
-        bindings: { type: "array", items: ref("InstallerBindingSelection") },
-      },
-      additionalProperties: false,
-    },
-    InstallerDeploymentApplyRequest: {
-      type: "object",
-      properties: {
-        source: ref("InstallerSource"),
-        profile: { type: "string" },
-        bindings: { type: "array", items: ref("InstallerBindingSelection") },
-        expected: ref("InstallerDeploymentExpectedGuard"),
-      },
-      additionalProperties: false,
-    },
-    InstallerDryRunChange: {
-      type: "object",
-      required: ["op", "subject", "kind"],
-      properties: {
-        op: { enum: ["create", "update", "delete", "noop"] },
-        subject: { type: "string" },
-        kind: {
-          enum: ["source", "binding", "publication", "deployment"],
+        planRunId: { type: "string" },
+        installationId: { type: "string" },
+        currentDeploymentId: {
+          anyOf: [{ type: "string" }, { type: "null" }],
         },
+        runnerProfileId: { type: "string" },
+        sourceDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        variablesDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        policyDecisionDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+        planDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        planArtifactDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+        sourceCommit: { type: "string" },
+        providerLockDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+      },
+      additionalProperties: false,
+    },
+    RunApproval: {
+      type: "object",
+      properties: {
+        approvedBy: { type: "string" },
+        approvedAt: { type: "number" },
         reason: { type: "string" },
       },
-      additionalProperties: true,
+      additionalProperties: false,
     },
-    InstallerBindingSelection: {
+    CreateApplyRunRequest: {
       type: "object",
-      required: ["name"],
+      required: ["planRunId", "expected"],
+      properties: {
+        planRunId: { type: "string" },
+        approval: ref("RunApproval"),
+        expected: ref("ApplyExpectedGuard"),
+      },
+      additionalProperties: false,
+    },
+    DeploymentOutput: {
+      type: "object",
+      required: [
+        "name",
+        "kind",
+        "value",
+        "sensitive",
+      ],
       properties: {
         name: { type: "string" },
-        servicePath: { type: "string" },
-        serviceKind: { type: "string" },
+        kind: { type: "string" },
+        value: {},
+        sensitive: { const: false },
         labels: { type: "object", additionalProperties: { type: "string" } },
-        many: { type: "boolean" },
-        required: { type: "boolean" },
-        inject: {},
       },
       additionalProperties: false,
     },
-    InstallerInstallPlan: {
+    RunnerStateLockEvidence: {
       type: "object",
-      required: [
-        "source",
-        "repo",
-        "requestedBindings",
-        "resolvedBindings",
-        "publications",
-        "changes",
-        "warnings",
-      ],
+      required: ["status", "backendRef"],
       properties: {
-        source: ref("InstallerSourceSummary"),
-        repo: jsonObject,
-        selectedProfile: { type: "string" },
-        requestedBindings: {
-          type: "array",
-          items: ref("InstallerBindingSelection"),
-        },
-        resolvedBindings: { type: "array", items: jsonObject },
-        publications: { type: "array", items: jsonObject },
-        changes: { type: "array", items: ref("InstallerDryRunChange") },
-        warnings: { type: "array", items: { type: "string" } },
+        status: { enum: ["pending", "recorded", "not_required"] },
+        backendRef: { type: "string" },
+        lockRef: { type: "string" },
+        acquiredAt: { type: "number" },
+        releasedAt: { type: "number" },
       },
       additionalProperties: false,
     },
-    InstallerDryRunResponse: {
+    ApplyRun: {
       type: "object",
       required: [
-        "source",
-        "installPlan",
-        "planSnapshotDigest",
-        "changes",
+        "id",
+        "planRunId",
+        "spaceId",
+        "operation",
+        "runnerProfileId",
+        "status",
         "expected",
+        "stateBackend",
+        "stateLock",
+        "auditEvents",
+        "createdAt",
+        "updatedAt",
       ],
       properties: {
-        source: ref("InstallerSourceSummary"),
-        installPlan: ref("InstallerInstallPlan"),
-        planSnapshotDigest: {
-          type: "string",
-          pattern: "^sha256:[0-9a-f]{64}$",
+        id: { type: "string" },
+        planRunId: { type: "string" },
+        spaceId: { type: "string" },
+        installationId: { type: "string" },
+        deploymentId: { type: "string" },
+        operation: { enum: ["create", "update", "destroy"] },
+        runnerProfileId: { type: "string" },
+        status: {
+          enum: ["queued", "running", "succeeded", "failed", "blocked", "cancelled"],
         },
-        changes: { type: "array", items: ref("InstallerDryRunChange") },
-        expected: {
-          oneOf: [
-            ref("InstallerSourcePin"),
-            ref("InstallerDeploymentExpectedGuard"),
-          ],
+        approval: ref("RunApproval"),
+        expected: ref("ApplyExpectedGuard"),
+        stateBackend: ref("RunnerStateBackend"),
+        stateLock: ref("RunnerStateLockEvidence"),
+        outputs: { type: "array", items: ref("DeploymentOutput") },
+        diagnostics: { type: "array", items: ref("RunDiagnostic") },
+        auditEvents: {
+          type: "array",
+          items: ref("DeployControlAuditEvent"),
         },
+        createdAt: { type: "number" },
+        updatedAt: { type: "number" },
+        finishedAt: { type: "number" },
       },
-      description:
-        "Installation or Deployment dry-run plan. Deploy dry-run expected guards include currentDeploymentId.",
-      additionalProperties: true,
+      additionalProperties: false,
     },
-    InstallerInstallation: {
+    Installation: {
       type: "object",
       required: [
         "id",
         "spaceId",
         "appId",
+        "source",
+        "runnerProfileId",
         "currentDeploymentId",
         "status",
         "createdAt",
+        "updatedAt",
       ],
       properties: {
         id: { type: "string" },
         spaceId: { type: "string" },
         appId: { type: "string" },
+        source: ref("OpenTofuModuleSource"),
+        runnerProfileId: { type: "string" },
         currentDeploymentId: { type: "string", nullable: true },
-        status: { enum: ["installing", "ready", "failed", "suspended"] },
+        status: {
+          enum: ["installing", "ready", "failed", "destroying", "destroyed", "suspended"],
+        },
         createdAt: { type: "number" },
-      },
-      description:
-        "Public Installation entity. See takosumi-contract `installer-api.ts` `Installation`.",
-      additionalProperties: false,
-    },
-    InstallerSourceSummary: {
-      type: "object",
-      required: ["kind"],
-      properties: {
-        kind: { enum: ["git", "local", "prepared"] },
-        url: { type: "string" },
-        ref: { type: "string" },
-        commit: { type: "string" },
-        digest: { type: "string" },
-        sourceDigest: { type: "string" },
+        updatedAt: { type: "number" },
       },
       additionalProperties: false,
     },
-    InstallerDeployment: {
+    Deployment: {
       type: "object",
       required: [
         "id",
         "installationId",
+        "planRunId",
+        "applyRunId",
         "source",
-        "planSnapshotDigest",
-        "planSnapshot",
-        "bindingsSnapshot",
+        "runnerProfileId",
         "status",
         "outputs",
+        "auditEvents",
         "createdAt",
       ],
       properties: {
         id: { type: "string" },
         installationId: { type: "string" },
-        source: ref("InstallerSourceSummary"),
-        sourceDigest: { type: "string" },
-        artifactDigest: { type: "string" },
-        planSnapshotDigest: {
+        planRunId: { type: "string" },
+        applyRunId: { type: "string" },
+        source: ref("OpenTofuModuleSource"),
+        runnerProfileId: { type: "string" },
+        status: { enum: ["running", "succeeded", "failed", "destroyed"] },
+        planDigest: {
           type: "string",
           pattern: "^sha256:[0-9a-f]{64}$",
         },
-        planSnapshot: ref("InstallerInstallPlan"),
-        bindingsSnapshot: { type: "array", items: jsonObject },
-        status: { enum: ["running", "succeeded", "failed"] },
-        outputs: jsonObject,
-        createdAt: { type: "number" },
-      },
-      description:
-        "Public Deployment entity. Rollback selects a retained succeeded Deployment; it does not create another Deployment.",
-      additionalProperties: false,
-    },
-    InstallerInstallationApplyResponse: {
-      type: "object",
-      required: ["installation", "deployment"],
-      properties: {
-        installation: ref("InstallerInstallation"),
-        deployment: ref("InstallerDeployment"),
-      },
-      description:
-        "Response for creating a new Installation and its first Deployment.",
-      additionalProperties: false,
-    },
-    InstallerDeploymentApplyResponse: {
-      type: "object",
-      required: ["deployment"],
-      properties: {
-        deployment: ref("InstallerDeployment"),
-      },
-      description: "Response for applying a new Deployment to an Installation.",
-      additionalProperties: false,
-    },
-    InstallerRollbackMetadata: {
-      type: "object",
-      required: ["rolledBackFrom", "rolledBackTo", "scope"],
-      properties: {
-        rolledBackFrom: { type: "string", nullable: true },
-        rolledBackTo: { type: "string" },
-        scope: ref("InstallerRollbackScope"),
-      },
-      additionalProperties: false,
-    },
-    InstallerRollbackScope: {
-      type: "object",
-      description:
-        "What a rollback reverts. A Takosumi rollback re-points the current " +
-        "Deployment only; it does NOT re-materialize provider resources and " +
-        "NEVER reverts workload data/schema (recover those via backup/restore " +
-        "and expand-contract migrations).",
-      required: ["pointer", "resourceMaterialization", "workloadState"],
-      properties: {
-        pointer: { type: "string", enum: ["reverted"] },
-        resourceMaterialization: {
+        sourceCommit: { type: "string" },
+        providerLockDigest: {
           type: "string",
-          enum: ["not-reapplied"],
+          pattern: "^sha256:[0-9a-f]{64}$",
         },
-        workloadState: { type: "string", enum: ["not-reverted"] },
+        outputs: { type: "array", items: ref("DeploymentOutput") },
+        auditEvents: {
+          type: "array",
+          items: ref("DeployControlAuditEvent"),
+        },
+        createdAt: { type: "number" },
+        completedAt: { type: "number" },
       },
       additionalProperties: false,
     },
-    InstallerRollbackResponse: {
+    ApplyRunResponse: {
       type: "object",
-      required: ["installation", "deployment", "rollback"],
       properties: {
-        installation: ref("InstallerInstallation"),
-        deployment: ref("InstallerDeployment"),
-        rollback: ref("InstallerRollbackMetadata"),
+        applyRun: ref("ApplyRun"),
+        installation: ref("Installation"),
+        deployment: ref("Deployment"),
       },
-      description:
-        "Response for pointer-only rollback to a retained succeeded Deployment.",
+      required: ["applyRun"],
       additionalProperties: false,
     },
-    InstallerRollbackRequest: {
+    GetInstallationResponse: {
       type: "object",
-      description:
-        "Rollback request body. See takosumi-contract `installer-api.ts` `RollbackRequest`.",
-      required: ["deploymentId"],
+      required: ["installation"],
       properties: {
-        deploymentId: { type: "string" },
+        installation: ref("Installation"),
+      },
+      additionalProperties: false,
+    },
+    ListDeploymentsResponse: {
+      type: "object",
+      required: ["deployments"],
+      properties: {
+        deployments: { type: "array", items: ref("Deployment") },
+      },
+      additionalProperties: false,
+    },
+    ListDeploymentOutputsResponse: {
+      type: "object",
+      required: ["outputs"],
+      properties: {
+        outputs: { type: "array", items: ref("DeploymentOutput") },
       },
       additionalProperties: false,
     },
@@ -1339,7 +1420,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    ArtifactKindsResponse: jsonObject,
     ArtifactGcResponse: jsonObject,
     BinaryResponse: {
       type: "string",
@@ -1366,45 +1446,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         envName: { type: "string" },
         metadata: jsonObject,
       },
-    },
-    InternalDeploymentRequest: {
-      type: "object",
-      required: ["manifest"],
-      properties: {
-        spaceId: { type: "string" },
-        envName: { type: "string" },
-        group: { type: "string" },
-        manifest: jsonObject,
-      },
-      additionalProperties: false,
-    },
-    InternalDeploymentApplyRequest: {
-      type: "object",
-      properties: {
-        spaceId: { type: "string" },
-        space_id: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    DeploymentMutationResponse: {
-      type: "object",
-      required: ["deployment_id", "status", "conditions"],
-      properties: {
-        deployment_id: { type: "string" },
-        status: {
-          enum: [
-            "preview",
-            "resolved",
-            "applying",
-            "applied",
-            "failed",
-            "rolled-back",
-          ],
-        },
-        conditions: { type: "array", items: ref("Condition") },
-        expansion_summary: jsonObject,
-      },
-      additionalProperties: true,
     },
     SpacesResponse: jsonObject,
     SpaceResponse: jsonObject,

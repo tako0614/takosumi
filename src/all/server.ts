@@ -5,7 +5,7 @@ export { startTakosumiService };
 // Derive the runtime adapter / serve-handle types from the service's public
 // `startTakosumiService` return so this module routes HTTP serving through the service
 // `RuntimeAdapter` (`src/service/shared/runtime/`) instead of touching
-// `Deno.*` directly. This keeps the substrate-neutral boundary intact and the
+// host-specific globals directly. This keeps the substrate-neutral boundary intact and the
 // npm build typeable on Node.
 type StartedTakosumiService = Awaited<ReturnType<typeof startTakosumiService>>;
 type ServiceRuntime = StartedTakosumiService["runtime"];

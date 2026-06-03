@@ -1,8 +1,8 @@
 -- Migration: 20260430000019_replay_protection_log
 -- Purpose:   Provide a durable, cross-process / cross-pod source of truth for
---            observed signed internal RPC request-ids so multiple PaaS
---            replicas (k8s pods, Cloudflare Worker isolates, multiple Deno
---            hosts behind a load balancer) cannot each independently accept
+--            observed signed internal RPC request-ids so multiple Takosumi
+--            replicas (k8s pods, Cloudflare Worker isolates, multiple
+--            Bun/Node hosts behind a load balancer) cannot each independently accept
 --            the same replayed request.
 --
 --            The in-memory `seenRequestIds` Map (5s TTL) only protected a single
@@ -19,7 +19,7 @@
 
 create table if not exists internal_request_replay_log (
   -- Logical namespace (`internal-request` for inbound signed RPC,
-  -- `internal-response` for kernel-side response signatures). Keeping
+  -- `internal-response` for service-side response signatures). Keeping
   -- request and response signatures in distinct namespaces prevents a
   -- request signature from masking a later response signature with the
   -- same id.

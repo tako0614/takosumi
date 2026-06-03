@@ -12,6 +12,13 @@ const workerBundle = new URL(
   ".wrangler/dist/takosumi-accounts-worker.mjs",
   cloudflareRoot,
 );
+// Bundled dashboard SPA build (Workers Static Assets). Like `main`, the
+// `[assets].directory` value is rewritten to be relative to the rendered
+// config's location so `wrangler deploy --config .wrangler/...` resolves it.
+const dashboardAssets = new URL(
+  "../../packages/dashboard-ui/.output/public",
+  cloudflareRoot,
+);
 
 // Environment profile selects which [vars] block is "in scope" for validation.
 //   --env production: strict — every production-facing var must be a non-empty,
@@ -19,14 +26,14 @@ const workerBundle = new URL(
 //   --env staging:    strict — same checks as production; only routes / names
 //                     differ at the wrangler.toml [env.staging] level.
 //   --env local:      lenient — workers_dev defaults are accepted and the
-//                     installer URL / database id requirement is dropped so
+//                     deploy control URL / database id requirement is dropped so
 //                     `wrangler dev --env local` can run against a local
 //                     substrate stack without operator secrets.
 type DeployEnv = "production" | "staging" | "local";
 
 interface Options {
   readonly databaseId: string;
-  readonly installerUrl: string;
+  readonly deployControlUrl: string;
   readonly input: string;
   readonly output: string;
   readonly workersDev: boolean;
@@ -36,7 +43,7 @@ interface Options {
 
 function parseArgs(args: string[], env = process.env): Options {
   let databaseId = env.TAKOSUMI_ACCOUNTS_D1_DATABASE_ID ?? "";
-  let installerUrl = env.TAKOSUMI_ACCOUNTS_INSTALLER_URL ?? "";
+  let deployControlUrl = env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL ?? "";
   let input = new URL(defaultInput).pathname;
   let output = new URL(defaultOutput).pathname;
   let workersDev = env.TAKOSUMI_ACCOUNTS_CLOUDFLARE_WORKERS_DEV === "1";
@@ -51,8 +58,8 @@ function parseArgs(args: string[], env = process.env): Options {
       continue;
     } else if (arg === "--database-id") {
       databaseId = requiredValue(args, ++index, arg);
-    } else if (arg === "--installer-url") {
-      installerUrl = requiredValue(args, ++index, arg);
+    } else if (arg === "--deploy-control-url") {
+      deployControlUrl = requiredValue(args, ++index, arg);
     } else if (arg === "--input") {
       input = resolve(requiredValue(args, ++index, arg));
     } else if (arg === "--output") {
@@ -77,16 +84,16 @@ function parseArgs(args: string[], env = process.env): Options {
   }
 
   if (deployEnv === "local") {
-    // Local profile: workers_dev defaults are fine; no real D1 / installer
+    // Local profile: workers_dev defaults are fine; no real D1 / deployControl
     // required for `wrangler dev --env local`.
     if (databaseId && (!validUuid(databaseId) || placeholderUuid(databaseId))) {
       throw new TypeError(
         "If --database-id is supplied in local mode it must still be a non-placeholder D1 UUID.",
       );
     }
-    if (installerUrl && !validUrl(installerUrl)) {
+    if (deployControlUrl && !validUrl(deployControlUrl)) {
       throw new TypeError(
-        "If --installer-url is supplied in local mode it must still be a valid URL.",
+        "If --deploy-control-url is supplied in local mode it must still be a valid URL.",
       );
     }
   } else {
@@ -95,16 +102,16 @@ function parseArgs(args: string[], env = process.env): Options {
         `A real non-placeholder D1 database UUID is required for --env ${deployEnv}. Pass --database-id or set TAKOSUMI_ACCOUNTS_D1_DATABASE_ID.`,
       );
     }
-    if (!validUrl(installerUrl) || placeholderUrl(installerUrl)) {
+    if (!validUrl(deployControlUrl) || placeholderUrl(deployControlUrl)) {
       throw new TypeError(
-        `A real non-placeholder Takosumi installer URL is required for --env ${deployEnv}. Pass --installer-url or set TAKOSUMI_ACCOUNTS_INSTALLER_URL.`,
+        `A real non-placeholder Takosumi deploy control URL is required for --env ${deployEnv}. Pass --deploy-control-url or set TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL.`,
       );
     }
   }
 
   return {
     databaseId,
-    installerUrl,
+    deployControlUrl,
     input,
     output,
     workersDev,
@@ -209,9 +216,9 @@ function placeholderUrl(value: string): boolean {
 //
 // `wrangler.toml` carries one shared top-level `[vars]` block and three
 // per-environment `[env.<production|staging|local>.vars]` overrides. The
-// `TAKOSUMI_ACCOUNTS_INSTALLER_URL = ""` placeholder appears in every block
-// because each environment may target a different installer host. A naive
-// `.replace(/TAKOSUMI_ACCOUNTS_INSTALLER_URL = "[^"]*"/, ...)` only replaces
+// `TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL = ""` placeholder appears in every block
+// because each environment may target a different deployControl host. A naive
+// `.replace(/TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL = "[^"]*"/, ...)` only replaces
 // the first match, leaving the other env blocks with the empty placeholder,
 // which then fails validation.
 //
@@ -237,11 +244,11 @@ function renderConfig(source: string, options: Options): string {
       `database_id = "${options.databaseId}"`,
     );
   }
-  if (options.installerUrl) {
-    rendered = substituteInstallerUrl(
+  if (options.deployControlUrl) {
+    rendered = substituteDeployControlUrl(
       rendered,
       options.env,
-      options.installerUrl,
+      options.deployControlUrl,
     );
   }
 
@@ -255,6 +262,20 @@ function renderConfig(source: string, options: Options): string {
     }"`,
   );
 
+  const assetsDirectory = relative(
+    dirname(options.output),
+    dashboardAssets.pathname,
+  ).replaceAll("\\", "/");
+  rendered = rendered.replace(
+    /directory = "[^"]+"/,
+    `directory = "${assetsDirectory}"`,
+  );
+  if (!rendered.includes(`directory = "${assetsDirectory}"`)) {
+    throw new TypeError(
+      `render-config: failed to rewrite [assets].directory to "${assetsDirectory}" — no directory entry matched the template`,
+    );
+  }
+
   if (
     options.env !== "local" &&
     !rendered.includes(`database_id = "${options.databaseId}"`)
@@ -265,14 +286,14 @@ function renderConfig(source: string, options: Options): string {
   }
   if (
     options.env !== "local" &&
-    !installerUrlMatchesScopedBlocks(
+    !deployControlUrlMatchesScopedBlocks(
       rendered,
       options.env,
-      options.installerUrl,
+      options.deployControlUrl,
     )
   ) {
     throw new TypeError(
-      `Could not replace TAKOSUMI_ACCOUNTS_INSTALLER_URL for --env ${options.env} in wrangler config`,
+      `Could not replace TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL for --env ${options.env} in wrangler config`,
     );
   }
 
@@ -316,12 +337,12 @@ const ENV_VAR_SECTIONS: Readonly<Record<DeployEnv, readonly string[]>> = {
   local: ["[env.local.vars]"],
 };
 
-// Replace `TAKOSUMI_ACCOUNTS_INSTALLER_URL = "<old>"` only inside the var
+// Replace `TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL = "<old>"` only inside the var
 // sections owned by `env`. Other env blocks keep their template values.
-function substituteInstallerUrl(
+function substituteDeployControlUrl(
   source: string,
   env: DeployEnv,
-  installerUrl: string,
+  deployControlUrl: string,
 ): string {
   const sections = ENV_VAR_SECTIONS[env];
   let rewritten = source;
@@ -329,26 +350,26 @@ function substituteInstallerUrl(
     rewritten = replaceVarInSection(
       rewritten,
       header,
-      "TAKOSUMI_ACCOUNTS_INSTALLER_URL",
-      installerUrl,
+      "TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL",
+      deployControlUrl,
     );
   }
   return rewritten;
 }
 
-function installerUrlMatchesScopedBlocks(
+function deployControlUrlMatchesScopedBlocks(
   rendered: string,
   env: DeployEnv,
-  installerUrl: string,
+  deployControlUrl: string,
 ): boolean {
   const sections = ENV_VAR_SECTIONS[env];
   for (const header of sections) {
     const value = readVarInSection(
       rendered,
       header,
-      "TAKOSUMI_ACCOUNTS_INSTALLER_URL",
+      "TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL",
     );
-    if (value !== installerUrl) return false;
+    if (value !== deployControlUrl) return false;
   }
   return true;
 }
@@ -424,7 +445,7 @@ const PRODUCTION_REQUIRED_VARS: readonly string[] = [
   "TAKOSUMI_ACCOUNTS_CLIENT_ID",
   "TAKOSUMI_ACCOUNTS_REDIRECT_URIS",
   "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS",
-  "TAKOSUMI_ACCOUNTS_INSTALLER_URL",
+  "TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL",
 ];
 
 function enforceProductionFacingVars(
@@ -512,8 +533,8 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({
     ok: true,
     output: options.output,
-    installerUrlConfigured: options.env === "local"
-      ? Boolean(options.installerUrl)
+    deployControlUrlConfigured: options.env === "local"
+      ? Boolean(options.deployControlUrl)
       : true,
     workersDev: options.workersDev,
     keepRoutes: options.keepRoutes,
@@ -527,7 +548,7 @@ function printHelp(): void {
 
 Options:
   --database-id <uuid>  D1 database UUID. Defaults to TAKOSUMI_ACCOUNTS_D1_DATABASE_ID.
-  --installer-url <url> Takosumi installer base URL. Defaults to TAKOSUMI_ACCOUNTS_INSTALLER_URL.
+  --deploy-control-url <url> Takosumi deployControl base URL. Defaults to TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL.
   --output <path>      Rendered wrangler config path.
   --workers-dev        Render for a closed Workers.dev bootstrap deploy.
   --workers-dev-with-routes

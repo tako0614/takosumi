@@ -3,10 +3,7 @@ import { KeyRound, ShieldAlert } from "lucide-solid";
 import { createSignal, Show } from "solid-js";
 import AppShell from "~/components/shell/AppShell";
 import AuthGuard from "~/components/auth/AuthGuard";
-import {
-  completePasskeyRegistration,
-  requestPasskeyRegisterOptions,
-} from "~/lib/api/passkey";
+import { rpc } from "~/lib/rpc";
 import {
   b64urlToBuf,
   bufToB64url,
@@ -39,7 +36,7 @@ function Inner(props: { subject: string }) {
       ) {
         throw new Error("このブラウザは WebAuthn に対応していません。");
       }
-      const opts = await requestPasskeyRegisterOptions(props.subject);
+      const opts = await rpc.auth.requestPasskeyRegisterOptions(props.subject);
       const pubKeyCredParams = opts.pubKeyCredParams?.map((param) => ({
         ...param,
       })) ?? [];
@@ -63,7 +60,7 @@ function Inner(props: { subject: string }) {
       const response = cred.response as AuthenticatorAttestationResponse;
       const jwk = coseToJwk(extractCosePublicKey(response.attestationObject));
 
-      await completePasskeyRegistration({
+      await rpc.auth.completePasskeyRegistration({
         subject: props.subject,
         credentialId: bufToB64url(cred.rawId),
         publicKeyJwk: jwk,

@@ -134,7 +134,7 @@ export interface TakosumiServiceDirectory {
  *
  * The `env` map is required and has no runtime default: this contract package
  * is published to JSR for cross-runtime consumption, so it does not read
- * `Deno.env` / `process.env` itself. The caller (operator distribution /
+ * runtime environment itself. The caller (operator distribution /
  * runtime adapter) is responsible for snapshotting the environment for its
  * runtime and passing it in.
  */

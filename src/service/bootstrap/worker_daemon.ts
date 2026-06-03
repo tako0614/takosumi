@@ -1,11 +1,10 @@
 import type { AppContext } from "../app_context.ts";
 import type { TakosumiProcessRole } from "../process/mod.ts";
-import type { RevokeDebtStore } from "../domains/deploy/revoke_debt_store.ts";
-import { RevokeDebtCleanupWorker } from "../domains/deploy/revoke_debt_cleanup_worker.ts";
+import type { RevokeDebtStore } from "../domains/deploy-records/revoke_debt_store.ts";
+import { RevokeDebtCleanupWorker } from "../domains/deploy-records/revoke_debt_cleanup_worker.ts";
 import type {
   TakosumiDeploymentRecordStore,
-} from "../domains/deploy/takosumi_deployment_record_store.ts";
-import { ApplyWorker, type ApplyWorkerJob } from "../workers/apply_worker.ts";
+} from "../domains/deploy-records/deployment_record_store.ts";
 import {
   NoopOutboxPublisher,
   OutboxDispatcher,
@@ -68,25 +67,10 @@ function createWorkerTasks(
   options: RoleWorkerDaemonOptions,
 ): readonly WorkerDaemonTask[] {
   if (options.role !== "takosumi-worker") return [];
-  // Product-neutral substrate default; the `takos.` namespace is a product ID
-  // that must not be baked into the Takosumi service (AGENTS.md). Operators
-  // override with TAKOSUMI_APPLY_QUEUE.
-  const applyQueue = options.runtimeEnv.TAKOSUMI_APPLY_QUEUE ??
-    "takosumi.deploy.apply";
   const intervalMs = positiveInteger(
     options.runtimeEnv.TAKOSUMI_WORKER_POLL_INTERVAL_MS,
     1_000,
   );
-  const visibilityTimeoutMs = positiveInteger(
-    options.runtimeEnv.TAKOSUMI_WORKER_VISIBILITY_TIMEOUT_MS,
-    30_000,
-  );
-  const applyWorker = new ApplyWorker({
-    store: options.context.stores.deploy.deploys,
-    deploymentService: options.context.services.deploy.deployments,
-    auditStore: options.context.stores.audit.events,
-    outboxStore: options.context.services.space.outbox,
-  });
   const outboxDispatcher = new OutboxDispatcher(
     options.context.services.space.outbox,
     new NoopOutboxPublisher(),
@@ -112,37 +96,6 @@ function createWorkerTasks(
   );
 
   return [
-    {
-      name: "apply",
-      intervalMs,
-      async tick() {
-        const lease = await options.context.adapters.queue.lease<
-          ApplyWorkerJob
-        >(
-          {
-            queue: applyQueue,
-            visibilityTimeoutMs,
-          },
-        );
-        if (!lease) return;
-        try {
-          await applyWorker.process(lease.message.payload);
-          await options.context.adapters.queue.ack({
-            queue: applyQueue,
-            messageId: lease.message.id,
-            leaseToken: lease.token,
-          });
-        } catch (error) {
-          await options.context.adapters.queue.nack({
-            queue: applyQueue,
-            messageId: lease.message.id,
-            leaseToken: lease.token,
-            reason: errorMessage(error),
-          });
-          throw error;
-        }
-      },
-    },
     {
       name: "outbox",
       intervalMs,

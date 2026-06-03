@@ -1,67 +1,66 @@
-# Quickstart {#quickstart}
+# Quickstart
 
-## Requirements
+Run a local Takosumi service and deploy a small OpenTofu module.
 
-- Node.js 20+ / npm or Bun
+## Prerequisites
 
-This guide verifies that a local Takosumi server can create an Installation and first Deployment from a source root.
+- Bun
+- OpenTofu CLI (`tofu`)
+- Git
 
-## Install the CLI
-
-```bash
-npm install -g @takosjp/takosumi
-takosumi version
-```
-
-## Create a source root
+## Start the service
 
 ```bash
-mkdir hello-takosumi && cd hello-takosumi
-printf '{"name":"hello-takosumi","version":"0.1.0"}\n' > package.json
+cd takosumi
+bun install
+
+export TAKOSUMI_DEV_MODE=1
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
+bun src/cli/main.ts server --port 8788
 ```
 
-`package.json` is generic repository metadata, not Takosumi-specific metadata.
-
-## Start a local server
-
-In another shell:
+In another terminal:
 
 ```bash
-export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
-TAKOSUMI_DEV_MODE=1 takosumi server --port 8788
+cd takosumi
+export TAKOSUMI_REMOTE_URL=http://127.0.0.1:8788
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
 ```
 
-Back in the source shell:
+## Create a module
 
 ```bash
-export APP_ROOT="$PWD"
-export TAKOSUMI_REMOTE_URL=http://localhost:8788
-export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
+mkdir -p /tmp/hello-takosumi
+cd /tmp/hello-takosumi
+
+cat > main.tf <<'EOF'
+terraform {
+  required_version = ">= 1.6.0"
+}
+
+output "launch_url" {
+  value = "https://example.test"
+}
+EOF
+
+git init
+git add main.tf
+git commit -m "initial OpenTofu module"
 ```
 
-## Dry-run
+## Plan and apply
 
 ```bash
-takosumi install dry-run --space space_personal --source "$APP_ROOT"
+cd takosumi
+bun src/cli/main.ts plan /tmp/hello-takosumi \
+  --space space_personal \
+  --remote "$TAKOSUMI_REMOTE_URL" \
+  --token "$TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+
+bun src/cli/main.ts install /tmp/hello-takosumi \
+  --space space_personal \
+  --remote "$TAKOSUMI_REMOTE_URL" \
+  --token "$TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-The response contains `installPlan`, `planSnapshotDigest`, `changes[]`, and `expected`.
-
-## Apply
-
-```bash
-takosumi install --space space_personal --source "$APP_ROOT"
-```
-
-To apply the reviewed dry-run:
-
-```bash
-takosumi install --space space_personal --source "$APP_ROOT" \
-  --expected-plan-snapshot-digest sha256:<copied-from-dry-run>
-```
-
-## Next
-
-- [Installer API](../reference/installer-api.md)
-- [CLI](../reference/cli.md)
-- [Platform Services](../reference/platform-services.md)
+The CLI builds the ApplyRun expected guard from the PlanRun response.

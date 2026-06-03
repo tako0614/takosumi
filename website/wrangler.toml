@@ -1,12 +1,8 @@
 # Cloudflare Pages project configuration for the takosumi.com property.
 #
-# Wave M-G (= ecosystem 2026-05-20、 architectural restructure):
 # This is the SINGLE Pages project that serves the entire takosumi.com
 # property — landing at `/`, VitePress docs at `/docs/*`, and the
-# JSON-LD context catalog at `/contexts/*`. The legacy `takosumi-site`
-# Pages project (vanilla HTML at `takosumi/site/`) and the legacy
-# `takosumi-docs` Pages project (`docs.takosumi.com` subdomain) are
-# both superseded.
+# JSON-LD contexts at `/contexts/*`.
 #
 # `website/build.sh` produces the merged `.output/public/` artifact
 # (Solid Start landing + VitePress dist overlaid under `/docs/` +
@@ -22,22 +18,10 @@
 #   - Custom domains `takosumi.com` and `www.takosumi.com` attached
 #     to the Pages project.
 #
-# Operator-side cleanup of superseded resources (= one-time, after this
-# wave is deployed; see DEPLOY.md §"Cleanup of legacy Pages projects"):
-#   - Detach `docs.takosumi.com` custom domain from the legacy
-#     `takosumi-docs` Pages project and delete the project.
-#   - Detach `takosumi.com` / `www.takosumi.com` from the legacy
-#     `takosumi-site` Pages project (if previously deployed) and
-#     delete the project. Re-attach the custom domains to the new
-#     `takosumi-website` Pages project.
-#
 # Once active, the property is reachable at:
 #   - https://takosumi.com/                      (landing)
 #   - https://takosumi.com/docs/                 (VitePress docs)
 #   - https://takosumi.com/contexts/v1.jsonld    (JSON-LD vocab)
-#   - https://takosumi.com/contexts/kinds/v1/<name>.jsonld (kind docs)
-#   - https://takosumi.com/kinds/v1/<name>       (canonical kind descriptor URI)
-#   - https://takosumi.com/kinds/v1/<name>.jsonld (explicit JSON-LD descriptor)
 # The default `takosumi-website.pages.dev` host stays available for
 # preview deploys.
 name = "takosumi-website"

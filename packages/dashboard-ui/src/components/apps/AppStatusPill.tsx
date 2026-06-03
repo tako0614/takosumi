@@ -4,7 +4,7 @@ interface Props {
 }
 
 // Aligned with the canonical contract enum
-// (`TakosumiAppInstallationStatus`). Wave 6 removed the legacy
+// (`TakosumiAppInstallationStatus`). Wave 6 removed the former
 // `uninstalling` / `uninstalled` / `error` states; the canonical list is
 // `installing` / `ready` / `failed` / `suspended` / `exported`.
 const LABEL: Record<string, string> = {

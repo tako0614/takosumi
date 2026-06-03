@@ -1,9 +1,6 @@
 import type { Context, Hono as HonoApp } from "hono";
 import {
   type ActorContext,
-  type Deployment,
-  type DeploymentInput,
-  type DeploymentStatus,
   type InternalGroupRequest,
   type InternalGroupSummary,
   type InternalSpaceRequest,
@@ -16,11 +13,6 @@ import type { WorkerAuthzService } from "../services/security/mod.ts";
 import { DomainError } from "../shared/errors.ts";
 import { currentRuntime } from "../shared/runtime/index.ts";
 import { findNonCatalogConditionReasons } from "./condition_reasons.ts";
-import type {
-  DeploymentEnvelope,
-  DeploymentExpansionSummary,
-  DeploymentRouteService,
-} from "./deployment_route_types.ts";
 import { apiError, readJsonObject, registerApiErrorHandler } from "./errors.ts";
 import { type InternalAuthResult, readInternalAuth } from "./internal_auth.ts";
 
@@ -35,41 +27,6 @@ export interface MutationBoundaryEntitlementService {
 
 export interface InternalRouteServices {
   readonly space: ReturnType<typeof createSpaceDomainServices>;
-  readonly deployments: DeploymentRouteService;
-  readonly planService: {
-    createPlan(input: {
-      spaceId: string;
-      manifest: unknown;
-      env?: string;
-      envName?: string;
-      input?: DeploymentInput;
-    }): Promise<unknown>;
-    getDeployment?(id: string): Promise<unknown>;
-    listDeployments?(filter: {
-      readonly spaceId?: string;
-      readonly groupId?: string;
-      readonly status?: string;
-    }): Promise<readonly unknown[]>;
-  };
-  readonly applyService: {
-    applySourcePayload(input: {
-      spaceId: string;
-      manifest: unknown;
-      input?: DeploymentInput;
-      envName?: string;
-      createdBy: string;
-      actor: unknown;
-    }): Promise<unknown>;
-    applyDeployment?(input: {
-      readonly deploymentId: string;
-    }): Promise<unknown>;
-    rollbackToDeployment?(input: {
-      readonly spaceId: string;
-      readonly groupId: string;
-      readonly targetDeploymentId: string;
-      readonly reason?: string;
-    }): Promise<unknown>;
-  };
   readonly security?: WorkerAuthzService;
   readonly entitlements?: MutationBoundaryEntitlementService;
 }
@@ -84,7 +41,7 @@ export function registerInternalRoutes(
   options: RegisterInternalRoutesOptions,
 ): void {
   registerApiErrorHandler(app);
-  const { space, deployments } = options.services;
+  const { space } = options.services;
   const getInternalServiceSecret = options.getInternalServiceSecret ??
     (() => currentRuntime().env.get("TAKOSUMI_INTERNAL_API_SECRET"));
 
@@ -218,92 +175,6 @@ export function registerInternalRoutes(
     return c.json({ group: summary }, 201);
   });
 
-  app.post(TAKOSUMI_INTERNAL_PATHS.deployments, async (c) => {
-    const auth = await readInternalAuth(c.req.raw, {
-      secret: getInternalServiceSecret(),
-    });
-    if (!auth.ok) return internalAuthError(c, auth);
-    const request = await readJsonObject(c.req.raw) as {
-      spaceId?: string;
-      envName?: string;
-      group?: string;
-      manifest: unknown;
-    };
-    const spaceId = request.spaceId ?? auth.actor.spaceId;
-    if (!spaceId) {
-      return c.json(apiError("invalid_argument", "spaceId is required"), 400);
-    }
-    const groupId = optionalString(request.group) ??
-      groupIdFromSourcePayload(request.manifest);
-    const authorization = await authorizeInternalServiceCall({
-      auth,
-      services: options.services,
-      spaceId,
-      groupId,
-      serviceGrantPermission: "deploy.plan",
-      entitlementOperation: "deploy.plan",
-    });
-    if (!authorization.ok) {
-      return c.json(
-        authorization.body,
-        authorization.status,
-      );
-    }
-    const result = await deployments.resolveDeployment({
-      actor: auth.actor,
-      mode: "resolve",
-      space_id: spaceId,
-      group: groupId,
-      env: optionalString(request.envName),
-      manifest: request.manifest,
-    });
-    assertCatalogConditionReasons(result, "internal deployment resolve");
-    return c.json(toMutationResponse(result), 201);
-  });
-
-  app.post(TAKOSUMI_INTERNAL_PATHS.deploymentApply, async (c) => {
-    const auth = await readInternalAuth(c.req.raw, {
-      secret: getInternalServiceSecret(),
-    });
-    if (!auth.ok) return internalAuthError(c, auth);
-    const request = await readJsonObject(c.req.raw) as {
-      spaceId?: string;
-      space_id?: string;
-    };
-    const deploymentId = c.req.param("deploymentId");
-    const deployment = await deployments.getDeployment({
-      actor: auth.actor,
-      deploymentId,
-    });
-    if (!deployment) {
-      return c.json(apiError("not_found", "deployment not found"), 404);
-    }
-    const requestedSpaceId = optionalString(request.spaceId) ??
-      optionalString(request.space_id) ?? auth.actor.spaceId;
-    if (requestedSpaceId && requestedSpaceId !== deployment.space_id) {
-      return c.json(apiError("not_found", "deployment not found"), 404);
-    }
-    const authorization = await authorizeInternalServiceCall({
-      auth,
-      services: options.services,
-      spaceId: deployment.space_id,
-      groupId: deployment.group_id,
-      serviceGrantPermission: "deploy.apply",
-      entitlementOperation: "deploy.apply",
-    });
-    if (!authorization.ok) {
-      return c.json(
-        authorization.body,
-        authorization.status,
-      );
-    }
-    const result = await deployments.applyResolved({
-      actor: auth.actor,
-      deploymentId,
-    });
-    assertCatalogConditionReasons(result, "internal deployment apply");
-    return c.json(toMutationResponse(result), 201);
-  });
 }
 
 interface AuthorizeInternalServiceCallInput {
@@ -328,20 +199,6 @@ type AuthorizationResponse =
       };
     };
   };
-
-function toMutationResponse(envelope: DeploymentEnvelope): {
-  readonly deployment_id: string;
-  readonly status: DeploymentStatus;
-  readonly conditions: Deployment["conditions"];
-  readonly expansion_summary?: DeploymentExpansionSummary;
-} {
-  return {
-    deployment_id: envelope.deployment.id,
-    status: envelope.deployment.status,
-    conditions: envelope.deployment.conditions,
-    expansion_summary: envelope.expansion_summary,
-  };
-}
 
 async function authorizeInternalServiceCall(
   input: AuthorizeInternalServiceCallInput,
@@ -447,14 +304,6 @@ function isJsonValue(value: unknown): value is JsonObject[keyof JsonObject] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function groupIdFromSourcePayload(manifest: unknown): string | undefined {
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    return undefined;
-  }
-  const name = (manifest as { name?: unknown }).name;
-  return typeof name === "string" && name.length > 0 ? name : undefined;
 }
 
 function assertCatalogConditionReasons(value: unknown, surface: string): void {

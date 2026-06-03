@@ -3,16 +3,18 @@ export interface Chip {
   readonly hint?: string;
 }
 
+// Top layer of the map = examples of what gets deployed ON Takosumi. Lead with
+// generic workloads so the "（例）" framing matches the chips; the Takos family
+// appears as a clearly-tagged representative subset, not the dominant majority.
 export const APPS: readonly Chip[] = [
-  { label: "takos", hint: "chat" },
-  { label: "takos-docs", hint: "wiki" },
-  { label: "takos-slide", hint: "deck" },
-  { label: "takos-excel", hint: "sheet" },
-  { label: "takos-computer", hint: "sandbox" },
-  { label: "takos-agent", hint: "AI" },
-  { label: "yurucommu", hint: "social" },
-  { label: "road-to-me", hint: "coach" },
-  { label: "あなたの app", hint: "custom" },
+  { label: "あなたの module", hint: "Git URL" },
+  { label: "web / API", hint: "http" },
+  { label: "worker / cron", hint: "jobs" },
+  { label: "静的サイト", hint: "docs" },
+  { label: "takos", hint: "chat (例)" },
+  { label: "takos-docs", hint: "wiki (例)" },
+  { label: "yurucommu", hint: "social (例)" },
+  { label: "road-to-me", hint: "coach (例)" },
 ];
 
 export const PROVIDERS: readonly Chip[] = [
@@ -20,14 +22,13 @@ export const PROVIDERS: readonly Chip[] = [
   { label: "AWS", hint: "Fargate / S3 / RDS" },
   { label: "GCP", hint: "Cloud Run / GCS" },
   { label: "Kubernetes", hint: "any cluster" },
-  { label: "Deno Deploy", hint: "edge" },
   { label: "Single-host", hint: "docker / systemd" },
 ];
 
 export const SUBSTRATE = {
   label: "Takosumi",
   description:
-    "共通 source-to-deployment substrate。Source / Installation / Deployment を cloud、VM、cluster、管理サービスへ apply。",
+    "OpenTofu-native deploy control plane。PlanRun / ApplyRun / DeploymentOutput を cloud、VM、cluster、管理サービスへ記録。",
 };
 
 export const ACCOUNTS = {

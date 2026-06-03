@@ -1,9 +1,9 @@
 /**
  * Keeps the local-substrate dynamic Caddy route partition healthy.
  *
- * The old implementation polled the removed legacy deployment route
+ * The old implementation polled the removed deployment route
  * (`/v1/deployments`) for `desired.routes[]`. Takosumi v1's public surface is
- * now the installer API; it intentionally does not expose a deployment list.
+ * now the deploy control API; it intentionally does not expose a deployment list.
  * The postgres-profile service wrapper writes a local operator projection file
  * whenever the CoreDNS gateway adapter applies a gateway component. This
  * process reads that local projection and turns it into Caddy routes.

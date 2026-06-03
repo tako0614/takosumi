@@ -4,7 +4,7 @@
  * Phase 18.3 (M4) hardens the service's internal API against cross-process /
  * cross-pod replay. Process-local memory only protects a single Takosumi process;
  * when the service runs as a multi-replica deploy (k8s pods,
- * Cloudflare Worker isolates, multiple Deno hosts behind a load balancer)
+ * Cloudflare Worker isolates, multiple Bun/Node hosts behind a load balancer)
  * the same signed `request-id` could be replayed against a sibling process
  * that has not yet observed it.
  *

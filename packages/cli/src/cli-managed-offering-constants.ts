@@ -164,7 +164,7 @@ export const managedOfferingRequiredEvidenceTypes = {
       "secret-inventory",
       "secret-rotation-run-log",
       "security-contact",
-      "installer-abuse-blocked",
+      "deploy-control-abuse-blocked",
     ],
     "legal-privacy-support": [
       "legal-signoff",
@@ -197,7 +197,7 @@ export const managedOfferingRequiredEvidenceTypes = {
       "default-app-reinstall",
     ],
     "git-url-install": [
-      "installation-dry-run",
+      "installation-plan-run",
       "cost-review",
       "install-apply",
       "oidc-login",
@@ -585,7 +585,7 @@ export const managedOfferingStructuredEvidenceRequirements: Record<
     fields: ["contactTestId", "result"],
     allowedValues: { result: ["delivered"] },
   },
-  "installer-abuse-blocked": {
+  "deploy-control-abuse-blocked": {
     fields: ["scenarioId", "blockEventId", "policyRef"],
   },
   "dashboard-link": {
@@ -658,18 +658,18 @@ export const managedOfferingStructuredEvidenceRequirements: Record<
   "default-app-uninstall": {
     fields: ["spaceId", "appId", "uninstallEventId"],
   },
-  "installation-dry-run": {
-    fields: ["sourceUrl", "commitSha", "planSnapshotDigest"],
+  "installation-plan-run": {
+    fields: ["sourceUrl", "commitSha", "planDigest"],
   },
   "cost-review": {
-    fields: ["planSnapshotDigest", "costEstimateId", "approvedBy"],
+    fields: ["planDigest", "costEstimateId", "approvedBy"],
   },
   "install-apply": {
     fields: [
       "installationId",
       "deploymentId",
       "applyEventId",
-      "planSnapshotDigest",
+      "planDigest",
     ],
   },
   "oidc-login": {
@@ -800,21 +800,16 @@ export const managedOfferingStructuredEvidenceRequirements: Record<
 export const productionTopologyRequiredRoles = [
   "accounts",
   "dashboard",
-  "takosumi-installer",
+  "takosumi-deploy-control",
   "service",
-  "shared-cell-runtime",
   "object-storage",
   "dns-tls",
-  "queue",
-  "background-worker",
 ] as const;
 export const productionTopologyDeployableRoles = new Set([
   "accounts",
   "dashboard",
-  "takosumi-installer",
+  "takosumi-deploy-control",
   "service",
-  "shared-cell-runtime",
-  "background-worker",
 ]);
 
 export type ManagedOfferingEvidenceStatus = "passed" | "failed" | "blocked";

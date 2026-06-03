@@ -5,7 +5,7 @@ import {
   normalizeIssuer,
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
   TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
-  TAKOSUMI_ACCOUNTS_INSTALLATION_DRY_RUN_PATH,
+  TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH,
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH,
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
   TAKOSUMI_ACCOUNTS_INTROSPECT_PATH,
@@ -22,7 +22,6 @@ import {
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
   TAKOSUMI_ACCOUNTS_USERINFO_PATH,
-  type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 
 export type {
@@ -58,17 +57,9 @@ import {
 import type { SharedCellRuntimeAllocator } from "./runtime.ts";
 import type { UpstreamOAuthProvider } from "./upstream.ts";
 import {
-  handleDashboardInstall,
-  handleDashboardInstallApply,
-  handleDashboardInstallationDetail,
-  handleDashboardInstallations,
-  handleDashboardRequestExport,
-  handleDashboardRequestMaterialize,
-} from "./dashboard-routes.ts";
-import {
   handleCreateAppInstallation,
   handleDownloadAppInstallationExport,
-  handleDryRunAppInstallationDeployment,
+  handlePlanAppInstallationDeployment,
   handleGetAppInstallationExportOperation,
   handleImportAppInstallation,
   handleReportInstallationBillingUsage,
@@ -82,7 +73,6 @@ import {
   handleGetAppInstallation,
   handleListAppInstallations,
   handleListInstallationEvents,
-  subjectCanAccessAccount,
 } from "./installation-routes.ts";
 import { signEs256Jwt } from "./jwt.ts";
 import {
@@ -123,16 +113,14 @@ import {
   upstreamOAuthNotConfigured,
 } from "./upstream-oauth-routes.ts";
 import {
-  type DashboardInstallationRoute,
   type InstallationRoute,
   matchAccountTokenRevokeRoute,
-  matchDashboardInstallationRoute,
   matchInstallationRoute,
 } from "./route-matchers.ts";
 import {
-  handleInstallationDryRunProxy,
-  type InstallerProxyOptions,
-} from "./installer-proxy.ts";
+  handleInstallationPlanRunProxy,
+  type DeployControlProxyOptions,
+} from "./deploy-control-proxy.ts";
 import {
   isWorkloadPlatformServiceResolveContext,
   resolveTakosumiWorkloadPlatformService,
@@ -142,7 +130,6 @@ import {
   managedOfferingAccessBlocked,
   type ManagedOfferingAccessPolicy,
   managedOfferingGuardedCoreAccessRoute,
-  managedOfferingGuardedDashboardMutation,
   managedOfferingGuardedInstallationMutation,
   managedOfferingReadyStatusPatchBlocked,
 } from "./managed-offering-policy.ts";
@@ -150,17 +137,17 @@ import {
   requireAppInstallationAccountAccess,
   requireAppInstallationCreateWriteAccess,
   requireAppInstallationImportWriteAccess,
-  requireInstallationDryRunWriteAccess,
+  requireInstallationPlanRunWriteAccess,
 } from "./installation-auth.ts";
 
 export {
   requestDeploymentApply,
-  requestDeploymentDryRun,
+  requestDeploymentPlanRun,
   requestInstallationApply,
-  requestInstallationDryRun,
+  requestInstallationPlanRun,
   requestRollback,
-} from "./installer-proxy.ts";
-export type { InstallerProxyOptions } from "./installer-proxy.ts";
+} from "./deploy-control-proxy.ts";
+export type { DeployControlProxyOptions } from "./deploy-control-proxy.ts";
 export {
   createOpenManagedOfferingAccessPolicy,
 } from "./managed-offering-policy.ts";
@@ -232,7 +219,7 @@ export interface AccountsHandlerOptions {
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
   launchTokens?: LaunchTokenOptions;
-  installer?: InstallerProxyOptions;
+  deployControl?: DeployControlProxyOptions;
   bindingMaterializer?: AppBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
@@ -267,7 +254,7 @@ export interface EphemeralAccountsHandlerOptions {
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
   launchTokens?: EphemeralLaunchTokenOptions;
-  installer?: InstallerProxyOptions;
+  deployControl?: DeployControlProxyOptions;
   bindingMaterializer?: AppBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
@@ -301,7 +288,7 @@ export interface WorkloadPlatformServiceResolverHttpOptions {
   readonly token: string;
   readonly billingPortalUrl?: string;
   readonly internalUrl?: string;
-  readonly allowDirectInstallerInstallations?: boolean;
+  readonly allowDeployControlInstallations?: boolean;
 }
 
 export interface AccountsServerOptions extends AccountsHandlerOptions {
@@ -519,11 +506,6 @@ export interface EphemeralLaunchTokenOptions {
 
 export const TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_SUFFIX = "/launch-token";
 export const TAKOSUMI_ACCOUNTS_USE_TAKOS_PATH = "/start";
-export const TAKOSUMI_ACCOUNTS_DASHBOARD_INSTALL_PATH = "/dashboard/install";
-export const TAKOSUMI_ACCOUNTS_DASHBOARD_USE_TAKOS_PATH =
-  "/dashboard/use-takos";
-export const TAKOSUMI_ACCOUNTS_DASHBOARD_INSTALLATIONS_PATH =
-  "/dashboard/installations";
 
 const emptyJwks: JsonWebKeySet = { keys: [] };
 
@@ -571,7 +553,7 @@ export async function createEphemeralAccountsHandler(
     stripeBilling: options.stripeBilling,
     upstreamOAuth: options.upstreamOAuth,
     passkeys: options.passkeys,
-    installer: options.installer,
+    deployControl: options.deployControl,
     bindingMaterializer: options.bindingMaterializer,
     sharedCellRuntime: options.sharedCellRuntime,
     materializeWorker: options.materializeWorker,
@@ -675,8 +657,8 @@ export function createAccountsHandler(
         issuer,
         internalUrl: options.workloadPlatformServices.internalUrl,
         billingPortalUrl: options.workloadPlatformServices.billingPortalUrl,
-        allowDirectInstallerInstallations:
-          options.workloadPlatformServices.allowDirectInstallerInstallations,
+        allowDeployControlInstallations:
+          options.workloadPlatformServices.allowDeployControlInstallations,
         context: body,
       });
       if (Array.isArray(material)) {
@@ -912,33 +894,30 @@ export function createAccountsHandler(
       });
     }
 
-    if (url.pathname === TAKOSUMI_ACCOUNTS_INSTALLATION_DRY_RUN_PATH) {
+    if (url.pathname === TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
       const blocked = managedOfferingAccessBlocked(
         options.managedOfferingAccess,
       );
       if (blocked) return blocked;
-      const authBlocked = await requireInstallationDryRunWriteAccess({
+      const authBlocked = await requireInstallationPlanRunWriteAccess({
         request: request.clone(),
         store,
       });
       if (authBlocked) return authBlocked;
-      if (!options.installer) {
+      if (!options.deployControl) {
         return json({
           error: "feature_unavailable",
-          error_description: "Installation dry-run is temporarily unavailable.",
+          error_description: "Installation PlanRun is temporarily unavailable.",
         }, 503);
       }
-      return await handleInstallationDryRunProxy({
+      return await handleInstallationPlanRunProxy({
         request,
-        installer: options.installer,
+        deployControl: options.deployControl,
       });
     }
 
-    if (
-      url.pathname === TAKOSUMI_ACCOUNTS_USE_TAKOS_PATH ||
-      url.pathname === TAKOSUMI_ACCOUNTS_DASHBOARD_USE_TAKOS_PATH
-    ) {
+    if (url.pathname === TAKOSUMI_ACCOUNTS_USE_TAKOS_PATH) {
       if (request.method !== "GET") return methodNotAllowed("GET");
       const blocked = managedOfferingAccessBlocked(
         options.managedOfferingAccess,
@@ -954,106 +933,6 @@ export function createAccountsHandler(
         bindingMaterializer: options.bindingMaterializer,
         sharedCellRuntime: options.sharedCellRuntime,
       });
-    }
-
-    if (url.pathname === TAKOSUMI_ACCOUNTS_DASHBOARD_INSTALL_PATH) {
-      if (request.method === "GET") {
-        if (dashboardInstallationDryRunRequested(url)) {
-          const blocked = managedOfferingAccessBlocked(
-            options.managedOfferingAccess,
-          );
-          if (blocked) return blocked;
-        }
-        const authBlocked = await requireDashboardInstallAccess({
-          request,
-          url,
-          store,
-        });
-        if (authBlocked) return authBlocked;
-        return await handleDashboardInstall({
-          url,
-          installer: options.installer,
-        });
-      }
-      if (request.method === "POST") {
-        const blocked = managedOfferingAccessBlocked(
-          options.managedOfferingAccess,
-        );
-        if (blocked) return blocked;
-        const authBlocked = await requireDashboardInstallAccess({
-          request: request.clone(),
-          url,
-          store,
-        });
-        if (authBlocked) return authBlocked;
-        return await handleDashboardInstallApply({
-          request,
-          installer: options.installer,
-        });
-      }
-      return methodNotAllowed("GET, POST");
-    }
-
-    if (url.pathname === TAKOSUMI_ACCOUNTS_DASHBOARD_INSTALLATIONS_PATH) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      const authBlocked = await requireDashboardInstallationsListAccess({
-        request,
-        url,
-        store,
-      });
-      if (authBlocked) return authBlocked;
-      return await handleDashboardInstallations({ url, store });
-    }
-
-    const dashboardRoute = matchDashboardInstallationRoute(url.pathname);
-    if (dashboardRoute) {
-      if (
-        managedOfferingGuardedDashboardMutation(
-          dashboardRoute.kind,
-          request.method,
-        )
-      ) {
-        const blocked = managedOfferingAccessBlocked(
-          options.managedOfferingAccess,
-        );
-        if (blocked) return blocked;
-      }
-      const accountAccess = dashboardInstallationRouteAccountAccess(
-        dashboardRoute,
-        request.method,
-      );
-      if (accountAccess) {
-        const authBlocked = await requireAppInstallationAccountAccess({
-          request,
-          store,
-          installationId: dashboardRoute.installationId,
-          scope: accountAccess,
-        });
-        if (authBlocked) return authBlocked;
-      }
-      if (dashboardRoute.kind === "detail" && request.method === "GET") {
-        return await handleDashboardInstallationDetail({
-          installationId: dashboardRoute.installationId,
-          store,
-        });
-      }
-      if (dashboardRoute.kind === "materialize" && request.method === "POST") {
-        return await handleDashboardRequestMaterialize({
-          installationId: dashboardRoute.installationId,
-          request,
-          store,
-          materializeWorker: options.materializeWorker,
-        });
-      }
-      if (dashboardRoute.kind === "export" && request.method === "POST") {
-        return await handleDashboardRequestExport({
-          installationId: dashboardRoute.installationId,
-          request,
-          store,
-          exportWorker: options.exportWorker,
-        });
-      }
-      return methodNotAllowed("GET, POST");
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH) {
@@ -1073,7 +952,7 @@ export function createAccountsHandler(
           request,
           store,
           issuer,
-          installer: options.installer,
+          deployControl: options.deployControl,
           launchTokens: options.launchTokens,
           bindingMaterializer: options.bindingMaterializer,
           sharedCellRuntime: options.sharedCellRuntime,
@@ -1174,14 +1053,14 @@ export function createAccountsHandler(
         });
       }
       if (
-        installationRoute.kind === "deployment-dry-run" &&
+        installationRoute.kind === "deployment-plan-run" &&
         request.method === "POST"
       ) {
-        return await handleDryRunAppInstallationDeployment({
+        return await handlePlanAppInstallationDeployment({
           installationId: installationRoute.installationId,
           request,
           store,
-          installer: options.installer,
+          deployControl: options.deployControl,
         });
       }
       if (
@@ -1192,7 +1071,7 @@ export function createAccountsHandler(
           operation: "deployment",
           request,
           store,
-          installer: options.installer,
+          deployControl: options.deployControl,
         });
       }
       if (installationRoute.kind === "rollback" && request.method === "POST") {
@@ -1201,7 +1080,7 @@ export function createAccountsHandler(
           operation: "rollback",
           request,
           store,
-          installer: options.installer,
+          deployControl: options.deployControl,
         });
       }
       if (
@@ -1547,7 +1426,7 @@ function installationRouteAccountAccess(
   }
   if (
     (route.kind === "deployment" ||
-      route.kind === "deployment-dry-run" ||
+      route.kind === "deployment-plan-run" ||
       route.kind === "rollback" ||
       route.kind === "materialize" ||
       route.kind === "export") &&
@@ -1564,116 +1443,4 @@ function installationRouteAccountAccess(
     return "read";
   }
   return undefined;
-}
-
-function dashboardInstallationRouteAccountAccess(
-  route: DashboardInstallationRoute,
-  method: string,
-): "read" | "write" | undefined {
-  if (route.kind === "detail") return method === "GET" ? "read" : undefined;
-  if (
-    method === "POST" &&
-    (route.kind === "materialize" || route.kind === "export")
-  ) {
-    return "write";
-  }
-  return undefined;
-}
-
-async function requireDashboardInstallAccess(input: {
-  request: Request;
-  url: URL;
-  store: AccountsStore;
-}): Promise<Response | undefined> {
-  const session = await requireAccountSession({
-    request: input.request,
-    store: input.store,
-  });
-  if (!session.ok) return session.response;
-  const spaceId = input.request.method === "POST"
-    ? await dashboardInstallSpaceIdFromForm(input.request)
-    : dashboardInstallSpaceIdFromUrl(input.url);
-  if (!spaceId) return undefined;
-  return await requireDashboardSpaceAccess({
-    store: input.store,
-    subject: session.subject,
-    spaceId,
-  });
-}
-
-async function requireDashboardInstallationsListAccess(input: {
-  request: Request;
-  url: URL;
-  store: AccountsStore;
-}): Promise<Response | undefined> {
-  const session = await requireAccountSession({
-    request: input.request,
-    store: input.store,
-  });
-  if (!session.ok) return session.response;
-  const spaceId = input.url.searchParams.get("space_id") ??
-    input.url.searchParams.get("spaceId");
-  if (!spaceId) return undefined;
-  return await requireDashboardSpaceAccess({
-    store: input.store,
-    subject: session.subject,
-    spaceId,
-  });
-}
-
-async function requireDashboardSpaceAccess(input: {
-  store: AccountsStore;
-  subject: TakosumiSubject;
-  spaceId: string;
-}): Promise<Response | undefined> {
-  const space = await input.store.findSpace(input.spaceId);
-  if (!space) return json({ error: "space_not_found" }, 404);
-  if (
-    !await subjectCanAccessAccount(
-      input.store,
-      input.subject,
-      space.accountId,
-    )
-  ) {
-    return json({ error: "space_not_found" }, 404);
-  }
-  return undefined;
-}
-
-function dashboardInstallSpaceIdFromUrl(url: URL): string | undefined {
-  return nonEmptyString(
-    url.searchParams.get("space_id") ??
-      url.searchParams.get("spaceId") ??
-      url.searchParams.get("space"),
-  );
-}
-
-async function dashboardInstallSpaceIdFromForm(
-  request: Request,
-): Promise<string | undefined> {
-  try {
-    const formData = await request.formData();
-    return nonEmptyString(
-      formData.get("space_id") ??
-        formData.get("spaceId") ??
-        formData.get("space"),
-    );
-  } catch {
-    return undefined;
-  }
-}
-
-function nonEmptyString(
-  value: FormDataEntryValue | string | null,
-): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function dashboardInstallationDryRunRequested(url: URL): boolean {
-  return Boolean(
-    url.searchParams.get("git")?.trim() ||
-      url.searchParams.get("gitUrl")?.trim() ||
-      url.searchParams.get("git_url")?.trim() ||
-      url.searchParams.get("ref")?.trim(),
-  );
 }

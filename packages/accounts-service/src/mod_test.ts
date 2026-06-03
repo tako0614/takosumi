@@ -16,7 +16,6 @@ import { type AccountsStore, InMemoryAccountsStore } from "./store.ts";
 import { handleUserInfo } from "./oidc-routes.ts";
 import {
   type InstallationRoute,
-  matchDashboardInstallationRoute,
   matchInstallationRoute,
 } from "./route-matchers.ts";
 
@@ -147,56 +146,6 @@ async function appInstallationAuthSubjectForTest(
     );
     return installation.createdBySubject;
   }
-  const dashboardRoute = matchDashboardInstallationRoute(url.pathname);
-  if (dashboardRoute) {
-    const installation = await store.findAppInstallation(
-      dashboardRoute.installationId,
-    );
-    if (!installation) return undefined;
-    await ensureLedgerAccountForTest(
-      store,
-      installation.accountId,
-      installation.createdBySubject,
-    );
-    return installation.createdBySubject;
-  }
-  if (
-    url.pathname === "/dashboard/installations" && request.method === "GET"
-  ) {
-    const spaceId = url.searchParams.get("space_id") ??
-      url.searchParams.get("spaceId");
-    if (!spaceId) return undefined;
-    const space = await store.findSpace(spaceId);
-    return space
-      ? (await store.findLedgerAccount(space.accountId))?.legalOwnerSubject
-      : undefined;
-  }
-  if (url.pathname === "/dashboard/install") {
-    const spaceId = request.method === "POST"
-      ? await dashboardSpaceIdForTest(request.clone())
-      : url.searchParams.get("space_id") ??
-        url.searchParams.get("spaceId") ??
-        url.searchParams.get("space");
-    if (!spaceId) return undefined;
-    const space = await store.findSpace(spaceId);
-    return space
-      ? (await store.findLedgerAccount(space.accountId))?.legalOwnerSubject
-      : undefined;
-  }
-}
-
-async function dashboardSpaceIdForTest(
-  request: Request,
-): Promise<string | undefined> {
-  try {
-    const formData = await request.formData();
-    const value = formData.get("space_id") ??
-      formData.get("spaceId") ??
-      formData.get("space");
-    return typeof value === "string" && value.trim() ? value.trim() : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function testInstallationRouteNeedsAccountBearer(
@@ -210,7 +159,7 @@ function testInstallationRouteNeedsAccountBearer(
   if (
     method === "POST" &&
     (kind === "deployment" ||
-      kind === "deployment-dry-run" ||
+      kind === "deployment-plan-run" ||
       kind === "rollback" ||
       kind === "materialize" ||
       kind === "export")
@@ -321,7 +270,7 @@ async function testRevisionPermissionDigest(input: {
   sourceGitUrl: string;
   sourceRef: string;
   sourceCommit: string;
-  planSnapshotDigest: string;
+  planDigest: string;
   artifactDigest?: string | null;
   requestedBindings?: readonly Record<string, unknown>[];
   requestedGrants?: readonly Record<string, unknown>[];
@@ -337,7 +286,7 @@ async function testRevisionPermissionDigest(input: {
       ),
       ref: input.sourceRef,
       commit: input.sourceCommit,
-      planSnapshotDigest: input.planSnapshotDigest,
+      planDigest: input.planDigest,
       artifactDigest: input.artifactDigest ?? null,
     },
     requestedBindings: [...(input.requestedBindings ?? [])].sort(
@@ -430,7 +379,7 @@ test("accounts handler does not expose a service descriptor anchor", async () =>
   expect(response.status).toEqual(404);
 });
 
-test("accounts handler proxies installation dry-run to installer", async () => {
+test("accounts handler proxies installation PlanRun to deployControl", async () => {
   const proxiedRequests: Request[] = [];
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(store, "tsub_owner", "acct_space_1", "space_1");
@@ -438,11 +387,43 @@ test("accounts handler proxies installation dry-run to installer", async () => {
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
-    installer: {
+    deployControl: {
       url: "http://takosumi.internal:8788",
-      token: "installer-secret",
+      token: "deploy-control-secret",
       fetch: (input, init) => {
-        proxiedRequests.push(new Request(input, init));
+        const request = new Request(input, init);
+        proxiedRequests.push(request);
+        if (new URL(request.url).pathname === "/v1/plan-runs/plan_core_apply") {
+          return Promise.resolve(Response.json({
+            planRun: {
+              id: "plan_core_apply",
+              spaceId: "space_core",
+              source: {
+                kind: "git",
+                url: "https://github.com/example/hello",
+                ref: "main",
+              },
+              operation: "create",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: "sha256:source-core-apply",
+              variablesDigest: "sha256:variables-core-apply",
+              policyDecisionDigest: "sha256:policy-core-apply",
+              planDigest: "sha256:abc",
+              planArtifact: {
+                kind: "runner-local",
+                ref: "runner-local://plan_core_apply/tfplan",
+                digest: "sha256:abc",
+              },
+              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+              status: "succeeded",
+              requiredProviders: [],
+              policy: { status: "passed", reasons: [], checkedAt: 1 },
+              createdAt: 1,
+              updatedAt: 1,
+              finishedAt: 1,
+            },
+          }));
+        }
         return Promise.resolve(Response.json({
           source: {
             kind: "git",
@@ -450,11 +431,11 @@ test("accounts handler proxies installation dry-run to installer", async () => {
             ref: "v1.2.3",
             commit: "0123456789abcdef0123456789abcdef01234567",
           },
-          planSnapshotDigest: "sha256:abc",
+          planDigest: "sha256:abc",
           changes: [],
           expected: {
-            commit: "0123456789abcdef0123456789abcdef01234567",
-            planSnapshotDigest: "sha256:abc",
+            sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+            planDigest: "sha256:abc",
           },
         }));
       },
@@ -462,7 +443,7 @@ test("accounts handler proxies installation dry-run to installer", async () => {
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations/dry-run", {
+    new Request("https://accounts.example.test/v1/installations/plan-runs", {
       method: "POST",
       headers: {
         ...accountSessionHeaders(sessionId),
@@ -480,10 +461,10 @@ test("accounts handler proxies installation dry-run to installer", async () => {
   );
 
   expect(response.status).toEqual(200);
-  expect((await response.json()).planSnapshotDigest).toEqual("sha256:abc");
+  expect((await response.json()).planDigest).toEqual("sha256:abc");
   expect(proxiedRequests.length).toEqual(1);
-  expect(proxiedRequests[0].url).toEqual("http://takosumi.internal:8788/v1/installations/dry-run");
-  expect(proxiedRequests[0].headers.get("authorization")).toEqual("Bearer installer-secret");
+  expect(proxiedRequests[0].url).toEqual("http://takosumi.internal:8788/v1/plan-runs");
+  expect(proxiedRequests[0].headers.get("authorization")).toEqual("Bearer deploy-control-secret");
   expect(await proxiedRequests[0].json()).toEqual({
     spaceId: "space_1",
     source: {
@@ -491,21 +472,54 @@ test("accounts handler proxies installation dry-run to installer", async () => {
       url: "https://github.com/example/hello",
       ref: "v1.2.3",
     },
+    operation: "create",
   });
 });
 
-test("accounts handler applies installation through space installer when configured", async () => {
+test("accounts handler applies installation through space deployControl when configured", async () => {
   const proxiedRequests: Request[] = [];
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(store, "tsub_core_apply", "acct_core_apply", "space_core");
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
-    installer: {
+    deployControl: {
       url: "http://takosumi.internal:8788",
-      token: "installer-secret",
+      token: "deploy-control-secret",
       fetch: (input, init) => {
-        proxiedRequests.push(new Request(input, init));
+        const request = new Request(input, init);
+        proxiedRequests.push(request);
+        if (new URL(request.url).pathname === "/v1/plan-runs/plan_core_apply") {
+          return Promise.resolve(Response.json({
+            planRun: {
+              id: "plan_core_apply",
+              spaceId: "space_core",
+              source: {
+                kind: "git",
+                url: "https://github.com/example/hello",
+                ref: "main",
+              },
+              operation: "create",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: "sha256:source-core-apply",
+              variablesDigest: "sha256:variables-core-apply",
+              policyDecisionDigest: "sha256:policy-core-apply",
+              planDigest: "sha256:abc",
+              planArtifact: {
+                kind: "runner-local",
+                ref: "runner-local://plan_core_apply/tfplan",
+                digest: "sha256:abc",
+              },
+              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+              status: "succeeded",
+              requiredProviders: [],
+              policy: { status: "passed", reasons: [], checkedAt: 1 },
+              createdAt: 1,
+              updatedAt: 1,
+              finishedAt: 1,
+            },
+          }));
+        }
         return Promise.resolve(Response.json({
           installation: {
             id: "inst_core_apply",
@@ -524,7 +538,7 @@ test("accounts handler applies installation through space installer when configu
               ref: "main",
               commit: "0123456789abcdef0123456789abcdef01234567",
             },
-            planSnapshotDigest: "sha256:abc",
+            planDigest: "sha256:abc",
             status: "succeeded",
             outputs: {
               components: {
@@ -549,6 +563,18 @@ test("accounts handler applies installation through space installer when configu
       body: JSON.stringify({
         accountId: "acct_core_apply",
         spaceId: "space_core",
+        planRunId: "plan_core_apply",
+        planArtifactDigest: "sha256:abc",
+        expected: {
+          planRunId: "plan_core_apply",
+          runnerProfileId: "cloudflare-default",
+          sourceDigest: "sha256:source-core-apply",
+          variablesDigest: "sha256:variables-core-apply",
+          policyDecisionDigest: "sha256:policy-core-apply",
+          planDigest: "sha256:abc",
+          planArtifactDigest: "sha256:abc",
+          sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+        },
         source: {
           kind: "git",
           url: "https://github.com/example/hello",
@@ -590,20 +616,14 @@ test("accounts handler applies installation through space installer when configu
       "installation.created",
       "installation.activated-http-domain",
     ]);
-  expect(proxiedRequests.length).toEqual(1);
-  expect(proxiedRequests[0].url).toEqual("http://takosumi.internal:8788/v1/installations");
-  expect(proxiedRequests[0].headers.get("authorization")).toEqual("Bearer installer-secret");
-  expect(await proxiedRequests[0].json()).toEqual({
-    spaceId: "space_core",
-    source: {
-      kind: "git",
-      url: "https://github.com/example/hello",
-      ref: "main",
-    },
-  });
+  expect(proxiedRequests.length).toEqual(2);
+  expect(proxiedRequests[0].url).toEqual("http://takosumi.internal:8788/v1/plan-runs/plan_core_apply");
+  expect(proxiedRequests[0].headers.get("authorization")).toEqual("Bearer deploy-control-secret");
+  expect(proxiedRequests[1].url).toEqual("http://takosumi.internal:8788/v1/apply-runs");
+  expect((await proxiedRequests[1].json()).planRunId).toEqual("plan_core_apply");
 });
 
-test("accounts handler validates installation facade request before space installer apply", async () => {
+test("accounts handler validates installation facade request before space deployControl apply", async () => {
   const proxiedRequests: Request[] = [];
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(
@@ -615,9 +635,9 @@ test("accounts handler validates installation facade request before space instal
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
-    installer: {
+    deployControl: {
       url: "http://takosumi.internal:8788",
-      token: "installer-secret",
+      token: "deploy-control-secret",
       fetch: (input, init) => {
         proxiedRequests.push(new Request(input, init));
         return Promise.resolve(Response.json({}, { status: 500 }));
@@ -647,18 +667,51 @@ test("accounts handler validates installation facade request before space instal
   expect(proxiedRequests.length).toEqual(0);
 });
 
-test("accounts handler applies local source through space installer with local expected guard", async () => {
+test("accounts handler applies local source through space deployControl with local expected guard", async () => {
   const proxiedRequests: Request[] = [];
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(store, "tsub_core_local", "acct_core_local", "space_core");
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
-    installer: {
+    deployControl: {
       url: "http://takosumi.internal:8788",
-      token: "installer-secret",
+      token: "deploy-control-secret",
       fetch: (input, init) => {
-        proxiedRequests.push(new Request(input, init));
+        const request = new Request(input, init);
+        proxiedRequests.push(request);
+        if (new URL(request.url).pathname === "/v1/plan-runs/plan_core_local") {
+          return Promise.resolve(Response.json({
+            planRun: {
+              id: "plan_core_local",
+              spaceId: "space_core",
+              source: {
+                kind: "local",
+                path: "/workspace/example-local",
+              },
+              operation: "create",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: "sha256:source-core-local",
+              variablesDigest: "sha256:variables-core-local",
+              policyDecisionDigest: "sha256:policy-core-local",
+              planDigest:
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              planArtifact: {
+                kind: "runner-local",
+                ref: "runner-local://plan_core_local/tfplan",
+                digest:
+                  "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              },
+              sourceCommit: "working-tree",
+              status: "succeeded",
+              requiredProviders: [],
+              policy: { status: "passed", reasons: [], checkedAt: 1 },
+              createdAt: 1,
+              updatedAt: 1,
+              finishedAt: 1,
+            },
+          }));
+        }
         return Promise.resolve(Response.json({
           installation: {
             id: "inst_core_local",
@@ -675,7 +728,8 @@ test("accounts handler applies local source through space installer with local e
               kind: "local",
               url: "/workspace/example-local",
             },
-            planSnapshotDigest:
+            sourceCommit: "working-tree",
+            planDigest:
               "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             status: "succeeded",
             outputs: {},
@@ -692,12 +746,27 @@ test("accounts handler applies local source through space installer with local e
       body: JSON.stringify({
         accountId: "acct_core_local",
         spaceId: "space_core",
+        planRunId: "plan_core_local",
+        planArtifactDigest:
+          "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        expected: {
+          planRunId: "plan_core_local",
+          runnerProfileId: "cloudflare-default",
+          sourceDigest: "sha256:source-core-local",
+          variablesDigest: "sha256:variables-core-local",
+          policyDecisionDigest: "sha256:policy-core-local",
+          planDigest:
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          planArtifactDigest:
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          sourceCommit: "working-tree",
+        },
         source: {
           kind: "local",
           url: "/workspace/example-local",
           ref: "working-tree",
           commit: "working-tree",
-          planSnapshotDigest:
+          planDigest:
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         },
         mode: "shared-cell",
@@ -710,23 +779,15 @@ test("accounts handler applies local source through space installer with local e
   const body = await response.json();
   expect(body.installation.id).toEqual("inst_core_local");
   expect(body.installation.status).toEqual("ready");
-  expect(store.findAppInstallation("inst_core_local")?.sourceRef).toEqual("working-tree");
+  expect(store.findAppInstallation("inst_core_local")?.sourceRef).toEqual("local");
   expect(store.findAppInstallation("inst_core_local")?.sourceCommit).toEqual("working-tree");
-  expect(proxiedRequests.length).toEqual(1);
-  expect(await proxiedRequests[0].json()).toEqual({
-    spaceId: "space_core",
-    source: {
-      kind: "local",
-      url: "/workspace/example-local",
-    },
-    expected: {
-      planSnapshotDigest:
-        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    },
-  });
+  expect(proxiedRequests.length).toEqual(2);
+  expect(proxiedRequests[0].url).toEqual("http://takosumi.internal:8788/v1/plan-runs/plan_core_local");
+  expect(proxiedRequests[1].url).toEqual("http://takosumi.internal:8788/v1/apply-runs");
+  expect((await proxiedRequests[1].json()).planRunId).toEqual("plan_core_local");
 });
 
-test("raw accounts handler requires account bearer for installation dry-run", async () => {
+test("raw accounts handler requires account bearer for installation PlanRun", async () => {
   const store = new InMemoryAccountsStore();
   const now = Date.now();
   seedOwnedSpace(store, "tsub_auth_owner", "acct_auth_dry_run", "space_auth");
@@ -753,10 +814,44 @@ test("raw accounts handler requires account bearer for installation dry-run", as
     issuer: testIssuer,
     managedOfferingAccess: testManagedOfferingOpenAccess,
     store,
-    installer: {
+    deployControl: {
       url: "http://takosumi.internal:8788",
       fetch: (input, init) => {
-        proxiedRequests.push(new Request(input, init));
+        const request = new Request(input, init);
+        proxiedRequests.push(request);
+        if (
+          new URL(request.url).pathname === "/v1/plan-runs/plan_dashboard_apply"
+        ) {
+          return Promise.resolve(Response.json({
+            planRun: {
+              id: "plan_dashboard_apply",
+              spaceId: "space_dashboard",
+              source: {
+                kind: "git",
+                url: "https://github.com/takos/takos",
+                ref: "v1.2.3",
+              },
+              operation: "create",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: "sha256:source-dashboard-apply",
+              variablesDigest: "sha256:variables-dashboard-apply",
+              policyDecisionDigest: "sha256:policy-dashboard-apply",
+              planDigest: "sha256:app",
+              planArtifact: {
+                kind: "runner-local",
+                ref: "runner-local://plan_dashboard_apply/tfplan",
+                digest: "sha256:app",
+              },
+              sourceCommit: "abc123",
+              status: "succeeded",
+              requiredProviders: [],
+              policy: { status: "passed", reasons: [], checkedAt: 1 },
+              createdAt: 1,
+              updatedAt: 1,
+              finishedAt: 1,
+            },
+          }));
+        }
         return Promise.resolve(Response.json({
           source: {
             kind: "git",
@@ -764,11 +859,11 @@ test("raw accounts handler requires account bearer for installation dry-run", as
             ref: "main",
             commit: "0123456789abcdef0123456789abcdef01234567",
           },
-          planSnapshotDigest: "sha256:abc",
+          planDigest: "sha256:abc",
           changes: [],
           expected: {
-            commit: "0123456789abcdef0123456789abcdef01234567",
-            planSnapshotDigest: "sha256:abc",
+            sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+            planDigest: "sha256:abc",
           },
         }));
       },
@@ -784,7 +879,7 @@ test("raw accounts handler requires account bearer for installation dry-run", as
   });
 
   const unauthenticated = await handler(
-    new Request(`${testIssuer}/v1/installations/dry-run`, {
+    new Request(`${testIssuer}/v1/installations/plan-runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body,
@@ -793,7 +888,7 @@ test("raw accounts handler requires account bearer for installation dry-run", as
   expect(unauthenticated.status).toEqual(401);
 
   const readPat = await handler(
-    new Request(`${testIssuer}/v1/installations/dry-run`, {
+    new Request(`${testIssuer}/v1/installations/plan-runs`, {
       method: "POST",
       headers: {
         authorization: "Bearer takpat_read_dry_run",
@@ -805,7 +900,7 @@ test("raw accounts handler requires account bearer for installation dry-run", as
   expect(readPat.status).toEqual(403);
 
   const crossOwner = await handler(
-    new Request(`${testIssuer}/v1/installations/dry-run`, {
+    new Request(`${testIssuer}/v1/installations/plan-runs`, {
       method: "POST",
       headers: {
         ...accountSessionHeaders(otherSession),
@@ -818,7 +913,7 @@ test("raw accounts handler requires account bearer for installation dry-run", as
   expect((await crossOwner.json()).error).toEqual("space_not_found");
 
   const owner = await handler(
-    new Request(`${testIssuer}/v1/installations/dry-run`, {
+    new Request(`${testIssuer}/v1/installations/plan-runs`, {
       method: "POST",
       headers: {
         ...accountSessionHeaders(ownerSession),
@@ -828,280 +923,48 @@ test("raw accounts handler requires account bearer for installation dry-run", as
     }),
   );
   expect(owner.status).toEqual(200);
-  expect((await owner.json()).planSnapshotDigest).toEqual("sha256:abc");
+  expect((await owner.json()).planDigest).toEqual("sha256:abc");
   expect(proxiedRequests.length).toEqual(1);
-});
 
-test("accounts dashboard renders install dry-run form", async () => {
-  const store = new InMemoryAccountsStore();
-  const sessionId = seedAccountSession(store);
-  const handler = createAccountsHandler({
-    issuer: "https://accounts.example.test",
-    store,
-  });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/dashboard/install", {
-      headers: accountSessionHeaders(sessionId),
-    }),
-  );
-
-  expect(response.status).toEqual(200);
-  const html = await response.text();
-  expect(html).toContain("Takosumi Accounts");
-  expect(html).toContain("Git URL");
-  expect(html).toContain("Max metered use edges");
-});
-
-test("accounts dashboard proxies Git URL installation dry-run", async () => {
-  const proxiedRequests: Request[] = [];
-  const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_owner", "acct_space_1", "space_1");
-  const handler = createAccountsHandler({
-    issuer: "https://accounts.example.test",
-    store,
-    installer: {
-      url: "http://takosumi.internal:8788",
-      token: "installer-secret",
-      fetch: (input, init) => {
-        proxiedRequests.push(new Request(input, init));
-        return Promise.resolve(Response.json({
-          source: {
-            kind: "git",
-            url: "https://github.com/example/hello",
-            ref: "v1.2.3",
-            commit: "0123456789abcdef0123456789abcdef01234567",
-          },
-          planSnapshotDigest: "sha256:abc",
-          repo: { id: "example.hello", name: "Example Hello" },
-          installPlan: {
-            source: {
-              kind: "git",
-              url: "https://github.com/example/hello",
-              ref: "v1.2.3",
-              commit: "0123456789abcdef0123456789abcdef01234567",
-            },
-            repo: { id: "example.hello", name: "Example Hello" },
-            requestedBindings: [],
-            resolvedBindings: [],
-            publications: [],
-            changes: [],
-            warnings: [],
-          },
-          changes: [{
-            op: "create",
-            subject: "database",
-            kind: "binding",
-          }],
-          expected: {
-            commit: "0123456789abcdef0123456789abcdef01234567",
-            planSnapshotDigest: "sha256:abc",
-          },
-          cost: {
-            meteredBindingCount: 1,
-          },
-        }));
-      },
-    },
-  });
-
-  const response = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/install?git=https%3A%2F%2Fgithub.com%2Fexample%2Fhello&ref=v1.2.3&space_id=space_1",
-    ),
-  );
-
-  expect(response.status).toEqual(200);
-  const html = await response.text();
-  expect(html).toContain("Example Hello");
-  expect(html).toContain("sha256:abc");
-  expect(html).toContain("database");
-  expect(html).toContain("Approve Install");
-  expect(html).toContain('name="expected_commit" value="0123456789abcdef0123456789abcdef01234567"');
-  expect(html).toContain('name="expected_plan_snapshot_digest" value="sha256:abc"');
-  expect(html).toContain('name="cost_ack"');
-  expect(proxiedRequests.length).toEqual(1);
-  expect(proxiedRequests[0].url).toEqual("http://takosumi.internal:8788/v1/installations/dry-run");
-  expect(proxiedRequests[0].headers.get("authorization")).toEqual("Bearer installer-secret");
-  expect(await proxiedRequests[0].json()).toEqual({
-    spaceId: "space_1",
-    source: {
-      kind: "git",
-      url: "https://github.com/example/hello",
-      ref: "v1.2.3",
-    },
-  });
-});
-
-test("accounts dashboard blocks installation dry-run when budget guard is exceeded", async () => {
-  const proxiedRequests: Request[] = [];
-  const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_owner", "acct_space_1", "space_1");
-  const handler = createAccountsHandler({
-    issuer: "https://accounts.example.test",
-    store,
-    installer: {
-      url: "http://takosumi.internal:8788",
-      fetch: (input, init) => {
-        proxiedRequests.push(new Request(input, init));
-        return Promise.resolve(Response.json({
-          source: {
-            kind: "git",
-            url: "https://github.com/example/hello",
-            ref: "v1.2.3",
-            commit: "0123456789abcdef0123456789abcdef01234567",
-          },
-          planSnapshotDigest: "sha256:abc",
-          changes: [],
-          expected: {
-            commit: "0123456789abcdef0123456789abcdef01234567",
-            planSnapshotDigest: "sha256:abc",
-          },
-          cost: {
-            meteredBindingCount: 1,
-          },
-        }));
-      },
-    },
-  });
-
-  const response = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/install?git=https%3A%2F%2Fgithub.com%2Fexample%2Fhello&ref=v1.2.3&space_id=space_1&max_metered_use_edges=0",
-    ),
-  );
-
-  expect(response.status).toEqual(409);
-  const html = await response.text();
-  expect(html).toContain("budget_guard_exceeded");
-  expect(html.includes("Approve Install")).toEqual(false);
-  expect(proxiedRequests.length).toEqual(1);
-});
-
-test("accounts dashboard proxies Git URL install apply", async () => {
-  const proxiedRequests: Request[] = [];
-  const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_owner", "acct_space_1", "space_1");
-  const handler = createAccountsHandler({
-    issuer: "https://accounts.example.test",
-    store,
-    installer: {
-      url: "http://takosumi.internal:8788",
-      token: "install-secret",
-      fetch: (input, init) => {
-        proxiedRequests.push(new Request(input, init));
-        return Promise.resolve(Response.json({
-          installation: {
-            id: "inst_dash",
-            accountId: "acct_space_1",
-            spaceId: "space_1",
-            appId: "example.hello",
-            currentDeploymentId: "dep_dash",
-            status: "ready",
-            createdAt: 1,
-          },
-          deployment: {
-            id: "dep_dash",
-            installationId: "inst_dash",
-            source: {
-              kind: "git",
-              url: "https://github.com/example/hello",
-              ref: "v1.2.3",
-              commit: "0123456789abcdef0123456789abcdef01234567",
-            },
-            planSnapshotDigest: "sha256:0123456789abcdef",
-            status: "succeeded",
-            outputs: {},
-            createdAt: 1,
-          },
-        }, { status: 201 }));
-      },
-    },
-  });
-
-  const body = new URLSearchParams({
-    git: "https://github.com/example/hello",
-    ref: "v1.2.3",
-    space_id: "space_1",
-    expected_commit: "0123456789abcdef0123456789abcdef01234567",
-    expected_plan_snapshot_digest: "sha256:0123456789abcdef",
-    cost_ack: "true",
-  });
-  const response = await handler(
-    new Request("https://accounts.example.test/dashboard/install", {
+  // New-user one-click install: a write-scoped owner can PlanRun a space that
+  // does NOT exist yet (it is created later at install time with this spaceId).
+  // Previously this 404'd, dead-ending the /install?git=... funnel for cold
+  // visitors who have no space.
+  const freshSpace = await handler(
+    new Request(`${testIssuer}/v1/installations/plan-runs`, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body,
-    }),
-  );
-
-  expect(response.status).toEqual(202);
-  const html = await response.text();
-  expect(html).toContain("Install requested");
-  expect(html).toContain("inst_dash");
-  expect(html).toContain("/dashboard/installations/inst_dash");
-  expect(proxiedRequests.length).toEqual(1);
-  expect(proxiedRequests[0].url).toEqual("http://takosumi.internal:8788/v1/installations");
-  expect(proxiedRequests[0].headers.get("authorization")).toEqual("Bearer install-secret");
-  expect(await proxiedRequests[0].json()).toEqual({
-    spaceId: "space_1",
-    source: {
-      kind: "git",
-      url: "https://github.com/example/hello",
-      ref: "v1.2.3",
-    },
-    expected: {
-      commit: "0123456789abcdef0123456789abcdef01234567",
-      planSnapshotDigest: "sha256:0123456789abcdef",
-    },
-  });
-});
-
-test("accounts dashboard blocks install apply when managed offering access is closed", async () => {
-  let installApplyCalled = false;
-  const handler = createAccountsHandler({
-    issuer: "https://accounts.example.test",
-    managedOfferingAccess: { status: "closed" },
-    installer: {
-      url: "http://takosumi.internal:8788",
-      fetch: () => {
-        installApplyCalled = true;
-        return Promise.resolve(Response.json({ unexpected: true }));
+      headers: {
+        ...accountSessionHeaders(ownerSession),
+        "content-type": "application/json",
       },
-    },
-  });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/dashboard/install", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        git: "https://github.com/example/hello",
-        ref: "v1.2.3",
+      body: JSON.stringify({
+        spaceId: "space_not_created_yet",
+        source: {
+          kind: "git",
+          url: "https://github.com/example/hello",
+          ref: "main",
+        },
       }),
     }),
   );
-
-  expect(response.status).toEqual(503);
-  expect((await response.json()).error).toEqual("launch_readiness_not_complete");
-  expect(installApplyCalled).toEqual(false);
+  expect(freshSpace.status).toEqual(200);
 });
 
-test("accounts handler blocks installation dry-run when managed offering access is closed", async () => {
-  let dryRunCalled = false;
+test("accounts handler blocks installation PlanRun when managed offering access is closed", async () => {
+  let planRunCalled = false;
   const handler = createAccountsHandler({
     managedOfferingAccess: { status: "closed" },
-    installer: {
+    deployControl: {
       url: "http://takosumi.internal:8788",
       fetch: () => {
-        dryRunCalled = true;
+        planRunCalled = true;
         return Promise.resolve(Response.json({ unexpected: true }));
       },
     },
   });
 
-  const rawDryRunResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations/dry-run", {
+  const rawPlanRunResponse = await handler(
+    new Request("https://accounts.example.test/v1/installations/plan-runs", {
       method: "POST",
       body: JSON.stringify({
         spaceId: "space_1",
@@ -1113,17 +976,10 @@ test("accounts handler blocks installation dry-run when managed offering access 
       }),
     }),
   );
-  const dashboardDryRunResponse = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/install?git=https://github.com/example/hello&ref=v1.2.3&space_id=space_1",
-    ),
-  );
 
-  expect(rawDryRunResponse.status).toEqual(503);
-  expect((await rawDryRunResponse.json()).error).toEqual("launch_readiness_not_complete");
-  expect(dashboardDryRunResponse.status).toEqual(503);
-  expect((await dashboardDryRunResponse.json()).error).toEqual("launch_readiness_not_complete");
-  expect(dryRunCalled).toEqual(false);
+  expect(rawPlanRunResponse.status).toEqual(503);
+  expect((await rawPlanRunResponse.json()).error).toEqual("launch_readiness_not_complete");
+  expect(planRunCalled).toEqual(false);
 });
 
 test("accounts handler blocks open managed offering policy without evidence metadata", async () => {
@@ -1319,7 +1175,7 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
   }
 });
 
-test("accounts reference operator distribution exposes Accounts, OIDC, billing, and dashboard routes", async () => {
+test("accounts reference operator distribution exposes Accounts, OIDC, and billing routes", async () => {
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(store, "tsub_operator", "acct_operator", "space_operator");
   const sessionId = seedAccountSession(
@@ -1373,16 +1229,6 @@ test("accounts reference operator distribution exposes Accounts, OIDC, billing, 
       headers: accountSessionHeaders(sessionId),
     }),
   );
-  const dashboardInstall = await handler(
-    new Request(`${testIssuer}/dashboard/install`, {
-      headers: accountSessionHeaders(sessionId),
-    }),
-  );
-  const dashboardInstallations = await handler(
-    new Request(`${testIssuer}/dashboard/installations?space_id=space_operator`, {
-      headers: accountSessionHeaders(sessionId),
-    }),
-  );
   const checkout = await handler(
     new Request(`${testIssuer}/v1/billing/stripe/checkout`, {
       method: "POST",
@@ -1410,10 +1256,6 @@ test("accounts reference operator distribution exposes Accounts, OIDC, billing, 
   expect((await jwks.json()).keys[0].kid).toEqual("operator-key");
   expect(session.status).toEqual(200);
   expect((await session.json()).subject).toEqual("tsub_operator");
-  expect(dashboardInstall.status).toEqual(200);
-  expect(await dashboardInstall.text()).toContain("Takosumi Accounts");
-  expect(dashboardInstallations.status).toEqual(200);
-  expect(await dashboardInstallations.text()).toContain("Installations");
   expect(checkout.status).toEqual(200);
   expect((await checkout.json()).url).toEqual(
     "https://checkout.stripe.test/cs_operator",
@@ -1424,85 +1266,7 @@ test("accounts reference operator distribution exposes Accounts, OIDC, billing, 
   );
 });
 
-test("accounts dashboard rechecks budget guard before install apply", async () => {
-  const proxiedRequests: Request[] = [];
-  const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_owner", "acct_space_1", "space_1");
-  const handler = createAccountsHandler({
-    issuer: "https://accounts.example.test",
-    store,
-    installer: {
-      url: "http://takosumi.internal:8788",
-      fetch: (input, init) => {
-        const request = new Request(input, init);
-        proxiedRequests.push(request);
-        if (request.url.endsWith("/v1/installations")) {
-          return Promise.resolve(Response.json({ ok: true }, { status: 201 }));
-        }
-        return Promise.resolve(Response.json({
-          source: {
-            kind: "git",
-            url: "https://github.com/example/hello",
-            ref: "v1.2.3",
-            commit: "0123456789abcdef0123456789abcdef01234567",
-          },
-          planSnapshotDigest: "sha256:abc",
-          changes: [],
-          expected: {
-            commit: "0123456789abcdef0123456789abcdef01234567",
-            planSnapshotDigest: "sha256:abc",
-          },
-          cost: {
-            meteredBindingCount: 1,
-          },
-        }));
-      },
-    },
-  });
-
-  const body = new URLSearchParams({
-    git: "https://github.com/example/hello",
-    ref: "v1.2.3",
-    mode: "shared-cell",
-    space_id: "space_1",
-    expected_commit: "0123456789abcdef0123456789abcdef01234567",
-    expected_plan_snapshot_digest: "sha256:abc",
-    cost_ack: "true",
-    max_metered_use_edges: "0",
-  });
-  const response = await handler(
-    new Request("https://accounts.example.test/dashboard/install", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body,
-    }),
-  );
-
-  expect(response.status).toEqual(409);
-  expect(await response.text()).toContain("budget_guard_exceeded");
-  expect(proxiedRequests.length).toEqual(1);
-  expect(proxiedRequests[0].url).toEqual("http://takosumi.internal:8788/v1/installations/dry-run");
-});
-
-test("accounts dashboard reports installer dry-run configuration errors", async () => {
-  const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_owner", "acct_space_1", "space_1");
-  const handler = createAccountsHandler({
-    issuer: "https://accounts.example.test",
-    store,
-  });
-
-  const response = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/install?git=https%3A%2F%2Fgithub.com%2Fexample%2Fhello&ref=v1.2.3&space_id=space_1",
-    ),
-  );
-
-  expect(response.status).toEqual(503);
-  expect(await response.text()).toContain("Installation dry-run is temporarily unavailable.");
-});
-
-test("accounts handler rejects installation dry-run when installer is not configured", async () => {
+test("accounts handler rejects installation PlanRun when deployControl is not configured", async () => {
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(store, "tsub_owner", "acct_space_1", "space_1");
   const sessionId = seedAccountSession(store, "tsub_owner");
@@ -1512,7 +1276,7 @@ test("accounts handler rejects installation dry-run when installer is not config
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations/dry-run", {
+    new Request("https://accounts.example.test/v1/installations/plan-runs", {
       method: "POST",
       headers: {
         ...accountSessionHeaders(sessionId),
@@ -1525,7 +1289,7 @@ test("accounts handler rejects installation dry-run when installer is not config
   expect(response.status).toEqual(503);
   const body = await response.json();
   expect(body.error).toEqual("feature_unavailable");
-  expect(body.error_description).toEqual("Installation dry-run is temporarily unavailable.");
+  expect(body.error_description).toEqual("Installation PlanRun is temporarily unavailable.");
 });
 
 test("reserved OIDC endpoints return public-safe unavailable response", async () => {
@@ -1854,7 +1618,7 @@ test("accounts handler issues and revokes personal access tokens", async () => {
   });
   // Round 2: register a static OIDC client so /oauth/introspect can
   // authenticate the introspection request per RFC 7662 §2.1. The
-  // legacy degraded mode (no clients wired) is no longer available now
+  // degraded mode (no clients wired) is no longer available now
   // that mod.ts forwards the `clients` map to the introspect handler.
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
@@ -2891,7 +2655,7 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "shared-cell",
@@ -3029,7 +2793,7 @@ test("accounts handler validates install approval confirmation", async () => {
           gitUrl: "https://github.com/example/db",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
@@ -3062,7 +2826,7 @@ test("accounts handler validates install approval confirmation", async () => {
           gitUrl: "https://github.com/example/db",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
@@ -3100,7 +2864,7 @@ test("accounts handler requires account-session ownership for installation reads
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         status: "ready",
@@ -3190,7 +2954,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
       gitUrl: "https://github.com/takos/takos",
       ref: "v1.2.3",
       commit: "abc123",
-      planSnapshotDigest: "sha256:app",
+      planDigest: "sha256:app",
     },
     mode: "shared-cell",
     createdBySubject: "tsub_auth_owner",
@@ -3305,168 +3069,6 @@ test("raw accounts handler requires account bearer for installation writes", asy
   expect(readPatEvents.status).toEqual(200);
 });
 
-test("raw accounts dashboard requires account ownership for installation surfaces", async () => {
-  const store = new InMemoryAccountsStore();
-  const ownerSession = seedAccountSession(
-    store,
-    "tsub_dashboard_owner",
-    "sess_dashboard_owner",
-  );
-  const otherSession = seedAccountSession(
-    store,
-    "tsub_dashboard_other",
-    "sess_dashboard_other",
-  );
-  const now = Date.now();
-  seedOwnedSpace(
-    store,
-    "tsub_dashboard_owner",
-    "acct_dashboard",
-    "space_dashboard",
-  );
-  store.saveAppInstallation({
-    installationId: "inst_dashboard_owned",
-    accountId: "acct_dashboard",
-    spaceId: "space_dashboard",
-    appId: "takos.chat",
-    sourceGitUrl: "https://github.com/takos/takos",
-    sourceRef: "v1.2.3",
-    sourceCommit: "abc123",
-    planSnapshotDigest: "sha256:app",
-    mode: "shared-cell",
-    status: "ready",
-    createdBySubject: "tsub_dashboard_owner",
-    createdAt: now,
-    updatedAt: now,
-  });
-  const proxiedRequests: Request[] = [];
-  const handler = createRawAccountsHandler({
-    issuer: testIssuer,
-    managedOfferingAccess: testManagedOfferingOpenAccess,
-    store,
-    installer: {
-      url: "http://takosumi.internal:8788",
-      fetch: (input, init) => {
-        proxiedRequests.push(new Request(input, init));
-        return Promise.resolve(Response.json({
-          installation: {
-            id: "inst_dashboard_apply",
-            accountId: "acct_dashboard",
-            spaceId: "space_dashboard",
-            appId: "takos.chat",
-            currentDeploymentId: "dep_dashboard_apply",
-            status: "ready",
-            createdAt: 1,
-          },
-          deployment: {
-            id: "dep_dashboard_apply",
-            installationId: "inst_dashboard_apply",
-            source: {
-              kind: "git",
-              url: "https://github.com/takos/takos",
-              ref: "v1.2.3",
-              commit: "abc123",
-            },
-            planSnapshotDigest: "sha256:app",
-            status: "succeeded",
-            outputs: {},
-            createdAt: 1,
-          },
-        }, { status: 201 }));
-      },
-    },
-  });
-
-  const unauthenticatedDetail = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/installations/inst_dashboard_owned",
-    ),
-  );
-  expect(unauthenticatedDetail.status).toEqual(401);
-
-  const ownerDetail = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/installations/inst_dashboard_owned",
-      { headers: accountSessionHeaders(ownerSession) },
-    ),
-  );
-  expect(ownerDetail.status).toEqual(200);
-
-  const crossDetail = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/installations/inst_dashboard_owned",
-      { headers: accountSessionHeaders(otherSession) },
-    ),
-  );
-  expect(crossDetail.status).toEqual(404);
-  expect((await crossDetail.json()).error).toEqual("installation_not_found");
-
-  const unauthenticatedList = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/installations?space_id=space_dashboard",
-    ),
-  );
-  expect(unauthenticatedList.status).toEqual(401);
-
-  const ownerList = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/installations?space_id=space_dashboard",
-      { headers: accountSessionHeaders(ownerSession) },
-    ),
-  );
-  expect(ownerList.status).toEqual(200);
-
-  const crossList = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/installations?space_id=space_dashboard",
-      { headers: accountSessionHeaders(otherSession) },
-    ),
-  );
-  expect(crossList.status).toEqual(404);
-  expect((await crossList.json()).error).toEqual("space_not_found");
-
-  const applyBody = new URLSearchParams({
-    git: "https://github.com/takos/takos",
-    ref: "v1.2.3",
-    mode: "shared-cell",
-    space_id: "space_dashboard",
-  });
-  const unauthenticatedApply = await handler(
-    new Request("https://accounts.example.test/dashboard/install", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: applyBody,
-    }),
-  );
-  expect(unauthenticatedApply.status).toEqual(401);
-
-  const crossApply = await handler(
-    new Request("https://accounts.example.test/dashboard/install", {
-      method: "POST",
-      headers: {
-        ...accountSessionHeaders(otherSession),
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      body: applyBody,
-    }),
-  );
-  expect(crossApply.status).toEqual(404);
-  expect((await crossApply.json()).error).toEqual("space_not_found");
-
-  const ownerApply = await handler(
-    new Request("https://accounts.example.test/dashboard/install", {
-      method: "POST",
-      headers: {
-        ...accountSessionHeaders(ownerSession),
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      body: applyBody,
-    }),
-  );
-  expect(ownerApply.status).toEqual(202);
-  expect(proxiedRequests.length).toEqual(1);
-});
-
 test("accounts handler rejects removed serviceId aliases in install OIDC client requests", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({
@@ -3486,7 +3088,7 @@ test("accounts handler rejects removed serviceId aliases in install OIDC client 
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
@@ -3530,7 +3132,7 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
     sourceGitUrl: "https://github.com/example/app",
     sourceRef: "main",
     sourceCommit: "abc123",
-    planSnapshotDigest: "sha256:manifest",
+    planDigest: "sha256:manifest",
     mode: "shared-cell",
     billingAccountId: "bill_usage",
     status: "ready",
@@ -3651,7 +3253,7 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
     sourceGitUrl: "https://github.com/example/app",
     sourceRef: "main",
     sourceCommit: "abc123",
-    planSnapshotDigest: "sha256:manifest",
+    planDigest: "sha256:manifest",
     mode: "shared-cell",
     billingAccountId: "bill_usage_2",
     status: "ready",
@@ -3718,7 +3320,7 @@ test("accounts handler rejects billing usage reports after permission scope revo
     sourceGitUrl: "https://github.com/example/app",
     sourceRef: "main",
     sourceCommit: "abc123",
-    planSnapshotDigest: "sha256:manifest",
+    planDigest: "sha256:manifest",
     mode: "shared-cell",
     billingAccountId: "bill_usage",
     status: "ready",
@@ -3789,7 +3391,7 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "shared-cell",
@@ -3803,7 +3405,7 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
   const created = await createResponse.json();
   // Wave 6 (Phase E SQL drift fix): `runtime_target` was removed from
   // the envelope. The internal `runtime_target_id` field on
-  // `installation` is still surfaced (it carries the legacy ledger
+  // `installation` is still surfaced (it carries the account-plane ledger
   // reference for callers that need it during the transition).
   expect(created.installation.runtime_target_id).toEqual("rtb_inst_shared_auto_shared_cell");
   expect(store.findRuntimeBinding("rtb_inst_shared_auto_shared_cell")?.targetId).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_shared_auto");
@@ -3826,7 +3428,7 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "def456",
-          planSnapshotDigest: "sha256:app2",
+          planDigest: "sha256:app2",
         },
         mode: "shared-cell",
         status: "ready",
@@ -3853,7 +3455,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
           gitUrl: "https://github.com/takos/takos.git",
           ref: "v1.2.3",
           commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          planSnapshotDigest: "sha256:app-v123",
+          planDigest: "sha256:app-v123",
           artifactDigest: "sha256:compiled-v123",
         },
         mode: "shared-cell",
@@ -3890,14 +3492,14 @@ test("accounts handler records AppInstallation deployment and rollback revisions
     sourceGitUrl: "https://github.com/takos/takos",
     sourceRef: "v1.2.4",
     sourceCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    planSnapshotDigest: "sha256:app-v124",
+    planDigest: "sha256:app-v124",
     artifactDigest: "sha256:compiled-v124",
     requestedBindings: deploymentBindings,
     requestedGrants: deploymentGrants,
   });
-  const deploymentDryRunResponse = await handler(
+  const deploymentPlanRunResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision/deployments/dry-run",
+      "https://accounts.example.test/v1/installations/inst_revision/deployments/plan-runs",
       {
         method: "POST",
         body: JSON.stringify({
@@ -3905,7 +3507,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
             gitUrl: "https://github.com/takos/takos",
             ref: "v1.2.4",
             commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            planSnapshotDigest: "sha256:app-v124",
+            planDigest: "sha256:app-v124",
             artifactDigest: "sha256:compiled-v124",
           },
           useEdges: deploymentBindings,
@@ -3914,13 +3516,13 @@ test("accounts handler records AppInstallation deployment and rollback revisions
       },
     ),
   );
-  expect(deploymentDryRunResponse.status).toEqual(200);
-  const deploymentDryRun = await deploymentDryRunResponse.json();
-  expect(deploymentDryRun.operation).toEqual("deployment");
-  expect(deploymentDryRun.expected.permissionDigest).toEqual(deploymentPermissionDigest);
-  expect(deploymentDryRun.expected.costAckRequired).toEqual(false);
-  expect(deploymentDryRun.requestedUseEdges[0].name).toEqual("bootstrap");
-  expect(deploymentDryRun.requestedPermissionScopes[0].capability).toEqual("logs.read.own");
+  expect(deploymentPlanRunResponse.status).toEqual(200);
+  const deploymentPlanRun = await deploymentPlanRunResponse.json();
+  expect(deploymentPlanRun.operation).toEqual("deployment");
+  expect(deploymentPlanRun.expected.permissionDigest).toEqual(deploymentPermissionDigest);
+  expect(deploymentPlanRun.expected.costAckRequired).toEqual(false);
+  expect(deploymentPlanRun.requestedUseEdges[0].name).toEqual("bootstrap");
+  expect(deploymentPlanRun.requestedPermissionScopes[0].capability).toEqual("logs.read.own");
   const deploymentResponse = await handler(
     new Request(
       "https://accounts.example.test/v1/installations/inst_revision/deployments",
@@ -3931,7 +3533,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
             gitUrl: "https://github.com/takos/takos",
             ref: "v1.2.4",
             commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            planSnapshotDigest: "sha256:app-v124",
+            planDigest: "sha256:app-v124",
             artifactDigest: "sha256:compiled-v124",
           },
           useEdges: deploymentBindings,
@@ -3961,7 +3563,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
     sourceGitUrl: "https://github.com/takos/takos.git",
     sourceRef: "v1.2.3",
     sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    planSnapshotDigest: "sha256:app-v123",
+    planDigest: "sha256:app-v123",
     artifactDigest: "sha256:compiled-v123",
   });
   const rollbackResponse = await handler(
@@ -3973,7 +3575,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
           to: "v1.2.3",
           source: {
             commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            planSnapshotDigest: "sha256:app-v123",
+            planDigest: "sha256:app-v123",
             artifactDigest: "sha256:compiled-v123",
           },
           confirm: {
@@ -4007,7 +3609,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   ]);
 });
 
-test("accounts handler brokers deployment and rollback through space installer", async () => {
+test("accounts handler brokers deployment and rollback through space deployControl", async () => {
   const store = new InMemoryAccountsStore();
   const now = Date.now();
   store.saveAppInstallation({
@@ -4018,7 +3620,7 @@ test("accounts handler brokers deployment and rollback through space installer",
     sourceGitUrl: "https://github.com/takos/takos.git",
     sourceRef: "v1.2.3",
     sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    planSnapshotDigest: "sha256:app-v123",
+    planDigest: "sha256:app-v123",
     mode: "shared-cell",
     status: "ready",
     createdBySubject: "tsub_owner",
@@ -4032,9 +3634,9 @@ test("accounts handler brokers deployment and rollback through space installer",
   }> = [];
   const handler = createAccountsHandler({
     store,
-    installer: {
+    deployControl: {
       url: "http://takosumi.internal:8788",
-      token: "installer-secret",
+      token: "deploy-control-secret",
       fetch: (url, init) => {
         const path = new URL(String(url)).pathname;
         const requestInit = init as
@@ -4051,81 +3653,197 @@ test("accounts handler brokers deployment and rollback through space installer",
           ),
           body,
         });
-        if (
-          path ===
-            "/v1/installations/inst_core_revision/deployments/dry-run"
-        ) {
-          return Promise.resolve(Response.json({
-            source: {
-              kind: "git",
-              url: "https://github.com/takos/takos.git",
-              ref: "v1.2.4",
-              commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            },
-            planSnapshotDigest: "sha256:app-v124",
-            changes: [],
-            expected: {
-              planSnapshotDigest: "sha256:app-v124",
-              commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              currentDeploymentId: "dep_old",
-            },
-          }));
-        }
-        if (path === "/v1/installations/inst_core_revision/deployments") {
-          return Promise.resolve(Response.json({
-            deployment: {
-              id: "dep_new",
-              installationId: "inst_core_revision",
-              source: {
-                kind: "git",
-                url: "https://github.com/takos/takos.git",
-                ref: "v1.2.4",
-                commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              },
-              planSnapshotDigest: "sha256:app-v124",
-              status: "succeeded",
-              outputs: {
-                components: {
-                  public: {
-                    url: "https://takos-new.example.test",
-                    host: "takos-new.example.test",
-                    scheme: "https",
-                    listener: "public",
-                  },
-                },
-              },
-              createdAt: now + 1,
-            },
-          }, { status: 201 }));
-        }
-        if (path === "/v1/installations/inst_core_revision/rollback") {
+        if (path === "/v1/installations/inst_core_revision") {
           return Promise.resolve(Response.json({
             installation: {
               id: "inst_core_revision",
               spaceId: "space_1",
               appId: "takos.chat",
-              currentDeploymentId: "dep_old",
-              status: "ready",
-              createdAt: now,
-            },
-            deployment: {
-              id: "dep_old",
-              installationId: "inst_core_revision",
               source: {
                 kind: "git",
                 url: "https://github.com/takos/takos.git",
                 ref: "v1.2.3",
                 commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               },
-              planSnapshotDigest: "sha256:app-v123",
+              runnerProfileId: "cloudflare-default",
+              currentDeploymentId: "dep_old",
+              status: "ready",
+              createdAt: now,
+              updatedAt: now,
+            },
+          }));
+        }
+        if (path === "/v1/plan-runs") {
+          const source = typeof body.source === "object" && body.source !== null &&
+              !Array.isArray(body.source)
+            ? body.source
+            : {
+              kind: "git",
+              url: "https://github.com/takos/takos.git",
+              ref: "v1.2.4",
+            };
+          const ref = typeof source.ref === "string" ? source.ref : "v1.2.4";
+          const commit = ref === "v1.2.3"
+            ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+          const digest = ref === "v1.2.3"
+            ? "sha256:app-v123"
+            : "sha256:app-v124";
+          return Promise.resolve(Response.json({
+            planRun: {
+              id: `plan_${ref.replace(/[^0-9a-z]/gi, "")}`,
+              spaceId: "space_1",
+              installationId: "inst_core_revision",
+              installationCurrentDeploymentId: "dep_old",
+              source,
+              operation: "update",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest:
+                `sha256:source-${ref.replace(/[^0-9a-z]/gi, "")}`,
+              variablesDigest:
+                `sha256:variables-${ref.replace(/[^0-9a-z]/gi, "")}`,
+              policyDecisionDigest:
+                `sha256:policy-${ref.replace(/[^0-9a-z]/gi, "")}`,
+              variables: {},
+              requiredProviders: [],
+              status: "succeeded",
+              policy: { status: "passed", reasons: [], checkedAt: now },
+              planDigest: digest,
+              planArtifact: {
+                kind: "runner-local",
+                ref: `runner-local://plan_${ref.replace(/[^0-9a-z]/gi, "")}/tfplan`,
+                digest,
+              },
+              sourceCommit: commit,
+              providerLockDigest: `sha256:lock-${ref}`,
+              createdAt: now,
+              updatedAt: now,
+              finishedAt: now,
+            },
+            currentDeploymentId: "dep_old",
+          }));
+        }
+        if (path.startsWith("/v1/plan-runs/")) {
+          const planRunId = decodeURIComponent(path.split("/").pop() ?? "");
+          const rollbackPlan = planRunId.includes("v123");
+          const ref = rollbackPlan ? "v1.2.3" : "v1.2.4";
+          const commit = rollbackPlan
+            ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+          const digest = rollbackPlan ? "sha256:app-v123" : "sha256:app-v124";
+          return Promise.resolve(Response.json({
+            planRun: {
+              id: planRunId,
+              spaceId: "space_1",
+              installationId: "inst_core_revision",
+              installationCurrentDeploymentId: rollbackPlan ? "dep_new" : "dep_old",
+              source: {
+                kind: "git",
+                url: "https://github.com/takos/takos.git",
+                ref,
+              },
+              operation: "update",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: `sha256:source-${planRunId}`,
+              variablesDigest: `sha256:variables-${planRunId}`,
+              policyDecisionDigest: `sha256:policy-${planRunId}`,
+              requiredProviders: [],
+              status: "succeeded",
+              policy: { status: "passed", reasons: [], checkedAt: now },
+              planDigest: digest,
+              planArtifact: {
+                kind: "runner-local",
+                ref: `runner-local://${planRunId}/tfplan`,
+                digest,
+              },
+              sourceCommit: commit,
+              providerLockDigest: `sha256:lock-${ref}`,
+              createdAt: now,
+              updatedAt: now,
+              finishedAt: now,
+            },
+          }));
+        }
+        if (path === "/v1/apply-runs") {
+          const planRunId = typeof body.planRunId === "string"
+            ? body.planRunId
+            : "";
+          const rollbackApply = planRunId.includes("v123");
+          const source = rollbackApply
+            ? {
+              kind: "git",
+              url: "https://github.com/takos/takos.git",
+              ref: "v1.2.3",
+            }
+            : {
+              kind: "git",
+              url: "https://github.com/takos/takos.git",
+              ref: "v1.2.4",
+            };
+          const deploymentId = rollbackApply ? "dep_old" : "dep_new";
+          const commit = rollbackApply
+            ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+          const digest = rollbackApply ? "sha256:app-v123" : "sha256:app-v124";
+          return Promise.resolve(Response.json({
+            applyRun: {
+              id: rollbackApply ? "apply_rollback" : "apply_new",
+              planRunId,
+              spaceId: "space_1",
+              installationId: "inst_core_revision",
+              deploymentId,
+              operation: "update",
+              runnerProfileId: "cloudflare-default",
+              status: "succeeded",
+              createdAt: now + 1,
+              updatedAt: now + 1,
+              finishedAt: now + 1,
+            },
+            installation: {
+              id: "inst_core_revision",
+              spaceId: "space_1",
+              appId: "takos.chat",
+              currentDeploymentId: deploymentId,
+              status: "ready",
+              createdAt: now,
+              updatedAt: now + 1,
+            },
+            deployment: {
+              id: deploymentId,
+              installationId: "inst_core_revision",
+              source,
+              planDigest: digest,
+              sourceCommit: commit,
+              status: "succeeded",
+              outputs: rollbackApply ? [] : [{
+                name: "takosumi_launch_url",
+                kind: "launch_url",
+                value: "https://takos-new.example.test",
+                sensitive: false,
+              }],
+              createdAt: now + 1,
+            },
+          }, { status: 201 }));
+        }
+        if (path === "/v1/installations/inst_core_revision/deployments") {
+          return Promise.resolve(Response.json({
+            deployments: [{
+              id: "dep_old",
+              installationId: "inst_core_revision",
+              planRunId: "plan_v123",
+              applyRunId: "apply_old",
+              source: {
+                kind: "git",
+                url: "https://github.com/takos/takos.git",
+                ref: "v1.2.3",
+              },
+              planDigest: "sha256:app-v123",
+              sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              runnerProfileId: "cloudflare-default",
               status: "succeeded",
               outputs: {},
               createdAt: now,
-            },
-            rollback: {
-              rolledBackFrom: "dep_new",
-              rolledBackTo: "dep_old",
-            },
+            }],
           }));
         }
         return Promise.resolve(
@@ -4137,9 +3855,9 @@ test("accounts handler brokers deployment and rollback through space installer",
     },
   });
 
-  const dryRunResponse = await handler(
+  const planRunResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_core_revision/deployments/dry-run",
+      "https://accounts.example.test/v1/installations/inst_core_revision/deployments/plan-runs",
       {
         method: "POST",
         body: JSON.stringify({
@@ -4152,11 +3870,11 @@ test("accounts handler brokers deployment and rollback through space installer",
       },
     ),
   );
-  expect(dryRunResponse.status).toEqual(200);
-  const dryRun = await dryRunResponse.json();
-  expect(dryRun.expected.currentDeploymentId).toEqual("dep_old");
-  expect(dryRun.expected.commit).toEqual("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-  expect(typeof dryRun.expected.permissionDigest).toEqual("string");
+  expect(planRunResponse.status).toEqual(200);
+  const planRun = await planRunResponse.json();
+  expect(planRun.expected.currentDeploymentId).toEqual("dep_old");
+  expect(planRun.expected.sourceCommit).toEqual("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  expect(typeof planRun.expected.permissionDigest).toEqual("string");
 
   const deployResponse = await handler(
     new Request(
@@ -4170,12 +3888,20 @@ test("accounts handler brokers deployment and rollback through space installer",
             ref: "v1.2.4",
           },
           expected: {
-            planSnapshotDigest: "sha256:app-v124",
-            commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            planRunId: planRun.expected.planRunId,
+            installationId: "inst_core_revision",
+            runnerProfileId: planRun.expected.runnerProfileId,
+            sourceDigest: planRun.expected.sourceDigest,
+            variablesDigest: planRun.expected.variablesDigest,
+            policyDecisionDigest: planRun.expected.policyDecisionDigest,
+            planDigest: "sha256:app-v124",
+            planArtifactDigest: planRun.expected.planArtifactDigest,
+            sourceCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            providerLockDigest: planRun.expected.providerLockDigest,
             currentDeploymentId: "dep_old",
           },
           confirm: {
-            permissionDigest: dryRun.expected.permissionDigest,
+            permissionDigest: planRun.expected.permissionDigest,
           },
           reason: "deployment v1.2.4",
         }),
@@ -4195,6 +3921,20 @@ test("accounts handler brokers deployment and rollback through space installer",
         method: "POST",
         body: JSON.stringify({
           deploymentId: "dep_old",
+          planRunId: "plan_v123",
+          expected: {
+            planRunId: "plan_v123",
+            installationId: "inst_core_revision",
+            runnerProfileId: "cloudflare-default",
+            sourceDigest: "sha256:source-plan_v123",
+            variablesDigest: "sha256:variables-plan_v123",
+            policyDecisionDigest: "sha256:policy-plan_v123",
+            planDigest: "sha256:app-v123",
+            planArtifactDigest: "sha256:app-v123",
+            sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            providerLockDigest: "sha256:lock-v1.2.3",
+            currentDeploymentId: "dep_new",
+          },
           reason: "operator rollback",
         }),
       },
@@ -4204,20 +3944,29 @@ test("accounts handler brokers deployment and rollback through space installer",
   const rolledBack = await rollbackResponse.json();
   expect(rolledBack.installation.source.ref).toEqual("v1.2.3");
   expect(rolledBack.installation.launch_url).toEqual(null);
-  expect(rolledBack.event.payload.coreDeployment.rollback.rolledBackTo).toEqual("dep_old");
+  expect(rolledBack.event.payload.coreDeployment.rollback.targetDeploymentId).toEqual("dep_old");
   expect(upstreamCalls.map((call) => call.path)).toEqual([
-    "/v1/installations/inst_core_revision/deployments/dry-run",
+    "/v1/installations/inst_core_revision",
+    "/v1/plan-runs",
+    "/v1/plan-runs/plan_v124",
+    "/v1/apply-runs",
     "/v1/installations/inst_core_revision/deployments",
-    "/v1/installations/inst_core_revision/rollback",
+    "/v1/plan-runs/plan_v123",
+    "/v1/apply-runs",
   ]);
   expect(upstreamCalls.map((call) => call.authorization)).toEqual([
-      "Bearer installer-secret",
-      "Bearer installer-secret",
-      "Bearer installer-secret",
+      "Bearer deploy-control-secret",
+      "Bearer deploy-control-secret",
+      "Bearer deploy-control-secret",
+      "Bearer deploy-control-secret",
+      "Bearer deploy-control-secret",
+      "Bearer deploy-control-secret",
+      "Bearer deploy-control-secret",
     ]);
-  expect((upstreamCalls[1].body.expected as Record<string, unknown>)
-      .currentDeploymentId).toEqual("dep_old");
-  expect(upstreamCalls[2].body.deploymentId).toEqual("dep_old");
+  expect(upstreamCalls[2].body).toEqual({});
+  expect(upstreamCalls[3].body.planRunId).toEqual("plan_v124");
+  expect(upstreamCalls[5].body).toEqual({});
+  expect(upstreamCalls[6].body.planRunId).toEqual("plan_v123");
 });
 
 test("accounts handler rejects invalid AppInstallation revision mutations", async () => {
@@ -4235,7 +3984,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
           gitUrl: "https://github.com/takos/takos.git",
           ref: "v1.2.3",
           commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          planSnapshotDigest: "sha256:app-v123",
+          planDigest: "sha256:app-v123",
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
@@ -4253,7 +4002,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
           source: {
             ref: "v1.2.4",
             commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            planSnapshotDigest: "sha256:app-v124",
+            planDigest: "sha256:app-v124",
           },
         }),
       },
@@ -4282,7 +4031,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
           source: {
             ref: "v1.2.4",
             commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            planSnapshotDigest: "sha256:app-v124",
+            planDigest: "sha256:app-v124",
           },
         }),
       },
@@ -4300,7 +4049,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
           source: {
             ref: "v1.2.4",
             commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            planSnapshotDigest: "sha256:app-v124",
+            planDigest: "sha256:app-v124",
           },
           confirm: {
             permissionDigest:
@@ -4326,7 +4075,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
     sourceGitUrl: "https://github.com/takos/takos.git",
     sourceRef: "v1.2.4",
     sourceCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    planSnapshotDigest: "sha256:app-v124",
+    planDigest: "sha256:app-v124",
     requestedBindings: meteredBindings,
   });
   const missingCostAck = await handler(
@@ -4338,7 +4087,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
           source: {
             ref: "v1.2.4",
             commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            planSnapshotDigest: "sha256:app-v124",
+            planDigest: "sha256:app-v124",
           },
           useEdges: meteredBindings,
           confirm: {
@@ -4361,7 +4110,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
             gitUrl: "https://github.com/example/other",
             ref: "v1.2.4",
             commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            planSnapshotDigest: "sha256:app-v124",
+            planDigest: "sha256:app-v124",
           },
         }),
       },
@@ -4380,7 +4129,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
           to: "v1.2.2",
           source: {
             commit: "cccccccccccccccccccccccccccccccccccccccc",
-            planSnapshotDigest: "sha256:app-v122",
+            planDigest: "sha256:app-v122",
           },
         }),
       },
@@ -4409,7 +4158,7 @@ test("accounts handler blocks AppInstallation creation when managed offering acc
           gitUrl: "https://github.com/example/app",
           ref: "main",
           commit: "abc123",
-          planSnapshotDigest: "sha256:manifest",
+          planDigest: "sha256:manifest",
         },
         mode: "shared-cell",
         status: "ready",
@@ -4491,18 +4240,6 @@ test("accounts handler blocks installation access mutations when managed offerin
         method: "POST",
       },
     ),
-    new Request(
-      "https://accounts.example.test/dashboard/installations/inst_1/materialize",
-      {
-        method: "POST",
-      },
-    ),
-    new Request(
-      "https://accounts.example.test/dashboard/installations/inst_1/export",
-      {
-        method: "POST",
-      },
-    ),
   ];
 
   for (const request of blockedRequests) {
@@ -4557,7 +4294,7 @@ test("accounts handler completes AppInstallation ready suspended exported lifecy
           gitUrl: "https://github.com/example/lifecycle",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "shared-cell",
@@ -4642,7 +4379,7 @@ test("accounts handler records uninstall for already terminal installations", as
           gitUrl: "https://github.com/example/failed-uninstall",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         status: "failed",
@@ -4683,7 +4420,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
           gitUrl: "https://github.com/example/materialize",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "shared-cell",
@@ -4700,21 +4437,21 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
           name: "auth",
           kind: "identity.oidc@v1",
           configRef:
-            "takosumi-installer://installable-app/example.materialize/use-edges/auth",
+            "takosumi-deploy-control://installable-app/example.materialize/use-edges/auth",
           secretRefs: [],
         }, {
           useEdgeId: "bind_materialize_database",
           name: "database",
           kind: "database.postgres@v1",
           configRef:
-            "takosumi-installer://installable-app/example.materialize/use-edges/database",
+            "takosumi-deploy-control://installable-app/example.materialize/use-edges/database",
           secretRefs: ["secret://inst_materialize_request/database/password"],
         }, {
           useEdgeId: "bind_materialize_domain",
           name: "domain",
           kind: "domain.http@v1",
           configRef:
-            "takosumi-installer://installable-app/example.materialize/use-edges/domain",
+            "takosumi-deploy-control://installable-app/example.materialize/use-edges/domain",
           secretRefs: [],
         }],
         oidcClients: [{
@@ -4997,7 +4734,7 @@ test("accounts handler records AppInstallation materialize operation failures", 
           gitUrl: "https://github.com/example/materialize-failure",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "shared-cell",
@@ -5133,7 +4870,7 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
           gitUrl: "https://github.com/example/materialize-worker",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "shared-cell",
@@ -5150,14 +4887,14 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
           name: "auth",
           kind: "identity.oidc@v1",
           configRef:
-            "takosumi-installer://installable-app/example.materialize-worker/use-edges/auth",
+            "takosumi-deploy-control://installable-app/example.materialize-worker/use-edges/auth",
           secretRefs: [],
         }, {
           useEdgeId: "bind_materialize_worker_domain",
           name: "domain",
           kind: "domain.http@v1",
           configRef:
-            "takosumi-installer://installable-app/example.materialize-worker/use-edges/domain",
+            "takosumi-deploy-control://installable-app/example.materialize-worker/use-edges/domain",
           secretRefs: [],
         }],
         oidcClients: [{
@@ -5250,7 +4987,7 @@ test("accounts handler rejects materialize worker continuity mismatch before cut
           gitUrl: "https://github.com/example/materialize-mismatch",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "shared-cell",
@@ -5319,7 +5056,7 @@ test("accounts handler keeps shared-cell runtime ready when materialize worker f
           gitUrl: "https://github.com/example/materialize-worker-failure",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "shared-cell",
@@ -5386,7 +5123,7 @@ test("accounts handler rejects operation completion without request event", asyn
           gitUrl: "https://github.com/example/missing-operation",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "dedicated",
@@ -5449,7 +5186,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
           gitUrl: "https://github.com/example/export",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "dedicated",
@@ -5657,7 +5394,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
           gitUrl: "https://github.com/example/export-worker",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "dedicated",
@@ -5785,7 +5522,7 @@ test("accounts handler records configured export worker failures", async () => {
           gitUrl: "https://github.com/example/export-worker-failure",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "dedicated",
@@ -5859,7 +5596,7 @@ test("accounts handler imports export bundle with target OIDC issuer", async () 
       sourceGitUrl: "https://github.com/takos/takos",
       sourceRef: "v1.2.3",
       sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-      planSnapshotDigest: "sha256:app",
+      planDigest: "sha256:app",
       artifactDigest: "sha256:compiled",
       mode: "dedicated",
       status: "ready",
@@ -6084,7 +5821,7 @@ test("accounts handler moves AppInstallation through materialize export import l
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "shared-cell",
@@ -6100,7 +5837,7 @@ test("accounts handler moves AppInstallation through materialize export import l
           name: "auth",
           kind: "identity.oidc@v1",
           configRef:
-            "takosumi-installer://installable-app/takos.chat/use-edges/auth",
+            "takosumi-deploy-control://installable-app/takos.chat/use-edges/auth",
           secretRefs: [],
         }],
         oidcClients: [{
@@ -6259,7 +5996,7 @@ test("accounts handler records AppInstallation export operation failures", async
           gitUrl: "https://github.com/example/export-failure",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
           artifactDigest: "sha256:compiled",
         },
         mode: "dedicated",
@@ -6314,107 +6051,6 @@ test("accounts handler records AppInstallation export operation failures", async
   expect(operation.error).toEqual("bundle writer failed");
 });
 
-test("accounts dashboard requests materialize and export operations", async () => {
-  const store = new InMemoryAccountsStore();
-  const handler = createAccountsHandler({ store });
-  await createReadyLaunchInstallation(handler, "inst_dashboard_materialize");
-  await createReadyLaunchInstallation(handler, "inst_dashboard_export");
-
-  const materializeResponse = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/installations/inst_dashboard_materialize/materialize",
-      {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          region: "tokyo",
-          cost_ack: "true",
-        }),
-      },
-    ),
-  );
-  expect(materializeResponse.status).toEqual(303);
-  expect(materializeResponse.headers.get("location")).toEqual("/dashboard/installations/inst_dashboard_materialize");
-  expect(store.listInstallationEvents("inst_dashboard_materialize").some((event) =>
-      event.eventType === "installation.materialize-requested"
-    )).toEqual(true);
-  const materializeRequest = store.listInstallationEvents(
-    "inst_dashboard_materialize",
-  ).find((event) => event.eventType === "installation.materialize-requested");
-  const materializeOperationId = String(
-    materializeRequest?.payload.operationId ?? "",
-  );
-  expect(materializeOperationId.length > 0).toEqual(true);
-  const materializeHtml = await dashboardHtml(
-    handler,
-    "inst_dashboard_materialize",
-  );
-  expect(materializeHtml).toContain(materializeOperationId);
-  expect(materializeHtml).toContain("preparing");
-
-  const exportResponse = await handler(
-    new Request(
-      "https://accounts.example.test/dashboard/installations/inst_dashboard_export/export",
-      {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          include_data: "true",
-          encryption_method: "none",
-        }),
-      },
-    ),
-  );
-  expect(exportResponse.status).toEqual(303);
-  expect(exportResponse.headers.get("location")).toEqual("/dashboard/installations/inst_dashboard_export");
-  expect(store.listInstallationEvents("inst_dashboard_export").some((event) =>
-      event.eventType === "installation.export-requested"
-    )).toEqual(true);
-  const exportRequest = store.listInstallationEvents("inst_dashboard_export")
-    .find((event) => event.eventType === "installation.export-requested");
-  const exportOperationId = String(exportRequest?.payload.operationId ?? "");
-  expect(exportOperationId.length > 0).toEqual(true);
-  const exportDetailHtml = await dashboardHtml(
-    handler,
-    "inst_dashboard_export",
-  );
-  expect(exportDetailHtml).toContain(exportOperationId);
-  expect(exportDetailHtml).toContain("preparing");
-
-  const completedStore = new InMemoryAccountsStore();
-  const completedHandler = createAccountsHandler({
-    store: completedStore,
-    exportWorker: () => ({
-      downloadUrl: "https://downloads.example.test/takos-export.tar.zst",
-      downloadExpiresAt: "2999-05-10T00:00:00.000Z",
-    }),
-  });
-  await createReadyLaunchInstallation(
-    completedHandler,
-    "inst_dashboard_export_done",
-  );
-  const completedExportResponse = await completedHandler(
-    new Request(
-      "https://accounts.example.test/dashboard/installations/inst_dashboard_export_done/export",
-      {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          encryption_method: "none",
-        }),
-      },
-    ),
-  );
-  expect(completedExportResponse.status).toEqual(303);
-  const completedHtml = await dashboardHtml(
-    completedHandler,
-    "inst_dashboard_export_done",
-  );
-  expect(completedHtml).toContain("exported");
-  expect(completedHtml).toContain("https://downloads.example.test/takos-export.tar.zst");
-  expect(completedHtml).toContain("Download");
-});
-
 test("accounts handler materializes launch token binding config", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({
@@ -6437,7 +6073,7 @@ test("accounts handler materializes launch token binding config", async () => {
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
@@ -6446,7 +6082,7 @@ test("accounts handler materializes launch token binding config", async () => {
           name: "bootstrap",
           kind: "install-launch-token@v1",
           configRef:
-            "takosumi-installer://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
+            "takosumi-deploy-control://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
           secretRefs: [],
         }],
       }),
@@ -6497,7 +6133,7 @@ test("accounts handler connects shared-cell runtime binding to launch token boot
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         status: "ready",
@@ -6506,7 +6142,7 @@ test("accounts handler connects shared-cell runtime binding to launch token boot
           name: "bootstrap",
           kind: "install-launch-token@v1",
           configRef:
-            "takosumi-installer://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
+            "takosumi-deploy-control://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
           secretRefs: [],
         }],
       }),
@@ -6549,8 +6185,8 @@ test("accounts handler Use Takos start creates product launch without Git instal
     launchTokens: {
       pairwiseSubjectSecret: launchPairwiseSubjectSecret,
     },
-    installer: {
-      url: "http://takosumi-installer.internal:8788",
+    deployControl: {
+      url: "http://takosumi-deploy-control.internal:8788",
       fetch: () => {
         installApplyCalled = true;
         return Promise.resolve(Response.json({ unexpected: true }));
@@ -6624,25 +6260,23 @@ test("accounts handler blocks Use Takos start when managed offering access is cl
     },
   });
 
-  for (const path of ["/start", "/dashboard/use-takos"]) {
-    const response = await handler(
-      new Request(
-        [
-          `https://accounts.example.test${path}`,
-          "?takos_url=https%3A%2F%2Ftakos.example.test",
-          "&subject=tsub_owner",
-          "&account_id=acct_1",
-          "&space_id=space_1",
-          "&installation_id=inst_takos_start",
-          "&terms_version=terms-2026-05-13",
-          "&terms_accepted=true",
-        ].join(""),
-      ),
-    );
+  const response = await handler(
+    new Request(
+      [
+        "https://accounts.example.test/start",
+        "?takos_url=https%3A%2F%2Ftakos.example.test",
+        "&subject=tsub_owner",
+        "&account_id=acct_1",
+        "&space_id=space_1",
+        "&installation_id=inst_takos_start",
+        "&terms_version=terms-2026-05-13",
+        "&terms_accepted=true",
+      ].join(""),
+    ),
+  );
 
-    expect(response.status).toEqual(503);
-    expect((await response.json()).error).toEqual("launch_readiness_not_complete");
-  }
+  expect(response.status).toEqual(503);
+  expect((await response.json()).error).toEqual("launch_readiness_not_complete");
 
   expect(store.findAccount("tsub_owner")).toEqual(undefined);
   expect(store.findAppInstallation("inst_takos_start")).toEqual(undefined);
@@ -6740,7 +6374,7 @@ test("accounts handler Use Takos start validates redirect and existing installat
           gitUrl: "takos-product://managed/takos",
           ref: "managed",
           commit: "managed-prebuilt",
-          planSnapshotDigest: "sha256:takos-product-managed",
+          planDigest: "sha256:takos-product-managed",
         },
         mode: "shared-cell",
         status: "ready",
@@ -6795,7 +6429,7 @@ test("accounts handler isolates shared-cell namespaces and launch tokens", async
             gitUrl: "https://github.com/takos/takos",
             ref: "v1.2.3",
             commit: "abc123",
-            planSnapshotDigest: "sha256:app",
+            planDigest: "sha256:app",
           },
           mode: "shared-cell",
           status: "ready",
@@ -6804,7 +6438,7 @@ test("accounts handler isolates shared-cell namespaces and launch tokens", async
             name: "bootstrap",
             kind: "install-launch-token@v1",
             configRef:
-              "takosumi-installer://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
+              "takosumi-deploy-control://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
             secretRefs: [],
           }],
         }),
@@ -6929,7 +6563,7 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
             gitUrl: "https://github.com/takos/takos",
             ref: "v1.2.3",
             commit: "abc123",
-            planSnapshotDigest: "sha256:app",
+            planDigest: "sha256:app",
           },
           mode: "shared-cell",
           status: "ready",
@@ -6938,19 +6572,19 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
             name: "auth",
             kind: "identity.oidc@v1",
             configRef:
-              `takosumi-installer://installable-app/takos.chat/use-edges/auth/${input.installationId}`,
+              `takosumi-deploy-control://installable-app/takos.chat/use-edges/auth/${input.installationId}`,
             secretRefs: [],
           }, {
             name: "database",
             kind: "database.postgres@v1",
             configRef:
-              `takosumi-installer://installable-app/takos.chat/use-edges/database/${input.installationId}`,
+              `takosumi-deploy-control://installable-app/takos.chat/use-edges/database/${input.installationId}`,
             secretRefs: [],
           }, {
             name: "blob",
             kind: "object-store.s3-compatible@v1",
             configRef:
-              `takosumi-installer://installable-app/takos.chat/use-edges/blob/${input.installationId}`,
+              `takosumi-deploy-control://installable-app/takos.chat/use-edges/blob/${input.installationId}`,
             secretRefs: [],
           }],
           oidcClients: [{
@@ -7098,7 +6732,7 @@ test("accounts handler materializes configured provider bindings", async () => {
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
@@ -7106,7 +6740,7 @@ test("accounts handler materializes configured provider bindings", async () => {
           name: "db",
           kind: "database.postgres@v1",
           configRef:
-            "takosumi-installer://installable-app/takos.chat/use-edges/db/sha256:pending",
+            "takosumi-deploy-control://installable-app/takos.chat/use-edges/db/sha256:pending",
           declaration: {
             type: "database.postgres@v1",
             required: true,
@@ -7116,7 +6750,7 @@ test("accounts handler materializes configured provider bindings", async () => {
           name: "blob",
           kind: "object-store.s3-compatible@v1",
           configRef:
-            "takosumi-installer://installable-app/takos.chat/use-edges/blob/sha256:pending",
+            "takosumi-deploy-control://installable-app/takos.chat/use-edges/blob/sha256:pending",
           declaration: {
             type: "object-store.s3-compatible@v1",
             required: true,
@@ -7172,7 +6806,7 @@ test("accounts handler rejects AppBinding records outside the catalog contract",
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
@@ -7204,7 +6838,7 @@ test("accounts handler rejects AppGrant records outside the catalog contract", a
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
@@ -7276,7 +6910,7 @@ test("accounts handler paginates AppInstallation list via cursor and limit", asy
       sourceGitUrl: `https://github.com/example/page-${i}`,
       sourceRef: "v1.0.0",
       sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-      planSnapshotDigest: "sha256:app",
+      planDigest: "sha256:app",
       mode: "shared-cell",
       status: "ready",
       createdBySubject: "tsub_page_owner",
@@ -7308,7 +6942,7 @@ test("accounts handler paginates AppInstallation list via cursor and limit", asy
   const secondBody = await secondPage.json();
   expect(secondBody.installations.length).toEqual(2);
   // The serialized envelope exposes `id` (not `installationId`) for the
-  // legacy wire shape (see `serializeAppInstallation`).
+  // account-plane wire shape (see `serializeAppInstallation`).
   expect(secondBody.installations[0].id).toEqual("inst_page_2");
 
   const malformedCursor = await handler(
@@ -7350,7 +6984,7 @@ test("accounts handler signs export download redirects", async () => {
           gitUrl: "https://github.com/example/signed",
           ref: "v1.0.0",
           commit: "0123456789abcdef0123456789abcdef01234567",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         status: "ready",
@@ -7456,7 +7090,7 @@ async function createReadyLaunchInstallation(
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "abc123",
-          planSnapshotDigest: "sha256:app",
+          planDigest: "sha256:app",
         },
         mode: "shared-cell",
         status: "ready",
@@ -7465,19 +7099,6 @@ async function createReadyLaunchInstallation(
     }),
   );
   expect(response.status).toEqual(202);
-}
-
-async function dashboardHtml(
-  handler: (request: Request) => Promise<Response>,
-  installationId: string,
-): Promise<string> {
-  const response = await handler(
-    new Request(
-      `https://accounts.example.test/dashboard/installations/${installationId}`,
-    ),
-  );
-  expect(response.status).toEqual(200);
-  return await response.text();
 }
 
 async function s256Challenge(verifier: string): Promise<string> {

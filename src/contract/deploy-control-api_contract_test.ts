@@ -1,0 +1,137 @@
+import { expect, test } from "bun:test";
+import {
+  APPLY_RUN_PATH,
+  APPLY_RUNS_PATH,
+  INSTALLATION_DEPLOYMENTS_PATH,
+  INSTALLATION_DEPLOYMENT_OUTPUTS_PATH,
+  INSTALLATION_PATH,
+  DEPLOY_CONTROL_ERROR_CODES,
+  DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
+  PLAN_RUN_PATH,
+  PLAN_RUNS_PATH,
+  RUNNER_PROFILES_PATH,
+} from "./deploy-control-api.ts";
+import { DEPLOY_CONTROL_API_CONTRACT_FIXTURES } from "./deploy-control-api_contract.ts";
+
+test("Deploy Control API v1 exposes the OpenTofu deploy-control endpoint templates", () => {
+  expect([
+    RUNNER_PROFILES_PATH,
+    PLAN_RUNS_PATH,
+    PLAN_RUN_PATH("{id}"),
+    APPLY_RUNS_PATH,
+    APPLY_RUN_PATH("{id}"),
+    INSTALLATION_PATH("{id}"),
+    INSTALLATION_DEPLOYMENTS_PATH("{id}"),
+    INSTALLATION_DEPLOYMENT_OUTPUTS_PATH("{id}"),
+  ]).toEqual([
+    "/v1/runner-profiles",
+    "/v1/plan-runs",
+    "/v1/plan-runs/%7Bid%7D",
+    "/v1/apply-runs",
+    "/v1/apply-runs/%7Bid%7D",
+    "/v1/installations/%7Bid%7D",
+    "/v1/installations/%7Bid%7D/deployments",
+    "/v1/installations/%7Bid%7D/deployment-outputs",
+  ]);
+});
+
+test("Deploy Control API v1 error code and HTTP status table is frozen", () => {
+  expect(DEPLOY_CONTROL_ERROR_CODES).toEqual([
+    "invalid_argument",
+    "unauthenticated",
+    "permission_denied",
+    "not_found",
+    "failed_precondition",
+    "resource_exhausted",
+    "not_implemented",
+    "internal_error",
+  ]);
+  expect(DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE).toEqual({
+    invalid_argument: 400,
+    unauthenticated: 401,
+    permission_denied: 403,
+    not_found: 404,
+    failed_precondition: 409,
+    resource_exhausted: 413,
+    not_implemented: 501,
+    internal_error: 500,
+  });
+});
+
+test("Deploy Control API v1 request and response DTO top-level shapes are frozen", () => {
+  const fixtures = DEPLOY_CONTROL_API_CONTRACT_FIXTURES;
+
+  expect(Object.keys(fixtures.listRunnerProfilesResponse)).toEqual([
+    "runnerProfiles",
+  ]);
+  expect(Object.keys(fixtures.createPlanRunRequest)).toEqual([
+    "spaceId",
+    "source",
+    "runnerProfileId",
+    "variables",
+    "requiredProviders",
+  ]);
+  expect(Object.keys(fixtures.planRunResponse)).toEqual([
+    "planRun",
+  ]);
+  expect(Object.keys(fixtures.createApplyRunRequest)).toEqual([
+    "planRunId",
+    "expected",
+  ]);
+  expect(Object.keys(fixtures.applyRunResponse)).toEqual([
+    "applyRun",
+    "installation",
+    "deployment",
+  ]);
+  expect(Object.keys(fixtures.getInstallationResponse)).toEqual([
+    "installation",
+  ]);
+  expect(Object.keys(fixtures.listDeploymentsResponse)).toEqual([
+    "deployments",
+  ]);
+  expect(Object.keys(fixtures.listDeploymentOutputsResponse)).toEqual([
+    "outputs",
+  ]);
+  expect(Object.keys(fixtures.errorEnvelope)).toEqual(["error"]);
+  expect(Object.keys(fixtures.errorEnvelope.error)).toEqual([
+    "code",
+    "message",
+    "requestId",
+    "details",
+  ]);
+});
+
+test("RunnerProfile fixture exposes Cloudflare tenant runtime and secret exposure boundaries", () => {
+  const profile = DEPLOY_CONTROL_API_CONTRACT_FIXTURES
+    .listRunnerProfilesResponse.runnerProfiles[0];
+
+  expect(Object.keys(profile)).toEqual([
+    "id",
+    "name",
+    "substrate",
+    "tofuVersion",
+    "stateBackend",
+    "allowedProviders",
+    "credentialRefs",
+    "resourceLimits",
+    "networkPolicy",
+    "cloudflareContainer",
+    "cloudflareWorkersForPlatforms",
+    "secretExposurePolicy",
+    "createdAt",
+  ]);
+  expect(profile.substrate).toEqual("cloudflare-containers");
+  expect(profile.cloudflareWorkersForPlatforms?.dispatchNamespace).toEqual(
+    "takosumi-tenants",
+  );
+  expect(
+    profile.cloudflareWorkersForPlatforms?.outboundWorker
+      ?.enforceNetworkPolicy,
+  ).toEqual(true);
+  expect(profile.secretExposurePolicy).toEqual({
+    providerCredentials: "runner-only",
+    tenantWorkerOperatorSecrets: "forbidden",
+    redactLogs: true,
+    blockSensitiveOutputs: true,
+  });
+});

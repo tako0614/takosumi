@@ -54,8 +54,6 @@ The Caddy site label and the Bun listener bind address are intentionally separat
 - `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME` — the eTLD+1 your users dial (e.g. `accounts.example.com`). Caddy uses this as the site label in `Caddyfile.example` and obtains an ACME certificate for it.
 - `TAKOSUMI_ACCOUNTS_BIND_HOST` — the in-container Bun listener bind address. Defaults to `0.0.0.0`. Caddy reverse-proxies to `accounts:8787` on the docker-compose network, so this address is private to the container.
 
-The legacy `TAKOSUMI_ACCOUNTS_HOSTNAME` env var is accepted as a deprecated alias for `TAKOSUMI_ACCOUNTS_BIND_HOST` to ease upgrades. New deployments must use the split env names.
-
 ## Installation export downloads
 
 To enable installation export downloads the operator must set, together:
@@ -99,4 +97,4 @@ If you bind-mount additional directories into the `accounts` container (e.g. the
 
 ## Why two reference distributions
 
-The architectural claim that Takosumi Accounts is substrate-neutral needs a second working deployment to be more than a spec promise. This distribution is that second working deployment. See `docs/architecture/takosumi.md` and the ecosystem-level `ARCHITECTURE.md` for the substitutability table.
+The architectural claim that Takosumi Accounts is substrate-neutral needs a second working deployment to be more than a spec promise. This distribution is that second working deployment. See `takosumi/docs/reference/operator.md` and the ecosystem-level `ARCHITECTURE.md` for the substitutability table.

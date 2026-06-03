@@ -182,7 +182,6 @@ class InMemorySqlClient implements SqlClient, SqlTransaction {
     }
   }
 
-  // deno-lint-ignore require-await
   async query<Row extends Record<string, unknown> = Record<string, unknown>>(
     sql: string,
     parameters?: SqlParameters,

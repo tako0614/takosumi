@@ -183,7 +183,7 @@ async function authenticateOidcClient(input: {
    * When the host wiring did not supply a `clients` map (clientsSupplied =
    * false) and no static or dynamic client is known yet, the handler runs in
    * a transitional degraded mode: requests without a `client_id` are
-   * accepted to preserve legacy behavior. Once the host wires `clients` (or
+   * accepted only in degraded mode. Once the host wires `clients` (or
    * any dynamic registration exists), strict RFC 7009 §2.1 / RFC 7662 §2.1
    * client authentication is enforced.
    */
@@ -194,7 +194,7 @@ async function authenticateOidcClient(input: {
 > {
   if (!input.clientId) {
     if (!input.clientsSupplied && input.clients.size === 0) {
-      // Degraded mode: legacy caller, no static clients wired. Accept the
+      // Degraded mode: no static clients wired. Accept the
       // anonymous request to preserve transitional compatibility. Once
       // mod.ts wires `clients` through (Agent 7 follow-up), this branch
       // becomes unreachable for production deployments.
@@ -842,7 +842,7 @@ export async function handleRevoke(input: {
   // Only revoke tokens that were issued for the authenticated client. This
   // protects against a malicious client revoking another client's tokens.
   // In degraded mode (no static clients wired) the caller is unauthenticated
-  // and we fall back to the legacy delete-by-token behavior.
+  // and we fall back to delete-by-token behavior.
   const accessRecord = await input.store.findAccessToken(token);
   if (accessRecord) {
     if (
@@ -930,7 +930,7 @@ export async function handleIntrospect(input: {
       return json({ active: false });
     }
     // Only reveal token contents to the client that owns the token. In
-    // degraded mode (no static clients wired) the legacy behavior is kept.
+    // degraded mode (no static clients wired) the delete-by-token behavior is kept.
     if (
       authenticatedClientId !== undefined &&
       accessRecord.clientId !== authenticatedClientId
@@ -1013,7 +1013,7 @@ async function isPkceVerifierValid(
   if (!record.codeChallenge) return false;
   if (!verifier) return false;
   // Only S256 is supported. Plain (and any other method) is rejected
-  // explicitly as defense-in-depth even if a legacy or migrated record still
+  // explicitly as defense-in-depth even if a migrated record still
   // carries it.
   if (record.codeChallengeMethod !== "S256") return false;
   const digest = await crypto.subtle.digest(

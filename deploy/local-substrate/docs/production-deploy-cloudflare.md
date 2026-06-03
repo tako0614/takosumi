@@ -63,15 +63,13 @@ wrangler d1 create takosumi
 wrangler r2 bucket create takos-artifacts
 wrangler queues create takosumi-control-plane
 wrangler queues create takosumi-control-plane-dlq
+wrangler queues create takosumi-opentofu-runs
+wrangler queues create takosumi-opentofu-runs-dlq
 
 # Push operator secrets.
-wrangler secret put TAKOSUMI_INSTALLER_TOKEN --config deploy/cloudflare/wrangler.toml
-wrangler secret put TAKOSUMI_DEPLOY_TOKEN --config deploy/cloudflare/wrangler.toml
+wrangler secret put TAKOSUMI_DEPLOY_CONTROL_TOKEN --config deploy/cloudflare/wrangler.toml
 wrangler secret put TAKOSUMI_INTERNAL_API_SECRET --config deploy/cloudflare/wrangler.toml
 wrangler secret put TAKOSUMI_SECRET_STORE_PASSPHRASE --config deploy/cloudflare/wrangler.toml
-
-# Optional if provider apply should call a runtime-agent from the Worker.
-wrangler secret put TAKOSUMI_AGENT_TOKEN --config deploy/cloudflare/wrangler.toml
 
 # Deploy.
 wrangler deploy --config deploy/cloudflare/wrangler.toml
@@ -92,7 +90,7 @@ curl -X POST -H "Content-Type: application/json" \
 
 ## Step 3 — takosumi.com website (landing + /docs/ + /contexts/, Cloudflare Pages)
 
-Wave M-G (= 2026-05-20) consolidated the apex landing, the VitePress reference docs, and the JSON-LD context catalog into a **single** Cloudflare Pages project (`takosumi-website`). The build script `takosumi/website/build.sh` produces one merged `.output/public/` artifact with `index.html` at the apex, the VitePress build overlaid under `/docs/`, and `spec/contexts/` overlaid under `/contexts/`. The legacy split (`takosumi-site` for the landing + `takosumi-docs` for `docs.takosumi.com`) is superseded; see [`takosumi/DEPLOY.md`](../../../DEPLOY.md) §"Cleanup of legacy Pages projects" for the one-time dashboard cleanup steps.
+Wave M-G (= 2026-05-20) consolidated the apex landing, the VitePress reference docs, and the JSON-LD context catalog into a **single** Cloudflare Pages project (`takosumi-website`). The build script `takosumi/website/build.sh` produces one merged `.output/public/` artifact with `index.html` at the apex, the VitePress build overlaid under `/docs/`, and `spec/contexts/` overlaid under `/contexts/`. The former split (`takosumi-site` for the landing + `takosumi-docs` for `docs.takosumi.com`) is superseded; see [`takosumi/DEPLOY.md`](../../../DEPLOY.md) §"Cleanup of retired Pages projects" for the one-time dashboard cleanup steps.
 
 Option A — connect Pages to the takosumi repo (recommended for CI):
 
@@ -153,7 +151,7 @@ The local-substrate runs the **same bundled Worker files** that `wrangler deploy
 
 ```
 takosumi/deploy/cloudflare/.wrangler/dist/takosumi-accounts-worker.mjs
-takosumi/deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs
+takosumi/deploy/cloudflare/.wrangler/dist/takosumi-cloudflare-worker.mjs
 ```
 
 The build containers produce them; Miniflare runs them locally with emulated D1/R2/Queues/DO bindings. The difference between local and prod is the provider-managed binding backend and the binding / secret values. Code path is identical.

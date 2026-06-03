@@ -210,12 +210,12 @@ test("Accounts workload platform service resolver reconciles existing OIDC clien
   expect(store.findOidcClientForInstallation("inst_reconcile")?.updatedAt).toEqual(1_700_000_000_999);
 });
 
-test("Accounts workload platform service resolver can project direct-installer installations", async () => {
+test("Accounts workload platform service resolver can project deploy-control installations", async () => {
   const store = new InMemoryAccountsStore();
   const resolver = createTakosumiWorkloadPlatformServiceResolver({
     store,
     issuer: "https://cloud.example.test",
-    allowDirectInstallerInstallations: true,
+    allowDeployControlInstallations: true,
     now: () => 1_700_000_000_000,
   });
 
@@ -234,7 +234,7 @@ test("Accounts workload platform service resolver can project direct-installer i
   expect(store.findOidcClientForInstallation("ins_direct")?.namespacePath).toEqual(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC);
 });
 
-test("Accounts workload platform service resolver does not reassign existing spaces for direct projections", async () => {
+test("Accounts workload platform service resolver does not reassign existing spaces for deploy control projections", async () => {
   const store = new InMemoryAccountsStore();
   store.saveLedgerAccount({
     accountId: "acct_existing",
@@ -252,7 +252,7 @@ test("Accounts workload platform service resolver does not reassign existing spa
   const resolver = createTakosumiWorkloadPlatformServiceResolver({
     store,
     issuer: "https://cloud.example.test",
-    allowDirectInstallerInstallations: true,
+    allowDeployControlInstallations: true,
     now: () => 1_700_000_000_000,
   });
 
@@ -342,7 +342,7 @@ test("Accounts workload platform service resolver projects BillingPort material"
     sourceGitUrl: "https://github.com/example/app",
     sourceRef: "main",
     sourceCommit: "commit_1",
-    planSnapshotDigest:
+    planDigest:
       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     mode: "shared-cell",
     billingAccountId: "billing_1",

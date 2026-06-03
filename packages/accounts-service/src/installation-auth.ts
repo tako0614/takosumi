@@ -48,7 +48,7 @@ export async function requireAppInstallationCreateWriteAccess(input: {
   });
 }
 
-export async function requireInstallationDryRunWriteAccess(input: {
+export async function requireInstallationPlanRunWriteAccess(input: {
   request: Request;
   store: AccountsStore;
 }): Promise<Response | undefined> {
@@ -70,8 +70,14 @@ export async function requireInstallationDryRunWriteAccess(input: {
     }, 400);
   }
   const space = await input.store.findSpace(spaceId);
-  if (!space) return json({ error: "space_not_found" }, 404);
+  // A not-yet-created space is allowed for any write-scoped subject: this is the
+  // new-user one-click install case (open /install?git=... -> sign in -> plan),
+  // where the space is created later at install time with this spaceId. A
+  // PlanRun is a read-only OpenTofu dry-run of the git module, and ownership is
+  // enforced at install create. An EXISTING space owned by someone else is
+  // still rejected so a subject cannot plan against another account's space.
   if (
+    space &&
     !await subjectCanAccessAccount(
       input.store,
       bearer.auth.subject,

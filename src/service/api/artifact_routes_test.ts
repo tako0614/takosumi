@@ -5,9 +5,8 @@ import {
   registerArtifactKind,
   unregisterArtifactKind,
 } from "takosumi-contract/reference/compat";
-import { registerBundledArtifactKinds } from "../bootstrap/artifact_kinds.ts";
 import { MemoryObjectStorage } from "../adapters/object-storage/memory.ts";
-import { InMemoryTakosumiDeploymentRecordStore } from "../domains/deploy/takosumi_deployment_record_store.ts";
+import { InMemoryTakosumiDeploymentRecordStore } from "../domains/deploy-records/deployment_record_store.ts";
 import {
   registerArtifactRoutes,
   TAKOSUMI_ARTIFACT_MAX_BYTES_DEFAULT,
@@ -349,7 +348,7 @@ test("artifact gc removes unreferenced artifacts but keeps referenced ones",
     await recordStore.upsert({
       tenantId: "takosumi-deploy",
       name: "app",
-      manifest: {
+      sourceEvidence: {
         resources: [{ spec: { artifact: { hash: keepBody.hash } } }],
       },
       appliedResources: [],
@@ -422,7 +421,7 @@ test("artifact gc keeps artifacts referenced by destroyed records",
     await recordStore.upsert({
       tenantId: "takosumi-deploy",
       name: "destroyed-app",
-      manifest: {
+      sourceEvidence: {
         resources: [{ spec: { artifact: { hash: stored.hash } } }],
       },
       appliedResources: [],
@@ -722,84 +721,5 @@ test("artifact upload uses default 50 MiB cap when option omitted",
     const bytes = new Uint8Array(1024);
     const res = await uploadArtifact(app, VALID_TOKEN, bytes, "js-bundle");
     assert.equal(res.status, 200);
-  },
-);
-
-// --- Task: GET /v1/artifacts/kinds discovery endpoint ------------------------
-
-test("GET /v1/artifacts/kinds returns 401 without bearer auth",
-  async () => {
-    registerBundledArtifactKinds();
-    const { app } = createApp({ token: VALID_TOKEN });
-    const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/kinds`);
-    assert.equal(res.status, 401);
-  },
-);
-
-test("GET /v1/artifacts/kinds surfaces the bundled artifact kinds",
-  async () => {
-    registerBundledArtifactKinds();
-    const { app } = createApp({ token: VALID_TOKEN });
-    const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/kinds`, {
-      headers: authHeaders(VALID_TOKEN),
-    });
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.ok(Array.isArray(body.kinds), "kinds must be an array");
-    const ids = (body.kinds as Array<{ kind: string }>).map((k) => k.kind);
-    for (
-      const expected of [
-        "oci-image",
-        "js-bundle",
-        "lambda-zip",
-        "static-bundle",
-        "wasm",
-      ]
-    ) {
-      assert.ok(ids.includes(expected), `missing bundled kind: ${expected}`);
-    }
-    const jsBundle = (body.kinds as Array<{
-      kind: string;
-      contentTypeHint?: string;
-    }>).find((k) => k.kind === "js-bundle");
-    assert.ok(jsBundle);
-    assert.equal(jsBundle!.contentTypeHint, "application/javascript");
-  },
-);
-
-test("GET /v1/artifacts/kinds reflects newly registered kinds",
-  async () => {
-    registerBundledArtifactKinds();
-    const { app } = createApp({ token: VALID_TOKEN });
-    const customKind = {
-      kind: "test-only-custom-kind",
-      description: "A test-only kind to verify discovery",
-      contentTypeHint: "application/x-test",
-    };
-    registerArtifactKind(customKind);
-    try {
-      const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/kinds`, {
-        headers: authHeaders(VALID_TOKEN),
-      });
-      assert.equal(res.status, 200);
-      const body = await res.json();
-      const found = (body.kinds as Array<{ kind: string }>).find((k) =>
-        k.kind === "test-only-custom-kind"
-      );
-      assert.ok(found, "newly registered kind must appear in discovery");
-    } finally {
-      unregisterArtifactKind("test-only-custom-kind");
-    }
-  },
-);
-
-test("GET /v1/artifacts/kinds returns 404 when deploy token unset",
-  async () => {
-    registerBundledArtifactKinds();
-    const { app } = createApp({ token: undefined });
-    const res = await app.request(`${TAKOSUMI_ARTIFACTS_PATH}/kinds`, {
-      headers: authHeaders("anything"),
-    });
-    assert.equal(res.status, 404);
   },
 );

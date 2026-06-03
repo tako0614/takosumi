@@ -1,8 +1,8 @@
 # Takosumi Service — single-host reference distribution
 
-Substrate-neutral counterpart to `deploy/cloudflare/`. Brings up the Takosumi service + runtime-agent + Postgres + MinIO + Caddy on any Docker host (single VM, container host, k8s pod via kompose).
+Substrate-neutral service/storage counterpart to `deploy/cloudflare/`. Brings up the Takosumi service + Postgres + MinIO + Caddy on any Docker host (single VM, container host, k8s pod via kompose). OpenTofu execution is attached separately through RunnerProfile.
 
-The service here is the same `src/service/index.ts` that ships to Cloudflare Workers. It uses the runtime-neutral `RuntimeAdapter` under `src/service/shared/runtime/` and is run through the Node/Bun path in this distribution.
+The service here is the same `src/service/index.ts` that ships to Cloudflare Workers. It uses the runtime-neutral `RuntimeAdapter` under `src/service/shared/runtime/` and is run through the Bun path in this distribution.
 
 ## Quick start
 
@@ -14,9 +14,9 @@ docker compose up -d
 # wait until service reports healthy
 curl -k https://localhost/healthz
 
-# install a Source through the canonical installer entry point
-curl -X POST https://localhost/v1/installations \
-  -H "Authorization: Bearer $TAKOSUMI_INSTALLER_TOKEN" \
+# create a PlanRun through the canonical Deploy Control entry point
+curl -X POST https://localhost/v1/plan-runs \
+  -H "Authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{
     "spaceId": "space:personal",
@@ -24,7 +24,8 @@ curl -X POST https://localhost/v1/installations \
       "kind": "git",
       "url": "https://github.com/example/app.git",
       "ref": "main"
-    }
+    },
+    "requiredProviders": ["registry.opentofu.org/cloudflare/cloudflare"]
   }'
 ```
 
@@ -35,10 +36,8 @@ Set strong, unique secrets for each of:
 ```
 POSTGRES_PASSWORD          # Postgres superuser passphrase
 MINIO_ROOT_PASSWORD        # MinIO admin passphrase
-TAKOSUMI_INSTALLER_TOKEN   # bearer token for /v1/installations/*
-TAKOSUMI_DEPLOY_TOKEN      # optional bearer token for DataAsset write routes
+TAKOSUMI_DEPLOY_CONTROL_TOKEN   # bearer token for Deploy Control API routes
 TAKOSUMI_INTERNAL_API_SECRET  # shared secret for service ↔ admin RPC
-TAKOSUMI_AGENT_TOKEN       # bearer token between service and runtime-agent
 TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 ```
 
@@ -46,19 +45,17 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 
 ## Files
 
-- `compose.yml` — Postgres + MinIO + service + runtime-agent + Caddy stack
+- `compose.yml` — Postgres + MinIO + service + Caddy stack
 - `Dockerfile.service` — service image (Bun + workspace bundle)
-- `Dockerfile.runtime-agent` — generic runtime-agent image (Bun + lifecycle host)
 - `Caddyfile.example` — reverse proxy + automatic HTTPS template
 - `schema.sql` — initial Postgres schema (loaded by `docker-entrypoint-initdb.d`)
 - `.env.example` — template for required secrets
 
 ## Operator notes
 
-- The service exposes `/v1/installations*` as the canonical installer API. CLI / GitHub Actions / custom CI all use that 5 endpoint surface with an installer bearer token.
-- `runtime-agent` receives apply / destroy calls from the service and dispatches them through a runtime handler registry. The generic runtime-agent host lives in `takosumi/src/runtime-agent/`; concrete local and cloud runtime handlers are operator-owned code and must be wired by the operator distribution.
-- The runtime-agent needs `/var/run/docker.sock` mounted to drive user-deployed containers via the Docker Compose web-service adapter. Lock this down with rootless Docker or Podman in production.
-- For multi-host deployments, replace the `runtime-agent` service with one runtime-agent process per host and configure the service with `TAKOSUMI_AGENT_REGISTRY` to fan out apply calls. See `docs/operator/operator-managed.md` for the multi-agent topology.
+- The service exposes `/v1/plan-runs` and `/v1/apply-runs` as the canonical mutation API. Installation routes are read/projection routes.
+- OpenTofu execution is operator-owned RunnerProfile scope. Attach a Cloudflare Container runner, external runner, or private workflow engine that enforces provider allowlists, credential refs, state backend, and network policy.
+- Provider credentials and state backend credentials must not be mounted into tenant workloads.
 
 ## Substrate matrix
 
@@ -70,8 +67,8 @@ TAKOSUMI_HOSTNAME          # public hostname (Caddy issues TLS for this)
 | AWS (ECS / Fargate + RDS + S3)    | n/a                              | spec-compliant, operator-owned |
 | GCP (Cloud Run + Cloud SQL + GCS) | n/a                              | spec-compliant, operator-owned |
 
-Native provider implementations for AWS / GCP / Kubernetes are operator-owned. No production-grade default reference deploy package for those substrates ships here. Operators bring their own OpenTofu / Helm / Pulumi / native controller wiring to land the service image and runtime-agent image, then publish PlatformService inventory for Takosumi to consume.
+Provider enablement for AWS / GCP / Kubernetes and other substrates is operator-owned. Operators bring their own OpenTofu modules and runner profile evidence, then publish well-known non-sensitive OpenTofu outputs into DeploymentOutput records and configure workload platform service resolvers when needed.
 
 ## Why two reference distributions
 
-The architectural claim that the Takosumi service is substrate-neutral needs a second working deployment to be more than a spec promise. This distribution is that second working deployment. See `docs/reference/architecture/operator-boundaries.md` and the ecosystem-level `ARCHITECTURE.md` for the substitutability table.
+The architectural claim that the Takosumi service is substrate-neutral needs working deployment evidence, not only source structure. See `docs/reference/operator.md` and the ecosystem-level `ARCHITECTURE.md` for the boundary.

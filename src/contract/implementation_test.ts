@@ -18,7 +18,7 @@ import {
   outputsToOutputMaterial,
 } from "./implementation.ts";
 import type { Component } from "./implementation.ts";
-import type { Deployment, Installation } from "./installer-api.ts";
+import type { Deployment, Installation } from "./deploy-control-api.ts";
 
 test("operatorImplementationFromNativeKindOperations wraps native operations without provider bridge", async () => {
   const seenSpecs: unknown[] = [];
@@ -349,7 +349,7 @@ test("OperatorImplementation lifecycle hook signatures accept Installation + Dep
     id: "dep_1",
     installationId: "ins_1",
     source: { kind: "local", url: "/tmp/app" },
-    planSnapshotDigest:
+    planDigest:
       "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     planSnapshot: {
       source: { kind: "local", url: "/tmp/app" },
@@ -554,7 +554,7 @@ test("OperatorImplementation.applyListen returns an EnvInjection", async () => {
 
 test("InlineMaterializer is the minimal Materializer packaging", () => {
   // `Materializer = OperatorImplementation | InlineMaterializer` — both attach to
-  // the same installer surface; this test exercises the inline form to
+  // the same deploy control surface; this test exercises the inline form to
   // pin the type contract.
   const inline: InlineMaterializer = {
     provides: ["https://example.com/kinds/lambda"],

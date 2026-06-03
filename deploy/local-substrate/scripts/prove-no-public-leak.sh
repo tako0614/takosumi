@@ -2,8 +2,8 @@
 # Defense-in-depth assertion that the local-substrate cannot leak to
 # public DNS / ACME endpoints. Three checks:
 #
-#   1. service: removed legacy public deploy routes return 404, so raw Manifest
-#      posts cannot bypass the installer contract.
+#   1. service: retired public deploy routes return 404, so raw source
+#      posts cannot bypass the deploy control contract.
 #   2. CoreDNS: any letsencrypt.org name returns NXDOMAIN.
 #   3. host firewall: the script *recommends* nftables / iptables egress
 #      filtering (we don't apply it here, since it requires root and varies
@@ -17,8 +17,8 @@ cd "$SUBSTRATE_DIR"
 PASS=0
 FAIL=0
 
-assert_legacy_public_deploy_closed() {
-	echo "==> [service] Verifying legacy public deploy routes are closed"
+assert_retired_public_deploy_closed() {
+	echo "==> [service] Verifying retired public deploy routes are closed"
 	local leaked=0
 	local paths=(
 		"/v1/deployments"
@@ -31,7 +31,7 @@ assert_legacy_public_deploy_closed() {
 			--resolve accounts.takosumi.test:443:127.0.0.1 \
 			-H "Authorization: Bearer ${TAKOSUMI_DEPLOY_TOKEN:-local-substrate-deploy-token}" \
 			-H "Content-Type: application/json" \
-			-d '{"manifest":{"kind":"Manifest","metadata":{"name":"legacy-route-probe"}}}' \
+			-d '{"source":{"git":{"url":"https://example.invalid/retired-route-probe.git","ref":"main"}}}' \
 			-o /dev/null \
 			-w "%{http_code}" \
 			"https://accounts.takosumi.test${path}")
@@ -41,7 +41,7 @@ assert_legacy_public_deploy_closed() {
 		fi
 	done
 	if [[ "$leaked" -eq 0 ]]; then
-		echo "    PASS legacy deploy routes are not mounted"
+		echo "    PASS retired deploy routes are not mounted"
 		PASS=$((PASS + 1))
 	else
 		FAIL=$((FAIL + 1))
@@ -80,15 +80,14 @@ EOF
 }
 
 assert_mocks_not_host_published() {
-	# The mock + emulator services (installer-mock, oauth-mock,
-	# mailpit web UI, jaeger UI, otel-collector, minio, and the
+	# The emulator services (oauth-mock, mailpit web UI, jaeger UI,
+	# otel-collector, minio, and the
 	# Miniflare worker mirrors) must stay on the internal docker
 	# network. If anyone accidentally adds a `ports:` entry that
 	# publishes them to 0.0.0.0, this catches it.
 	echo "==> [docker] Verifying new mock/emulator containers do not bind 0.0.0.0"
 	local leaked=0
 	local services=(
-		installer-mock
 		oauth-mock
 		mailpit
 		jaeger
@@ -117,7 +116,7 @@ assert_mocks_not_host_published() {
 	fi
 }
 
-assert_legacy_public_deploy_closed
+assert_retired_public_deploy_closed
 assert_coredns_nxdomain_letsencrypt
 assert_mocks_not_host_published
 recommend_egress_filter

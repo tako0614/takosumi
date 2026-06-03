@@ -1,89 +1,26 @@
-import { expect, test } from "bun:test";
-import { checkSpecSchemaForTesting } from "./lint-json-ld.ts";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
 
-function messagesFor(spec: unknown): readonly string[] {
-  return checkSpecSchemaForTesting(spec).map((issue) => issue.message);
+const ROOT = new URL("../", import.meta.url);
+
+test("JSON-LD linter is scoped to public contexts", async () => {
+  const source = await readText(new URL("scripts/lint-json-ld.ts", ROOT));
+
+  assert.match(source, /spec\/contexts/);
+  assert.equal(source.includes("docs/ki" + "nds"), false);
+  assert.equal(source.includes("/ki" + "nds/v1"), false);
+});
+
+test("v1 context exposes takosumi.com vocabulary", async () => {
+  const source = await readText(new URL("spec/contexts/v1.jsonld", ROOT));
+  const parsed = JSON.parse(source) as {
+    readonly "@context"?: { readonly "@vocab"?: unknown };
+  };
+
+  assert.equal(parsed["@context"]?.["@vocab"], "https://takosumi.com/vocab/v1#");
+});
+
+async function readText(path: URL): Promise<string> {
+  return await readFile(path, "utf8");
 }
-
-test("JSON-LD schema lint requires fixed object schemas to be closed", () => {
-  const messages = messagesFor({
-    type: "object",
-    properties: {
-      name: {
-        type: "string",
-        description: "Name.",
-      },
-    },
-  });
-  expect(messages).toContain(
-    "spec.additionalProperties must be false for object schemas with fixed properties",
-  );
-});
-
-test("JSON-LD schema lint accepts map schemas with propertyNames and value schemas", () => {
-  const messages = messagesFor({
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      listeners: {
-        type: "object",
-        description: "Named listeners.",
-        propertyNames: {
-          type: "string",
-          pattern: "^[a-z][a-z0-9-]{0,62}$",
-        },
-        additionalProperties: {
-          type: "object",
-          required: ["protocol"],
-          additionalProperties: false,
-          properties: {
-            protocol: {
-              type: "string",
-              enum: ["http", "https"],
-              description: "Protocol.",
-            },
-          },
-        },
-      },
-    },
-  });
-  expect(messages).toEqual([]);
-});
-
-test("JSON-LD schema lint validates keyword value types", () => {
-  const messages = messagesFor({
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      name: {
-        type: "string",
-        description: "Name.",
-        pattern: "[",
-        minLength: -1,
-      },
-      count: {
-        type: "integer",
-        description: "Count.",
-        minimum: "1",
-      },
-      tags: {
-        type: "array",
-        description: "Tags.",
-        minItems: 1.5,
-        items: { type: "string" },
-      },
-    },
-  });
-  expect(messages).toContain(
-    "spec.properties.name.pattern must be a valid regular expression",
-  );
-  expect(messages).toContain(
-    "spec.properties.name.minLength must be a non-negative integer",
-  );
-  expect(messages).toContain(
-    "spec.properties.count.minimum must be a finite number",
-  );
-  expect(messages).toContain(
-    "spec.properties.tags.minItems must be a non-negative integer",
-  );
-});

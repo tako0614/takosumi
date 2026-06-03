@@ -10,7 +10,7 @@
  * cached value via `readSession()` and react to changes via
  * `onSessionChange()`.
  *
- * `writeSession()` is intentionally a refresh trigger for legacy
+ * `writeSession()` is intentionally a refresh trigger for existing
  * callers: the cookie is set by the server when authentication
  * completes. Components that previously called `writeSession` should
  * call `refreshSession()` to pull the new server-known subject into
@@ -72,7 +72,7 @@ function pickResponseRecord(
   data: SessionMeResponse,
 ): SessionRecord | null {
   // The contract is the top-level shape `{ subject, expiresAt, primaryAccountId }`.
-  // We also accept the legacy `{ session: { subject, ... } }` envelope so the
+  // We also accept the existing `{ session: { subject, ... } }` envelope so the
   // SPA keeps working during a rolling deploy.
   if (typeof data?.subject === "string" && data.subject.length > 0) {
     return {
@@ -169,7 +169,7 @@ export function readSession(): SessionRecord | null {
 }
 
 /**
- * Legacy `writeSession` API: with the HttpOnly cookie model the server
+ * `writeSession` API: with the HttpOnly cookie model the server
  * is the source of truth, so this just triggers a refresh (the cookie
  * was set by the server's Set-Cookie header before the SPA was
  * navigated here).

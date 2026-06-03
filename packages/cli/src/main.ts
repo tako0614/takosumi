@@ -31,7 +31,7 @@ export type { AccountsSeedPlan } from "./cli-accounts-commands.ts";
 
 // Keep launch-readiness audit markers in this entrypoint because the
 // root readiness check validates the public CLI surface after helper extraction:
-// docs/managed-offering-evidence-collection-matrix.md
+// root docs/quality/managed-offering-evidence-summary.md
 // privateEvidenceRefClass must be null or a redacted scheme class
 // normalized.startsWith("topology://")
 // artifactDigestEvidenceRef

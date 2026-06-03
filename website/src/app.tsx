@@ -12,7 +12,7 @@ export default function App() {
     <Router
       root={(props) => (
         <MetaProvider>
-          <Title>Takosumi — Operator-portable PaaS toolkit</Title>
+          <Title>Takosumi — OpenTofu-native deploy control plane</Title>
           <Suspense>{props.children}</Suspense>
         </MetaProvider>
       )}

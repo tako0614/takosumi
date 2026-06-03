@@ -15,7 +15,7 @@ const defaultConfig = new URL(
 //                 production-shaped default and is allowed to keep template
 //                 values when only a staging rollout is in flight)
 //   - local:      `[env.local.vars]` only, and placeholder hostnames /
-//                 missing installer URL are tolerated (workers_dev defaults)
+//                 missing deploy control URL are tolerated (workers_dev defaults)
 type DeployEnv = "production" | "staging" | "local";
 
 interface Options {
@@ -34,9 +34,10 @@ interface ValidationDetails {
   readonly d1DatabaseIdPlaceholder: boolean;
   readonly r2BindingPresent: boolean;
   readonly r2BucketBlockPresent: boolean;
-  readonly installerUrlPresent: boolean;
-  readonly installerUrlValid: boolean;
-  readonly installerUrlPlaceholder: boolean;
+  readonly assetsConfigured: boolean;
+  readonly deployControlUrlPresent: boolean;
+  readonly deployControlUrlValid: boolean;
+  readonly deployControlUrlPlaceholder: boolean;
   readonly containerConfigured: boolean;
   readonly durableObjectPersistenceConfigured: boolean;
   readonly workersDev: boolean | null;
@@ -107,7 +108,7 @@ const PRODUCTION_FACING_VAR_KEYS: readonly string[] = [
   "TAKOSUMI_ACCOUNTS_CLIENT_ID",
   "TAKOSUMI_ACCOUNTS_REDIRECT_URIS",
   "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS",
-  "TAKOSUMI_ACCOUNTS_INSTALLER_URL",
+  "TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL",
 ];
 
 // Each TOML var section that wrangler may select per deploy profile.
@@ -132,14 +133,14 @@ function inspectRenderedConfig(
   env: DeployEnv,
 ): ValidationDetails {
   const databaseId = configString(source, "database_id");
-  // For env-scoped lookups (installer URL / managed offering access) prefer
+  // For env-scoped lookups (deploy control URL / managed offering access) prefer
   // the value from the env's first selected block. This keeps a
   // staging-only render honest: `[vars]` may legitimately stay empty in a
   // staging-only deploy as long as `[env.staging.vars]` is fully populated.
-  const installerUrl = readScopedVar(
+  const deployControlUrl = readScopedVar(
     source,
     env,
-    "TAKOSUMI_ACCOUNTS_INSTALLER_URL",
+    "TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL",
   );
   const managedOfferingAccess = readScopedVar(
     source,
@@ -180,10 +181,12 @@ function inspectRenderedConfig(
     d1DatabaseIdPlaceholder: databaseId ? placeholderUuid(databaseId) : false,
     r2BindingPresent: source.includes('binding = "TAKOSUMI_ACCOUNTS_EXPORTS"'),
     r2BucketBlockPresent: /^\[\[r2_buckets\]\]/m.test(source),
-    installerUrlPresent: Boolean(installerUrl),
-    installerUrlValid: installerUrl ? validUrl(installerUrl) : false,
-    installerUrlPlaceholder: installerUrl
-      ? placeholderUrl(installerUrl)
+    assetsConfigured: /^\[assets\]/m.test(source) &&
+      source.includes('binding = "ASSETS"'),
+    deployControlUrlPresent: Boolean(deployControlUrl),
+    deployControlUrlValid: deployControlUrl ? validUrl(deployControlUrl) : false,
+    deployControlUrlPlaceholder: deployControlUrl
+      ? placeholderUrl(deployControlUrl)
       : false,
     containerConfigured: /^\[\[containers\]\]/m.test(source),
     durableObjectPersistenceConfigured: /^\[\[durable_objects\.bindings\]\]/m
@@ -205,13 +208,13 @@ function validateRenderedConfig(details: ValidationDetails): string[] {
     errors.push("d1_databases.database_id must be a D1 UUID");
   }
 
-  if (!details.installerUrlPresent) {
-    errors.push("TAKOSUMI_ACCOUNTS_INSTALLER_URL is required");
-  } else if (!details.installerUrlValid) {
-    errors.push("TAKOSUMI_ACCOUNTS_INSTALLER_URL must be a URL");
-  } else if (details.installerUrlPlaceholder) {
+  if (!details.deployControlUrlPresent) {
+    errors.push("TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL is required");
+  } else if (!details.deployControlUrlValid) {
+    errors.push("TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL must be a URL");
+  } else if (details.deployControlUrlPlaceholder) {
     errors.push(
-      "TAKOSUMI_ACCOUNTS_INSTALLER_URL must not use example, test, or localhost hosts",
+      "TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL must not use example, test, or localhost hosts",
     );
   }
 
@@ -231,6 +234,11 @@ function validateRenderedConfig(details: ValidationDetails): string[] {
   }
   if (!details.r2BucketBlockPresent) {
     errors.push("[[r2_buckets]] block is required");
+  }
+  if (!details.assetsConfigured) {
+    errors.push(
+      '[assets] with binding = "ASSETS" is required to serve the dashboard SPA from the Worker',
+    );
   }
   if (details.containerConfigured) {
     errors.push("Cloudflare Containers must not be configured for Accounts");

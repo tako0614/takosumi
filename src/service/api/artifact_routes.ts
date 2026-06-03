@@ -9,13 +9,14 @@ import type {
   ObjectStorageDigest,
   ObjectStoragePort,
 } from "../adapters/object-storage/types.ts";
-import type { TakosumiDeploymentRecordStore } from "../domains/deploy/takosumi_deployment_record_store.ts";
+import type { TakosumiDeploymentRecordStore } from "../domains/deploy-records/deployment_record_store.ts";
 import { apiError } from "./errors.ts";
 import { log } from "../shared/log.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
 
 /**
- * Artifact upload endpoints — the data plane for `takosumi artifact push`.
+ * Artifact upload endpoints — an optional operator-internal data plane for
+ * runtime-agent compatibility handlers.
  *
  *   POST   /v1/artifacts            multipart upload (kind, metadata, body)
  *   GET    /v1/artifacts            list (cursor + limit pagination)
