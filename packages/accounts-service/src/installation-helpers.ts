@@ -853,11 +853,22 @@ export function serializeInstallationEvent(
     id: event.eventId,
     installation_id: event.installationId,
     type: event.eventType,
-    payload: event.payload,
+    payload: serializeInstallationEventPayload(event),
     previous_event_hash: event.previousEventHash ?? null,
     event_hash: event.eventHash,
     created_at: new Date(event.createdAt).toISOString(),
   };
+}
+
+function serializeInstallationEventPayload(
+  event: InstallationEventRecord,
+): Record<string, unknown> {
+  if (event.eventType !== "workload_service.token_rotated") {
+    return event.payload;
+  }
+  const { tokenHash: _tokenHash, token_hash: _tokenHashSnake, ...safe } =
+    event.payload;
+  return safe;
 }
 
 export async function parseAppInstallationImportData(

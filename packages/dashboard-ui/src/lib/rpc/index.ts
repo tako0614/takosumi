@@ -30,6 +30,9 @@ export const rpc = {
     plan: installations.planInstallation,
     create: installations.createInstallation,
     uninstall: installations.uninstallInstallation,
+    services: installations.listInstallationServices,
+    serviceCatalog: installations.listWorkloadServices,
+    rotateServiceToken: installations.rotateInstallationServiceToken,
     materialize: installations.materializeInstallation,
     requestExport: installations.requestInstallationExport,
     getExportOperation: installations.getInstallationExportOperation,
@@ -67,6 +70,10 @@ export type {
   InstallationEventsResult,
   MaterializeInput,
   OidcClientConfig,
+  RotateWorkloadServiceTokenResult,
+  WorkloadService,
+  WorkloadServiceDescriptor,
+  WorkloadServiceStatus,
 } from "./installations";
 export type {
   CreateTokenInput,
