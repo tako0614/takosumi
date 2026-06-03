@@ -16,8 +16,11 @@ import {
 import { json } from "./http-helpers.ts";
 import {
   requireAccountsBearer,
-  requireAccountSession,
 } from "./account-session.ts";
+import {
+  requireSameSpaceWorkloadControlForInstallation,
+  requireSameSpaceWorkloadControlToken,
+} from "./workload-service-tokens.ts";
 
 /**
  * Pagination guard constants for the list endpoints in this file and the
@@ -132,14 +135,27 @@ export async function handleListAppInstallations(input: {
     store: input.store,
     scope: "read",
   });
-  if (!bearer.ok) return bearer.response;
   const spaceId = input.url.searchParams.get("space_id") ??
     input.url.searchParams.get("spaceId");
   if (!spaceId) {
+    if (!bearer.ok) return bearer.response;
     return json({
       error: "invalid_request",
       error_description: "space_id is required",
     }, 400);
+  }
+  if (!bearer.ok) {
+    const workloadControl = await requireSameSpaceWorkloadControlToken({
+      request: input.request,
+      store: input.store,
+      targetSpaceId: spaceId,
+    });
+    if (!workloadControl.ok) {
+      return preferredCompositeAuthResponse(
+        bearer.response,
+        workloadControl.response,
+      );
+    }
   }
   const limit = parsePageLimit(input.url.searchParams.get("limit"));
   if (limit === "invalid") {
@@ -158,6 +174,7 @@ export async function handleListAppInstallations(input: {
   const space = await input.store.findSpace(spaceId);
   if (!space) return json({ error: "space_not_found" }, 404);
   if (
+    bearer.ok &&
     !await subjectCanAccessAccount(
       input.store,
       bearer.auth.subject,
@@ -183,20 +200,43 @@ export async function handleGetAppInstallation(input: {
   request: Request;
   store: AccountsStore;
 }): Promise<Response> {
-  const session = await requireAccountSession(input);
-  if (!session.ok) return session.response;
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
-  );
+  const bearer = await requireAccountsBearer({
+    request: input.request,
+    store: input.store,
+    scope: "read",
+  });
+  let workloadControl:
+    | Awaited<ReturnType<typeof requireSameSpaceWorkloadControlForInstallation>>
+    | undefined;
+  let bearerFailure: Response | undefined;
+  if (!bearer.ok) {
+    bearerFailure = bearer.response;
+    workloadControl = await requireSameSpaceWorkloadControlForInstallation({
+      request: input.request,
+      store: input.store,
+      targetInstallationId: input.installationId,
+    });
+    if (!workloadControl.ok) {
+      return preferredCompositeAuthResponse(
+        bearerFailure,
+        workloadControl.response,
+      );
+    }
+  }
+  const installation = workloadControl?.ok
+    ? workloadControl.installation
+    : await input.store.findAppInstallation(input.installationId);
   if (!installation) return json({ error: "installation_not_found" }, 404);
-  if (
-    !await subjectCanAccessInstallation(
-      input.store,
-      session.subject,
-      installation,
-    )
-  ) {
-    return json({ error: "installation_not_found" }, 404);
+  if (bearer.ok) {
+    if (
+      !await subjectCanAccessInstallation(
+        input.store,
+        bearer.auth.subject,
+        installation,
+      )
+    ) {
+      return json({ error: "installation_not_found" }, 404);
+    }
   }
   // Wave 6 removed `AppBinding` / `AppGrant` / `RuntimeBinding` from the
   // public API surface, so we do not surface them in this account-facing
@@ -278,7 +318,24 @@ export async function handleListInstallationEvents(input: {
     store: input.store,
     scope: "read",
   });
-  if (!bearer.ok) return bearer.response;
+  let workloadControl:
+    | Awaited<ReturnType<typeof requireSameSpaceWorkloadControlForInstallation>>
+    | undefined;
+  let bearerFailure: Response | undefined;
+  if (!bearer.ok) {
+    bearerFailure = bearer.response;
+    workloadControl = await requireSameSpaceWorkloadControlForInstallation({
+      request: input.request,
+      store: input.store,
+      targetInstallationId: input.installationId,
+    });
+    if (!workloadControl.ok) {
+      return preferredCompositeAuthResponse(
+        bearerFailure,
+        workloadControl.response,
+      );
+    }
+  }
   const limit = parsePageLimit(input.url.searchParams.get("limit"));
   if (limit === "invalid") {
     return json({
@@ -293,18 +350,20 @@ export async function handleListInstallationEvents(input: {
       error_description: "cursor is malformed",
     }, 400);
   }
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
-  );
+  const installation = workloadControl?.ok
+    ? workloadControl.installation
+    : await input.store.findAppInstallation(input.installationId);
   if (!installation) return json({ error: "installation_not_found" }, 404);
-  if (
-    !await subjectCanAccessAccount(
-      input.store,
-      bearer.auth.subject,
-      installation.accountId,
-    )
-  ) {
-    return json({ error: "installation_not_found" }, 404);
+  if (bearer.ok) {
+    if (
+      !await subjectCanAccessAccount(
+        input.store,
+        bearer.auth.subject,
+        installation.accountId,
+      )
+    ) {
+      return json({ error: "installation_not_found" }, 404);
+    }
   }
   const allEvents = await input.store.listInstallationEvents(
     input.installationId,
@@ -333,4 +392,14 @@ export function installationEventTypeFilter(
   if (!value) return undefined;
   const types = value.split(",").map((entry) => entry.trim()).filter(Boolean);
   return types.length > 0 ? new Set(types) : undefined;
+}
+
+function preferredCompositeAuthResponse(
+  accountResponse: Response,
+  workloadResponse: Response,
+): Response {
+  if (accountResponse.status === 401 && workloadResponse.status !== 401) {
+    return workloadResponse;
+  }
+  return accountResponse;
 }

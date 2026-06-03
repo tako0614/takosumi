@@ -25,6 +25,7 @@ import type {
   AccountsStore,
   BillingUsageRecord,
   OidcClientRecord,
+  TokenRecord,
 } from "./store.ts";
 import type { SharedCellRuntimeAllocator } from "./runtime.ts";
 import { constantTimeEqual, sha256HexText, sha256Text } from "./encoding.ts";
@@ -118,6 +119,7 @@ import {
   readExportDownloadSigningSecretFromEnv,
   signExportDownloadUrl,
 } from "./export-archive.ts";
+import { requireSameSpaceWorkloadControlForInstallation } from "./workload-service-tokens.ts";
 
 /**
  * Whitelist the fields we are willing to echo from an upstream deployControl
@@ -3209,17 +3211,33 @@ export async function handleReportInstallationBillingUsage(input: {
   request: Request;
   store: AccountsStore;
 }): Promise<Response> {
-  const auth = await requireInstallationAccessTokenCapability({
+  const billingAuth = await requireInstallationAccessTokenCapability({
     request: input.request,
     store: input.store,
     installationId: input.installationId,
     capability: "billing.usage.report",
   });
-  if (!auth.ok) return auth.response;
-
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
-  );
+  let authRecord: TokenRecord;
+  let installation: InstallationRecord | undefined;
+  if (billingAuth.ok) {
+    authRecord = billingAuth.record;
+    installation = await input.store.findAppInstallation(input.installationId);
+  } else {
+    const workloadControl =
+      await requireSameSpaceWorkloadControlForInstallation({
+        request: input.request,
+        store: input.store,
+        targetInstallationId: input.installationId,
+      });
+    if (!workloadControl.ok) {
+      return preferredCompositeAuthResponse(
+        billingAuth.response,
+        workloadControl.response,
+      );
+    }
+    authRecord = workloadControl.record;
+    installation = workloadControl.installation;
+  }
   if (!installation) return json({ error: "installation_not_found" }, 404);
   if (installation.status !== "ready") {
     return json({
@@ -3384,8 +3402,8 @@ export async function handleReportInstallationBillingUsage(input: {
     ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
     requestDigest,
     metadata,
-    ...(auth.record.takosumiSubject
-      ? { reportedBySubject: auth.record.takosumiSubject }
+    ...(authRecord.takosumiSubject
+      ? { reportedBySubject: authRecord.takosumiSubject }
       : {}),
     reportedAt: now,
   };
@@ -3405,6 +3423,16 @@ export async function handleReportInstallationBillingUsage(input: {
   });
 
   return json({ usage_report: serializeBillingUsageRecord(record) }, 202);
+}
+
+function preferredCompositeAuthResponse(
+  primaryResponse: Response,
+  workloadResponse: Response,
+): Response {
+  if (primaryResponse.status === 401 && workloadResponse.status !== 401) {
+    return workloadResponse;
+  }
+  return primaryResponse;
 }
 
 function appBindingDeclarationsFromValue(

@@ -31,6 +31,10 @@ import { base64UrlEncodeBytes, sha256Text } from "./encoding.ts";
 import { appendLedgerEvent } from "./installation-helpers.ts";
 import { includesScope, tokenScopesRemainGranted } from "./oidc-routes.ts";
 import {
+  isCurrentWorkloadServiceAccessToken,
+  isWorkloadServiceAccessTokenRecord,
+} from "./workload-service-tokens.ts";
+import {
   bearerChallenge,
   bearerToken,
   json,
@@ -286,6 +290,20 @@ export async function requireInstallationAccessTokenCapability(input: {
           `Bearer error="insufficient_scope", scope="${input.capability}"`,
       }),
     };
+  }
+  if (
+    await isCurrentWorkloadServiceAccessToken({
+      store: input.store,
+      token: accessToken,
+      record,
+      capability: input.capability,
+    })
+  ) {
+    return { ok: true, record };
+  }
+  if (isWorkloadServiceAccessTokenRecord(record)) {
+    await input.store.deleteToken(accessToken);
+    return { ok: false, response: bearerChallenge("invalid_token") };
   }
   if (!await tokenScopesRemainGranted({ store: input.store, record })) {
     await input.store.deleteToken(accessToken);

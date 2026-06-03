@@ -1,4 +1,8 @@
 import {
+  TAKOSUMI_ACCOUNTS_MATERIAL_BILLING_PORT_V1,
+  TAKOSUMI_ACCOUNTS_MATERIAL_IDENTITY_OIDC_V1,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
   normalizeIssuer,
  takosumiAccountsInstallationBillingUsageReportsPath,
 } from "@takosjp/takosumi-accounts-contract";
@@ -7,15 +11,15 @@ import { isRecord } from "./http-helpers.ts";
 import { isAllowedOidcRedirectUri } from "./installation-routes-internal.ts";
 import type { AccountsStore, OidcClientRecord } from "./store.ts";
 
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC =
-  "identity.primary.oidc";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT =
-  "billing.primary.default";
 export const TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVE_PATH =
   "/internal/workload-platform-services/resolve";
 
-export const TAKOSUMI_ACCOUNTS_MATERIAL_IDENTITY_OIDC_V1 = "identity.oidc@v1";
-export const TAKOSUMI_ACCOUNTS_MATERIAL_BILLING_PORT_V1 = "billing.port@v1";
+export {
+  TAKOSUMI_ACCOUNTS_MATERIAL_BILLING_PORT_V1,
+  TAKOSUMI_ACCOUNTS_MATERIAL_IDENTITY_OIDC_V1,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
+} from "@takosjp/takosumi-accounts-contract";
 
 export type WorkloadPlatformServiceSecret = Readonly<
   { readonly secretRef: string }

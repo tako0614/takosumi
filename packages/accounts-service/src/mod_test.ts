@@ -1,6 +1,19 @@
 import { expect, test } from "bun:test";
 
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import {
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOSUMI_CONTROL_SPACE,
+  TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH,
+  type TakosumiSubject,
+  takosumiAccountsInstallationBillingUsageReportsPath,
+  takosumiAccountsInstallationDeploymentPlanRunsPath,
+  takosumiAccountsInstallationEventsIngestPath,
+  takosumiAccountsInstallationEventsPath,
+  takosumiAccountsInstallationPath,
+  takosumiAccountsInstallationServiceRotateTokenPath,
+  takosumiAccountsInstallationServicesPath,
+} from "@takosjp/takosumi-accounts-contract";
 import {
   type AccountsInstallationExportBundle,
   type AppBindingKind,
@@ -3367,6 +3380,459 @@ test("accounts handler rejects billing usage reports after permission scope revo
   expect(response.status).toEqual(401);
   expect((await response.json()).error).toEqual("invalid_token");
   expect(store.listBillingUsageRecordsForInstallation("inst_usage")).toEqual([]);
+});
+
+test("accounts handler exposes workload services and rotates event ingest tokens", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({ store });
+  const now = Date.now();
+  seedOwnedSpace(store, "tsub_owner", "acct_1", "space_1");
+  const sessionId = seedAccountSession(store, "tsub_owner", "sess_services");
+  store.saveAppInstallation({
+    installationId: "inst_services",
+    accountId: "acct_1",
+    spaceId: "space_1",
+    appId: "example.app",
+    sourceGitUrl: "https://github.com/example/app",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:manifest",
+    mode: "shared-cell",
+    status: "ready",
+    createdBySubject: "tsub_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const catalog = await handler(
+    new Request(`${testIssuer}${TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH}`, {
+      headers: accountSessionHeaders(sessionId),
+    }),
+  );
+  expect(catalog.status).toEqual(200);
+  expect((await catalog.json()).services.map((service: { id: string }) =>
+    service.id
+  )).toContain(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT);
+
+  const servicesBefore = await handler(
+    new Request(
+      `${testIssuer}${takosumiAccountsInstallationServicesPath("inst_services")}`,
+      { headers: accountSessionHeaders(sessionId) },
+    ),
+  );
+  expect(servicesBefore.status).toEqual(200);
+  const servicesBeforeBody = await servicesBefore.json();
+  const eventsBefore = servicesBeforeBody.services.find((
+    service: { id: string },
+  ) => service.id === TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT);
+  expect(eventsBefore.status).toEqual("not_configured");
+  expect(eventsBefore.secret_ref).toEqual(undefined);
+  expect(eventsBefore.rotate_token_url).toContain(
+    "/v1/installations/inst_services/services/events.webhook.default/rotate-token",
+  );
+
+  const rotate = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationServiceRotateTokenPath(
+          "inst_services",
+          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
+        )
+      }`,
+      {
+        method: "POST",
+        headers: accountSessionHeaders(sessionId),
+        body: JSON.stringify({ ttlSeconds: 300 }),
+      },
+    ),
+  );
+  expect(rotate.status).toEqual(200);
+  const rotated = await rotate.json();
+  expect(rotated.token).toStartWith("taksrv_");
+  expect(rotated.service.secret_ref).toContain(
+    "takosumi-accounts://installations/inst_services/services/events.webhook.default/tokens/wst_",
+  );
+  expect(JSON.stringify(rotated)).not.toContain("tokenHash");
+
+  const eventLogAfterRotate = await handler(
+    new Request(
+      `${testIssuer}${takosumiAccountsInstallationEventsPath("inst_services")}`,
+      { headers: accountSessionHeaders(sessionId) },
+    ),
+  );
+  expect(eventLogAfterRotate.status).toEqual(200);
+  expect(JSON.stringify(await eventLogAfterRotate.json())).not.toContain(
+    "tokenHash",
+  );
+
+  const ingest = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationEventsIngestPath("inst_services")
+      }`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${rotated.token}` },
+        body: JSON.stringify({
+          type: "job.finished",
+          payload: { ok: true, runId: "run_1" },
+        }),
+      },
+    ),
+  );
+  expect(ingest.status).toEqual(202);
+  const ingested = await ingest.json();
+  expect(ingested.event.type).toEqual("workload.event_ingested");
+  expect(ingested.event.payload.type).toEqual("workload.job.finished");
+
+  const secondRotate = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationServiceRotateTokenPath(
+          "inst_services",
+          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
+        )
+      }`,
+      {
+        method: "POST",
+        headers: accountSessionHeaders(sessionId),
+        body: JSON.stringify({ ttlSeconds: 300 }),
+      },
+    ),
+  );
+  expect(secondRotate.status).toEqual(200);
+  const secondRotated = await secondRotate.json();
+  expect(secondRotated.token).not.toEqual(rotated.token);
+
+  const staleIngest = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationEventsIngestPath("inst_services")
+      }`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${rotated.token}` },
+        body: JSON.stringify({ type: "job.finished", payload: {} }),
+      },
+    ),
+  );
+  expect(staleIngest.status).toEqual(401);
+  expect((await staleIngest.json()).error).toEqual("invalid_token");
+});
+
+test("accounts handler accepts rotated billing service tokens without AppGrant storage", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({ store });
+  const now = Date.now();
+  seedOwnedSpace(store, "tsub_owner", "acct_1", "space_1");
+  const sessionId = seedAccountSession(store, "tsub_owner", "sess_billing_service");
+  store.saveBillingAccount({
+    billingAccountId: "bill_service",
+    subject: "tsub_owner",
+    provider: "stripe",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAppInstallation({
+    installationId: "inst_billing_service",
+    accountId: "acct_1",
+    spaceId: "space_1",
+    appId: "example.metered",
+    sourceGitUrl: "https://github.com/example/metered",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:manifest",
+    mode: "shared-cell",
+    billingAccountId: "bill_service",
+    status: "ready",
+    createdBySubject: "tsub_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const rotate = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationServiceRotateTokenPath(
+          "inst_billing_service",
+          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
+        )
+      }`,
+      {
+        method: "POST",
+        headers: accountSessionHeaders(sessionId),
+        body: JSON.stringify({ ttlSeconds: 300 }),
+      },
+    ),
+  );
+  expect(rotate.status).toEqual(200);
+  const rotated = await rotate.json();
+  expect(rotated.service.id).toEqual(
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
+  );
+  expect(store.listAppGrantsForInstallation("inst_billing_service")).toEqual([]);
+
+  const usage = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationBillingUsageReportsPath(
+          "inst_billing_service",
+        )
+      }`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${rotated.token}` },
+        body: JSON.stringify({
+          reportId: "usage_service_1",
+          meter: "agent.compute.seconds",
+          quantity: 12,
+          unit: "seconds",
+          metadata: { runId: "run_1" },
+        }),
+      },
+    ),
+  );
+  expect(usage.status).toEqual(202);
+  const usageBody = await usage.json();
+  expect(usageBody.usage_report.id).toEqual("usage_service_1");
+  expect(usageBody.usage_report.billing_account_id).toEqual("bill_service");
+  expect(store.listBillingUsageRecordsForInstallation("inst_billing_service")
+    .length).toEqual(1);
+
+  const secondRotate = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationServiceRotateTokenPath(
+          "inst_billing_service",
+          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
+        )
+      }`,
+      {
+        method: "POST",
+        headers: accountSessionHeaders(sessionId),
+        body: "",
+      },
+    ),
+  );
+  expect(secondRotate.status).toEqual(200);
+  const staleUsage = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationBillingUsageReportsPath(
+          "inst_billing_service",
+        )
+      }`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${rotated.token}` },
+        body: JSON.stringify({
+          reportId: "usage_service_2",
+          meter: "agent.compute.seconds",
+          quantity: 1,
+          unit: "seconds",
+        }),
+      },
+    ),
+  );
+  expect(staleUsage.status).toEqual(401);
+  expect((await staleUsage.json()).error).toEqual("invalid_token");
+});
+
+test("accounts handler accepts same-space workload control tokens for scoped operations", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({ store });
+  const now = Date.now();
+  seedOwnedSpace(store, "tsub_owner", "acct_1", "space_1");
+  seedOwnedSpace(store, "tsub_owner", "acct_1", "space_2");
+  const sessionId = seedAccountSession(store, "tsub_owner", "sess_control");
+  store.saveBillingAccount({
+    billingAccountId: "bill_control",
+    subject: "tsub_owner",
+    provider: "stripe",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAppInstallation({
+    installationId: "inst_control",
+    accountId: "acct_1",
+    spaceId: "space_1",
+    appId: "example.control",
+    sourceGitUrl: "https://github.com/example/control",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:control",
+    mode: "shared-cell",
+    status: "ready",
+    createdBySubject: "tsub_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAppInstallation({
+    installationId: "inst_control_target",
+    accountId: "acct_1",
+    spaceId: "space_1",
+    appId: "example.target",
+    sourceGitUrl: "https://github.com/example/target",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:target",
+    mode: "shared-cell",
+    billingAccountId: "bill_control",
+    status: "ready",
+    createdBySubject: "tsub_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAppInstallation({
+    installationId: "inst_control_other_space",
+    accountId: "acct_1",
+    spaceId: "space_2",
+    appId: "example.other",
+    sourceGitUrl: "https://github.com/example/other",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:other",
+    mode: "shared-cell",
+    status: "ready",
+    createdBySubject: "tsub_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const rotate = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationServiceRotateTokenPath(
+          "inst_control",
+          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOSUMI_CONTROL_SPACE,
+        )
+      }`,
+      {
+        method: "POST",
+        headers: accountSessionHeaders(sessionId),
+        body: JSON.stringify({ ttlSeconds: 300 }),
+      },
+    ),
+  );
+  expect(rotate.status).toEqual(200);
+  const rotated = await rotate.json();
+  const controlHeaders = { authorization: `Bearer ${rotated.token}` };
+
+  const list = await handler(
+    new Request(`${testIssuer}/v1/installations?space_id=space_1`, {
+      headers: controlHeaders,
+    }),
+  );
+  expect(list.status).toEqual(200);
+  expect((await list.json()).installations.map((
+    installation: { id: string },
+  ) => installation.id)).toEqual(["inst_control", "inst_control_target"]);
+
+  const detail = await handler(
+    new Request(
+      `${testIssuer}${takosumiAccountsInstallationPath("inst_control_target")}`,
+      { headers: controlHeaders },
+    ),
+  );
+  expect(detail.status).toEqual(200);
+  expect((await detail.json()).installation.id).toEqual("inst_control_target");
+
+  const events = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationEventsPath("inst_control_target")
+      }`,
+      { headers: controlHeaders },
+    ),
+  );
+  expect(events.status).toEqual(200);
+  expect((await events.json()).hash_chain_valid).toEqual(true);
+
+  const deploymentPlan = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationDeploymentPlanRunsPath(
+          "inst_control_target",
+        )
+      }`,
+      {
+        method: "POST",
+        headers: controlHeaders,
+        body: JSON.stringify({
+          source: {
+            gitUrl: "https://github.com/example/target",
+            ref: "main",
+            commit: "def456",
+            planDigest: "sha256:next",
+          },
+        }),
+      },
+    ),
+  );
+  expect(deploymentPlan.status).toEqual(200);
+  expect((await deploymentPlan.json()).expected.permissionDigest).toStartWith(
+    "sha256:",
+  );
+
+  const usage = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationBillingUsageReportsPath(
+          "inst_control_target",
+        )
+      }`,
+      {
+        method: "POST",
+        headers: controlHeaders,
+        body: JSON.stringify({
+          reportId: "usage_control_1",
+          meter: "agent.compute.seconds",
+          quantity: 5,
+          unit: "seconds",
+        }),
+      },
+    ),
+  );
+  expect(usage.status).toEqual(202);
+  expect((await usage.json()).usage_report.id).toEqual("usage_control_1");
+
+  const crossSpace = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationPath("inst_control_other_space")
+      }`,
+      { headers: controlHeaders },
+    ),
+  );
+  expect(crossSpace.status).toEqual(404);
+  expect((await crossSpace.json()).error).toEqual("installation_not_found");
+
+  const secondRotate = await handler(
+    new Request(
+      `${testIssuer}${
+        takosumiAccountsInstallationServiceRotateTokenPath(
+          "inst_control",
+          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOSUMI_CONTROL_SPACE,
+        )
+      }`,
+      {
+        method: "POST",
+        headers: accountSessionHeaders(sessionId),
+        body: JSON.stringify({ ttlSeconds: 300 }),
+      },
+    ),
+  );
+  expect(secondRotate.status).toEqual(200);
+
+  const staleList = await handler(
+    new Request(`${testIssuer}/v1/installations?space_id=space_1`, {
+      headers: controlHeaders,
+    }),
+  );
+  expect(staleList.status).toEqual(401);
+  expect((await staleList.json()).error).toEqual("invalid_token");
 });
 
 test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", async () => {

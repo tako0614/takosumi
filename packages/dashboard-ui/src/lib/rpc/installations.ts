@@ -69,6 +69,37 @@ export interface InstallationEventsResult {
   readonly nextCursor?: string;
 }
 
+export type WorkloadServiceStatus =
+  | "ready"
+  | "not_configured"
+  | "unavailable";
+
+export interface WorkloadServiceDescriptor {
+  readonly id: string;
+  readonly materialKind: string;
+  readonly title: string;
+  readonly description: string;
+  readonly secretBacked: boolean;
+}
+
+export interface WorkloadService {
+  readonly id: string;
+  readonly materialKind: string;
+  readonly status: WorkloadServiceStatus;
+  readonly endpoint?: string;
+  readonly material?: Record<string, unknown>;
+  readonly secretRef?: string;
+  readonly tokenExpiresAt?: string;
+  readonly rotateTokenUrl?: string;
+}
+
+export interface RotateWorkloadServiceTokenResult {
+  readonly token: string;
+  readonly tokenType: "Bearer";
+  readonly expiresAt: string;
+  readonly service: WorkloadService;
+}
+
 export interface ExportOperation {
   readonly operationId: string;
   readonly status: "preparing" | "exported" | "failed";
@@ -141,6 +172,25 @@ interface WireInstallationEvent {
   readonly previous_event_hash?: string | null;
   readonly event_hash?: string;
   readonly created_at?: string;
+}
+
+interface WireWorkloadServiceDescriptor {
+  readonly id?: string;
+  readonly material_kind?: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly secret_backed?: boolean;
+}
+
+interface WireWorkloadService {
+  readonly id?: string;
+  readonly material_kind?: string;
+  readonly status?: WorkloadServiceStatus;
+  readonly endpoint?: string;
+  readonly material?: Record<string, unknown>;
+  readonly secret_ref?: string;
+  readonly token_expires_at?: string;
+  readonly rotate_token_url?: string;
 }
 
 function deserializeInstallation(
@@ -225,6 +275,33 @@ function deserializeEvent(raw: WireInstallationEvent): InstallationEvent {
   };
 }
 
+function deserializeWorkloadServiceDescriptor(
+  raw: WireWorkloadServiceDescriptor,
+): WorkloadServiceDescriptor {
+  return {
+    id: raw.id ?? "",
+    materialKind: raw.material_kind ?? "",
+    title: raw.title ?? "",
+    description: raw.description ?? "",
+    secretBacked: raw.secret_backed ?? false,
+  };
+}
+
+function deserializeWorkloadService(
+  raw: WireWorkloadService,
+): WorkloadService {
+  return {
+    id: raw.id ?? "",
+    materialKind: raw.material_kind ?? "",
+    status: raw.status ?? "unavailable",
+    endpoint: raw.endpoint,
+    material: raw.material,
+    secretRef: raw.secret_ref,
+    tokenExpiresAt: raw.token_expires_at,
+    rotateTokenUrl: raw.rotate_token_url,
+  };
+}
+
 // ===== Public API ==========================================================
 
 interface ListResponse {
@@ -244,6 +321,52 @@ export async function listInstallationsForSpace(
 export async function getInstallation(id: string): Promise<Installation> {
   const env = await apiFetch<InstallationEnvelope>(paths.installation(id));
   return deserializeEnvelope(env);
+}
+
+export async function listWorkloadServices(): Promise<
+  readonly WorkloadServiceDescriptor[]
+> {
+  interface ResponseBody {
+    readonly services?: readonly WireWorkloadServiceDescriptor[];
+  }
+  const body = await apiFetch<ResponseBody>(paths.WORKLOAD_SERVICES);
+  return (body.services ?? []).map(deserializeWorkloadServiceDescriptor);
+}
+
+export async function listInstallationServices(
+  id: string,
+): Promise<readonly WorkloadService[]> {
+  interface ResponseBody {
+    readonly services?: readonly WireWorkloadService[];
+  }
+  const body = await apiFetch<ResponseBody>(paths.installationServices(id));
+  return (body.services ?? []).map(deserializeWorkloadService);
+}
+
+export async function rotateInstallationServiceToken(
+  id: string,
+  serviceId: string,
+  input: { readonly ttlSeconds?: number } = {},
+): Promise<RotateWorkloadServiceTokenResult> {
+  interface ResponseBody {
+    readonly token?: string;
+    readonly token_type?: "Bearer";
+    readonly expires_at?: string;
+    readonly service?: WireWorkloadService;
+  }
+  const body = await apiFetch<ResponseBody>(
+    paths.installationServiceRotateToken(id, serviceId),
+    {
+      method: "POST",
+      body: { ttlSeconds: input.ttlSeconds ?? 90 * 24 * 60 * 60 },
+    },
+  );
+  return {
+    token: body.token ?? "",
+    tokenType: body.token_type ?? "Bearer",
+    expiresAt: body.expires_at ?? "",
+    service: deserializeWorkloadService(body.service ?? {}),
+  };
 }
 
 export interface InstallationPlanRunInput {

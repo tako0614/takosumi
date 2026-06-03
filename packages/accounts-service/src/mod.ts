@@ -22,6 +22,7 @@ import {
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
   TAKOSUMI_ACCOUNTS_USERINFO_PATH,
+  TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH,
 } from "@takosjp/takosumi-accounts-contract";
 
 export type {
@@ -127,6 +128,12 @@ import {
   TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVE_PATH,
 } from "./workload-platform-services.ts";
 import {
+  handleIngestInstallationWorkloadEvent,
+  handleListInstallationWorkloadServices,
+  handleListWorkloadServices,
+  handleRotateInstallationWorkloadServiceToken,
+} from "./workload-service-routes.ts";
+import {
   managedOfferingAccessBlocked,
   type ManagedOfferingAccessPolicy,
   managedOfferingGuardedCoreAccessRoute,
@@ -135,6 +142,7 @@ import {
 } from "./managed-offering-policy.ts";
 import {
   requireAppInstallationAccountAccess,
+  requireAppInstallationAccountOrWorkloadControlAccess,
   requireAppInstallationCreateWriteAccess,
   requireAppInstallationImportWriteAccess,
   requireInstallationPlanRunWriteAccess,
@@ -755,6 +763,11 @@ export function createAccountsHandler(
       return methodNotAllowed("GET, POST");
     }
 
+    if (url.pathname === TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return await handleListWorkloadServices({ request, store });
+    }
+
     const accountTokenRevokeRoute = matchAccountTokenRevokeRoute(url.pathname);
     if (accountTokenRevokeRoute) {
       if (request.method !== "POST") return methodNotAllowed("POST");
@@ -1004,7 +1017,11 @@ export function createAccountsHandler(
         request.method,
       );
       if (accountAccess) {
-        const authBlocked = await requireAppInstallationAccountAccess({
+        const authBlocked = await (
+          installationRouteAllowsWorkloadControl(installationRoute, request.method)
+            ? requireAppInstallationAccountOrWorkloadControlAccess
+            : requireAppInstallationAccountAccess
+        )({
           request,
           store,
           installationId: installationRoute.installationId,
@@ -1128,6 +1145,36 @@ export function createAccountsHandler(
           request,
           url,
           store,
+        });
+      }
+      if (
+        installationRoute.kind === "events-ingest" &&
+        request.method === "POST"
+      ) {
+        return await handleIngestInstallationWorkloadEvent({
+          installationId: installationRoute.installationId,
+          request,
+          store,
+        });
+      }
+      if (installationRoute.kind === "services" && request.method === "GET") {
+        return await handleListInstallationWorkloadServices({
+          installationId: installationRoute.installationId,
+          request,
+          store,
+          issuer,
+        });
+      }
+      if (
+        installationRoute.kind === "service-rotate-token" &&
+        request.method === "POST"
+      ) {
+        return await handleRotateInstallationWorkloadServiceToken({
+          installationId: installationRoute.installationId,
+          serviceId: installationRoute.serviceId,
+          request,
+          store,
+          issuer,
         });
       }
       if (
@@ -1443,4 +1490,29 @@ function installationRouteAccountAccess(
     return "read";
   }
   return undefined;
+}
+
+function installationRouteAllowsWorkloadControl(
+  route: InstallationRoute,
+  method: string,
+): boolean {
+  if (
+    (route.kind === "deployment" ||
+      route.kind === "deployment-plan-run" ||
+      route.kind === "rollback" ||
+      route.kind === "materialize" ||
+      route.kind === "export") &&
+    method === "POST"
+  ) {
+    return true;
+  }
+  if (
+    (route.kind === "events" ||
+      route.kind === "export-operation" ||
+      route.kind === "export-download") &&
+    method === "GET"
+  ) {
+    return true;
+  }
+  return false;
 }
