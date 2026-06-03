@@ -50,7 +50,7 @@
         # header with the exact `script-src`, `style-src`,
         # `connect-src`, and `frame-src` they need rather than removing
         # the policy. `frame-ancestors 'none'` doubles up with
-        # `X-Frame-Options DENY` for legacy browsers.
+        # `X-Frame-Options DENY` for older browsers.
         Content-Security-Policy "default-src 'self'; frame-ancestors 'none'"
     }
 

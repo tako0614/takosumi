@@ -3,7 +3,7 @@
  *
  * The contract itself lives in `@takosjp/takosumi/contract/reference/implementation`. This
  * shim keeps existing service imports stable and adds the service-internal
- * `OperatorImplementationRegistry` interface used by `InstallerPipeline`.
+ * `OperatorImplementationRegistry` interface used by `DeployControlPipeline`.
  */
 export type {
   OperatorImplementation,

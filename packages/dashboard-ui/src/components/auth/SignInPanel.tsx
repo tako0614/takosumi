@@ -1,6 +1,6 @@
 import { createSignal, type JSX, Show } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
-import { startUpstreamOAuth } from "~/lib/api/oauth";
+import { rpc } from "~/lib/rpc";
 import { shouldShowBrowserDevSignIn } from "~/lib/dev-sign-in";
 
 type Provider = "passkey" | "google" | "github";
@@ -87,7 +87,7 @@ export default function SignInPanel() {
       setError("Passkey sign-in は、このアカウントではまだ利用できません。");
       return;
     }
-    startUpstreamOAuth(p);
+    rpc.auth.startUpstreamOAuth(p);
   };
 
   const devSignIn = DEV_SIGN_IN_BUILD_ENABLED
@@ -154,11 +154,21 @@ export default function SignInPanel() {
       </Show>
       <p class="sign-in-terms">
         続行することで{" "}
-        <a href="/terms" class="link">
+        <a
+          href="https://docs.takos.jp/legal/terms-of-service"
+          class="link"
+          target="_blank"
+          rel="noopener"
+        >
           利用規約
         </a>{" "}
         と
-        <a href="/privacy" class="link">
+        <a
+          href="https://docs.takos.jp/legal/privacy-policy"
+          class="link"
+          target="_blank"
+          rel="noopener"
+        >
           プライバシーポリシー
         </a>{" "}
         に同意したものとみなします。

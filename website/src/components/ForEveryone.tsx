@@ -1,14 +1,17 @@
 import { For } from "solid-js";
 import { AUDIENCES } from "~/content/audiences";
+import SplatField from "./SplatField";
 
 export default function ForEveryone() {
   return (
     <section id="for-everyone">
+      <SplatField density="section" />
       <div class="container">
-        <span class="eyebrow">for everyone</span>
-        <h2>ひとり用にも、 組織にも、 はじめての人にも。</h2>
+        <span class="eyebrow">who it's for</span>
+        <h2>ひとりの開発者から、組織まで。</h2>
         <p class="lede">
-          技術者だけのものじゃない。 自分の Space を 持ちたい全ての人のために。
+          重い運用を抱えなくても、自分の deploy を所有できる。
+          はじめての人から、監査が要る組織まで。
         </p>
         <div class="audience-rows">
           <For each={AUDIENCES}>
@@ -23,7 +26,7 @@ export default function ForEveryone() {
                 </div>
                 <div class="audience-row-stack">
                   <span class="audience-stack-label">
-                    例えば この Space に
+                    例えば こんな deploy を
                   </span>
                   <code class="audience-stack-value">{a.exampleStack}</code>
                 </div>

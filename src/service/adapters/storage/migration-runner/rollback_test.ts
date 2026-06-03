@@ -13,7 +13,6 @@ import {
   type StorageMigrationLock,
   StorageMigrationRunner,
 } from "./mod.ts";
-import { postgresStorageMigrationStatements } from "../migrations.ts";
 import type { StorageMigrationStatement } from "../migrations.ts";
 import type { SqlClient, SqlParameters, SqlQueryResult } from "../sql.ts";
 
@@ -163,26 +162,6 @@ test("rollback refuses to undo a forward-only migration", async () => {
   // Ledger must remain untouched after the refusal.
   const remaining = await runner.listAppliedMigrations();
   assertEquals(remaining.length, 3);
-});
-
-test("rollback refuses to cross deployment unification in the current catalog", async () => {
-  const migration = postgresStorageMigrationStatements.find((entry) =>
-    entry.id === "deploy.unify_to_deployments"
-  );
-  assert(migration, "deploy.unify_to_deployments missing from catalog");
-  const sql = new FakeSqlClient();
-  const runner = new StorageMigrationRunner(sql, {
-    migrations: postgresStorageMigrationStatements.filter((entry) =>
-      entry.version <= migration.version
-    ),
-  });
-  await runner.applyPending();
-
-  await assertRejects(
-    () => runner.rollback({ targetVersion: migration.version - 1 }),
-    StorageMigrationDownNotSupportedError,
-    "deploy.unify_to_deployments",
-  );
 });
 
 test("rollback against an empty ledger returns an empty plan", async () => {

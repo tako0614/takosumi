@@ -8,12 +8,12 @@ import {
   TAKOSUMI_INTERNAL_PATHS,
 } from "takosumi-contract/reference/compat";
 import { TAKOSUMI_METRICS_PATH } from "./metrics_routes.ts";
-import { TAKOSUMI_PAAS_READINESS_PATHS } from "./readiness_routes.ts";
-import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
+import { TAKOSUMI_SERVICE_READINESS_PATHS } from "./readiness_routes.ts";
+import { TAKOSUMI_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
 export interface CreateApiCapabilitiesDescriptionOptions {
   readonly internalRoutesMounted?: boolean;
-  readonly installerPublicRoutesMounted?: boolean;
+  readonly deployControlPublicRoutesMounted?: boolean;
   readonly artifactRoutesMounted?: boolean;
   readonly runtimeAgentRoutesMounted?: boolean;
   readonly openApiRouteMounted?: boolean;
@@ -37,7 +37,7 @@ export interface ApiEndpointDescription {
     | "internal-service"
     | "deploy-token"
     | "artifact-read"
-    | "installer-token"
+    | "deploy-control-token"
     | "metrics-token";
 }
 
@@ -69,8 +69,8 @@ export function createApiCapabilitiesDescription(
     });
   }
   if (options.internalRoutesMounted) endpoints.push(...internalEndpoints());
-  if (options.installerPublicRoutesMounted) {
-    endpoints.push(...installerPublicEndpoints());
+  if (options.deployControlPublicRoutesMounted) {
+    endpoints.push(...deployControlPublicEndpoints());
   }
   if (options.artifactRoutesMounted) endpoints.push(...artifactEndpoints());
   if (options.runtimeAgentRoutesMounted) {
@@ -95,38 +95,48 @@ export function createApiCapabilitiesDescription(
   };
 }
 
-function installerPublicEndpoints(): ApiEndpointDescription[] {
+function deployControlPublicEndpoints(): ApiEndpointDescription[] {
   return [
     [
-      "POST",
-      "/v1/installations/dry-run",
-      "Plans a fresh Source install without persisting state.",
+      "GET",
+      "/v1/runner-profiles",
+      "Lists OpenTofu runner profiles and provider allowlists.",
     ],
     [
       "POST",
-      "/v1/installations",
-      "Creates an Installation from a Source.",
+      "/v1/plan-runs",
+      "Creates an OpenTofu plan run for a plain module source.",
+    ],
+    [
+      "GET",
+      "/v1/plan-runs/:id",
+      "Reads an OpenTofu plan run.",
     ],
     [
       "POST",
-      "/v1/installations/:id/deployments/dry-run",
-      "Plans a re-deploy against an existing Installation.",
+      "/v1/apply-runs",
+      "Creates an apply run from a succeeded PlanRun.",
     ],
     [
-      "POST",
+      "GET",
+      "/v1/apply-runs/:id",
+      "Reads an OpenTofu apply run.",
+    ],
+    [
+      "GET",
+      "/v1/installations/:id",
+      "Reads an Installation ledger record.",
+    ],
+    [
+      "GET",
       "/v1/installations/:id/deployments",
-      "Applies a Deployment against an existing Installation.",
-    ],
-    [
-      "POST",
-      "/v1/installations/:id/rollback",
-      "Rolls an Installation back to a prior Deployment.",
+      "Lists Deployment records for an Installation.",
     ],
   ].map(([method, path, summary]) => ({
     method: method as ApiEndpointDescription["method"],
     path,
     summary,
-    auth: "installer-token" as const,
+    auth: "deploy-control-token" as const,
   }));
 }
 
@@ -142,12 +152,6 @@ function artifactEndpoints(): ApiEndpointDescription[] {
       "GET",
       ARTIFACTS_BASE_PATH,
       "Lists uploaded artifacts with cursor pagination.",
-      "deploy-token",
-    ],
-    [
-      "GET",
-      `${ARTIFACTS_BASE_PATH}/kinds`,
-      "Lists artifact kinds registered in the service.",
       "deploy-token",
     ],
     [
@@ -208,19 +212,6 @@ function internalEndpoints(): ApiEndpointDescription[] {
       summary: "Creates a group through the internal service API.",
       auth: "internal-service",
     },
-    {
-      method: "POST",
-      path: TAKOSUMI_INTERNAL_PATHS.deployments,
-      summary: "Resolves a Deployment through the internal service API.",
-      auth: "internal-service",
-    },
-    {
-      method: "POST",
-      path: TAKOSUMI_INTERNAL_PATHS.deploymentApply,
-      summary:
-        "Applies a resolved Deployment through the internal service API.",
-      auth: "internal-service",
-    },
   ];
 }
 
@@ -228,23 +219,23 @@ function runtimeAgentEndpoints(): ApiEndpointDescription[] {
   return [
     [
       "POST",
-      TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
+      TAKOSUMI_RUNTIME_AGENT_PATHS.enroll,
       "Enrolls a runtime agent.",
     ],
     [
       "POST",
-      TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.heartbeat,
+      TAKOSUMI_RUNTIME_AGENT_PATHS.heartbeat,
       "Records a runtime agent heartbeat.",
     ],
-    ["POST", TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.lease, "Leases runtime work."],
+    ["POST", TAKOSUMI_RUNTIME_AGENT_PATHS.lease, "Leases runtime work."],
     [
       "POST",
-      TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.report,
+      TAKOSUMI_RUNTIME_AGENT_PATHS.report,
       "Reports runtime work completion.",
     ],
     [
       "POST",
-      TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.drain,
+      TAKOSUMI_RUNTIME_AGENT_PATHS.drain,
       "Requests runtime-agent drain.",
     ],
   ].map(([method, path, summary]) => ({
@@ -259,19 +250,19 @@ function readinessEndpoints(): ApiEndpointDescription[] {
   return [
     {
       method: "GET",
-      path: TAKOSUMI_PAAS_READINESS_PATHS.ready,
+      path: TAKOSUMI_SERVICE_READINESS_PATHS.ready,
       summary: "Readiness probe for the current Takosumi role.",
       auth: "none",
     },
     {
       method: "GET",
-      path: TAKOSUMI_PAAS_READINESS_PATHS.live,
+      path: TAKOSUMI_SERVICE_READINESS_PATHS.live,
       summary: "Liveness probe for the current Takosumi role.",
       auth: "none",
     },
     {
       method: "GET",
-      path: TAKOSUMI_PAAS_READINESS_PATHS.statusSummary,
+      path: TAKOSUMI_SERVICE_READINESS_PATHS.statusSummary,
       summary: "Returns the current group summary status projection.",
       auth: "none",
     },

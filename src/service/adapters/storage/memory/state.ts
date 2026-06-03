@@ -3,8 +3,6 @@
 // the clone through the store classes, and either swaps the clone in
 // (commit) or discards it (rollback).
 
-import type { Deployment, GroupHead } from "takosumi-contract/reference/compat";
-import type { ProviderObservation as CoreProviderObservation } from "takosumi-contract/reference/compat";
 import type { AuditEvent, AuditEventId } from "../../../domains/audit/types.ts";
 import type {
   Group,
@@ -56,9 +54,6 @@ export interface MemoryStorageSnapshot {
   readonly spaces: readonly Space[];
   readonly groups: readonly Group[];
   readonly spaceMemberships: readonly SpaceMembership[];
-  readonly deployments: readonly Deployment[];
-  readonly groupHeads: readonly GroupHead[];
-  readonly deployProviderObservations: readonly CoreProviderObservation[];
   readonly runtimeDesiredStates: readonly RuntimeDesiredState[];
   readonly runtimeObservedStates: readonly RuntimeObservedStateSnapshot[];
   readonly providerObservations: readonly ProviderObservation[];
@@ -84,7 +79,6 @@ export interface MemoryStorageState {
     readonly groups: Map<string, Group>;
     readonly spaceMemberships: Map<string, SpaceMembership>;
   };
-  readonly deploy: MemoryDeployState;
   readonly runtime: {
     readonly desiredStates: Map<RuntimeDesiredStateId, RuntimeDesiredState>;
     readonly observedStates: Map<
@@ -123,12 +117,6 @@ export interface MemoryStorageState {
   };
 }
 
-export interface MemoryDeployState {
-  readonly deployments: Map<string, Deployment>;
-  readonly groupHeads: Map<string, GroupHead>;
-  readonly providerObservations: Map<string, CoreProviderObservation>;
-}
-
 export function createEmptyState(
   providerSupportReports: readonly ProviderSupportReport[],
 ): MemoryStorageState {
@@ -137,11 +125,6 @@ export function createEmptyState(
       spaces: new Map(),
       groups: new Map(),
       spaceMemberships: new Map(),
-    },
-    deploy: {
-      deployments: new Map(),
-      groupHeads: new Map(),
-      providerObservations: new Map(),
     },
     runtime: {
       desiredStates: new Map(),
@@ -190,17 +173,6 @@ export function stateFromSnapshot(
       spaceMemberships: mapBy(
         snapshot.spaceMemberships,
         (membership) => `${membership.spaceId}:${membership.accountId}`,
-      ),
-    },
-    deploy: {
-      deployments: mapBy(snapshot.deployments, (deployment) => deployment.id),
-      groupHeads: mapBy(
-        snapshot.groupHeads,
-        (head) => `${head.space_id}\u0000${head.group_id}`,
-      ),
-      providerObservations: mapBy(
-        snapshot.deployProviderObservations,
-        (observation) => observation.id,
       ),
     },
     runtime: {
@@ -269,11 +241,6 @@ export function cloneState(state: MemoryStorageState): MemoryStorageState {
       groups: cloneMap(state.space.groups),
       spaceMemberships: cloneMap(state.space.spaceMemberships),
     },
-    deploy: {
-      deployments: cloneMap(state.deploy.deployments),
-      groupHeads: cloneMap(state.deploy.groupHeads),
-      providerObservations: cloneMap(state.deploy.providerObservations),
-    },
     runtime: {
       desiredStates: cloneMap(state.runtime.desiredStates),
       observedStates: cloneMap(state.runtime.observedStates),
@@ -332,11 +299,6 @@ export function snapshotState(
     spaces: [...state.space.spaces.values()],
     groups: [...state.space.groups.values()],
     spaceMemberships: [...state.space.spaceMemberships.values()],
-    deployments: [...state.deploy.deployments.values()],
-    groupHeads: [...state.deploy.groupHeads.values()],
-    deployProviderObservations: [
-      ...state.deploy.providerObservations.values(),
-    ],
     runtimeDesiredStates: [...state.runtime.desiredStates.values()],
     runtimeObservedStates: [...state.runtime.observedStates.values()],
     providerObservations: [...state.runtime.providerObservations],

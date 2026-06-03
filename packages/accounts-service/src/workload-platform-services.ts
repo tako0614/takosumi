@@ -76,7 +76,7 @@ export interface TakosumiWorkloadPlatformServiceResolverOptions {
       context: WorkloadPlatformServiceResolveContext,
     ) => string | undefined | Promise<string | undefined>);
   readonly now?: () => number;
-  readonly allowDirectInstallerInstallations?: boolean;
+  readonly allowDeployControlInstallations?: boolean;
   readonly billingPortalUrl?:
     | string
     | ((
@@ -153,8 +153,8 @@ async function resolveOidcPlatformService(
     readonly context: WorkloadPlatformServiceResolveContext;
   },
 ): Promise<WorkloadPlatformServiceMaterial> {
-  if (input.allowDirectInstallerInstallations) {
-    await ensureDirectInstallerInstallationProjection(input);
+  if (input.allowDeployControlInstallations) {
+    await ensureDeployControlInstallationProjection(input);
   }
   const issuerUrl = normalizeIssuer(input.issuer);
   const existing = await input.store.findOidcClientForInstallation(
@@ -260,7 +260,7 @@ async function createOidcClient(
   return client;
 }
 
-async function ensureDirectInstallerInstallationProjection(
+async function ensureDeployControlInstallationProjection(
   input: TakosumiWorkloadPlatformServiceResolverOptions & {
     readonly context: WorkloadPlatformServiceResolveContext;
   },
@@ -271,10 +271,10 @@ async function ensureDirectInstallerInstallationProjection(
   if (existing) return;
 
   const now = input.now?.() ?? Date.now();
-  const ownerSubject = "tsub_direct_installer" as const;
-  const spaceId = input.context.spaceId ?? "space_direct_installer";
+  const ownerSubject = "tsub_direct_deployControl" as const;
+  const spaceId = input.context.spaceId ?? "space_direct_deployControl";
   const existingSpace = await input.store.findSpace(spaceId);
-  const accountId = existingSpace?.accountId ?? "acct_direct_installer";
+  const accountId = existingSpace?.accountId ?? "acct_direct_deployControl";
   const appId = input.context.appId ?? "unknown.app";
   const sourceFingerprint = await sha256Text(JSON.stringify({
     installationId: input.context.installationId,
@@ -293,7 +293,7 @@ async function ensureDirectInstallerInstallationProjection(
       spaceId,
       accountId,
       kind: "personal",
-      displayName: "Direct installer",
+      displayName: "Deploy Control",
       createdAt: now,
       updatedAt: now,
     });
@@ -303,10 +303,10 @@ async function ensureDirectInstallerInstallationProjection(
     accountId,
     spaceId,
     appId,
-    sourceGitUrl: "direct-installer://local",
+    sourceGitUrl: "deploy-control://local",
     sourceRef: "direct",
     sourceCommit: "direct",
-    planSnapshotDigest: sourceFingerprint,
+    planDigest: sourceFingerprint,
     mode: "self-hosted",
     status: "installing",
     createdBySubject: ownerSubject,

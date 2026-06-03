@@ -124,7 +124,7 @@ export interface ProducerChangePlan {
   readonly blockingIssues: readonly ProducerChangeBlockingIssue[];
 }
 
-export interface PlanDeploymentInput {
+export interface PlanDeploymentOutputsInput {
   readonly spaceId: string;
   readonly groupId: string;
   readonly bindings?: readonly OutputConsumerBinding[];
@@ -427,7 +427,7 @@ export class OutputDependencyPlanner {
   }
 
   async planDeployment(
-    input: PlanDeploymentInput,
+    input: PlanDeploymentOutputsInput,
   ): Promise<DeploymentOutputDependencyPlan> {
     const candidateOutputs = input.outputs ?? [];
     const storedBindings = await this.#stores.bindings.listByConsumer(

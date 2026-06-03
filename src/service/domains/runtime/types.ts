@@ -1,8 +1,3 @@
-import type {
-  InternalDeploySpecComponent,
-  InternalDeploySpecResource,
-  InternalDeploySpecRoute,
-} from "../deploy/types.ts";
 import type { Digest } from "takosumi-contract/reference/compat";
 
 /**
@@ -89,12 +84,40 @@ export interface RuntimeMaterializationInput {
   readonly deploySpec: {
     readonly name: string;
     readonly version?: string;
-    readonly components: readonly InternalDeploySpecComponent[];
-    readonly resources: readonly InternalDeploySpecResource[];
-    readonly routes: readonly InternalDeploySpecRoute[];
+    readonly components: readonly RuntimeDeployComponentSpec[];
+    readonly resources: readonly RuntimeDeployResourceSpec[];
+    readonly routes: readonly RuntimeDeployRouteSpec[];
     readonly env: Record<string, string>;
   };
   readonly materializedAt?: string;
+}
+
+export interface RuntimeDeployComponentSpec {
+  readonly name: string;
+  readonly type: string;
+  readonly image?: string;
+  readonly entrypoint?: string;
+  readonly command?: readonly string[];
+  readonly args?: readonly string[];
+  readonly env: Record<string, string>;
+  readonly depends: readonly string[];
+}
+
+export interface RuntimeDeployResourceSpec {
+  readonly name: string;
+  readonly type: string;
+  readonly env: Record<string, string>;
+}
+
+export interface RuntimeDeployRouteSpec {
+  readonly name: string;
+  readonly to: string;
+  readonly host?: string;
+  readonly path?: string;
+  readonly protocol?: string;
+  readonly port?: number;
+  readonly targetPort?: number;
+  readonly source?: string;
 }
 
 export interface RuntimeWorkloadSpec {

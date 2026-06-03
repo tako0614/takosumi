@@ -107,7 +107,7 @@ export class InMemoryWorkLedger implements WorkLedger {
 /**
  * Storage-backed ledger adapter. The registry remains storage-agnostic while
  * app boot can still bind runtime-agent state to the same transactional
- * storage boundary as the rest of the PaaS runtime.
+ * storage boundary as the rest of the Takosumi service runtime.
  */
 export class StorageBackedWorkLedger implements WorkLedger {
   readonly #driver: StorageDriver;

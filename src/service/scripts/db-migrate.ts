@@ -105,7 +105,6 @@ class InMemorySqlClient implements SqlClient, SqlTransaction {
   readonly #applied = new Map<string, AppliedRow>();
   #ledgerCreated = false;
 
-  // deno-lint-ignore require-await
   async query<Row extends Record<string, unknown> = Record<string, unknown>>(
     sql: string,
     parameters?: SqlParameters,

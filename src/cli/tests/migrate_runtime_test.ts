@@ -15,7 +15,7 @@ import {
 /**
  * Build a minimal fake RuntimeAdapter that records subprocess / env / exit
  * / sync-read interactions so the migrate-runtime primitives can be verified
- * to route through `currentRuntime()` instead of touching `Deno.*` directly.
+ * to route through `currentRuntime()` instead of touching host globals directly.
  */
 function fakeRuntime(overrides: {
   subprocessCode?: number;

@@ -20,12 +20,12 @@ process.env.TAKOSUMI_DEV_MODE = "1";
 
 /**
  * Regression coverage for the composed-app route-shadowing bug. The embedded
- * service (`createTakosumiService`) registers the Installer API on the SAME
+ * service (`createTakosumiService`) registers the Deploy Control API on the SAME
  * `/v1/installations/*` paths the account-plane projection owns, and Hono
  * composes matched handlers in registration order, so the service routes used to
  * permanently shadow the account-plane (account-plane mints `inst_<uuid>` ids,
  * which the service's `^ins_[0-9a-zA-Z]{16,32}$` guard rejects with 400, or 401s
- * outright without the internal installer bearer). `buildComposedApp` now wraps
+ * outright without the internal deploy control bearer). `buildComposedApp` now wraps
  * the service app so account-plane installation requests reach the accounts
  * handler first while non-installation service routes stay reachable.
  */
@@ -107,7 +107,7 @@ test("composed app routes POST /v1/installations to the account plane, not the s
     }),
   );
   // Account-plane sentinel proves the request was NOT shadowed by the service
-  // installer route (which would 401 without the internal installer bearer).
+  // deployControl route (which would 401 without the internal deploy control bearer).
   assert.equal(res.headers.get("x-handled-by"), "accounts");
   assert.deepEqual(spy.calls, [{
     method: "POST",
@@ -115,33 +115,31 @@ test("composed app routes POST /v1/installations to the account plane, not the s
   }]);
 });
 
-test("composed app builds accounts handler with an in-process service installer proxy", async () => {
+test("composed app builds accounts handler with an in-process service deploy control proxy", async () => {
   const spy = accountsHandlerSpy();
-  let installerEndpointReached = false;
+  let deployControlEndpointReached = false;
   const { buildComposedApp } = await import("./composed-app.ts");
   const created = await buildComposedApp({
     config: testConfig(),
     store: new PostgresAccountsStore(stubQueryClient()),
-    createAccountsHandler: async (installer) => {
-      assert.equal(typeof installer.token, "string");
-      const res = await installer.fetch!(
-        new Request(`${installer.url}/v1/installations/dry-run`, {
-          method: "POST",
+    createAccountsHandler: async (deployControl) => {
+      assert.equal(typeof deployControl.token, "string");
+      const res = await deployControl.fetch!(
+        new Request(`${deployControl.url}/v1/runner-profiles`, {
+          method: "GET",
           headers: {
-            "authorization": `Bearer ${installer.token}`,
-            "content-type": "application/json",
+            "authorization": `Bearer ${deployControl.token}`,
           },
-          body: JSON.stringify({}),
         }),
       );
       const body = await res.json();
-      installerEndpointReached = res.status === 400 &&
-        body.error?.code === "invalid_argument";
+      deployControlEndpointReached = res.status === 200 &&
+        Array.isArray(body.runnerProfiles);
       return spy.handler;
     },
   });
 
-  assert.equal(installerEndpointReached, true);
+  assert.equal(deployControlEndpointReached, true);
   const res = await created.app.fetch(
     new Request("http://localhost/dashboard"),
   );

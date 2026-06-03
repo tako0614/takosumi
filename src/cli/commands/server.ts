@@ -1,5 +1,4 @@
 import { Command } from "../command.ts";
-import { LIFECYCLE_AGENT_URL_ENV } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import { currentRuntime } from "../../service/shared/runtime/index.ts";
 
 function createServerCommand(): Command {
@@ -7,26 +6,14 @@ function createServerCommand(): Command {
     .description("Start the Takosumi service HTTP server")
     .option("--port <port>", "Port to listen on", (v) => Number(v), 8788)
     .option(
-      "--agent-port <port>",
-      "Port for the embedded runtime-agent (only used when TAKOSUMI_AGENT_URL is unset)",
-      (v) => Number(v),
-      8789,
-    )
-    .option(
-      "--no-agent",
-      "Skip starting the embedded runtime-agent (operator must run one separately)",
-    )
-    .option(
       "--detach",
       "Print a recommended systemd unit for production daemonization and " +
         "exit immediately. The CLI does not provide a portable detach primitive, " +
         "so we surface the supervisor template instead of half-baked daemonising.",
     )
     .action(async (
-      { port, agentPort, agent, detach }: {
+      { port, detach }: {
         port: number;
-        agentPort: number;
-        agent: boolean;
         detach?: boolean;
       },
     ) => {
@@ -35,43 +22,9 @@ function createServerCommand(): Command {
         return;
       }
       const runtime = currentRuntime();
-      const agentDisabled = agent === false;
-      const agentUrl = runtime.env.get(LIFECYCLE_AGENT_URL_ENV);
-      let agentShutdown: (() => Promise<void>) | undefined;
-      if (!agentUrl && !agentDisabled) {
-        const { startEmbeddedAgent } = await import(
-          "../../runtime-agent/embed.ts"
-        );
-        const handle = startEmbeddedAgent({ port: agentPort });
-        agentShutdown = handle.shutdown;
-        console.log(
-          `[takosumi-server] embedded runtime-agent listening at ${handle.url}`,
-        );
-        console.log(
-          `[takosumi-server] (operators running an external agent should set ${LIFECYCLE_AGENT_URL_ENV})`,
-        );
-      }
-      if (agentShutdown) {
-        registerShutdownHandlers(agentShutdown);
-      }
       runtime.env.set("PORT", String(port));
       await import("../../service/index.ts");
     });
-}
-
-function registerShutdownHandlers(shutdown: () => Promise<void>): void {
-  const runtime = currentRuntime();
-  let shuttingDown = false;
-  const handler = (signal: "SIGINT" | "SIGTERM") => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    console.log(`[takosumi-server] received ${signal}, draining...`);
-    shutdown()
-      .catch((err) => console.error("[takosumi-server] shutdown error:", err))
-      .finally(() => runtime.exit(0));
-  };
-  runtime.onSignal("SIGINT", () => handler("SIGINT"));
-  runtime.onSignal("SIGTERM", () => handler("SIGTERM"));
 }
 
 /**
@@ -103,7 +56,7 @@ function printDaemonizationTemplate(port: number): void {
     "",
     "   [Service]",
     `   ExecStart=${exec} x @takosjp/takosumi server --port ${port}`,
-    "   Environment=TAKOSUMI_DEPLOY_TOKEN=...",
+    "   Environment=TAKOSUMI_DEPLOY_CONTROL_TOKEN=...",
     "   Environment=TAKOSUMI_DATABASE_URL=postgres://...",
     "   Restart=always",
     "   RestartSec=5",
@@ -120,7 +73,7 @@ function printDaemonizationTemplate(port: number): void {
     "       image: oven/bun:1",
     `       command: bun x @takosjp/takosumi server --port ${port}`,
     "       environment:",
-    "         TAKOSUMI_DEPLOY_TOKEN: ${TAKOSUMI_DEPLOY_TOKEN}",
+    "         TAKOSUMI_DEPLOY_CONTROL_TOKEN: ${TAKOSUMI_DEPLOY_CONTROL_TOKEN}",
     "         TAKOSUMI_DATABASE_URL: ${TAKOSUMI_DATABASE_URL}",
     `       ports: [\"${port}:${port}\"]`,
     "       restart: unless-stopped",

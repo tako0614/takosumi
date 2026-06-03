@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import type { CreatedTakosumiService } from "../../../src/service/bootstrap.ts";
-import { type CloudflareWorkerEnv, createCloudflareWorker } from "./handler.ts";
+import {
+  type CloudflareWorkerEnv,
+  type CreatedCloudflareWorkerApp,
+  createCloudflareWorker,
+} from "./handler.ts";
 import type {
   D1Database,
   D1PreparedStatement,
   DurableObjectNamespace,
+  OpenTofuRunQueueMessage,
+  QueueBatch,
   R2Bucket,
 } from "./bindings.ts";
 import { TAKOSUMI_CLOUDFLARE_FRONT_HEADER } from "./routes.ts";
@@ -25,21 +30,24 @@ test("Cloudflare Worker dispatches service control-plane routes in-process", asy
   });
   const env = createEnv();
 
-  for (
-    const path of [
-      "/health",
-      "/capabilities",
-      "/openapi.json",
-      "/livez",
-      "/readyz",
-      "/status/summary",
-      "/metrics",
-      "/v1/installations",
-      "/v1/installations/ins_demo/deployments/dry-run",
-      "/v1/artifacts/kinds",
-      "/api/internal/v1/spaces",
-    ]
-  ) {
+  for (const path of [
+    "/health",
+    "/capabilities",
+    "/openapi.json",
+    "/livez",
+    "/readyz",
+    "/status/summary",
+    "/metrics",
+    "/api/internal/v1/spaces",
+    "/v1/runner-profiles",
+    "/v1/plan-runs",
+    "/v1/plan-runs/plan_abcdef12",
+    "/v1/apply-runs",
+    "/v1/apply-runs/apply_abcdef12",
+    "/v1/installations/ins_abcdef12",
+    "/v1/installations/ins_abcdef12/deployments",
+    "/v1/installations/ins_abcdef12/deployment-outputs",
+  ]) {
     calls.length = 0;
     const response = await worker.fetch(
       new Request(`https://worker.example${path}`),
@@ -81,17 +89,16 @@ test("Cloudflare Worker preserves method, query, headers, and body", async () =>
   });
   const body = JSON.stringify({
     spaceId: "space_test",
-    source: { kind: "local", url: "." },
+    audit: { reason: "test" },
   });
   const response = await worker.fetch(
-    new Request("https://worker.example/v1/installations/dry-run?trace=1", {
+    new Request("https://worker.example/api/internal/v1/runs?trace=1", {
       method: "POST",
       headers: {
-        authorization: "Bearer installer-token",
+        authorization: "Bearer internal-token",
         "content-type": "application/json",
         traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
         "x-correlation-id": "corr_1",
-        "x-idempotency-key": "deploy_1",
         "x-request-id": "req_1",
       },
       body,
@@ -103,18 +110,62 @@ test("Cloudflare Worker preserves method, query, headers, and body", async () =>
   assert.equal(calls.length, 1);
   const call = calls[0];
   assert.equal(call.method, "POST");
-  assert.equal(
-    call.url,
-    "https://worker.example/v1/installations/dry-run?trace=1",
-  );
-  assert.equal(call.headers.get("authorization"), "Bearer installer-token");
-  assert.equal(call.headers.get("x-idempotency-key"), "deploy_1");
+  assert.equal(call.url, "https://worker.example/api/internal/v1/runs?trace=1");
+  assert.equal(call.headers.get("authorization"), "Bearer internal-token");
   assert.equal(
     call.headers.get("traceparent"),
     "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
   );
   assert.equal(call.headers.get(TAKOSUMI_CLOUDFLARE_FRONT_HEADER), "worker");
   assert.equal(call.body, body);
+});
+
+test("Cloudflare Worker dispatches OpenTofu run queue messages to runner container binding", async () => {
+  const runnerCalls: CapturedRequest[] = [];
+  const worker = createCloudflareWorker();
+
+  await worker.queue(
+    createQueueBatch({
+      kind: "takosumi.opentofu-run@v1",
+      action: "plan",
+      runId: "run_queue_1",
+      requestedAt: "2026-06-02T00:00:00.000Z",
+      request: { sourceRef: "git:example" },
+    }),
+    createEnv({ runnerCalls }),
+  );
+
+  assert.equal(runnerCalls.length, 1);
+  assert.equal(
+    runnerCalls[0].url,
+    "https://opentofu-runner.internal/runs/run_queue_1",
+  );
+  assert.equal(runnerCalls[0].method, "POST");
+  assert.deepEqual(JSON.parse(runnerCalls[0].body), {
+    kind: "takosumi.opentofu-run@v1",
+    action: "plan",
+    runId: "run_queue_1",
+    requestedAt: "2026-06-02T00:00:00.000Z",
+    request: { sourceRef: "git:example" },
+  });
+});
+
+test("Cloudflare Worker does not forward the old Deploy Control API paths", async () => {
+  const calls: CapturedRequest[] = [];
+  const worker = createCloudflareWorker({
+    createServiceApp: () => Promise.resolve(createdApp("service", calls)),
+  });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/v1/installations/plan-runs", {
+      method: "POST",
+      body: "{}",
+    }),
+    createEnv(),
+  );
+
+  assert.equal(response.status, 404);
+  assert.equal(calls.length, 0);
 });
 
 test("Cloudflare Worker keeps edge-local routes outside the service app", async () => {
@@ -132,34 +183,40 @@ test("Cloudflare Worker keeps edge-local routes outside the service app", async 
   assert.equal(calls.length, 0);
 
   assert.equal(
-    (await worker.fetch(
-      new Request("https://worker.example/queue/test", {
-        method: "POST",
-        body: JSON.stringify({ hello: "queue" }),
-      }),
-      env,
-    )).status,
+    (
+      await worker.fetch(
+        new Request("https://worker.example/queue/test", {
+          method: "POST",
+          body: JSON.stringify({ hello: "queue" }),
+        }),
+        env,
+      )
+    ).status,
     200,
   );
   assert.equal(calls.length, 0);
 
   assert.equal(
-    (await worker.fetch(
-      new Request("https://worker.example/storage/healthz"),
-      env,
-    )).status,
+    (
+      await worker.fetch(
+        new Request("https://worker.example/storage/healthz"),
+        env,
+      )
+    ).status,
     200,
   );
   assert.equal(calls.length, 0);
 
   assert.equal(
-    (await worker.fetch(
-      new Request("https://worker.example/coordination/list-alarms", {
-        method: "POST",
-        body: "{}",
-      }),
-      env,
-    )).status,
+    (
+      await worker.fetch(
+        new Request("https://worker.example/coordination/list-alarms", {
+          method: "POST",
+          body: "{}",
+        }),
+        env,
+      )
+    ).status,
     200,
   );
   assert.equal(calls.length, 0);
@@ -182,7 +239,7 @@ function createdApp(
   name: string,
   calls: CapturedRequest[],
   status = 200,
-): CreatedTakosumiService {
+): CreatedCloudflareWorkerApp {
   return {
     app: {
       fetch: async (request: Request) => {
@@ -190,9 +247,7 @@ function createdApp(
         return Response.json({ app: name }, { status });
       },
     },
-    context: {},
-    role: name === "runtime-agent" ? "takosumi-runtime-agent" : "takosumi-api",
-  } as unknown as CreatedTakosumiService;
+  };
 }
 
 async function captureRequest(
@@ -208,17 +263,42 @@ async function captureRequest(
   };
 }
 
-function createEnv(): CloudflareWorkerEnv {
+interface CreateEnvOptions {
+  readonly runnerCalls?: CapturedRequest[];
+}
+
+function createEnv(options: CreateEnvOptions = {}): CloudflareWorkerEnv {
   const coordination = new FakeNamespace((request) =>
-    Response.json({ coordinationPath: new URL(request.url).pathname })
+    Response.json({ coordinationPath: new URL(request.url).pathname }),
   );
+  const runner = new FakeNamespace(async (request) => {
+    options.runnerCalls?.push(await captureRequest("opentofu-runner", request));
+    return Response.json({ ok: true, runner: "opentofu" });
+  });
   return {
     TAKOS_D1: new FakeD1Database(),
     TAKOS_ARTIFACTS: new FakeR2Bucket(),
     TAKOS_QUEUE: {
       send: () => Promise.resolve(),
     },
+    TAKOS_OPENTOFU_RUN_QUEUE: {
+      send: () => Promise.resolve(),
+    },
     TAKOS_COORDINATION: coordination,
+    TAKOS_OPENTOFU_RUNNER: runner,
+  };
+}
+
+function createQueueBatch(
+  message: OpenTofuRunQueueMessage,
+): QueueBatch<OpenTofuRunQueueMessage> {
+  return {
+    messages: [
+      {
+        id: "msg_1",
+        body: message,
+      },
+    ],
   };
 }
 

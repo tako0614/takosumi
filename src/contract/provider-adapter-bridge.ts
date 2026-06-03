@@ -3,13 +3,12 @@
  * `OperatorImplementation`.
  *
  * The wrapper is intentionally thin: it forwards `component.spec` (passed
- * through the reference installer pipeline as opaque JSON) to the underlying
+ * through the reference deploy control pipeline as opaque JSON) to the underlying
  * provider's `apply()` / `destroy()`, and surfaces the resource handle as
  * `resourceHandle` for the service's internal apply evidence.
  *
- * This bridge is retained for deploy-space compatibility code. `OperatorImplementation`
- * is the current reference adapter API; `ProviderAdapter` is the older
- * shape/provider surface this file keeps isolated from native kind implementations.
+ * `OperatorImplementation` is the current reference adapter API. `ProviderAdapter`
+ * stays isolated here as an adapter-facing implementation helper.
  */
 
 import type { JsonObject } from "./types.ts";
@@ -28,13 +27,12 @@ import type {
  * underlying `ProviderAdapter`. The kind URI must match the descriptor URI
  * the underlying provider materializes.
  *
- * `ProviderAdapter` is generic over `Spec` / `Outputs` types; this compatibility
+ * `ProviderAdapter` is generic over `Spec` / `Outputs` types; this bridge
  * adapter erases to the generic JsonObject form before entering the current
  * `OperatorImplementation` pipeline.
  */
 export function operatorImplementationFromProviderAdapter(
   opts: {
-    // deno-lint-ignore no-explicit-any
     readonly provider: ProviderAdapter<any, any, any>;
     readonly kindUri: string;
     readonly name?: string;
@@ -156,7 +154,7 @@ function sameEnvValue(a: EnvValue, b: EnvValue): boolean {
 }
 
 /**
- * Build a minimal `PlatformContext` for legacy shape/provider delegation. The
+ * Build a minimal `PlatformContext` for shape/provider delegation. The
  * compatibility provider set (external / cloud) uses `_ctx` exclusively, so we
  * pass typed stubs for the SDK ports — none of them are exercised by the
  * wrappers in this directory.
@@ -207,7 +205,7 @@ function unavailable(port: string): Promise<never> {
  * adapters and the service `apply_service.ts` fallback do not maintain
  * byte-identical copies.
  *
- * The service's legacy `resources[]` apply path builds a per-resource ref resolver
+ * The service's resource apply path builds a per-resource ref resolver
  * before dispatch; these stubs are intentionally fail-loud / fail-quiet
  * fallbacks for code paths that never exercise them.
  */

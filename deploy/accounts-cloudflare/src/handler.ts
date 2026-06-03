@@ -22,11 +22,15 @@ import {
   type UpstreamOAuthOptions,
   type WorkloadPlatformServiceResolverHttpOptions,
 } from "@takosjp/takosumi-accounts-service";
-import { isWorkerLocalPath } from "./routes.ts";
+import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 
 export interface CloudflareWorkerEnv {
   readonly [name: string]: unknown;
   readonly TAKOSUMI_ACCOUNTS_DB: D1Database;
+  // Cloudflare Static Assets binding for the bundled dashboard SPA
+  // (packages/dashboard-ui → .output/public). Present when the wrangler
+  // `[assets]` block is configured; absent in API-only deploys/tests.
+  readonly ASSETS?: { fetch(request: Request): Promise<Response> };
   readonly TAKOSUMI_ACCOUNTS_EXPORTS?: R2Bucket;
   readonly TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL?: string;
@@ -83,8 +87,8 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF?: string;
   readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF?: string;
   readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY?: string;
-  readonly TAKOSUMI_ACCOUNTS_INSTALLER_URL?: string;
-  readonly TAKOSUMI_ACCOUNTS_INSTALLER_TOKEN?: string;
+  readonly TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL?: string;
+  readonly TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVER_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICES_INTERNAL_URL?: string;
   readonly TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL?: string;
@@ -150,6 +154,17 @@ export function createCloudflareWorker(): CloudflareWorkerHandler {
       }
       const exportDownload = await maybeHandleR2ExportDownload(request, env);
       if (exportDownload) return exportDownload;
+      // Non-API paths = the dashboard SPA, served from this Worker's static
+      // assets (deep links fall back to index.html via not_found_handling).
+      // API namespaces, and any deploy without the ASSETS binding, fall
+      // through to the accounts handler below.
+      if (
+        env.ASSETS &&
+        (request.method === "GET" || request.method === "HEAD") &&
+        !isAccountsApiPath(url.pathname)
+      ) {
+        return await env.ASSETS.fetch(request);
+      }
       try {
         const handler = await cachedAccountsHandler(env);
         return await handler(request);
@@ -219,7 +234,7 @@ async function buildAccountsHandler(
     upstreamOAuth: parseUpstreamOAuth(env),
     passkeys: parsePasskeys(env),
     managedOfferingAccess: parseManagedOfferingAccess(env),
-    installer: parseInstaller(env),
+    deployControl: parseDeployControl(env),
     workloadPlatformServices: parseWorkloadPlatformServices(env),
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
@@ -690,12 +705,12 @@ function parseCustomOidcUpstreamProvider(
   };
 }
 
-function parseInstaller(
+function parseDeployControl(
   env: CloudflareWorkerEnv,
 ): { url: string; token?: string } | undefined {
-  const url = optionalString(env.TAKOSUMI_ACCOUNTS_INSTALLER_URL);
+  const url = optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL);
   if (!url) return undefined;
-  const token = optionalString(env.TAKOSUMI_ACCOUNTS_INSTALLER_TOKEN);
+  const token = optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN);
   return token ? { url, token } : { url };
 }
 

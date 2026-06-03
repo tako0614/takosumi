@@ -1,4 +1,4 @@
-import type { Installation } from "./api/installations";
+import type { Installation } from "./rpc";
 import { tryDefaultTakosUrlForHost } from "./use-takos-start";
 
 export interface AppDetailLaunchState {
@@ -72,7 +72,10 @@ function managedTakosLaunchUrl(
 ): string | undefined {
   const takosUrl = tryDefaultTakosUrlForHost(env.hostname);
   if (!takosUrl) return undefined;
-  const url = new URL("/dashboard/use-takos", env.origin);
+  // Defensive: the caller guards spaceId, but TS does not narrow across the
+  // boundary — never emit a return_to of /spaces/undefined/threads.
+  if (!app.spaceId) return undefined;
+  const url = new URL("/takos/start", env.origin);
   url.searchParams.set("takos_url", takosUrl);
   url.searchParams.set("account_id", app.accountId ?? "");
   url.searchParams.set("space_id", app.spaceId ?? "");

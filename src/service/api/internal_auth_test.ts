@@ -287,7 +287,7 @@ async function signedRequest(input: {
     actor: { ...actor, requestId: input.requestId },
   });
   return new Request(
-    `https://paas.test${path}${input.requestQuery ?? input.query ?? ""}`,
+    `https://takosumi.test${path}${input.requestQuery ?? input.query ?? ""}`,
     {
       method: "POST",
       headers: signed.headers,
@@ -382,7 +382,7 @@ test("readInternalAuth: independent in-memory stores do NOT share state (regress
   // Sanity check that documents the original Phase 18 vulnerability:
   // when each replica owns its own in-memory store, a replayed request
   // is incorrectly accepted by the second replica. This test pins the
-  // historical behavior so the SQL-backed test above is meaningful.
+  // previous behavior so the SQL-backed test above is meaningful.
   const replicaAStore = new InMemoryReplayProtectionStore();
   const replicaBStore = new InMemoryReplayProtectionStore();
   const signed = await signedRequest({

@@ -1,13 +1,8 @@
 # Takosumi Service — single-host reference distribution.
 #
-# Substrate-neutral counterpart to deploy/cloudflare/. Brings up the
-# full Takosumi PaaS service + runtime-agent + Postgres + MinIO (S3
-# compatible) + Caddy (TLS) on any Docker host. Use this on a single
-# VM, container host, or Kubernetes pod (via kompose) instead of
-# Cloudflare Workers.
-#
-# The service and runtime-agent here do NOT depend on Cloudflare D1 or
-# R2; they use Postgres + MinIO via local adapter handlers.
+# Substrate-neutral service/storage example for operators that do not want the
+# Cloudflare Worker + D1 + R2 profile. OpenTofu execution is not embedded here;
+# operators attach an external runner through RunnerProfile.
 
 services:
   postgres:
@@ -54,39 +49,12 @@ services:
     environment:
       TAKOSUMI_ENVIRONMENT: ${TAKOSUMI_ENVIRONMENT:-production}
       TAKOSUMI_DATABASE_URL: postgres://takosumi:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/takosumi
-      TAKOSUMI_INSTALLER_TOKEN: ${TAKOSUMI_INSTALLER_TOKEN:?set TAKOSUMI_INSTALLER_TOKEN in .env}
-      TAKOSUMI_DEPLOY_TOKEN: ${TAKOSUMI_DEPLOY_TOKEN:?set TAKOSUMI_DEPLOY_TOKEN in .env}
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: ${TAKOSUMI_DEPLOY_CONTROL_TOKEN:?set TAKOSUMI_DEPLOY_CONTROL_TOKEN in .env}
       TAKOSUMI_INTERNAL_API_SECRET: ${TAKOSUMI_INTERNAL_API_SECRET:?set TAKOSUMI_INTERNAL_API_SECRET in .env}
-      TAKOSUMI_AGENT_URL: http://runtime-agent:8789
-      TAKOSUMI_AGENT_TOKEN: ${TAKOSUMI_AGENT_TOKEN:?set TAKOSUMI_AGENT_TOKEN in .env}
       TAKOSUMI_DB_AUTO_MIGRATE: "true"
       PORT: "8788"
     expose:
       - "8788"
-
-  runtime-agent:
-    build:
-      context: ../..
-      dockerfile: deploy/single-host/Dockerfile.runtime-agent
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    environment:
-      TAKOSUMI_AGENT_TOKEN: ${TAKOSUMI_AGENT_TOKEN:?set TAKOSUMI_AGENT_TOKEN in .env}
-      TAKOSUMI_AGENT_PORT: "8789"
-      TAKOSUMI_S3_ENDPOINT: http://minio:9000
-      TAKOSUMI_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-takosumi}
-      TAKOSUMI_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
-    expose:
-      - "8789"
-    volumes:
-      # The Docker Compose adapter shells out to docker / docker compose
-      # to manage user-deployed services. Mount the host docker socket
-      # so the runtime-agent can drive it.
-      - /var/run/docker.sock:/var/run/docker.sock
 
   caddy:
     image: caddy:2-alpine

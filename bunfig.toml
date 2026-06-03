@@ -1,3 +1,4 @@
-# Bun runs without a global Deno compatibility preload. Real Deno support lives
-# in src/service/shared/runtime/deno.ts and is selected only on a genuine Deno
-# host.
+# Bun runs without compatibility preloads. Takosumi is Bun/Node/Workers-first.
+
+[test]
+pathIgnorePatterns = ["packages/dashboard-ui/test/e2e/**"]

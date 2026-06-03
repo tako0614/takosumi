@@ -167,32 +167,3 @@ test("GC retains mirrored external image through rollback window", async () => {
   assert.equal(expired.retain, false);
   assert.equal(expired.deleteOperation?.dryRun, true);
 });
-
-test("GC retains deploy retained artifacts required for rollback", async () => {
-  const service = new GcRetentionService({
-    protectedReferences: new InMemoryProtectedReferenceStore(),
-  });
-
-  const retained = await service.decideRetainedDeployArtifact({
-    id: "descriptor-closure:sha256:closure",
-    kind: "descriptor-closure",
-    digest: "sha256:closure",
-    retainedAt: "2026-04-27T00:00:00.000Z",
-    retainedUntil: "2026-04-30T00:00:00.000Z",
-    sourceActivationId: "activation_v1",
-  }, "2026-04-29T00:00:00.000Z");
-  const expired = await service.decideRetainedDeployArtifact({
-    id: "app-release:sha256:old",
-    kind: "app-release",
-    digest: "sha256:old",
-    retainedAt: "2026-04-27T00:00:00.000Z",
-    retainedUntil: "2026-04-28T00:00:00.000Z",
-    sourceActivationId: "activation_old",
-  }, "2026-04-29T00:00:00.000Z");
-
-  assert.equal(retained.retain, true);
-  assert.equal(retained.reasons[0]?.code, "rollback-window");
-  assert.deepEqual(retained.reasons[0]?.referenceIds, ["activation_v1"]);
-  assert.equal(expired.retain, false);
-  assert.equal(expired.deleteOperation?.refType, "RetainedDeployArtifact");
-});

@@ -40,8 +40,8 @@ const REDACTED = "[redacted]";
 // message / redacted-details shape to every caller. It does NOT differentiate
 // a public vs internal audience (that would require generalizing messages and
 // dropping free-form details for untrusted callers, which is not implemented
-// here). The fail-closed public Installer API boundary lives in
-// `installer_public_routes.ts`.
+// here). The fail-closed public Deploy Control API boundary lives in
+// `deploy_control_public_routes.ts`.
 export function createApiErrorResponse(
   error: unknown,
   options: ApiErrorEnvelopeOptions = {},

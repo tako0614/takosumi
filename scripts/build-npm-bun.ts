@@ -154,7 +154,7 @@ const npmPackage = {
   name: sourcePackage.name,
   version: sourcePackage.version,
   description:
-    "Takosumi contract, service, installer, CLI, and runtime-agent.",
+    "Takosumi OpenTofu-native Deploy Control contract, service, and CLI.",
   license: sourcePackage.license ?? "MIT",
   type: "module",
   module: "./esm/src/all/mod.js",

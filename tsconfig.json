@@ -14,8 +14,8 @@
     "paths": {
       "@takosjp/takosumi": ["./src/all/mod.ts"],
       "@takosjp/takosumi/contract": ["./src/contract/mod.ts"],
-      "@takosjp/takosumi/contract/installer-api": [
-        "./src/contract/installer-api.ts"
+      "@takosjp/takosumi/contract/deploy-control-api": [
+        "./src/contract/deploy-control-api.ts"
       ],
       "@takosjp/takosumi-accounts-contract": [
         "./packages/accounts-contract/src/mod.ts"
@@ -29,8 +29,8 @@
         "./packages/platform-services/src/mod.ts"
       ],
       "@takos/takosumi-contract": ["./src/contract/mod.ts"],
-      "@takos/takosumi-contract/installer-api": [
-        "./src/contract/installer-api.ts"
+      "@takos/takosumi-contract/deploy-control-api": [
+        "./src/contract/deploy-control-api.ts"
       ],
       "@takos/takosumi-contract/reference/compat": [
         "./src/contract/reference-compat.ts"
@@ -81,7 +81,7 @@
         "./src/service/shared/runtime/index.ts"
       ],
       "takosumi-contract": ["./src/contract/mod.ts"],
-      "takosumi-contract/installer-api": ["./src/contract/installer-api.ts"],
+      "takosumi-contract/deploy-control-api": ["./src/contract/deploy-control-api.ts"],
       "takosumi-contract/reference/compat": [
         "./src/contract/reference-compat.ts"
       ],
@@ -113,9 +113,9 @@
       ],
       "takosumi-contract/internal/rpc": ["./src/contract/internal-rpc.ts"],
 
-      "takosumi-installer": ["./src/installer/mod.ts"],
-      "takosumi-installer/git-fetch": ["./src/installer/git-fetch.ts"],
-      "takosumi-installer/deploy-client": ["./src/installer/deploy-client.ts"],
+      "takosumi-deploy-control": ["./src/deploy-control/mod.ts"],
+      "takosumi-deploy-control/git-fetch": ["./src/deploy-control/git-fetch.ts"],
+      "takosumi-deploy-control/deploy-client": ["./src/deploy-control/deploy-client.ts"],
       "takosumi-runtime-agent/prepared-source-reader": [
         "./src/runtime-agent/prepared_source_reader.ts"
       ]

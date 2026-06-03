@@ -183,15 +183,15 @@ test("installation export bundle import plan rewrites only the exact source orig
   ]);
 });
 
-test("installation export bundle parser accepts legacy OIDC namespacePath", () => {
-  const legacy = JSON.parse(
+test("installation export bundle parser accepts stored OIDC namespacePath", () => {
+  const stored = JSON.parse(
     JSON.stringify(sampleExportBundle("https://accounts.source.test")),
   ) as Record<string, unknown>;
-  const oidcClient = legacy.oidcClient as Record<string, unknown>;
+  const oidcClient = stored.oidcClient as Record<string, unknown>;
   oidcClient.namespacePath = oidcClient.servicePath;
   delete oidcClient.servicePath;
 
-  const parsed = parseAccountsInstallationExportBundle(legacy);
+  const parsed = parseAccountsInstallationExportBundle(stored);
 
   expect(parsed.oidcClient?.servicePath).toEqual("identity.primary.oidc");
   expect(parsed.oidcClient?.namespacePath).toEqual("identity.primary.oidc");
@@ -439,7 +439,7 @@ test("metadata-only export worker writes archive and returns download URL", asyn
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
         sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-        planSnapshotDigest: "sha256:app",
+        planDigest: "sha256:app",
         artifactDigest: "sha256:compiled",
         mode: "dedicated",
         status: "ready",
@@ -504,7 +504,7 @@ test("metadata-only export worker attaches provider data when requested", async 
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
         sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-        planSnapshotDigest: "sha256:app",
+        planDigest: "sha256:app",
         artifactDigest: "sha256:compiled",
         mode: "dedicated",
         status: "ready",
@@ -571,7 +571,7 @@ test("metadata-only export worker attaches artifact descriptor when configured",
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
         sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-        planSnapshotDigest: "sha256:app",
+        planDigest: "sha256:app",
         artifactDigest: "sha256:compiled",
         mode: "dedicated",
         status: "ready",
@@ -629,7 +629,7 @@ test("metadata-only export worker keeps prefixed static archive paths readable",
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
         sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-        planSnapshotDigest: "sha256:app",
+        planDigest: "sha256:app",
         artifactDigest: "sha256:compiled",
         mode: "dedicated",
         status: "ready",
@@ -715,7 +715,7 @@ test("metadata-only export worker uploads archive through injectable object-stor
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
         sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-        planSnapshotDigest: "sha256:app",
+        planDigest: "sha256:app",
         artifactDigest: "sha256:compiled",
         mode: "dedicated",
         status: "ready",
@@ -793,7 +793,7 @@ test("metadata-only export worker encrypts archive with age recipients", async (
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
         sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-        planSnapshotDigest: "sha256:app",
+        planDigest: "sha256:app",
         artifactDigest: "sha256:compiled",
         mode: "dedicated",
         status: "ready",
@@ -843,7 +843,7 @@ function sampleExportBundle(sourceIssuer: string) {
       sourceGitUrl: "https://github.com/takos/takos",
       sourceRef: "v1.2.3",
       sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-      planSnapshotDigest: "sha256:app",
+      planDigest: "sha256:app",
       artifactDigest: "sha256:compiled",
       mode: "dedicated",
       status: "ready",

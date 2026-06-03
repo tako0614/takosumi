@@ -1,19 +1,14 @@
 // Pure shared helpers used by every in-memory store class:
 //  - `immutable` / `deepFreeze`: freeze a deep copy so a returned value
 //    cannot be mutated by callers
-//  - composite-key formatters (`membershipKey`, `groupHeadKey`, `packageKey`)
-//  - small predicates used by deploy and audit stores
+//  - composite-key formatters (`membershipKey`, `packageKey`)
+//  - small predicates used by audit stores
 
 import type { AccountId, SpaceId } from "../../../domains/space/types.ts";
 import type {
   AuditEvent,
   AuditEventQuery,
 } from "../../../domains/audit/types.ts";
-import type { Deployment } from "takosumi-contract/reference/compat";
-import type {
-  AdvanceGroupHeadInput,
-  DeploymentFilter,
-} from "../../../domains/deploy/store.ts";
 import type { PackageKind } from "../../../domains/registry/types.ts";
 
 export function immutable<T>(value: T): T {
@@ -35,33 +30,6 @@ export function membershipKey(
   accountId: AccountId,
 ): string {
   return `${spaceId}:${accountId}`;
-}
-
-export function groupHeadKey(spaceId: string, groupId: string): string {
-  return `${spaceId}\u0000${groupId}`;
-}
-
-export function assertDeploymentHeadScope(
-  input: AdvanceGroupHeadInput,
-  deployment: Deployment,
-): void {
-  if (deployment.space_id !== input.spaceId) {
-    throw new Error(
-      `deployment ${deployment.id} belongs to space ${deployment.space_id}, not ${input.spaceId}`,
-    );
-  }
-  if (deployment.group_id !== input.groupId) {
-    throw new Error(
-      `deployment ${deployment.id} belongs to group ${deployment.group_id}, not ${input.groupId}`,
-    );
-  }
-}
-
-export function normalizeDeploymentStatusFilter(
-  status: DeploymentFilter["status"],
-): Set<Deployment["status"]> | undefined {
-  if (status === undefined) return undefined;
-  return new Set(Array.isArray(status) ? status : [status]);
 }
 
 export function packageKey(

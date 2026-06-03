@@ -19,7 +19,7 @@ import {
  * unavailable in V8 isolates. The adapter exposes them as fail-closed
  * surfaces so that any accidental call (e.g. from a CLI-only code path
  * imported by mistake) throws a clear error instead of a confusing
- * `Deno is not defined` ReferenceError.
+ * host-runtime ReferenceError.
  */
 
 export interface WorkersEnvBindings {
@@ -114,22 +114,14 @@ export function isWorkers(): boolean {
   }
   // Best-effort fallback for environments where `navigator.userAgent` is not
   // populated (older `workerd` builds): Workers expose `WebSocketPair` but not
-  // Deno / Node `process`. This is a heuristic and could misclassify a
-  // non-Deno/non-Node host that exposes `WebSocketPair`; the userAgent signal
-  // above is preferred whenever available.
-  //
-  // Probe for a genuine `Deno.Command` rather than a bare `typeof Deno`, so a
-  // partial compatibility global without `Command` cannot be mistaken for real
-  // Deno. (`hasNodeProcess` already excludes Node here, but the hardened probe
-  // keeps the discriminator consistent with `isDeno()`.)
-  const hasDeno =
-    typeof (globalThis as { Deno?: { Command?: unknown } }).Deno?.Command ===
-      "function";
+  // Node `process`. This is a heuristic and could misclassify another host that
+  // exposes `WebSocketPair`; the userAgent signal above is preferred whenever
+  // available.
   const hasNodeProcess = typeof (globalThis as {
     process?: { versions?: { node?: string } };
   }).process?.versions?.node === "string";
   const hasWebSocketPair =
     typeof (globalThis as { WebSocketPair?: unknown }).WebSocketPair !==
       "undefined";
-  return hasWebSocketPair && !hasDeno && !hasNodeProcess;
+  return hasWebSocketPair && !hasNodeProcess;
 }

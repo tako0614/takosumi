@@ -62,8 +62,8 @@ export function createOperatorImplementationRegistry(
 
 /**
  * Normalize a kind reference for implementation lookup. Full `http(s)` URIs pass
- * through unchanged. Bare tokens are returned as-is; the manifestless v1 space
- * does not expand authoring aliases.
+ * through unchanged. Bare tokens are returned as-is; v1 does not expand
+ * authoring aliases.
  */
 export function normalizeKindToUri(kind: string): string {
   if (isKindUri(kind)) return kind;

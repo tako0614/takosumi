@@ -248,7 +248,7 @@ test("InMemoryAccountsStore persists AppInstallation ledger records", () => {
     sourceGitUrl: "https://github.com/takos/takos",
     sourceRef: "v1.2.3",
     sourceCommit: "abc123",
-    planSnapshotDigest: "sha256:app",
+    planDigest: "sha256:app",
     artifactDigest: "sha256:compiled",
     mode: "shared-cell",
     billingAccountId: "billing-inst-1",

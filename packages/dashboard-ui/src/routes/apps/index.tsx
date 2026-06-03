@@ -11,8 +11,7 @@ import {
 import AppShell from "~/components/shell/AppShell";
 import AuthGuard from "~/components/auth/AuthGuard";
 import AppCard from "~/components/apps/AppCard";
-import { listInstallationsForSpace } from "~/lib/api/installations";
-import { ApiError } from "~/lib/api/client";
+import { ApiError, rpc } from "~/lib/rpc";
 
 const STORAGE_KEY = "tg_apps_space_id";
 
@@ -42,7 +41,7 @@ function AppsInner() {
 
   const [apps] = createResource(
     () => (spaceId() ? spaceId() : null),
-    listInstallationsForSpace,
+    rpc.installations.list,
   );
 
   const hasSpace = createMemo(() => !!spaceId());
@@ -53,7 +52,7 @@ function AppsInner() {
         <h1>Apps</h1>
         <p class="page-sub">Space ごとの install 済みアプリを確認します。</p>
         <div class="page-actions">
-          <a href="/apps/install" class="btn btn-primary">
+          <a href="/install" class="btn btn-primary">
             + Install
           </a>
         </div>
@@ -105,7 +104,7 @@ function AppsInner() {
                 fallback={
                   <section class="empty-state">
                     <p>この space にはまだ何も installed されていません。</p>
-                    <a href="/apps/install" class="btn btn-primary">
+                    <a href="/install" class="btn btn-primary">
                       最初のアプリを install →
                     </a>
                   </section>

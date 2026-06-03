@@ -1,19 +1,9 @@
-// Backup / restore service — Deployment-centric port.
+// Backup / restore service.
 //
 // Resource-side restore semantics (snapshot / point-in-time / provider-native)
-// remain owned by this service because they live below the Deployment record
-// and operate on `ResourceInstance` lifecycle entries directly. Group-level
-// "rollback the whole deployment" is delegated to
-// `DeploymentService.rollbackGroup()`, which atomically advances the
-// `GroupHead` pointer back to the previous Deployment. The retained
-// `Deployment.input.manifest_snapshot` and
-// `Deployment.resolution.descriptor_closure` provide the required artefacts.
+// operate on `ResourceInstance` lifecycle entries directly.
 
-import type {
-  Deployment,
-  GroupHead,
-  JsonObject,
-} from "takosumi-contract/reference/compat";
+import type { JsonObject } from "takosumi-contract/reference/compat";
 import type {
   ResourceInstance,
   ResourceInstanceId,
@@ -34,31 +24,6 @@ import type {
   RestorePlanResourceDto,
 } from "./types.ts";
 
-/**
- * Subset of the deploy-domain `DeploymentService` used by backup/restore for
- * group-level rollback. Kept as a structural interface so this service stays
- * decoupled from the concrete `DeploymentService` class while Phase 3 Agent A
- * finalises it.
- */
-export interface BackupRestoreDeploymentClient {
-  rollbackGroup(input: BackupRestoreRollbackGroupInput): Promise<{
-    readonly deployment: Deployment;
-    readonly groupHead: GroupHead;
-  }>;
-}
-
-export interface BackupRestoreRollbackGroupInput {
-  readonly spaceId: string;
-  readonly groupId: string;
-  /**
-   * Optional target Deployment id. When omitted, the deployment service
-   * rolls the GroupHead back one step (current -> previous).
-   */
-  readonly targetDeploymentId?: string;
-  readonly reason?: string;
-  readonly actor?: { readonly accountId?: string };
-}
-
 export interface BackupRestoreServiceStores {
   readonly backupRestore: BackupRestoreStore;
   readonly resources: ResourceInstanceStore;
@@ -78,11 +43,6 @@ export interface BackupRestoreServiceOptions {
   readonly providerSupport?: readonly BackupRestoreProviderSupport[];
   readonly idFactory?: () => string;
   readonly clock?: () => Date;
-  /**
-   * Optional deployment-domain client used for group-level rollback. When
-   * absent, callers must perform Deployment rollback themselves.
-   */
-  readonly deploymentService?: BackupRestoreDeploymentClient;
 }
 
 export interface RegisterBackupMetadataInput {
@@ -121,7 +81,6 @@ export class BackupRestoreService {
   readonly #providerSupport: ReadonlyMap<string, readonly RestoreMode[]>;
   readonly #idFactory: () => string;
   readonly #clock: () => Date;
-  readonly #deploymentService?: BackupRestoreDeploymentClient;
 
   constructor(options: BackupRestoreServiceOptions) {
     this.#stores = options.stores;
@@ -133,27 +92,6 @@ export class BackupRestoreService {
     );
     this.#idFactory = options.idFactory ?? crypto.randomUUID;
     this.#clock = options.clock ?? (() => new Date());
-    this.#deploymentService = options.deploymentService;
-  }
-
-  /**
-   * Group-level rollback. Delegates to `DeploymentService.rollbackGroup`,
-   * which atomically advances the `GroupHead` pointer back to the previous
-   * Deployment. Resource-level restore (snapshot / point-in-time /
-   * provider-native) is a separate concern and goes through `planRestore`.
-   */
-  async rollbackGroup(
-    input: BackupRestoreRollbackGroupInput,
-  ): Promise<
-    { readonly deployment: Deployment; readonly groupHead: GroupHead }
-  > {
-    if (!this.#deploymentService) {
-      throw conflict(
-        "Deployment service is required for group rollback",
-        { spaceId: input.spaceId, groupId: input.groupId },
-      );
-    }
-    return await this.#deploymentService.rollbackGroup(input);
   }
 
   async registerBackupMetadata(

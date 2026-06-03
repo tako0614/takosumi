@@ -33,7 +33,7 @@ cd takosumi/deploy/local-substrate
 sha256sum docs/launch-readiness/p0-local-evidence.md
 # → <hash>  docs/launch-readiness/p0-local-evidence.md
 # Then update TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST in
-# env/takosumi-worker.env with `sha256:<hash>`.
+# env/takosumi-accounts-worker.env with `sha256:<hash>`.
 ```
 
 The substrate's `scripts/up.sh` does NOT auto-recompute this digest — that's intentional, because the whole point of pinning a digest is that the operator chose it deliberately at the moment they reviewed the file. If you change this file you must also update the env file by hand; otherwise the worker's managed-offering gate will refuse with `readiness_digest_mismatch`.

@@ -1,4 +1,4 @@
-import type { ReferenceDeploySourcePayload } from "../../domains/deploy/mod.ts";
+import type { JsonObject } from "takosumi-contract/reference/compat";
 
 export type SourceSnapshotKind = "source" | "git" | "local_upload";
 
@@ -12,7 +12,7 @@ export interface SourceFileSnapshot {
 export interface SourceSnapshot {
   readonly id: string;
   readonly kind: SourceSnapshotKind;
-  readonly source: ReferenceDeploySourcePayload;
+  readonly source: JsonObject;
   readonly files: readonly SourceFileSnapshot[];
   readonly metadata: Record<string, unknown>;
   readonly createdAt: string;

@@ -7,7 +7,7 @@ interface Props {
 }
 
 /**
- * Layered-manifest mark — three stacked rounded rectangles with a
+ * Layered module mark — three stacked rounded rectangles with a
  * subtle depth offset, suggesting `resources[]` snapping into the
  * apply pipeline. Single-color with the gradient applied as fill.
  */
@@ -32,8 +32,8 @@ export default function GeometricMark(props: Props): JSX.Element {
           y2="44"
           gradientUnits="userSpaceOnUse"
         >
-          <stop offset="0" stop-color="var(--tg-grad-from, #5d3afd)" />
-          <stop offset="1" stop-color="var(--tg-grad-to, #00b1ff)" />
+          <stop offset="0" stop-color="var(--tg-grad-from, #0a0a0a)" />
+          <stop offset="1" stop-color="var(--tg-grad-to, #dc2626)" />
         </linearGradient>
       </defs>
       <rect

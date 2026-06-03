@@ -62,8 +62,6 @@ export interface RestorePlanDto {
   readonly kind: "restore-plan";
   readonly spaceId: string;
   readonly groupId?: string;
-  /** Restore plans are intentionally separate from deploy rollback plans. */
-  readonly rollbackPlanId?: never;
   readonly resources: readonly RestorePlanResourceDto[];
   readonly createdAt: IsoTimestamp;
   readonly createdBy?: string;

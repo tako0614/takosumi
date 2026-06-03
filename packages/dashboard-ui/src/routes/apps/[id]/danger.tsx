@@ -5,11 +5,7 @@ import { createResource, createSignal, Match, Show, Switch } from "solid-js";
 import AppShell from "~/components/shell/AppShell";
 import AuthGuard from "~/components/auth/AuthGuard";
 import AppDetailNav from "~/components/apps/AppDetailNav";
-import {
-  getInstallation,
-  uninstallInstallation,
-} from "~/lib/api/installations";
-import { ApiError } from "~/lib/api/client";
+import { ApiError, rpc } from "~/lib/rpc";
 
 export default function Danger() {
   return (
@@ -22,7 +18,7 @@ export default function Danger() {
 function Inner() {
   const params = useParams<{ id: string }>();
   const nav = useNavigate();
-  const [app] = createResource(() => params.id, getInstallation);
+  const [app] = createResource(() => params.id, rpc.installations.get);
   const [typed, setTyped] = createSignal("");
   const [uninstalling, setUninstalling] = createSignal(false);
   const [err, setErr] = createSignal<string | null>(null);
@@ -44,7 +40,7 @@ function Inner() {
     setUninstalling(true);
     setErr(null);
     try {
-      await uninstallInstallation(a.installationId);
+      await rpc.installations.uninstall(a.installationId);
       nav("/apps");
     } catch (e) {
       setErr((e as ApiError).message);

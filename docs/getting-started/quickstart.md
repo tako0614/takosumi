@@ -1,92 +1,94 @@
-# クイックスタート — ローカル記録の検証 {#quickstart}
+# Quickstart
 
-## 前提条件
+この手順は local Takosumi service に OpenTofu module の PlanRun / ApplyRun を作る最小例です。
 
-- Node.js 20+ / npm または Bun
+## Prerequisites
 
-この手順では、ローカル Takosumi server に source を渡し、Installation と最初の Deployment が作られるところまでを確認します。
-public URL で提供するには、gateway や runtime を持つ operator 環境が必要です。
+- Bun
+- OpenTofu CLI (`tofu`)
+- Git
 
-## 1. CLI をインストールする
-
-```bash
-npm install -g @takosjp/takosumi
-takosumi version
-```
-
-## 2. source root を作る
+## 1. service を起動
 
 ```bash
-mkdir hello-takosumi && cd hello-takosumi
-printf '{"name":"hello-takosumi","version":"0.1.0"}\n' > package.json
+cd takosumi
+bun install
+
+export TAKOSUMI_DEV_MODE=1
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
+bun src/cli/main.ts server --port 8788
 ```
 
-`package.json` は Takosumi 専用 metadata ではなく、repo の汎用 metadata です。
-
-## 3. ローカル server を起動する
-
-別 shell で起動します。
+別 terminal で CLI を叩きます。
 
 ```bash
-export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
-TAKOSUMI_DEV_MODE=1 takosumi server --port 8788
+cd takosumi
+export TAKOSUMI_REMOTE_URL=http://127.0.0.1:8788
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
 ```
 
-元の shell で接続先を設定します。
+## 2. OpenTofu module を用意
 
 ```bash
-export APP_ROOT="$PWD"
-export TAKOSUMI_REMOTE_URL=http://localhost:8788
-export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
-```
+mkdir -p /tmp/hello-takosumi
+cd /tmp/hello-takosumi
 
-## 4. dry-run する
-
-```bash
-takosumi install dry-run --space space_personal --source "$APP_ROOT"
-```
-
-成功すると `installPlan`、`planSnapshotDigest`、`changes[]`、`expected` が返ります。
-
-```json
-{
-  "source": { "kind": "local", "url": "/path/to/hello-takosumi" },
-  "planSnapshotDigest": "sha256:...",
-  "installPlan": {
-    "repo": { "id": "hello-takosumi", "name": "hello-takosumi", "version": "0.1.0" },
-    "requestedBindings": [],
-    "resolvedBindings": [],
-    "publications": [],
-    "changes": []
-  },
-  "expected": { "planSnapshotDigest": "sha256:..." }
+cat > main.tf <<'EOF'
+terraform {
+  required_version = ">= 1.6.0"
 }
-```
 
-## 5. Installation を作る
-
-```bash
-takosumi install --space space_personal --source "$APP_ROOT"
-```
-
-dry-run で得た digest を指定して apply するには:
-
-```bash
-takosumi install --space space_personal --source "$APP_ROOT" \
-  --expected-plan-snapshot-digest sha256:<copied-from-dry-run>
-```
-
-成功すると Installation id と Deployment id が返ります。
-
-```json
-{
-  "installation": { "id": "inst_...", "status": "ready" },
-  "deployment": { "id": "dep_...", "status": "succeeded" }
+output "launch_url" {
+  value = "https://example.test"
 }
+EOF
+
+git init
+git add main.tf
+git commit -m "initial OpenTofu module"
 ```
 
-## 次に読む
+## 3. PlanRun を作る
 
-- [Installer API](../reference/installer-api.md)
-- [CLI](../reference/cli.md)
-- [プラットフォームサービス](../reference/platform-services.md)
+```bash
+cd takosumi
+bun src/cli/main.ts plan /tmp/hello-takosumi \
+  --space space_personal \
+  --remote "$TAKOSUMI_REMOTE_URL" \
+  --token "$TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+```
+
+Plan command は PlanRun response を表示します。`status: "succeeded"`、`planDigest`、`sourceDigest`、`variablesDigest`、`policyDecisionDigest` が apply guard の入力になります。
+
+## 4. ApplyRun を作る
+
+```bash
+cd takosumi
+bun src/cli/main.ts install /tmp/hello-takosumi \
+  --space space_personal \
+  --remote "$TAKOSUMI_REMOTE_URL" \
+  --token "$TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+```
+
+CLI は PlanRun response から expected guard を組み立てて apply します。review した plan と違う source / variables / policy decision / plan digest では ApplyRun が作れません。
+
+## Source syntax
+
+```text
+local path:
+  /path/to/module
+
+git repo:
+  git:https://github.com/example/module.git#main
+
+prepared archive:
+  prepared:https://example.com/module.tar.gz#sha256:<64 lowercase hex>
+```
+
+module path が必要な場合は API request の `source.modulePath` で渡します。
+
+## 次
+
+- [Model](../reference/model.md)
+- [Deploy Control API](../reference/deploy-control-api.md)
+- [Runner profiles](../reference/runner-profiles.md)

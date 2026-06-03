@@ -1,5 +1,6 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For } from "solid-js";
 import type { JSX } from "solid-js";
+import SplatField from "./SplatField";
 
 interface Tab {
   readonly key: string;
@@ -11,87 +12,76 @@ interface Tab {
 
 const TABS: readonly Tab[] = [
   {
-    key: "space",
-    label: "1. Space を作る",
-    subtitle: "bundled apps が auto-install",
+    key: "install",
+    label: "1. module を install",
+    subtitle: "Git repo → Installation",
     source: () => (
       <>
-        <span class="c"># 新しい Space を作るだけで、 bundled apps が立つ</span>
+        <span class="c"># Git の OpenTofu module を Installation に</span>
         {"\n"}
-        <span class="k">$</span> takosumi space create my-home{"\n"}
-        <span class="c">{" ".repeat(2)}✓ chat (takos)</span>
+        <span class="k">$</span> takosumi install git:github.com/acme/api \{"\n"}
+        {"      "}--space prod{"\n"}
+        <span class="c">{"  "}✓ Installation created</span>
         {"\n"}
-        <span class="c">{" ".repeat(2)}✓ docs (takos-docs)</span>
-        {"\n"}
-        <span class="c">{" ".repeat(2)}✓ slides (takos-slide)</span>
-        {"\n"}
-        <span class="c">{" ".repeat(2)}✓ spreadsheet (takos-excel)</span>
-        {"\n"}
-        <span class="c">{" ".repeat(2)}✓ AI agent (takos-agent)</span>
+        <span class="c">{"  "}✓ PlanRun plan_8f2a…  reviewed</span>
       </>
     ),
     output: () => (
       <>
-        <span class="c">空 → 必要なもの 全部 揃った Space。</span>
+        <span class="c">Installation が 1 つ、</span>
         {"\n"}
-        <span class="c">Notion / Slack / Docs を 個別契約する代わりに</span>
+        <span class="c">reviewed plan が 1 本。</span>
         {"\n"}
-        <span class="c">1 つの Takosumi 上で 全部。</span>
+        <span class="c">専用 manifest は要らない。</span>
       </>
     ),
   },
   {
-    key: "app",
-    label: "2. 自分の app を 1 つ追加",
-    subtitle: "Source を install",
+    key: "apply",
+    label: "2. reviewed plan を apply",
+    subtitle: "PlanRun → ApplyRun → Deployment",
     source: () => (
       <>
-        <span class="c"># Git repo を Source として install</span>
+        <span class="c"># planDigest を pin して apply</span>
         {"\n"}
-        <span class="k">$</span> takosumi install git+https://example.com/diary
-        {"\n"}
-        <span class="c">{" ".repeat(2)}source: git</span>
-        {"\n"}
-        <span class="c">{" ".repeat(2)}binding: database.primary.connection</span>
-        {"\n"}
-        <span class="c">{" ".repeat(2)}expected: planSnapshotDigest</span>
+        <span class="k">$</span> takosumi deploy ins_api \{"\n"}
+        {"      "}--expected-plan-digest sha256:…{"\n"}
+        <span class="c">{"  "}✓ ApplyRun apply_3c1d…  applied</span>
       </>
     ),
     output: () => (
       <>
-        <span class="k">$</span> takosumi install . --space my-home{"\n"}
-        <span class="c">{" ".repeat(2)}✓ installed com.example.diary</span>
+        <span class="c">→ Deployment live</span>
         {"\n"}
-        <span class="c">{" ".repeat(2)}→ my Space に 並んだ。</span>
+        <span class="c">→ DeploymentOutput recorded (non-secret)</span>
+        {"\n"}
+        <span class="c">→ policy decision と audit event も台帳に。</span>
       </>
     ),
   },
   {
-    key: "deploy",
-    label: "3. deploy 先を切り替える",
-    subtitle: "cloud でも VM でも cluster でも",
+    key: "runner",
+    label: "3. 実行先を切り替える",
+    subtitle: "RunnerProfile で portable",
     source: () => (
       <>
-        <span class="c"># operator inventory を差し替える</span>
+        <span class="c"># operator が RunnerProfile を差し替えて再 deploy</span>
         {"\n"}
-        <span class="k">$</span> takosumi deploy diary --profile cloudflare
+        <span class="k">$</span> takosumi deploy ins_api{"\n"}
+        <span class="c">{"  "}↳ runner: cloudflare-container</span>
         {"\n"}
-        <span class="c">{" ".repeat(2)}✓ deployed to Cloudflare Workers</span>
         {"\n"}
-        {"\n"}
-        <span class="k">$</span>{" "}
-        takosumi deploy diary --profile docker-compose
-        {"\n"}
-        <span class="c">{" ".repeat(2)}✓ deployed to an operator VM</span>
+        <span class="k">$</span> takosumi deploy ins_api{"\n"}
+        <span class="c">{"  "}↳ runner: docker-compose (operator VM)</span>
       </>
     ),
     output: () => (
       <>
-        <span class="c">同じ Source を、違う operator profile で。</span>
+        <span class="c">同じ OpenTofu module を、違う RunnerProfile で。</span>
         {"\n"}
-        <span class="c">cloud に出しても、 VM や cluster に戻しても、</span>
+        <span class="c">cloud に出しても、VM や cluster に戻しても、</span>
         {"\n"}
-        <span class="c">中身は変わらない。 引っ越せる。</span>
+        <span class="c">中身は変わらない。引っ越せる。</span>
       </>
     ),
   },
@@ -99,55 +89,79 @@ const TABS: readonly Tab[] = [
 
 export default function Showcase() {
   const [active, setActive] = createSignal(TABS[0].key);
-  const current = () => TABS.find((t) => t.key === active())!;
+
+  // Arrow-key navigation per the WAI-ARIA tablist pattern.
+  const onTabKey = (e: KeyboardEvent & { currentTarget: HTMLElement }) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    e.preventDefault();
+    const i = TABS.findIndex((t) => t.key === active());
+    const n = e.key === "ArrowRight"
+      ? (i + 1) % TABS.length
+      : (i - 1 + TABS.length) % TABS.length;
+    setActive(TABS[n].key);
+    (e.currentTarget.parentElement?.children[n] as HTMLElement | undefined)
+      ?.focus();
+  };
 
   return (
     <section id="showcase">
+      <SplatField density="section" />
       <div class="container">
         <span class="eyebrow">how it works</span>
-        <h2>Space を 1 つ作ると、 必要なもの 全部 揃う。</h2>
+        <h2>install → plan / apply → どこへでも。</h2>
         <p class="lede">
-          Space を作る → 自分の app を Source として足す → deploy 先を選ぶ。3 step、
-          operator inventory が cloud / VM / cluster の違いを受け持ちます。
+          Git の OpenTofu module を install → reviewed plan を apply →
+          RunnerProfile で実行先を選ぶ。3 step。Takos も、この仕組みで動いています。
         </p>
         <div class="showcase">
-          <div class="showcase-tabs" role="tablist">
+          <div
+            class="showcase-tabs"
+            role="tablist"
+            aria-label="使い方の 3 ステップ"
+          >
             <For each={TABS}>
               {(t) => (
                 <button
                   type="button"
                   role="tab"
+                  id={`showcase-tab-${t.key}`}
+                  aria-controls={`showcase-panel-${t.key}`}
                   aria-selected={active() === t.key}
+                  tabindex={active() === t.key ? 0 : -1}
                   classList={{ active: active() === t.key }}
                   onClick={() => setActive(t.key)}
+                  onKeyDown={onTabKey}
                 >
                   {t.label}
                 </button>
               )}
             </For>
           </div>
-          <div class="showcase-body">
-            <div>
-              <div class="label">Source</div>
-              <Show when={current()}>
-                {(t) => (
+          <For each={TABS}>
+            {(t) => (
+              <div
+                class="showcase-body"
+                id={`showcase-panel-${t.key}`}
+                role="tabpanel"
+                tabindex={0}
+                aria-labelledby={`showcase-tab-${t.key}`}
+                hidden={active() !== t.key}
+              >
+                <div>
+                  <div class="label">Source</div>
                   <div class="codeblock">
-                    <pre>{t().source()}</pre>
+                    <pre>{t.source()}</pre>
                   </div>
-                )}
-              </Show>
-            </div>
-            <div>
-              <div class="label">apply</div>
-              <Show when={current()}>
-                {(t) => (
+                </div>
+                <div>
+                  <div class="label">apply</div>
                   <div class="codeblock">
-                    <pre>{t().output()}</pre>
+                    <pre>{t.output()}</pre>
                   </div>
-                )}
-              </Show>
-            </div>
-          </div>
+                </div>
+              </div>
+            )}
+          </For>
         </div>
       </div>
     </section>

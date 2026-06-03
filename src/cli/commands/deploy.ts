@@ -1,67 +1,50 @@
 import { Command } from "../command.ts";
 import {
-  callInstaller,
-  deploymentExpectedGuardFromOptions,
-  INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH,
-  INSTALLATION_DEPLOYMENTS_PATH,
+  APPLY_RUNS_PATH,
+  callDeployControl,
+  expectedGuardFromPlanRun,
+  PLAN_RUNS_PATH,
   parseSourceRef,
-  requireRemoteInstaller,
-} from "../installer_client.ts";
+  readInstallationSource,
+  readInstallationSpace,
+  requireRemoteDeployControl,
+} from "../deploy_control_client.ts";
 import { exitCli } from "../runtime.ts";
 
 interface DeployFlags {
   remote?: string;
   token?: string;
   source?: string;
-  expectedCommit?: string;
-  expectedPlanSnapshotDigest?: string;
-  expectedSourceDigest?: string;
-  expectedCurrentDeploymentId?: string;
-  dryRun?: boolean;
+  provider?: string[];
+  expectedSourceCommit?: string;
+  expectedPlanDigest?: string;
+  expectedPlanArtifactDigest?: string;
+  expectedProviderLockDigest?: string;
 }
 
 function createDeployCommand(): Command {
-  const dryRun = new Command("dry-run")
-    .description("Dry-run a Deployment for an existing Installation")
-    .argument("<installationId>", "Installation id")
-    .option("--remote <url>", "Remote Takosumi service URL")
-    .option("--token <token>", "Installer bearer token")
-    .option("--source <source>", "Optional replacement source");
-  dryRun.action(async (
-      installationId: string,
-      opts: DeployFlags | Command,
-      actionCommand?: Command,
-    ) => {
-      const flags = actionFlags(dryRun, opts, actionCommand);
-      await runDeploy({
-        installationId,
-        remote: flags.remote,
-        token: flags.token,
-        source: flags.source,
-        dryRun: true,
-      });
-    });
-
   const command = new Command("deploy")
-    .description("Apply a Deployment for an existing Installation")
+    .description("Create an OpenTofu PlanRun and ApplyRun for an Installation")
     .argument("<installationId>", "Installation id")
     .option("--remote <url>", "Remote Takosumi service URL")
-    .option("--token <token>", "Installer bearer token")
+    .option("--token <token>", "DeployControl bearer token")
     .option("--source <source>", "Optional replacement source")
-    .option("--expected-commit <commit>", "Expected source commit pin")
     .option(
-      "--expected-plan-snapshot-digest <digest>",
-      "Expected dry-run plan snapshot digest",
+      "--provider <source-address>",
+      "Required OpenTofu provider source address (repeatable)",
+      collect,
+      [],
+    )
+    .option("--expected-source-commit <commit>", "Expected source commit pin")
+    .option("--expected-plan-digest <digest>", "Expected OpenTofu plan digest")
+    .option(
+      "--expected-plan-artifact-digest <digest>",
+      "Expected immutable OpenTofu plan artifact digest",
     )
     .option(
-      "--expected-source-digest <digest>",
-      "Expected prepared source digest pin",
-    )
-    .option(
-      "--expected-current-deployment-id <deploymentId>",
-      "Expected current Deployment pointer",
-    )
-    .option("--dry-run", "Alias for `takosumi deploy dry-run`");
+      "--expected-provider-lock-digest <digest>",
+      "Expected OpenTofu provider lock digest",
+    );
   command.action(async (
       installationId: string,
       opts: DeployFlags | Command,
@@ -73,15 +56,14 @@ function createDeployCommand(): Command {
         remote: flags.remote,
         token: flags.token,
         source: flags.source,
-        expectedCommit: flags.expectedCommit,
-        expectedPlanSnapshotDigest: flags.expectedPlanSnapshotDigest,
-        expectedSourceDigest: flags.expectedSourceDigest,
-        expectedCurrentDeploymentId: flags.expectedCurrentDeploymentId,
-        dryRun: flags.dryRun === true,
+        providers: normalizeProviders(flags.provider),
+        expectedSourceCommit: flags.expectedSourceCommit,
+        expectedPlanDigest: flags.expectedPlanDigest,
+        expectedPlanArtifactDigest: flags.expectedPlanArtifactDigest,
+        expectedProviderLockDigest: flags.expectedProviderLockDigest,
       });
     });
 
-  command.addCommand(dryRun);
   return command;
 }
 
@@ -120,30 +102,49 @@ async function runDeploy(input: {
   readonly remote?: string;
   readonly token?: string;
   readonly source?: string;
-  readonly expectedCommit?: string;
-  readonly expectedPlanSnapshotDigest?: string;
-  readonly expectedSourceDigest?: string;
-  readonly expectedCurrentDeploymentId?: string;
-  readonly dryRun: boolean;
+  readonly providers: readonly string[];
+  readonly expectedSourceCommit?: string;
+  readonly expectedPlanDigest?: string;
+  readonly expectedPlanArtifactDigest?: string;
+  readonly expectedProviderLockDigest?: string;
 }): Promise<void> {
   try {
-    const target = await requireRemoteInstaller(input.remote, input.token);
-    const body = {
-      ...(input.source ? { source: parseSourceRef(input.source) } : {}),
-      ...(input.dryRun ? {} : {
-        expected: deploymentExpectedGuardFromOptions({
-          expectedCommit: input.expectedCommit,
-        expectedPlanSnapshotDigest: input.expectedPlanSnapshotDigest,
-          expectedSourceDigest: input.expectedSourceDigest,
-          expectedCurrentDeploymentId: input.expectedCurrentDeploymentId,
+    const target = await requireRemoteDeployControl(input.remote, input.token);
+    const source = input.source
+      ? parseSourceRef(input.source)
+      : await readInstallationSource(target, input.installationId);
+    const plan = await callDeployControl(target, {
+      path: PLAN_RUNS_PATH,
+      body: {
+        installationId: input.installationId,
+        operation: "update",
+        spaceId: await readInstallationSpace(target, input.installationId),
+        source,
+        requiredProviders: input.providers,
+      },
+    });
+    if (plan.status >= 400) {
+      console.error(`Takosumi service returned ${plan.status}:`, plan.body);
+      exitCli(1);
+    }
+    const planRunId = readNestedString(plan.body, ["planRun", "id"]);
+    const planStatus = readNestedString(plan.body, ["planRun", "status"]);
+    const planRun = readNestedRecord(plan.body, ["planRun"]);
+    if (!planRunId || planStatus !== "succeeded" || !planRun) {
+      console.log(JSON.stringify(plan.body, null, 2));
+      return;
+    }
+    const { status, body: responseBody } = await callDeployControl(target, {
+      path: APPLY_RUNS_PATH,
+      body: {
+        planRunId,
+        expected: expectedGuardFromPlanRun(planRun, {
+          expectedSourceCommit: input.expectedSourceCommit,
+          expectedPlanDigest: input.expectedPlanDigest,
+          expectedPlanArtifactDigest: input.expectedPlanArtifactDigest,
+          expectedProviderLockDigest: input.expectedProviderLockDigest,
         }),
-      }),
-    };
-    const { status, body: responseBody } = await callInstaller(target, {
-      path: input.dryRun
-        ? INSTALLATION_DEPLOYMENTS_DRY_RUN_PATH(input.installationId)
-        : INSTALLATION_DEPLOYMENTS_PATH(input.installationId),
-      body,
+      },
     });
     if (status >= 400) {
       console.error(`Takosumi service returned ${status}:`, responseBody);
@@ -157,4 +158,42 @@ async function runDeploy(input: {
   }
 }
 
+function readNestedRecord(
+  value: unknown,
+  path: readonly string[],
+): Record<string, unknown> | undefined {
+  const result = readNested(value, path);
+  return typeof result === "object" && result !== null && !Array.isArray(result)
+    ? result as Record<string, unknown>
+    : undefined;
+}
+
+function readNestedString(value: unknown, path: readonly string[]): string | undefined {
+  const result = readNested(value, path);
+  return typeof result === "string" ? result : undefined;
+}
+
+function readNested(value: unknown, path: readonly string[]): unknown {
+  let current = value;
+  for (const key of path) {
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      Array.isArray(current)
+    ) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
 export const deployCommand: Command = createDeployCommand();
+
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function normalizeProviders(values: readonly string[] | undefined): readonly string[] {
+  return Array.from(new Set((values ?? []).map((value) => value.trim()).filter(Boolean)));
+}

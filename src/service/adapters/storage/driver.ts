@@ -4,7 +4,6 @@ import type {
   SpaceMembershipStore,
   SpaceStore,
 } from "../../domains/space/stores.ts";
-import type { DeploymentStore } from "../../domains/deploy/store.ts";
 import type {
   BindingSetRevisionStore,
   MigrationLedgerStore,
@@ -40,7 +39,6 @@ export interface StorageDriver {
 
 export interface StorageTransaction {
   readonly space: SpaceStorageStores;
-  readonly deploy: DeployStorageStores;
   readonly runtime: RuntimeStorageStores;
   readonly resources: ResourceStorageStores;
   readonly registry: RegistryStorageStores;
@@ -54,10 +52,6 @@ export interface SpaceStorageStores {
   readonly spaces: SpaceStore;
   readonly groups: GroupStore;
   readonly spaceMemberships: SpaceMembershipStore;
-}
-
-export interface DeployStorageStores {
-  readonly deploys: DeploymentStore;
 }
 
 export interface RuntimeStorageStores {

@@ -162,7 +162,7 @@ export async function saveAppInstallation(
     client,
     `INSERT INTO installation_v1.app_installations (
         installation_id, account_id, space_id, app_id, source_git_url,
-        source_ref, source_commit, plan_snapshot_digest, artifact_digest,
+        source_ref, source_commit, plan_digest, artifact_digest,
         mode, billing_account_id, status,
         created_by_subject, created_at, updated_at
       ) VALUES (
@@ -175,7 +175,7 @@ export async function saveAppInstallation(
         source_git_url = EXCLUDED.source_git_url,
         source_ref = EXCLUDED.source_ref,
         source_commit = EXCLUDED.source_commit,
-        plan_snapshot_digest = EXCLUDED.plan_snapshot_digest,
+        plan_digest = EXCLUDED.plan_digest,
         artifact_digest = EXCLUDED.artifact_digest,
         mode = EXCLUDED.mode,
         billing_account_id = EXCLUDED.billing_account_id,
@@ -189,7 +189,7 @@ export async function saveAppInstallation(
       record.sourceGitUrl,
       record.sourceRef,
       record.sourceCommit,
-      record.planSnapshotDigest,
+      record.planDigest,
       record.artifactDigest ?? null,
       record.mode,
       record.billingAccountId ?? null,
@@ -293,7 +293,7 @@ export function listAppBindingsForInstallation(
   // longer a public concept; the table no longer exists in production
   // schema. Selecting against it raised "relation does not exist"
   // (production-blocking SQL drift). We now return an empty array so
-  // legacy callers (= envelope serialization, dashboard render path)
+  // account-plane callers (= envelope serialization, dashboard render path)
   // remain compatible without touching the database.
   void client;
   void installationId;
@@ -336,7 +336,7 @@ export function listAppGrantsForInstallation(
   // a public concept; the table no longer exists in production schema.
   // Selecting against it raised "relation does not exist"
   // (production-blocking SQL drift). We now return an empty array so
-  // legacy callers (= envelope serialization, dashboard render path)
+  // account-plane callers (= envelope serialization, dashboard render path)
   // remain compatible without touching the database.
   void client;
   void installationId;

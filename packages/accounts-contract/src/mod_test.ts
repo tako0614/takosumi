@@ -17,9 +17,9 @@ import {
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
  takosumiAccountsAccountTokenRevokePath,
  takosumiAccountsInstallationBillingUsageReportsPath,
- takosumiAccountsInstallationDeploymentDryRunPath,
+ takosumiAccountsInstallationDeploymentPlanRunsPath,
  takosumiAccountsInstallationDeploymentsPath,
- takosumiAccountsInstallationDryRunPath,
+ takosumiAccountsInstallationPlanRunsPath,
  takosumiAccountsInstallationEventsPath,
  takosumiAccountsInstallationExportDownloadPath,
  takosumiAccountsInstallationExportOperationPath,
@@ -97,12 +97,12 @@ test("export bundle kind is stable for portable AppInstallation exports", () => 
 });
 
 test("AppInstallation path helpers expose the Accounts route surface", () => {
-  expect(takosumiAccountsInstallationDryRunPath()).toEqual("/v1/installations/dry-run");
+  expect(takosumiAccountsInstallationPlanRunsPath()).toEqual("/v1/installations/plan-runs");
   expect(takosumiAccountsInstallationPath("inst_1")).toEqual("/v1/installations/inst_1");
   expect(takosumiAccountsInstallationsImportPath()).toEqual("/v1/installations/import");
   expect(takosumiAccountsInstallationStatusPath("inst_1")).toEqual("/v1/installations/inst_1/status");
   expect(takosumiAccountsInstallationDeploymentsPath("inst_1")).toEqual("/v1/installations/inst_1/deployments");
-  expect(takosumiAccountsInstallationDeploymentDryRunPath("inst_1")).toEqual("/v1/installations/inst_1/deployments/dry-run");
+  expect(takosumiAccountsInstallationDeploymentPlanRunsPath("inst_1")).toEqual("/v1/installations/inst_1/deployments/plan-runs");
   expect(takosumiAccountsInstallationRollbackPath("inst_1")).toEqual("/v1/installations/inst_1/rollback");
   expect(takosumiAccountsInstallationMaterializePath("inst_1")).toEqual("/v1/installations/inst_1/materialize");
   expect(takosumiAccountsInstallationExportPath("inst_1")).toEqual("/v1/installations/inst_1/export");

@@ -13,7 +13,7 @@
  * `createTakosumiService({ implementations })`, matching the plain-array implementation authoring
  * experience. A Takosumi-compatible implementation can bind the same backend
  * adapter through another mechanism. This is implementation wiring, not the
- * manifestless v1 public Source contract.
+ * OpenTofu-native v1 Deploy Control source contract.
  *
  * # Materializer abstraction
  *
@@ -26,8 +26,8 @@
 import type {
   Deployment,
   Installation,
-  SourceSummary,
-} from "./installer-api.ts";
+  OpenTofuModuleSource,
+} from "./deploy-control-api.ts";
 import {
   isOfficialMaterialKindName,
   validateOfficialMaterial,
@@ -61,7 +61,7 @@ export interface OperatorImplementation {
   readonly version: string;
   /**
    * Operator-resolved kind URIs this implementation can materialize.
-   * The installer resolves `Component.kind` through the operator alias map
+   * The deployControl resolves `Component.kind` through the operator alias map
    * and matches the resulting URI against `provides[]` during `apply`.
    * JSON-LD is the takosumi.com reference descriptor metadata format, not a
    * required authority for every implementation.
@@ -95,7 +95,7 @@ export interface OperatorImplementation {
 
   /**
    * Materialize a component into a concrete resource on the target
-   * runtime. Called by `InstallerPipeline` during `apply` in connect
+   * runtime. Called by `DeployControlPipeline` during `apply` in connect
    * topological order. Resolved input materials are made available via
    * `inputMaterials` (`listenedMaterials` is kept as a compatibility alias).
    */
@@ -129,7 +129,7 @@ export interface OperatorImplementation {
   ): Promise<OutputMaterial>;
 
   /**
-   * @deprecated Renamed to `materializeOutput`. The installer reads
+   * @deprecated Renamed to `materializeOutput`. The deployControl reads
    * `materializeOutput ?? publishMaterial`, so this alias only exists to accept
    * pre-rename implementations. Remove once no operator implementation defines
    * `publishMaterial`.
@@ -145,12 +145,12 @@ export interface OperatorImplementation {
    * consuming component.
    *
    * Optional — kinds that do not consume input material may omit
-   * this hook (the installer treats absent hooks as no-op).
+   * this hook (the deployControl treats absent hooks as no-op).
    */
   applyBinding?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
 
   /**
-   * @deprecated Renamed to `applyBinding`. The installer reads
+   * @deprecated Renamed to `applyBinding`. The deployControl reads
    * `applyBinding ?? applyListen`. Remove once no operator implementation
    * and no service binding handler defines `applyListen`.
    */
@@ -181,7 +181,7 @@ export interface OperatorImplementation {
 export type Materializer = OperatorImplementation | InlineMaterializer;
 
 /**
- * Minimal materializer surface — the smallest contract the installer
+ * Minimal materializer surface — the smallest contract the deployControl
  * recognizes. Useful for inline materializers in tests, examples, and
  * operator-defined raw code. An `OperatorImplementation` is structurally a superset
  * of `InlineMaterializer`.
@@ -235,7 +235,7 @@ export type PublicationMaterial = OutputMaterial;
 
 /**
  * Result of `applyBinding()`: the env / mount / target descriptor the
- * installer should attach to the consuming component runtime.
+ * deployControl should attach to the consuming component runtime.
  *
  *   - `env`    — env-var injections (literal strings or secretRefs).
  *   - `mounts` — filesystem-mount descriptors keyed by mount path.
@@ -244,7 +244,7 @@ export type PublicationMaterial = OutputMaterial;
  *                target or endpoint).
  *
  * All fields are optional; an empty `EnvInjection` is a valid no-op
- * (the installer will treat it as "this listener took no action").
+ * (the deployControl will treat it as "this listener took no action").
  */
 export interface EnvInjection {
   readonly env?: Readonly<
@@ -288,14 +288,14 @@ export interface OperatorImplementationApplyContext {
   readonly installationId: string;
   readonly componentName: string;
   readonly component: Component;
-  /** Source summary for this Deployment, including prepared source digest when available. */
-  readonly source: SourceSummary;
+  /** OpenTofu module source used for this Deployment. */
+  readonly source: OpenTofuModuleSource;
   /** Local directory containing the already-prepared source snapshot. */
   readonly sourceDirectory: string;
   /**
    * Materials this component consumes, keyed by the local binding name as
    * declared by the reference implementation wiring. Pre-resolved by the
-   * installer from reference component outputs or Space-visible platform
+   * deployControl from reference component outputs or Space-visible platform
    * services; the consuming component's
    * `applyBinding` has
    * already been invoked and the resulting env / mount / target
@@ -308,7 +308,7 @@ export interface OperatorImplementationApplyContext {
     Record<BindingName, OutputMaterial>
   >;
   /**
-   * @deprecated Renamed to `inputMaterials`. The installer still populates this
+   * @deprecated Renamed to `inputMaterials`. The deployControl still populates this
    * field with the same map, so it is required for now. Make it optional and
    * then remove once no service binding code or operator implementation reads
    * `ctx.listenedMaterials`.

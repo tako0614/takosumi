@@ -67,8 +67,8 @@ export function isSha256HexDigest(value: string): boolean {
  * this only asserts the `sha256:` scheme and a non-empty digest body. That is
  * enough to reject a digest-typed field carrying arbitrary junk (e.g. "x")
  * while still accepting both the real base64url digests and the shorter forms
- * used in fixtures. Strong provenance still comes from the service installer
- * (which supplies `planSnapshotDigest` from `coreApply.planSnapshotDigest`); this is
+ * used in fixtures. Strong provenance still comes from the service deployControl
+ * (which supplies `planDigest` from `coreApply.planDigest`); this is
  * a format guard on the caller-supplied value recorded in the ledger.
  */
 export function isSha256DigestRef(value: string): boolean {
@@ -414,7 +414,7 @@ export function idempotencyRequestConflict(
   const existingDigest = stringValue(event.payload.requestDigest);
   if (existingDigest === requestDigest) return undefined;
   // Fail closed. If the prior operation event carries no stored requestDigest
-  // (a legacy/older event written before request digests were recorded), we
+  // (an older event written before request digests were recorded), we
   // cannot prove the replayed body matches, so we must not silently return the
   // prior operation as if it matched — that would let a different body reuse
   // the key. Treat an unverifiable digest as a conflict. Newly written events
@@ -685,7 +685,7 @@ export function installationEnvelope(input: {
   // are no longer public concepts and the backing tables were dropped.
   // The fields below are accepted for caller-API compatibility but are
   // no longer surfaced in the response envelope. The materialize /
-  // lifecycle routes that historically depended on these fields render
+  // lifecycle routes that depend on these fields render
   // their own payloads via the per-field `serialize*` helpers.
   bindings?: readonly AppBindingRecord[];
   grants?: readonly AppGrantRecord[];
@@ -700,10 +700,26 @@ export function installationEnvelope(input: {
   const launch = input.activatedHttpDomain
     ? serializeActivatedHttpDomainProjection(input.activatedHttpDomain)
     : null;
+  const deploymentOutputs = input.activatedHttpDomain
+    ? [{
+      name: "launch_url",
+      kind: "launch_url",
+      value: input.activatedHttpDomain.url,
+      sensitive: false,
+      ...(input.activatedHttpDomain.deploymentOutputRef
+        ? {
+          labels: {
+            deploymentOutputRef: input.activatedHttpDomain.deploymentOutputRef,
+          },
+        }
+        : {}),
+    }]
+    : [];
   return {
     installation: {
       ...serializeAppInstallation(input.installation),
       launch_url: input.activatedHttpDomain?.url ?? null,
+      deployment_outputs: deploymentOutputs,
       launch,
       activated_http_domain: launch,
     },
@@ -731,7 +747,7 @@ export function serializeAppInstallation(
       ref: installation.sourceRef,
       commit: installation.sourceCommit,
     },
-    plan_snapshot_digest: installation.planSnapshotDigest,
+    plan_digest: installation.planDigest,
     artifact_digest: installation.artifactDigest ?? null,
     mode: installation.mode,
     runtime_target_id: installation.runtimeBindingId ?? null,

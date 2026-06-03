@@ -9,7 +9,7 @@ import type {
  * AppBinding from the public surface. These kinds remain only as internal
  * implementation details of the AppInstallation ledger so existing import
  * data and stored records continue to load; new public APIs use
- * PlatformService binding selections and Deployment binding snapshots.
+ * RunnerProfile decisions, PlanRun/ApplyRun evidence, and DeploymentOutput projections.
  */
 const APP_BINDING_KINDS = [
   "identity.oidc@v1",
@@ -19,7 +19,7 @@ const APP_BINDING_KINDS = [
   "install-launch-token@v1",
 ] as const;
 
-/** Internal-only union of legacy binding kinds; not part of the v1 contract. */
+/** Internal-only union of account-plane binding kinds; not part of the v1 contract. */
 export type AppBindingKind = typeof APP_BINDING_KINDS[number];
 
 /**
@@ -50,7 +50,7 @@ const APP_GRANT_CAPABILITIES = [
   "events:subscribe",
 ] as const;
 
-/** Internal-only union of legacy grant capabilities; not part of the v1 contract. */
+/** Internal-only union of account-plane grant capabilities; not part of the v1 contract. */
 export type AppGrantCapability = typeof APP_GRANT_CAPABILITIES[number];
 
 export type AppInstallationStatus = TakosumiAppInstallationStatus;
@@ -86,7 +86,7 @@ export interface InstallationRecord {
   sourceGitUrl: string;
   sourceRef: string;
   sourceCommit: string;
-  planSnapshotDigest: string;
+  planDigest: string;
   artifactDigest?: string;
   mode: AppInstallationMode;
   runtimeBindingId?: string;
@@ -115,7 +115,7 @@ export interface RuntimeBindingRecord {
 
 /**
  * @internal v1 contract reset (Wave 6): AppBinding is no longer a public
- * concept. PlatformService binding selections replace it. Retained for
+ * concept. Workload platform service binding selections replace it. Retained for
  * internal storage.
  */
 export interface AppBindingRecord {

@@ -155,7 +155,7 @@ type UseTakosStartRequest = {
   returnTo: string;
   sourceRef: string;
   sourceCommit: string;
-  planSnapshotDigest: string;
+  planDigest: string;
   artifactDigest?: string;
   termsVersion: string;
   email?: string;
@@ -237,7 +237,7 @@ function useTakosStartRequest(
     sourceRef: startParam(url, "ref") ?? "managed",
     sourceCommit: startParam(url, "source_commit", "commit") ??
       "managed-prebuilt",
-    planSnapshotDigest: startParam(url, "plan_snapshot_digest") ??
+    planDigest: startParam(url, "plan_digest") ??
       "sha256:takos-product-managed",
     termsVersion,
     ...(startParam(url, "artifact_digest")
@@ -262,7 +262,7 @@ function useTakosInstallationBody(
       gitUrl: "takos-product://managed/takos",
       ref: start.sourceRef,
       commit: start.sourceCommit,
-      planSnapshotDigest: start.planSnapshotDigest,
+      planDigest: start.planDigest,
       ...(start.artifactDigest
         ? { artifactDigest: start.artifactDigest }
         : {}),

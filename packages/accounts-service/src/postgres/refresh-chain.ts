@@ -141,7 +141,7 @@ export async function revokeRefreshChain(
     );
   }
   // Cascade-delete every access token minted by any rotation in the
-  // chain. Symmetric to the in-process behavior of the legacy
+  // chain. Symmetric to the in-process behavior of the
   // implementation.
   await cascadeRevokeChainAccessTokens(client, rootHash);
   return [...all];

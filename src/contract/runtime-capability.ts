@@ -1,27 +1,26 @@
 /**
- * Runtime-capability interfaces — injected subprocess primitives the installer
+ * Runtime-capability interfaces — injected subprocess primitives the deployControl
  * needs but the Takosumi *framework library* must not call directly.
  *
  * Takosumi is consumed as a framework: runtime capabilities (git / tar
  * subprocess, temp-dir FS, HTTP serve) are *injected* by the implementation
- * rather than reached through `Deno.*` / `node:*` inside the library surface.
- * These interfaces are the contract between the installer (which consumes a
+ * rather than reached through host-specific globals inside the library surface.
+ * These interfaces are the contract between the deployControl (which consumes a
  * git / tar runner) and whatever the operator wires in.
  *
  * The reference service provides a default implementation built over the
  * `RuntimeAdapter` `SubprocessAdapter` (see
- * `src/service/shared/runtime/capability-runners.ts`), so the Deno
- * runtime behavior is unchanged: the default runner routes through
- * `currentRuntime().subprocess`, which already has Deno / Node / Workers
+ * `src/service/shared/runtime/capability-runners.ts`). The default runner routes
+ * through `currentRuntime().subprocess`, which provides Bun / Node / Workers
  * implementations.
  *
- * Result shapes are intentionally identical to the installer's existing
+ * Result shapes are intentionally identical to the deploy control existing
  * `runGitCommand` / `runTarCommand` shapes so wiring a runner is a drop-in.
  */
 
 /**
  * Result of a single `git` invocation. Structurally identical to the
- * installer's historical `GitInvocationResult` so the installer can adopt this
+ * deploy control `GitInvocationResult` so the deployControl can adopt this
  * interface without changing call sites.
  */
 export interface GitInvocationResult {
@@ -48,7 +47,7 @@ export interface GitRunner {
  *
  * Implementations MUST force a deterministic C locale (`LC_ALL=C` / `LANG=C`)
  * so the `tar -tv` column format does not shift with the operator's
- * LANG / LC_TIME settings — this is required for the installer's column
+ * LANG / LC_TIME settings — this is required for the deploy control column
  * parser. The default implementation does this via the `SubprocessAdapter`
  * `env` option.
  */
@@ -57,31 +56,28 @@ export interface TarRunner {
 }
 
 /**
- * Injected temp-dir filesystem capability the installer needs to stage a git /
- * prepared source checkout before deriving an install plan. The installer must
- * not reach for `Deno.makeTempDir` / `node:fs` directly; the reference service
+ * Injected temp-dir filesystem capability the deployControl needs to stage a git /
+ * prepared source checkout before deriving an install plan. The deployControl must
+ * not reach for host filesystem APIs directly; the reference service
  * injects `currentRuntime().fs`, whose `FsAdapter` structurally satisfies this
  * subset (`makeTempDir` / `remove` / `mkdir`).
  *
- * The three members mirror the historical `Deno.makeTempDir({ prefix })` /
- * `Deno.remove(path, { recursive })` / `Deno.mkdir(path, { recursive })`
- * behavior exactly so wiring an FS is a drop-in and legacy filesystem behavior
- * is unchanged.
+ * The three members mirror the temp-dir / remove / mkdir behavior so
+ * wiring an FS is a drop-in.
  */
-export interface InstallerFs {
+export interface DeployControlFs {
   /**
    * Create a uniquely-named temporary directory whose basename starts with
-   * `prefix` and return its absolute path. Mirrors `Deno.makeTempDir({ prefix })`.
+   * `prefix` and return its absolute path.
    */
   makeTempDir(prefix?: string): Promise<string>;
   /**
    * Remove a file or directory. With `{ recursive: true }` the entire tree is
-   * removed. Mirrors `Deno.remove(path, { recursive })`.
+   * removed.
    */
   remove(path: string | URL, options?: { recursive?: boolean }): Promise<void>;
   /**
-   * Create a directory (with `{ recursive: true }` to create parents). Mirrors
-   * `Deno.mkdir(path, { recursive })`.
+   * Create a directory (with `{ recursive: true }` to create parents).
    */
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
 }

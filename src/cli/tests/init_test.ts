@@ -22,7 +22,7 @@ test("init command writes the package template", async () => {
     );
 
     const text = await readFile(tmp, "utf8");
-    assert.match(text, /"description": "Manifestless Takosumi source"/);
+    assert.match(text, /"description": "OpenTofu-native Takosumi source"/);
     assert.equal(text.includes("apiVersion"), false);
     assert.equal(text.includes("components"), false);
   } finally {

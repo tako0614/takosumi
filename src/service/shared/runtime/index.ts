@@ -18,7 +18,6 @@ export {
   setRuntimeForTesting,
 } from "./detect.ts";
 
-export { denoRuntime, isDeno } from "./deno.ts";
 export { isNode, nodeRuntime } from "./node.ts";
 export { createWorkersRuntime, isWorkers } from "./workers.ts";
 export type { WorkersEnvBindings } from "./workers.ts";
@@ -33,6 +32,6 @@ export {
 export type {
   GitInvocationResult,
   GitRunner,
-  InstallerFs,
+  DeployControlFs,
   TarRunner,
 } from "takosumi-contract/reference/runtime-capability";

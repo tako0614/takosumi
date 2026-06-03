@@ -44,7 +44,7 @@ const scriptContents = readFileSync(scriptPath, "utf8");
 
 // Pass through every TAKOSUMI_ACCOUNTS_* env var as a worker binding so we
 // don't have to enumerate each new config knob (managed-offering refs,
-// installer URL, upstream OAuth, passkey RP, etc) in this runner.
+// deploy control URL, upstream OAuth, passkey RP, etc) in this runner.
 const bindings = Object.fromEntries(
   Object.entries(process.env).filter(([k, v]) =>
     typeof v === "string" && k.startsWith("TAKOSUMI_ACCOUNTS_")

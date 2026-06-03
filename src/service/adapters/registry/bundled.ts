@@ -176,17 +176,12 @@ export const bundledRegistrySeedResolutions: readonly PackageResolution[] =
   }));
 
 export const bundledRegistrySeedTrustRecords: readonly TrustRecord[] =
-  BUILT_IN_PACKAGE_SEEDS.map((seed) => ({
-    id: trustRecordIdFor(seed.kind, seed.ref, seed.digest),
-    packageRef: seed.ref,
-    packageDigest: seed.digest,
-    packageKind: seed.kind,
-    trustLevel: seed.trustLevel,
-    status: "active",
-    conformanceTier: seed.conformanceTier,
-    verifiedBy: PUBLISHER,
-    verifiedAt: VERIFIED_AT,
-  }));
+  BUILT_IN_PACKAGE_SEEDS.flatMap((seed) => {
+    const record = trustRecordForSeed(seed, seed.kind);
+    return seed.kind === "kind-package"
+      ? [record, trustRecordForSeed(seed, "backend-implementation")]
+      : [record];
+  });
 
 export const bundledRegistrySeedProviderSupportReports:
   readonly ProviderSupportReport[] = [
@@ -247,17 +242,7 @@ export class BundledRegistrySeedAdapter implements BundledRegistry {
   }
 
   getTrustRecord(id: string): Promise<TrustRecord | undefined> {
-    const record = cloneTrustRecord(this.#trustRecordsById.get(id));
-    if (record) return Promise.resolve(record);
-    const legacy = cloneTrustRecord(
-      this.#trustRecordsById.get(id.replace(":backend-implementation:", ":kind-package:")),
-    );
-    if (!legacy) return Promise.resolve(undefined);
-    return Promise.resolve({
-      ...legacy,
-      id,
-      packageKind: "backend-implementation",
-    });
+    return Promise.resolve(cloneTrustRecord(this.#trustRecordsById.get(id)));
   }
 
   listProviderSupport(): Promise<readonly ProviderSupportReport[]> {
@@ -319,6 +304,23 @@ function keyFor(kind: PackageKind, ref: string, digest: Digest): string {
 
 function storagePackageKind(kind: PackageKind): PackageKind {
   return kind === "backend-implementation" ? "kind-package" : kind;
+}
+
+function trustRecordForSeed(
+  seed: BuiltInPackageSeed,
+  packageKind: PackageKind,
+): TrustRecord {
+  return {
+    id: trustRecordIdFor(packageKind, seed.ref, seed.digest),
+    packageRef: seed.ref,
+    packageDigest: seed.digest,
+    packageKind,
+    trustLevel: seed.trustLevel,
+    status: "active",
+    conformanceTier: seed.conformanceTier,
+    verifiedBy: PUBLISHER,
+    verifiedAt: VERIFIED_AT,
+  };
 }
 
 function exposePackageResolution(

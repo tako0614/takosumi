@@ -1,7 +1,8 @@
-import type { PlatformService } from "@takosjp/takosumi/contract/installer-api";
-
-type PlatformServiceMaterial = NonNullable<PlatformService["material"]>;
-type PlatformServiceMaterialValue = PlatformServiceMaterial[string];
+import type {
+  DeploymentOutput,
+  OpenTofuOutputEnvelope,
+  OpenTofuOutputValue,
+} from "@takosjp/takosumi/contract/deploy-control-api";
 
 export interface OpenTofuOutputRecord {
   readonly sensitive?: boolean;
@@ -11,38 +12,27 @@ export interface OpenTofuOutputRecord {
 
 export type OpenTofuOutputJson = Readonly<Record<string, OpenTofuOutputRecord>>;
 
-export interface OpenTofuPlatformServiceDefinition {
-  readonly spaceId?: string;
-  readonly spaceIds?: readonly string[];
-  readonly path?: string;
-  readonly kind: string;
-  readonly name?: string;
-  readonly labels?: Readonly<Record<string, string>>;
-  readonly material?: Readonly<Record<string, string>>;
-}
-
-export interface OpenTofuPlatformServiceBindingSelection {
-  readonly servicePath?: string;
-  readonly serviceKind?: string;
-  readonly labels?: Readonly<Record<string, string>>;
-}
-
-export interface OpenTofuPlatformServiceResolveContext {
-  readonly spaceId?: string;
-  readonly binding: OpenTofuPlatformServiceBindingSelection;
-}
-
-export interface OpenTofuPlatformServiceResolver {
-  resolve(
-    context: OpenTofuPlatformServiceResolveContext,
-  ): readonly PlatformService[] | undefined;
-}
-
-export interface CreateOpenTofuPlatformServiceResolverOptions {
+export interface ExtractDeploymentOutputsOptions {
   readonly outputs: string | unknown;
-  readonly services: readonly OpenTofuPlatformServiceDefinition[];
-  readonly includeSensitiveOutputs?: boolean;
+  /**
+   * Optional map from output name to public output kind. When omitted, only
+   * well-known output names are published.
+   */
+  readonly outputKinds?: Readonly<Record<string, string>>;
 }
+
+const WELL_KNOWN_OUTPUT_KINDS: Readonly<Record<string, string>> = {
+  launch_url: "launch_url",
+  admin_url: "admin_url",
+  health_url: "health_url",
+  docs_url: "docs_url",
+  service_url: "service_url",
+  takosumi_launch_url: "launch_url",
+  takosumi_admin_url: "admin_url",
+  takosumi_health_url: "health_url",
+  takosumi_docs_url: "docs_url",
+  takosumi_service_url: "service_url",
+};
 
 export function parseOpenTofuOutputs(input: string | unknown): OpenTofuOutputJson {
   const parsed = typeof input === "string" ? JSON.parse(input) as unknown : input;
@@ -68,103 +58,43 @@ export function parseOpenTofuOutputs(input: string | unknown): OpenTofuOutputJso
   return outputs;
 }
 
-export function createOpenTofuPlatformServiceResolver(
-  options: CreateOpenTofuPlatformServiceResolverOptions,
-): OpenTofuPlatformServiceResolver {
+export function extractDeploymentOutputs(
+  options: ExtractDeploymentOutputsOptions,
+): readonly DeploymentOutput[] {
   const outputs = parseOpenTofuOutputs(options.outputs);
-  const services = options.services.map((definition) => ({
-    definition,
-    service: materializePlatformService(definition, outputs, {
-      includeSensitiveOutputs: options.includeSensitiveOutputs === true,
-    }),
-  }));
-
-  return {
-    resolve(context) {
-      const matches = services
-        .filter(({ definition, service }) =>
-          matchesSpaceScope(definition, context.spaceId) &&
-          matchesBindingSelection(service, context.binding)
-        )
-        .map(({ service }) => service);
-      return matches.length > 0 ? matches : undefined;
-    },
-  };
+  const kinds = { ...WELL_KNOWN_OUTPUT_KINDS, ...(options.outputKinds ?? {}) };
+  const result: DeploymentOutput[] = [];
+  for (const [name, output] of Object.entries(outputs)) {
+    if (output.sensitive === true) continue;
+    const kind = kinds[name];
+    if (!kind) continue;
+    result.push({
+      name,
+      kind,
+      value: asJsonValue(output.value, name),
+      sensitive: false,
+    });
+  }
+  return result;
 }
 
-function materializePlatformService(
-  definition: OpenTofuPlatformServiceDefinition,
-  outputs: OpenTofuOutputJson,
-  options: { readonly includeSensitiveOutputs: boolean },
-): PlatformService {
-  const material: Record<string, PlatformServiceMaterialValue> = {};
-  for (const [materialKey, outputName] of Object.entries(
-    definition.material ?? {},
-  )) {
-    const output = outputs[outputName];
-    if (!output) {
-      throw new Error(`OpenTofu output ${outputName} is not available`);
-    }
-    if (output.sensitive === true && !options.includeSensitiveOutputs) {
-      continue;
-    }
-    material[materialKey] = asJsonValue(output.value, outputName);
+export function toDeployControlOutputEnvelope(
+  input: OpenTofuOutputJson,
+): OpenTofuOutputEnvelope {
+  const envelope: Record<string, OpenTofuOutputValue> = {};
+  for (const [name, output] of Object.entries(input)) {
+    envelope[name] = {
+      ...(typeof output.sensitive === "boolean"
+        ? { sensitive: output.sensitive }
+        : {}),
+      ...("type" in output ? { type: asJsonValue(output.type, name) } : {}),
+      value: asJsonValue(output.value, name),
+    };
   }
-
-  return {
-    ...(definition.path ? { path: definition.path } : {}),
-    kind: definition.kind,
-    ...(definition.name ? { name: definition.name } : {}),
-    ...(definition.labels ? { labels: definition.labels } : {}),
-    ...(Object.keys(material).length > 0 ? { material } : {}),
-  };
+  return envelope;
 }
 
-function matchesBindingSelection(
-  service: PlatformService,
-  selection: OpenTofuPlatformServiceBindingSelection,
-): boolean {
-  const hasSelector = Boolean(selection.servicePath || selection.serviceKind) ||
-    Object.keys(selection.labels ?? {}).length > 0;
-  if (!hasSelector) {
-    return false;
-  }
-  if (selection.servicePath && service.path !== selection.servicePath) {
-    return false;
-  }
-  if (selection.serviceKind && service.kind !== selection.serviceKind) {
-    return false;
-  }
-  for (const [key, value] of Object.entries(selection.labels ?? {})) {
-    if (service.labels?.[key] !== value) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function matchesSpaceScope(
-  definition: OpenTofuPlatformServiceDefinition,
-  spaceId: string | undefined,
-): boolean {
-  if (definition.spaceId && definition.spaceIds) {
-    throw new TypeError(
-      "OpenTofu PlatformService definition must use spaceId or spaceIds, not both",
-    );
-  }
-  const allowed = definition.spaceId
-    ? [definition.spaceId]
-    : definition.spaceIds;
-  if (!allowed) return true;
-  if (allowed.length === 0) {
-    throw new TypeError(
-      "OpenTofu PlatformService definition spaceIds must not be empty",
-    );
-  }
-  return spaceId !== undefined && allowed.includes(spaceId);
-}
-
-function asJsonValue(value: unknown, outputName: string): PlatformServiceMaterialValue {
+function asJsonValue(value: unknown, outputName: string): DeploymentOutput["value"] {
   if (
     value === null ||
     typeof value === "string" ||
@@ -182,7 +112,7 @@ function asJsonValue(value: unknown, outputName: string): PlatformServiceMateria
     return value.map((item) => asJsonValue(item, outputName));
   }
   if (isRecord(value)) {
-    const object: Record<string, PlatformServiceMaterialValue> = {};
+    const object: Record<string, DeploymentOutput["value"]> = {};
     for (const [key, item] of Object.entries(value)) {
       object[key] = asJsonValue(item, outputName);
     }

@@ -4,14 +4,6 @@ import {
   createSpaceDomainServices,
 } from "./domains/space/mod.ts";
 import {
-  type DeployBlocker,
-  type DeploymentFilter,
-  DeploymentService,
-  type DeploymentServiceOptions,
-  type DeploymentStore,
-  type ReferenceDeploySourcePayload,
-} from "./domains/deploy/mod.ts";
-import {
   DefaultRuntimeMaterializer,
   type ProviderObservationStore,
   type RuntimeDesiredStateStore,
@@ -87,15 +79,7 @@ import type { Clock } from "./shared/time.ts";
 import type { IdGenerator } from "./shared/ids.ts";
 import { log } from "./shared/log.ts";
 import { currentRuntime } from "./shared/runtime/index.ts";
-import type {
-  ActorContext,
-  Deployment,
-  DeploymentApproval,
-  DeploymentInput,
-  GroupHead,
-  IsoTimestamp,
-  OperatorImplementation,
-} from "takosumi-contract/reference/compat";
+import type { OperatorImplementation } from "takosumi-contract/reference/implementation";
 import {
   InMemoryRuntimeAgentRegistry,
   type RuntimeAgentRegistry,
@@ -124,7 +108,6 @@ export interface AppContextOptions {
   readonly stores?: Partial<AppStores>;
   readonly adapters?: Partial<AppAdapters>;
   readonly space?: Partial<SpaceDomainDependencies>;
-  readonly deploy?: Omit<Partial<DeploymentServiceOptions>, "store">;
   readonly runtimeConfig?: AppRuntimeConfig;
   readonly loadRuntimeConfig?: boolean;
   readonly runtimeEnv?: Record<string, string | undefined>;
@@ -156,17 +139,12 @@ export interface AppRuntimeConfig {
 
 export interface AppStores {
   readonly space: SpaceDomainDependencies;
-  readonly deploy: DeployStores;
   readonly runtime: RuntimeStores;
   readonly resources: ResourceStores;
   readonly registry: RegistryStores;
   readonly audit: AuditStores;
   readonly usage: UsageStores;
   readonly serviceEndpoints: ServiceEndpointStores;
-}
-
-export interface DeployStores {
-  readonly deploys: DeploymentStore;
 }
 
 export interface RuntimeStores {
@@ -259,75 +237,6 @@ const STRICT_RUNTIME_FALLBACK_LABELS: Record<keyof AppAdapters, string> = {
   runtimeAgent: "in-memory runtime-agent registry",
 };
 
-export interface DeployServices {
-  readonly deployments: DeploymentService;
-  readonly plans: DeploymentPlanFacade;
-  readonly apply: DeploymentApplyFacade;
-}
-
-export interface DeploymentPlanFacade {
-  createPlan(input: CreateDeploymentPlanInput): Promise<Deployment>;
-  getDeployment(id: string): Promise<Deployment | undefined>;
-  listDeployments(filter?: DeploymentFilter): Promise<readonly Deployment[]>;
-}
-
-export interface CreateDeploymentPlanInput {
-  readonly spaceId: string;
-  readonly manifest: ReferenceDeploySourcePayload;
-  readonly env?: string;
-  readonly envName?: string;
-  readonly input?: DeploymentInput;
-  readonly id?: string;
-  readonly createdAt?: IsoTimestamp;
-  readonly blockers?: readonly DeployBlocker[];
-}
-
-export interface DeploymentApplyFacade {
-  applySourcePayload(
-    input: ApplyDeploymentSourcePayloadInput,
-  ): Promise<ApplyDeploymentResult>;
-  applyDeployment(
-    input: ApplyDeploymentByIdInput,
-  ): Promise<ApplyDeploymentResult>;
-  rollbackToDeployment(
-    input: RollbackDeploymentFacadeInput,
-  ): Promise<ApplyDeploymentResult>;
-  getDeployment(id: string): Promise<Deployment | undefined>;
-  listDeployments(filter?: DeploymentFilter): Promise<readonly Deployment[]>;
-}
-
-export interface ApplyDeploymentSourcePayloadInput {
-  readonly spaceId: string;
-  readonly manifest: ReferenceDeploySourcePayload;
-  readonly env?: string;
-  readonly envName?: string;
-  readonly input?: DeploymentInput;
-  readonly createdAt?: IsoTimestamp;
-  readonly createdBy?: string;
-  readonly actor?: ActorContext;
-  readonly approval?: DeploymentApproval;
-  readonly blockers?: readonly DeployBlocker[];
-}
-
-export interface ApplyDeploymentByIdInput {
-  readonly deploymentId: string;
-  readonly appliedAt?: IsoTimestamp;
-  readonly approval?: DeploymentApproval;
-}
-
-export interface RollbackDeploymentFacadeInput {
-  readonly spaceId: string;
-  readonly groupId: string;
-  readonly targetDeploymentId: string;
-  readonly advancedAt?: IsoTimestamp;
-  readonly reason?: string;
-}
-
-export interface ApplyDeploymentResult {
-  readonly deployment: Deployment;
-  readonly head?: GroupHead;
-}
-
 export interface RuntimeServices {
   readonly materializer: RuntimeMaterializer;
 }
@@ -338,7 +247,6 @@ export interface EntitlementServices {
 
 export interface ServiceContainer {
   readonly space: SpaceDomainServices;
-  readonly deploy: DeployServices;
   readonly runtime: RuntimeServices;
   readonly entitlements: EntitlementServices;
 }
@@ -390,88 +298,6 @@ export function createInMemoryAppStores(
   options: AppContextOptions = {},
 ): AppStores {
   return createAppStores(options);
-}
-
-function createDeploymentPlanFacade(
-  deploymentService: DeploymentService,
-): DeploymentPlanFacade {
-  return {
-    createPlan: (input) =>
-      deploymentService.resolveDeployment({
-        spaceId: input.spaceId,
-        manifest: input.manifest,
-        env: input.env,
-        envName: input.envName,
-        input: input.input,
-        id: input.id,
-        createdAt: input.createdAt,
-        blockers: input.blockers,
-      }),
-    getDeployment: (id) => deploymentService.getDeployment(id),
-    listDeployments: (filter = {}) => deploymentService.listDeployments(filter),
-  };
-}
-
-function createDeploymentApplyFacade(
-  deploymentService: DeploymentService,
-  store: DeploymentStore,
-): DeploymentApplyFacade {
-  const applyDeployment = async (
-    input: ApplyDeploymentByIdInput,
-  ): Promise<ApplyDeploymentResult> => {
-    const deployment = await deploymentService.applyDeployment({
-      deploymentId: input.deploymentId,
-      appliedAt: input.appliedAt,
-      approval: input.approval,
-    });
-    const head = await store.getGroupHead({
-      spaceId: deployment.space_id,
-      groupId: deployment.group_id,
-    });
-    return { deployment, head };
-  };
-
-  const rollbackToDeployment = async (
-    input: RollbackDeploymentFacadeInput,
-  ): Promise<ApplyDeploymentResult> => {
-    const head = await deploymentService.rollbackGroup({
-      spaceId: input.spaceId,
-      groupId: input.groupId,
-      targetDeploymentId: input.targetDeploymentId,
-      advancedAt: input.advancedAt,
-      reason: input.reason,
-    });
-    const deployment = await store.getDeployment(input.targetDeploymentId);
-    if (!deployment) {
-      throw new Error(
-        `rollback target disappeared: ${input.targetDeploymentId}`,
-      );
-    }
-    return { deployment, head };
-  };
-
-  return {
-    applySourcePayload: async (input) => {
-      const resolved = await deploymentService.resolveDeployment({
-        spaceId: input.spaceId,
-        manifest: input.manifest,
-        env: input.env,
-        envName: input.envName,
-        input: input.input,
-        createdAt: input.createdAt,
-        blockers: input.blockers,
-      });
-      return await applyDeployment({
-        deploymentId: resolved.id,
-        appliedAt: input.createdAt,
-        approval: input.approval,
-      });
-    },
-    applyDeployment,
-    rollbackToDeployment,
-    getDeployment: (id) => deploymentService.getDeployment(id),
-    listDeployments: (filter = {}) => deploymentService.listDeployments(filter),
-  };
 }
 
 export function createDefaultAppAdapters(
@@ -585,7 +411,7 @@ async function importRuntimeConfigModule(): Promise<
 
 /**
  * Build the canonical `OperatorImplementationRegistry` from the operator-supplied
- * `options.implementations` array. The registry is consulted by `InstallerPipeline`
+ * `options.implementations` array. The registry is consulted by `DeployControlPipeline`
  * to resolve exact kind references to implementations that materialize them.
  */
 export function buildOperatorImplementationRegistry(
@@ -656,28 +482,8 @@ export function createServiceContainer(
 ): ServiceContainer {
   const stores = options.stores ?? createInMemoryAppStores(options);
   const dateClock = options.dateClock ?? (() => new Date());
-  const uuidFactory = options.uuidFactory ?? (() => crypto.randomUUID());
-  const deploymentService = new DeploymentService({
-    ...options.deploy,
-    store: stores.deploy.deploys,
-    clock: options.deploy?.clock ?? dateClock,
-    idFactory: options.deploy?.idFactory ?? uuidFactory,
-    // Propagate the runtime environment so the deploy service fails CLOSED on
-    // production / staging when no real providerAdapter is wired, instead of
-    // silently advancing GroupHead via SYNTHETIC_PROVIDER_ADAPTER.
-    environment: options.deploy?.environment ??
-      options.runtimeConfig?.environment,
-  });
   return {
     space: createSpaceDomainServices(stores.space),
-    deploy: {
-      deployments: deploymentService,
-      plans: createDeploymentPlanFacade(deploymentService),
-      apply: createDeploymentApplyFacade(
-        deploymentService,
-        stores.deploy.deploys,
-      ),
-    },
     runtime: {
       materializer: new DefaultRuntimeMaterializer({ clock: dateClock }),
     },

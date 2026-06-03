@@ -67,18 +67,18 @@ bundle_freshness_gate() {
 	fi
 	# Takosumi service Worker bundle: takosumi/deploy/cloudflare runs the
 	# service in-process on workerd with D1/R2 bindings.
-	local kernel_worker_bundle="$repo_root/takosumi/deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs"
-	local kernel_worker_sources=(
+	local service_worker_bundle="$repo_root/takosumi/deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs"
+	local service_worker_sources=(
 		"$repo_root/takosumi/deploy/cloudflare/src"
 		"$repo_root/takosumi/src/service"
 	)
-	if [[ -f "$kernel_worker_bundle" ]]; then
-		local kernel_newer
-		kernel_newer=$(find "${kernel_worker_sources[@]}" -type f -newer "$kernel_worker_bundle" \
+	if [[ -f "$service_worker_bundle" ]]; then
+		local service_newer
+		service_newer=$(find "${service_worker_sources[@]}" -type f -newer "$service_worker_bundle" \
 			\( -name '*.ts' -o -name '*.tsx' \) 2>/dev/null | head -3)
-		if [[ -n "$kernel_newer" ]]; then
+		if [[ -n "$service_newer" ]]; then
 			echo "==> [bundle-gate] service worker source newer than bundle, auto-rebuilding..."
-			echo "$kernel_newer" | sed 's/^/                   /'
+			echo "$service_newer" | sed 's/^/                   /'
 			docker compose -f compose.substrate.yml --profile postgres \
 				run --rm takosumi-service-worker-build >"$SMOKE_LOG_DIR/bundle-gate-service-worker.log" 2>&1 || {
 				echo "==> [bundle-gate] service worker rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-service-worker.log" >&2
@@ -225,18 +225,8 @@ check_json "prod-mirror.cloud.oidc-discovery" "accounts.takosumi.test" "/.well-k
 check "prod-mirror.cloud.dashboard-index" "accounts.takosumi.test" "/" "200"
 check "prod-mirror.cloud.dashboard-signin" "accounts.takosumi.test" "/sign-in" "200"
 check "prod-mirror.cloud.dashboard-deeplink" "accounts.takosumi.test" "/apps/abc" "200"
-check "prod-mirror.cloud.use-takos-entry" "accounts.takosumi.test" "/dashboard/use-takos?takos_url=https%3A%2F%2Ftakos.test" "200"
+check "prod-mirror.cloud.takos-start-entry" "accounts.takosumi.test" "/takos/start?takos_url=https%3A%2F%2Ftakos.test" "200"
 check "prod-mirror.cloud.use-takos-start-validation" "accounts.takosumi.test" "/start?takos_url=https%3A%2F%2Ftakos.test" "400"
-
-echo
-echo "==> Install flow — managed-offering bypass + installer dry-run mock"
-# managed-offering gate is flipped to 'open' for the local test bed, so the
-# dry-run endpoint should return 200 instead of 503 (launch_readiness_not_complete).
-check_post "install.dry-run.takos-docs" "accounts.takosumi.test" "/v1/installations/dry-run" \
-	'{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/takos-docs.git","ref":"main"}}' "200"
-# yurucommu through the same wizard
-check_post "install.dry-run.yurucommu" "accounts.takosumi.test" "/v1/installations/dry-run" \
-	'{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' "200"
 
 echo
 echo "==> OAuth flow — upstream mock (accounts.google.com / github.com)"
@@ -299,12 +289,12 @@ else
 fi
 
 echo
-echo "==> Installer API (5 endpoint surface)"
-if run_script "installer.api.e2e" "bash $SCRIPT_DIR/cli-smoke.sh"; then
-	echo "    PASS [installer.api.e2e] install + deploy + rollback succeeded"
+echo "==> Deploy Control API (OpenTofu run ledger surface)"
+if run_script "deploy-control.api.e2e" "bash $SCRIPT_DIR/cli-smoke.sh"; then
+	echo "    PASS [deploy-control.api.e2e] plan + apply + ledger reads succeeded"
 	PASS=$((PASS + 1))
 else
-	echo "    FAIL [installer.api.e2e] see scripts/cli-smoke.sh for the failure"
+	echo "    FAIL [deploy-control.api.e2e] see scripts/cli-smoke.sh for the failure"
 	FAIL=$((FAIL + 1))
 fi
 
@@ -361,7 +351,7 @@ fi
 echo
 echo "==> k6 load baseline via Caddy + TLS (20 RPS x 20s — regression watch only, NOT SLO)"
 if run_script "k6.baseline" "bash $SCRIPT_DIR/k6-baseline.sh"; then
-	echo "    PASS [k6.baseline] install dry-run + oidc both within p95 + error-rate thresholds"
+	echo "    PASS [k6.baseline] deploy control plan + oidc both within p95 + error-rate thresholds"
 	PASS=$((PASS + 1))
 else
 	echo "    FAIL [k6.baseline] see scripts/k6-baseline.sh --verbose"

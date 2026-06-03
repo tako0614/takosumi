@@ -1,7 +1,7 @@
 # Takosumi Accounts — Cloudflare Worker.
 #
 # This file is the **shared default** for every deploy profile. The top-level
-# block holds the values that production has historically expected; explicit
+# block holds the values that production expects; explicit
 # `[env.production]` / `[env.staging]` / `[env.local]` sections override `name`,
 # `routes`, and `vars` on a per-profile basis.
 #
@@ -27,7 +27,7 @@
 #       TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET
 #       TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET
 #       TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET
-#       TAKOSUMI_ACCOUNTS_INSTALLER_TOKEN           (if installer requires bearer auth)
+#       TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN           (if deployControl requires bearer auth)
 #       (Stripe / upstream OIDC / passkey secrets as needed)
 
 name = "takosumi-accounts"
@@ -51,6 +51,21 @@ zone_name = "takosumi.com"
 command = 'mkdir -p .wrangler/dist && bun build --target browser --format esm src/worker.ts --outfile .wrangler/dist/takosumi-accounts-worker.mjs'
 watch_dir = "deploy/accounts-cloudflare/src"
 
+# Static SPA (Takosumi dashboard-ui) served from this same Worker, so one
+# Worker answers both the account-plane API and the dashboard UI on one origin.
+# `run_worker_first = true` makes the Worker run before the asset router for
+# EVERY request: the handler sends API namespaces to the accounts handler and
+# everything else to `env.ASSETS.fetch(...)` (deep links fall back to
+# index.html via not_found_handling). `directory` is the path from THIS config
+# dir for `wrangler dev`; render-config.ts rewrites it relative to the rendered
+# config location (same treatment as `main`). The dashboard-ui build
+# (`packages/dashboard-ui` → `.output/public`) must run before deploy.
+[assets]
+directory = "../../packages/dashboard-ui/.output/public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
 [observability]
 enabled = true
 
@@ -61,12 +76,12 @@ TAKOSUMI_ACCOUNTS_CLIENT_ID = "takos-private-production"
 TAKOSUMI_ACCOUNTS_REDIRECT_URIS = "https://takos.jp/auth/oidc/callback"
 TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
 TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
-TAKOSUMI_ACCOUNTS_INSTALLER_URL = ""
+TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL = ""
 
 # TODO(operator): keep the placeholder below in source control. Generate an
 # ignored deploy config with `bun run deploy:accounts-cloudflare:render-config` and a
 # real TAKOSUMI_ACCOUNTS_D1_DATABASE_ID before running `wrangler deploy`.
-# The placeholder is intentionally all-zeros so direct deploys fail fast if the
+# The placeholder is intentionally all-zeros so deploy control runs fail fast if the
 # operator step is skipped.
 [[d1_databases]]
 binding = "TAKOSUMI_ACCOUNTS_DB"
@@ -97,7 +112,7 @@ TAKOSUMI_ACCOUNTS_CLIENT_ID = "takos-private-production"
 TAKOSUMI_ACCOUNTS_REDIRECT_URIS = "https://takos.jp/auth/oidc/callback"
 TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
 TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
-TAKOSUMI_ACCOUNTS_INSTALLER_URL = ""
+TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL = ""
 
 # ===== Staging profile =====================================================
 #
@@ -120,7 +135,7 @@ TAKOSUMI_ACCOUNTS_CLIENT_ID = "takos-private-staging"
 TAKOSUMI_ACCOUNTS_REDIRECT_URIS = "https://staging.takos.jp/auth/oidc/callback"
 TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
 TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
-TAKOSUMI_ACCOUNTS_INSTALLER_URL = ""
+TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL = ""
 
 # ===== Local dev profile (Wave M-D) ========================================
 #
@@ -146,4 +161,4 @@ TAKOSUMI_ACCOUNTS_CLIENT_ID = "takos-private-local"
 TAKOSUMI_ACCOUNTS_REDIRECT_URIS = "https://app.takos.test/auth/oidc/callback,https://road.takos.test/api/v1/auth/oidc/callback,https://yurucommu.test/api/v1/auth/oidc/callback"
 TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
 TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
-TAKOSUMI_ACCOUNTS_INSTALLER_URL = ""
+TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL = ""

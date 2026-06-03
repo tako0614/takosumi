@@ -3,40 +3,16 @@ import {
   createSubprocessGitRunner,
   createSubprocessTarRunner,
   currentRuntime,
-  denoRuntime,
-  isDeno,
   resetRuntimeForTesting,
   setRuntimeForTesting,
 } from "./index.ts";
 import { nodeRuntime } from "./node.ts";
 import type { SubprocessAdapter, SubprocessOutput } from "./runtime.ts";
 
-const realDenoTest = isDeno() ? test : test.skip;
-
-test("isDeno discriminator probes Deno.Command, rejecting partial Deno globals", () => {
-  // Mirror the exact `isDeno()` probe against synthetic globals to document the
-  // regression contract without touching the host `Deno`. Partial compatibility
-  // globals may define `globalThis.Deno` without `Command`; the probe must
-  // return false for that shape. It must NOT also gate on Node being absent,
-  // since real Deno reports `process.versions.node`.
-  const probesDenoCommand = (g: { Deno?: { Command?: unknown } }): boolean =>
-    typeof g.Deno?.Command === "function";
-  // Partial Deno global: Deno defined, no Command -> NOT Deno.
-  expect(!probesDenoCommand({
-      Deno: { readTextFile: () => {} } as { Command?: unknown },
-    })).toBeTruthy();
-  // Real Deno: Command is a function -> Deno, even though process.versions.node
-  // would also be present on a Deno host.
-  expect(probesDenoCommand({ Deno: { Command: class {} } })).toBeTruthy();
-  // Pure-ESM Node with no Deno global -> NOT Deno.
-  expect(!probesDenoCommand({})).toBeTruthy();
-});
-
 test("nodeRuntime fs.makeTempDir nests inside the OS temp dir with no prefix", async () => {
   // Regression: with no prefix, `path.join(os.tmpdir(), "")` drops the trailing
   // separator, so `mkdtemp` would create a SIBLING of the temp root instead of
-  // a child. The adapter must nest the temp dir INSIDE `os.tmpdir()` to match
-  // `Deno.makeTempDir()` semantics.
+  // a child. The adapter must nest the temp dir INSIDE `os.tmpdir()`.
   const [osMod, pathMod] = await Promise.all([
     import("node:os"),
     import("node:path"),
@@ -58,60 +34,14 @@ test("nodeRuntime fs.makeTempDir nests inside the OS temp dir with no prefix", a
   }
 });
 
-realDenoTest("denoRuntime env reader returns process env", () => {
-  const sentinel = "TAKOSUMI_RUNTIME_ADAPTER_TEST";
-  Deno.env.set(sentinel, "1");
-  try {
-    expect(denoRuntime.env.get(sentinel)).toEqual("1");
-    expect(denoRuntime.env.toObject()[sentinel] === "1").toBeTruthy();
-  } finally {
-    Deno.env.delete(sentinel);
-  }
-});
-
-realDenoTest("denoRuntime fs.isNotFoundError recognises Deno.errors.NotFound", () => {
-  const error = new Deno.errors.NotFound("missing");
-  expect(denoRuntime.fs.isNotFoundError(error)).toBeTruthy();
-  expect(!denoRuntime.fs.isNotFoundError(new Error("other"))).toBeTruthy();
-});
-
-realDenoTest("denoRuntime env.set writes a process env var", () => {
-  const sentinel = "TAKOSUMI_RUNTIME_ENV_SET_TEST";
-  try {
-    denoRuntime.env.set(sentinel, "value-x");
-    expect(Deno.env.get(sentinel)).toEqual("value-x");
-    expect(denoRuntime.env.get(sentinel)).toEqual("value-x");
-  } finally {
-    Deno.env.delete(sentinel);
-  }
-});
-
-realDenoTest("denoRuntime execPath returns the Deno executable path", () => {
-  expect(denoRuntime.execPath()).toEqual(Deno.execPath());
-});
-
 test("setRuntimeForTesting overrides detection", () => {
-  const fakeAdapter = { ...denoRuntime, kind: "node" as const };
+  const fakeAdapter = { ...nodeRuntime, kind: "node" as const };
   setRuntimeForTesting(fakeAdapter);
   try {
     expect(currentRuntime().kind).toEqual("node");
   } finally {
     resetRuntimeForTesting();
   }
-});
-
-realDenoTest("denoRuntime fs.makeTempDir + remove round-trips with prefix", async () => {
-  const dir = await denoRuntime.fs.makeTempDir("takosumi-runtime-test-");
-  try {
-    const base = dir.split(/[\\/]/).pop() ?? "";
-    expect(base.startsWith("takosumi-runtime-test-")).toBeTruthy();
-    await denoRuntime.fs.writeTextFile(`${dir}/file.txt`, "ok");
-    expect(await denoRuntime.fs.readTextFile(`${dir}/file.txt`)).toEqual("ok");
-  } finally {
-    await denoRuntime.fs.remove(dir, { recursive: true });
-  }
-  // After recursive remove the directory is gone.
-  await expect(denoRuntime.fs.readTextFile(`${dir}/file.txt`)).rejects.toThrow();
 });
 
 /**

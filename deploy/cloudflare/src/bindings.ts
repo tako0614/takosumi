@@ -2,7 +2,19 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOS_D1: D1Database;
   readonly TAKOS_ARTIFACTS: R2Bucket;
   readonly TAKOS_QUEUE?: Queue<unknown>;
+  readonly TAKOS_OPENTOFU_RUN_QUEUE?: Queue<OpenTofuRunQueueMessage>;
   readonly TAKOS_COORDINATION: DurableObjectNamespace;
+  readonly TAKOS_OPENTOFU_RUNNER?: DurableObjectNamespace;
+}
+
+export type OpenTofuRunAction = "plan" | "apply" | "destroy";
+
+export interface OpenTofuRunQueueMessage {
+  readonly kind: "takosumi.opentofu-run@v1";
+  readonly action: OpenTofuRunAction;
+  readonly runId: string;
+  readonly requestedAt: string;
+  readonly request: Record<string, unknown>;
 }
 
 export interface D1Database {
@@ -80,11 +92,43 @@ export interface Queue<T> {
   send(message: T): Promise<void>;
 }
 
+export interface QueueBatch<T = unknown> {
+  readonly messages: readonly QueueMessage<T>[];
+}
+
+export interface QueueMessage<T = unknown> {
+  readonly id: string;
+  readonly body: T;
+  ack?(): void;
+  retry?(): void;
+}
+
 export interface DurableObjectNamespace {
   idFromName(name: string): unknown;
   get(id: unknown): DurableObjectStub;
 }
 
 export interface DurableObjectStub {
+  fetch(request: Request): Promise<Response>;
+}
+
+export interface WorkersForPlatformsDispatchNamespace {
+  get(
+    scriptName: string,
+    options?: WorkersForPlatformsDispatchOptions,
+    context?: WorkersForPlatformsDispatchContext,
+  ): WorkersForPlatformsUserWorker;
+}
+
+export interface WorkersForPlatformsDispatchOptions {
+  readonly limits?: Record<string, unknown>;
+  readonly outbound?: Record<string, unknown>;
+}
+
+export interface WorkersForPlatformsDispatchContext {
+  readonly outbound?: Record<string, unknown>;
+}
+
+export interface WorkersForPlatformsUserWorker {
   fetch(request: Request): Promise<Response>;
 }

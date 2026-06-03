@@ -20,7 +20,7 @@ export const TAKOSUMI_BUNDLED_ARTIFACT_KINDS:
     {
       kind: "js-bundle",
       description: "ESM JavaScript bundle for serverless runtimes " +
-        "(Cloudflare Workers / Deno Deploy)",
+        "(Cloudflare Workers)",
       contentTypeHint: "application/javascript",
     },
     {

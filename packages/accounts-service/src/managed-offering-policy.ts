@@ -10,10 +10,7 @@ import {
   json,
   readJsonObject,
 } from "./http-helpers.ts";
-import type {
-  DashboardInstallationRoute,
-  InstallationRoute,
-} from "./route-matchers.ts";
+import type { InstallationRoute } from "./route-matchers.ts";
 
 export interface ManagedOfferingAccessPolicy {
   status: "closed" | "open";
@@ -175,21 +172,13 @@ export async function managedOfferingReadyStatusPatchBlocked(
   return managedOfferingAccessBlocked(policy);
 }
 
-export function managedOfferingGuardedDashboardMutation(
-  kind: DashboardInstallationRoute["kind"],
-  method: string,
-): boolean {
-  if (method !== "POST") return false;
-  return kind === "materialize" || kind === "export";
-}
-
 export function managedOfferingGuardedInstallationMutation(
   kind: InstallationRoute["kind"],
   method: string,
 ): boolean {
   if (method === "POST") {
     return kind === "deployment" ||
-      kind === "deployment-dry-run" ||
+      kind === "deployment-plan-run" ||
       kind === "rollback" ||
       kind === "materialize" ||
       kind === "export";

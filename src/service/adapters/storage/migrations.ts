@@ -79,77 +79,6 @@ export const postgresStorageTableDefinitions:
       indexes: [["space_id"]],
     },
     {
-      name: "deployments",
-      domain: "deploy",
-      columns: [
-        "id",
-        "group_id",
-        "space_id",
-        "input_json",
-        "resolution_json",
-        "desired_json",
-        "status",
-        "conditions_json",
-        "policy_decisions_json",
-        "approval_json",
-        "rollback_target",
-        "created_at",
-        "applied_at",
-        "finalized_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [["group_id", "created_at"], ["status"], ["space_id"]],
-    },
-    {
-      name: "provider_observations",
-      domain: "deploy",
-      columns: [
-        "id",
-        "deployment_id",
-        "provider_id",
-        "object_address",
-        "observed_state",
-        "drift_status",
-        "observed_digest",
-        "observed_state_json",
-        "observed_at",
-        "archived",
-      ],
-      primaryKey: ["id"],
-      indexes: [["deployment_id"], ["observed_at"], ["archived"]],
-    },
-    {
-      name: "group_heads",
-      domain: "deploy",
-      columns: [
-        "space_id",
-        "group_id",
-        "current_deployment_id",
-        "previous_deployment_id",
-        "generation",
-        "advanced_at",
-      ],
-      primaryKey: ["space_id", "group_id"],
-      indexes: [["current_deployment_id"]],
-    },
-    {
-      name: "group_head_history",
-      domain: "deploy",
-      columns: [
-        "space_id",
-        "group_id",
-        "deployment_id",
-        "previous_deployment_id",
-        "sequence",
-        "advanced_at",
-      ],
-      primaryKey: ["space_id", "group_id", "sequence"],
-      indexes: [
-        ["space_id", "group_id", "sequence"],
-        ["space_id", "group_id", "deployment_id"],
-      ],
-    },
-    {
       name: "resource_instances",
       domain: "resources",
       columns: [
@@ -361,10 +290,9 @@ export const postgresStorageTableDefinitions:
         "materialization_id",
         "observation_json",
         "observed_at",
-        "archived",
       ],
       primaryKey: ["id"],
-      indexes: [["materialization_id"], ["observed_at"], ["archived"]],
+      indexes: [["materialization_id"], ["observed_at"]],
     },
     {
       name: "runtime_agents",
@@ -545,13 +473,13 @@ export const postgresStorageTableDefinitions:
       indexes: [["expires_at_ms"]],
     },
     {
-      name: "takosumi_deployments",
+      name: "takosumi_deployment_records",
       domain: "deploy",
       columns: [
         "id",
         "tenant_id",
         "name",
-        "manifest_json",
+        "source_evidence_json",
         "applied_resources_json",
         "status",
         "created_at",
@@ -562,37 +490,7 @@ export const postgresStorageTableDefinitions:
       indexes: [["tenant_id"], ["status"]],
     },
     {
-      name: "takosumi_deploy_idempotency_keys",
-      domain: "deploy",
-      columns: [
-        "id",
-        "tenant_id",
-        "idempotency_key",
-        "request_digest",
-        "response_status",
-        "response_body_json",
-        "created_at",
-      ],
-      primaryKey: ["id"],
-      uniqueConstraints: [["tenant_id", "idempotency_key"]],
-      indexes: [["tenant_id"], ["created_at"]],
-    },
-    {
-      name: "takosumi_deploy_idempotency_locks",
-      domain: "deploy",
-      columns: [
-        "tenant_id",
-        "idempotency_key",
-        "owner_token",
-        "locked_until",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["tenant_id", "idempotency_key"],
-      indexes: [["locked_until"]],
-    },
-    {
-      name: "takosumi_deploy_locks",
+      name: "takosumi_deployment_record_locks",
       domain: "deploy",
       columns: [
         "tenant_id",
@@ -604,39 +502,6 @@ export const postgresStorageTableDefinitions:
       ],
       primaryKey: ["tenant_id", "name"],
       indexes: [["locked_until"]],
-    },
-    {
-      name: "takosumi_operation_journal_entries",
-      domain: "deploy",
-      columns: [
-        "id",
-        "space_id",
-        "deployment_name",
-        "operation_plan_digest",
-        "journal_entry_id",
-        "operation_id",
-        "phase",
-        "stage",
-        "operation_kind",
-        "resource_name",
-        "provider_id",
-        "effect_digest",
-        "effect_json",
-        "status",
-        "created_at",
-      ],
-      primaryKey: ["id"],
-      uniqueConstraints: [[
-        "space_id",
-        "operation_plan_digest",
-        "journal_entry_id",
-        "stage",
-      ]],
-      indexes: [
-        ["space_id", "operation_plan_digest"],
-        ["space_id", "deployment_name"],
-        ["created_at"],
-      ],
     },
     {
       name: "takosumi_revoke_debts",
@@ -679,46 +544,96 @@ export const postgresStorageTableDefinitions:
       ],
     },
     {
-      name: "takosumi_installer_installations",
+      name: "takosumi_runner_profiles",
+      domain: "deploy",
+      columns: ["id", "profile_json", "created_at"],
+      primaryKey: ["id"],
+    },
+    {
+      name: "takosumi_plan_runs",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "installation_id",
+        "runner_profile_id",
+        "status",
+        "run_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["space_id"], ["installation_id"], ["status"], ["created_at"]],
+    },
+    {
+      name: "takosumi_apply_runs",
+      domain: "deploy",
+      columns: [
+        "id",
+        "plan_run_id",
+        "space_id",
+        "installation_id",
+        "deployment_id",
+        "runner_profile_id",
+        "status",
+        "run_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["plan_run_id"], ["space_id"], ["installation_id"], ["status"]],
+    },
+    {
+      name: "takosumi_destroy_runs",
+      domain: "deploy",
+      columns: [
+        "id",
+        "installation_id",
+        "space_id",
+        "runner_profile_id",
+        "status",
+        "run_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["installation_id"], ["space_id"], ["status"]],
+    },
+    {
+      name: "takosumi_opentofu_installations",
       domain: "deploy",
       columns: [
         "id",
         "space_id",
         "app_id",
         "current_deployment_id",
+        "runner_profile_id",
         "status",
+        "installation_json",
         "created_at",
+        "updated_at",
       ],
       primaryKey: ["id"],
-      indexes: [["space_id"], ["created_at"]],
+      indexes: [["space_id"], ["current_deployment_id"], ["created_at"]],
     },
     {
-      name: "takosumi_installer_deployments",
+      name: "takosumi_opentofu_deployments",
       domain: "deploy",
       columns: [
         "id",
         "installation_id",
-        "source_json",
-        "manifest_digest",
+        "plan_run_id",
+        "apply_run_id",
+        "runner_profile_id",
         "status",
-        "outputs_json",
+        "deployment_json",
         "created_at",
+        "completed_at",
       ],
       primaryKey: ["id"],
-      indexes: [["installation_id"], ["created_at"]],
-    },
-    {
-      name: "takosumi_installer_rollback_events",
-      domain: "deploy",
-      columns: [
-        "id",
-        "installation_id",
-        "rolled_back_from",
-        "rolled_back_to",
+      indexes: [["installation_id"], ["plan_run_id"], ["apply_run_id"], [
         "created_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [["installation_id"], ["created_at"]],
+      ]],
     },
   ]);
 
@@ -739,30 +654,14 @@ export const postgresStorageMigrationStatements:
       id: "core.tables.create",
       version: 2,
       domain: "core",
-      description: "Create core spaces, groups, and memberships tables.",
+      description: "Create Takosumi spaces, groups, and memberships tables.",
       sql:
-        `create table if not exists core_spaces (id text primary key, name text not null, metadata_json jsonb not null, created_by_account_id text not null, created_at timestamptz not null, updated_at timestamptz not null);
-create table if not exists core_groups (id text primary key, space_id text not null references core_spaces(id), slug text not null, display_name text not null, metadata_json jsonb not null, created_by_account_id text not null, created_at timestamptz not null, updated_at timestamptz not null, unique (space_id, slug));
-create table if not exists core_space_memberships (id text primary key, space_id text not null references core_spaces(id), account_id text not null, roles_json jsonb not null, status text not null, created_at timestamptz not null, updated_at timestamptz not null, unique (space_id, account_id));`,
-      down: `drop table if exists core_space_memberships;
-drop table if exists core_groups;
-drop table if exists core_spaces;`,
-    },
-    {
-      id: "deploy.tables.create",
-      version: 3,
-      domain: "deploy",
-      description:
-        "Create deploy plan, activation, pointer, and operation tables.",
-      sql:
-        `create table if not exists deploy_plans (id text primary key, space_id text not null, group_id text not null, plan_json jsonb not null, created_at timestamptz not null);
-create table if not exists deploy_activation_records (id text primary key, space_id text not null, group_id text not null, plan_id text not null, manifest_json jsonb not null, app_spec_json jsonb not null, core_app_spec_json jsonb, core_env_spec_json jsonb, core_policy_spec_json jsonb, descriptor_closure_json jsonb, resolved_graph_json jsonb, descriptor_plan_json jsonb, core_activation_json jsonb not null default '{}'::jsonb, descriptor_closure_id text not null default '', descriptor_closure_digest text not null default '', resolved_graph_digest text not null default '', source_json jsonb not null, status text not null, retained_artifacts_json jsonb, rollback_json jsonb, created_at timestamptz not null, created_by text, actor_json jsonb);
-create table if not exists deploy_group_activation_pointers (space_id text not null, group_id text not null, activation_id text not null references deploy_activation_records(id), advanced_at timestamptz not null, primary key (space_id, group_id));
-create table if not exists deploy_operation_records (id text primary key, kind text not null, status text not null, space_id text not null, group_id text not null, activation_id text, plan_id text, created_at timestamptz not null, updated_at timestamptz not null, error text);`,
-      down: `drop table if exists deploy_operation_records;
-drop table if exists deploy_group_activation_pointers;
-drop table if exists deploy_activation_records;
-drop table if exists deploy_plans;`,
+        `create table if not exists spaces (id text primary key, name text not null, metadata_json jsonb not null, created_by_account_id text not null, created_at timestamptz not null, updated_at timestamptz not null);
+create table if not exists space_groups (id text primary key, space_id text not null references spaces(id), slug text not null, display_name text not null, metadata_json jsonb not null, created_by_account_id text not null, created_at timestamptz not null, updated_at timestamptz not null, unique (space_id, slug));
+create table if not exists space_memberships (id text primary key, space_id text not null references spaces(id), account_id text not null, roles_json jsonb not null, status text not null, created_at timestamptz not null, updated_at timestamptz not null, unique (space_id, account_id));`,
+      down: `drop table if exists space_memberships;
+drop table if exists space_groups;
+drop table if exists spaces;`,
     },
     {
       id: "resources.tables.create",
@@ -773,7 +672,7 @@ drop table if exists deploy_plans;`,
       sql:
         `create table if not exists resource_instances (id text primary key, space_id text not null, group_id text, contract text not null, origin text not null, sharing_mode text not null, provider text, provider_resource_id text, provider_materialization_id text, lifecycle_json jsonb not null, schema_owner_json jsonb, properties_json jsonb, created_at timestamptz not null, updated_at timestamptz not null);
 create table if not exists resource_bindings (id text primary key, space_id text not null, group_id text not null, claim_address text not null, instance_id text not null references resource_instances(id), role text not null, created_at timestamptz not null, updated_at timestamptz not null);
-create table if not exists resource_binding_set_revisions (id text primary key, space_id text not null, group_id text not null, component_address text, structure_digest text, inputs_json jsonb not null default '[]'::jsonb, binding_value_resolutions_json jsonb not null default '[]'::jsonb, conditions_json jsonb not null default '[]'::jsonb, activation_record_id text, resource_binding_ids_json jsonb not null, secret_bindings_json jsonb not null, output_bindings_json jsonb not null, created_at timestamptz not null);
+create table if not exists resource_binding_set_revisions (id text primary key, space_id text not null, group_id text not null, binding_value_resolutions_json jsonb not null default '[]'::jsonb, created_at timestamptz not null);
 create table if not exists resource_migration_ledger (id text primary key, space_id text not null, resource_instance_id text not null references resource_instances(id), migration_ref text not null, from_version text, to_version text, status text not null, checkpoints_json jsonb not null, started_at timestamptz not null, completed_at timestamptz, metadata_json jsonb);`,
       down: `drop table if exists resource_migration_ledger;
 drop table if exists resource_binding_set_revisions;
@@ -804,165 +703,14 @@ drop table if exists registry_package_descriptors;`,
       down: "drop table if exists audit_events;",
     },
     {
-      id: "deploy.activation_core_snapshots.add",
-      version: 7,
-      domain: "deploy",
-      description:
-        "Persist Core activation snapshots and rollback retention metadata.",
-      sql:
-        `alter table deploy_activation_records add column if not exists core_app_spec_json jsonb;
-alter table deploy_activation_records add column if not exists core_env_spec_json jsonb;
-alter table deploy_activation_records add column if not exists core_policy_spec_json jsonb;
-alter table deploy_activation_records add column if not exists descriptor_closure_json jsonb;
-alter table deploy_activation_records add column if not exists resolved_graph_json jsonb;
-alter table deploy_activation_records add column if not exists descriptor_plan_json jsonb;
-alter table deploy_activation_records add column if not exists retained_artifacts_json jsonb;
-alter table deploy_activation_records add column if not exists rollback_json jsonb;`,
-      // Note: `deploy_activation_records` itself is dropped by the deployment collapse
-      // migration (version 10). The down side here only reverts the columns
-      // added by version 7 — and only runs if version 10 is rolled back first.
-      down:
-        `alter table deploy_activation_records drop column if exists rollback_json;
-alter table deploy_activation_records drop column if exists retained_artifacts_json;
-alter table deploy_activation_records drop column if exists descriptor_plan_json;
-alter table deploy_activation_records drop column if exists resolved_graph_json;
-alter table deploy_activation_records drop column if exists descriptor_closure_json;
-alter table deploy_activation_records drop column if exists core_policy_spec_json;
-alter table deploy_activation_records drop column if exists core_env_spec_json;
-alter table deploy_activation_records drop column if exists core_app_spec_json;`,
-    },
-    {
-      id: "resources.bindings.allow_historical_claim_rebind",
+      id: "resources.bindings.claim_index.create",
       version: 8,
       domain: "resources",
       description:
-        "Allow historical resource bindings to retain claim addresses after unbind.",
+        "Index resource bindings by group and claim address.",
       sql:
-        `alter table resource_bindings drop constraint if exists resource_bindings_group_id_claim_address_key;
-create index if not exists resource_bindings_group_claim_address_idx on resource_bindings (group_id, claim_address);`,
-      // Down only drops the index this migration added. The unique constraint
-      // it dropped is *not* re-added by rollback because doing so could fail
-      // against historical bindings rows that the source schema would now reject.
+        `create index if not exists resource_bindings_group_claim_address_idx on resource_bindings (group_id, claim_address);`,
       down: `drop index if exists resource_bindings_group_claim_address_idx;`,
-    },
-    {
-      id: "resources.binding_set_revisions.core_columns.add",
-      version: 9,
-      domain: "resources",
-      description:
-        "Persist Core BindingSetRevision structure, value resolutions, and conditions.",
-      sql:
-        `alter table resource_binding_set_revisions add column if not exists component_address text;
-alter table resource_binding_set_revisions add column if not exists structure_digest text;
-alter table resource_binding_set_revisions add column if not exists inputs_json jsonb not null default '[]'::jsonb;
-alter table resource_binding_set_revisions add column if not exists binding_value_resolutions_json jsonb not null default '[]'::jsonb;
-alter table resource_binding_set_revisions add column if not exists conditions_json jsonb not null default '[]'::jsonb;`,
-      down:
-        `alter table resource_binding_set_revisions drop column if exists conditions_json;
-alter table resource_binding_set_revisions drop column if exists binding_value_resolutions_json;
-alter table resource_binding_set_revisions drop column if exists inputs_json;
-alter table resource_binding_set_revisions drop column if exists structure_digest;
-alter table resource_binding_set_revisions drop column if exists component_address;`,
-    },
-    {
-      id: "deploy.unify_to_deployments",
-      version: 10,
-      domain: "deploy",
-      description:
-        "Collapse deploy records into deployments / provider_observations / group_heads.",
-      sql:
-        `create table if not exists deployments (id text primary key, group_id text not null, space_id text not null, input_json jsonb not null, resolution_json jsonb not null, desired_json jsonb not null, status text not null check (status in ('preview','resolved','applying','applied','failed','rolled-back')), conditions_json jsonb not null default '[]'::jsonb, policy_decisions_json jsonb not null default '[]'::jsonb, approval_json jsonb, rollback_target text references deployments(id), created_at timestamptz not null default now(), applied_at timestamptz, finalized_at timestamptz);
-create index if not exists deployments_group_created_idx on deployments (group_id, created_at desc);
-create index if not exists deployments_status_idx on deployments (status);
-create index if not exists deployments_space_idx on deployments (space_id);
-create table if not exists provider_observations (id text primary key, deployment_id text not null references deployments(id), provider_id text not null, object_address text not null, observed_state text not null check (observed_state in ('present','missing','drifted','unknown')), drift_status text, observed_digest text, observed_state_json jsonb not null default '{}'::jsonb, observed_at timestamptz not null);
-create index if not exists provider_observations_deployment_idx on provider_observations (deployment_id);
-create index if not exists provider_observations_observed_at_idx on provider_observations (observed_at desc);
-create table if not exists group_heads (space_id text not null, group_id text not null, current_deployment_id text not null references deployments(id), previous_deployment_id text references deployments(id), generation bigint not null default 1, advanced_at timestamptz not null default now(), primary key (space_id, group_id));
-create index if not exists group_heads_current_idx on group_heads (current_deployment_id);
-insert into deployments (id, group_id, space_id, input_json, resolution_json, desired_json, status, conditions_json, policy_decisions_json, approval_json, rollback_target, created_at, applied_at, finalized_at)
-  select coalesce(ar.id, p.id), p.group_id, p.space_id,
-         jsonb_build_object('manifest_snapshot', coalesce(ar.manifest_json, p.plan_json -> 'manifest', '{}'::jsonb), 'source_kind', coalesce(ar.source_json ->> 'kind', 'manifest'), 'source_ref', ar.source_json ->> 'ref'),
-         jsonb_build_object('descriptor_closure', coalesce(ar.descriptor_closure_json, p.plan_json -> 'descriptorClosure', '{}'::jsonb), 'resolved_graph', coalesce(ar.resolved_graph_json, p.plan_json -> 'resolvedGraph', '{}'::jsonb)),
-         coalesce(ar.core_activation_json, '{}'::jsonb),
-         case when ar.id is not null and ar.status in ('succeeded','applied') then 'applied'
-              when ar.id is not null and ar.status in ('running','queued')    then 'applying'
-              when ar.id is not null and ar.status in ('failed','cancelled')  then 'failed'
-              else 'resolved' end,
-         coalesce(p.plan_json -> 'conditions', '[]'::jsonb),
-         coalesce(p.plan_json -> 'policyDecisions', '[]'::jsonb),
-         ar.rollback_json,
-         ar.rollback_json ->> 'targetActivationId',
-         coalesce(ar.created_at, p.created_at),
-         case when ar.id is not null then ar.created_at end,
-         case when ar.id is not null and ar.status in ('succeeded','applied') then ar.created_at end
-    from deploy_plans p left join deploy_activation_records ar on ar.plan_id = p.id
-  on conflict (id) do nothing;
-insert into deployments (id, group_id, space_id, input_json, resolution_json, desired_json, status, conditions_json, policy_decisions_json, approval_json, rollback_target, created_at, applied_at, finalized_at)
-  select ar.id, ar.group_id, ar.space_id,
-         jsonb_build_object('manifest_snapshot', coalesce(ar.manifest_json, '{}'::jsonb), 'source_kind', coalesce(ar.source_json ->> 'kind', 'manifest'), 'source_ref', ar.source_json ->> 'ref'),
-         jsonb_build_object('descriptor_closure', coalesce(ar.descriptor_closure_json, '{}'::jsonb), 'resolved_graph', coalesce(ar.resolved_graph_json, '{}'::jsonb)),
-         coalesce(ar.core_activation_json, '{}'::jsonb),
-         case when ar.status in ('succeeded','applied') then 'applied'
-              when ar.status in ('running','queued')    then 'applying'
-              when ar.status = 'failed'                  then 'failed'
-              else 'applied' end,
-         '[]'::jsonb, '[]'::jsonb, ar.rollback_json,
-         ar.rollback_json ->> 'targetActivationId',
-         ar.created_at, ar.created_at,
-         case when ar.status in ('succeeded','applied') then ar.created_at end
-    from deploy_activation_records ar
-    where not exists (select 1 from deployments d where d.id = ar.id)
-  on conflict (id) do nothing;
-update deployments d set conditions_json = coalesce(d.conditions_json,'[]'::jsonb) || op_arr.entries
-  from (select coalesce(o.activation_id, o.plan_id) as deployment_id,
-               jsonb_agg(jsonb_build_object('type', concat('Operation:', o.kind),
-                                            'status', case when o.status in ('succeeded','applied') then 'true' when o.status='failed' then 'false' else 'unknown' end,
-                                            'reason', o.error, 'message', o.error,
-                                            'observed_generation', 1,
-                                            'last_transition_time', o.updated_at,
-                                            'scope', jsonb_build_object('kind','operation','ref', o.id))
-                         order by o.created_at) as entries
-        from deploy_operation_records o
-        where coalesce(o.activation_id, o.plan_id) is not null
-        group by coalesce(o.activation_id, o.plan_id)) op_arr
-  where op_arr.deployment_id = d.id;
-update deployments d set desired_json = jsonb_set(coalesce(d.desired_json,'{}'::jsonb), '{bindings}', br.merged_inputs, true)
-  from (select activation_record_id as deployment_id, jsonb_agg(coalesce(inputs_json,'[]'::jsonb)) as merged_inputs
-        from resource_binding_set_revisions where activation_record_id is not null
-        group by activation_record_id) br
-  where br.deployment_id = d.id;
-insert into group_heads (space_id, group_id, current_deployment_id, previous_deployment_id, generation, advanced_at)
-  select p.space_id, p.group_id, p.activation_id,
-         (select prev.id from deployments prev
-            where prev.space_id = p.space_id
-              and prev.group_id = p.group_id
-              and prev.id <> p.activation_id
-              and prev.status in ('applied','rolled-back')
-            order by coalesce(prev.applied_at, prev.created_at) desc, prev.id desc
-            limit 1),
-         1, p.advanced_at
-    from deploy_group_activation_pointers p
-    where exists (select 1 from deployments d where d.id = p.activation_id)
-  on conflict (space_id, group_id) do nothing;
-drop table if exists deploy_operation_records;
-drop table if exists deploy_group_activation_pointers;
-drop table if exists deploy_activation_records;
-drop table if exists deploy_plans;
-alter table resource_binding_set_revisions
-  drop column if exists activation_record_id,
-  drop column if exists resource_binding_ids_json,
-  drop column if exists secret_bindings_json,
-  drop column if exists output_bindings_json,
-  drop column if exists component_address,
-  drop column if exists structure_digest,
-  drop column if exists inputs_json,
-  drop column if exists conditions_json;`,
-      // Forward-only: this migration drops source deploy tables after folding
-      // their data into the current Deployment schema. Dropping current deployment tables in a down
-      // migration would leave the storage_migrations ledger claiming v9 while
-      // the source schema/data no longer exists, so the runner must refuse rollback
-      // past this point.
     },
     {
       id: "runtime.agent_work_ledger.create",
@@ -1171,82 +919,6 @@ create index if not exists custom_domain_reservations_status_idx
       down: "drop table if exists custom_domain_reservations;",
     },
     {
-      id: "deploy.group_head_history.create",
-      version: 17,
-      domain: "deploy",
-      description:
-        "Retain N generations of group_head pointer history so multi-generation rollback (`rollbackGroup --steps=N` or `rollbackGroup --target=<deployment_id>`) can address any prior applied Deployment, not just the single previous_deployment_id slot tracked on group_heads (Phase 18.3 / M6).",
-      sql: `create table if not exists group_head_history (
-  space_id                  text        not null,
-  group_id                  text        not null,
-  deployment_id             text        not null references deployments(id),
-  previous_deployment_id    text        references deployments(id),
-  sequence                  bigint      not null,
-  advanced_at               timestamptz not null default now(),
-  primary key (space_id, group_id, sequence)
-);
-create index if not exists group_head_history_recent_idx
-  on group_head_history (space_id, group_id, sequence desc);
-create index if not exists group_head_history_deployment_idx
-  on group_head_history (space_id, group_id, deployment_id);
-insert into group_head_history (
-  space_id, group_id, deployment_id, previous_deployment_id,
-  sequence, advanced_at
-)
-select
-  gh.space_id,
-  gh.group_id,
-  gh.previous_deployment_id,
-  null,
-  greatest(gh.generation - 1, 1) as sequence,
-  gh.advanced_at
-from group_heads gh
-where gh.previous_deployment_id is not null
-  and not exists (
-    select 1 from group_head_history h
-    where h.space_id = gh.space_id
-      and h.group_id = gh.group_id
-      and h.sequence = greatest(gh.generation - 1, 1)
-  );
-insert into group_head_history (
-  space_id, group_id, deployment_id, previous_deployment_id,
-  sequence, advanced_at
-)
-select
-  gh.space_id,
-  gh.group_id,
-  gh.current_deployment_id,
-  gh.previous_deployment_id,
-  gh.generation as sequence,
-  gh.advanced_at
-from group_heads gh
-where not exists (
-  select 1 from group_head_history h
-  where h.space_id = gh.space_id
-    and h.group_id = gh.group_id
-    and h.sequence = gh.generation
-);`,
-      down: `drop index if exists group_head_history_deployment_idx;
-drop index if exists group_head_history_recent_idx;
-drop table if exists group_head_history;`,
-    },
-    {
-      id: "deploy.provider_observations.archived",
-      version: 18,
-      domain: "deploy",
-      description:
-        "Add archived flag + supporting indexes to provider_observations / runtime_provider_observations for the Phase 18.3 retention GC.",
-      sql:
-        `alter table provider_observations add column if not exists archived boolean not null default false;
-create index if not exists provider_observations_archived_idx on provider_observations (archived);
-alter table runtime_provider_observations add column if not exists archived boolean not null default false;
-create index if not exists runtime_provider_observations_archived_idx on runtime_provider_observations (archived);`,
-      down: `drop index if exists runtime_provider_observations_archived_idx;
-alter table runtime_provider_observations drop column if exists archived;
-drop index if exists provider_observations_archived_idx;
-alter table provider_observations drop column if exists archived;`,
-    },
-    {
       id: "internal_auth.replay_protection_log.create",
       version: 19,
       domain: "internal-auth",
@@ -1267,16 +939,16 @@ create index if not exists internal_request_replay_log_expires_idx
 drop table if exists internal_request_replay_log;`,
     },
     {
-      id: "deploy.takosumi_deployments.create",
+      id: "deploy.takosumi_deployment_records.create",
       version: 20,
       domain: "deploy",
       description:
-        "Persist legacy deployment state so recovery paths can read prior apply handles end-to-end (Task 1).",
-      sql: `create table if not exists takosumi_deployments (
+        "Persist deployment record evidence for artifact retention and revoke cleanup.",
+      sql: `create table if not exists takosumi_deployment_records (
   id                     text        primary key,
   tenant_id              text        not null,
   name                   text        not null,
-  manifest_json          jsonb       not null,
+  source_evidence_json   jsonb       not null,
   applied_resources_json jsonb       not null default '[]'::jsonb,
   status                 text        not null
     check (status in ('applied','destroyed','failed')),
@@ -1284,46 +956,21 @@ drop table if exists internal_request_replay_log;`,
   updated_at             timestamptz not null default now(),
   unique (tenant_id, name)
 );
-create index if not exists takosumi_deployments_tenant_idx
-  on takosumi_deployments (tenant_id);
-create index if not exists takosumi_deployments_status_idx
-  on takosumi_deployments (status);`,
-      down: `drop index if exists takosumi_deployments_status_idx;
-drop index if exists takosumi_deployments_tenant_idx;
-drop table if exists takosumi_deployments;`,
+create index if not exists takosumi_deployment_records_tenant_idx
+  on takosumi_deployment_records (tenant_id);
+create index if not exists takosumi_deployment_records_status_idx
+  on takosumi_deployment_records (status);`,
+      down: `drop index if exists takosumi_deployment_records_status_idx;
+drop index if exists takosumi_deployment_records_tenant_idx;
+drop table if exists takosumi_deployment_records;`,
     },
     {
-      id: "deploy.takosumi_deploy_idempotency_keys.create",
-      version: 21,
-      domain: "deploy",
-      description:
-        "Persist deployment idempotency responses so retries replay the first outcome after service restarts.",
-      sql: `create table if not exists takosumi_deploy_idempotency_keys (
-  id                 text        primary key,
-  tenant_id          text        not null,
-  idempotency_key    text        not null,
-  request_digest     text        not null,
-  response_status    integer     not null,
-  response_body_json jsonb       not null,
-  created_at         timestamptz not null default now(),
-  unique (tenant_id, idempotency_key)
-);
-create index if not exists takosumi_deploy_idempotency_keys_tenant_idx
-  on takosumi_deploy_idempotency_keys (tenant_id);
-create index if not exists takosumi_deploy_idempotency_keys_created_at_idx
-  on takosumi_deploy_idempotency_keys (created_at);`,
-      down:
-        `drop index if exists takosumi_deploy_idempotency_keys_created_at_idx;
-drop index if exists takosumi_deploy_idempotency_keys_tenant_idx;
-drop table if exists takosumi_deploy_idempotency_keys;`,
-    },
-    {
-      id: "deploy.takosumi_deploy_locks.create",
+      id: "deploy.takosumi_deployment_record_locks.create",
       version: 22,
       domain: "deploy",
       description:
-        "Persist deployment lease locks so same deployment applies are fenced across service pods.",
-      sql: `create table if not exists takosumi_deploy_locks (
+        "Persist deployment record lease locks so same apply or destroy cleanup updates are fenced across service pods.",
+      sql: `create table if not exists takosumi_deployment_record_locks (
   tenant_id    text        not null,
   name         text        not null,
   owner_token  text        not null,
@@ -1332,56 +979,18 @@ drop table if exists takosumi_deploy_idempotency_keys;`,
   updated_at   timestamptz not null default now(),
   primary key (tenant_id, name)
 );
-create index if not exists takosumi_deploy_locks_locked_until_idx
-  on takosumi_deploy_locks (locked_until);`,
-      down: `drop index if exists takosumi_deploy_locks_locked_until_idx;
-drop table if exists takosumi_deploy_locks;`,
-    },
-    {
-      id: "deploy.takosumi_operation_journal_entries.create",
-      version: 23,
-      domain: "deploy",
-      description:
-        "Persist deployment OperationPlan WAL stage entries for recovery and replay checks.",
-      sql: `create table if not exists takosumi_operation_journal_entries (
-  id                    text        primary key,
-  space_id              text        not null,
-  deployment_name       text,
-  operation_plan_digest text        not null,
-  journal_entry_id      text        not null,
-  operation_id          text        not null,
-  phase                 text        not null
-    check (phase in ('apply','activate','destroy','rollback','recovery','observe')),
-  stage                 text        not null
-    check (stage in ('prepare','pre-commit','commit','post-commit','observe','finalize','abort','skip')),
-  operation_kind        text        not null,
-  resource_name         text,
-  provider_id           text,
-  effect_digest         text        not null,
-  effect_json           jsonb       not null,
-  status                text        not null
-    check (status in ('recorded','succeeded','failed','skipped')),
-  created_at            timestamptz not null default now(),
-  unique (space_id, operation_plan_digest, journal_entry_id, stage)
-);
-create index if not exists takosumi_operation_journal_entries_plan_idx
-  on takosumi_operation_journal_entries (space_id, operation_plan_digest);
-create index if not exists takosumi_operation_journal_entries_deployment_idx
-  on takosumi_operation_journal_entries (space_id, deployment_name);
-create index if not exists takosumi_operation_journal_entries_created_at_idx
-  on takosumi_operation_journal_entries (created_at);`,
+create index if not exists takosumi_deployment_record_locks_locked_until_idx
+  on takosumi_deployment_record_locks (locked_until);`,
       down:
-        `drop index if exists takosumi_operation_journal_entries_created_at_idx;
-drop index if exists takosumi_operation_journal_entries_deployment_idx;
-drop index if exists takosumi_operation_journal_entries_plan_idx;
-drop table if exists takosumi_operation_journal_entries;`,
+        `drop index if exists takosumi_deployment_record_locks_locked_until_idx;
+drop table if exists takosumi_deployment_record_locks;`,
     },
     {
       id: "deploy.takosumi_revoke_debts.create",
       version: 24,
       domain: "deploy",
       description:
-        "Persist RevokeDebt records created by WAL compensation and post-commit cleanup paths.",
+        "Persist RevokeDebt records created by deploy record cleanup paths.",
       sql: `create table if not exists takosumi_revoke_debts (
   id                        text        primary key,
   source_key                text        not null unique,
@@ -1498,96 +1107,136 @@ drop index if exists registry_catalog_publisher_keys_publisher_idx;
 drop table if exists registry_catalog_publisher_keys;`,
     },
     {
-      id: "deploy.takosumi_deploy_idempotency_locks.create",
-      version: 26,
+      id: "deploy.opentofu_run_ledger.create",
+      version: 29,
       domain: "deploy",
       description:
-        "Persist deployment idempotency lease locks so same idempotency keys are fenced across service pods.",
-      sql: `create table if not exists takosumi_deploy_idempotency_locks (
-  tenant_id       text        not null,
-  idempotency_key text        not null,
-  owner_token     text        not null,
-  locked_until    timestamptz not null,
-  created_at      timestamptz not null default now(),
-  updated_at      timestamptz not null default now(),
-  primary key (tenant_id, idempotency_key)
+        "Create the OpenTofu-native PlanRun and ApplyRun ledger.",
+      sql:
+        `create table if not exists takosumi_runner_profiles (
+  id           text   primary key,
+  profile_json jsonb  not null,
+  created_at   bigint not null
 );
-create index if not exists takosumi_deploy_idempotency_locks_locked_until_idx
-  on takosumi_deploy_idempotency_locks (locked_until);`,
-      down:
-        `drop index if exists takosumi_deploy_idempotency_locks_locked_until_idx;
-drop table if exists takosumi_deploy_idempotency_locks;`,
-    },
-    {
-      id: "deploy.installer_ledger.create",
-      version: 27,
-      domain: "deploy",
-      description:
-        "Persist the public Installer API Installation + Deployment ledger so the canonical install entry survives service restarts / isolate recycles.",
-      sql: `create table if not exists takosumi_installer_installations (
+create table if not exists takosumi_plan_runs (
+  id                text   primary key,
+  space_id          text   not null,
+  installation_id   text,
+  runner_profile_id text   not null,
+  status            text   not null
+    check (status in ('queued','running','succeeded','failed','blocked','cancelled')),
+  run_json          jsonb  not null,
+  created_at        bigint not null,
+  updated_at        bigint not null
+);
+create index if not exists takosumi_plan_runs_space_idx
+  on takosumi_plan_runs (space_id);
+create index if not exists takosumi_plan_runs_installation_idx
+  on takosumi_plan_runs (installation_id);
+create index if not exists takosumi_plan_runs_status_idx
+  on takosumi_plan_runs (status);
+create index if not exists takosumi_plan_runs_created_at_idx
+  on takosumi_plan_runs (created_at);
+create table if not exists takosumi_apply_runs (
+  id                text   primary key,
+  plan_run_id       text   not null,
+  space_id          text   not null,
+  installation_id   text,
+  deployment_id     text,
+  runner_profile_id text   not null,
+  status            text   not null
+    check (status in ('queued','running','succeeded','failed','blocked','cancelled')),
+  run_json          jsonb  not null,
+  created_at        bigint not null,
+  updated_at        bigint not null
+);
+create index if not exists takosumi_apply_runs_plan_idx
+  on takosumi_apply_runs (plan_run_id);
+create index if not exists takosumi_apply_runs_space_idx
+  on takosumi_apply_runs (space_id);
+create index if not exists takosumi_apply_runs_installation_idx
+  on takosumi_apply_runs (installation_id);
+create index if not exists takosumi_apply_runs_status_idx
+  on takosumi_apply_runs (status);
+create table if not exists takosumi_destroy_runs (
+  id                text   primary key,
+  installation_id   text   not null,
+  space_id          text   not null,
+  runner_profile_id text   not null,
+  status            text   not null
+    check (status in ('queued','running','succeeded','failed','blocked','cancelled')),
+  run_json          jsonb  not null,
+  created_at        bigint not null,
+  updated_at        bigint not null
+);
+create index if not exists takosumi_destroy_runs_installation_idx
+  on takosumi_destroy_runs (installation_id);
+create index if not exists takosumi_destroy_runs_space_idx
+  on takosumi_destroy_runs (space_id);
+create index if not exists takosumi_destroy_runs_status_idx
+  on takosumi_destroy_runs (status);
+create table if not exists takosumi_opentofu_installations (
   id                    text   primary key,
   space_id              text   not null,
   app_id                text   not null,
   current_deployment_id text,
+  runner_profile_id     text   not null,
   status                text   not null
-    check (status in ('installing','ready','failed','suspended')),
-  created_at            bigint not null
+    check (status in ('installing','ready','failed','destroying','destroyed','suspended')),
+  installation_json     jsonb  not null,
+  created_at            bigint not null,
+  updated_at            bigint not null
 );
-create index if not exists takosumi_installer_installations_space_idx
-  on takosumi_installer_installations (space_id);
-create index if not exists takosumi_installer_installations_created_at_idx
-  on takosumi_installer_installations (created_at);
-create table if not exists takosumi_installer_deployments (
-  id                     text   primary key,
-  installation_id        text   not null,
-  source_json            jsonb  not null,
-  source_digest          text,
-  artifact_digest        text,
-  plan_snapshot_digest   text   not null,
-  plan_snapshot_json     jsonb  not null,
-  bindings_snapshot_json jsonb  not null,
-  status                 text   not null
-    check (status in ('running','succeeded','failed')),
-  outputs_json           jsonb  not null,
-  created_at             bigint not null
+create index if not exists takosumi_opentofu_installations_space_idx
+  on takosumi_opentofu_installations (space_id);
+create index if not exists takosumi_opentofu_installations_current_deployment_idx
+  on takosumi_opentofu_installations (current_deployment_id);
+create index if not exists takosumi_opentofu_installations_created_at_idx
+  on takosumi_opentofu_installations (created_at);
+create table if not exists takosumi_opentofu_deployments (
+  id                text   primary key,
+  installation_id   text   not null,
+  plan_run_id       text   not null,
+  apply_run_id      text   not null,
+  runner_profile_id text   not null,
+  status            text   not null
+    check (status in ('running','succeeded','failed','destroyed')),
+  deployment_json   jsonb  not null,
+  created_at        bigint not null,
+  completed_at      bigint
 );
-create index if not exists takosumi_installer_deployments_installation_idx
-  on takosumi_installer_deployments (installation_id);
-create index if not exists takosumi_installer_deployments_created_at_idx
-  on takosumi_installer_deployments (created_at);
-create table if not exists takosumi_installer_rollback_events (
-  id               text   primary key,
-  installation_id  text   not null,
-  rolled_back_from text,
-  rolled_back_to   text   not null,
-  created_at       bigint not null
-);
-create index if not exists takosumi_installer_rollback_events_installation_idx
-  on takosumi_installer_rollback_events (installation_id);
-create index if not exists takosumi_installer_rollback_events_created_at_idx
-  on takosumi_installer_rollback_events (created_at);`,
+create index if not exists takosumi_opentofu_deployments_installation_idx
+  on takosumi_opentofu_deployments (installation_id);
+create index if not exists takosumi_opentofu_deployments_plan_idx
+  on takosumi_opentofu_deployments (plan_run_id);
+create index if not exists takosumi_opentofu_deployments_apply_idx
+  on takosumi_opentofu_deployments (apply_run_id);
+create index if not exists takosumi_opentofu_deployments_created_at_idx
+  on takosumi_opentofu_deployments (created_at);`,
       down:
-        `drop index if exists takosumi_installer_rollback_events_created_at_idx;
-drop index if exists takosumi_installer_rollback_events_installation_idx;
-drop table if exists takosumi_installer_rollback_events;
-drop index if exists takosumi_installer_deployments_created_at_idx;
-drop index if exists takosumi_installer_deployments_installation_idx;
-drop table if exists takosumi_installer_deployments;
-drop index if exists takosumi_installer_installations_created_at_idx;
-drop index if exists takosumi_installer_installations_space_idx;
-drop table if exists takosumi_installer_installations;`,
-    },
-    {
-      id: "space.rename_legacy_core_tables",
-      version: 28,
-      domain: "space",
-      description:
-        "Rename legacy core space tables to Takosumi space tables.",
-      sql: `alter table if exists core_space_memberships rename to space_memberships;
-alter table if exists core_groups rename to space_groups;
-alter table if exists core_spaces rename to spaces;`,
-      down: `alter table if exists spaces rename to core_spaces;
-alter table if exists space_groups rename to core_groups;
-alter table if exists space_memberships rename to core_space_memberships;`,
+        `drop index if exists takosumi_opentofu_deployments_created_at_idx;
+drop index if exists takosumi_opentofu_deployments_apply_idx;
+drop index if exists takosumi_opentofu_deployments_plan_idx;
+drop index if exists takosumi_opentofu_deployments_installation_idx;
+drop table if exists takosumi_opentofu_deployments;
+drop index if exists takosumi_opentofu_installations_created_at_idx;
+drop index if exists takosumi_opentofu_installations_current_deployment_idx;
+drop index if exists takosumi_opentofu_installations_space_idx;
+drop table if exists takosumi_opentofu_installations;
+drop index if exists takosumi_destroy_runs_status_idx;
+drop index if exists takosumi_destroy_runs_space_idx;
+drop index if exists takosumi_destroy_runs_installation_idx;
+drop table if exists takosumi_destroy_runs;
+drop index if exists takosumi_apply_runs_status_idx;
+drop index if exists takosumi_apply_runs_installation_idx;
+drop index if exists takosumi_apply_runs_space_idx;
+drop index if exists takosumi_apply_runs_plan_idx;
+drop table if exists takosumi_apply_runs;
+drop index if exists takosumi_plan_runs_created_at_idx;
+drop index if exists takosumi_plan_runs_status_idx;
+drop index if exists takosumi_plan_runs_installation_idx;
+drop index if exists takosumi_plan_runs_space_idx;
+drop table if exists takosumi_plan_runs;
+drop table if exists takosumi_runner_profiles;`,
     },
   ]);

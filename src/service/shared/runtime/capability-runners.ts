@@ -3,17 +3,15 @@
  * `RuntimeAdapter` `SubprocessAdapter` (`currentRuntime().subprocess`).
  *
  * Takosumi is consumed as a framework library: runtime capabilities are
- * *injected* rather than reached through `Deno.*` / `node:*` in the library
+ * *injected* rather than reached through host-specific globals in the library
  * surface. These defaults route every git / tar invocation through the runtime
- * adapter's subprocess primitive, which already has Deno / Node / Workers
- * implementations, so the legacy subprocess behavior is byte-for-byte identical to
- * the historical `Deno.Command`-based `runGitCommand` / `runTarCommand` while
- * the same code path now also runs on Node WITHOUT calling `Deno.Command`
- * directly. This is the seam the reference service injects so callers never
- * reach the installer / runtime-agent fallback subprocess primitives in
+ * adapter's subprocess primitive, which has Bun / Node / Workers
+ * implementations. This keeps subprocess behavior byte-for-byte identical while
+ * keeping host runtime calls outside the library surface. This is the boundary the reference service injects so callers never
+ * reach the deployControl / runtime-agent fallback subprocess primitives in
  * production.
  *
- * Behavior parity contract (do not change without re-checking the installer's
+ * Behavior parity contract (do not change without re-checking the deploy control
  * tar column parser and git-fetch call sites):
  *   - git: `ok` is `exit code === 0`; stdout / stderr are UTF-8 decoded.
  *   - tar: pipes `stdin`, forces `LC_ALL=C` / `LANG=C`, throws with the exact
@@ -33,7 +31,7 @@ const decoder = new TextDecoder();
 
 /**
  * Default `GitRunner` over the runtime adapter subprocess primitive. Mirrors
- * the historical Deno `runGitCommand(args, cwd)` exactly.
+ * the local `runGitCommand(args, cwd)` behavior exactly.
  */
 export function createSubprocessGitRunner(
   subprocess: SubprocessAdapter = currentRuntime().subprocess,
@@ -58,7 +56,7 @@ export function createSubprocessGitRunner(
 
 /**
  * Default `TarRunner` over the runtime adapter subprocess primitive. Mirrors
- * the historical Deno `runTarCommand(args, stdin)` exactly, including the
+ * the local `runTarCommand(args, stdin)` behavior exactly, including the
  * forced C locale and the non-zero-exit error message.
  */
 export function createSubprocessTarRunner(

@@ -89,7 +89,7 @@ export function resolveRuntimeAgentRpcPath(
  * Capabilities a runtime-agent exposes at enrollment time. The service uses
  * these to filter work leases:
  *
- *   - `providers` is the list of legacy runtime-handler-local provider selectors the
+ *   - `providers` is the list of runtime-handler-local provider selectors the
  *     agent can execute (e.g. `aws`, `gcp`, `k8s`). Operator adapters derive
  *     these from the current kind/materializer mapping. A queued work item
  *     without an explicit provider is leasable by any agent.
@@ -115,7 +115,7 @@ export interface RuntimeAgentCapabilitiesPayload {
 export interface RuntimeAgentRegistration {
   /** Agent identifier — stable across restarts of the same process. */
   readonly agentId: string;
-  /** Legacy runtime-handler-local provider selector this agent primarily serves. */
+  /** Runtime-handler-local provider selector this agent primarily serves. */
   readonly provider: string;
   /** Optional public callback URL the service could later push work to. */
   readonly endpoint?: string;
@@ -337,7 +337,7 @@ export interface GatewayManifest {
   /** ISO-8601 timestamp after which the manifest is invalid. */
   readonly expiresAt: string;
   /**
-   * Legacy provider selectors the gateway is allowed to broker for. The agent
+   * Provider selectors the gateway is allowed to broker for. The agent
    * will refuse to lease work whose `provider` is not in this list.
    */
   readonly allowedProviderKinds: readonly string[];
@@ -616,7 +616,7 @@ function bytesToBase64(bytes: Uint8Array): string {
  * handed off to a remote agent.
  */
 export interface LongRunningOperationEnqueue {
-  /** Legacy runtime-handler-local provider selector the agent must speak (`aws`, `gcp`, `k8s`). */
+  /** Runtime-handler-local provider selector the agent must speak (`aws`, `gcp`, `k8s`). */
   readonly provider: string;
   /** Component / action descriptor (e.g. `aws.rds.create`). */
   readonly descriptor: string;

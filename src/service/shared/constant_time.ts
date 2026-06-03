@@ -1,6 +1,6 @@
 /**
  * Constant-time comparison helpers shared across the service's bearer / token /
- * signature checks. Previously every route (installer, artifact, metrics) and
+ * signature checks. Previously every route (deployControl, artifact, metrics) and
  * the routing-token service hand-rolled its own copy, and the copies disagreed
  * on whether they short-circuited on a length mismatch (which leaks the secret
  * length via timing). These helpers are the single length-safe source of truth

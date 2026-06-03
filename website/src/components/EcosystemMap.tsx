@@ -1,20 +1,23 @@
 import { For } from "solid-js";
 import { ACCOUNTS, APPS, PROVIDERS, SUBSTRATE } from "~/content/ecosystem";
+import SplatField from "./SplatField";
 
 export default function EcosystemMap() {
   return (
     <section id="ecosystem">
+      <SplatField density="section" />
       <div class="container">
         <span class="eyebrow">ecosystem map</span>
-        <h2>ひとつの土台、 たくさんの形。</h2>
+        <h2>ひとつの土台、たくさんの形。</h2>
         <p class="lede">
-          同じ Takosumi の上で、chat も docs も agent も動く。下は cloud、
-          VM、cluster、管理サービスのどれでも、同じ manifest が走る。必要なら
-          自分の resource も 1 つ増やせる。
+          上に並ぶ app、真ん中の Takosumi、下の deploy 先。この 3 層を
+          operator が自由に組み替えても、app の入口は変わりません。
         </p>
         <div class="ecosystem-map">
           <div class="ecosystem-layer ecosystem-apps">
-            <div class="ecosystem-layer-label">あなたの Space に 並ぶもの</div>
+            <div class="ecosystem-layer-label">
+              Takosumi が deploy する module / product（例）
+            </div>
             <div class="ecosystem-chips">
               <For each={APPS}>
                 {(c) => (
@@ -37,7 +40,7 @@ export default function EcosystemMap() {
             </div>
           </div>
           <div class="ecosystem-layer ecosystem-providers">
-            <div class="ecosystem-layer-label">deploy 先 (= 何処にでも)</div>
+            <div class="ecosystem-layer-label">deploy 先 (= どこにでも)</div>
             <div class="ecosystem-chips">
               <For each={PROVIDERS}>
                 {(c) => (

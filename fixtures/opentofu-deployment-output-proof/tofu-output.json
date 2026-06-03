@@ -1,0 +1,22 @@
+{
+  "takosumi_launch_url": {
+    "sensitive": false,
+    "type": "string",
+    "value": "https://demo.fixture.example"
+  },
+  "takosumi_admin_url": {
+    "sensitive": false,
+    "type": "string",
+    "value": "https://demo.fixture.example/admin"
+  },
+  "health_url": {
+    "sensitive": false,
+    "type": "string",
+    "value": "https://demo.fixture.example/health"
+  },
+  "deployment_token": {
+    "sensitive": true,
+    "type": "string",
+    "value": "fixture-secret"
+  }
+}

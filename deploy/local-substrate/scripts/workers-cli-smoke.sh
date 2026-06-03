@@ -6,7 +6,7 @@
 #   2. takosumi service Worker runs on workerd with D1/R2, Queue, and DO
 #      either as the postgres-profile mirror at service-worker.takosumi.test or
 #      as the workers-profile service at service.takosumi.test.
-#   3. The Accounts installation dry-run and OIDC discovery surfaces still answer.
+#   3. The Accounts installation PlanRun and OIDC discovery surfaces still answer.
 #   4. D1 binding semantics: the sqlite file underneath miniflare's D1
 #      emulator supports json_extract on the document column AND a
 #      multi-statement INSERT/SELECT round-trip — these are the two
@@ -19,10 +19,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 
-resolve_kernel_worker_host() {
+resolve_service_worker_host() {
 	local candidates=()
-	if [[ -n "${KERNEL_WORKER_HOST:-}" ]]; then
-		candidates+=("$KERNEL_WORKER_HOST")
+	if [[ -n "${SERVICE_WORKER_HOST:-}" ]]; then
+		candidates+=("$SERVICE_WORKER_HOST")
 	else
 		# postgres profile exposes the Worker mirror beside the Bun+Postgres
 		# service. workers profile replaces service.takosumi.test with the Worker.
@@ -50,7 +50,7 @@ raise SystemExit(0 if d.get('provider') == 'cloudflare-worker' else 1)
 	return 1
 }
 
-KERNEL_HOST="$(resolve_kernel_worker_host)"
+SERVICE_HOST="$(resolve_service_worker_host)"
 
 # 1. Accounts workerd-edge sentinel
 HEALTH=$(curl -sk --cacert "$CA" https://accounts.takosumi.test/healthz)
@@ -62,55 +62,54 @@ assert d.get('persistence') == 'd1+r2', f'expected persistence=d1+r2, got {d!r}'
 " || { echo "FAIL: /healthz did not look workerd-local: $HEALTH" >&2; exit 1; }
 
 # 2. Service Worker sentinel + D1/R2 storage probe.
-KERNEL_HEALTH=$(curl -sk --cacert "$CA" --resolve "${KERNEL_HOST}:443:127.0.0.1" "https://${KERNEL_HOST}/healthz")
-echo "$KERNEL_HEALTH" | python3 -c "
+SERVICE_HEALTH=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" "https://${SERVICE_HOST}/healthz")
+echo "$SERVICE_HEALTH" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
 assert d.get('provider') == 'cloudflare-worker', f'expected provider=cloudflare-worker, got {d!r}'
-" || { echo "FAIL: $KERNEL_HOST /healthz did not look workerd-local: $KERNEL_HEALTH" >&2; exit 1; }
+" || { echo "FAIL: $SERVICE_HOST /healthz did not look workerd-local: $SERVICE_HEALTH" >&2; exit 1; }
 
-KERNEL_STORAGE=$(curl -sk --cacert "$CA" --resolve "${KERNEL_HOST}:443:127.0.0.1" "https://${KERNEL_HOST}/storage/healthz")
-echo "$KERNEL_STORAGE" | python3 -c "
+SERVICE_STORAGE=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" "https://${SERVICE_HOST}/storage/healthz")
+echo "$SERVICE_STORAGE" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
 assert d.get('ok') is True, f'expected ok=true, got {d!r}'
 assert d.get('storage') == 'cloudflare-d1-r2', f'expected storage=cloudflare-d1-r2, got {d!r}'
-" || { echo "FAIL: $KERNEL_HOST /storage/healthz did not prove D1/R2: $KERNEL_STORAGE" >&2; exit 1; }
+" || { echo "FAIL: $SERVICE_HOST /storage/healthz did not prove D1/R2: $SERVICE_STORAGE" >&2; exit 1; }
 
-KERNEL_COORDINATION=$(curl -sk --cacert "$CA" --resolve "${KERNEL_HOST}:443:127.0.0.1" "https://${KERNEL_HOST}/coordination/healthz")
-echo "$KERNEL_COORDINATION" | python3 -c "
+SERVICE_COORDINATION=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" "https://${SERVICE_HOST}/coordination/healthz")
+echo "$SERVICE_COORDINATION" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
 assert d.get('ok') is True, f'expected ok=true, got {d!r}'
 assert d.get('role') == 'coordination', f'expected role=coordination, got {d!r}'
-" || { echo "FAIL: $KERNEL_HOST /coordination/healthz did not prove Durable Object routing: $KERNEL_COORDINATION" >&2; exit 1; }
+" || { echo "FAIL: $SERVICE_HOST /coordination/healthz did not prove Durable Object routing: $SERVICE_COORDINATION" >&2; exit 1; }
 
-KERNEL_QUEUE=$(curl -sk --cacert "$CA" -X POST \
-	--resolve "${KERNEL_HOST}:443:127.0.0.1" \
+SERVICE_QUEUE=$(curl -sk --cacert "$CA" -X POST \
+	--resolve "${SERVICE_HOST}:443:127.0.0.1" \
 	-H "Content-Type: application/json" \
 	-d '{"kind":"local-substrate-smoke"}' \
-	"https://${KERNEL_HOST}/queue/test")
-echo "$KERNEL_QUEUE" | python3 -c "
+	"https://${SERVICE_HOST}/queue/test")
+echo "$SERVICE_QUEUE" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
 assert d.get('queued') is True, f'expected queued=true, got {d!r}'
-" || { echo "FAIL: $KERNEL_HOST /queue/test did not accept Queue producer send: $KERNEL_QUEUE" >&2; exit 1; }
+" || { echo "FAIL: $SERVICE_HOST /queue/test did not accept Queue producer send: $SERVICE_QUEUE" >&2; exit 1; }
 
-KERNEL_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${KERNEL_HOST}:443:127.0.0.1" -o /dev/null -w "%{http_code}" "https://${KERNEL_HOST}/health")
-[[ "$KERNEL_API_STATUS" == "200" ]] || {
-	echo "FAIL: $KERNEL_HOST /health returned $KERNEL_API_STATUS (expected 200)" >&2
+SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" -o /dev/null -w "%{http_code}" "https://${SERVICE_HOST}/health")
+[[ "$SERVICE_API_STATUS" == "200" ]] || {
+	echo "FAIL: $SERVICE_HOST /health returned $SERVICE_API_STATUS (expected 200)" >&2
 	exit 1
 }
 
-# 3. installer dry-run (D1 + handler init still working from this stack)
-LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
-DRY_RUN=$(curl -sk --cacert "$CA" -X POST \
-	-H "Authorization: Bearer $LOCAL_CLOUD_SESSION_ID" \
+# 3. deploy control API auth + handler init
+DEPLOY_CONTROL_TOKEN="${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-local-substrate-deploy-control-token}"
+RUNNER_PROFILES=$(curl -sk --cacert "$CA" \
+	-H "Authorization: Bearer $DEPLOY_CONTROL_TOKEN" \
 	-H "Content-Type: application/json" \
-	-d '{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' \
-	https://accounts.takosumi.test/v1/installations/dry-run)
-APP_ID=$(echo "$DRY_RUN" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('appId',''))")
-[[ -n "$APP_ID" ]] || { echo "FAIL: /v1/installations/dry-run did not return appId: $DRY_RUN" >&2; exit 1; }
+	"https://${SERVICE_HOST}/v1/runner-profiles")
+PROFILE_COUNT=$(echo "$RUNNER_PROFILES" | python3 -c "import json,sys;print(len(json.loads(sys.stdin.read()).get('runnerProfiles') or []))")
+[[ "$PROFILE_COUNT" -gt 0 ]] || { echo "FAIL: /v1/runner-profiles returned no profiles: $RUNNER_PROFILES" >&2; exit 1; }
 
 # 4. OIDC discovery shape
 DISC=$(curl -sk --cacert "$CA" https://accounts.takosumi.test/.well-known/openid-configuration)
@@ -158,7 +157,7 @@ fi
 SQLITE_PATH=$(docker exec local-substrate-takosumi-worker-1 \
 	sh -c "find /data/d1 -name '*.sqlite' | head -1" 2>/dev/null || true)
 if [[ -z "$SQLITE_PATH" ]]; then
-	echo "OK accounts worker + service worker healthy via $KERNEL_HOST (D1 semantics check SKIPPED — sqlite path not yet materialised); appId=$APP_ID issuer=$ISSUER"
+	echo "OK accounts worker + service worker healthy via $SERVICE_HOST (D1 semantics check SKIPPED — sqlite path not yet materialised); appId=$APP_ID issuer=$ISSUER"
 	exit 0
 fi
 SCRATCH_DB=$(mktemp --suffix=.sqlite)
@@ -185,4 +184,4 @@ assert r[0] == ":x\"y{z}", f"expected ':x\\\"y{{z}}', got {r[0]!r}"
 db.close()
 PY
 
-echo "OK accounts worker + service worker healthy via $KERNEL_HOST; Accounts D1 health + R2 signed-route and service D1/R2/Queue/DO smoke passed; D1 json1 + INSERT/SELECT semantics intact; appId=$APP_ID issuer=$ISSUER"
+echo "OK accounts worker + service worker healthy via $SERVICE_HOST; Accounts D1 health + R2 signed-route and service D1/R2/Queue/DO smoke passed; D1 json1 + INSERT/SELECT semantics intact; appId=$APP_ID issuer=$ISSUER"

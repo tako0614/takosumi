@@ -1,4 +1,3 @@
-import type { ApplyWorkerJob } from "./apply_worker.ts";
 import type {
   RuntimeAgentRegistry,
   StaleAgentDetection,
@@ -9,7 +8,7 @@ import type { RepairGroupInput } from "./repair_worker.ts";
 import type {
   RevokeDebtCleanupOwnerInput,
   RevokeDebtCleanupResult,
-} from "../domains/deploy/revoke_debt_cleanup_worker.ts";
+} from "../domains/deploy-records/revoke_debt_cleanup_worker.ts";
 
 export type MaybePromise<T> = T | Promise<T>;
 
@@ -208,30 +207,6 @@ export function runWorkerDaemonOnce(
   options: WorkerDaemonOptions,
 ): Promise<readonly WorkerDaemonTickResult[]> {
   return new WorkerDaemon(options).runOnce();
-}
-
-export interface ApplyWorkerLike {
-  process(job: ApplyWorkerJob): Promise<unknown>;
-}
-
-export interface ApplyWorkerDaemonTaskOptions extends WorkerDaemonTaskTiming {
-  readonly worker: ApplyWorkerLike;
-  readonly nextJob: () => MaybePromise<ApplyWorkerJob | undefined>;
-  readonly name?: string;
-}
-
-export function createApplyWorkerTask(
-  options: ApplyWorkerDaemonTaskOptions,
-): WorkerDaemonTask {
-  return {
-    ...taskTiming(options),
-    name: options.name ?? "apply",
-    async tick(context) {
-      const job = await options.nextJob();
-      if (!job || context.signal.aborted) return;
-      await options.worker.process(job);
-    },
-  };
 }
 
 export interface OutboxDispatcherLike {

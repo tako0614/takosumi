@@ -366,8 +366,8 @@ export function normalizeStripeBillingEvent(
  * Map a raw Stripe subscription status string onto our local
  * `BillingAccountStatus`. Returns `undefined` for any unrecognized value so the
  * caller can skip the event instead of silently coercing an unknown status into
- * a suspend-worthy `incomplete` (Stripe has historically added statuses, e.g.
- * `paused`, and an unknown value must never auto-suspend a paying customer).
+ * a suspend-worthy `incomplete` (Stripe can add statuses, e.g. `paused`, and an
+ * unknown value must never auto-suspend a paying customer).
  */
 export function stripeSubscriptionStatus(
   value: unknown,

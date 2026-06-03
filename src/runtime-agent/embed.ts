@@ -1,16 +1,16 @@
 /**
  * Embedded runtime-agent.
  *
- * Allows the service (or CLI) to spawn an in-process runtime-agent for
+ * Allows operator wrappers to spawn an in-process runtime-agent for
  * single-VM development. Operators pass the handler registry they want to
  * expose; the runtime-agent package itself does not auto-load backend
  * handlers. A random bearer token is generated and exported via
- * `TAKOSUMI_AGENT_TOKEN` so the service's implementation client picks it up
- * automatically.
+ * `TAKOSUMI_AGENT_TOKEN` when requested so internal compatibility clients can
+ * discover it.
  *
- * For multi-host production, operators run a standalone agent (`takosumi
- * runtime-agent serve`) and set `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN`
- * explicitly — `startEmbeddedAgent` is bypassed.
+ * For multi-host production, operators run their own distribution wrapper and
+ * set `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN` explicitly —
+ * `startEmbeddedAgent` is bypassed.
  */
 
 import {

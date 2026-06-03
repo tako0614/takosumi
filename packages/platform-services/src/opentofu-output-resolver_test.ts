@@ -1,20 +1,21 @@
 import { expect, test } from "bun:test";
 
 import {
-  createOpenTofuPlatformServiceResolver,
+  extractDeploymentOutputs,
   parseOpenTofuOutputs,
+  toDeployControlOutputEnvelope,
 } from "./opentofu-output-resolver.ts";
 
 const OUTPUTS = {
-  oidc_issuer_url: {
+  launch_url: {
     sensitive: false,
     type: "string",
-    value: "https://accounts.example.test",
+    value: "https://app.example.test",
   },
-  oidc_client_id: {
+  takosumi_admin_url: {
     sensitive: false,
     type: "string",
-    value: "toc_app",
+    value: "https://admin.example.test",
   },
   oidc_client_secret: {
     sensitive: true,
@@ -35,196 +36,51 @@ test("parseOpenTofuOutputs reads tofu output -json shape", () => {
   expect(parseOpenTofuOutputs(JSON.stringify(OUTPUTS))).toEqual(OUTPUTS);
 });
 
-test("createOpenTofuPlatformServiceResolver resolves a service path", () => {
-  const resolver = createOpenTofuPlatformServiceResolver({
-    outputs: OUTPUTS,
-    services: [
-      {
-        path: "identity.primary.oidc",
-        kind: "identity.oidc@v1",
-        material: {
-          issuerUrl: "oidc_issuer_url",
-          clientId: "oidc_client_id",
-          clientSecret: "oidc_client_secret",
-        },
-      },
-    ],
-  });
-
-  expect(resolver.resolve({
-    binding: { servicePath: "identity.primary.oidc" },
-  })).toEqual([
+test("extractDeploymentOutputs publishes only well-known non-sensitive outputs", () => {
+  expect(extractDeploymentOutputs({ outputs: OUTPUTS })).toEqual([
     {
-      path: "identity.primary.oidc",
-      kind: "identity.oidc@v1",
-      material: {
-        issuerUrl: "https://accounts.example.test",
-        clientId: "toc_app",
-      },
+      name: "launch_url",
+      kind: "launch_url",
+      value: "https://app.example.test",
+      sensitive: false,
+    },
+    {
+      name: "takosumi_admin_url",
+      kind: "admin_url",
+      value: "https://admin.example.test",
+      sensitive: false,
     },
   ]);
 });
 
-test("createOpenTofuPlatformServiceResolver can explicitly include sensitive outputs", () => {
-  const resolver = createOpenTofuPlatformServiceResolver({
-    outputs: OUTPUTS,
-    includeSensitiveOutputs: true,
-    services: [
-      {
-        path: "identity.primary.oidc",
-        kind: "identity.oidc@v1",
-        material: {
-          clientSecret: "oidc_client_secret",
-        },
-      },
-    ],
-  });
-
-  expect(resolver.resolve({
-    binding: { servicePath: "identity.primary.oidc" },
-  })).toEqual([
-    {
-      path: "identity.primary.oidc",
-      kind: "identity.oidc@v1",
-      material: {
-        clientSecret: "secret-value",
-      },
-    },
-  ]);
-});
-
-test("createOpenTofuPlatformServiceResolver resolves kind and labels", () => {
-  const resolver = createOpenTofuPlatformServiceResolver({
-    outputs: OUTPUTS,
-    services: [
-      {
-        path: "storage.assets",
-        kind: "object-store",
-        labels: { profile: "assets" },
-        material: { r2: "object_store" },
-      },
-      {
-        path: "storage.backups",
-        kind: "object-store",
-        labels: { profile: "backups" },
-      },
-    ],
-  });
-
-  expect(resolver.resolve({
-    binding: { serviceKind: "object-store", labels: { profile: "assets" } },
-  })).toEqual([
-    {
-      path: "storage.assets",
-      kind: "object-store",
-      labels: { profile: "assets" },
-      material: {
-        r2: {
-          bucket: "app-assets",
-          endpoint: "https://r2.example.test",
-        },
-      },
-    },
-  ]);
-});
-
-test("createOpenTofuPlatformServiceResolver keeps inventory space-scoped", () => {
-  const resolver = createOpenTofuPlatformServiceResolver({
-    outputs: OUTPUTS,
-    services: [
-      {
-        spaceId: "space_alpha",
-        path: "identity.primary.oidc",
-        kind: "identity.oidc@v1",
-        material: { issuerUrl: "oidc_issuer_url" },
-      },
-      {
-        spaceId: "space_beta",
-        path: "identity.primary.oidc",
-        kind: "identity.oidc@v1",
-        material: { clientId: "oidc_client_id" },
-      },
-      {
-        path: "storage.shared.assets",
-        kind: "object-store",
-        labels: { visibility: "global" },
-        material: { r2: "object_store" },
-      },
-    ],
-  });
-
-  expect(resolver.resolve({
-    spaceId: "space_alpha",
-    binding: { servicePath: "identity.primary.oidc" },
-  })).toEqual([
-    {
-      path: "identity.primary.oidc",
-      kind: "identity.oidc@v1",
-      material: { issuerUrl: "https://accounts.example.test" },
-    },
-  ]);
-  expect(resolver.resolve({
-    spaceId: "space_beta",
-    binding: { servicePath: "identity.primary.oidc" },
-  })).toEqual([
-    {
-      path: "identity.primary.oidc",
-      kind: "identity.oidc@v1",
-      material: { clientId: "toc_app" },
-    },
-  ]);
-  expect(resolver.resolve({
-    binding: { servicePath: "identity.primary.oidc" },
-  })).toBeUndefined();
-  expect(resolver.resolve({
-    binding: { serviceKind: "object-store", labels: { visibility: "global" } },
-  })).toEqual([
-    {
-      path: "storage.shared.assets",
-      kind: "object-store",
-      labels: { visibility: "global" },
-      material: {
-        r2: {
-          bucket: "app-assets",
-          endpoint: "https://r2.example.test",
-        },
-      },
-    },
-  ]);
-});
-
-test("createOpenTofuPlatformServiceResolver validates ambiguous space scopes", () => {
-  const resolver = createOpenTofuPlatformServiceResolver({
-    outputs: OUTPUTS,
-    services: [
-      {
-        spaceId: "space_alpha",
-        spaceIds: ["space_beta"],
-        path: "identity.primary.oidc",
-        kind: "identity.oidc@v1",
-      },
-    ],
-  });
-
-  expect(() =>
-    resolver.resolve({
-      spaceId: "space_alpha",
-      binding: { servicePath: "identity.primary.oidc" },
-    })
-  ).toThrow("spaceId or spaceIds");
-});
-
-test("createOpenTofuPlatformServiceResolver rejects missing outputs", () => {
-  expect(() =>
-    createOpenTofuPlatformServiceResolver({
+test("extractDeploymentOutputs accepts explicit output kind mappings", () => {
+  expect(
+    extractDeploymentOutputs({
       outputs: OUTPUTS,
-      services: [
-        {
-          path: "identity.primary.oidc",
-          kind: "identity.oidc@v1",
-          material: { issuerUrl: "missing_output" },
-        },
-      ],
-    })
-  ).toThrow("OpenTofu output missing_output is not available");
+      outputKinds: { object_store: "service_url" },
+    }),
+  ).toContainEqual({
+    name: "object_store",
+    kind: "service_url",
+    value: {
+      bucket: "app-assets",
+      endpoint: "https://r2.example.test",
+    },
+    sensitive: false,
+  });
+});
+
+test("toDeployControlOutputEnvelope validates JSON-safe output values", () => {
+  expect(toDeployControlOutputEnvelope(parseOpenTofuOutputs(OUTPUTS)).launch_url)
+    .toEqual({
+      sensitive: false,
+      type: "string",
+      value: "https://app.example.test",
+    });
+});
+
+test("parseOpenTofuOutputs rejects malformed output records", () => {
+  expect(() => parseOpenTofuOutputs({ bad: { sensitive: false } })).toThrow(
+    "value field",
+  );
 });

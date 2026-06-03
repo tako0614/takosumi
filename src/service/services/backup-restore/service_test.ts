@@ -1,9 +1,4 @@
 import { test } from "bun:test";
-// Backup / restore service tests — Deployment-centric port.
-//
-// These tests cover the resource-side restore semantics that this service
-// owns. Group-level rollback delegates to `DeploymentService.rollbackGroup`
-// and is exercised in Phase 4 alongside Agent A's `deployment_service.ts`.
 
 import assert from "node:assert/strict";
 import {
@@ -271,27 +266,6 @@ test("BackupRestoreService requires resource operation semantics before completi
       error instanceof DomainError && error.code === "conflict" &&
       error.message ===
         "Restore completion requires resource operation restore semantics",
-  );
-});
-
-test("BackupRestoreService rejects group rollback when no deployment service is wired", async () => {
-  const { service } = await createFixture({
-    provider: "postgres-provider",
-    providerSupport: [{
-      provider: "postgres-provider",
-      restoreModes: ["snapshot"],
-    }],
-  });
-
-  await assert.rejects(
-    () =>
-      service.rollbackGroup({
-        spaceId: "space_a",
-        groupId: "group_a",
-      }),
-    (error) =>
-      error instanceof DomainError && error.code === "conflict" &&
-      error.message === "Deployment service is required for group rollback",
   );
 });
 

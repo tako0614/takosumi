@@ -38,7 +38,7 @@ test("resolveMode returns local when no URL configured", () => {
   assert.deepEqual(result, { mode: "local" });
 });
 
-test("loadConfig reads ~/.takosumi/config.yml when env unset", async () => {
+test("loadConfig reads configured YAML file when env unset", async () => {
   const dir = await mkdtemp(join(tmpdir(), "takosumi-cfg-"));
   try {
     const path = `${dir}/config.yml`;
@@ -49,10 +49,10 @@ test("loadConfig reads ~/.takosumi/config.yml when env unset", async () => {
 
     const previousFile = process.env["TAKOSUMI_CONFIG_FILE"];
     const previousRemote = process.env["TAKOSUMI_REMOTE_URL"];
-    const previousInstallerToken = process.env["TAKOSUMI_INSTALLER_TOKEN"];
+    const previousDeployControlToken = process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"];
     process.env["TAKOSUMI_CONFIG_FILE"] = path;
     delete process.env["TAKOSUMI_REMOTE_URL"];
-    delete process.env["TAKOSUMI_INSTALLER_TOKEN"];
+    delete process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"];
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
@@ -67,8 +67,8 @@ test("loadConfig reads ~/.takosumi/config.yml when env unset", async () => {
       if (previousRemote !== undefined) {
         process.env["TAKOSUMI_REMOTE_URL"] = previousRemote;
       }
-      if (previousInstallerToken !== undefined) {
-        process.env["TAKOSUMI_INSTALLER_TOKEN"] = previousInstallerToken;
+      if (previousDeployControlToken !== undefined) {
+        process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"] = previousDeployControlToken;
       }
       __resetConfigFileCacheForTesting();
     }
@@ -88,10 +88,10 @@ test("loadConfig env wins over config file", async () => {
 
     const previousFile = process.env["TAKOSUMI_CONFIG_FILE"];
     const previousRemote = process.env["TAKOSUMI_REMOTE_URL"];
-    const previousInstallerToken = process.env["TAKOSUMI_INSTALLER_TOKEN"];
+    const previousDeployControlToken = process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"];
     process.env["TAKOSUMI_CONFIG_FILE"] = path;
     process.env["TAKOSUMI_REMOTE_URL"] = "https://from-env.local";
-    process.env["TAKOSUMI_INSTALLER_TOKEN"] = "env-token";
+    process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"] = "env-token";
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
@@ -108,10 +108,10 @@ test("loadConfig env wins over config file", async () => {
       } else {
         process.env["TAKOSUMI_REMOTE_URL"] = previousRemote;
       }
-      if (previousInstallerToken === undefined) {
-        delete process.env["TAKOSUMI_INSTALLER_TOKEN"];
+      if (previousDeployControlToken === undefined) {
+        delete process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"];
       } else {
-        process.env["TAKOSUMI_INSTALLER_TOKEN"] = previousInstallerToken;
+        process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"] = previousDeployControlToken;
       }
       __resetConfigFileCacheForTesting();
     }
@@ -126,10 +126,10 @@ test("loadConfig returns empty when neither env nor file present", async () => {
     const path = `${dir}/missing-config.yml`;
     const previousFile = process.env["TAKOSUMI_CONFIG_FILE"];
     const previousRemote = process.env["TAKOSUMI_REMOTE_URL"];
-    const previousInstallerToken = process.env["TAKOSUMI_INSTALLER_TOKEN"];
+    const previousDeployControlToken = process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"];
     process.env["TAKOSUMI_CONFIG_FILE"] = path;
     delete process.env["TAKOSUMI_REMOTE_URL"];
-    delete process.env["TAKOSUMI_INSTALLER_TOKEN"];
+    delete process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"];
     __resetConfigFileCacheForTesting();
     try {
       const config = await loadConfig();
@@ -144,8 +144,54 @@ test("loadConfig returns empty when neither env nor file present", async () => {
       if (previousRemote !== undefined) {
         process.env["TAKOSUMI_REMOTE_URL"] = previousRemote;
       }
-      if (previousInstallerToken !== undefined) {
-        process.env["TAKOSUMI_INSTALLER_TOKEN"] = previousInstallerToken;
+      if (previousDeployControlToken !== undefined) {
+        process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"] = previousDeployControlToken;
+      }
+      __resetConfigFileCacheForTesting();
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig ignores legacy deploy token env", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "takosumi-cfg-"));
+  try {
+    const path = `${dir}/missing-config.yml`;
+    const previousFile = process.env["TAKOSUMI_CONFIG_FILE"];
+    const previousRemote = process.env["TAKOSUMI_REMOTE_URL"];
+    const previousDeployControlToken = process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"];
+    const previousDeployToken = process.env["TAKOSUMI_DEPLOY_TOKEN"];
+    process.env["TAKOSUMI_CONFIG_FILE"] = path;
+    process.env["TAKOSUMI_REMOTE_URL"] = "https://from-env.local";
+    delete process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"];
+    process.env["TAKOSUMI_DEPLOY_TOKEN"] = "legacy-deploy-token";
+    __resetConfigFileCacheForTesting();
+    try {
+      const config = await loadConfig();
+      assert.equal(config.serviceUrl, "https://from-env.local");
+      assert.equal(config.token, undefined);
+    } finally {
+      if (previousFile === undefined) {
+        delete process.env["TAKOSUMI_CONFIG_FILE"];
+      } else {
+        process.env["TAKOSUMI_CONFIG_FILE"] = previousFile;
+      }
+      if (previousRemote === undefined) {
+        delete process.env["TAKOSUMI_REMOTE_URL"];
+      } else {
+        process.env["TAKOSUMI_REMOTE_URL"] = previousRemote;
+      }
+      if (previousDeployControlToken === undefined) {
+        delete process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"];
+      } else {
+        process.env["TAKOSUMI_DEPLOY_CONTROL_TOKEN"] =
+          previousDeployControlToken;
+      }
+      if (previousDeployToken === undefined) {
+        delete process.env["TAKOSUMI_DEPLOY_TOKEN"];
+      } else {
+        process.env["TAKOSUMI_DEPLOY_TOKEN"] = previousDeployToken;
       }
       __resetConfigFileCacheForTesting();
     }

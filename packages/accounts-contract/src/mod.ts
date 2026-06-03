@@ -31,8 +31,8 @@ export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH =
   "/v1/auth/passkeys/authenticate/options";
 export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH =
   "/v1/auth/passkeys/authenticate/complete";
-export const TAKOSUMI_ACCOUNTS_INSTALLATION_DRY_RUN_PATH =
-  "/v1/installations/dry-run";
+export const TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH =
+  "/v1/installations/plan-runs";
 export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH = "/v1/installations";
 export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH =
   "/v1/installations/import";
@@ -80,8 +80,8 @@ export interface TakosumiAccountsRevokePatResponse {
   token: TakosumiAccountsPatMetadata;
 }
 
-export function takosumiAccountsInstallationDryRunPath(): string {
-  return TAKOSUMI_ACCOUNTS_INSTALLATION_DRY_RUN_PATH;
+export function takosumiAccountsInstallationPlanRunsPath(): string {
+  return TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH;
 }
 
 export function takosumiAccountsAccountTokenRevokePath(
@@ -116,12 +116,12 @@ export function takosumiAccountsInstallationDeploymentsPath(
   return `${takosumiAccountsInstallationPath(installationId)}/deployments`;
 }
 
-export function takosumiAccountsInstallationDeploymentDryRunPath(
+export function takosumiAccountsInstallationDeploymentPlanRunsPath(
   installationId: string,
 ): string {
   return `${
    takosumiAccountsInstallationDeploymentsPath(installationId)
-  }/dry-run`;
+  }/plan-runs`;
 }
 
 export function takosumiAccountsInstallationRollbackPath(

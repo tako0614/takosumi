@@ -257,7 +257,7 @@ export interface AppInstallationRow {
   source_git_url: string;
   source_ref: string;
   source_commit: string;
-  plan_snapshot_digest: string;
+  plan_digest: string;
   artifact_digest: string | null;
   mode: InstallationRecord["mode"];
   // Wave 6 dropped the `runtime_binding_id` column. The select clause in
@@ -563,12 +563,12 @@ export function appInstallationFromRow(
     sourceGitUrl: row.source_git_url,
     sourceRef: row.source_ref,
     sourceCommit: row.source_commit,
-    planSnapshotDigest: row.plan_snapshot_digest,
+    planDigest: row.plan_digest,
     artifactDigest: optional(row.artifact_digest),
     mode: row.mode,
     // Wave 6 dropped `runtime_binding_id`; we no longer read it.
     // `InstallationRecord.runtimeBindingId` stays optional for the
-    // legacy in-memory store, but the postgres-backed read path always
+    // in-memory store, but the postgres-backed read path always
     // yields `undefined` here.
     billingAccountId: optional(row.billing_account_id),
     status: row.status,
@@ -665,13 +665,13 @@ export function spaceSelect(where: string): string {
 
 export function appInstallationSelect(where: string): string {
   // Wave 6 dropped the `runtime_binding_id` column from
-  // `installation_v1.app_installations`. The legacy schema kept the
+  // `installation_v1.app_installations`. The removed schema kept the
   // column; the production migration removed it. Selecting against the
   // dropped column raised "column does not exist" at install time
   // (production-blocking SQL drift). We no longer SELECT it; consumers
   // observe `runtimeBindingId` as `undefined`.
   return `SELECT installation_id, account_id, space_id, app_id, source_git_url,
-      source_ref, source_commit, plan_snapshot_digest, artifact_digest,
+      source_ref, source_commit, plan_digest, artifact_digest,
       mode, billing_account_id, status,
       created_by_subject, created_at, updated_at
     FROM installation_v1.app_installations

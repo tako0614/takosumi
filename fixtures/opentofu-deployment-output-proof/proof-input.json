@@ -1,0 +1,19 @@
+{
+  "kind": "takosumi.opentofu-deployment-output-proof-input@v1",
+  "live": false,
+  "spaceId": "space_opentofu_fixture",
+  "source": {
+    "kind": "local",
+    "path": "source"
+  },
+  "requiredProviders": [
+    "registry.opentofu.org/cloudflare/cloudflare"
+  ],
+  "outputs": {
+    "file": "tofu-output.json",
+    "ref": "fixture://opentofu-deployment-output-proof/tofu-output.json"
+  },
+  "operator": {
+    "opentofuApplyRef": "fixture://opentofu-deployment-output-proof/apply"
+  }
+}

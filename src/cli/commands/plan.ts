@@ -1,42 +1,67 @@
 import { Command } from "../command.ts";
 import {
-  callInstaller,
-  INSTALLATIONS_DRY_RUN_PATH,
+  callDeployControl,
+  PLAN_RUNS_PATH,
   parseSourceRef,
-  requireRemoteInstaller,
+  readInstallationSource,
+  readInstallationSpace,
+  requireRemoteDeployControl,
   resolveSourceArg,
-} from "../installer_client.ts";
+} from "../deploy_control_client.ts";
 import { exitCli } from "../runtime.ts";
 
 function createPlanCommand(): Command {
   return new Command("plan")
     .description(
-      "Alias for `takosumi install dry-run`: preview a new Installation",
+      "Create an OpenTofu PlanRun for a module source",
     )
     .argument("[source]", "git:, prepared:, or local path")
     .option("--source <source>", "git:, prepared:, or local path")
-    .requiredOption("--space <spaceId>", "Target Space id")
+    .option("--installation <installationId>", "Existing Installation id")
+    .option("--space <spaceId>", "Target Space id")
     .option("--remote <url>", "Remote Takosumi service URL")
-    .option("--token <token>", "Installer bearer token")
+    .option("--token <token>", "DeployControl bearer token")
+    .option(
+      "--provider <source-address>",
+      "Required OpenTofu provider source address (repeatable)",
+      collect,
+      [],
+    )
     .action(
       async (
         sourceArg: string | undefined,
         opts: {
           source?: string;
-          space: string;
+          installation?: string;
+          space?: string;
           remote?: string;
           token?: string;
+          provider?: string[];
         },
       ) => {
         try {
-          const sourceRef = resolveSourceArg({
+          const target = await requireRemoteDeployControl(opts.remote, opts.token);
+          const sourceRef = resolveOptionalSourceArg({
             argument: sourceArg,
             flag: opts.source,
           });
-          const target = await requireRemoteInstaller(opts.remote, opts.token);
-          const { status, body } = await callInstaller(target, {
-            path: INSTALLATIONS_DRY_RUN_PATH,
-            body: { spaceId: opts.space, source: parseSourceRef(sourceRef) },
+          const installationId = opts.installation;
+          const source = sourceRef
+            ? parseSourceRef(sourceRef)
+            : installationId
+            ? await readInstallationSource(target, installationId)
+            : parseSourceRef(resolveSourceArg({}));
+          const spaceId = installationId
+            ? await readInstallationSpace(target, installationId)
+            : requireSpace(opts.space);
+          const { status, body } = await callDeployControl(target, {
+            path: PLAN_RUNS_PATH,
+            body: {
+              ...(installationId ? { installationId, operation: "update" } : {}),
+              spaceId,
+              source,
+              requiredProviders: normalizeProviders(opts.provider),
+            },
           });
           if (status >= 400) {
             console.error(`Takosumi service returned ${status}:`, body);
@@ -55,3 +80,30 @@ function createPlanCommand(): Command {
 }
 
 export const planCommand: Command = createPlanCommand();
+
+function requireSpace(space: string | undefined): string {
+  if (!space) {
+    throw new Error("required option '--space <spaceId>' not specified");
+  }
+  return space;
+}
+
+function resolveOptionalSourceArg(input: {
+  readonly argument?: string;
+  readonly flag?: string;
+}): string | undefined {
+  if (input.argument && input.flag && input.argument !== input.flag) {
+    throw new Error(
+      "pass the source either as an argument or with --source, not both",
+    );
+  }
+  return input.flag ?? input.argument;
+}
+
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function normalizeProviders(values: readonly string[] | undefined): readonly string[] {
+  return Array.from(new Set((values ?? []).map((value) => value.trim()).filter(Boolean)));
+}

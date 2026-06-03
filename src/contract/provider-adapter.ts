@@ -18,9 +18,9 @@ import type {
 } from "./implementation-sdk.ts";
 
 /**
- * Legacy runtime-handler-local selector for shape-based backend adapters.
+ * Runtime-handler-local selector for shape-based backend adapters.
  *
- * Runtime-agent lifecycle envelopes still carry `(shape, provider)` so older
+ * Runtime-agent lifecycle envelopes carry `(shape, provider)` so local
  * handlers can dispatch work locally. Current operator distributions derive
  * those selectors from their materializer mapping; reference components
  * remain keyed by `Component.kind`, and new reference adapters should implement
@@ -112,7 +112,7 @@ export interface PlatformContext {
 }
 
 /**
- * A legacy backend adapter implements one shape (`implements`) with a chosen
+ * A compatibility backend adapter implements one shape (`implements`) with a chosen
  * cloud / runtime backend. Operators register adapters via
  * {@link registerProvider} and reference them from implementation-specific
  * `provider:` fields by `id`.
@@ -170,7 +170,7 @@ export function registerProvider(
   const previous = PROVIDER_REGISTRY.get(provider.id);
   // Same-value re-registration (idempotent boot) is silent — only warn
   // when the new entry differs from the prior. Reference equality is the
-  // cheapest comparison and good enough: the legacy shape/provider path passes
+  // cheapest comparison and good enough: the shape/provider path passes
   // the same `Shape` / `ProviderAdapter` instance every time.
   if (
     previous !== undefined &&
