@@ -21,6 +21,7 @@
     "./contract": "./src/contract/mod.ts",
     "./contract/deploy-control-api": "./src/contract/deploy-control-api.ts",
     "./deploy-control": "./src/deploy-control/mod.ts",
+    "./runtime-agent": "./src/runtime-agent/mod.ts",
     "./cli": "./src/all/cli.ts",
     "./server": "./src/all/server.ts"
   },
