@@ -90,7 +90,5 @@ test("full AppContext composition wires default adapters and services", () => {
   assert.ok(context.adapters.source instanceof ImmutableSourceAdapter);
   assert.ok(context.adapters.storage instanceof MemoryStorageDriver);
   assert.ok(context.services.space);
-  assert.ok(context.services.deploy.plans);
-  assert.ok(context.services.deploy.apply);
   assert.ok(context.services.runtime.materializer);
 });

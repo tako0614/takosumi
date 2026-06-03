@@ -16,9 +16,24 @@ COPY deploy/node-postgres/package.json /work/deploy/node-postgres/package.json
 COPY deploy/node-postgres/src /work/deploy/node-postgres/src
 RUN bun install --frozen-lockfile
 
+# Build the dashboard SPA so the runtime image can serve it from the same
+# origin as the API (parity with the Cloudflare Workers Static Assets profile).
+# Built in an isolated stage; only the static `.output/public` is copied into
+# the runtime image. If this build is removed/fails, the server auto-detects the
+# missing build and disables static serving (it does not crash).
+FROM oven/bun:1 AS dashboard
+WORKDIR /work
+COPY package.json bun.lock tsconfig.json bunfig.toml /work/
+COPY packages /work/packages
+RUN bun install --frozen-lockfile
+RUN cd packages/dashboard-ui && bun run build
+
 FROM oven/bun:1
 WORKDIR /app
 COPY --from=deps --chown=bun:bun /work /app
+COPY --from=dashboard --chown=bun:bun \
+  /work/packages/dashboard-ui/.output/public \
+  /app/packages/dashboard-ui/.output/public
 
 # Outbound network destinations the accounts handler is allowed to reach.
 # Defaults cover the Postgres service alias used by docker-compose, Stripe

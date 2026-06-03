@@ -70,8 +70,8 @@ const fs: FsAdapter = {
     // classic Node, otherwise use the `require` synthesised from
     // `node:module#createRequire(import.meta.url)` that we pre-warm
     // asynchronously at module load (see `warmNodeRequire`). On pure-ESM Node
-    // and Deno's node-compat shim there is no `globalThis.require`, so the
-    // pre-warmed cache is the only path; the read happens lazily (descriptor
+    // there is no `globalThis.require`, so the pre-warmed cache is the only
+    // path; the read happens lazily (descriptor
     // JSON loading at deploy-plan time), long after the warm-up import has
     // resolved.
     const required = nodeRequireSync("node:fs") as
@@ -91,15 +91,15 @@ const fs: FsAdapter = {
     await mod.mkdir(path, { recursive: options?.recursive ?? false });
   },
   async makeTempDir(prefix) {
-    // Match `Deno.makeTempDir({ prefix })`: create a uniquely-named directory
-    // INSIDE the OS temp dir whose basename starts with `prefix`. Node's
+    // Create a uniquely-named directory INSIDE the OS temp dir whose basename
+    // starts with `prefix`. Node's
     // `mkdtemp` takes a full path template and appends 6 random chars to it, so
     // the template must end with a path separator (followed by the optional
     // prefix) for the new dir to land *inside* `os.tmpdir()`. `path.join(tmpdir,
     // "")` drops the trailing separator (`"/tmp"`), which would make `mkdtemp`
     // create a *sibling* (`/tmpXXXXXX`) instead. Build the template as
     // `tmpdir + sep + (prefix ?? "")` so the empty-prefix case still nests
-    // inside the temp root, matching Deno.
+    // inside the temp root.
     const [fsMod, osMod, pathMod] = await Promise.all([
       import("node:fs/promises"),
       import("node:os"),
@@ -127,7 +127,7 @@ const fs: FsAdapter = {
  * Resolution order:
  *   1. A `require` synthesised from `node:module#createRequire(import.meta.url)`
  *      that {@link warmNodeRequire} pre-warms via an async import at module
- *      load. This is the only path that works on pure-ESM Node and Deno's
+ *      load. This is the only path that works on pure-ESM Node and Bun's
  *      node-compat shim, where `globalThis.require` is absent.
  *   2. `globalThis.require` directly, when a CommonJS bootstrap exposes one.
  *
@@ -167,7 +167,7 @@ function nodeRequireSync(specifier: string): unknown {
  * Started once at module load and never awaited at the top level (so a runtime
  * without `node:module`, e.g. Cloudflare Workers, never blocks or throws at
  * import time — the dynamic import simply rejects and is swallowed). On Node /
- * Bun / Deno node-compat the import resolves and populates {@link cachedRequire}
+ * Bun / Node-compatible runtimes the import resolves and populates {@link cachedRequire}
  * for the synchronous read path.
  */
 function warmNodeRequire(): void {

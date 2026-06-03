@@ -1,15 +1,15 @@
-# Takosumiflare Worker provider scaffold.
+# Takosumi Cloudflare Worker + Cloudflare Containers runner profile.
 # Replace placeholder resource identifiers and secrets from operator-managed config before deploy.
 
-name = "takosumiflare-provider"
-main = ".wrangler/dist/takosumiflare-worker.mjs"
+name = "takosumi-cloudflare"
+main = ".wrangler/dist/takosumi-cloudflare-worker.mjs"
 compatibility_date = "2026-04-15"
 workers_dev = false
 compatibility_flags = ["nodejs_compat"]
 no_bundle = true
 
 [build]
-command = 'ROOT=.; if [ ! -f "$ROOT/deploy/cloudflare/wrangler.toml" ]; then ROOT=../..; fi; mkdir -p "$ROOT/deploy/cloudflare/.wrangler/dist" && bun build --target browser --format esm "$ROOT/deploy/cloudflare/src/worker.ts" --outfile "$ROOT/deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs"'
+command = 'ROOT=.; if [ ! -f "$ROOT/deploy/cloudflare/wrangler.toml" ]; then ROOT=../..; fi; mkdir -p "$ROOT/deploy/cloudflare/.wrangler/dist" && bun build --target browser --format esm --external cloudflare:workers "$ROOT/deploy/cloudflare/src/worker.ts" --outfile "$ROOT/deploy/cloudflare/.wrangler/dist/takosumi-cloudflare-worker.mjs"'
 watch_dir = "deploy/cloudflare/src"
 
 [observability]
@@ -28,6 +28,10 @@ bucket_name = "takos-artifacts"
 binding = "TAKOS_QUEUE"
 queue = "takosumi-control-plane"
 
+[[queues.producers]]
+binding = "TAKOS_OPENTOFU_RUN_QUEUE"
+queue = "takosumi-opentofu-runs"
+
 [[queues.consumers]]
 queue = "takosumi-control-plane"
 max_batch_size = 10
@@ -35,14 +39,40 @@ max_batch_timeout = 5
 max_retries = 3
 dead_letter_queue = "takosumi-control-plane-dlq"
 
+[[queues.consumers]]
+queue = "takosumi-opentofu-runs"
+max_batch_size = 5
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "takosumi-opentofu-runs-dlq"
+
 [[durable_objects.bindings]]
 name = "TAKOS_COORDINATION"
 class_name = "TakosCoordinationObject"
 
+[[durable_objects.bindings]]
+name = "TAKOS_OPENTOFU_RUNNER"
+class_name = "TakosumiOpenTofuRunner"
+
 [vars]
 TAKOS_RUNTIME_MODE = "cloudflare-worker"
 TAKOSUMI_ENVIRONMENT = "staging"
+TAKOSUMI_RUN_MODEL = "opentofu-plan-apply-destroy"
+TAKOS_ARTIFACTS_BUCKET_NAME = "takos-artifacts"
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["TakosCoordinationObject"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["TakosumiOpenTofuRunner"]
+
+# OpenTofu run executor. The embedded Takosumi service calls this
+# container-backed Durable Object through its OpenTofu runner adapter.
+[[containers]]
+class_name = "TakosumiOpenTofuRunner"
+image = "runner/Dockerfile"
+image_build_context = "."
+instance_type = "basic"
+max_instances = 10

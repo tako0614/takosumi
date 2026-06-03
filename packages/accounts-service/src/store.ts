@@ -1208,7 +1208,7 @@ export class InMemoryAccountsStore implements AccountsStore {
       this.#refreshTokens.delete(token);
     }
     // Cascade-delete access tokens minted by any rotation in the
-    // chain. Symmetric to the legacy in-process behavior.
+    // chain. Symmetric to the in-process behavior.
     const linkedAccessTokens = this.#refreshChainAccessTokens.get(root);
     if (linkedAccessTokens) {
       for (const accessToken of linkedAccessTokens) {

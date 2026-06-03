@@ -1,10 +1,9 @@
 # @takosjp/takosumi
 
-Reference service for the manifestless Takosumi Installer API. It receives Source install/deploy requests over HTTP,
-returns `InstallPlan` dry-runs, records Installation / Deployment state, and resolves PlatformService bindings through
-operator-provided inventory.
+Reference service for the OpenTofu-native Takosumi Deploy Control API. It records Installation, PlanRun, ApplyRun,
+Deployment, DeploymentOutput, RunnerProfile policy, logs, and audit events.
 
-The service does not hold cloud provider credentials and does not run Terraform/OpenTofu.
+The service does not hold provider credential values. OpenTofu execution runs through operator-selected runner profiles.
 
 ## Install
 
@@ -13,18 +12,23 @@ npm install @takosjp/takosumi
 takosumi server
 ```
 
-## Public installer endpoints
+## Public deploy control endpoints
 
-- `POST /v1/installations/dry-run` — new Installation dry-run
-- `POST /v1/installations` — Installation create + first Deployment
-- `POST /v1/installations/{id}/deployments/dry-run` — update dry-run
-- `POST /v1/installations/{id}/deployments` — apply a new Deployment
-- `POST /v1/installations/{id}/rollback` — rollback to a prior Deployment
+- `GET /v1/runner-profiles` — list operator-adopted RunnerProfiles
+- `POST /v1/plan-runs` — create an OpenTofu plan run
+- `GET /v1/plan-runs/{id}` — read a PlanRun
+- `POST /v1/apply-runs` — apply a reviewed PlanRun
+- `GET /v1/apply-runs/{id}` — read an ApplyRun
+- `GET /v1/installations/{id}` — read Installation state
+- `GET /v1/installations/{id}/deployments` — read Deployment and DeploymentOutput history
+- `GET /v1/installations/{id}/deployment-outputs` — read current non-sensitive DeploymentOutput records
+
+Destroy is planned with `POST /v1/plan-runs` using `operation: "destroy"` and executed through `POST /v1/apply-runs`.
 
 ## Operator / internal extensions
 
-- Optional `/v1/artifacts*` routes — operator DataAsset extension
-- `/api/internal/v1/runtime/agents/*` — runtime-agent fleet enrollment / lease / heartbeat
+- Optional `/v1/artifacts*` routes — operator-internal object extension, not part of public Deploy Control v1
+- `/api/internal/v1/runtime/agents/*` — compatibility fleet ledger for private operator distributions
 - `TakosumiDeploymentRecordStore` — internal apply evidence and status for reference implementation workflows
 
 ## Required env (production)
@@ -33,9 +37,7 @@ takosumi server
 | --- | --- |
 | `TAKOSUMI_DATABASE_URL` | Postgres URL for state / record store |
 | `TAKOSUMI_SECRET_STORE_PASSPHRASE` | Symmetric key for at-rest secret encryption |
-| `TAKOSUMI_INSTALLER_TOKEN` | Bearer for `/v1/installations/*` |
-| `TAKOSUMI_DEPLOY_TOKEN` | Bearer for optional DataAsset write routes |
-| `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN` | runtime-agent locator |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | Bearer for Deploy Control API routes |
 | `TAKOSUMI_ENVIRONMENT=production` | strict-runtime checks |
 
 For dev:
@@ -51,26 +53,15 @@ import { createTakosumiService } from "@takosjp/takosumi";
 
 const { app } = await createTakosumiService({
   runtimeEnv: process.env,
-  platformServices: {
-    async resolve(selection) {
-      if (selection.name !== "identity") return [];
-      return [{
-        path: "identity.primary.oidc",
-        kind: "identity.oidc",
-        material: { issuer: "https://accounts.example.test" },
-      }];
-    },
-  },
 });
 
 const server = Bun.serve({ port: 8788, fetch: app.fetch });
 ```
 
 `createTakosumiService` builds the Hono app, wires adapter ports, mounts route modules for the configured process role, and
-passes PlatformService resolver configuration to the Installer pipeline.
+passes RunnerProfile and store configuration to the deploy control pipeline.
 
 ## See also
 
-- `@takosjp/takosumi/runtime-agent` — lifecycle execution host
 - `@takosjp/takosumi/cli` — operator CLI
-- `@takosjp/takosumi/contract` — Installer API wire types
+- `@takosjp/takosumi/contract` — Deploy Control API wire types

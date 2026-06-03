@@ -1,37 +1,9 @@
 /**
- * Takosumi deploy-domain space module.
+ * Takosumi reference helper module.
  *
- * This module mixes two surfaces and is NOT, as a whole, deprecated:
- *
- *  1. Live deploy-domain primitives that have no other home and are imported
- *     by service code today: the `ObjectAddress` value type plus its helpers
- *     (`objectAddress` / `isObjectAddress` / `assertObjectAddress` /
- *     `joinObjectAddressSegments`), the shared scalar enums, and the
- *     `CORE_CONDITION_REASONS` catalog (`CoreConditionReason` /
- *     `isCoreConditionReason`). These are current and not slated for removal.
- *
- *  2. The legacy deploy-space projection DTOs (`LegacyCoreAppDefinition`, `Deployment`,
- *     `ProviderObservation`, `GroupHead`, and the records collapsed onto them).
- *     These are NOT the current Installer API contract; new code should import
- *     DTOs from `@takosjp/takosumi/contract/installer-api`. They are deprecated
- *     as a group (see the removal
- *     condition below); the `@deprecated` tag is scoped to this surface only,
- *     not to the live primitives in surface 1.
- *
- * Historical spec: /docs/space/01-space-contract-v1.0.md. The legacy space was
- * organized around three records:
- *   - Deployment            (input + resolution + desired state + status)
- *   - ProviderObservation   (observed provider state, never authoritative)
- *   - GroupHead             (space/group-scoped pointer to the current
- *                            Deployment)
- *
- * Removal condition for the projection DTOs (surface 2): the legacy
- * legacy `resources[]` deploy-space planning path is fully retired AND all
- * service consumers have moved their
- * deployment-lifecycle DTOs into `src/service/domains/deploy/`. The
- * live primitives in surface 1 must be relocated to a non-deprecated subpath
- * before that removal, since they are re-exported via
- * `@takosjp/takosumi/contract/reference/compat` today.
+ * Public deploy-control DTOs live in `deploy-control-api.ts`. This module keeps
+ * shared helper primitives used by the service implementation: ObjectAddress,
+ * condition reasons, binding resolution helpers, and output projection helpers.
  */
 
 import type { Digest, IsoTimestamp, JsonObject } from "./types.ts";
@@ -126,13 +98,35 @@ export type CoreNetworkBoundary =
   | "provider-internal"
   | "external";
 export type CorePolicyDecisionOutcome = "allow" | "deny" | "require-approval";
+export type CorePolicyGateGroup =
+  | "resolution"
+  | "planning"
+  | "execution"
+  | "recovery"
+  | string;
+export type CorePolicyGate =
+  | "descriptor-resolution"
+  | "authoring-expansion"
+  | "graph-projection"
+  | "provider-selection"
+  | "binding-resolution"
+  | "access-path-selection"
+  | "operation-planning"
+  | "activation-preview"
+  | "apply-phase-revalidation"
+  | "repair-planning"
+  | string;
+export type CoreBindingSource =
+  | "resource"
+  | "output"
+  | "secret"
+  | "provider-output";
 
 // ---------------------------------------------------------------------------
 // Condition reason catalog. Single-source-of-truth via `as const`; the type
 // union and the runtime list are derived together.
 // ---------------------------------------------------------------------------
 
-// deno-fmt-ignore
 export const CORE_CONDITION_REASONS = [
   "PlanStale", "ReadSetChanged",
   "DescriptorPinned", "DescriptorChanged", "DescriptorUnavailable", "DescriptorUntrusted",
@@ -181,51 +175,11 @@ export function isCoreConditionReason(
 }
 
 // ---------------------------------------------------------------------------
-// 4. Legacy app/env/policy authoring shapes (legacy deploy-space
-//    projection — surface 2; see module header for the removal condition).
+// 4. Component and binding helper shapes.
 // ---------------------------------------------------------------------------
-
-/**
- * @deprecated Legacy deploy-space authoring shape. New code should use the
- *             manifestless Installer API contract. Removed once the legacy
- *             resources[] planning path is retired (see module header).
- */
-export interface LegacyCoreAppDefinition {
-  apiVersion: "takosumi.com/v1";
-  kind: "App";
-  name: string;
-  components: Record<string, CoreComponentSpec>;
-  exposures?: Record<string, CoreExposureSpec>;
-  /** App-scope Output declarations. */
-  outputs?: Record<string, CoreOutputSpec>;
-  requirements?: JsonObject;
-}
-
-export interface CoreEnvSpec {
-  apiVersion: "takosumi.com/v1";
-  kind: "Environment";
-  providerTargets?: Record<string, CoreProviderTargetSpec>;
-  router?: JsonObject;
-  runtimeNetworkPolicy?: JsonObject;
-  accessPathPreferences?: JsonObject;
-}
-
-export interface CorePolicySpec {
-  apiVersion: "takosumi.com/v1";
-  kind: "Policy";
-  descriptorPolicy?: JsonObject;
-  bindingPolicy?: JsonObject;
-  routerPolicy?: JsonObject;
-  resourcePolicy?: JsonObject;
-  approvals?: JsonObject;
-}
 
 export interface CoreComponentSpec {
   contracts: Record<string, CoreContractInstanceSpec>;
-  /**
-   * Legacy authoring surface for explicitly requesting that a typed source
-   * field be injected into a component.
-   */
   bindings?: Record<string, CoreComponentBindingSpec>;
   /** Component-level Output declarations, equivalent to App-scope `outputs`. */
   outputs?: Record<string, CoreOutputSpec>;
@@ -254,9 +208,8 @@ export interface CoreInjectionTarget {
 }
 
 /**
- * Component-level binding declaration — the legacy authoring shape for
- * explicitly requesting that a selected source field be injected into a
- * component. Compiles to a CoreBindingDeclaration.
+ * Component-level binding declaration for explicitly requesting that a
+ * selected source field be injected into a component.
  */
 export interface CoreComponentBindingSpec {
   from: CoreComponentBindingSource;
@@ -405,303 +358,7 @@ export interface CoreResourceAccessPath {
 }
 
 // ---------------------------------------------------------------------------
-// 13. Deployment record (legacy deploy-space record)
-// ---------------------------------------------------------------------------
-
-export type DeploymentStatus =
-  | "preview"
-  | "resolved"
-  | "applying"
-  | "applied"
-  | "failed"
-  | "rolled-back";
-
-/**
- * Resolve mode — controls whether `resolveDeployment` persists the resulting
- * Deployment record:
- *   - "resolve" (default): write the Deployment to the store, return it.
- *   - "preview": do NOT write to the store; return the in-memory record so
- *     authors / dashboards can inspect the resolution without producing a
- *     persisted record. Mirrors `kubectl --dry-run=client` semantics.
- */
-export type DeploymentMode = "preview" | "resolve";
-
-export type DeploymentSourceKind =
-  | "git"
-  | "registry"
-  | "inline"
-  | "store"
-  | string;
-
-export interface DeploymentInput {
-  manifest_snapshot: string;
-  source_kind: DeploymentSourceKind;
-  source_ref?: string;
-  env?: string;
-  group?: string;
-}
-
-export interface DeploymentDescriptorClosure {
-  resolutions: readonly CoreDescriptorResolution[];
-  dependencies?: readonly CoreDescriptorDependency[];
-  closureDigest: Digest;
-  createdAt: IsoTimestamp;
-}
-
-export interface DeploymentResolvedGraph {
-  digest: Digest;
-  components: readonly CoreComponent[];
-  projections: readonly CoreProjectionRecord[];
-  deploySpecDigest?: Digest;
-  envSpecDigest?: Digest;
-  policySpecDigest?: Digest;
-}
-
-export interface DeploymentResolution {
-  descriptor_closure: DeploymentDescriptorClosure;
-  resolved_graph: DeploymentResolvedGraph;
-}
-
-export type DeploymentBindingSource =
-  | "resource"
-  | "output"
-  | "secret"
-  | "provider-output";
-
-export type DeploymentBindingResolutionPolicy =
-  | "latest-at-activation"
-  | "pinned-version"
-  | "latest-at-invocation";
-
-export interface DeploymentBinding {
-  bindingName: string;
-  componentAddress: ObjectAddress;
-  source: DeploymentBindingSource;
-  sourceAddress: string;
-  access?: CoreAccessModeRef;
-  injection: CoreInjectionTarget;
-  sensitivity: CoreSensitivity;
-  enforcement: CoreEnforcement;
-  resolutionPolicy: DeploymentBindingResolutionPolicy;
-  resolvedVersion?: string;
-  resolvedAt?: IsoTimestamp;
-  grantRef?: string;
-  accessPath?: CoreResourceAccessPath;
-}
-
-export interface DeploymentRoute {
-  id: string;
-  exposureAddress: ObjectAddress;
-  routeDescriptorId: DescriptorId;
-  match: Record<string, unknown>;
-  transport?: { security?: string; tls?: Record<string, unknown> };
-}
-
-export interface DeploymentResourceClaim {
-  claimAddress: ObjectAddress;
-  contract: string;
-  bindingNames: readonly string[];
-  resourceInstanceId?: string;
-}
-
-export interface DeploymentEgressRule {
-  effect: "allow" | "deny";
-  protocol?: "http" | "https" | "tcp" | "udp";
-  to?: readonly Record<string, unknown>[];
-  ports?: readonly number[];
-}
-
-export interface DeploymentRuntimeNetworkPolicy {
-  policyDigest: Digest;
-  defaultEgress: "allow" | "deny" | "deny-by-default";
-  egressRules?: readonly DeploymentEgressRule[];
-  serviceIdentity?: Record<string, unknown>;
-}
-
-export interface DeploymentAssignment {
-  componentAddress: ObjectAddress;
-  weight: number;
-  labels?: Record<string, string>;
-}
-
-export interface DeploymentRouteAssignment {
-  routeId: string;
-  protocol?: string;
-  assignments: readonly {
-    componentAddress: ObjectAddress;
-    weightPermille: number;
-    /**
-     * Optional labels carried with the assignment. The rollout-canary service
-     * uses `labels.release` to project the canary app-release id onto the
-     * route assignment so dashboards / observability can attribute traffic
-     * weights to the underlying release lineage.
-     */
-    labels?: Record<string, string>;
-  }[];
-}
-
-export interface DeploymentNonRoutedDefaults {
-  events?: { componentAddress: ObjectAddress; reason?: string };
-  /** Default producing component for Outputs that have no explicit route. */
-  outputs?: { componentAddress: ObjectAddress; reason?: string };
-}
-
-export interface DeploymentRolloutStrategy {
-  kind: "immediate" | "blue-green" | "canary" | string;
-  steps?: readonly unknown[];
-}
-
-export interface DeploymentActivationEnvelope {
-  primary_assignment: DeploymentAssignment;
-  assignments?: readonly DeploymentAssignment[];
-  route_assignments?: readonly DeploymentRouteAssignment[];
-  rollout_strategy?: DeploymentRolloutStrategy;
-  non_routed_defaults?: DeploymentNonRoutedDefaults;
-  envelopeDigest: Digest;
-}
-
-export interface DeploymentDesired {
-  routes: readonly DeploymentRoute[];
-  bindings: readonly DeploymentBinding[];
-  resources: readonly DeploymentResourceClaim[];
-  runtime_network_policy: DeploymentRuntimeNetworkPolicy;
-  activation_envelope: DeploymentActivationEnvelope;
-}
-
-export type DeploymentConditionScopeKind = "operation" | "phase" | "deployment";
-export type DeploymentConditionStatus = "true" | "false" | "unknown";
-
-export interface DeploymentConditionScope {
-  kind: DeploymentConditionScopeKind;
-  ref?: string;
-}
-
-export interface DeploymentCondition {
-  type: string;
-  status: DeploymentConditionStatus;
-  reason?: CoreConditionReason | string;
-  message?: string;
-  observed_generation: number;
-  last_transition_time: IsoTimestamp;
-  scope?: DeploymentConditionScope;
-  /**
-   * Phase 18.2 multi-cloud provider tag. When a Deployment is materialised
-   * across more than one provider (e.g. a composite where compute lives on
-   * Cloudflare Workers and the database lives on AWS RDS) per-provider
-   * conditions carry the provider id so the status projector can mark the
-   * AWS layer outage independently of the Cloudflare layer.
-   */
-  provider_id?: string;
-  /**
-   * Phase 18.2 optional-provider flag. When `true`, a `false` condition for
-   * this provider degrades the Deployment but never escalates it to a full
-   * `outage`. This is the contract surface for `composite.web-app-with-cdn`
-   * style descriptors where the CDN can fail without taking the space compute
-   * path down.
-   */
-  optional?: boolean;
-}
-
-export type DeploymentPolicyGateGroup =
-  | "resolution"
-  | "planning"
-  | "execution"
-  | "recovery"
-  | string;
-
-export type DeploymentPolicyGate =
-  | "descriptor-resolution"
-  | "authoring-expansion"
-  | "graph-projection"
-  | "provider-selection"
-  | "binding-resolution"
-  | "access-path-selection"
-  | "operation-planning"
-  | "activation-preview"
-  | "apply-phase-revalidation"
-  | "repair-planning"
-  | "rollback-planning"
-  | string;
-
-export interface DeploymentPolicyDecision {
-  id: string;
-  gateGroup: DeploymentPolicyGateGroup;
-  gate: DeploymentPolicyGate;
-  decision: CorePolicyDecisionOutcome;
-  ruleRef?: string;
-  subjectAddress?: ObjectAddress;
-  subjectDigest: Digest;
-  decidedAt: IsoTimestamp;
-}
-
-export interface DeploymentApproval {
-  approved_by: string;
-  approved_at: IsoTimestamp;
-  policy_decision_id: string;
-  expires_at?: IsoTimestamp;
-}
-
-export interface Deployment {
-  id: string;
-  group_id: string;
-  space_id: string;
-  input: DeploymentInput;
-  resolution: DeploymentResolution;
-  desired: DeploymentDesired;
-  status: DeploymentStatus;
-  conditions: readonly DeploymentCondition[];
-  policy_decisions?: readonly DeploymentPolicyDecision[];
-  approval?: DeploymentApproval | null;
-  rollback_target?: string | null;
-  created_at: IsoTimestamp;
-  applied_at?: IsoTimestamp | null;
-  finalized_at?: IsoTimestamp | null;
-}
-
-// ---------------------------------------------------------------------------
-// 14. ProviderObservation (observed-side stream, never authoritative)
-// ---------------------------------------------------------------------------
-
-export type ProviderObservationState =
-  | "present"
-  | "missing"
-  | "drifted"
-  | "unknown";
-
-export type ProviderObservationDriftStatus =
-  | "provider-object-missing"
-  | "config-drift"
-  | "status-drift"
-  | "security-drift"
-  | "ownership-drift"
-  | "cache-drift";
-
-export interface ProviderObservation {
-  id: string;
-  deployment_id: string;
-  provider_id: string;
-  object_address: ObjectAddress;
-  observed_state: ProviderObservationState;
-  drift_status?: ProviderObservationDriftStatus;
-  observed_digest?: Digest;
-  observed_at: IsoTimestamp;
-}
-
-// ---------------------------------------------------------------------------
-// 15. GroupHead (strongly consistent space/group pointer to the current Deployment)
-// ---------------------------------------------------------------------------
-
-export interface GroupHead {
-  space_id: string;
-  group_id: string;
-  current_deployment_id: string;
-  previous_deployment_id?: string | null;
-  generation: number;
-  advanced_at: IsoTimestamp;
-}
-
-// ---------------------------------------------------------------------------
-// Space v1 records shared by the deploy-domain implementation and docs.
+// Space helper records shared by the resource/output service implementation.
 // ---------------------------------------------------------------------------
 
 export type CorePolicyDecision = CorePolicyDecisionOutcome;
@@ -735,8 +392,8 @@ export interface CoreResolvedGraph {
 
 export interface CorePolicyDecisionRecord {
   id: string;
-  gateGroup: "resolution" | "planning" | "execution" | "recovery";
-  gate: DeploymentPolicyGate;
+  gateGroup: CorePolicyGateGroup;
+  gate: CorePolicyGate;
   decision: CorePolicyDecision;
   ruleRef?: string;
   subjectAddress?: ObjectAddress;
@@ -763,7 +420,7 @@ export interface CoreBindingResolutionReport {
 
 export interface CoreBindingResolutionInput {
   bindingName: string;
-  source: DeploymentBindingSource;
+  source: CoreBindingSource;
   sourceAddress: string;
   access?: CoreAccessModeRef;
   injection: CoreInjectionTarget;
@@ -862,8 +519,8 @@ export type CoreBindingSourceRef =
   };
 
 /**
- * Consumer-side explicit injection request — the legacy Space record for
- * "this component requests source field X be injected into target Y".
+ * Consumer-side explicit injection request: this component requests source
+ * field X to be injected into target Y.
  *
  * Binding does not imply raw env. Raw env injection of secret / credential
  * outputs requires an explicit policy decision and approval (see
@@ -914,7 +571,7 @@ export interface CoreBindingResolution {
  * a new BindingSetRevision is produced for a rebind plan.
  *
  * - `inputs` carries the per-binding {@link CoreBindingResolutionInput} surface.
- * - `bindingDeclarations` records the declared legacy shape per binding.
+ * - `bindingDeclarations` records the declared shape per binding.
  * - `bindingResolutions` records the resolved + authorized binding state.
  * - `bindingValueResolutions` retains value-level resolution (secret version
  *   etc.) and remains the per-value snapshot.
@@ -960,13 +617,6 @@ export interface CoreRouterConfig {
   status: CoreMaterializationStatus;
 }
 
-export interface CoreRuntimeNetworkPolicy {
-  id: string;
-  groupId: string;
-  policyDigest: Digest;
-  status: CoreMaterializationStatus;
-}
-
 /**
  * Operation-side record of an OutputRevision computation. Distinct from the
  * persisted {@link CoreOutputRevision} record: this captures the raw resolver
@@ -987,23 +637,6 @@ export interface CoreApplyPhase {
   name: string;
   status: "pending" | "running" | "succeeded" | "failed" | "skipped";
   revalidationRequired: boolean;
-}
-
-export interface CoreProviderMaterialization {
-  id: string;
-  role: "router" | "runtime" | "resource" | "access";
-  desiredObjectRef: string;
-  providerTarget: string;
-  objectAddress: ObjectAddress;
-  createdByOperationId: string;
-}
-
-export interface CoreProviderObservation {
-  materializationId: string;
-  observedState: ProviderObservationState;
-  driftReason?: ProviderObservationDriftStatus;
-  observedDigest?: Digest;
-  observedAt: IsoTimestamp;
 }
 
 // ---------------------------------------------------------------------------

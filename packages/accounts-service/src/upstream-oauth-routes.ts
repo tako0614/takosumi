@@ -153,7 +153,7 @@ export async function handleUpstreamCallbackRequest(input: {
       secure,
       maxAgeSeconds: Math.max(1, Math.floor(ttlMs / 1000)),
     });
-    // Build a single set-cookie header value that clears the legacy state
+    // Build a single set-cookie header value that clears the previous state
     // cookie and sets the new session cookie. `Response` headers can hold
     // multiple Set-Cookie entries, but `json()` accepts a flat record;
     // serialize both into one comma-separated value via the Headers API.

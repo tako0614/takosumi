@@ -1,6 +1,6 @@
 import { A } from "@solidjs/router";
 import { Box, GitBranch, Server } from "lucide-solid";
-import type { Installation } from "~/lib/api/installations";
+import type { Installation } from "~/lib/rpc";
 import AppStatusPill from "./AppStatusPill";
 
 export default function AppCard(props: { app: Installation }) {

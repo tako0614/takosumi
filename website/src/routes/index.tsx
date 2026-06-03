@@ -13,30 +13,50 @@ import Footer from "~/components/Footer";
 export default function Home() {
   return (
     <>
-      <Title>
-        Takosumi — An Open Source, Operator-Portable Platform for Everything
-      </Title>
+      <Title>Takosumi — OpenTofu-native deploy control plane</Title>
       <Meta
         name="description"
-        content="chat も docs も agent も SNS も、 自分の DB も —— 1 つの Takosumi の上で、 cloud でも VM でも cluster でも、 同じ Space が動く。"
+        content="plain な OpenTofu module を Installation に。plan / apply / destroy を PlanRun / ApplyRun として記録し、RunnerProfile が実行先を所有。cloud でも VM でも cluster でも、同じ台帳で deploy。"
       />
+      <Meta property="og:site_name" content="Takosumi" />
+      <Meta property="og:locale" content="ja_JP" />
       <Meta
         property="og:title"
-        content="Takosumi — An Open Source, Operator-Portable Platform for Everything"
+        content="Takosumi — OpenTofu-native deploy control plane"
       />
       <Meta
         property="og:description"
-        content="Manifest、Installation、Deployment を共通化し、実行先は operator が選ぶ。cloud でも VM でも cluster でも同じ Space が動く。"
+        content="plain な OpenTofu module を Installation に。plan / apply を PlanRun / ApplyRun として記録し、RunnerProfile が実行先を所有。cloud でも VM でも cluster でも、同じ台帳で deploy。"
       />
       <Meta property="og:url" content="https://takosumi.com/" />
       <Meta property="og:type" content="website" />
       <Meta
         property="og:image"
-        content="https://takosumi.com/brand/geometric.svg"
+        content="https://takosumi.com/brand/og-cover.svg"
+      />
+      <Meta property="og:image:type" content="image/svg+xml" />
+      <Meta property="og:image:width" content="1200" />
+      <Meta property="og:image:height" content="630" />
+      <Meta
+        property="og:image:alt"
+        content="Takosumi — OpenTofu-native deploy control plane"
+      />
+      <Meta name="twitter:card" content="summary_large_image" />
+      <Meta
+        name="twitter:title"
+        content="Takosumi — OpenTofu-native deploy control plane"
+      />
+      <Meta
+        name="twitter:description"
+        content="plain な OpenTofu module を Installation に。plan / apply を PlanRun / ApplyRun として記録し、RunnerProfile が実行先を所有。cloud でも VM でも cluster でも、同じ台帳で deploy。"
+      />
+      <Meta
+        name="twitter:image"
+        content="https://takosumi.com/brand/og-cover.svg"
       />
 
       <Nav />
-      <main>
+      <main id="main">
         <Hero />
         <WhatYouCanHost />
         <WhyOperatorOwned />

@@ -6,7 +6,7 @@ export default function Footer() {
       <div class="container">
         <div style="display: flex; align-items: center; gap: 12px;">
           <Wordmark variant="geometric" size={20} />
-          <span class="copy">© Takos / Takosumi contributors — MIT</span>
+          <span class="copy">© Takos / Takosumi contributors — AGPL-3.0</span>
         </div>
         <nav aria-label="Footer">
           <a href="/docs/" rel="external">Docs</a>

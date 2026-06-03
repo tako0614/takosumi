@@ -1,104 +1,38 @@
 import { type DefaultTheme, defineConfig } from "vitepress";
 
+const jaNav: DefaultTheme.NavItem[] = [
+  { text: "概要", link: "/" },
+  { text: "Quickstart", link: "/getting-started/quickstart" },
+  { text: "Model", link: "/reference/model" },
+  { text: "API", link: "/reference/deploy-control-api" },
+  { text: "Operator", link: "/reference/operator" },
+];
+
+const enNav: DefaultTheme.NavItem[] = [
+  { text: "Overview", link: "/en/" },
+  { text: "Quickstart", link: "/en/getting-started/quickstart" },
+  { text: "Model", link: "/en/reference/model" },
+  { text: "API", link: "/en/reference/deploy-control-api" },
+  { text: "Operator", link: "/en/reference/operator" },
+];
+
 const jaSidebar: DefaultTheme.SidebarMulti = {
   "/": [
     {
-      text: "まず読む",
+      text: "Start",
       items: [
-        { text: "コンセプト", link: "/getting-started/concepts" },
-        { text: "クイックスタート", link: "/getting-started/quickstart" },
-        { text: "読む順序", link: "/getting-started/reading-paths" },
+        { text: "概要", link: "/" },
+        { text: "Quickstart", link: "/getting-started/quickstart" },
       ],
     },
     {
-      text: "案内",
+      text: "Reference",
       items: [
-        {
-          text: "Source を install する",
-          link: "/getting-started/reading-paths#source-installers",
-        },
-        {
-          text: "Operator として動かす",
-          link: "/getting-started/reading-paths#operators",
-        },
-        {
-          text: "Takosumi を拡張する",
-          link: "/getting-started/reading-paths#provider-extension-authors",
-        },
-        {
-          text: "Takosumi を読む",
-          link: "/getting-started/reading-paths#cloud-operators",
-        },
-        {
-          text: "Takosumi v1 に関わる",
-          link: "/getting-started/reading-paths#takosumi-v1-contributors",
-        },
-      ],
-    },
-    {
-      text: "Takosumi v1",
-      items: [
-        {
-          text: "仕様境界",
-          link: "/reference/spec-boundaries",
-        },
-        { text: "Takosumi v1", link: "/reference/takosumi-v1" },
-        { text: "Installer API", link: "/reference/installer-api" },
-        {
-          text: "プラットフォームサービス",
-          link: "/reference/platform-services",
-        },
-        { text: "HTTP 公開", link: "/reference/http-exposure" },
-      ],
-    },
-    {
-      text: "Integration",
-      items: [
-        { text: "Takosumi を拡張する", link: "/extending" },
-        { text: "アクセスモード", link: "/reference/access-modes" },
-      ],
-    },
-    {
-      text: "Takosumi",
-      items: [
-        {
-          text: "Operator surface",
-          link: "/reference/accounts",
-        },
-      ],
-    },
-    {
-      text: "ビルド連携",
-      collapsed: true,
-      items: [
-        { text: "ビルドサービス境界", link: "/reference/build-spec" },
-        {
-          text: "ビルドサービス例",
-          link: "/operator/build-service-profile",
-        },
-        { text: "ダイジェスト計算", link: "/reference/digest-computation" },
-      ],
-    },
-    {
-      text: "運用",
-      collapsed: true,
-      items: [
-        { text: "運用概要", link: "/operator/" },
+        { text: "Model", link: "/reference/model" },
+        { text: "Deploy Control API", link: "/reference/deploy-control-api" },
+        { text: "Runner profiles", link: "/reference/runner-profiles" },
+        { text: "Operator", link: "/reference/operator" },
         { text: "CLI", link: "/reference/cli" },
-      ],
-    },
-    {
-      text: "補助リファレンス",
-      items: [
-        { text: "リファレンス索引", link: "/reference/" },
-        { text: "CLI", link: "/reference/cli" },
-        { text: "用語集", link: "/reference/glossary" },
-      ],
-    },
-    {
-      text: "拡張",
-      items: [
-        { text: "Takosumi を拡張する", link: "/extending" },
       ],
     },
   ],
@@ -107,141 +41,38 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
 const enSidebar: DefaultTheme.SidebarMulti = {
   "/en/": [
     {
-      text: "Start Here",
+      text: "Start",
       items: [
-        { text: "Concepts", link: "/en/getting-started/concepts" },
+        { text: "Overview", link: "/en/" },
         { text: "Quickstart", link: "/en/getting-started/quickstart" },
-        { text: "Reading Paths", link: "/en/getting-started/reading-paths" },
-      ],
-    },
-    {
-      text: "Guide",
-      items: [
-        {
-          text: "Installing Sources",
-          link: "/en/getting-started/reading-paths#source-installers",
-        },
-        {
-          text: "Operating Takosumi",
-          link: "/en/getting-started/reading-paths#operators",
-        },
-        {
-          text: "Reading Takosumi",
-          link: "/en/getting-started/reading-paths#cloud-operators",
-        },
-        {
-          text: "Extending Takosumi",
-          link: "/en/getting-started/reading-paths#provider-extension-authors",
-        },
-        {
-          text: "Working on Takosumi v1",
-          link: "/en/getting-started/reading-paths#takosumi-v1-contributors",
-        },
-      ],
-    },
-    {
-      text: "Takosumi v1",
-      items: [
-        {
-          text: "Specification Boundaries",
-          link: "/en/reference/spec-boundaries",
-        },
-        { text: "Takosumi v1", link: "/en/reference/takosumi-v1" },
-        { text: "Installer API", link: "/en/reference/installer-api" },
-        {
-          text: "Platform Services",
-          link: "/en/reference/platform-services",
-        },
-        { text: "HTTP Exposure", link: "/en/reference/http-exposure" },
-      ],
-    },
-    {
-      text: "Integration",
-      items: [
-        { text: "Extending Takosumi", link: "/en/extending" },
-        { text: "Access Modes", link: "/en/reference/access-modes" },
-      ],
-    },
-    {
-      text: "Takosumi",
-      items: [
-        { text: "Operator Surface", link: "/en/reference/accounts" },
-      ],
-    },
-    {
-      text: "Build Boundary",
-      collapsed: true,
-      items: [
-        { text: "Build Service Boundary", link: "/en/reference/build-spec" },
-        {
-          text: "Build Service Example",
-          link: "/en/operator/build-service-profile",
-        },
-        {
-          text: "Digest Computation",
-          link: "/en/reference/digest-computation",
-        },
-      ],
-    },
-    {
-      text: "Operations",
-      collapsed: true,
-      items: [
-        { text: "Operator Overview", link: "/en/operator/" },
-        { text: "CLI", link: "/en/reference/cli" },
       ],
     },
     {
       text: "Reference",
       items: [
-        { text: "Reference Index", link: "/en/reference/" },
+        { text: "Model", link: "/en/reference/model" },
+        {
+          text: "Deploy Control API",
+          link: "/en/reference/deploy-control-api",
+        },
+        { text: "Runner profiles", link: "/en/reference/runner-profiles" },
+        { text: "Operator", link: "/en/reference/operator" },
         { text: "CLI", link: "/en/reference/cli" },
-        { text: "Glossary", link: "/en/reference/glossary" },
-      ],
-    },
-    {
-      text: "Extensions",
-      items: [
-        { text: "Extending Takosumi", link: "/en/extending" },
       ],
     },
   ],
 };
 
-const jaNav: DefaultTheme.NavItem[] = [
-  { text: "概要", link: "/" },
-  { text: "コンセプト", link: "/getting-started/concepts" },
-  { text: "クイックスタート", link: "/getting-started/quickstart" },
-  { text: "読む順序", link: "/getting-started/reading-paths" },
-  { text: "リファレンス", link: "/reference/" },
-  { text: "運用", link: "/operator/" },
-];
-
-const enNav: DefaultTheme.NavItem[] = [
-  { text: "Overview", link: "/en/" },
-  { text: "Concepts", link: "/en/getting-started/concepts" },
-  { text: "Quickstart", link: "/en/getting-started/quickstart" },
-  { text: "Reading Paths", link: "/en/getting-started/reading-paths" },
-  { text: "Reference", link: "/en/reference/" },
-  { text: "Operations", link: "/en/operator/" },
-];
-
 export default defineConfig({
   title: "Takosumi",
   description:
-    "Source, Installation, Deployment, PlatformService を中心にした PaaS toolkit",
+    "OpenTofu-native deploy control plane, UI, and audit ledger",
   lang: "ja",
-  // Served under /docs/ on takosumi.com (and takosumi.test mirror); the
-  // root path serves a separate marketing landing page. Override via
-  // VITEPRESS_BASE if a deploy needs the docs at "/".
   base: process.env.VITEPRESS_BASE ?? "/docs/",
   cleanUrls: true,
   lastUpdated: true,
   vite: {
     server: {
-      // Wave M LAN dev: dev hostname (= `*.takosumi.test` / `*.takos.test` /
-      // `yurucommu.test`) を Caddy reverse_proxy 経由で踏むため Host header
-      // 検証を緩める。 production build には影響しない (= dev server only)。
       allowedHosts: [
         ".takosumi.test",
         ".takos.test",
@@ -253,19 +84,13 @@ export default defineConfig({
   sitemap: {
     hostname: "https://takosumi.com/docs/",
   },
-  srcExclude: [
-    "operator/{bootstrap,runtime-agent,operator-managed,upgrade}.md",
-    "reference/architecture/**",
-    "reference/{approval-invalidation,audit-events,backup-restore,bootstrap-protocol,closed-enums,runtime-handler-contract,cross-process-locks,data-asset-gc,data-asset-policy,drift-detection,env-vars,group-head-rollout,journal-compaction,service-http-api,kind-registry,lifecycle,lifecycle-phases,logging-conventions,migration-upgrade,observability-stack,observation-retention,plan-output,public-spec-source-map,readiness-probes,resource-ids,revoke-debt,risk-taxonomy,runtime-agent-api,secret-partitions,status-output,storage-schema,supply-chain-trust,telemetry-metrics,time-clock-model,wal-stages,workers-backend}.md",
-    "rfc/**",
-  ],
   locales: {
     root: {
       label: "日本語",
       lang: "ja",
       title: "Takosumi",
       description:
-        "Source, Installation, Deployment, PlatformService を中心にした PaaS toolkit",
+        "OpenTofu-native deploy control plane, UI, and audit ledger",
       themeConfig: {
         nav: jaNav,
         sidebar: jaSidebar,
@@ -276,8 +101,8 @@ export default defineConfig({
         sidebarMenuLabel: "メニュー",
         returnToTopLabel: "トップへ戻る",
         footer: {
-          message: "MIT License で公開されています。",
-          copyright: "© Takos / Takosumi contributors",
+          message: "AGPL-3.0-only",
+          copyright: "© Takosumi contributors",
         },
         editLink: {
           pattern: "https://github.com/tako0614/takosumi/edit/main/docs/:path",
@@ -291,7 +116,7 @@ export default defineConfig({
       lang: "en-US",
       title: "Takosumi",
       description:
-        "A PaaS toolkit centered on Source, Installation, Deployment, and PlatformService",
+        "OpenTofu-native deploy control plane, UI, and audit ledger",
       themeConfig: {
         nav: enNav,
         sidebar: enSidebar,
@@ -302,8 +127,8 @@ export default defineConfig({
         sidebarMenuLabel: "Menu",
         returnToTopLabel: "Return to top",
         footer: {
-          message: "Released under the MIT License.",
-          copyright: "© Takos / Takosumi contributors",
+          message: "AGPL-3.0-only",
+          copyright: "© Takosumi contributors",
         },
         editLink: {
           pattern: "https://github.com/tako0614/takosumi/edit/main/docs/:path",

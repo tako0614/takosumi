@@ -1,48 +1,44 @@
-# Takosumi AWS Kind Runbook
+# Takosumi AWS OpenTofu Profile Runbook
 
-This directory documents the AWS surface as **operator-owned scope**. AWS lifecycle coverage comes from the operator's OpenTofu/native controller stack plus runtime-agent handler wiring. The deploy artifact that lands the Takosumi service image and runtime-agent image on AWS infrastructure is also the operator's responsibility.
+AWS support is an OpenTofu provider profile, not a separate Takosumi runtime
+layer. The default profile is `aws-default`.
 
-## Why no reference deploy here
+## Profile
 
-The two reference distributions Takosumi ships (`deploy/cloudflare/` and `deploy/single-host/`) cover the substrate-neutrality claim at spec level. AWS / GCP / Azure / k8s are operator-owned targets: operators run the service image on whatever AWS compute they prefer (ECS / Fargate / EC2 / EKS), point the service at a Postgres database (RDS / Aurora), and expose the resulting databases, buckets, queues, DNS routes, and runtimes through PlatformService inventory.
+| Field | Value |
+| --- | --- |
+| Provider | `registry.opentofu.org/hashicorp/aws` |
+| Credential ref | `secret://takosumi/aws-default` |
+| Runner substrate | `cloudflare-containers` by default |
+| State ref | `state://takosumi/aws-default` |
+| Lock ref | `lock://takosumi/aws-default` |
 
-## Required runtime shape
+The profile allows the AWS provider and records AWS control-plane egress through
+exact hosts such as `sts.amazonaws.com`, `iam.amazonaws.com`, and
+`route53.amazonaws.com`, plus suffix patterns such as `*.amazonaws.com`.
 
-The AWS runtime handlers talk to the AWS API directly via SigV4-signed fetch calls (no AWS SDK dependency). They expect:
+## Operator Duties
 
-- AWS credentials supplied via `TAKOSUMI_AWS_ACCESS_KEY_ID` / `TAKOSUMI_AWS_SECRET_ACCESS_KEY` env vars on the runtime-agent process, or via instance role / IRSA when running on AWS compute.
-- A Postgres database for service state (`TAKOSUMI_DATABASE_URL`).
-- Network reachability from the runtime-agent to the AWS API endpoints in the relevant region.
+- Resolve `secret://takosumi/aws-default` inside the runner only.
+- Prefer short-lived credentials from STS / OIDC federation over long-lived IAM
+  access keys.
+- Store OpenTofu state and locks in the operator-managed backend referenced by
+  the RunnerProfile.
+- Do not expose AWS credentials through dashboard JSON, DeploymentOutput,
+  diagnostics, audit payloads, or tenant Workers.
+- Clone the RunnerProfile when a workload needs a narrower provider allowlist,
+  region list, network policy, role ARN, or state backend.
 
-## Recommended topology
+## Live Evidence Required
 
-```
-Internet → ALB / CloudFront
-              │
-              ▼
-        service (Fargate task)  ── Postgres (RDS)
-              │
-              ▼
-    runtime-agent (Fargate task)  ── AWS API (S3, RDS, ECS, Route53)
-```
+Before marking AWS ready for an operator, capture non-production evidence for:
 
-Both service and runtime-agent are stateless; scale horizontally with Fargate service desired count. State lives in RDS.
+1. `tofu init`, `tofu plan`, `tofu apply`, `tofu output -json`, and destroy.
+2. state backend ref and lock evidence recorded on ApplyRun.
+3. sensitive output omitted from DeploymentOutput.
+4. runner diagnostics and failure audit messages redacted.
+5. AWS credential material unavailable from tenant runtime surfaces.
 
-## Smoke check
-
-```sh
-TAKOSUMI_AWS_ACCESS_KEY_ID=... \
-TAKOSUMI_AWS_SECRET_ACCESS_KEY=... \
-TAKOSUMI_PROVIDER_LIVE_PROVIDER=aws \
-TAKOSUMI_PROVIDER_LIVE_PROOF_FIXTURE_FILE=fixtures/live-provisioning/aws.shape-v1.json \
-bun run live-provisioning-smoke
-```
-
-Use `TAKOSUMI_PROVIDER_LIVE_PROOF_MODE=live` plus
-`TAKOSUMI_PROVIDER_GATEWAY_URL` / provider-specific gateway credentials when
-running the destructive live proof. Without live mode, the command runs the
-credential-free fixture proof and reports `"live": false`.
-
-## Substrate-neutral references
-
-If you want a reference Docker image to base your AWS task definitions on, copy `deploy/single-host/Dockerfile.service` and `deploy/single-host/Dockerfile.runtime-agent`. They are substrate- neutral and run unmodified on any container runtime, including AWS Fargate / ECS / EKS.
+This directory intentionally does not ship an AWS production reference
+distribution. Running Takosumi itself on ECS / Fargate / EKS / EC2 remains an
+operator-owned deployment choice.

@@ -8,10 +8,6 @@ import {
   createConfiguredAppContext,
   createInMemoryAppContext,
 } from "./app_context.ts";
-import type {
-  DeploymentProviderAdapter,
-  OperationOutcome,
-} from "./domains/deploy/apply_orchestrator.ts";
 import { LocalActorAdapter } from "./adapters/auth/mod.ts";
 import { MemoryCoordinationAdapter } from "./adapters/coordination/mod.ts";
 import { NoopTestKms } from "./adapters/kms/mod.ts";
@@ -75,29 +71,10 @@ test("createAppContext uses operator-injected adapters in production", async () 
   const productionAdapters = buildProductionAdapters({ source: customSource });
   const context = await createAppContext({
     adapters: productionAdapters,
-    // Production deploy runtime requires an explicit deploy providerAdapter —
-    // the synthetic fallback is refused. Wire a stub so context construction
-    // succeeds (the AppAdapters.provider is a separate injection point).
-    deploy: { providerAdapter: stubDeployProviderAdapter() },
     runtimeConfig: { environment: "production" },
   });
 
   assert.equal(context.adapters.source, customSource);
-});
-
-test("createAppContext rejects production runtime without an explicit deploy providerAdapter", async () => {
-  // Even with full AppAdapters (including AppAdapters.provider), a production
-  // context refuses to fall back to SYNTHETIC_PROVIDER_ADAPTER on the deploy
-  // domain: the deploy providerAdapter is a distinct injection point that the
-  // strict runtime-adapter guard does not cover.
-  await assert.rejects(
-    () =>
-      createAppContext({
-        adapters: buildProductionAdapters(),
-        runtimeConfig: { environment: "production" },
-      }),
-    /production deploy runtime requires an explicit providerAdapter/,
-  );
 });
 
 test("createAppContext rejects production runtime without explicit adapters", async () => {
@@ -176,19 +153,6 @@ function buildProductionAdapters(
     objectStorage: new MemoryObjectStorage({ clock }),
     runtimeAgent: new InMemoryRuntimeAgentRegistry({ clock, idGenerator }),
     ...overrides,
-  };
-}
-
-function stubDeployProviderAdapter(): DeploymentProviderAdapter {
-  return {
-    materialize: (): OperationOutcome => ({
-      success: true,
-      reason: "StubApplied",
-    }),
-    rollback: (): OperationOutcome => ({
-      success: true,
-      reason: "StubReverted",
-    }),
   };
 }
 

@@ -22,11 +22,11 @@ import type { JsonObject, JsonValue } from "./types.ts";
  * namespace — a discriminated union over `kind` (open string).
  *
  * - `kind: "oci-image"` typically uses `uri` (e.g. `ghcr.io/me/api:v1`)
- * - operator-owned bundle kinds may use `hash`
- *   pointing at a `takosumi artifact push`-uploaded blob
+ * - operator-owned bundle kinds may use `hash` pointing at an object uploaded
+ *   through the optional internal `POST /v1/artifacts` extension
  *
  * DataAsset / artifact handling is an optional operator extension, not an
- * public Installer API concept. `kind` is intentionally open: operator handlers
+ * public Deploy Control API concept. `kind` is intentionally open: operator handlers
  * can introduce new DataAsset metadata kinds while keeping the same wire shape.
  */
 export interface Artifact {
@@ -151,7 +151,7 @@ export interface LifecycleApplyRequest {
   readonly shape: string;
   /**
    * Runtime-handler-local provider selector (e.g. `aws-s3`, `filesystem`).
-   * This is runtime-agent dispatch metadata, not a public Installer API field.
+   * This is runtime-agent dispatch metadata, not a public Deploy Control API field.
    */
   readonly provider: string;
   readonly resourceName: string;
@@ -159,7 +159,7 @@ export interface LifecycleApplyRequest {
    * Runtime-handler-local lifecycle input projected by the operator-selected
    * implementation adapter. It may be the public kind spec unchanged, or the
    * validated kind spec plus binding-derived runtime fields such as env or
-   * gateway targets. It is not an open public Installer API extension point.
+   * gateway targets. It is not an open public Deploy Control API extension point.
    */
   readonly spec: JsonValue;
   readonly spaceId: string;
@@ -168,7 +168,7 @@ export interface LifecycleApplyRequest {
    * @internal service ↔ runtime-agent RPC only. WAL-derived request token
    * forwarded to external cloud APIs that accept their own idempotency
    * keys (= AWS S3 / GCP / etc). This is separate from the retired public
-   * `X-Idempotency-Key` HTTP header: installer replay protection is via source
+   * `X-Idempotency-Key` HTTP header: deployControl replay protection is via source
    * pin + expected digest, while handler-level idempotency belongs to this
    * service ↔ runtime-agent RPC envelope.
    */
@@ -203,7 +203,7 @@ export interface LifecycleDestroyRequest {
    * @internal service ↔ runtime-agent RPC only. WAL-derived request token
    * forwarded to external cloud APIs that accept their own idempotency
    * keys (= AWS S3 / GCP / etc). This is separate from the retired public
-   * `X-Idempotency-Key` HTTP header: installer replay protection is via source
+   * `X-Idempotency-Key` HTTP header: deployControl replay protection is via source
    * pin + expected digest, while handler-level idempotency belongs to this
    * service ↔ runtime-agent RPC envelope.
    */
@@ -295,15 +295,14 @@ export const LIFECYCLE_AGENT_URL_ENV = "TAKOSUMI_AGENT_URL" as const;
 
 /**
  * Central registry for {@link Artifact.kind} DataAsset metadata values. The
- * optional operator artifact extension can expose the resulting set on
- * `GET /v1/artifacts/kinds` so CLIs and operators can discover which kinds the
- * deployed distribution understands.
+ * optional operator artifact extension can use the resulting set internally to
+ * document which kinds the deployed distribution understands.
  *
  * `kind` is intentionally an open string at the protocol level; this
- * registry is purely a discovery / documentation layer. Runtime handlers do
+ * registry is purely an operator-local documentation layer. Runtime handlers do
  * not have to consult it before producing or consuming an artifact —
- * but registering a kind makes it visible to operators and lets the
- * optional operator artifact extension apply per-kind size overrides.
+ * but registering a kind lets the optional operator artifact extension apply
+ * per-kind size overrides.
  */
 export interface RegisteredArtifactKind {
   readonly kind: string;

@@ -6,23 +6,12 @@ import {
 } from "./migrations.ts";
 import { storageStatementCatalog } from "./statements.ts";
 
-const removedDeployTables = new Set([
-  "deploy_plans",
-  "deploy_activation_records",
-  "deploy_group_activation_pointers",
-  "deploy_operation_records",
-]);
-
 const migrationFilesUrl = new URL("../../db/migrations/", import.meta.url);
 
 const mirroredMigrationFiles: readonly {
   readonly fileName: string;
   readonly migrationId: string;
 }[] = [
-  {
-    fileName: "20260430000010_unify_to_deployments.sql",
-    migrationId: "deploy.unify_to_deployments",
-  },
   {
     fileName: "20260430000011_runtime_agent_work_ledger.sql",
     migrationId: "runtime.agent_work_ledger.create",
@@ -48,28 +37,12 @@ const mirroredMigrationFiles: readonly {
     migrationId: "custom_domain.reservations.create",
   },
   {
-    fileName: "20260430000017_group_head_history.sql",
-    migrationId: "deploy.group_head_history.create",
-  },
-  {
-    fileName: "20260430000018_observation_retention_archived.sql",
-    migrationId: "deploy.provider_observations.archived",
-  },
-  {
     fileName: "20260430000019_replay_protection_log.sql",
     migrationId: "internal_auth.replay_protection_log.create",
   },
   {
-    fileName: "20260430000021_takosumi_deploy_idempotency_keys.sql",
-    migrationId: "deploy.takosumi_deploy_idempotency_keys.create",
-  },
-  {
-    fileName: "20260430000022_takosumi_deploy_locks.sql",
-    migrationId: "deploy.takosumi_deploy_locks.create",
-  },
-  {
-    fileName: "20260430000023_takosumi_operation_journal_entries.sql",
-    migrationId: "deploy.takosumi_operation_journal_entries.create",
+    fileName: "20260430000022_takosumi_deployment_record_locks.sql",
+    migrationId: "deploy.takosumi_deployment_record_locks.create",
   },
   {
     fileName: "20260430000024_takosumi_revoke_debts.sql",
@@ -81,24 +54,8 @@ const mirroredMigrationFiles: readonly {
   },
 ];
 
-test("deploy statement catalog references deployment tables only", () => {
-  for (const statement of storageStatementCatalog.deploy) {
-    const tables = extractReferencedTables(statement.sql);
-    for (const table of tables) {
-      assert(
-        !removedDeployTables.has(table),
-        `${statement.id} references removed table ${table}`,
-      );
-    }
-  }
-  assertEquals(
-    new Set(
-      storageStatementCatalog.deploy.flatMap((
-        statement,
-      ) => [...extractReferencedTables(statement.sql)]),
-    ),
-    new Set(["deployments", "group_heads", "provider_observations"]),
-  );
+test("deploy statement catalog is retired", () => {
+  assertEquals(storageStatementCatalog.deploy.length, 0);
 });
 
 test("statement catalog references declared storage tables", () => {
@@ -148,14 +105,6 @@ test("migration catalog creates every declared storage table", () => {
   }
 });
 
-test("deployment unification migration is forward-only", () => {
-  const migration = postgresStorageMigrationStatements.find((entry) =>
-    entry.id === "deploy.unify_to_deployments"
-  );
-  assert(migration, "deploy.unify_to_deployments missing from catalog");
-  assertEquals(migration.down, undefined);
-});
-
 test("migration SQL files do not drift from the storage catalog", () => {
   const migrationsById = new Map(
     postgresStorageMigrationStatements.map((migration) => [
@@ -188,18 +137,10 @@ test("migration SQL files do not drift from the storage catalog", () => {
       ),
       `${entry.fileName} has a stale migration marker`,
     );
-    if (entry.migrationId === "deploy.unify_to_deployments") {
-      assertEquals(
-        extractCreatedTables(fileSql),
-        extractCreatedTables(migration.sql),
-      );
-      assertDeployUnificationFileShape(fileSql);
-    } else {
-      assertEquals(
-        normalizeExecutableSql(fileSql),
-        normalizeExecutableSql(migration.sql),
-      );
-    }
+    assertEquals(
+      normalizeExecutableSql(fileSql),
+      normalizeExecutableSql(migration.sql),
+    );
   }
 });
 
@@ -307,30 +248,6 @@ function normalizeExecutableSql(sql: string): string {
     .replace(/;+/g, "")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function assertDeployUnificationFileShape(sql: string): void {
-  const normalized = normalizeExecutableSql(sql);
-  assert(
-    normalized.includes(
-      "create table if not exists group_heads ( space_id text not null, group_id text not null, current_deployment_id text not null references deployments(id), previous_deployment_id text references deployments(id), generation bigint not null default 1, advanced_at timestamptz not null default now(), primary key (space_id, group_id) )",
-    ),
-    "deploy unification file must create group_heads with primary key (space_id, group_id)",
-  );
-  assert(
-    normalized.includes(
-      "insert into group_heads ( space_id, group_id, current_deployment_id, previous_deployment_id, generation, advanced_at )",
-    ),
-    "deploy unification file must insert group_heads.space_id",
-  );
-  assert(
-    normalized.includes("where prev.space_id = p.space_id"),
-    "deploy unification file must scope previous head lookup by space_id",
-  );
-  assert(
-    normalized.includes("on conflict (space_id, group_id) do nothing"),
-    "deploy unification file must use the composite group_heads conflict target",
-  );
 }
 
 function assert(value: unknown, message = "assertion failed"): asserts value {

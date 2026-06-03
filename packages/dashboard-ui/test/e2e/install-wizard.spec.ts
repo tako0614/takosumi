@@ -1,14 +1,14 @@
 import { expect, test } from "@playwright/test";
 
-// Browser E2E for the install wizard: local dev sign-in → /apps/install
-// with autodryrun → fill account/space → click Install → land on
+// Browser E2E for the install wizard: local dev sign-in → /install
+// with autoplan → fill account/space → click Install → land on
 // /apps/<id> with the detail rendered. Catches SPA regressions that
 // the curl-based smoke can't (route registration, component rendering,
 // session-derived state, etc.).
 test("install wizard end-to-end", async ({ page }) => {
   // 1. Sign in via the local dev button (real OAuth would need the
   //    oauth-mock dance, but the SPA's auth shell is already covered
-  //    by the deno + curl smokes — here we just need ANY session so
+  //    by the Bun + curl smokes — here we just need ANY session so
   //    AuthGuard lets us through).
   await page.goto("/sign-in?fresh=playwright");
   const devButton = page.locator(".sign-in-dev");
@@ -20,16 +20,16 @@ test("install wizard end-to-end", async ({ page }) => {
   const repoUrl = "https://github.com/tako0614/takos.git";
   const accountId = "acct_local";
   const spaceId = "space_local";
-  const installUrl = `/apps/install?git=${
+  const installUrl = `/install?git=${
     encodeURIComponent(
       repoUrl,
     )
-  }&ref=main&mode=shared-cell&space=${spaceId}&autodryrun=1`;
+  }&ref=main&mode=shared-cell&space=${spaceId}&autoplan=1`;
   await page.goto(installUrl);
 
-  // 3. autodryrun should populate the dry-run summary within ~5s.
+  // 3. autoplan should populate the plan summary within ~5s.
   await expect(
-    page.locator(".detail-section", { hasText: "Dry-run 結果" }),
+    page.locator(".detail-section", { hasText: "Plan 結果" }),
   ).toBeVisible({ timeout: 7000 });
   await expect(page.locator(".kv-list")).toContainText("Commit");
 
@@ -96,7 +96,7 @@ test("yurucommu install CTA rewrites accounts.takosumi.com → .test on .test ho
   await page.waitForURL("https://accounts.takosumi.test/sign-in?**");
   await page.waitForLoadState("domcontentloaded");
   const returnPath = new URL(page.url()).searchParams.get("return");
-  expect(returnPath).toMatch(/^\/apps\/install\?/);
+  expect(returnPath).toMatch(/^\/install\?/);
   await page.evaluate(() => {
     globalThis.localStorage.setItem(
       "tg_session",
@@ -114,15 +114,15 @@ test("yurucommu install CTA rewrites accounts.takosumi.com → .test on .test ho
     page.evaluate(() => globalThis.localStorage.getItem("tg_session"))
   )
     .toContain("sess_local_substrate");
-  await page.goto(returnPath ?? "/apps/install");
-  await page.waitForURL("https://accounts.takosumi.test/apps/install?**");
+  await page.goto(returnPath ?? "/install");
+  await page.waitForURL("https://accounts.takosumi.test/install?**");
   const installUrl = new URL(page.url());
   expect(installUrl.searchParams.get("git")).toBe(
     "https://github.com/tako0614/yurucommu.git",
   );
   expect(installUrl.searchParams.get("ref")).toBe("main");
   expect(installUrl.searchParams.get("mode")).toBe("shared-cell");
-  expect(installUrl.searchParams.get("autodryrun")).toBe("1");
+  expect(installUrl.searchParams.get("autoplan")).toBe("1");
   await expect(page.getByRole("heading", { name: "App を install" }))
     .toBeVisible();
   await expect(page.getByLabel("Git URL")).toHaveValue(
@@ -143,18 +143,18 @@ test("Takos Use Takos CTA rewrites accounts.takosumi.com → .test and builds /s
     expect(href).not.toMatch(/cloud\.takosumi\.com/);
   }
 
-  const useTakosLinks = page.locator('a[href*="/dashboard/use-takos"]');
+  const useTakosLinks = page.locator('a[href*="/takos/start"]');
   await expect(useTakosLinks.first()).toBeVisible();
   const useTakosHref = await useTakosLinks.first().getAttribute("href");
   expect(useTakosHref).toBeTruthy();
   const useTakosUrl = new URL(useTakosHref ?? "", page.url());
   expect(useTakosUrl.origin).toBe("https://accounts.takosumi.test");
-  expect(useTakosUrl.pathname).toBe("/dashboard/use-takos");
+  expect(useTakosUrl.pathname).toBe("/takos/start");
   expect(useTakosUrl.searchParams.get("takos_url")).toBe("https://takos.test");
 
   await Promise.all([
     page.waitForURL(
-      /^https:\/\/cloud\.takosumi\.test\/(?:sign-in\?|dashboard\/use-takos\?)/,
+      /^https:\/\/cloud\.takosumi\.test\/(?:sign-in\?|takos\/start\?)/,
       {
         waitUntil: "commit",
       },
@@ -166,7 +166,7 @@ test("Takos Use Takos CTA rewrites accounts.takosumi.com → .test and builds /s
   const returnPath = cloudEntryUrl.pathname === "/sign-in"
     ? cloudEntryUrl.searchParams.get("return")
     : cloudEntryUrl.pathname + cloudEntryUrl.search;
-  expect(returnPath).toMatch(/^\/dashboard\/use-takos\?/);
+  expect(returnPath).toMatch(/^\/takos\/start\?/);
   const returnUrl = new URL(returnPath ?? "", "https://accounts.takosumi.test");
   expect(returnUrl.searchParams.get("takos_url")).toBe("https://takos.test");
 
@@ -175,7 +175,7 @@ test("Takos Use Takos CTA rewrites accounts.takosumi.com → .test and builds /s
       timeout: 10_000,
     });
   } else {
-    expect(cloudEntryUrl.pathname).toBe("/dashboard/use-takos");
+    expect(cloudEntryUrl.pathname).toBe("/takos/start");
   }
 
   await page.evaluate(() => {
@@ -202,7 +202,7 @@ test("Takos Use Takos CTA rewrites accounts.takosumi.com → .test and builds /s
     });
   });
 
-  await page.goto(returnPath ?? "/dashboard/use-takos");
+  await page.goto(returnPath ?? "/takos/start");
   await expect(page.getByRole("heading", { name: "Use Takos" })).toBeVisible();
   await expect(page.getByLabel("Takos URL")).toHaveValue("https://takos.test");
   await expect(page.getByLabel("Account ID")).toHaveValue("acct_local");
@@ -245,7 +245,7 @@ test("Use Takos dashboard entry collects terms and builds /start handoff", async
   });
 
   await page.goto(
-    "/dashboard/use-takos?takos_url=https%3A%2F%2Ftakos.test&return_to=%2Fspaces%2Fspace_local%2Fthreads",
+    "/takos/start?takos_url=https%3A%2F%2Ftakos.test&return_to=%2Fspaces%2Fspace_local%2Fthreads",
   );
   await expect(page.getByRole("heading", { name: "Use Takos" })).toBeVisible();
   await expect(page.getByLabel("Takos URL")).toHaveValue("https://takos.test");

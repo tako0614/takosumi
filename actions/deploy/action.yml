@@ -1,22 +1,25 @@
 name: Takosumi Deploy
-description: Submit a Source to the Takosumi installer API.
+description: Plan or apply a plain OpenTofu module through the Takosumi Deploy Control API.
 
 inputs:
   source:
-    description: Source input (git URL, prepared source URL, or local path).
+    description: OpenTofu module source input (git URL, prepared source URL, or local path).
     required: true
     default: .
   space:
     description: Target Takosumi Space id.
     required: true
   remote-url:
-    description: Base URL of the Takosumi kernel HTTP server.
+    description: Base URL of the Takosumi Deploy Control HTTP server.
     required: true
   token:
-    description: Installer bearer for /v1/installations/*.
+    description: Deploy Control bearer for /v1/plan-runs and /v1/apply-runs.
+    required: true
+  providers:
+    description: Comma-separated OpenTofu provider source addresses reviewed for this module.
     required: true
   mode:
-    description: apply or dry-run.
+    description: apply or plan.
     required: false
     default: apply
   cli-version:
@@ -43,7 +46,8 @@ runs:
         TAKOSUMI_ACTION_REMOTE_URL: ${{ inputs.remote-url }}
         TAKOSUMI_ACTION_MODE: ${{ inputs.mode }}
         TAKOSUMI_ACTION_CLI_VERSION: ${{ inputs.cli-version }}
-        TAKOSUMI_INSTALLER_TOKEN: ${{ inputs.token }}
+        TAKOSUMI_ACTION_PROVIDERS: ${{ inputs.providers }}
+        TAKOSUMI_DEPLOY_CONTROL_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
 
@@ -51,17 +55,31 @@ runs:
           apply)
             subcommand=(install "$TAKOSUMI_ACTION_SOURCE")
             ;;
-          dry-run)
-            subcommand=(install dry-run "$TAKOSUMI_ACTION_SOURCE")
+          plan)
+            subcommand=(plan "$TAKOSUMI_ACTION_SOURCE")
             ;;
           *)
-            echo "::error::mode must be 'apply' or 'dry-run'"
+            echo "::error::mode must be 'apply' or 'plan'"
             exit 2
             ;;
         esac
+
+        provider_args=()
+        IFS=',' read -ra providers <<< "$TAKOSUMI_ACTION_PROVIDERS"
+        for raw_provider in "${providers[@]}"; do
+          provider="$(printf '%s' "$raw_provider" | xargs)"
+          if [[ -n "$provider" ]]; then
+            provider_args+=(--provider "$provider")
+          fi
+        done
+        if [[ "${#provider_args[@]}" -eq 0 ]]; then
+          echo "::error::providers must include at least one OpenTofu provider source address"
+          exit 2
+        fi
 
         bunx --bun "@takosjp/takosumi@$TAKOSUMI_ACTION_CLI_VERSION" \
           "${subcommand[@]}" \
           --space "$TAKOSUMI_ACTION_SPACE" \
           --remote "$TAKOSUMI_ACTION_REMOTE_URL" \
-          --token "$TAKOSUMI_INSTALLER_TOKEN"
+          --token "$TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
+          "${provider_args[@]}"

@@ -108,25 +108,25 @@ import type {
   LaunchTokenOptions,
 } from "./mod.ts";
 import {
-  type InstallerProxyOptions,
+  type DeployControlProxyOptions,
   requestDeploymentApply,
-  requestDeploymentDryRun,
+  requestDeploymentPlanRun,
   requestInstallationApply,
   requestRollback,
-} from "./installer-proxy.ts";
+} from "./deploy-control-proxy.ts";
 import {
   readExportDownloadSigningSecretFromEnv,
   signExportDownloadUrl,
 } from "./export-archive.ts";
 
 /**
- * Whitelist the fields we are willing to echo from an upstream installer
- * error envelope back to the Cloud caller. The installer (Takosumi)
+ * Whitelist the fields we are willing to echo from an upstream deployControl
+ * error envelope back to the Cloud caller. The deployControl (Takosumi)
  * may include implementation details, stack traces, or operator-private
  * context in its `payload`; surfacing those verbatim was an information
  * leak (Round 1 finding). Only `code`, `message`, the non-sensitive
  * correlation `requestId`, and `hint` are passed through; anything else is
- * dropped. The fields are read from the nested Installer envelope
+ * dropped. The fields are read from the nested DeployControl envelope
  * (`payload.error.*`) with a fallback to a top-level shape.
  */
 function sanitizeUpstreamErrorPayload(
@@ -138,7 +138,7 @@ function sanitizeUpstreamErrorPayload(
     return undefined;
   }
   const record = payload as Record<string, unknown>;
-  // The Installer API closed error envelope nests its fields under `error`:
+  // The Deploy Control API closed error envelope nests its fields under `error`:
   // `{ error: { code, message, requestId } }`. Reading `record.code` directly
   // (the prior behavior) always missed them and silently dropped the upstream
   // code from every failed-deploy facade response. Unwrap the envelope, falling
@@ -177,7 +177,7 @@ interface CoreInstallationProjection {
   readonly sourceRef: string;
   readonly sourceCommit?: string;
   readonly sourceDigest?: string;
-  readonly planSnapshotDigest: string;
+  readonly planDigest: string;
   readonly artifactDigest?: string;
   readonly activatedHttpDomain?: ActivatedHttpDomainProjection;
 }
@@ -188,7 +188,7 @@ interface CoreDeploymentProjection {
   readonly sourceRef?: string;
   readonly sourceCommit?: string;
   readonly sourceDigest?: string;
-  readonly planSnapshotDigest: string;
+  readonly planDigest: string;
   readonly artifactDigest?: string;
   readonly activatedHttpDomain?: ActivatedHttpDomainProjection;
   readonly expected?: Record<string, unknown>;
@@ -196,14 +196,13 @@ interface CoreDeploymentProjection {
 }
 
 async function applyCoreInstallationForCloudProjection(input: {
-  installer: InstallerProxyOptions;
+  deployControl: DeployControlProxyOptions;
   spaceId: string | undefined;
   source: Record<string, unknown>;
-  expectedCommit: string | undefined;
-  expectedSourceDigest: string | undefined;
-  expectedPlanSnapshotDigest: string | undefined;
+  expected: Record<string, unknown> | undefined;
+  planRunId: string | undefined;
 }): Promise<CoreInstallationProjection | Response> {
-  const source = coreInstallerSourceFromCloudSource(input.source);
+  const source = coreDeployControlSourceFromCloudSource(input.source);
   if (source instanceof Response) return source;
   if (!input.spaceId) {
     return json({
@@ -215,22 +214,19 @@ async function applyCoreInstallationForCloudProjection(input: {
     spaceId: input.spaceId,
     source,
   };
-  const expected: Record<string, unknown> = {};
-  if (input.expectedPlanSnapshotDigest) {
-    expected.planSnapshotDigest = input.expectedPlanSnapshotDigest;
+  if (input.planRunId) {
+    body.planRunId = input.planRunId;
   }
-  if (source.kind === "git" && input.expectedCommit) {
-    expected.commit = input.expectedCommit;
-  } else if (source.kind === "prepared" && input.expectedSourceDigest) {
-    expected.sourceDigest = input.expectedSourceDigest;
+  if (!input.expected || !isRecord(input.expected)) {
+    return json({
+      error: "invalid_request",
+      error_description:
+        "installation apply through Takosumi deploy control requires expected review guards",
+    }, 400);
   }
-  if (Object.keys(expected).length > 0) {
-    body.expected = {
-      ...expected,
-    };
-  }
+  body.expected = { ...input.expected };
   const result = await requestInstallationApply({
-    installer: input.installer,
+    deployControl: input.deployControl,
     body,
   });
   if (result.status < 200 || result.status >= 300) {
@@ -246,15 +242,15 @@ async function applyCoreInstallationForCloudProjection(input: {
   return projection;
 }
 
-async function dryRunCoreDeploymentForCloudProjection(input: {
-  installer: InstallerProxyOptions;
+async function planCoreDeploymentForCloudProjection(input: {
+  deployControl: DeployControlProxyOptions;
   installationId: string;
   source: Record<string, unknown> | undefined;
 }): Promise<CoreDeploymentProjection | Response> {
   const body = coreDeploymentRequestBodyFromCloudBody({ source: input.source });
   if (body instanceof Response) return body;
-  const result = await requestDeploymentDryRun({
-    installer: input.installer,
+  const result = await requestDeploymentPlanRun({
+    deployControl: input.deployControl,
     installationId: input.installationId,
     body,
   });
@@ -262,15 +258,15 @@ async function dryRunCoreDeploymentForCloudProjection(input: {
     const upstream = sanitizeUpstreamErrorPayload(result.payload);
     return json({
       error: "failed_precondition",
-      error_description: "Takosumi deployment dry-run failed",
+      error_description: "Takosumi deployment PlanRun failed",
       ...(upstream ? { upstream } : {}),
     }, result.status);
   }
-  return coreDeploymentProjectionFromDryRun(result.payload);
+  return coreDeploymentProjectionFromPlanRun(result.payload);
 }
 
 async function applyCoreDeploymentForCloudProjection(input: {
-  installer: InstallerProxyOptions;
+  deployControl: DeployControlProxyOptions;
   installationId: string;
   source: Record<string, unknown> | undefined;
   expected: Record<string, unknown> | undefined;
@@ -284,11 +280,11 @@ async function applyCoreDeploymentForCloudProjection(input: {
     return json({
       error: "invalid_request",
       error_description:
-        "deployment apply through the Takosumi installer requires expected from deployment dry-run",
+        "deployment apply through Takosumi deploy control requires expected review guards",
     }, 400);
   }
   const result = await requestDeploymentApply({
-    installer: input.installer,
+    deployControl: input.deployControl,
     installationId: input.installationId,
     body,
   });
@@ -304,21 +300,27 @@ async function applyCoreDeploymentForCloudProjection(input: {
 }
 
 async function rollbackCoreDeploymentForCloudProjection(input: {
-  installer: InstallerProxyOptions;
+  deployControl: DeployControlProxyOptions;
   installationId: string;
   deploymentId: string | undefined;
+  planRunId: string | undefined;
+  expected: Record<string, unknown> | undefined;
 }): Promise<CoreDeploymentProjection | Response> {
   if (!input.deploymentId) {
     return json({
       error: "invalid_request",
       error_description:
-        "rollback through the Takosumi installer requires deploymentId",
+        "rollback through Takosumi deploy control requires deploymentId",
     }, 400);
   }
   const result = await requestRollback({
-    installer: input.installer,
+    deployControl: input.deployControl,
     installationId: input.installationId,
-    body: { deploymentId: input.deploymentId },
+    body: {
+      deploymentId: input.deploymentId,
+      ...(input.planRunId ? { planRunId: input.planRunId } : {}),
+      ...(input.expected ? { expected: input.expected } : {}),
+    },
   });
   if (result.status < 200 || result.status >= 300) {
     const upstream = sanitizeUpstreamErrorPayload(result.payload);
@@ -337,7 +339,7 @@ function coreDeploymentRequestBodyFromCloudBody(input: {
 }): Record<string, unknown> | Response {
   const body: Record<string, unknown> = {};
   if (input.source && Object.keys(input.source).length > 0) {
-    const source = coreInstallerSourceFromCloudSource(input.source);
+    const source = coreDeployControlSourceFromCloudSource(input.source);
     if (source instanceof Response) return source;
     body.source = source;
   }
@@ -345,11 +347,11 @@ function coreDeploymentRequestBodyFromCloudBody(input: {
   return body;
 }
 
-function coreInstallerSourceFromCloudSource(
+function coreDeployControlSourceFromCloudSource(
   source: Record<string, unknown>,
 ): Record<string, unknown> | Response {
   const kind = stringValue(source.kind) ?? "git";
-  const url = stringValue(source.url) ?? stringValue(source.gitUrl);
+  const url = stringValue(source.url);
   if (!url) {
     return json({
       error: "invalid_request",
@@ -367,8 +369,7 @@ function coreInstallerSourceFromCloudSource(
     return { kind: "git", url, ref };
   }
   if (kind === "prepared") {
-    const digest = stringValue(source.digest) ??
-      stringValue(source.sourceDigest);
+    const digest = stringValue(source.digest);
     if (!digest) {
       return json({
         error: "invalid_request",
@@ -378,7 +379,7 @@ function coreInstallerSourceFromCloudSource(
     return { kind: "prepared", url, digest };
   }
   if (kind === "local") {
-    return { kind: "local", url };
+    return { kind: "local", path: url };
   }
   return json({
     error: "invalid_request",
@@ -408,14 +409,16 @@ function coreInstallationProjectionFromApply(
   const installationId = stringValue(installation?.id);
   const appId = stringValue(installation?.appId) ??
     stringValue(installation?.app_id);
-  const sourceUrl = stringValue(source?.url);
+  const sourceUrl = stringValue(source?.url) ?? stringValue(source?.path);
   const sourceKind = stringValue(source?.kind);
   const sourceRef = stringValue(source?.ref) ?? stringValue(source?.digest) ??
     (sourceKind === "local" ? "local" : undefined);
-  const sourceCommit = stringValue(source?.commit);
+  const sourceCommit = stringValue(source?.commit) ??
+    stringValue(deployment?.sourceCommit) ??
+    stringValue(deployment?.source_commit);
   const sourceDigest = stringValue(source?.digest);
-  const planSnapshotDigest = stringValue(deployment?.planSnapshotDigest) ??
-    stringValue(deployment?.plan_snapshot_digest);
+  const planDigest = stringValue(deployment?.planDigest) ??
+    stringValue(deployment?.plan_digest);
   const artifactDigest =
     stringValue(deployment?.artifactDigest) ??
       stringValue(deployment?.artifact_digest);
@@ -425,7 +428,7 @@ function coreInstallationProjectionFromApply(
     now: Date.now(),
   });
   if (
-    !installationId || !appId || !sourceUrl || !sourceRef || !planSnapshotDigest
+    !installationId || !appId || !sourceUrl || !sourceRef || !planDigest
   ) {
     return json({
       error: "feature_unavailable",
@@ -440,26 +443,26 @@ function coreInstallationProjectionFromApply(
     sourceRef,
     sourceCommit,
     sourceDigest,
-    planSnapshotDigest,
+    planDigest,
     artifactDigest,
     activatedHttpDomain,
   };
 }
 
-function coreDeploymentProjectionFromDryRun(
+function coreDeploymentProjectionFromPlanRun(
   payload: unknown,
 ): CoreDeploymentProjection | Response {
   if (!isRecord(payload)) {
     return json({
       error: "feature_unavailable",
       error_description:
-        "Takosumi deployment dry-run returned a non-object response",
+        "Takosumi deployment PlanRun returned a non-object response",
     }, 502);
   }
   const projection = coreDeploymentProjectionFromDeploymentLike({
     deployment: payload,
     payload,
-    fallbackDeploymentId: "dry-run",
+    fallbackDeploymentId: "plan-run",
   });
   if (projection instanceof Response) return projection;
   const expected = isRecord(payload.expected) ? payload.expected : undefined;
@@ -511,11 +514,11 @@ function coreDeploymentProjectionFromDeploymentLike(input: {
     : undefined;
   const deploymentId = stringValue(deployment?.id) ??
     input.fallbackDeploymentId;
-  const planSnapshotDigest = stringValue(deployment?.planSnapshotDigest) ??
-    stringValue(deployment?.plan_snapshot_digest) ??
+  const planDigest = stringValue(deployment?.planDigest) ??
+    stringValue(deployment?.plan_digest) ??
     (isRecord(input.payload)
-      ? stringValue(input.payload.planSnapshotDigest) ??
-        stringValue(input.payload.plan_snapshot_digest)
+      ? stringValue(input.payload.planDigest) ??
+        stringValue(input.payload.plan_digest)
       : undefined);
   const artifactDigest =
     stringValue(deployment?.artifactDigest) ??
@@ -525,7 +528,7 @@ function coreDeploymentProjectionFromDeploymentLike(input: {
     outputs: deployment?.outputs,
     now: Date.now(),
   });
-  if (!deploymentId || !planSnapshotDigest) {
+  if (!deploymentId || !planDigest) {
     return json({
       error: "feature_unavailable",
       error_description:
@@ -534,11 +537,13 @@ function coreDeploymentProjectionFromDeploymentLike(input: {
   }
   return {
     deploymentId,
-    sourceUrl: stringValue(source?.url),
+    sourceUrl: stringValue(source?.url) ?? stringValue(source?.path),
     sourceRef: stringValue(source?.ref) ?? stringValue(source?.digest),
-    sourceCommit: stringValue(source?.commit),
+    sourceCommit: stringValue(source?.commit) ??
+      stringValue(deployment?.sourceCommit) ??
+      stringValue(deployment?.source_commit),
     sourceDigest: stringValue(source?.digest),
-    planSnapshotDigest,
+    planDigest,
     artifactDigest,
     activatedHttpDomain,
     payload: input.payload,
@@ -581,6 +586,38 @@ function activatedHttpDomainCandidateFromCoreOutputs(
   readonly scheme?: string;
   readonly listener?: string;
 } | undefined {
+  if (Array.isArray(outputs)) {
+    const candidates = outputs
+      .filter(isRecord)
+      .flatMap((output, index) => {
+        const kind = stringValue(output.kind);
+        const name = stringValue(output.name);
+        const value = stringValue(output.value);
+        if (
+          !value ||
+          !canonicalHttpOrigin(value) ||
+          !(
+            kind === "launch_url" ||
+            kind === "service_url" ||
+            name === "launch_url" ||
+            name === "takosumi_launch_url" ||
+            name === "service_url" ||
+            name === "takosumi_service_url"
+          )
+        ) {
+          return [];
+        }
+        return [{
+          url: value,
+          deploymentOutputRef: `deployment.outputs.${index}`,
+          component: name ?? kind,
+        }];
+      });
+    return candidates.sort((left, right) =>
+      activatedHttpDomainCandidateScore(right) -
+      activatedHttpDomainCandidateScore(left)
+    )[0];
+  }
   if (!isRecord(outputs)) return undefined;
   const candidates: {
     readonly url: string;
@@ -751,7 +788,7 @@ export async function handleCreateAppInstallation(input: {
   request: Request;
   store: AccountsStore;
   issuer: string;
-  installer?: InstallerProxyOptions;
+  deployControl?: DeployControlProxyOptions;
   launchTokens?: LaunchTokenOptions;
   bindingMaterializer?: AppBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
@@ -760,6 +797,7 @@ export async function handleCreateAppInstallation(input: {
   if (!body) return json({ error: "invalid_request" }, 400);
 
   const source = isRecord(body.source) ? body.source : {};
+  const expected = isRecord(body.expected) ? body.expected : undefined;
   const now = Date.now();
   const requestedInstallationId = stringValue(body.installationId);
   const accountId = stringValue(body.accountId);
@@ -767,13 +805,18 @@ export async function handleCreateAppInstallation(input: {
   let appId = stringValue(body.appId);
   let sourceGitUrl = stringValue(source.gitUrl) ?? stringValue(source.url);
   let sourceRef = stringValue(source.ref);
-  let sourceCommit = stringValue(source.commit);
-  const sourceDigest = stringValue(source.digest) ??
-    stringValue(source.sourceDigest);
-  let planSnapshotDigest = stringValue(source.planSnapshotDigest) ??
-    stringValue(body.planSnapshotDigest);
-  let artifactDigest = stringValue(source.artifactDigest) ??
+  let sourceCommit = stringValue(expected?.sourceCommit) ??
+    stringValue(source.commit);
+  let planDigest = stringValue(expected?.planDigest) ??
+    stringValue(source.planDigest) ??
+    stringValue(body.planDigest);
+  let artifactDigest = stringValue(expected?.planArtifactDigest) ??
+    stringValue(source.artifactDigest) ??
     stringValue(body.artifactDigest);
+  const planRunId = stringValue(source.planRunId) ??
+    stringValue(body.planRunId) ??
+    stringValue(body.plan_run_id) ??
+    stringValue(expected?.planRunId);
   const mode = appInstallationModeValue(body.mode);
   const billingAccountId = stringValue(
     body.billingAccountId ?? body.billing_account_id,
@@ -798,26 +841,33 @@ export async function handleCreateAppInstallation(input: {
   if (existingSpace && existingSpace.accountId !== accountId) {
     return json({ error: "space_account_mismatch" }, 409);
   }
-  if (input.installer && requestedInstallationId) {
+  if (input.deployControl && requestedInstallationId) {
     return json({
       error: "invalid_request",
       error_description:
-        "installationId is assigned by the Takosumi installer for this Takosumi Accounts facade",
+        "installationId is assigned by Takosumi deploy control for this Accounts facade",
+    }, 400);
+  }
+  if (input.deployControl && !expected) {
+    return json({
+      error: "invalid_request",
+      error_description:
+        "installation apply through Takosumi deploy control requires expected review guards",
     }, 400);
   }
   if (
-    (planSnapshotDigest !== undefined &&
-      !isSha256DigestRef(planSnapshotDigest)) ||
+    (planDigest !== undefined &&
+      !isSha256DigestRef(planDigest)) ||
     (artifactDigest !== undefined &&
       !isSha256DigestRef(artifactDigest))
   ) {
     return json({
       error: "invalid_request",
       error_description:
-        "source.planSnapshotDigest and source.artifactDigest must be sha256: digest references",
+        "source.planDigest and source.artifactDigest must be sha256: digest references",
     }, 400);
   }
-  if (input.installer) {
+  if (input.deployControl) {
     const preflightBindings = appBindingRecordsFromValue({
       value: body.useEdges,
       installationId: "inst_core_apply_preflight",
@@ -844,26 +894,23 @@ export async function handleCreateAppInstallation(input: {
     });
     if (preflightOidcClient instanceof Response) return preflightOidcClient;
   }
-  const coreApply = input.installer
+  const coreApply = input.deployControl
     ? await applyCoreInstallationForCloudProjection({
-      installer: input.installer,
+      deployControl: input.deployControl,
       spaceId,
       source,
-      expectedCommit: sourceCommit,
-      expectedSourceDigest: sourceDigest,
-      expectedPlanSnapshotDigest: planSnapshotDigest,
+      expected,
+      planRunId,
     })
     : undefined;
   if (coreApply instanceof Response) return coreApply;
   if (coreApply) {
-    appId = appId ?? coreApply.appId;
-    sourceGitUrl = sourceGitUrl ?? coreApply.sourceUrl;
-    sourceRef = sourceRef ?? coreApply.sourceRef;
-    sourceCommit = sourceCommit ?? coreApply.sourceCommit ??
-      coreApply.sourceDigest;
-    planSnapshotDigest = planSnapshotDigest ?? coreApply.planSnapshotDigest;
-    artifactDigest = artifactDigest ??
-      coreApply.artifactDigest;
+    appId = coreApply.appId;
+    sourceGitUrl = coreApply.sourceUrl;
+    sourceRef = coreApply.sourceRef;
+    sourceCommit = coreApply.sourceCommit ?? coreApply.sourceDigest;
+    planDigest = coreApply.planDigest;
+    artifactDigest = coreApply.artifactDigest;
   }
   const installationId = requestedInstallationId ??
     coreApply?.installationId ??
@@ -873,10 +920,10 @@ export async function handleCreateAppInstallation(input: {
   // (D1 `INSERT OR REPLACE`; Postgres `ON CONFLICT DO UPDATE`), so two
   // concurrent creates with the same caller-influenced installationId can
   // both pass this check and the second silently overwrites the first. The
-  // common path is safe: when `input.installer` is wired the space installer
+  // common path is safe: when `input.deployControl` is wired the space deployControl
   // assigns the id (a caller-supplied requestedInstallationId is rejected
   // above), and space-assigned/random ids do not collide. Fully closing the
-  // no-installer + caller-supplied-id race requires an atomic putIfAbsent
+  // no-deployControl + caller-supplied-id race requires an atomic putIfAbsent
   // on `saveAppInstallation` in the store implementations.
   if (await input.store.findAppInstallation(installationId)) {
     return json({ error: "installation_already_exists" }, 409);
@@ -888,29 +935,29 @@ export async function handleCreateAppInstallation(input: {
     !sourceGitUrl ||
     !sourceRef ||
     !sourceCommit ||
-    !planSnapshotDigest ||
+    !planDigest ||
     !mode ||
     !createdBySubject
   ) {
     return json({
       error: "invalid_request",
       error_description:
-        "accountId, spaceId, appId, source.gitUrl/url, source.ref, source.commit, source.planSnapshotDigest, mode, and createdBySubject are required",
+        "accountId, spaceId, appId, source.gitUrl/url, source.ref, source.commit, source.planDigest, mode, and createdBySubject are required",
     }, 400);
   }
   // These fields are digest-typed integrity attestations recorded in the
-  // ledger (surfaced as plan_snapshot_digest); reject values that are not a
+  // ledger (surfaced as plan_digest); reject values that are not a
   // `sha256:`-prefixed digest reference so the provenance the ledger claims is
   // not weakened by arbitrary junk strings.
   if (
-    !isSha256DigestRef(planSnapshotDigest) ||
+    !isSha256DigestRef(planDigest) ||
     (artifactDigest !== undefined &&
       !isSha256DigestRef(artifactDigest))
   ) {
     return json({
       error: "invalid_request",
       error_description:
-        "source.planSnapshotDigest and source.artifactDigest must be sha256: digest references",
+        "source.planDigest and source.artifactDigest must be sha256: digest references",
     }, 400);
   }
 
@@ -1051,6 +1098,19 @@ export async function handleCreateAppInstallation(input: {
       createdAt: now,
       updatedAt: now,
     });
+    // Read-back guard mirroring the LedgerAccount claim check above. The store's
+    // ON CONFLICT(space_id) DO UPDATE SET account_id would otherwise let a
+    // concurrent create with the same spaceId but a different accountId silently
+    // re-own this space, leaving this installation pointing at a space owned by
+    // another account.
+    const confirmedSpace = await input.store.findSpace(spaceId);
+    if (!confirmedSpace || confirmedSpace.accountId !== accountId) {
+      return json({
+        error: "space_claim_conflict",
+        error_description:
+          "spaceId was claimed by another account while creating this one",
+      }, 409);
+    }
   }
 
   const installation: InstallationRecord = {
@@ -1061,7 +1121,7 @@ export async function handleCreateAppInstallation(input: {
     sourceGitUrl,
     sourceRef,
     sourceCommit,
-    planSnapshotDigest,
+    planDigest,
     artifactDigest,
     mode,
     runtimeBindingId,
@@ -2055,7 +2115,7 @@ export async function handleUpdateAppInstallationRevision(input: {
   operation: "deployment" | "rollback";
   request: Request;
   store: AccountsStore;
-  installer?: InstallerProxyOptions;
+  deployControl?: DeployControlProxyOptions;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return json({ error: "invalid_request" }, 400);
@@ -2069,13 +2129,13 @@ export async function handleUpdateAppInstallationRevision(input: {
       error_description: `${input.operation} requires a ready AppInstallation`,
     }, 409);
   }
-  if (input.installer) {
-    return await handleCoreInstallerBackedRevision({
+  if (input.deployControl) {
+    return await handleCoreDeployControlBackedRevision({
       installationId: input.installationId,
       operation: input.operation,
       body,
       store: input.store,
-      installer: input.installer,
+      deployControl: input.deployControl,
       installation,
     });
   }
@@ -2087,15 +2147,15 @@ export async function handleUpdateAppInstallationRevision(input: {
     stringValue(body.to);
   const sourceCommit = stringValue(source.commit) ??
     stringValue(body.sourceCommit);
-  const planSnapshotDigest = stringValue(source.planSnapshotDigest) ??
-    stringValue(body.planSnapshotDigest);
+  const planDigest = stringValue(source.planDigest) ??
+    stringValue(body.planDigest);
   const artifactDigest = stringValue(source.artifactDigest) ??
     stringValue(body.artifactDigest);
-  if (!sourceRef || !sourceCommit || !planSnapshotDigest) {
+  if (!sourceRef || !sourceCommit || !planDigest) {
     return json({
       error: "invalid_request",
       error_description:
-        "source.ref, source.commit, and source.planSnapshotDigest are required",
+        "source.ref, source.commit, and source.planDigest are required",
     }, 400);
   }
   if (
@@ -2139,7 +2199,7 @@ export async function handleUpdateAppInstallationRevision(input: {
     sourceGitUrl,
     sourceRef,
     sourceCommit,
-    planSnapshotDigest,
+    planDigest,
     artifactDigest: artifactDigest ?? null,
     requestedBindings,
     requestedGrants,
@@ -2151,7 +2211,7 @@ export async function handleUpdateAppInstallationRevision(input: {
     sourceGitUrl,
     sourceRef,
     sourceCommit,
-    planSnapshotDigest,
+    planDigest,
     ...(artifactDigest
       ? { artifactDigest }
       : { artifactDigest: undefined }),
@@ -2202,12 +2262,12 @@ export async function handleUpdateAppInstallationRevision(input: {
   });
 }
 
-async function handleCoreInstallerBackedRevision(input: {
+async function handleCoreDeployControlBackedRevision(input: {
   installationId: string;
   operation: "deployment" | "rollback";
   body: Record<string, unknown>;
   store: AccountsStore;
-  installer: InstallerProxyOptions;
+  deployControl: DeployControlProxyOptions;
   installation: InstallationRecord;
 }): Promise<Response> {
   const now = Date.now();
@@ -2218,10 +2278,14 @@ async function handleCoreInstallerBackedRevision(input: {
 
   if (input.operation === "rollback") {
     const coreRollback = await rollbackCoreDeploymentForCloudProjection({
-      installer: input.installer,
+      deployControl: input.deployControl,
       installationId: input.installationId,
       deploymentId: stringValue(input.body.deploymentId) ??
         stringValue(input.body.deployment_id),
+      planRunId: stringValue(input.body.planRunId) ??
+        stringValue(input.body.plan_run_id) ??
+        (expected ? stringValue(expected.planRunId) : undefined),
+      expected,
     });
     if (coreRollback instanceof Response) return coreRollback;
     const updated = installationRecordFromCoreDeploymentProjection({
@@ -2266,22 +2330,21 @@ async function handleCoreInstallerBackedRevision(input: {
     });
   }
 
-  const sourceGitUrl = stringValue(source?.gitUrl) ??
-    stringValue(source?.url) ?? input.installation.sourceGitUrl;
+  const sourceGitUrl = stringValue(source?.url) ?? input.installation.sourceGitUrl;
   const sourceRef = stringValue(source?.ref) ?? stringValue(input.body.ref) ??
     stringValue(input.body.to);
-  const sourceCommit = stringValue(expected?.commit) ??
+  const sourceCommit = stringValue(expected?.sourceCommit) ??
     stringValue(source?.commit) ?? stringValue(input.body.sourceCommit);
-  const planSnapshotDigest = stringValue(expected?.planSnapshotDigest) ??
-    stringValue(source?.planSnapshotDigest) ??
-    stringValue(input.body.planSnapshotDigest);
+  const planDigest = stringValue(expected?.planDigest) ??
+    stringValue(source?.planDigest) ??
+    stringValue(input.body.planDigest);
   const artifactDigest = stringValue(source?.artifactDigest) ??
     stringValue(input.body.artifactDigest);
-  if (!sourceRef || !sourceCommit || !planSnapshotDigest) {
+  if (!sourceRef || !sourceCommit || !planDigest) {
     return json({
       error: "invalid_request",
       error_description:
-        "deployment through the Takosumi installer requires source.ref plus expected.commit and expected.planSnapshotDigest from deployment dry-run",
+        "deployment through Takosumi deploy control requires source.ref plus expected.sourceCommit and expected.planDigest",
     }, 400);
   }
   if (
@@ -2321,7 +2384,7 @@ async function handleCoreInstallerBackedRevision(input: {
     sourceGitUrl,
     sourceRef,
     sourceCommit,
-    planSnapshotDigest,
+    planDigest,
     artifactDigest: artifactDigest ?? null,
     requestedBindings,
     requestedGrants,
@@ -2329,7 +2392,7 @@ async function handleCoreInstallerBackedRevision(input: {
   if (confirmResult instanceof Response) return confirmResult;
 
   const coreDeploy = await applyCoreDeploymentForCloudProjection({
-    installer: input.installer,
+    deployControl: input.deployControl,
     installationId: input.installationId,
     source,
     expected,
@@ -2343,7 +2406,7 @@ async function handleCoreInstallerBackedRevision(input: {
       sourceGitUrl,
       sourceRef,
       sourceCommit,
-      planSnapshotDigest,
+      planDigest,
       artifactDigest,
     },
     now,
@@ -2390,7 +2453,7 @@ function installationRecordFromCoreDeploymentProjection(input: {
     sourceGitUrl: string;
     sourceRef: string;
     sourceCommit: string;
-    planSnapshotDigest: string;
+    planDigest: string;
     artifactDigest?: string;
   };
   now: number;
@@ -2407,9 +2470,9 @@ function installationRecordFromCoreDeploymentProjection(input: {
       input.projection.sourceDigest ??
       input.fallback?.sourceCommit ??
       input.installation.sourceCommit,
-    planSnapshotDigest: input.projection.planSnapshotDigest ??
-      input.fallback?.planSnapshotDigest ??
-      input.installation.planSnapshotDigest,
+    planDigest: input.projection.planDigest ??
+      input.fallback?.planDigest ??
+      input.installation.planDigest,
     artifactDigest: input.projection.artifactDigest ??
       input.fallback?.artifactDigest ??
       input.installation.artifactDigest,
@@ -2455,11 +2518,11 @@ async function revisionEnvelopeResponse(input: {
   });
 }
 
-export async function handleDryRunAppInstallationDeployment(input: {
+export async function handlePlanAppInstallationDeployment(input: {
   installationId: string;
   request: Request;
   store: AccountsStore;
-  installer?: InstallerProxyOptions;
+  deployControl?: DeployControlProxyOptions;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return json({ error: "invalid_request" }, 400);
@@ -2470,33 +2533,33 @@ export async function handleDryRunAppInstallationDeployment(input: {
   if (installation.status !== "ready") {
     return json({
       error: "state_conflict",
-      error_description: "deployment dry-run requires a ready AppInstallation",
+      error_description: "deployment PlanRun requires a ready AppInstallation",
     }, 409);
   }
-  if (input.installer) {
+  if (input.deployControl) {
     const source = isRecord(body.source) ? body.source : undefined;
-    const coreDryRun = await dryRunCoreDeploymentForCloudProjection({
-      installer: input.installer,
+    const corePlanRun = await planCoreDeploymentForCloudProjection({
+      deployControl: input.deployControl,
       installationId: input.installationId,
       source,
     });
-    if (coreDryRun instanceof Response) return coreDryRun;
-    const sourceGitUrl = coreDryRun.sourceUrl ??
+    if (corePlanRun instanceof Response) return corePlanRun;
+    const sourceGitUrl = corePlanRun.sourceUrl ??
       stringValue(source?.gitUrl) ??
       stringValue(source?.url) ??
       installation.sourceGitUrl;
-    const sourceRef = coreDryRun.sourceRef ??
+    const sourceRef = corePlanRun.sourceRef ??
       stringValue(source?.ref) ??
       stringValue(body.ref) ??
       stringValue(body.to) ??
       installation.sourceRef;
-    const sourceCommit = coreDryRun.sourceCommit ??
-      coreDryRun.sourceDigest ??
+    const sourceCommit = corePlanRun.sourceCommit ??
+      corePlanRun.sourceDigest ??
       stringValue(source?.commit) ??
       stringValue(body.sourceCommit) ??
       installation.sourceCommit;
-    const planSnapshotDigest = coreDryRun.planSnapshotDigest;
-    const artifactDigest = coreDryRun.artifactDigest ??
+    const planDigest = corePlanRun.planDigest;
+    const artifactDigest = corePlanRun.artifactDigest ??
       stringValue(source?.artifactDigest) ??
       stringValue(body.artifactDigest) ??
       null;
@@ -2507,7 +2570,7 @@ export async function handleDryRunAppInstallationDeployment(input: {
       return json({
         error: "source_mismatch",
         error_description:
-          "deployment dry-run must keep the installation source git URL",
+          "deployment PlanRun must keep the installation source git URL",
       }, 409);
     }
     const appId = stringValue(body.appId);
@@ -2515,7 +2578,7 @@ export async function handleDryRunAppInstallationDeployment(input: {
       return json({
         error: "app_mismatch",
         error_description:
-          "deployment dry-run must keep the installation appId",
+          "deployment PlanRun must keep the installation appId",
       }, 409);
     }
 
@@ -2540,7 +2603,7 @@ export async function handleDryRunAppInstallationDeployment(input: {
       sourceGitUrl,
       sourceRef,
       sourceCommit,
-      planSnapshotDigest,
+      planDigest,
       artifactDigest,
       requestedBindings,
       requestedGrants,
@@ -2550,20 +2613,20 @@ export async function handleDryRunAppInstallationDeployment(input: {
       operation: "deployment",
       installationId: input.installationId,
       source: {
-        gitUrl: sourceGitUrl,
+        url: sourceGitUrl,
         ref: sourceRef,
         commit: sourceCommit,
-        planSnapshotDigest,
+        planDigest,
         artifactDigest,
       },
       requestedUseEdges: requestedBindings.map(serializeAppBinding),
       requestedPermissionScopes: requestedGrants.map(serializeAppGrant),
-      changes: isRecord(coreDryRun.payload) &&
-          Array.isArray(coreDryRun.payload.changes)
-        ? coreDryRun.payload.changes
+      changes: isRecord(corePlanRun.payload) &&
+          Array.isArray(corePlanRun.payload.changes)
+        ? corePlanRun.payload.changes
         : [],
       expected: {
-        ...(coreDryRun.expected ?? {}),
+        ...(corePlanRun.expected ?? {}),
         permissionDigest,
         costAckRequired: requestedBindings.some((binding) =>
           isMeteredBindingKind(binding.kind)
@@ -2579,15 +2642,15 @@ export async function handleDryRunAppInstallationDeployment(input: {
     stringValue(body.to);
   const sourceCommit = stringValue(source.commit) ??
     stringValue(body.sourceCommit);
-  const planSnapshotDigest = stringValue(source.planSnapshotDigest) ??
-    stringValue(body.planSnapshotDigest);
+  const planDigest = stringValue(source.planDigest) ??
+    stringValue(body.planDigest);
   const artifactDigest = stringValue(source.artifactDigest) ??
     stringValue(body.artifactDigest);
-  if (!sourceRef || !sourceCommit || !planSnapshotDigest) {
+  if (!sourceRef || !sourceCommit || !planDigest) {
     return json({
       error: "invalid_request",
       error_description:
-        "source.ref, source.commit, and source.planSnapshotDigest are required",
+        "source.ref, source.commit, and source.planDigest are required",
     }, 400);
   }
   if (
@@ -2597,14 +2660,14 @@ export async function handleDryRunAppInstallationDeployment(input: {
     return json({
       error: "source_mismatch",
       error_description:
-        "deployment dry-run must keep the installation source git URL",
+        "deployment PlanRun must keep the installation source git URL",
     }, 409);
   }
   const appId = stringValue(body.appId);
   if (appId && appId !== installation.appId) {
     return json({
       error: "app_mismatch",
-      error_description: "deployment dry-run must keep the installation appId",
+      error_description: "deployment PlanRun must keep the installation appId",
     }, 409);
   }
 
@@ -2629,7 +2692,7 @@ export async function handleDryRunAppInstallationDeployment(input: {
     sourceGitUrl,
     sourceRef,
     sourceCommit,
-    planSnapshotDigest,
+    planDigest,
     artifactDigest: artifactDigest ?? null,
     requestedBindings,
     requestedGrants,
@@ -2642,7 +2705,7 @@ export async function handleDryRunAppInstallationDeployment(input: {
       gitUrl: sourceGitUrl,
       ref: sourceRef,
       commit: sourceCommit,
-      planSnapshotDigest,
+      planDigest,
       artifactDigest: artifactDigest ?? null,
     },
     requestedUseEdges: requestedBindings.map(serializeAppBinding),
@@ -3131,7 +3194,7 @@ function appInstallationRevisionPayload(
       gitUrl: installation.sourceGitUrl,
       ref: installation.sourceRef,
       commit: installation.sourceCommit,
-      planSnapshotDigest: installation.planSnapshotDigest,
+      planDigest: installation.planDigest,
       artifactDigest: installation.artifactDigest ?? null,
     },
   };
@@ -3543,7 +3606,7 @@ async function appInstallationRevisionConfirmFromValue(input: {
   sourceGitUrl: string;
   sourceRef: string;
   sourceCommit: string;
-  planSnapshotDigest: string;
+  planDigest: string;
   artifactDigest: string | null;
   requestedBindings: readonly AppBindingRecord[];
   requestedGrants: readonly AppGrantRecord[];
@@ -3602,7 +3665,7 @@ async function appInstallationRevisionPermissionDigest(input: {
   sourceGitUrl: string;
   sourceRef: string;
   sourceCommit: string;
-  planSnapshotDigest: string;
+  planDigest: string;
   artifactDigest: string | null;
   requestedBindings: readonly AppBindingRecord[];
   requestedGrants: readonly AppGrantRecord[];
@@ -3615,7 +3678,7 @@ async function appInstallationRevisionPermissionDigest(input: {
       gitUrl: normalizeSourceGitUrl(input.sourceGitUrl),
       ref: input.sourceRef,
       commit: input.sourceCommit,
-      planSnapshotDigest: input.planSnapshotDigest,
+      planDigest: input.planDigest,
       artifactDigest: input.artifactDigest,
     },
     requestedBindings: input.requestedBindings

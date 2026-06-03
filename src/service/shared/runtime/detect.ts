@@ -1,4 +1,3 @@
-import { denoRuntime, isDeno } from "./deno.ts";
 import { isNode, nodeRuntime } from "./node.ts";
 import { isWorkers } from "./workers.ts";
 import {
@@ -18,24 +17,12 @@ let cached: RuntimeAdapter | undefined;
  *
  *   1. Cloudflare Workers (`navigator.userAgent === "Cloudflare-Workers"` or
  *      `globalThis.WebSocketPair` fallback). Returning early here keeps the
- *      module safe to import inside an isolate where touching `Deno.*` or
+ *      module safe to import inside an isolate where touching runtime globals
  *      `process.versions.node` could throw or spawn Node-compat shims.
  *   2. Bun (`typeof Bun !== "undefined"`). Bun is mostly Node-compatible but
  *      surfaces its own marker; we still treat the adapter as `node`-shaped
  *      because Bun supports the same `node:fs` / `node:http` modules.
- *   3. Deno (`isDeno()` = `typeof Deno.Command === "function"`). A naive
- *      `typeof Deno !== "undefined"` probe can be satisfied by partial
- *      compatibility globals in embedded hosts and then misclassify them as
- *      Deno before calling missing `Deno.Command` / `Deno.serve` APIs.
- *      `isDeno()` instead probes a genuine `Deno.Command` (a function only on
- *      real Deno), which is the reliable discriminator. It deliberately does
- *      NOT also require `process.versions.node` absent, because Deno 2.x
- *      exposes a Node-compat `process.versions.node` string — that clause
- *      would reject real Deno.
- *   4. Node.js (`isNode()` = `process.versions.node` string). Checked AFTER
- *      Deno: Deno also reports `process.versions.node`, so Deno must be matched
- *      first via the `Deno.Command` probe; the only host that reaches this
- *      branch is genuine Node.
+ *   3. Node.js (`isNode()` = `process.versions.node` string).
  *
  * On Workers, callers MUST use `createWorkersRuntime(env)` per request
  * because env bindings arrive on the fetch invocation, not at module load.
@@ -60,10 +47,6 @@ export function currentRuntime(): RuntimeAdapter {
     // AGENTS.md, so treat Bun support as best-effort until a Bun smoke test
     // covers descriptor JSON loading.
     cached = nodeRuntime;
-    return cached;
-  }
-  if (isDeno()) {
-    cached = denoRuntime;
     return cached;
   }
   if (isNode()) {

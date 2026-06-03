@@ -33,8 +33,8 @@ export default function InkdropMark(props: Props): JSX.Element {
           y2="44"
           gradientUnits="userSpaceOnUse"
         >
-          <stop offset="0" stop-color="var(--tg-grad-from, #5d3afd)" />
-          <stop offset="1" stop-color="var(--tg-grad-to, #00b1ff)" />
+          <stop offset="0" stop-color="var(--tg-grad-from, #0a0a0a)" />
+          <stop offset="1" stop-color="var(--tg-grad-to, #dc2626)" />
         </linearGradient>
       </defs>
       {/* droplet body — classic teardrop curve, point at top */}

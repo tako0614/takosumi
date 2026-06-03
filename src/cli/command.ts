@@ -16,11 +16,11 @@
  * tests run via `bun test`, commander's save/restore of `_optionValues` around
  * parse leaves the post-parse option store empty, so `cmd.opts()` (and the
  * options object commander passes to `.action()`) come back as `{}` even though
- * parsing succeeded. (`bun run` and `deno` are unaffected.) commander's
+ * parsing succeeded. (`bun run` and Node are unaffected.) commander's
  * `option:<name>` events DO fire correctly during parse, so we mirror every
  * parsed value into a per-command store and have `opts()` fall back to it
  * whenever commander's native store is empty. When the native store is
- * populated (Node / Deno / `bun run`), we return it unchanged.
+ * populated (Node / `bun run`), we return it unchanged.
  *
  * Every CLI command module imports `Command` from here instead of directly from
  * `commander` so the whole tree shares these semantics.

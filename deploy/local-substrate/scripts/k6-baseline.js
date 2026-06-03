@@ -16,14 +16,14 @@ import { check } from "k6";
 
 export const options = {
   scenarios: {
-    install_dry_run: {
+    deploy_control_plan: {
       executor: "constant-arrival-rate",
       rate: 10,
       timeUnit: "1s",
       duration: "20s",
       preAllocatedVUs: 5,
       maxVUs: 20,
-      exec: "installationDryRun",
+      exec: "deployControlPlan",
     },
     oidc_discovery: {
       executor: "constant-arrival-rate",
@@ -36,44 +36,44 @@ export const options = {
     },
   },
   thresholds: {
-    "http_req_failed{scenario:install_dry_run}": ["rate<0.01"],
+    "http_req_failed{scenario:deploy_control_plan}": ["rate<0.01"],
     "http_req_failed{scenario:oidc_discovery}": ["rate<0.01"],
     // Local Docker can temporarily stretch into seconds while worker
     // bundles are being rebuilt or containers are cold. This is a smoke
     // regression guard, not a production SLO; the error-rate thresholds
     // above catch broken routing/TLS, while these catch stuck handlers.
-    "http_req_duration{scenario:install_dry_run}": ["p(95)<5000"],
+    "http_req_duration{scenario:deploy_control_plan}": ["p(95)<5000"],
     "http_req_duration{scenario:oidc_discovery}": ["p(95)<5000"],
   },
 };
 
-const INSTALLATION_DRY_RUN_URL =
-  "https://accounts.takosumi.test/v1/installations/dry-run";
+const PLAN_RUNS_URL =
+  "https://service-worker.takosumi.test/v1/plan-runs";
 const OIDC_URL = "https://accounts.takosumi.test/.well-known/openid-configuration";
-const LOCAL_CLOUD_SESSION_ID = __ENV.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID ||
-  "sess_local_substrate";
+const DEPLOY_CONTROL_TOKEN = __ENV.TAKOSUMI_DEPLOY_CONTROL_TOKEN ||
+  "local-substrate-deploy-control-token";
 
-export function installationDryRun() {
+export function deployControlPlan() {
   const res = http.post(
-    INSTALLATION_DRY_RUN_URL,
+    PLAN_RUNS_URL,
     JSON.stringify({
       spaceId: "space_local",
       source: {
-        kind: "git",
-        url: "https://github.com/tako0614/takos-docs.git",
-        ref: "main",
+        kind: "local",
+        path: "/workspace/examples/opentofu-basic",
       },
+      requiredProviders: [],
     }),
     {
       headers: {
-        "Authorization": `Bearer ${LOCAL_CLOUD_SESSION_ID}`,
+        "Authorization": `Bearer ${DEPLOY_CONTROL_TOKEN}`,
         "Content-Type": "application/json",
       },
     },
   );
   check(res, {
-    "dry-run status 200": (r) => r.status === 200,
-    "dry-run has appId": (r) => r.json("appId") !== undefined,
+    "plan status 201": (r) => r.status === 201,
+    "plan has id": (r) => r.json("planRun.id") !== undefined,
   });
 }
 

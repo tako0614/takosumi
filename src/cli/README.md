@@ -1,6 +1,6 @@
 # @takosjp/takosumi/cli
 
-Operator CLI for the manifestless Takosumi Installer API.
+Operator CLI for the OpenTofu-native Takosumi Deploy Control API.
 
 ## Install
 
@@ -13,39 +13,37 @@ takosumi version
 
 ```bash
 export TAKOSUMI_DEV_MODE=1
-export TAKOSUMI_INSTALLER_TOKEN=dev-installer-token
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-deploy-control-token
 export TAKOSUMI_REMOTE_URL=http://localhost:8788
 
 takosumi server --port 8788 &
 
 mkdir hello-takosumi && cd hello-takosumi
-printf '{"name":"hello-takosumi","version":"0.1.0"}\n' > package.json
+git init
+cat > main.tf <<'EOF'
+output "app_url" {
+  value = "https://example.test"
+}
+EOF
 
-takosumi install dry-run --source . --space space_personal
-takosumi install --source . --space space_personal
-takosumi deploy <installation-id> --source .
-takosumi rollback <installation-id> <deployment-id>
+takosumi plan ./ --space space_personal
+takosumi install ./ --space space_personal \
+  --provider registry.opentofu.org/cloudflare/cloudflare
 ```
-
-The public surface is Source, Installation, Deployment, and PlatformService. The CLI calls the five installer endpoints
-under `/v1/installations/*`.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `takosumi install <source>` | create an Installation and first Deployment |
-| `takosumi install dry-run <source>` | dry-run a new Installation |
-| `takosumi deploy <installation-id> [--source <source>]` | apply a new Deployment to an Installation |
-| `takosumi deploy dry-run <installation-id> [--source <source>]` | dry-run an Installation update |
-| `takosumi rollback <installation-id> <deployment-id>` | move current pointer to a retained Deployment |
-| `takosumi server [--port] [--no-agent]` | boot the local Takosumi service |
-| `takosumi runtime-agent serve` | standalone generic agent host |
-| `takosumi runtime-agent list` | show registered handlers on an agent |
-| `takosumi runtime-agent verify` | smoke-test handlers |
-| `takosumi artifact push <file> --kind <kind>` | optional DataAsset upload |
+| `takosumi plan <source> --space <id>` | create a PlanRun |
+| `takosumi install <source> --space <id>` | create a PlanRun and ApplyRun |
+| `takosumi deploy <installation-id> [--source <source>]` | create an update PlanRun and ApplyRun |
+| `takosumi plan --installation <id> [--source <source>]` | create only the update PlanRun |
+| `takosumi rollback <installation-id> <deployment-id>` | redeploy from a retained Deployment source |
+| `--provider <source-address>` | repeat on plan/install/deploy/rollback to declare the reviewed OpenTofu providers before runner execution |
+| `takosumi server [--port]` | boot the local Takosumi service |
 | `takosumi migrate [--dry-run]` | run Takosumi service DB migrations |
-| `takosumi init [<output>] [--template]` | generic repo metadata starter |
+| `takosumi init [<output>] [--template]` | optional OpenTofu module scaffold |
 | `takosumi version` | print version |
 
 ## Env vars
@@ -53,20 +51,18 @@ under `/v1/installations/*`.
 Priority:
 
 1. CLI flag (`--remote` / `--token`)
-2. Command-specific env (`TAKOSUMI_INSTALLER_TOKEN`, `TAKOSUMI_AGENT_TOKEN`)
+2. Command-specific env (`TAKOSUMI_DEPLOY_CONTROL_TOKEN`)
 3. Remote URL env (`TAKOSUMI_REMOTE_URL`)
-4. Config file (`~/.takosumi/config.yml`)
+4. XDG config file
 
 | Env var | Used by |
 | --- | --- |
 | `TAKOSUMI_REMOTE_URL` | default Takosumi service URL for remote CLI commands |
-| `TAKOSUMI_INSTALLER_TOKEN` | bearer token for `/v1/installations/*` |
-| `TAKOSUMI_DEPLOY_TOKEN` | bearer token for optional DataAsset write endpoints |
-| `TAKOSUMI_AGENT_URL` / `TAKOSUMI_AGENT_TOKEN` | `takosumi runtime-agent {list,verify}` target |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | bearer token for deploy control routes |
 | `TAKOSUMI_DEV_MODE=1` | dev opt-out for strict production guards |
 
 ## See also
 
 - `@takosjp/takosumi`
-- `@takosjp/takosumi/runtime-agent`
-- operator-owned runtime-agent handler code
+- `@takosjp/takosumi/contract`
+- `@takosjp/takosumi/contract/deploy-control-api`

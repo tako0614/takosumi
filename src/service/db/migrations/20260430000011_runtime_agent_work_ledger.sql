@@ -1,6 +1,6 @@
 -- Migration: 20260430000011_runtime_agent_work_ledger
 -- Purpose:   Persist Takos runtime agent registry + work-item ledger so the
---            kernel can resume in-flight long-running operations after a
+--            service can resume in-flight long-running operations after a
 --            restart (Phase 18 / C5). The in-memory registry hydrates from
 --            this ledger on boot; stale leases (whose `lease_expires_at` has
 --            elapsed) are reset to `queued` so a fresh agent lease can pick

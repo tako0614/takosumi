@@ -63,7 +63,7 @@ export interface AccountsInstallationExportBundle {
     readonly gitUrl: string;
     readonly ref: string;
     readonly commit: string;
-    readonly planSnapshotDigest: string;
+    readonly planDigest: string;
     readonly artifactDigest: string | null;
   };
   readonly runtimeTarget: ExportRuntimeTarget | null;
@@ -84,7 +84,7 @@ export interface ExportOidcClient {
   readonly clientId: string;
   readonly useEdge: string;
   readonly servicePath: string;
-  /** Legacy import compatibility for bundles exported before servicePath. */
+  /** Optional stored projection name used by account-plane ledgers. */
   readonly namespacePath?: string;
   readonly issuerUrl: string;
   readonly redirectUris: readonly string[];
@@ -205,7 +205,7 @@ export function buildInstallationExportBundle(
       gitUrl: input.installation.sourceGitUrl,
       ref: input.installation.sourceRef,
       commit: input.installation.sourceCommit,
-      planSnapshotDigest: input.installation.planSnapshotDigest,
+      planDigest: input.installation.planDigest,
       artifactDigest: input.installation.artifactDigest ?? null,
     },
     runtimeTarget: input.runtimeBinding
@@ -291,7 +291,7 @@ export function planInstallationImport(
         gitUrl: input.bundle.source.gitUrl,
         ref: input.bundle.source.ref,
         commit: input.bundle.source.commit,
-        planSnapshotDigest: input.bundle.source.planSnapshotDigest,
+        planDigest: input.bundle.source.planDigest,
         artifactDigest: input.bundle.source.artifactDigest,
       },
       mode: input.mode ?? "self-hosted",
@@ -509,9 +509,9 @@ function parseSourceFields(
     gitUrl: requireString(record.gitUrl, "bundle.source.gitUrl"),
     ref: requireString(record.ref, "bundle.source.ref"),
     commit: requireString(record.commit, "bundle.source.commit"),
-    planSnapshotDigest: requireString(
-      record.planSnapshotDigest,
-      "bundle.source.planSnapshotDigest",
+    planDigest: requireString(
+      record.planDigest,
+      "bundle.source.planDigest",
     ),
     artifactDigest: parseNullableString(
       record.artifactDigest,

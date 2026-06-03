@@ -18,14 +18,14 @@ test("callTakosumiService sends auth + JSON body on write requests", async () =>
   try {
     const result = await callTakosumiService({
       url: "https://service.example/",
-      token: "installer-token",
+      token: "deploy-control-token",
       path: "/v1/installations",
       body: { spaceId: "space_1", source: { kind: "local", url: "./" } },
     });
     assert.equal(result.status, 200);
     assert.equal(
       observedHeaders?.get("authorization"),
-      "Bearer installer-token",
+      "Bearer deploy-control-token",
     );
     // Idempotency header was removed with the Phase A spec rewrite —
     // installs are tracked by Installation id instead.
@@ -50,7 +50,7 @@ test("callTakosumiService passes through GET requests without idempotency residu
   try {
     const result = await callTakosumiService({
       url: "https://service.example",
-      token: "installer-token",
+      token: "deploy-control-token",
       method: "GET",
       path: "/health",
     });

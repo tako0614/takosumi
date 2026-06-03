@@ -46,15 +46,15 @@ After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warni
 4. Expect: redirect back to `https://accounts.takosumi.test/sign-in/callback?code=...`
 5. Expect: the dashboard session is established.
 
-## Smoke flow E — installer API
+## Smoke flow E — deploy control API
 
-1. Run the installer smoke:
+1. Run the deploy control smoke:
    ```bash
    bash scripts/cli-smoke.sh
    ```
-2. Expect: install dry-run/apply, deployment dry-run/apply, and rollback all succeed through `/v1/installations*`.
+2. Expect: runner profile lookup, PlanRun, ApplyRun, Installation read, and Deployment list all succeed through the deploy control API.
 
-Dynamic `<id>.app.takosumi.test` projection is deferred. Takosumi v1's public installer API does not expose raw desired-route listings; route projection must come from a future operator-internal source.
+Dynamic `<id>.app.takosumi.test` projection is deferred. Takosumi v1's public deploy control API does not expose raw desired-route listings; route projection must come from a future operator-internal source.
 
 ## Failure flow F — public-deploy route closure
 
@@ -62,7 +62,7 @@ Dynamic `<id>.app.takosumi.test` projection is deferred. Takosumi v1's public in
    ```bash
    bash scripts/prove-no-public-leak.sh
    ```
-2. Expect: legacy `/v1/deployments` and `/api/public/v1/deployments` return 404, CoreDNS denies public ACME DNS lookups, and mock/emulator containers do not publish host ports.
+2. Expect: closed public deployment routes return 404, CoreDNS denies public ACME DNS lookups, and emulator containers do not publish host ports.
 
 ## Notes
 

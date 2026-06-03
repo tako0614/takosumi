@@ -75,7 +75,7 @@ export class InMemoryRuntimeAgentRegistry implements RuntimeAgentRegistry {
    * {@link InMemoryWorkLedger} is last-write-wins, so a ledger-level CAS
    * cannot protect the in-memory maps. We therefore serialize the
    * vulnerable sections through a single Promise chain (mirroring the
-   * installer's `#mutationChains`). Concurrent `leaseWork` calls thus run
+   * deploy control `#mutationChains`). Concurrent `leaseWork` calls thus run
    * one-at-a-time and cannot double-claim the same queued candidate;
    * `detectStaleAgents` likewise runs to completion atomically.
    */

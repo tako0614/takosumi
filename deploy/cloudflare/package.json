@@ -1,5 +1,5 @@
 {
-  "name": "@takosjp/takosumiflare-worker",
+  "name": "@takosjp/takosumi-cloudflare-worker",
   "version": "0.0.0",
   "private": true,
   "type": "module",

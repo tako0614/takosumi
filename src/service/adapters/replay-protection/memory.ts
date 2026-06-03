@@ -11,7 +11,6 @@ import type {
 export class InMemoryReplayProtectionStore implements ReplayProtectionStore {
   readonly #seen = new Map<string, number>();
 
-  // deno-lint-ignore require-await
   async markSeen(input: ReplayProtectionMarkInput): Promise<boolean> {
     this.#evictExpired(input.seenAt);
     const key = composeKey(input.namespace, input.requestId);
@@ -20,7 +19,6 @@ export class InMemoryReplayProtectionStore implements ReplayProtectionStore {
     return true;
   }
 
-  // deno-lint-ignore require-await
   async cleanupExpired(now: number): Promise<void> {
     this.#evictExpired(now);
   }

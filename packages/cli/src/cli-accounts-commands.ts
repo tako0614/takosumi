@@ -49,7 +49,7 @@ import {
 import {
   bindingMaterializerPlan,
   buildHttpMaterializeWorkerConfig,
-  buildInstallerProxyOptions,
+  buildDeployControlProxyOptions,
   buildManagedOfferingAccessConfig,
   buildMetadataExportWorkerConfig,
   buildPasskeyOptions,
@@ -357,9 +357,9 @@ export async function runAccountsServe(
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
   }
-  let installer;
+  let deployControl;
   try {
-    installer = await buildInstallerProxyOptions(options);
+    deployControl = await buildDeployControlProxyOptions(options);
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
@@ -482,11 +482,11 @@ export async function runAccountsServe(
         sessionTtlMs: passkeys.sessionTtlMs,
       }
       : { configured: false },
-    installer: installer
+    deployControl: deployControl
       ? {
         configured: true,
-        url: installer.url,
-        tokenConfigured: Boolean(installer.token),
+        url: deployControl.url,
+        tokenConfigured: Boolean(deployControl.token),
       }
       : { configured: false },
     bindingMaterializer: bindingMaterializerPlan({
@@ -634,7 +634,7 @@ export async function runAccountsServe(
       stripeBilling,
       upstreamOAuth,
       passkeys,
-      installer,
+      deployControl,
       bindingMaterializer: composeBindingMaterializers([
         ...(staticBindingMaterializerConfig
           ? [

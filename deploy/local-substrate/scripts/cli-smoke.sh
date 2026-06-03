@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Exercises the canonical installer HTTP surface (`POST /v1/installations*`).
-# This is the same path the takosumi CLI uses for install / deploy / rollback;
-# without this smoke, a regression in the public installer pipeline would only
-# be caught in production.
+# Exercises the canonical Deploy Control HTTP surface.
 #
-#   1. POST /v1/installations/dry-run for the mounted source fixture fixture.
-#   2. POST /v1/installations and assert deployment.status == "succeeded".
-#   3. POST /v1/installations/{id}/deployments[/dry-run].
-#   4. POST /v1/installations/{id}/rollback.
+#   1. GET  /v1/runner-profiles.
+#   2. POST /v1/plan-runs.
+#   3. POST /v1/apply-runs.
+#   4. GET  /v1/installations/{id}.
+#   5. GET  /v1/installations/{id}/deployments.
 #
 # Run: bash scripts/cli-smoke.sh
 set -euo pipefail
@@ -15,24 +13,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
-TOKEN="${TAKOSUMI_INSTALLER_TOKEN:-local-substrate-installer-token}"
-LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
-SPACE_ID="${TAKOSUMI_INSTALLER_SPACE_ID:-local-substrate-space}"
-SOURCE_PATH="${TAKOSUMI_INSTALLER_SOURCE_PATH:-/workspace/examples/direct-deploy}"
-SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://accounts.takosumi.test}"
+TOKEN="${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-local-substrate-deploy-control-token}"
+SPACE_ID="${TAKOSUMI_DEPLOY_CONTROL_SPACE_ID:-local-substrate-space}"
+SOURCE_PATH="${TAKOSUMI_DEPLOY_CONTROL_SOURCE_PATH:-/workspace/examples/opentofu-basic}"
+SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://service-worker.takosumi.test}"
 
 if [[ ! -f "$CA" ]]; then
 	echo "Pebble CA not found at $CA — run scripts/up.sh first" >&2
 	exit 1
 fi
 
-INSTALL_REQUEST=$(cat <<EOF
+PLAN_REQUEST=$(cat <<EOF
 {
   "spaceId": "$SPACE_ID",
   "source": {
     "kind": "local",
-    "url": "$SOURCE_PATH"
-  }
+    "path": "$SOURCE_PATH"
+  },
+  "requiredProviders": []
 }
 EOF
 )
@@ -44,6 +42,15 @@ post_json() {
 		-H "Authorization: Bearer $TOKEN" \
 		-H "Content-Type: application/json" \
 		-d "$body" \
+		-w "\n%{http_code}\n" \
+		"$SERVICE_URL$path"
+}
+
+get_json() {
+	local path="$1"
+	curl -sk --cacert "$CA" \
+		-H "Authorization: Bearer $TOKEN" \
+		-H "Content-Type: application/json" \
 		-w "\n%{http_code}\n" \
 		"$SERVICE_URL$path"
 }
@@ -69,28 +76,37 @@ require_code() {
 	fi
 }
 
-DRY_RESPONSE="$(post_json "/v1/installations/dry-run" "$INSTALL_REQUEST")"
-require_code "installation dry-run" "$DRY_RESPONSE" "200"
-DRY_BODY="$(response_body "$DRY_RESPONSE")"
-EXPECTED_PIN="$(printf '%s' "$DRY_BODY" | python3 -c '
-import json, sys
-body = json.load(sys.stdin)
-print(json.dumps(body["expected"], separators=(",", ":")))
-')"
-PLAN_DIGEST="$(printf '%s' "$DRY_BODY" | python3 -c '
-import json, sys
-print(json.load(sys.stdin).get("planSnapshotDigest", ""))
-')"
+PROFILES_RESPONSE="$(get_json "/v1/runner-profiles")"
+require_code "runner profiles" "$PROFILES_RESPONSE" "200"
 
-APPLY_REQUEST="$(printf '%s' "$INSTALL_REQUEST" | python3 -c '
+PLAN_RESPONSE="$(post_json "/v1/plan-runs" "$PLAN_REQUEST")"
+require_code "plan run create" "$PLAN_RESPONSE" "201"
+PLAN_BODY="$(response_body "$PLAN_RESPONSE")"
+PLAN_ID="$(printf '%s' "$PLAN_BODY" | python3 -c '
 import json, sys
-body = json.load(sys.stdin)
-body["expected"] = json.loads(sys.argv[1])
-print(json.dumps(body, separators=(",", ":")))
-' "$EXPECTED_PIN")"
+print(json.load(sys.stdin)["planRun"]["id"])
+')"
+PLAN_STATUS="$(printf '%s' "$PLAN_BODY" | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["planRun"]["status"])
+')"
+PLAN_DIGEST="$(printf '%s' "$PLAN_BODY" | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["planRun"].get("planDigest", ""))
+')"
+if [[ "$PLAN_STATUS" != "succeeded" ]]; then
+	echo "FAIL: plan run status=$PLAN_STATUS (expected succeeded)" >&2
+	echo "      response: $PLAN_BODY" >&2
+	exit 1
+fi
+if [[ -z "$PLAN_DIGEST" ]]; then
+	echo "FAIL: plan run did not return planDigest: $PLAN_BODY" >&2
+	exit 1
+fi
 
-APPLY_RESPONSE="$(post_json "/v1/installations" "$APPLY_REQUEST")"
-require_code "installation apply" "$APPLY_RESPONSE" "201"
+APPLY_REQUEST="{\"planRunId\":\"$PLAN_ID\",\"expected\":{\"planDigest\":\"$PLAN_DIGEST\"}}"
+APPLY_RESPONSE="$(post_json "/v1/apply-runs" "$APPLY_REQUEST")"
+require_code "apply run create" "$APPLY_RESPONSE" "201"
 APPLY_BODY="$(response_body "$APPLY_RESPONSE")"
 INSTALLATION_ID="$(printf '%s' "$APPLY_BODY" | python3 -c '
 import json, sys
@@ -106,57 +122,14 @@ print(json.load(sys.stdin)["deployment"]["status"])
 ')"
 
 if [[ "$DEPLOYMENT_STATUS" != "succeeded" ]]; then
-	echo "FAIL: installation apply produced deployment.status=$DEPLOYMENT_STATUS" >&2
+	echo "FAIL: apply run produced deployment.status=$DEPLOYMENT_STATUS" >&2
 	echo "      response: $APPLY_BODY" >&2
 	exit 1
 fi
 
-DEPLOY_REQUEST="$(cat <<EOF
-{
-  "source": {
-    "kind": "local",
-    "url": "$SOURCE_PATH"
-  }
-}
-EOF
-)"
-DEPLOY_DRY_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/deployments/dry-run" "$DEPLOY_REQUEST")"
-require_code "deployment dry-run" "$DEPLOY_DRY_RESPONSE" "200"
-DEPLOY_DRY_BODY="$(response_body "$DEPLOY_DRY_RESPONSE")"
-DEPLOY_EXPECTED="$(printf '%s' "$DEPLOY_DRY_BODY" | python3 -c '
-import json, sys
-body = json.load(sys.stdin)
-print(json.dumps(body["expected"], separators=(",", ":")))
-')"
+GET_INSTALLATION_RESPONSE="$(get_json "/v1/installations/$INSTALLATION_ID")"
+require_code "get installation" "$GET_INSTALLATION_RESPONSE" "200"
+LIST_DEPLOYMENTS_RESPONSE="$(get_json "/v1/installations/$INSTALLATION_ID/deployments")"
+require_code "list deployments" "$LIST_DEPLOYMENTS_RESPONSE" "200"
 
-DEPLOY_APPLY_REQUEST="$(printf '%s' "$DEPLOY_REQUEST" | python3 -c '
-import json, sys
-body = json.load(sys.stdin)
-body["expected"] = json.loads(sys.argv[1])
-print(json.dumps(body, separators=(",", ":")))
-' "$DEPLOY_EXPECTED")"
-
-DEPLOY_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/deployments" "$DEPLOY_APPLY_REQUEST")"
-require_code "deployment apply" "$DEPLOY_RESPONSE" "201"
-
-ROLLBACK_REQUEST="{\"deploymentId\":\"$DEPLOYMENT_ID\"}"
-ROLLBACK_RESPONSE="$(post_json "/v1/installations/$INSTALLATION_ID/rollback" "$ROLLBACK_REQUEST")"
-require_code "rollback" "$ROLLBACK_RESPONSE" "200"
-
-echo "OK installer installation=$INSTALLATION_ID deployment=$DEPLOYMENT_ID status=$DEPLOYMENT_STATUS digest=$PLAN_DIGEST"
-
-# B6: also assert installer-mock returns real source fixture-derived changes
-# (fixture-hit path, not the empty fallback).
-PREVIEW=$(curl -sk --cacert "$CA" \
-	-H "Authorization: Bearer $LOCAL_CLOUD_SESSION_ID" \
-	-H "Content-Type: application/json" \
-	-d '{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/yurucommu.git","ref":"main"}}' \
-	"https://accounts.takosumi.test/v1/installations/dry-run")
-CHANGE_COUNT=$(echo "$PREVIEW" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(len(d.get('changes') or []))")
-if [[ "$CHANGE_COUNT" -lt 3 ]]; then
-	echo "FAIL: installer dry-run returned $CHANGE_COUNT changes for yurucommu (expected >=3)" >&2
-	echo "      response: $PREVIEW" >&2
-	exit 1
-fi
-
-echo "OK installer dry-run yurucommu → $CHANGE_COUNT source fixture changes (fixture-hit)"
+echo "OK deploy control installation=$INSTALLATION_ID deployment=$DEPLOYMENT_ID status=$DEPLOYMENT_STATUS digest=$PLAN_DIGEST"

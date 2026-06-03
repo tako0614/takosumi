@@ -258,7 +258,7 @@ export class SecretRotationService {
 
 function cryptoUuid(): string {
   // Generate a cryptographically random UUID. The service targets modern
-  // Deno / Node runtimes where `crypto.randomUUID` is always defined; fall
+  // Bun / Node runtimes where `crypto.randomUUID` is always defined; fall
   // back to a manual v4 UUID built from `crypto.getRandomValues` (still
   // cryptographically random) just in case a host has stripped randomUUID
   // off the global. Never fall back to Math.random — that would silently

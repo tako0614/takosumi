@@ -5,7 +5,7 @@
  * (`local` / `development` / `test` / `staging` / `production`) and
  * process role. Backend implementation selection is no longer driven by env
  * vars; operators inject implementation bindings through service construction.
- * Legacy backend / adapter selectors are rejected to keep configuration clean.
+ * Retired backend / adapter selectors are rejected to keep configuration clean.
  */
 import {
   EnvOperatorConfig,
@@ -68,7 +68,7 @@ export const PROCESS_ROLE_ENV_KEYS = [
 /**
  * Hard-break selectors retained as runtime errors so existing operator
  * configurations get a clear message ("inject implementation bindings") instead
- * of silently doing the wrong thing. Includes both legacy adapter
+ * of silently doing the wrong thing. Includes both retired adapter
  * selectors and the now-retired env-based implementation selectors.
  */
 const STALE_SELECTOR_KEYS = [

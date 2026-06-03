@@ -2,12 +2,13 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { deployCommand } from "../commands/deploy.ts";
 import { installCommand } from "../commands/install.ts";
+import { planCommand } from "../commands/plan.ts";
 import { rollbackCommand } from "../commands/rollback.ts";
 import {
-  deploymentExpectedGuardFromOptions,
+  expectedGuardFromOptions,
   parseSourceRef,
   resolveSourceArg,
-} from "../installer_client.ts";
+} from "../deploy_control_client.ts";
 import { __resetConfigFileCacheForTesting } from "../config.ts";
 
 interface CapturedRequest {
@@ -17,19 +18,21 @@ interface CapturedRequest {
   readonly authorization: string | null;
 }
 
-test("installer source parser maps supported source refs", () => {
-  assert.deepEqual(parseSourceRef("./"), { kind: "local", url: "./" });
+const CLOUDFLARE_PROVIDER = "registry.opentofu.org/cloudflare/cloudflare";
+
+test("deploy control source parser maps supported source refs", () => {
+  assert.deepEqual(parseSourceRef("./"), { kind: "local", path: "./" });
   assert.deepEqual(
     parseSourceRef("git:https://github.com/acme/app#main"),
     { kind: "git", url: "https://github.com/acme/app", ref: "main" },
   );
   assert.throws(
     () => parseSourceRef("catalog:com.acme.app@1"),
-    /operator catalog sources/,
+    /retired/,
   );
   assert.throws(
     () => parseSourceRef("bundle:https://example.com/app.tgz"),
-    /operator catalog sources/,
+    /retired/,
   );
   assert.deepEqual(
     parseSourceRef(
@@ -46,9 +49,9 @@ test("installer source parser maps supported source refs", () => {
     () => parseSourceRef("prepared:https://example.com/app.tar#sha256:abc"),
     /64 lowercase hex/,
   );
-  assert.throws(
-    () => parseSourceRef("git:https://github.com/acme/app"),
-    /git source requires/,
+  assert.deepEqual(
+    parseSourceRef("git:https://github.com/acme/app"),
+    { kind: "git", url: "https://github.com/acme/app" },
   );
   assert.throws(
     () => parseSourceRef("prepared:https://example.com/app.tar"),
@@ -61,22 +64,22 @@ test("installer source parser maps supported source refs", () => {
   );
 });
 
-test("deploy expected guard parses null current pointer", () => {
+test("apply expected guard maps canonical OpenTofu guard options", () => {
   assert.deepEqual(
-    deploymentExpectedGuardFromOptions({
-      expectedPlanSnapshotDigest:
+    expectedGuardFromOptions({
+      expectedPlanDigest:
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      expectedCurrentDeploymentId: "null",
+      expectedSourceCommit: "abc123",
     }),
     {
-      planSnapshotDigest:
+      planDigest:
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      currentDeploymentId: null,
+      sourceCommit: "abc123",
     },
   );
 });
 
-test("install command posts source to /v1/installations", async () => {
+test("install command creates a PlanRun and ApplyRun", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
@@ -89,16 +92,25 @@ test("install command posts source to /v1/installations", async () => {
         "--remote",
         "https://service.example",
         "--token",
-        "installer-token",
+        "deploy-control-token",
+        "--provider",
+        CLOUDFLARE_PROVIDER,
       ])
     );
 
-    assert.equal(captured.method, "POST");
-    assert.equal(captured.url, "https://service.example/v1/installations");
-    assert.equal(captured.authorization, "Bearer installer-token");
-    assert.deepEqual(captured.body, {
+    assert.equal(captured.length, 2);
+    assert.equal(captured[0].method, "POST");
+    assert.equal(captured[0].url, "https://service.example/v1/plan-runs");
+    assert.equal(captured[0].authorization, "Bearer deploy-control-token");
+    assert.deepEqual(captured[0].body, {
       spaceId: "space_personal",
       source: { kind: "git", url: "https://github.com/acme/app", ref: "main" },
+      requiredProviders: [CLOUDFLARE_PROVIDER],
+    });
+    assert.equal(captured[1].url, "https://service.example/v1/apply-runs");
+    assert.deepEqual(captured[1].body, {
+      planRunId: "plan_cli",
+      expected: fakeExpectedGuard(),
     });
   } finally {
     restoreEnv(env);
@@ -106,32 +118,31 @@ test("install command posts source to /v1/installations", async () => {
   }
 });
 
-test("install dry-run posts source to /v1/installations/dry-run", async () => {
+test("plan command creates only a new Installation PlanRun", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
     const captured = await runCommandAgainstFakeService(() =>
-      installCommand.parseAsync([
-        "dry-run",
+      planCommand.parseAsync([
+        "./",
         "--space",
         "space_personal",
-        "--source",
-        "./",
         "--remote",
         "https://service.example/",
         "--token",
-        "installer-token",
+        "deploy-control-token",
+        "--provider",
+        CLOUDFLARE_PROVIDER,
       ])
     );
 
-    assert.equal(captured.method, "POST");
-    assert.equal(
-      captured.url,
-      "https://service.example/v1/installations/dry-run",
-    );
-    assert.deepEqual(captured.body, {
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].method, "POST");
+    assert.equal(captured[0].url, "https://service.example/v1/plan-runs");
+    assert.deepEqual(captured[0].body, {
       spaceId: "space_personal",
-      source: { kind: "local", url: "./" },
+      source: { kind: "local", path: "./" },
+      requiredProviders: [CLOUDFLARE_PROVIDER],
     });
   } finally {
     restoreEnv(env);
@@ -139,7 +150,7 @@ test("install dry-run posts source to /v1/installations/dry-run", async () => {
   }
 });
 
-test("deploy command posts to an installation deployment endpoint", async () => {
+test("deploy command creates an update PlanRun and ApplyRun", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
@@ -148,35 +159,41 @@ test("deploy command posts to an installation deployment endpoint", async () => 
         "ins_123",
         "--source",
         "git:https://github.com/acme/app#v1.0.0",
-        "--expected-commit",
+        "--expected-source-commit",
         "abc123",
-        "--expected-plan-snapshot-digest",
+        "--expected-plan-digest",
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        "--expected-current-deployment-id",
-        "dep_current",
         "--remote",
         "https://service.example",
         "--token",
-        "installer-token",
+        "deploy-control-token",
+        "--provider",
+        CLOUDFLARE_PROVIDER,
       ])
     );
 
-    assert.equal(captured.method, "POST");
-    assert.equal(
-      captured.url,
-      "https://service.example/v1/installations/ins_123/deployments",
-    );
-    assert.deepEqual(captured.body, {
+    assert.equal(captured.length, 3);
+    assert.equal(captured[0].url, "https://service.example/v1/installations/ins_123");
+    assert.equal(captured[1].url, "https://service.example/v1/plan-runs");
+    assert.deepEqual(captured[1].body, {
+      installationId: "ins_123",
+      operation: "update",
+      spaceId: "space_personal",
       source: {
         kind: "git",
         url: "https://github.com/acme/app",
         ref: "v1.0.0",
       },
+      requiredProviders: [CLOUDFLARE_PROVIDER],
+    });
+    assert.equal(captured[2].url, "https://service.example/v1/apply-runs");
+    assert.deepEqual(captured[2].body, {
+      planRunId: "plan_cli",
       expected: {
-        commit: "abc123",
-        planSnapshotDigest:
+        ...fakeExpectedGuard(),
+        sourceCommit: "abc123",
+        planDigest:
           "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        currentDeploymentId: "dep_current",
       },
     });
   } finally {
@@ -185,30 +202,34 @@ test("deploy command posts to an installation deployment endpoint", async () => 
   }
 });
 
-test("deploy dry-run posts to the deployment dry-run endpoint", async () => {
+test("plan command creates only an update PlanRun", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
     const captured = await runCommandAgainstFakeService(() =>
-      deployCommand.parseAsync([
-        "dry-run",
+      planCommand.parseAsync([
+        "--installation",
         "ins_123",
         "--source",
         "./",
         "--remote",
         "https://service.example",
         "--token",
-        "installer-token",
+        "deploy-control-token",
+        "--provider",
+        CLOUDFLARE_PROVIDER,
       ])
     );
 
-    assert.equal(captured.method, "POST");
-    assert.equal(
-      captured.url,
-      "https://service.example/v1/installations/ins_123/deployments/dry-run",
-    );
-    assert.deepEqual(captured.body, {
-      source: { kind: "local", url: "./" },
+    assert.equal(captured.length, 2);
+    assert.equal(captured[0].url, "https://service.example/v1/installations/ins_123");
+    assert.equal(captured[1].url, "https://service.example/v1/plan-runs");
+    assert.deepEqual(captured[1].body, {
+      installationId: "ins_123",
+      operation: "update",
+      spaceId: "space_personal",
+      source: { kind: "local", path: "./" },
+      requiredProviders: [CLOUDFLARE_PROVIDER],
     });
   } finally {
     restoreEnv(env);
@@ -216,7 +237,7 @@ test("deploy dry-run posts to the deployment dry-run endpoint", async () => {
   }
 });
 
-test("rollback command posts deploymentId to rollback endpoint", async () => {
+test("rollback command redeploys from a previous Deployment source", async () => {
   const env = snapshotEnv();
   try {
     isolateConfig();
@@ -227,16 +248,28 @@ test("rollback command posts deploymentId to rollback endpoint", async () => {
         "--remote",
         "https://service.example",
         "--token",
-        "installer-token",
+        "deploy-control-token",
+        "--provider",
+        CLOUDFLARE_PROVIDER,
       ])
     );
 
-    assert.equal(captured.method, "POST");
-    assert.equal(
-      captured.url,
-      "https://service.example/v1/installations/ins_123/rollback",
-    );
-    assert.deepEqual(captured.body, { deploymentId: "dep_old" });
+    assert.equal(captured.length, 4);
+    assert.equal(captured[0].url, "https://service.example/v1/installations/ins_123");
+    assert.equal(captured[1].url, "https://service.example/v1/installations/ins_123/deployments");
+    assert.equal(captured[2].url, "https://service.example/v1/plan-runs");
+    assert.deepEqual(captured[2].body, {
+      installationId: "ins_123",
+      operation: "update",
+      spaceId: "space_personal",
+      source: { kind: "git", url: "https://github.com/acme/app", ref: "old" },
+      requiredProviders: [CLOUDFLARE_PROVIDER],
+    });
+    assert.equal(captured[3].url, "https://service.example/v1/apply-runs");
+    assert.deepEqual(captured[3].body, {
+      planRunId: "plan_cli",
+      expected: fakeExpectedGuard(),
+    });
   } finally {
     restoreEnv(env);
     __resetConfigFileCacheForTesting();
@@ -245,7 +278,7 @@ test("rollback command posts deploymentId to rollback endpoint", async () => {
 
 async function runCommandAgainstFakeService(
   run: () => Promise<unknown>,
-): Promise<CapturedRequest> {
+): Promise<readonly CapturedRequest[]> {
   const captured: CapturedRequest[] = [];
   const originalFetch = globalThis.fetch;
   const originalLog = console.log;
@@ -271,7 +304,7 @@ async function runCommandAgainstFakeService(
       authorization: headers.get("authorization"),
     });
     return Promise.resolve(
-      new Response(JSON.stringify({ ok: true }), {
+      new Response(JSON.stringify(fakeServiceBody(url, init?.method ?? "GET")), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -284,12 +317,88 @@ async function runCommandAgainstFakeService(
     globalThis.fetch = originalFetch;
     console.log = originalLog;
   }
-  if (captured.length !== 1) {
-    throw new Error(
-      `expected exactly one fetch call, got ${captured.length}`,
-    );
+  return captured;
+}
+
+function fakeServiceBody(url: string, method: string): unknown {
+  const path = new URL(url).pathname;
+  if (method === "GET" && path === "/v1/installations/ins_123") {
+    return {
+      installation: {
+        id: "ins_123",
+        spaceId: "space_personal",
+        source: { kind: "git", url: "https://github.com/acme/app", ref: "main" },
+      },
+    };
   }
-  return captured[0];
+  if (
+    method === "GET" &&
+    path === "/v1/installations/ins_123/deployments"
+  ) {
+    return {
+      deployments: [{
+        id: "dep_old",
+        source: { kind: "git", url: "https://github.com/acme/app", ref: "old" },
+      }],
+    };
+  }
+  if (method === "POST" && path === "/v1/plan-runs") {
+    return {
+      planRun: {
+        id: "plan_cli",
+        status: "succeeded",
+        runnerProfileId: "cloudflare-default",
+        sourceDigest:
+          "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        variablesDigest:
+          "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        policyDecisionDigest:
+          "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        planDigest:
+          "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        planArtifact: {
+          kind: "runner-local",
+          ref: "runner-local://plan_cli/tfplan",
+          digest:
+            "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+          contentType: "application/vnd.opentofu.plan",
+        },
+        sourceCommit: "commit_cli",
+        providerLockDigest:
+          "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      },
+    };
+  }
+  if (method === "POST" && path === "/v1/apply-runs") {
+    return {
+      applyRun: {
+        id: "apply_cli",
+        operation: "update",
+        status: "succeeded",
+      },
+    };
+  }
+  return { ok: true };
+}
+
+function fakeExpectedGuard(): Record<string, string> {
+  return {
+    planRunId: "plan_cli",
+    runnerProfileId: "cloudflare-default",
+    sourceDigest:
+      "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    variablesDigest:
+      "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    policyDecisionDigest:
+      "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    planDigest:
+      "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    planArtifactDigest:
+      "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    sourceCommit: "commit_cli",
+    providerLockDigest:
+      "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+  };
 }
 
 function isolateConfig(): void {
@@ -313,5 +422,5 @@ function restoreEnv(
 const ENV_KEYS = [
   "TAKOSUMI_CONFIG_FILE",
   "TAKOSUMI_REMOTE_URL",
-  "TAKOSUMI_INSTALLER_TOKEN",
+  "TAKOSUMI_DEPLOY_CONTROL_TOKEN",
 ] as const;

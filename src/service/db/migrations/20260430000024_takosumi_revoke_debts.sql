@@ -1,10 +1,10 @@
 -- Migration: 20260430000024_takosumi_revoke_debts
--- Purpose:   Persist RevokeDebt records created by WAL compensation and
---            post-commit cleanup paths. `source_key` makes enqueue idempotent
---            for a single generated object / WAL tuple.
+-- Purpose:   Persist RevokeDebt records created by deploy record cleanup
+--            paths. `source_key` makes enqueue idempotent for a single
+--            generated object.
 --
--- Spec:      src/service/domains/deploy/revoke_debt_store.ts
--- Phase:     deployment recovery / RevokeDebt
+-- Spec:      src/service/domains/deploy-records/revoke_debt_store.ts
+-- Phase:     deployment record cleanup / RevokeDebt
 -- Domain:    deploy
 
 create table if not exists takosumi_revoke_debts (

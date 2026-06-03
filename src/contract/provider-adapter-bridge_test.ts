@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { operatorImplementationFromProviderAdapter } from "./provider-adapter-bridge.ts";
 import type { ProviderAdapter } from "./provider-adapter.ts";
 
-test("operatorImplementationFromProviderAdapter injects resolved env into legacy spec", async () => {
+test("operatorImplementationFromProviderAdapter injects resolved env into adapter spec", async () => {
   let seenSpec: unknown;
   const provider: ProviderAdapter = {
     id: "@test/gateway",
@@ -189,7 +189,7 @@ test("operatorImplementationFromProviderAdapter projects object-store outputs to
     secretAccessKeyRef: { secretRef: "secret://bucket/secret-access-key" },
   });
 
-  const legacyAliasMaterial = await implementation.materializeOutput!({
+  const aliasMaterial = await implementation.materializeOutput!({
     installationId: "ins_1",
     componentName: "bucket",
     component: { kind: "object-store" },
@@ -201,7 +201,7 @@ test("operatorImplementationFromProviderAdapter projects object-store outputs to
       secretKeyRef: "secret://bucket/secret-key",
     },
   });
-  assert.deepEqual(legacyAliasMaterial, {
+  assert.deepEqual(aliasMaterial, {
     bucket: "assets",
     endpoint: "https://s3.example.test",
     accessKeyRef: { secretRef: "secret://bucket/access-key" },

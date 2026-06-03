@@ -57,7 +57,7 @@ jaeger.takosumi.test {
 # plane + embedded service) served by the `cloud` service, mirroring production's
 # one accounts.takosumi.com. Wrap in `route { handle @api ... handle ... }` so the
 # API handler is evaluated before the SPA fallback (Caddy's directive sorter
-# would otherwise put the catch-all `handle` first). The @api matcher (installer
+# would otherwise put the catch-all `handle` first). The @api matcher (deploy control
 # / oauth / oidc / start / exports) goes to the composed app; the dashboard SPA
 # is served from static build output, exactly like the worker mirror below.
 accounts.takosumi.test {

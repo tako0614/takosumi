@@ -5,7 +5,7 @@ import { signTakosumiInternalRequest } from "takosumi-contract/internal/rpc";
 import { InMemoryRuntimeAgentRegistry } from "../agents/mod.ts";
 import { createInMemoryAppContext } from "../app_context.ts";
 import { createApiApp } from "./app.ts";
-import { TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
+import { TAKOSUMI_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
 test("createApiApp exposes /openapi.json when enabled", async () => {
   const app = await createApiApp({
@@ -22,13 +22,13 @@ test("createApiApp exposes /openapi.json when enabled", async () => {
   assert.ok(body.paths["/health"]);
 });
 
-test("createApiApp does not mount legacy public deployment routes", async () => {
+test("createApiApp does not mount retired public deployment routes", async () => {
   const app = await createApiApp({
     registerInternalRoutes: false,
-    registerInstallerPublicRoutes: true,
+    registerDeployControlPublicRoutes: true,
     registerOpenApiRoute: true,
-    installerPublicRouteOptions: {
-      getInstallerToken: () => "installer-token",
+    deployControlPublicRouteOptions: {
+      getDeployControlToken: () => "deploy-control-token",
     },
   });
 
@@ -47,7 +47,8 @@ test("createApiApp does not mount legacy public deployment routes", async () => 
   const endpointPaths = capabilities.endpoints.map((
     endpoint: { path: string },
   ) => endpoint.path);
-  assert.ok(endpointPaths.includes("/v1/installations"));
+  assert.ok(endpointPaths.includes("/v1/plan-runs"));
+  assert.ok(endpointPaths.includes("/v1/apply-runs"));
   assert.equal(
     endpointPaths.some((path: string) => path.includes("/api/public/v1")),
     false,
@@ -55,27 +56,36 @@ test("createApiApp does not mount legacy public deployment routes", async () => 
   assert.equal(endpointPaths.includes("/v1/deployments"), false);
 
   const openapi = await (await app.request("/openapi.json")).json();
-  assert.ok(openapi.paths["/v1/installations"]);
+  assert.ok(openapi.paths["/v1/plan-runs"]);
+  assert.ok(openapi.paths["/v1/apply-runs"]);
+  assert.ok(openapi.paths["/v1/installations/{installationId}"]);
   assert.ok(openapi.paths["/v1/installations/{installationId}/deployments"]);
+  assert.equal(openapi.paths["/v1/installations"], undefined);
   assert.equal(
     openapi.paths["/v1/installations/:installationId/deployments"],
     undefined,
   );
   assert.equal(openapi.paths["/api/public/v1/deployments"], undefined);
   assert.equal(openapi.paths["/v1/deployments"], undefined);
-  assert.equal(openapi.components.schemas.InternalDeploymentRecord, undefined);
-  assert.equal(openapi.components.schemas.GroupHead, undefined);
+  assert.equal(openapi.paths["/v1/artifacts/kinds"], undefined);
   assert.equal(openapi.components.schemas.StatusSummaryResponse, undefined);
   assert.equal(
-    openapi.paths["/v1/installations"].post.requestBody.content[
+    openapi.paths["/v1/plan-runs"].post.requestBody.content[
       "application/json"
     ].schema.$ref,
-    "#/components/schemas/InstallerInstallationApplyRequest",
+    "#/components/schemas/CreatePlanRunRequest",
   );
   assert.equal(
     openapi.components.schemas.ErrorResponse.properties.error.required
       .includes("requestId"),
     true,
+  );
+  assert.ok(
+    openapi.components.schemas.RunnerProfile.properties
+      .cloudflareWorkersForPlatforms,
+  );
+  assert.ok(
+    openapi.components.schemas.RunnerProfile.properties.secretExposurePolicy,
   );
 });
 
@@ -86,7 +96,7 @@ test("createApiApp mounts runtime-agent routes fail-closed when enabled", async 
     role: "takosumi-runtime-agent",
   });
 
-  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     body: JSON.stringify({ agentId: "agent_1", provider: "local" }),
   });
@@ -105,12 +115,12 @@ test("createApiApp accepts signed v1 runtime-agent routes when enabled", async (
   });
   const body = JSON.stringify({ agentId: "agent_1", provider: "local" });
 
-  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     headers: await signedHeaders({
       secret,
       method: "POST",
-      path: TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
+      path: TAKOSUMI_RUNTIME_AGENT_PATHS.enroll,
       body,
       actor: {
         actorAccountId: "acct_runtime",
@@ -144,12 +154,12 @@ test("createApiApp uses context runtime-agent registry for mounted routes", asyn
   });
   const body = JSON.stringify({ agentId: "agent_context", provider: "local" });
 
-  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     headers: await signedHeaders({
       secret,
       method: "POST",
-      path: TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
+      path: TAKOSUMI_RUNTIME_AGENT_PATHS.enroll,
       body,
       actor: {
         actorAccountId: "acct_runtime",

@@ -21,7 +21,7 @@ export default function Home() {
             </div>
             <section class="empty-state">
               <p>まだ何も installed されていません。</p>
-              <a href="/apps/install" class="btn btn-primary">
+              <a href="/install" class="btn btn-primary">
                 最初のアプリを install →
               </a>
             </section>

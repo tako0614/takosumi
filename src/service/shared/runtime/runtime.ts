@@ -1,10 +1,10 @@
 /**
  * RuntimeAdapter — substrate-neutral surface for the JS runtime primitives
  * the service actually depends on at boot. The service itself must run on
- * Deno, Node.js 22+, Cloudflare Workers, and any other Web-standard JS
+ * Bun, Node.js 22+, Cloudflare Workers, and any other Web-standard JS
  * runtime that supports `fetch` / `Request` / `Response` / Web Crypto.
  *
- * The service must not call `Deno.*`, `process.*`, or `node:*` directly
+ * The service must not call runtime globals such as `process.*` or `node:*` directly
  * outside of this module. Anything reachable from a Cloudflare Worker
  * entry point (Hono `app.fetch` and the modules it imports) must compile
  * on V8 isolates, which means no FS, no subprocess, no signal handlers,
@@ -12,12 +12,12 @@
  *
  * The HTTP server entrypoint is the Web-standard fetch handler
  * `(req: Request) => Response | Promise<Response>`. `serveHttp` is only
- * called by long-running server entry points (Deno / Node); Workers
+ * called by long-running server entry points (Bun / Node); Workers
  * `export default { fetch: app.fetch }` directly and never invoke this
  * surface.
  */
 
-export type RuntimeKind = "deno" | "node" | "workers" | "bun" | "unknown";
+export type RuntimeKind = "node" | "workers" | "bun" | "unknown";
 
 export type Signal = "SIGINT" | "SIGTERM";
 
@@ -25,8 +25,8 @@ export interface EnvReader {
   get(name: string): string | undefined;
   toObject(): Record<string, string>;
   /**
-   * Set a process environment variable. Available on Deno (`Deno.env.set`)
-   * and Node (`process.env[name] = value`); a no-op on Workers / unknown
+   * Set a process environment variable. Available on Node/Bun
+   * (`process.env[name] = value`); a no-op on Workers / unknown
    * runtimes, where process env is not a mutable surface. Used by long-running
    * server entry points (e.g. the CLI `server` command handing `PORT` to the
    * service module).
@@ -38,31 +38,30 @@ export interface FsAdapter {
   readonly available: boolean;
   readTextFile(path: string | URL): Promise<string>;
   /**
-   * Read the file as raw bytes (no decoding). Used by the installer
+   * Read the file as raw bytes (no decoding). Used by the deployControl
    * pipeline to compute artifact digests over binary build outputs.
-   * Available on Deno and Node; throws on Workers.
+   * Available on Node/Bun; throws on Workers.
    */
   readFile(path: string | URL): Promise<Uint8Array>;
   writeTextFile(path: string, content: string): Promise<void>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
   /**
    * Synchronous text read for descriptor bundles that are loaded at
-   * module init time. Available on Deno and Node; throws on Workers.
+   * module init time. Available on Node/Bun; throws on Workers.
    */
   readTextFileSync(path: string | URL): string;
   /**
    * Create a uniquely-named temporary directory and return its absolute
-   * path. Used by the installer pipeline to stage git / prepared source
-   * checkouts before reading the InternalDeploySpec. Available on Deno and Node;
-   * throws on Workers (`makeTempDir` → `Deno.makeTempDir` /
-   * `node:fs/promises#mkdtemp`).
+   * path. Used by the deploy control pipeline to stage git / prepared source
+   * checkouts before running OpenTofu. Available on Node/Bun;
+   * throws on Workers (`makeTempDir` → `node:fs/promises#mkdtemp`).
    */
   makeTempDir(prefix?: string): Promise<string>;
   /**
    * Remove a file or directory. With `{ recursive: true }` the entire tree
    * is removed (used to clean up the temp checkout staged by
-   * {@link FsAdapter.makeTempDir}). Available on Deno and Node; throws on
-   * Workers (`remove` → `Deno.remove` / `node:fs/promises#rm`).
+   * {@link FsAdapter.makeTempDir}). Available on Node/Bun; throws on
+   * Workers (`remove` → `node:fs/promises#rm`).
    */
   remove(path: string | URL, options?: { recursive?: boolean }): Promise<void>;
   isNotFoundError(error: unknown): boolean;
@@ -109,7 +108,7 @@ export interface RuntimeAdapter {
   readonly subprocess: SubprocessAdapter;
   /**
    * Absolute path to the runtime executable that is running this process
-   * (`Deno.execPath()` / Node `process.execPath`). Used by CLI commands that
+   * (Node/Bun `process.execPath`). Used by CLI commands that
    * render supervisor templates (e.g. `takosumi server --detach`). Throws
    * {@link UnavailableInRuntimeError} on Workers / unknown runtimes.
    */

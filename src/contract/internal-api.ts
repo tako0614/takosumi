@@ -49,8 +49,6 @@ export type InternalGroupSummary = GroupSummary;
 export const TAKOSUMI_INTERNAL_PATHS = {
   spaces: "/api/internal/v1/spaces",
   groups: "/api/internal/v1/groups",
-  deployments: "/api/internal/v1/deployments",
-  deploymentApply: "/api/internal/v1/deployments/:deploymentId/apply",
 } as const;
 
 export type TakosumiInternalPath =

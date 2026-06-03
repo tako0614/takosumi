@@ -1,6 +1,0 @@
-{
-  "name": "@takos-fixtures/opentofu-binding-snapshot-app",
-  "version": "0.1.0",
-  "private": true,
-  "description": "OpenTofu binding snapshot proof source fixture"
-}

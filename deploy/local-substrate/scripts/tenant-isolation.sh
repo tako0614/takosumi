@@ -57,15 +57,9 @@ if [[ "$SUB_A" == "$SUB_B" ]]; then
 	exit 1
 fi
 
-LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
-PREVIEW=$(curl -sk --cacert "$CA" -X POST \
-	-H "Authorization: Bearer $LOCAL_CLOUD_SESSION_ID" \
-	-H "Content-Type: application/json" \
-	-d '{"spaceId":"space_local","source":{"kind":"git","url":"https://github.com/tako0614/takos-docs.git","ref":"main"}}' \
-	"$BASE/v1/installations/dry-run")
-APP_ID=$(echo "$PREVIEW" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('appId',''))")
-COMMIT=$(echo "$PREVIEW" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('source',{}).get('commit',''))")
-DIGEST=$(echo "$PREVIEW" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('planSnapshotDigest',''))")
+APP_ID="takos-docs"
+COMMIT="0000000000000000000000000000000000000000"
+DIGEST="sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 INSTALL_PAYLOAD=$(cat <<JSON
 {
@@ -76,7 +70,7 @@ INSTALL_PAYLOAD=$(cat <<JSON
     "gitUrl": "https://github.com/tako0614/takos-docs.git",
     "ref": "main",
     "commit": "$COMMIT",
-    "planSnapshotDigest": "$DIGEST"
+    "planDigest": "$DIGEST"
   },
   "mode": "shared-cell",
   "createdBySubject": "$SUB_A"

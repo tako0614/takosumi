@@ -9,7 +9,6 @@
  */
 
 import { createInMemorySpaceDomainDependencies } from "./domains/space/mod.ts";
-import { InMemoryDeploymentStore } from "./domains/deploy/mod.ts";
 import {
   InMemoryProviderObservationStore,
   InMemoryRuntimeDesiredStateStore,
@@ -62,10 +61,6 @@ export function createAppStores(
       idGenerator: options.space?.idGenerator ?? options.idGenerator,
       ...options.stores?.space,
     }),
-    deploy: {
-      deploys: options.stores?.deploy?.deploys ??
-        new InMemoryDeploymentStore(),
-    },
     runtime: {
       desiredStates: options.stores?.runtime?.desiredStates ??
         new InMemoryRuntimeDesiredStateStore(),
@@ -142,16 +137,6 @@ function createStorageBackedAppStores(
       memberships: options.stores?.space?.memberships ??
         storageBackedStore(driver, (tx) => tx.space.spaceMemberships),
     }),
-    deploy: {
-      deploys: options.stores?.deploy?.deploys ??
-        storageBackedStore(driver, (tx) => tx.deploy.deploys, {
-          missingOptionalMethods: [
-            "getDefaultRollbackValidators",
-            "getGroupHeadHistory",
-            "listObservations",
-          ],
-        }),
-    },
     runtime: {
       desiredStates: options.stores?.runtime?.desiredStates ??
         storageBackedStore(driver, (tx) => tx.runtime.desiredStates),

@@ -435,7 +435,7 @@ test("PostgresAccountsStore does not write retired service import storage", asyn
     sourceGitUrl: "https://git.example.test/app.git",
     sourceRef: "main",
     sourceCommit: "abc123",
-    planSnapshotDigest: "sha256:manifest",
+    planDigest: "sha256:manifest",
     artifactDigest: undefined,
     mode: "shared-cell",
     runtimeBindingId: undefined,

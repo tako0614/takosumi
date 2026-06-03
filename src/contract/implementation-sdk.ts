@@ -1,4 +1,3 @@
-// deno-lint-ignore-file no-namespace no-slow-types
 import type { ActorContext, Digest, JsonObject } from "./types.ts";
 import type { ObjectAddress } from "./takosumi-v1.ts";
 import type { TakosumiActorContext } from "./internal-api.ts";
@@ -14,8 +13,8 @@ import {
   TAKOSUMI_GATEWAY_IDENTITY_TIMESTAMP_HEADER,
 } from "./runtime-agent.ts";
 
-// Reference deploy-space source payload used by adapter bridges.
-export type ReferenceDeploySourcePayload = JsonObject;
+// Implementation source payload used by adapter bridges.
+export type ImplementationSourcePayload = JsonObject;
 
 export type TakosumiProcessRole =
   | "takosumi-api"
@@ -842,7 +841,7 @@ export namespace source {
   export interface SourceSnapshot {
     readonly id: string;
     readonly kind: SourceSnapshotKind;
-    readonly source: ReferenceDeploySourcePayload;
+    readonly source: ImplementationSourcePayload;
     readonly files: readonly SourceFileSnapshot[];
     readonly metadata: Record<string, unknown>;
     readonly createdAt: string;
@@ -856,7 +855,7 @@ export namespace source {
   export class ImmutableSourceAdapter implements
     SourcePort<{
       readonly sourceId?: string;
-      readonly source: ReferenceDeploySourcePayload;
+      readonly source: ImplementationSourcePayload;
       readonly files?: readonly {
         readonly path: string;
         readonly body?: Uint8Array | string;
@@ -877,7 +876,7 @@ export namespace source {
 
     async snapshot(input: {
       readonly sourceId?: string;
-      readonly source: ReferenceDeploySourcePayload;
+      readonly source: ImplementationSourcePayload;
       readonly files?: readonly {
         readonly path: string;
         readonly body?: Uint8Array | string;
@@ -1305,7 +1304,6 @@ export namespace storage {
   // concrete store implementations with typed methods (`(space: Space) => …`)
   // are assignable without a bridging cast. Param-position contravariance
   // would otherwise reject typed methods against `readonly unknown[]`.
-  // deno-lint-ignore no-explicit-any
   type EmptyStoreMethod = (...args: any[]) => unknown;
   type AnyStore = Record<string, EmptyStoreMethod>;
 

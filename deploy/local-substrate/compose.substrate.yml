@@ -3,9 +3,7 @@
 # Scope: Takosumi 製品群のみ (service + Accounts + cloud worker +
 # dashboard SPA + takosumi-worker)。 Takos product (takos-app /
 # takos-git) と yurucommu の direct service は外してある。 各 product
-# の動作確認は各 repo 内の test に委ねる。 「Takosumi 経由で
-# yurucommu を install して動かす」 統合シナリオは TODO-SMOKE.md
-# 筆頭参照。
+# の動作確認は各 repo 内の test に委ねる。
 #
 # Profiles:
 #   postgres   Takosumi service (Bun + Postgres + MinIO) + Accounts
@@ -246,7 +244,7 @@ services:
       - ../../../takosumi:/work
 
   takosumi-service-worker:
-    profiles: ["postgres"]
+    profiles: ["postgres", "workers"]
     build:
       context: .
       dockerfile: wrappers/Dockerfile.takosumi-accounts-worker
@@ -276,39 +274,7 @@ services:
       takos-local-internal:
         aliases:
           - takosumi-service-worker
-
-  service-workers:
-    profiles: ["workers"]
-    build:
-      context: .
-      dockerfile: wrappers/Dockerfile.takosumi-accounts-worker
-    restart: unless-stopped
-    depends_on:
-      takosumi-service-worker-build:
-        condition: service_completed_successfully
-    working_dir: /app
-    command: ["node", "/app/runner.mjs"]
-    env_file:
-      - ./env/takosumi-service-worker.env
-    volumes:
-      - ../../../takosumi/deploy/cloudflare/.wrangler/dist:/worker:ro
-      - ./wrappers/takosumi-service-worker-runner.mjs:/app/runner.mjs:ro
-      - takosumi-service-workers-data:/data
-    healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - "fetch('http://127.0.0.1:8788/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-      interval: 10s
-      timeout: 5s
-      retries: 15
-      start_period: 60s
-    networks:
-      takos-local-internal:
-        aliases:
           - service
-          - service-workers
 
   # ---- takosumi landing (SolidStart, mirrors takosumi.com root) ----
   takosumi-website-build:
@@ -353,23 +319,6 @@ services:
           npm run build
     volumes:
       - ../../../takosumi/docs:/docs
-
-  # ---- installer mock (local Accounts installer fixture API) ----
-  # Returns deterministic fake {appId, source.commit, source.*Digest} so the
-  # install wizard can complete dry-run → install end-to-end without a real
-  # git mirror behind it.
-  installer-mock:
-    profiles: ["postgres", "workers"]
-    image: oven/bun:1
-    restart: unless-stopped
-    command: ["bun", "/srv/main.ts"]
-    volumes:
-      - ./installer-mock/main.ts:/srv/main.ts:ro
-      - ./installer-mock/fixtures:/srv/fixtures:ro
-    networks:
-      takos-local-internal:
-        aliases:
-          - installer-mock
 
   # ---- OpenTelemetry collector + Jaeger (trace + metric sink) ----
   # No service emits OTel today, but the collector + UI are sitting here so
@@ -487,19 +436,19 @@ services:
     depends_on:
       takosumi-worker-build:
         condition: service_completed_successfully
-      installer-mock:
-        condition: service_started
+      takosumi-service-worker:
+        condition: service_healthy
       oauth-mock:
         condition: service_started
     working_dir: /app
     command: ["node", "/app/runner.mjs"]
-    # All ~30 env vars live in env/takosumi-worker.env so the compose
-    # service block stays readable. Inline-only deltas would go here.
+    # Accounts Worker env vars live in env/takosumi-accounts-worker.env so the
+    # compose service block stays readable. Inline-only deltas would go here.
     env_file:
-      - ./env/takosumi-worker.env
+      - ./env/takosumi-accounts-worker.env
     volumes:
       - ../../../takosumi/deploy/cloudflare/.wrangler/dist:/worker:ro
-      - ./wrappers/takosumi-worker-runner.mjs:/app/runner.mjs:ro
+      - ./wrappers/takosumi-accounts-worker-runner.mjs:/app/runner.mjs:ro
       - takosumi-worker-data:/data
     networks:
       takos-local-internal:
@@ -508,7 +457,7 @@ services:
 
   # ---- Phase 3 route registrar ----
   # Maintains the dynamic route partition in Caddy admin. The v1 public
-  # installer surface does not expose deployment route listings, so dynamic
+  # deploy control surface does not expose deployment route listings, so dynamic
   # app routes are deferred until an operator-internal projection source lands.
   route-registrar:
     profiles: ["postgres"]
@@ -535,12 +484,12 @@ services:
     image: oven/bun:1
     restart: unless-stopped
     depends_on:
-      service-workers:
+      takosumi-service-worker:
         condition: service_healthy
     working_dir: /app
     command: ["bun", "mod.ts"]
     environment:
-      SERVICE_URL: http://service-workers:8788
+      SERVICE_URL: http://takosumi-service-worker:8788
       CADDY_ADMIN_URL: http://caddy:2019
       POLL_INTERVAL_MS: "5000"
       GATEWAY_ROUTE_PROJECTION_FILE: /local-substrate-runtime/gateway-routes.json
@@ -556,7 +505,6 @@ volumes:
   substrate-minio-data:
   takosumi-worker-data:
   takosumi-service-worker-data:
-  takosumi-service-workers-data:
 
 networks:
   takos-local-internal:

@@ -10,13 +10,7 @@ import {
 } from "solid-js";
 import AppShell from "~/components/shell/AppShell";
 import AuthGuard from "~/components/auth/AuthGuard";
-import {
-  createToken,
-  type CreateTokenResult,
-  listTokens,
-  revokeToken,
-} from "~/lib/api/tokens";
-import { ApiError } from "~/lib/api/client";
+import { ApiError, type CreateTokenResult, rpc } from "~/lib/rpc";
 
 export default function Tokens() {
   return (
@@ -28,7 +22,7 @@ export default function Tokens() {
 }
 
 function Inner() {
-  const [tokens, { refetch }] = createResource(() => listTokens());
+  const [tokens, { refetch }] = createResource(() => rpc.tokens.list());
   const [name, setName] = createSignal("");
   const [creating, setCreating] = createSignal(false);
   const [createError, setCreateError] = createSignal<string | null>(null);
@@ -45,7 +39,7 @@ function Inner() {
     setCreating(true);
     setCreateError(null);
     try {
-      const t = await createToken({ name: name() });
+      const t = await rpc.tokens.create({ name: name() });
       setNewToken(t);
       setName("");
       refetch();
@@ -60,7 +54,7 @@ function Inner() {
     setRevoking(true);
     setRevokeError(null);
     try {
-      await revokeToken(id);
+      await rpc.tokens.revoke(id);
       setPendingRevoke(null);
       refetch();
     } catch (err) {

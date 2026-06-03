@@ -21,12 +21,12 @@ import {
 
 /**
  * Pagination guard constants for the list endpoints in this file and the
- * peer pagination helpers in `pat-routes.ts` / `dashboard-routes.ts`.
+ * peer pagination helpers in `pat-routes.ts`.
  *
  * The same defaults apply to `handleListAppInstallations`,
- * `handleListInstallationEvents`, `handleListPersonalAccessTokens`, and
- * `handleDashboardInstallations`. Cursor values are opaque to the caller:
- * base64-encoded JSON containing a `{ lastId }` field.
+ * `handleListInstallationEvents`, and `handleListPersonalAccessTokens`.
+ * Cursor values are opaque to the caller: base64-encoded JSON containing a
+ * `{ lastId }` field.
  */
 export const LIST_PAGE_DEFAULT_LIMIT = 50;
 export const LIST_PAGE_MAX_LIMIT = 200;
@@ -119,7 +119,7 @@ export function paginateById<T>(
  * base64 cursor produced by the previous response). Cursor format:
  * `base64url(JSON({ lastId }))`. Responses include a top-level
  * `next_cursor` string (or `null` when the page is the final one). The
- * legacy non-paginated shape is preserved by including `installations`
+ * non-paginated shape is preserved by including `installations`
  * unchanged; callers that ignore `next_cursor` still see the first page.
  */
 export async function handleListAppInstallations(input: {
@@ -222,7 +222,7 @@ export async function handleGetAppInstallation(input: {
  * Test whether `subject` can access `installation`.
  *
  * Access depends solely on the current `LedgerAccount.legalOwnerSubject` of
- * the installation's `accountId`. The historical `createdBySubject ===
+ * the installation's `accountId`. The `createdBySubject ===
  * subject` fallback has been removed: on account transfer, the original
  * creator loses access. Any code path that wants per-installation read/write
  * (lifecycle handlers, dashboard routes, events list) MUST resolve through

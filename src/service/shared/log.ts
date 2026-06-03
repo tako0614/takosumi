@@ -13,7 +13,7 @@
  *    the format is resolved lazily on first emit so tests that scope env
  *    are not racing module evaluation)
  *  - runtime-neutral (reads env through the RuntimeAdapter, so the same
- *    module works on Deno / Node / Cloudflare Workers without changes)
+ *    module works on Bun / Node / Cloudflare Workers without changes)
  *
  * Output shape (`json` format, one line per event):
  *
@@ -115,7 +115,7 @@ function resolveDefaultFormat(
 
 function safeEnv(): Readonly<Record<string, string | undefined>> {
   // Read env via the runtime adapter so this module compiles and runs
-  // on Deno, Node, Cloudflare Workers, or any Web-standard JS runtime.
+  // on Bun, Node, Cloudflare Workers, or any Web-standard JS runtime.
   // The adapter wraps the underlying API in try/catch, so a sandboxed
   // context (e.g. implementation unit tests without --allow-env) gets an empty
   // object instead of an exception.
@@ -182,7 +182,7 @@ class TakosumiLoggerImpl implements TakosumiLogger {
 
 function defaultStdout(line: string): void {
   // Keep this as a single console.log so structured output is emitted
-  // consistently under Bun, Node, Deno, and test harnesses.
+  // consistently under Bun, Node, and test harnesses.
   console.log(line);
 }
 

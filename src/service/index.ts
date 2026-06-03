@@ -30,7 +30,6 @@ import {
   selectAuditExternalReplicationSink,
   verifyAuditReplicationConsistency,
 } from "./services/audit-replication/mod.ts";
-import { ObservationRetentionService } from "./services/observation-retention/mod.ts";
 import type {
   SqlClient,
   SqlParameters,
@@ -41,8 +40,7 @@ import { wrapPgResult } from "./adapters/storage/pg_result.ts";
 
 /**
  * Materialised boot output exposed to callers that want to embed the service
- * into a custom host (e.g. tests, CLI `takosumi server`, the bundled Deno
- * entry point below). The HTTP listener is *not* started here; callers wire
+ * into a custom host (e.g. tests or CLI `takosumi server`). The HTTP listener is *not* started here; callers wire
  * it up themselves via `runtime.serveHttp(app.fetch, ...)`.
  */
 export interface StartedTakosumiService {
@@ -76,7 +74,6 @@ export async function startTakosumiService(): Promise<StartedTakosumiService> {
   );
   await maybeApplyDatabaseMigrations(runtimeEnv);
   await maybeApplyAuditRetention(runtimeEnv);
-  await maybeApplyObservationRetention(runtimeEnv);
   await maybeVerifyAuditReplicationChain(
     runtime,
     runtimeEnv,
@@ -96,7 +93,7 @@ export async function startTakosumiService(): Promise<StartedTakosumiService> {
   if (!created) {
     // fatalStartupError already exited; this is unreachable but keeps the
     // type checker honest.
-    throw new Error("service.boot.create_paas_app_did_not_return");
+    throw new Error("service.boot.create_service_app_did_not_return");
   }
   const app: HonoApp = created.app;
   const role: TakosumiProcessRole = created.role;
@@ -167,7 +164,7 @@ function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
         ...(diagnostic.key ? { key: diagnostic.key } : {}),
         message: diagnostic.message,
       })),
-      docs: ["docs/operator/operator-managed.md", "docs/reference/env-vars.md"],
+      docs: ["docs/reference/operator.md", "docs/reference/runner-profiles.md"],
     });
     runtime.exit(1);
   }
@@ -175,8 +172,8 @@ function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
     log.error("service.boot.secret_encryption_required", {
       message: error.message,
       hint: "Refusing to start takosumi with plaintext secret storage. " +
-        "See docs/operator/operator-managed.md and " +
-        "docs/reference/secret-partitions.md for required " +
+        "See docs/reference/operator.md and " +
+        "docs/reference/runner-profiles.md for required " +
         "encryption-key configuration.",
     });
     runtime.exit(1);
@@ -185,7 +182,7 @@ function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
     log.error("service.boot.database_encryption_required", {
       message: error.message,
       hint: "Refusing to start takosumi against an unencrypted database. " +
-        "See docs/operator/operator-managed.md and docs/reference/env-vars.md " +
+        "See docs/reference/operator.md " +
         "for database at-rest encryption configuration.",
     });
     runtime.exit(1);
@@ -195,8 +192,7 @@ function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
       message: error.message,
       hint:
         "Refusing to start takosumi without an external audit-replication " +
-        "sink. See docs/reference/audit-events.md and " +
-        "docs/reference/env-vars.md for AuditExternalReplicationSink " +
+        "sink. See docs/reference/operator.md for AuditExternalReplicationSink " +
         "configuration.",
     });
     runtime.exit(1);
@@ -319,69 +315,6 @@ async function maybeApplyAuditRetention(
 }
 
 /**
- * Phase 18.3 / M3 init hook: apply observation retention GC at boot.
- *
- * `provider_observations` and `runtime_provider_observations` were Phase 17A
- * append-only and grew unbounded. The retention service flags rows older
- * than `recentRetentionDays` (default 30d) as archived, then deletes
- * archived rows older than `archiveCapDays` (default 90d). Observations
- * pointing at the current group head are exempt.
- *
- * Opt-out: `TAKOSUMI_OBSERVATION_RETENTION_DISABLE=true`. Tunables:
- * `TAKOSUMI_OBSERVATION_RETENTION_RECENT_DAYS`,
- * `TAKOSUMI_OBSERVATION_RETENTION_ARCHIVE_CAP_DAYS`.
- */
-async function maybeApplyObservationRetention(
-  env: Record<string, string | undefined>,
-): Promise<void> {
-  if (env.TAKOSUMI_OBSERVATION_RETENTION_DISABLE?.toLowerCase() === "true") {
-    return;
-  }
-  const databaseUrl = env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
-    env.TAKOSUMI_PRODUCTION_DATABASE_URL ?? env.TAKOSUMI_STAGING_DATABASE_URL;
-  if (!databaseUrl) return; // silent: most local dev runs without DB
-
-  const recentDays = parsePositiveIntEnv(
-    env.TAKOSUMI_OBSERVATION_RETENTION_RECENT_DAYS,
-  );
-  const archiveCapDays = parsePositiveIntEnv(
-    env.TAKOSUMI_OBSERVATION_RETENTION_ARCHIVE_CAP_DAYS,
-  );
-  const client = await tryCreatePostgresClient(databaseUrl);
-  if (!client) return;
-  try {
-    const policy: { recentRetentionDays?: number; archiveCapDays?: number } =
-      {};
-    if (recentDays !== undefined) policy.recentRetentionDays = recentDays;
-    if (archiveCapDays !== undefined) policy.archiveCapDays = archiveCapDays;
-    const service = new ObservationRetentionService({
-      client: client.client,
-      ...(Object.keys(policy).length ? { policy } : {}),
-    });
-    const report = await service.run();
-    log.info("service.boot.observation_retention_applied", {
-      archivedDeploy: report.archivedDeploy,
-      archivedRuntime: report.archivedRuntime,
-      deletedDeploy: report.deletedDeploy,
-      deletedRuntime: report.deletedRuntime,
-    });
-  } catch (error) {
-    log.error("service.boot.observation_retention_failed", {
-      message: (error as Error).message,
-    });
-  } finally {
-    await client.close().catch(() => {});
-  }
-}
-
-function parsePositiveIntEnv(value: string | undefined): number | undefined {
-  if (!value) return undefined;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
-  return Math.floor(parsed);
-}
-
-/**
  * Surface the deployment-record-store backend selection at boot so
  * operators can spot the in-memory fallback in their logs. Without this
  * line, a missing `TAKOSUMI_DATABASE_URL` silently degrades durability
@@ -404,7 +337,7 @@ function logDeploymentRecordStoreBackend(sqlClientResolved: boolean): void {
 
 /**
  * Build a long-lived SqlClient that the service passes into
- * `createTakosumiService` so SQL-backed deployment and installer lifecycle records
+ * `createTakosumiService` so SQL-backed deployment and deployControl lifecycle records
  * survive process restart.
  *
  * Returns `undefined` when no `DATABASE_URL` is configured or the pg
@@ -415,7 +348,7 @@ function logDeploymentRecordStoreBackend(sqlClientResolved: boolean): void {
  * The returned handle is intentionally NOT closed by the service: the
  * underlying pg pool is reused for the lifetime of the process. The
  * shared instance is fine because `SqlTakosumiDeploymentRecordStore`
- * uses `takosumi_deploy_locks` lease rows instead of session-scoped
+ * uses `takosumi_deployment_record_locks` lease rows instead of session-scoped
  * advisory locks, so successive acquire / release queries do not need
  * connection pinning.
  */
@@ -437,7 +370,7 @@ async function tryCreatePostgresClient(
   // runtime check so the service module stays importable on Workers and
   // operators receive a clean warning when the driver is unavailable.
   const runtime = currentRuntime();
-  if (runtime.kind !== "deno" && runtime.kind !== "node") {
+  if (runtime.kind !== "node") {
     log.warn("service.boot.postgres_driver_unavailable", {
       message:
         `npm:pg cannot run on the ${runtime.kind} runtime; use an HTTP-mode ` +
@@ -519,14 +452,14 @@ function startHeartbeatIfConfigured(
   runtime: RuntimeAdapter,
   role: TakosumiProcessRole,
 ): void {
-  const heartbeatFile = runtime.env.get("TAKOSUMI_PAAS_WORKER_HEARTBEAT_FILE");
+  const heartbeatFile = runtime.env.get("TAKOSUMI_SERVICE_WORKER_HEARTBEAT_FILE");
   if (!heartbeatFile) return;
   if (!runtime.fs.available) {
     log.warn("service.heartbeat.unsupported_runtime", { runtime: runtime.kind });
     return;
   }
   const intervalMs = Number(
-    runtime.env.get("TAKOSUMI_PAAS_WORKER_POLL_INTERVAL_MS") ?? "250",
+    runtime.env.get("TAKOSUMI_SERVICE_WORKER_POLL_INTERVAL_MS") ?? "250",
   );
   const write = async () => {
     const now = new Date().toISOString();
@@ -574,8 +507,8 @@ function assertSecretEncryptionConfigured(
       log.error("service.boot.secret_encryption_required", {
         message: error.message,
         hint: "Refusing to start takosumi with plaintext secret storage. " +
-          "See docs/operator/operator-managed.md and " +
-          "docs/reference/secret-partitions.md for required " +
+          "See docs/reference/operator.md and " +
+          "docs/reference/runner-profiles.md for required " +
           "encryption-key configuration.",
       });
       runtime.exit(1);
@@ -608,7 +541,7 @@ function assertDatabaseEncryptionConfigured(
       log.error("service.boot.database_encryption_required", {
         message: error.message,
         hint: "Refusing to start takosumi against an unencrypted database. " +
-          "See docs/operator/operator-managed.md and docs/reference/env-vars.md " +
+          "See docs/reference/operator.md " +
           "for database at-rest encryption configuration.",
       });
       runtime.exit(1);
@@ -640,8 +573,7 @@ function assertAuditReplicationConfigured(
         message: error.message,
         hint:
           "Refusing to start takosumi without an external audit-replication " +
-          "sink. See docs/reference/audit-events.md and " +
-          "docs/reference/env-vars.md for AuditExternalReplicationSink " +
+          "sink. See docs/reference/operator.md for AuditExternalReplicationSink " +
           "configuration.",
       });
       runtime.exit(1);

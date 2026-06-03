@@ -4,7 +4,7 @@ import { Hono, type Hono as HonoApp } from "hono";
 import type { GroupSummaryStatusProjection } from "../services/status/mod.ts";
 import {
   registerReadinessRoutes,
-  TAKOSUMI_PAAS_READINESS_PATHS,
+  TAKOSUMI_SERVICE_READINESS_PATHS,
 } from "./readiness_routes.ts";
 
 test("readiness routes expose injected liveness and readiness probes", async () => {
@@ -18,7 +18,7 @@ test("readiness routes expose injected liveness and readiness probes", async () 
     statusSummary: () => activeStatusSummary,
   });
 
-  const ready = await app.request(TAKOSUMI_PAAS_READINESS_PATHS.ready);
+  const ready = await app.request(TAKOSUMI_SERVICE_READINESS_PATHS.ready);
   assert.equal(ready.status, 200);
   assert.deepEqual(await ready.json(), {
     ok: true,
@@ -26,7 +26,7 @@ test("readiness routes expose injected liveness and readiness probes", async () 
     checks: { database: "ok", router: "ok" },
   });
 
-  const live = await app.request(TAKOSUMI_PAAS_READINESS_PATHS.live);
+  const live = await app.request(TAKOSUMI_SERVICE_READINESS_PATHS.live);
   assert.equal(live.status, 200);
   assert.deepEqual(await live.json(), { ok: true, pid: 1234 });
 });
@@ -44,7 +44,7 @@ test("readiness route returns service unavailable for failed probes", async () =
     statusSummary: () => activeStatusSummary,
   });
 
-  const ready = await app.request(TAKOSUMI_PAAS_READINESS_PATHS.ready);
+  const ready = await app.request(TAKOSUMI_SERVICE_READINESS_PATHS.ready);
   assert.equal(ready.status, 503);
   assert.deepEqual(await ready.json(), {
     error: {
@@ -58,7 +58,7 @@ test("readiness route returns service unavailable for failed probes", async () =
     },
   });
 
-  const live = await app.request(TAKOSUMI_PAAS_READINESS_PATHS.live);
+  const live = await app.request(TAKOSUMI_SERVICE_READINESS_PATHS.live);
   assert.equal(live.status, 503);
   assert.deepEqual(await live.json(), {
     error: {
@@ -79,7 +79,7 @@ test("readiness route returns service unavailable for booting probes", async () 
     statusSummary: () => activeStatusSummary,
   });
 
-  const ready = await app.request(TAKOSUMI_PAAS_READINESS_PATHS.ready);
+  const ready = await app.request(TAKOSUMI_SERVICE_READINESS_PATHS.ready);
 
   assert.equal(ready.status, 503);
   assert.deepEqual(await ready.json(), {
@@ -103,7 +103,7 @@ test("status summary route returns existing projection DTO", async () => {
   });
 
   const response = await app.request(
-    TAKOSUMI_PAAS_READINESS_PATHS.statusSummary,
+    TAKOSUMI_SERVICE_READINESS_PATHS.statusSummary,
   );
 
   assert.equal(response.status, 200);
@@ -120,7 +120,7 @@ test("status summary route reports probe failures", async () => {
   });
 
   const response = await app.request(
-    TAKOSUMI_PAAS_READINESS_PATHS.statusSummary,
+    TAKOSUMI_SERVICE_READINESS_PATHS.statusSummary,
   );
 
   assert.equal(response.status, 503);
@@ -147,7 +147,7 @@ test("status summary route rejects non-catalog condition reasons", async () => {
   });
 
   const response = await app.request(
-    TAKOSUMI_PAAS_READINESS_PATHS.statusSummary,
+    TAKOSUMI_SERVICE_READINESS_PATHS.statusSummary,
   );
 
   assert.equal(response.status, 503);

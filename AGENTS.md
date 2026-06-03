@@ -1,28 +1,31 @@
 # AGENTS.md - Takosumi
 
-This repository is **Takosumi**, a manifestless source-to-deployment substrate published as the single npm package
-`@takosjp/takosumi`.
+This repository is **Takosumi**, an OpenTofu-native deploy control plane, UI, and audit ledger published as the single
+npm package `@takosjp/takosumi`.
 
 ## Public v1 Surface
 
 Takosumi public concepts are:
 
-- `Source`: git / prepared / local source input and resolved source identity.
-- `Installation`: Space-scoped installed source record.
-- `Deployment`: one apply result with source summary, install plan snapshot, binding snapshot, outputs, and status.
-- `PlatformService`: operator-catalog service capability selected during install or deploy.
+- `Installation`: Space-scoped installed OpenTofu module record with repository identity and current Deployment pointer.
+- `Deployment`: successful apply result with commit/module identity, run links, status, and output snapshot.
+- `PlanRun`: one OpenTofu plan attempt with reviewed plan artifact metadata, policy decision, runner profile, logs, and
+  audit events.
+- `ApplyRun`: one OpenTofu apply or destroy attempt with state backend reference, runner profile, status, logs, and
+  audit events.
+- `RunnerProfile`: operator-defined execution boundary for provider allowlists, credential references, state backend,
+  execution image/resource limits, network policy, and Cloudflare Container execution.
+- `DeploymentOutput`: public non-secret output projection derived from successful OpenTofu outputs. Sensitive outputs
+  and secret references stay outside the public ledger.
 
-There is no Takosumi-specific source metadata file in v1. Do not add Takosumi-specific repository metadata fields. Use generic repo
-metadata such as Git URL, commit, tag, and `package.json` for display and identity hints.
+Repositories are plain OpenTofu modules. Use Git URL, commit, tag, module path, and well-known OpenTofu outputs for
+display, identity, and output projection.
 
-Dry-run returns an `InstallPlan` and `planSnapshotDigest`. The plan is not a persisted public entity. Apply records the
-plan snapshot and binding snapshot on Deployment.
+## Runner Profile Boundary
 
-## Operator Boundary
-
-Takosumi does not run Terraform/OpenTofu, own provider state, or manage backend credentials. Operator distributions
-own infra materialization and may use Terraform output, HCP Stacks publish output, remote state, cloud APIs, or static
-config to populate PlatformService inventory.
+Runner profiles own provider allowlists, credentials, state backends, execution image/resource limits, network policy,
+and Cloudflare Container execution. Takosumi records plan / apply / destroy runs, installations, deployments, outputs,
+policy decisions, logs, and audit trail. Credential values and secret outputs are never stored as public ledger values.
 
 `takosumi` is the reference operator distribution. It composes the service app, injects stores/capabilities, owns
 account-plane APIs, and exposes dashboard / billing / OIDC / deploy facade surfaces.
@@ -33,10 +36,9 @@ account-plane APIs, and exposes dashboard / billing / OIDC / deploy facade surfa
 takosumi/
 ├── package.json
 ├── src/
-│   ├── contract/        public DTOs and reference SDK types
-│   ├── installer/       source fetchers and Installer API client
+│   ├── contract/        public deploy-control DTOs and internal reference contracts
 │   ├── service/          reference service implementation
-│   ├── runtime-agent/   runtime-agent host and lifecycle wire
+│   ├── runtime-agent/   internal compatibility code, not a public v1 subpath
 │   ├── cli/             CLI implementation
 │   └── all/             package subpath wrappers
 ├── docs/
@@ -46,19 +48,11 @@ takosumi/
 └── scripts/
 ```
 
-## Installer API
+## Deploy Control API
 
-The public Installer API is five endpoints:
-
-- `POST /v1/installations/dry-run`
-- `POST /v1/installations`
-- `POST /v1/installations/{id}/deployments/dry-run`
-- `POST /v1/installations/{id}/deployments`
-- `POST /v1/installations/{id}/rollback`
-
-Use `409 failed_precondition` for source pin, prepared digest, current pointer, or `planSnapshotDigest` guard conflicts.
-Use `413 resource_exhausted` for request or source size limits. The v1 surface does not use a caller-supplied
-Idempotency-Key header.
+The public API creates/imports Installations, creates PlanRuns, records approvals and policy decisions, creates
+ApplyRuns for apply or destroy, and reads Deployments, DeploymentOutputs, logs, and audit events. API and CLI docs must
+describe OpenTofu module repos and runner profiles.
 
 ## Runtime Neutrality And Bun
 
@@ -78,7 +72,6 @@ bun run lint:json-ld
 
 - Keep public contract changes in `src/contract/` and update docs/tests in the same change.
 - Keep service-specific changes in `src/service/`.
-- Keep source fetch / Installer API client behavior in `src/installer/`.
+- Keep API and CLI docs aligned with OpenTofu module repo, PlanRun, ApplyRun, RunnerProfile, and DeploymentOutput.
 - Keep account-plane features in operator distribution docs/code, not Takosumi.
-- Keep Terraform/OpenTofu ownership outside Takosumi.
-- Retired v0 source-DSL vocabulary must not be reintroduced as public v1 doctrine.
+- Do not add Deno; the Bun migration is in progress and Bun remains the default runtime/tooling direction.

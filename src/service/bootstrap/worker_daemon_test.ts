@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { createInMemoryAppContext } from "../app_context.ts";
-import { InMemoryRevokeDebtStore } from "../domains/deploy/revoke_debt_store.ts";
+import { InMemoryRevokeDebtStore } from "../domains/deploy-records/revoke_debt_store.ts";
 import {
   createRoleWorkerDaemon,
   createWorkerDaemonState,
@@ -35,7 +35,7 @@ test("createRoleWorkerDaemon schedules RevokeDebt cleanup from shared store", as
   assert.equal(results.every((result) => result.ok), true);
   assert.deepEqual(
     results.map((result) => result.taskName).sort(),
-    ["apply", "outbox", "revoke-debt-cleanup"].sort(),
+    ["outbox", "revoke-debt-cleanup"].sort(),
   );
   const [debt] = await revokeDebtStore.listByOwnerSpace("space:daemon");
   assert.equal(debt?.status, "operator-action-required");

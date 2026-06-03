@@ -3,6 +3,7 @@ import {
   type CloudflareWorkerHandler,
   createCloudflareWorker,
 } from "./handler.ts";
+export { TakosumiOpenTofuRunner } from "./opentofu_runner_container.ts";
 
 export class TakosCoordinationObject {
   constructor(
@@ -82,12 +83,11 @@ export class TakosCoordinationObject {
     return lease;
   }
 
-  async renewLease(
-    input: CoordinationRenewInput,
-  ): Promise<CoordinationLease> {
+  async renewLease(input: CoordinationRenewInput): Promise<CoordinationLease> {
     const existing = await this.getLease(input.scope);
     if (
-      !existing || existing.holderId !== input.holderId ||
+      !existing ||
+      existing.holderId !== input.holderId ||
       existing.token !== input.token
     ) {
       throw new Error(`coordination lease not held: ${input.scope}`);
@@ -104,7 +104,8 @@ export class TakosCoordinationObject {
   async releaseLease(input: CoordinationReleaseInput): Promise<boolean> {
     const existing = await this.getLease(input.scope);
     if (
-      !existing || existing.holderId !== input.holderId ||
+      !existing ||
+      existing.holderId !== input.holderId ||
       existing.token !== input.token
     ) {
       return false;
@@ -152,9 +153,10 @@ export class TakosCoordinationObject {
     });
     return [...alarms.values()]
       .filter((alarm) => scope === undefined || alarm.scope === scope)
-      .sort((left, right) =>
-        left.fireAt.localeCompare(right.fireAt) ||
-        left.id.localeCompare(right.id)
+      .sort(
+        (left, right) =>
+          left.fireAt.localeCompare(right.fireAt) ||
+          left.id.localeCompare(right.id),
       );
   }
 }
@@ -167,9 +169,9 @@ interface DurableObjectStorage {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<boolean>;
-  list<T = unknown>(
-    options?: { readonly prefix?: string },
-  ): Promise<Map<string, T>>;
+  list<T = unknown>(options?: {
+    readonly prefix?: string;
+  }): Promise<Map<string, T>>;
 }
 
 interface CoordinationLease {
@@ -229,10 +231,7 @@ async function readJsonObject(
   throw new Error("request body must be a JSON object");
 }
 
-function requireString(
-  body: Record<string, unknown>,
-  field: string,
-): string {
+function requireString(body: Record<string, unknown>, field: string): string {
   const value = body[field];
   if (typeof value !== "string" || !value) {
     throw new Error(`field ${field} must be a non-empty string`);
@@ -240,10 +239,7 @@ function requireString(
   return value;
 }
 
-function requireNumber(
-  body: Record<string, unknown>,
-  field: string,
-): number {
+function requireNumber(body: Record<string, unknown>, field: string): number {
   const value = body[field];
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`field ${field} must be a finite number`);

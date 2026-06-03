@@ -46,7 +46,7 @@ export interface RuntimeAgentServerOptions {
    * Injected `tar` capability used to verify and extract a remote
    * prepared-source snapshot. Optional: when omitted, the prepared-source
    * reader falls back to the runtime-agent's local subprocess-backed default,
-   * so the legacy subprocess behavior is unchanged. Operators may inject an
+   * so the default subprocess behavior is unchanged. Operators may inject an
    * alternative implementation (the contract `TarRunner`).
    */
   readonly tarRunner?: TarRunner;
@@ -372,11 +372,10 @@ export {
 /**
  * Optional dev-runner: running this module directly starts a bare runtime-agent
  * with an empty handler registry and the local serve primitive. This is
- * a convenience for local development only — production operators run a
- * standalone agent through the CLI (`takosumi runtime-agent serve`) or embed
- * one in-process via `startEmbeddedAgent` so they can pass their handler
- * registry. Importing this module (the package entry) never binds a port; only
- * running it directly does.
+ * a convenience for local development only. Production operators embed an
+ * agent process via `startEmbeddedAgent` or their own distribution wrapper so
+ * they can pass their handler registry. Importing this module (the package
+ * entry) never binds a port; only running it directly does.
  */
 if (import.meta.main) {
   const port = Number(readRuntimeEnv("TAKOSUMI_AGENT_PORT") ?? "8789");
@@ -388,7 +387,7 @@ if (import.meta.main) {
     port,
     hostname,
   });
-  console.log(`takosumi runtime-agent (dev-runner) listening at ${handle.url}`);
+  console.log(`Takosumi internal runtime-agent dev-runner listening at ${handle.url}`);
   console.log(`  TAKOSUMI_AGENT_URL=${handle.url}`);
-  console.log(`  TAKOSUMI_AGENT_TOKEN=${token}`);
+  console.log("  TAKOSUMI_AGENT_TOKEN=<redacted>");
 }

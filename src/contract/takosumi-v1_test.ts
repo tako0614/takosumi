@@ -5,12 +5,12 @@ import {
   CORE_CONDITION_REASONS,
   type CoreBindingDeclaration,
   type CoreBindingResolution,
+  type CoreBindingResolutionInput,
+  type CoreBindingSource,
   type CoreBindingSetRevision,
   type CoreOutputDeclaration,
   type CoreOutputRevision,
   type CoreOutputValue,
-  type DeploymentBinding,
-  type DeploymentBindingSource,
   isCoreConditionReason,
   isObjectAddress,
   joinObjectAddressSegments,
@@ -86,15 +86,15 @@ test("Retired Publication-* condition reasons are no longer in the catalog", () 
   }
 });
 
-test("DeploymentBindingSource accepts only canonical sources", () => {
-  const sources: DeploymentBindingSource[] = [
+test("CoreBindingSource accepts only canonical sources", () => {
+  const sources: CoreBindingSource[] = [
     "resource",
     "output",
     "secret",
     "provider-output",
   ];
   for (const source of sources) {
-    const binding: DeploymentBinding = {
+    const binding: CoreBindingResolutionInput = {
       bindingName: "X",
       componentAddress: "app.component:web",
       source,

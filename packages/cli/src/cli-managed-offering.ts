@@ -844,10 +844,10 @@ function hasConsistentRehearsalStepEvidence(
         ], "appId");
     case "git-url-install":
       return sameEvidenceField(evidenceByType, [
-        "installation-dry-run",
+        "installation-plan-run",
         "cost-review",
         "install-apply",
-      ], "planSnapshotDigest") &&
+      ], "planDigest") &&
         sameEvidenceField(evidenceByType, [
           "install-apply",
           "oidc-login",
@@ -1482,8 +1482,8 @@ function accountsWorkerConfigValidationErrors(value: unknown): string[] {
     "d1DatabaseIdValid",
     "r2BindingPresent",
     "r2BucketBlockPresent",
-    "installerUrlPresent",
-    "installerUrlValid",
+    "deployControlUrlPresent",
+    "deployControlUrlValid",
   ];
   for (const field of expectedTrueFields) {
     if (report[field] !== true) {
@@ -1494,7 +1494,7 @@ function accountsWorkerConfigValidationErrors(value: unknown): string[] {
   }
   const expectedFalseFields = [
     "d1DatabaseIdPlaceholder",
-    "installerUrlPlaceholder",
+    "deployControlUrlPlaceholder",
     "containerConfigured",
     "durableObjectPersistenceConfigured",
   ];
@@ -1677,9 +1677,9 @@ export function buildProductionTopologyTemplate(
             d1DatabaseIdPlaceholder: false,
             r2BindingPresent: true,
             r2BucketBlockPresent: true,
-            installerUrlPresent: true,
-            installerUrlValid: true,
-            installerUrlPlaceholder: false,
+            deployControlUrlPresent: true,
+            deployControlUrlValid: true,
+            deployControlUrlPlaceholder: false,
             containerConfigured: false,
             durableObjectPersistenceConfigured: false,
           },

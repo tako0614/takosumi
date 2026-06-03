@@ -1,7 +1,7 @@
 import { Title } from "@solidjs/meta";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 import { createSignal, onMount, Show } from "solid-js";
-import { completeUpstreamOAuth, recallOAuthProvider } from "~/lib/api/oauth";
+import { rpc } from "~/lib/rpc";
 import { refreshSession } from "~/lib/session";
 
 export default function SignInCallback() {
@@ -16,14 +16,14 @@ export default function SignInCallback() {
     // from sessionStorage (stashed by startUpstreamOAuth) and fall back to
     // the URL only if the SPA initiated the flow via a deep link.
     const provider = (params.provider as "google" | "github" | undefined) ??
-      recallOAuthProvider() ?? undefined;
+      rpc.auth.recallOAuthProvider() ?? undefined;
     if (typeof code !== "string" || typeof state !== "string" || !provider) {
       setError(
         "OAuth response が不完全です (code / state / provider のいずれかが欠落)。 再度 sign-in を試してください。",
       );
       return;
     }
-    completeUpstreamOAuth(code, state, provider)
+    rpc.auth.completeUpstreamOAuth(code, state, provider)
       .then(async ({ returnTo }) => {
         // Populate the session cache from the just-set HttpOnly cookie
         // BEFORE we navigate. Without the await the next route's

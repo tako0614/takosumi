@@ -8,7 +8,7 @@
 #      of static routes (proves the partition strategy isn't accidentally
 #      dropping Caddyfile-owned routes).
 #
-# Note: Takosumi v1's public installer API does not expose raw desired routes.
+# Note: Takosumi v1's public deploy control API does not expose raw desired routes.
 # Dynamic <id>.app.takosumi.test projection is deferred until an operator-
 # internal route source lands; this smoke is the registrar wiring guard.
 set -euo pipefail

@@ -1,5 +1,4 @@
 import type { AuditStore } from "../../domains/audit/store.ts";
-import type { DeploymentStore } from "../../domains/deploy/store.ts";
 import type {
   BundledRegistry,
   PackageDescriptorStore,
@@ -31,7 +30,6 @@ import {
   MemorySpaceMembershipStore,
   MemorySpaceStore,
 } from "./memory/space_stores.ts";
-import { MemoryDeploymentStore } from "./memory/deploy_store.ts";
 import {
   MemoryProviderObservationStore,
   MemoryRuntimeDesiredStateStore,
@@ -110,7 +108,6 @@ export class MemoryStorageDriver implements StorageDriver {
 
 class MemoryStorageTransaction implements StorageTransaction {
   readonly space: SpaceStorageStores;
-  readonly deploy: { readonly deploys: DeploymentStore };
   readonly runtime: RuntimeStorageStores;
   readonly resources: ResourceStorageStores;
   readonly registry: {
@@ -141,9 +138,6 @@ class MemoryStorageTransaction implements StorageTransaction {
       spaceMemberships: new MemorySpaceMembershipStore(
         state.space.spaceMemberships,
       ),
-    };
-    this.deploy = {
-      deploys: new MemoryDeploymentStore(state.deploy),
     };
     this.runtime = {
       desiredStates: new MemoryRuntimeDesiredStateStore(

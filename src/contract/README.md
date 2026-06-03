@@ -1,18 +1,23 @@
 # Takosumi Contract
 
-TypeScript DTOs and wire types for the manifestless Takosumi v1 Installer API.
+TypeScript DTOs and wire types for the OpenTofu-native Takosumi v1 Deploy
+Control API.
 
-The public contract is centered on four concepts:
+The public contract is centered on these concepts:
 
-- `Source` - git, prepared, or local source input.
-- `Installation` - a Space-scoped installed source record.
-- `Deployment` - one apply result with source identity, plan snapshot, binding snapshot, outputs, and status.
-- `PlatformService` - an operator-catalog service that can be bound during install or deploy.
+- `RunnerProfile` - operator-owned OpenTofu runner policy, provider allowlist,
+  credential reference boundary, state backend, execution substrate, tenant
+  runtime dispatch, and secret exposure policy.
+- `PlanRun` - persisted review record for `tofu plan`.
+- `ApplyRun` - persisted execution record for `tofu apply`.
+- `Installation` - Space-scoped installed OpenTofu module record.
+- `Deployment` - immutable apply result with source identity, runner profile,
+  plan digest, provider lock digest, outputs, and status.
+- `DeploymentOutput` - public non-secret output value extracted from
+  `tofu output -json`. Sensitive outputs and secret references are not stored
+  in the public ledger.
 
-Dry-run responses include an `InstallPlan` and `planSnapshotDigest`. The plan is
-review evidence, not a persisted public entity. Apply requests can include the
-expected digest to guard the reviewed source and operator binding resolution.
-
-Repository metadata is inferred from generic source metadata such as Git URL,
-commit, and `package.json` fields. The contract does not define a Takosumi
-source DSL or Takosumi-specific repository metadata field.
+Repositories are plain OpenTofu modules. Repository metadata is inferred from
+Git URL, commit, module path, tags, and well-known OpenTofu outputs. The
+contract does not define a Takosumi source DSL or Takosumi-specific repository
+metadata file.

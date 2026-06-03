@@ -152,7 +152,7 @@ test("transitionAppInstallationStatus enforces the ledger state machine", () => 
     sourceGitUrl: "https://github.com/takos/takos",
     sourceRef: "v1.2.3",
     sourceCommit: "abc123",
-    planSnapshotDigest: "sha256:app",
+    planDigest: "sha256:app",
     artifactDigest: "sha256:compiled",
     mode: "shared-cell" as const,
     status: "installing" as const,

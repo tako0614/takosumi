@@ -1,7 +1,7 @@
 export const TAKOSUMI_CLOUDFLARE_FRONT_HEADER =
-  "x-takosumiflare-front" as const;
+  "x-takosumi-cloudflare-front" as const;
 
-const KERNEL_CONTROL_PLANE_EXACT_PATHS = new Set([
+const SERVICE_CONTROL_PLANE_EXACT_PATHS = new Set([
   "/health",
   "/capabilities",
   "/openapi.json",
@@ -13,11 +13,19 @@ const KERNEL_CONTROL_PLANE_EXACT_PATHS = new Set([
 
 export function isServiceControlPlanePath(pathname: string): boolean {
   const normalized = normalizePathname(pathname);
-  if (KERNEL_CONTROL_PLANE_EXACT_PATHS.has(normalized)) return true;
-  return normalized === "/v1" ||
-    normalized.startsWith("/v1/") ||
+  if (SERVICE_CONTROL_PLANE_EXACT_PATHS.has(normalized)) return true;
+  return (
     normalized === "/api/internal/v1" ||
-    normalized.startsWith("/api/internal/v1/");
+    normalized.startsWith("/api/internal/v1/") ||
+    normalized === "/v1/runner-profiles" ||
+    normalized === "/v1/plan-runs" ||
+    normalized.startsWith("/v1/plan-runs/") ||
+    normalized === "/v1/apply-runs" ||
+    normalized.startsWith("/v1/apply-runs/") ||
+    /^\/v1\/installations\/ins_[0-9A-Za-z]+(?:$|\/(?:deployments|deployment-outputs)$)/.test(
+      normalized,
+    )
+  );
 }
 
 export function createServiceWorkerRequest(request: Request): Request {

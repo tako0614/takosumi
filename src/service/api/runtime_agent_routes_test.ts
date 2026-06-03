@@ -26,7 +26,7 @@ import {
 import {
   registerRuntimeAgentRoutes,
   type RuntimeAgentAuthResult,
-  TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS,
+  TAKOSUMI_RUNTIME_AGENT_PATHS,
 } from "./runtime_agent_routes.ts";
 
 test("runtime agent routes enroll, heartbeat, lease, complete, and drain", async () => {
@@ -43,7 +43,7 @@ test("runtime agent routes enroll, heartbeat, lease, complete, and drain", async
   });
   const app = createApp(registry);
 
-  const enroll = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const enroll = await app.request(TAKOSUMI_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     body: JSON.stringify({
       agentId: "agent_1",
@@ -138,7 +138,7 @@ test("runtime agent routes return auth and registry errors", async () => {
     error: "forbidden",
   }));
   const deniedResponse = await denied.request(
-    TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
+    TAKOSUMI_RUNTIME_AGENT_PATHS.enroll,
     {
       method: "POST",
       body: JSON.stringify({ provider: "local" }),
@@ -154,7 +154,7 @@ test("runtime agent routes return auth and registry errors", async () => {
 
   const app = createApp(new InMemoryRuntimeAgentRegistry());
   const invalidEnroll = await app.request(
-    TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
+    TAKOSUMI_RUNTIME_AGENT_PATHS.enroll,
     {
       method: "POST",
       body: JSON.stringify({}),
@@ -182,7 +182,7 @@ test("runtime agent routes fail closed without signed auth or explicit authentic
     registry: new InMemoryRuntimeAgentRegistry(),
   });
 
-  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     body: JSON.stringify({ provider: "local" }),
   });
@@ -323,7 +323,7 @@ test("runtime agent routes reject reports with unknown status", async () => {
 
 test("runtime agent routes return renewAfterMs on enroll", async () => {
   const app = createApp(new InMemoryRuntimeAgentRegistry());
-  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     body: JSON.stringify({ provider: "aws" }),
   });
@@ -341,7 +341,7 @@ test("runtime agent routes return common envelope for uncaught errors", async ()
   }
   const app = createApp(new ThrowingRegistry());
 
-  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     body: JSON.stringify({ provider: "local" }),
   });
@@ -456,12 +456,12 @@ test("runtime agent routes require signed workload identity service grants when 
     groupId: "runtime",
   });
 
-  const response = await app.request(TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll, {
+  const response = await app.request(TAKOSUMI_RUNTIME_AGENT_PATHS.enroll, {
     method: "POST",
     headers: await signedHeaders({
       secret,
       method: "POST",
-      path: TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS.enroll,
+      path: TAKOSUMI_RUNTIME_AGENT_PATHS.enroll,
       body,
       actor: {
         actorAccountId: "acct_runtime",
@@ -515,7 +515,7 @@ function agentPath(
   kind: "heartbeat" | "lease" | "report" | "drain",
   agentId: string,
 ): string {
-  return TAKOSUMI_PAAS_RUNTIME_AGENT_PATHS[kind].replace(":agentId", agentId);
+  return TAKOSUMI_RUNTIME_AGENT_PATHS[kind].replace(":agentId", agentId);
 }
 
 function sequence(...values: string[]): () => string {

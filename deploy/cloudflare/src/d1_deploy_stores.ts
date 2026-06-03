@@ -1,13 +1,5 @@
 import type { JsonValue } from "takosumi-contract/reference/compat";
 import {
-  assertReplayCompatible,
-  compareJournalEntries,
-  type OperationJournalAppendInput,
-  operationJournalEffectDigest,
-  type OperationJournalEntry,
-  type OperationJournalStore,
-} from "../../../src/service/domains/deploy/operation_journal.ts";
-import {
   ageRevokeDebtIfDue,
   clearRevokeDebt,
   compareRevokeDebtRecords,
@@ -23,22 +15,20 @@ import {
   revokeDebtSourceKey,
   type RevokeDebtStore,
   type RevokeDebtTransitionInput,
-} from "../../../src/service/domains/deploy/revoke_debt_store.ts";
+} from "../../../src/service/domains/deploy-records/revoke_debt_store.ts";
 import type {
   TakosumiDeploymentRecord,
   TakosumiDeploymentRecordStore,
   TakosumiDeploymentUpsertInput,
-} from "../../../src/service/domains/deploy/takosumi_deployment_record_store.ts";
+} from "../../../src/service/domains/deploy-records/deployment_record_store.ts";
 import type { D1Database } from "./bindings.ts";
 
 const DEPLOYMENT_NAMESPACE = "takosumi-deployment";
-const JOURNAL_NAMESPACE = "takosumi-operation-journal";
 const REVOKE_DEBT_NAMESPACE = "takosumi-revoke-debt";
 const ARTIFACT_HASH_REGEX = /^sha256:[0-9a-f]{64}$/;
 
 export interface CloudflareD1DeployStores {
   readonly deploymentRecordStore: TakosumiDeploymentRecordStore;
-  readonly operationJournalStore: OperationJournalStore;
   readonly revokeDebtStore: RevokeDebtStore;
 }
 
@@ -48,7 +38,6 @@ export function createCloudflareD1DeployStores(
   const records = new D1RecordTable(db);
   return {
     deploymentRecordStore: new D1TakosumiDeploymentRecordStore(records),
-    operationJournalStore: new D1OperationJournalStore(records),
     revokeDebtStore: new D1RevokeDebtStore(records),
   };
 }
@@ -69,7 +58,7 @@ class D1TakosumiDeploymentRecordStore implements TakosumiDeploymentRecordStore {
       id: existing?.id ?? crypto.randomUUID(),
       tenantId: input.tenantId,
       name: input.name,
-      manifest: input.manifest,
+      sourceEvidence: input.sourceEvidence,
       appliedResources: input.appliedResources,
       status: input.status,
       createdAt: existing?.createdAt ?? input.now,
@@ -150,99 +139,12 @@ class D1TakosumiDeploymentRecordStore implements TakosumiDeploymentRecordStore {
     );
     const hashes = new Set<string>();
     for (const row of rows) {
-      collectArtifactHashes(row.manifest as JsonValue, hashes);
+      collectArtifactHashes(row.sourceEvidence as JsonValue, hashes);
       for (const applied of row.appliedResources) {
         collectArtifactHashes(applied.outputs as JsonValue, hashes);
       }
     }
     return hashes;
-  }
-}
-
-class D1OperationJournalStore implements OperationJournalStore {
-  constructor(private readonly records: D1RecordTable) {}
-
-  async append(
-    input: OperationJournalAppendInput,
-  ): Promise<OperationJournalEntry> {
-    // `operationJournalEffectDigest` is async post Workers / Web Crypto fix.
-    const effectDigest = await operationJournalEffectDigest(input.effect);
-    const key = [
-      input.spaceId,
-      input.operationPlanDigest,
-      input.journalEntryId,
-      input.stage,
-    ].join("\u0000");
-    const existing = await this.records.get<OperationJournalEntry>(
-      JOURNAL_NAMESPACE,
-      key,
-    );
-    if (existing) {
-      assertReplayCompatible(existing, effectDigest);
-      return existing;
-    }
-    const entry: OperationJournalEntry = stripUndefined({
-      id: crypto.randomUUID(),
-      spaceId: input.spaceId,
-      deploymentName: input.deploymentName,
-      operationPlanDigest: input.operationPlanDigest,
-      journalEntryId: input.journalEntryId,
-      operationId: input.operationId,
-      phase: input.phase,
-      stage: input.stage,
-      operationKind: input.operationKind,
-      resourceName: input.resourceName,
-      providerId: input.providerId,
-      effectDigest,
-      effect: input.effect,
-      status: input.status ?? "recorded",
-      createdAt: input.createdAt,
-    }) as unknown as OperationJournalEntry;
-    await this.records.putIfAbsent({
-      namespace: JOURNAL_NAMESPACE,
-      key,
-      tenantId: input.spaceId,
-      name: input.deploymentName ?? "",
-      createdAt: input.createdAt,
-      updatedAt: input.createdAt,
-      record: entry,
-    });
-    const stored = await this.records.get<OperationJournalEntry>(
-      JOURNAL_NAMESPACE,
-      key,
-    );
-    if (stored) {
-      assertReplayCompatible(stored, effectDigest);
-      return stored;
-    }
-    return freezeClone(entry);
-  }
-
-  async listByPlan(
-    spaceId: string,
-    operationPlanDigest: `sha256:${string}`,
-  ): Promise<readonly OperationJournalEntry[]> {
-    const entries = await this.records.listByTenant<OperationJournalEntry>(
-      JOURNAL_NAMESPACE,
-      spaceId,
-    );
-    return entries
-      .filter((entry) => entry.operationPlanDigest === operationPlanDigest)
-      .sort(compareJournalEntries);
-  }
-
-  async listByDeployment(
-    spaceId: string,
-    deploymentName: string,
-  ): Promise<readonly OperationJournalEntry[]> {
-    const entries = await this.records.listByTenantAndName<
-      OperationJournalEntry
-    >(
-      JOURNAL_NAMESPACE,
-      spaceId,
-      deploymentName,
-    );
-    return entries.sort(compareJournalEntries);
   }
 }
 

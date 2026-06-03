@@ -1,70 +1,148 @@
 # Takosumi GA Roadmap
 
-Takosumi is the source-to-deployment substrate and ledger. GA keeps Takosumi
-small: Source, Installation, Deployment, PlatformService, InstallPlan, and the
-five Installer API endpoints.
+Takosumi is the OpenTofu-native deploy control plane, UI, and audit ledger.
+GA keeps Takosumi small: Installation, Deployment, PlanRun, ApplyRun,
+RunnerProfile, DeploymentOutput, policy decisions, state evidence, and audit
+events.
 
 ## Current Direction
 
-- Takosumi v1 has no `.takosumi` source manifest.
-- OpenTofu is the native operator infrastructure manifest and inventory source.
-- Operator distributions run OpenTofu, own state and credentials, and publish
-  non-sensitive outputs into PlatformService inventory.
-- Takosumi reads operator inventory, resolves bindings, records Deployment
-  evidence, and exposes the installer/account-plane API surfaces.
+- Repositories are plain OpenTofu modules. Metadata comes from Git/prepared/local
+  source identity, module path, variables, and well-known OpenTofu outputs.
+- RunnerProfile owns provider allowlists, deny rules, credential references,
+  state backend, state lock policy, execution image/resource limits, network
+  policy, Cloudflare Container execution settings, optional Cloudflare Workers
+  for Platforms tenant dispatch settings, and secret exposure policy.
+- Default provider profiles cover Cloudflare, AWS, GCP, Azure, Kubernetes/Helm,
+  GitHub, DigitalOcean, and local Docker by OpenTofu provider source address.
+- In the Cloudflare reference topology, OpenTofu `plan/apply` runs in the
+  Container runner. Workers for Platforms is tenant / user Worker ingress and
+  dispatch only; operator provider credentials are not bound into user Workers.
+- ApplyRun requires the full reviewed PlanRun guard: PlanRun id, RunnerProfile,
+  source digest, variables digest, policy decision digest, plan digest, optional
+  source commit, and optional provider lock digest.
+- DeploymentOutput is public non-sensitive output only. Sensitive OpenTofu
+  outputs are skipped by the public projection.
 
 ## Completed
 
+### Contract and Control Plane
+
 - [x] Single package direction for `@takosjp/takosumi`.
-- [x] Service implementation renamed away from public `kernel` vocabulary.
-- [x] Source / Installation / Deployment / PlatformService docs aligned to v1.
-- [x] OpenTofu output resolver added under `packages/platform-services`.
-- [x] Credential-free OpenTofu binding snapshot proof records
-      operator-supplied output inventory into Deployment evidence.
-- [x] Current storage schema renamed away from legacy `core_*` table names with
-      a compatibility rename migration.
+- [x] Service implementation renamed away from old public control-plane vocabulary.
+- [x] Deploy Control API request/response DTOs frozen for RunnerProfile,
+      PlanRun, ApplyRun, Installation, Deployment, DeploymentOutput, errors,
+      state evidence, and audit events.
+- [x] Apply is guarded by reviewed PlanRun id, source/module identity digest,
+      RunnerProfile, variables digest, policy decision digest, plan digest,
+      source commit, and provider lock digest.
+- [x] Old public DeployControl API wording removed from docs and SDK examples.
+- [x] OpenTofu-only repository fixture coverage uses generic Git/local source
+      metadata and OpenTofu output.
 
-## GA Work
+### Runner Profiles
 
-### Contract and Installer
+- [x] GA RunnerProfile schema includes provider allowlists, denied providers,
+      credential references, credential-ref enforcement, state backend, state
+      lock policy, resource limits, network policy, and Cloudflare Container
+      execution settings.
+- [x] Cloudflare RunnerProfile schema records Workers for Platforms dispatch
+      namespace, outbound Worker policy, tenant Worker binding policy, and
+      secret exposure policy without changing the OpenTofu runner substrate.
+- [x] Provider deny policy blocks before plan/apply side effects.
+- [x] Required credential reference absence blocks before plan/apply side
+      effects.
+- [x] ApplyRun records state backend and state lock evidence.
+- [x] Default Cloudflare/AWS/GCP RunnerProfiles encode Cloudflare Container
+      execution settings.
+- [x] Default Azure, Kubernetes/Helm, GitHub, DigitalOcean, and local Docker
+      RunnerProfiles encode OpenTofu provider allowlists, credential references,
+      state backend refs, secret exposure policy, and provider network policy.
+- [x] RunnerProfile network policy supports exact hosts and provider API suffix
+      patterns for region / service-specific endpoints.
 
-- [x] Freeze Installer API request/response DTOs and error envelope.
-- [x] Add OpenTofu-only source fixture coverage: no `.takosumi` file, no
-      Takosumi source metadata, only generic repo metadata and OpenTofu output.
-- [x] Keep dry-run/apply guarded by `expected.commit` or
-      `expected.sourceDigest` plus `expected.planSnapshotDigest`.
+### OpenTofu Proofs
 
-### PlatformService Inventory
+- [x] Parse `tofu output -json` shape into DeploymentOutput material.
+- [x] Credential-free OpenTofu output proof records operator-supplied output
+      material into Deployment evidence.
+- [x] Live local non-production OpenTofu proof executes `tofu init`, `tofu plan`,
+      `tofu apply`, and `tofu output -json` through a Takosumi OpenTofu runner.
+- [x] Sensitive outputs are skipped by the public DeploymentOutput projection.
+- [x] PlanRun / ApplyRun / DeploymentOutput proof records immutable output,
+      state-lock, and audit evidence.
+- [x] Runner diagnostics and failure audit messages are redacted before
+      PlanRun / ApplyRun / DestroyRun persistence.
 
-- [x] Parse `tofu output -json` shape into PlatformService material.
-- [x] Add operator example that imports OpenTofu outputs into Space-scoped
-      PlatformService inventory.
-- [x] Prove sensitive outputs are skipped unless explicitly allowed by the
-      operator.
-- [x] Prove `tofu output -json` import through PlatformService inventory into
-      Deployment `bindingsSnapshot` with matching dry-run/apply digests.
+### Deployment Outputs and UI
 
-### Operator Distribution
+- [x] Well-known public output names are defined:
+      `launch_url`, `admin_url`, `health_url`, `docs_url`, `service_url`, plus
+      `takosumi_`-prefixed variants.
+- [x] DeploymentOutput read API added:
+      `GET /v1/installations/{installationId}/deployment-outputs`.
+- [x] Dashboard Installation detail projects non-sensitive DeploymentOutput
+      values without exposing secret literals.
 
-- [x] Prove Accounts/OIDC/billing/dashboard routes on the reference
-      `takosumi` operator distribution.
-- [ ] Prove one live OpenTofu apply outside Takosumi, then import outputs into
-      PlatformService inventory.
-- [ ] Record immutable Deployment binding snapshot evidence for the live proof.
+### Audit and Managed Readiness
 
-### Publication
+- [x] PlanRun stores audit events for plan requested, policy evaluated, plan
+      started, plan completed, and plan failed.
+- [x] ApplyRun stores audit events for apply queued, started, completed, and
+      failed.
+- [x] DestroyRun stores audit events for destroy queued, started, completed, and
+      failed.
+- [x] Deployment stores output snapshot recorded audit events.
+- [x] Exportable proof scripts include output digest, ApplyRun output digest,
+      Deployment output digest, state lock status, and audit event count.
+
+### Documentation and Publication Readiness
+
+- [x] Takosumi v1 docs aligned to OpenTofu-native Deploy Control API.
+- [x] CLI docs aligned to current `plan`, `install`, `deploy`, and `rollback`
+      commands.
+- [x] RunnerProfile / DeploymentOutput docs aligned to public non-sensitive
+      output projection.
+- [x] Takosumi public docs build.
+- [x] npm publication rehearsal for `@takosjp/takosumi`.
+
+## Verification Commands
 
 - [x] `bun run check`
-- [x] `bun run test`
-- [x] `bun run opentofu:binding-snapshot-proof`
+- [x] `bun test ... deploy-control / API / CLI / proof targeted tests`
+- [x] `bun run opentofu:deployment-output-proof`
+- [x] `bun run opentofu:live-local-proof`
+- [x] `bun run test:scripts`
+- [x] `bun run lint:json-ld`
+- [x] `bun run docs:build`
 - [x] `bun run build:npm`
-- [x] npm publication rehearsal for `@takosjp/takosumi`
-- [x] Takosumi public docs build
-- [ ] Takosumi public docs deploy
+- [x] `bun run website:deploy`
+
+## Operator-Live Evidence
+
+These are deployment-environment proofs rather than remaining Takosumi source
+work:
+
+- [x] Publish Takosumi website/docs to Cloudflare Pages (`bun run website:deploy`):
+      <https://eae08889.takosumi-website.pages.dev>
+- [ ] Capture managed offering launch evidence with operator Cloudflare
+      credentials, DNS, account-plane, billing, OIDC, and dashboard enabled.
+- [ ] Capture hosted Cloudflare Container runner evidence for a real
+      non-production provider apply.
+- [ ] Capture AWS, GCP, Azure, Kubernetes/Helm, GitHub, and DigitalOcean
+      non-production provider `plan/apply/destroy` evidence for every profile
+      enabled by the operator.
+- [ ] Capture Workers for Platforms dispatch namespace and outbound Worker
+      isolation evidence for tenant / user Worker execution.
+- [ ] Capture secret-boundary leak tests proving provider credentials, Deploy
+      Control tokens, and state backend credentials are not visible to tenant
+      Workers, diagnostics, audit payloads, or DeploymentOutput records.
 
 ## Non-Goals
 
-- Takosumi-owned OpenTofu state, state locks, provider credentials, or live
-  apply orchestration.
-- Reintroducing `.takosumi` or another Takosumi-specific source manifest.
-- Making optional provider adapters part of the public source contract.
+- Adding a Takosumi-specific source metadata file.
+- Reintroducing the pre-v1 source metadata and dry-run API model as public v1
+  doctrine.
+- Storing raw provider credentials or secret output literals in Takosumi public
+  ledger records.
+- Adding another runtime requirement during the Bun migration.

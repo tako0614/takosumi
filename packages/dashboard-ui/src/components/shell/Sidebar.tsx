@@ -32,7 +32,12 @@ export default function Sidebar() {
         ))}
       </nav>
       <div class="sidebar-footer">
-        <a href="/docs/" rel="external" class="sidebar-link sidebar-link-sub">
+        <a
+          href="https://docs.takos.jp/"
+          target="_blank"
+          rel="external noopener"
+          class="sidebar-link sidebar-link-sub"
+        >
           ドキュメント →
         </a>
       </div>

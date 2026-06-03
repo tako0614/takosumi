@@ -4,11 +4,11 @@
  *
  * - OIDC value validators (`oidcRedirectUrisValue`, `oidcIssuerUrlValue`,
  *   `oidcClientAuthMethodValue`, etc.) are sibling-package internals shared
- *   between the install-lifecycle handlers and use-takos start route.
+ *   between the install-lifecycle handlers and Takos start handoff route.
  * - `handleIssueLaunchToken` and its support helpers
  *   (`launchRedirectUrl`, `resolveLaunchTokenPairwiseSubject`,
  *   `opaqueLaunchToken`, `launchTokenConsumeError`) back the in-package
- *   `/start` and `/dashboard/use-takos` issue flows. Token issue is not a
+ *   `/start` issue flow. Token issue is not a
  *   public app route; token consume remains public so installed apps can
  *   redeem the one-shot launch token.
  * - `requireInstallationAccessTokenCapability` gates internal bearer-token
@@ -44,8 +44,8 @@ import type { LaunchTokenOptions } from "./mod.ts";
 /**
  * Internal launch-token issuer. Wave 6 removed
  * `POST /v1/installations/{id}/launch-token` from the public surface; this
- * helper is now only reachable from internal routes (`/start` /
- * `/dashboard/use-takos`) that drive the install→launch handshake from the
+ * helper is now only reachable from the internal `/start` route that drives
+ * the install→launch handshake from the
  * operator-controlled dashboard. Do not export over HTTP.
  */
 export async function handleIssueLaunchToken(input: {

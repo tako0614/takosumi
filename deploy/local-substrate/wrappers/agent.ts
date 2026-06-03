@@ -1,15 +1,13 @@
 /**
- * Boots the takosumi runtime-agent (execution plane) for the local-substrate.
+ * Boots the internal runtime-agent compatibility execution plane for the
+ * local-substrate.
  *
  * This is the execution half of the local substrate, paired with `cloud.ts`. In
- * the redesigned substrate the `cloud` control-plane service runs the composed
- * service + account-plane and dispatches source / lifecycle / capability
- * execution HERE over `TAKOSUMI_AGENT_URL` (+ `TAKOSUMI_AGENT_TOKEN`). Running
- * the agent in its own container:
- *   - mirrors production — a Cloudflare Worker control plane cannot embed a
- *     subprocess agent, so execution is always an external binding;
- *   - isolates docker.sock / subprocess privilege OFF the control plane that
- *     also serves OIDC / billing / dashboard.
+ * this substrate the `cloud` control-plane service runs the composed service +
+ * account-plane and dispatches operator-owned execution HERE over
+ * `TAKOSUMI_AGENT_URL` (+ `TAKOSUMI_AGENT_TOKEN`). Running the agent in its own
+ * container isolates docker.sock / subprocess privilege OFF the control plane
+ * that also serves OIDC / billing / dashboard.
  *
  * The local substrate no longer imports a sibling provider package. OpenTofu /
  * provider materialization is operator-owned, so this agent starts with an

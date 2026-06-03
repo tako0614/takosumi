@@ -11,11 +11,8 @@ import {
 } from "./internal-api.ts";
 
 test("signInternalResponse / verifySignedInternalResponseFromHeaders round trip", async () => {
-  const body = '{"deployment":"dep_42","status":"applied"}';
-  const path = TAKOSUMI_INTERNAL_PATHS.deploymentApply.replace(
-    ":deploymentId",
-    "dep_42",
-  );
+  const body = '{"space":{"id":"space_42","name":"default"}}';
+  const path = TAKOSUMI_INTERNAL_PATHS.spaces;
   const signed = await signInternalResponse({
     method: "POST",
     path,
@@ -52,7 +49,7 @@ test("signInternalResponse / verifySignedInternalResponseFromHeaders round trip"
     true,
   );
 
-  const tamperedBody = body.replace("applied", "rolled-back");
+  const tamperedBody = body.replace("default", "tampered");
   assert.equal(
     await verifySignedInternalResponseFromHeaders({
       method: "POST",
@@ -68,10 +65,7 @@ test("signInternalResponse / verifySignedInternalResponseFromHeaders round trip"
 });
 
 test("canonicalInternalResponse binds method/path/status/body", () => {
-  const path = TAKOSUMI_INTERNAL_PATHS.deploymentApply.replace(
-    ":deploymentId",
-    "dep_42",
-  );
+  const path = TAKOSUMI_INTERNAL_PATHS.spaces;
   const canonical = canonicalInternalResponse({
     method: "post",
     path,

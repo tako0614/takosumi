@@ -479,7 +479,7 @@ function installationProjection(
       commit: bundle.source.commit,
     },
     digests: {
-      planSnapshot: bundle.source.planSnapshotDigest,
+      plan: bundle.source.planDigest,
       artifact: bundle.source.artifactDigest,
     },
     runtimeTarget: bundle.runtimeTarget,
@@ -732,7 +732,7 @@ OIDC use-edge metadata is also available at \`takos-export/oidc/use-edge-templat
 \`\`\`
 
 Source commit: \`${bundle.source.commit}\`
-Plan snapshot digest: \`${bundle.source.planSnapshotDigest}\`
+Plan digest digest: \`${bundle.source.planDigest}\`
 Artifact digest: \`${bundle.source.artifactDigest ?? "none"}\`
 
 Secret material is not included. Provider use edges must be reissued by the target Accounts instance.
