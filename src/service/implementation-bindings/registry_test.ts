@@ -4,7 +4,6 @@ import type { OperatorImplementation } from "takosumi-contract/reference/impleme
 import {
   createOperatorImplementationRegistry,
   findImplementationForKind,
-  normalizeKindToUri,
 } from "./registry.ts";
 
 function buildImplementation(
@@ -113,15 +112,19 @@ test("registry refuses implementation without apply()", () => {
   );
 });
 
-test("normalizeKindToUri leaves bare tokens unresolved", () => {
-  assert.equal(normalizeKindToUri("worker"), "worker");
-  assert.equal(
-    normalizeKindToUri("https://takosumi.com/kinds/v1/postgres"),
-    "https://takosumi.com/kinds/v1/postgres",
+test("findByKindUri resolves kind references verbatim without normalization", () => {
+  const workerImplementation = buildImplementation(
+    "@takos/workers-reference",
+    ["https://takosumi.com/kinds/v1/worker"],
   );
+  const registry = createOperatorImplementationRegistry([workerImplementation]);
+
+  // Bare token does not get expanded into the registered URI.
+  assert.equal(registry.findByKindUri("worker"), undefined);
+  // The exact URI matches.
   assert.equal(
-    normalizeKindToUri("https://operator.example.com/kinds/lambda"),
-    "https://operator.example.com/kinds/lambda",
+    registry.findByKindUri("https://takosumi.com/kinds/v1/worker")?.name,
+    "@takos/workers-reference",
   );
 });
 

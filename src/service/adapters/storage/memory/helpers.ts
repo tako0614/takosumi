@@ -1,6 +1,6 @@
 // Pure shared helpers used by every in-memory store class:
-//  - `immutable` / `deepFreeze`: freeze a deep copy so a returned value
-//    cannot be mutated by callers
+//  - `immutable`: freeze a deep copy so a returned value cannot be mutated by
+//    callers (re-exported from the shared `freeze` primitive)
 //  - composite-key formatters (`membershipKey`, `packageKey`)
 //  - small predicates used by audit stores
 
@@ -11,19 +11,7 @@ import type {
 } from "../../../domains/audit/types.ts";
 import type { PackageKind } from "../../../domains/registry/types.ts";
 
-export function immutable<T>(value: T): T {
-  return deepFreeze(structuredClone(value));
-}
-
-export function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
-}
+export { immutable } from "../../../shared/freeze.ts";
 
 export function membershipKey(
   spaceId: SpaceId,

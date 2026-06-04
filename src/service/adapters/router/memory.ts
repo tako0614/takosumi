@@ -1,8 +1,8 @@
+import { freezeClone } from "../../shared/freeze.ts";
 import type { RouteProjection } from "../../domains/routing/mod.ts";
 import {
   activationSnapshot,
   DefaultRouterConfigRenderer,
-  freezeClone,
   validateProjectionActivationUnchanged,
   validateRouterConfigActivation,
 } from "./render.ts";

@@ -20,6 +20,7 @@ import { DomainError } from "../shared/errors.ts";
 import { apiError, readJsonObject, registerApiErrorHandler } from "./errors.ts";
 import { readInternalAuth } from "./internal_auth.ts";
 import type { MutationBoundaryEntitlementService } from "./internal_routes.ts";
+import type { ApiEndpoint } from "./route_families.ts";
 
 export const TAKOSUMI_RUNTIME_AGENT_PATHS = {
   enroll: "/api/internal/v1/runtime/agents/enroll",
@@ -29,6 +30,86 @@ export const TAKOSUMI_RUNTIME_AGENT_PATHS = {
   drain: "/api/internal/v1/runtime/agents/:agentId/drain",
   gatewayManifest: "/api/internal/v1/runtime/agents/:agentId/gateway-manifest",
 } as const;
+
+/**
+ * Endpoint inventory for the `runtime-agent` family, co-located with the mount
+ * calls below. Consumed by `route_families.ts` to derive `/capabilities` and
+ * `/openapi.json`. Keep in lockstep with {@link registerRuntimeAgentRoutes}.
+ */
+export const RUNTIME_AGENT_ENDPOINTS: readonly ApiEndpoint[] = [
+  {
+    method: "POST",
+    path: TAKOSUMI_RUNTIME_AGENT_PATHS.enroll,
+    summary: "Enrolls a runtime agent for provider work leasing.",
+    auth: "internal-service",
+    operationId: "enrollRuntimeAgent",
+    openapi: {
+      requestSchema: "RuntimeAgentEnrollRequest",
+      okStatus: "201",
+      okSchema: "RuntimeAgentResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_RUNTIME_AGENT_PATHS.heartbeat,
+    summary: "Records a runtime agent heartbeat.",
+    auth: "internal-service",
+    operationId: "heartbeatRuntimeAgent",
+    openapi: {
+      pathParams: ["agentId"],
+      requestSchema: "RuntimeAgentHeartbeatRequest",
+      okSchema: "RuntimeAgentResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_RUNTIME_AGENT_PATHS.lease,
+    summary: "Leases work to a runtime agent.",
+    auth: "internal-service",
+    operationId: "leaseRuntimeAgentWork",
+    openapi: {
+      pathParams: ["agentId"],
+      requestSchema: "RuntimeAgentLeaseRequest",
+      okSchema: "RuntimeAgentLeaseResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_RUNTIME_AGENT_PATHS.report,
+    summary: "Reports runtime-agent work completion or failure.",
+    auth: "internal-service",
+    operationId: "reportRuntimeAgentWork",
+    openapi: {
+      pathParams: ["agentId"],
+      requestSchema: "RuntimeAgentReportRequest",
+      okSchema: "RuntimeAgentWorkResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_RUNTIME_AGENT_PATHS.drain,
+    summary: "Requests runtime-agent drain.",
+    auth: "internal-service",
+    operationId: "drainRuntimeAgent",
+    openapi: {
+      pathParams: ["agentId"],
+      requestSchema: "RuntimeAgentDrainRequest",
+      okSchema: "RuntimeAgentResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_RUNTIME_AGENT_PATHS.gatewayManifest,
+    summary:
+      "Issues a service-trusted Ed25519 signed gateway manifest the agent pins for fail-closed identity verification.",
+    auth: "internal-service",
+    operationId: "issueGatewayManifest",
+    openapi: {
+      pathParams: ["agentId"],
+      okSchema: "GatewayManifestResponse",
+    },
+  },
+] as const;
 
 export type RuntimeAgentAuthResult =
   | {

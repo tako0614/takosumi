@@ -1,5 +1,6 @@
 import type { SpaceMembershipStore } from "../../domains/space/mod.ts";
 import { permissionDenied } from "../../shared/errors.ts";
+import { ALL_CAPABILITIES } from "./types.ts";
 import type {
   EffectiveEntitlements,
   EffectiveEntitlementsQuery,
@@ -16,28 +17,6 @@ export interface EntitlementPolicyServiceOptions {
   readonly memberships: SpaceMembershipStore;
   readonly policy?: LocalEntitlementPolicyConfigDto;
 }
-
-const ALL_CAPABILITIES: readonly EntitlementCapability[] = [
-  "deploy.read",
-  "deploy.plan",
-  "deploy.apply",
-  "deploy.rollback",
-  "resource.read",
-  "resource.create",
-  "resource.update",
-  "resource.delete",
-  "resource.bind",
-  "resource.migrate",
-  "resource.restore",
-  "runtime.read",
-  "runtime.scale",
-  "runtime.restart",
-  "runtime-agent.read",
-  "runtime-agent.enqueue",
-  "runtime-agent.register",
-  "runtime-agent.drain",
-  "runtime-agent.revoke",
-];
 
 export const DEFAULT_LOCAL_ENTITLEMENT_POLICY = Object.freeze(
   {

@@ -122,15 +122,7 @@ export async function createApiApp(
   }
 
   app.get("/capabilities", (c) => {
-    return c.json(createApiCapabilitiesDescription(role, {
-      internalRoutesMounted,
-      deployControlPublicRoutesMounted,
-      artifactRoutesMounted,
-      runtimeAgentRoutesMounted,
-      openApiRouteMounted,
-      readinessRoutesMounted,
-      metricsRoutesMounted,
-    }));
+    return c.json(createApiCapabilitiesDescription(role, mounted));
   });
 
   if (internalRoutesMounted) {
@@ -181,16 +173,7 @@ export async function createApiApp(
 
   if (openApiRouteMounted) {
     const createOpenApiDocument = options.createOpenApiDocument ??
-      (() =>
-        createTakosumiOpenApiDocument({
-          internalRoutesMounted,
-          deployControlPublicRoutesMounted,
-          artifactRoutesMounted,
-          runtimeAgentRoutesMounted,
-          readinessRoutesMounted,
-          metricsRoutesMounted,
-          openApiRouteMounted,
-        }));
+      (() => createTakosumiOpenApiDocument(mounted));
     app.get(
       "/openapi.json",
       async (c) => c.json(await createOpenApiDocument()),

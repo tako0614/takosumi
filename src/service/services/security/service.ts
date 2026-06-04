@@ -10,6 +10,10 @@ import type {
   WorkloadIdentityStore,
 } from "../../domains/network/mod.ts";
 import { permissionDenied } from "../../shared/errors.ts";
+import {
+  assertHostNotBlocked,
+  BlockedHostError,
+} from "takosumi-contract/reference/host-blocklist";
 
 export interface WorkerAuthzStores {
   readonly workloadIdentities: WorkloadIdentityStore;
@@ -251,15 +255,25 @@ function peerMatchesDestination(
   return false;
 }
 
+/**
+ * Whether the requested destination resolves to a blocked IP literal
+ * (loopback / RFC1918 / link-local / cloud-metadata / IPv6 equivalents). This
+ * delegates to the canonical SSRF classifier in
+ * `takosumi-contract/reference/host-blocklist` so the IPv4/IPv6 ranges cannot
+ * drift from the source-fetcher SSRF guards. Used only to refine the
+ * deny-reason string; DNS hostnames and non-literals classify as not-private.
+ */
 function isPrivateDestination(input: DecideRuntimeEgressInput): boolean {
   const value = input.destinationCidr ?? input.destinationHost;
   if (!value) return false;
-  const address = value.split("/")[0];
-  const parts = address.split(".").map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+  // Strip any CIDR suffix; the canonical classifier expects a bare host /
+  // IP literal (and strips IPv6 brackets itself).
+  const host = value.split("/")[0];
+  try {
+    assertHostNotBlocked(host, "egress destination");
     return false;
+  } catch (error) {
+    if (error instanceof BlockedHostError) return true;
+    throw error;
   }
-  const [a, b] = parts;
-  return a === 10 || (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) || a === 127 || (a === 169 && b === 254);
 }

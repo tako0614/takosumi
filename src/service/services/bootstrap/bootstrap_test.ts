@@ -21,6 +21,10 @@ test("standalone bootstrap selects explicit local adapters and redacts config", 
       TAKOSUMI_BOOTSTRAP_PROVIDER_ADAPTER: "noop",
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_INTERNAL_API_SECRET: "super-secret",
+      // camelCase compound credential keys: the previous bootstrap-local
+      // isSensitiveKey regex missed these; redaction.isSecretKey catches them.
+      connectionString: "postgres://user:pw@db.example/app",
+      sessionId: "abc123",
       DATABASE_SECRET_REF: { name: "DATABASE_URL", version: "v1" },
     },
   });
@@ -83,6 +87,31 @@ test("standalone bootstrap selects explicit local adapters and redacts config", 
       redacted: true,
     },
   );
+  // camelCase compound credential keys must be redacted by the hardened
+  // isSecretKey policy in both the redacted config and the operator snapshot.
+  for (const camelKey of ["connectionString", "sessionId"]) {
+    const redactedValue = report.config.values.find((value) =>
+      value.key === camelKey
+    );
+    assert.equal(
+      redactedValue?.kind === "plain" ? redactedValue.value : undefined,
+      "[REDACTED]",
+      `${camelKey} should be redacted in report.config`,
+    );
+    assert.equal(
+      redactedValue?.kind === "plain" ? redactedValue.redacted : undefined,
+      true,
+      `${camelKey} should be flagged redacted in report.config`,
+    );
+    const snapshotValue = report.operatorConfigSnapshot.values.find((value) =>
+      value.key === camelKey
+    );
+    assert.equal(
+      snapshotValue?.kind === "plain" ? snapshotValue.value : undefined,
+      "[REDACTED]",
+      `${camelKey} should be redacted in operatorConfigSnapshot`,
+    );
+  }
 });
 
 test("standalone bootstrap reports unsafe default adapters in production", async () => {

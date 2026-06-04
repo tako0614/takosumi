@@ -1,4 +1,5 @@
 import type { Digest } from "takosumi-contract/reference/compat";
+import { freezeClone } from "../../shared/freeze.ts";
 import type {
   CatalogReleaseAdoption,
   CatalogReleaseDescriptor,
@@ -172,7 +173,7 @@ export class InMemoryCatalogReleaseDescriptorStore
   put(
     descriptor: CatalogReleaseDescriptor,
   ): Promise<CatalogReleaseDescriptor> {
-    const frozen = deepFreeze(structuredClone(descriptor));
+    const frozen = freezeClone(descriptor);
     this.#descriptors.set(frozen.releaseId, frozen);
     return Promise.resolve(frozen);
   }
@@ -196,7 +197,7 @@ export class InMemoryCatalogReleasePublisherKeyStore
   readonly #keys = new Map<string, CatalogReleasePublisherKey>();
 
   put(key: CatalogReleasePublisherKey): Promise<CatalogReleasePublisherKey> {
-    const frozen = deepFreeze(structuredClone(key));
+    const frozen = freezeClone(key);
     this.#keys.set(frozen.keyId, frozen);
     return Promise.resolve(frozen);
   }
@@ -224,7 +225,7 @@ export class InMemoryCatalogReleaseAdoptionStore
   readonly #adoptions = new Map<string, CatalogReleaseAdoption>();
 
   put(adoption: CatalogReleaseAdoption): Promise<CatalogReleaseAdoption> {
-    const frozen = deepFreeze(structuredClone(adoption));
+    const frozen = freezeClone(adoption);
     this.#adoptions.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -302,14 +303,4 @@ function compareAdoptions(
   return left.adoptedAt.localeCompare(right.adoptedAt) ||
     left.catalogReleaseId.localeCompare(right.catalogReleaseId) ||
     left.id.localeCompare(right.id);
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

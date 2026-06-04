@@ -15,7 +15,7 @@ import type {
   objectStorage,
   ObservabilitySink,
   secretStore,
-} from "./implementation-sdk.ts";
+} from "./provider-material-ports.ts";
 
 /**
  * Runtime-handler-local selector for shape-based backend adapters.

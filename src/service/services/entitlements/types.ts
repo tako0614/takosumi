@@ -6,26 +6,29 @@ import type {
   SpaceMembership,
 } from "../../domains/space/mod.ts";
 
-export type EntitlementCapability =
-  | "deploy.read"
-  | "deploy.plan"
-  | "deploy.apply"
-  | "deploy.rollback"
-  | "resource.read"
-  | "resource.create"
-  | "resource.update"
-  | "resource.delete"
-  | "resource.bind"
-  | "resource.migrate"
-  | "resource.restore"
-  | "runtime.read"
-  | "runtime.scale"
-  | "runtime.restart"
-  | "runtime-agent.read"
-  | "runtime-agent.enqueue"
-  | "runtime-agent.register"
-  | "runtime-agent.drain"
-  | "runtime-agent.revoke";
+export const ALL_CAPABILITIES = [
+  "deploy.read",
+  "deploy.plan",
+  "deploy.apply",
+  "deploy.rollback",
+  "resource.read",
+  "resource.create",
+  "resource.update",
+  "resource.delete",
+  "resource.bind",
+  "resource.migrate",
+  "resource.restore",
+  "runtime.read",
+  "runtime.scale",
+  "runtime.restart",
+  "runtime-agent.read",
+  "runtime-agent.enqueue",
+  "runtime-agent.register",
+  "runtime-agent.drain",
+  "runtime-agent.revoke",
+] as const;
+
+export type EntitlementCapability = (typeof ALL_CAPABILITIES)[number];
 
 export type EntitlementLimitKey =
   | "deploysPerDay"

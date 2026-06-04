@@ -1,3 +1,4 @@
+import { freezeClone } from "../../shared/freeze.ts";
 import type {
   ProviderObservation,
   RuntimeDesiredState,
@@ -52,7 +53,7 @@ export class InMemoryRuntimeDesiredStateStore
   readonly #states = new Map<RuntimeDesiredStateId, RuntimeDesiredState>();
 
   put(state: RuntimeDesiredState): Promise<RuntimeDesiredState> {
-    const frozen = deepFreeze(structuredClone(state));
+    const frozen = freezeClone(state);
     this.#states.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -99,7 +100,7 @@ export class InMemoryRuntimeObservedStateStore
   record(
     snapshot: RuntimeObservedStateSnapshot,
   ): Promise<RuntimeObservedStateSnapshot> {
-    const frozen = deepFreeze(structuredClone(snapshot));
+    const frozen = freezeClone(snapshot);
     this.#snapshots.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -139,7 +140,7 @@ export class InMemoryProviderObservationStore
   readonly #observations: ProviderObservation[] = [];
 
   record(observation: ProviderObservation): Promise<ProviderObservation> {
-    const frozen = deepFreeze(structuredClone(observation));
+    const frozen = freezeClone(observation);
     this.#observations.push(frozen);
     return Promise.resolve(frozen);
   }
@@ -165,14 +166,4 @@ export class InMemoryProviderObservationStore
       ),
     );
   }
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

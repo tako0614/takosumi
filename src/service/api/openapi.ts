@@ -1,25 +1,12 @@
+import { CORE_CONDITION_REASONS } from "takosumi-contract/reference/compat";
 import {
-  ARTIFACTS_BASE_PATH,
-  CORE_CONDITION_REASONS,
-  TAKOSUMI_INTERNAL_PATHS,
-} from "takosumi-contract/reference/compat";
-import {
-  TAKOSUMI_APPLY_RUN_ROUTE,
-  TAKOSUMI_APPLY_RUNS_ROUTE,
-  TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
-  TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE,
-  TAKOSUMI_INSTALLATION_ROUTE,
-  TAKOSUMI_PLAN_RUN_ROUTE,
-  TAKOSUMI_PLAN_RUNS_ROUTE,
-  TAKOSUMI_RUNNER_PROFILES_ROUTE,
-} from "./deploy_control_public_routes.ts";
-import {
-  PROMETHEUS_CONTENT_TYPE,
-  TAKOSUMI_METRICS_PATH,
-} from "./metrics_routes.ts";
-import { TAKOSUMI_SERVICE_READINESS_PATHS } from "./readiness_routes.ts";
-import { TAKOSUMI_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
-import { mountedOpenApiTags } from "./route_families.ts";
+  type ApiEndpoint,
+  endpointTag,
+  mountedEndpoints,
+  mountedOpenApiTags,
+  ROUTE_FAMILIES,
+  type RouteFamilyMountedFlags,
+} from "./route_families.ts";
 
 export type OpenApiHttpMethod = "delete" | "get" | "head" | "post";
 
@@ -110,361 +97,7 @@ export function createTakosumiOpenApiDocument(
     },
     servers,
     "x-takos-service": "takosumi",
-    paths: {
-      "/health": {
-        get: operation({
-          operationId: "getHealth",
-          summary: "Process-local health probe for the current Takosumi role.",
-          tag: "process",
-          auth: "none",
-          okSchema: "HealthResponse",
-        }),
-      },
-      "/capabilities": {
-        get: operation({
-          operationId: "getCapabilities",
-          summary:
-            "Describes the current process role, declared capabilities, and route guards.",
-          tag: "process",
-          auth: "none",
-          okSchema: "CapabilitiesResponse",
-        }),
-      },
-      [TAKOSUMI_METRICS_PATH]: {
-        get: {
-          operationId: "getMetrics",
-          summary:
-            "Returns Prometheus exposition format metrics for service scrape pipelines.",
-          tags: ["metrics"],
-          security: [{ metricsBearer: [] }],
-          responses: {
-            "200": {
-              description: "Prometheus exposition document.",
-              content: {
-                [PROMETHEUS_CONTENT_TYPE]: {
-                  schema: {
-                    type: "string",
-                    description:
-                      "Prometheus text exposition format (one metric per line).",
-                  },
-                },
-              },
-            },
-            "401": errorResponse(),
-            "404": errorResponse(),
-          },
-          "x-takos-auth": "metrics-scrape",
-          "x-takos-mounted-path": TAKOSUMI_METRICS_PATH,
-        } satisfies OpenApiOperation,
-      },
-      "/openapi.json": {
-        get: {
-          operationId: "getOpenApi",
-          summary:
-            "Returns the OpenAPI 3.1 document describing the current service surface (this document).",
-          tags: ["openapi"],
-          responses: {
-            "200": {
-              description: "OpenAPI 3.1 document.",
-              content: {
-                "application/json": {
-                  schema: {
-                    type: "object",
-                    description:
-                      "OpenAPI 3.1 document; clients should treat its shape as opaque except for the standard OpenAPI fields.",
-                    additionalProperties: true,
-                  },
-                },
-              },
-            },
-          },
-          "x-takos-auth": "none",
-          "x-takos-mounted-path": "/openapi.json",
-        } satisfies OpenApiOperation,
-      },
-      [TAKOSUMI_RUNNER_PROFILES_ROUTE]: {
-        get: operation({
-          operationId: "listRunnerProfiles",
-          summary: "Lists OpenTofu runner profiles and provider allowlists.",
-          tag: "deployControl-public",
-          auth: "deploy-control-token",
-          okSchema: "ListRunnerProfilesResponse",
-          mountedPath: TAKOSUMI_RUNNER_PROFILES_ROUTE,
-        }),
-      },
-      [TAKOSUMI_PLAN_RUNS_ROUTE]: {
-        post: operation({
-          operationId: "createPlanRun",
-          summary: "Creates an OpenTofu plan run for a plain module source.",
-          tag: "deployControl-public",
-          auth: "deploy-control-token",
-          requestSchema: "CreatePlanRunRequest",
-          okStatus: "201",
-          okSchema: "PlanRunResponse",
-          mountedPath: TAKOSUMI_PLAN_RUNS_ROUTE,
-        }),
-      },
-      [toOpenApiPath(TAKOSUMI_PLAN_RUN_ROUTE)]: {
-        get: operation({
-          operationId: "getPlanRun",
-          summary: "Reads an OpenTofu PlanRun.",
-          tag: "deployControl-public",
-          auth: "deploy-control-token",
-          pathParams: ["planRunId"],
-          okSchema: "PlanRunResponse",
-          mountedPath: TAKOSUMI_PLAN_RUN_ROUTE,
-        }),
-      },
-      [TAKOSUMI_APPLY_RUNS_ROUTE]: {
-        post: operation({
-          operationId: "createApplyRun",
-          summary: "Creates an apply run from a succeeded PlanRun.",
-          tag: "deployControl-public",
-          auth: "deploy-control-token",
-          requestSchema: "CreateApplyRunRequest",
-          okStatus: "201",
-          okSchema: "ApplyRunResponse",
-          mountedPath: TAKOSUMI_APPLY_RUNS_ROUTE,
-        }),
-      },
-      [toOpenApiPath(TAKOSUMI_APPLY_RUN_ROUTE)]: {
-        get: operation({
-          operationId: "getApplyRun",
-          summary: "Reads an OpenTofu ApplyRun.",
-          tag: "deployControl-public",
-          auth: "deploy-control-token",
-          pathParams: ["applyRunId"],
-          okSchema: "ApplyRunResponse",
-          mountedPath: TAKOSUMI_APPLY_RUN_ROUTE,
-        }),
-      },
-      [toOpenApiPath(TAKOSUMI_INSTALLATION_ROUTE)]: {
-        get: operation({
-          operationId: "getInstallation",
-          summary: "Reads an Installation ledger record.",
-          tag: "deployControl-public",
-          auth: "deploy-control-token",
-          pathParams: ["installationId"],
-          okSchema: "GetInstallationResponse",
-          mountedPath: TAKOSUMI_INSTALLATION_ROUTE,
-        }),
-      },
-      [toOpenApiPath(TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE)]: {
-        get: operation({
-          operationId: "listInstallationDeployments",
-          summary: "Lists Deployment records for an Installation.",
-          tag: "deployControl-public",
-          auth: "deploy-control-token",
-          pathParams: ["installationId"],
-          okSchema: "ListDeploymentsResponse",
-          mountedPath: TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE,
-        }),
-      },
-      [toOpenApiPath(TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE)]: {
-        get: operation({
-          operationId: "listInstallationDeploymentOutputs",
-          summary:
-            "Lists non-sensitive DeploymentOutput records for the current Deployment of an Installation.",
-          tag: "deployControl-public",
-          auth: "deploy-control-token",
-          pathParams: ["installationId"],
-          okSchema: "ListDeploymentOutputsResponse",
-          mountedPath: TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
-        }),
-      },
-      [ARTIFACTS_BASE_PATH]: {
-        post: operation({
-          operationId: "uploadArtifact",
-          summary: "Uploads a content-addressed artifact for runtime agents.",
-          tag: "artifact",
-          auth: "deploy-token",
-          requestBody: multipartArtifactUploadRequestBody(),
-          okSchema: "ArtifactStored",
-          mountedPath: ARTIFACTS_BASE_PATH,
-        }),
-        get: operation({
-          operationId: "listArtifacts",
-          summary: "Lists uploaded artifacts with cursor pagination.",
-          tag: "artifact",
-          auth: "deploy-token",
-          query: ["cursor", "limit"],
-          okSchema: "ArtifactListResponse",
-          mountedPath: ARTIFACTS_BASE_PATH,
-        }),
-      },
-      [toOpenApiPath(`${ARTIFACTS_BASE_PATH}/:hash`)]: {
-        head: operation({
-          operationId: "headArtifact",
-          summary: "Returns artifact metadata headers without a body.",
-          tag: "artifact",
-          auth: "artifact-read",
-          pathParams: ["hash"],
-          okStatus: "200",
-          okSchema: "EmptyResponse",
-          mountedPath: `${ARTIFACTS_BASE_PATH}/:hash`,
-        }),
-        get: operation({
-          operationId: "getArtifact",
-          summary: "Streams artifact bytes to a runtime agent or operator.",
-          tag: "artifact",
-          auth: "artifact-read",
-          pathParams: ["hash"],
-          okSchema: "BinaryResponse",
-          mountedPath: `${ARTIFACTS_BASE_PATH}/:hash`,
-        }),
-        delete: operation({
-          operationId: "deleteArtifact",
-          summary: "Deletes an artifact from object storage.",
-          tag: "artifact",
-          auth: "deploy-token",
-          pathParams: ["hash"],
-          okStatus: "204",
-          okSchema: "EmptyResponse",
-          mountedPath: `${ARTIFACTS_BASE_PATH}/:hash`,
-        }),
-      },
-      [`${ARTIFACTS_BASE_PATH}/gc`]: {
-        post: operation({
-          operationId: "gcArtifacts",
-          summary: "Runs mark-and-sweep artifact garbage collection.",
-          tag: "artifact",
-          auth: "deploy-token",
-          query: ["dryRun"],
-          okSchema: "ArtifactGcResponse",
-          mountedPath: `${ARTIFACTS_BASE_PATH}/gc`,
-        }),
-      },
-      [TAKOSUMI_INTERNAL_PATHS.spaces]: {
-        get: operation({
-          operationId: "listInternalSpaces",
-          summary: "Lists internal space summaries visible to the actor.",
-          tag: "internal",
-          auth: "internal-service",
-          okSchema: "SpacesResponse",
-        }),
-        post: operation({
-          operationId: "createInternalSpace",
-          summary: "Creates a space through the internal service API.",
-          tag: "internal",
-          auth: "internal-service",
-          requestSchema: "InternalSpaceRequest",
-          okStatus: "201",
-          okSchema: "SpaceResponse",
-        }),
-      },
-      [TAKOSUMI_INTERNAL_PATHS.groups]: {
-        get: operation({
-          operationId: "listInternalGroups",
-          summary: "Lists groups for a space through the internal service API.",
-          tag: "internal",
-          auth: "internal-service",
-          query: ["spaceId"],
-          okSchema: "GroupsResponse",
-        }),
-        post: operation({
-          operationId: "createInternalGroup",
-          summary: "Creates a group through the internal service API.",
-          tag: "internal",
-          auth: "internal-service",
-          requestSchema: "InternalGroupRequest",
-          okStatus: "201",
-          okSchema: "GroupResponse",
-        }),
-      },
-      [TAKOSUMI_RUNTIME_AGENT_PATHS.enroll]: {
-        post: operation({
-          operationId: "enrollRuntimeAgent",
-          summary: "Enrolls a runtime agent for provider work leasing.",
-          tag: "runtime-agent",
-          auth: "internal-service",
-          requestSchema: "RuntimeAgentEnrollRequest",
-          okStatus: "201",
-          okSchema: "RuntimeAgentResponse",
-        }),
-      },
-      [toOpenApiPath(TAKOSUMI_RUNTIME_AGENT_PATHS.heartbeat)]: {
-        post: operation({
-          operationId: "heartbeatRuntimeAgent",
-          summary: "Records a runtime agent heartbeat.",
-          tag: "runtime-agent",
-          auth: "internal-service",
-          pathParams: ["agentId"],
-          requestSchema: "RuntimeAgentHeartbeatRequest",
-          okSchema: "RuntimeAgentResponse",
-        }),
-      },
-      [toOpenApiPath(TAKOSUMI_RUNTIME_AGENT_PATHS.lease)]: {
-        post: operation({
-          operationId: "leaseRuntimeAgentWork",
-          summary: "Leases work to a runtime agent.",
-          tag: "runtime-agent",
-          auth: "internal-service",
-          pathParams: ["agentId"],
-          requestSchema: "RuntimeAgentLeaseRequest",
-          okSchema: "RuntimeAgentLeaseResponse",
-        }),
-      },
-      [toOpenApiPath(TAKOSUMI_RUNTIME_AGENT_PATHS.report)]: {
-        post: operation({
-          operationId: "reportRuntimeAgentWork",
-          summary: "Reports runtime-agent work completion or failure.",
-          tag: "runtime-agent",
-          auth: "internal-service",
-          pathParams: ["agentId"],
-          requestSchema: "RuntimeAgentReportRequest",
-          okSchema: "RuntimeAgentWorkResponse",
-        }),
-      },
-      [toOpenApiPath(TAKOSUMI_RUNTIME_AGENT_PATHS.drain)]: {
-        post: operation({
-          operationId: "drainRuntimeAgent",
-          summary: "Requests runtime-agent drain.",
-          tag: "runtime-agent",
-          auth: "internal-service",
-          pathParams: ["agentId"],
-          requestSchema: "RuntimeAgentDrainRequest",
-          okSchema: "RuntimeAgentResponse",
-        }),
-      },
-      [toOpenApiPath(TAKOSUMI_RUNTIME_AGENT_PATHS.gatewayManifest)]: {
-        post: operation({
-          operationId: "issueGatewayManifest",
-          summary:
-            "Issues a service-trusted Ed25519 signed gateway manifest the agent pins for fail-closed identity verification.",
-          tag: "runtime-agent",
-          auth: "internal-service",
-          pathParams: ["agentId"],
-          okSchema: "GatewayManifestResponse",
-        }),
-      },
-      [TAKOSUMI_SERVICE_READINESS_PATHS.ready]: {
-        get: operation({
-          operationId: "getReadyz",
-          summary: "Readiness probe for the current Takosumi role.",
-          tag: "readiness",
-          auth: "none",
-          okSchema: "HealthProbeResponse",
-        }),
-      },
-      [TAKOSUMI_SERVICE_READINESS_PATHS.live]: {
-        get: operation({
-          operationId: "getLivez",
-          summary: "Liveness probe for the current Takosumi role.",
-          tag: "readiness",
-          auth: "none",
-          okSchema: "HealthProbeResponse",
-        }),
-      },
-      [TAKOSUMI_SERVICE_READINESS_PATHS.statusSummary]: {
-        get: operation({
-          operationId: "getStatusSummary",
-          summary: "Returns the current group summary status projection.",
-          tag: "status",
-          auth: "none",
-          okSchema: "StatusSummaryResponse",
-        }),
-      },
-    },
+    paths: buildPaths(),
     components: {
       securitySchemes: {
         deployBearer: {
@@ -536,23 +169,92 @@ function toOpenApiPath(path: string): string {
   return path.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, "{$1}");
 }
 
+/**
+ * Maps each {@link ApiEndpoint} to its owning family `id` (used for the primary
+ * OpenAPI tag fallback and the `x-takos-mounted-path` extension which the
+ * original document set only on the deployControl-public + artifact families).
+ */
+function endpointFamilyIndex(): Map<ApiEndpoint, string> {
+  const index = new Map<ApiEndpoint, string>();
+  for (const family of ROUTE_FAMILIES) {
+    for (const endpoint of family.endpoints) index.set(endpoint, family.id);
+  }
+  return index;
+}
+
+/**
+ * Families that historically surfaced an `x-takos-mounted-path` extension on
+ * each operation. Preserved verbatim to keep the document byte-shape stable.
+ */
+const MOUNTED_PATH_FAMILIES = new Set(["deployControl-public", "artifact"]);
+
+/**
+ * Derives the full OpenAPI `paths` object from the single-source endpoint
+ * descriptors (always-mounted process endpoints + every family). The result is
+ * later filtered down to the mounted families by {@link filterMountedRouteFamilies}.
+ */
+function buildPaths(): Record<string, OpenApiPathItem> {
+  const familyIndex = endpointFamilyIndex();
+  const paths: Record<string, OpenApiPathItem> = {};
+  // All endpoints (process + every family); filtering by mounted tags happens
+  // afterwards so the schema-reference pruning sees the full surface.
+  const allFlags = Object.fromEntries(
+    ROUTE_FAMILIES.map((family) => [family.flag, true]),
+  ) as RouteFamilyMountedFlags;
+  for (const endpoint of mountedEndpoints(allFlags)) {
+    const openApiPath = toOpenApiPath(endpoint.path);
+    const method = endpoint.method.toLowerCase() as OpenApiHttpMethod;
+    const familyId = familyIndex.get(endpoint) ?? "process";
+    const item = paths[openApiPath] ?? {};
+    paths[openApiPath] = {
+      ...item,
+      [method]: endpointOperation(endpoint, familyId),
+    };
+  }
+  return paths;
+}
+
+function endpointOperation(
+  endpoint: ApiEndpoint,
+  familyId: string,
+): OpenApiOperation {
+  if (endpoint.openapi.customOperation) {
+    // The descriptor stays the single source of `operationId` + `summary`; the
+    // custom operation supplies only the non-JSON response shape and security.
+    return {
+      operationId: endpoint.operationId,
+      summary: endpoint.summary,
+      ...endpoint.openapi.customOperation,
+    } as unknown as OpenApiOperation;
+  }
+  return operation({
+    operationId: endpoint.operationId,
+    summary: endpoint.summary,
+    tag: endpointTag(endpoint, familyId),
+    auth: endpoint.auth,
+    okSchema: endpoint.openapi.okSchema,
+    okStatus: endpoint.openapi.okStatus,
+    requestSchema: endpoint.openapi.requestSchema,
+    requestBody: endpoint.openapi.requestBody,
+    query: endpoint.openapi.query,
+    pathParams: endpoint.openapi.pathParams,
+    mountedPath: MOUNTED_PATH_FAMILIES.has(familyId)
+      ? endpoint.path
+      : undefined,
+  });
+}
+
 function operation(input: {
   readonly operationId: string;
   readonly summary: string;
-  readonly tag:
-    | "process"
-    | "deployControl-public"
-    | "artifact"
-    | "internal"
-    | "runtime-agent"
-    | "readiness"
-    | "status";
+  readonly tag: string;
   readonly auth:
     | "none"
     | "deploy-token"
     | "artifact-read"
     | "deploy-control-token"
-    | "internal-service";
+    | "internal-service"
+    | "metrics-scrape";
   readonly okSchema: string;
   readonly okStatus?: "200" | "201" | "204";
   readonly requestSchema?: string;
@@ -606,10 +308,12 @@ function securityRequirements(
     | "deploy-token"
     | "artifact-read"
     | "deploy-control-token"
-    | "internal-service",
+    | "internal-service"
+    | "metrics-scrape",
 ): readonly Record<string, readonly string[]>[] {
   if (auth === "deploy-token") return [{ deployBearer: [] }];
   if (auth === "deploy-control-token") return [{ deployControlBearer: [] }];
+  if (auth === "metrics-scrape") return [{ metricsBearer: [] }];
   if (auth === "artifact-read") {
     return [{ deployBearer: [] }, { artifactFetchBearer: [] }];
   }
@@ -651,33 +355,6 @@ function jsonRequestBody(schemaName: string): Record<string, unknown> {
     content: {
       "application/json": {
         schema: ref(schemaName),
-      },
-    },
-  };
-}
-
-function multipartArtifactUploadRequestBody(): Record<string, unknown> {
-  return {
-    required: true,
-    content: {
-      "multipart/form-data": {
-        schema: {
-          type: "object",
-          required: ["kind", "body"],
-          properties: {
-            kind: { type: "string" },
-            body: { type: "string", format: "binary" },
-            metadata: {
-              type: "string",
-              description: "Optional JSON object encoded as a string.",
-            },
-            expectedDigest: {
-              type: "string",
-              pattern: "^sha256:[0-9a-f]{64}$",
-            },
-          },
-          additionalProperties: false,
-        },
       },
     },
   };
@@ -1413,6 +1090,25 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       additionalProperties: false,
     },
     ArtifactGcResponse: jsonObject,
+    RegisteredArtifactKind: {
+      type: "object",
+      required: ["kind", "description"],
+      properties: {
+        kind: { type: "string" },
+        description: { type: "string" },
+        contentTypeHint: { type: "string" },
+        maxSize: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+    ArtifactKindsResponse: {
+      type: "object",
+      required: ["kinds"],
+      properties: {
+        kinds: { type: "array", items: ref("RegisteredArtifactKind") },
+      },
+      additionalProperties: false,
+    },
     BinaryResponse: {
       type: "string",
       format: "binary",

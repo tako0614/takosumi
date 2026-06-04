@@ -16,7 +16,6 @@ import type {
   StorageTransaction,
   UsageStorageStores,
 } from "./driver.ts";
-import { storageStatementCatalog } from "./statements.ts";
 import {
   cloneState,
   createEmptyState,
@@ -64,7 +63,6 @@ export interface MemoryStorageDriverOptions {
 }
 
 export class MemoryStorageDriver implements StorageDriver {
-  readonly statements = storageStatementCatalog;
   #state: MemoryStorageState;
   #transactionTail: Promise<void> = Promise.resolve();
 

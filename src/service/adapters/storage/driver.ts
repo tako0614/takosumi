@@ -28,10 +28,8 @@ import type {
 } from "../../domains/service-endpoints/stores.ts";
 import type { UsageAggregateStore } from "../../services/usage/store.ts";
 import type { WorkLedger } from "../../agents/work_ledger.ts";
-import type { StorageStatementCatalog } from "./statements.ts";
 
 export interface StorageDriver {
-  readonly statements: StorageStatementCatalog;
   transaction<T>(
     fn: (transaction: StorageTransaction) => T | Promise<T>,
   ): Promise<T>;
