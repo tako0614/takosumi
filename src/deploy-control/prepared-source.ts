@@ -10,6 +10,17 @@ import type {
   DeployControlFs,
   TarRunner,
 } from "takosumi-contract/reference/runtime-capability";
+import {
+  assertSafeTarEntries,
+  isAllowedHttpsUrl,
+  isGzipBytes,
+  isGzipUrlSuffix,
+  isRedirectStatus,
+  isSha256Digest,
+  PREPARED_SOURCE_EXTRACTION_FLAGS,
+  readBodyWithCap,
+  sha256Hex,
+} from "takosumi-contract/reference/prepared-source-core";
 import { assertHostNotBlocked, BlockedHostError } from "./host-blocklist.ts";
 import { defaultDeployControlFs } from "./default-fs.ts";
 import { defaultTarRunner } from "./subprocess/tar-runner.ts";
@@ -141,7 +152,21 @@ export async function fetchPreparedSource(
     const compressed = bytes.length >= 2
       ? isGzipBytes(bytes)
       : isGzipUrlSuffix(options.url);
-    await assertSafeTarEntries(tarRunner, bytes, compressed);
+    await assertSafeTarEntries(
+      tarRunner,
+      bytes,
+      compressed,
+      preparedDecompressedMaxBytes(),
+      {
+        unparseableLine: (line) =>
+          `preparedSource tar listing has an unparseable entry line: ${line}`,
+        decompressedTooLarge: (cap) =>
+          `${ARCHIVE_TOO_LARGE}: prepared source archive decompresses to more than ${cap} bytes`,
+        duplicatePath: (path) =>
+          `prepared source tar entry duplicates normalized path: ${path}`,
+        entryLabel: "prepared source tar entry",
+      },
+    );
     // Extraction safety:
     // - `--no-same-owner` ignores tar uid/gid so a malicious archive cannot
     //   chown extracted files to a privileged user.
@@ -152,10 +177,7 @@ export async function fetchPreparedSource(
     //   (GNU tar treats `--keep-old-files` and `--no-overwrite-dir` as
     //   mutually exclusive, so we keep the stronger overwrite refusal and
     //   rely on the symlink target check for directory-overlay safety.)
-    const extractionFlags = [
-      "--no-same-owner",
-      "--keep-old-files",
-    ];
+    const extractionFlags = PREPARED_SOURCE_EXTRACTION_FLAGS;
     await runTar(
       tarRunner,
       compressed
@@ -217,56 +239,12 @@ async function readPreparedArchive(url: string): Promise<Uint8Array> {
       );
     }
   }
-  return await readBodyWithCap(response, cap, "prepared source archive");
-}
-
-function isRedirectStatus(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 ||
-    status === 307 || status === 308;
-}
-
-/**
- * Read a response body into memory, aborting as soon as the accumulated byte
- * count exceeds `cap`. This bounds memory even when the server omits / lies
- * about `Content-Length` or uses chunked transfer-encoding, which a plain
- * `arrayBuffer()` would buffer in full before any size check.
- */
-async function readBodyWithCap(
-  response: Response,
-  cap: number,
-  label: string,
-): Promise<Uint8Array> {
-  const body = response.body;
-  if (body === null) {
-    return new Uint8Array(0);
-  }
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value === undefined) continue;
-      total += value.byteLength;
-      if (total > cap) {
-        await reader.cancel().catch(() => {});
-        throw new Error(
-          `${ARCHIVE_TOO_LARGE}: ${label} exceeds ${cap} bytes`,
-        );
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
+  return await readBodyWithCap(
+    response,
+    cap,
+    "prepared source archive",
+    (label, capBytes) => `${ARCHIVE_TOO_LARGE}: ${label} exceeds ${capBytes} bytes`,
+  );
 }
 
 function assertPreparedHostNotBlocked(url: string): void {
@@ -288,215 +266,10 @@ function assertPreparedHostNotBlocked(url: string): void {
   }
 }
 
-function isAllowedHttpsUrl(value: string): boolean {
-  if (!value.startsWith("https://")) return false;
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "https:" && parsed.hostname.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-function isSha256Digest(value: string): boolean {
-  return /^sha256:[0-9a-f]{64}$/.test(value);
-}
-
-/**
- * Detect gzip by content (RFC 1952 magic bytes 0x1f 0x8b). This is the
- * authoritative check because the URL suffix may not reflect actual encoding.
- */
-function isGzipBytes(bytes: Uint8Array): boolean {
-  return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
-}
-
-/**
- * Fallback URL-suffix sniff. The caller only consults this when the body is
- * too short to read the gzip magic ({@link isGzipBytes} inconclusive), so the
- * authoritative byte check always wins when bytes are present.
- */
-function isGzipUrlSuffix(url: string): boolean {
-  const lower = url.toLowerCase();
-  return lower.endsWith(".tgz") || lower.endsWith(".tar.gz");
-}
-
-async function assertSafeTarEntries(
-  tarRunner: TarRunner,
-  bytes: Uint8Array,
-  compressed: boolean,
-): Promise<void> {
-  // Single verbose listing pass — we derive both the path table (for the
-  // duplicate / traversal check) and the link target check from one tar
-  // invocation. `-tv` produces lines like:
-  //   -rw-r--r-- user/group  size date time path
-  //   lrwxrwxrwx user/group  size date time path -> target
-  //   hrw-r--r-- user/group  size date time path link to target
-  const verbose = await runTar(
-    tarRunner,
-    compressed
-      ? ["-t", "-v", "--quoting-style=literal", "-z", "-f", "-"]
-      : ["-t", "-v", "--quoting-style=literal", "-f", "-"],
-    bytes,
-  );
-  const seen = new Set<string>();
-  let decompressedTotal = 0;
-  const decompressedCap = preparedDecompressedMaxBytes();
-  for (const line of verbose.split(/\r?\n/)) {
-    if (line.length === 0) continue;
-    const parsed = parseTarVerboseLine(line);
-    if (parsed === null) continue;
-    // Reject gzip bombs: the wire cap only bounds the compressed download, so
-    // sum the per-entry sizes the `-tv` listing already reports and stop if
-    // the inflated total would exceed the decompressed cap before extraction.
-    decompressedTotal += parsed.size;
-    if (decompressedTotal > decompressedCap) {
-      throw new Error(
-        `${ARCHIVE_TOO_LARGE}: prepared source archive decompresses to more than ${decompressedCap} bytes`,
-      );
-    }
-    const normalized = normalizeTarEntryPath(
-      parsed.path,
-      "prepared source tar entry",
-    );
-    if (seen.has(normalized)) {
-      throw new Error(
-        `prepared source tar entry duplicates normalized path: ${parsed.path}`,
-      );
-    }
-    seen.add(normalized);
-    assertSafeTarLinkTarget(parsed, "prepared source tar entry");
-  }
-}
-
-interface TarVerboseEntry {
-  /** First mode char: `-` file, `d` dir, `l` symlink, `h` hardlink. */
-  readonly type: string;
-  /** Declared entry size in bytes (0 for non-regular entries). */
-  readonly size: number;
-  /** The entry path with any ` -> ` / ` link to ` link suffix stripped. */
-  readonly path: string;
-  /**
-   * The link target (everything AFTER the first link separator), or null when
-   * the entry is not a symlink / hardlink or carries no separator.
-   */
-  readonly linkTarget: string | null;
-}
-
-/**
- * Parse one `tar -tv` line into its type, declared size, path, and link
- * target. This is the single column-aware parse shared by the duplicate /
- * traversal check and the link-target safety check, so both agree on where
- * the path ends and the link target begins.
- *
- * tar -tv columns: `mode owner size date time path[ -> target]`. We strip the
- * 5 leading metadata columns, then for symlink (`l`) / hardlink (`h`) entries
- * cut at the FIRST ` -> ` / ` link to ` separator: the path is everything
- * before it, the link target everything after (including any further ` -> `
- * inside the target). For regular files / directories the entire remainder is
- * the path verbatim, so a file literally named `evil -> target` cannot smuggle
- * a separator that breaks duplicate / traversal detection.
- */
-function parseTarVerboseLine(line: string): TarVerboseEntry | null {
-  const columns = line.split(/\s+/);
-  if (columns.length < 6) return null;
-  // tar reports size in column index 2 (mode owner size ...). For device
-  // nodes it is "major,minor"; Number.parseInt yields the major number, which
-  // is fine for a coarse decompressed-size guard.
-  const rawSize = Number.parseInt(columns[2], 10);
-  const size = Number.isFinite(rawSize) && rawSize > 0 ? rawSize : 0;
-  // Walk past the 5 metadata columns to find the path remainder while keeping
-  // paths that contain spaces intact.
-  let cursor = 0;
-  let column = 0;
-  while (column < 5 && cursor < line.length) {
-    while (cursor < line.length && /\s/.test(line[cursor])) cursor += 1;
-    while (cursor < line.length && !/\s/.test(line[cursor])) cursor += 1;
-    column += 1;
-  }
-  while (cursor < line.length && /\s/.test(line[cursor])) cursor += 1;
-  const remainder = line.slice(cursor);
-  if (remainder.length === 0) return null;
-  const type = line[0];
-  if (type !== "l" && type !== "h") {
-    // Regular file / directory: the entire remainder is the path. A
-    // filename that contains ` -> ` as literal text is left intact.
-    return { type, size, path: remainder, linkTarget: null };
-  }
-  const arrowIndex = remainder.indexOf(" -> ");
-  const linkToIndex = remainder.indexOf(" link to ");
-  const candidates: Array<{ idx: number; sepLen: number }> = [];
-  if (arrowIndex >= 0) candidates.push({ idx: arrowIndex, sepLen: 4 });
-  if (linkToIndex >= 0) candidates.push({ idx: linkToIndex, sepLen: 9 });
-  if (candidates.length === 0) {
-    return { type, size, path: remainder, linkTarget: null };
-  }
-  // Cut at the FIRST separator so the path matches the regular-file extractor
-  // and the link target is the real remainder, not a filename fragment.
-  const first = candidates.reduce((a, b) => (b.idx < a.idx ? b : a));
-  return {
-    type,
-    size,
-    path: remainder.slice(0, first.idx),
-    linkTarget: remainder.slice(first.idx + first.sepLen),
-  };
-}
-
-function normalizeTarEntryPath(entry: string, label: string): string {
-  if (entry.startsWith("/") || entry.includes("\0")) {
-    throw new Error(`${label} is unsafe: ${entry}`);
-  }
-  const withoutTrailingSlash = entry.replace(/\/+$/, "");
-  if (
-    withoutTrailingSlash.length === 0 ||
-    withoutTrailingSlash === "." ||
-    withoutTrailingSlash === ".."
-  ) {
-    throw new Error(`${label} is empty or root-only: ${entry}`);
-  }
-  const segments = withoutTrailingSlash.split("/");
-  if (
-    segments.some((segment) =>
-      segment.length === 0 || segment === "." || segment === ".."
-    )
-  ) {
-    throw new Error(`${label} escapes destination: ${entry}`);
-  }
-  return segments.join("/");
-}
-
-function assertSafeTarLinkTarget(entry: TarVerboseEntry, label: string): void {
-  const target = entry.linkTarget;
-  // Use the link target the shared parser already cut at the FIRST separator,
-  // so a symlink whose own filename contains ` -> ` cannot make us validate a
-  // filename fragment instead of the real (escaping) target.
-  if (target === null || target.length === 0) return;
-  if (target.startsWith("/") || target.includes("\0")) {
-    throw new Error(`${label} link target is unsafe: ${target}`);
-  }
-  if (
-    target.split("/").some((segment) =>
-      segment.length === 0 || segment === "." || segment === ".."
-    )
-  ) {
-    throw new Error(`${label} link target escapes destination: ${target}`);
-  }
-}
-
 function runTar(
   tarRunner: TarRunner,
   args: readonly string[],
   stdin: Uint8Array,
 ): Promise<string> {
   return tarRunner.run(args, stdin);
-}
-
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const buffer = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(buffer).set(bytes);
-  const hash = await crypto.subtle.digest("SHA-256", buffer);
-  return `sha256:${
-    Array.from(new Uint8Array(hash))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-  }`;
 }

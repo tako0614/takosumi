@@ -526,7 +526,7 @@ async function materializeSource(
 ): Promise<void> {
   switch (source.kind) {
     case "git":
-      assertHttpsSourceUrl(source.url, "git source url");
+      await assertHttpsSourceUrl(source.url, "git source url");
       if (source.ref) assertSafeGitSelector(source.ref, "git source ref");
       if (source.commit) assertFullGitObjectId(source.commit, "git source commit");
       await runRequiredCommand(["git", "clone", source.url, sourceRoot], {
@@ -547,7 +547,7 @@ async function materializeSource(
       }
       return;
     case "prepared": {
-      assertHttpsSourceUrl(source.url, "prepared source url");
+      await assertHttpsSourceUrl(source.url, "prepared source url");
       const response = await fetch(source.url, { redirect: "error" });
       if (!response.ok) {
         throw new Error(`prepared source fetch failed: ${response.status}`);
@@ -588,11 +588,18 @@ async function assertSafeTarArchive(
   archivePath: string,
   context: CommandContext,
 ): Promise<void> {
+  // SECURITY (tar-slip / link-target bypass): use `--quoting-style=escape`, NOT
+  // `literal`. Literal quoting lets a newline byte in an entry name split the
+  // listing across two lines, so the traversal / duplicate checks see a harmless
+  // first line and silently skip the dangerous fragment while `tar -x` still
+  // extracts the real entry. Escape quoting renders control chars as backslash
+  // sequences so a name can never span lines. This matches the hardened shared
+  // core (src/contract/reference/prepared-source-core.ts).
   const verbose = await runCommand([
     "tar",
     "-t",
     "-v",
-    "--quoting-style=literal",
+    "--quoting-style=escape",
     "-z",
     "-f",
     archivePath,
@@ -610,7 +617,13 @@ async function assertSafeTarArchive(
   for (const line of verbose.stdout.split(/\r?\n/)) {
     if (!line) continue;
     const entry = parseTarVerboseLine(line);
-    if (!entry) continue;
+    // REJECT any unparseable non-empty line instead of skipping it: a skipped
+    // line is exactly how a smuggled entry would evade the path / type checks.
+    if (!entry) {
+      throw new Error(
+        `prepared source archive has an unparseable metadata line: ${line}`,
+      );
+    }
     const normalizedPath = normalizeArchiveEntryPath(entry.path);
     if (seenPaths.has(normalizedPath)) {
       throw new Error(
@@ -681,7 +694,7 @@ function normalizeArchiveEntryPath(path: string): string {
   return normalized;
 }
 
-function assertHttpsSourceUrl(url: string, label: string): void {
+async function assertHttpsSourceUrl(url: string, label: string): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -698,6 +711,81 @@ function assertHttpsSourceUrl(url: string, label: string): void {
     throw new Error(`${label} must not embed credentials`);
   }
   assertHostLiteralNotBlocked(parsed.hostname, `${label} host`);
+  // SECURITY (SSRF): the literal check above only rejects IP literals. A DNS
+  // NAME that resolves to a private/loopback/link-local address would otherwise
+  // pass and let the credentialed runner fetch/clone from internal hosts. Reject
+  // internal-only name suffixes and resolve the host (DoH), rejecting if ANY
+  // resolved address is blocked. Fails closed when the host cannot be resolved.
+  await assertResolvedHostNotBlocked(parsed.hostname, `${label} host`);
+}
+
+const INTERNAL_NAME_SUFFIXES =
+  /(\.internal|\.local|\.localdomain|\.intranet|\.lan|\.corp|\.home|\.svc|\.cluster\.local)$/;
+
+async function assertResolvedHostNotBlocked(
+  host: string,
+  label: string,
+): Promise<void> {
+  const literal = host.startsWith("[") && host.endsWith("]")
+    ? host.slice(1, -1)
+    : host;
+  // IP literals are already fully covered by assertHostLiteralNotBlocked.
+  if (
+    /^(\d{1,3}\.){3}\d{1,3}$/.test(literal) || literal.includes(":")
+  ) {
+    return;
+  }
+  const lower = literal.toLowerCase();
+  if (lower === "localhost" || INTERNAL_NAME_SUFFIXES.test(lower)) {
+    throw new Error(`${label} is an internal-only name: ${host}`);
+  }
+  const addresses = await resolveHostAddresses(literal);
+  if (addresses.length === 0) {
+    throw new Error(
+      `${label} could not be resolved for SSRF validation: ${host}`,
+    );
+  }
+  for (const addr of addresses) {
+    if (isBlockedIpv4Literal(addr) || isBlockedIpv6Literal(addr)) {
+      throw new Error(
+        `${label} resolves to a blocked address (${addr}): ${host}`,
+      );
+    }
+  }
+}
+
+/** Resolve A/AAAA records via DNS-over-HTTPS for SSRF pre-flight validation. */
+async function resolveHostAddresses(host: string): Promise<string[]> {
+  const addresses: string[] = [];
+  for (const type of ["A", "AAAA"]) {
+    try {
+      const response = await fetch(
+        `https://cloudflare-dns.com/dns-query?name=${
+          encodeURIComponent(host)
+        }&type=${type}`,
+        {
+          headers: { accept: "application/dns-json" },
+          signal: AbortSignal.timeout(5_000),
+        },
+      );
+      if (!response.ok) continue;
+      const body = await response.json() as {
+        Answer?: Array<{ type: number; data: string }>;
+      };
+      for (const answer of body.Answer ?? []) {
+        // RR type 1 = A, 28 = AAAA. Ignore CNAME/other chain records.
+        if (
+          (answer.type === 1 || answer.type === 28) &&
+          typeof answer.data === "string"
+        ) {
+          addresses.push(answer.data.trim());
+        }
+      }
+    } catch {
+      // Treat a failed lookup as "unresolved"; the caller fails closed.
+    }
+  }
+  return addresses;
 }
 
 function assertSafeGitSelector(value: string, label: string): void {

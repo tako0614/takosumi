@@ -1,6 +1,8 @@
 import { Command } from "../command.ts";
 import {
   callDeployControl,
+  collect,
+  normalizeProviders,
   PLAN_RUNS_PATH,
   parseSourceRef,
   readInstallationSource,
@@ -98,12 +100,4 @@ function resolveOptionalSourceArg(input: {
     );
   }
   return input.flag ?? input.argument;
-}
-
-function collect(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
-
-function normalizeProviders(values: readonly string[] | undefined): readonly string[] {
-  return Array.from(new Set((values ?? []).map((value) => value.trim()).filter(Boolean)));
 }

@@ -38,9 +38,6 @@
       "@takos/takosumi-contract/reference/catalog": [
         "./src/contract/catalog.ts"
       ],
-      "@takos/takosumi-contract/reference/error-category": [
-        "./src/contract/error-category.ts"
-      ],
       "@takos/takosumi-contract/reference/implementation": ["./src/contract/implementation.ts"],
       "@takos/takosumi-contract/reference/implementation-sdk": [
         "./src/contract/implementation-sdk.ts"
@@ -54,9 +51,11 @@
       "@takos/takosumi-contract/reference/runtime-capability": [
         "./src/contract/runtime-capability.ts"
       ],
-      "@takos/takosumi-contract/reference/shape": ["./src/contract/shape.ts"],
-      "@takos/takosumi-contract/reference/shape-validators": [
-        "./src/contract/shape-validators.ts"
+      "@takos/takosumi-contract/reference/host-blocklist": [
+        "./src/contract/reference/host-blocklist.ts"
+      ],
+      "@takos/takosumi-contract/reference/prepared-source-core": [
+        "./src/contract/reference/prepared-source-core.ts"
       ],
       "@takos/takosumi-contract/reference/types": ["./src/contract/types.ts"],
       "@takos/takosumi-contract/reference/types-validators": [
@@ -86,9 +85,6 @@
         "./src/contract/reference-compat.ts"
       ],
       "takosumi-contract/reference/catalog": ["./src/contract/catalog.ts"],
-      "takosumi-contract/reference/error-category": [
-        "./src/contract/error-category.ts"
-      ],
       "takosumi-contract/reference/implementation": ["./src/contract/implementation.ts"],
       "takosumi-contract/reference/implementation-sdk": [
         "./src/contract/implementation-sdk.ts"
@@ -102,9 +98,11 @@
       "takosumi-contract/reference/runtime-capability": [
         "./src/contract/runtime-capability.ts"
       ],
-      "takosumi-contract/reference/shape": ["./src/contract/shape.ts"],
-      "takosumi-contract/reference/shape-validators": [
-        "./src/contract/shape-validators.ts"
+      "takosumi-contract/reference/host-blocklist": [
+        "./src/contract/reference/host-blocklist.ts"
+      ],
+      "takosumi-contract/reference/prepared-source-core": [
+        "./src/contract/reference/prepared-source-core.ts"
       ],
       "takosumi-contract/reference/types": ["./src/contract/types.ts"],
       "takosumi-contract/internal/api": ["./src/contract/internal-api.ts"],

@@ -1,9 +1,9 @@
-import { Title } from "@solidjs/meta";
 import { KeyRound, ShieldAlert } from "lucide-solid";
-import { createSignal, Show } from "solid-js";
+import { Show } from "solid-js";
 import AppShell from "~/components/shell/AppShell";
-import AuthGuard from "~/components/auth/AuthGuard";
+import Page from "~/components/auth/Page";
 import { rpc } from "~/lib/rpc";
+import { ActionError, createAction } from "~/lib/action";
 import {
   b64urlToBuf,
   bufToB64url,
@@ -13,71 +13,66 @@ import {
 
 export default function Security() {
   return (
-    <>
-      <Title>セキュリティ — Takosumi</Title>
-      <AuthGuard>{(session) => <Inner subject={session.subject} />}</AuthGuard>
-    </>
+    <Page title="セキュリティ">
+      {(session) => <Inner subject={session.subject} />}
+    </Page>
   );
 }
 
 function Inner(props: { subject: string }) {
-  const [busy, setBusy] = createSignal(false);
-  const [status, setStatus] = createSignal<string | null>(null);
-  const [err, setErr] = createSignal<string | null>(null);
-
-  const addPasskey = async () => {
-    setBusy(true);
-    setErr(null);
-    setStatus(null);
-    try {
-      if (
-        !("credentials" in navigator) ||
-        typeof globalThis.PublicKeyCredential === "undefined"
-      ) {
-        throw new Error("このブラウザは WebAuthn に対応していません。");
-      }
-      const opts = await rpc.auth.requestPasskeyRegisterOptions(props.subject);
-      const pubKeyCredParams = opts.pubKeyCredParams?.map((param) => ({
+  const addPasskey = createAction(async () => {
+    if (
+      !("credentials" in navigator) ||
+      typeof globalThis.PublicKeyCredential === "undefined"
+    ) {
+      throw new Error("このブラウザは WebAuthn に対応していません。");
+    }
+    const opts = await rpc.auth.requestPasskeyRegisterOptions(props.subject);
+    const pubKeyCredParams =
+      opts.pubKeyCredParams?.map((param) => ({
         ...param,
       })) ?? [];
-      if (pubKeyCredParams.length === 0) {
-        throw new Error("passkey 登録オプションが不完全です。");
-      }
-      const cred = (await navigator.credentials.create({
-        publicKey: {
-          ...opts,
-          pubKeyCredParams,
-          challenge: b64urlToBuf(opts.challenge),
-          user: { ...opts.user, id: b64urlToBuf(opts.user.id) },
-          excludeCredentials: (opts.excludeCredentials ?? []).map((c) => ({
-            ...c,
-            id: b64urlToBuf(c.id),
-          })),
-        },
-      })) as PublicKeyCredential | null;
-      if (!cred) throw new Error("credential creation cancelled");
-
-      const response = cred.response as AuthenticatorAttestationResponse;
-      const jwk = coseToJwk(extractCosePublicKey(response.attestationObject));
-
-      await rpc.auth.completePasskeyRegistration({
-        subject: props.subject,
-        credentialId: bufToB64url(cred.rawId),
-        publicKeyJwk: jwk,
-        // Echo back the server-minted challenge plus the raw ceremony
-        // material so the server can verify the registration (challenge /
-        // origin / attestation format) instead of trusting the JWK alone.
-        challenge: opts.challenge,
-        clientDataJSON: bufToB64url(response.clientDataJSON),
-        attestationObject: bufToB64url(response.attestationObject),
-        transports: response.getTransports?.() ?? [],
-      });
-      setStatus("Passkey を登録しました。");
-    } catch (e) {
-      setErr((e as Error).message ?? String(e));
-    } finally {
-      setBusy(false);
+    if (pubKeyCredParams.length === 0) {
+      throw new Error("passkey 登録オプションが不完全です。");
     }
+    const cred = (await navigator.credentials.create({
+      publicKey: {
+        ...opts,
+        pubKeyCredParams,
+        challenge: b64urlToBuf(opts.challenge),
+        user: { ...opts.user, id: b64urlToBuf(opts.user.id) },
+        excludeCredentials: (opts.excludeCredentials ?? []).map((c) => ({
+          ...c,
+          id: b64urlToBuf(c.id),
+        })),
+      },
+    })) as PublicKeyCredential | null;
+    if (!cred) throw new Error("credential creation cancelled");
+
+    const response = cred.response as AuthenticatorAttestationResponse;
+    const jwk = coseToJwk(extractCosePublicKey(response.attestationObject));
+
+    await rpc.auth.completePasskeyRegistration({
+      subject: props.subject,
+      credentialId: bufToB64url(cred.rawId),
+      publicKeyJwk: jwk,
+      // Echo back the server-minted challenge plus the raw ceremony
+      // material so the server can verify the registration (challenge /
+      // origin / attestation format) instead of trusting the JWK alone.
+      challenge: opts.challenge,
+      clientDataJSON: bufToB64url(response.clientDataJSON),
+      attestationObject: bufToB64url(response.attestationObject),
+      transports: response.getTransports?.() ?? [],
+    });
+    return "Passkey を登録しました。";
+  });
+  const status = addPasskey.result;
+
+  const onAddPasskey = () => {
+    // Clear the prior success message before the busy/error machine runs so a
+    // re-attempt does not flash the previous "registered" status.
+    addPasskey.clearResult();
+    void addPasskey.run();
   };
 
   return (
@@ -101,10 +96,11 @@ function Inner(props: { subject: string }) {
         <button
           class="btn btn-primary"
           type="button"
-          onClick={addPasskey}
-          disabled={busy()}
+          onClick={onAddPasskey}
+          disabled={addPasskey.busy()}
         >
-          <KeyRound size={16} /> {busy() ? "登録中..." : "Passkey を追加"}
+          <KeyRound size={16} />{" "}
+          {addPasskey.busy() ? "登録中..." : "Passkey を追加"}
         </button>
         <Show when={status()}>
           {(m) => (
@@ -113,7 +109,7 @@ function Inner(props: { subject: string }) {
             </p>
           )}
         </Show>
-        <Show when={err()}>{(m) => <p class="sign-in-error">{m()}</p>}</Show>
+        <ActionError error={addPasskey.error} />
         <p class="muted" style="margin-top: 16px;">
           登録済み passkey の一覧表示と削除 (coming soon): 現在この
           account-plane には passkey の列挙 / 失効 API がないため、UI

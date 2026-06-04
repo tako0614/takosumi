@@ -207,6 +207,8 @@ test("Cloudflare Worker keeps edge-local routes outside the service app", async 
   );
   assert.equal(calls.length, 0);
 
+  // Without a configured control-plane token the coordination route is not
+  // exposed: it must not accept unauthenticated writes into the DO.
   assert.equal(
     (
       await worker.fetch(
@@ -217,9 +219,59 @@ test("Cloudflare Worker keeps edge-local routes outside the service app", async 
         env,
       )
     ).status,
-    200,
+    404,
   );
   assert.equal(calls.length, 0);
+});
+
+test("Cloudflare Worker requires the operator bearer on /coordination/*", async () => {
+  const worker = createCloudflareWorker({
+    createServiceApp: () => Promise.resolve(createdApp("service", [])),
+  });
+  const env = createEnv({ deployControlToken: "operator-secret" });
+
+  // Missing bearer.
+  assert.equal(
+    (
+      await worker.fetch(
+        new Request("https://worker.example/coordination/list-alarms", {
+          method: "POST",
+          body: "{}",
+        }),
+        env,
+      )
+    ).status,
+    401,
+  );
+
+  // Wrong bearer.
+  assert.equal(
+    (
+      await worker.fetch(
+        new Request("https://worker.example/coordination/list-alarms", {
+          method: "POST",
+          body: "{}",
+          headers: { authorization: "Bearer wrong-secret" },
+        }),
+        env,
+      )
+    ).status,
+    401,
+  );
+
+  // Correct bearer forwards to the coordination Durable Object.
+  const ok = await worker.fetch(
+    new Request("https://worker.example/coordination/list-alarms", {
+      method: "POST",
+      body: "{}",
+      headers: { authorization: "Bearer operator-secret" },
+    }),
+    env,
+  );
+  assert.equal(ok.status, 200);
+  assert.deepEqual(await ok.json(), {
+    coordinationPath: "/list-alarms",
+  });
 });
 
 test("Cloudflare Worker no longer exposes runtime container routing", async () => {
@@ -265,6 +317,7 @@ async function captureRequest(
 
 interface CreateEnvOptions {
   readonly runnerCalls?: CapturedRequest[];
+  readonly deployControlToken?: string;
 }
 
 function createEnv(options: CreateEnvOptions = {}): CloudflareWorkerEnv {
@@ -286,6 +339,9 @@ function createEnv(options: CreateEnvOptions = {}): CloudflareWorkerEnv {
     },
     TAKOS_COORDINATION: coordination,
     TAKOS_OPENTOFU_RUNNER: runner,
+    ...(options.deployControlToken
+      ? { TAKOSUMI_DEPLOY_CONTROL_TOKEN: options.deployControlToken }
+      : {}),
   };
 }
 

@@ -5,6 +5,13 @@
  * provider allowlists, state-backend ownership, and runner substrate choice.
  * OpenTofu execution is delegated to an injected runner, normally a
  * Cloudflare Container runner in the reference distribution.
+ *
+ * This module hosts the controller and run-execution ceremony. Four cohesive
+ * concerns live in sibling files and are composed in here:
+ *   - `runner_profiles.ts` — default RunnerProfile seed data
+ *   - `policy.ts`          — RunnerProfile policy engine
+ *   - `validation.ts`      — request / source validation and identity guards
+ *   - `projection.ts`      — output / diagnostic projection and redaction
  */
 
 import type { JsonValue } from "takosumi-contract";
@@ -19,20 +26,15 @@ import type {
   DeploymentOutput,
   GetInstallationResponse,
   Installation,
-  DeployControlErrorCode,
   ListDeploymentsResponse,
   ListDeploymentOutputsResponse,
   ListRunnerProfilesResponse,
-  OpenTofuModuleSource,
   OpenTofuOutputEnvelope,
-  OpenTofuOperation,
   OpenTofuPlanArtifact,
   PlanRun,
   PlanRunResponse,
   PlanRunSummary,
-  PolicyDecision,
   RunnerProfile,
-  RunnerStateBackend,
   RunnerStateLockEvidence,
   RunDiagnostic,
 } from "takosumi-contract/deploy-control-api";
@@ -42,25 +44,38 @@ import {
   InstallationPatchGuardConflict,
   type OpenTofuDeploymentStore,
 } from "./store.ts";
-import { redactString } from "../../services/observability/redaction.ts";
+import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
+import { createDefaultRunnerProfiles } from "./runner_profiles.ts";
+import { evaluatePolicy } from "./policy.ts";
 import {
-  assertHostNotBlocked,
-  BlockedHostError,
-} from "../../../deploy-control/host-blocklist.ts";
+  appIdFromSource,
+  normalizeProviders,
+  normalizeVariables,
+  validateOperation,
+  validateOperationInstallationShape,
+  validatePlannedInstallationCurrent,
+  validateSource,
+  validateSourceAllowedByProfile,
+} from "./validation.ts";
+import {
+  errorDiagnostic,
+  errorMessage,
+  normalizeDeploymentOutputs,
+  normalizePlanArtifact,
+  normalizePlanSummary,
+  redactRunDiagnostics,
+  stateLockEvidence,
+} from "./projection.ts";
 
-export type OpenTofuControllerErrorCode = DeployControlErrorCode;
-
-const SHA256_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
-
-export class OpenTofuControllerError extends Error {
-  readonly code: OpenTofuControllerErrorCode;
-
-  constructor(code: OpenTofuControllerErrorCode, message: string) {
-    super(message);
-    this.name = "OpenTofuControllerError";
-    this.code = code;
-  }
-}
+// Re-export the shared error primitive and the four decomposed concerns so the
+// domain's public entry point stays `./mod.ts` for importers and tests.
+export {
+  OpenTofuControllerError,
+  type OpenTofuControllerErrorCode,
+} from "./errors.ts";
+export { createDefaultRunnerProfiles } from "./runner_profiles.ts";
+export { providerMatches } from "./policy.ts";
+export { deploymentOutputsFromOpenTofu } from "./projection.ts";
 
 export interface OpenTofuPlanJob {
   readonly planRun: PlanRun;
@@ -256,7 +271,18 @@ export class OpenTofuDeploymentController {
         `plan run ${planRun.id} has no immutable plan artifact`,
       );
     }
-    checkApplyExpected(request.expected, planRun);
+    // SECURITY (apply-once / idempotency): a `create` plan never carries an
+    // installationId, so without this guard each apply allocates a brand-new
+    // Installation + Deployment (and real cloud resources). Reject any apply of a
+    // PlanRun that has already been successfully applied. (update/destroy were
+    // already replay-protected by the installation currentDeploymentId guard.)
+    if (planRun.appliedApplyRunId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${planRun.id} has already been applied by apply run ${planRun.appliedApplyRunId}`,
+      );
+    }
+    await checkApplyExpected(request.expected, planRun);
     if (planRun.installationId) {
       await this.#requireCurrentPlannedInstallation(planRun);
     }
@@ -335,11 +361,10 @@ export class OpenTofuDeploymentController {
     return { outputs: deployment?.outputs ?? [] };
   }
 
-  async #executePlan(
-    planRun: PlanRun,
-    profile: RunnerProfile,
-    variables: Readonly<Record<string, JsonValue>>,
-  ): Promise<PlanRun> {
+  // Status-transition ceremony shared by the three execute paths: clone the run
+  // into `running`, append the phase `started` audit event, persist, and return
+  // the running run.
+  async #markPlanRunning(planRun: PlanRun): Promise<PlanRun> {
     const startedAt = this.#now();
     const running: PlanRun = {
       ...planRun,
@@ -351,6 +376,82 @@ export class OpenTofuDeploymentController {
       updatedAt: startedAt,
     };
     await this.#store.putPlanRun(running);
+    return running;
+  }
+
+  async #markApplyRunning(
+    applyRun: ApplyRun,
+    profile: RunnerProfile,
+    startedAt: number,
+  ): Promise<ApplyRun> {
+    const running: ApplyRun = {
+      ...applyRun,
+      status: "running",
+      stateLock: stateLockEvidence(profile.stateBackend, startedAt, startedAt, "pending"),
+      auditEvents: [
+        ...applyRun.auditEvents,
+        auditEvent(applyRun.id, "apply.started", startedAt),
+      ],
+      updatedAt: startedAt,
+    };
+    await this.#store.putApplyRun(running);
+    return running;
+  }
+
+  // Failure ceremony shared by the three catch bodies: clone the running run
+  // into `failed`, attach the redacted error diagnostic and the phase `failed`
+  // audit event, persist, and return the failed run.
+  async #failPlanRun(running: PlanRun, error: unknown): Promise<PlanRun> {
+    const now = this.#now();
+    const failed: PlanRun = {
+      ...running,
+      status: "failed",
+      diagnostics: [errorDiagnostic(error)],
+      auditEvents: [
+        ...running.auditEvents,
+        auditEvent(running.id, "plan.failed", now, {
+          message: errorMessage(error),
+        }),
+      ],
+      updatedAt: now,
+      finishedAt: now,
+    };
+    await this.#store.putPlanRun(failed);
+    return failed;
+  }
+
+  async #failApplyRun(
+    running: ApplyRun,
+    profile: RunnerProfile,
+    startedAt: number,
+    eventType: "apply.failed" | "destroy.failed",
+    error: unknown,
+  ): Promise<ApplyRun> {
+    const now = this.#now();
+    const failed: ApplyRun = {
+      ...running,
+      status: "failed",
+      stateLock: stateLockEvidence(profile.stateBackend, startedAt, now, "recorded"),
+      diagnostics: [errorDiagnostic(error)],
+      auditEvents: [
+        ...running.auditEvents,
+        auditEvent(running.id, eventType, now, {
+          message: errorMessage(error),
+        }),
+      ],
+      updatedAt: now,
+      finishedAt: now,
+    };
+    await this.#store.putApplyRun(failed);
+    return failed;
+  }
+
+  async #executePlan(
+    planRun: PlanRun,
+    profile: RunnerProfile,
+    variables: Readonly<Record<string, JsonValue>>,
+  ): Promise<PlanRun> {
+    const running = await this.#markPlanRunning(planRun);
     try {
       const result = await this.#runner!.plan({
         planRun: running,
@@ -407,22 +508,7 @@ export class OpenTofuDeploymentController {
       await this.#store.putPlanRun(updated);
       return updated;
     } catch (error) {
-      const now = this.#now();
-      const failed: PlanRun = {
-        ...running,
-        status: "failed",
-        diagnostics: [errorDiagnostic(error)],
-        auditEvents: [
-          ...running.auditEvents,
-          auditEvent(planRun.id, "plan.failed", now, {
-            message: errorMessage(error),
-          }),
-        ],
-        updatedAt: now,
-        finishedAt: now,
-      };
-      await this.#store.putPlanRun(failed);
-      return failed;
+      return await this.#failPlanRun(running, error);
     }
   }
 
@@ -437,21 +523,21 @@ export class OpenTofuDeploymentController {
         `plan run ${planRun.id} has no immutable plan artifact`,
       );
     }
+    // Apply-once re-check inside the serialized section: a concurrent apply of the
+    // same PlanRun is serialized on its id, so re-read the persisted PlanRun here
+    // to observe a sibling apply that already completed and marked it applied.
+    const persistedPlan = await this.#store.getPlanRun(planRun.id);
+    if (persistedPlan?.appliedApplyRunId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${planRun.id} has already been applied by apply run ${persistedPlan.appliedApplyRunId}`,
+      );
+    }
     const plannedInstallation = planRun.installationId
       ? await this.#requireCurrentPlannedInstallation(planRun)
       : undefined;
     const startedAt = this.#now();
-    const running: ApplyRun = {
-      ...applyRun,
-      status: "running",
-      stateLock: stateLockEvidence(profile.stateBackend, startedAt, startedAt, "pending"),
-      auditEvents: [
-        ...applyRun.auditEvents,
-        auditEvent(applyRun.id, "apply.started", startedAt),
-      ],
-      updatedAt: startedAt,
-    };
-    await this.#store.putApplyRun(running);
+    const running = await this.#markApplyRunning(applyRun, profile, startedAt);
     if (planRun.operation === "destroy") {
       return await this.#executeDestroyApply(
         running,
@@ -533,28 +619,25 @@ export class OpenTofuDeploymentController {
         finishedAt: now,
       };
       await this.#store.putApplyRun(completed);
+      // Mark the PlanRun applied so it cannot be applied again (apply-once).
+      await this.#store.putPlanRun({
+        ...planRun,
+        appliedApplyRunId: applyRun.id,
+        updatedAt: now,
+      });
       return {
         applyRun: completed,
         installation: patched ?? installation,
         deployment,
       };
     } catch (error) {
-      const now = this.#now();
-      const failed: ApplyRun = {
-        ...running,
-        status: "failed",
-        stateLock: stateLockEvidence(profile.stateBackend, startedAt, now, "recorded"),
-        diagnostics: [errorDiagnostic(error)],
-        auditEvents: [
-          ...running.auditEvents,
-          auditEvent(applyRun.id, "apply.failed", now, {
-            message: errorMessage(error),
-          }),
-        ],
-        updatedAt: now,
-        finishedAt: now,
-      };
-      await this.#store.putApplyRun(failed);
+      const failed = await this.#failApplyRun(
+        running,
+        profile,
+        startedAt,
+        "apply.failed",
+        error,
+      );
       return { applyRun: failed };
     }
   }
@@ -581,7 +664,16 @@ export class OpenTofuDeploymentController {
     const installation = plannedInstallation ??
       await this.#requireCurrentPlannedInstallation(planRun);
     try {
-      const result = await this.#runner!.destroy?.({
+      if (typeof this.#runner!.destroy !== "function") {
+        // Without a real teardown the Installation must NOT be marked
+        // destroyed: doing so would record a successful destroy in the ledger
+        // while the underlying cloud resources keep running (silent leak).
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "runner does not implement destroy; refusing to mark installation destroyed without teardown",
+        );
+      }
+      const result = await this.#runner!.destroy({
         applyRun: running,
         planRun,
         planArtifact: planRun.planArtifact,
@@ -617,27 +709,24 @@ export class OpenTofuDeploymentController {
         finishedAt: now,
       };
       await this.#store.putApplyRun(completed);
+      // Mark the PlanRun applied so a destroy plan cannot be re-applied.
+      await this.#store.putPlanRun({
+        ...planRun,
+        appliedApplyRunId: running.id,
+        updatedAt: now,
+      });
       return { applyRun: completed, installation: patched ?? installation };
     } catch (error) {
       if (error instanceof InstallationPatchGuardConflict) {
         throw new OpenTofuControllerError("failed_precondition", error.message);
       }
-      const now = this.#now();
-      const failed: ApplyRun = {
-        ...running,
-        status: "failed",
-        stateLock: stateLockEvidence(profile.stateBackend, startedAt, now, "recorded"),
-        diagnostics: [errorDiagnostic(error)],
-        auditEvents: [
-          ...running.auditEvents,
-          auditEvent(running.id, "destroy.failed", now, {
-            message: errorMessage(error),
-          }),
-        ],
-        updatedAt: now,
-        finishedAt: now,
-      };
-      await this.#store.putApplyRun(failed);
+      const failed = await this.#failApplyRun(
+        running,
+        profile,
+        startedAt,
+        "destroy.failed",
+        error,
+      );
       return { applyRun: failed, installation };
     }
   }
@@ -751,602 +840,10 @@ export class OpenTofuDeploymentController {
   }
 }
 
-export function createDefaultRunnerProfiles(now = Date.now()): readonly RunnerProfile[] {
-  const cloudflareProvider = "registry.opentofu.org/cloudflare/cloudflare";
-  const awsProvider = "registry.opentofu.org/hashicorp/aws";
-  const gcpProvider = "registry.opentofu.org/hashicorp/google";
-  const azureProvider = "registry.opentofu.org/hashicorp/azurerm";
-  const kubernetesProvider = "registry.opentofu.org/hashicorp/kubernetes";
-  const helmProvider = "registry.opentofu.org/hashicorp/helm";
-  const dockerProvider = "registry.opentofu.org/kreuzwerker/docker";
-  const githubProvider = "registry.opentofu.org/integrations/github";
-  const digitalOceanProvider = "registry.opentofu.org/digitalocean/digitalocean";
-
-  return [
-    defaultProviderRunnerProfile(now, {
-      id: "cloudflare-default",
-      name: "Cloudflare default",
-      description:
-        "Reference Cloudflare Container runner for OpenTofu modules that use Cloudflare resources.",
-      allowedProviders: [cloudflareProvider],
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "api.cloudflare.com",
-        ],
-      },
-      cloudflareWorkersForPlatforms: {
-        dispatchNamespace: "takosumi-tenants",
-        dispatchWorkerBinding: "TAKOSUMI_TENANT_DISPATCH",
-        outboundWorker: {
-          serviceBinding: "TAKOSUMI_OUTBOUND_WORKER",
-          enforceNetworkPolicy: true,
-        },
-        userWorkerBindings: {
-          mode: "tenant-scoped-only",
-          allowedBindingKinds: [
-            "kv_namespace",
-            "durable_object_namespace",
-            "queue",
-            "r2_bucket",
-            "d1_database",
-          ],
-        },
-      },
-    }),
-    defaultProviderRunnerProfile(now, {
-      id: "aws-default",
-      name: "AWS default",
-      description:
-        "Reference Cloudflare Container runner for OpenTofu modules that use AWS resources.",
-      allowedProviders: [awsProvider],
-      labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "sts.amazonaws.com",
-          "iam.amazonaws.com",
-          "route53.amazonaws.com",
-        ],
-        allowedHostPatterns: [
-          "*.amazonaws.com",
-          "*.api.aws",
-        ],
-      },
-    }),
-    defaultProviderRunnerProfile(now, {
-      id: "gcp-default",
-      name: "GCP default",
-      description:
-        "Reference Cloudflare Container runner for OpenTofu modules that use Google Cloud resources.",
-      allowedProviders: [gcpProvider],
-      labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "oauth2.googleapis.com",
-          "cloudresourcemanager.googleapis.com",
-          "serviceusage.googleapis.com",
-          "iam.googleapis.com",
-        ],
-        allowedHostPatterns: [
-          "*.googleapis.com",
-        ],
-      },
-    }),
-    defaultProviderRunnerProfile(now, {
-      id: "azure-default",
-      name: "Azure default",
-      description:
-        "Reference Cloudflare Container runner for OpenTofu modules that use Azure resources.",
-      allowedProviders: [azureProvider],
-      labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "login.microsoftonline.com",
-          "management.azure.com",
-          "graph.microsoft.com",
-        ],
-        allowedHostPatterns: [
-          "*.azure.com",
-          "*.windows.net",
-          "*.microsoftonline.com",
-        ],
-      },
-    }),
-    defaultProviderRunnerProfile(now, {
-      id: "kubernetes-default",
-      name: "Kubernetes default",
-      description:
-        "Operator-managed OpenTofu runner for Kubernetes and Helm modules.",
-      allowedProviders: [kubernetesProvider, helmProvider],
-      labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "operator-managed",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "kubernetes.default.svc",
-        ],
-        allowedHostPatterns: [
-          "*.svc",
-          "*.cluster.local",
-        ],
-      },
-    }),
-    defaultProviderRunnerProfile(now, {
-      id: "github-default",
-      name: "GitHub default",
-      description:
-        "Reference Cloudflare Container runner for OpenTofu modules that use GitHub resources.",
-      allowedProviders: [githubProvider],
-      labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "api.github.com",
-          "uploads.github.com",
-        ],
-        allowedHostPatterns: [
-          "*.githubusercontent.com",
-        ],
-      },
-    }),
-    defaultProviderRunnerProfile(now, {
-      id: "digitalocean-default",
-      name: "DigitalOcean default",
-      description:
-        "Reference Cloudflare Container runner for OpenTofu modules that use DigitalOcean resources.",
-      allowedProviders: [digitalOceanProvider],
-      labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "api.digitalocean.com",
-        ],
-      },
-    }),
-    defaultProviderRunnerProfile(now, {
-      id: "docker-local",
-      name: "Docker local",
-      substrate: "local",
-      description:
-        "Local runner profile for OpenTofu modules that use a host Docker daemon.",
-      allowedProviders: [dockerProvider],
-      credentialRefs: [],
-      cloudflareContainer: false,
-      labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "operator-managed",
-        allowedHosts: [
-          "registry.opentofu.org",
-        ],
-      },
-    }),
-  ];
-}
-
-interface DefaultProviderRunnerProfileOptions {
-  readonly id: string;
-  readonly name: string;
-  readonly description: string;
-  readonly allowedProviders: readonly string[];
-  readonly substrate?: string;
-  readonly credentialRefs?: RunnerProfile["credentialRefs"];
-  readonly cloudflareContainer?: RunnerProfile["cloudflareContainer"] | false;
-  readonly cloudflareWorkersForPlatforms?: RunnerProfile["cloudflareWorkersForPlatforms"];
-  readonly networkPolicy: NonNullable<RunnerProfile["networkPolicy"]>;
-  readonly labels?: RunnerProfile["labels"];
-}
-
-const DEFAULT_CLOUDFLARE_CONTAINER_EXECUTION: NonNullable<
-  RunnerProfile["cloudflareContainer"]
-> = {
-  image: "ghcr.io/takosjp/takosumi-opentofu-runner:1",
-  queueName: "takosumi-opentofu-runs",
-  durableObjectBinding: "TAKOS_OPENTOFU_RUNNER",
-  workDir: "/workspace",
-};
-
-const DEFAULT_RESOURCE_LIMITS: NonNullable<RunnerProfile["resourceLimits"]> = {
-  maxRunSeconds: 900,
-  maxSourceArchiveBytes: 100 * 1024 * 1024,
-  maxSourceDecompressedBytes: 1000 * 1024 * 1024,
-  cpu: "1",
-  memoryMb: 1024,
-};
-
-const DEFAULT_SECRET_EXPOSURE_POLICY: NonNullable<
-  RunnerProfile["secretExposurePolicy"]
-> = {
-  providerCredentials: "runner-only",
-  tenantWorkerOperatorSecrets: "forbidden",
-  redactLogs: true,
-  blockSensitiveOutputs: true,
-};
-
-function defaultProviderRunnerProfile(
-  now: number,
-  options: DefaultProviderRunnerProfileOptions,
-): RunnerProfile {
-  const credentialRefs = options.credentialRefs ??
-    credentialRefsForProfile(options.id, options.allowedProviders);
-  return {
-    id: options.id,
-    name: options.name,
-    substrate: options.substrate ?? "cloudflare-containers",
-    description: options.description,
-    tofuVersion: "operator-managed",
-    stateBackend: {
-      kind: "operator-managed",
-      ref: `state://takosumi/${options.id}`,
-      lock: {
-        kind: "operator",
-        ref: `lock://takosumi/${options.id}`,
-      },
-    },
-    allowedProviders: options.allowedProviders,
-    ...(credentialRefs.length > 0 ? { credentialRefs } : {}),
-    requireCredentialRefs: credentialRefs.length > 0,
-    resourceLimits: DEFAULT_RESOURCE_LIMITS,
-    networkPolicy: options.networkPolicy,
-    ...(options.cloudflareContainer === false
-      ? {}
-      : {
-        cloudflareContainer: options.cloudflareContainer ??
-          DEFAULT_CLOUDFLARE_CONTAINER_EXECUTION,
-      }),
-    ...(options.cloudflareWorkersForPlatforms
-      ? { cloudflareWorkersForPlatforms: options.cloudflareWorkersForPlatforms }
-      : {}),
-    secretExposurePolicy: DEFAULT_SECRET_EXPOSURE_POLICY,
-    ...(options.labels ? { labels: options.labels } : {}),
-    createdAt: now,
-  };
-}
-
-function templateRunnerProfileLabels(): Readonly<Record<string, string>> {
-  return {
-    "takosumi.com/profile-state": "template",
-  };
-}
-
-function credentialRefsForProfile(
-  profileId: string,
-  providers: readonly string[],
-): NonNullable<RunnerProfile["credentialRefs"]> {
-  return providers.map((provider) => ({
-    provider,
-    ref: `secret://takosumi/${profileId}`,
-    required: true,
-  }));
-}
-
-export function deploymentOutputsFromOpenTofu(
-  outputs: OpenTofuOutputEnvelope,
-): readonly DeploymentOutput[] {
-  const result: DeploymentOutput[] = [];
-  for (const [name, output] of Object.entries(outputs)) {
-    if (output.sensitive === true) continue;
-    const kind = outputKindFromName(name);
-    if (!kind) continue;
-    if (!isPublishableDeploymentOutputValue(name, kind, output.value)) continue;
-    result.push({
-      name,
-      kind,
-      value: output.value,
-      sensitive: false,
-    });
-  }
-  return result;
-}
-
-function normalizeDeploymentOutputs(
-  outputs: OpenTofuApplyResult["outputs"],
-): readonly DeploymentOutput[] {
-  if (!outputs) return [];
-  if (Array.isArray(outputs as unknown)) {
-    return (outputs as readonly DeploymentOutput[]).filter((output) =>
-      output.sensitive === false &&
-      isPublishableDeploymentOutputValue(output.name, output.kind, output.value)
-    );
-  }
-  return deploymentOutputsFromOpenTofu(outputs as OpenTofuOutputEnvelope);
-}
-
-function normalizePlanArtifact(input: {
-  readonly artifact: OpenTofuPlanArtifact;
-  readonly planDigest: string;
-  readonly now: number;
-}): OpenTofuPlanArtifact {
-  requireNonEmptyString(input.artifact.ref, "planArtifact.ref");
-  requireNonEmptyString(input.artifact.digest, "planArtifact.digest");
-  if (input.artifact.digest !== input.planDigest) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "planArtifact.digest must match planDigest",
-    );
-  }
-  return {
-    kind: input.artifact.kind || "runner-local",
-    ref: input.artifact.ref,
-    digest: input.artifact.digest,
-    ...(input.artifact.contentType
-      ? { contentType: input.artifact.contentType }
-      : {}),
-    ...(input.artifact.sizeBytes !== undefined
-      ? { sizeBytes: input.artifact.sizeBytes }
-      : {}),
-    createdAt: input.artifact.createdAt ?? input.now,
-  };
-}
-
-function normalizePlanSummary(
-  summary: PlanRunSummary | undefined,
-): PlanRunSummary | undefined {
-  if (!summary) return undefined;
-  const normalized: PlanRunSummary = {
-    ...(typeof summary.add === "number" ? { add: summary.add } : {}),
-    ...(typeof summary.change === "number" ? { change: summary.change } : {}),
-    ...(typeof summary.destroy === "number" ? { destroy: summary.destroy } : {}),
-  };
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-function outputKindFromName(name: string): DeploymentOutput["kind"] | undefined {
-  const normalized = name.replace(/^takosumi_/, "");
-  switch (normalized) {
-    case "launch_url":
-    case "admin_url":
-    case "health_url":
-    case "docs_url":
-    case "service_url":
-      return normalized;
-    default:
-      return undefined;
-  }
-}
-
-const SECRET_OUTPUT_NAME_RE =
-  /(?:^|[_-])(token|secret|password|passwd|credential|auth|bearer|session|cookie|key)(?:$|[_-])/i;
-const SECRET_QUERY_RE =
-  /(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key)/i;
-
-function isPublishableDeploymentOutputValue(
-  name: string,
-  kind: DeploymentOutput["kind"],
-  value: JsonValue,
-): boolean {
-  if (SECRET_OUTPUT_NAME_RE.test(name)) return false;
-  if (typeof value !== "string") return true;
-  if (!kind.endsWith("_url")) return !SECRET_QUERY_RE.test(value);
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
-  if (parsed.username || parsed.password) return false;
-  for (const key of parsed.searchParams.keys()) {
-    if (SECRET_QUERY_RE.test(key)) return false;
-  }
-  return true;
-}
-
-function evaluatePolicy(input: {
-  readonly profile: RunnerProfile;
-  readonly requiredProviders: readonly string[];
-  readonly checkedAt: number;
-}): PolicyDecision {
-  const reasons: string[] = [];
-  const templateReason = templateProfileDisabledReason(input.profile);
-  if (templateReason) reasons.push(templateReason);
-  if (
-    input.profile.allowedProviders.length > 0 &&
-    input.requiredProviders.length === 0
-  ) {
-    reasons.push(
-      `runner profile ${input.profile.id} requires requiredProviders before OpenTofu init`,
-    );
-  }
-  for (const provider of input.requiredProviders) {
-    if (providerDenied(provider, input.profile.deniedProviders ?? [])) {
-      reasons.push(`provider ${provider} is denied by runner profile ${input.profile.id}`);
-      continue;
-    }
-    if (!providerAllowed(provider, input.profile.allowedProviders)) {
-      reasons.push(`provider ${provider} is not allowed by runner profile ${input.profile.id}`);
-    }
-    if (
-      input.profile.requireCredentialRefs === true &&
-      !credentialRefPresent(provider, input.profile.credentialRefs ?? [])
-    ) {
-      reasons.push(
-        `credential reference for provider ${provider} is missing from runner profile ${input.profile.id}`,
-      );
-    }
-  }
-  return {
-    status: reasons.length === 0 ? "passed" : "blocked",
-    reasons,
-    checkedAt: input.checkedAt,
-  };
-}
-
-function validateOperationInstallationShape(input: {
-  readonly operation: OpenTofuOperation;
-  readonly installation?: Installation;
-  readonly requestedSpaceId: string;
-  readonly requestedSource: OpenTofuModuleSource;
-  readonly runnerProfileId: string;
-}): void {
-  if (input.operation === "create" && input.installation) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "create PlanRun must not target an existing installationId",
-    );
-  }
-  if (
-    (input.operation === "update" || input.operation === "destroy") &&
-    !input.installation
-  ) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${input.operation} PlanRun requires installationId`,
-    );
-  }
-  if (
-    input.installation &&
-    input.installation.spaceId !== input.requestedSpaceId
-  ) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} belongs to space ${input.installation.spaceId}, not ${input.requestedSpaceId}`,
-    );
-  }
-  if (!input.installation) return;
-  if (
-    (input.operation === "update" || input.operation === "destroy") &&
-    input.installation.currentDeploymentId === null
-  ) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `${input.operation} PlanRun requires an Installation with a current Deployment`,
-    );
-  }
-  if (input.installation.runnerProfileId !== input.runnerProfileId) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} uses runner profile ${input.installation.runnerProfileId}, not ${input.runnerProfileId}`,
-    );
-  }
-  if (!sourceIdentityMatches(input.installation.source, input.requestedSource)) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} source identity does not match the requested OpenTofu module source`,
-    );
-  }
-}
-
-function validatePlannedInstallationCurrent(input: {
-  readonly planRun: PlanRun;
-  readonly installation: Installation;
-}): void {
-  if (input.installation.spaceId !== input.planRun.spaceId) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} no longer belongs to PlanRun space ${input.planRun.spaceId}`,
-    );
-  }
-  if (input.installation.runnerProfileId !== input.planRun.runnerProfileId) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} runner profile changed since PlanRun ${input.planRun.id}`,
-    );
-  }
-  if (
-    !sourceIdentityMatches(input.installation.source, input.planRun.source)
-  ) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} source identity changed since PlanRun ${input.planRun.id}`,
-    );
-  }
-  const expectedCurrentDeploymentId =
-    input.planRun.installationCurrentDeploymentId ?? null;
-  if (input.installation.currentDeploymentId !== expectedCurrentDeploymentId) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} current Deployment changed since PlanRun ${input.planRun.id}`,
-    );
-  }
-}
-
-function sourceIdentityMatches(
-  existing: OpenTofuModuleSource,
-  requested: OpenTofuModuleSource,
-): boolean {
-  if (existing.kind !== requested.kind) return false;
-  if ((existing.modulePath ?? "") !== (requested.modulePath ?? "")) return false;
-  if (existing.kind === "git" && requested.kind === "git") {
-    return existing.url === requested.url;
-  }
-  if (existing.kind === "prepared" && requested.kind === "prepared") {
-    return existing.url === requested.url;
-  }
-  if (existing.kind === "local" && requested.kind === "local") {
-    return existing.path === requested.path;
-  }
-  return false;
-}
-
-function validateSourceAllowedByProfile(
-  source: OpenTofuModuleSource,
-  profile: RunnerProfile,
-): void {
-  if (source.kind !== "local") return;
-  if (profile.sourcePolicy?.allowLocalSource === true) return;
-  throw new OpenTofuControllerError(
-    "failed_precondition",
-    `runner profile ${profile.id} does not allow local source paths`,
-  );
-}
-
-function templateProfileDisabledReason(profile: RunnerProfile): string | undefined {
-  if (profile.labels?.["takosumi.com/profile-state"] !== "template") {
-    return undefined;
-  }
-  if (profile.labels?.["takosumi.com/profile-enabled"] === "true") {
-    return undefined;
-  }
-  return `runner profile ${profile.id} is a disabled template; clone it or set takosumi.com/profile-enabled=true after operator validation`;
-}
-
-function credentialRefPresent(
-  provider: string,
-  refs: NonNullable<RunnerProfile["credentialRefs"]>,
-): boolean {
-  return refs.some((ref) => providerMatches(provider, ref.provider));
-}
-
-function providerAllowed(
-  provider: string,
-  allowedProviders: readonly string[],
-): boolean {
-  return allowedProviders.some((allowed) =>
-    allowed === "*" || providerMatches(provider, allowed)
-  );
-}
-
-function providerDenied(
-  provider: string,
-  deniedProviders: readonly string[],
-): boolean {
-  return deniedProviders.some((denied) => providerMatches(provider, denied));
-}
-
-export function providerMatches(provider: string, rule: string): boolean {
-  // Hierarchical, one-directional: a fully-qualified provider address
-  // (`registry/namespace/type`) matches a short allowlist rule (its trailing
-  // type), e.g. `registry.opentofu.org/cloudflare/cloudflare` matches rule
-  // `cloudflare`. The reverse must NOT hold — a specific fully-qualified RULE
-  // must not admit an ambiguous bare provider name (e.g. rule
-  // `registry.opentofu.org/hashicorp/aws` must not match provider `aws`), which
-  // would silently widen the allowlist (and inconsistently narrow the denylist).
-  return provider === rule || provider.endsWith(`/${rule}`);
-}
-
-function checkApplyExpected(
+async function checkApplyExpected(
   expected: CreateApplyRunRequest["expected"],
   planRun: PlanRun,
-): void {
+): Promise<void> {
   if (!expected) {
     throw new OpenTofuControllerError(
       "failed_precondition",
@@ -1354,72 +851,49 @@ function checkApplyExpected(
     );
   }
   const reviewed = applyExpectedGuardFromPlanRun(planRun);
-  if (expected.planRunId !== reviewed.planRunId) {
+  // Structural compare: the request guard must reproduce the reviewed guard
+  // exactly. Both sides are projected onto the same fixed guard key set (absent
+  // optional keys normalized to `undefined`) before digesting, so this is
+  // equivalent to the prior per-field equality over every known guard field —
+  // including the directions where one side omits an optional field.
+  const [reviewedHash, expectedHash] = await Promise.all([
+    stableJsonDigest(projectApplyExpectedGuard(reviewed)),
+    stableJsonDigest(projectApplyExpectedGuard(expected)),
+  ]);
+  if (reviewedHash !== expectedHash) {
     throw new OpenTofuControllerError(
       "failed_precondition",
-      "expected planRunId does not match the PlanRun",
+      "expected guard does not match the reviewed PlanRun",
     );
   }
-  if (expected.installationId !== reviewed.installationId) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "expected installationId does not match the PlanRun",
-    );
+}
+
+// Canonical key order for the ApplyExpectedGuard structural compare. Listing the
+// fixed field set (instead of an object's own keys) keeps the digest comparison
+// equivalent to the prior per-field equality: every known guard field is
+// compared in both directions, and absent optional fields read as `undefined`.
+const APPLY_EXPECTED_GUARD_KEYS = [
+  "planRunId",
+  "installationId",
+  "currentDeploymentId",
+  "runnerProfileId",
+  "sourceDigest",
+  "variablesDigest",
+  "policyDecisionDigest",
+  "planDigest",
+  "planArtifactDigest",
+  "sourceCommit",
+  "providerLockDigest",
+] as const satisfies readonly (keyof ApplyExpectedGuard)[];
+
+function projectApplyExpectedGuard(
+  guard: ApplyExpectedGuard,
+): Record<string, JsonValue | null | undefined> {
+  const projection: Record<string, JsonValue | null | undefined> = {};
+  for (const key of APPLY_EXPECTED_GUARD_KEYS) {
+    projection[key] = guard[key];
   }
-  if (expected.currentDeploymentId !== reviewed.currentDeploymentId) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "expected currentDeploymentId does not match the PlanRun",
-    );
-  }
-  if (expected.runnerProfileId !== reviewed.runnerProfileId) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "expected runnerProfileId does not match the PlanRun",
-    );
-  }
-  if (expected.sourceDigest !== reviewed.sourceDigest) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "expected sourceDigest does not match the PlanRun",
-    );
-  }
-  if (expected.variablesDigest !== reviewed.variablesDigest) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "expected variablesDigest does not match the PlanRun",
-    );
-  }
-  if (expected.policyDecisionDigest !== reviewed.policyDecisionDigest) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "expected policyDecisionDigest does not match the PlanRun",
-    );
-  }
-  if (expected.planDigest !== reviewed.planDigest) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "expected planDigest does not match the PlanRun",
-    );
-  }
-  if (expected.planArtifactDigest !== reviewed.planArtifactDigest) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "expected planArtifactDigest does not match the PlanRun",
-    );
-  }
-  if (expected.sourceCommit !== reviewed.sourceCommit) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "expected sourceCommit does not match the PlanRun",
-    );
-  }
-  if (expected.providerLockDigest !== reviewed.providerLockDigest) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "expected providerLockDigest does not match the PlanRun",
-    );
-  }
+  return projection;
 }
 
 export function applyExpectedGuardFromPlanRun(planRun: PlanRun): ApplyExpectedGuard {
@@ -1463,31 +937,6 @@ export function applyExpectedGuardFromPlanRun(planRun: PlanRun): ApplyExpectedGu
   };
 }
 
-function stateLockEvidence(
-  stateBackend: RunnerStateBackend,
-  acquiredAt: number,
-  releasedAt: number,
-  status: RunnerStateLockEvidence["status"],
-): RunnerStateLockEvidence {
-  const backendRef = stateBackend.ref ?? stateBackend.kind;
-  const lock = stateBackend.lock;
-  if (!lock || lock.kind === "none") {
-    return {
-      status: "not_required",
-      backendRef,
-      acquiredAt,
-      releasedAt,
-    };
-  }
-  return {
-    status,
-    backendRef,
-    ...(lock.ref ? { lockRef: lock.ref } : {}),
-    acquiredAt,
-    ...(status === "recorded" ? { releasedAt } : {}),
-  };
-}
-
 function auditEvent(
   ownerId: string,
   type: string,
@@ -1502,197 +951,6 @@ function auditEvent(
     ...(actor ? { actor } : {}),
     ...(data ? { data } : {}),
   };
-}
-
-function normalizeProviders(
-  providers: readonly string[],
-): readonly string[] {
-  return providers.map((provider) => {
-    requireNonEmptyString(provider, "requiredProviders[]");
-    return provider;
-  });
-}
-
-function normalizeVariables(
-  variables: Readonly<Record<string, JsonValue>> | undefined,
-): Readonly<Record<string, JsonValue>> {
-  if (variables === undefined) return {};
-  if (!isRecord(variables) || Array.isArray(variables)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "variables must be a JSON object",
-    );
-  }
-  return variables;
-}
-
-function validateOperation(operation: OpenTofuOperation): void {
-  if (operation === "create" || operation === "update" || operation === "destroy") {
-    return;
-  }
-  throw new OpenTofuControllerError(
-    "invalid_argument",
-    "operation must be create, update, or destroy",
-  );
-}
-
-function validateSource(source: OpenTofuModuleSource): void {
-  if (!isRecord(source)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "source must be a JSON object",
-    );
-  }
-  switch (source.kind) {
-    case "git":
-      requireNonEmptyString(source.url, "source.url");
-      validateHttpsSourceUrl(source.url, "git source url");
-      if (source.ref !== undefined) requireNonEmptyString(source.ref, "source.ref");
-      if (source.commit !== undefined) {
-        requireNonEmptyString(source.commit, "source.commit");
-        if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(source.commit)) {
-          throw new OpenTofuControllerError(
-            "invalid_argument",
-            "source.commit must be a full git object id",
-          );
-        }
-      }
-      if (source.ref !== undefined) validateSafeGitSelector(source.ref, "source.ref");
-      break;
-    case "prepared":
-      requireNonEmptyString(source.url, "source.url");
-      validateHttpsSourceUrl(source.url, "prepared source url");
-      requireNonEmptyString(source.digest, "source.digest");
-      if (!SHA256_DIGEST_RE.test(source.digest)) {
-        throw new OpenTofuControllerError(
-          "invalid_argument",
-          "prepared source digest must be sha256:<64 lowercase hex>",
-        );
-      }
-      break;
-    case "local":
-      requireNonEmptyString(source.path, "source.path");
-      break;
-    default:
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "source.kind must be git, prepared, or local",
-      );
-  }
-  if (source.modulePath !== undefined) {
-    requireNonEmptyString(source.modulePath, "source.modulePath");
-    validateSafeModulePath(source.modulePath);
-  }
-}
-
-function validateHttpsSourceUrl(url: string, label: string): void {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${label} must be a valid URL`,
-    );
-  }
-  if (parsed.protocol !== "https:") {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${label} must use https://`,
-    );
-  }
-  if (!parsed.hostname) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${label} must include a host`,
-    );
-  }
-  if (parsed.username || parsed.password) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${label} must not embed credentials`,
-    );
-  }
-  try {
-    assertHostNotBlocked(parsed.hostname, `${label} host`);
-  } catch (error) {
-    if (error instanceof BlockedHostError) {
-      throw new OpenTofuControllerError("invalid_argument", error.message);
-    }
-    throw error;
-  }
-}
-
-function validateSafeGitSelector(value: string, label: string): void {
-  if (value.startsWith("-") || /[\r\n\0]/.test(value)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${label} must not start with '-' or contain control characters`,
-    );
-  }
-}
-
-function validateSafeModulePath(modulePath: string): void {
-  if (
-    modulePath.startsWith("/") ||
-    /^[A-Za-z]:[\\/]/.test(modulePath) ||
-    modulePath.split(/[\\/]+/).some((part) => part === "..")
-  ) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "source.modulePath must stay inside the source root",
-    );
-  }
-}
-
-function requireNonEmptyString(value: unknown, field: string): asserts value is string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${field} must be a non-empty string`,
-    );
-  }
-}
-
-function appIdFromSource(source: OpenTofuModuleSource): string {
-  const seed = source.kind === "local" ? source.path : source.url;
-  const withoutQuery = seed.split(/[?#]/)[0] ?? seed;
-  const parts = withoutQuery.split(/[/:]/).filter((part) => part.length > 0);
-  const name = (parts[parts.length - 1] ?? source.kind).replace(/\.git$/, "");
-  const moduleSuffix = source.modulePath
-    ? `-${source.modulePath.replace(/[^a-zA-Z0-9._-]+/g, "-")}`
-    : "";
-  return `${name}${moduleSuffix}`.toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "opentofu-module";
-}
-
-function errorDiagnostic(error: unknown): RunDiagnostic {
-  return {
-    severity: "error",
-    message: errorMessage(error),
-  };
-}
-
-function errorMessage(error: unknown): string {
-  return redactString(error instanceof Error ? error.message : String(error));
-}
-
-function redactRunDiagnostics(
-  diagnostics: readonly RunDiagnostic[] | undefined,
-): readonly RunDiagnostic[] | undefined {
-  if (!diagnostics) return undefined;
-  return diagnostics.map((diagnostic) => ({
-    ...diagnostic,
-    message: redactString(diagnostic.message),
-    ...(diagnostic.detail === undefined
-      ? {}
-      : { detail: redactString(diagnostic.detail) }),
-  }));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function newId(prefix: string): string {
