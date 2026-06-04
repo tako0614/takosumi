@@ -262,6 +262,21 @@ function renderConfig(source: string, options: Options): string {
     }"`,
   );
 
+  // wrangler runs the [build] custom command from the wrangler INVOCATION cwd
+  // (not the config dir), while the command's relative paths (src/worker.ts,
+  // .wrangler/dist) are written relative to the input config dir. Prefix the
+  // command with an absolute `cd` into that dir so it works regardless of where
+  // wrangler is invoked. Without this the custom build fails with
+  // `FileNotFound opening root directory "src"`.
+  const buildDir = dirname(resolve(options.input)).replaceAll("\\", "/");
+  rendered = rendered.replace(
+    /command = '([^']*)'/,
+    (_match, command: string) =>
+      command.includes(`cd ${buildDir} &&`)
+        ? `command = '${command}'`
+        : `command = 'cd ${buildDir} && ${command}'`,
+  );
+
   const assetsDirectory = relative(
     dirname(options.output),
     dashboardAssets.pathname,
