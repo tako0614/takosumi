@@ -12,6 +12,8 @@ run ledger / dashboard. Takos is just another plain OpenTofu module app to Takos
 
 `deploy/platform/` is the **platform worker's home**: it composes the accounts plane, the in-process deploy-control
 plane, the dashboard SPA, and the OpenTofu runner container into the worker the operator runs at `app.takosumi.com`.
+Its wrangler.toml is a placeholder reference template; the realized operator config (real resource IDs) lives in the
+operator-private `takosumi-private` repo (state only — no code), which references this repo by relative path.
 
 The two in-process entry points (consumed by both targets) are:
 
@@ -66,8 +68,7 @@ takosumi/
 │   ├── contract/        public deploy-control DTOs and internal reference contracts
 │   ├── service/         service implementation consumed in-process by the platform / product workers
 │   ├── runtime-agent/   internal compatibility code, not a public v1 subpath
-│   ├── cli/             CLI implementation
-│   └── all/             package subpath wrappers
+│   └── cli/             CLI implementation
 ├── deploy/
 │   ├── platform/              operator Takosumi platform worker (app.takosumi.com) build target
 │   ├── accounts-cloudflare/   account-plane handler (in-process entry point)
