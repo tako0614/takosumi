@@ -19,8 +19,16 @@ import type { WorkerAuthzService } from "../services/security/mod.ts";
 import { DomainError } from "../shared/errors.ts";
 import { apiError, readJsonObject, registerApiErrorHandler } from "./errors.ts";
 import { readInternalAuth } from "./internal_auth.ts";
-import type { MutationBoundaryEntitlementService } from "./internal_routes.ts";
 import type { ApiEndpoint } from "./route_families.ts";
+
+export interface MutationBoundaryEntitlementService {
+  requireMutationBoundary(input: {
+    readonly spaceId: string;
+    readonly groupId?: string;
+    readonly accountId: string;
+    readonly operation: MutationBoundaryOperation;
+  }): Promise<unknown>;
+}
 
 export const TAKOSUMI_RUNTIME_AGENT_PATHS = {
   enroll: "/api/internal/v1/runtime/agents/enroll",

@@ -24,7 +24,6 @@ import {
   type QueueMessage,
   type QueuePort,
 } from "../../../src/service/adapters/queue/mod.ts";
-import { InMemoryRouterConfigAdapter } from "../../../src/service/adapters/router/mod.ts";
 import { MemoryEncryptedSecretStore } from "../../../src/service/adapters/secret-store/mod.ts";
 import { ImmutableSourceAdapter } from "../../../src/service/adapters/source/mod.ts";
 import { InMemoryObservabilitySink } from "../../../src/service/services/observability/mod.ts";
@@ -418,7 +417,6 @@ function createWorkerAdapters(input: {
     storage: input.storage,
     kms: new NoopTestKms({ clock, idGenerator }),
     observability: new InMemoryObservabilitySink(),
-    routerConfig: new InMemoryRouterConfigAdapter({ clock }),
     queue: input.env.TAKOS_QUEUE
       ? new CloudflareQueueAdapter(input.env.TAKOS_QUEUE)
       : new MemoryQueueAdapter({ clock, idGenerator }),

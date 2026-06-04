@@ -85,7 +85,7 @@ export const DEFAULT_LOCAL_ENTITLEMENT_POLICY = Object.freeze(
 
 /**
  * The entitlement-policy surface the service consumes (the internal-mutation
- * boundary gate in `api/internal_routes.ts`). The local membership-RBAC
+ * boundary gate in `api/runtime_agent_routes.ts`). The local membership-RBAC
  * `EntitlementPolicyService` is the service default; operator distributions
  * (takosumi) may inject a tier/billing-aware implementation via
  * `createTakosumiService({ managedHosting: { entitlements } })`.

@@ -41,7 +41,6 @@ import type {
   ServiceTrustRecord,
   ServiceTrustRecordId,
 } from "../../../domains/service-endpoints/types.ts";
-import type { UsageAggregate } from "../../../services/usage/types.ts";
 import type {
   RuntimeAgentId,
   RuntimeAgentRecord,
@@ -65,7 +64,6 @@ export interface MemoryStorageSnapshot {
   readonly packageResolutions: readonly PackageResolution[];
   readonly trustRecords: readonly TrustRecord[];
   readonly auditEvents: readonly AuditEvent[];
-  readonly usageAggregates: readonly UsageAggregate[];
   readonly serviceEndpoints: readonly ServiceEndpoint[];
   readonly serviceTrustRecords: readonly ServiceTrustRecord[];
   readonly serviceGrants: readonly ServiceGrant[];
@@ -102,9 +100,6 @@ export interface MemoryStorageState {
   readonly audit: {
     readonly events: Map<AuditEventId, AuditEvent>;
     readonly order: AuditEventId[];
-  };
-  readonly usage: {
-    readonly aggregates: Map<string, UsageAggregate>;
   };
   readonly serviceEndpoints: {
     readonly endpoints: Map<ServiceEndpointId, ServiceEndpoint>;
@@ -146,9 +141,6 @@ export function createEmptyState(
     audit: {
       events: new Map(),
       order: [],
-    },
-    usage: {
-      aggregates: new Map(),
     },
     serviceEndpoints: {
       endpoints: new Map(),
@@ -216,9 +208,6 @@ export function stateFromSnapshot(
       events: mapBy(snapshot.auditEvents, (event) => event.id),
       order: snapshot.auditEvents.map((event) => event.id),
     },
-    usage: {
-      aggregates: mapBy(snapshot.usageAggregates, (aggregate) => aggregate.id),
-    },
     serviceEndpoints: {
       endpoints: mapBy(snapshot.serviceEndpoints, (endpoint) => endpoint.id),
       trustRecords: mapBy(
@@ -261,9 +250,6 @@ export function cloneState(state: MemoryStorageState): MemoryStorageState {
     audit: {
       events: cloneMap(state.audit.events),
       order: [...state.audit.order],
-    },
-    usage: {
-      aggregates: cloneMap(state.usage.aggregates),
     },
     serviceEndpoints: {
       endpoints: cloneMap(state.serviceEndpoints.endpoints),
@@ -312,7 +298,6 @@ export function snapshotState(
     auditEvents: state.audit.order
       .map((id) => state.audit.events.get(id))
       .filter((event): event is AuditEvent => event !== undefined),
-    usageAggregates: [...state.usage.aggregates.values()],
     serviceEndpoints: [...state.serviceEndpoints.endpoints.values()],
     serviceTrustRecords: [...state.serviceEndpoints.trustRecords.values()],
     serviceGrants: [...state.serviceEndpoints.grants.values()],

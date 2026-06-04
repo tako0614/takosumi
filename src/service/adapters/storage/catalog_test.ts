@@ -24,10 +24,6 @@ const mirroredMigrationFiles: readonly {
     migrationId: "runtime.materialization_state.create",
   },
   {
-    fileName: "20260430000014_usage_aggregates.sql",
-    migrationId: "usage.aggregates.create",
-  },
-  {
     fileName: "20260430000015_service_endpoints.sql",
     migrationId: "service_endpoints.tables.create",
   },

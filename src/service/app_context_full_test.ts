@@ -2,7 +2,6 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { createInMemoryAppContext } from "./app_context.ts";
 import { NoopTestKms } from "./adapters/kms/mod.ts";
-import { InMemoryRouterConfigAdapter } from "./adapters/router/mod.ts";
 import { NoopProviderMaterializer } from "./adapters/provider/mod.ts";
 import { ImmutableSourceAdapter } from "./adapters/source/mod.ts";
 import { MemoryStorageDriver } from "./adapters/storage/mod.ts";
@@ -23,9 +22,6 @@ test("createInMemoryAppContext exposes full optional composition fields", async 
   assert.ok(context.adapters.kms instanceof NoopTestKms);
   assert.ok(
     context.adapters.observability instanceof InMemoryObservabilitySink,
-  );
-  assert.ok(
-    context.adapters.routerConfig instanceof InMemoryRouterConfigAdapter,
   );
   assert.ok(context.adapters.queue instanceof MemoryQueueAdapter);
   assert.ok(context.adapters.objectStorage instanceof MemoryObjectStorage);
