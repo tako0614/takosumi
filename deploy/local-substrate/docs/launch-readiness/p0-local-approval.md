@@ -2,7 +2,7 @@
 
 **This is NOT a real approval record.** It is a deterministic file the local-substrate uses to satisfy the `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF` requirement of the worker's managed-offering gate. The gate insists the approval ref must differ from the evidence ref (`p0-local-evidence.md`); this file exists solely to be a distinct second pointer.
 
-Real launches use approval records tracked in `takos-private/docs/launch-readiness/`, with a human reviewer's signature, audit trail, and an immutable commit SHA. This fixture satisfies only the local-substrate gate, never production.
+Real launches used approval records that were tracked under `docs/launch-readiness/` in the now-archived `takos-private` repository (preserved in that repo's Git history), with a human reviewer's signature, audit trail, and an immutable commit SHA. This fixture satisfies only the local-substrate gate, never production.
 
 ## Why the gate requires distinct refs
 
