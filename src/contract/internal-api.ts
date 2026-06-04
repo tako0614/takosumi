@@ -51,20 +51,6 @@ export const TAKOSUMI_INTERNAL_PATHS = {
   groups: "/api/internal/v1/groups",
 } as const;
 
-export type TakosumiInternalPath =
-  (typeof TAKOSUMI_INTERNAL_PATHS)[keyof typeof TAKOSUMI_INTERNAL_PATHS];
-
-export const TAKOSUMI_RUNTIME_INTERNAL_PATHS = {
-  services: "/api/internal/v1/runtime/services",
-  resources: "/api/internal/v1/runtime/resources",
-  sessions: "/api/internal/v1/runtime/sessions",
-} as const;
-
-export type TakosumiRuntimeInternalPath =
-  (typeof TAKOSUMI_RUNTIME_INTERNAL_PATHS)[
-    keyof typeof TAKOSUMI_RUNTIME_INTERNAL_PATHS
-  ];
-
 export interface SignedInternalResponseInput {
   method: string;
   path: string;

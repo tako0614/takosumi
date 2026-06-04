@@ -55,6 +55,13 @@ import {
 
 export type { CloudflareWorkerEnv } from "./bindings.ts";
 
+// Durable Object classes that back the embedded deploy-control plane. Re-exported
+// from the single handler module so a host worker (e.g. the unified Takos worker)
+// can pull every deploy-control export — the in-process service factory and the
+// DO classes the wrangler bindings reference — from one entry point.
+export { TakosCoordinationObject } from "./coordination_object.ts";
+export { TakosumiOpenTofuRunner } from "./opentofu_runner_container.ts";
+
 export interface CloudflareWorkerHandler {
   fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response>;
   queue(batch: QueueBatch, env: CloudflareWorkerEnv): Promise<void>;
@@ -170,6 +177,19 @@ function denyUnauthorizedCoordination(
     );
   }
   return undefined;
+}
+
+/**
+ * Builds the deploy-control Takosumi service (the `takosumi-api` role) directly,
+ * bypassing the worker fetch dispatcher. The unified Takos worker injects the
+ * returned service's `app.fetch` as the in-process deploy-control transport for
+ * the accounts handler's deploy-control proxy seam — so the deploy-control plane
+ * runs in-process and owns no public route.
+ */
+export function createDeployControlService(
+  env: CloudflareWorkerEnv,
+): Promise<CreatedTakosumiService> {
+  return createWorkerServiceApp(env, "takosumi-api");
 }
 
 async function createWorkerServiceApp(

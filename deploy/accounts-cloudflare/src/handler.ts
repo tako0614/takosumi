@@ -89,6 +89,9 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY?: string;
   readonly TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL?: string;
   readonly TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN?: string;
+  // Shared deploy-control bearer for the in-process transport; must match the
+  // embedded deploy-control service's `TAKOSUMI_DEPLOY_CONTROL_TOKEN` gate.
+  readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVER_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICES_INTERNAL_URL?: string;
   readonly TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL?: string;
@@ -101,6 +104,17 @@ export interface CloudflareWorkerEnv {
 
 export interface CloudflareWorkerHandler {
   fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response>;
+}
+
+export interface CreateCloudflareWorkerOptions {
+  /**
+   * In-process deploy-control transport. When supplied, the deploy-control proxy
+   * seam (`deployControl.fetch`) is routed to this fetch instead of an HTTP URL,
+   * so the deploy-control plane runs in-process and owns no public route. The
+   * unified Takos worker passes the embedded deploy-control service's
+   * `app.fetch` here.
+   */
+  readonly deployControlFetch?: (env: CloudflareWorkerEnv) => typeof fetch;
 }
 
 export interface R2Bucket {
@@ -140,7 +154,9 @@ type Es256PrivateJwk = JsonWebKey & {
   readonly y?: string;
 };
 
-export function createCloudflareWorker(): CloudflareWorkerHandler {
+export function createCloudflareWorker(
+  options: CreateCloudflareWorkerOptions = {},
+): CloudflareWorkerHandler {
   return {
     async fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response> {
       const url = new URL(request.url);
@@ -166,7 +182,7 @@ export function createCloudflareWorker(): CloudflareWorkerHandler {
         return await env.ASSETS.fetch(request);
       }
       try {
-        const handler = await cachedAccountsHandler(env);
+        const handler = await cachedAccountsHandler(env, options);
         return await handler(request);
       } catch (error) {
         return Response.json({
@@ -182,10 +198,11 @@ export function createCloudflareWorker(): CloudflareWorkerHandler {
 
 async function cachedAccountsHandler(
   env: CloudflareWorkerEnv,
+  options: CreateCloudflareWorkerOptions,
 ): Promise<AccountsHandler> {
   let handler = handlers.get(env);
   if (!handler) {
-    handler = buildAccountsHandler(env);
+    handler = buildAccountsHandler(env, options);
     handlers.set(env, handler);
   }
   return await handler;
@@ -204,6 +221,7 @@ const EXPECTED_D1_SCHEMA_VERSION = 0;
 
 async function buildAccountsHandler(
   env: CloudflareWorkerEnv,
+  options: CreateCloudflareWorkerOptions,
 ): Promise<AccountsHandler> {
   if (!env.TAKOSUMI_ACCOUNTS_DB) {
     throw new TypeError("TAKOSUMI_ACCOUNTS_DB D1 binding is required");
@@ -234,7 +252,7 @@ async function buildAccountsHandler(
     upstreamOAuth: parseUpstreamOAuth(env),
     passkeys: parsePasskeys(env),
     managedOfferingAccess: parseManagedOfferingAccess(env),
-    deployControl: parseDeployControl(env),
+    deployControl: parseDeployControl(env, options.deployControlFetch?.(env)),
     workloadPlatformServices: parseWorkloadPlatformServices(env),
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
@@ -705,9 +723,29 @@ function parseCustomOidcUpstreamProvider(
   };
 }
 
+// Synthetic absolute base for the in-process deploy-control transport. The proxy
+// only uses this to build `new URL(path, url)`; the actual transport is the
+// injected `fetch`, so the host part is never dialed.
+const IN_PROCESS_DEPLOY_CONTROL_BASE = "https://deploy-control.internal/";
+
 function parseDeployControl(
   env: CloudflareWorkerEnv,
-): { url: string; token?: string } | undefined {
+  deployControlFetch?: typeof fetch,
+): { url: string; token?: string; fetch?: typeof fetch } | undefined {
+  // In-process transport (unified single-worker deployment): the deploy-control
+  // plane runs in this same worker, reached through the injected fetch rather
+  // than an edge URL. The bearer must match the embedded service's
+  // `TAKOSUMI_DEPLOY_CONTROL_TOKEN` (which gates `authorizeDeployControl`), so we
+  // read that shared secret here and pass a syntactically valid synthetic base.
+  if (deployControlFetch) {
+    const token = optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN) ??
+      optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN);
+    const url = optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL) ??
+      IN_PROCESS_DEPLOY_CONTROL_BASE;
+    return token
+      ? { url, token, fetch: deployControlFetch }
+      : { url, fetch: deployControlFetch };
+  }
   const url = optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL);
   if (!url) return undefined;
   const token = optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN);
