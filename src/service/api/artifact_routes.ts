@@ -13,6 +13,7 @@ import type { TakosumiDeploymentRecordStore } from "../domains/deploy-records/de
 import { apiError } from "./errors.ts";
 import { log } from "../shared/log.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
+import type { ApiEndpoint } from "./route_families.ts";
 
 /**
  * Artifact upload endpoints — an optional operator-internal data plane for
@@ -20,10 +21,11 @@ import { constantTimeEqualsString } from "../shared/constant_time.ts";
  *
  *   POST   /v1/artifacts            multipart upload (kind, metadata, body)
  *   GET    /v1/artifacts            list (cursor + limit pagination)
+ *   POST   /v1/artifacts/gc         mark+sweep unreferenced artifacts
+ *   GET    /v1/artifacts/kinds      list registered artifact kinds (discovery)
  *   HEAD   /v1/artifacts/:hash      existence + size + kind (header `x-takosumi-artifact-*`)
  *   GET    /v1/artifacts/:hash      bytes stream
  *   DELETE /v1/artifacts/:hash      remove
- *   POST   /v1/artifacts/gc         mark+sweep unreferenced artifacts
  *
  * Auth: write-side endpoints (POST / DELETE / gc) require the
  * `TAKOSUMI_DEPLOY_TOKEN` bearer. Read-side endpoints (GET / HEAD on a
@@ -62,6 +64,112 @@ import { constantTimeEqualsString } from "../shared/constant_time.ts";
  */
 export const TAKOSUMI_ARTIFACTS_PATH = ARTIFACTS_BASE_PATH;
 export const TAKOSUMI_ARTIFACTS_BUCKET = "takosumi-artifacts" as const;
+
+/**
+ * Endpoint inventory for the `artifact` family, co-located with the mount calls
+ * below. Consumed by `route_families.ts` to derive `/capabilities` and
+ * `/openapi.json`. Keep in lockstep with {@link registerArtifactRoutes}.
+ *
+ * `/:hash` HEAD/GET accept the read-scoped artifact-fetch token in addition to
+ * the deploy token (`artifact-read`); write-side and `kinds`/`gc` use the
+ * deploy token.
+ */
+export const ARTIFACT_ENDPOINTS: readonly ApiEndpoint[] = [
+  {
+    method: "POST",
+    path: TAKOSUMI_ARTIFACTS_PATH,
+    summary: "Uploads a content-addressed artifact for runtime agents.",
+    auth: "deploy-token",
+    operationId: "uploadArtifact",
+    openapi: {
+      requestBody: multipartArtifactUploadRequestBody(),
+      okSchema: "ArtifactStored",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_ARTIFACTS_PATH,
+    summary: "Lists uploaded artifacts with cursor pagination.",
+    auth: "deploy-token",
+    operationId: "listArtifacts",
+    openapi: { query: ["cursor", "limit"], okSchema: "ArtifactListResponse" },
+  },
+  {
+    method: "POST",
+    path: `${TAKOSUMI_ARTIFACTS_PATH}/gc`,
+    summary: "Runs mark-and-sweep artifact garbage collection.",
+    auth: "deploy-token",
+    operationId: "gcArtifacts",
+    openapi: { query: ["dryRun"], okSchema: "ArtifactGcResponse" },
+  },
+  {
+    method: "GET",
+    path: `${TAKOSUMI_ARTIFACTS_PATH}/kinds`,
+    summary: "Lists registered artifact kinds for CLI discovery.",
+    auth: "deploy-token",
+    operationId: "listArtifactKinds",
+    openapi: { okSchema: "ArtifactKindsResponse" },
+  },
+  {
+    method: "HEAD",
+    path: `${TAKOSUMI_ARTIFACTS_PATH}/:hash`,
+    summary: "Returns artifact metadata headers without a body.",
+    auth: "artifact-read",
+    operationId: "headArtifact",
+    openapi: {
+      pathParams: ["hash"],
+      okStatus: "200",
+      okSchema: "EmptyResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: `${TAKOSUMI_ARTIFACTS_PATH}/:hash`,
+    summary: "Streams artifact bytes to a runtime agent or operator.",
+    auth: "artifact-read",
+    operationId: "getArtifact",
+    openapi: { pathParams: ["hash"], okSchema: "BinaryResponse" },
+  },
+  {
+    method: "DELETE",
+    path: `${TAKOSUMI_ARTIFACTS_PATH}/:hash`,
+    summary: "Deletes an artifact from object storage.",
+    auth: "deploy-token",
+    operationId: "deleteArtifact",
+    openapi: {
+      pathParams: ["hash"],
+      okStatus: "204",
+      okSchema: "EmptyResponse",
+    },
+  },
+] as const;
+
+function multipartArtifactUploadRequestBody(): Record<string, unknown> {
+  return {
+    required: true,
+    content: {
+      "multipart/form-data": {
+        schema: {
+          type: "object",
+          required: ["kind", "body"],
+          properties: {
+            kind: { type: "string" },
+            body: { type: "string", format: "binary" },
+            metadata: {
+              type: "string",
+              description: "Optional JSON object encoded as a string.",
+            },
+            expectedDigest: {
+              type: "string",
+              pattern: "^sha256:[0-9a-f]{64}$",
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+}
 const KEY_PREFIX = "artifacts/" as const;
 /** Hard cap on `?limit=` for the list endpoint. */
 const ARTIFACT_LIST_MAX_LIMIT = 1000;

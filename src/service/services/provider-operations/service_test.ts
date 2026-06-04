@@ -49,6 +49,21 @@ test("ProviderOperationService materializes provider output and returns success 
   );
 });
 
+test("deriveProviderOperationIdempotencyKey embeds a stable bare-hex digest", async () => {
+  // Locks the signing-input + digest format after routing through the shared
+  // digest helpers (stableStringify + sha256Hex) in adapters/source/digest.ts.
+  // The embedded digest must stay a bare 64-char hex (no `sha256:` prefix).
+  const key = await deriveProviderOperationIdempotencyKey({
+    provider: "fake",
+    desiredState: desiredState(),
+  });
+  assert.equal(
+    key,
+    "provider-operation:fake:space-a:group-a:activation-a:" +
+      "9ee638953fa83e4d4630d793848abb9e8a90413e16b305d1ba6d30dee393aef5",
+  );
+});
+
 test("ProviderOperationService replays same idempotency key without invoking provider again", async () => {
   const provider = new FakeProviderMaterializer({
     plan: providerPlan({ id: "plan-once", operationStatus: "succeeded" }),

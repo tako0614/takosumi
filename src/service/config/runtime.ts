@@ -12,6 +12,7 @@ import {
   type OperatorConfigPort,
 } from "../adapters/operator-config/mod.ts";
 import { isTakosumiProcessRole, type TakosumiProcessRole } from "../process/mod.ts";
+import { freeze } from "../shared/freeze.ts";
 
 export type RuntimeEnvironment =
   | "local"
@@ -176,7 +177,7 @@ export async function loadRuntimeConfig(
 
   const errors = config.diagnostics.filter((item) => item.severity === "error");
   if (errors.length > 0) throw new RuntimeConfigError(errors);
-  return deepFreeze(config);
+  return freeze(config);
 }
 
 async function rejectStaleSelectors(
@@ -284,14 +285,4 @@ class OperatorConfigReader {
     }
     return values;
   }
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

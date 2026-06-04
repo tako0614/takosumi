@@ -3,6 +3,7 @@
 // `revokeDebtSourceKey` and the store methods that use it are now async;
 // callers (SQL and in-memory store, F1 tests) propagate the await.
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
+import { freezeClone } from "../../shared/freeze.ts";
 import type { JsonObject } from "takosumi-contract/reference/compat";
 
 export type RevokeDebtReason =
@@ -595,18 +596,6 @@ function canonicalize(value: unknown): unknown {
       if (canonical !== undefined) output[key] = canonical;
     }
     return output;
-  }
-  return value;
-}
-
-function freezeClone<T>(value: T): T {
-  return deepFreeze(structuredClone(value));
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const inner of Object.values(value)) deepFreeze(inner);
   }
   return value;
 }

@@ -1,4 +1,5 @@
 import { conflict, invalidArgument, notFound } from "../shared/errors.ts";
+import { freezeClone } from "../shared/freeze.ts";
 import {
   type GatewayManifest,
   type SignedGatewayManifest,
@@ -877,17 +878,4 @@ export class RuntimeAgentGatewayManifestIssuer
     };
     return await signGatewayManifest(manifest, this.#signingKey);
   }
-}
-
-function freezeClone<T>(value: T): T {
-  return deepFreeze(structuredClone(value));
-}
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

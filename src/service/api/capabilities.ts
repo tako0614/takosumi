@@ -4,22 +4,15 @@ import {
   type TakosumiProcessRoleDescription,
 } from "../process/mod.ts";
 import {
-  ARTIFACTS_BASE_PATH,
-  TAKOSUMI_INTERNAL_PATHS,
-} from "takosumi-contract/reference/compat";
-import { TAKOSUMI_METRICS_PATH } from "./metrics_routes.ts";
-import { TAKOSUMI_SERVICE_READINESS_PATHS } from "./readiness_routes.ts";
-import { TAKOSUMI_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
+  type ApiEndpointAuth,
+  type ApiEndpointMethod,
+  mountedEndpoints,
+  type RouteFamilyMountedFlags,
+} from "./route_families.ts";
 
-export interface CreateApiCapabilitiesDescriptionOptions {
-  readonly internalRoutesMounted?: boolean;
-  readonly deployControlPublicRoutesMounted?: boolean;
-  readonly artifactRoutesMounted?: boolean;
-  readonly runtimeAgentRoutesMounted?: boolean;
-  readonly openApiRouteMounted?: boolean;
-  readonly readinessRoutesMounted?: boolean;
-  readonly metricsRoutesMounted?: boolean;
-}
+export type CreateApiCapabilitiesDescriptionOptions = Partial<
+  RouteFamilyMountedFlags
+>;
 
 export interface ApiCapabilitiesDescription {
   readonly service: "takosumi";
@@ -29,242 +22,33 @@ export interface ApiCapabilitiesDescription {
 }
 
 export interface ApiEndpointDescription {
-  readonly method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
+  readonly method: ApiEndpointMethod;
   readonly path: string;
   readonly summary: string;
-  readonly auth:
-    | "none"
-    | "internal-service"
-    | "deploy-token"
-    | "artifact-read"
-    | "deploy-control-token"
-    | "metrics-token";
+  readonly auth: ApiEndpointAuth;
 }
 
+/**
+ * Builds the `/capabilities` endpoint inventory by projecting the single-source
+ * {@link mountedEndpoints} list (driven by the per-family `mounted` flags) down
+ * to the public `{method, path, summary, auth}` shape. This is derived from the
+ * same descriptors the OpenAPI document uses, so the two surfaces can no longer
+ * drift.
+ */
 export function createApiCapabilitiesDescription(
   role: TakosumiProcessRole,
   options: CreateApiCapabilitiesDescriptionOptions = {},
 ): ApiCapabilitiesDescription {
-  const endpoints: ApiEndpointDescription[] = [
-    {
-      method: "GET",
-      path: "/health",
-      summary: "Process-local health probe for the current Takosumi role.",
-      auth: "none",
-    },
-    {
-      method: "GET",
-      path: "/capabilities",
-      summary:
-        "Describes the current process role, its declared capabilities, and guards.",
-      auth: "none",
-    },
-  ];
-  if (options.openApiRouteMounted) {
-    endpoints.push({
-      method: "GET",
-      path: "/openapi.json",
-      summary: "Returns the OpenAPI document for mounted route families.",
-      auth: "none",
-    });
-  }
-  if (options.internalRoutesMounted) endpoints.push(...internalEndpoints());
-  if (options.deployControlPublicRoutesMounted) {
-    endpoints.push(...deployControlPublicEndpoints());
-  }
-  if (options.artifactRoutesMounted) endpoints.push(...artifactEndpoints());
-  if (options.runtimeAgentRoutesMounted) {
-    endpoints.push(...runtimeAgentEndpoints());
-  }
-  if (options.readinessRoutesMounted) {
-    endpoints.push(...readinessEndpoints());
-  }
-  if (options.metricsRoutesMounted) {
-    endpoints.push({
-      method: "GET",
-      path: TAKOSUMI_METRICS_PATH,
-      summary: "Returns Prometheus text exposition for recorded metrics.",
-      auth: "metrics-token",
-    });
-  }
+  const endpoints = mountedEndpoints(options).map((endpoint) => ({
+    method: endpoint.method,
+    path: endpoint.path,
+    summary: endpoint.summary,
+    auth: endpoint.auth,
+  }));
   return {
     service: "takosumi",
     role,
     roleDescription: describeTakosumiProcessRole(role),
     endpoints,
   };
-}
-
-function deployControlPublicEndpoints(): ApiEndpointDescription[] {
-  return [
-    [
-      "GET",
-      "/v1/runner-profiles",
-      "Lists OpenTofu runner profiles and provider allowlists.",
-    ],
-    [
-      "POST",
-      "/v1/plan-runs",
-      "Creates an OpenTofu plan run for a plain module source.",
-    ],
-    [
-      "GET",
-      "/v1/plan-runs/:id",
-      "Reads an OpenTofu plan run.",
-    ],
-    [
-      "POST",
-      "/v1/apply-runs",
-      "Creates an apply run from a succeeded PlanRun.",
-    ],
-    [
-      "GET",
-      "/v1/apply-runs/:id",
-      "Reads an OpenTofu apply run.",
-    ],
-    [
-      "GET",
-      "/v1/installations/:id",
-      "Reads an Installation ledger record.",
-    ],
-    [
-      "GET",
-      "/v1/installations/:id/deployments",
-      "Lists Deployment records for an Installation.",
-    ],
-  ].map(([method, path, summary]) => ({
-    method: method as ApiEndpointDescription["method"],
-    path,
-    summary,
-    auth: "deploy-control-token" as const,
-  }));
-}
-
-function artifactEndpoints(): ApiEndpointDescription[] {
-  return [
-    [
-      "POST",
-      ARTIFACTS_BASE_PATH,
-      "Uploads a content-addressed artifact for runtime agents.",
-      "deploy-token",
-    ],
-    [
-      "GET",
-      ARTIFACTS_BASE_PATH,
-      "Lists uploaded artifacts with cursor pagination.",
-      "deploy-token",
-    ],
-    [
-      "HEAD",
-      `${ARTIFACTS_BASE_PATH}/:hash`,
-      "Returns artifact metadata headers without a body.",
-      "artifact-read",
-    ],
-    [
-      "GET",
-      `${ARTIFACTS_BASE_PATH}/:hash`,
-      "Streams artifact bytes to a runtime agent or operator.",
-      "artifact-read",
-    ],
-    [
-      "DELETE",
-      `${ARTIFACTS_BASE_PATH}/:hash`,
-      "Deletes an artifact from object storage.",
-      "deploy-token",
-    ],
-    [
-      "POST",
-      `${ARTIFACTS_BASE_PATH}/gc`,
-      "Runs mark-and-sweep artifact garbage collection.",
-      "deploy-token",
-    ],
-  ].map(([method, path, summary, auth]) => ({
-    method: method as ApiEndpointDescription["method"],
-    path,
-    summary,
-    auth: auth as ApiEndpointDescription["auth"],
-  }));
-}
-
-function internalEndpoints(): ApiEndpointDescription[] {
-  return [
-    {
-      method: "GET",
-      path: TAKOSUMI_INTERNAL_PATHS.spaces,
-      summary: "Lists internal space summaries visible to the actor.",
-      auth: "internal-service",
-    },
-    {
-      method: "POST",
-      path: TAKOSUMI_INTERNAL_PATHS.spaces,
-      summary: "Creates a space through the internal service API.",
-      auth: "internal-service",
-    },
-    {
-      method: "GET",
-      path: TAKOSUMI_INTERNAL_PATHS.groups,
-      summary: "Lists groups for a space through the internal service API.",
-      auth: "internal-service",
-    },
-    {
-      method: "POST",
-      path: TAKOSUMI_INTERNAL_PATHS.groups,
-      summary: "Creates a group through the internal service API.",
-      auth: "internal-service",
-    },
-  ];
-}
-
-function runtimeAgentEndpoints(): ApiEndpointDescription[] {
-  return [
-    [
-      "POST",
-      TAKOSUMI_RUNTIME_AGENT_PATHS.enroll,
-      "Enrolls a runtime agent.",
-    ],
-    [
-      "POST",
-      TAKOSUMI_RUNTIME_AGENT_PATHS.heartbeat,
-      "Records a runtime agent heartbeat.",
-    ],
-    ["POST", TAKOSUMI_RUNTIME_AGENT_PATHS.lease, "Leases runtime work."],
-    [
-      "POST",
-      TAKOSUMI_RUNTIME_AGENT_PATHS.report,
-      "Reports runtime work completion.",
-    ],
-    [
-      "POST",
-      TAKOSUMI_RUNTIME_AGENT_PATHS.drain,
-      "Requests runtime-agent drain.",
-    ],
-  ].map(([method, path, summary]) => ({
-    method: method as ApiEndpointDescription["method"],
-    path,
-    summary,
-    auth: "internal-service" as const,
-  }));
-}
-
-function readinessEndpoints(): ApiEndpointDescription[] {
-  return [
-    {
-      method: "GET",
-      path: TAKOSUMI_SERVICE_READINESS_PATHS.ready,
-      summary: "Readiness probe for the current Takosumi role.",
-      auth: "none",
-    },
-    {
-      method: "GET",
-      path: TAKOSUMI_SERVICE_READINESS_PATHS.live,
-      summary: "Liveness probe for the current Takosumi role.",
-      auth: "none",
-    },
-    {
-      method: "GET",
-      path: TAKOSUMI_SERVICE_READINESS_PATHS.statusSummary,
-      summary: "Returns the current group summary status projection.",
-      auth: "none",
-    },
-  ];
 }

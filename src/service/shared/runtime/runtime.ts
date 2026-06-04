@@ -127,3 +127,60 @@ export class UnavailableInRuntimeError extends Error {
     this.name = "UnavailableInRuntimeError";
   }
 }
+
+/**
+ * Fail-closed {@link FsAdapter} for runtimes without filesystem access
+ * (Cloudflare Workers / unknown). Every IO method throws
+ * {@link UnavailableInRuntimeError} tagged with `runtime`, and
+ * `isNotFoundError` reports `false` because no IO ever succeeds here.
+ *
+ * Shared by the Workers adapter and the auto-detect fallback so the
+ * unavailable surface has a single definition (no per-runtime drift when a
+ * new FS method is added to the {@link FsAdapter} contract).
+ */
+export function unavailableFsAdapter(runtime: RuntimeKind): FsAdapter {
+  return {
+    available: false,
+    readTextFile() {
+      throw new UnavailableInRuntimeError("fs.readTextFile", runtime);
+    },
+    readFile(): Promise<Uint8Array> {
+      throw new UnavailableInRuntimeError("fs.readFile", runtime);
+    },
+    readTextFileSync(): string {
+      throw new UnavailableInRuntimeError("fs.readTextFileSync", runtime);
+    },
+    writeTextFile() {
+      throw new UnavailableInRuntimeError("fs.writeTextFile", runtime);
+    },
+    mkdir() {
+      throw new UnavailableInRuntimeError("fs.mkdir", runtime);
+    },
+    makeTempDir() {
+      throw new UnavailableInRuntimeError("fs.makeTempDir", runtime);
+    },
+    remove() {
+      throw new UnavailableInRuntimeError("fs.remove", runtime);
+    },
+    isNotFoundError() {
+      return false;
+    },
+  };
+}
+
+/**
+ * Fail-closed {@link SubprocessAdapter} for runtimes without process spawn
+ * (Cloudflare Workers / unknown). `run` throws
+ * {@link UnavailableInRuntimeError} tagged with `runtime`. Shared by the
+ * Workers adapter and the auto-detect fallback.
+ */
+export function unavailableSubprocessAdapter(
+  runtime: RuntimeKind,
+): SubprocessAdapter {
+  return {
+    available: false,
+    run() {
+      throw new UnavailableInRuntimeError("subprocess.run", runtime);
+    },
+  };
+}

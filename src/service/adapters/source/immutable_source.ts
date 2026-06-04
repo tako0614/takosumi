@@ -1,5 +1,6 @@
 import type { JsonObject } from "takosumi-contract/reference/compat";
-import { deepFreeze, stableJsonDigest } from "./digest.ts";
+import { stableJsonDigest } from "./digest.ts";
+import { freeze } from "../../shared/freeze.ts";
 import type { SourcePort, SourceSnapshot } from "./types.ts";
 
 export interface ImmutableSourceInput {
@@ -25,7 +26,7 @@ export class ImmutableSourceAdapter implements SourcePort<ImmutableSourceInput> 
   async snapshot(input: ImmutableSourceInput): Promise<SourceSnapshot> {
     const source = structuredClone(input.source);
     const sourceDigest = await stableJsonDigest(source);
-    return deepFreeze({
+    return freeze({
       id: input.sourceId ?? `source_${this.#idGenerator()}`,
       kind: "source",
       source,

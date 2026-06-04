@@ -1,3 +1,4 @@
+import { freezeClone } from "../../shared/freeze.ts";
 import type {
   EventSubscriptionRevision,
   EventSubscriptionRevisionId,
@@ -28,7 +29,7 @@ export class InMemoryEventSubscriptionRevisionStore
   >();
 
   put(revision: EventSubscriptionRevision): Promise<EventSubscriptionRevision> {
-    const frozen = deepFreeze(structuredClone(revision));
+    const frozen = freezeClone(revision);
     this.#revisions.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -75,14 +76,4 @@ function matchesRevision(
     return false;
   }
   return true;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

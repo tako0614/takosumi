@@ -3,6 +3,7 @@ import {
   LocalActorAdapter,
   ServiceActorAuthAdapter,
 } from "../../adapters/auth/mod.ts";
+import { freeze } from "../../shared/freeze.ts";
 import type {
   OperatorConfigPort,
   OperatorConfigSnapshot,
@@ -23,6 +24,7 @@ import {
 import { ImmutableSourceAdapter, type SourcePort } from "../../adapters/source/mod.ts";
 import {
   InMemoryObservabilitySink,
+  isSecretKey,
   type ObservabilitySink,
   SqlObservabilitySink,
 } from "../observability/mod.ts";
@@ -141,7 +143,7 @@ export class StandaloneBootstrapService {
       snapshot,
     });
 
-    return deepFreeze({
+    return freeze({
       ok: errors.length === 0,
       generatedAt,
       environment,
@@ -607,7 +609,7 @@ function redactOperatorConfigValue(
   value: OperatorConfigValue,
 ): OperatorConfigValue {
   if (value.kind === "secret-ref") return Object.freeze(structuredClone(value));
-  if (!isSensitiveKey(value.key)) return Object.freeze({ ...value });
+  if (!isSecretKey(value.key)) return Object.freeze({ ...value });
   return Object.freeze({
     ...value,
     value: "[REDACTED]",
@@ -624,7 +626,7 @@ function redactValue(value: OperatorConfigValue): BootstrapRedactedConfigValue {
       redacted: true,
     };
   }
-  if (isSensitiveKey(value.key)) {
+  if (isSecretKey(value.key)) {
     return {
       key: value.key,
       source: value.source,
@@ -641,25 +643,10 @@ function redactValue(value: OperatorConfigValue): BootstrapRedactedConfigValue {
   };
 }
 
-function isSensitiveKey(key: string): boolean {
-  return /(?:SECRET|PASSWORD|TOKEN|PRIVATE_KEY|API_KEY|ACCESS_KEY)/i.test(key);
-}
-
 function isUnsafeSecretValue(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return normalized === "" || normalized === "replace-me" ||
     normalized === "changeme" || normalized === "change-me" ||
     normalized === "password" || normalized === "secret" ||
     normalized === "dev-secret";
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    if (ArrayBuffer.isView(value)) return value;
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

@@ -1,3 +1,4 @@
+import { freezeClone } from "../../shared/freeze.ts";
 import type {
   EgressReport,
   EgressReportId,
@@ -49,7 +50,7 @@ export class InMemoryRuntimeNetworkPolicyStore
   implements RuntimeNetworkPolicyStore {
   readonly #policies = new Map<RuntimeNetworkPolicyId, RuntimeNetworkPolicy>();
   put(policy: RuntimeNetworkPolicy): Promise<RuntimeNetworkPolicy> {
-    const frozen = deepFreeze(structuredClone(policy));
+    const frozen = freezeClone(policy);
     this.#policies.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -71,7 +72,7 @@ export class InMemoryRuntimeNetworkPolicyStore
 export class InMemoryWorkloadIdentityStore implements WorkloadIdentityStore {
   readonly #identities = new Map<WorkloadIdentityId, WorkloadIdentity>();
   put(identity: WorkloadIdentity): Promise<WorkloadIdentity> {
-    const frozen = deepFreeze(structuredClone(identity));
+    const frozen = freezeClone(identity);
     this.#identities.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -96,7 +97,7 @@ export class InMemoryWorkloadIdentityStore implements WorkloadIdentityStore {
 export class InMemoryServiceGrantStore implements ServiceGrantStore {
   readonly #grants = new Map<ServiceGrantId, ServiceGrant>();
   put(grant: ServiceGrant): Promise<ServiceGrant> {
-    const frozen = deepFreeze(structuredClone(grant));
+    const frozen = freezeClone(grant);
     this.#grants.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -117,7 +118,7 @@ export class InMemoryServiceGrantStore implements ServiceGrantStore {
 export class InMemoryEgressReportStore implements EgressReportStore {
   readonly #reports = new Map<EgressReportId, EgressReport>();
   put(report: EgressReport): Promise<EgressReport> {
-    const frozen = deepFreeze(structuredClone(report));
+    const frozen = freezeClone(report);
     this.#reports.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -135,14 +136,4 @@ export class InMemoryEgressReportStore implements EgressReportStore {
       .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt));
     return Promise.resolve(reports[0]);
   }
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

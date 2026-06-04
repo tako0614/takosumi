@@ -1,3 +1,4 @@
+import { freezeClone } from "../../shared/freeze.ts";
 import type {
   RouteOwnershipRecord,
   RouteProjection,
@@ -31,7 +32,7 @@ export class InMemoryRouteProjectionStore implements RouteProjectionStore {
   readonly #projections = new Map<RouteProjectionId, RouteProjection>();
 
   put(projection: RouteProjection): Promise<RouteProjection> {
-    const frozen = deepFreeze(structuredClone(projection));
+    const frozen = freezeClone(projection);
     this.#projections.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -65,7 +66,7 @@ export class InMemoryRouteOwnershipStore implements RouteOwnershipStore {
     const status = existing && !sameOwner(existing, record)
       ? "conflict"
       : record.status;
-    const frozen = deepFreeze(structuredClone({ ...record, status }));
+    const frozen = freezeClone({ ...record, status });
     this.#records.set(frozen.key, frozen);
     return Promise.resolve(frozen);
   }
@@ -76,13 +77,11 @@ export class InMemoryRouteOwnershipStore implements RouteOwnershipStore {
   ): Promise<RouteOwnershipRecord | undefined> {
     const existing = this.#records.get(key);
     if (!existing) return Promise.resolve(undefined);
-    const released = deepFreeze(
-      structuredClone({
-        ...existing,
-        status: "released" as const,
-        updatedAt: releasedAt ?? new Date().toISOString(),
-      }),
-    );
+    const released = freezeClone({
+      ...existing,
+      status: "released" as const,
+      updatedAt: releasedAt ?? new Date().toISOString(),
+    });
     this.#records.set(key, released);
     return Promise.resolve(released);
   }
@@ -108,14 +107,4 @@ function sameOwner(a: RouteOwnershipRecord, b: RouteOwnershipRecord): boolean {
     a.owner.groupId === b.owner.groupId &&
     a.owner.activationId === b.owner.activationId &&
     a.owner.routeName === b.owner.routeName;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

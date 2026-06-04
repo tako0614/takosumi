@@ -1,4 +1,5 @@
 import type { CoreBindingResolutionInput } from "takosumi-contract/reference/compat";
+import { sha256Digest } from "../../adapters/source/digest.ts";
 import type {
   ResourceBindingRole,
   ResourceInstance,
@@ -66,15 +67,15 @@ export function defaultBindingRole(
 export async function structureDigest(
   inputs: readonly CoreBindingResolutionInput[],
 ): Promise<string> {
-  const bytes = new TextEncoder().encode(stableStringify(inputs));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return `sha256:${
-    Array.from(new Uint8Array(digest)).map((byte) =>
-      byte.toString(16).padStart(2, "0")
-    ).join("")
-  }`;
+  return await sha256Digest(new TextEncoder().encode(stableStringify(inputs)));
 }
 
+// Binding-resolution structure digests intentionally omit undefined-valued
+// fields (e.g. an absent optional `access` ref) so an optional field's
+// presence does not change the persisted digest. This differs from the
+// canonical `stableStringify` in digest.ts (which keeps undefined keys), so
+// the normalization stays local while the hashing routes through the shared
+// `sha256Digest` helper.
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map(stableStringify).join(",")}]`;

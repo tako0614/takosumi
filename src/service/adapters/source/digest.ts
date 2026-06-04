@@ -33,14 +33,3 @@ export function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     bytes.byteOffset + bytes.byteLength,
   ) as ArrayBuffer;
 }
-
-export function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    if (ArrayBuffer.isView(value)) return value;
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
-}

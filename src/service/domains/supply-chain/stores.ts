@@ -1,4 +1,5 @@
 import { conflict } from "../../shared/errors.ts";
+import { freezeClone } from "../../shared/freeze.ts";
 import type {
   PreparedArtifact,
   PreparedArtifactId,
@@ -46,7 +47,7 @@ export class InMemorySupplyChainRecordStore implements SupplyChainRecordStore {
   put(record: SupplyChainRecord): Promise<SupplyChainRecord> {
     const existing = this.#records.get(record.id);
     if (existing) return Promise.resolve(existing);
-    const frozen = deepFreeze(structuredClone(record));
+    const frozen = freezeClone(record);
     this.#records.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -75,7 +76,7 @@ export class InMemoryPreparedArtifactStore implements PreparedArtifactStore {
         digest: artifact.digest,
       });
     }
-    const frozen = deepFreeze(structuredClone(artifact));
+    const frozen = freezeClone(artifact);
     this.#artifacts.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -117,7 +118,7 @@ export class InMemoryProtectedReferenceStore
   put(reference: ProtectedReference): Promise<ProtectedReference> {
     const existing = this.#references.get(reference.id);
     if (existing) return Promise.resolve(existing);
-    const frozen = deepFreeze(structuredClone(reference));
+    const frozen = freezeClone(reference);
     this.#references.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -147,14 +148,4 @@ export class InMemoryProtectedReferenceStore
       reference.expiresAt === undefined || reference.expiresAt > now
     );
   }
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

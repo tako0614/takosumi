@@ -1,10 +1,10 @@
 import { isNode, nodeRuntime } from "./node.ts";
 import { isWorkers } from "./workers.ts";
 import {
-  type FsAdapter,
   type RuntimeAdapter,
-  type SubprocessAdapter,
+  unavailableFsAdapter,
   UnavailableInRuntimeError,
+  unavailableSubprocessAdapter,
 } from "./runtime.ts";
 
 let cached: RuntimeAdapter | undefined;
@@ -72,39 +72,6 @@ function isBun(): boolean {
 }
 
 function unknownRuntime(): RuntimeAdapter {
-  const fs: FsAdapter = {
-    available: false,
-    readTextFile() {
-      throw new UnavailableInRuntimeError("fs.readTextFile", "unknown");
-    },
-    readFile(): Promise<Uint8Array> {
-      throw new UnavailableInRuntimeError("fs.readFile", "unknown");
-    },
-    readTextFileSync(): string {
-      throw new UnavailableInRuntimeError("fs.readTextFileSync", "unknown");
-    },
-    writeTextFile() {
-      throw new UnavailableInRuntimeError("fs.writeTextFile", "unknown");
-    },
-    mkdir() {
-      throw new UnavailableInRuntimeError("fs.mkdir", "unknown");
-    },
-    makeTempDir() {
-      throw new UnavailableInRuntimeError("fs.makeTempDir", "unknown");
-    },
-    remove() {
-      throw new UnavailableInRuntimeError("fs.remove", "unknown");
-    },
-    isNotFoundError() {
-      return false;
-    },
-  };
-  const subprocess: SubprocessAdapter = {
-    available: false,
-    run() {
-      throw new UnavailableInRuntimeError("subprocess.run", "unknown");
-    },
-  };
   return {
     kind: "unknown",
     env: {
@@ -112,8 +79,8 @@ function unknownRuntime(): RuntimeAdapter {
       set: () => {},
       toObject: () => ({}),
     },
-    fs,
-    subprocess,
+    fs: unavailableFsAdapter("unknown"),
+    subprocess: unavailableSubprocessAdapter("unknown"),
     execPath() {
       throw new UnavailableInRuntimeError("execPath", "unknown");
     },

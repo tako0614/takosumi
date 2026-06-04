@@ -2,8 +2,6 @@ import {
   MemoryStorageDriver,
   type MemoryStorageSnapshot,
   type StorageDriver,
-  type StorageStatementCatalog,
-  storageStatementCatalog,
   type StorageTransaction,
 } from "../../../src/service/adapters/storage/mod.ts";
 import type { D1Database } from "./bindings.ts";
@@ -11,7 +9,6 @@ import type { D1Database } from "./bindings.ts";
 const SNAPSHOT_ID = "default";
 
 export class CloudflareD1SnapshotStorageDriver implements StorageDriver {
-  readonly statements: StorageStatementCatalog = storageStatementCatalog;
   #tail: Promise<void> = Promise.resolve();
   #initialized?: Promise<void>;
 

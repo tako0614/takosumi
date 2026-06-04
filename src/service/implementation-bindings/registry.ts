@@ -45,10 +45,6 @@ export class InMemoryOperatorImplementationRegistry implements OperatorImplement
     return this.#byKindUri.get(kindUri);
   }
 
-  findByKindRef(kind: string): OperatorImplementation | undefined {
-    return this.findByKindUri(normalizeKindToUri(kind));
-  }
-
   getByName(name: string): OperatorImplementation | undefined {
     return this.#byName.get(name);
   }
@@ -61,34 +57,18 @@ export function createOperatorImplementationRegistry(
 }
 
 /**
- * Normalize a kind reference for implementation lookup. Full `http(s)` URIs pass
- * through unchanged. Bare tokens are returned as-is; v1 does not expand
- * authoring aliases.
- */
-export function normalizeKindToUri(kind: string): string {
-  if (isKindUri(kind)) return kind;
-  // Unknown bare token - return as-is so the lookup miss surfaces a clean
-  // "no implementation provides kind X" error downstream.
-  return kind;
-}
-
-/**
  * Find the implementation that should materialize a given kind reference.
+ *
+ * Takosumi v1 does not expand short aliases: the operator-selected kind
+ * reference is looked up verbatim. Full `http(s)` URIs and bare tokens are
+ * resolved by exact match against each implementation's `provides[]`; an
+ * unknown reference returns `undefined`.
  */
 export function findImplementationForKind(
   registry: OperatorImplementationRegistry,
   kind: string,
 ): OperatorImplementation | undefined {
-  return registry.findByKindRef(kind);
-}
-
-function isKindUri(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:";
-  } catch {
-    return false;
-  }
+  return registry.findByKindUri(kind);
 }
 
 function assertValidImplementation(implementation: OperatorImplementation): void {
