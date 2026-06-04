@@ -1,6 +1,6 @@
 # P0 local-substrate readiness evidence (FIXTURE)
 
-**This is NOT a real launch evidence document.** It exists solely as a deterministic file whose SHA-256 the local-substrate test bed can hash into `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST` so the managed-offering policy gate accepts the local worker as "approved" for testing purposes. Real launches use evidence documents tracked in `takos-private/docs/launch-readiness/`, signed off by a human reviewer, and pinned via commit SHA — not by mutable file hash.
+**This is NOT a real launch evidence document.** It exists solely as a deterministic file whose SHA-256 the local-substrate test bed can hash into `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST` so the managed-offering policy gate accepts the local worker as "approved" for testing purposes. Real launches used evidence documents that were tracked under `docs/launch-readiness/` in the now-archived `takos-private` repository (preserved in that repo's Git history), signed off by a human reviewer, and pinned via commit SHA — not by mutable file hash.
 
 ## What this file replaces
 

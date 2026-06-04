@@ -59,7 +59,7 @@ position in the sorted list. The runner validates this and rejects gaps.
    invocation will error explicitly.
 
 For restore / disaster-recovery procedures, see
-[`takos-private/docs/operations/`](../../../../takos-private/docs/operations/).
+[`takosumi/docs/operations/`](../../../docs/operations/).
 
 ## Contract reference
 
