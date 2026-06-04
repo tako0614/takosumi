@@ -109,7 +109,6 @@ bun run test:scripts
 bun run lint:json-ld
 bun run docs:build
 bun run website:build
-bun run build:npm
 ```
 
 ## Package

@@ -115,7 +115,6 @@ events.
 - [x] `bun run test:scripts`
 - [x] `bun run lint:json-ld`
 - [x] `bun run docs:build`
-- [x] `bun run build:npm`
 - [x] `bun run website:deploy`
 
 ## Operator-Live Evidence

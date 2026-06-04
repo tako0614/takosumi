@@ -17,13 +17,8 @@ clone and adapt `takosumi/deploy/` rather than these examples.
 | Directory          | Role                                                                                                                                                                                                                   |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cloudflare/`      | Worker-first service scaffold example: builds the service in-process with `createTakosumiService`, D1 persistence, optional R2 object store. Referenced by the Takos distribution profile and the local-substrate worker runner. |
-| `single-host/`     | Substrate-neutral Docker compose example: service + Postgres + MinIO + Caddy on one host; OpenTofu execution is attached through RunnerProfile.                                                                          |
-| `aws/`             | Operator-owned AWS OpenTofu provider profile runbook (README only).                                                                                                              |
-| `gcp/`             | Operator-owned GCP OpenTofu provider profile runbook (README only).                                                                                                                                                                     |
-| `azure/`           | Operator-owned Azure OpenTofu provider profile runbook (README only).                                                                                                                                                                  |
-| `kubernetes/`      | Operator-owned Kubernetes / Helm OpenTofu provider profile runbook (README only).                                                                                                                                                              |
-| `github/`          | Operator-owned GitHub OpenTofu provider profile runbook (README only).                                                                                                                                                              |
-| `digitalocean/`    | Operator-owned DigitalOcean OpenTofu provider profile runbook (README only).                                                                                                                                                              |
+| `accounts-cloudflare/` | Account-plane Cloudflare Worker reference distribution (OIDC issuer / billing / dashboard / deploy facade).                                                                                                          |
+| `node-postgres/`   | Bun + Postgres reference composer (`buildComposedServer`) consumed by `local-substrate/`'s cloud profile.                                                                                                               |
 | `local-substrate/` | Local Pebble + CoreDNS + Caddy dev substrate for production-equivalent hostname access.                                                                                                                                |
 | `observability/`   | Reference observability wiring.                                                                                                                                                                                        |
 
@@ -33,10 +28,10 @@ These examples are intentionally **not relocated** into `takosumi/deploy/`:
 
 - The Takos product distribution profile (`takos/deploy/distributions/cloudflare.json`)
   pins the exact artifact refs `../takosumi/deploy/cloudflare` and
-  `../takosumi/deploy/cloudflare/wrangler.toml`, and `takos`'s
-  `validate-distribution-profiles.ts` stat-checks those paths on disk.
+  `../takosumi/deploy/cloudflare/wrangler.toml`.
 - `deploy/local-substrate/` boots `deploy/cloudflare`'s Worker scaffold through its
-  worker runner and compose wiring.
+  worker runner and compose wiring, and composes the account plane through
+  `deploy/node-postgres/src/server.ts`.
 
 Moving them would break those cross-submodule references. They remain reference examples;
 production composition and serving belong to `takosumi/deploy/`.
