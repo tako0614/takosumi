@@ -2,9 +2,11 @@ import { expect, test } from "bun:test";
 import { assertEquals, assertThrows } from "../../../test/assert.ts";
 import {
   buildOidcDiscoveryDocument,
+  canonicalJson,
   normalizeIssuer,
+  sha256HexText,
+  takosumiAccountsInstallationMaterializeDigest,
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
-  TAKOSUMI_ACCOUNTS_EXAMPLE_ISSUER,
   TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH,
@@ -57,15 +59,16 @@ test("normalizeIssuer requires explicit operator issuer", () => {
 });
 
 test("buildOidcDiscoveryDocument returns stable account endpoints", () => {
-  const discovery = buildOidcDiscoveryDocument({
-    issuer: TAKOSUMI_ACCOUNTS_EXAMPLE_ISSUER,
-  });
-  expect(discovery.issuer).toEqual("https://accounts.takosumi.com");
-  expect(discovery.authorization_endpoint).toEqual("https://accounts.takosumi.com/oauth/authorize");
-  expect(discovery.token_endpoint).toEqual("https://accounts.takosumi.com/oauth/token");
-  expect(discovery.jwks_uri).toEqual("https://accounts.takosumi.com/oauth/jwks");
-  expect(discovery.revocation_endpoint).toEqual("https://accounts.takosumi.com/oauth/revoke");
-  expect(discovery.introspection_endpoint).toEqual("https://accounts.takosumi.com/oauth/introspect");
+  // The issuer is the bare worker origin supplied by the operator; the
+  // discovery doc is derived from whatever origin is passed in.
+  const issuer = "https://app.takosumi.test";
+  const discovery = buildOidcDiscoveryDocument({ issuer });
+  expect(discovery.issuer).toEqual(issuer);
+  expect(discovery.authorization_endpoint).toEqual(`${issuer}/oauth/authorize`);
+  expect(discovery.token_endpoint).toEqual(`${issuer}/oauth/token`);
+  expect(discovery.jwks_uri).toEqual(`${issuer}/oauth/jwks`);
+  expect(discovery.revocation_endpoint).toEqual(`${issuer}/oauth/revoke`);
+  expect(discovery.introspection_endpoint).toEqual(`${issuer}/oauth/introspect`);
   expect(discovery.subject_types_supported).toEqual(["pairwise"]);
 });
 
@@ -123,4 +126,47 @@ test("AppInstallation path helpers expose the Accounts route surface", () => {
     TypeError,
     "operationId is required",
   );
+});
+
+test("canonicalJson sorts object keys and stabilizes scalars", () => {
+  expect(canonicalJson({ b: 1, a: { d: 4, c: 3 } })).toEqual(
+    `{"a":{"c":3,"d":4},"b":1}`,
+  );
+  expect(canonicalJson([3, 1, 2])).toEqual("[3,1,2]");
+  expect(canonicalJson(undefined)).toEqual("null");
+  expect(canonicalJson({ x: undefined })).toEqual(`{"x":null}`);
+});
+
+test("sha256HexText returns a sha256:<64-hex> digest", async () => {
+  expect(await sha256HexText("")).toEqual(
+    "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  );
+  expect(await sha256HexText("abc")).toMatch(/^sha256:[0-9a-f]{64}$/);
+});
+
+test("materialize permission digest is the canonical form the server verifies", async () => {
+  // Pinned golden: the materialize endpoint recomputes this exact digest and
+  // rejects the request on any byte mismatch. The server now derives it from
+  // this same builder, so a change here is a deliberate, breaking change.
+  const digest = await takosumiAccountsInstallationMaterializeDigest({
+    installationId: "inst_1",
+    mode: "dedicated",
+    region: "default",
+    plan: {},
+    cutover: {},
+  });
+  expect(digest).toEqual(
+    "sha256:94a00d4f8b3ecc85eaaa9ed56d8ec922d2f8a876c29518d42b7b2d8d78d64394",
+  );
+  // The digest is sha256(canonicalJson(operation envelope)); recompute it the
+  // long way to lock the envelope shape the server expects.
+  const expected = await sha256HexText(canonicalJson({
+    operation: "materialize",
+    installationId: "inst_1",
+    mode: "dedicated",
+    region: "default",
+    plan: {},
+    cutover: {},
+  }));
+  expect(digest).toEqual(expected);
 });

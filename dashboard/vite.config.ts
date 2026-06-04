@@ -10,6 +10,17 @@ import { resolve } from "node:path";
 export default defineConfig({
   plugins: [solid()],
   root: resolve(__dirname),
+  resolve: {
+    alias: {
+      // Account-plane contract (path builders, DTO/enum types, the materialize
+      // permission-digest builder). Imported in-process via the same specifier
+      // the worker uses; const/type imports are browser-safe.
+      "@takosjp/takosumi-accounts-contract": resolve(
+        __dirname,
+        "../packages/accounts-contract/src/mod.ts",
+      ),
+    },
+  },
   build: {
     outDir: resolve(__dirname, "dist"),
     emptyOutDir: true,

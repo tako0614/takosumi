@@ -44,6 +44,9 @@
       "takosumi-contract/reference/host-blocklist": [
         "./src/contract/reference/host-blocklist.ts"
       ],
+      "takosumi-contract/reference/ip-classification": [
+        "./src/contract/reference/ip-classification.ts"
+      ],
       "takosumi-contract/reference/prepared-source-core": [
         "./src/contract/reference/prepared-source-core.ts"
       ],

@@ -129,7 +129,11 @@ export async function buildComposedApp(
     return await accountsHandler(c.req.raw);
   });
 
-  const deployControl = inProcessDeployControlProxy(serviceApp, deployControlToken);
+  const deployControl = inProcessDeployControlProxy(
+    serviceApp,
+    deployControlToken,
+    created.operations,
+  );
   accountsHandler ??= input.createAccountsHandler
     ? await input.createAccountsHandler(deployControl)
     : undefined;
@@ -190,8 +194,12 @@ export async function buildComposedApp(
 function inProcessDeployControlProxy(
   serviceApp: CreatedTakosumiService["app"],
   token: string,
+  operations: CreatedTakosumiService["operations"],
 ): DeployControlProxyOptions {
   const url = "http://takosumi-service.internal";
+  // The proxy calls the embedded service's typed `operations` facade directly
+  // (no Bearer handshake, no JSON round-trip). The URL-rewriting `fetch` into
+  // the service Hono app is kept as the transport fallback.
   const fetchThroughService = async (
     input: RequestInfo | URL,
     init?: RequestInit,
@@ -217,6 +225,7 @@ function inProcessDeployControlProxy(
     url,
     token,
     fetch: fetchThroughService as typeof fetch,
+    operations,
   };
 }
 

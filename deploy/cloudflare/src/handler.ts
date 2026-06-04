@@ -1,6 +1,7 @@
 import {
   type CreatedTakosumiService,
   createTakosumiService,
+  type TakosumiOperations,
 } from "../../../src/service/bootstrap.ts";
 import type { AppAdapters } from "../../../src/service/app_context.ts";
 import {
@@ -189,6 +190,55 @@ export function createDeployControlService(
   env: CloudflareWorkerEnv,
 ): Promise<CreatedTakosumiService> {
   return createWorkerServiceApp(env, "takosumi-api");
+}
+
+/**
+ * In-process deploy-control seam shared by every single-worker host (the unified
+ * Takos worker, the operator platform worker, and the node-postgres composer).
+ *
+ * It owns the one per-env service cache and the Request normalization that each
+ * host used to re-derive. `operations` is the default transport the accounts
+ * deploy-control proxy calls (the wired OpenTofu controller, with no Bearer
+ * handshake and no JSON round-trip); `fetch` dispatches the same per-env cached
+ * service's `app.fetch` and is kept only as a transport fallback.
+ */
+export function createInProcessDeployControlSeam(
+  env: CloudflareWorkerEnv,
+): {
+  readonly fetch: typeof fetch;
+  readonly operations: () => Promise<TakosumiOperations>;
+} {
+  const service = () => cachedDeployControlService(env);
+  const inProcessFetch = async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const created = await service();
+    const request = input instanceof Request && init === undefined
+      ? input
+      : new Request(input as RequestInfo | URL, init);
+    return await created.app.fetch(request);
+  };
+  return {
+    fetch: inProcessFetch as typeof fetch,
+    operations: async () => (await service()).operations,
+  };
+}
+
+const inProcessDeployControlServices = new WeakMap<
+  CloudflareWorkerEnv,
+  Promise<CreatedTakosumiService>
+>();
+
+function cachedDeployControlService(
+  env: CloudflareWorkerEnv,
+): Promise<CreatedTakosumiService> {
+  let service = inProcessDeployControlServices.get(env);
+  if (!service) {
+    service = createDeployControlService(env);
+    inProcessDeployControlServices.set(env, service);
+  }
+  return service;
 }
 
 async function createWorkerServiceApp(

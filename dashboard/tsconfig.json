@@ -14,7 +14,12 @@
     "allowImportingTsExtensions": true,
     "jsx": "preserve",
     "jsxImportSource": "solid-js",
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "@takosjp/takosumi-accounts-contract": [
+        "../packages/accounts-contract/src/mod.ts"
+      ]
+    }
   },
   "include": ["src/**/*", "*.ts"],
   "exclude": ["node_modules", "dist"]
