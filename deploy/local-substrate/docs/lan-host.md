@@ -2,7 +2,7 @@
 
 local-substrate は default で「dev マシン単独 (= 127.0.0.1 完結)」構成。 **dev マシン以外の Linux PC の browser から `https://*.takosumi.test` を production-equivalent flow で踏みたい場合** にこの runbook を使う。
 
-`root-ca-install.md` (single-machine 用) の **拡張**。 LAN client (= browser 側 Linux PC) で必要な手順は別 runbook ([`takos-private/docs/operations/lan-dev-setup.md`](../../../../takos-private/docs/operations/lan-dev-setup.md))。本 runbook は **dev マシン (= local-substrate を起動する側)** の設定を扱う。
+`root-ca-install.md` (single-machine 用) の **拡張**。 LAN client (= browser 側 Linux PC) で必要な手順は別 runbook ([`takosumi/docs/operations/lan-dev-setup.md`](../../../docs/operations/lan-dev-setup.md))。本 runbook は **dev マシン (= local-substrate を起動する側)** の設定を扱う。
 
 ## 前提
 
@@ -95,7 +95,7 @@ curl https://hello.takosumi.test/
 # → "hello from local-substrate (Phase 0)"
 ```
 
-LAN client 側の詳細手順 (root CA install + DNS split) は [`takos-private/docs/operations/lan-dev-setup.md`](../../../../takos-private/docs/operations/lan-dev-setup.md) を参照。
+LAN client 側の詳細手順 (root CA install + DNS split) は [`takosumi/docs/operations/lan-dev-setup.md`](../../../docs/operations/lan-dev-setup.md) を参照。
 
 ## tear down / single-machine mode に戻す
 
@@ -188,7 +188,7 @@ cd <repo-root>/takosumi && npm --prefix docs run build
 cd <repo-root>/takosumi/website && npm run build
 ```
 
-LAN client (= browser PC) 側は [`takos-private/docs/operations/lan-dev-setup.md`](../../../../takos-private/docs/operations/lan-dev-setup.md) の手順を実行 (= root CA install + systemd-resolved per-domain split)。
+LAN client (= browser PC) 側は [`takosumi/docs/operations/lan-dev-setup.md`](../../../docs/operations/lan-dev-setup.md) の手順を実行 (= root CA install + systemd-resolved per-domain split)。
 
 docs を編集 → `npm --prefix docs run build` を再実行 → ブラウザ refresh で反映 (= Caddy reload 不要、 file_server は file system 直読)。 production deploy が **static file_server** なので、 dev も同 method で揃え、 dev-only HMR layer を入れない方針。
 
