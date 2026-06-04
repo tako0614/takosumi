@@ -28,6 +28,7 @@ import { InMemoryRouterConfigAdapter } from "../../../src/service/adapters/route
 import { MemoryEncryptedSecretStore } from "../../../src/service/adapters/secret-store/mod.ts";
 import { ImmutableSourceAdapter } from "../../../src/service/adapters/source/mod.ts";
 import { InMemoryObservabilitySink } from "../../../src/service/services/observability/mod.ts";
+import { constantTimeEqualsString } from "../../../src/service/shared/constant_time.ts";
 import type {
   OpenTofuApplyJob,
   OpenTofuApplyResult,
@@ -87,6 +88,8 @@ export function createCloudflareWorker(
         return Response.json({ ok: true, provider: "cloudflare-worker" });
       }
       if (url.pathname.startsWith("/coordination/")) {
+        const denied = denyUnauthorizedCoordination(request, env);
+        if (denied) return denied;
         const id = env.TAKOS_COORDINATION.idFromName("takos-control-plane");
         const targetPath = `/${url.pathname.slice("/coordination/".length)}`;
         return env.TAKOS_COORDINATION.get(id).fetch(
@@ -127,6 +130,46 @@ export function createCloudflareWorker(
       }
     },
   };
+}
+
+/**
+ * The `/coordination/*` route forwards straight to a single shared
+ * {@link TakosCoordinationObject} Durable Object (lease/alarm storage for the
+ * control plane). It is an internal control-plane surface, so it must not be
+ * edge-reachable without authentication. We gate it on the same operator secret
+ * as the Deploy Control API (`TAKOSUMI_DEPLOY_CONTROL_TOKEN`):
+ *
+ * - token unset  -> the control-plane surface is not exposed -> 404 (mirrors the
+ *   Deploy Control "routes disabled" behavior, so an unconfigured host never
+ *   accepts unauthenticated writes into the coordination DO).
+ * - token set    -> require `Authorization: Bearer <token>`, constant-time
+ *   compared; 401 on missing/invalid bearer.
+ *
+ * Returns a Response when the request must be rejected, or undefined when it is
+ * authorized and may proceed to the Durable Object.
+ */
+function denyUnauthorizedCoordination(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Response | undefined {
+  const configuredToken = typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
+    ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
+    : undefined;
+  if (!configuredToken) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  const header = request.headers.get("authorization") ?? "";
+  const prefix = "Bearer ";
+  const bearer = header.startsWith(prefix)
+    ? header.slice(prefix.length)
+    : undefined;
+  if (!bearer || !constantTimeEqualsString(bearer, configuredToken)) {
+    return Response.json(
+      { error: "invalid coordination bearer" },
+      { status: 401 },
+    );
+  }
+  return undefined;
 }
 
 async function createWorkerServiceApp(

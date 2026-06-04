@@ -16,6 +16,7 @@ import {
   type WorkerDaemonTickResult,
 } from "../workers/daemon.ts";
 import { log } from "../shared/log.ts";
+import { errorMessage } from "../shared/errors.ts";
 import type {
   PlatformContext,
   RefResolver,
@@ -138,10 +139,6 @@ function positiveInteger(
   if (!value) return fallback;
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function platformContextFromAppContext(

@@ -5,6 +5,7 @@ import type {
   WorkerDaemonHandle,
   WorkerDaemonTickResult,
 } from "../workers/daemon.ts";
+import { errorMessage } from "../shared/errors.ts";
 
 /**
  * Structural shape of the worker daemon state the readiness probe needs.
@@ -219,8 +220,4 @@ function checkFailureMessage(
     ? record.reason
     : "check failed";
   return { message, booting: record.state === "booting" };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

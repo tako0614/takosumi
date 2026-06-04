@@ -1,34 +1,30 @@
-import { Title } from "@solidjs/meta";
 import AppShell from "~/components/shell/AppShell";
-import AuthGuard from "~/components/auth/AuthGuard";
+import Page from "~/components/auth/Page";
 
 export default function Home() {
   return (
-    <>
-      <Title>Home — Takosumi</Title>
-      <AuthGuard>
-        {(session) => (
-          <AppShell>
-            <div class="page-header">
-              <h1>Welcome back.</h1>
-              <p class="page-sub">
-                <Display
-                  name={session.displayName}
-                  sub={session.subject}
-                  email={session.email}
-                />
-              </p>
-            </div>
-            <section class="empty-state">
-              <p>まだ何も installed されていません。</p>
-              <a href="/install" class="btn btn-primary">
-                最初のアプリを install →
-              </a>
-            </section>
-          </AppShell>
-        )}
-      </AuthGuard>
-    </>
+    <Page title="Home">
+      {(session) => (
+        <AppShell>
+          <div class="page-header">
+            <h1>Welcome back.</h1>
+            <p class="page-sub">
+              <Display
+                name={session.displayName}
+                sub={session.subject}
+                email={session.email}
+              />
+            </p>
+          </div>
+          <section class="empty-state">
+            <p>まだ何も installed されていません。</p>
+            <a href="/install" class="btn btn-primary">
+              最初のアプリを install →
+            </a>
+          </section>
+        </AppShell>
+      )}
+    </Page>
   );
 }
 

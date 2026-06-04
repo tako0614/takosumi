@@ -70,4 +70,3 @@ export {
 } from "./internal-rpc.ts";
 export * from "./runtime-agent.ts";
 export * from "./runtime-agent-lifecycle.ts";
-export * from "./error-category.ts";

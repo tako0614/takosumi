@@ -55,3 +55,12 @@ export function notImplemented(
 ): DomainError {
   return new DomainError("not_implemented", message, details);
 }
+
+/**
+ * Extract a human-readable message from an unknown thrown value, falling back
+ * to a string coercion for non-`Error` throwables. Shared so service-side
+ * call sites do not each re-declare the same one-liner.
+ */
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

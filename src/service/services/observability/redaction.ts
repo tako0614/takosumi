@@ -5,9 +5,26 @@ export const REDACTED_VALUE = "[REDACTED]";
 const DEFAULT_SECRET_KEY_PATTERN =
   /(^|[_-])(secret|token|password|passwd|pwd|credential|credentials|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?id|authorization|auth)([_-]|$)/i;
 
-const BEARER_TOKEN_PATTERN = /\bBearer\s+[-._~+/=a-zA-Z0-9]+/g;
+// SECURITY: the anchored DEFAULT_SECRET_KEY_PATTERN only matches snake_case /
+// kebab-case / exact keys, so camelCase compound credential names slipped
+// through (awsSecretAccessKey, accessKeyId, connectionString, databaseUrl, dsn,
+// sessionToken, authToken, bearerToken, stripeSecretKey, …). We additionally
+// match against the key with separators stripped and lowercased, so camelCase
+// keys are covered. Over-matching a non-secret key is the safe failure here.
+const SECRET_KEY_SUBSTRINGS =
+  /(secret|token|passwd|pwd|password|passphrase|credential|apikey|accesskey|privatekey|sessionid|sessiontoken|authtoken|bearertoken|authorization|connectionstring|connstring|databaseurl|dsn)/;
+
+function normalizeSecretKey(key: string): string {
+  return key.toLowerCase().replace(/[_\-\s]+/g, "");
+}
+
+const BEARER_TOKEN_PATTERN =
+  /\b(Bearer|Basic|Digest|Token)\s+[-._~+/=a-zA-Z0-9]+/g;
+// scheme://user:password@host — mask only the password segment of a DSN/URI.
+const URL_CREDENTIAL_PATTERN =
+  /\b([a-z][a-z0-9+.\-]*:\/\/[^:/?#\s@]+:)([^@/?#\s]+)@/gi;
 const ASSIGNMENT_SECRET_PATTERN =
-  /\b(secret|token|password|passwd|pwd|api[_-]?key|client[_-]?secret|refresh[_-]?token)=([^\s&]+)/gi;
+  /\b(secret|token|password|passwd|pwd|api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|auth[_-]?token|bearer[_-]?token|private[_-]?key|connection[_-]?string|database[_-]?url|dsn|credentials?)(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,&]+)/gi;
 
 export interface RedactionOptions {
   readonly redactedValue?: string;
@@ -19,7 +36,9 @@ export function isSecretKey(
   key: string,
   options: RedactionOptions = {},
 ): boolean {
-  return (options.secretKeyPattern ?? DEFAULT_SECRET_KEY_PATTERN).test(key);
+  if (options.secretKeyPattern) return options.secretKeyPattern.test(key);
+  return DEFAULT_SECRET_KEY_PATTERN.test(key) ||
+    SECRET_KEY_SUBSTRINGS.test(normalizeSecretKey(key));
 }
 
 export function redactJsonObject(
@@ -57,10 +76,22 @@ export function redactString(
 ): string {
   const replacement = redacted(options);
   return value
-    .replace(BEARER_TOKEN_PATTERN, `Bearer ${replacement}`)
+    // Mask the password in scheme://user:password@host DSNs/URIs (Postgres,
+    // AMQP, Redis, SMTP, …) which OpenTofu/provider errors routinely echo.
+    .replace(
+      URL_CREDENTIAL_PATTERN,
+      (_match, prefix: string) => `${prefix}${replacement}@`,
+    )
+    // Mask Authorization scheme tokens (Bearer / Basic / Digest / Token).
+    .replace(
+      BEARER_TOKEN_PATTERN,
+      (_match, scheme: string) => `${scheme} ${replacement}`,
+    )
+    // Mask key=value / key: value / key="value" credential assignments, keeping
+    // the original separator and spacing.
     .replace(
       ASSIGNMENT_SECRET_PATTERN,
-      (_match, key: string) => `${key}=${replacement}`,
+      (_match, key: string, sep: string) => `${key}${sep}${replacement}`,
     );
 }
 

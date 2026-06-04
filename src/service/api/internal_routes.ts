@@ -11,10 +11,12 @@ import type { createSpaceDomainServices } from "../domains/space/mod.ts";
 import type { MutationBoundaryOperation } from "../services/entitlements/mod.ts";
 import type { WorkerAuthzService } from "../services/security/mod.ts";
 import { DomainError } from "../shared/errors.ts";
+import { isRecord } from "../domains/deploy-control/errors.ts";
 import { currentRuntime } from "../shared/runtime/index.ts";
 import { findNonCatalogConditionReasons } from "./condition_reasons.ts";
 import { apiError, readJsonObject, registerApiErrorHandler } from "./errors.ts";
 import { type InternalAuthResult, readInternalAuth } from "./internal_auth.ts";
+import type { ReplayProtectionStore } from "../adapters/replay-protection/mod.ts";
 
 export interface MutationBoundaryEntitlementService {
   requireMutationBoundary(input: {
@@ -34,6 +36,14 @@ export interface InternalRouteServices {
 export interface RegisterInternalRoutesOptions {
   readonly services: InternalRouteServices;
   readonly getInternalServiceSecret?: () => string | undefined;
+  /**
+   * SECURITY (cross-replica replay): when omitted, readInternalAuth falls back to
+   * a per-process in-memory nonce store, so a captured signed internal request
+   * can be replayed against a different replica within the clock-skew window.
+   * Inject a shared store (e.g. SqlReplayProtectionStore) from the host edge for
+   * multi-replica deployments.
+   */
+  readonly replayProtectionStore?: ReplayProtectionStore;
 }
 
 export function registerInternalRoutes(
@@ -48,6 +58,7 @@ export function registerInternalRoutes(
   app.get(TAKOSUMI_INTERNAL_PATHS.spaces, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {
       secret: getInternalServiceSecret(),
+      replayProtectionStore: options.replayProtectionStore,
     });
     if (!auth.ok) return internalAuthError(c, auth);
     const authorization = await authorizeInternalServiceCall({
@@ -71,6 +82,7 @@ export function registerInternalRoutes(
   app.post(TAKOSUMI_INTERNAL_PATHS.spaces, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {
       secret: getInternalServiceSecret(),
+      replayProtectionStore: options.replayProtectionStore,
     });
     if (!auth.ok) return internalAuthError(c, auth);
     const request = parseInternalSpaceRequest(
@@ -107,6 +119,7 @@ export function registerInternalRoutes(
   app.get(TAKOSUMI_INTERNAL_PATHS.groups, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {
       secret: getInternalServiceSecret(),
+      replayProtectionStore: options.replayProtectionStore,
     });
     if (!auth.ok) return internalAuthError(c, auth);
     const spaceId = c.req.query("spaceId") ?? auth.actor.spaceId;
@@ -137,6 +150,7 @@ export function registerInternalRoutes(
   app.post(TAKOSUMI_INTERNAL_PATHS.groups, async (c) => {
     const auth = await readInternalAuth(c.req.raw, {
       secret: getInternalServiceSecret(),
+      replayProtectionStore: options.replayProtectionStore,
     });
     if (!auth.ok) return internalAuthError(c, auth);
     const request = parseInternalGroupRequest(
@@ -300,10 +314,6 @@ function isJsonValue(value: unknown): value is JsonObject[keyof JsonObject] {
     typeof value === "number" || typeof value === "boolean" ||
     (Array.isArray(value) && value.every(isJsonValue)) ||
     isJsonObject(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function assertCatalogConditionReasons(value: unknown, surface: string): void {

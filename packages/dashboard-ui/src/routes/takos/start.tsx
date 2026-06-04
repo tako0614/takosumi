@@ -2,7 +2,7 @@ import { Title } from "@solidjs/meta";
 import { useSearchParams } from "@solidjs/router";
 import { Rocket } from "lucide-solid";
 import { createSignal, Show } from "solid-js";
-import AuthGuard from "~/components/auth/AuthGuard";
+import Page from "~/components/auth/Page";
 import AppShell from "~/components/shell/AppShell";
 import {
   buildUseTakosStartUrl,
@@ -11,10 +11,12 @@ import {
 } from "~/lib/use-takos-start";
 
 export default function UseTakos() {
+  // Title kept literal (hyphen, not em-dash) to preserve the exact existing
+  // document title; Page handles the AuthGuard preamble.
   return (
     <>
       <Title>Start Takos - Takosumi</Title>
-      <AuthGuard>{(session) => <Inner subject={session.subject} />}</AuthGuard>
+      <Page>{(session) => <Inner subject={session.subject} />}</Page>
     </>
   );
 }

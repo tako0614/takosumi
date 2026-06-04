@@ -14,6 +14,7 @@ import {
   type InternalRouteServices,
   registerInternalRoutes,
 } from "./internal_routes.ts";
+import type { ReplayProtectionStore } from "../adapters/replay-protection/mod.ts";
 import {
   type ReadinessRouteProbes,
   registerReadinessRoutes,
@@ -39,12 +40,23 @@ import {
   type RegisterRequestCorrelationOptions,
 } from "./request_correlation.ts";
 import { DefaultGroupSummaryStatusProjector } from "../services/status/mod.ts";
+import {
+  ROUTE_FAMILIES,
+  type RouteFamilyFlag,
+  type RouteFamilyMountedFlags,
+} from "./route_families.ts";
 
 export interface CreateApiAppOptions {
   readonly role?: TakosumiProcessRole;
   readonly context?: AppContext;
   readonly internalRouteServices?: InternalRouteServices;
   readonly getInternalServiceSecret?: () => string | undefined;
+  /**
+   * Shared replay-protection store injected into the internal-RPC authenticator.
+   * Omitting it falls back to a per-process in-memory store, which cannot defend
+   * against cross-replica replay in multi-replica deployments.
+   */
+  readonly replayProtectionStore?: ReplayProtectionStore;
   readonly registerInternalRoutes?: boolean;
   readonly registerOpenApiRoute?: boolean;
   readonly registerReadinessRoutes?: boolean;
@@ -93,19 +105,15 @@ export async function createApiApp(
     });
   });
 
-  const internalRoutesMounted = options.registerInternalRoutes ??
-    role === "takosumi-api";
-  const runtimeAgentRoutesMounted = options.registerRuntimeAgentRoutes ??
-    role === "takosumi-runtime-agent";
-  const openApiRouteMounted = options.registerOpenApiRoute ??
-    role === "takosumi-api";
-  const readinessRoutesMounted = options.registerReadinessRoutes ?? false;
-  const artifactRoutesMounted = options.registerArtifactRoutes ??
-    (role === "takosumi-api" && options.artifactRouteOptions !== undefined);
-  const deployControlPublicRoutesMounted = options.registerDeployControlPublicRoutes ??
-    (role === "takosumi-api");
-  const metricsRoutesMounted = options.registerMetricsRoutes ??
-    (role === "takosumi-api" && options.metricsRouteOptions !== undefined);
+  const mounted = resolveMountedRouteFamilies(role, options);
+  const internalRoutesMounted = mounted.internalRoutesMounted;
+  const runtimeAgentRoutesMounted = mounted.runtimeAgentRoutesMounted;
+  const openApiRouteMounted = mounted.openApiRouteMounted;
+  const readinessRoutesMounted = mounted.readinessRoutesMounted;
+  const artifactRoutesMounted = mounted.artifactRoutesMounted;
+  const deployControlPublicRoutesMounted =
+    mounted.deployControlPublicRoutesMounted;
+  const metricsRoutesMounted = mounted.metricsRoutesMounted;
 
   if (internalRoutesMounted) assertRoleCapability(role, "api.internal.host");
   if (runtimeAgentRoutesMounted) {
@@ -130,6 +138,7 @@ export async function createApiApp(
       services: options.internalRouteServices ??
         (await defaultRouteServices).internal,
       getInternalServiceSecret: options.getInternalServiceSecret,
+      replayProtectionStore: options.replayProtectionStore,
     });
   }
 
@@ -191,6 +200,68 @@ export async function createApiApp(
   await options.configure?.(app);
 
   return app;
+}
+
+/**
+ * Per-family explicit `register<Family>` overrides plus the `hasOptions` probe
+ * the default-on predicate consults. Keyed by the family flag so the registry
+ * in {@link ROUTE_FAMILIES} stays the single enumeration of families.
+ */
+function routeFamilyMountInputs(
+  options: CreateApiAppOptions,
+): Record<
+  RouteFamilyFlag,
+  { readonly override: boolean | undefined; readonly hasOptions: boolean }
+> {
+  return {
+    internalRoutesMounted: {
+      override: options.registerInternalRoutes,
+      hasOptions: options.internalRouteServices !== undefined,
+    },
+    runtimeAgentRoutesMounted: {
+      override: options.registerRuntimeAgentRoutes,
+      hasOptions: options.runtimeAgentRouteOptions !== undefined,
+    },
+    openApiRouteMounted: {
+      override: options.registerOpenApiRoute,
+      hasOptions: options.createOpenApiDocument !== undefined,
+    },
+    readinessRoutesMounted: {
+      override: options.registerReadinessRoutes,
+      hasOptions: options.readinessRouteProbes !== undefined,
+    },
+    artifactRoutesMounted: {
+      override: options.registerArtifactRoutes,
+      hasOptions: options.artifactRouteOptions !== undefined,
+    },
+    deployControlPublicRoutesMounted: {
+      override: options.registerDeployControlPublicRoutes,
+      hasOptions: options.deployControlPublicRouteOptions !== undefined,
+    },
+    metricsRoutesMounted: {
+      override: options.registerMetricsRoutes,
+      hasOptions: options.metricsRouteOptions !== undefined,
+    },
+  };
+}
+
+/**
+ * Resolves the mounted-state of each optional route family by driving the
+ * {@link ROUTE_FAMILIES} registry: an explicit `register<Family>` override wins,
+ * otherwise the family's `defaultMounted` predicate decides.
+ */
+function resolveMountedRouteFamilies(
+  role: TakosumiProcessRole,
+  options: CreateApiAppOptions,
+): RouteFamilyMountedFlags {
+  const inputs = routeFamilyMountInputs(options);
+  const flags = {} as Record<RouteFamilyFlag, boolean>;
+  for (const family of ROUTE_FAMILIES) {
+    const { override, hasOptions } = inputs[family.flag];
+    flags[family.flag] = override ??
+      family.defaultMounted({ role, hasOptions });
+  }
+  return flags;
 }
 
 async function createDefaultRouteServices(

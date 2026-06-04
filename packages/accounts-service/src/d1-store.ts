@@ -1180,12 +1180,36 @@ export class D1AccountsStore implements AccountsStore {
     return Promise.resolve([]);
   }
 
-  appendInstallationEvent(record: InstallationEventRecord): Promise<void> {
-    return this.#put("installation_events", record.eventId, record, [{
-      name: "installation_events_by_installation",
-      key: record.installationId,
-      sortKey: record.createdAt,
-    }]);
+  async appendInstallationEvent(
+    record: InstallationEventRecord,
+  ): Promise<void> {
+    // SECURITY (audit hash-chain fork): D1 has no per-installation row lock, so
+    // two concurrent appends that read the same chain tail would each INSERT a
+    // successor sharing previousEventHash, forking the tamper-evident ledger.
+    // Key the event document by its CHAIN POSITION (installationId,
+    // previousEventHash) and insert with INSERT OR IGNORE, so only one successor
+    // per position can win. The loser gets inserted === false and we throw;
+    // appendLedgerEvent's retry loop then re-reads the advanced tail and
+    // re-appends. (Postgres achieves the same via FOR UPDATE NOWAIT.)
+    const chainKey =
+      `${record.installationId}::${record.previousEventHash ?? "<genesis>"}`;
+    const inserted = await this.#putIfAbsentWithIndexes(
+      "installation_events",
+      chainKey,
+      record,
+      [{
+        name: "installation_events_by_installation",
+        key: record.installationId,
+        sortKey: record.createdAt,
+      }],
+    );
+    if (!inserted) {
+      throw new Error(
+        `installation event chain position already claimed for ` +
+          `${record.installationId} (previousEventHash=` +
+          `${record.previousEventHash ?? "<genesis>"}); concurrent appender won`,
+      );
+    }
   }
 
   listInstallationEvents(

@@ -1,18 +1,15 @@
 import { Title } from "@solidjs/meta";
 import { useNavigate, useParams } from "@solidjs/router";
 import { AlertTriangle, Trash2 } from "lucide-solid";
-import { createResource, createSignal, Match, Show, Switch } from "solid-js";
+import { createResource, createSignal, Match, Switch } from "solid-js";
 import AppShell from "~/components/shell/AppShell";
-import AuthGuard from "~/components/auth/AuthGuard";
+import Page from "~/components/auth/Page";
 import AppDetailNav from "~/components/apps/AppDetailNav";
 import { ApiError, rpc } from "~/lib/rpc";
+import { ActionError, createAction } from "~/lib/action";
 
 export default function Danger() {
-  return (
-    <>
-      <AuthGuard>{() => <Inner />}</AuthGuard>
-    </>
-  );
+  return <Page>{() => <Inner />}</Page>;
 }
 
 function Inner() {
@@ -20,14 +17,17 @@ function Inner() {
   const nav = useNavigate();
   const [app] = createResource(() => params.id, rpc.installations.get);
   const [typed, setTyped] = createSignal("");
-  const [uninstalling, setUninstalling] = createSignal(false);
-  const [err, setErr] = createSignal<string | null>(null);
 
-  const run = async () => {
+  const uninstall = createAction(async (installationId: string) => {
+    await rpc.installations.uninstall(installationId);
+    nav("/apps");
+  });
+
+  const run = () => {
     const a = app();
     if (!a) return;
     if (typed() !== a.appId) {
-      setErr(`appId (${a.appId}) を正確に入力してください。`);
+      uninstall.setError(`appId (${a.appId}) を正確に入力してください。`);
       return;
     }
     if (
@@ -37,16 +37,7 @@ function Inner() {
     ) {
       return;
     }
-    setUninstalling(true);
-    setErr(null);
-    try {
-      await rpc.installations.uninstall(a.installationId);
-      nav("/apps");
-    } catch (e) {
-      setErr((e as ApiError).message);
-    } finally {
-      setUninstalling(false);
-    }
+    void uninstall.run(a.installationId);
   };
 
   return (
@@ -99,15 +90,13 @@ function Inner() {
                     class="btn btn-danger"
                     type="button"
                     onClick={run}
-                    disabled={uninstalling() || typed() !== a().appId}
+                    disabled={uninstall.busy() || typed() !== a().appId}
                   >
                     <Trash2 size={16} />{" "}
-                    {uninstalling() ? "Uninstall 中..." : "Uninstall"}
+                    {uninstall.busy() ? "Uninstall 中..." : "Uninstall"}
                   </button>
                 </div>
-                <Show when={err()}>
-                  {(m) => <p class="sign-in-error">{m()}</p>}
-                </Show>
+                <ActionError error={uninstall.error} />
               </section>
             </>
           )}

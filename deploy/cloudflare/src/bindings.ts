@@ -5,6 +5,12 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOS_OPENTOFU_RUN_QUEUE?: Queue<OpenTofuRunQueueMessage>;
   readonly TAKOS_COORDINATION: DurableObjectNamespace;
   readonly TAKOS_OPENTOFU_RUNNER?: DurableObjectNamespace;
+  /**
+   * Operator control-plane bearer (shared with the Deploy Control API). Gates the
+   * internal `/coordination/*` Durable Object route; when unset that route is not
+   * exposed.
+   */
+  readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
 }
 
 export type OpenTofuRunAction = "plan" | "apply" | "destroy";
