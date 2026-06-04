@@ -1,4 +1,10 @@
-# THE operator-deployed Takosumi platform worker (app.takosumi.com).
+# Takosumi platform worker (app.takosumi.com) — REFERENCE TEMPLATE.
+#
+# The REALIZED config actually deployed by the operator (real resource IDs)
+# lives in the operator-private takosumi-private repo (platform/wrangler.toml),
+# which references this repo's worker.ts / dashboard / runner Dockerfile by
+# relative path. This template documents the full binding shape with
+# placeholder IDs; keep the two in sync.
 #
 # One worker = accounts plane (bare-origin OIDC issuer) + in-process
 # deploy-control plane + dashboard SPA (served from ASSETS) + OpenTofu runner
@@ -33,13 +39,13 @@ enabled = true
 [[d1_databases]]
 binding = "TAKOSUMI_ACCOUNTS_DB"
 database_name = "takosumi-accounts"
-database_id = "51138f7c-f298-4f60-8528-37acc85daa4d"
+database_id = "replace-with-accounts-d1-database-id"
 
 # Deploy-control store (PlanRun / ApplyRun / Deployment / DeploymentOutput).
 [[d1_databases]]
 binding = "TAKOS_D1"
 database_name = "takosumi-deploy"
-database_id = "a82de2de-60cb-45c0-8ad4-921cd2aa1aaa"
+database_id = "replace-with-deploy-d1-database-id"
 
 # Accounts data-export artifacts (signed download).
 [[r2_buckets]]
