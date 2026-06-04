@@ -2,9 +2,18 @@
  * Installation / Deployment RPC for the account plane.
  * Ported from takosumi dashboard-ui/src/lib/rpc/installations.ts.
  */
+import type {
+  TakosumiAccountsWorkloadServiceDescriptor as WireWorkloadServiceDescriptor,
+  TakosumiAccountsWorkloadServiceProjection as WireWorkloadService,
+  TakosumiAccountsWorkloadServiceStatus as WorkloadServiceStatus,
+  TakosumiAppInstallationMode,
+  TakosumiAppInstallationStatus,
+} from "@takosjp/takosumi-accounts-contract";
 import { apiFetch, qs } from "./http.ts";
 import * as paths from "./paths.ts";
-import { sha256Canonical } from "./digest.ts";
+import { materializeInstallationDigest } from "./digest.ts";
+
+export type { WorkloadServiceStatus };
 
 /** A subset of InstallationRecord that the dashboard actually displays.
  *  Mirrors the account-plane InstallationRecord. */
@@ -18,15 +27,8 @@ export interface Installation {
   readonly sourceCommit?: string;
   readonly planDigest?: string;
   readonly artifactDigest?: string;
-  readonly mode?: "shared-cell" | "dedicated" | "self-hosted";
-  // Aligned with the canonical contract enum. The canonical list is
-  // `installing` / `ready` / `failed` / `suspended` / `exported`.
-  readonly status?:
-    | "installing"
-    | "ready"
-    | "failed"
-    | "suspended"
-    | "exported";
+  readonly mode?: TakosumiAppInstallationMode;
+  readonly status?: TakosumiAppInstallationStatus;
   readonly launchUrl?: string;
   readonly deploymentOutputs?: readonly DeploymentOutput[];
   /** Present on the detail envelope (GET /v1/installations/:id), not on list. */
@@ -70,11 +72,6 @@ export interface InstallationEventsResult {
   readonly hashChainValid: boolean;
   readonly nextCursor?: string;
 }
-
-export type WorkloadServiceStatus =
-  | "ready"
-  | "not_configured"
-  | "unavailable";
 
 export interface WorkloadServiceDescriptor {
   readonly id: string;
@@ -176,25 +173,6 @@ interface WireInstallationEvent {
   readonly created_at?: string;
 }
 
-interface WireWorkloadServiceDescriptor {
-  readonly id?: string;
-  readonly material_kind?: string;
-  readonly title?: string;
-  readonly description?: string;
-  readonly secret_backed?: boolean;
-}
-
-interface WireWorkloadService {
-  readonly id?: string;
-  readonly material_kind?: string;
-  readonly status?: WorkloadServiceStatus;
-  readonly endpoint?: string;
-  readonly material?: Record<string, unknown>;
-  readonly secret_ref?: string;
-  readonly token_expires_at?: string;
-  readonly rotate_token_url?: string;
-}
-
 function deserializeInstallation(
   raw: WireInstallation | undefined,
 ): Installation {
@@ -278,7 +256,7 @@ function deserializeEvent(raw: WireInstallationEvent): InstallationEvent {
 }
 
 function deserializeWorkloadServiceDescriptor(
-  raw: WireWorkloadServiceDescriptor,
+  raw: Partial<WireWorkloadServiceDescriptor>,
 ): WorkloadServiceDescriptor {
   return {
     id: raw.id ?? "",
@@ -290,7 +268,7 @@ function deserializeWorkloadServiceDescriptor(
 }
 
 function deserializeWorkloadService(
-  raw: WireWorkloadService,
+  raw: Partial<WireWorkloadService>,
 ): WorkloadService {
   return {
     id: raw.id ?? "",
@@ -446,8 +424,8 @@ export async function materializeInstallation(
   const mode = "dedicated";
   const plan: Record<string, unknown> = {};
   const cutover: Record<string, unknown> = {};
-  const permissionDigest = await sha256Canonical({
-    operation: "materialize",
+  // Same builder the server verifies against (see digest.ts / the contract).
+  const permissionDigest = await materializeInstallationDigest({
     installationId: id,
     mode,
     region,

@@ -1,6 +1,7 @@
 import type { JsonValue } from "takosumi-contract";
 import {
   APPLY_RUNS_PATH,
+  DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
   INSTALLATION_DEPLOYMENTS_PATH,
   INSTALLATION_PATH,
   PLAN_RUN_PATH,
@@ -10,6 +11,8 @@ import type {
   ApplyRunResponse,
   CreateApplyRunRequest,
   CreatePlanRunRequest,
+  DeployControlErrorCode,
+  DeployControlErrorEnvelope,
   Deployment,
   DeploymentOutput,
   GetInstallationResponse,
@@ -20,10 +23,37 @@ import type {
   PlanRunResponse,
 } from "takosumi-contract/deploy-control-api";
 
+/**
+ * In-process typed deploy-control operations the facade depends on. This is the
+ * contract-DTO subset of the host's `TakosumiOperations` facade (the wired
+ * OpenTofu controller); when injected it lets the proxy call the deploy-control
+ * service directly instead of building a synthetic Request and dialing it back
+ * through the embedded Hono router inside the same worker. Genuine remote
+ * deploy-control (a separate origin) is still reached through {@link
+ * DeployControlProxyOptions.fetch}.
+ */
+export interface DeployControlOperations {
+  createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
+  getPlanRun(id: string): Promise<PlanRunResponse>;
+  createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
+  getInstallation(id: string): Promise<GetInstallationResponse>;
+  listDeployments(installationId: string): Promise<ListDeploymentsResponse>;
+}
+
 export interface DeployControlProxyOptions {
   url: string;
   token?: string;
   fetch?: typeof fetch;
+  /**
+   * In-process deploy-control facade. When present the proxy calls these typed
+   * operations directly (no self-issued Bearer handshake, no JSON
+   * serialize/parse round-trip through the embedded router) — the single-worker
+   * default. When absent the proxy falls back to {@link
+   * DeployControlProxyOptions.fetch} (or the global `fetch`) against {@link
+   * DeployControlProxyOptions.url}, which remains the path for a genuine remote
+   * deploy-control origin.
+   */
+  operations?: DeployControlOperations;
 }
 
 export async function handleInstallationPlanRunProxy(input: {
@@ -686,6 +716,14 @@ async function requestDeployControlJson<TPayload = unknown>(input: {
   path: string;
   body?: unknown;
 }): Promise<{ status: number; contentType: string; payload: TPayload | unknown }> {
+  if (input.deployControl.operations) {
+    return await requestDeployControlInProcess({
+      operations: input.deployControl.operations,
+      method: input.method,
+      path: input.path,
+      body: input.body,
+    });
+  }
   const response = await (input.deployControl.fetch ?? fetch)(
     new URL(input.path, input.deployControl.url),
     {
@@ -712,6 +750,129 @@ async function requestDeployControlJson<TPayload = unknown>(input: {
     payload = text;
   }
   return { status: response.status, contentType, payload };
+}
+
+const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
+
+/**
+ * In-process dispatch for the deploy-control transport. Mirrors the embedded
+ * deploy-control router: the same `{ method, path }` the proxy was written
+ * against maps to a typed controller operation and the same success status
+ * (201 create / 200 read). Controller errors are rendered as the deploy-control
+ * error envelope with the contract's code→HTTP-status mapping, identical to the
+ * router's `runHandler`, so every caller of {@link requestDeployControlJson}
+ * sees the same `{ status, contentType, payload }` it would over HTTP.
+ */
+async function requestDeployControlInProcess(input: {
+  operations: DeployControlOperations;
+  method: "GET" | "POST";
+  path: string;
+  body?: unknown;
+}): Promise<{ status: number; contentType: string; payload: unknown }> {
+  try {
+    if (input.method === "POST" && input.path === PLAN_RUNS_PATH) {
+      const payload = await input.operations.createPlanRun(
+        input.body as CreatePlanRunRequest,
+      );
+      return { status: 201, contentType: JSON_CONTENT_TYPE, payload };
+    }
+    if (input.method === "POST" && input.path === APPLY_RUNS_PATH) {
+      const payload = await input.operations.createApplyRun(
+        input.body as CreateApplyRunRequest,
+      );
+      return { status: 201, contentType: JSON_CONTENT_TYPE, payload };
+    }
+    if (input.method === "GET") {
+      const planRunId = idFromPath(input.path, PLAN_RUN_PATH);
+      if (planRunId !== undefined) {
+        const payload = await input.operations.getPlanRun(planRunId);
+        return { status: 200, contentType: JSON_CONTENT_TYPE, payload };
+      }
+      const deploymentsId = idFromPath(input.path, INSTALLATION_DEPLOYMENTS_PATH);
+      if (deploymentsId !== undefined) {
+        const payload = await input.operations.listDeployments(deploymentsId);
+        return { status: 200, contentType: JSON_CONTENT_TYPE, payload };
+      }
+      const installationId = idFromPath(input.path, INSTALLATION_PATH);
+      if (installationId !== undefined) {
+        const payload = await input.operations.getInstallation(installationId);
+        return { status: 200, contentType: JSON_CONTENT_TYPE, payload };
+      }
+    }
+    return deployControlErrorResult(
+      "not_found",
+      `deploy control route ${input.method} ${input.path} not found`,
+    );
+  } catch (error) {
+    const code = controllerErrorCode(error);
+    if (code) {
+      return deployControlErrorResult(
+        code,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    return deployControlErrorResult("internal_error", "internal error");
+  }
+}
+
+function idFromPath(
+  path: string,
+  build: (id: string) => string,
+): string | undefined {
+  // The contract path helpers encodeURIComponent the id, so reverse the build
+  // by trying the decoded segment(s) of the request path. Both deployments and
+  // single-installation paths share a prefix; resolve by exact reconstruction.
+  const installationsPrefix = "/v1/installations/";
+  if (path.startsWith(installationsPrefix)) {
+    const remainder = path.slice(installationsPrefix.length);
+    const deploymentsSuffix = "/deployments";
+    if (build === INSTALLATION_DEPLOYMENTS_PATH) {
+      if (!remainder.endsWith(deploymentsSuffix)) return undefined;
+      const encoded = remainder.slice(0, -deploymentsSuffix.length);
+      if (encoded.length === 0 || encoded.includes("/")) return undefined;
+      return decodeURIComponent(encoded);
+    }
+    if (build === INSTALLATION_PATH) {
+      if (remainder.length === 0 || remainder.includes("/")) return undefined;
+      return decodeURIComponent(remainder);
+    }
+    return undefined;
+  }
+  const planRunPrefix = "/v1/plan-runs/";
+  if (build === PLAN_RUN_PATH && path.startsWith(planRunPrefix)) {
+    const remainder = path.slice(planRunPrefix.length);
+    if (remainder.length === 0 || remainder.includes("/")) return undefined;
+    return decodeURIComponent(remainder);
+  }
+  return undefined;
+}
+
+function controllerErrorCode(
+  error: unknown,
+): DeployControlErrorCode | undefined {
+  if (!isRecord(error)) return undefined;
+  const code = error.code;
+  return typeof code === "string" &&
+      code in DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE
+    ? code as DeployControlErrorCode
+    : undefined;
+}
+
+function deployControlErrorResult(
+  code: DeployControlErrorCode,
+  message: string,
+): { status: number; contentType: string; payload: DeployControlErrorEnvelope } {
+  return {
+    status: DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE[code],
+    contentType: JSON_CONTENT_TYPE,
+    payload: {
+      error: {
+        code,
+        message,
+        requestId: "in-process",
+      },
+    },
+  };
 }
 
 function responseFromProxyResult(input: {

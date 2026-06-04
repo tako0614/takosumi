@@ -1,0 +1,190 @@
+import { expect, test } from "bun:test";
+
+import type {
+  ApplyRunResponse,
+  CreateApplyRunRequest,
+  CreatePlanRunRequest,
+  GetInstallationResponse,
+  ListDeploymentsResponse,
+  PlanRun,
+  PlanRunResponse,
+} from "takosumi-contract/deploy-control-api";
+import {
+  type DeployControlOperations,
+  requestDeploymentApply,
+  requestInstallationApply,
+  requestInstallationPlanRun,
+} from "./mod.ts";
+
+// `fetch` must never be dialed once typed `operations` are injected — the proxy
+// is supposed to call the in-process controller facade directly. Any host that
+// reaches this means the transport fallback fired by mistake.
+const fetchThatMustNotBeCalled: typeof fetch = () => {
+  throw new Error("deployControl.fetch must not be used when operations exist");
+};
+
+function planRun(overrides: Partial<PlanRun> = {}): PlanRun {
+  return {
+    id: "plan_inproc",
+    spaceId: "space_1",
+    source: { kind: "git", url: "https://github.com/example/hello", ref: "main" },
+    sourceDigest: "sha256:source",
+    operation: "create",
+    runnerProfileId: "cloudflare-default",
+    variablesDigest: "sha256:variables",
+    requiredProviders: [],
+    status: "succeeded",
+    policy: { status: "passed", reasons: [], checkedAt: 1 },
+    policyDecisionDigest: "sha256:policy",
+    planDigest: "sha256:plan",
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://plan_inproc/tfplan",
+      digest: "sha256:plan-artifact",
+    },
+    sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+    finishedAt: 1,
+    ...overrides,
+  } as PlanRun;
+}
+
+function operationsStub(
+  overrides: Partial<DeployControlOperations> = {},
+): DeployControlOperations {
+  const reject = (name: string) => () =>
+    Promise.reject(new Error(`unexpected ${name} call`));
+  return {
+    createPlanRun: reject("createPlanRun") as DeployControlOperations[
+      "createPlanRun"
+    ],
+    getPlanRun: reject("getPlanRun") as DeployControlOperations["getPlanRun"],
+    createApplyRun: reject("createApplyRun") as DeployControlOperations[
+      "createApplyRun"
+    ],
+    getInstallation: reject("getInstallation") as DeployControlOperations[
+      "getInstallation"
+    ],
+    listDeployments: reject("listDeployments") as DeployControlOperations[
+      "listDeployments"
+    ],
+    ...overrides,
+  };
+}
+
+test("requestInstallationPlanRun dispatches through typed operations, not fetch", async () => {
+  let createPlanRunArg: CreatePlanRunRequest | undefined;
+  const operations = operationsStub({
+    createPlanRun: (request) => {
+      createPlanRunArg = request;
+      return Promise.resolve<PlanRunResponse>({ planRun: planRun() });
+    },
+  });
+
+  const result = await requestInstallationPlanRun({
+    deployControl: {
+      url: "https://deploy-control.internal/",
+      token: "secret",
+      fetch: fetchThatMustNotBeCalled,
+      operations,
+    },
+    body: {
+      spaceId: "space_1",
+      source: { kind: "git", url: "https://github.com/example/hello", ref: "main" },
+    },
+  });
+
+  expect(result.status).toEqual(201);
+  expect(createPlanRunArg?.spaceId).toEqual("space_1");
+  expect(createPlanRunArg?.operation).toEqual("create");
+  const payload = result.payload as { kind?: string; planRunId?: string };
+  expect(payload.kind).toEqual("takosumi.deploy-control.plan-run@v1");
+  expect(payload.planRunId).toEqual("plan_inproc");
+});
+
+test("requestInstallationApply reads the reviewed PlanRun and applies in-process", async () => {
+  let appliedRequest: CreateApplyRunRequest | undefined;
+  const reviewed = planRun({ id: "plan_apply" });
+  const operations = operationsStub({
+    getPlanRun: (id) => {
+      expect(id).toEqual("plan_apply");
+      return Promise.resolve<PlanRunResponse>({ planRun: reviewed });
+    },
+    createApplyRun: (request) => {
+      appliedRequest = request;
+      return Promise.resolve<ApplyRunResponse>({
+        applyRun: {
+          id: "apply_1",
+          planRunId: "plan_apply",
+          spaceId: "space_1",
+          operation: "create",
+          runnerProfileId: "cloudflare-default",
+          status: "succeeded",
+          expected: request.expected,
+          auditEvents: [],
+          createdAt: 2,
+          updatedAt: 2,
+        } as ApplyRunResponse["applyRun"],
+      });
+    },
+  });
+
+  const result = await requestInstallationApply({
+    deployControl: {
+      url: "https://deploy-control.internal/",
+      token: "secret",
+      fetch: fetchThatMustNotBeCalled,
+      operations,
+    },
+    body: {
+      planRunId: "plan_apply",
+      expected: {
+        planRunId: "plan_apply",
+        runnerProfileId: "cloudflare-default",
+        sourceDigest: "sha256:source",
+        variablesDigest: "sha256:variables",
+        policyDecisionDigest: "sha256:policy",
+        planDigest: "sha256:plan",
+        planArtifactDigest: "sha256:plan-artifact",
+        sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+      },
+    },
+  });
+
+  expect(result.status).toEqual(201);
+  expect(appliedRequest?.planRunId).toEqual("plan_apply");
+  const payload = result.payload as { kind?: string };
+  expect(payload.kind).toEqual("takosumi.deploy-control.apply-run@v1");
+});
+
+test("in-process controller errors map to the contract HTTP status + envelope", async () => {
+  // requestDeploymentApply resolves the reviewed PlanRun first via getPlanRun;
+  // a not_found-coded controller error must surface as the 404 deploy-control
+  // error envelope, identical to what the HTTP route's runHandler would emit.
+  const operations = operationsStub({
+    getPlanRun: () =>
+      Promise.reject(
+        Object.assign(new Error("plan run plan_missing not found"), {
+          code: "not_found",
+        }),
+      ),
+  });
+
+  const result = await requestDeploymentApply({
+    deployControl: {
+      url: "https://deploy-control.internal/",
+      token: "secret",
+      fetch: fetchThatMustNotBeCalled,
+      operations,
+    },
+    installationId: "inst_1",
+    body: { planRunId: "plan_missing" },
+  });
+
+  expect(result.status).toEqual(404);
+  const payload = result.payload as { error?: { code?: string; message?: string } };
+  expect(payload.error?.code).toEqual("not_found");
+  expect(payload.error?.message).toContain("plan_missing");
+});

@@ -1,7 +1,6 @@
 import {
   normalizeIssuer,
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
-  TAKOSUMI_ACCOUNTS_EXAMPLE_ISSUER,
  takosumiAccountsAccountTokenRevokePath,
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
@@ -790,11 +789,13 @@ async function runAccountsTokensRevoke(
 function buildAccountsSeedPlan(
   options: Record<string, string | boolean>,
 ): AccountsSeedPlan {
-  // Seed plan scaffolds the takosumi reference distribution; when no
-  // --issuer is supplied we fall back to the documented example URL for the
-  // reference deployment. Production seeds must pass --issuer explicitly.
+  // The issuer is the bare worker origin (the platform worker's
+  // app.takosumi.com, or a self-hoster's own origin); there is no implicit
+  // takosumi-branded default. The seed/serve scaffold is dev-only, so when no
+  // --issuer is supplied we fall back to a generic localhost placeholder (never
+  // a takosumi.com host). Production seeds must pass --issuer explicitly.
   const issuer = normalizeIssuer(
-    stringOption(options, "issuer", TAKOSUMI_ACCOUNTS_EXAMPLE_ISSUER),
+    stringOption(options, "issuer", "http://localhost:8787"),
   );
   const subject = stringOption(options, "subject", "tsub_dev_seed");
   if (!subject.startsWith("tsub_")) {

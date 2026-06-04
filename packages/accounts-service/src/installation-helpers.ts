@@ -1,5 +1,7 @@
 import {
+ canonicalJson,
  takosumiAccountsInstallationEventsPath,
+ takosumiAccountsInstallationMaterializeDigest,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   type AppBindingKind,
@@ -94,19 +96,10 @@ export function isMeteredBindingKind(kind: AppBindingKind): boolean {
     kind === "domain.http@v1";
 }
 
-export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`;
-  }
-  if (isRecord(value)) {
-    return `{${
-      Object.keys(value).sort().map((key) =>
-        `${JSON.stringify(key)}:${canonicalJson(value[key])}`
-      ).join(",")
-    }}`;
-  }
-  return JSON.stringify(value ?? null);
-}
+// `canonicalJson` is owned by the accounts contract (imported above) so the
+// dashboard SPA and this server serialize permission digests identically.
+// Re-export it for the existing in-package call sites.
+export { canonicalJson };
 
 export function compareCanonicalJson(
   left: Record<string, unknown>,
@@ -149,21 +142,16 @@ export async function appInstallationPermissionDigest(input: {
   }));
 }
 
-export async function appInstallationMaterializeDigest(input: {
+export function appInstallationMaterializeDigest(input: {
   installationId: string;
   mode: "dedicated";
   region: string;
   plan: Record<string, unknown>;
   cutover: Record<string, unknown>;
 }): Promise<string> {
-  return await sha256HexText(canonicalJson({
-    operation: "materialize",
-    installationId: input.installationId,
-    mode: input.mode,
-    region: input.region,
-    plan: input.plan,
-    cutover: input.cutover,
-  }));
+  // Delegate to the contract so the server verifies the materialize permission
+  // digest against the exact function the dashboard SPA uses to produce it.
+  return takosumiAccountsInstallationMaterializeDigest(input);
 }
 
 /**

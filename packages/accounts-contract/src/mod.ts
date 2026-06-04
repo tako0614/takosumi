@@ -1,11 +1,3 @@
-/**
- * Example issuer URL for the takosumi reference distribution.
- * Override with operator-selected issuer hostname; this constant is for
- * documentation / test scaffolding only and must not be treated as a
- * production default.
- */
-export const TAKOSUMI_ACCOUNTS_EXAMPLE_ISSUER =
-  "https://accounts.takosumi.com";
 export const TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH =
   "/.well-known/openid-configuration";
 export const TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH = "/oauth/authorize";
@@ -366,6 +358,68 @@ export function normalizeIssuer(
   }
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
   return parsed.toString().replace(/\/$/, "");
+}
+
+/**
+ * Deterministic JSON serialization: object keys sorted, arrays preserved,
+ * scalars via `JSON.stringify`, `undefined`/missing collapsed to `null`. The
+ * account-plane server hashes the same canonical form when it verifies a
+ * client-issued permission digest, so this lives in the contract and both
+ * sides import it (no drift between client and server encoders).
+ */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    return `{${
+      Object.keys(record).sort().map((key) =>
+        `${JSON.stringify(key)}:${canonicalJson(record[key])}`
+      ).join(",")
+    }}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/** `sha256:<lowercase-hex>` digest of a UTF-8 string. */
+export async function sha256HexText(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return `sha256:${
+    [...new Uint8Array(digest)].map((byte) =>
+      byte.toString(16).padStart(2, "0")
+    ).join("")
+  }`;
+}
+
+export interface TakosumiAccountsInstallationMaterializeDigestInput {
+  readonly installationId: string;
+  readonly mode: "dedicated";
+  readonly region: string;
+  readonly plan: Record<string, unknown>;
+  readonly cutover: Record<string, unknown>;
+}
+
+/**
+ * Canonical `confirm.permissionDigest` for an installation materialize
+ * (dedicated-cell promotion). The materialize endpoint recomputes this exact
+ * digest and rejects the request unless it byte-matches, so the dashboard and
+ * the server must derive it from this single function.
+ */
+export function takosumiAccountsInstallationMaterializeDigest(
+  input: TakosumiAccountsInstallationMaterializeDigestInput,
+): Promise<string> {
+  return sha256HexText(canonicalJson({
+    operation: "materialize",
+    installationId: input.installationId,
+    mode: input.mode,
+    region: input.region,
+    plan: input.plan,
+    cutover: input.cutover,
+  }));
 }
 
 export function buildOidcDiscoveryDocument(

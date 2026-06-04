@@ -155,7 +155,10 @@ export {
   requestInstallationPlanRun,
   requestRollback,
 } from "./deploy-control-proxy.ts";
-export type { DeployControlProxyOptions } from "./deploy-control-proxy.ts";
+export type {
+  DeployControlOperations,
+  DeployControlProxyOptions,
+} from "./deploy-control-proxy.ts";
 export {
   createOpenManagedOfferingAccessPolicy,
 } from "./managed-offering-policy.ts";
