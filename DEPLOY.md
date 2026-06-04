@@ -5,7 +5,15 @@ This runbook covers the public Takosumi website/docs property and the managed ac
 | Property | Resource type | Project / Worker name | Source |
 | --- | --- | --- | --- |
 | `takosumi.com` | Cloudflare Pages | `takosumi-website` | `website/` merged build |
-| `accounts.takosumi.com` | Cloudflare Worker + D1 + R2 | `takosumi-accounts` | `deploy/accounts-cloudflare/` |
+
+The account plane (OIDC issuer / dashboard API / Installation ledger / billing) no
+longer ships as a separate `accounts.takosumi.com` Worker. It runs **in-process**
+inside the unified Takos worker at the origin root of `app.takosumi.com`. The
+account-plane source lives at `deploy/accounts-cloudflare/src/{handler,routes}.ts`
+(aliased into Takos as `@takosjp/takosumi-accounts-worker`); its `wrangler.toml`,
+D1/R2 bindings, secrets, and deploy commands live with the unified Takos worker in
+`takos/deploy/cloudflare/`, not in this repo. See
+`takos/src/worker/server/routes/accounts/mount.ts`.
 
 ## Prerequisites
 
@@ -61,48 +69,17 @@ curl -I https://takosumi.com/docs/reference/model
 curl https://takosumi.com/contexts/v1.jsonld | jq '.["@context"]["@vocab"]'
 ```
 
-## `accounts.takosumi.com`
+## Account plane (in-process)
 
-Cloudflare Worker + D1 + R2 is the current Accounts reference profile.
-
-The account surface provides managed dashboard, OIDC, billing, deploy facade, and account-facing Installation projection. It is part of the Takosumi distribution, not a separate public core layer.
-
-One-time setup:
-
-```bash
-cd takosumi
-bunx wrangler d1 create takosumi-accounts
-bunx wrangler r2 bucket create takosumi-accounts-exports
-```
-
-Put the D1 database id into the rendered Cloudflare config, then push secrets through Wrangler:
-
-```bash
-bunx wrangler secret put TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK \
-  --config deploy/accounts-cloudflare/wrangler.toml
-bunx wrangler secret put TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET \
-  --config deploy/accounts-cloudflare/wrangler.toml
-bunx wrangler secret put TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET \
-  --config deploy/accounts-cloudflare/wrangler.toml
-bunx wrangler secret put TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET \
-  --config deploy/accounts-cloudflare/wrangler.toml
-```
-
-Deploy:
-
-```bash
-cd takosumi
-bun run deploy:accounts-cloudflare:dryrun
-bun run deploy:accounts-cloudflare
-```
-
-Smoke:
-
-```bash
-curl https://accounts.takosumi.com/healthz
-curl https://accounts.takosumi.com/.well-known/openid-configuration | jq .issuer
-curl https://accounts.takosumi.com/healthz | jq -c '{"persistence":"d1+r2"}'
-```
+The account plane (managed dashboard, OIDC, billing, deploy facade, account-facing
+Installation projection) is part of the Takosumi distribution, not a separate public
+core layer. It no longer deploys as a standalone `accounts.takosumi.com` Worker — it
+runs in-process inside the unified Takos worker at the origin root of
+`app.takosumi.com`. D1/R2 provisioning, secrets (`TAKOSUMI_ACCOUNTS_*`), the
+`wrangler.toml`, and deploy commands live with the unified Takos worker in
+`takos/deploy/cloudflare/`; the account-plane source is in
+`deploy/accounts-cloudflare/src/{handler,routes}.ts` (D1 schema-migration gate
+documented in `deploy/accounts-cloudflare/README.md`).
 
 ## GA evidence
 

@@ -1,4 +1,1 @@
 # Bun runs without compatibility preloads. Takosumi is Bun/Node/Workers-first.
-
-[test]
-pathIgnorePatterns = ["packages/dashboard-ui/test/e2e/**"]
