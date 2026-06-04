@@ -40,14 +40,6 @@
         "@takosjp/takosumi-accounts-contract": "workspace:*",
       },
     },
-    "packages/all": {
-      "name": "@takosjp/takosumi-accounts",
-      "version": "0.0.1",
-      "dependencies": {
-        "@takosjp/takosumi-accounts-contract": "workspace:*",
-        "@takosjp/takosumi-accounts-service": "workspace:*",
-      },
-    },
     "packages/cli": {
       "name": "@takosjp/takosumi-accounts-cli",
       "version": "0.0.1",
@@ -203,8 +195,6 @@
     "@sindresorhus/is": ["@sindresorhus/is@7.2.0", "", {}, "sha512-P1Cz1dWaFfR4IR+U13mqqiGsLFf1KbayybWwdd2vfctdV6hDpUkgCY0nKOLLTMSoRd/jJNjtbqzf13K8DCCXQw=="],
 
     "@speed-highlight/core": ["@speed-highlight/core@1.2.15", "", {}, "sha512-BMq1K3DsElxDWawkX6eLg9+CKJrTVGCBAWVuHXVUV2u0s2711qiChLSId6ikYPfxhdYocLNt3wWwSvDiTvFabw=="],
-
-    "@takosjp/takosumi-accounts": ["@takosjp/takosumi-accounts@workspace:packages/all"],
 
     "@takosjp/takosumi-accounts-cli": ["@takosjp/takosumi-accounts-cli@workspace:packages/cli"],
 

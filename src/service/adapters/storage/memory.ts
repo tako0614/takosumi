@@ -14,7 +14,6 @@ import type {
   ServiceEndpointStorageStores,
   StorageDriver,
   StorageTransaction,
-  UsageStorageStores,
 } from "./driver.ts";
 import {
   cloneState,
@@ -47,7 +46,6 @@ import {
   MemoryTrustRecordStore,
 } from "./memory/registry_stores.ts";
 import { MemoryAuditStore } from "./memory/audit_store.ts";
-import { MemoryUsageAggregateStore } from "./memory/usage_store.ts";
 import { MemoryRuntimeAgentLedgerStore } from "./memory/runtime_agent_store.ts";
 import {
   MemoryServiceEndpointStore,
@@ -115,7 +113,6 @@ class MemoryStorageTransaction implements StorageTransaction {
     readonly bundledRegistry: BundledRegistry;
   };
   readonly audit: { readonly events: AuditStore };
-  readonly usage: UsageStorageStores;
   readonly serviceEndpoints: ServiceEndpointStorageStores;
   readonly runtimeAgent: WorkLedger;
 
@@ -171,9 +168,6 @@ class MemoryStorageTransaction implements StorageTransaction {
     };
     this.audit = {
       events: new MemoryAuditStore(state.audit.events, state.audit.order),
-    };
-    this.usage = {
-      aggregates: new MemoryUsageAggregateStore(state.usage.aggregates),
     };
     this.serviceEndpoints = {
       endpoints: new MemoryServiceEndpointStore(

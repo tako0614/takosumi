@@ -1,7 +1,6 @@
 import type { TakosumiProcessRole } from "../process/mod.ts";
 import { DEPLOY_CONTROL_PUBLIC_ENDPOINTS } from "./deploy_control_public_routes.ts";
 import { ARTIFACT_ENDPOINTS } from "./artifact_routes.ts";
-import { INTERNAL_ENDPOINTS } from "./internal_routes.ts";
 import { RUNTIME_AGENT_ENDPOINTS } from "./runtime_agent_routes.ts";
 import { READINESS_ENDPOINTS } from "./readiness_routes.ts";
 import { METRICS_ENDPOINTS } from "./metrics_routes.ts";
@@ -107,7 +106,6 @@ export interface RouteFamilyDescriptor {
 }
 
 export type RouteFamilyId =
-  | "internal"
   | "runtime-agent"
   | "openapi"
   | "readiness"
@@ -116,7 +114,6 @@ export type RouteFamilyId =
   | "metrics";
 
 export type RouteFamilyFlag =
-  | "internalRoutesMounted"
   | "runtimeAgentRoutesMounted"
   | "openApiRouteMounted"
   | "readinessRoutesMounted"
@@ -158,13 +155,6 @@ export const ALWAYS_MOUNTED_ENDPOINTS: readonly ApiEndpoint[] = [
  * stable for readability.
  */
 export const ROUTE_FAMILIES: readonly RouteFamilyDescriptor[] = [
-  {
-    id: "internal",
-    flag: "internalRoutesMounted",
-    openapiTags: ["internal"],
-    defaultMounted: ({ role }) => role === "takosumi-api",
-    endpoints: INTERNAL_ENDPOINTS,
-  },
   {
     id: "runtime-agent",
     flag: "runtimeAgentRoutesMounted",

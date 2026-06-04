@@ -23,7 +23,7 @@ import {
 import {
   assertHostNotBlocked,
   BlockedHostError,
-} from "../../../deploy-control/host-blocklist.ts";
+} from "takosumi-contract/reference/host-blocklist";
 
 const SHA256_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 

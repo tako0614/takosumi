@@ -11,7 +11,6 @@ import {
 } from "./route_families.ts";
 
 const ALL_MOUNTED: RouteFamilyMountedFlags = {
-  internalRoutesMounted: true,
   runtimeAgentRoutesMounted: true,
   openApiRouteMounted: true,
   readinessRoutesMounted: true,
@@ -116,9 +115,11 @@ test("mountedEndpoints gates families and always includes process endpoints", ()
     ALWAYS_MOUNTED_ENDPOINTS.map((e) => e.path),
   );
 
-  const onlyInternal = mountedEndpoints({ internalRoutesMounted: true });
-  assert.ok(onlyInternal.some((e) => e.path.startsWith("/api/internal")));
-  assert.ok(!onlyInternal.some((e) => e.path === "/metrics"));
+  const onlyRuntimeAgent = mountedEndpoints({
+    runtimeAgentRoutesMounted: true,
+  });
+  assert.ok(onlyRuntimeAgent.some((e) => e.path.startsWith("/api/internal")));
+  assert.ok(!onlyRuntimeAgent.some((e) => e.path === "/metrics"));
 });
 
 test("every endpoint descriptor has a unique operationId", () => {

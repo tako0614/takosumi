@@ -1,15 +1,15 @@
 /**
  * Canonical SSRF host blocklist shared across source fetchers.
  *
- * Both the deploy-control source fetchers (git / prepared-source) and the
- * runtime-agent prepared-source reader accept a caller-supplied URL and reach
- * out over the network on the operator's behalf. To avoid the service being
- * used as a confused deputy against loopback / RFC1918 / link-local /
- * cloud-metadata addresses, every IP literal in a source URL is classified here
- * and rejected before any subprocess (`git clone`) or `fetch()` runs.
+ * Both the deploy-control input validation and the runtime-agent
+ * prepared-source reader accept a caller-supplied URL and reach out over the
+ * network on the operator's behalf. To avoid the service being used as a
+ * confused deputy against loopback / RFC1918 / link-local / cloud-metadata
+ * addresses, every IP literal in a source URL is classified here and rejected
+ * before any subprocess (`git clone`) or `fetch()` runs.
  *
- * This module lives in `contract/reference/*` — the layer that BOTH
- * `src/deploy-control` and `src/runtime-agent` already import — so the single
+ * This module lives in `contract/reference/*` — the layer that BOTH the
+ * deploy-control domain and `src/runtime-agent` already import — so the single
  * IPv4/IPv6 classifier cannot drift between the two SSRF call sites and silently
  * weaken one of them.
  *

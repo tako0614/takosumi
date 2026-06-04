@@ -1,18 +1,14 @@
 import {
-  signInternalResponse as signInternalResponseContract,
   TAKOSUMI_INTERNAL_REQUEST_ID_HEADER,
-  TAKOSUMI_INTERNAL_SIGNATURE_HEADER,
   TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS,
   TAKOSUMI_INTERNAL_TIMESTAMP_HEADER,
   type TakosumiActorContext,
-  verifySignedInternalResponseFromHeaders,
 } from "takosumi-contract/reference/compat";
 import {
   verifyTakosumiInternalRequestFromHeaders,
 } from "takosumi-contract/internal/rpc";
 import {
   InMemoryReplayProtectionStore,
-  type ReplayProtectionNamespace,
   type ReplayProtectionStore,
 } from "../adapters/replay-protection/mod.ts";
 
@@ -30,9 +26,9 @@ export interface InternalAuthOptions {
   readonly clock?: () => Date;
   readonly maxClockSkewMs?: number;
   /**
-   * Shared replay protection store. When provided, takes precedence over the
-   * in-process default. Inject a `SqlReplayProtectionStore` at the host edge
-   * to harden distributed deploys against cross-process / cross-pod replay.
+   * Replay protection store. Defaults to the in-process implementation, which
+   * is sufficient because the worker terminates every signed internal request
+   * inside one process.
    */
   readonly replayProtectionStore?: ReplayProtectionStore;
 }
@@ -49,11 +45,9 @@ export type InternalAuthResult =
   | { readonly ok: false; readonly error: string; readonly status: 401 };
 
 /**
- * Skeleton helper for signed internal API authentication.
- *
- * The current entrypoint still owns live routes. Future routes can call this
- * helper so internal RPC remains bound to method, path, body digest, headers,
- * and actor context instead of re-implementing auth per endpoint.
+ * Verifies a signed internal API request (opentofu-runner / executor container
+ * callbacks). Binds method, path, query, body digest, headers, and actor
+ * context, and rejects replayed `request-id`s within the clock-skew window.
  */
 export async function readInternalAuth(
   request: Request,
@@ -131,188 +125,13 @@ async function rememberRequestId(
   const now = options.clock?.().getTime() ?? Date.now();
   const ttl = options.maxClockSkewMs ?? TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS;
   const expiresAt = expiryFrom(issuedAt, ttl);
-  return await claimReplayNonce({
+  const store = options.replayProtectionStore ?? defaultReplayProtectionStore;
+  return await store.markSeen({
     namespace: "internal-request",
     requestId,
-    issuedAt,
+    timestamp: issuedAt,
     expiresAt,
-    now,
-    replayProtectionStore: options.replayProtectionStore,
-  });
-}
-
-/**
- * Thrown when an inbound internal RPC response (e.g. Worker -> service) fails
- * signature verification. Callers must fail-closed instead of trusting the
- * response payload.
- */
-export class SignatureVerificationError extends Error {
-  readonly code: string;
-  constructor(reason: string) {
-    super(`internal response signature verification failed: ${reason}`);
-    this.name = "SignatureVerificationError";
-    this.code = reason;
-  }
-}
-
-export interface SignInternalResponseOptions {
-  readonly secret: string;
-  readonly method: string;
-  readonly path: string;
-  readonly status: number;
-  readonly body: string;
-  readonly requestId: string;
-  readonly clock?: () => Date;
-}
-
-/**
- * Sign an internal RPC response so the caller (typically the service) can
- * verify the response did not get tampered with by an intermediate worker
- * surface. Uses the same operator-managed `TAKOSUMI_INTERNAL_API_SECRET`
- * HMAC-SHA256 secret as internal request signing.
- */
-export async function signInternalResponse(
-  options: SignInternalResponseOptions,
-): Promise<Headers> {
-  const timestamp = (options.clock?.() ?? new Date()).toISOString();
-  const signed = await signInternalResponseContract({
-    method: options.method,
-    path: options.path,
-    status: options.status,
-    body: options.body,
-    timestamp,
-    requestId: options.requestId,
-    secret: options.secret,
-  });
-  return new Headers(signed.headers);
-}
-
-export interface VerifyInternalResponseOptions {
-  readonly secret: string;
-  readonly method: string;
-  readonly path: string;
-  readonly expectedRequestId?: string;
-  readonly clock?: () => Date;
-  readonly maxClockSkewMs?: number;
-  /**
-   * Shared replay protection store. When provided, takes precedence over the
-   * in-process default. Inject a `SqlReplayProtectionStore` at the host edge
-   * to harden distributed deploys against cross-process / cross-pod replay.
-   */
-  readonly replayProtectionStore?: ReplayProtectionStore;
-}
-
-interface ReadResponseBody {
-  clone(): Response;
-  text(): Promise<string>;
-  status: number;
-  headers: Headers;
-}
-
-/**
- * Verify an internal RPC response signature. Used by the service when reading
- * results returned by Cloudflare Worker (or other forwarder) surfaces. Throws
- * `SignatureVerificationError` on any mismatch / missing / stale / replayed
- * signature so callers fail-closed.
- */
-export async function verifyInternalResponse(
-  response: Response | ReadResponseBody,
-  options: VerifyInternalResponseOptions,
-): Promise<{ body: string }> {
-  if (!options.secret) {
-    throw new SignatureVerificationError("internal service secret missing");
-  }
-  const headers = response.headers;
-  const signature = headers.get(TAKOSUMI_INTERNAL_SIGNATURE_HEADER);
-  const timestamp = headers.get(TAKOSUMI_INTERNAL_TIMESTAMP_HEADER);
-  const requestId = headers.get(TAKOSUMI_INTERNAL_REQUEST_ID_HEADER);
-  if (!signature) {
-    throw new SignatureVerificationError("missing signature header");
-  }
-  if (!timestamp) {
-    throw new SignatureVerificationError("missing timestamp header");
-  }
-  if (!requestId) {
-    throw new SignatureVerificationError("missing request id header");
-  }
-
-  const issuedAt = Date.parse(timestamp);
-  if (!Number.isFinite(issuedAt)) {
-    throw new SignatureVerificationError("invalid timestamp");
-  }
-  const skew = options.maxClockSkewMs ??
-    TAKOSUMI_INTERNAL_SIGNATURE_MAX_SKEW_MS;
-  const now = (options.clock?.() ?? new Date()).getTime();
-  if (Number.isFinite(skew) && Math.abs(now - issuedAt) > skew) {
-    throw new SignatureVerificationError("expired timestamp");
-  }
-  if (
-    options.expectedRequestId && options.expectedRequestId !== requestId
-  ) {
-    throw new SignatureVerificationError("request id mismatch");
-  }
-
-  const body = await response.clone().text();
-  const valid = await verifySignedInternalResponseFromHeaders({
-    method: options.method,
-    path: options.path,
-    status: response.status,
-    body,
-    expectedRequestId: options.expectedRequestId,
-    secret: options.secret,
-    headers,
-    now: options.clock,
-    maxClockSkewMs: options.maxClockSkewMs,
-  });
-  if (!valid) {
-    throw new SignatureVerificationError("signature mismatch");
-  }
-  if (
-    !await rememberResponseSignatureId(
-      requestId,
-      issuedAt,
-      now,
-      skew,
-      options.replayProtectionStore,
-    )
-  ) {
-    throw new SignatureVerificationError("replayed response");
-  }
-  return { body };
-}
-
-async function rememberResponseSignatureId(
-  requestId: string,
-  issuedAt: number,
-  now: number,
-  ttl: number,
-  replayProtectionStore?: ReplayProtectionStore,
-): Promise<boolean> {
-  return await claimReplayNonce({
-    namespace: "internal-response",
-    requestId,
-    issuedAt,
-    expiresAt: expiryFrom(issuedAt, ttl),
-    now,
-    replayProtectionStore,
-  });
-}
-
-async function claimReplayNonce(input: {
-  readonly namespace: ReplayProtectionNamespace;
-  readonly requestId: string;
-  readonly issuedAt: number;
-  readonly expiresAt: number;
-  readonly now: number;
-  readonly replayProtectionStore?: ReplayProtectionStore;
-}): Promise<boolean> {
-  const store = input.replayProtectionStore ?? defaultReplayProtectionStore;
-  return await store.markSeen({
-    namespace: input.namespace,
-    requestId: input.requestId,
-    timestamp: input.issuedAt,
-    expiresAt: input.expiresAt,
-    seenAt: input.now,
+    seenAt: now,
   });
 }
 

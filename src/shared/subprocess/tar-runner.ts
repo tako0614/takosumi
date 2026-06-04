@@ -2,14 +2,11 @@
  * Shared low-level `tar` subprocess primitive.
  *
  * Single source of truth for the runtime-detecting `tar` primitive consumed by
- * both the deploy control (`deploy-control/subprocess/tar-runner.ts`) and the
- * runtime-agent (`runtime-agent/subprocess/tar-runner.ts`). It lives in a
- * neutral leaf module so neither sibling layer has to import the other: the
- * deploy control must not depend on the runtime-agent and the runtime-agent must not
- * depend on the deploy control. This module imports nothing from either layer and
- * loads Node subprocess primitives lazily so Worker/browser bundles can include
- * the runtime-agent HTTP surface without pulling `node:*` modules into the
- * static graph.
+ * the runtime-agent (`runtime-agent/subprocess/tar-runner.ts`). It lives in a
+ * neutral leaf module that imports nothing from any other layer and loads Node
+ * subprocess primitives lazily so Worker/browser bundles can include the
+ * runtime-agent HTTP surface without pulling `node:*` modules into the static
+ * graph.
  */
 
 async function runTarCommandNode(

@@ -251,21 +251,11 @@ export async function createTakosumiService(
     await loadRuntimeConfigFromEnv({ env: runtimeEnv });
   const role = options.role ?? processRoleFromRuntimeConfig(runtimeConfig);
   registerDefaultArtifactKinds();
-  // Billing is an operator-distribution / account-plane concern, not a service
-  // space one. The operator-config layer (here) resolves any env-driven billing
-  // wiring from product-neutral `TAKOSUMI_BILLING_*` keys and injects it via
-  // `options.billing`; Takosumi service (`createBillingPort` in app_context.ts) only
-  // reads `options.billing` and no longer hard-reads a product-namespaced key.
-  const billing = resolveBillingOptions({
-    configured: options.billing,
-    env: runtimeEnv,
-  });
   const context = options.context ?? await createAppContext({
     ...options,
     runtimeEnv,
     runtimeConfig,
     implementations: options.implementations ?? [],
-    ...(billing ? { billing } : {}),
   });
   const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
   const deployControlToken = runtimeEnv.TAKOSUMI_DEPLOY_CONTROL_TOKEN;
@@ -329,7 +319,6 @@ export async function createTakosumiService(
   const app = await createApiApp({
     role,
     context,
-    registerInternalRoutes: role === "takosumi-api",
     registerRuntimeAgentRoutes: role === "takosumi-runtime-agent",
     registerReadinessRoutes: true,
     registerOpenApiRoute: role === "takosumi-api",
@@ -430,24 +419,3 @@ function parsePositiveIntegerEnv(
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-/**
- * Resolve billing port config for the operator-config layer. An explicit
- * `options.billing` always wins; otherwise read the product-neutral
- * `TAKOSUMI_BILLING_BASE_URL` / `TAKOSUMI_BILLING_SECRET` env pair. Billing is
- * an operator-distribution concern, so the service deliberately does NOT read a
- * product-namespaced key (the old `TAKOS_APP_BILLING_*` fallback that lived in
- * Takosumi service has been removed — see `createBillingPort` in app_context.ts).
- */
-function resolveBillingOptions(input: {
-  readonly configured?: { readonly baseUrl?: string; readonly secret?: string };
-  readonly env: Record<string, string | undefined>;
-}): { readonly baseUrl?: string; readonly secret?: string } | undefined {
-  const baseUrl = input.configured?.baseUrl ??
-    input.env.TAKOSUMI_BILLING_BASE_URL;
-  const secret = input.configured?.secret ?? input.env.TAKOSUMI_BILLING_SECRET;
-  if (baseUrl === undefined && secret === undefined) return undefined;
-  return {
-    ...(baseUrl !== undefined ? { baseUrl } : {}),
-    ...(secret !== undefined ? { secret } : {}),
-  };
-}

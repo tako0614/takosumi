@@ -4,7 +4,7 @@ import type { ProviderMaterializationPlan } from "../adapters/provider/mod.ts";
 import {
   BundledRegistrySeedAdapter,
   bundledRegistrySeedTrustRecords,
-} from "../adapters/registry/mod.ts";
+} from "../test-fixtures/bundled-registry/mod.ts";
 import {
   InMemoryRuntimeDesiredStateStore,
   type RuntimeDesiredState,

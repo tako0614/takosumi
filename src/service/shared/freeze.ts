@@ -3,8 +3,8 @@
  * services. Previously ~13 files each hand-rolled their own `deepFreeze` /
  * `freezeClone` (and a few `immutable`) copy, and the copies diverged:
  *
- *  - only `adapters/source/digest.ts` and `services/bootstrap/service.ts`
- *    guarded typed-array / `ArrayBuffer` view fields (`ArrayBuffer.isView`), so
+ *  - only `adapters/source/digest.ts` guarded typed-array / `ArrayBuffer` view
+ *    fields (`ArrayBuffer.isView`), so
  *    every other copy would recurse into a `Uint8Array`'s numeric indices and
  *    freeze byte payloads element by element, and
  *  - `adapters/auth/local.ts` only `Object.freeze`d the top-level object

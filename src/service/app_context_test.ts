@@ -16,7 +16,6 @@ import { MemoryObjectStorage } from "./adapters/object-storage/mod.ts";
 import { LocalOperatorConfig } from "./adapters/operator-config/mod.ts";
 import { NoopProviderMaterializer } from "./adapters/provider/mod.ts";
 import { MemoryQueueAdapter } from "./adapters/queue/mod.ts";
-import { InMemoryRouterConfigAdapter } from "./adapters/router/mod.ts";
 import { MemoryEncryptedSecretStore } from "./adapters/secret-store/mod.ts";
 import { ImmutableSourceAdapter } from "./adapters/source/mod.ts";
 import { MemoryStorageDriver } from "./adapters/storage/mod.ts";
@@ -148,7 +147,6 @@ function buildProductionAdapters(
     storage,
     kms: new NoopTestKms({ clock, idGenerator }),
     observability: new InMemoryObservabilitySink(),
-    routerConfig: new InMemoryRouterConfigAdapter({ clock }),
     queue: new MemoryQueueAdapter({ clock, idGenerator }),
     objectStorage: new MemoryObjectStorage({ clock }),
     runtimeAgent: new InMemoryRuntimeAgentRegistry({ clock, idGenerator }),
