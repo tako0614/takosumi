@@ -1,5 +1,4 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import { type AppGrantCapability, isAppGrantCapability } from "./ledger.ts";
 import type {
   AccountsStore,
   AuthorizationCodeRecord,
@@ -431,9 +430,6 @@ export async function handleToken(input: {
   if (!record || record.expiresAt < Date.now()) {
     return json({ error: "invalid_grant" }, 400);
   }
-  if (!await tokenScopesRemainGranted({ store: input.store, record })) {
-    return json({ error: "invalid_grant" }, 400);
-  }
 
   const credentials = oidcTokenClientCredentials(input.request, params);
   if (credentials.clientId !== record.clientId) {
@@ -536,10 +532,6 @@ async function handleRefreshToken(input: {
   // valid token's root is never in `revoked_refresh_roots`, so this never
   // rejects a legitimate grant.
   if (await input.store.isRefreshRootRevoked(refreshToken)) {
-    await input.store.deleteToken(refreshToken);
-    return json({ error: "invalid_grant" }, 400);
-  }
-  if (!await tokenScopesRemainGranted({ store: input.store, record })) {
     await input.store.deleteToken(refreshToken);
     return json({ error: "invalid_grant" }, 400);
   }
@@ -751,10 +743,6 @@ export async function handleUserInfo(input: {
     return bearerChallenge("invalid_token");
   }
   if (record) {
-    if (!await tokenScopesRemainGranted({ store: input.store, record })) {
-      await input.store.deleteToken(accessToken);
-      return bearerChallenge("invalid_token");
-    }
     // Audience enforcement: the access token records the clientId it was
     // issued for. If the caller declared an expected audience, reject any
     // access token whose recorded audience does not match.
@@ -920,15 +908,6 @@ export async function handleIntrospect(input: {
 
   const accessRecord = await input.store.findAccessToken(token);
   if (accessRecord) {
-    if (
-      !await tokenScopesRemainGranted({
-        store: input.store,
-        record: accessRecord,
-      })
-    ) {
-      await input.store.deleteToken(token);
-      return json({ active: false });
-    }
     // Only reveal token contents to the client that owns the token. In
     // degraded mode (no static clients wired) the delete-by-token behavior is kept.
     if (
@@ -941,15 +920,6 @@ export async function handleIntrospect(input: {
   }
   const refreshRecord = await input.store.findRefreshToken(token);
   if (refreshRecord) {
-    if (
-      !await tokenScopesRemainGranted({
-        store: input.store,
-        record: refreshRecord,
-      })
-    ) {
-      await input.store.deleteToken(token);
-      return json({ active: false });
-    }
     if (
       authenticatedClientId !== undefined &&
       refreshRecord.clientId !== authenticatedClientId
@@ -970,36 +940,6 @@ export async function handleIntrospect(input: {
     return json(personalAccessTokenIntrospectionBody(patRecord, input.issuer));
   }
   return json({ active: false });
-}
-
-export async function tokenScopesRemainGranted(input: {
-  store: AccountsStore;
-  record: Pick<TokenRecord, "installationId" | "scope">;
-}): Promise<boolean> {
-  if (!input.record.installationId) return true;
-  const requiredCapabilities = tokenAppGrantCapabilities(input.record.scope);
-  if (requiredCapabilities.length === 0) return true;
-
-  const grants = await input.store.listAppGrantsForInstallation(
-    input.record.installationId,
-  );
-  const activeCapabilities = new Set(
-    grants
-      .filter((grant) => !grant.revokedAt)
-      .map((grant) => grant.capability),
-  );
-  return requiredCapabilities.every((capability) =>
-    activeCapabilities.has(capability)
-  );
-}
-
-function tokenAppGrantCapabilities(
-  scope: string,
-): readonly AppGrantCapability[] {
-  return scope
-    .split(/\s+/)
-    .filter((value) => value.length > 0)
-    .filter(isAppGrantCapability);
 }
 
 export function includesScope(scope: string, required: string): boolean {

@@ -117,10 +117,25 @@ export class SpaceCommandService {
 }
 
 export class SpaceQueryService {
-  constructor(private readonly spaces: SpaceStore) {}
+  constructor(
+    private readonly spaces: SpaceStore,
+    private readonly memberships: SpaceMembershipStore,
+  ) {}
 
-  async listSpaces(_query: ListSpacesQuery): Promise<readonly Space[]> {
-    return await this.spaces.list();
+  async listSpaces(query: ListSpacesQuery): Promise<readonly Space[]> {
+    // SECURITY (cross-tenant disclosure): the internal spaces endpoint forwards a
+    // user-derived actor and the trusting gateway assumes this list is already
+    // membership-filtered. Return ONLY spaces the actor's account is an active
+    // member of, never the full deployment-wide inventory.
+    const all = await this.spaces.list();
+    const accountId = query.actor.actorAccountId;
+    const visible: Space[] = [];
+    for (const space of all) {
+      if (await isActiveMember(this.memberships, space.id, accountId)) {
+        visible.push(space);
+      }
+    }
+    return visible;
   }
 
   async listInternalSpaceSummaries(
@@ -217,9 +232,22 @@ export class GroupCommandService {
 }
 
 export class GroupQueryService {
-  constructor(private readonly groups: GroupStore) {}
+  constructor(
+    private readonly groups: GroupStore,
+    private readonly memberships: SpaceMembershipStore,
+  ) {}
 
   async listGroups(query: ListGroupsQuery): Promise<readonly Group[]> {
+    // SECURITY (cross-tenant IDOR): spaceId is attacker-chosen on the internal
+    // groups endpoint. Only return groups when the actor's account is an active
+    // member of the requested space; otherwise return nothing (do not leak
+    // another tenant's group listing).
+    const member = await isActiveMember(
+      this.memberships,
+      query.spaceId,
+      query.actor.actorAccountId,
+    );
+    if (!member) return [];
     return await this.groups.listBySpace(query.spaceId);
   }
 
@@ -335,9 +363,15 @@ export function createSpaceDomainServices(
 ): SpaceDomainServices {
   return {
     spaces: new SpaceCommandService(dependencies),
-    spaceQueries: new SpaceQueryService(dependencies.spaces),
+    spaceQueries: new SpaceQueryService(
+      dependencies.spaces,
+      dependencies.memberships,
+    ),
     groups: new GroupCommandService(dependencies),
-    groupQueries: new GroupQueryService(dependencies.groups),
+    groupQueries: new GroupQueryService(
+      dependencies.groups,
+      dependencies.memberships,
+    ),
     memberships: new MembershipRoleEntitlementService(dependencies),
     outbox: dependencies.outbox,
   };
@@ -373,6 +407,16 @@ async function canManageSpace(
   const membership = await memberships.get(spaceId, accountId);
   return membership?.status === "active" &&
     hasAnyRole(membership.roles, ["owner", "admin"]);
+}
+
+/** True when the account has any active membership in the space (any role). */
+async function isActiveMember(
+  memberships: SpaceMembershipStore,
+  spaceId: string,
+  accountId: string,
+): Promise<boolean> {
+  const membership = await memberships.get(spaceId, accountId);
+  return membership?.status === "active";
 }
 
 function hasAnyRole(

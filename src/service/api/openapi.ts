@@ -19,6 +19,7 @@ import {
 } from "./metrics_routes.ts";
 import { TAKOSUMI_SERVICE_READINESS_PATHS } from "./readiness_routes.ts";
 import { TAKOSUMI_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
+import { mountedOpenApiTags } from "./route_families.ts";
 
 export type OpenApiHttpMethod = "delete" | "get" | "head" | "post";
 
@@ -507,16 +508,7 @@ function filterMountedRouteFamilies(
   document: OpenApiDocument,
   options: CreateTakosumiOpenApiDocumentOptions,
 ): OpenApiDocument {
-  const mountedTags = new Set([
-    "process",
-    ...(options.deployControlPublicRoutesMounted ? ["deployControl-public"] : []),
-    ...(options.artifactRoutesMounted ? ["artifact"] : []),
-    ...(options.internalRoutesMounted ? ["internal"] : []),
-    ...(options.runtimeAgentRoutesMounted ? ["runtime-agent"] : []),
-    ...(options.readinessRoutesMounted ? ["readiness", "status"] : []),
-    ...(options.metricsRoutesMounted ? ["metrics"] : []),
-    ...(options.openApiRouteMounted ? ["openapi"] : []),
-  ]);
+  const mountedTags = mountedOpenApiTags(options);
   const paths = Object.fromEntries(
     Object.entries(document.paths)
       .map(([path, item]) => {

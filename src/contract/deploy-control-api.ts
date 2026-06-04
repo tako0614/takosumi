@@ -210,6 +210,13 @@ export interface PlanRun {
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly finishedAt?: number;
+  /**
+   * Set to the ApplyRun id once this PlanRun has been successfully applied.
+   * Enforces apply-once: a succeeded PlanRun (especially a `create` plan, which
+   * otherwise allocates a fresh Installation/Deployment on every apply) may be
+   * applied only once. Cleared/unset means the plan has not yet been applied.
+   */
+  readonly appliedApplyRunId?: string;
 }
 
 export interface PlanRunSummary {

@@ -191,10 +191,30 @@ function assertSafeGitArgument(value: string, label: string): void {
   if (/[\r\n\0]/.test(value)) {
     throw new Error(`${label} must not contain control characters`);
   }
+  // SECURITY (SSRF parser differential): a backslash is the wedge that makes
+  // WHATWG `new URL` and git/libcurl disagree about the host (see
+  // assertAllowedGitUrl). Git arguments never legitimately need a backslash.
+  if (value.includes("\\")) {
+    throw new Error(`${label} must not contain a backslash`);
+  }
 }
 
 function assertAllowedGitUrl(url: string): void {
   if (url.startsWith("https://")) {
+    // SECURITY (SSRF host parser differential): WHATWG `new URL` reports the
+    // hostname we validate, but git/libcurl may connect somewhere else when the
+    // authority contains userinfo separators. e.g. for
+    // `https://github.com\@10.0.0.1/repo.git` WHATWG yields hostname=github.com
+    // (the `\` becomes a path slash), while libcurl treats `\@` as userinfo and
+    // connects to 10.0.0.1. Backslashes are already rejected by
+    // assertSafeGitArgument; additionally reject any `@` (embedded credentials /
+    // userinfo) in the raw authority so the validated host is the host git uses.
+    const authority = url.slice("https://".length).split(/[/?#]/, 1)[0] ?? "";
+    if (authority.includes("@")) {
+      throw new Error(
+        `git source url must not embed credentials/userinfo in its authority: ${url}`,
+      );
+    }
     const host = extractHttpsHost(url);
     if (host === null) {
       throw new Error(`git source url has no host: ${url}`);
@@ -204,6 +224,17 @@ function assertAllowedGitUrl(url: string): void {
   }
   if (isSshShorthand(url)) {
     const host = extractSshShorthandHost(url);
+    // SECURITY (SSRF blocklist differential): unlike the https:// path, which is
+    // canonicalized by `new URL().hostname` (so `2130706433` is normalized to
+    // `127.0.0.1` before the blocklist runs), the SSH-shorthand host is sliced
+    // raw. The blocklist's IPv4 classifier only matches strict dotted-quads, so
+    // legacy numeric IPv4 forms (`git@2130706433:`, `git@0x7f000001:`,
+    // `git@0177.0.0.1:`, `git@127.1:`) would fall through to the "DNS hostname"
+    // branch and bypass the loopback / RFC1918 / link-local / metadata checks
+    // even though git/inet_aton would dial the encoded IP. Reject any host whose
+    // labels are all numeric (decimal / hex / octal) unless it is already a
+    // canonical dotted-quad the blocklist understands.
+    assertSshHostNotNumericIpv4Evasion(host);
     assertGitHostNotBlocked(host);
     return;
   }
@@ -256,6 +287,33 @@ function extractSshShorthandHost(url: string): string {
   }
   const colon = url.indexOf(":", at + 1);
   return url.slice(at + 1, colon).toLowerCase();
+}
+
+/**
+ * Fail closed on legacy numeric IPv4 host forms in an SSH-shorthand source.
+ *
+ * `host` here is the raw slice from `git@<host>:path` (already lowercased,
+ * never a bracketed IPv6 literal — those start with `[` and are classified by
+ * the IPv6 parser). git / `inet_aton(3)` accept dotted-quad **and** packed
+ * integer / hex / octal / short forms (`2130706433`, `0x7f000001`,
+ * `0177.0.0.1`, `127.1`), all of which can encode a blocked address. The shared
+ * blocklist only recognizes strict dotted-decimal, so without this guard those
+ * forms slip through as "DNS hostnames". A real DNS hostname always has at
+ * least one non-numeric label (e.g. an alphabetic TLD), so rejecting hosts
+ * whose every dot-separated label is purely numeric does not touch legitimate
+ * names; canonical dotted-quads are left for the blocklist to classify.
+ */
+function assertSshHostNotNumericIpv4Evasion(host: string): void {
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) return; // canonical dotted-quad
+  const labels = host.split(".");
+  const allNumeric = labels.every((label) =>
+    /^[0-9]+$/.test(label) || /^0x[0-9a-f]+$/.test(label)
+  );
+  if (allNumeric) {
+    throw new Error(
+      `git source host is not allowed (non-dotted-quad numeric IPv4 form): ${host}`,
+    );
+  }
 }
 
 async function runGit(

@@ -29,6 +29,7 @@
  */
 
 import type { JsonObject } from "takosumi-contract/reference/types";
+import { readBodyWithCap } from "takosumi-contract/reference/prepared-source-core";
 import { readRuntimeEnv } from "./runtime.ts";
 
 export interface FetchedArtifact {
@@ -101,49 +102,6 @@ function readPositiveIntEnv(name: string, fallback: number): number {
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return parsed;
-}
-
-/**
- * Read a response body into memory, aborting as soon as the accumulated byte
- * count exceeds `cap`. This bounds memory even when the server omits / lies
- * about `Content-Length` or uses chunked transfer-encoding, which a plain
- * `arrayBuffer()` would buffer in full before any size check. Mirrors the
- * capped reader in `prepared_source_reader.ts`.
- */
-async function readBodyWithCap(
-  response: Response,
-  cap: number,
-  label: string,
-): Promise<Uint8Array> {
-  const body = response.body;
-  if (body === null) {
-    return new Uint8Array(0);
-  }
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value === undefined) continue;
-      total += value.byteLength;
-      if (total > cap) {
-        await reader.cancel().catch(() => {});
-        throw new Error(`${label} exceeds ${cap} bytes`);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
 }
 
 export class HttpArtifactFetcher implements ArtifactFetcher {

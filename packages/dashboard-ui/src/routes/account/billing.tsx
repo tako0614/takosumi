@@ -1,9 +1,9 @@
-import { Title } from "@solidjs/meta";
 import { CreditCard, ExternalLink } from "lucide-solid";
 import { createSignal, Show } from "solid-js";
 import AppShell from "~/components/shell/AppShell";
-import AuthGuard from "~/components/auth/AuthGuard";
-import { ApiError, rpc } from "~/lib/rpc";
+import Page from "~/components/auth/Page";
+import { rpc } from "~/lib/rpc";
+import { ActionError, createAction } from "~/lib/action";
 
 /**
  * Origins that Stripe checkout / billing portal redirect URLs are
@@ -31,47 +31,34 @@ export function isAllowedStripeRedirect(value: string): boolean {
 }
 
 export default function Billing() {
-  return (
-    <>
-      <Title>Billing — Takosumi</Title>
-      <AuthGuard>{() => <Inner />}</AuthGuard>
-    </>
-  );
+  return <Page title="Billing">{() => <Inner />}</Page>;
 }
 
 function Inner() {
   const [planId, setPlanId] = createSignal("");
-  const [busy, setBusy] = createSignal(false);
-  const [err, setErr] = createSignal<string | null>(null);
-  const [checkoutUrl, setCheckoutUrl] = createSignal<string | null>(null);
 
-  const start = async (e: Event) => {
-    e.preventDefault();
-    setBusy(true);
-    setErr(null);
-    try {
-      const result = await rpc.billing.checkout({
-        planId: planId() || undefined,
-        successUrl: location.origin + "/account/billing?status=success",
-        cancelUrl: location.origin + "/account/billing?status=cancelled",
-      });
-      if (!result.url) {
-        setErr("Stripe checkout URL が返ってきませんでした。");
-        return;
-      }
-      if (!isAllowedStripeRedirect(result.url)) {
-        setErr(
-          "Stripe checkout URL が許可されたオリジン (checkout.stripe.com / billing.stripe.com) と一致しません。",
-        );
-        return;
-      }
-      setCheckoutUrl(result.url);
-      location.assign(result.url);
-    } catch (e) {
-      setErr((e as ApiError).message);
-    } finally {
-      setBusy(false);
+  const checkout = createAction(async () => {
+    const result = await rpc.billing.checkout({
+      planId: planId() || undefined,
+      successUrl: location.origin + "/account/billing?status=success",
+      cancelUrl: location.origin + "/account/billing?status=cancelled",
+    });
+    if (!result.url) {
+      throw new Error("Stripe checkout URL が返ってきませんでした。");
     }
+    if (!isAllowedStripeRedirect(result.url)) {
+      throw new Error(
+        "Stripe checkout URL が許可されたオリジン (checkout.stripe.com / billing.stripe.com) と一致しません。",
+      );
+    }
+    location.assign(result.url);
+    return result.url;
+  });
+  const checkoutUrl = checkout.result;
+
+  const start = (e: Event) => {
+    e.preventDefault();
+    void checkout.run();
   };
 
   return (
@@ -100,12 +87,16 @@ function Inner() {
               autocomplete="off"
             />
           </label>
-          <button class="btn btn-primary" type="submit" disabled={busy()}>
+          <button
+            class="btn btn-primary"
+            type="submit"
+            disabled={checkout.busy()}
+          >
             <ExternalLink size={16} />{" "}
-            {busy() ? "リダイレクト準備中..." : "Stripe Checkout へ"}
+            {checkout.busy() ? "リダイレクト準備中..." : "Stripe Checkout へ"}
           </button>
         </form>
-        <Show when={err()}>{(m) => <p class="sign-in-error">{m()}</p>}</Show>
+        <ActionError error={checkout.error} />
         <Show when={checkoutUrl()}>
           {(u) => (
             <p class="muted" style="margin-top: 8px;">

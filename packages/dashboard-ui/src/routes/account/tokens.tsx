@@ -1,4 +1,3 @@
-import { Title } from "@solidjs/meta";
 import { Copy, KeyRound, Trash2 } from "lucide-solid";
 import {
   createResource,
@@ -9,59 +8,39 @@ import {
   Switch,
 } from "solid-js";
 import AppShell from "~/components/shell/AppShell";
-import AuthGuard from "~/components/auth/AuthGuard";
-import { ApiError, type CreateTokenResult, rpc } from "~/lib/rpc";
+import Page from "~/components/auth/Page";
+import { ApiError, rpc } from "~/lib/rpc";
+import { ActionError, createAction } from "~/lib/action";
 
 export default function Tokens() {
-  return (
-    <>
-      <Title>Personal access tokens — Takosumi</Title>
-      <AuthGuard>{() => <Inner />}</AuthGuard>
-    </>
-  );
+  return <Page title="Personal access tokens">{() => <Inner />}</Page>;
 }
 
 function Inner() {
   const [tokens, { refetch }] = createResource(() => rpc.tokens.list());
   const [name, setName] = createSignal("");
-  const [creating, setCreating] = createSignal(false);
-  const [createError, setCreateError] = createSignal<string | null>(null);
-  const [newToken, setNewToken] = createSignal<CreateTokenResult | null>(null);
   const [copied, setCopied] = createSignal(false);
   // In-app revoke confirmation + error surface (replaces native
   // confirm()/alert(), which is blocking, unstyled, and untestable).
   const [pendingRevoke, setPendingRevoke] = createSignal<string | null>(null);
-  const [revoking, setRevoking] = createSignal(false);
-  const [revokeError, setRevokeError] = createSignal<string | null>(null);
 
-  const create = async (e: Event) => {
+  const createToken = createAction(async () => {
+    const t = await rpc.tokens.create({ name: name() });
+    setName("");
+    refetch();
+    return t;
+  });
+  const newToken = createToken.result;
+
+  const revoke = createAction(async (id: string) => {
+    await rpc.tokens.revoke(id);
+    setPendingRevoke(null);
+    refetch();
+  });
+
+  const create = (e: Event) => {
     e.preventDefault();
-    setCreating(true);
-    setCreateError(null);
-    try {
-      const t = await rpc.tokens.create({ name: name() });
-      setNewToken(t);
-      setName("");
-      refetch();
-    } catch (err) {
-      setCreateError((err as ApiError).message);
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const revoke = async (id: string) => {
-    setRevoking(true);
-    setRevokeError(null);
-    try {
-      await rpc.tokens.revoke(id);
-      setPendingRevoke(null);
-      refetch();
-    } catch (err) {
-      setRevokeError((err as ApiError).message);
-    } finally {
-      setRevoking(false);
-    }
+    void createToken.run();
   };
 
   const copy = async () => {
@@ -97,14 +76,12 @@ function Inner() {
           <button
             class="btn btn-primary"
             type="submit"
-            disabled={creating() || !name()}
+            disabled={createToken.busy() || !name()}
           >
-            <KeyRound size={16} /> {creating() ? "発行中..." : "発行"}
+            <KeyRound size={16} /> {createToken.busy() ? "発行中..." : "発行"}
           </button>
         </form>
-        <Show when={createError()}>
-          {(m) => <p class="sign-in-error">{m()}</p>}
-        </Show>
+        <ActionError error={createToken.error} />
         <Show when={newToken()}>
           {(t) => (
             <div class="token-issued">
@@ -128,9 +105,7 @@ function Inner() {
 
       <section class="detail-section">
         <h2>発行済み</h2>
-        <Show when={revokeError()}>
-          {(m) => <p class="sign-in-error">{m()}</p>}
-        </Show>
+        <ActionError error={revoke.error} />
         <Switch>
           <Match when={tokens.loading}>
             <div class="skel-block" />
@@ -174,7 +149,7 @@ function Inner() {
                                   class="btn-icon-danger"
                                   type="button"
                                   onClick={() => {
-                                    setRevokeError(null);
+                                    revoke.clearError();
                                     setPendingRevoke(t.tokenId);
                                   }}
                                   aria-label="revoke"
@@ -188,16 +163,16 @@ function Inner() {
                                 <button
                                   class="btn btn-danger btn-sm"
                                   type="button"
-                                  onClick={() => revoke(t.tokenId)}
-                                  disabled={revoking()}
+                                  onClick={() => void revoke.run(t.tokenId)}
+                                  disabled={revoke.busy()}
                                 >
-                                  {revoking() ? "失効中..." : "失効"}
+                                  {revoke.busy() ? "失効中..." : "失効"}
                                 </button>
                                 <button
                                   class="btn btn-secondary btn-sm"
                                   type="button"
                                   onClick={() => setPendingRevoke(null)}
-                                  disabled={revoking()}
+                                  disabled={revoke.busy()}
                                 >
                                   取消
                                 </button>

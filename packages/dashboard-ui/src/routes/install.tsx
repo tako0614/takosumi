@@ -1,5 +1,4 @@
-import { Title } from "@solidjs/meta";
-import AuthGuard from "~/components/auth/AuthGuard";
+import Page from "~/components/auth/Page";
 import InstallWizard from "~/components/apps/InstallWizard";
 
 /**
@@ -18,10 +17,5 @@ import InstallWizard from "~/components/apps/InstallWizard";
  * "+ Install" button.
  */
 export default function InstallByUrl() {
-  return (
-    <>
-      <Title>Install — Takosumi</Title>
-      <AuthGuard>{() => <InstallWizard />}</AuthGuard>
-    </>
-  );
+  return <Page title="Install">{() => <InstallWizard />}</Page>;
 }

@@ -16,6 +16,7 @@ import type {
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
 import type { RuntimeHandler, RuntimeHandlerContext } from "./handlers.ts";
 import type { RuntimeHandlerRegistry } from "./handlers.ts";
+import { isRecord } from "./value.ts";
 
 export class RuntimeHandlerNotFoundError extends Error {
   readonly shape: string;
@@ -117,10 +118,6 @@ function validateArtifactKind(
       declared,
     );
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function inferArtifactKind(spec: unknown): string | undefined {

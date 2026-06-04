@@ -10,6 +10,7 @@ import {
   PLAN_RUNS_PATH,
 } from "takosumi-contract/deploy-control-api";
 import { loadConfig, resolveMode } from "./config.ts";
+import { readNestedRecord, readNestedString } from "./json.ts";
 import { callTakosumiService } from "./remote_client.ts";
 
 export interface RemoteDeployControlTarget {
@@ -251,32 +252,14 @@ async function readInstallationBody(
   return body;
 }
 
-function readNestedRecord(
-  value: unknown,
-  path: readonly string[],
-): Record<string, unknown> | undefined {
-  const result = readNested(value, path);
-  return typeof result === "object" && result !== null && !Array.isArray(result)
-    ? result as Record<string, unknown>
-    : undefined;
+export function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
 
-function readNestedString(value: unknown, path: readonly string[]): string | undefined {
-  const result = readNested(value, path);
-  return typeof result === "string" ? result : undefined;
-}
-
-function readNested(value: unknown, path: readonly string[]): unknown {
-  let current = value;
-  for (const key of path) {
-    if (
-      typeof current !== "object" ||
-      current === null ||
-      Array.isArray(current)
-    ) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
+export function normalizeProviders(
+  values: readonly string[] | undefined,
+): readonly string[] {
+  return Array.from(
+    new Set((values ?? []).map((value) => value.trim()).filter(Boolean)),
+  );
 }

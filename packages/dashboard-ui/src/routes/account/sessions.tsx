@@ -1,17 +1,13 @@
-import { Title } from "@solidjs/meta";
 import { useNavigate } from "@solidjs/router";
 import { LogOut, Monitor } from "lucide-solid";
 import { createSignal, Show } from "solid-js";
 import AppShell from "~/components/shell/AppShell";
-import AuthGuard from "~/components/auth/AuthGuard";
+import Page from "~/components/auth/Page";
 import { clearSession } from "~/lib/session";
 
 export default function Sessions() {
   return (
-    <>
-      <Title>Sessions — Takosumi</Title>
-      <AuthGuard>{(session) => <Inner session={session} />}</AuthGuard>
-    </>
+    <Page title="Sessions">{(session) => <Inner session={session} />}</Page>
   );
 }
 

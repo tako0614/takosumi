@@ -36,6 +36,7 @@ import {
   sourceContextFromLocator,
 } from "./prepared_source_reader.ts";
 import { readRuntimeEnv } from "./runtime.ts";
+import { isRecord } from "./value.ts";
 
 export interface RuntimeAgentServerOptions {
   readonly registry: RuntimeHandlerRegistry;
@@ -235,10 +236,6 @@ function buildContext(
       : {}),
     ...(source ? { source } : {}),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function validApply(body: unknown): body is LifecycleApplyRequest {

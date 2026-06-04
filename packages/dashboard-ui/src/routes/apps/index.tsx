@@ -1,4 +1,3 @@
-import { Title } from "@solidjs/meta";
 import {
   createMemo,
   createResource,
@@ -9,19 +8,14 @@ import {
   Switch,
 } from "solid-js";
 import AppShell from "~/components/shell/AppShell";
-import AuthGuard from "~/components/auth/AuthGuard";
+import Page from "~/components/auth/Page";
 import AppCard from "~/components/apps/AppCard";
 import { ApiError, rpc } from "~/lib/rpc";
 
 const STORAGE_KEY = "tg_apps_space_id";
 
 export default function Apps() {
-  return (
-    <>
-      <Title>Apps — Takosumi</Title>
-      <AuthGuard>{() => <AppsInner />}</AuthGuard>
-    </>
-  );
+  return <Page title="Apps">{() => <AppsInner />}</Page>;
 }
 
 function AppsInner() {

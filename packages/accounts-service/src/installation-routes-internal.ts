@@ -29,7 +29,7 @@ import type {
 import { derivePairwiseSubject } from "./subject.ts";
 import { base64UrlEncodeBytes, sha256Text } from "./encoding.ts";
 import { appendLedgerEvent } from "./installation-helpers.ts";
-import { includesScope, tokenScopesRemainGranted } from "./oidc-routes.ts";
+import { includesScope } from "./oidc-routes.ts";
 import {
   isCurrentWorkloadServiceAccessToken,
   isWorkloadServiceAccessTokenRecord,
@@ -302,10 +302,6 @@ export async function requireInstallationAccessTokenCapability(input: {
     return { ok: true, record };
   }
   if (isWorkloadServiceAccessTokenRecord(record)) {
-    await input.store.deleteToken(accessToken);
-    return { ok: false, response: bearerChallenge("invalid_token") };
-  }
-  if (!await tokenScopesRemainGranted({ store: input.store, record })) {
     await input.store.deleteToken(accessToken);
     return { ok: false, response: bearerChallenge("invalid_token") };
   }

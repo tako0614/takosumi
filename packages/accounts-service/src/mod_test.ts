@@ -3313,7 +3313,14 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
   expect((await crossInstallationReportId.json()).error).toEqual("usage_report_id_conflict");
 });
 
-test("accounts handler rejects billing usage reports after permission scope revoke", async () => {
+test("accounts handler no longer gates installation access tokens on AppGrant revocation (AC1)", async () => {
+  // AC1 retirement: the dead `tokenScopesRemainGranted` grant-scope guard was
+  // removed because `listAppGrantsForInstallation` is a no-op on the durable
+  // (D1 / Postgres) stores, so the guard rejected valid tokens on durable
+  // stores while accepting them in-memory. Token authorization is now a
+  // consistent absence across stores: an installation access token is gated by
+  // its static scope (`includesScope`), not by a revocable grant row. A revoked
+  // AppGrant therefore no longer blocks a usage report.
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
   const now = Date.now();
@@ -3377,9 +3384,13 @@ test("accounts handler rejects billing usage reports after permission scope revo
     ),
   );
 
-  expect(response.status).toEqual(401);
-  expect((await response.json()).error).toEqual("invalid_token");
-  expect(store.listBillingUsageRecordsForInstallation("inst_usage")).toEqual([]);
+  expect(response.status).toEqual(202);
+  expect((await response.json()).usage_report.id).toEqual("usage_report_123");
+  expect(
+    store.listBillingUsageRecordsForInstallation("inst_usage").map((record) =>
+      record.meter
+    ),
+  ).toEqual(["agent.compute.seconds"]);
 });
 
 test("accounts handler exposes workload services and rotates event ingest tokens", async () => {
