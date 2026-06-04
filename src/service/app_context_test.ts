@@ -109,9 +109,9 @@ test("buildOperatorImplementationRegistry exposes operator-supplied implementati
 test("buildOperatorImplementationRegistry leaves bare kind refs to operator implementations", () => {
   const implementation = buildExampleImplementation();
   const registry = buildOperatorImplementationRegistry({ implementations: [implementation] });
-  assert.equal(registry.findByKindRef("test"), undefined);
+  assert.equal(registry.findByKindUri("test"), undefined);
   assert.equal(
-    registry.findByKindRef("https://example.test/kinds/v1/test")?.name,
+    registry.findByKindUri("https://example.test/kinds/v1/test")?.name,
     "@example/test",
   );
 });

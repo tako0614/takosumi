@@ -1,3 +1,4 @@
+import { freezeClone } from "../../shared/freeze.ts";
 import type {
   AckInput,
   DeadLetterInput,
@@ -234,18 +235,4 @@ function cloneMessage<TPayload>(
   message: QueueMessage<TPayload>,
 ): QueueMessage<TPayload> {
   return freezeClone(message);
-}
-
-function freezeClone<T>(value: T): T {
-  return deepFreeze(structuredClone(value));
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

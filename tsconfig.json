@@ -39,9 +39,6 @@
         "./src/contract/catalog.ts"
       ],
       "@takos/takosumi-contract/reference/implementation": ["./src/contract/implementation.ts"],
-      "@takos/takosumi-contract/reference/implementation-sdk": [
-        "./src/contract/implementation-sdk.ts"
-      ],
       "@takos/takosumi-contract/reference/runtime-agent": [
         "./src/contract/runtime-agent.ts"
       ],
@@ -86,9 +83,6 @@
       ],
       "takosumi-contract/reference/catalog": ["./src/contract/catalog.ts"],
       "takosumi-contract/reference/implementation": ["./src/contract/implementation.ts"],
-      "takosumi-contract/reference/implementation-sdk": [
-        "./src/contract/implementation-sdk.ts"
-      ],
       "takosumi-contract/reference/runtime-agent": [
         "./src/contract/runtime-agent.ts"
       ],

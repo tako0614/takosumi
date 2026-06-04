@@ -16,6 +16,24 @@ test("local actor adapter returns configured actor", async () => {
   assert.equal(result.actor.actorAccountId, "acct_local");
 });
 
+test("local actor adapter deep-freezes the returned actor context", async () => {
+  const actor = actorContext("acct_local", "req_local");
+  const adapter = new LocalActorAdapter({ actor });
+
+  const returned = await adapter.actorForRequest(
+    new Request("http://localhost/test"),
+  );
+
+  // The top-level context and its nested `roles` array must both be frozen so a
+  // caller cannot mutate the actor (e.g. escalate roles) after authentication.
+  assert.equal(Object.isFrozen(returned), true);
+  assert.equal(Object.isFrozen(returned.roles), true);
+  assert.throws(() => {
+    (returned.roles as string[]).push("admin");
+  }, TypeError);
+  assert.deepEqual([...returned.roles], ["owner"]);
+});
+
 test("service actor adapter verifies signed internal request", async () => {
   const actor = actorContext("acct_service", "req_service");
   const adapter = new ServiceActorAuthAdapter({

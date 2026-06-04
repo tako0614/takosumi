@@ -1,4 +1,5 @@
 import type { RuntimeDesiredState } from "../../domains/runtime/mod.ts";
+import { freezeClone } from "../../shared/freeze.ts";
 import type {
   ProviderMaterializationPlan,
   ProviderMaterializer,
@@ -61,18 +62,4 @@ export class NoopProviderMaterializer implements ProviderMaterializer {
   #now(): string {
     return this.#clock().toISOString();
   }
-}
-
-function freezeClone<T>(value: T): T {
-  return deepFreeze(structuredClone(value));
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

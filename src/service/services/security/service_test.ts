@@ -95,6 +95,64 @@ test("WorkerAuthzService denies private egress when runtime network policy block
   assert.equal(decision.policy?.id, "policy_web");
 });
 
+test("WorkerAuthzService classifies IPv6/extended private destinations via the canonical blocklist", async () => {
+  const { service, stores } = createService();
+  await putIdentity(stores);
+  await stores.runtimeNetworkPolicies.put({
+    id: "policy_web",
+    spaceId: "space_a",
+    groupId: "group_a",
+    name: "deny-private-by-default",
+    selector: { componentNames: ["web"] },
+    ingress: [],
+    egress: [],
+    defaultEgress: "denied",
+    createdAt: "2026-04-27T00:00:00.000Z",
+    updatedAt: "2026-04-27T00:00:00.000Z",
+  });
+
+  // Ranges the previous IPv4-only classifier missed but the canonical SSRF
+  // blocklist (shared with the source fetchers) rejects.
+  const privateDestinations = [
+    "[::1]/128", // IPv6 loopback
+    "[fe80::1]/64", // IPv6 link-local
+    "[fd00::1]/64", // IPv6 unique-local
+    "0.0.0.0/8", // 0.0.0.0/8
+    "100.64.0.1/32", // carrier-grade NAT
+  ];
+  for (const destinationCidr of privateDestinations) {
+    const decision = await service.decideRuntimeEgress({
+      sourceIdentityId: "wi_worker",
+      spaceId: "space_a",
+      groupId: "group_a",
+      destinationCidr,
+      port: 443,
+      protocol: "tcp",
+    });
+    assert.equal(decision.decision, "denied", destinationCidr);
+    assert.equal(
+      decision.reason,
+      "private egress blocked by runtime network policy",
+      destinationCidr,
+    );
+  }
+
+  // A public destination still falls through to the generic default-deny reason.
+  const publicDecision = await service.decideRuntimeEgress({
+    sourceIdentityId: "wi_worker",
+    spaceId: "space_a",
+    groupId: "group_a",
+    destinationHost: "example.test",
+    port: 443,
+    protocol: "tcp",
+  });
+  assert.equal(publicDecision.decision, "denied");
+  assert.equal(
+    publicDecision.reason,
+    "egress blocked by runtime network policy default",
+  );
+});
+
 test("WorkerAuthzService reports advisory egress denial as unknown instead of enforced deny", async () => {
   const { service, stores } = createService();
   await putIdentity(stores);

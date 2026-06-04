@@ -1,3 +1,4 @@
+import { freezeClone } from "../../shared/freeze.ts";
 import type { RouteProjection } from "../../domains/routing/mod.ts";
 import type { RouterConfig, RouterConfigRenderer } from "./types.ts";
 
@@ -93,18 +94,4 @@ export function activationSnapshot(projection: RouteProjection): string {
       source: route.source,
     })),
   });
-}
-
-export function freezeClone<T>(value: T): T {
-  return deepFreeze(structuredClone(value));
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

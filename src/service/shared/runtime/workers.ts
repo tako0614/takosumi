@@ -1,10 +1,10 @@
 import {
   type EnvReader,
-  type FsAdapter,
   type RuntimeAdapter,
   type ServeHttpHandle,
-  type SubprocessAdapter,
+  unavailableFsAdapter,
   UnavailableInRuntimeError,
+  unavailableSubprocessAdapter,
 } from "./runtime.ts";
 
 /**
@@ -46,46 +46,11 @@ export function createWorkersRuntime(
     },
   };
 
-  const fs: FsAdapter = {
-    available: false,
-    readTextFile() {
-      throw new UnavailableInRuntimeError("fs.readTextFile", "workers");
-    },
-    readFile(): Promise<Uint8Array> {
-      throw new UnavailableInRuntimeError("fs.readFile", "workers");
-    },
-    readTextFileSync(): string {
-      throw new UnavailableInRuntimeError("fs.readTextFileSync", "workers");
-    },
-    writeTextFile() {
-      throw new UnavailableInRuntimeError("fs.writeTextFile", "workers");
-    },
-    mkdir() {
-      throw new UnavailableInRuntimeError("fs.mkdir", "workers");
-    },
-    makeTempDir() {
-      throw new UnavailableInRuntimeError("fs.makeTempDir", "workers");
-    },
-    remove() {
-      throw new UnavailableInRuntimeError("fs.remove", "workers");
-    },
-    isNotFoundError() {
-      return false;
-    },
-  };
-
-  const subprocess: SubprocessAdapter = {
-    available: false,
-    run() {
-      throw new UnavailableInRuntimeError("subprocess.run", "workers");
-    },
-  };
-
   return {
     kind: "workers",
     env,
-    fs,
-    subprocess,
+    fs: unavailableFsAdapter("workers"),
+    subprocess: unavailableSubprocessAdapter("workers"),
     execPath() {
       throw new UnavailableInRuntimeError("execPath", "workers");
     },

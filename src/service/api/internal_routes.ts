@@ -17,6 +17,55 @@ import { findNonCatalogConditionReasons } from "./condition_reasons.ts";
 import { apiError, readJsonObject, registerApiErrorHandler } from "./errors.ts";
 import { type InternalAuthResult, readInternalAuth } from "./internal_auth.ts";
 import type { ReplayProtectionStore } from "../adapters/replay-protection/mod.ts";
+import type { ApiEndpoint } from "./route_families.ts";
+
+/**
+ * Endpoint inventory for the `internal` family, co-located with the mount calls
+ * below. Consumed by `route_families.ts` to derive `/capabilities` and
+ * `/openapi.json`. Keep in lockstep with {@link registerInternalRoutes}.
+ */
+export const INTERNAL_ENDPOINTS: readonly ApiEndpoint[] = [
+  {
+    method: "GET",
+    path: TAKOSUMI_INTERNAL_PATHS.spaces,
+    summary: "Lists internal space summaries visible to the actor.",
+    auth: "internal-service",
+    operationId: "listInternalSpaces",
+    openapi: { okSchema: "SpacesResponse" },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_INTERNAL_PATHS.spaces,
+    summary: "Creates a space through the internal service API.",
+    auth: "internal-service",
+    operationId: "createInternalSpace",
+    openapi: {
+      requestSchema: "InternalSpaceRequest",
+      okStatus: "201",
+      okSchema: "SpaceResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_INTERNAL_PATHS.groups,
+    summary: "Lists groups for a space through the internal service API.",
+    auth: "internal-service",
+    operationId: "listInternalGroups",
+    openapi: { query: ["spaceId"], okSchema: "GroupsResponse" },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_INTERNAL_PATHS.groups,
+    summary: "Creates a group through the internal service API.",
+    auth: "internal-service",
+    operationId: "createInternalGroup",
+    openapi: {
+      requestSchema: "InternalGroupRequest",
+      okStatus: "201",
+      okSchema: "GroupResponse",
+    },
+  },
+] as const;
 
 export interface MutationBoundaryEntitlementService {
   requireMutationBoundary(input: {

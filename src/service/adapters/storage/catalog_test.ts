@@ -4,7 +4,6 @@ import {
   postgresStorageMigrationStatements,
   postgresStorageTableDefinitions,
 } from "./migrations.ts";
-import { storageStatementCatalog } from "./statements.ts";
 
 const migrationFilesUrl = new URL("../../db/migrations/", import.meta.url);
 
@@ -53,41 +52,6 @@ const mirroredMigrationFiles: readonly {
     migrationId: "registry.catalog_releases.create",
   },
 ];
-
-test("deploy statement catalog is retired", () => {
-  assertEquals(storageStatementCatalog.deploy.length, 0);
-});
-
-test("statement catalog references declared storage tables", () => {
-  const declared = new Set(
-    postgresStorageTableDefinitions.map((definition) => definition.name),
-  );
-  for (const statement of storageStatementCatalog.all) {
-    for (const table of extractReferencedTables(statement.sql)) {
-      assert(
-        declared.has(table),
-        `${statement.id} references undeclared table ${table}`,
-      );
-    }
-  }
-});
-
-test("statement insert and update columns exist in table definitions", () => {
-  const definitions = new Map(
-    postgresStorageTableDefinitions.map((definition) => [
-      definition.name,
-      new Set(definition.columns),
-    ]),
-  );
-  for (const statement of storageStatementCatalog.all) {
-    for (const { table, columns } of extractInsertColumns(statement.sql)) {
-      assertColumns(statement.id, table, columns, definitions);
-    }
-    for (const { table, columns } of extractUpdateColumns(statement.sql)) {
-      assertColumns(statement.id, table, columns, definitions);
-    }
-  }
-});
 
 test("migration catalog creates every declared storage table", () => {
   const migrationSql = postgresStorageMigrationStatements.map((migration) =>
@@ -158,14 +122,6 @@ test("migration SQL files have unique timestamp prefixes", () => {
   }
 });
 
-function extractReferencedTables(sql: string): Set<string> {
-  const tables = new Set<string>();
-  const pattern =
-    /\b(?:insert\s+into|(?<!do\s)update|from|join)\s+([a-z_][a-z0-9_]*)\b/gi;
-  for (const match of sql.matchAll(pattern)) tables.add(match[1]);
-  return tables;
-}
-
 function extractCreatedTables(sql: string): Set<string> {
   const tables = new Set<string>();
   const pattern =
@@ -180,57 +136,6 @@ function extractRenameTargets(sql: string): Set<string> {
     /\balter\s+table\s+if\s+exists\s+[a-z_][a-z0-9_]*\s+rename\s+to\s+([a-z_][a-z0-9_]*)\b/gi;
   for (const match of sql.matchAll(pattern)) tables.add(match[1]);
   return tables;
-}
-
-function extractInsertColumns(
-  sql: string,
-): readonly { readonly table: string; readonly columns: readonly string[] }[] {
-  const matches: { table: string; columns: string[] }[] = [];
-  const pattern = /\binsert\s+into\s+([a-z_][a-z0-9_]*)\s*\(([^)]*)\)/gi;
-  for (const match of sql.matchAll(pattern)) {
-    matches.push({
-      table: match[1],
-      columns: splitColumns(match[2]),
-    });
-  }
-  return matches;
-}
-
-function extractUpdateColumns(
-  sql: string,
-): readonly { readonly table: string; readonly columns: readonly string[] }[] {
-  const matches: { table: string; columns: string[] }[] = [];
-  const pattern =
-    /\bupdate\s+([a-z_][a-z0-9_]*)\s+set\s+(.+?)(?:\s+where\b|$)/gi;
-  for (const match of sql.matchAll(pattern)) {
-    matches.push({
-      table: match[1],
-      columns: [...match[2].matchAll(/\b([a-z_][a-z0-9_]*)\s*=/gi)].map((
-        columnMatch,
-      ) => columnMatch[1]),
-    });
-  }
-  return matches;
-}
-
-function splitColumns(columns: string): string[] {
-  return columns.split(",").map((column) => column.trim()).filter(Boolean);
-}
-
-function assertColumns(
-  statementId: string,
-  table: string,
-  columns: readonly string[],
-  definitions: ReadonlyMap<string, ReadonlySet<string>>,
-): void {
-  const definition = definitions.get(table);
-  assert(definition, `${statementId} references undeclared table ${table}`);
-  for (const column of columns) {
-    assert(
-      definition.has(column),
-      `${statementId} references undeclared column ${table}.${column}`,
-    );
-  }
 }
 
 function listMigrationSqlFiles(): readonly string[] {

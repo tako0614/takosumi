@@ -6,8 +6,69 @@ import {
   resetRuntimeForTesting,
   setRuntimeForTesting,
 } from "./index.ts";
+import { createWorkersRuntime } from "./workers.ts";
 import { nodeRuntime } from "./node.ts";
+import {
+  unavailableFsAdapter,
+  unavailableSubprocessAdapter,
+} from "./runtime.ts";
 import type { SubprocessAdapter, SubprocessOutput } from "./runtime.ts";
+
+test("unavailableFsAdapter fails closed on every IO method", () => {
+  const fs = unavailableFsAdapter("workers");
+  expect(fs.available).toEqual(false);
+  // isNotFoundError never reports true because no IO ever succeeds here.
+  expect(fs.isNotFoundError(new Error("anything"))).toEqual(false);
+  // Every IO method throws (synchronously), tagged with the supplied runtime.
+  expect(() => fs.readTextFile("x")).toThrow(
+    "fs.readTextFile is not available on the workers runtime",
+  );
+  expect(() => fs.readFile("x")).toThrow(
+    "fs.readFile is not available on the workers runtime",
+  );
+  expect(() => fs.readTextFileSync("x")).toThrow(
+    "fs.readTextFileSync is not available on the workers runtime",
+  );
+  expect(() => fs.writeTextFile("x", "y")).toThrow(
+    "fs.writeTextFile is not available on the workers runtime",
+  );
+  expect(() => fs.mkdir("x")).toThrow(
+    "fs.mkdir is not available on the workers runtime",
+  );
+  expect(() => fs.makeTempDir()).toThrow(
+    "fs.makeTempDir is not available on the workers runtime",
+  );
+  expect(() => fs.remove("x")).toThrow(
+    "fs.remove is not available on the workers runtime",
+  );
+});
+
+test("unavailableFsAdapter tags errors with the supplied runtime kind", () => {
+  const fs = unavailableFsAdapter("unknown");
+  expect(() => fs.readTextFile("x")).toThrow(
+    "fs.readTextFile is not available on the unknown runtime",
+  );
+});
+
+test("unavailableSubprocessAdapter fails closed on run", () => {
+  const subprocess = unavailableSubprocessAdapter("workers");
+  expect(subprocess.available).toEqual(false);
+  expect(() => subprocess.run("git")).toThrow(
+    "subprocess.run is not available on the workers runtime",
+  );
+});
+
+test("createWorkersRuntime wires the shared fail-closed fs/subprocess surface", () => {
+  const runtime = createWorkersRuntime({});
+  expect(runtime.fs.available).toEqual(false);
+  expect(runtime.subprocess.available).toEqual(false);
+  expect(() => runtime.fs.makeTempDir()).toThrow(
+    "fs.makeTempDir is not available on the workers runtime",
+  );
+  expect(() => runtime.subprocess.run("git")).toThrow(
+    "subprocess.run is not available on the workers runtime",
+  );
+});
 
 test("nodeRuntime fs.makeTempDir nests inside the OS temp dir with no prefix", async () => {
   // Regression: with no prefix, `path.join(os.tmpdir(), "")` drops the trailing

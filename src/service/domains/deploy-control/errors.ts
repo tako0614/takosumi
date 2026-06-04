@@ -8,6 +8,11 @@
 
 import type { DeployControlErrorCode } from "takosumi-contract/deploy-control-api";
 
+// Re-exported from the shared guard home so deploy-control consumers can keep
+// importing `isRecord` from this module while there is a single canonical
+// (non-array) definition for the whole service.
+export { isRecord } from "../../shared/mod.ts";
+
 export type OpenTofuControllerErrorCode = DeployControlErrorCode;
 
 export class OpenTofuControllerError extends Error {
@@ -30,8 +35,4 @@ export function requireNonEmptyString(
       `${field} must be a non-empty string`,
     );
   }
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

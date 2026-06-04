@@ -84,9 +84,9 @@ export interface ProviderMaterializationPlan {
 
 /**
  * Service-internal materializer bound to service-domain `RuntimeDesiredState`.
- * Semantically pairs with `provider.ProviderMaterializer` in the reference
- * adapter SDK (`takosumi-contract/reference/implementation-sdk`), but service uses the in-process
- * domain type for the desired state input. Both interfaces share the same role
+ * Mirrors the contract-layer provider materializer role, but service uses the
+ * in-process domain type for the desired state input. Both interfaces share the
+ * same role
  * (= "materialize a desired state into a plan + recorded operations");
  * `RuntimeDesiredState` belongs to this service domain.
  */

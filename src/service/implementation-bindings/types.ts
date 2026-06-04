@@ -23,14 +23,12 @@ export interface OperatorImplementationRegistry {
    * Returns `undefined` if no implementation claims the kind. The first registered
    * implementation wins on conflict; the registry refuses conflicting registration
    * at construction time.
+   *
+   * Takosumi v1 does not expand short aliases: operators pass the URI or opaque
+   * reference they want resolved, and lookup is an exact match against
+   * `provides[]`.
    */
   findByKindUri(kindUri: string): OperatorImplementation | undefined;
-  /**
-   * Find an implementation by the exact operator-selected kind reference. Takosumi
-   * does not expand short aliases; operators pass the URI or opaque reference
-   * they want the implementation registry to resolve.
-   */
-  findByKindRef(kind: string): OperatorImplementation | undefined;
   /** Lookup by `name`. Returns `undefined` if not registered. */
   getByName(name: string): OperatorImplementation | undefined;
 }

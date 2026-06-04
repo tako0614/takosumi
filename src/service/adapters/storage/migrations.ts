@@ -1,4 +1,14 @@
-import type { StorageDomain } from "./statements.ts";
+type StorageDomain =
+  | "space"
+  | "deploy"
+  | "runtime"
+  | "resources"
+  | "registry"
+  | "audit"
+  | "usage"
+  | "service-endpoints"
+  | "custom-domain"
+  | "internal-auth";
 
 type StorageMigrationDomain = StorageDomain | "core";
 

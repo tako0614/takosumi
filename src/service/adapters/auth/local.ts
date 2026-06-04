@@ -1,4 +1,5 @@
 import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
+import { freezeClone } from "../../shared/freeze.ts";
 import type { ActorAdapter, AuthPort, AuthResult } from "./types.ts";
 
 export interface LocalActorAuthAdapterOptions {
@@ -37,8 +38,4 @@ export class LocalActorAdapter implements ActorAdapter, AuthPort {
       };
     }
   }
-}
-
-function freezeClone<T>(value: T): T {
-  return Object.freeze(structuredClone(value));
 }

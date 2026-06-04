@@ -1,3 +1,4 @@
+import { freezeClone } from "../../shared/freeze.ts";
 import type {
   CoreOutputResolution,
   CoreOutputResolutionId,
@@ -75,7 +76,7 @@ export class InMemoryOutputStore implements OutputStore {
   readonly #outputs = new Map<OutputId, Output>();
 
   put(output: Output): Promise<Output> {
-    const frozen = deepFreeze(structuredClone(output));
+    const frozen = freezeClone(output);
     this.#outputs.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -113,7 +114,7 @@ export class InMemoryOutputConsumerBindingStore
   put(
     binding: OutputConsumerBinding,
   ): Promise<OutputConsumerBinding> {
-    const frozen = deepFreeze(structuredClone(binding));
+    const frozen = freezeClone(binding);
     this.#bindings.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -151,7 +152,7 @@ export class InMemoryOutputGrantStore implements OutputGrantStore {
   readonly #grants = new Map<string, OutputGrant>();
 
   put(grant: OutputGrant): Promise<OutputGrant> {
-    const frozen = deepFreeze(structuredClone(grant));
+    const frozen = freezeClone(grant);
     this.#grants.set(frozen.ref, frozen);
     return Promise.resolve(frozen);
   }
@@ -180,7 +181,7 @@ export class InMemoryOutputProjectionStore implements OutputProjectionStore {
   >();
 
   put(projection: OutputProjection): Promise<OutputProjection> {
-    const frozen = deepFreeze(structuredClone(projection));
+    const frozen = freezeClone(projection);
     this.#projections.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -222,7 +223,7 @@ export class InMemoryCoreOutputResolutionStore
   put(
     resolution: CoreOutputResolution,
   ): Promise<CoreOutputResolution> {
-    const frozen = deepFreeze(structuredClone(resolution));
+    const frozen = freezeClone(resolution);
     this.#resolutions.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
@@ -266,14 +267,4 @@ function matchesOutput(
   if (query.address && output.address !== query.address) return false;
   if (!query.includeWithdrawn && output.withdrawnAt) return false;
   return true;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(nested);
-    }
-  }
-  return value;
 }

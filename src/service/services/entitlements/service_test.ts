@@ -5,7 +5,21 @@ import {
   InMemorySpaceMembershipStore,
 } from "../../domains/space/mod.ts";
 import { DomainError } from "../../shared/errors.ts";
-import { EntitlementPolicyService } from "./mod.ts";
+import {
+  ALL_CAPABILITIES,
+  DEFAULT_LOCAL_ENTITLEMENT_POLICY,
+  EntitlementPolicyService,
+} from "./mod.ts";
+
+test("owner default grant covers every ALL_CAPABILITIES entry (no type/grant drift)", () => {
+  const ownerCapabilities =
+    DEFAULT_LOCAL_ENTITLEMENT_POLICY.roles?.owner?.capabilities ?? [];
+  assert.deepEqual(
+    [...ownerCapabilities].sort(),
+    [...ALL_CAPABILITIES].sort(),
+    "owner role must grant exactly the full capability set",
+  );
+});
 
 test("EntitlementPolicyService grants owner full mutation capabilities", async () => {
   const service = await serviceForRole("owner");

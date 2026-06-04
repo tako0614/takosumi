@@ -3,10 +3,68 @@ import type { ObservabilitySink } from "../services/observability/mod.ts";
 import type { MetricEvent } from "../services/observability/types.ts";
 import { apiError, registerApiErrorHandler } from "./errors.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
+import type { ApiEndpoint } from "./route_families.ts";
 
 export const TAKOSUMI_METRICS_PATH = "/metrics" as const;
 export const PROMETHEUS_CONTENT_TYPE =
   "text/plain; version=0.0.4; charset=utf-8" as const;
+
+/**
+ * Endpoint inventory for the `metrics` family, co-located with the mount call
+ * below. Consumed by `route_families.ts` to derive `/capabilities` and
+ * `/openapi.json`. The Prometheus exposition response is non-JSON, so the
+ * OpenAPI operation is supplied verbatim via `customOperation`. Keep in
+ * lockstep with {@link registerMetricsRoutes}.
+ */
+export const METRICS_ENDPOINTS: readonly ApiEndpoint[] = [
+  {
+    method: "GET",
+    path: TAKOSUMI_METRICS_PATH,
+    summary:
+      "Returns Prometheus exposition format metrics for service scrape pipelines.",
+    auth: "metrics-scrape",
+    operationId: "getMetrics",
+    openapi: {
+      okSchema: "EmptyResponse",
+      customOperation: {
+        tags: ["metrics"],
+        security: [{ metricsBearer: [] }],
+        responses: {
+          "200": {
+            description: "Prometheus exposition document.",
+            content: {
+              [PROMETHEUS_CONTENT_TYPE]: {
+                schema: {
+                  type: "string",
+                  description:
+                    "Prometheus text exposition format (one metric per line).",
+                },
+              },
+            },
+          },
+          "401": {
+            description: "JSON response",
+            content: {
+              "application/json": {
+                schema: { "$ref": "#/components/schemas/ErrorResponse" },
+              },
+            },
+          },
+          "404": {
+            description: "JSON response",
+            content: {
+              "application/json": {
+                schema: { "$ref": "#/components/schemas/ErrorResponse" },
+              },
+            },
+          },
+        },
+        "x-takos-auth": "metrics-scrape",
+        "x-takos-mounted-path": TAKOSUMI_METRICS_PATH,
+      },
+    },
+  },
+] as const;
 
 export interface RegisterMetricsRoutesOptions {
   readonly observability: Pick<ObservabilitySink, "listMetrics">;

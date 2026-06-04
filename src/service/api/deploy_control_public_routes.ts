@@ -34,6 +34,7 @@ import {
 } from "../domains/deploy-control/mod.ts";
 import { log } from "../shared/log.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
+import type { ApiEndpoint } from "./route_families.ts";
 
 export const TAKOSUMI_RUNNER_PROFILES_ROUTE = RUNNER_PROFILES_PATH;
 export const TAKOSUMI_PLAN_RUNS_ROUTE = "/v1/plan-runs" as const;
@@ -46,6 +47,96 @@ export const TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE =
   "/v1/installations/:installationId/deployments" as const;
 export const TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE =
   "/v1/installations/:installationId/deployment-outputs" as const;
+
+/**
+ * Endpoint inventory for the `deployControl-public` family, co-located with the
+ * mount calls below. Consumed by `route_families.ts` to derive `/capabilities`
+ * and `/openapi.json`. Keep in lockstep with {@link mountDeployControlPublicRoutes}.
+ */
+export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
+  {
+    method: "GET",
+    path: TAKOSUMI_RUNNER_PROFILES_ROUTE,
+    summary: "Lists OpenTofu runner profiles and provider allowlists.",
+    auth: "deploy-control-token",
+    operationId: "listRunnerProfiles",
+    openapi: { okSchema: "ListRunnerProfilesResponse" },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_PLAN_RUNS_ROUTE,
+    summary: "Creates an OpenTofu plan run for a plain module source.",
+    auth: "deploy-control-token",
+    operationId: "createPlanRun",
+    openapi: {
+      requestSchema: "CreatePlanRunRequest",
+      okStatus: "201",
+      okSchema: "PlanRunResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_PLAN_RUN_ROUTE,
+    summary: "Reads an OpenTofu PlanRun.",
+    auth: "deploy-control-token",
+    operationId: "getPlanRun",
+    openapi: { pathParams: ["planRunId"], okSchema: "PlanRunResponse" },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_APPLY_RUNS_ROUTE,
+    summary: "Creates an apply run from a succeeded PlanRun.",
+    auth: "deploy-control-token",
+    operationId: "createApplyRun",
+    openapi: {
+      requestSchema: "CreateApplyRunRequest",
+      okStatus: "201",
+      okSchema: "ApplyRunResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_APPLY_RUN_ROUTE,
+    summary: "Reads an OpenTofu ApplyRun.",
+    auth: "deploy-control-token",
+    operationId: "getApplyRun",
+    openapi: { pathParams: ["applyRunId"], okSchema: "ApplyRunResponse" },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_INSTALLATION_ROUTE,
+    summary: "Reads an Installation ledger record.",
+    auth: "deploy-control-token",
+    operationId: "getInstallation",
+    openapi: {
+      pathParams: ["installationId"],
+      okSchema: "GetInstallationResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE,
+    summary: "Lists Deployment records for an Installation.",
+    auth: "deploy-control-token",
+    operationId: "listInstallationDeployments",
+    openapi: {
+      pathParams: ["installationId"],
+      okSchema: "ListDeploymentsResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
+    summary:
+      "Lists non-sensitive DeploymentOutput records for the current Deployment of an Installation.",
+    auth: "deploy-control-token",
+    operationId: "listInstallationDeploymentOutputs",
+    openapi: {
+      pathParams: ["installationId"],
+      okSchema: "ListDeploymentOutputsResponse",
+    },
+  },
+] as const;
 
 export const DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
 
