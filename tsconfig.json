@@ -126,7 +126,6 @@
   ],
   "exclude": [
     "**/*_test.ts",
-    "packages/dashboard-ui",
     "src/cli/tests",
     "src/service/scripts"
   ]
