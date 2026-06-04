@@ -53,7 +53,6 @@
     "deploy:accounts-cloudflare:template": "bunx wrangler deploy --config deploy/accounts-cloudflare/wrangler.toml --env production",
     "deploy:accounts-cloudflare:template:staging": "bunx wrangler deploy --config deploy/accounts-cloudflare/wrangler.toml --env staging",
     "deploy:accounts-cloudflare:dryrun:template": "bunx wrangler deploy --config deploy/accounts-cloudflare/wrangler.toml --env production --dry-run --outdir deploy/accounts-cloudflare/.wrangler/dryrun-template",
-    "build:npm": "bun scripts/build-npm-bun.ts",
     "docs:build": "cd docs && bun run build",
     "docs:dev": "cd docs && bun run dev",
     "website:build": "bash website/build.sh",

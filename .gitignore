@@ -1,5 +1,4 @@
 .wrangler/
-npm/
 deno.lock
 node_modules/
 /node_modules
