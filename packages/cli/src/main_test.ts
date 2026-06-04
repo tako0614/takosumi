@@ -107,7 +107,14 @@ test("accounts seed prints a stable seed plan", async () => {
 test("accounts seed rejects non Takosumi subjects", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const code = await main(["accounts", "seed", "--subject", "user_1"], {
+  const code = await main([
+    "accounts",
+    "seed",
+    "--issuer",
+    "https://accounts.example.test/",
+    "--subject",
+    "user_1",
+  ], {
     stdout: (line) => stdout.push(line),
     stderr: (line) => stderr.push(line),
   });
@@ -115,6 +122,21 @@ test("accounts seed rejects non Takosumi subjects", async () => {
   expect(code).toEqual(2);
   expect(stdout).toEqual([]);
   expect(stderr).toEqual(["--subject must use the tsub_ prefix"]);
+});
+
+test("accounts seed default issuer is a generic localhost placeholder, never a takosumi.com host", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const code = await main(["accounts", "seed", "--subject", "tsub_test"], {
+    stdout: (line) => stdout.push(line),
+    stderr: (line) => stderr.push(line),
+  });
+
+  expect(code).toEqual(0);
+  expect(stderr).toEqual([]);
+  const plan = JSON.parse(stdout.join("\n"));
+  expect(plan.issuer).toEqual("http://localhost:8787");
+  expect(plan.issuer).not.toContain("takosumi.com");
 });
 
 type ManagedOfferingTemplateEntryForTest = Record<string, unknown> & {

@@ -1,8 +1,4 @@
 import { Command } from "./command.ts";
-import { installCommand } from "./commands/install.ts";
-import { deployCommand } from "./commands/deploy.ts";
-import { rollbackCommand } from "./commands/rollback.ts";
-import { planCommand } from "./commands/plan.ts";
 import { serverCommand } from "./commands/server.ts";
 import { migrateCommand } from "./commands/migrate.ts";
 import { initCommand } from "./commands/init.ts";
@@ -15,12 +11,8 @@ export type TakosumiCommand = Command;
 function createTakosumi(): TakosumiCommand {
   const program = new Command()
     .name("takosumi")
-    .description("Takosumi: OpenTofu deploy control CLI")
+    .description("Takosumi: in-repo operator CLI (server / migrate / init)")
     .version(TAKOSUMI_CLI_VERSION);
-  program.addCommand(installCommand);
-  program.addCommand(deployCommand);
-  program.addCommand(rollbackCommand);
-  program.addCommand(planCommand);
   program.addCommand(serverCommand);
   program.addCommand(migrateCommand);
   program.addCommand(initCommand);

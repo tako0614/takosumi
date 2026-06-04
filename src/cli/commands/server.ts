@@ -44,6 +44,10 @@ function createServerCommand(): Command {
  */
 function printDaemonizationTemplate(port: number): void {
   const exec = currentRuntime().execPath();
+  // Takosumi is not npm-published; the CLI runs in-repo against the cloned
+  // source, so the supervisor templates invoke the source entry point
+  // (`src/cli/main.ts`) rather than a non-existent published binary.
+  const cliEntry = "/path/to/takosumi/src/cli/main.ts";
   const lines = [
     "[takosumi] --detach is fire-and-forget: pick a supervisor template.",
     "",
@@ -55,7 +59,8 @@ function printDaemonizationTemplate(port: number): void {
     "   After=network-online.target",
     "",
     "   [Service]",
-    `   ExecStart=${exec} x @takosjp/takosumi server --port ${port}`,
+    "   WorkingDirectory=/path/to/takosumi",
+    `   ExecStart=${exec} ${cliEntry} server --port ${port}`,
     "   Environment=TAKOSUMI_DEPLOY_CONTROL_TOKEN=...",
     "   Environment=TAKOSUMI_DATABASE_URL=postgres://...",
     "   Restart=always",
@@ -71,7 +76,8 @@ function printDaemonizationTemplate(port: number): void {
     "   services:",
     "     takosumi-api:",
     "       image: oven/bun:1",
-    `       command: bun x @takosjp/takosumi server --port ${port}`,
+    "       working_dir: /app",
+    `       command: bun src/cli/main.ts server --port ${port}`,
     "       environment:",
     "         TAKOSUMI_DEPLOY_CONTROL_TOKEN: ${TAKOSUMI_DEPLOY_CONTROL_TOKEN}",
     "         TAKOSUMI_DATABASE_URL: ${TAKOSUMI_DATABASE_URL}",
@@ -80,7 +86,7 @@ function printDaemonizationTemplate(port: number): void {
     "",
     "3. nohup (adhoc / not for production)",
     "",
-    `   nohup takosumi server --port ${port} > /var/log/takosumi.log 2>&1 &`,
+    `   nohup ${exec} ${cliEntry} server --port ${port} > /var/log/takosumi.log 2>&1 &`,
     "",
     "(A CLI-level daemoniser would " +
     "silently drop signals and stdout. Use a real supervisor.)",

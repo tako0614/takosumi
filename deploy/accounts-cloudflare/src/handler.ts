@@ -9,6 +9,7 @@ import {
   customOidcOAuthProvider,
   D1AccountsStore,
   type D1Database,
+  type DeployControlOperations,
   githubOAuthProvider,
   googleOAuthProvider,
   type JsonWebKeySet,
@@ -115,6 +116,18 @@ export interface CreateCloudflareWorkerOptions {
    * `app.fetch` here.
    */
   readonly deployControlFetch?: (env: CloudflareWorkerEnv) => typeof fetch;
+  /**
+   * In-process deploy-control typed operations. When supplied, the proxy calls
+   * these contract-DTO operations directly instead of building a synthetic
+   * Request and dialing it back through the embedded router in the same worker:
+   * no self-issued Bearer handshake, no JSON serialize/parse round-trip. The
+   * unified Takos worker passes the embedded service's typed `operations` facade
+   * here. `deployControlFetch` remains as the fallback transport (and the only
+   * transport for a genuine remote deploy-control origin).
+   */
+  readonly deployControlOperations?: (
+    env: CloudflareWorkerEnv,
+  ) => Promise<DeployControlOperations | undefined>;
 }
 
 export interface R2Bucket {
@@ -244,6 +257,7 @@ async function buildAccountsHandler(
   }
   const issuer = issuerEnv;
   const clients = parseClients(env);
+  const deployControlOperations = await options.deployControlOperations?.(env);
   const commonOptions = {
     issuer,
     clients,
@@ -252,7 +266,11 @@ async function buildAccountsHandler(
     upstreamOAuth: parseUpstreamOAuth(env),
     passkeys: parsePasskeys(env),
     managedOfferingAccess: parseManagedOfferingAccess(env),
-    deployControl: parseDeployControl(env, options.deployControlFetch?.(env)),
+    deployControl: parseDeployControl(
+      env,
+      options.deployControlFetch?.(env),
+      deployControlOperations,
+    ),
     workloadPlatformServices: parseWorkloadPlatformServices(env),
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
@@ -731,20 +749,31 @@ const IN_PROCESS_DEPLOY_CONTROL_BASE = "https://deploy-control.internal/";
 function parseDeployControl(
   env: CloudflareWorkerEnv,
   deployControlFetch?: typeof fetch,
-): { url: string; token?: string; fetch?: typeof fetch } | undefined {
+  deployControlOperations?: DeployControlOperations,
+): {
+  url: string;
+  token?: string;
+  fetch?: typeof fetch;
+  operations?: DeployControlOperations;
+} | undefined {
   // In-process transport (unified single-worker deployment): the deploy-control
-  // plane runs in this same worker, reached through the injected fetch rather
-  // than an edge URL. The bearer must match the embedded service's
+  // plane runs in this same worker. When the host injects the typed `operations`
+  // facade the proxy calls the controller directly (no Bearer handshake, no JSON
+  // round-trip); the injected fetch remains a fallback transport. The bearer
+  // (still threaded for the fetch fallback) must match the embedded service's
   // `TAKOSUMI_DEPLOY_CONTROL_TOKEN` (which gates `authorizeDeployControl`), so we
   // read that shared secret here and pass a syntactically valid synthetic base.
-  if (deployControlFetch) {
+  if (deployControlFetch || deployControlOperations) {
     const token = optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN) ??
       optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN);
     const url = optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL) ??
       IN_PROCESS_DEPLOY_CONTROL_BASE;
-    return token
-      ? { url, token, fetch: deployControlFetch }
-      : { url, fetch: deployControlFetch };
+    return {
+      url,
+      ...(token ? { token } : {}),
+      ...(deployControlFetch ? { fetch: deployControlFetch } : {}),
+      ...(deployControlOperations ? { operations: deployControlOperations } : {}),
+    };
   }
   const url = optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL);
   if (!url) return undefined;

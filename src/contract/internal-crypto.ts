@@ -77,11 +77,49 @@ export function assertNoCanonicalDelimiter(
   }
 }
 
+/**
+ * Constant-time equality over two hex strings. The length difference is folded
+ * into the accumulator and the loop runs over the longer operand, so the
+ * comparison time does not vary with where the first differing character is nor
+ * with whether the lengths match.
+ */
 export function timingSafeEqualHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  const length = Math.max(a.length, b.length);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < length; i += 1) {
+    diff |= (i < a.length ? a.charCodeAt(i) : 0) ^
+      (i < b.length ? b.charCodeAt(i) : 0);
+  }
+  return diff === 0;
+}
+
+/**
+ * Constant-time equality over two UTF-8 strings. Operands are encoded as bytes
+ * so multi-byte characters in operator/internal secrets and tokens are compared
+ * end-to-end. This is the single length-safe source of truth for the worker's
+ * bearer / token / signature / secret checks; do not re-declare a copy that
+ * short-circuits on a length mismatch (which leaks the secret length via
+ * timing).
+ */
+export function constantTimeEqualsString(left: string, right: string): boolean {
+  return constantTimeEqualsBytes(
+    textEncoder.encode(left),
+    textEncoder.encode(right),
+  );
+}
+
+/**
+ * Constant-time equality over two byte arrays. The length difference is folded
+ * into the accumulator and the loop runs over the longer operand.
+ */
+export function constantTimeEqualsBytes(
+  left: Uint8Array,
+  right: Uint8Array,
+): boolean {
+  const length = Math.max(left.length, right.length);
+  let diff = left.length ^ right.length;
+  for (let index = 0; index < length; index += 1) {
+    diff |= (left[index] ?? 0) ^ (right[index] ?? 0);
   }
   return diff === 0;
 }

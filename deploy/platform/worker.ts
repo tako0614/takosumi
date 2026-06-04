@@ -15,44 +15,33 @@ import {
 } from "../accounts-cloudflare/src/handler.ts";
 import {
   type CloudflareWorkerEnv as DeployControlEnv,
-  createDeployControlService,
+  createInProcessDeployControlSeam,
   TakosCoordinationObject,
   TakosumiOpenTofuRunner,
 } from "../cloudflare/src/handler.ts";
 
 export { TakosCoordinationObject, TakosumiOpenTofuRunner };
 
-// Lazy-cached deploy-control service, one per env (mirrors takos mount.ts).
-const services = new WeakMap<
+// In-process deploy-control seam, one cached service per env, shared with the
+// unified Takos worker. The accounts deploy-control proxy calls the typed
+// `operations` facade directly (no Bearer handshake, no JSON round-trip); the
+// HTTP `fetch` dispatch into the embedded service's Hono app is kept as a
+// transport fallback. The synthetic base host is never dialed.
+const seams = new WeakMap<
   CloudflareWorkerEnv,
-  ReturnType<typeof createDeployControlService>
+  ReturnType<typeof createInProcessDeployControlSeam>
 >();
 
-function deployControlService(env: CloudflareWorkerEnv) {
-  let service = services.get(env);
-  if (!service) {
-    service = createDeployControlService(env as unknown as DeployControlEnv);
-    services.set(env, service);
+function deployControlSeam(env: CloudflareWorkerEnv) {
+  let seam = seams.get(env);
+  if (!seam) {
+    seam = createInProcessDeployControlSeam(env as unknown as DeployControlEnv);
+    seams.set(env, seam);
   }
-  return service;
+  return seam;
 }
 
-// In-process deploy-control transport. The accounts deploy-control proxy calls
-// this as `fetch(new URL(path, syntheticBase), init)`; we normalize that into a
-// Request and dispatch straight into the embedded service's Hono app. The
-// synthetic base host is never dialed.
-function deployControlFetch(env: CloudflareWorkerEnv): typeof fetch {
-  const inProcessFetch = async (
-    input: RequestInfo | URL,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const service = await deployControlService(env);
-    const request = input instanceof Request && init === undefined
-      ? input
-      : new Request(input as RequestInfo | URL, init);
-    return await service.app.fetch(request);
-  };
-  return inProcessFetch as typeof fetch;
-}
-
-export default createCloudflareWorker({ deployControlFetch });
+export default createCloudflareWorker({
+  deployControlFetch: (env) => deployControlSeam(env).fetch,
+  deployControlOperations: (env) => deployControlSeam(env).operations(),
+});
