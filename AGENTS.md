@@ -5,8 +5,10 @@ deploy-control plane (plus UI surfaces and the audit ledger). Takosumi is not a 
 npm-published: its handlers are consumed **in-process** through `tsconfig` aliases by **two build targets** — the
 operator's **Takosumi platform worker** (`deploy/platform/`, served at `app.takosumi.com`, the only worker the operator
 deploys) and the **self-hosted Takos product worker** (`takos/deploy/cloudflare/` template, served at the self-hoster's
-own origin). The `takosumi.com` apex is the landing/docs site only; `takos.jp` is the Takos introduction site. The Takos
-product itself is never officially deployed — users deploy it onto their own infrastructure via Takosumi.
+own origin). The `takosumi.com` apex is the landing/docs site only; `takos.jp` is the Takos introduction site. Takos is
+complete as a plain OpenTofu module and self-hosts with `tofu apply` + one wrangler step on its own infrastructure with
+no Takosumi required; running that same module through Takosumi is an optional convenience that adds the Installation /
+run ledger / dashboard. Takos is just another plain OpenTofu module app to Takosumi, with no special coupling.
 
 `deploy/platform/` is the **platform worker's home**: it composes the accounts plane, the in-process deploy-control
 plane, the dashboard SPA, and the OpenTofu runner container into the worker the operator runs at `app.takosumi.com`.
