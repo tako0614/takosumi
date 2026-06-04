@@ -1,0 +1,106 @@
+# THE operator-deployed Takosumi platform worker (app.takosumi.com).
+#
+# One worker = accounts plane (bare-origin OIDC issuer) + in-process
+# deploy-control plane + dashboard SPA (served from ASSETS) + OpenTofu runner
+# container. The Takos product is never officially deployed here; users deploy
+# Takos onto their own infra via Takosumi.
+#
+# All relative paths below resolve from THIS config's directory
+# (takosumi/deploy/platform/).
+
+name = "takosumi"
+main = "worker.ts"
+compatibility_date = "2026-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "app.takosumi.com"
+custom_domain = true
+
+# Dashboard SPA. The accounts handler serves non-API GET/HEAD from this binding
+# (deep links fall back to index.html). run_worker_first lets the worker inspect
+# the request (API namespaces, export downloads) before static assets answer.
+[assets]
+directory = "../../dashboard/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+[observability]
+enabled = true
+
+# Accounts plane store (OIDC / billing / Installation ledger).
+[[d1_databases]]
+binding = "TAKOSUMI_ACCOUNTS_DB"
+database_name = "takosumi-accounts"
+database_id = "51138f7c-f298-4f60-8528-37acc85daa4d"
+
+# Deploy-control store (PlanRun / ApplyRun / Deployment / DeploymentOutput).
+[[d1_databases]]
+binding = "TAKOS_D1"
+database_name = "takosumi-deploy"
+database_id = "a82de2de-60cb-45c0-8ad4-921cd2aa1aaa"
+
+# Accounts data-export artifacts (signed download).
+[[r2_buckets]]
+binding = "TAKOSUMI_ACCOUNTS_EXPORTS"
+bucket_name = "takosumi-accounts-exports"
+
+# Deploy-control plan/state artifacts.
+[[r2_buckets]]
+binding = "TAKOS_ARTIFACTS"
+bucket_name = "takos-artifacts"
+
+# Coordination leases/alarms for the deploy-control plane.
+[[durable_objects.bindings]]
+name = "TAKOS_COORDINATION"
+class_name = "TakosCoordinationObject"
+
+# OpenTofu run executor (container-backed DO security sandbox).
+[[durable_objects.bindings]]
+name = "TAKOS_OPENTOFU_RUNNER"
+class_name = "TakosumiOpenTofuRunner"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TakosCoordinationObject", "TakosumiOpenTofuRunner"]
+
+# OpenTofu run executor container. The embedded deploy-control service reaches
+# this through its OpenTofu runner adapter (idFromName(runId) -> .fetch). The
+# Dockerfile + build context live under deploy/cloudflare/.
+[[containers]]
+class_name = "TakosumiOpenTofuRunner"
+image = "../cloudflare/runner/Dockerfile"
+image_build_context = "../cloudflare"
+instance_type = "basic"
+max_instances = 10
+
+# Producers only: runs are dispatched synchronously to the container DO, so
+# there are no queue consumers in this worker.
+[[queues.producers]]
+binding = "TAKOS_QUEUE"
+queue = "takosumi-control-plane"
+
+[[queues.producers]]
+binding = "TAKOS_OPENTOFU_RUN_QUEUE"
+queue = "takosumi-opentofu-runs"
+
+[vars]
+TAKOSUMI_ACCOUNTS_ISSUER = "https://app.takosumi.com"
+TAKOSUMI_ACCOUNTS_SUBJECT = "tsub_takosumi_prod"
+TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
+TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
+
+# Required secrets (pushed via `wrangler secret put`, NEVER committed):
+#   TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK            stable OIDC signing key (JWK JSON)
+#   TAKOSUMI_ACCOUNTS_ES256_KEY_ID                 signing key id (kid)
+#   TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET pairwise OIDC subject secret
+#   TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET launch-token pairwise secret
+#   TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET       R2 export download HMAC secret
+#   TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN         accounts->deploy-control bearer
+#   TAKOSUMI_DEPLOY_CONTROL_TOKEN                  same value; embedded service's
+#                                                  in-process handshake gate
+# Optional (upstream OAuth providers; set the full group per provider):
+#   TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_CLIENT_ID / _CLIENT_SECRET / _REDIRECT_URI
+#   TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID / _CLIENT_SECRET / _REDIRECT_URI
+#   TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_*             custom OIDC upstream provider

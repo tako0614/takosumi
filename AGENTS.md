@@ -1,15 +1,21 @@
 # AGENTS.md - Takosumi
 
 This repository is **Takosumi**, the source module that provides the accounts plane and the OpenTofu-native
-deploy-control plane (plus UI surfaces and the audit ledger) for the single Takos worker. Takosumi is not a standalone
-service and is not npm-published: its handlers are consumed **in-process** by the takos worker through `tsconfig`
-aliases. There is one operator and one Cloudflare worker serving everything under `app.takosumi.com`; the
-`takosumi.com` apex is the landing/docs site only.
+deploy-control plane (plus UI surfaces and the audit ledger). Takosumi is not a standalone service and is not
+npm-published: its handlers are consumed **in-process** through `tsconfig` aliases by **two build targets** — the
+operator's **Takosumi platform worker** (`deploy/platform/`, served at `app.takosumi.com`, the only worker the operator
+deploys) and the **self-hosted Takos product worker** (`takos/deploy/cloudflare/` template, served at the self-hoster's
+own origin). The `takosumi.com` apex is the landing/docs site only; `takos.jp` is the Takos introduction site. The Takos
+product itself is never officially deployed — users deploy it onto their own infrastructure via Takosumi.
 
-The two in-process entry points are:
+`deploy/platform/` is the **platform worker's home**: it composes the accounts plane, the in-process deploy-control
+plane, the dashboard SPA, and the OpenTofu runner container into the worker the operator runs at `app.takosumi.com`.
+
+The two in-process entry points (consumed by both targets) are:
 
 - `deploy/accounts-cloudflare/src/handler.ts` — account-plane handler (`createAccountsHandler`) mounted at the worker
-  origin root. The issuer is the bare origin; there is no `accounts.takosumi.com`.
+  origin root. The issuer is the bare worker origin (`app.takosumi.com` for the platform worker, the self-hoster's own
+  origin for a self-hosted takos worker); there is no `accounts.takosumi.com`.
 - `deploy/cloudflare/src/handler.ts` — deploy-control handler mounted via the worker's in-process fetch seam. It owns
   the Installation/run ledger and has no public routes; there is no `deploy-control.takosumi.com`.
 
@@ -39,9 +45,11 @@ policy decisions, logs, and audit trail. Credential values and secret outputs ar
 
 ## In-Process Composition
 
-The deploy-control and account-plane handlers are composed into the takos worker, not run as separate services. The
-worker injects stores/capabilities, mounts the account-plane handler at the origin root, and reaches deploy-control
-through the in-process fetch seam. `/internal/*` HTTP exists only for opentofu-runner / executor container callbacks.
+The deploy-control and account-plane handlers are composed into the host worker (the operator's Takosumi platform worker
+via `deploy/platform/`, and the self-hosted Takos product worker via `takos/deploy/cloudflare/`), not run as separate
+services. The worker injects stores/capabilities, mounts the account-plane handler at the origin root, and reaches
+deploy-control through the in-process fetch seam. `/internal/*` HTTP exists only for opentofu-runner / executor container
+callbacks.
 
 `deploy/node-postgres/` is the Bun + Postgres substrate that backs the account-plane handler in the local-substrate
 cloud profile (the `deploy/local-substrate/` cloud wrapper imports its server). It is a substrate for the same
@@ -54,11 +62,12 @@ takosumi/
 ├── package.json
 ├── src/
 │   ├── contract/        public deploy-control DTOs and internal reference contracts
-│   ├── service/         service implementation consumed in-process by the takos worker
+│   ├── service/         service implementation consumed in-process by the platform / product workers
 │   ├── runtime-agent/   internal compatibility code, not a public v1 subpath
 │   ├── cli/             CLI implementation
 │   └── all/             package subpath wrappers
 ├── deploy/
+│   ├── platform/              operator Takosumi platform worker (app.takosumi.com) build target
 │   ├── accounts-cloudflare/   account-plane handler (in-process entry point)
 │   ├── cloudflare/            deploy-control handler + runner + container scaffold
 │   ├── node-postgres/         Postgres substrate for the local-substrate cloud profile
@@ -95,6 +104,7 @@ bun run lint:json-ld
 - Keep public contract changes in `src/contract/` and update docs/tests in the same change.
 - Keep service-specific changes in `src/service/`.
 - Keep API and CLI docs aligned with OpenTofu module repo, PlanRun, ApplyRun, RunnerProfile, and DeploymentOutput.
-- Keep the deploy-control and account-plane handlers consumable in-process by the takos worker; do not reintroduce
-  standalone workers or `accounts.takosumi.com` / `deploy-control.takosumi.com` surfaces.
+- Keep the deploy-control and account-plane handlers consumable in-process by both build targets (the operator's Takosumi
+  platform worker via `deploy/platform/` and the self-hosted Takos product worker via `takos/deploy/cloudflare/`); do not
+  reintroduce standalone workers or `accounts.takosumi.com` / `deploy-control.takosumi.com` surfaces.
 - Do not add Deno; the Bun migration is in progress and Bun remains the default runtime/tooling direction.
