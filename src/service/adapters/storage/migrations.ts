@@ -5,7 +5,6 @@ type StorageDomain =
   | "resources"
   | "registry"
   | "audit"
-  | "usage"
   | "service-endpoints"
   | "custom-domain"
   | "internal-auth";
@@ -392,25 +391,6 @@ export const postgresStorageTableDefinitions:
         ["sequence"],
       ],
       uniqueConstraints: [["sequence"]],
-    },
-    {
-      name: "usage_aggregates",
-      domain: "usage",
-      columns: [
-        "id",
-        "space_id",
-        "group_id",
-        "owner_kind",
-        "metric",
-        "unit",
-        "quantity",
-        "event_count",
-        "first_occurred_at",
-        "last_occurred_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [["space_id"], ["group_id"], ["owner_kind", "metric"]],
     },
     {
       name: "service_endpoints",
@@ -842,31 +822,6 @@ create index if not exists runtime_provider_observations_observed_at_idx
       down: `drop table if exists runtime_provider_observations;
 drop table if exists runtime_observed_states;
 drop table if exists runtime_desired_states;`,
-    },
-    {
-      id: "usage.aggregates.create",
-      version: 14,
-      domain: "usage",
-      description:
-        "Create usage aggregate projection table referenced by the usage storage catalog.",
-      sql: `create table if not exists usage_aggregates (
-  id                 text        primary key,
-  space_id           text        not null,
-  group_id           text,
-  owner_kind         text        not null,
-  metric             text        not null,
-  unit               text        not null,
-  quantity           numeric     not null,
-  event_count        integer     not null,
-  first_occurred_at  timestamptz not null,
-  last_occurred_at   timestamptz not null,
-  updated_at         timestamptz not null
-);
-create index if not exists usage_aggregates_space_idx on usage_aggregates (space_id);
-create index if not exists usage_aggregates_group_idx on usage_aggregates (group_id);
-create index if not exists usage_aggregates_owner_metric_idx
-  on usage_aggregates (owner_kind, metric);`,
-      down: "drop table if exists usage_aggregates;",
     },
     {
       id: "service_endpoints.tables.create",

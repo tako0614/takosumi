@@ -6,7 +6,6 @@ import { OpenTofuDeploymentController } from "../domains/deploy-control/mod.ts";
 test("deploy_control_public_routes — OpenTofu endpoints respond with 501 when controller is absent",
   async () => {
     const app = await createApiApp({
-      registerInternalRoutes: false,
       registerDeployControlPublicRoutes: true,
       deployControlPublicRouteOptions: {
         getDeployControlToken: () => "deploy-control-token",
@@ -46,7 +45,6 @@ test("deploy_control_public_routes — OpenTofu endpoints respond with 501 when 
 test("deploy_control_public_routes — disabled without TAKOSUMI_DEPLOY_CONTROL_TOKEN",
   async () => {
     const app = await createApiApp({
-      registerInternalRoutes: false,
       registerDeployControlPublicRoutes: true,
       requestCorrelation: false,
     });
@@ -63,7 +61,6 @@ test("deploy_control_public_routes — disabled without TAKOSUMI_DEPLOY_CONTROL_
 
 test("deploy_control_public_routes — rejects invalid bearer", async () => {
   const app = await createApiApp({
-    registerInternalRoutes: false,
     registerDeployControlPublicRoutes: true,
     deployControlPublicRouteOptions: {
       getDeployControlToken: () => "deploy-control-token",
@@ -85,7 +82,6 @@ test("deploy_control_public_routes — rejects invalid bearer", async () => {
 
 test("deploy_control_public_routes — scoped bearer enforces space and records actor", async () => {
   const app = await createApiApp({
-    registerInternalRoutes: false,
     registerDeployControlPublicRoutes: true,
     deployControlPublicRouteOptions: {
       controller: new OpenTofuDeploymentController({
@@ -138,7 +134,6 @@ test("deploy_control_public_routes — scoped bearer enforces space and records 
 
 test("deploy_control_public_routes — scoped bearer defaults to deny when scopes are omitted", async () => {
   const app = await createApiApp({
-    registerInternalRoutes: false,
     registerDeployControlPublicRoutes: true,
     deployControlPublicRouteOptions: {
       controller: new OpenTofuDeploymentController({
@@ -170,7 +165,6 @@ test("deploy_control_public_routes — scoped bearer defaults to deny when scope
 
 test("deploy_control_public_routes — runner profile list is scoped", async () => {
   const app = await createApiApp({
-    registerInternalRoutes: false,
     registerDeployControlPublicRoutes: true,
     deployControlPublicRouteOptions: {
       controller: new OpenTofuDeploymentController({

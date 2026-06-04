@@ -12,8 +12,6 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@takosjp/takosumi": ["./src/all/mod.ts"],
-      "@takosjp/takosumi/contract": ["./src/contract/mod.ts"],
       "@takosjp/takosumi/contract/deploy-control-api": [
         "./src/contract/deploy-control-api.ts"
       ],
@@ -24,59 +22,10 @@
         "./packages/accounts-service/src/mod.ts"
       ],
       "@takosjp/takosumi-accounts-cli": ["./packages/cli/src/main.ts"],
-      "@takosjp/takosumi-accounts": ["./packages/all/src/mod.ts"],
       "@takosjp/takosumi-platform-services": [
         "./packages/platform-services/src/mod.ts"
       ],
-      "@takos/takosumi-contract": ["./src/contract/mod.ts"],
-      "@takos/takosumi-contract/deploy-control-api": [
-        "./src/contract/deploy-control-api.ts"
-      ],
-      "@takos/takosumi-contract/reference/compat": [
-        "./src/contract/reference-compat.ts"
-      ],
-      "@takos/takosumi-contract/reference/catalog": [
-        "./src/contract/catalog.ts"
-      ],
-      "@takos/takosumi-contract/reference/implementation": ["./src/contract/implementation.ts"],
-      "@takos/takosumi-contract/reference/runtime-agent": [
-        "./src/contract/runtime-agent.ts"
-      ],
-      "@takos/takosumi-contract/reference/runtime-agent-lifecycle": [
-        "./src/contract/runtime-agent-lifecycle.ts"
-      ],
-      "@takos/takosumi-contract/reference/runtime-capability": [
-        "./src/contract/runtime-capability.ts"
-      ],
-      "@takos/takosumi-contract/reference/host-blocklist": [
-        "./src/contract/reference/host-blocklist.ts"
-      ],
-      "@takos/takosumi-contract/reference/prepared-source-core": [
-        "./src/contract/reference/prepared-source-core.ts"
-      ],
-      "@takos/takosumi-contract/reference/types": ["./src/contract/types.ts"],
-      "@takos/takosumi-contract/reference/types-validators": [
-        "./src/contract/types-validators.ts"
-      ],
-      "@takos/takosumi-contract/internal/api": [
-        "./src/contract/internal-api.ts"
-      ],
-      "@takos/takosumi-contract/internal/material": [
-        "./src/contract/internal-material.ts"
-      ],
-      "@takos/takosumi-contract/internal/material-validators": [
-        "./src/contract/internal-material-validators.ts"
-      ],
-      "@takos/takosumi-contract/internal/provider-adapter": [
-        "./src/contract/provider-adapter.ts"
-      ],
-      "@takos/takosumi-contract/internal/rpc": [
-        "./src/contract/internal-rpc.ts"
-      ],
-      "@takos/takosumi-service/runtime": [
-        "./src/service/shared/runtime/index.ts"
-      ],
-      "takosumi-contract": ["./src/contract/mod.ts"],
+      "takosumi-contract": ["./src/contract/index.ts"],
       "takosumi-contract/deploy-control-api": ["./src/contract/deploy-control-api.ts"],
       "takosumi-contract/reference/compat": [
         "./src/contract/reference-compat.ts"
@@ -105,9 +54,6 @@
       ],
       "takosumi-contract/internal/rpc": ["./src/contract/internal-rpc.ts"],
 
-      "takosumi-deploy-control": ["./src/deploy-control/mod.ts"],
-      "takosumi-deploy-control/git-fetch": ["./src/deploy-control/git-fetch.ts"],
-      "takosumi-deploy-control/deploy-client": ["./src/deploy-control/deploy-client.ts"],
       "takosumi-runtime-agent/prepared-source-reader": [
         "./src/runtime-agent/prepared_source_reader.ts"
       ]
@@ -118,7 +64,6 @@
     "packages/accounts-contract",
     "packages/accounts-service",
     "packages/cli",
-    "packages/all",
     "packages/platform-services",
     "deploy/accounts-cloudflare",
     "deploy/node-postgres",

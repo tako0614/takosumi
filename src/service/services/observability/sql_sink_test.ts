@@ -9,8 +9,6 @@ import type {
 } from "../../adapters/storage/sql.ts";
 import { verifyAuditHashChain } from "./audit_chain.ts";
 import { SqlObservabilitySink } from "./sql_sink.ts";
-import { StandaloneBootstrapService } from "../bootstrap/mod.ts";
-import { LocalOperatorConfig } from "../../adapters/operator-config/mod.ts";
 
 /**
  * In-memory fake of a SQL client tailored to the audit_events table so the
@@ -410,59 +408,5 @@ test("SqlObservabilitySink refuses delete-after-archive without replication", as
   await assert.rejects(
     () => sink.applyRetentionPolicy(),
     /delete-after-archive requires a configured replication sink/,
-  );
-});
-
-test("StandaloneBootstrapService rejects memory observability sink in production", async () => {
-  const config = new LocalOperatorConfig({
-    clock: () => new Date("2026-04-27T00:00:00.000Z"),
-    values: {
-      TAKOSUMI_ENVIRONMENT: "production",
-      TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "service",
-      TAKOSUMI_INTERNAL_API_SECRET: "production-secret-7d3f1a8b9e2c",
-      TAKOSUMI_BOOTSTRAP_OBSERVABILITY_ADAPTER: "memory",
-    },
-  });
-
-  const report = await new StandaloneBootstrapService({
-    operatorConfig: config,
-  })
-    .bootstrap();
-
-  assert.equal(report.ok, false);
-  assert.ok(
-    report.errors.some((diagnostic) =>
-      diagnostic.code === "observability_memory_forbidden_in_production"
-    ),
-    `expected production memory sink rejection, got: ${
-      JSON.stringify(report.errors)
-    }`,
-  );
-});
-
-test("StandaloneBootstrapService selects sql observability when sqlClient available", async () => {
-  const config = new LocalOperatorConfig({
-    clock: () => new Date("2026-04-27T00:00:00.000Z"),
-    values: {
-      TAKOSUMI_ENVIRONMENT: "production",
-      TAKOSUMI_BOOTSTRAP_AUTH_ADAPTER: "service",
-      TAKOSUMI_INTERNAL_API_SECRET: "production-secret-7d3f1a8b9e2c",
-      TAKOSUMI_BOOTSTRAP_OBSERVABILITY_ADAPTER: "sql",
-    },
-  });
-  const sqlClient = new FakeAuditSqlClient();
-
-  const report = await new StandaloneBootstrapService({
-    operatorConfig: config,
-    sqlClient,
-  }).bootstrap();
-
-  assert.ok(report.adapters.observability instanceof SqlObservabilitySink);
-  assert.ok(
-    !report.errors.some((diagnostic) =>
-      diagnostic.code === "observability_memory_forbidden_in_production" ||
-      diagnostic.code === "observability_sql_client_missing"
-    ),
-    `expected no observability errors, got: ${JSON.stringify(report.errors)}`,
   );
 });

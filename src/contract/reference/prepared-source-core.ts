@@ -1,9 +1,9 @@
 /**
  * Canonical tar-safety + capped-fetch core shared by prepared-source fetchers.
  *
- * Both the deploy-control prepared-source fetcher and the runtime-agent
- * prepared-source reader materialize an operator/tenant-influenced tar snapshot
- * over the network and extract it. The digest pin alone does NOT mitigate SSRF
+ * Both the runner server and the runtime-agent prepared-source reader
+ * materialize an operator/tenant-influenced tar snapshot over the network and
+ * extract it. The digest pin alone does NOT mitigate SSRF
  * (the request still reaches the host and the body is buffered before the digest
  * is computed) nor a gzip bomb, so the same defenses must run on both paths:
  *
@@ -16,10 +16,9 @@
  *  - per-entry sizes are summed and rejected past the decompressed cap,
  *  - paths and link targets are normalized and rejected when they escape.
  *
- * This module lives in `contract/reference/*` — the layer that BOTH
- * `src/deploy-control` and `src/runtime-agent` already import — so the single
- * tar-verify / capped-fetch core cannot drift between the two extraction sites
- * and silently weaken one of them.
+ * This module lives in `contract/reference/*` — the layer that the runner and
+ * `src/runtime-agent` extraction sites both import — so the single tar-verify /
+ * capped-fetch core cannot drift between them and silently weaken one of them.
  *
  * Error MESSAGE text differs slightly between the two callers (one prefixes
  * closed-envelope codes for the public Deploy Control API), so the security

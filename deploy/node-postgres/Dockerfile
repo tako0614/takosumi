@@ -9,7 +9,6 @@ WORKDIR /work
 COPY package.json bun.lock tsconfig.json bunfig.toml /work/
 COPY packages/accounts-contract /work/packages/accounts-contract
 COPY packages/accounts-service /work/packages/accounts-service
-COPY packages/all /work/packages/all
 COPY packages/cli /work/packages/cli
 COPY packages/platform-services /work/packages/platform-services
 COPY deploy/node-postgres/package.json /work/deploy/node-postgres/package.json

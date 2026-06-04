@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   BundledRegistrySeedAdapter,
   bundledRegistrySeedTrustRecords,
-} from "../../adapters/registry/mod.ts";
+} from "../../test-fixtures/bundled-registry/mod.ts";
 import { BackendImplementationConformanceService } from "./mod.ts";
 
 test("backend implementation conformance accepts trusted provider with required support", async () => {

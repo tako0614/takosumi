@@ -1,8 +1,7 @@
 import { Hono, type Hono as HonoApp } from "hono";
 import type { AppContext } from "../app_context.ts";
 import { InMemoryRuntimeAgentRegistry } from "../agents/registry.ts";
-import { createSpaceDomainServices } from "../domains/space/mod.ts";
-import { assertRoleCapability, type TakosumiProcessRole } from "../process/mod.ts";
+import type { TakosumiProcessRole } from "../process/mod.ts";
 import { currentRuntime } from "../shared/runtime/index.ts";
 import { createApiCapabilitiesDescription } from "./capabilities.ts";
 import { registerApiErrorHandler } from "./errors.ts";
@@ -10,11 +9,6 @@ import {
   createTakosumiOpenApiDocument,
   type OpenApiDocument,
 } from "./openapi.ts";
-import {
-  type InternalRouteServices,
-  registerInternalRoutes,
-} from "./internal_routes.ts";
-import type { ReplayProtectionStore } from "../adapters/replay-protection/mod.ts";
 import {
   type ReadinessRouteProbes,
   registerReadinessRoutes,
@@ -49,15 +43,7 @@ import {
 export interface CreateApiAppOptions {
   readonly role?: TakosumiProcessRole;
   readonly context?: AppContext;
-  readonly internalRouteServices?: InternalRouteServices;
   readonly getInternalServiceSecret?: () => string | undefined;
-  /**
-   * Shared replay-protection store injected into the internal-RPC authenticator.
-   * Omitting it falls back to a per-process in-memory store, which cannot defend
-   * against cross-replica replay in multi-replica deployments.
-   */
-  readonly replayProtectionStore?: ReplayProtectionStore;
-  readonly registerInternalRoutes?: boolean;
   readonly registerOpenApiRoute?: boolean;
   readonly registerReadinessRoutes?: boolean;
   readonly readinessRouteProbes?: ReadinessRouteProbes;
@@ -87,15 +73,12 @@ export async function createApiApp(
   options: CreateApiAppOptions = {},
 ): Promise<HonoApp> {
   const role = options.role ?? "takosumi-api";
-  assertRoleCapability(role, "api.health.read");
-  assertRoleCapability(role, "api.capabilities.read");
 
   const app: HonoApp = new Hono();
   registerApiErrorHandler(app);
   if (options.requestCorrelation !== false) {
     registerRequestCorrelation(app, options.requestCorrelation ?? {});
   }
-  const defaultRouteServices = createDefaultRouteServices(options);
 
   app.get("/health", (c) => {
     return c.json({
@@ -106,7 +89,6 @@ export async function createApiApp(
   });
 
   const mounted = resolveMountedRouteFamilies(role, options);
-  const internalRoutesMounted = mounted.internalRoutesMounted;
   const runtimeAgentRoutesMounted = mounted.runtimeAgentRoutesMounted;
   const openApiRouteMounted = mounted.openApiRouteMounted;
   const readinessRoutesMounted = mounted.readinessRoutesMounted;
@@ -115,24 +97,9 @@ export async function createApiApp(
     mounted.deployControlPublicRoutesMounted;
   const metricsRoutesMounted = mounted.metricsRoutesMounted;
 
-  if (internalRoutesMounted) assertRoleCapability(role, "api.internal.host");
-  if (runtimeAgentRoutesMounted) {
-    assertRoleCapability(role, "runtime.agent.lease");
-    assertRoleCapability(role, "runtime.agent.observe");
-  }
-
   app.get("/capabilities", (c) => {
     return c.json(createApiCapabilitiesDescription(role, mounted));
   });
-
-  if (internalRoutesMounted) {
-    registerInternalRoutes(app, {
-      services: options.internalRouteServices ??
-        (await defaultRouteServices).internal,
-      getInternalServiceSecret: options.getInternalServiceSecret,
-      replayProtectionStore: options.replayProtectionStore,
-    });
-  }
 
   if (runtimeAgentRoutesMounted) {
     registerRuntimeAgentRoutes(app, createRuntimeAgentRouteOptions(options));
@@ -197,10 +164,6 @@ function routeFamilyMountInputs(
   { readonly override: boolean | undefined; readonly hasOptions: boolean }
 > {
   return {
-    internalRoutesMounted: {
-      override: options.registerInternalRoutes,
-      hasOptions: options.internalRouteServices !== undefined,
-    },
     runtimeAgentRoutesMounted: {
       override: options.registerRuntimeAgentRoutes,
       hasOptions: options.runtimeAgentRouteOptions !== undefined,
@@ -245,26 +208,6 @@ function resolveMountedRouteFamilies(
       family.defaultMounted({ role, hasOptions });
   }
   return flags;
-}
-
-async function createDefaultRouteServices(
-  options: CreateApiAppOptions,
-): Promise<{
-  readonly internal: InternalRouteServices;
-}> {
-  const context = options.context;
-  if (context) {
-    return {
-      internal: {
-        space: context.services.space,
-        entitlements: context.services.entitlements.policy,
-      },
-    };
-  }
-  const space = createSpaceDomainServices();
-  return {
-    internal: { space },
-  };
 }
 
 function createRuntimeAgentRouteOptions(

@@ -9,7 +9,6 @@ import { TAKOSUMI_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
 
 test("createApiApp exposes /openapi.json when enabled", async () => {
   const app = await createApiApp({
-    registerInternalRoutes: false,
     registerOpenApiRoute: true,
   });
 
@@ -24,7 +23,6 @@ test("createApiApp exposes /openapi.json when enabled", async () => {
 
 test("createApiApp does not mount retired public deployment routes", async () => {
   const app = await createApiApp({
-    registerInternalRoutes: false,
     registerDeployControlPublicRoutes: true,
     registerOpenApiRoute: true,
     deployControlPublicRouteOptions: {
@@ -91,7 +89,6 @@ test("createApiApp does not mount retired public deployment routes", async () =>
 
 test("createApiApp mounts runtime-agent routes fail-closed when enabled", async () => {
   const app = await createApiApp({
-    registerInternalRoutes: false,
     registerRuntimeAgentRoutes: true,
     role: "takosumi-runtime-agent",
   });
@@ -108,7 +105,6 @@ test("createApiApp mounts runtime-agent routes fail-closed when enabled", async 
 test("createApiApp accepts signed v1 runtime-agent routes when enabled", async () => {
   const secret = "runtime-agent-secret";
   const app = await createApiApp({
-    registerInternalRoutes: false,
     registerRuntimeAgentRoutes: true,
     role: "takosumi-runtime-agent",
     getInternalServiceSecret: () => secret,
@@ -147,7 +143,6 @@ test("createApiApp uses context runtime-agent registry for mounted routes", asyn
   });
   const app = await createApiApp({
     context,
-    registerInternalRoutes: false,
     registerRuntimeAgentRoutes: true,
     role: "takosumi-runtime-agent",
     getInternalServiceSecret: () => secret,

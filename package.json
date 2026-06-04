@@ -3,28 +3,13 @@
   "version": "0.17.0",
   "license": "AGPL-3.0-only",
   "type": "module",
-  "module": "./src/all/mod.ts",
   "workspaces": [
     "packages/accounts-contract",
     "packages/accounts-service",
     "packages/cli",
-    "packages/all",
     "packages/platform-services",
     "deploy/node-postgres"
   ],
-  "exports": {
-    ".": "./src/all/mod.ts",
-    "./accounts": "./packages/all/src/mod.ts",
-    "./accounts/contract": "./packages/accounts-contract/src/mod.ts",
-    "./accounts/service": "./packages/accounts-service/src/mod.ts",
-    "./accounts/platform-services": "./packages/platform-services/src/mod.ts",
-    "./contract": "./src/contract/mod.ts",
-    "./contract/deploy-control-api": "./src/contract/deploy-control-api.ts",
-    "./deploy-control": "./src/deploy-control/mod.ts",
-    "./runtime-agent": "./src/runtime-agent/mod.ts",
-    "./cli": "./src/all/cli.ts",
-    "./server": "./src/all/server.ts"
-  },
   "scripts": {
     "check": "tsc --noEmit && bun run check:cloudflare-worker-build",
     "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers deploy/cloudflare/src/worker.ts --outfile /tmp/takosumi-cf-worker-check.mjs && bun build --target browser --format esm deploy/cloudflare/src/wfp_dispatch_worker.ts --outfile /tmp/takosumi-wfp-dispatch-worker-check.mjs",

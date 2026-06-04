@@ -56,7 +56,6 @@ export interface OpenApiOperation {
 export interface CreateTakosumiOpenApiDocumentOptions {
   readonly deployControlPublicRoutesMounted?: boolean;
   readonly artifactRoutesMounted?: boolean;
-  readonly internalRoutesMounted?: boolean;
   readonly runtimeAgentRoutesMounted?: boolean;
   readonly readinessRoutesMounted?: boolean;
   /**
@@ -93,7 +92,7 @@ export function createTakosumiOpenApiDocument(
       title: "Takosumi API",
       version: TAKOSUMI_OPENAPI_VERSION,
       description:
-        "Dependency-free OpenAPI-ish description for mounted Takosumi process, deployControl, internal, runtime-agent, readiness, and status route families.",
+        "Dependency-free OpenAPI-ish description for mounted Takosumi process, deployControl, runtime-agent, readiness, and status route families.",
     },
     servers,
     "x-takos-service": "takosumi",
@@ -1116,29 +1115,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     EmptyResponse: {
       description: "No response body.",
     },
-    InternalSpaceRequest: {
-      type: "object",
-      properties: {
-        spaceId: { type: "string" },
-        name: { type: "string" },
-        metadata: jsonObject,
-      },
-    },
-    InternalGroupRequest: {
-      type: "object",
-      required: ["spaceId"],
-      properties: {
-        spaceId: { type: "string" },
-        groupId: { type: "string" },
-        name: { type: "string" },
-        envName: { type: "string" },
-        metadata: jsonObject,
-      },
-    },
-    SpacesResponse: jsonObject,
-    SpaceResponse: jsonObject,
-    GroupsResponse: jsonObject,
-    GroupResponse: jsonObject,
     RuntimeAgentEnrollRequest: jsonObject,
     RuntimeAgentHeartbeatRequest: jsonObject,
     RuntimeAgentLeaseRequest: jsonObject,

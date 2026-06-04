@@ -45,10 +45,6 @@ import {
   type NotificationPort,
 } from "./adapters/notification/mod.ts";
 import { type KmsPort, NoopTestKms } from "./adapters/kms/mod.ts";
-import {
-  InMemoryRouterConfigAdapter,
-  type RouterConfigPort,
-} from "./adapters/router/mod.ts";
 import { MemoryQueueAdapter, type QueuePort } from "./adapters/queue/mod.ts";
 import {
   MemoryObjectStorage,
@@ -94,7 +90,6 @@ import {
   type EntitlementPolicyPort,
   EntitlementPolicyService,
 } from "./services/entitlements/mod.ts";
-import type { UsageAggregateStore } from "./services/usage/mod.ts";
 import {
   createOperatorImplementationRegistry,
   type OperatorImplementationRegistry,
@@ -111,10 +106,6 @@ export interface AppContextOptions {
   readonly runtimeConfig?: AppRuntimeConfig;
   readonly loadRuntimeConfig?: boolean;
   readonly runtimeEnv?: Record<string, string | undefined>;
-  readonly billing?: {
-    readonly baseUrl?: string;
-    readonly secret?: string;
-  };
   /**
    * Operator-injected managed-hosting service implementations. The Takosumi service
    * ships none by default — a plain import constructs zero managed-hosting
@@ -143,7 +134,6 @@ export interface AppStores {
   readonly resources: ResourceStores;
   readonly registry: RegistryStores;
   readonly audit: AuditStores;
-  readonly usage: UsageStores;
   readonly serviceEndpoints: ServiceEndpointStores;
 }
 
@@ -174,10 +164,6 @@ export interface AuditStores {
   readonly events: AuditStore;
 }
 
-export interface UsageStores {
-  readonly aggregates: UsageAggregateStore;
-}
-
 export interface ServiceEndpointStores {
   readonly endpoints: ServiceEndpointStore;
   readonly trustRecords: ServiceTrustRecordStore;
@@ -196,7 +182,6 @@ export interface AppAdapters {
   readonly storage: StorageDriver;
   readonly kms: KmsPort;
   readonly observability: ObservabilitySink;
-  readonly routerConfig: RouterConfigPort;
   readonly queue: QueuePort;
   readonly objectStorage: ObjectStoragePort;
   readonly runtimeAgent: RuntimeAgentRegistry;
@@ -214,7 +199,6 @@ const STRICT_RUNTIME_ADAPTERS: readonly (keyof AppAdapters)[] = [
   "objectStorage",
   "kms",
   "secrets",
-  "routerConfig",
   "observability",
   "runtimeAgent",
 ];
@@ -232,7 +216,6 @@ const STRICT_RUNTIME_FALLBACK_LABELS: Record<keyof AppAdapters, string> = {
   objectStorage: "in-memory object storage",
   kms: "noop KMS",
   secrets: "in-memory secret store",
-  routerConfig: "in-memory router config",
   observability: "in-memory observability",
   runtimeAgent: "in-memory runtime-agent registry",
 };
@@ -364,8 +347,6 @@ export function createDefaultAppAdapters(
         idGenerator: uuidFactory,
       }),
     observability,
-    routerConfig: options.adapters?.routerConfig ??
-      new InMemoryRouterConfigAdapter({ clock: dateClock }),
     queue: options.adapters?.queue ??
       new MemoryQueueAdapter({
         clock: dateClock,

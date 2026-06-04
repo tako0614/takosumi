@@ -35,7 +35,6 @@ import {
   InMemoryServiceGrantStore,
   InMemoryServiceTrustRecordStore,
 } from "./domains/service-endpoints/mod.ts";
-import { InMemoryUsageAggregateStore } from "./services/usage/mod.ts";
 import type {
   StorageDriver,
   StorageTransaction,
@@ -82,10 +81,6 @@ export function createAppStores(
     registry: registryStores,
     audit: {
       events: options.stores?.audit?.events ?? new InMemoryAuditStore(),
-    },
-    usage: {
-      aggregates: options.stores?.usage?.aggregates ??
-        new InMemoryUsageAggregateStore(),
     },
     serviceEndpoints: {
       endpoints: options.stores?.serviceEndpoints?.endpoints ??
@@ -159,10 +154,6 @@ function createStorageBackedAppStores(
     audit: {
       events: options.stores?.audit?.events ??
         storageBackedStore(driver, (tx) => tx.audit.events),
-    },
-    usage: {
-      aggregates: options.stores?.usage?.aggregates ??
-        storageBackedStore(driver, (tx) => tx.usage.aggregates),
     },
     serviceEndpoints: {
       endpoints: options.stores?.serviceEndpoints?.endpoints ??

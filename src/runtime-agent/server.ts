@@ -333,9 +333,8 @@ export interface ServeHandle {
  * The pure `createRuntimeAgentApp` factory above never touches the serve
  * primitive — it returns only the `Hono` app — so consumers that wire the app
  * into their own server (tests, embedders supplying their own bind) do not pull
- * the host server boundary into their graph. This helper, the
- * in-process `startEmbeddedAgent` (`./embed.ts`), and the `import.meta.main`
- * dev-runner below are the only paths that bind a port.
+ * the host server boundary into their graph. This helper and the
+ * `import.meta.main` dev-runner below are the only paths that bind a port.
  */
 export function serveRuntimeAgent(options: ServeOptions): ServeHandle {
   const app = createRuntimeAgentApp({
@@ -369,8 +368,8 @@ export {
 /**
  * Optional dev-runner: running this module directly starts a bare runtime-agent
  * with an empty handler registry and the local serve primitive. This is
- * a convenience for local development only. Production operators embed an
- * agent process via `startEmbeddedAgent` or their own distribution wrapper so
+ * a convenience for local development only. Production operators run an agent
+ * process via {@link serveRuntimeAgent} or their own distribution wrapper so
  * they can pass their handler registry. Importing this module (the package
  * entry) never binds a port; only running it directly does.
  */

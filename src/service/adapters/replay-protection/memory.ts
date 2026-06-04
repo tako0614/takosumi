@@ -4,9 +4,9 @@ import type {
 } from "./store.ts";
 
 /**
- * Default in-memory backend for unit tests and local single-process hosts.
- * NOT safe for distributed deploys — pick {@link SqlReplayProtectionStore}
- * for any host that runs multiple Takosumi replicas.
+ * In-process replay protection backend. The worker terminates every signed
+ * internal request inside one process, so this single-process store is the
+ * default and only implementation.
  */
 export class InMemoryReplayProtectionStore implements ReplayProtectionStore {
   readonly #seen = new Map<string, number>();

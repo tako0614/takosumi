@@ -49,7 +49,7 @@ export TAKOSUMI_DEV_MODE=1
 ## API
 
 ```typescript
-import { createTakosumiService } from "@takosjp/takosumi";
+import { createTakosumiService } from "./bootstrap.ts";
 
 const { app } = await createTakosumiService({
   runtimeEnv: process.env,
