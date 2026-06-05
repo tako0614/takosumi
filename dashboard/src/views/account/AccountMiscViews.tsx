@@ -144,7 +144,7 @@ export function InstallWizard() {
     setErr(null);
     const p = planRun();
     if (!p) {
-      setErr("先に PlanRun を実行してください。");
+      setErr("先に「変更を確認」を実行してください。");
       return;
     }
     const session = readSession();
@@ -161,7 +161,7 @@ export function InstallWizard() {
     const planDigest = pickString(p, ["expected.planDigest", "planDigest"]);
     if (!appId || !commit || !planDigest) {
       setErr(
-        "Plan の結果を install に使用できませんでした。時間をおいて再度お試しください。",
+        "変更の確認結果を公開に使用できませんでした。時間をおいて再度お試しください。",
       );
       return;
     }
@@ -193,9 +193,9 @@ export function InstallWizard() {
   return (
     <AppShell>
       <div class="page-header">
-        <h1>App を install</h1>
+        <h1>アプリを追加</h1>
         <p class="page-sub">
-          Git リポジトリから takosumi 上に app を install します。
+          Git リポジトリから takosumi 上にアプリを追加します。
         </p>
       </div>
 
@@ -228,8 +228,8 @@ export function InstallWizard() {
             disabled={planRunning() || !gitUrl() || !spaceId()}
           >
             <Icons.GitBranch class="w-4 h-4" /> {planRunning()
-              ? "Plan 中..."
-              : "Plan"}
+              ? "変更を確認中..."
+              : "変更を確認"}
           </button>
         </form>
       </section>
@@ -237,7 +237,7 @@ export function InstallWizard() {
       <Show when={planRun()}>
         {(p) => (
           <section class="detail-section">
-            <h2>Plan 結果</h2>
+            <h2>変更内容の確認</h2>
             <dl class="kv-list">
               <dt>App ID</dt>
               <dd>
@@ -312,14 +312,14 @@ export function InstallWizard() {
           disabled={installing() || !planRun() || !accountId() || !spaceId()}
         >
           <Icons.Server class="w-4 h-4" /> {installing()
-            ? "Install 中..."
-            : "Install"}
+            ? "公開中..."
+            : "公開"}
         </button>
         <a href="/apps" class="btn btn-secondary" style="margin-left: 8px;">
           キャンセル
         </a>
         <p class="muted" style="margin-top: 12px;">
-          Install 先の account と space を確認してから実行してください。
+          公開先の account と space を確認してから実行してください。
         </p>
       </section>
     </AppShell>
@@ -332,7 +332,7 @@ export function InstallWizard() {
  * and the wizard pre-fills + runs the PlanRun.
  */
 export function InstallByUrlView() {
-  return <Page title="Install">{() => <InstallWizard />}</Page>;
+  return <Page title="アプリを追加">{() => <InstallWizard />}</Page>;
 }
 
 /**
@@ -341,7 +341,7 @@ export function InstallByUrlView() {
  * links/bookmarks keep working.
  */
 export function AppsInstallView() {
-  return <Page title="Install app">{() => <InstallWizard />}</Page>;
+  return <Page title="アプリを追加">{() => <InstallWizard />}</Page>;
 }
 
 // ===========================================================================
@@ -839,9 +839,9 @@ export function HomeView() {
             </p>
           </div>
           <section class="empty-state">
-            <p>まだ何も installed されていません。</p>
+            <p>まだアプリがありません。</p>
             <a href="/install" class="btn btn-primary">
-              最初のアプリを install →
+              最初のアプリを追加 →
             </a>
           </section>
         </AppShell>
@@ -865,14 +865,14 @@ export function NotificationsView() {
           <div class="page-header">
             <h1>Notifications</h1>
             <p class="page-sub">
-              billing アラート / app install イベント / invite の通知。
+              billing アラート / アプリ追加イベント / invite の通知。
             </p>
           </div>
           <section class="empty-state">
             <Icons.Bell class="w-8 h-8" aria-hidden="true" />
             <p>通知はまだ利用できません (coming soon)。</p>
             <p class="muted">
-              billing アラート / app install イベント / invite
+              billing アラート / アプリ追加イベント / invite
               の通知配信は、このアカウントプレーンではまだ実装されていません。
             </p>
           </section>

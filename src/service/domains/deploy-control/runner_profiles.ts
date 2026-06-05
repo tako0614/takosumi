@@ -8,6 +8,86 @@
 
 import type { RunnerProfile } from "takosumi-contract/deploy-control-api";
 
+/**
+ * Resolve the operator-curated set of enabled runner profiles from a CSV env
+ * value (`TAKOSUMI_ENABLED_RUNNER_PROFILES`, e.g.
+ * `"cloudflare-default,aws-default,gcp-default"`).
+ *
+ * The returned list is the operator-curated provider surface: only the listed
+ * profile ids appear (so `/v1/runner-profiles` and policy evaluation never see
+ * an unlisted seed), and each listed profile is returned with
+ * `labels["takosumi.com/profile-enabled"] = "true"` merged in so a template
+ * seed passes the policy gate once the operator opts it in.
+ *
+ * Behavior:
+ * - unset / empty / whitespace-only env -> defaults to `["cloudflare-default"]`.
+ * - listed ids preserve the env's order; duplicates collapse to first wins.
+ * - unknown ids (not present in `allProfiles`) are collected and warned, then
+ *   skipped. This never throws — a typo in operator config degrades the surface
+ *   rather than crashing the worker boot.
+ */
+export function resolveEnabledRunnerProfiles(
+  allProfiles: readonly RunnerProfile[],
+  envValue: string | undefined,
+): readonly RunnerProfile[] {
+  const byId = new Map(allProfiles.map((profile) => [profile.id, profile]));
+  const requestedIds = parseEnabledRunnerProfileIds(envValue);
+  const enabled: RunnerProfile[] = [];
+  const unknownIds: string[] = [];
+  for (const id of requestedIds) {
+    const profile = byId.get(id);
+    if (!profile) {
+      unknownIds.push(id);
+      continue;
+    }
+    enabled.push(withProfileEnabledLabel(profile));
+  }
+  if (unknownIds.length > 0) {
+    console.warn(
+      `[takosumi-service] WARNING: TAKOSUMI_ENABLED_RUNNER_PROFILES lists ` +
+        `unknown runner profile id(s) ${unknownIds.join(", ")}; skipping. ` +
+        `Known ids: ${Array.from(byId.keys()).join(", ")}.`,
+    );
+  }
+  return enabled;
+}
+
+/**
+ * Parse the CSV env value into a deduplicated, order-preserving list of profile
+ * ids. Unset / empty / whitespace-only input defaults to `["cloudflare-default"]`.
+ */
+export function parseEnabledRunnerProfileIds(
+  envValue: string | undefined,
+): readonly string[] {
+  const ids = (envValue ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (ids.length === 0) {
+    return [DEFAULT_ENABLED_RUNNER_PROFILE_ID];
+  }
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    deduped.push(id);
+  }
+  return deduped;
+}
+
+const DEFAULT_ENABLED_RUNNER_PROFILE_ID = "cloudflare-default";
+
+function withProfileEnabledLabel(profile: RunnerProfile): RunnerProfile {
+  return {
+    ...profile,
+    labels: {
+      ...(profile.labels ?? {}),
+      "takosumi.com/profile-enabled": "true",
+    },
+  };
+}
+
 export function createDefaultRunnerProfiles(now = Date.now()): readonly RunnerProfile[] {
   const cloudflareProvider = "registry.opentofu.org/cloudflare/cloudflare";
   const awsProvider = "registry.opentofu.org/hashicorp/aws";

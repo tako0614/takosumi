@@ -35,7 +35,7 @@ export function AccountHubView() {
           </div>
           <div class="account-nav">
             <a href="/account/profile">プロフィール</a>
-            <a href="/account/security">セキュリティ (passkey / 接続)</a>
+            <a href="/account/security">セキュリティ (passkey / 連携)</a>
             <a href="/account/tokens">Personal access tokens</a>
             <a href="/account/billing">Billing</a>
             <a href="/account/sessions">Sessions</a>

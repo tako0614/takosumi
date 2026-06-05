@@ -96,6 +96,8 @@ TAKOSUMI_ACCOUNTS_ISSUER = "https://app.takosumi.com"
 TAKOSUMI_ACCOUNTS_SUBJECT = "tsub_takosumi_prod"
 TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
 TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
+# Operator-curated provider surface (CSV of runner profile ids); aws/gcp enabled later.
+TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default"
 
 # Required secrets (pushed via `wrangler secret put`, NEVER committed):
 #   TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK            stable OIDC signing key (JWK JSON)

@@ -35,6 +35,10 @@ import {
   type WorkloadService,
 } from "../account/lib/api.ts";
 import { ActionError, createAction } from "../account/lib/action.tsx";
+import {
+  exportStatusLabel,
+  serviceStatusLabel,
+} from "../../lib/status-labels.ts";
 
 export default function InstallationDetailView() {
   return <Page>{() => <Inner />}</Page>;
@@ -66,7 +70,7 @@ function Inner() {
             class="btn btn-secondary"
             style="margin-top: 16px;"
           >
-            Apps 一覧へ戻る
+            アプリ一覧へ戻る
           </a>
         </Match>
         <Match when={app()}>
@@ -188,9 +192,11 @@ function Inner() {
               <EventsSection installationId={a().installationId} />
 
               <section class="detail-section">
-                <p class="muted">Uninstall は Danger zone から実行できます。</p>
+                <p class="muted">
+                  アプリの削除は Danger zone から実行できます。
+                </p>
                 <a href="/installations" class="btn btn-secondary">
-                  ← Apps 一覧へ戻る
+                  ← アプリ一覧へ戻る
                 </a>
               </section>
             </>
@@ -206,8 +212,8 @@ function Inner() {
 // ===========================================================================
 
 const DETAIL_NAV_TABS = [
-  { suffix: "", label: "Overview" },
-  { suffix: "/danger", label: "Danger" },
+  { suffix: "", label: "概要" },
+  { suffix: "/danger", label: "削除" },
 ];
 
 function AppDetailNav(props: { installationId: string }) {
@@ -326,7 +332,7 @@ function WorkloadServicesSection(props: {
                           <code>{service.id}</code>
                           <div class="muted">{service.materialKind}</div>
                         </td>
-                        <td>{service.status}</td>
+                        <td>{serviceStatusLabel(service.status)}</td>
                         <td>
                           <Show when={service.endpoint} fallback={<>—</>}>
                             {(endpoint) => <OutputValue value={endpoint()} />}
@@ -647,8 +653,8 @@ function ExportForm(props: { installationId: string }) {
       <Show when={operation()}>
         {(op) => (
           <p class="muted" style="margin-top: 8px;">
-            operation <code>{op().operationId}</code> — status:{" "}
-            <strong>{op().status}</strong>
+            操作 <code>{op().operationId}</code> — 状態:{" "}
+            <strong>{exportStatusLabel(op().status)}</strong>
           </p>
         )}
       </Show>

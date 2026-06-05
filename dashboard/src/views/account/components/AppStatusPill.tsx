@@ -1,24 +1,21 @@
+import { installationStatusLabel } from "../../../lib/status-labels.ts";
+
 interface Props {
   status?: string;
   class?: string;
 }
 
-// Aligned with the canonical contract enum. The canonical list is
-// `installing` / `ready` / `failed` / `suspended` / `exported`.
-const LABEL: Record<string, string> = {
-  ready: "稼働中",
-  installing: "インストール中",
-  failed: "失敗",
-  suspended: "停止中",
-  exported: "エクスポート済み",
-};
-
-/** Ported from takosumi dashboard-ui/src/components/apps/AppStatusPill.tsx. */
+/**
+ * App ("Installation") status pill. Labels come from the shared
+ * status-label map (`lib/status-labels.ts`) so the App-vocabulary wording is
+ * defined once and reused by later screens. The `status-${s()}` class still
+ * keys off the raw status string for styling.
+ */
 export default function AppStatusPill(props: Props) {
   const s = () => props.status ?? "unknown";
   return (
     <span class={`status-pill status-${s()} ${props.class ?? ""}`}>
-      {LABEL[s()] ?? s()}
+      {installationStatusLabel(props.status)}
     </span>
   );
 }

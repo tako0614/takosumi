@@ -37,7 +37,9 @@ const RETIRED_DOC_PATHS = [
 
 const RETIRED_DOC_TERMS = [
   "App" + "Spec",
-  "." + "takosumi",
+  // The retired `.takosumi/` in-repo metadata convention (trailing slash keeps
+  // legitimate hostnames like app.takosumi.com out of this check).
+  "." + "takosumi/",
   "takosumi-" + "cloud",
   "Takosumi " + "Cloud",
   "takosumi-" + "plugins",

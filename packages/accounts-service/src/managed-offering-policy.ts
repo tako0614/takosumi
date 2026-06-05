@@ -1,15 +1,13 @@
-import {
-  TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
-  TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
-  TAKOSUMI_ACCOUNTS_TOKEN_PATH,
-} from "@takosjp/takosumi-accounts-contract";
+// Scope: this module gates ONLY the managed-takos offering surfaces — the
+// hosted-signup funnel (`/v1/installations/use-takos/start`), the managed-cell
+// `materialize`/`export` installation mutations, and Stripe checkout. The
+// generic Takosumi platform (OIDC sign-in, PAT issuance, upstream OAuth,
+// passkeys, generic Installations + import, PlanRuns, deployment / rollback
+// mutations, and the installation status PATCH) is NOT launch-gated and must
+// keep working while the managed offering is closed.
 
 import { isSha256HexDigest } from "./installation-helpers.ts";
-import {
-  appInstallationStatusValue,
-  json,
-  readJsonObject,
-} from "./http-helpers.ts";
+import { json } from "./http-helpers.ts";
 import type { InstallationRoute } from "./route-matchers.ts";
 
 export interface ManagedOfferingAccessPolicy {
@@ -56,6 +54,11 @@ export function createOpenManagedOfferingAccessPolicy(
   return policy;
 }
 
+// Returns a 503 launch-readiness response unless the managed offering is open
+// with validated evidence. Call this ONLY from managed-takos offering call
+// sites (use-takos/start, materialize/export mutations, Stripe checkout). The
+// offering-gate semantics here are unchanged; only the set of call sites that
+// invoke it has been narrowed to offering surfaces.
 export function managedOfferingAccessBlocked(
   policy: ManagedOfferingAccessPolicy | undefined,
 ): Response | null {
@@ -146,41 +149,16 @@ function managedOfferingSummaryLooksSensitive(summary: string): boolean {
     );
 }
 
-export function managedOfferingGuardedCoreAccessRoute(
-  pathname: string,
-  method: string,
-): boolean {
-  return (pathname === TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH && method === "GET") ||
-    (pathname === TAKOSUMI_ACCOUNTS_TOKEN_PATH && method === "POST") ||
-    (pathname === TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH && method === "POST");
-}
-
-export async function managedOfferingReadyStatusPatchBlocked(
-  request: Request,
-  policy: ManagedOfferingAccessPolicy | undefined,
-): Promise<Response | null> {
-  if (
-    policy?.status === "open" && managedOfferingOpenPolicyHasEvidence(policy)
-  ) {
-    return null;
-  }
-  const body = await readJsonObject(request.clone());
-  const requestedStatus = appInstallationStatusValue(body?.status);
-  if (requestedStatus !== "ready" && requestedStatus !== "installing") {
-    return null;
-  }
-  return managedOfferingAccessBlocked(policy);
-}
-
+// Only the managed-cell `materialize`/`export` installation mutations are
+// offering surfaces. Generic deployment / deployment-plan-run / rollback
+// mutations are part of the non-gated platform and must work while the managed
+// offering is closed.
 export function managedOfferingGuardedInstallationMutation(
   kind: InstallationRoute["kind"],
   method: string,
 ): boolean {
   if (method === "POST") {
-    return kind === "deployment" ||
-      kind === "deployment-plan-run" ||
-      kind === "rollback" ||
-      kind === "materialize" ||
+    return kind === "materialize" ||
       kind === "export";
   }
   return false;
