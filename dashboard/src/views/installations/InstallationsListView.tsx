@@ -27,7 +27,7 @@ const STORAGE_KEY = "tg_apps_space_id";
  * `useAuth().spaces`.
  */
 export default function InstallationsListView() {
-  return <Page title="Apps">{() => <InstallationsListInner />}</Page>;
+  return <Page title="アプリ">{() => <InstallationsListInner />}</Page>;
 }
 
 function InstallationsListInner() {
@@ -55,11 +55,11 @@ function InstallationsListInner() {
   return (
     <AppShell>
       <div class="page-header">
-        <h1>Apps</h1>
-        <p class="page-sub">Space ごとの install 済みアプリを確認します。</p>
+        <h1>アプリ</h1>
+        <p class="page-sub">Space ごとの導入済みアプリを確認します。</p>
         <div class="page-actions">
           <a href="/install" class="btn btn-primary">
-            + Install
+            + アプリを追加
           </a>
         </div>
       </div>
@@ -109,9 +109,9 @@ function InstallationsListInner() {
                 when={list().length > 0}
                 fallback={
                   <section class="empty-state">
-                    <p>この space にはまだ何も installed されていません。</p>
+                    <p>この space にはまだアプリがありません。</p>
                     <a href="/install" class="btn btn-primary">
-                      最初のアプリを install →
+                      最初のアプリを追加 →
                     </a>
                   </section>
                 }

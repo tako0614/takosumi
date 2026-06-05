@@ -3,11 +3,11 @@ import { Bell, CreditCard, Home, LayoutGrid, UserCircle2 } from "lucide-solid";
 import Wordmark from "../brand/Wordmark.tsx";
 
 const ITEMS = [
-  { href: "/home", label: "Home", icon: Home },
-  { href: "/apps", label: "Apps", icon: LayoutGrid },
-  { href: "/account", label: "Account", icon: UserCircle2 },
+  { href: "/home", label: "ホーム", icon: Home },
+  { href: "/apps", label: "アプリ", icon: LayoutGrid },
+  { href: "/account", label: "アカウント", icon: UserCircle2 },
   { href: "/account/billing", label: "Billing", icon: CreditCard },
-  { href: "/notifications", label: "Notifications", icon: Bell },
+  { href: "/notifications", label: "通知", icon: Bell },
 ];
 
 /** Ported from takosumi dashboard-ui/src/components/shell/Sidebar.tsx. */

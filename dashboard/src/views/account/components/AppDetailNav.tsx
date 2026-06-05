@@ -1,8 +1,8 @@
 import { A, useLocation } from "@solidjs/router";
 
 const TABS = [
-  { suffix: "", label: "Overview" },
-  { suffix: "/danger", label: "Danger" },
+  { suffix: "", label: "概要" },
+  { suffix: "/danger", label: "削除" },
 ];
 
 /** Ported from takosumi dashboard-ui/src/components/apps/AppDetailNav.tsx. */

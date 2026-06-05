@@ -73,7 +73,11 @@ export {
   OpenTofuControllerError,
   type OpenTofuControllerErrorCode,
 } from "./errors.ts";
-export { createDefaultRunnerProfiles } from "./runner_profiles.ts";
+export {
+  createDefaultRunnerProfiles,
+  parseEnabledRunnerProfileIds,
+  resolveEnabledRunnerProfiles,
+} from "./runner_profiles.ts";
 export { providerMatches } from "./policy.ts";
 export { deploymentOutputsFromOpenTofu } from "./projection.ts";
 

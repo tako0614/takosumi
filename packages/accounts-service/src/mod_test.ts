@@ -963,7 +963,10 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
   expect(freshSpace.status).toEqual(200);
 });
 
-test("accounts handler blocks installation PlanRun when managed offering access is closed", async () => {
+test("accounts handler does not launch-gate installation PlanRun when managed offering access is closed", async () => {
+  // PlanRun is generic-platform surface: the managed-offering gate no longer
+  // applies. An unauthenticated request proceeds to normal auth enforcement
+  // (401), and the deploy-control proxy is never reached without a session.
   let planRunCalled = false;
   const handler = createAccountsHandler({
     managedOfferingAccess: { status: "closed" },
@@ -990,8 +993,8 @@ test("accounts handler blocks installation PlanRun when managed offering access 
     }),
   );
 
-  expect(rawPlanRunResponse.status).toEqual(503);
-  expect((await rawPlanRunResponse.json()).error).toEqual("launch_readiness_not_complete");
+  expect(rawPlanRunResponse.status).toEqual(401);
+  expect((await rawPlanRunResponse.json()).error).toEqual("invalid_token");
   expect(planRunCalled).toEqual(false);
 });
 
@@ -1081,14 +1084,11 @@ test("accounts handler rejects weak open managed offering policy metadata", asyn
 test("raw accounts handler defaults managed offering access to closed", async () => {
   const handler = createRawAccountsHandler({ issuer: testIssuer });
 
+  // The managed-takos offering surfaces (hosted /start signup and Stripe
+  // checkout) default to the launch-gated 503 when no policy is supplied.
   for (
     const request of [
       new Request(`${testIssuer}/start`),
-      new Request(`${testIssuer}/v1/installations`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      }),
       new Request(`${testIssuer}/v1/billing/stripe/checkout`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1102,6 +1102,19 @@ test("raw accounts handler defaults managed offering access to closed", async ()
     expect(body.error).toEqual("launch_readiness_not_complete");
     expect(body.managed_offering_access).toEqual("closed");
   }
+
+  // The generic platform (e.g. installation create) is NOT launch-gated even
+  // with the default-closed policy: it proceeds to normal request validation
+  // (an empty body is rejected for missing ownership fields, not launch-gated).
+  const installResponse = await handler(
+    new Request(`${testIssuer}/v1/installations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }),
+  );
+  expect(installResponse.status).toEqual(400);
+  expect((await installResponse.json()).error).toEqual("missing_field");
 });
 
 test("ephemeral accounts handler defaults managed offering access to closed", async () => {
@@ -2066,7 +2079,11 @@ test("accounts handler rejects upstream OAuth callback state mismatches", async 
   expect(upstreamFetchCalled).toEqual(false);
 });
 
-test("accounts handler blocks upstream OAuth authorize and callback when managed offering access is closed", async () => {
+test("accounts handler does not launch-gate upstream OAuth authorize and callback when managed offering access is closed", async () => {
+  // Upstream OAuth is generic sign-in surface, not a managed-offering surface:
+  // the launch gate no longer applies. Authorize issues the provider redirect
+  // and callback proceeds to normal state validation (400 without a state
+  // cookie); neither leaks a launch_readiness_not_complete response.
   let upstreamFetchCalled = false;
   const handler = createAccountsHandler({
     managedOfferingAccess: { status: "closed" },
@@ -2096,10 +2113,12 @@ test("accounts handler blocks upstream OAuth authorize and callback when managed
     ),
   );
 
-  expect(authorizeResponse.status).toEqual(503);
-  expect((await authorizeResponse.json()).error).toEqual("launch_readiness_not_complete");
-  expect(response.status).toEqual(503);
-  expect((await response.json()).error).toEqual("launch_readiness_not_complete");
+  expect(authorizeResponse.status).toEqual(302);
+  expect(authorizeResponse.headers.get("location") ?? "").toContain(
+    "github.com",
+  );
+  expect(response.status).toEqual(400);
+  expect((await response.json()).error).toEqual("invalid_state");
   expect(upstreamFetchCalled).toEqual(false);
 });
 
@@ -2419,7 +2438,11 @@ test("passkey register/complete fails closed when ceremony fields are omitted", 
   expect(store.findPasskeyCredential("attacker-key")).toEqual(undefined);
 });
 
-test("accounts handler blocks passkey flows when managed offering access is closed", async () => {
+test("accounts handler does not launch-gate passkey flows when managed offering access is closed", async () => {
+  // Passkeys are generic sign-in surface, not a managed-offering surface: the
+  // launch gate no longer applies. Each route proceeds to its normal
+  // auth/validation behavior instead of returning launch_readiness_not_complete,
+  // and no credential is persisted from these unauthenticated probes.
   const store = new InMemoryAccountsStore();
   store.saveAccount({
     subject: "tsub_account",
@@ -2438,52 +2461,68 @@ test("accounts handler blocks passkey flows when managed offering access is clos
     },
   });
 
-  const requests = [
-    new Request(
-      "https://accounts.example.test/v1/auth/passkeys/register/options",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          subject: "tsub_account",
-          challenge: "register-challenge",
-        }),
-      },
-    ),
-    new Request(
-      "https://accounts.example.test/v1/auth/passkeys/register/complete",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          subject: "tsub_account",
-          credentialId: "credential-1",
-          publicKeyJwk: { kty: "EC" },
-          signCount: 0,
-        }),
-      },
-    ),
-    new Request(
-      "https://accounts.example.test/v1/auth/passkeys/authenticate/options",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          subject: "tsub_account",
-          challenge: "challenge-1",
-        }),
-      },
-    ),
-    new Request(
-      "https://accounts.example.test/v1/auth/passkeys/authenticate/complete",
-      {
-        method: "POST",
-        body: JSON.stringify({ credentialId: "credential-1" }),
-      },
-    ),
+  const cases: { request: Request; status: number }[] = [
+    {
+      // Seeded account => registration options are issued normally.
+      request: new Request(
+        "https://accounts.example.test/v1/auth/passkeys/register/options",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            subject: "tsub_account",
+            challenge: "register-challenge",
+          }),
+        },
+      ),
+      status: 200,
+    },
+    {
+      // Registration completion still requires a session => 401, not 503.
+      request: new Request(
+        "https://accounts.example.test/v1/auth/passkeys/register/complete",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            subject: "tsub_account",
+            credentialId: "credential-1",
+            publicKeyJwk: { kty: "EC" },
+            signCount: 0,
+          }),
+        },
+      ),
+      status: 401,
+    },
+    {
+      request: new Request(
+        "https://accounts.example.test/v1/auth/passkeys/authenticate/options",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            subject: "tsub_account",
+            challenge: "challenge-1",
+          }),
+        },
+      ),
+      status: 200,
+    },
+    {
+      // No registered credential => normal authentication validation (400).
+      request: new Request(
+        "https://accounts.example.test/v1/auth/passkeys/authenticate/complete",
+        {
+          method: "POST",
+          body: JSON.stringify({ credentialId: "credential-1" }),
+        },
+      ),
+      status: 400,
+    },
   ];
 
-  for (const request of requests) {
+  for (const { request, status } of cases) {
     const response = await handler(request);
-    expect(response.status).toEqual(503);
-    expect((await response.json()).error).toEqual("launch_readiness_not_complete");
+    expect(response.status).toEqual(status);
+    const body = await response.text();
+    expect(body.includes("launch_readiness_not_complete")).toEqual(false);
   }
   expect(store.findPasskeyCredential("credential-1")).toEqual(undefined);
 });
@@ -4616,8 +4655,12 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
   expect((await appMismatch.json()).error).toEqual("app_mismatch");
 });
 
-test("accounts handler blocks AppInstallation creation when managed offering access is closed", async () => {
+test("accounts handler does not launch-gate AppInstallation creation when managed offering access is closed", async () => {
+  // Generic Installation create is platform surface, not a managed-offering
+  // surface: the launch gate no longer applies. An authorized create proceeds
+  // and is persisted even while the managed offering is closed.
   const store = new InMemoryAccountsStore();
+  seedOwnedSpace(store, "tsub_owner", "acct_1", "space_1");
   const handler = createAccountsHandler({
     store,
     managedOfferingAccess: { status: "closed" },
@@ -4627,14 +4670,14 @@ test("accounts handler blocks AppInstallation creation when managed offering acc
     new Request("https://accounts.example.test/v1/installations", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_blocked",
+        installationId: "inst_open_platform",
         accountId: "acct_1",
         spaceId: "space_1",
         appId: "example.app",
         source: {
           gitUrl: "https://github.com/example/app",
           ref: "main",
-          commit: "abc123",
+          commit: "0123456789abcdef0123456789abcdef01234567",
           planDigest: "sha256:manifest",
         },
         mode: "shared-cell",
@@ -4644,12 +4687,18 @@ test("accounts handler blocks AppInstallation creation when managed offering acc
     }),
   );
 
-  expect(response.status).toEqual(503);
-  expect((await response.json()).error).toEqual("launch_readiness_not_complete");
-  expect(store.findAppInstallation("inst_blocked")).toEqual(undefined);
+  expect(response.status).toEqual(202);
+  const body = await response.text();
+  expect(body.includes("launch_readiness_not_complete")).toEqual(false);
+  expect(store.findAppInstallation("inst_open_platform")?.appId).toEqual(
+    "example.app",
+  );
 });
 
-test("accounts handler blocks AppInstallation import when managed offering access is closed", async () => {
+test("accounts handler does not launch-gate AppInstallation import when managed offering access is closed", async () => {
+  // Generic Installation import is platform surface, not a managed-offering
+  // surface: the launch gate no longer applies. The request proceeds to normal
+  // request validation (missing ownership fields) instead of launch-gating.
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({
     store,
@@ -4666,11 +4715,11 @@ test("accounts handler blocks AppInstallation import when managed offering acces
     }),
   );
 
-  expect(response.status).toEqual(503);
-  expect((await response.json()).error).toEqual("launch_readiness_not_complete");
+  expect(response.status).toEqual(400);
+  expect((await response.json()).error).toEqual("missing_field");
 });
 
-test("accounts handler blocks installation access mutations when managed offering access is closed", async () => {
+test("accounts handler keeps generic installation mutations un-launch-gated but gates managed materialize/export when offering access is closed", async () => {
   const handler = createAccountsHandler({
     managedOfferingAccess: { status: "closed" },
     launchTokens: {
@@ -4678,7 +4727,9 @@ test("accounts handler blocks installation access mutations when managed offerin
     },
   });
 
-  const blockedRequests = [
+  // Generic deployment / rollback / status mutations are platform surface: the
+  // launch gate no longer applies, so they proceed to ownership auth (401).
+  const ungatedRequests = [
     new Request(
       "https://accounts.example.test/v1/installations/inst_1/deployments",
       {
@@ -4687,12 +4738,6 @@ test("accounts handler blocks installation access mutations when managed offerin
     ),
     new Request(
       "https://accounts.example.test/v1/installations/inst_1/rollback",
-      {
-        method: "POST",
-      },
-    ),
-    new Request(
-      "https://accounts.example.test/v1/installations/inst_1/materialize",
       {
         method: "POST",
       },
@@ -4711,6 +4756,23 @@ test("accounts handler blocks installation access mutations when managed offerin
         body: JSON.stringify({ status: "installing" }),
       },
     ),
+  ];
+
+  for (const request of ungatedRequests) {
+    const response = await handler(request);
+    expect(response.status).toEqual(401);
+    expect((await response.json()).error).toEqual("invalid_token");
+  }
+
+  // The managed-cell materialize/export mutations are offering surfaces and
+  // stay launch-gated while the offering is closed.
+  const gatedRequests = [
+    new Request(
+      "https://accounts.example.test/v1/installations/inst_1/materialize",
+      {
+        method: "POST",
+      },
+    ),
     new Request(
       "https://accounts.example.test/v1/installations/inst_1/export",
       {
@@ -4719,39 +4781,55 @@ test("accounts handler blocks installation access mutations when managed offerin
     ),
   ];
 
-  for (const request of blockedRequests) {
+  for (const request of gatedRequests) {
     const response = await handler(request);
     expect(response.status).toEqual(503);
     expect((await response.json()).error).toEqual("launch_readiness_not_complete");
   }
 });
 
-test("accounts handler blocks core OAuth and PAT issuance when managed offering access is closed", async () => {
+test("accounts handler does not launch-gate core OAuth and PAT issuance when managed offering access is closed", async () => {
+  // OIDC sign-in and PAT issuance are generic platform surfaces, not
+  // managed-offering surfaces: the launch gate no longer applies. They proceed
+  // to their normal behavior (OIDC flow unconfigured in this fixture, PAT
+  // requires a session) instead of returning launch_readiness_not_complete.
   const handler = createAccountsHandler({
     managedOfferingAccess: { status: "closed" },
   });
 
-  const blockedRequests = [
-    new Request(
-      "https://accounts.example.test/oauth/authorize?client_id=takos&redirect_uri=https%3A%2F%2Ftakos.example.test%2Fcallback&response_type=code&scope=openid",
-    ),
-    new Request("https://accounts.example.test/oauth/token", {
-      method: "POST",
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code: "code",
+  const cases: { request: Request; status: number; error: string }[] = [
+    {
+      request: new Request(
+        "https://accounts.example.test/oauth/authorize?client_id=takos&redirect_uri=https%3A%2F%2Ftakos.example.test%2Fcallback&response_type=code&scope=openid",
+      ),
+      status: 503,
+      error: "feature_unavailable",
+    },
+    {
+      request: new Request("https://accounts.example.test/oauth/token", {
+        method: "POST",
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code: "code",
+        }),
       }),
-    }),
-    new Request("https://accounts.example.test/v1/account/tokens", {
-      method: "POST",
-      body: JSON.stringify({ subject: "tsub_owner", label: "operator" }),
-    }),
+      status: 503,
+      error: "feature_unavailable",
+    },
+    {
+      request: new Request("https://accounts.example.test/v1/account/tokens", {
+        method: "POST",
+        body: JSON.stringify({ subject: "tsub_owner", label: "operator" }),
+      }),
+      status: 401,
+      error: "invalid_session",
+    },
   ];
 
-  for (const request of blockedRequests) {
+  for (const { request, status, error } of cases) {
     const response = await handler(request);
-    expect(response.status).toEqual(503);
-    expect((await response.json()).error).toEqual("launch_readiness_not_complete");
+    expect(response.status).toEqual(status);
+    expect((await response.json()).error).toEqual(error);
   }
 });
 

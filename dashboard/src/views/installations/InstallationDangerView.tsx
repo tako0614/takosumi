@@ -32,10 +32,10 @@ function Inner() {
       return;
     }
     const ok = await confirm({
-      title: "Uninstall",
+      title: "アプリを削除",
       message:
-        `本当に ${a.installationId} を uninstall しますか？ この操作は取り消せません。`,
-      confirmText: "Uninstall",
+        `本当に ${a.installationId} を削除しますか？ この操作は取り消せません。`,
+      confirmText: "削除",
       danger: true,
     });
     if (!ok) return;
@@ -70,10 +70,10 @@ function Inner() {
               <section class="detail-section danger-zone">
                 <h2>
                   <Icons.AlertTriangle style={{ width: "18px", height: "18px" }} />{" "}
-                  Uninstall
+                  アプリを削除
                 </h2>
                 <p class="muted">
-                  この installation を完全に削除します。 取り消せません。
+                  このアプリを完全に削除します。 取り消せません。
                 </p>
                 <p class="muted">
                   続行するには appId (<code>{a().appId}</code>)
@@ -94,7 +94,7 @@ function Inner() {
                     disabled={uninstall.busy() || typed() !== a().appId}
                   >
                     <Icons.Trash style={{ width: "16px", height: "16px" }} />{" "}
-                    {uninstall.busy() ? "Uninstall 中..." : "Uninstall"}
+                    {uninstall.busy() ? "削除中..." : "削除"}
                   </button>
                 </div>
                 <ActionError error={uninstall.error} />
