@@ -9,6 +9,7 @@
  */
 import {
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
+  TAKOSUMI_ACCOUNTS_CONNECTIONS_PATH,
   TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH,
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH,
@@ -18,6 +19,8 @@ import {
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
   TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH,
   takosumiAccountsAccountTokenRevokePath,
+  takosumiAccountsConnectionPath,
+  takosumiAccountsConnectionTestPath,
   takosumiAccountsInstallationEventsPath,
   takosumiAccountsInstallationExportDownloadPath,
   takosumiAccountsInstallationExportOperationPath,
@@ -46,6 +49,10 @@ export const INSTALLATIONS = TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH;
 export const INSTALLATION_PLAN_RUNS =
   TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH;
 export const WORKLOAD_SERVICES = TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH;
+
+export const CONNECTIONS = TAKOSUMI_ACCOUNTS_CONNECTIONS_PATH;
+export const connection = takosumiAccountsConnectionPath;
+export const connectionTest = takosumiAccountsConnectionTestPath;
 export const installation = takosumiAccountsInstallationPath;
 export const installationMaterialize =
   takosumiAccountsInstallationMaterializePath;

@@ -8,6 +8,13 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { isAbsolute, join, normalize, resolve } from "node:path";
+// Shared provider -> credential env-name table. This module is dependency-free
+// and is copied into the runner container image alongside this file so the
+// relative import resolves at container runtime (see runner/Dockerfile).
+import {
+  type ProviderCredentialEnvRule,
+  providerEnvRule,
+} from "../../../src/contract/provider-env-rules.ts";
 
 type OpenTofuRunAction = "plan" | "apply" | "destroy";
 type OpenTofuOperation = "create" | "update" | "destroy";
@@ -55,12 +62,6 @@ interface CommandContext {
   readonly sourceArchiveMaxDecompressedBytes?: number;
 }
 
-interface ProviderCredentialEnvRule {
-  readonly match: RegExp;
-  readonly envNames: readonly string[];
-  readonly requiredGroups: readonly (readonly string[])[];
-}
-
 const port = Number(Bun.env.PORT ?? "8080");
 const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
 const TFVARS_FILENAME = "takosumi.auto.tfvars.json";
@@ -78,98 +79,6 @@ const BASE_COMMAND_ENV_NAMES = [
   "GIT_SSL_CAINFO",
   "REQUESTS_CA_BUNDLE",
 ] as const;
-const PROVIDER_CREDENTIAL_ENV_RULES: readonly ProviderCredentialEnvRule[] = [
-  {
-    match: /(^|\/)cloudflare\/cloudflare$/,
-    envNames: [
-      "CLOUDFLARE_API_TOKEN",
-      "CLOUDFLARE_API_KEY",
-      "CLOUDFLARE_EMAIL",
-      "CLOUDFLARE_ACCOUNT_ID",
-      "CLOUDFLARE_ZONE_ID",
-      "CF_API_TOKEN",
-    ],
-    requiredGroups: [
-      ["CLOUDFLARE_API_TOKEN"],
-      ["CF_API_TOKEN"],
-      ["CLOUDFLARE_API_KEY", "CLOUDFLARE_EMAIL"],
-    ],
-  },
-  {
-    match: /(^|\/)hashicorp\/aws$/,
-    envNames: [
-      "AWS_ACCESS_KEY_ID",
-      "AWS_SECRET_ACCESS_KEY",
-      "AWS_SESSION_TOKEN",
-      "AWS_WEB_IDENTITY_TOKEN_FILE",
-      "AWS_ROLE_ARN",
-      "AWS_REGION",
-      "AWS_DEFAULT_REGION",
-    ],
-    requiredGroups: [
-      ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
-      ["AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN"],
-    ],
-  },
-  {
-    match: /(^|\/)hashicorp\/google$/,
-    envNames: [
-      "GOOGLE_CREDENTIALS",
-      "GOOGLE_APPLICATION_CREDENTIALS",
-      "GOOGLE_CLOUD_PROJECT",
-      "GOOGLE_PROJECT",
-      "GOOGLE_REGION",
-    ],
-    requiredGroups: [
-      ["GOOGLE_CREDENTIALS"],
-      ["GOOGLE_APPLICATION_CREDENTIALS"],
-    ],
-  },
-  {
-    match: /(^|\/)hashicorp\/azurerm$/,
-    envNames: [
-      "ARM_CLIENT_ID",
-      "ARM_CLIENT_SECRET",
-      "ARM_TENANT_ID",
-      "ARM_SUBSCRIPTION_ID",
-      "AZURE_CLIENT_ID",
-      "AZURE_CLIENT_SECRET",
-      "AZURE_TENANT_ID",
-      "AZURE_SUBSCRIPTION_ID",
-    ],
-    requiredGroups: [
-      ["ARM_CLIENT_ID", "ARM_CLIENT_SECRET", "ARM_TENANT_ID", "ARM_SUBSCRIPTION_ID"],
-      ["AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID"],
-    ],
-  },
-  {
-    match: /(^|\/)(integrations\/github|github\/github)$/,
-    envNames: ["GITHUB_TOKEN"],
-    requiredGroups: [["GITHUB_TOKEN"]],
-  },
-  {
-    match: /(^|\/)digitalocean\/digitalocean$/,
-    envNames: ["DIGITALOCEAN_TOKEN", "SPACES_ACCESS_KEY_ID", "SPACES_SECRET_ACCESS_KEY"],
-    requiredGroups: [["DIGITALOCEAN_TOKEN"]],
-  },
-  {
-    match: /(^|\/)hashicorp\/kubernetes$/,
-    envNames: ["KUBE_CONFIG_PATH", "KUBE_HOST", "KUBE_TOKEN", "KUBE_CLUSTER_CA_CERT_DATA"],
-    requiredGroups: [
-      ["KUBE_CONFIG_PATH"],
-      ["KUBE_HOST", "KUBE_TOKEN"],
-    ],
-  },
-  {
-    match: /(^|\/)hashicorp\/helm$/,
-    envNames: ["KUBE_CONFIG_PATH", "KUBE_HOST", "KUBE_TOKEN", "KUBE_CLUSTER_CA_CERT_DATA"],
-    requiredGroups: [
-      ["KUBE_CONFIG_PATH"],
-      ["KUBE_HOST", "KUBE_TOKEN"],
-    ],
-  },
-] as const;
-
 Bun.serve({
   port,
   async fetch(request) {
@@ -1194,10 +1103,6 @@ function envNamesFromCredentialRef(ref: string): readonly string[] {
     .split(",")
     .map((value) => value.trim())
     .filter((value) => /^[A-Z_][A-Z0-9_]*$/.test(value));
-}
-
-function providerEnvRule(provider: string): ProviderCredentialEnvRule | undefined {
-  return PROVIDER_CREDENTIAL_ENV_RULES.find((rule) => rule.match.test(provider));
 }
 
 function maxRunSecondsFromProfile(

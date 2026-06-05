@@ -8,12 +8,35 @@
  */
 import type {
   ApplyRun,
+  Connection,
   Deployment,
   Installation,
   PlanRun,
   RunnerProfile,
 } from "takosumi-contract/deploy-control-api";
 import { currentRuntime } from "../../shared/runtime/index.ts";
+
+/**
+ * Sealed credential blob persisted alongside (but separate from) the public
+ * Connection record. The plaintext is the JSON of `{ [envName]: value }`
+ * encrypted as ONE blob via the secret-boundary crypto. The store only ever
+ * sees ciphertext; it never decrypts.
+ */
+export interface StoredSecretBlob {
+  readonly connectionId: string;
+  /** Base64 of the sealed bytes (the crypto prepends the IV to the ciphertext). */
+  readonly ciphertext: string;
+  /** Base64 of the IV (also embedded in `ciphertext`); kept for blob clarity. */
+  readonly iv: string;
+  /** Secret-boundary crypto key/version label (the cloud partition + scheme). */
+  readonly keyVersion: string;
+  /** Additional-authenticated-data fields bound into the seal (cloud family). */
+  readonly aad: {
+    readonly cloudPartition: string;
+    readonly spaceId: string;
+    readonly provider: string;
+  };
+}
 
 export interface InstallationPatchGuard {
   readonly currentDeploymentId: string | null;
@@ -81,6 +104,18 @@ export interface OpenTofuDeploymentStore {
   putDeployment(deployment: Deployment): Promise<Deployment>;
   getDeployment(id: string): Promise<Deployment | undefined>;
   listDeployments(installationId: string): Promise<readonly Deployment[]>;
+
+  // Connection records (public fields) + their sealed secret blobs. The blob is
+  // stored in a separate namespace so the public Connection can be listed
+  // without ever touching ciphertext.
+  putConnection(connection: Connection): Promise<Connection>;
+  getConnection(id: string): Promise<Connection | undefined>;
+  listConnections(spaceId: string): Promise<readonly Connection[]>;
+  deleteConnection(id: string): Promise<boolean>;
+
+  putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob>;
+  getSecretBlob(connectionId: string): Promise<StoredSecretBlob | undefined>;
+  deleteSecretBlob(connectionId: string): Promise<boolean>;
 }
 
 export class InMemoryOpenTofuDeploymentStore
@@ -90,6 +125,8 @@ export class InMemoryOpenTofuDeploymentStore
   readonly #applyRuns = new Map<string, ApplyRun>();
   readonly #installations = new Map<string, Installation>();
   readonly #deployments = new Map<string, Deployment>();
+  readonly #connections = new Map<string, Connection>();
+  readonly #secretBlobs = new Map<string, StoredSecretBlob>();
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuDeploymentStore");
@@ -198,6 +235,40 @@ export class InMemoryOpenTofuDeploymentStore
         .filter((row) => row.installationId === installationId)
         .sort((a, b) => a.createdAt - b.createdAt),
     );
+  }
+
+  putConnection(connection: Connection): Promise<Connection> {
+    this.#connections.set(connection.id, connection);
+    return Promise.resolve(connection);
+  }
+
+  getConnection(id: string): Promise<Connection | undefined> {
+    return Promise.resolve(this.#connections.get(id));
+  }
+
+  listConnections(spaceId: string): Promise<readonly Connection[]> {
+    return Promise.resolve(
+      Array.from(this.#connections.values())
+        .filter((row) => row.spaceId === spaceId)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
+    );
+  }
+
+  deleteConnection(id: string): Promise<boolean> {
+    return Promise.resolve(this.#connections.delete(id));
+  }
+
+  putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob> {
+    this.#secretBlobs.set(blob.connectionId, blob);
+    return Promise.resolve(blob);
+  }
+
+  getSecretBlob(connectionId: string): Promise<StoredSecretBlob | undefined> {
+    return Promise.resolve(this.#secretBlobs.get(connectionId));
+  }
+
+  deleteSecretBlob(connectionId: string): Promise<boolean> {
+    return Promise.resolve(this.#secretBlobs.delete(connectionId));
   }
 }
 

@@ -19,13 +19,17 @@ import type {
   ApplyExpectedGuard,
   ApplyRun,
   ApplyRunResponse,
+  Connection,
+  ConnectionResponse,
   CreateApplyRunRequest,
+  CreateConnectionRequest,
   CreatePlanRunRequest,
   DeployControlAuditEvent,
   Deployment,
   DeploymentOutput,
   GetInstallationResponse,
   Installation,
+  ListConnectionsResponse,
   ListDeploymentsResponse,
   ListDeploymentOutputsResponse,
   ListRunnerProfilesResponse,
@@ -37,7 +41,13 @@ import type {
   RunnerProfile,
   RunnerStateLockEvidence,
   RunDiagnostic,
+  TestConnectionResponse,
 } from "takosumi-contract/deploy-control-api";
+import type {
+  ConnectionVault,
+  CredentialBundle,
+} from "../../adapters/vault/mod.ts";
+import { ConnectionVaultError } from "../../adapters/vault/mod.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import {
   InMemoryOpenTofuDeploymentStore,
@@ -135,6 +145,14 @@ export interface OpenTofuDeploymentControllerDependencies {
   readonly defaultRunnerProfileId?: string;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => number;
+  /**
+   * Credential Vault broker. When present, the controller exposes the
+   * Connection lifecycle (`createConnection` / `listConnections` /
+   * `testConnection` / `deleteConnection`) and `mintCredentialBundle`. When
+   * absent, those methods throw `not_implemented`. The Vault is intentionally
+   * NOT wired into plan/apply dispatch here — that is Phase 1B.
+   */
+  readonly vault?: ConnectionVault;
 }
 
 export interface DeployControlActorContext {
@@ -144,6 +162,7 @@ export interface DeployControlActorContext {
 export class OpenTofuDeploymentController {
   readonly #store: OpenTofuDeploymentStore;
   readonly #runner?: OpenTofuRunner;
+  readonly #vault?: ConnectionVault;
   readonly #defaultRunnerProfileId: string;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
@@ -153,6 +172,7 @@ export class OpenTofuDeploymentController {
   constructor(dependencies: OpenTofuDeploymentControllerDependencies = {}) {
     this.#store = dependencies.store ?? new InMemoryOpenTofuDeploymentStore();
     this.#runner = dependencies.runner;
+    this.#vault = dependencies.vault;
     this.#defaultRunnerProfileId = dependencies.defaultRunnerProfileId ??
       "cloudflare-default";
     this.#newId = dependencies.newId ?? newId;
@@ -363,6 +383,86 @@ export class OpenTofuDeploymentController {
       installation.currentDeploymentId,
     );
     return { outputs: deployment?.outputs ?? [] };
+  }
+
+  // --- Connections (provider credential registration; Phase 1A) -------------
+
+  async createConnection(
+    request: CreateConnectionRequest,
+  ): Promise<ConnectionResponse> {
+    const vault = this.#requireVault();
+    try {
+      const connection = await vault.register(request);
+      return { connection };
+    } catch (error) {
+      throw mapVaultError(error);
+    }
+  }
+
+  async listConnections(spaceId: string): Promise<ListConnectionsResponse> {
+    requireNonEmptyString(spaceId, "spaceId");
+    return { connections: await this.#store.listConnections(spaceId) };
+  }
+
+  async getConnection(connectionId: string): Promise<Connection> {
+    requireNonEmptyString(connectionId, "connectionId");
+    const connection = await this.#store.getConnection(connectionId);
+    if (!connection) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `connection ${connectionId} not found`,
+      );
+    }
+    return connection;
+  }
+
+  async testConnection(
+    connectionId: string,
+  ): Promise<TestConnectionResponse> {
+    const vault = this.#requireVault();
+    requireNonEmptyString(connectionId, "connectionId");
+    try {
+      return await vault.test(connectionId);
+    } catch (error) {
+      throw mapVaultError(error);
+    }
+  }
+
+  async deleteConnection(connectionId: string): Promise<boolean> {
+    const vault = this.#requireVault();
+    requireNonEmptyString(connectionId, "connectionId");
+    try {
+      return await vault.revoke(connectionId);
+    } catch (error) {
+      throw mapVaultError(error);
+    }
+  }
+
+  /**
+   * Mints a credential bundle for a space + providers. Exposed for Phase 1B
+   * dispatch; NOT wired into plan/apply here. Returns an opaque
+   * {@link CredentialBundle} that never serializes its values.
+   */
+  async mintCredentialBundle(
+    spaceId: string,
+    providers: readonly string[],
+  ): Promise<CredentialBundle> {
+    const vault = this.#requireVault();
+    try {
+      return await vault.mint(spaceId, providers);
+    } catch (error) {
+      throw mapVaultError(error);
+    }
+  }
+
+  #requireVault(): ConnectionVault {
+    if (!this.#vault) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "connection vault is not configured",
+      );
+    }
+    return this.#vault;
   }
 
   // Status-transition ceremony shared by the three execute paths: clone the run
@@ -959,4 +1059,16 @@ function auditEvent(
 
 function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+}
+
+// Translate a Vault error into the controller error vocabulary. Missing env
+// groups (no values) are appended to the message so callers can fix their
+// registration without the Vault ever exposing secret material.
+function mapVaultError(error: unknown): unknown {
+  if (!(error instanceof ConnectionVaultError)) return error;
+  const groups = error.missingEnvGroups;
+  const suffix = groups && groups.length > 0
+    ? `: provide one of [${groups.map((group) => group.join("+")).join(", ")}]`
+    : "";
+  return new OpenTofuControllerError(error.code, `${error.message}${suffix}`);
 }

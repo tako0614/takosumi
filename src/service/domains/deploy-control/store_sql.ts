@@ -7,6 +7,7 @@
  */
 import type {
   ApplyRun,
+  Connection,
   Deployment,
   Installation,
   PlanRun,
@@ -20,6 +21,7 @@ import type {
 import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
+  StoredSecretBlob,
 } from "./store.ts";
 import { InstallationPatchGuardConflict } from "./store.ts";
 
@@ -293,6 +295,84 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       [installationId],
     );
     return result.rows.map((row) => parseRow(row) as Deployment);
+  }
+
+  async putConnection(connection: Connection): Promise<Connection> {
+    await this.#query(
+      "insert into takosumi_connections " +
+        "(id, space_id, provider, status, connection_json, created_at, updated_at) " +
+        "values ($1, $2, $3, $4, $5::jsonb, $6, $7) " +
+        "on conflict (id) do update set " +
+        "space_id = excluded.space_id, " +
+        "provider = excluded.provider, " +
+        "status = excluded.status, " +
+        "connection_json = excluded.connection_json, " +
+        "created_at = excluded.created_at, " +
+        "updated_at = excluded.updated_at",
+      [
+        connection.id,
+        connection.spaceId,
+        connection.provider,
+        connection.status,
+        JSON.stringify(connection),
+        connection.createdAt,
+        connection.updatedAt,
+      ],
+    );
+    return connection;
+  }
+
+  async getConnection(id: string): Promise<Connection | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select connection_json as json from takosumi_connections where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as Connection | undefined;
+  }
+
+  async listConnections(spaceId: string): Promise<readonly Connection[]> {
+    const result = await this.#query<JsonRow>(
+      "select connection_json as json from takosumi_connections " +
+        "where space_id = $1 order by created_at asc, id asc",
+      [spaceId],
+    );
+    return result.rows.map((row) => parseRow(row) as Connection);
+  }
+
+  async deleteConnection(id: string): Promise<boolean> {
+    const result = await this.#query(
+      "delete from takosumi_connections where id = $1",
+      [id],
+    );
+    return result.rowCount > 0;
+  }
+
+  async putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob> {
+    await this.#query(
+      "insert into takosumi_connection_secret_blobs (connection_id, blob_json) " +
+        "values ($1, $2::jsonb) " +
+        "on conflict (connection_id) do update set blob_json = excluded.blob_json",
+      [blob.connectionId, JSON.stringify(blob)],
+    );
+    return blob;
+  }
+
+  async getSecretBlob(
+    connectionId: string,
+  ): Promise<StoredSecretBlob | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select blob_json as json from takosumi_connection_secret_blobs where connection_id = $1",
+      [connectionId],
+    );
+    return parseRow(result.rows[0]) as StoredSecretBlob | undefined;
+  }
+
+  async deleteSecretBlob(connectionId: string): Promise<boolean> {
+    const result = await this.#query(
+      "delete from takosumi_connection_secret_blobs where connection_id = $1",
+      [connectionId],
+    );
+    return result.rowCount > 0;
   }
 
   #query<Row extends Record<string, unknown> = Record<string, unknown>>(

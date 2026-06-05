@@ -7897,3 +7897,216 @@ test("handleUserInfo emits a flat space_memberships claim from the token's space
   expect(body.takosumi.space_id).toEqual("space-membership");
   expect(body.takosumi.installation_id).toEqual("inst-membership");
 });
+
+test("accounts handler proxies Connection create to deployControl with space ownership", async () => {
+  const proxiedRequests: Request[] = [];
+  const store = new InMemoryAccountsStore();
+  seedOwnedSpace(store, "tsub_conn_owner", "acct_conn_1", "space_conn_1");
+  const sessionId = seedAccountSession(store, "tsub_conn_owner");
+  const handler = createAccountsHandler({
+    issuer: "https://accounts.example.test",
+    store,
+    deployControl: {
+      url: "http://takosumi.internal:8788",
+      token: "deploy-control-secret",
+      fetch: (input, init) => {
+        const request = new Request(input, init);
+        proxiedRequests.push(request);
+        return Promise.resolve(Response.json({
+          id: "conn_new",
+          spaceId: "space_conn_1",
+          provider: "cloudflare",
+          owner: "customer",
+          authMethod: "static_secret",
+          status: "pending",
+          envNames: ["CLOUDFLARE_API_TOKEN"],
+          createdAt: "2026-06-05T00:00:00.000Z",
+          updatedAt: "2026-06-05T00:00:00.000Z",
+        }, { status: 201 }));
+      },
+    },
+  });
+
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/connections", {
+      method: "POST",
+      headers: {
+        ...accountSessionHeaders(sessionId),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        spaceId: "space_conn_1",
+        provider: "cloudflare",
+        authMethod: "static_secret",
+        values: { CLOUDFLARE_API_TOKEN: "secret-token-never-echoed" },
+      }),
+    }),
+  );
+
+  expect(response.status).toEqual(201);
+  expect(proxiedRequests.length).toEqual(1);
+  expect(proxiedRequests[0].url).toEqual(
+    "http://takosumi.internal:8788/v1/connections",
+  );
+  expect(proxiedRequests[0].headers.get("authorization")).toEqual(
+    "Bearer deploy-control-secret",
+  );
+  // The write-only values reach deploy-control verbatim...
+  expect(await proxiedRequests[0].clone().text()).toContain(
+    "secret-token-never-echoed",
+  );
+  // ...but the response (the public Connection) never echoes them.
+  const text = await response.text();
+  expect(text).not.toContain("secret-token-never-echoed");
+  expect(text).toContain("conn_new");
+});
+
+test("accounts handler rejects Connection create for a space the caller does not own", async () => {
+  let proxied = false;
+  const store = new InMemoryAccountsStore();
+  // Space owned by someone else.
+  seedOwnedSpace(store, "tsub_conn_owner", "acct_conn_1", "space_conn_1");
+  const otherSession = seedAccountSession(store, "tsub_conn_intruder");
+  const handler = createAccountsHandler({
+    issuer: "https://accounts.example.test",
+    store,
+    deployControl: {
+      url: "http://takosumi.internal:8788",
+      token: "deploy-control-secret",
+      fetch: () => {
+        proxied = true;
+        return Promise.resolve(Response.json({}, { status: 201 }));
+      },
+    },
+  });
+
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/connections", {
+      method: "POST",
+      headers: {
+        ...accountSessionHeaders(otherSession),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        spaceId: "space_conn_1",
+        provider: "cloudflare",
+        authMethod: "static_secret",
+        values: { CLOUDFLARE_API_TOKEN: "should-not-reach-upstream" },
+      }),
+    }),
+  );
+
+  expect(response.status).toEqual(404);
+  expect((await response.json()).error).toEqual("space_not_found");
+  // The secret-bearing body must never have been forwarded.
+  expect(proxied).toEqual(false);
+});
+
+test("accounts handler proxies Connection list with the spaceId query", async () => {
+  const proxiedRequests: Request[] = [];
+  const store = new InMemoryAccountsStore();
+  seedOwnedSpace(store, "tsub_conn_owner", "acct_conn_1", "space_conn_1");
+  const sessionId = seedAccountSession(store, "tsub_conn_owner");
+  const handler = createAccountsHandler({
+    issuer: "https://accounts.example.test",
+    store,
+    deployControl: {
+      url: "http://takosumi.internal:8788",
+      token: "deploy-control-secret",
+      fetch: (input, init) => {
+        const request = new Request(input, init);
+        proxiedRequests.push(request);
+        return Promise.resolve(Response.json({ connections: [] }, { status: 200 }));
+      },
+    },
+  });
+
+  const response = await handler(
+    new Request(
+      "https://accounts.example.test/v1/connections?spaceId=space_conn_1",
+      { method: "GET", headers: accountSessionHeaders(sessionId) },
+    ),
+  );
+
+  expect(response.status).toEqual(200);
+  expect(proxiedRequests.length).toEqual(1);
+  expect(proxiedRequests[0].url).toEqual(
+    "http://takosumi.internal:8788/v1/connections?spaceId=space_conn_1",
+  );
+});
+
+test("accounts handler resolves Connection spaceId before forwarding delete", async () => {
+  const proxiedPaths: string[] = [];
+  const store = new InMemoryAccountsStore();
+  seedOwnedSpace(store, "tsub_conn_owner", "acct_conn_1", "space_conn_1");
+  const sessionId = seedAccountSession(store, "tsub_conn_owner");
+  const handler = createAccountsHandler({
+    issuer: "https://accounts.example.test",
+    store,
+    deployControl: {
+      url: "http://takosumi.internal:8788",
+      token: "deploy-control-secret",
+      fetch: (input, init) => {
+        const request = new Request(input, init);
+        const path = new URL(request.url).pathname;
+        proxiedPaths.push(`${request.method} ${path}`);
+        if (request.method === "GET") {
+          // The ownership-resolution read of the Connection projection.
+          return Promise.resolve(Response.json({
+            id: "conn_del",
+            spaceId: "space_conn_1",
+            provider: "cloudflare",
+            owner: "customer",
+            authMethod: "static_secret",
+            status: "verified",
+            envNames: ["CLOUDFLARE_API_TOKEN"],
+            createdAt: "2026-06-05T00:00:00.000Z",
+            updatedAt: "2026-06-05T00:00:00.000Z",
+          }, { status: 200 }));
+        }
+        return Promise.resolve(new Response(null, { status: 204 }));
+      },
+    },
+  });
+
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/connections/conn_del", {
+      method: "DELETE",
+      headers: accountSessionHeaders(sessionId),
+    }),
+  );
+
+  expect(response.status).toEqual(204);
+  expect(proxiedPaths).toEqual([
+    "GET /v1/connections/conn_del",
+    "DELETE /v1/connections/conn_del",
+  ]);
+});
+
+test("accounts handler rejects unauthenticated Connection delete before any deploy-control read", async () => {
+  let dialed = false;
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({
+    issuer: "https://accounts.example.test",
+    store,
+    deployControl: {
+      url: "http://takosumi.internal:8788",
+      token: "deploy-control-secret",
+      fetch: () => {
+        dialed = true;
+        return Promise.resolve(new Response(null, { status: 204 }));
+      },
+    },
+  });
+
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/connections/conn_del", {
+      method: "DELETE",
+    }),
+  );
+
+  expect(response.status).toEqual(401);
+  // The unauthenticated request must never reach deploy-control (no probe of
+  // connection existence across tenants).
+  expect(dialed).toEqual(false);
+});

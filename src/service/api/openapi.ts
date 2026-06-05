@@ -1067,6 +1067,88 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+    ConnectionScope: {
+      type: "object",
+      properties: {
+        accountId: { type: "string" },
+        zoneId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    Connection: {
+      type: "object",
+      required: [
+        "id",
+        "spaceId",
+        "provider",
+        "owner",
+        "authMethod",
+        "status",
+        "envNames",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        id: { type: "string" },
+        spaceId: { type: "string" },
+        provider: { type: "string" },
+        owner: { enum: ["service", "customer"] },
+        authMethod: {
+          enum: ["static_secret", "aws_assume_role", "github_app_installation"],
+        },
+        displayName: { type: "string" },
+        status: { enum: ["pending", "verified", "revoked"] },
+        scope: ref("ConnectionScope"),
+        envNames: { type: "array", items: { type: "string" } },
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
+        verifiedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    CreateConnectionRequest: {
+      type: "object",
+      required: ["spaceId", "provider", "authMethod", "values"],
+      properties: {
+        spaceId: { type: "string" },
+        provider: { type: "string" },
+        authMethod: { enum: ["static_secret"] },
+        displayName: { type: "string" },
+        owner: { enum: ["service", "customer"] },
+        scope: ref("ConnectionScope"),
+        values: {
+          type: "object",
+          additionalProperties: { type: "string" },
+          description: "Write-only credential values keyed by env name. Never echoed.",
+        },
+      },
+      additionalProperties: false,
+    },
+    ConnectionResponse: {
+      type: "object",
+      required: ["connection"],
+      properties: {
+        connection: ref("Connection"),
+      },
+      additionalProperties: false,
+    },
+    ListConnectionsResponse: {
+      type: "object",
+      required: ["connections"],
+      properties: {
+        connections: { type: "array", items: ref("Connection") },
+      },
+      additionalProperties: false,
+    },
+    TestConnectionResponse: {
+      type: "object",
+      required: ["status"],
+      properties: {
+        status: { enum: ["verified", "pending"] },
+        detail: { type: "string" },
+      },
+      additionalProperties: false,
+    },
     ArtifactStored: {
       type: "object",
       required: ["hash", "kind", "size", "uploadedAt"],

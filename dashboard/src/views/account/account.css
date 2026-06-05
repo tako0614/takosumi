@@ -1259,3 +1259,92 @@
   gap: 0.75rem;
   margin-top: 0.25rem;
 }
+
+/* ===== Connections screen =================================================
+ * Provider-credential register form + registered-connection list. Reuses the
+ * shared `.status-pill` base; the connection-status modifiers map verified ->
+ * ready (green), pending -> installing (amber), revoked -> subtle. */
+.status-connection-verified {
+  background: color-mix(in srgb, var(--tg-status-ready) 14%, transparent);
+  color: var(--tg-status-ready);
+  border-color: color-mix(in srgb, var(--tg-status-ready) 30%, transparent);
+}
+.status-connection-pending {
+  background: color-mix(in srgb, var(--tg-status-installing) 14%, transparent);
+  color: var(--tg-status-installing);
+  border-color: color-mix(in srgb, var(--tg-status-installing) 30%, transparent);
+}
+.status-connection-revoked {
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg-subtle);
+}
+
+.connection-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-4);
+  max-width: 480px;
+}
+.connection-form .form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+  color: var(--tg-fg-muted);
+}
+.connection-form .form-field input,
+.connection-form .form-field select {
+  padding: 8px 10px;
+  border-radius: var(--tg-r-sm);
+  border: 1px solid var(--tg-line);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+  font-family: var(--tg-font-body);
+  font-weight: 400;
+}
+.connection-form .form-required {
+  color: var(--tg-danger);
+  margin-left: var(--tg-s-1);
+}
+.connection-form .form-actions {
+  display: flex;
+  gap: var(--tg-s-3);
+}
+
+.connection-list {
+  list-style: none;
+  margin: var(--tg-s-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+}
+.connection-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+}
+.connection-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+}
+.connection-name {
+  font-weight: 600;
+}
+.connection-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  font-size: var(--tg-fs-sm);
+}
+.connection-row-actions {
+  display: flex;
+  gap: var(--tg-s-3);
+  margin-top: var(--tg-s-2);
+}
