@@ -136,9 +136,7 @@ import {
 import {
   managedOfferingAccessBlocked,
   type ManagedOfferingAccessPolicy,
-  managedOfferingGuardedCoreAccessRoute,
   managedOfferingGuardedInstallationMutation,
-  managedOfferingReadyStatusPatchBlocked,
 } from "./managed-offering-policy.ts";
 import {
   requireAppInstallationAccountAccess,
@@ -681,13 +679,6 @@ export function createAccountsHandler(
       return json({ material });
     }
 
-    if (managedOfferingGuardedCoreAccessRoute(url.pathname, request.method)) {
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
-      if (blocked) return blocked;
-    }
-
     if (url.pathname === TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH) {
       if (!isGetOrHead(request)) return methodNotAllowed("GET, HEAD");
       return json(discovery);
@@ -783,10 +774,6 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH) {
       if (request.method !== "GET") return methodNotAllowed("GET");
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
-      if (blocked) return blocked;
       if (!options.upstreamOAuth) return upstreamOAuthNotConfigured();
       return handleUpstreamAuthorizeRequest({
         url,
@@ -796,10 +783,6 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH) {
       if (request.method !== "GET") return methodNotAllowed("GET");
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
-      if (blocked) return blocked;
       if (!options.upstreamOAuth) return upstreamOAuthNotConfigured();
       return await handleUpstreamCallbackRequest({
         request,
@@ -811,10 +794,6 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
-      if (blocked) return blocked;
       if (!options.passkeys) return passkeysNotConfigured();
       return await handlePasskeyRegisterOptions({
         request,
@@ -825,10 +804,6 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
-      if (blocked) return blocked;
       if (!options.passkeys) return passkeysNotConfigured();
       return await handlePasskeyRegisterComplete({
         request,
@@ -839,10 +814,6 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
-      if (blocked) return blocked;
       if (!options.passkeys) return passkeysNotConfigured();
       return await handlePasskeyAuthenticateOptions({
         request,
@@ -853,10 +824,6 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
-      if (blocked) return blocked;
       if (!options.passkeys) return passkeysNotConfigured();
       return await handlePasskeyAuthenticateComplete({
         request,
@@ -868,10 +835,10 @@ export function createAccountsHandler(
     if (url.pathname === TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
       // Checkout has two gates: the managed-offering admission policy
-      // (consistent with other user-facing entrypoints, e.g. /start and
-      // OIDC authorize) and an account session. The webhook route below
-      // intentionally bypasses BOTH so internal Stripe -> us events keep
-      // converging while public-facing surfaces stay blocked.
+      // (consistent with the other managed-takos offering entrypoint /start)
+      // and an account session. The webhook route below intentionally bypasses
+      // BOTH so internal Stripe -> us events keep converging while the managed
+      // offering surfaces stay blocked.
       const limited = checkoutLimiter.consume(request);
       if (limited) return limited;
       const blocked = managedOfferingAccessBlocked(
@@ -912,10 +879,6 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
-      if (blocked) return blocked;
       const authBlocked = await requireInstallationPlanRunWriteAccess({
         request: request.clone(),
         store,
@@ -955,10 +918,6 @@ export function createAccountsHandler(
       if (request.method === "POST") {
         const limited = installationsLimiter.consume(request);
         if (limited) return limited;
-        const blocked = managedOfferingAccessBlocked(
-          options.managedOfferingAccess,
-        );
-        if (blocked) return blocked;
         const authBlocked = await requireAppInstallationCreateWriteAccess({
           request: request.clone(),
           store,
@@ -982,10 +941,6 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
-      if (blocked) return blocked;
       const authBlocked = await requireAppInstallationImportWriteAccess({
         request: request.clone(),
         store,
@@ -1052,13 +1007,6 @@ export function createAccountsHandler(
         });
       }
       if (installationRoute.kind === "status" && request.method === "PATCH") {
-        // The policy keeps the documented installing bootstrap exception:
-        // requestedStatus !== "installing"
-        const blocked = await managedOfferingReadyStatusPatchBlocked(
-          request,
-          options.managedOfferingAccess,
-        );
-        if (blocked) return blocked;
         const authBlocked = await requireAppInstallationAccountAccess({
           request,
           store,

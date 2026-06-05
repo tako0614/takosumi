@@ -11,6 +11,14 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * exposed.
    */
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
+  /**
+   * Operator-curated provider surface: CSV of runner profile ids the operator
+   * enables (e.g. `"cloudflare-default,aws-default"`). Only listed ids appear in
+   * `/v1/runner-profiles` and policy evaluation, each with
+   * `takosumi.com/profile-enabled=true`. Unset/empty defaults to
+   * `"cloudflare-default"`.
+   */
+  readonly TAKOSUMI_ENABLED_RUNNER_PROFILES?: string;
 }
 
 export type OpenTofuRunAction = "plan" | "apply" | "destroy";

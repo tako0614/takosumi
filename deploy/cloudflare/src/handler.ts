@@ -29,15 +29,18 @@ import { MemoryEncryptedSecretStore } from "../../../src/service/adapters/secret
 import { ImmutableSourceAdapter } from "../../../src/service/adapters/source/mod.ts";
 import { InMemoryObservabilitySink } from "../../../src/service/services/observability/mod.ts";
 import { constantTimeEqualsString } from "../../../src/service/shared/constant_time.ts";
-import type {
-  OpenTofuApplyJob,
-  OpenTofuApplyResult,
-  OpenTofuDestroyJob,
-  OpenTofuDestroyResult,
-  OpenTofuPlanJob,
-  OpenTofuPlanResult,
-  OpenTofuRunner,
+import {
+  createDefaultRunnerProfiles,
+  type OpenTofuApplyJob,
+  type OpenTofuApplyResult,
+  type OpenTofuDestroyJob,
+  type OpenTofuDestroyResult,
+  type OpenTofuPlanJob,
+  type OpenTofuPlanResult,
+  type OpenTofuRunner,
+  resolveEnabledRunnerProfiles,
 } from "../../../src/service/domains/deploy-control/mod.ts";
+import type { RunnerProfile } from "takosumi-contract/deploy-control-api";
 import type {
   CloudflareWorkerEnv,
   OpenTofuRunQueueMessage,
@@ -189,7 +192,25 @@ function denyUnauthorizedCoordination(
 export function createDeployControlService(
   env: CloudflareWorkerEnv,
 ): Promise<CreatedTakosumiService> {
-  return createWorkerServiceApp(env, "takosumi-api");
+  return createWorkerServiceApp(env, "takosumi-api", {
+    runnerProfiles: resolveEnabledRunnerProfilesFromEnv(env),
+  });
+}
+
+/**
+ * The operator-curated provider surface. `createDefaultRunnerProfiles` seeds
+ * every reference profile (most as disabled templates); the operator opts in via
+ * `TAKOSUMI_ENABLED_RUNNER_PROFILES` (CSV). Only listed profiles are seeded into
+ * the controller, each enabled, so `/v1/runner-profiles` and policy evaluation
+ * never expose an unlisted provider. Unset/empty -> `["cloudflare-default"]`.
+ */
+function resolveEnabledRunnerProfilesFromEnv(
+  env: CloudflareWorkerEnv,
+): readonly RunnerProfile[] {
+  return resolveEnabledRunnerProfiles(
+    createDefaultRunnerProfiles(),
+    env.TAKOSUMI_ENABLED_RUNNER_PROFILES,
+  );
 }
 
 /**
@@ -244,6 +265,7 @@ function cachedDeployControlService(
 async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
   role: "takosumi-api" | "takosumi-runtime-agent",
+  options: { readonly runnerProfiles?: readonly RunnerProfile[] } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
   const storage = new CloudflareD1SnapshotStorageDriver(env.TAKOS_D1);
@@ -264,6 +286,9 @@ async function createWorkerServiceApp(
       env.TAKOS_D1,
     ),
     opentofuRunner: new CloudflareContainerOpenTofuRunner(env),
+    ...(options.runnerProfiles
+      ? { runnerProfiles: options.runnerProfiles }
+      : {}),
   });
 }
 
