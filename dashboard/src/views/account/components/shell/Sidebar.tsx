@@ -1,10 +1,18 @@
 import { A, useLocation } from "@solidjs/router";
-import { Bell, CreditCard, Home, LayoutGrid, UserCircle2 } from "lucide-solid";
+import {
+  Bell,
+  CreditCard,
+  Home,
+  KeyRound,
+  LayoutGrid,
+  UserCircle2,
+} from "lucide-solid";
 import Wordmark from "../brand/Wordmark.tsx";
 
 const ITEMS = [
   { href: "/home", label: "ホーム", icon: Home },
   { href: "/apps", label: "アプリ", icon: LayoutGrid },
+  { href: "/connections", label: "接続", icon: KeyRound },
   { href: "/account", label: "アカウント", icon: UserCircle2 },
   { href: "/account/billing", label: "Billing", icon: CreditCard },
   { href: "/notifications", label: "通知", icon: Bell },

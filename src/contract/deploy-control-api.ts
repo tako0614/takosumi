@@ -400,6 +400,96 @@ export interface ListDeploymentOutputsResponse {
   readonly outputs: readonly DeploymentOutput[];
 }
 
+// ---------------------------------------------------------------------------
+// Connections (provider credential registration — Phase 1A credential core).
+//
+// A Connection records that a Space has registered provider credentials with
+// Takosumi. The secret values are NEVER part of the public Connection type:
+// they are write-only on `POST /v1/connections` and are sealed into a separate
+// secret blob by the in-process Vault broker. Phase 1 supports the
+// `static_secret` authMethod for the `cloudflare` provider end-to-end; the
+// type unions anticipate `aws_assume_role` / `github_app_installation` later.
+// ---------------------------------------------------------------------------
+
+export const CONNECTIONS_PATH = "/v1/connections" as const;
+export const CONNECTION_PATH = (id: string): string =>
+  `/v1/connections/${encodeURIComponent(id)}`;
+export const CONNECTION_TEST_PATH = (id: string): string =>
+  `/v1/connections/${encodeURIComponent(id)}/test`;
+
+/**
+ * Credential acquisition method. Phase 1 implements `static_secret`; the other
+ * members are reserved so consumers can switch exhaustively ahead of their
+ * implementation (Phase 1B+).
+ */
+export type ConnectionAuthMethod =
+  | "static_secret"
+  | "aws_assume_role"
+  | "github_app_installation";
+
+/** Whether the credentials belong to the operator (service) or the customer. */
+export type ConnectionOwner = "service" | "customer";
+
+export type ConnectionStatus = "pending" | "verified" | "revoked";
+
+/**
+ * Optional provider-scope hints recorded alongside a Connection (non-secret).
+ * For cloudflare these narrow the account / zone the credentials act on.
+ */
+export interface ConnectionScope {
+  readonly accountId?: string;
+  readonly zoneId?: string;
+}
+
+/**
+ * Public Connection record. NEVER carries secret values. `envNames` lists which
+ * provider env vars this Connection supplies (validated against
+ * provider-env-rules); the values themselves live only in the sealed secret
+ * blob owned by the Vault broker.
+ */
+export interface Connection {
+  readonly id: string;
+  readonly spaceId: string;
+  /** `cloudflare` short name or a full registry path. */
+  readonly provider: string;
+  readonly owner: ConnectionOwner;
+  readonly authMethod: ConnectionAuthMethod;
+  readonly displayName?: string;
+  readonly status: ConnectionStatus;
+  readonly scope?: ConnectionScope;
+  readonly envNames: readonly string[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly verifiedAt?: string;
+}
+
+export interface CreateConnectionRequest {
+  readonly spaceId: string;
+  readonly provider: string;
+  readonly authMethod: "static_secret";
+  readonly displayName?: string;
+  readonly owner?: ConnectionOwner;
+  readonly scope?: ConnectionScope;
+  /**
+   * Write-only credential values keyed by env name. Validated against the
+   * provider's allowed env names and required groups. Never echoed back.
+   */
+  readonly values: Readonly<Record<string, string>>;
+}
+
+export interface ConnectionResponse {
+  readonly connection: Connection;
+}
+
+export interface ListConnectionsResponse {
+  readonly connections: readonly Connection[];
+}
+
+export interface TestConnectionResponse {
+  readonly status: Extract<ConnectionStatus, "verified" | "pending">;
+  readonly detail?: string;
+}
+
 export type DeployControlErrorCode =
   | "invalid_argument"
   | "unauthenticated"

@@ -15,15 +15,17 @@ import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
   APPLY_RUNS_PATH,
+  CONNECTIONS_PATH,
   DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
   RUNNER_PROFILES_PATH,
 } from "takosumi-contract/deploy-control-api";
 import type {
   CreateApplyRunRequest,
-  CreatePlanRunRequest,
+  CreateConnectionRequest,
   DeployControlErrorCode,
   DeployControlErrorEnvelope,
   DeployControlErrorHttpStatus,
+  CreatePlanRunRequest,
   ListRunnerProfilesResponse,
   OpenTofuOperation,
 } from "takosumi-contract/deploy-control-api";
@@ -47,6 +49,11 @@ export const TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE =
   "/v1/installations/:installationId/deployments" as const;
 export const TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE =
   "/v1/installations/:installationId/deployment-outputs" as const;
+export const TAKOSUMI_CONNECTIONS_ROUTE = CONNECTIONS_PATH;
+export const TAKOSUMI_CONNECTION_ROUTE =
+  "/v1/connections/:connectionId" as const;
+export const TAKOSUMI_CONNECTION_TEST_ROUTE =
+  "/v1/connections/:connectionId/test" as const;
 
 /**
  * Endpoint inventory for the `deployControl-public` family, co-located with the
@@ -136,6 +143,50 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
       okSchema: "ListDeploymentOutputsResponse",
     },
   },
+  {
+    method: "POST",
+    path: TAKOSUMI_CONNECTIONS_ROUTE,
+    summary:
+      "Registers provider credentials as a Connection (credential values are write-only).",
+    auth: "deploy-control-token",
+    operationId: "createConnection",
+    openapi: {
+      requestSchema: "CreateConnectionRequest",
+      okStatus: "201",
+      okSchema: "ConnectionResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_CONNECTIONS_ROUTE,
+    summary: "Lists Connections for a Space (never includes secret values).",
+    auth: "deploy-control-token",
+    operationId: "listConnections",
+    openapi: { query: ["spaceId"], okSchema: "ListConnectionsResponse" },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_CONNECTION_TEST_ROUTE,
+    summary: "Verifies a Connection's stored credentials with the provider.",
+    auth: "deploy-control-token",
+    operationId: "testConnection",
+    openapi: {
+      pathParams: ["connectionId"],
+      okSchema: "TestConnectionResponse",
+    },
+  },
+  {
+    method: "DELETE",
+    path: TAKOSUMI_CONNECTION_ROUTE,
+    summary: "Revokes a Connection and deletes its sealed secret blob.",
+    auth: "deploy-control-token",
+    operationId: "deleteConnection",
+    openapi: {
+      pathParams: ["connectionId"],
+      okStatus: "204",
+      okSchema: "EmptyResponse",
+    },
+  },
 ] as const;
 
 export const DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
@@ -161,11 +212,23 @@ const ALLOWED_KEYS: Record<DeployControlRouteName, ReadonlySet<string>> = {
     "requiredProviders",
   ]),
   applyRunCreate: new Set(["planRunId", "approval", "expected"]),
+  connectionCreate: new Set([
+    "spaceId",
+    "provider",
+    "authMethod",
+    "displayName",
+    "owner",
+    "scope",
+    "values",
+  ]),
 };
 
 type DeployControlRouteName =
   | "planRunCreate"
-  | "applyRunCreate";
+  | "applyRunCreate"
+  | "connectionCreate";
+
+const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
 
 export interface DeployControlPublicRouteDependencies {
   /**
@@ -337,6 +400,63 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
+  app.post(TAKOSUMI_CONNECTIONS_ROUTE, deployControlBodyLimit, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+    if (limit) return limit;
+    return await runHandler(c, async () => {
+      const body = await readJsonBody<CreateConnectionRequest>(
+        c,
+        "connectionCreate",
+      );
+      ensureSpacePermission(auth.principal, body.spaceId);
+      const response = await controller.createConnection(body);
+      return c.json(response, 201);
+    });
+  });
+
+  app.get(TAKOSUMI_CONNECTIONS_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const spaceId = c.req.query("spaceId") ?? "";
+    if (spaceId.trim().length === 0) {
+      return c.json(
+        errorEnvelope(c, "invalid_argument", "spaceId query is required"),
+        400,
+      );
+    }
+    return await runHandler(c, async () => {
+      ensureSpacePermission(auth.principal, spaceId);
+      return c.json(await controller.listConnections(spaceId), 200);
+    });
+  });
+
+  app.post(TAKOSUMI_CONNECTION_TEST_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidConnectionId(c);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const connection = await controller.getConnection(idCheck.value);
+      ensureSpacePermission(auth.principal, connection.spaceId);
+      return c.json(await controller.testConnection(idCheck.value), 200);
+    });
+  });
+
+  app.delete(TAKOSUMI_CONNECTION_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidConnectionId(c);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const connection = await controller.getConnection(idCheck.value);
+      ensureSpacePermission(auth.principal, connection.spaceId);
+      await controller.deleteConnection(idCheck.value);
+      return c.body(null, 204);
+    });
+  });
+
 }
 
 function mountNotImplementedRoutes(
@@ -362,6 +482,10 @@ function mountNotImplementedRoutes(
     TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
     get("deployment outputs not wired"),
   );
+  app.post(TAKOSUMI_CONNECTIONS_ROUTE, post("connections not wired"));
+  app.get(TAKOSUMI_CONNECTIONS_ROUTE, get("connections not wired"));
+  app.post(TAKOSUMI_CONNECTION_TEST_ROUTE, post("connections not wired"));
+  app.delete(TAKOSUMI_CONNECTION_ROUTE, post("connections not wired"));
 }
 
 async function authorizeDeployControl(
@@ -622,6 +746,24 @@ function ensureValidId(
       kind: "invalid",
       response: c.json(
         errorEnvelope(c, "invalid_argument", `${param} has an unsupported shape`),
+        400,
+      ),
+    };
+  }
+  return { kind: "ok", value: raw };
+}
+
+function ensureValidConnectionId(
+  c: Context,
+):
+  | { readonly kind: "ok"; readonly value: string }
+  | { readonly kind: "invalid"; readonly response: Response } {
+  const raw = c.req.param("connectionId") ?? "";
+  if (!CONNECTION_ID_PATTERN.test(raw)) {
+    return {
+      kind: "invalid",
+      response: c.json(
+        errorEnvelope(c, "invalid_argument", "connectionId has an unsupported shape"),
         400,
       ),
     };

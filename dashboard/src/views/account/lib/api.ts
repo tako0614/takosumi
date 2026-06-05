@@ -20,6 +20,7 @@
  */
 import { clearSession, refreshSession } from "./session.ts";
 import * as installations from "./installations.ts";
+import * as connections from "./connections.ts";
 import * as tokens from "./tokens.ts";
 import * as billing from "./billing.ts";
 import * as auth from "./auth.ts";
@@ -46,6 +47,12 @@ export const rpc = {
     exportDownloadUrl: installations.installationExportDownloadUrl,
     events: installations.listInstallationEvents,
   },
+  connections: {
+    list: connections.listConnections,
+    create: connections.createConnection,
+    test: connections.testConnection,
+    remove: connections.removeConnection,
+  },
   tokens: {
     list: tokens.listTokens,
     create: tokens.createToken,
@@ -64,6 +71,19 @@ export const rpc = {
 } as const;
 
 export { ApiError } from "./http.ts";
+
+export { PROVIDERS, providerDescriptor } from "./connections.ts";
+export type {
+  Connection,
+  ConnectionAuthMethod,
+  ConnectionOwner,
+  ConnectionScope,
+  ConnectionStatus,
+  ConnectionTestResult,
+  CreateConnectionInput,
+  ProviderDescriptor,
+  ProviderEnvField,
+} from "./connections.ts";
 
 export type {
   CreateInstallationInput,

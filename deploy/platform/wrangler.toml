@@ -72,12 +72,14 @@ tag = "v1"
 new_sqlite_classes = ["TakosCoordinationObject", "TakosumiOpenTofuRunner"]
 
 # OpenTofu run executor container. The embedded deploy-control service reaches
-# this through its OpenTofu runner adapter (idFromName(runId) -> .fetch). The
-# Dockerfile + build context live under deploy/cloudflare/.
+# this through its OpenTofu runner adapter (idFromName(runId) -> .fetch). Build
+# context is the takosumi repo root: the runner Dockerfile copies
+# src/contract/provider-env-rules.ts (shared provider->env table) alongside
+# runner/server.ts.
 [[containers]]
 class_name = "TakosumiOpenTofuRunner"
 image = "../cloudflare/runner/Dockerfile"
-image_build_context = "../cloudflare"
+image_build_context = "../.."
 instance_type = "basic"
 max_instances = 10
 

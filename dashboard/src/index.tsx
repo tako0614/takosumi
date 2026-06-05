@@ -72,6 +72,9 @@ const InstallationDetailView = lazy(() =>
 const InstallationDangerView = lazy(() =>
   import("./views/installations/InstallationDangerView.tsx")
 );
+const ConnectionsView = lazy(() =>
+  import("./views/connections/ConnectionsView.tsx")
+);
 
 function App() {
   return (
@@ -94,6 +97,8 @@ function App() {
       <Route path="/installations" component={InstallationsListView} />
       <Route path="/installations/:id" component={InstallationDetailView} />
       <Route path="/installations/:id/danger" component={InstallationDangerView} />
+
+      <Route path="/connections" component={ConnectionsView} />
 
       <Route path="/takos/start" component={TakosStartView} />
     </Router>
