@@ -102,6 +102,22 @@ export function serviceStatusLabel(status: string | undefined): string {
 }
 
 /**
+ * Connection status. Canonical enum: `pending` / `verified` / `revoked`.
+ * A Connection registers provider credentials for a Space; `verified` means the
+ * stored credential passed a provider check (e.g. Cloudflare token verify).
+ */
+const CONNECTION_STATUS_LABELS: Record<string, string> = {
+  pending: "未確認",
+  verified: "確認済み",
+  revoked: "無効化",
+};
+
+export function connectionStatusLabel(status: string | undefined): string {
+  if (!status) return UNKNOWN_LABEL;
+  return CONNECTION_STATUS_LABELS[status] ?? status;
+}
+
+/**
  * Export operation status. Canonical enum:
  * `preparing` / `exported` / `failed`.
  */

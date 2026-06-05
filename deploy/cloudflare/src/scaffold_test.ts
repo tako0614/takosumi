@@ -23,8 +23,8 @@ test("Cloudflare scaffold wires D1/R2 and the OpenTofu runner container", async 
   assert.match(wrangler, /name = "TAKOS_OPENTOFU_RUNNER"/);
   assert.match(wrangler, /class_name = "TakosumiOpenTofuRunner"/);
   assert.match(wrangler, /\[\[containers\]\]/);
-  assert.match(wrangler, /image = "runner\/Dockerfile"/);
-  assert.match(wrangler, /image_build_context = "\."/);
+  assert.match(wrangler, /image = "deploy\/cloudflare\/runner\/Dockerfile"/);
+  assert.match(wrangler, /image_build_context = "\.\.\/\.\."/);
   assert.match(wrangler, /new_sqlite_classes = \["TakosCoordinationObject"\]/);
   assert.match(wrangler, /new_sqlite_classes = \["TakosumiOpenTofuRunner"\]/);
 });

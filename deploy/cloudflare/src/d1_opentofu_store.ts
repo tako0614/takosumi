@@ -1,5 +1,6 @@
 import type {
   ApplyRun,
+  Connection,
   Deployment,
   Installation,
   PlanRun,
@@ -8,6 +9,7 @@ import type {
 import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
+  StoredSecretBlob,
 } from "../../../src/service/domains/deploy-control/store.ts";
 import { InstallationPatchGuardConflict } from "../../../src/service/domains/deploy-control/store.ts";
 import type { D1Database } from "./bindings.ts";
@@ -19,7 +21,9 @@ type Namespace =
   | "plan-run"
   | "apply-run"
   | "installation"
-  | "deployment";
+  | "deployment"
+  | "connection"
+  | "secret-blob";
 
 export class CloudflareD1OpenTofuDeploymentStore
   implements OpenTofuDeploymentStore {
@@ -182,6 +186,56 @@ export class CloudflareD1OpenTofuDeploymentStore
     return await this.#list<Deployment>("deployment", { installationId });
   }
 
+  async putConnection(connection: Connection): Promise<Connection> {
+    await this.#put("connection", connection.id, connection, {
+      spaceId: connection.spaceId,
+      status: connection.status,
+      createdAt: epochMillis(connection.createdAt),
+      updatedAt: epochMillis(connection.updatedAt),
+    });
+    return connection;
+  }
+
+  async getConnection(id: string): Promise<Connection | undefined> {
+    return await this.#get("connection", id);
+  }
+
+  async listConnections(spaceId: string): Promise<readonly Connection[]> {
+    return await this.#list<Connection>("connection", { spaceId });
+  }
+
+  async deleteConnection(id: string): Promise<boolean> {
+    return await this.#delete("connection", id);
+  }
+
+  async putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob> {
+    // The secret blob carries ciphertext only; the metadata columns intentionally
+    // omit space_id/status so the ciphertext blob is never list-indexable.
+    await this.#put("secret-blob", blob.connectionId, blob, {
+      createdAt: 0,
+      updatedAt: 0,
+    });
+    return blob;
+  }
+
+  async getSecretBlob(
+    connectionId: string,
+  ): Promise<StoredSecretBlob | undefined> {
+    return await this.#get("secret-blob", connectionId);
+  }
+
+  async deleteSecretBlob(connectionId: string): Promise<boolean> {
+    return await this.#delete("secret-blob", connectionId);
+  }
+
+  async #delete(namespace: Namespace, key: string): Promise<boolean> {
+    await this.#ensureSchema();
+    const result = await this.db.prepare(
+      `delete from ${TABLE} where namespace = ? and key = ?`,
+    ).bind(namespace, key).run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   async #put(
     namespace: Namespace,
     key: string,
@@ -272,6 +326,11 @@ export function createCloudflareD1OpenTofuDeploymentStore(
   db: D1Database,
 ): OpenTofuDeploymentStore {
   return new CloudflareD1OpenTofuDeploymentStore(db);
+}
+
+function epochMillis(iso: string): number {
+  const parsed = Date.parse(iso);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export async function ensureD1OpenTofuLedgerSchema(

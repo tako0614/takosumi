@@ -1204,4 +1204,33 @@ drop index if exists takosumi_plan_runs_space_idx;
 drop table if exists takosumi_plan_runs;
 drop table if exists takosumi_runner_profiles;`,
     },
+    {
+      id: "deploy.takosumi_connections.create",
+      version: 30,
+      domain: "deploy",
+      description:
+        "Create the Connection (provider credential registration) ledger and its sealed secret-blob sidecar. The blob column stores ciphertext only; plaintext credential values never land in the database.",
+      sql: `create table if not exists takosumi_connections (
+  id              text   primary key,
+  space_id        text   not null,
+  provider        text   not null,
+  status          text   not null
+    check (status in ('pending','verified','revoked')),
+  connection_json jsonb  not null,
+  created_at      text   not null,
+  updated_at      text   not null
+);
+create index if not exists takosumi_connections_space_idx
+  on takosumi_connections (space_id);
+create index if not exists takosumi_connections_status_idx
+  on takosumi_connections (status);
+create table if not exists takosumi_connection_secret_blobs (
+  connection_id text  primary key,
+  blob_json     jsonb not null
+);`,
+      down: `drop table if exists takosumi_connection_secret_blobs;
+drop index if exists takosumi_connections_status_idx;
+drop index if exists takosumi_connections_space_idx;
+drop table if exists takosumi_connections;`,
+    },
   ]);

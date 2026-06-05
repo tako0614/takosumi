@@ -5,6 +5,7 @@ import {
   normalizeIssuer,
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
   TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
+  TAKOSUMI_ACCOUNTS_CONNECTIONS_PATH,
   TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH,
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH,
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
@@ -98,11 +99,17 @@ import {
   handleToken,
   handleUserInfo,
 } from "./oidc-routes.ts";
-import { json, methodNotAllowed, readJsonObject } from "./http-helpers.ts";
+import {
+  json,
+  methodNotAllowed,
+  readJsonObject,
+  stringValue,
+} from "./http-helpers.ts";
 import { constantTimeEqual } from "./encoding.ts";
 import {
   handleAccountSessionMeDelete,
   handleAccountSessionMeGet,
+  requireAccountsBearer,
   requireAccountSession,
   TAKOSUMI_ACCOUNTS_SESSION_ME_PATH,
 } from "./account-session.ts";
@@ -114,14 +121,24 @@ import {
   upstreamOAuthNotConfigured,
 } from "./upstream-oauth-routes.ts";
 import {
+  type ConnectionRoute,
   type InstallationRoute,
   matchAccountTokenRevokeRoute,
+  matchConnectionRoute,
   matchInstallationRoute,
 } from "./route-matchers.ts";
 import {
   handleInstallationPlanRunProxy,
   type DeployControlProxyOptions,
 } from "./deploy-control-proxy.ts";
+import {
+  forwardCreateConnection,
+  forwardDeleteConnection,
+  forwardGetConnection,
+  forwardListConnections,
+  forwardTestConnection,
+  responseFromConnectionsResult,
+} from "./connections-proxy.ts";
 import {
   isWorkloadPlatformServiceResolveContext,
   resolveTakosumiWorkloadPlatformService,
@@ -143,6 +160,7 @@ import {
   requireAppInstallationAccountOrWorkloadControlAccess,
   requireAppInstallationCreateWriteAccess,
   requireAppInstallationImportWriteAccess,
+  requireConnectionSpaceAccess,
   requireInstallationPlanRunWriteAccess,
 } from "./installation-auth.ts";
 
@@ -957,6 +975,25 @@ export function createAccountsHandler(
       });
     }
 
+    if (url.pathname === TAKOSUMI_ACCOUNTS_CONNECTIONS_PATH) {
+      return await handleConnectionsCollection({
+        request,
+        url,
+        store,
+        deployControl: options.deployControl,
+      });
+    }
+
+    const connectionRoute = matchConnectionRoute(url.pathname);
+    if (connectionRoute) {
+      return await handleConnectionItem({
+        route: connectionRoute,
+        request,
+        store,
+        deployControl: options.deployControl,
+      });
+    }
+
     const installationRoute = matchInstallationRoute(url.pathname);
     if (installationRoute) {
       if (
@@ -1160,6 +1197,164 @@ export function createAccountsHandler(
     const response = await inner(request);
     return withSecurityHeaders(response, isProductionIssuer);
   };
+}
+
+function connectionsNotConfigured(): Response {
+  return json({
+    error: "feature_unavailable",
+    error_description: "Connections are temporarily unavailable.",
+  }, 503);
+}
+
+/**
+ * POST /v1/connections (create) and GET /v1/connections?spaceId=... (list).
+ *
+ * Both gate on space ownership: the authenticated subject must own the
+ * LedgerAccount that owns the spaceId named in the body (create) or query
+ * (list). The create body carries write-only `values` (secret credential
+ * material); we do NOT read or log the body here beyond resolving `spaceId`,
+ * and we forward the original (unconsumed) request body to deploy-control via
+ * the connections proxy. The proxy never logs bodies.
+ */
+async function handleConnectionsCollection(input: {
+  request: Request;
+  url: URL;
+  store: AccountsStore;
+  deployControl?: DeployControlProxyOptions;
+}): Promise<Response> {
+  const { request, url, store, deployControl } = input;
+  if (request.method === "POST") {
+    // Read the body once to resolve spaceId for the ownership check, then
+    // forward the same parsed object (the original request body stream is
+    // already consumed). `values` are passed through untouched and never
+    // logged.
+    const body = await readJsonObject(request);
+    if (!body) {
+      return json({
+        error: "invalid_request",
+        error_description: "request body is required",
+      }, 400);
+    }
+    const spaceId = stringValue(body.spaceId) ?? stringValue(body.space_id);
+    if (!spaceId) {
+      return json({
+        error: "invalid_request",
+        error_description: "spaceId is required",
+      }, 400);
+    }
+    // The bearer auth helper reads only headers/cookies (not the body), so the
+    // already-consumed request is fine to authorize against.
+    const authBlocked = await requireConnectionSpaceAccess({
+      request,
+      store,
+      spaceId,
+      scope: "write",
+    });
+    if (authBlocked) return authBlocked;
+    if (!deployControl) return connectionsNotConfigured();
+    const result = await forwardCreateConnection({ deployControl, body });
+    return responseFromConnectionsResult(result);
+  }
+  if (request.method === "GET") {
+    const spaceId = stringValue(url.searchParams.get("spaceId") ?? undefined) ??
+      stringValue(url.searchParams.get("space_id") ?? undefined);
+    if (!spaceId) {
+      return json({
+        error: "invalid_request",
+        error_description: "spaceId query parameter is required",
+      }, 400);
+    }
+    const authBlocked = await requireConnectionSpaceAccess({
+      request,
+      store,
+      spaceId,
+      scope: "read",
+    });
+    if (authBlocked) return authBlocked;
+    if (!deployControl) return connectionsNotConfigured();
+    const result = await forwardListConnections({ deployControl, spaceId });
+    return responseFromConnectionsResult(result);
+  }
+  return methodNotAllowed("GET, POST");
+}
+
+/**
+ * POST /v1/connections/{id}/test and DELETE /v1/connections/{id}.
+ *
+ * The request only names the connection id, so space ownership is enforced by
+ * first reading the Connection from deploy-control (a non-secret projection —
+ * the public Connection type carries no values) to learn its spaceId, then
+ * checking that the session subject owns that space. The Connection's
+ * `spaceId` field is the authorization anchor; if it is absent or the space is
+ * not owned, we respond `connection_not_found` (404, non-disclosure).
+ */
+async function handleConnectionItem(input: {
+  route: ConnectionRoute;
+  request: Request;
+  store: AccountsStore;
+  deployControl?: DeployControlProxyOptions;
+}): Promise<Response> {
+  const { route, request, store, deployControl } = input;
+  if (route.kind === "connection-test" && request.method !== "POST") {
+    return methodNotAllowed("POST");
+  }
+  if (route.kind === "connection" && request.method !== "DELETE") {
+    return methodNotAllowed("DELETE");
+  }
+  if (!deployControl) return connectionsNotConfigured();
+  // Authenticate the caller (write scope: test re-verifies, delete revokes)
+  // BEFORE dialing deploy-control, so an unauthenticated request can never even
+  // trigger the connection-resolution read. The per-space ownership check runs
+  // once we know the Connection's spaceId.
+  const bearer = await requireAccountsBearer({ request, store, scope: "write" });
+  if (!bearer.ok) return bearer.response;
+  // Resolve the Connection's spaceId for the ownership check. The Connection
+  // projection carries no secret values, so this read is safe to perform here.
+  const connection = await forwardGetConnection({
+    deployControl,
+    connectionId: route.connectionId,
+  });
+  if (connection.status < 200 || connection.status >= 300) {
+    // Surface the upstream not_found/etc. as a non-disclosing 404 so callers
+    // cannot probe connection ids across tenants.
+    return json({ error: "connection_not_found" }, 404);
+  }
+  const spaceId = connectionSpaceId(connection.payload);
+  if (!spaceId) {
+    return json({ error: "connection_not_found" }, 404);
+  }
+  // Both test (re-verify against the provider) and delete (revoke) are
+  // write-scoped mutations of the Connection.
+  const authBlocked = await requireConnectionSpaceAccess({
+    request,
+    store,
+    spaceId,
+    scope: "write",
+  });
+  if (authBlocked) {
+    // The space-ownership failure must not disclose the connection's existence.
+    return authBlocked.status === 404
+      ? json({ error: "connection_not_found" }, 404)
+      : authBlocked;
+  }
+  if (route.kind === "connection-test") {
+    const result = await forwardTestConnection({
+      deployControl,
+      connectionId: route.connectionId,
+    });
+    return responseFromConnectionsResult(result);
+  }
+  const result = await forwardDeleteConnection({
+    deployControl,
+    connectionId: route.connectionId,
+  });
+  return responseFromConnectionsResult(result);
+}
+
+function connectionSpaceId(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const record = payload as Record<string, unknown>;
+  return stringValue(record.spaceId) ?? stringValue(record.space_id);
 }
 
 const HSTS_HEADER_VALUE = "max-age=31536000; includeSubDomains; preload";

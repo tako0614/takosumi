@@ -1,5 +1,6 @@
 import {
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
+  TAKOSUMI_ACCOUNTS_CONNECTIONS_PATH,
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
 } from "@takosjp/takosumi-accounts-contract";
 
@@ -23,6 +24,25 @@ export type InstallationRoute =
   }
   | { kind: "billing-usage-reports"; installationId: string }
   | { kind: "launch-token-consume"; installationId: string };
+
+export type ConnectionRoute =
+  | { kind: "connection"; connectionId: string }
+  | { kind: "connection-test"; connectionId: string };
+
+export function matchConnectionRoute(
+  pathname: string,
+): ConnectionRoute | null {
+  const prefix = `${TAKOSUMI_ACCOUNTS_CONNECTIONS_PATH}/`;
+  if (!pathname.startsWith(prefix)) return null;
+  const parts = pathname.slice(prefix.length).split("/");
+  const connectionId = parts[0] ? decodeURIComponent(parts[0]) : "";
+  if (!connectionId) return null;
+  if (parts.length === 1) return { kind: "connection", connectionId };
+  if (parts.length === 2 && parts[1] === "test") {
+    return { kind: "connection-test", connectionId };
+  }
+  return null;
+}
 
 export function matchAccountTokenRevokeRoute(
   pathname: string,
