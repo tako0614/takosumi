@@ -35,10 +35,13 @@ import {
   OpenTofuDeploymentController,
   type OpenTofuRunner,
 } from "./domains/deploy-control/mod.ts";
+import type { EnvironmentCoordination } from "./domains/deploy-control/environment_lease.ts";
 import {
   type EnqueueSourceSync,
   SourcesService,
 } from "./domains/sources/mod.ts";
+import { LanesService } from "./domains/lanes/mod.ts";
+import { officialInstallProfiles } from "./domains/lanes/install_profile_seed.ts";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
@@ -69,6 +72,7 @@ import {
 } from "./domains/deploy-control/store_sql.ts";
 import { log } from "./shared/log.ts";
 import type { OperatorImplementation } from "takosumi-contract/reference/implementation";
+import type { Run } from "takosumi-contract/lanes";
 
 function resolveTakosumiDeploymentRecordStore(input: {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
@@ -236,6 +240,14 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly enqueueSourceSync?: EnqueueSourceSync;
   readonly runnerProfiles?: readonly RunnerProfile[];
   readonly defaultRunnerProfileId?: string;
+  /**
+   * Environment lease seam (Core Specification §10.2). The Workers adapter
+   * injects a DO-backed implementation fronting the `TAKOS_COORDINATION`
+   * CoordinationObject so only ONE write run per environment runs at a time
+   * across isolates; when omitted the controller relies on its in-process
+   * serialization (single-isolate safe).
+   */
+  readonly environmentCoordination?: EnvironmentCoordination;
 }
 
 /**
@@ -248,6 +260,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
 export interface TakosumiOperations {
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuDeploymentController;
+  /**
+   * Lanes domain service (Core Specification §6.3-§6.7): App / Environment /
+   * InstallProfile / DeploymentProfile over the same shared ledger.
+   */
+  readonly lanes: LanesService;
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
   getPlanRun(id: string): Promise<PlanRunResponse>;
@@ -258,6 +275,13 @@ export interface TakosumiOperations {
   listDeploymentOutputs(
     installationId: string,
   ): Promise<ListDeploymentOutputsResponse>;
+  /** Unified Run facade (§6.8): read / approve / cancel by run id. */
+  getRun(id: string): Promise<Run>;
+  approveRun(
+    id: string,
+    input?: { readonly approvedBy?: string; readonly reason?: string },
+  ): Promise<Run>;
+  cancelRun(id: string): Promise<Run>;
   /**
    * Queue-consumer entry point. The Workers `queue()` consumer calls this for
    * each dispatched run message (plan/apply); it loads the run, applies the
@@ -384,6 +408,15 @@ export async function createTakosumiService(
       ? { enqueueSourceSync: options.enqueueSourceSync }
       : {}),
   });
+  // Lanes domain (Core Specification §6.3-§6.7): App / Environment /
+  // InstallProfile / DeploymentProfile over the SAME shared ledger as the
+  // controller and Source service.
+  const lanesService = new LanesService({ store: sharedOpenTofuStore });
+  // Seed the official InstallProfile catalog from the built-in template
+  // registry (trustLevel "official"). Idempotent upsert keyed by the derived
+  // profile id, so a restart re-seeds the same rows. Fire-and-forget: a seed
+  // failure must not block boot, and lanes read paths tolerate an empty catalog.
+  void seedOfficialInstallProfiles(sharedOpenTofuStore);
   const opentofuController = new OpenTofuDeploymentController({
     store: sharedOpenTofuStore,
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
@@ -392,6 +425,9 @@ export async function createTakosumiService(
     ...(options.runnerProfiles ? { runnerProfiles: options.runnerProfiles } : {}),
     ...(options.defaultRunnerProfileId
       ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
+      : {}),
+    ...(options.environmentCoordination
+      ? { environmentCoordination: options.environmentCoordination }
       : {}),
   });
   const app = await createApiApp({
@@ -424,6 +460,7 @@ export async function createTakosumiService(
       : undefined,
     deployControlPublicRouteOptions: {
       controller: opentofuController,
+      lanesService,
       ...(deployControlToken ? { getDeployControlToken: () => deployControlToken } : {}),
     },
     readinessRouteProbes: createRoleReadinessProbes({
@@ -452,6 +489,7 @@ export async function createTakosumiService(
   // controller; does not duplicate controller logic.
   const operations: TakosumiOperations = {
     controller: opentofuController,
+    lanes: lanesService,
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
     getPlanRun: (id) => opentofuController.getPlanRun(id),
@@ -462,6 +500,9 @@ export async function createTakosumiService(
       opentofuController.listDeployments(installationId),
     listDeploymentOutputs: (installationId) =>
       opentofuController.listDeploymentOutputs(installationId),
+    getRun: (id) => opentofuController.getRun(id),
+    approveRun: (id, input) => opentofuController.approveRun(id, input ?? {}),
+    cancelRun: (id) => opentofuController.cancelRun(id),
     dispatchQueuedRun: (dispatch) =>
       opentofuController.dispatchQueuedRun(dispatch),
     createSource: (request) => opentofuController.createSource(request),
@@ -477,6 +518,25 @@ export async function createTakosumiService(
       opentofuController.verifySourceHookSecret(sourceId, presentedSecret),
   };
   return { app, context, role, workerDaemon, operations };
+}
+
+/**
+ * Seeds the official InstallProfile catalog into the shared ledger. The profile
+ * id is derived from the template id+version so the upsert is idempotent across
+ * restarts. Logs and swallows a seed failure so it never blocks service boot.
+ */
+async function seedOfficialInstallProfiles(
+  store: OpenTofuDeploymentStore,
+): Promise<void> {
+  try {
+    for (const profile of officialInstallProfiles()) {
+      await store.putInstallProfile(profile);
+    }
+  } catch (error) {
+    log.warn("service.lanes.install_profile_seed_failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 function shouldEmitHttpRequestLogs(

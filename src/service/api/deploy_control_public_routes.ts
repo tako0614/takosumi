@@ -35,6 +35,18 @@ import type {
   PatchSourceRequest,
 } from "takosumi-contract/sources";
 import {
+  APPS_PATH,
+  INSTALL_PROFILES_PATH,
+} from "takosumi-contract/lanes";
+import type {
+  CreateAppRequest,
+  CreateEnvironmentRequest,
+  PatchAppRequest,
+  PatchEnvironmentRequest,
+  PutDeploymentProfileRequest,
+} from "takosumi-contract/lanes";
+import type { LanesService } from "../domains/lanes/mod.ts";
+import {
   OpenTofuControllerError,
   type OpenTofuControllerErrorCode,
   type OpenTofuDeploymentController,
@@ -65,6 +77,20 @@ export const TAKOSUMI_SOURCE_SYNC_ROUTE =
   "/v1/sources/:sourceId/sync" as const;
 export const TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE =
   "/v1/sources/:sourceId/snapshots" as const;
+export const TAKOSUMI_APPS_ROUTE = APPS_PATH;
+export const TAKOSUMI_APP_ROUTE = "/v1/apps/:appId" as const;
+export const TAKOSUMI_APP_ENVIRONMENTS_ROUTE =
+  "/v1/apps/:appId/environments" as const;
+export const TAKOSUMI_ENVIRONMENT_ROUTE =
+  "/v1/environments/:environmentId" as const;
+export const TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE =
+  "/v1/environments/:environmentId/deployment-profile" as const;
+export const TAKOSUMI_INSTALL_PROFILES_ROUTE = INSTALL_PROFILES_PATH;
+export const TAKOSUMI_INSTALL_PROFILE_ROUTE =
+  "/v1/install-profiles/:installProfileId" as const;
+export const TAKOSUMI_RUN_ROUTE = "/v1/runs/:runId" as const;
+export const TAKOSUMI_RUN_APPROVE_ROUTE = "/v1/runs/:runId/approve" as const;
+export const TAKOSUMI_RUN_CANCEL_ROUTE = "/v1/runs/:runId/cancel" as const;
 
 /**
  * Endpoint inventory for the `deployControl-public` family, co-located with the
@@ -265,6 +291,181 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
       okSchema: "ListSourceSnapshotsResponse",
     },
   },
+  {
+    method: "POST",
+    path: TAKOSUMI_APPS_ROUTE,
+    summary: "Creates an App binding a Source to one install type.",
+    auth: "deploy-control-token",
+    operationId: "createApp",
+    openapi: {
+      requestSchema: "CreateAppRequest",
+      okStatus: "201",
+      okSchema: "AppResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_APPS_ROUTE,
+    summary: "Lists Apps for a Space.",
+    auth: "deploy-control-token",
+    operationId: "listApps",
+    openapi: { query: ["spaceId"], okSchema: "ListAppsResponse" },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_APP_ROUTE,
+    summary: "Reads an App record.",
+    auth: "deploy-control-token",
+    operationId: "getApp",
+    openapi: { pathParams: ["appId"], okSchema: "AppResponse" },
+  },
+  {
+    method: "PATCH",
+    path: TAKOSUMI_APP_ROUTE,
+    summary: "Updates an App (name / install profile binding).",
+    auth: "deploy-control-token",
+    operationId: "patchApp",
+    openapi: {
+      pathParams: ["appId"],
+      requestSchema: "PatchAppRequest",
+      okSchema: "AppResponse",
+    },
+  },
+  {
+    method: "DELETE",
+    path: TAKOSUMI_APP_ROUTE,
+    summary: "Deletes an App (refused while Environments exist).",
+    auth: "deploy-control-token",
+    operationId: "deleteApp",
+    openapi: {
+      pathParams: ["appId"],
+      okStatus: "204",
+      okSchema: "EmptyResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_APP_ENVIRONMENTS_ROUTE,
+    summary:
+      "Creates an Environment lane for an App (automation defaults by name production/preview).",
+    auth: "deploy-control-token",
+    operationId: "createEnvironment",
+    openapi: {
+      pathParams: ["appId"],
+      requestSchema: "CreateEnvironmentRequest",
+      okStatus: "201",
+      okSchema: "EnvironmentResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_APP_ENVIRONMENTS_ROUTE,
+    summary: "Lists the Environment lanes of an App.",
+    auth: "deploy-control-token",
+    operationId: "listEnvironments",
+    openapi: {
+      pathParams: ["appId"],
+      okSchema: "ListEnvironmentsResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_ENVIRONMENT_ROUTE,
+    summary: "Reads an Environment record.",
+    auth: "deploy-control-token",
+    operationId: "getEnvironment",
+    openapi: {
+      pathParams: ["environmentId"],
+      okSchema: "EnvironmentResponse",
+    },
+  },
+  {
+    method: "PATCH",
+    path: TAKOSUMI_ENVIRONMENT_ROUTE,
+    summary:
+      "Updates an Environment (ref / path / autoSync / autoPlan / autoApply / requireApproval).",
+    auth: "deploy-control-token",
+    operationId: "patchEnvironment",
+    openapi: {
+      pathParams: ["environmentId"],
+      requestSchema: "PatchEnvironmentRequest",
+      okSchema: "EnvironmentResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE,
+    summary: "Reads the per-Environment Connection binding (DeploymentProfile).",
+    auth: "deploy-control-token",
+    operationId: "getDeploymentProfile",
+    openapi: {
+      pathParams: ["environmentId"],
+      okSchema: "DeploymentProfileResponse",
+    },
+  },
+  {
+    method: "PUT",
+    path: TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE,
+    summary:
+      "Replaces the per-Environment Connection binding (DeploymentProfile). References Connection ids only.",
+    auth: "deploy-control-token",
+    operationId: "putDeploymentProfile",
+    openapi: {
+      pathParams: ["environmentId"],
+      requestSchema: "PutDeploymentProfileRequest",
+      okSchema: "DeploymentProfileResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_INSTALL_PROFILES_ROUTE,
+    summary:
+      "Lists InstallProfiles (the official catalog seeded from templates plus operator profiles).",
+    auth: "deploy-control-token",
+    operationId: "listInstallProfiles",
+    openapi: { okSchema: "ListInstallProfilesResponse" },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_INSTALL_PROFILE_ROUTE,
+    summary: "Reads an InstallProfile record.",
+    auth: "deploy-control-token",
+    operationId: "getInstallProfile",
+    openapi: {
+      pathParams: ["installProfileId"],
+      okSchema: "InstallProfileResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_RUN_ROUTE,
+    summary:
+      "Reads the unified Run projection (over the SourceSync / Plan / Apply ledgers).",
+    auth: "deploy-control-token",
+    operationId: "getRun",
+    openapi: { pathParams: ["runId"], okSchema: "RunResponse" },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_RUN_APPROVE_ROUTE,
+    summary:
+      "Approves a waiting-approval run (destroy plan or destructive change), clearing the apply gate.",
+    auth: "deploy-control-token",
+    operationId: "approveRun",
+    openapi: {
+      pathParams: ["runId"],
+      requestSchema: "ApproveRunRequest",
+      okSchema: "RunResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_RUN_CANCEL_ROUTE,
+    summary: "Cancels a queued or waiting-approval run.",
+    auth: "deploy-control-token",
+    operationId: "cancelRun",
+    openapi: { pathParams: ["runId"], okSchema: "RunResponse" },
+  },
 ] as const;
 
 export const DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
@@ -323,6 +524,33 @@ const ALLOWED_KEYS: Record<DeployControlRouteName, ReadonlySet<string>> = {
     "authConnectionId",
     "status",
   ]),
+  appCreate: new Set([
+    "spaceId",
+    "name",
+    "sourceId",
+    "installType",
+    "installProfileId",
+  ]),
+  appPatch: new Set(["name", "installProfileId"]),
+  environmentCreate: new Set([
+    "name",
+    "ref",
+    "path",
+    "autoSync",
+    "autoPlan",
+    "autoApply",
+    "requireApproval",
+  ]),
+  environmentPatch: new Set([
+    "ref",
+    "path",
+    "autoSync",
+    "autoPlan",
+    "autoApply",
+    "requireApproval",
+  ]),
+  deploymentProfilePut: new Set(["bindings"]),
+  runApprove: new Set(["approvedBy", "reason"]),
 };
 
 type DeployControlRouteName =
@@ -330,10 +558,20 @@ type DeployControlRouteName =
   | "applyRunCreate"
   | "connectionCreate"
   | "sourceCreate"
-  | "sourcePatch";
+  | "sourcePatch"
+  | "appCreate"
+  | "appPatch"
+  | "environmentCreate"
+  | "environmentPatch"
+  | "deploymentProfilePut"
+  | "runApprove";
 
 const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
 const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
+const APP_ID_PATTERN = /^app_[0-9a-zA-Z]{8,64}$/;
+const ENVIRONMENT_ID_PATTERN = /^env_[0-9a-zA-Z]{8,64}$/;
+const RUN_ID_PATTERN = /^(plan|apply|ssr)_[0-9a-zA-Z]{8,64}$/;
+const INSTALL_PROFILE_ID_PATTERN = /^profile_[0-9a-zA-Z_]{1,96}$/;
 
 export interface DeployControlPublicRouteDependencies {
   /**
@@ -355,6 +593,12 @@ export interface DeployControlPublicRouteDependencies {
    * after successful auth.
    */
   readonly controller?: OpenTofuDeploymentController;
+  /**
+   * Lanes domain service (Core Specification §6.3-§6.7). When unset, the
+   * App / Environment / InstallProfile / DeploymentProfile routes return 501
+   * after successful auth.
+   */
+  readonly lanesService?: LanesService;
 }
 
 export interface DeployControlBearerAuthorizationInput {
@@ -644,6 +888,303 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
+  // --- Lanes: App / Environment / InstallProfile / DeploymentProfile (§6) ---
+
+  const lanes = dependencies.lanesService;
+
+  app.post(TAKOSUMI_APPS_ROUTE, deployControlBodyLimit, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+    if (limit) return limit;
+    return await runHandler(c, async () => {
+      const body = await readJsonBody<CreateAppRequest>(c, "appCreate");
+      ensureSpacePermission(auth.principal, body.spaceId);
+      return c.json({ app: await lanes.createApp(body) }, 201);
+    });
+  });
+
+  app.get(TAKOSUMI_APPS_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const spaceId = c.req.query("spaceId") ?? "";
+    if (spaceId.trim().length === 0) {
+      return c.json(
+        errorEnvelope(c, "invalid_argument", "spaceId query is required"),
+        400,
+      );
+    }
+    return await runHandler(c, async () => {
+      ensureSpacePermission(auth.principal, spaceId);
+      return c.json({ apps: await lanes.listApps(spaceId) }, 200);
+    });
+  });
+
+  app.get(TAKOSUMI_APP_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const idCheck = ensureValidParam(c, "appId", APP_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const app = await lanes.getApp(idCheck.value);
+      ensureSpacePermission(auth.principal, app.spaceId);
+      return c.json({ app }, 200);
+    });
+  });
+
+  app.patch(TAKOSUMI_APP_ROUTE, deployControlBodyLimit, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const idCheck = ensureValidParam(c, "appId", APP_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+    if (limit) return limit;
+    return await runHandler(c, async () => {
+      const app = await lanes.getApp(idCheck.value);
+      ensureSpacePermission(auth.principal, app.spaceId);
+      const body = await readJsonBody<PatchAppRequest>(c, "appPatch");
+      return c.json({ app: await lanes.patchApp(idCheck.value, body) }, 200);
+    });
+  });
+
+  app.delete(TAKOSUMI_APP_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const idCheck = ensureValidParam(c, "appId", APP_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const app = await lanes.getApp(idCheck.value);
+      ensureSpacePermission(auth.principal, app.spaceId);
+      await lanes.deleteApp(idCheck.value);
+      return c.body(null, 204);
+    });
+  });
+
+  app.post(
+    TAKOSUMI_APP_ENVIRONMENTS_ROUTE,
+    deployControlBodyLimit,
+    async (c) => {
+      const auth = await authorizeDeployControl(c, dependencies);
+      if (!auth.ok) return auth.response;
+      if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+      const idCheck = ensureValidParam(c, "appId", APP_ID_PATTERN);
+      if (idCheck.kind === "invalid") return idCheck.response;
+      const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+      if (limit) return limit;
+      return await runHandler(c, async () => {
+        const app = await lanes.getApp(idCheck.value);
+        ensureSpacePermission(auth.principal, app.spaceId);
+        const body = await readJsonBody<CreateEnvironmentRequest>(
+          c,
+          "environmentCreate",
+        );
+        return c.json(
+          { environment: await lanes.createEnvironment(idCheck.value, body) },
+          201,
+        );
+      });
+    },
+  );
+
+  app.get(TAKOSUMI_APP_ENVIRONMENTS_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const idCheck = ensureValidParam(c, "appId", APP_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const app = await lanes.getApp(idCheck.value);
+      ensureSpacePermission(auth.principal, app.spaceId);
+      return c.json(
+        { environments: await lanes.listEnvironments(idCheck.value) },
+        200,
+      );
+    });
+  });
+
+  app.get(TAKOSUMI_ENVIRONMENT_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const environment = await lanes.getEnvironment(idCheck.value);
+      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
+      return c.json({ environment }, 200);
+    });
+  });
+
+  app.patch(TAKOSUMI_ENVIRONMENT_ROUTE, deployControlBodyLimit, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+    if (limit) return limit;
+    return await runHandler(c, async () => {
+      const environment = await lanes.getEnvironment(idCheck.value);
+      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
+      const body = await readJsonBody<PatchEnvironmentRequest>(
+        c,
+        "environmentPatch",
+      );
+      return c.json(
+        { environment: await lanes.patchEnvironment(idCheck.value, body) },
+        200,
+      );
+    });
+  });
+
+  app.get(TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const environment = await lanes.getEnvironment(idCheck.value);
+      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
+      const deploymentProfile = await lanes.getDeploymentProfile(idCheck.value);
+      if (!deploymentProfile) {
+        return c.json(
+          errorEnvelope(c, "not_found", "deployment profile not set"),
+          404,
+        );
+      }
+      return c.json({ deploymentProfile }, 200);
+    });
+  });
+
+  app.put(TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE, deployControlBodyLimit, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+    if (limit) return limit;
+    return await runHandler(c, async () => {
+      const environment = await lanes.getEnvironment(idCheck.value);
+      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
+      const body = await readJsonBody<PutDeploymentProfileRequest>(
+        c,
+        "deploymentProfilePut",
+      );
+      return c.json(
+        {
+          deploymentProfile: await lanes.putDeploymentProfile(
+            idCheck.value,
+            body,
+          ),
+        },
+        200,
+      );
+    });
+  });
+
+  app.get(TAKOSUMI_INSTALL_PROFILES_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    return await runHandler(c, async () => {
+      return c.json(
+        { installProfiles: await lanes.listInstallProfiles() },
+        200,
+      );
+    });
+  });
+
+  app.get(TAKOSUMI_INSTALL_PROFILE_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const idCheck = ensureValidParam(
+      c,
+      "installProfileId",
+      INSTALL_PROFILE_ID_PATTERN,
+    );
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      return c.json(
+        { installProfile: await lanes.getInstallProfile(idCheck.value) },
+        200,
+      );
+    });
+  });
+
+  // --- Unified Run facade (§6.8) --------------------------------------------
+
+  app.get(TAKOSUMI_RUN_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidParam(c, "runId", RUN_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const run = await controller.getRun(idCheck.value);
+      ensureSpacePermission(auth.principal, run.spaceId);
+      return c.json({ run }, 200);
+    });
+  });
+
+  app.post(TAKOSUMI_RUN_APPROVE_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidParam(c, "runId", RUN_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const existing = await controller.getRun(idCheck.value);
+      ensureSpacePermission(auth.principal, existing.spaceId);
+      const body = await readOptionalJsonBody<{
+        readonly approvedBy?: string;
+        readonly reason?: string;
+      }>(c, "runApprove");
+      const approvedBy = body.approvedBy ?? auth.principal.actor;
+      return c.json(
+        {
+          run: await controller.approveRun(idCheck.value, {
+            approvedBy,
+            ...(body.reason ? { reason: body.reason } : {}),
+          }),
+        },
+        200,
+      );
+    });
+  });
+
+  app.post(TAKOSUMI_RUN_CANCEL_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidParam(c, "runId", RUN_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      // Resolve the run's space first so cancel is space-permission gated.
+      const existing = await controller.getRun(idCheck.value);
+      ensureSpacePermission(auth.principal, existing.spaceId);
+      return c.json({ run: await controller.cancelRun(idCheck.value) }, 200);
+    });
+  });
+
+}
+
+/**
+ * Resolves an environment's owning Space (via its App) and enforces the
+ * principal's space permission. Used by the environment / deployment-profile
+ * routes whose id does not itself carry the space.
+ */
+async function ensureEnvironmentSpacePermission(
+  lanes: LanesService,
+  principal: DeployControlPrincipal,
+  appId: string,
+): Promise<void> {
+  const app = await lanes.getApp(appId);
+  ensureSpacePermission(principal, app.spaceId);
 }
 
 function mountNotImplementedRoutes(
@@ -679,6 +1220,22 @@ function mountNotImplementedRoutes(
   app.patch(TAKOSUMI_SOURCE_ROUTE, post("sources not wired"));
   app.post(TAKOSUMI_SOURCE_SYNC_ROUTE, post("sources not wired"));
   app.get(TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE, get("sources not wired"));
+  app.post(TAKOSUMI_APPS_ROUTE, post("lanes not wired"));
+  app.get(TAKOSUMI_APPS_ROUTE, get("lanes not wired"));
+  app.get(TAKOSUMI_APP_ROUTE, get("lanes not wired"));
+  app.patch(TAKOSUMI_APP_ROUTE, post("lanes not wired"));
+  app.delete(TAKOSUMI_APP_ROUTE, post("lanes not wired"));
+  app.post(TAKOSUMI_APP_ENVIRONMENTS_ROUTE, post("lanes not wired"));
+  app.get(TAKOSUMI_APP_ENVIRONMENTS_ROUTE, get("lanes not wired"));
+  app.get(TAKOSUMI_ENVIRONMENT_ROUTE, get("lanes not wired"));
+  app.patch(TAKOSUMI_ENVIRONMENT_ROUTE, post("lanes not wired"));
+  app.get(TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE, get("lanes not wired"));
+  app.put(TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE, post("lanes not wired"));
+  app.get(TAKOSUMI_INSTALL_PROFILES_ROUTE, get("lanes not wired"));
+  app.get(TAKOSUMI_INSTALL_PROFILE_ROUTE, get("lanes not wired"));
+  app.get(TAKOSUMI_RUN_ROUTE, get("runs not wired"));
+  app.post(TAKOSUMI_RUN_APPROVE_ROUTE, post("runs not wired"));
+  app.post(TAKOSUMI_RUN_CANCEL_ROUTE, post("runs not wired"));
 }
 
 async function authorizeDeployControl(
@@ -901,6 +1458,44 @@ async function readJsonBody<T>(
   return raw as T;
 }
 
+/**
+ * Reads an OPTIONAL JSON body (the approve route allows an empty body). Returns
+ * `{}` when there is no body or it is empty; otherwise validates it like
+ * {@link readJsonBody} (object shape + allowed-key allowlist).
+ */
+async function readOptionalJsonBody<T>(
+  c: Context,
+  route: DeployControlRouteName,
+): Promise<T> {
+  const text = await c.req.text();
+  if (text.trim().length === 0) return {} as T;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "request body must be valid JSON",
+    );
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "request body must be a JSON object",
+    );
+  }
+  const allowed = ALLOWED_KEYS[route];
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `unknown_field: ${key}`,
+      );
+    }
+  }
+  return raw as T;
+}
+
 function enforceBodyLimit(
   c: Context,
   limitBytes: number,
@@ -975,6 +1570,26 @@ function ensureValidSourceId(
       kind: "invalid",
       response: c.json(
         errorEnvelope(c, "invalid_argument", "sourceId has an unsupported shape"),
+        400,
+      ),
+    };
+  }
+  return { kind: "ok", value: raw };
+}
+
+function ensureValidParam(
+  c: Context,
+  param: string,
+  pattern: RegExp,
+):
+  | { readonly kind: "ok"; readonly value: string }
+  | { readonly kind: "invalid"; readonly response: Response } {
+  const raw = c.req.param(param) ?? "";
+  if (!pattern.test(raw)) {
+    return {
+      kind: "invalid",
+      response: c.json(
+        errorEnvelope(c, "invalid_argument", `${param} has an unsupported shape`),
         400,
       ),
     };

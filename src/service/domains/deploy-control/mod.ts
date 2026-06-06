@@ -105,6 +105,16 @@ import {
   validateTemplateInputs,
 } from "../templates/mod.ts";
 import { generateRootModule } from "../rootgen/mod.ts";
+import type { Run } from "takosumi-contract/lanes";
+import {
+  projectApplyRun,
+  projectPlanRun,
+  projectSourceSyncRun,
+} from "./projection_run.ts";
+import {
+  type EnvironmentCoordination,
+  withEnvironmentLease,
+} from "./environment_lease.ts";
 
 // Re-export the shared error primitive and the four decomposed concerns so the
 // domain's public entry point stays `./mod.ts` for importers and tests.
@@ -310,6 +320,17 @@ export interface OpenTofuDeploymentControllerDependencies {
    * Resolves template-backed plan runs, validates inputs, and drives rootgen.
    */
   readonly templateRegistry?: TemplateRegistry;
+  /**
+   * Environment lease seam (Core Specification §10.2). When present, the apply
+   * consumer acquires the `environment:{installationId}` lease before executing
+   * a write run and releases it in `finally`, so only ONE write run per
+   * environment runs at a time. A busy lease throws
+   * {@link EnvironmentLeaseBusyError} so the queue redelivers. When absent, the
+   * controller falls back to its in-process serialization on the installation
+   * key (single-isolate safe; cross-isolate needs the DO-backed seam).
+   * `source_sync` never takes the lease.
+   */
+  readonly environmentCoordination?: EnvironmentCoordination;
 }
 
 export interface DeployControlActorContext {
@@ -326,6 +347,7 @@ export class OpenTofuDeploymentController {
   readonly #now: () => number;
   readonly #enqueueRun: EnqueueRun;
   readonly #templateRegistry: TemplateRegistry;
+  readonly #environmentCoordination?: EnvironmentCoordination;
   readonly #seededProfiles: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
 
@@ -334,6 +356,7 @@ export class OpenTofuDeploymentController {
     this.#runner = dependencies.runner;
     this.#vault = dependencies.vault;
     this.#sourcesService = dependencies.sourcesService;
+    this.#environmentCoordination = dependencies.environmentCoordination;
     this.#defaultRunnerProfileId = dependencies.defaultRunnerProfileId ??
       "cloudflare-default";
     this.#newId = dependencies.newId ?? newId;
@@ -897,10 +920,26 @@ export class OpenTofuDeploymentController {
     const inputs = await this.#store.getPlanRunInputs(planRun.id);
     const dispatch = templateDispatchFromInputs(inputs);
     const key = planRun.installationId ?? planRun.id;
-    return await this.#runSerialized(
-      key,
-      () => this.#executeApply(applyRun, planRun, profile, dispatch),
-    );
+    // Environment lease (spec §10.2): when a DO-backed coordination seam is wired
+    // AND this apply targets an existing installation (its environment lane),
+    // acquire the cross-isolate `environment:{installationId}` lease so only one
+    // write run per environment executes at a time. A busy lease throws so the
+    // queue redelivers. The in-process serialization stays as the inner guard
+    // (single-isolate correctness + a stable ordering for `create` runs that
+    // have no installation lease yet).
+    const runWork = () =>
+      this.#runSerialized(
+        key,
+        () => this.#executeApply(applyRun, planRun, profile, dispatch),
+      );
+    if (this.#environmentCoordination && planRun.installationId) {
+      return await withEnvironmentLease(
+        this.#environmentCoordination,
+        { environmentId: planRun.installationId, holderId: applyRun.id },
+        runWork,
+      );
+    }
+    return await runWork();
   }
 
   /**
@@ -1098,6 +1137,156 @@ export class OpenTofuDeploymentController {
 
   async getSourceSyncRun(id: string): Promise<SourceSyncRun> {
     return await this.#requireSources().getSyncRun(id);
+  }
+
+  // --- Unified Run facade (Core Specification §6.8) -------------------------
+
+  /**
+   * Resolves a run id to the unified §6.8 {@link Run} projection, looking across
+   * the PlanRun / ApplyRun / SourceSyncRun ledgers by id prefix. A plan that is
+   * `succeeded` but still requires approval (template destructive confirmation,
+   * or its environment requires approval and it has not been approved) projects
+   * to `waiting_approval`.
+   */
+  async getRun(id: string): Promise<Run> {
+    requireNonEmptyString(id, "runId");
+    const planRun = await this.#store.getPlanRun(id);
+    if (planRun) {
+      return projectPlanRun(planRun, {
+        awaitingApproval: this.#planAwaitsApproval(planRun),
+      });
+    }
+    const applyRun = await this.#store.getApplyRun(id);
+    if (applyRun) return projectApplyRun(applyRun);
+    const sync = await this.#store.getSourceSyncRun(id);
+    if (sync) return projectSourceSyncRun(sync);
+    throw new OpenTofuControllerError("not_found", `run ${id} not found`);
+  }
+
+  /**
+   * Cancels a run that has not started executing. Only `queued` plan/apply runs
+   * (or a plan parked `waiting_approval`, i.e. `blocked` with a pending approval)
+   * may be cancelled; a `running` or terminal run is rejected. Returns the
+   * resulting unified Run.
+   */
+  async cancelRun(id: string): Promise<Run> {
+    requireNonEmptyString(id, "runId");
+    const planRun = await this.#store.getPlanRun(id);
+    if (planRun) {
+      if (planRun.status !== "queued" && !this.#planAwaitsApproval(planRun)) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `plan run ${id} is ${planRun.status}; only queued or waiting-approval runs can be cancelled`,
+        );
+      }
+      const now = this.#now();
+      const cancelled: PlanRun = {
+        ...planRun,
+        status: "cancelled",
+        auditEvents: [
+          ...planRun.auditEvents,
+          auditEvent(planRun.id, "plan.cancelled", now),
+        ],
+        updatedAt: now,
+        finishedAt: now,
+      };
+      await this.#store.putPlanRun(cancelled);
+      await this.#store.deletePlanRunInputs(id);
+      return projectPlanRun(cancelled, { awaitingApproval: false });
+    }
+    const applyRun = await this.#store.getApplyRun(id);
+    if (applyRun) {
+      if (applyRun.status !== "queued") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `apply run ${id} is ${applyRun.status}; only queued runs can be cancelled`,
+        );
+      }
+      const now = this.#now();
+      const cancelled: ApplyRun = {
+        ...applyRun,
+        status: "cancelled",
+        auditEvents: [
+          ...applyRun.auditEvents,
+          auditEvent(applyRun.id, "apply.cancelled", now),
+        ],
+        updatedAt: now,
+        finishedAt: now,
+      };
+      await this.#store.putApplyRun(cancelled);
+      return projectApplyRun(cancelled);
+    }
+    throw new OpenTofuControllerError("not_found", `run ${id} not found`);
+  }
+
+  /**
+   * Whether a plan run is parked awaiting an explicit approval before its apply
+   * may proceed: a template plan that flagged a destructive change
+   * (`requiresConfirmation`) and has not yet been approved. The
+   * environment-level approval requirement is enforced at apply-create time via
+   * the lanes plan flow; this predicate reflects the plan-intrinsic gate.
+   */
+  #planAwaitsApproval(planRun: PlanRun): boolean {
+    if (planRun.appliedApplyRunId) return false;
+    if (planRun.approval) return false;
+    return planRun.status === "succeeded" &&
+      planRun.templateBinding?.requiresConfirmation === true;
+  }
+
+  /**
+   * Records an explicit approval against a `waiting_approval` plan run, clearing
+   * the approval gate so its apply may proceed (spec §10.6 destroy approval and
+   * the template destructive-confirmation gate). Idempotent: re-approving an
+   * already-approved plan returns it unchanged. Rejects a run that is not a plan
+   * or is not parked awaiting approval.
+   */
+  async approveRun(
+    id: string,
+    input: { readonly approvedBy?: string; readonly reason?: string } = {},
+  ): Promise<Run> {
+    requireNonEmptyString(id, "runId");
+    const planRun = await this.#store.getPlanRun(id);
+    if (!planRun) {
+      // Only plan runs carry an approval gate; an apply/source-sync id is a
+      // client error here.
+      if (
+        (await this.#store.getApplyRun(id)) ||
+        (await this.#store.getSourceSyncRun(id))
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `run ${id} is not an approvable plan run`,
+        );
+      }
+      throw new OpenTofuControllerError("not_found", `run ${id} not found`);
+    }
+    if (planRun.approval) {
+      return projectPlanRun(planRun, { awaitingApproval: false });
+    }
+    if (!this.#planAwaitsApproval(planRun)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${id} is not awaiting approval`,
+      );
+    }
+    const now = this.#now();
+    const approved: PlanRun = {
+      ...planRun,
+      approval: {
+        ...(input.approvedBy ? { approvedBy: input.approvedBy } : {}),
+        approvedAt: now,
+        ...(input.reason ? { reason: input.reason } : {}),
+      },
+      auditEvents: [
+        ...planRun.auditEvents,
+        auditEvent(planRun.id, "plan.approved", now, {
+          ...(input.approvedBy ? { approvedBy: input.approvedBy } : {}),
+        }, input.approvedBy),
+      ],
+      updatedAt: now,
+    };
+    await this.#store.putPlanRun(approved);
+    return projectPlanRun(approved, { awaitingApproval: false });
   }
 
   async listAutoSyncSources(limit: number): Promise<readonly Source[]> {
