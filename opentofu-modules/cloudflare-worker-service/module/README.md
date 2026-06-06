@@ -1,6 +1,7 @@
-# cloudflare-worker-hono (official template module)
+# cloudflare-worker-service (official template module)
 
-Deploys a Hono (or any module-syntax) Cloudflare Worker from a built artifact.
+Deploys a Hono (or any module-syntax) Cloudflare Worker service from a built
+artifact.
 
 ## Provider v5 note (verified)
 
@@ -42,4 +43,4 @@ credentials; only the OpenTofu plan/apply phases receive provider credentials.
 the subdomain on-cluster is left to the dispatch/runner wiring.
 
 This directory is baked into the runner image at
-`/app/templates/cloudflare-worker-hono/module`.
+`/app/templates/cloudflare-worker-service/module`.

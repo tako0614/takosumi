@@ -60,7 +60,7 @@ RUN set -eux; \
 # Official template modules baked from the repo-root catalog (templates/<id>/
 # module + template.ts metadata; the .ts files are inert in the image). The
 # `template.localModulePath` points at a directory under here (e.g.
-# /app/templates/cloudflare-r2-bucket/module); the runner copies it to
+# /app/templates/cloudflare-r2-storage/module); the runner copies it to
 # /work/generated-root/template-module at plan/apply time. Raw-module installs
 # never touch this directory.
 WORKDIR /app

@@ -146,13 +146,15 @@ test("template plan dispatch carries template ref, generated root, and build; ne
     spaceId: "space_test",
     installationId,
     source: SOURCE,
-    templateId: "cloudflare-worker-hono",
+    templateId: "cloudflare-worker-service",
     templateVersion: "1.0.0",
     inputs: { appName: "my-worker", accountId: "acct_123" },
   });
 
   expect(planRun.status).toEqual("succeeded");
-  expect(planRun.templateBinding?.templateId).toEqual("cloudflare-worker-hono");
+  expect(planRun.templateBinding?.templateId).toEqual(
+    "cloudflare-worker-service",
+  );
   expect(planRun.templateBinding?.requiresConfirmation).toEqual(false);
   // requiredProviders derived + canonicalized from the template policy.
   expect(planRun.requiredProviders).toEqual([
@@ -162,9 +164,9 @@ test("template plan dispatch carries template ref, generated root, and build; ne
   expect(runner.planJobs).toHaveLength(1);
   const planJob = runner.planJobs[0]!;
   expect(planJob.template).toEqual({
-    id: "cloudflare-worker-hono",
+    id: "cloudflare-worker-service",
     version: "1.0.0",
-    localModulePath: "/app/templates/cloudflare-worker-hono/module",
+    localModulePath: "/app/templates/cloudflare-worker-service/module",
   });
   expect(Object.keys(planJob.generatedRoot!.files).sort()).toEqual([
     "main.tf",
@@ -209,7 +211,7 @@ test("template plan is blocked when the plan introduces a disallowed resource ty
     spaceId: "space_test",
     installationId,
     source: SOURCE,
-    templateId: "cloudflare-r2-bucket",
+    templateId: "cloudflare-r2-storage",
     templateVersion: "1.0.0",
     inputs: { bucketName: "b", accountId: "a" },
   });
@@ -241,7 +243,7 @@ test("destructive template plan requires confirmDestructive at apply", async () 
     spaceId: "space_test",
     installationId,
     source: SOURCE,
-    templateId: "cloudflare-r2-bucket",
+    templateId: "cloudflare-r2-storage",
     templateVersion: "1.0.0",
     inputs: { bucketName: "b", accountId: "a" },
   });
@@ -265,7 +267,7 @@ test("destructive template plan requires confirmDestructive at apply", async () 
   expect(applied.applyRun.status).toEqual("succeeded");
   // Apply dispatch also carries the template + generated root.
   expect(runner.applyJobs).toHaveLength(1);
-  expect(runner.applyJobs[0]!.template?.id).toEqual("cloudflare-r2-bucket");
+  expect(runner.applyJobs[0]!.template?.id).toEqual("cloudflare-r2-storage");
   expect(runner.applyJobs[0]!.generatedRoot?.files["main.tf"]).toContain(
     'source = "./template-module"',
   );
@@ -301,7 +303,7 @@ test("output allowlist projects only template public outputs after the sensitive
     spaceId: "space_test",
     installationId,
     source: SOURCE,
-    templateId: "cloudflare-r2-bucket",
+    templateId: "cloudflare-r2-storage",
     templateVersion: "1.0.0",
     inputs: { bucketName: "my-bucket", accountId: "a" },
   });
@@ -349,7 +351,7 @@ test("requiredProviders must not be passed alongside a template", async () => {
       spaceId: "space_test",
       installationId,
       source: SOURCE,
-      templateId: "cloudflare-r2-bucket",
+      templateId: "cloudflare-r2-storage",
       templateVersion: "1.0.0",
       inputs: { bucketName: "b", accountId: "a" },
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],

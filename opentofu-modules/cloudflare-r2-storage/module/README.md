@@ -1,4 +1,4 @@
-# cloudflare-r2-bucket (official template module)
+# cloudflare-r2-storage (official template module)
 
 Creates a single Cloudflare R2 bucket from `bucketName` + `accountId`.
 
@@ -11,5 +11,5 @@ Creates a single Cloudflare R2 bucket from `bucketName` + `accountId`.
 - No build phase — the OpenTofu surface is the module alone.
 
 This directory is baked into the runner image at
-`/app/templates/cloudflare-r2-bucket/module`. Takosumi generates a root module
+`/app/templates/cloudflare-r2-storage/module`. Takosumi generates a root module
 that wires this module via `source = "./template-module"` with the typed inputs.

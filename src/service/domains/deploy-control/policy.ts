@@ -16,13 +16,22 @@ export function evaluatePolicy(input: {
   readonly profile: RunnerProfile;
   readonly requiredProviders: readonly string[];
   readonly checkedAt: number;
+  /**
+   * Whether a run with zero required providers is intentional (skips the
+   * "requiredProviders before OpenTofu init" gate). Set for a §10 provider-free
+   * install — a template whose policy declares zero allowed providers, e.g.
+   * `core`, which is pure value plumbing with no cloud resources. A raw cloud run
+   * still must declare providers (the gate's original purpose).
+   */
+  readonly allowNoProviders?: boolean;
 }): PolicyDecision {
   const reasons: string[] = [];
   const templateReason = templateProfileDisabledReason(input.profile);
   if (templateReason) reasons.push(templateReason);
   if (
     input.profile.allowedProviders.length > 0 &&
-    input.requiredProviders.length === 0
+    input.requiredProviders.length === 0 &&
+    input.allowNoProviders !== true
   ) {
     reasons.push(
       `runner profile ${input.profile.id} requires requiredProviders before OpenTofu init`,
