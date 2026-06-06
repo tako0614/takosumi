@@ -55,6 +55,19 @@ import type {
   CredentialBundle,
 } from "../../adapters/vault/mod.ts";
 import { ConnectionVaultError } from "../../adapters/vault/mod.ts";
+import type { SourcesService } from "../sources/mod.ts";
+import type {
+  CreateSourceRequest,
+  CreateSourceResponse,
+  CreateSourceSyncResponse,
+  ListSourcesResponse,
+  ListSourceSnapshotsResponse,
+  PatchSourceRequest,
+  Source,
+  SourceResponse,
+  SourceSnapshot,
+  SourceSyncRun,
+} from "takosumi-contract/sources";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import {
   InMemoryOpenTofuDeploymentStore,
@@ -192,6 +205,46 @@ export interface OpenTofuRunner {
   plan(job: OpenTofuPlanJob): Promise<OpenTofuPlanResult>;
   apply(job: OpenTofuApplyJob): Promise<OpenTofuApplyResult>;
   destroy?(job: OpenTofuDestroyJob): Promise<OpenTofuDestroyResult>;
+  /**
+   * Resolves a Source to an immutable archive snapshot (Core Specification §6).
+   * The runner runs `git ls-remote` + a shallow fetch in the untrusted container
+   * and PUTs the archive bytes to the DO artifact route under
+   * {@link OpenTofuSourceSyncJob.archiveObjectKey}; it returns only the resolved
+   * commit and archive metadata. Optional: an external/legacy runner without it
+   * leaves source_sync runs queued.
+   */
+  sourceSync?(job: OpenTofuSourceSyncJob): Promise<OpenTofuSourceSyncResult>;
+}
+
+/**
+ * Source-sync dispatch job. `credentials` carries the source-phase mint result
+ * (git env + files); absent for a public repo. Never logged; threaded onto the
+ * runner dispatch only.
+ */
+export interface OpenTofuSourceSyncJob {
+  readonly runId: string;
+  readonly spaceId: string;
+  readonly sourceId: string;
+  readonly source: {
+    readonly url: string;
+    readonly ref: string;
+    readonly path: string;
+  };
+  readonly archiveObjectKey: string;
+  readonly credentials?: {
+    readonly env: Readonly<Record<string, string>>;
+    readonly files?: readonly {
+      readonly path: string;
+      readonly mode: number;
+      readonly content: string;
+    }[];
+  };
+}
+
+export interface OpenTofuSourceSyncResult {
+  readonly resolvedCommit: string;
+  readonly archiveDigest: string;
+  readonly archiveSizeBytes: number;
 }
 
 /**
@@ -206,7 +259,7 @@ export interface OpenTofuRunner {
  * immediately, preserving the historical create-executes-run behavior.
  */
 export interface OpenTofuRunDispatch {
-  readonly action: "plan" | "apply";
+  readonly action: "plan" | "apply" | "source_sync";
   readonly runId: string;
   readonly spaceId: string;
 }
@@ -238,6 +291,14 @@ export interface OpenTofuDeploymentControllerDependencies {
    */
   readonly vault?: ConnectionVault;
   /**
+   * Source domain service (Core Specification §6). When present, the controller
+   * exposes the Source lifecycle (`createSource` / `listSources` / `getSource` /
+   * `patchSource` / `createSourceSync` / `listSourceSnapshots`) and the
+   * `source_sync` consumer path. When absent, those methods throw
+   * `not_implemented`.
+   */
+  readonly sourcesService?: SourcesService;
+  /**
    * Out-of-process run dispatch. Defaults to an inline dispatcher that runs the
    * consumer immediately (preserving synchronous create-executes-run for
    * tests / local / node substrates). The Workers adapter injects a producer
@@ -259,6 +320,7 @@ export class OpenTofuDeploymentController {
   readonly #store: OpenTofuDeploymentStore;
   readonly #runner?: OpenTofuRunner;
   readonly #vault?: ConnectionVault;
+  readonly #sourcesService?: SourcesService;
   readonly #defaultRunnerProfileId: string;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
@@ -271,6 +333,7 @@ export class OpenTofuDeploymentController {
     this.#store = dependencies.store ?? new InMemoryOpenTofuDeploymentStore();
     this.#runner = dependencies.runner;
     this.#vault = dependencies.vault;
+    this.#sourcesService = dependencies.sourcesService;
     this.#defaultRunnerProfileId = dependencies.defaultRunnerProfileId ??
       "cloudflare-default";
     this.#newId = dependencies.newId ?? newId;
@@ -595,7 +658,144 @@ export class OpenTofuDeploymentController {
       await this.runQueuedPlan(dispatch.runId);
       return;
     }
+    if (dispatch.action === "source_sync") {
+      await this.runQueuedSourceSync(dispatch.runId);
+      return;
+    }
     await this.runQueuedApply(dispatch.runId);
+  }
+
+  /**
+   * Source-sync consumer (Core Specification §6). Idempotency guard, transition
+   * to `running`, mint source-phase credentials NOW (git-only; never provider),
+   * dispatch to the runner, and on success record the SourceSnapshot + update the
+   * Source's `lastSeenCommit`. Never logs credential material.
+   */
+  async runQueuedSourceSync(runId: string): Promise<SourceSyncRun | undefined> {
+    const sources = this.#sourcesService;
+    if (!sources || !this.#runner?.sourceSync) {
+      return await this.#store.getSourceSyncRun(runId);
+    }
+    const run = await this.#store.getSourceSyncRun(runId);
+    if (!run) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `source sync run ${runId} not found`,
+      );
+    }
+    if (!this.#shouldProcessRun(run.status, run.heartbeatAt)) {
+      return run;
+    }
+    const startedAtMs = this.#now();
+    const running: SourceSyncRun = {
+      ...run,
+      status: "running",
+      startedAt: new Date(startedAtMs).toISOString(),
+      heartbeatAt: startedAtMs,
+      updatedAt: new Date(startedAtMs).toISOString(),
+    };
+    await this.#store.putSourceSyncRun(running);
+
+    let stored;
+    try {
+      stored = await sources.getStoredSource(run.sourceId);
+    } catch (error) {
+      await this.#failSourceSyncRun(running, error);
+      return await this.#store.getSourceSyncRun(runId);
+    }
+
+    let credentials;
+    try {
+      if (stored.authConnectionId) {
+        const bundle = await this.#requireVault().mintForPhase({
+          spaceId: run.spaceId,
+          phase: "source",
+          sourceConnectionId: stored.authConnectionId,
+        });
+        credentials = bundle.toMintResponse();
+      }
+    } catch (error) {
+      await this.#failSourceSyncRun(running, mapVaultError(error));
+      return await this.#store.getSourceSyncRun(runId);
+    }
+
+    try {
+      const result = await this.#runner.sourceSync({
+        runId: run.id,
+        spaceId: run.spaceId,
+        sourceId: run.sourceId,
+        source: { url: run.url, ref: run.ref, path: run.path },
+        archiveObjectKey: run.archiveObjectKey,
+        ...(credentials ? { credentials } : {}),
+      });
+      return await this.#succeedSourceSyncRun(running, result);
+    } catch (error) {
+      await this.#failSourceSyncRun(running, error);
+      return await this.#store.getSourceSyncRun(runId);
+    }
+  }
+
+  async #succeedSourceSyncRun(
+    running: SourceSyncRun,
+    result: OpenTofuSourceSyncResult,
+  ): Promise<SourceSyncRun> {
+    const finishedAtMs = this.#now();
+    const finishedAtIso = new Date(finishedAtMs).toISOString();
+    const snapshotId = running.snapshotId ?? this.#newId("snap");
+    const snapshot: SourceSnapshot = {
+      id: snapshotId,
+      sourceId: running.sourceId,
+      url: running.url,
+      ref: running.ref,
+      resolvedCommit: result.resolvedCommit,
+      path: running.path,
+      archiveObjectKey: running.archiveObjectKey,
+      archiveDigest: result.archiveDigest,
+      archiveSizeBytes: result.archiveSizeBytes,
+      fetchedByRunId: running.id,
+      fetchedAt: finishedAtIso,
+    };
+    await this.#store.putSourceSnapshot(snapshot);
+    // Record lastSeenCommit on the Source so the scheduler can skip an unchanged
+    // ref. Read-modify-write through the store (internal field, never projected).
+    const stored = await this.#store.getSource(running.sourceId);
+    if (stored) {
+      await this.#store.putSource({
+        ...stored,
+        lastSeenCommit: result.resolvedCommit,
+        updatedAt: finishedAtIso,
+      });
+    }
+    const succeeded: SourceSyncRun = {
+      ...running,
+      status: "succeeded",
+      heartbeatAt: finishedAtMs,
+      finishedAt: finishedAtIso,
+      updatedAt: finishedAtIso,
+      resolvedCommit: result.resolvedCommit,
+      archiveDigest: result.archiveDigest,
+      archiveSizeBytes: result.archiveSizeBytes,
+      snapshotId,
+    };
+    await this.#store.putSourceSyncRun(succeeded);
+    return succeeded;
+  }
+
+  async #failSourceSyncRun(
+    running: SourceSyncRun,
+    error: unknown,
+  ): Promise<void> {
+    const finishedAtMs = this.#now();
+    const finishedAtIso = new Date(finishedAtMs).toISOString();
+    const failed: SourceSyncRun = {
+      ...running,
+      status: "failed",
+      heartbeatAt: finishedAtMs,
+      finishedAt: finishedAtIso,
+      updatedAt: finishedAtIso,
+      error: errorMessage(error),
+    };
+    await this.#store.putSourceSyncRun(failed);
   }
 
   /**
@@ -858,6 +1058,70 @@ export class OpenTofuDeploymentController {
       );
     }
     return this.#vault;
+  }
+
+  // --- Sources (Core Specification §6) --------------------------------------
+
+  async createSource(
+    request: CreateSourceRequest,
+  ): Promise<CreateSourceResponse> {
+    return await this.#requireSources().createSource(request);
+  }
+
+  async listSources(spaceId: string): Promise<ListSourcesResponse> {
+    return await this.#requireSources().listSources(spaceId);
+  }
+
+  async getSource(id: string): Promise<SourceResponse> {
+    return await this.#requireSources().getSource(id);
+  }
+
+  async patchSource(
+    id: string,
+    patch: PatchSourceRequest,
+  ): Promise<SourceResponse> {
+    return await this.#requireSources().patchSource(id, patch);
+  }
+
+  async createSourceSync(
+    sourceId: string,
+    options: { readonly dedupe?: boolean } = {},
+  ): Promise<CreateSourceSyncResponse> {
+    return await this.#requireSources().createSync(sourceId, options);
+  }
+
+  async listSourceSnapshots(
+    sourceId: string,
+  ): Promise<ListSourceSnapshotsResponse> {
+    return await this.#requireSources().listSnapshots(sourceId);
+  }
+
+  async getSourceSyncRun(id: string): Promise<SourceSyncRun> {
+    return await this.#requireSources().getSyncRun(id);
+  }
+
+  async listAutoSyncSources(limit: number): Promise<readonly Source[]> {
+    return await this.#requireSources().listAutoSyncSources(limit);
+  }
+
+  async verifySourceHookSecret(
+    sourceId: string,
+    presentedSecret: string,
+  ): Promise<boolean> {
+    return await this.#requireSources().verifyHookSecret(
+      sourceId,
+      presentedSecret,
+    );
+  }
+
+  #requireSources(): SourcesService {
+    if (!this.#sourcesService) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "sources service is not configured",
+      );
+    }
+    return this.#sourcesService;
   }
 
   // Status-transition ceremony shared by the three execute paths: clone the run

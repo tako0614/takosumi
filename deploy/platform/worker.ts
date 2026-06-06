@@ -55,10 +55,128 @@ const accountsWorker = createCloudflareWorker({
 const runQueueConsumer = createDeployControlQueueConsumer();
 
 export default {
-  fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response> {
+  async fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response> {
+    const url = new URL(request.url);
+    // Source webhook surface (Core Specification §6). This is a NEW top-level
+    // prefix the accounts handler does not own; handle it here via the
+    // deploy-control service seam BEFORE delegating to the accounts handler.
+    if (url.pathname.startsWith("/hooks/sources/")) {
+      return await handleSourceWebhook(request, url, env);
+    }
     return accountsWorker.fetch(request, env);
   },
   queue(batch: QueueBatch, env: CloudflareWorkerEnv): Promise<void> {
     return runQueueConsumer(batch, env as unknown as DeployControlEnv);
   },
+  // Scheduled source polling (Core Specification §6). Every cron tick, scan the
+  // active sources whose autoSync flag is set and enqueue a deduped source_sync.
+  scheduled(_event: unknown, env: CloudflareWorkerEnv): Promise<void> {
+    return runScheduledSourcePoll(env as unknown as DeployControlEnv);
+  },
 };
+
+const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
+
+/**
+ * Subset of the deploy-control operations facade the source webhook / scheduler
+ * need. Kept narrow so the seam-level handlers are unit-testable with a stub.
+ */
+export interface SourceWebhookOperations {
+  verifySourceHookSecret(
+    sourceId: string,
+    presentedSecret: string,
+  ): Promise<boolean>;
+  createSourceSync(
+    sourceId: string,
+    options?: { readonly dedupe?: boolean },
+  ): Promise<{ readonly run: { readonly id: string } }>;
+}
+
+export interface SourcePollOperations extends SourceWebhookOperations {
+  readonly controller: {
+    listAutoSyncSources(limit: number): Promise<readonly { readonly id: string }[]>;
+  };
+}
+
+async function handleSourceWebhook(
+  request: Request,
+  url: URL,
+  env: CloudflareWorkerEnv,
+): Promise<Response> {
+  const operations = await deployControlSeam(
+    env as unknown as DeployControlEnv,
+  ).operations();
+  return await handleSourceWebhookRequest(request, url, operations);
+}
+
+/**
+ * Per-source webhook seam (`POST /hooks/sources/:sourceId`). The bearer is the
+ * per-source hook secret (compared against the stored hash by the source
+ * service). The payload body is IGNORED (untrusted); a valid bearer triggers a
+ * deduped source_sync for the source's default ref.
+ */
+export async function handleSourceWebhookRequest(
+  request: Request,
+  url: URL,
+  operations: SourceWebhookOperations,
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return Response.json({ error: "method not allowed" }, { status: 405 });
+  }
+  const sourceId = decodeURIComponent(
+    url.pathname.slice("/hooks/sources/".length),
+  );
+  if (!SOURCE_ID_PATTERN.test(sourceId)) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  const bearer = bearerFromAuthorization(
+    request.headers.get("authorization") ?? "",
+  );
+  if (!bearer) {
+    return Response.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  let valid = false;
+  try {
+    valid = await operations.verifySourceHookSecret(sourceId, bearer);
+  } catch {
+    valid = false;
+  }
+  if (!valid) {
+    return Response.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  // Payload is untrusted and ignored; effect is a deduped re-resolution.
+  const { run } = await operations.createSourceSync(sourceId, { dedupe: true });
+  return Response.json({ accepted: true, runId: run.id }, { status: 202 });
+}
+
+function bearerFromAuthorization(header: string): string | undefined {
+  const prefix = "Bearer ";
+  return header.startsWith(prefix) ? header.slice(prefix.length) : undefined;
+}
+
+// Capped batch so a single cron tick never enqueues an unbounded number of runs.
+const SCHEDULED_SOURCE_POLL_BATCH = 50;
+
+async function runScheduledSourcePoll(env: DeployControlEnv): Promise<void> {
+  const operations = await deployControlSeam(env).operations();
+  await pollAutoSyncSources(operations, SCHEDULED_SOURCE_POLL_BATCH);
+}
+
+/**
+ * Scheduled source polling seam. Scans active sources whose autoSync flag is set
+ * and enqueues a deduped source_sync for each (the consumer ls-remotes and only
+ * writes a new snapshot when the ref moved). Best-effort and capped.
+ */
+export async function pollAutoSyncSources(
+  operations: SourcePollOperations,
+  batch: number,
+): Promise<void> {
+  const sources = await operations.controller.listAutoSyncSources(batch);
+  for (const source of sources) {
+    try {
+      await operations.createSourceSync(source.id, { dedupe: true });
+    } catch {
+      // Best-effort: one bad source must not abort the whole poll.
+    }
+  }
+}

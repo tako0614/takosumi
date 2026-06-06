@@ -17,6 +17,11 @@ import type {
   PlanRun,
   RunnerProfile,
 } from "takosumi-contract/deploy-control-api";
+import type {
+  Source,
+  SourceSnapshot,
+  SourceSyncRun,
+} from "takosumi-contract/sources";
 import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 
@@ -63,6 +68,22 @@ export interface StoredSecretBlob {
     readonly spaceId: string;
     readonly provider: string;
   };
+}
+
+/**
+ * Persisted Source record. Extends the public {@link Source} with internal fields
+ * that are NEVER projected into the public API:
+ *   - `hookSecretHash` — SHA-256 of the per-source webhook bearer (the plaintext
+ *     is returned exactly once at creation and never stored).
+ *   - `lastSeenCommit` — last commit the scheduler/webhook observed via a
+ *     `source_sync`; used to skip re-syncing when the ref has not moved.
+ *   - `autoSync` — whether the scheduler should poll this source (M1: default
+ *     false; flips true when an Environment with autoSync references it in M2+).
+ */
+export interface StoredSource extends Source {
+  readonly hookSecretHash: string;
+  readonly lastSeenCommit?: string;
+  readonly autoSync: boolean;
 }
 
 export interface InstallationPatchGuard {
@@ -149,6 +170,23 @@ export interface OpenTofuDeploymentStore {
   putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob>;
   getSecretBlob(connectionId: string): Promise<StoredSecretBlob | undefined>;
   deleteSecretBlob(connectionId: string): Promise<boolean>;
+
+  // Source records (public fields + internal hook-secret hash / lastSeenCommit /
+  // autoSync). The hook secret plaintext is NEVER stored.
+  putSource(source: StoredSource): Promise<StoredSource>;
+  getSource(id: string): Promise<StoredSource | undefined>;
+  listSources(spaceId?: string): Promise<readonly StoredSource[]>;
+  deleteSource(id: string): Promise<boolean>;
+
+  // SourceSnapshot records (immutable archive snapshots).
+  putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
+  getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined>;
+  listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]>;
+
+  // SourceSyncRun ledger records.
+  putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun>;
+  getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined>;
+  listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]>;
 }
 
 export class InMemoryOpenTofuDeploymentStore
@@ -161,6 +199,9 @@ export class InMemoryOpenTofuDeploymentStore
   readonly #deployments = new Map<string, Deployment>();
   readonly #connections = new Map<string, Connection>();
   readonly #secretBlobs = new Map<string, StoredSecretBlob>();
+  readonly #sources = new Map<string, StoredSource>();
+  readonly #sourceSnapshots = new Map<string, SourceSnapshot>();
+  readonly #sourceSyncRuns = new Map<string, SourceSyncRun>();
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuDeploymentStore");
@@ -318,6 +359,69 @@ export class InMemoryOpenTofuDeploymentStore
 
   deleteSecretBlob(connectionId: string): Promise<boolean> {
     return Promise.resolve(this.#secretBlobs.delete(connectionId));
+  }
+
+  putSource(source: StoredSource): Promise<StoredSource> {
+    this.#sources.set(source.id, source);
+    return Promise.resolve(source);
+  }
+
+  getSource(id: string): Promise<StoredSource | undefined> {
+    return Promise.resolve(this.#sources.get(id));
+  }
+
+  listSources(spaceId?: string): Promise<readonly StoredSource[]> {
+    const rows = Array.from(this.#sources.values());
+    const filtered = spaceId === undefined
+      ? rows
+      : rows.filter((row) => row.spaceId === spaceId);
+    return Promise.resolve(
+      filtered.sort((a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+      ),
+    );
+  }
+
+  deleteSource(id: string): Promise<boolean> {
+    return Promise.resolve(this.#sources.delete(id));
+  }
+
+  putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
+    this.#sourceSnapshots.set(snapshot.id, snapshot);
+    return Promise.resolve(snapshot);
+  }
+
+  getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined> {
+    return Promise.resolve(this.#sourceSnapshots.get(id));
+  }
+
+  listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]> {
+    return Promise.resolve(
+      Array.from(this.#sourceSnapshots.values())
+        .filter((row) => row.sourceId === sourceId)
+        .sort((a, b) =>
+          a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id)
+        ),
+    );
+  }
+
+  putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
+    this.#sourceSyncRuns.set(run.id, run);
+    return Promise.resolve(run);
+  }
+
+  getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
+    return Promise.resolve(this.#sourceSyncRuns.get(id));
+  }
+
+  listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]> {
+    return Promise.resolve(
+      Array.from(this.#sourceSyncRuns.values())
+        .filter((row) => row.sourceId === sourceId)
+        .sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        ),
+    );
   }
 }
 

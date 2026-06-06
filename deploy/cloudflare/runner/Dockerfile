@@ -5,8 +5,11 @@ FROM oven/bun:1
 # tofu_${VERSION}_linux_amd64.zip.
 ARG OPENTOFU_VERSION=1.11.8
 
+# Source-sync (LANE M1) needs git + openssh-client to clone over https/ssh and
+# zstd to compress the deterministic source archive. tar is in the debian base.
+# ca-certificates + git + curl + unzip were already required by OpenTofu install.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git unzip \
+    ca-certificates curl git unzip openssh-client zstd \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL \

@@ -7,10 +7,15 @@ import type {
   RunnerProfile,
 } from "../../../src/contract/deploy-control-api.ts";
 import type {
+  SourceSnapshot,
+  SourceSyncRun,
+} from "../../../src/contract/sources.ts";
+import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
   StoredSecretBlob,
+  StoredSource,
 } from "../../../src/service/domains/deploy-control/store.ts";
 import { InstallationPatchGuardConflict } from "../../../src/service/domains/deploy-control/store.ts";
 import type { D1Database } from "./bindings.ts";
@@ -25,7 +30,10 @@ type Namespace =
   | "installation"
   | "deployment"
   | "connection"
-  | "secret-blob";
+  | "secret-blob"
+  | "source"
+  | "source-snapshot"
+  | "source-sync-run";
 
 export class CloudflareD1OpenTofuDeploymentStore
   implements OpenTofuDeploymentStore {
@@ -247,6 +255,74 @@ export class CloudflareD1OpenTofuDeploymentStore
 
   async deleteSecretBlob(connectionId: string): Promise<boolean> {
     return await this.#delete("secret-blob", connectionId);
+  }
+
+  async putSource(source: StoredSource): Promise<StoredSource> {
+    await this.#put("source", source.id, source, {
+      spaceId: source.spaceId,
+      status: source.status,
+      createdAt: epochMillis(source.createdAt),
+      updatedAt: epochMillis(source.updatedAt),
+    });
+    return source;
+  }
+
+  async getSource(id: string): Promise<StoredSource | undefined> {
+    return await this.#get("source", id);
+  }
+
+  async listSources(spaceId?: string): Promise<readonly StoredSource[]> {
+    return await this.#list<StoredSource>("source", { spaceId });
+  }
+
+  async deleteSource(id: string): Promise<boolean> {
+    return await this.#delete("source", id);
+  }
+
+  async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
+    // The snapshot is indexed by sourceId via the installation_id column so the
+    // shared #list helper can scan snapshots for a source.
+    await this.#put("source-snapshot", snapshot.id, snapshot, {
+      installationId: snapshot.sourceId,
+      createdAt: epochMillis(snapshot.fetchedAt),
+      updatedAt: epochMillis(snapshot.fetchedAt),
+    });
+    return snapshot;
+  }
+
+  async getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined> {
+    return await this.#get("source-snapshot", id);
+  }
+
+  async listSourceSnapshots(
+    sourceId: string,
+  ): Promise<readonly SourceSnapshot[]> {
+    return await this.#list<SourceSnapshot>("source-snapshot", {
+      installationId: sourceId,
+    });
+  }
+
+  async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
+    await this.#put("source-sync-run", run.id, run, {
+      spaceId: run.spaceId,
+      installationId: run.sourceId,
+      status: run.status,
+      createdAt: epochMillis(run.createdAt),
+      updatedAt: epochMillis(run.updatedAt),
+    });
+    return run;
+  }
+
+  async getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
+    return await this.#get("source-sync-run", id);
+  }
+
+  async listSourceSyncRuns(
+    sourceId: string,
+  ): Promise<readonly SourceSyncRun[]> {
+    return await this.#list<SourceSyncRun>("source-sync-run", {
+      installationId: sourceId,
+    });
   }
 
   async #delete(namespace: Namespace, key: string): Promise<boolean> {

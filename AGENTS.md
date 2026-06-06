@@ -41,6 +41,28 @@ Takosumi public concepts are:
 Repositories are plain OpenTofu modules. Use Git URL, commit, tag, module path, and well-known OpenTofu outputs for
 display, identity, and output projection.
 
+## Core Specification
+
+The canonical Takosumi core spec is [`docs/core-spec.md`](docs/core-spec.md); adoption status lives in
+[`docs/core-conformance.md`](docs/core-conformance.md). The spec governs the deploy control plane's data model,
+per-phase credential mint policy, and the 15 security invariants. When this AGENTS file, reference docs, or
+implementation conflict with the spec, the spec wins.
+
+Two principles are load-bearing for new work:
+
+- **GitHub-agnostic**: core knows only a `GitAddress` (`{ url, ref, path, credentialId? }`). Forge-specific identifiers
+  (`githubInstallationId`, `githubRepoId`, `githubOwner`, `githubWebhookPayload`) must never enter core types; forge
+  integrations are optional adapters outside core.
+- **No in-repo manifest**: user repos stay plain git repos with no required Takosumi metadata file. All install
+  configuration is service-side DB config; repo metadata is read from Git and well-known OpenTofu outputs.
+
+Core vocabulary for source-and-install modeling is **Source / App / Environment / InstallProfile** (with
+DeploymentProfile + ConnectionBinding): a `Source` is a registered git origin that yields snapshots; an `App` binds a
+Source to one install type (`app_source` / `opentofu_module` / `opentofu_root`); an `Environment` is one execution
+target carrying an `InstallProfile`, a DeploymentProfile, connection bindings, and a current Deployment pointer. The
+existing run-ledger surface (`Installation` / `PlanRun` / `ApplyRun` / `Deployment` / `DeploymentOutput`) remains the
+public deploy-control vocabulary and maps onto these core concepts.
+
 ## Runner Profile Boundary
 
 Runner profiles own provider allowlists, credentials, state backends, execution image/resource limits, network policy,
