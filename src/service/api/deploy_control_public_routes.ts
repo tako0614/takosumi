@@ -85,6 +85,10 @@ export const TAKOSUMI_ENVIRONMENT_ROUTE =
   "/v1/environments/:environmentId" as const;
 export const TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE =
   "/v1/environments/:environmentId/deployment-profile" as const;
+export const TAKOSUMI_ENVIRONMENT_PLAN_ROUTE =
+  "/v1/environments/:environmentId/plan" as const;
+export const TAKOSUMI_ENVIRONMENT_DESTROY_PLAN_ROUTE =
+  "/v1/environments/:environmentId/destroy-plan" as const;
 export const TAKOSUMI_INSTALL_PROFILES_ROUTE = INSTALL_PROFILES_PATH;
 export const TAKOSUMI_INSTALL_PROFILE_ROUTE =
   "/v1/install-profiles/:installProfileId" as const;
@@ -414,6 +418,32 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
       pathParams: ["environmentId"],
       requestSchema: "PutDeploymentProfileRequest",
       okSchema: "DeploymentProfileResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_ENVIRONMENT_PLAN_ROUTE,
+    summary:
+      "Creates an env-driven plan run: resolves the Environment's latest SourceSnapshot and dispatches with environment state scope.",
+    auth: "deploy-control-token",
+    operationId: "createEnvironmentPlan",
+    openapi: {
+      pathParams: ["environmentId"],
+      okStatus: "201",
+      okSchema: "PlanRunResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_ENVIRONMENT_DESTROY_PLAN_ROUTE,
+    summary:
+      "Creates an env-driven destroy-plan run (always lands waiting_approval per spec §10.6).",
+    auth: "deploy-control-token",
+    operationId: "createEnvironmentDestroyPlan",
+    openapi: {
+      pathParams: ["environmentId"],
+      okStatus: "201",
+      okSchema: "PlanRunResponse",
     },
   },
   {
@@ -1089,6 +1119,41 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
+  // --- Env-driven plan / destroy-plan (§10.4 / §10.6; M2) -------------------
+
+  app.post(TAKOSUMI_ENVIRONMENT_PLAN_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const environment = await lanes.getEnvironment(idCheck.value);
+      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
+      const response = await controller.createEnvironmentPlan(idCheck.value, {
+        actor: auth.principal.actor,
+      });
+      return c.json(response, 201);
+    });
+  });
+
+  app.post(TAKOSUMI_ENVIRONMENT_DESTROY_PLAN_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const environment = await lanes.getEnvironment(idCheck.value);
+      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
+      const response = await controller.createEnvironmentDestroyPlan(
+        idCheck.value,
+        { actor: auth.principal.actor },
+      );
+      return c.json(response, 201);
+    });
+  });
+
   app.get(TAKOSUMI_INSTALL_PROFILES_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
@@ -1231,6 +1296,8 @@ function mountNotImplementedRoutes(
   app.patch(TAKOSUMI_ENVIRONMENT_ROUTE, post("lanes not wired"));
   app.get(TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE, get("lanes not wired"));
   app.put(TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE, post("lanes not wired"));
+  app.post(TAKOSUMI_ENVIRONMENT_PLAN_ROUTE, post("lanes not wired"));
+  app.post(TAKOSUMI_ENVIRONMENT_DESTROY_PLAN_ROUTE, post("lanes not wired"));
   app.get(TAKOSUMI_INSTALL_PROFILES_ROUTE, get("lanes not wired"));
   app.get(TAKOSUMI_INSTALL_PROFILE_ROUTE, get("lanes not wired"));
   app.get(TAKOSUMI_RUN_ROUTE, get("runs not wired"));

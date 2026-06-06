@@ -12,6 +12,7 @@ import type {
   Installation,
   PlanRun,
   RunnerProfile,
+  StateSnapshot,
 } from "takosumi-contract/deploy-control-api";
 import type {
   SqlClient,
@@ -726,6 +727,48 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       [environmentId],
     );
     return parseRow(result.rows[0]) as DeploymentProfile | undefined;
+  }
+
+  async putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot> {
+    await this.#query(
+      "insert into takosumi_state_snapshots " +
+        "(id, environment_id, generation, snapshot_json, created_at) " +
+        "values ($1, $2, $3, $4::jsonb, $5) " +
+        "on conflict (environment_id, generation) do update set " +
+        "id = excluded.id, " +
+        "snapshot_json = excluded.snapshot_json, " +
+        "created_at = excluded.created_at",
+      [
+        snapshot.id,
+        snapshot.environmentId,
+        snapshot.generation,
+        JSON.stringify(snapshot),
+        snapshot.createdAt,
+      ],
+    );
+    return snapshot;
+  }
+
+  async listStateSnapshots(
+    environmentId: string,
+  ): Promise<readonly StateSnapshot[]> {
+    const result = await this.#query<JsonRow>(
+      "select snapshot_json as json from takosumi_state_snapshots " +
+        "where environment_id = $1 order by generation asc",
+      [environmentId],
+    );
+    return result.rows.map((row) => parseRow(row) as StateSnapshot);
+  }
+
+  async getLatestStateSnapshot(
+    environmentId: string,
+  ): Promise<StateSnapshot | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select snapshot_json as json from takosumi_state_snapshots " +
+        "where environment_id = $1 order by generation desc limit 1",
+      [environmentId],
+    );
+    return parseRow(result.rows[0]) as StateSnapshot | undefined;
   }
 
   #query<Row extends Record<string, unknown> = Record<string, unknown>>(

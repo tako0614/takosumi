@@ -684,6 +684,20 @@ export const postgresStorageTableDefinitions:
       uniqueConstraints: [["environment_id"]],
       indexes: [["environment_id"]],
     },
+    {
+      name: "takosumi_state_snapshots",
+      domain: "deploy",
+      columns: [
+        "id",
+        "environment_id",
+        "generation",
+        "snapshot_json",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["environment_id", "generation"]],
+      indexes: [["environment_id", "generation"]],
+    },
   ]);
 
 export const postgresStorageMigrationStatements:
@@ -1419,5 +1433,24 @@ drop table if exists takosumi_environments;
 drop index if exists takosumi_apps_source_idx;
 drop index if exists takosumi_apps_space_idx;
 drop table if exists takosumi_apps;`,
+    },
+    {
+      id: "deploy.takosumi_state_snapshots.create",
+      version: 34,
+      domain: "deploy",
+      description:
+        "Create the StateSnapshot ledger (Core Specification §6.9). Records per-(environment, generation) OpenTofu state metadata (encrypted object key + plaintext digest) after a successful env-driven apply/destroy state persist. The encrypted state bytes live in R2_STATE; only metadata enters the database, no secret value.",
+      sql: `create table if not exists takosumi_state_snapshots (
+  id             text    primary key,
+  environment_id text    not null,
+  generation     integer not null,
+  snapshot_json  jsonb   not null,
+  created_at     bigint  not null,
+  unique (environment_id, generation)
+);
+create index if not exists takosumi_state_snapshots_environment_idx
+  on takosumi_state_snapshots (environment_id, generation);`,
+      down: `drop index if exists takosumi_state_snapshots_environment_idx;
+drop table if exists takosumi_state_snapshots;`,
     },
   ]);
