@@ -87,11 +87,19 @@ function recordingRunner(): RecordingRunner {
       applyJobs.push(job);
       return Promise.resolve({
         // `launch_url` is a well-known DeploymentOutput kind so the raw-module
-        // output projection publishes it (a generic name would be filtered).
+        // PUBLIC projection publishes it (a generic name would be filtered from
+        // publicOutputs but still flows to spaceOutputs). `bucket_name` is a
+        // generic non-sensitive output: spaceOutputs only. `admin_token` is
+        // sensitive-flagged: it must appear in NEITHER projection (invariants
+        // 11/12).
         outputs: {
           launch_url: { sensitive: false, value: "https://x.example" },
+          bucket_name: { sensitive: false, value: "my-bucket" },
+          admin_token: { sensitive: true, value: "super-secret-token" },
         } as never,
         stateDigest: STATE_DIGEST,
+        rawOutputsKey:
+          "spaces/space_test/installations/inst_fixture/runs/apply_0007/outputs.raw.json.enc",
       });
     },
     destroy: (job) => {
@@ -250,6 +258,91 @@ test("installation apply emits generation base+1, records a StateSnapshot + Depl
   expect(installation?.status).toEqual("active");
   expect(installation?.currentStateGeneration).toEqual(1);
   expect(installation?.currentDeploymentId).toEqual(deployment?.id);
+});
+
+test("installation apply records an OutputSnapshot and links it on the Deployment + Installation", async () => {
+  const { store, controller } = await seededController();
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { installation, deployment } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  // The OutputSnapshot is recorded and linked from both the Deployment and the
+  // Installation's currentOutputSnapshotId.
+  expect(deployment?.outputSnapshotId).toBeDefined();
+  expect(installation?.currentOutputSnapshotId).toEqual(deployment?.outputSnapshotId);
+
+  const snapshot = await store.getOutputSnapshot(deployment!.outputSnapshotId!);
+  expect(snapshot).toBeDefined();
+  expect(snapshot?.installationId).toEqual("inst_fixture");
+  expect(snapshot?.stateGeneration).toEqual(1);
+  // rawOutputArtifactKey is the §26 key the runner DO echoed (rawOutputsKey).
+  expect(snapshot?.rawOutputArtifactKey).toEqual(
+    "spaces/space_test/installations/inst_fixture/runs/apply_0007/outputs.raw.json.enc",
+  );
+
+  // spaceOutputs = ALL non-sensitive outputs from the raw envelope.
+  expect(snapshot?.spaceOutputs).toEqual({
+    launch_url: "https://x.example",
+    bucket_name: "my-bucket",
+  });
+  // publicOutputs = the existing public projection (what Deployment.outputsPublic
+  // carries) — only the well-known launch_url here.
+  expect(snapshot?.publicOutputs).toEqual({ launch_url: "https://x.example" });
+  expect(snapshot?.publicOutputs).toEqual(
+    deployment?.outputsPublic as Record<string, unknown>,
+  );
+
+  // The digest is stable + recomputable over { spaceOutputs, publicOutputs }.
+  const { stableJsonDigest } = await import("../../adapters/source/digest.ts");
+  expect(snapshot?.outputDigest).toEqual(
+    await stableJsonDigest({
+      spaceOutputs: snapshot!.spaceOutputs,
+      publicOutputs: snapshot!.publicOutputs,
+    }),
+  );
+
+  // getLatestOutputSnapshot resolves the same record.
+  const latest = await store.getLatestOutputSnapshot("inst_fixture");
+  expect(latest?.id).toEqual(snapshot?.id);
+});
+
+test("a sensitive-flagged runner output leaks into NO projection (invariants 11/12)", async () => {
+  const { store, controller } = await seededController();
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { applyRun, deployment } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  const snapshot = await store.getOutputSnapshot(deployment!.outputSnapshotId!);
+
+  // The sensitive value never appears anywhere in the public projections.
+  const serializedSnapshot = JSON.stringify(snapshot);
+  expect(serializedSnapshot).not.toContain("admin_token");
+  expect(serializedSnapshot).not.toContain("super-secret-token");
+  expect(snapshot?.spaceOutputs).not.toHaveProperty("admin_token");
+  expect(snapshot?.publicOutputs).not.toHaveProperty("admin_token");
+
+  // Nor on the public Deployment projection.
+  const serializedDeployment = JSON.stringify(deployment);
+  expect(serializedDeployment).not.toContain("admin_token");
+  expect(serializedDeployment).not.toContain("super-secret-token");
+  expect(deployment?.outputsPublic).not.toHaveProperty("admin_token");
+
+  // Nor on the public §19 Run projection of the apply run, nor the ApplyRun's
+  // own public outputs (the well-known projection drops it).
+  const run = await controller.getRun(applyRun.id);
+  expect(JSON.stringify(run)).not.toContain("admin_token");
+  expect(JSON.stringify(run)).not.toContain("super-secret-token");
+  const reread = await controller.getApplyRun(applyRun.id);
+  expect(JSON.stringify(reread.applyRun.outputs ?? [])).not.toContain("admin_token");
+  expect(JSON.stringify(reread.applyRun.outputs ?? [])).not.toContain(
+    "super-secret-token",
+  );
 });
 
 test("a second installation plan reads the bumped generation and its apply moves to gen 2", async () => {

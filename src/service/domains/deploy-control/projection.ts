@@ -95,6 +95,37 @@ function templateOutputKind(type: string): DeploymentOutput["kind"] {
   return typeof type === "string" && type.length > 0 ? type : "string";
 }
 
+/**
+ * Space-scoped output projection for an OutputSnapshot (spec §16). Returns EVERY
+ * non-sensitive output from the runner envelope as `name -> value`. A
+ * sensitive-flagged output (envelope `sensitive: true`, or a {@link
+ * DeploymentOutput} carrying `sensitive: true` — which the public type forbids,
+ * but is guarded here defensively) NEVER enters the projection (invariants
+ * 11/12). Unlike {@link deploymentOutputsFromOpenTofu} this is NOT restricted to
+ * the well-known launch_url/etc. kinds: a Space dependency consumer reads any
+ * non-sensitive producer output. Name/value secret-shape heuristics that gate
+ * the PUBLIC projection are intentionally not applied here — spaceOutputs is the
+ * same-Space surface, not the public display surface.
+ */
+export function spaceOutputsFromOpenTofu(
+  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
+): Readonly<Record<string, JsonValue>> {
+  if (!outputs) return {};
+  const result: Record<string, JsonValue> = {};
+  if (Array.isArray(outputs as unknown)) {
+    for (const output of outputs as readonly DeploymentOutput[]) {
+      if ((output as { sensitive?: boolean }).sensitive === true) continue;
+      result[output.name] = output.value;
+    }
+    return result;
+  }
+  for (const [name, output] of Object.entries(outputs as OpenTofuOutputEnvelope)) {
+    if (output.sensitive === true) continue;
+    result[name] = output.value;
+  }
+  return result;
+}
+
 export function normalizeDeploymentOutputs(
   outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
 ): readonly DeploymentOutput[] {

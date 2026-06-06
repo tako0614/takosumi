@@ -53,6 +53,11 @@ import type {
   ConnectionsService,
   PutOperatorConnectionDefaultRequest,
 } from "../domains/connections/mod.ts";
+import type {
+  CreateDependencyRequest,
+  DependenciesService,
+} from "../domains/dependencies/mod.ts";
+import type { RunGroupsService } from "../domains/run-groups/mod.ts";
 import {
   OpenTofuControllerError,
   type OpenTofuControllerErrorCode,
@@ -98,6 +103,16 @@ export const TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE =
 export const TAKOSUMI_RUN_ROUTE = "/v1/runs/:runId" as const;
 export const TAKOSUMI_RUN_APPROVE_ROUTE = "/v1/runs/:runId/approve" as const;
 export const TAKOSUMI_RUN_CANCEL_ROUTE = "/v1/runs/:runId/cancel" as const;
+export const TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE =
+  "/v1/installations/:installationId/dependencies" as const;
+export const TAKOSUMI_DEPENDENCY_ROUTE =
+  "/v1/dependencies/:dependencyId" as const;
+export const TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE =
+  "/v1/spaces/:spaceId/plan-update" as const;
+export const TAKOSUMI_RUN_GROUP_ROUTE =
+  "/v1/run-groups/:runGroupId" as const;
+export const TAKOSUMI_RUN_GROUP_APPROVE_ROUTE =
+  "/v1/run-groups/:runGroupId/approve" as const;
 
 /**
  * Endpoint inventory for the `deployControl-public` family, co-located with the
@@ -417,6 +432,74 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
     operationId: "cancelRun",
     openapi: { pathParams: ["runId"], okSchema: "RunResponse" },
   },
+  {
+    method: "POST",
+    path: TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE,
+    summary:
+      "Creates a Dependency edge whose consumer is this Installation (variable_injection, same-Space; cycles rejected).",
+    auth: "deploy-control-token",
+    operationId: "createDependency",
+    openapi: {
+      pathParams: ["installationId"],
+      requestSchema: "CreateDependencyRequest",
+      okStatus: "201",
+      okSchema: "DependencyResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE,
+    summary:
+      "Lists the Dependencies of an Installation, split into asProducer / asConsumer views.",
+    auth: "deploy-control-token",
+    operationId: "listInstallationDependencies",
+    openapi: {
+      pathParams: ["installationId"],
+      okSchema: "InstallationDependenciesResponse",
+    },
+  },
+  {
+    method: "DELETE",
+    path: TAKOSUMI_DEPENDENCY_ROUTE,
+    summary: "Deletes a Dependency edge (space-permission gated via its consumer).",
+    auth: "deploy-control-token",
+    operationId: "deleteDependency",
+    openapi: {
+      pathParams: ["dependencyId"],
+      okStatus: "204",
+      okSchema: "EmptyResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE,
+    summary:
+      "Creates a space_update RunGroup: re-plans every stale Installation (+ downstream) in topological order.",
+    auth: "deploy-control-token",
+    operationId: "createSpacePlanUpdate",
+    openapi: {
+      pathParams: ["spaceId"],
+      okStatus: "201",
+      okSchema: "RunGroupResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_RUN_GROUP_ROUTE,
+    summary: "Reads a RunGroup with its member Runs and computed status.",
+    auth: "deploy-control-token",
+    operationId: "getRunGroup",
+    openapi: { pathParams: ["runGroupId"], okSchema: "RunGroupResponse" },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_RUN_GROUP_APPROVE_ROUTE,
+    summary:
+      "Approves every member Run of a RunGroup currently waiting on approval.",
+    auth: "deploy-control-token",
+    operationId: "approveRunGroup",
+    openapi: { pathParams: ["runGroupId"], okSchema: "RunGroupResponse" },
+  },
 ] as const;
 
 export const DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
@@ -495,6 +578,12 @@ const ALLOWED_KEYS: Record<DeployControlRouteName, ReadonlySet<string>> = {
     "installConfigId",
   ]),
   runApprove: new Set(["approvedBy", "reason"]),
+  dependencyCreate: new Set([
+    "producerInstallationId",
+    "mode",
+    "outputs",
+    "visibility",
+  ]),
 };
 
 type DeployControlRouteName =
@@ -506,12 +595,15 @@ type DeployControlRouteName =
   | "spaceCreate"
   | "installationCreate"
   | "operatorConnectionDefault"
-  | "runApprove";
+  | "runApprove"
+  | "dependencyCreate";
 
 const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
 const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
 const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
 const RUN_ID_PATTERN = /^(plan|apply|ssr)_[0-9a-zA-Z]{8,64}$/;
+const DEPENDENCY_ID_PATTERN = /^dep_[0-9a-zA-Z]{8,64}$/;
+const RUN_GROUP_ID_PATTERN = /^rg_[0-9a-zA-Z]{8,64}$/;
 
 export interface DeployControlPublicRouteDependencies {
   /**
@@ -545,6 +637,16 @@ export interface DeployControlPublicRouteDependencies {
   readonly installationsService?: InstallationsService;
   /** Operator default connections + capability resolution (spec §9). */
   readonly connectionsService?: ConnectionsService;
+  /**
+   * Dependencies domain service (Core Specification §14 / §15). When unset, the
+   * Dependency routes return 501 after successful auth.
+   */
+  readonly dependenciesService?: DependenciesService;
+  /**
+   * RunGroups domain service (Core Specification §19 / §24). When unset, the
+   * plan-update / run-group routes return 501 after successful auth.
+   */
+  readonly runGroupsService?: RunGroupsService;
 }
 
 export interface DeployControlBearerAuthorizationInput {
@@ -1079,6 +1181,145 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
+  // --- Dependencies (Core Specification §14 / §15) --------------------------
+
+  const dependenciesService = dependencies.dependenciesService;
+
+  app.post(
+    TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE,
+    deployControlBodyLimit,
+    async (c) => {
+      const auth = await authorizeDeployControl(c, dependencies);
+      if (!auth.ok) return auth.response;
+      if (!dependenciesService) {
+        return c.json(notImplemented(c, "dependencies not wired"), 501);
+      }
+      const idCheck = ensureValidId(c, "installationId");
+      if (idCheck.kind === "invalid") return idCheck.response;
+      const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+      if (limit) return limit;
+      return await runHandler(c, async () => {
+        // The consumer is the path Installation; its Space gates the write.
+        const consumer = await controller.getInstallation(idCheck.value);
+        ensureSpacePermission(auth.principal, consumer.installation.spaceId);
+        const body = await readJsonBody<
+          Omit<CreateDependencyRequest, "spaceId" | "consumerInstallationId">
+        >(c, "dependencyCreate");
+        const dependency = await dependenciesService.createDependency({
+          ...body,
+          spaceId: consumer.installation.spaceId,
+          consumerInstallationId: idCheck.value,
+        });
+        return c.json({ dependency }, 201);
+      });
+    },
+  );
+
+  app.get(TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!dependenciesService) {
+      return c.json(notImplemented(c, "dependencies not wired"), 501);
+    }
+    const idCheck = ensureValidId(c, "installationId");
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const installation = await controller.getInstallation(idCheck.value);
+      ensureSpacePermission(auth.principal, installation.installation.spaceId);
+      return c.json(
+        await dependenciesService.listForInstallation(idCheck.value),
+        200,
+      );
+    });
+  });
+
+  app.delete(TAKOSUMI_DEPENDENCY_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!dependenciesService) {
+      return c.json(notImplemented(c, "dependencies not wired"), 501);
+    }
+    const idCheck = ensureValidParam(c, "dependencyId", DEPENDENCY_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      // Resolve the edge first so deletion is space-permission gated via its
+      // consumer Installation's Space (the edge carries spaceId directly).
+      const dependency = await dependenciesService.getDependency(idCheck.value);
+      if (!dependency) {
+        throw new OpenTofuControllerError(
+          "not_found",
+          `dependency ${idCheck.value} not found`,
+        );
+      }
+      ensureSpacePermission(auth.principal, dependency.spaceId);
+      await dependenciesService.deleteDependency(idCheck.value);
+      return c.body(null, 204);
+    });
+  });
+
+  // --- RunGroups (Core Specification §19 / §24) -----------------------------
+
+  const runGroupsService = dependencies.runGroupsService;
+
+  app.post(TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!runGroupsService) {
+      return c.json(notImplemented(c, "run groups not wired"), 501);
+    }
+    const idCheck = ensureValidParam(c, "spaceId", SPACE_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      ensureSpacePermission(auth.principal, idCheck.value);
+      const result = await runGroupsService.createSpaceUpdate(idCheck.value);
+      return c.json(result, 201);
+    });
+  });
+
+  app.get(TAKOSUMI_RUN_GROUP_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!runGroupsService) {
+      return c.json(notImplemented(c, "run groups not wired"), 501);
+    }
+    const idCheck = ensureValidParam(c, "runGroupId", RUN_GROUP_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const result = await runGroupsService.getRunGroup(idCheck.value);
+      if (!result) {
+        throw new OpenTofuControllerError(
+          "not_found",
+          `run group ${idCheck.value} not found`,
+        );
+      }
+      ensureSpacePermission(auth.principal, result.runGroup.spaceId);
+      return c.json(result, 200);
+    });
+  });
+
+  app.post(TAKOSUMI_RUN_GROUP_APPROVE_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!runGroupsService) {
+      return c.json(notImplemented(c, "run groups not wired"), 501);
+    }
+    const idCheck = ensureValidParam(c, "runGroupId", RUN_GROUP_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      // Resolve the group first so approve is space-permission gated.
+      const existing = await runGroupsService.getRunGroup(idCheck.value);
+      if (!existing) {
+        throw new OpenTofuControllerError(
+          "not_found",
+          `run group ${idCheck.value} not found`,
+        );
+      }
+      ensureSpacePermission(auth.principal, existing.runGroup.spaceId);
+      const result = await runGroupsService.approveRunGroup(idCheck.value);
+      return c.json(result, 200);
+    });
+  });
+
 }
 
 function mountNotImplementedRoutes(
@@ -1131,6 +1372,18 @@ function mountNotImplementedRoutes(
   app.get(TAKOSUMI_RUN_ROUTE, get("runs not wired"));
   app.post(TAKOSUMI_RUN_APPROVE_ROUTE, post("runs not wired"));
   app.post(TAKOSUMI_RUN_CANCEL_ROUTE, post("runs not wired"));
+  app.post(
+    TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE,
+    post("dependencies not wired"),
+  );
+  app.get(
+    TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE,
+    get("dependencies not wired"),
+  );
+  app.delete(TAKOSUMI_DEPENDENCY_ROUTE, post("dependencies not wired"));
+  app.post(TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE, post("run groups not wired"));
+  app.get(TAKOSUMI_RUN_GROUP_ROUTE, get("run groups not wired"));
+  app.post(TAKOSUMI_RUN_GROUP_APPROVE_ROUTE, post("run groups not wired"));
 }
 
 async function authorizeDeployControl(

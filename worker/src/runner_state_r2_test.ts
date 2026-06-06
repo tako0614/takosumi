@@ -129,6 +129,83 @@ test("apply with stateScope persists encrypted state to R2_STATE and writes curr
   assert.equal(stateField.digest, current.digest);
 });
 
+test("apply with stateScope encrypts the raw outputs envelope to R2_ARTIFACTS and echoes rawOutputsKey", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await artifacts.put("opentofu-plan-runs/plan_1/tfplan.enc", sealedPlan.ciphertext);
+
+  // The raw `tofu output -json` envelope the runner returns: carries the
+  // per-output sensitive flags. The DO seals this verbatim (no projection — the
+  // controller projects spaceOutputs/publicOutputs from the same envelope).
+  const outputsEnvelope = {
+    launch_url: { sensitive: false, value: "https://x.example" },
+    admin_token: { sensitive: true, value: "super-secret" },
+  };
+
+  const runner = runnerWithContainer(artifacts, state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT" && path === "/runs/plan_1/artifacts/tfplan") {
+        return Response.json({ ok: true });
+      }
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          outputs: outputsEnvelope,
+        });
+      }
+      if (request.method === "GET" && path === "/runs/plan_1/artifacts/tfstate") {
+        return new Response(NEW_STATE_BYTES);
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(new Request("https://runner/runs/plan_1", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action: "apply",
+      runId: "plan_1",
+      request: {
+        stateScope: SCOPE,
+        planArtifact: {
+          kind: "object-storage",
+          ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+          digest: PLAN_DIGEST,
+        },
+      },
+    }),
+  }));
+
+  assert.equal(response.status, 200);
+  const payload = await response.json() as Record<string, unknown>;
+  const rawOutputsKey = payload.rawOutputsKey as string;
+  assert.equal(
+    rawOutputsKey,
+    "spaces/spc_1/installations/inst_1/runs/plan_1/outputs.raw.json.enc",
+  );
+
+  // The object is encrypted at rest (not the plaintext JSON).
+  const stored = artifacts.body(rawOutputsKey);
+  assert.ok(stored && stored.byteLength > 0);
+  const plaintextJson = new TextEncoder().encode(JSON.stringify(outputsEnvelope));
+  assert.notDeepEqual(stored, plaintextJson);
+
+  // It decrypts back to the EXACT raw envelope (sensitive flags intact).
+  const opened = await crypto.open(stored!);
+  assert.deepEqual(
+    JSON.parse(new TextDecoder().decode(opened)),
+    outputsEnvelope,
+  );
+});
+
 test("apply with stateScope restores the encrypted current state before apply", async () => {
   const calls: string[] = [];
   const artifacts = new FakeR2Bucket();
