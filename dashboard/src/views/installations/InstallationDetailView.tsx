@@ -66,7 +66,7 @@ function Inner() {
           </div>
           <p>{(app.error as ApiError).message}</p>
           <a
-            href="/installations"
+            href="/apps"
             class="btn btn-secondary"
             style="margin-top: 16px;"
           >
@@ -195,7 +195,7 @@ function Inner() {
                 <p class="muted">
                   アプリの削除は Danger zone から実行できます。
                 </p>
-                <a href="/installations" class="btn btn-secondary">
+                <a href="/apps" class="btn btn-secondary">
                   ← アプリ一覧へ戻る
                 </a>
               </section>
@@ -218,7 +218,7 @@ const DETAIL_NAV_TABS = [
 
 function AppDetailNav(props: { installationId: string }) {
   const loc = useLocation();
-  const base = `/installations/${encodeURIComponent(props.installationId)}`;
+  const base = `/apps/${encodeURIComponent(props.installationId)}`;
   const isActive = (suffix: string) => {
     const target = base + suffix;
     if (suffix === "") {

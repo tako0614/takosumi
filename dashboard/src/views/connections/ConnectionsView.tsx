@@ -18,8 +18,16 @@ import {
   rpc,
 } from "../account/lib/api.ts";
 import { ActionError, createAction } from "../account/lib/action.tsx";
-import { connectionStatusLabel } from "../../lib/status-labels.ts";
+import {
+  connectionScopeLabel,
+  connectionStatusLabel,
+} from "../../lib/status-labels.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
+import {
+  type ControlApiError,
+  listConnections as listControlConnections,
+  listOperatorConnectionDefaults,
+} from "../../lib/control-api.ts";
 
 // Reuse the apps screen's space-id memory so a previously-selected space
 // carries across both screens.
@@ -58,6 +66,23 @@ function ConnectionsInner() {
     () => (spaceId() ? spaceId() : null),
     rpc.connections.list,
   );
+
+  // Control-plane reads (spec §31): the per-Space Connection scope (operator vs
+  // space) and the instance-wide operator default connections. Read-only here;
+  // registration still flows through the account-plane RPC above.
+  const [controlConnections] = createResource(
+    () => (spaceId() ? spaceId() : null),
+    listControlConnections,
+  );
+  const [operatorDefaults] = createResource(listOperatorConnectionDefaults);
+
+  // connectionId -> scope, from the control listing, so each registered row can
+  // show whether it is operator-default-backed or space-scoped.
+  const scopeById = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of controlConnections() ?? []) map.set(c.id, c.scope);
+    return map;
+  });
 
   const hasSpace = createMemo(() => !!spaceId());
 
@@ -147,6 +172,44 @@ function ConnectionsInner() {
           一度保存すると再表示されません。
         </p>
       </div>
+
+      {/* Operator default connections (spec §9 / §31) — instance-wide defaults
+          a CapabilityBinding of `default` resolves to. Read-only here. */}
+      <Show when={(operatorDefaults() ?? []).length > 0}>
+        <section class="detail-section">
+          <h2>オペレーター既定の接続</h2>
+          <p class="page-sub">
+            CapabilityBinding が <code>default</code> のとき解決される、
+            インスタンス全体の既定接続です。
+          </p>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Capability</th>
+                <th>Provider</th>
+                <th>Connection</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={operatorDefaults() ?? []}>
+                {(d) => (
+                  <tr>
+                    <td><code>{d.capability}</code></td>
+                    <td>{d.provider}</td>
+                    <td><code>{d.connectionId}</code></td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </section>
+      </Show>
+      <Show when={operatorDefaults.error}>
+        <p class="sign-in-error">
+          オペレーター既定の取得に失敗しました —{" "}
+          {(operatorDefaults.error as ControlApiError).message}
+        </p>
+      </Show>
 
       <section class="space-picker">
         <form onSubmit={applySpace}>
@@ -287,6 +350,10 @@ function ConnectionsInner() {
                           </div>
                           <div class="connection-row-meta muted">
                             <span>{c.provider}</span>
+                            <span>·</span>
+                            <span class="connection-scope">
+                              {connectionScopeLabel(scopeById().get(c.id) ?? "space")}
+                            </span>
                             <span>·</span>
                             <code>{c.envNames.join(", ")}</code>
                           </div>

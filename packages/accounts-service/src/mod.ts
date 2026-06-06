@@ -132,6 +132,12 @@ import {
   type DeployControlProxyOptions,
 } from "./deploy-control-proxy.ts";
 import {
+  type ControlPlaneOperations,
+  handleControlRoute,
+  isControlRoutePath,
+} from "./control-routes.ts";
+import { maybeEnsurePersonalSpaceForSession } from "./control-personal-space.ts";
+import {
   forwardCreateConnection,
   forwardGetConnection,
   forwardListConnections,
@@ -175,6 +181,10 @@ export type {
   DeployControlOperations,
   DeployControlProxyOptions,
 } from "./deploy-control-proxy.ts";
+export type {
+  ControlPlaneOperations,
+  RunGroupWithRunsLike,
+} from "./control-routes.ts";
 export {
   createOpenManagedOfferingAccessPolicy,
 } from "./managed-offering-policy.ts";
@@ -247,6 +257,14 @@ export interface AccountsHandlerOptions {
   passkeys?: PasskeyHttpOptions;
   launchTokens?: LaunchTokenOptions;
   deployControl?: DeployControlProxyOptions;
+  /**
+   * In-process deploy-control operations facade backing the session-authed
+   * `/v1/control/*` account-plane routes the dashboard SPA calls (M10). The
+   * platform worker passes its wired `TakosumiOperations` here; it structurally
+   * satisfies {@link ControlPlaneOperations}. When omitted the control routes
+   * respond 503 after the session gate.
+   */
+  controlPlaneOperations?: ControlPlaneOperations;
   bindingMaterializer?: AppBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
@@ -282,6 +300,7 @@ export interface EphemeralAccountsHandlerOptions {
   passkeys?: PasskeyHttpOptions;
   launchTokens?: EphemeralLaunchTokenOptions;
   deployControl?: DeployControlProxyOptions;
+  controlPlaneOperations?: ControlPlaneOperations;
   bindingMaterializer?: AppBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
@@ -581,6 +600,7 @@ export async function createEphemeralAccountsHandler(
     upstreamOAuth: options.upstreamOAuth,
     passkeys: options.passkeys,
     deployControl: options.deployControl,
+    controlPlaneOperations: options.controlPlaneOperations,
     bindingMaterializer: options.bindingMaterializer,
     sharedCellRuntime: options.sharedCellRuntime,
     materializeWorker: options.materializeWorker,
@@ -751,6 +771,17 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_SESSION_ME_PATH) {
       if (request.method === "GET") {
+        // First-login personal-Space hook (spec §4). The dashboard hits this
+        // route first after sign-in; fire-and-forget the idempotent ensure so
+        // a personal Space exists without coupling it to the OAuth seam (closes
+        // the M9 TODO). Never awaited on the response path — a failure here must
+        // not affect the session read. `request.clone()` keeps the body/headers
+        // intact for the response handler (this is a GET, so only headers).
+        void maybeEnsurePersonalSpaceForSession({
+          request: request.clone(),
+          store,
+          operations: options.controlPlaneOperations,
+        });
         return await handleAccountSessionMeGet({ request, store });
       }
       if (request.method === "DELETE") {
@@ -1188,6 +1219,21 @@ export function createAccountsHandler(
         });
       }
       return methodNotAllowed("DELETE, GET, PATCH, POST");
+    }
+
+    // Account-plane session-authed deploy-control pass-through (M10). Owns the
+    // `/v1/control/*` namespace the dashboard SPA calls same-origin with its
+    // account session (NOT the operator deploy-control bearer). Dispatched here
+    // before the generic 404; `handleControlRoute` returns `undefined` only for
+    // paths it does not own.
+    if (isControlRoutePath(url.pathname)) {
+      const controlResponse = await handleControlRoute({
+        request,
+        url,
+        store,
+        operations: options.controlPlaneOperations,
+      });
+      if (controlResponse) return controlResponse;
     }
 
     return json({ error: "not_found" }, 404);
