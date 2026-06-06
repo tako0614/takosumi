@@ -30,8 +30,11 @@ policy enforce; `main.tf` is the actual module those inputs flow into.
 
 | id | build | providers | outputs.public |
 | --- | --- | --- | --- |
-| `cloudflare-r2-bucket` | — | `cloudflare/cloudflare` | `bucket_name`, `location` |
-| `cloudflare-worker-hono` | bun (`dist/index.js`) | `cloudflare/cloudflare` | `worker_name`, `url` |
+| `core` | — | (none) | `base_domain`, `public_origin`, `member_issuer`, `service_registry_url` |
+| `cloudflare-r2-storage` | — | `cloudflare/cloudflare` | `bucket_name`, `location` |
+| `cloudflare-worker-service` | bun (`dist/index.js`) | `cloudflare/cloudflare` | `worker_name`, `url` |
+| `cloudflare-static-site` | — | `cloudflare/cloudflare` | `project_name`, `url` |
+| `aws-s3-storage` | — | `hashicorp/aws` | `bucket_name`, `bucket_arn`, `region` |
 
 ## Adding a template
 
