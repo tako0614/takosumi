@@ -71,9 +71,14 @@ test("Takosumi docs are rebuilt around current OpenTofu-native surface", async (
     assert.equal(hit, false, `retired docs term: ${term}`);
   }
 
-  assert.match(docs, /OpenTofu-native deploy control plane/);
-  assert.match(docs, /RunnerProfile/);
-  assert.match(docs, /DeploymentOutput/);
+  // The 2026-06-06 core-spec surface: Space-direct Installation DAG model.
+  assert.match(
+    docs,
+    /OpenTofu Installation DAG (?:を管理する OSS control plane|directly under a Space)/,
+  );
+  assert.match(docs, /OutputSnapshot/);
+  assert.match(docs, /CapabilityBinding/);
+  assert.match(docs, /DependencySnapshot/);
 });
 
 test("website build no longer publishes docs kind overlays", async () => {
