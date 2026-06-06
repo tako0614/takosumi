@@ -23,6 +23,12 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type {
+  App,
+  DeploymentProfile,
+  Environment,
+  InstallProfile,
+} from "takosumi-contract/lanes";
+import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
@@ -539,6 +545,187 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       [sourceId],
     );
     return result.rows.map((row) => parseRow(row) as SourceSyncRun);
+  }
+
+  async putApp(app: App): Promise<App> {
+    await this.#query(
+      "insert into takosumi_apps " +
+        "(id, space_id, source_id, install_type, install_profile_id, app_json, created_at, updated_at) " +
+        "values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8) " +
+        "on conflict (id) do update set " +
+        "space_id = excluded.space_id, " +
+        "source_id = excluded.source_id, " +
+        "install_type = excluded.install_type, " +
+        "install_profile_id = excluded.install_profile_id, " +
+        "app_json = excluded.app_json, " +
+        "created_at = excluded.created_at, " +
+        "updated_at = excluded.updated_at",
+      [
+        app.id,
+        app.spaceId,
+        app.sourceId,
+        app.installType,
+        app.installProfileId ?? null,
+        JSON.stringify(app),
+        app.createdAt,
+        app.updatedAt,
+      ],
+    );
+    return app;
+  }
+
+  async getApp(id: string): Promise<App | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select app_json as json from takosumi_apps where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as App | undefined;
+  }
+
+  async listApps(spaceId?: string): Promise<readonly App[]> {
+    const result = spaceId === undefined
+      ? await this.#query<JsonRow>(
+        "select app_json as json from takosumi_apps order by created_at asc, id asc",
+      )
+      : await this.#query<JsonRow>(
+        "select app_json as json from takosumi_apps where space_id = $1 order by created_at asc, id asc",
+        [spaceId],
+      );
+    return result.rows.map((row) => parseRow(row) as App);
+  }
+
+  async deleteApp(id: string): Promise<boolean> {
+    const result = await this.#query(
+      "delete from takosumi_apps where id = $1",
+      [id],
+    );
+    return result.rowCount > 0;
+  }
+
+  async putEnvironment(environment: Environment): Promise<Environment> {
+    await this.#query(
+      "insert into takosumi_environments " +
+        "(id, app_id, name, environment_json, created_at, updated_at) " +
+        "values ($1, $2, $3, $4::jsonb, $5, $6) " +
+        "on conflict (id) do update set " +
+        "app_id = excluded.app_id, " +
+        "name = excluded.name, " +
+        "environment_json = excluded.environment_json, " +
+        "created_at = excluded.created_at, " +
+        "updated_at = excluded.updated_at",
+      [
+        environment.id,
+        environment.appId,
+        environment.name,
+        JSON.stringify(environment),
+        environment.createdAt,
+        environment.updatedAt,
+      ],
+    );
+    return environment;
+  }
+
+  async getEnvironment(id: string): Promise<Environment | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select environment_json as json from takosumi_environments where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as Environment | undefined;
+  }
+
+  async listEnvironments(appId: string): Promise<readonly Environment[]> {
+    const result = await this.#query<JsonRow>(
+      "select environment_json as json from takosumi_environments " +
+        "where app_id = $1 order by created_at asc, id asc",
+      [appId],
+    );
+    return result.rows.map((row) => parseRow(row) as Environment);
+  }
+
+  async deleteEnvironment(id: string): Promise<boolean> {
+    const result = await this.#query(
+      "delete from takosumi_environments where id = $1",
+      [id],
+    );
+    return result.rowCount > 0;
+  }
+
+  async putInstallProfile(profile: InstallProfile): Promise<InstallProfile> {
+    await this.#query(
+      "insert into takosumi_install_profiles " +
+        "(id, install_type, trust_level, profile_json, created_at, updated_at) " +
+        "values ($1, $2, $3, $4::jsonb, $5, $6) " +
+        "on conflict (id) do update set " +
+        "install_type = excluded.install_type, " +
+        "trust_level = excluded.trust_level, " +
+        "profile_json = excluded.profile_json, " +
+        "created_at = excluded.created_at, " +
+        "updated_at = excluded.updated_at",
+      [
+        profile.id,
+        profile.installType,
+        profile.trustLevel,
+        JSON.stringify(profile),
+        profile.createdAt,
+        profile.updatedAt,
+      ],
+    );
+    return profile;
+  }
+
+  async getInstallProfile(id: string): Promise<InstallProfile | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select profile_json as json from takosumi_install_profiles where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as InstallProfile | undefined;
+  }
+
+  async listInstallProfiles(): Promise<readonly InstallProfile[]> {
+    const result = await this.#query<JsonRow>(
+      "select profile_json as json from takosumi_install_profiles order by id asc",
+    );
+    return result.rows.map((row) => parseRow(row) as InstallProfile);
+  }
+
+  async putDeploymentProfile(
+    profile: DeploymentProfile,
+  ): Promise<DeploymentProfile> {
+    // One profile per environment: delete any stale row that referenced the
+    // same environment under a different id before upserting.
+    await this.#query(
+      "delete from takosumi_deployment_profiles where environment_id = $1 and id <> $2",
+      [profile.environmentId, profile.id],
+    );
+    await this.#query(
+      "insert into takosumi_deployment_profiles " +
+        "(id, environment_id, profile_json, created_at, updated_at) " +
+        "values ($1, $2, $3::jsonb, $4, $5) " +
+        "on conflict (id) do update set " +
+        "environment_id = excluded.environment_id, " +
+        "profile_json = excluded.profile_json, " +
+        "created_at = excluded.created_at, " +
+        "updated_at = excluded.updated_at",
+      [
+        profile.id,
+        profile.environmentId,
+        JSON.stringify(profile),
+        profile.createdAt,
+        profile.updatedAt,
+      ],
+    );
+    return profile;
+  }
+
+  async getDeploymentProfileByEnvironment(
+    environmentId: string,
+  ): Promise<DeploymentProfile | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select profile_json as json from takosumi_deployment_profiles " +
+        "where environment_id = $1 order by created_at desc, id desc limit 1",
+      [environmentId],
+    );
+    return parseRow(result.rows[0]) as DeploymentProfile | undefined;
   }
 
   #query<Row extends Record<string, unknown> = Record<string, unknown>>(

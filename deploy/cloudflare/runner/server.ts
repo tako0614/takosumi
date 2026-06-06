@@ -84,7 +84,7 @@ interface BuildSpec {
   readonly artifactPath: string;
 }
 
-interface CommandContext {
+export interface CommandContext {
   readonly env: Record<string, string>;
   readonly timeoutMs?: number;
   readonly sourceArchiveMaxBytes?: number;
@@ -135,6 +135,14 @@ async function handleRunnerRequest(request: Request): Promise<Response> {
     );
     const sourceArchiveArtifactMatch =
       /^\/runs\/([^/]+)\/artifacts\/source-archive$/.exec(url.pathname);
+    const sourceArchiveRestoreMatch =
+      /^\/runs\/([^/]+)\/source-archive\/restore$/.exec(url.pathname);
+    if (sourceArchiveRestoreMatch) {
+      return await handleSourceArchiveRestoreRequest(
+        decodeURIComponent(sourceArchiveRestoreMatch[1]!),
+        request,
+      );
+    }
     if (sourceArchiveArtifactMatch) {
       return await handleSourceArchiveArtifactRequest(
         decodeURIComponent(sourceArchiveArtifactMatch[1]!),
@@ -1291,6 +1299,147 @@ async function handleSourceArchiveArtifactRequest(
     { error: "method not allowed" },
     { status: 405, headers: { allow: "GET, PUT" } },
   );
+}
+
+// M2 SOURCE-ARCHIVE RESTORE: the DO streams the snapshotted source archive
+// (deterministic tar.zst produced by a prior source_sync) to this route. We
+// write the bytes, list+validate the archive metadata with the SAME tar-slip
+// hardening used for prepared sources, then extract into /work/source as the
+// source tree for the build/plan phases. The archive already contains the
+// snapshot subtree (source_sync archived `source.path`), so it is extracted at
+// the source root with no path remap.
+async function handleSourceArchiveRestoreRequest(
+  runId: string,
+  request: Request,
+): Promise<Response> {
+  if (request.method !== "PUT") {
+    return Response.json(
+      { error: "method not allowed" },
+      { status: 405, headers: { allow: "PUT" } },
+    );
+  }
+  const workspace = workspaceForRun(runId);
+  try {
+    await rm(workspace.root, { recursive: true, force: true });
+    await mkdir(workspace.sourceRoot, { recursive: true });
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    const archivePath = join(workspace.root, "restore-source.tar.zst");
+    await writeFile(archivePath, bytes);
+    const context: CommandContext = { env: baseCommandEnv() };
+    await assertSafeZstdTarArchive(archivePath, context);
+    await runRequiredCommand([
+      "tar",
+      "-x",
+      "--zstd",
+      "-f",
+      archivePath,
+      "--no-same-owner",
+      "--keep-old-files",
+      "-C",
+      workspace.sourceRoot,
+    ], { cwd: RUN_ROOT, context });
+    await rm(archivePath, { force: true });
+    // Record the source root as the state moduleDir default; a template/raw
+    // dispatch overwrites module-info.json before plan, but this keeps the state
+    // GET route resolvable if the dispatch omits it.
+    await writeModuleInfo(workspace, workspace.sourceRoot);
+    return Response.json({
+      runId,
+      artifact: "source-archive-restore",
+      digest: await digestBytes(bytes),
+      sizeBytes: bytes.byteLength,
+    });
+  } catch (error) {
+    return Response.json(
+      {
+        error: "source archive restore failed",
+        detail: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 },
+    );
+  }
+}
+
+// Same tar-slip / link-target / zip-bomb hardening as assertSafeTarArchive but
+// for a zstd-compressed tar (the source_sync archive format). Reuses the shared
+// per-entry validators (escape quoting, duplicate normalized paths, file/dir
+// only, decompressed-size cap).
+export async function assertSafeZstdTarArchive(
+  archivePath: string,
+  context: CommandContext,
+): Promise<void> {
+  const verbose = await runCommand([
+    "tar",
+    "-t",
+    "-v",
+    "--quoting-style=escape",
+    "--zstd",
+    "-f",
+    archivePath,
+  ], { cwd: RUN_ROOT, context });
+  if (verbose.exitCode !== 0) {
+    throw new Error(
+      `source archive metadata list failed: ${verbose.stderr || verbose.stdout}`,
+    );
+  }
+  const seenPaths = new Set<string>();
+  let decompressedBytes = 0;
+  for (const line of verbose.stdout.split(/\r?\n/)) {
+    if (!line) continue;
+    const entry = parseTarVerboseLine(line);
+    if (!entry) {
+      throw new Error(
+        `source archive has an unparseable metadata line: ${line}`,
+      );
+    }
+    const normalizedPath = normalizeSourceArchiveEntryPath(entry.path);
+    // The deterministic source archive carries a single `./` root dir entry;
+    // skip it from the duplicate set but still validate it is the safe root.
+    if (normalizedPath !== "") {
+      if (seenPaths.has(normalizedPath)) {
+        throw new Error(`source archive duplicates normalized path: ${entry.path}`);
+      }
+      seenPaths.add(normalizedPath);
+    }
+    if (entry.type !== "-" && entry.type !== "d") {
+      throw new Error(
+        `source archive contains unsupported entry type: ${entry.type}`,
+      );
+    }
+    decompressedBytes += entry.size;
+    const decompressedCap = context.sourceArchiveMaxDecompressedBytes ??
+      DEFAULT_PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES;
+    if (decompressedBytes > decompressedCap) {
+      throw new Error(
+        `source archive decompresses to more than ${decompressedCap} bytes`,
+      );
+    }
+  }
+}
+
+// Like normalizeArchiveEntryPath but tolerant of the deterministic source
+// archive's `.` / `./` ROOT entry (returns "" for it). Everything else must be a
+// traversal-free, absolute-free relative path so extraction stays inside
+// /work/source.
+function normalizeSourceArchiveEntryPath(path: string): string {
+  if (path === "." || path === "./") return "";
+  if (
+    path.includes("\0") ||
+    isAbsolute(path) ||
+    /^[A-Za-z]:[\\/]/.test(path)
+  ) {
+    throw new Error(`source archive contains unsafe path: ${path}`);
+  }
+  const normalized = normalize(path).replaceAll("\\", "/").replace(/^\.\//, "")
+    .replace(/\/+$/, "");
+  if (
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
+    throw new Error(`source archive contains unsafe path: ${path}`);
+  }
+  return normalized;
 }
 
 function workspaceForRun(runId: string): RunWorkspace {

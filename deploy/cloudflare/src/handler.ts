@@ -44,6 +44,7 @@ import {
   resolveEnabledRunnerProfiles,
 } from "../../../src/service/domains/deploy-control/mod.ts";
 import type { EnqueueSourceSync } from "../../../src/service/domains/sources/mod.ts";
+import type { EnvironmentCoordination } from "../../../src/service/domains/deploy-control/environment_lease.ts";
 import type { RunnerProfile } from "takosumi-contract/deploy-control-api";
 import type {
   CloudflareWorkerEnv,
@@ -393,6 +394,7 @@ async function createWorkerServiceApp(
   });
   const enqueueRun = openTofuRunEnqueuer(env);
   const enqueueSourceSync = openTofuSourceSyncEnqueuer(env);
+  const environmentCoordination = durableObjectEnvironmentCoordination(env);
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -410,10 +412,69 @@ async function createWorkerServiceApp(
     // default inline dispatcher preserves synchronous create-executes-run.
     ...(enqueueRun ? { enqueueRun } : {}),
     ...(enqueueSourceSync ? { enqueueSourceSync } : {}),
+    // Environment lease (spec §10.2): front the shared CoordinationObject so the
+    // apply consumer serializes write runs per environment across isolates.
+    ...(environmentCoordination ? { environmentCoordination } : {}),
     ...(options.runnerProfiles
       ? { runnerProfiles: options.runnerProfiles }
       : {}),
   });
+}
+
+/**
+ * Builds an {@link EnvironmentCoordination} that fronts the shared
+ * {@link TakosCoordinationObject} via its `acquire-lease` / `release-lease` POST
+ * API. Returns undefined when the DO binding is absent, leaving the controller
+ * on its in-process serialization. The same single DO instance
+ * (`takos-control-plane`) backs the lease keyspace used by the rest of the
+ * coordination surface, so environment leases share that storage.
+ */
+function durableObjectEnvironmentCoordination(
+  env: CloudflareWorkerEnv,
+): EnvironmentCoordination | undefined {
+  const namespace = env.TAKOS_COORDINATION;
+  if (!namespace) return undefined;
+  const stub = () =>
+    namespace.get(namespace.idFromName("takos-control-plane"));
+  const post = async (path: string, body: unknown): Promise<unknown> => {
+    const response = await stub().fetch(
+      new Request(`https://takos-coordination.internal/${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+    const payload = await response.json() as { result?: unknown; error?: string };
+    if (!response.ok || payload.error) {
+      throw new Error(
+        `coordination ${path} failed: ${payload.error ?? response.status}`,
+      );
+    }
+    return payload.result;
+  };
+  return {
+    async acquireLease(input) {
+      const result = await post("acquire-lease", {
+        scope: input.scope,
+        holderId: input.holderId,
+        ttlMs: input.ttlMs,
+      }) as {
+        scope: string;
+        holderId: string;
+        token: string;
+        acquired: boolean;
+        expiresAt: string;
+      };
+      return result;
+    },
+    async releaseLease(input) {
+      return await post("release-lease", {
+        scope: input.scope,
+        holderId: input.holderId,
+        token: input.token,
+      }) as boolean;
+    },
+  };
 }
 
 /**

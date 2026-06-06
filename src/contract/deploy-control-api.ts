@@ -240,6 +240,14 @@ export interface PlanRun {
    * plan-run-inputs sidecar) — only the public binding + policy verdict.
    */
   readonly templateBinding?: PlanRunTemplateBinding;
+  /**
+   * Explicit approval recorded against a plan that was parked
+   * `waiting_approval` (a destroy plan, a template-flagged destructive change,
+   * or an Environment whose `requireApproval` is set). Set by the approve API;
+   * its presence is the gate the apply path checks before a guarded plan may be
+   * applied. Absent means the plan has not been approved.
+   */
+  readonly approval?: RunApproval;
 }
 
 export interface PlanRunTemplateBinding {
