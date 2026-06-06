@@ -1,17 +1,22 @@
 # AGENTS.md - Takosumi
 
-This repository is **Takosumi**, the source module that provides the accounts plane and the OpenTofu-native
-deploy-control plane (plus UI surfaces and the audit ledger). Takosumi is not a standalone service and is not
-npm-published: its handlers are consumed **in-process** through `tsconfig` aliases by **two build targets** — the
-operator's **Takosumi platform worker** (`deploy/platform/`, served at `app.takosumi.com`, the only worker the operator
-deploys) and the **self-hosted Takos product worker** (`takos/deploy/cloudflare/` template, served at the self-hoster's
-own origin). The `takosumi.com` apex is the landing/docs site only; `takos.jp` is the Takos introduction site. Takos is
-complete as a plain OpenTofu module and self-hosts with `tofu apply` + one wrangler step on its own infrastructure with
-no Takosumi required; running that same module through Takosumi is an optional convenience that adds the Installation /
-run ledger / dashboard. Takos is just another plain OpenTofu module app to Takosumi, with no special coupling.
+This repository is **Takosumi**, an OSS control plane that manages the **OpenTofu Installation DAG directly under a
+Space**. The product concept is "own Services in your Space instead of renting SaaS": users install Services from any
+Git URL into a Space (`@handle`, an owner namespace close to a GitHub user/org), and Takosumi manages
+plan / apply / destroy, state generations, outputs, the dependency DAG between Installations, credentials, and the
+audit trail. Features like Talk / Files / Blog are not built into Takosumi — they enter as Git-URL Installations.
 
-`deploy/platform/` is the **platform worker's home**: it composes the accounts plane, the in-process deploy-control
-plane, the dashboard SPA, and the OpenTofu runner container into the worker the operator runs at `app.takosumi.com`.
+Takosumi is not a standalone npm-published service: its handlers are consumed **in-process** through `tsconfig`
+aliases by **two build targets** — the operator's **Takosumi platform worker** (`deploy/platform/`, served at
+`app.takosumi.com`, the only worker the operator deploys) and the **self-hosted Takos product worker**
+(`takos/deploy/cloudflare/` template, served at the self-hoster's own origin). The `takosumi.com` apex is the
+landing/docs site only; `takos.jp` is the Takos introduction site. Takos is complete as a plain OpenTofu module and
+self-hosts with `tofu apply` + one wrangler step on its own infrastructure with no Takosumi required; installing that
+same module into a Takosumi Space is optional, and Takos is just another plain OpenTofu module app to Takosumi, with no
+special coupling.
+
+`deploy/platform/` is the **platform worker's home**: it composes the accounts plane, the in-process control plane,
+the dashboard SPA, and the OpenTofu runner container into the worker the operator runs at `app.takosumi.com`.
 Its wrangler.toml is a placeholder reference template; the realized operator config (real resource IDs) lives in the
 operator-private `takosumi-private` repo (state only — no code), which references this repo by relative path.
 
@@ -20,23 +25,37 @@ The two in-process entry points (consumed by both targets) are:
 - `deploy/accounts-cloudflare/src/handler.ts` — account-plane handler (`createAccountsHandler`) mounted at the worker
   origin root. The issuer is the bare worker origin (`app.takosumi.com` for the platform worker, the self-hoster's own
   origin for a self-hosted takos worker); there is no `accounts.takosumi.com`.
-- `deploy/cloudflare/src/handler.ts` — deploy-control handler mounted via the worker's in-process fetch seam. It owns
-  the Installation/run ledger and has no public routes; there is no `deploy-control.takosumi.com`.
+- `deploy/cloudflare/src/handler.ts` — control-plane handler. On the platform worker it serves the `/api` surface and
+  the `/install` external install link; inside the takos product worker it is reached via the in-process fetch seam.
+  There is no `deploy-control.takosumi.com`.
 
-## Public v1 Surface
+## Public Surface
 
-Takosumi public concepts are:
+Takosumi public concepts are **Space / Source / Connection / Installation / Dependency / Run / RunGroup / Deployment /
+OutputSnapshot / Activity**:
 
-- `Installation`: Space-scoped installed OpenTofu module record with repository identity and current Deployment pointer.
-- `Deployment`: successful apply result with commit/module identity, run links, status, and output snapshot.
-- `PlanRun`: one OpenTofu plan attempt with reviewed plan artifact metadata, policy decision, runner profile, logs, and
-  audit events.
-- `ApplyRun`: one OpenTofu apply or destroy attempt with state backend reference, runner profile, status, logs, and
-  audit events.
-- `RunnerProfile`: execution boundary for provider allowlists, credential references, state backend, execution
-  image/resource limits, network policy, and Cloudflare Container execution.
-- `DeploymentOutput`: public non-secret output projection derived from successful OpenTofu outputs. Sensitive outputs
-  and secret references stay outside the public ledger.
+- `Space`: owner namespace (`@handle`) holding members, sources, connections, installations, the dependency graph,
+  policy, activity, and optional billing. A personal Space is auto-created on first login.
+- `Source`: a registered git origin (`url` / `defaultRef` / `defaultPath` / optional auth connection) yielding immutable
+  `SourceSnapshot`s (ref pinned to a commit, archived to R2 with digest).
+- `Connection`: an external connection (Git HTTPS token / Git SSH key / Cloudflare API token / AWS assume-role /
+  static / manual) with `operator` or `space` scope. Installations bind capabilities
+  (compute / dns / storage / source …) per `CapabilityBinding` (`default` / `connection` / `manual` / `disabled`);
+  `default` resolves to the instance-wide operator default connections.
+- `Installation`: the OpenTofu root/state unit directly under a Space (`@space/name`; one Installation = one OpenTofu
+  root/state), configured by a service-side `InstallConfig` (install type `core` / `opentofu_module` / `opentofu_root` /
+  `app_source`, trust level, build, variable mapping, output allowlist, policy).
+- `Dependency`: a DAG edge from a producer Installation's outputs to a consumer Installation's inputs
+  (`variable_injection` / `remote_state` / `published_output`), pinned at plan time by a `DependencySnapshot`
+  (`strict` / `pinned`).
+- `Run`: one execution (`source_sync` / `plan` / `apply` / `destroy_plan` / `destroy_apply` …) with approval gate, plan
+  digest, and policy status. `RunGroup` orders multiple Runs across the DAG (e.g. a Space update).
+- `Deployment`: a successful apply with source snapshot, dependency snapshot, state generation, and output snapshot
+  references.
+- `OutputSnapshot`: the `tofu output -json` generation captured after apply; raw outputs stay encrypted artifacts and
+  the InstallConfig output allowlist projects `spaceOutputs` and `publicOutputs`. Cross-Space sharing requires an
+  explicit `OutputShare`.
+- `Activity`: the Space-scoped audit trail.
 
 Repositories are plain OpenTofu modules. Use Git URL, commit, tag, module path, and well-known OpenTofu outputs for
 display, identity, and output projection.
@@ -44,8 +63,8 @@ display, identity, and output projection.
 ## Core Specification
 
 The canonical Takosumi core spec is [`docs/core-spec.md`](docs/core-spec.md); adoption status lives in
-[`docs/core-conformance.md`](docs/core-conformance.md). The spec governs the deploy control plane's data model,
-per-phase credential mint policy, and the 15 security invariants. When this AGENTS file, reference docs, or
+[`docs/core-conformance.md`](docs/core-conformance.md). The spec governs the control plane's data model, the dependency
+DAG, per-phase credential mint policy, and the 16 security invariants. When this AGENTS file, reference docs, or
 implementation conflict with the spec, the spec wins.
 
 Two principles are load-bearing for new work:
@@ -54,28 +73,25 @@ Two principles are load-bearing for new work:
   (`githubInstallationId`, `githubRepoId`, `githubOwner`, `githubWebhookPayload`) must never enter core types; forge
   integrations are optional adapters outside core.
 - **No in-repo manifest**: user repos stay plain git repos with no required Takosumi metadata file. All install
-  configuration is service-side DB config; repo metadata is read from Git and well-known OpenTofu outputs.
+  configuration is service-side DB config (`InstallConfig`); repo metadata is read from Git and well-known OpenTofu
+  outputs.
 
-Core vocabulary for source-and-install modeling is **Source / App / Environment / InstallProfile** (with
-DeploymentProfile + ConnectionBinding): a `Source` is a registered git origin that yields snapshots; an `App` binds a
-Source to one install type (`app_source` / `opentofu_module` / `opentofu_root`); an `Environment` is one execution
-target carrying an `InstallProfile`, a DeploymentProfile, connection bindings, and a current Deployment pointer. The
-existing run-ledger surface (`Installation` / `PlanRun` / `ApplyRun` / `Deployment` / `DeploymentOutput`) remains the
-public deploy-control vocabulary and maps onto these core concepts.
+## Connection / Policy Boundary
 
-## Runner Profile Boundary
-
-Runner profiles own provider allowlists, credentials, state backends, execution image/resource limits, network policy,
-and Cloudflare Container execution. Takosumi records plan / apply / destroy runs, installations, deployments, outputs,
-policy decisions, logs, and audit trail. Credential values and secret outputs are never stored as public ledger values.
+Operator default connections and space connections own external credentials; Installations bind capabilities through
+CapabilityBindings. Credential mint is decided **inside the vault** per run phase (source → git credential only,
+build → none, plan/apply/destroy → provider credentials only) and never trusts caller claims. Policy evaluates the
+OpenTofu plan JSON in layers (space policy / InstallConfig trust / install type / provider allowlist / resource-type
+allowlist / scope boundary / action policy / dependency policy / output policy / quota). The Cloudflare Container
+runner is the security sandbox for git clone / build / OpenTofu execution. Credential values and secret outputs are
+never stored as public ledger values.
 
 ## In-Process Composition
 
-The deploy-control and account-plane handlers are composed into the host worker (the operator's Takosumi platform worker
+The control-plane and account-plane handlers are composed into the host worker (the operator's Takosumi platform worker
 via `deploy/platform/`, and the self-hosted Takos product worker via `takos/deploy/cloudflare/`), not run as separate
-services. The worker injects stores/capabilities, mounts the account-plane handler at the origin root, and reaches
-deploy-control through the in-process fetch seam. `/internal/*` HTTP exists only for opentofu-runner / executor container
-callbacks.
+services. The worker injects stores/capabilities and mounts the account-plane handler at the origin root. `/internal/*`
+HTTP exists only for opentofu-runner / executor container callbacks.
 
 `deploy/node-postgres/` is the Bun + Postgres substrate that backs the account-plane handler in the local-substrate
 cloud profile (the `deploy/local-substrate/` cloud wrapper imports its server). It is a substrate for the same
@@ -83,18 +99,21 @@ cloud profile (the `deploy/local-substrate/` cloud wrapper imports its server). 
 
 ## Workspace
 
+Current layout (the target layout is spec §28 — `worker/src/modules/*` + `packages/*` + `runner-image/` +
+`opentofu-modules/`; the physical restructure tracks the conformance doc's M1):
+
 ```text
 takosumi/
 ├── package.json
 ├── src/
-│   ├── contract/        public deploy-control DTOs and internal reference contracts
+│   ├── contract/        public control-plane DTOs and internal reference contracts
 │   ├── service/         service implementation consumed in-process by the platform / product workers
-│   ├── runtime-agent/   internal compatibility code, not a public v1 subpath
+│   ├── runtime-agent/   internal compatibility code, not a public subpath
 │   └── cli/             CLI implementation
 ├── deploy/
 │   ├── platform/              operator Takosumi platform worker (app.takosumi.com) build target
 │   ├── accounts-cloudflare/   account-plane handler (in-process entry point)
-│   ├── cloudflare/            deploy-control handler + runner + container scaffold
+│   ├── cloudflare/            control-plane handler + runner + container scaffold
 │   ├── node-postgres/         Postgres substrate for the local-substrate cloud profile
 │   ├── local-substrate/       local dev hostname stack
 │   └── observability/
@@ -104,11 +123,13 @@ takosumi/
 └── scripts/
 ```
 
-## Deploy Control API
+## Control Plane API
 
-The deploy-control handler creates/imports Installations, creates PlanRuns, records approvals and policy decisions,
-creates ApplyRuns for apply or destroy, and reads Deployments, DeploymentOutputs, logs, and audit events. API and CLI
-docs must describe OpenTofu module repos and runner profiles.
+The control-plane handler registers Sources, creates Installations under a Space, creates plan Runs (pinning
+SourceSnapshot + DependencySnapshot), records approvals and policy decisions, applies saved plans (verifying plan
+digest / source snapshot / dependency snapshot / state generation), records StateSnapshot generations, OutputSnapshots,
+and Deployments, marks downstream Installations stale, and reads runs, deployments, logs, and audit events. API and CLI
+docs must describe OpenTofu module repos, Installations, Dependencies, and Runs.
 
 ## Runtime Neutrality And Bun
 
@@ -126,10 +147,12 @@ bun run lint:json-ld
 
 ## Work Rules
 
-- Keep public contract changes in `src/contract/` and update docs/tests in the same change.
-- Keep service-specific changes in `src/service/`.
-- Keep API and CLI docs aligned with OpenTofu module repo, PlanRun, ApplyRun, RunnerProfile, and DeploymentOutput.
-- Keep the deploy-control and account-plane handlers consumable in-process by both build targets (the operator's Takosumi
+- Keep public contract changes in the contract layer (`src/contract/`, moving to `packages/schema/` per spec §28) and
+  update docs/tests in the same change.
+- Keep service-specific changes in the service layer (`src/service/`, moving to `worker/src/modules/` per spec §28).
+- Keep API and CLI docs aligned with Space, Source, Connection, Installation, InstallConfig, Dependency, Run, RunGroup,
+  Deployment, and OutputSnapshot.
+- Keep the control-plane and account-plane handlers consumable in-process by both build targets (the operator's Takosumi
   platform worker via `deploy/platform/` and the self-hosted Takos product worker via `takos/deploy/cloudflare/`); do not
   reintroduce standalone workers or `accounts.takosumi.com` / `deploy-control.takosumi.com` surfaces.
 - Do not add Deno; the Bun migration is in progress and Bun remains the default runtime/tooling direction.

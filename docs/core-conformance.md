@@ -1,7 +1,8 @@
 # Takosumi Core Conformance
 
-> [`core-spec.md`](./core-spec.md) に対する適合状況 (conformance / gap) を記録します。 本書は正本 spec ではなく、
-> spec に対する現状の map です。 spec と矛盾した場合は spec が優先します。
+> [`core-spec.md`](./core-spec.md) (2026-06-06 全面改訂: Space 直下 Installation DAG モデル) に対する適合状況
+> (conformance / gap) を記録します。 本書は正本 spec ではなく、 spec に対する現状の map です。 spec と矛盾した場合は
+> spec が優先します。
 
 ## 状態区分
 
@@ -9,66 +10,92 @@
 - **in-progress**: 当該 milestone で実装中。
 - **pending**: 後続 milestone。 未実装または未強制。
 
+## 実装 milestone
+
+旧 spec (lanes モデル: App / Environment / InstallProfile) で実装済みの基盤は、 新 spec の語彙へ migrate して流用する。
+milestone は次のとおり。
+
+| milestone | 内容 | spec § |
+| --- | --- | --- |
+| M0 | spec 全面置換 + conformance reset + ecosystem 語彙更新 | 全体 |
+| M1 | §28 物理再構成 (worker/src + packages + runner-image + opentofu-modules) | §28 / §29 |
+| M2 | 新 contract 型 (Space / Installation / InstallConfig / CapabilityBinding / Dependency / OutputSnapshot / Run / RunGroup) | §4-§21 |
+| M3 | モデル移行: lanes 廃止、 §27 logical schema、 runs 統合、 Installation lease | §5 / §19 / §27 |
+| M4 | Connections 再編: operator defaults + CapabilityBinding 解決 | §8 / §9 |
+| M5 | install types 完成: core / opentofu_module / opentofu_root / app_source | §10 / §13 |
+| M6 | Dependency DAG + DependencySnapshot + variable_injection | §14 / §15 / §17 |
+| M7 | OutputSnapshot + stale propagation + RunGroup basic | §16 / §19 / §24 |
+| M8 | Policy basic + Activity | §25 |
+| M9 | `/api` surface + external install link + Space wire-up | §12 / §30 |
+| M10 | Dashboard (Space / Installations / Graph / Install flow) | §31 |
+| M11 | conformance 更新 + reference docs 追従 + 全体 gate | 全体 |
+
 ---
 
 ## 1. milestone gap table
 
 | 領域 | spec § | 状態 | 補足 |
 | --- | --- | --- | --- |
-| 単一 Worker (in-process call) | §1.2 / §4 | conformant | control plane は単一 Worker、 module は in-process 結合。 |
-| async queue lifecycle + DLQ | §10.1 | conformant | queue + lease + DLQ (`status: "dead"`) が稼働。 |
-| Container runner OpenTofu 1.11.8 + provider mirror | §9.3 / §17 | conformant | runner image に OpenTofu 1.11.8、 provider は filesystem mirror から init。 |
-| build phase credential-zero | §3.1 / §8.4 / §18.3 | conformant | build phase mint は常に空。 |
-| source archive digest + generation guard | §6.2 / §11.2 | conformant | archive digest 計算と generation guard が稼働。 |
-| vault per-phase mint | §8 | conformant | Connection seal + provider mint。 source/build/tofu の phase 分離は M1 で完成。 |
-| plan-JSON policy v1 | §10.2 / §13 | conformant | plan を JSON 化して policy 評価 (v1)。 |
-| output projection (allowlist) | §14 | conformant | DeploymentOutput を allowlist で projection。 |
-| generated root (rootgen) | §9.2 | conformant | `opentofu_module` の generated root 構築。 |
-| cloudflare provider Connection | §8 | conformant | provider Connection (cloudflare) を mint 可能。 |
-| URL policy | §7.1 | conformant | `file://` / `git://` / `ext::` / embedded credential の拒否を強制。 |
-| **M1 source foundation** | §6.1 / §7 / §10.2 | in-progress | Source/SourceSnapshot store、 mint phase 化 (source git-only)、 webhook、 scheduled poll、 runner `source_sync`。 |
-| **M2 model + state** | §6.3-§6.10 / §11 | in-progress | App/Environment/Run 統一、 coordination lease の厳密化、 R2_STATE 分離、 SecretBlob 暗号化、 destroy 2-stage。 |
-| M3 public `/api` surface | §15 | pending | source/app/environment/connection/run の public route。 |
-| M4 hybrid flow | §9.1 | pending | `opentofu_module` + `app_source` 連携。 |
-| M5 `app_source` build 完全対応 | §3.1 / §9.1 | pending | build -> image -> generated root deploy の完成。 |
-| M6 policy 8 層 | §13 | pending | resource allowlist / scope boundary / quota の完成。 |
-| M7 hardening | §18 | pending | 全 security invariant の網羅 enforcement + test。 |
-| M8 repo layout / docs | §21 | pending | layout / docs の最終化。 |
+| 正本 spec 採用 (Space 直下 Installation DAG モデル) | 全体 | conformant | M0 で全面置換。 |
+| 単一 Worker (fetch/queue/scheduled + DO + Container) | §3 / §22 | conformant | 旧 spec M0 から維持。 物理 layout の §28 準拠は M1。 |
+| async queue lifecycle + DLQ | §22 / §23 | conformant | queue + lease + DLQ が稼働 (旧実装からの流用)。 |
+| Container runner OpenTofu + provider mirror | §22 | conformant | runner image に OpenTofu 1.11.8、 filesystem mirror。 |
+| Source / SourceSnapshot | §6 / §7 | conformant | 旧 M1 実装を流用。 URL policy / webhook / polling / source_sync 稼働。 |
+| Connection vault + per-phase mint | §8 / §32 | conformant | SecretBlob seal + phase mint (source→git / build→空 / plan・apply→provider)。 |
+| 暗号化 state + generation guard | §20 / §32 | conformant | R2_STATE + current.json + StateSnapshot 世代管理 (旧 M2 実装を流用)。 |
+| **M1 物理再構成 (§28 layout)** | §28 / §29 | in-progress | worker/src + packages + runner-image + opentofu-modules への移動。 alias seam 原子更新。 |
+| M2 新 contract 型 | §4-§21 | pending | |
+| M3 モデル移行 (lanes 廃止 / §27 schema / runs 統合) | §5 / §19 / §27 | pending | App / Environment / InstallProfile を Installation + InstallConfig に置換。 |
+| M4 operator defaults + CapabilityBinding | §8 / §9 | pending | |
+| M5 install types (core / app_source 完成) | §10 / §13 | pending | |
+| M6 Dependency DAG + variable_injection | §14 / §15 / §17 | pending | |
+| M7 OutputSnapshot + stale + RunGroup | §16 / §19 / §24 | pending | |
+| M8 Policy basic + Activity | §25 | pending | |
+| M9 `/api` surface + install link | §12 / §30 | pending | 現状は旧 `/v1` surface。 |
+| M10 Dashboard | §31 | pending | |
+| MVP 外 (OutputShare / remote_state / published_output / backup / drift_check) | §15 / §18 / §33 | pending | §34 の MVP 外宣言どおり。 型と logical schema のみ先行定義。 |
+
+### 意図的な divergence (gap ではない)
+
+- なし (M1 で binding 名を §29 に揃える。 realized operator config の追従は
+  `takosumi-private/platform/wrangler.toml` 側の operator 作業)。
 
 ---
 
 ## 2. security invariant map
 
-各 invariant (§18) を enforcing code / test に map します。 未強制のものは pending と記します。
+各 invariant (§32) を enforcing code / test に map します。 未強制のものは pending と記します。
+(file path は M1 物理再構成前の現行 path。 M1 で worker/src / packages へ移動後に更新する。)
 
 | # | invariant | 状態 | enforcing code / test |
 | --- | --- | --- | --- |
-| 1 | forge 非依存 (`GitAddress` のみ) | conformant | core に forge 固有 identifier なし。 root `scripts/check-no-legacy-names.mjs` が `githubInstallationId` 等の再導入を拒否。 |
-| 2 | trusted Worker / untrusted Container 境界 | conformant | runner には mint された scoped credential のみ渡す (`src/service/adapters/vault/mod.ts`)。 |
-| 3 | build phase は credential-zero | conformant | build mint 常に空。 `src/service/domains/deploy-control/template_run_test.ts` / `async_run_lifecycle_test.ts`。 |
-| 4 | source phase は git credential のみ | in-progress | source phase mint を git-kind に限定 (M1)。 vault: `src/service/adapters/vault/mod.ts`。 |
-| 5 | tofu phase は git credential を渡さない | in-progress | plan/apply/destroy は provider のみ。 vault mint policy で強制 (M1 で phase 判定を完成)。 |
-| 6 | mint policy は vault 内で判定 | conformant | mint は `src/service/adapters/vault/mod.ts` 内で評価し caller 主張を信用しない。 |
-| 7 | secret は SecretBlob で seal、 raw 非返却 | in-progress | seal は稼働、 公開 API の raw 非返却は `src/service/api/deploy_control_connection_routes_test.ts` で検証。 暗号化 backend は M2。 |
-| 8 | SSH は `StrictHostKeyChecking=yes` 強制 | in-progress | known_hosts + strict host key を source phase で強制 (M1 source_sync)。 |
-| 9 | credential を arg/URL に書かない (askpass/key file) | in-progress | HTTPS は askpass file、 SSH は key file で渡す (M1)。 |
-| 10 | plan artifact は immutable、 apply は再 plan しない | conformant | reviewed `tfplan` artifact を復元して apply。 `src/service/domains/deploy-control/async_run_lifecycle_test.ts`。 |
-| 11 | apply は plan digest + generation guard を満たすときだけ | conformant | expected guard 検証。 `src/service/domains/deploy-control/mod_test.ts` / `async_run_lifecycle_test.ts`。 |
-| 12 | `opentofu_root` は auto-apply しない | pending | raw root flow は M4 以降。 auto-apply 禁止 policy を §13 に定義済み、 enforcement は pending。 |
-| 13 | `local-exec` / `external` は forbidden-by-default | pending | policy layer 5 の forbidden 一覧。 enforcement は M6。 |
-| 14 | Space scope boundary 強制 | in-progress | cross-Space Connection/Source 参照拒否。 store レベル enforcement を M2 で完成。 |
-| 15 | log / output に secret を含めない | conformant | output projection allowlist (`src/service/domains/outputs/projection.ts`)。 log redaction の網羅は M7。 |
+| 1 | Public API returns no raw secret | conformant | `src/service/api/deploy_control_connection_routes_test.ts`。 |
+| 2 | User source build runs in Container | conformant | runner container (`deploy/cloudflare/runner/`)。 Worker は build を実行しない。 |
+| 3 | Build phase receives build inputs only | conformant | build mint 常に空。 vault `mintForPhase` + `phase_mint_test.ts`。 |
+| 4 | Source phase receives Git credential only | conformant | source phase mint を git-kind に限定。 `src/service/adapters/vault/mod.ts`。 |
+| 5 | Plan/apply phase receives provider credentials only | conformant | plan/apply/destroy は provider のみ。 vault mint policy で強制。 |
+| 6 | Apply uses saved plan | conformant | reviewed `tfplan` artifact を復元して apply。 `async_run_lifecycle_test.ts`。 |
+| 7 | Apply verifies plan digest | conformant | expected guard 検証。 `async_run_lifecycle_test.ts`。 |
+| 8 | Apply verifies source snapshot | conformant | apply 時の snapshot id / digest 再検証。 |
+| 9 | Apply verifies dependency snapshot | pending | DependencySnapshot は M6。 |
+| 10 | Apply verifies state generation | conformant | generation guard。 `m2_environment_run_test.ts` 系。 |
+| 11 | Output publication uses allowlist | conformant | output projection allowlist (`src/service/domains/outputs/projection.ts`)。 OutputSnapshot 化は M7。 |
+| 12 | Sensitive output sharing requires explicit policy | pending | spaceOutputs / publicOutputs 分離と leak test は M7。 |
+| 13 | Cross-Space sharing uses OutputShare | pending | OutputShare は MVP 外。 cross-space dependency は M6 で作成拒否として強制。 |
+| 14 | State, plan, raw outputs are encrypted artifacts | conformant | state/plan は暗号化済み (旧 M2)。 raw outputs の暗号化 artifact 化は M7。 |
+| 15 | Logs pass through redaction | in-progress | output projection は稼働。 log redaction の網羅は M8 以降。 |
+| 16 | Destroy uses destroy plan and approval | conformant | destroy 2-phase (destroy_plan → approval → destroy_apply)。 |
 
 ---
 
 ## 3. enforcing artifacts (reference)
 
 - URL policy: `src/service/domains/sources/url-policy.ts` (+ `url-policy_test.ts`)。
-- vault mint / seal: `src/service/adapters/vault/mod.ts` (+ `mod_test.ts`)。
+- vault mint / seal: `src/service/adapters/vault/mod.ts` (+ `phase_mint_test.ts`)。
 - async run lifecycle (digest / generation guard / immutable plan artifact):
   `src/service/domains/deploy-control/async_run_lifecycle_test.ts`。
-- template run (build cred-zero path): `src/service/domains/deploy-control/template_run_test.ts`。
-- archive digest: `src/service/adapters/source/digest.ts` / `src/service/adapters/object-storage/digest.ts`。
+- state encryption: `deploy/cloudflare/src/state_crypto.ts`。
+- coordination lease: `deploy/cloudflare/src/coordination_object.ts`。
 - output projection: `src/service/domains/outputs/projection.ts`。
-- public connection routes (raw secret 非返却): `src/service/api/deploy_control_connection_routes_test.ts`。
+- generated root: `src/service/domains/rootgen/mod.ts`。
 - forge 非依存 guard: root `scripts/check-no-legacy-names.mjs`。

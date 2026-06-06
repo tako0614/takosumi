@@ -7,9 +7,9 @@
 この runbook は public managed Takos launch readiness (ROADMAP.md Managed Takos
 Offering gap audit) の patch management 正本です。Takos は 基本 Web/API surface
 として運用し、command-line tooling は primary customer UX
-として扱いません。Takosumi CLI / manifest workflows から発生する更新は
-`takosumi` / Takosumi deploy control の owning repo で扱い、Takos product shell は
-app / git / agent / deploy artifact の patch gate を所有します。
+として扱いません。Takosumi CLI / control plane から発生する更新は
+`takosumi` repo で扱い、Takos product shell は
+app / git / agent / deploy template の patch gate を所有します。
 
 ## Scope
 
