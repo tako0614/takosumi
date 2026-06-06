@@ -41,6 +41,7 @@ import type {
   RunnerProfile,
   RunnerStateLockEvidence,
   RunDiagnostic,
+  RunStatus,
   TestConnectionResponse,
 } from "takosumi-contract/deploy-control-api";
 import type {
@@ -91,10 +92,20 @@ export {
 export { providerMatches } from "./policy.ts";
 export { deploymentOutputsFromOpenTofu } from "./projection.ts";
 
+/**
+ * Minted provider credential env vars threaded onto the runner dispatch payload
+ * only. The controller fills this from `vault.mint(...).env` in the queue
+ * consumer just before dispatch; it is NEVER persisted to the store and NEVER
+ * logged. The runner filters it through provider-env-rules and falls back to its
+ * own `Bun.env` when absent.
+ */
+export type RunCredentials = Readonly<Record<string, string>>;
+
 export interface OpenTofuPlanJob {
   readonly planRun: PlanRun;
   readonly runnerProfile: RunnerProfile;
   readonly variables: Readonly<Record<string, JsonValue>>;
+  readonly credentials?: RunCredentials;
 }
 
 export interface OpenTofuApplyJob {
@@ -102,6 +113,7 @@ export interface OpenTofuApplyJob {
   readonly planRun: PlanRun;
   readonly planArtifact: OpenTofuPlanArtifact;
   readonly runnerProfile: RunnerProfile;
+  readonly credentials?: RunCredentials;
 }
 
 export interface OpenTofuDestroyJob {
@@ -110,6 +122,7 @@ export interface OpenTofuDestroyJob {
   readonly planArtifact: OpenTofuPlanArtifact;
   readonly installation: Installation;
   readonly runnerProfile: RunnerProfile;
+  readonly credentials?: RunCredentials;
 }
 
 export interface OpenTofuPlanResult {
@@ -138,6 +151,32 @@ export interface OpenTofuRunner {
   destroy?(job: OpenTofuDestroyJob): Promise<OpenTofuDestroyResult>;
 }
 
+/**
+ * Out-of-process run dispatch seam. The controller's create path persists the
+ * run as `queued` and hands the run identity to `enqueueRun`; the actual
+ * OpenTofu execution happens later in the queue consumer
+ * (`runQueuedPlan` / `runQueuedApply`).
+ *
+ * The Workers adapter supplies a producer that publishes onto
+ * `TAKOS_OPENTOFU_RUN_QUEUE`. Tests and non-queue runtimes (local / node
+ * substrates) get a default inline dispatcher that runs the consumer logic
+ * immediately, preserving the historical create-executes-run behavior.
+ */
+export interface OpenTofuRunDispatch {
+  readonly action: "plan" | "apply";
+  readonly runId: string;
+  readonly spaceId: string;
+}
+
+export type EnqueueRun = (dispatch: OpenTofuRunDispatch) => Promise<void>;
+
+/**
+ * Stale-heartbeat takeover window. A run left `running` by a crashed consumer
+ * may be retried once its heartbeat is older than this; a fresh `running`
+ * heartbeat means a sibling consumer holds the run and the duplicate no-ops.
+ */
+const RUN_HEARTBEAT_STALE_MS = 10 * 60 * 1000;
+
 export interface OpenTofuDeploymentControllerDependencies {
   readonly store?: OpenTofuDeploymentStore;
   readonly runner?: OpenTofuRunner;
@@ -150,9 +189,18 @@ export interface OpenTofuDeploymentControllerDependencies {
    * Connection lifecycle (`createConnection` / `listConnections` /
    * `testConnection` / `deleteConnection`) and `mintCredentialBundle`. When
    * absent, those methods throw `not_implemented`. The Vault is intentionally
-   * NOT wired into plan/apply dispatch here — that is Phase 1B.
+   * Wired into plan/apply dispatch from Phase 1B onward: the queue consumer
+   * mints a {@link CredentialBundle} just before the container dispatch and
+   * attaches it to the dispatch payload only (never stored, never logged).
    */
   readonly vault?: ConnectionVault;
+  /**
+   * Out-of-process run dispatch. Defaults to an inline dispatcher that runs the
+   * consumer immediately (preserving synchronous create-executes-run for
+   * tests / local / node substrates). The Workers adapter injects a producer
+   * that enqueues onto `TAKOS_OPENTOFU_RUN_QUEUE`.
+   */
+  readonly enqueueRun?: EnqueueRun;
 }
 
 export interface DeployControlActorContext {
@@ -166,6 +214,7 @@ export class OpenTofuDeploymentController {
   readonly #defaultRunnerProfileId: string;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
+  readonly #enqueueRun: EnqueueRun;
   readonly #seededProfiles: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
 
@@ -177,6 +226,10 @@ export class OpenTofuDeploymentController {
       "cloudflare-default";
     this.#newId = dependencies.newId ?? newId;
     this.#now = dependencies.now ?? (() => Date.now());
+    // Default to an inline dispatcher: run the consumer immediately so local /
+    // node substrates and tests keep the historical synchronous semantics.
+    this.#enqueueRun = dependencies.enqueueRun ??
+      ((dispatch) => this.dispatchQueuedRun(dispatch));
     this.#seededProfiles = this.#seedRunnerProfiles(
       dependencies.runnerProfiles ?? createDefaultRunnerProfiles(this.#now()),
     );
@@ -223,7 +276,12 @@ export class OpenTofuDeploymentController {
     const sourceDigest = await stableJsonDigest(request.source);
     const variablesDigest = await stableJsonDigest(variables);
     const policyDecisionDigest = await stableJsonDigest(policy);
-    let planRun: PlanRun = {
+    // Snapshot the target's state generation so a stale plan cannot apply over a
+    // newer state. `create` plans have no prior target and record 0.
+    const baseStateGeneration = installation
+      ? installation.stateGeneration ?? 0
+      : 0;
+    const planRun: PlanRun = {
       id: this.#newId("plan"),
       spaceId: request.spaceId,
       ...(request.installationId ? { installationId: request.installationId } : {}),
@@ -236,6 +294,7 @@ export class OpenTofuDeploymentController {
       runnerProfileId: profile.id,
       variablesDigest,
       requiredProviders: declaredProviders,
+      baseStateGeneration,
       status: policy.status === "passed" ? "queued" : "blocked",
       policy,
       policyDecisionDigest,
@@ -255,8 +314,28 @@ export class OpenTofuDeploymentController {
       ...(policy.status === "blocked" ? { finishedAt: now } : {}),
     };
     await this.#store.putPlanRun(planRun);
+    // Persist the plan variables out-of-band (internal, never part of the public
+    // ledger projection) so the queue consumer can re-run the plan without the
+    // controller retaining them on the public PlanRun record. Skipped when there
+    // are no variables to avoid a needless write.
+    if (Object.keys(variables).length > 0) {
+      await this.#store.putPlanRunInputs({
+        planRunId: planRun.id,
+        variables,
+      });
+    }
     if (policy.status === "passed" && this.#runner) {
-      planRun = await this.#executePlan(planRun, profile, variables);
+      // Hand off to the dispatch seam. The default inline dispatcher executes the
+      // consumer synchronously (so this call returns a terminal PlanRun, exactly
+      // as before); the Workers producer enqueues and returns immediately, after
+      // which clients poll GET /v1/plan-runs/:id.
+      await this.#enqueueRun({
+        action: "plan",
+        runId: planRun.id,
+        spaceId: planRun.spaceId,
+      });
+      const dispatched = await this.#store.getPlanRun(planRun.id);
+      return { planRun: dispatched ?? planRun };
     }
     return { planRun };
   }
@@ -335,11 +414,150 @@ export class OpenTofuDeploymentController {
     };
     await this.#store.putApplyRun(applyRun);
     if (!this.#runner) return { applyRun };
+    // Hand off to the dispatch seam. The default inline dispatcher runs the
+    // apply consumer synchronously and returns the terminal ApplyRunResponse;
+    // the Workers producer enqueues and returns the queued ApplyRun immediately.
+    await this.#enqueueRun({
+      action: "apply",
+      runId: applyRun.id,
+      spaceId: applyRun.spaceId,
+    });
+    const dispatched = await this.getApplyRun(applyRun.id);
+    return dispatched;
+  }
+
+  /**
+   * Queue-consumer entry point. Routes a dispatched run to the plan or apply
+   * consumer. Both the default inline dispatcher and the Workers `queue()`
+   * consumer call this. Errors propagate so the queue can retry (the apply/plan
+   * consumers themselves convert runner failures into recorded `failed` runs and
+   * only rethrow infrastructure/transport errors).
+   */
+  async dispatchQueuedRun(dispatch: OpenTofuRunDispatch): Promise<void> {
+    if (dispatch.action === "plan") {
+      await this.runQueuedPlan(dispatch.runId);
+      return;
+    }
+    await this.runQueuedApply(dispatch.runId);
+  }
+
+  /**
+   * Dead-letter backstop. Marks a run failed with the given reason when it is
+   * not already terminal (succeeded/failed/blocked/cancelled). Used by the DLQ
+   * consumer for runs whose consumer crashed before it could record failure.
+   * Returns true when it transitioned the run.
+   */
+  async markRunFailed(
+    action: "plan" | "apply",
+    runId: string,
+    reason: string,
+  ): Promise<boolean> {
+    if (action === "plan") {
+      const planRun = await this.#store.getPlanRun(runId);
+      if (!planRun || isTerminalStatus(planRun.status)) return false;
+      await this.#failPlanRun(planRun, new Error(reason));
+      await this.#store.deletePlanRunInputs(runId);
+      return true;
+    }
+    const applyRun = await this.#store.getApplyRun(runId);
+    if (!applyRun || isTerminalStatus(applyRun.status)) return false;
+    const profile = await this.#requireRunnerProfile(applyRun.runnerProfileId);
+    await this.#failApplyRun(
+      applyRun,
+      profile,
+      applyRun.startedAt ?? applyRun.createdAt,
+      "apply.failed",
+      new Error(reason),
+    );
+    return true;
+  }
+
+  /**
+   * Plan consumer. Idempotency guard (only `queued`, or `running` with a stale
+   * heartbeat, proceeds), transition to `running` with startedAt + heartbeatAt,
+   * mint credentials NOW, attach them to the runner dispatch ONLY, and record
+   * the terminal status. Returns the resulting PlanRun (used by the inline
+   * dispatcher); the Workers consumer ignores the return value and polls the
+   * store.
+   */
+  async runQueuedPlan(runId: string): Promise<PlanRun | undefined> {
+    if (!this.#runner) return await this.#store.getPlanRun(runId);
+    const planRun = await this.#store.getPlanRun(runId);
+    if (!planRun) {
+      throw new OpenTofuControllerError("not_found", `plan run ${runId} not found`);
+    }
+    if (!this.#shouldProcessRun(planRun.status, planRun.heartbeatAt)) {
+      // Terminal, or a sibling consumer holds it with a fresh heartbeat: no-op.
+      return planRun;
+    }
+    const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
+    const inputs = await this.#store.getPlanRunInputs(runId);
+    const variables = normalizeVariables(inputs?.variables);
+    const running = await this.#markPlanRunning(planRun);
+    const credentials = await this.#mintRunCredentials(
+      planRun.spaceId,
+      planRun.requiredProviders,
+    );
+    const result = await this.#executePlan(running, profile, variables, credentials);
+    await this.#store.deletePlanRunInputs(runId);
+    return result;
+  }
+
+  /**
+   * Apply consumer. Idempotency + stale-heartbeat takeover, generation
+   * pre-flight, credential mint, and serialized execution on the installation
+   * key. Returns the ApplyRunResponse for the inline dispatcher.
+   */
+  async runQueuedApply(runId: string): Promise<ApplyRunResponse> {
+    const applyRun = await this.#store.getApplyRun(runId);
+    if (!applyRun) {
+      throw new OpenTofuControllerError("not_found", `apply run ${runId} not found`);
+    }
+    if (!this.#runner) return { applyRun };
+    if (!this.#shouldProcessRun(applyRun.status, applyRun.heartbeatAt)) {
+      return await this.getApplyRun(runId);
+    }
+    const planRun = await this.#requirePlanRun(applyRun.planRunId);
+    const profile = await this.#requireRunnerProfile(applyRun.runnerProfileId);
     const key = planRun.installationId ?? planRun.id;
     return await this.#runSerialized(
       key,
       () => this.#executeApply(applyRun, planRun, profile),
     );
+  }
+
+  /**
+   * Idempotency predicate for the queue consumer. Proceed when the run is still
+   * `queued`, or when it is `running` but its heartbeat is stale (a prior
+   * consumer crashed mid-run). A fresh `running` heartbeat means a sibling
+   * consumer owns the run; terminal states are never reprocessed.
+   */
+  #shouldProcessRun(
+    status: RunStatus,
+    heartbeatAt: number | undefined,
+  ): boolean {
+    if (status === "queued") return true;
+    if (status !== "running") return false;
+    const last = heartbeatAt ?? 0;
+    return this.#now() - last > RUN_HEARTBEAT_STALE_MS;
+  }
+
+  /**
+   * Mints provider credentials for a run when a Vault is configured. Returns
+   * `undefined` (and dispatches with no credential override, leaving the runner
+   * to fall back to its own env) when no Vault is wired. Never logs the bundle.
+   */
+  async #mintRunCredentials(
+    spaceId: string,
+    requiredProviders: readonly string[],
+  ): Promise<RunCredentials | undefined> {
+    if (!this.#vault || requiredProviders.length === 0) return undefined;
+    try {
+      const bundle = await this.#vault.mint(spaceId, requiredProviders);
+      return bundle.env;
+    } catch (error) {
+      throw mapVaultError(error);
+    }
   }
 
   async getApplyRun(id: string): Promise<ApplyRunResponse> {
@@ -473,6 +691,8 @@ export class OpenTofuDeploymentController {
     const running: PlanRun = {
       ...planRun,
       status: "running",
+      startedAt,
+      heartbeatAt: startedAt,
       auditEvents: [
         ...planRun.auditEvents,
         auditEvent(planRun.id, "plan.started", startedAt),
@@ -491,6 +711,8 @@ export class OpenTofuDeploymentController {
     const running: ApplyRun = {
       ...applyRun,
       status: "running",
+      startedAt,
+      heartbeatAt: startedAt,
       stateLock: stateLockEvidence(profile.stateBackend, startedAt, startedAt, "pending"),
       auditEvents: [
         ...applyRun.auditEvents,
@@ -551,16 +773,18 @@ export class OpenTofuDeploymentController {
   }
 
   async #executePlan(
-    planRun: PlanRun,
+    running: PlanRun,
     profile: RunnerProfile,
     variables: Readonly<Record<string, JsonValue>>,
+    credentials: RunCredentials | undefined,
   ): Promise<PlanRun> {
-    const running = await this.#markPlanRunning(planRun);
     try {
       const result = await this.#runner!.plan({
         planRun: running,
         runnerProfile: profile,
         variables,
+        // Dispatch-only: the minted env never lands on the persisted run.
+        ...(credentials ? { credentials } : {}),
       });
       const now = this.#now();
       const diagnostics = redactRunDiagnostics(result.diagnostics);
@@ -595,12 +819,12 @@ export class OpenTofuDeploymentController {
         ...(diagnostics ? { diagnostics } : {}),
         auditEvents: [
           ...running.auditEvents,
-          auditEvent(planRun.id, "plan.policy_evaluated", now, {
+          auditEvent(running.id, "plan.policy_evaluated", now, {
             policyDecisionDigest,
             status: policy.status,
             observedProviderCount: requiredProviders.length,
           }),
-          auditEvent(planRun.id, "plan.completed", now, {
+          auditEvent(running.id, "plan.completed", now, {
             planDigest: result.planDigest,
             planArtifactDigest: planArtifact.digest,
             providerLockDigest: result.providerLockDigest ?? "",
@@ -640,8 +864,18 @@ export class OpenTofuDeploymentController {
     const plannedInstallation = planRun.installationId
       ? await this.#requireCurrentPlannedInstallation(planRun)
       : undefined;
+    // State generation guard: reject when the target's state advanced past the
+    // generation this plan was created against (a stale plan over newer state).
+    assertStateGenerationMatches(planRun, plannedInstallation);
     const startedAt = this.#now();
     const running = await this.#markApplyRunning(applyRun, profile, startedAt);
+    // Mint provider credentials NOW (just before dispatch). Apply runs resolve
+    // requiredProviders from the reviewed PlanRun. The bundle is attached to the
+    // runner dispatch ONLY — never stored, never logged.
+    const credentials = await this.#mintRunCredentials(
+      planRun.spaceId,
+      planRun.requiredProviders,
+    );
     if (planRun.operation === "destroy") {
       return await this.#executeDestroyApply(
         running,
@@ -649,6 +883,7 @@ export class OpenTofuDeploymentController {
         profile,
         startedAt,
         plannedInstallation,
+        credentials,
       );
     }
     try {
@@ -657,6 +892,7 @@ export class OpenTofuDeploymentController {
         planRun,
         planArtifact: planRun.planArtifact,
         runnerProfile: profile,
+        ...(credentials ? { credentials } : {}),
       });
       const now = this.#now();
       const outputs = normalizeDeploymentOutputs(result.outputs);
@@ -690,12 +926,17 @@ export class OpenTofuDeploymentController {
         completedAt: now,
       };
       await this.#store.putDeployment(deployment);
+      // Bump the state generation atomically with the state persist (the
+      // currentDeployment pointer move). A create starts at base 0 -> 1; an
+      // update advances the planned installation's generation by one.
+      const nextStateGeneration = (installation.stateGeneration ?? 0) + 1;
       const patched = await this.#store.patchInstallation(installation.id, {
         currentDeploymentId: deployment.id,
         status: "ready",
         updatedAt: now,
         source: planRun.source,
         runnerProfileId: profile.id,
+        stateGeneration: nextStateGeneration,
       }, planRun.installationId
         ? {
           currentDeploymentId: planRun.installationCurrentDeploymentId ?? null,
@@ -752,6 +993,7 @@ export class OpenTofuDeploymentController {
     profile: RunnerProfile,
     startedAt: number,
     plannedInstallation: Installation | undefined,
+    credentials: RunCredentials | undefined,
   ): Promise<ApplyRunResponse> {
     if (!planRun.installationId) {
       throw new OpenTofuControllerError(
@@ -783,12 +1025,17 @@ export class OpenTofuDeploymentController {
         planArtifact: planRun.planArtifact,
         installation,
         runnerProfile: profile,
+        ...(credentials ? { credentials } : {}),
       });
       const now = this.#now();
+      // Advance the state generation with the teardown state persist so a stale
+      // plan created against the pre-destroy generation cannot re-apply.
+      const nextStateGeneration = (installation.stateGeneration ?? 0) + 1;
       const patched = await this.#store.patchInstallation(installation.id, {
         currentDeploymentId: null,
         status: "destroyed",
         updatedAt: now,
+        stateGeneration: nextStateGeneration,
       }, {
         currentDeploymentId: planRun.installationCurrentDeploymentId ?? null,
         status: installation.status,
@@ -944,6 +1191,30 @@ export class OpenTofuDeploymentController {
   }
 }
 
+/**
+ * State generation guard. A PlanRun records the target's `baseStateGeneration`
+ * at creation; if the target Installation's generation has advanced since (a
+ * successful apply/destroy ran in between), this plan is stale and must not
+ * apply over the newer state. `create` plans (no planned installation) are
+ * exempt — they have no prior generation to race.
+ */
+function assertStateGenerationMatches(
+  planRun: PlanRun,
+  plannedInstallation: Installation | undefined,
+): void {
+  if (!plannedInstallation) return;
+  const base = planRun.baseStateGeneration ?? 0;
+  const current = plannedInstallation.stateGeneration ?? 0;
+  if (current !== base) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `state_generation_mismatch: plan run ${planRun.id} was created against ` +
+        `state generation ${base} but installation ${plannedInstallation.id} ` +
+        `is now at generation ${current}`,
+    );
+  }
+}
+
 async function checkApplyExpected(
   expected: CreateApplyRunRequest["expected"],
   planRun: PlanRun,
@@ -1059,6 +1330,11 @@ function auditEvent(
 
 function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+}
+
+function isTerminalStatus(status: RunStatus): boolean {
+  return status === "succeeded" || status === "failed" ||
+    status === "blocked" || status === "cancelled";
 }
 
 // Translate a Vault error into the controller error vocabulary. Missing env

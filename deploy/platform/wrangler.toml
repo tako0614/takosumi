@@ -83,8 +83,7 @@ image_build_context = "../.."
 instance_type = "basic"
 max_instances = 10
 
-# Producers only: runs are dispatched synchronously to the container DO, so
-# there are no queue consumers in this worker.
+# Producer: the deploy-control create path enqueues OpenTofu run dispatches.
 [[queues.producers]]
 binding = "TAKOS_QUEUE"
 queue = "takosumi-control-plane"
@@ -92,6 +91,25 @@ queue = "takosumi-control-plane"
 [[queues.producers]]
 binding = "TAKOS_OPENTOFU_RUN_QUEUE"
 queue = "takosumi-opentofu-runs"
+
+# Consumer: the platform worker runs the OpenTofu run-queue consumer in-process
+# (see deploy/platform/worker.ts `queue`). It loads the run, mints credentials,
+# and drives the container DO. One run per delivery so a failure only retries its
+# own run. NOTE: the queue consumer invocation budget (~15 min) bounds a single
+# run; detaching long runs from the consumer invocation is future work.
+[[queues.consumers]]
+queue = "takosumi-opentofu-runs"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "takosumi-opentofu-runs-dlq"
+
+# Dead-letter consumer: marks runs that exhausted retries failed
+# ("retries-exhausted") if not already terminal.
+[[queues.consumers]]
+queue = "takosumi-opentofu-runs-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
 
 [vars]
 TAKOSUMI_ACCOUNTS_ISSUER = "https://app.takosumi.com"

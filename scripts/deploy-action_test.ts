@@ -9,7 +9,8 @@ test("deploy action wraps the deploy control API", async () => {
   ).text();
 
   assert.match(source, /name: Takosumi Deploy/);
-  assert.match(source, /oven-sh\/setup-bun@v2/);
+  // SHA-pinned with a `# pinned: vX.Y.Z` trailer (supply-chain hardening).
+  assert.match(source, /oven-sh\/setup-bun@[0-9a-f]{40} # pinned: v2/);
   assert.match(source, /bunx --bun "@takosjp\/takosumi@/);
   assert.match(source, /install "\$TAKOSUMI_ACTION_SOURCE"/);
   assert.match(source, /plan "\$TAKOSUMI_ACTION_SOURCE"/);

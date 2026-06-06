@@ -1233,4 +1233,16 @@ drop index if exists takosumi_connections_status_idx;
 drop index if exists takosumi_connections_space_idx;
 drop table if exists takosumi_connections;`,
     },
+    {
+      id: "deploy.takosumi_plan_run_inputs.create",
+      version: 31,
+      domain: "deploy",
+      description:
+        "Create the internal plan-run inputs sidecar so the async run-queue consumer can re-run a queued plan with the submitted OpenTofu variables. Never projected into the public ledger; removed when the run reaches a terminal state.",
+      sql: `create table if not exists takosumi_plan_run_inputs (
+  plan_run_id text  primary key,
+  inputs_json jsonb not null
+);`,
+      down: `drop table if exists takosumi_plan_run_inputs;`,
+    },
   ]);
