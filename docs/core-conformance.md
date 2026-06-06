@@ -44,7 +44,7 @@ milestone は次のとおり。
 | Connection vault + per-phase mint | §8 / §32 | conformant | SecretBlob seal + phase mint (source→git / build→空 / plan・apply→provider)。 |
 | 暗号化 state + generation guard | §20 / §32 | conformant | R2_STATE + current.json + StateSnapshot 世代管理 (旧 M2 実装を流用)。 |
 | **M1 物理再構成 (§28 layout)** | §28 / §29 | conformant | worker/src (entry/durable) + packages/{schema,rootgen,graph} + runner-image + opentofu-modules を §28 配置に移動、 binding/class 名を §29 に整合。 `src/service/domains/*` の `worker/src/modules/*` への移設は各 milestone でその domain を書き換える際に行う (M3+)。 |
-| M2 新 contract 型 | §4-§21 | pending | |
+| M2 新 contract 型 | §4-§21 | conformant | `packages/schema/src/` に Space / Installation / InstallConfig / CapabilityBinding / Dependency / DependencySnapshot / OutputSnapshot / Run / RunGroup / Deployment を additive 定義 (`spaces.ts` / `installations.ts` / `capability-bindings.ts` / `dependencies.ts` / `output-snapshots.ts` / `runs.ts` / `deployments.ts` + `model_shapes_test.ts`)。 旧 lanes 型からの migrate は M3。 |
 | M3 モデル移行 (lanes 廃止 / §27 schema / runs 統合) | §5 / §19 / §27 | conformant | lanes (App/Environment/InstallProfile) 削除、 Space/InstallConfig/Installation (UNIQUE(space_id,name,environment)) store + service + /v1 routes、 単一 runs table (kind 列 + run_json、 SQL/D1)、 installation lease (`installation:{id}:{env}`)、 stateScope/R2 key を §20 に re-key、 D1 を §27 実テーブル化。 create-on-apply legacy path は削除 (Installation-first)。 |
 | M4 operator defaults + CapabilityBinding | §8 / §9 | conformant | Connection.scope (operator/space、 operator は spaceId なし + AAD `__operator__`)、 operator_connection_defaults CRUD (`/v1/operator-connection-defaults`、 unrestricted bearer のみ)、 ConnectionsService.resolveCapabilities (default/connection/manual/disabled + cross-space 拒否)、 vault mint の capability pool (caller 主張を信用せず id を再検証)。 manual values の module input 接続と rootgen capability alias は M5。 |
 | M5 install types (core / app_source 完成) | §10 / §13 | conformant | 公式 modules: core (provider-free 基盤、 4 標準 outputs) / cloudflare-worker-service / cloudflare-r2-storage / cloudflare-static-site / aws-s3-storage。 rootgen `generateInstallationRoot` が installType + 解決済み capability から §13 provider alias を生成 (**per-alias credential 分離は deferred** — 同一 provider の alias は env credential を共有)。 app_source は InstallConfig.build を credential-zero build phase に thread (template.build より優先)。 opentofu_root は snapshot を root として実行 (templateBinding 禁止)。 manual binding values は template 宣言済み input に限り variableMapping を override。 公式 seed: core / talk / files。 |
@@ -53,6 +53,7 @@ milestone は次のとおり。
 | M8 Policy basic + Activity | §25 / §27 | conformant | takosumi-policy package: provider allowlist (layer 4) / resource allowlist (layer 5、 InstallConfig.policy も評価) / action policy (layer 7: delete・replace → approval) を全 run に適用。 承認規則は「destroy / destructive change / template confirmation」のみ (M3 暫定の非-preview 一律承認は撤廃)。 scope boundary (layer 6) / quota (layer 10) は seam のみ (post-MVP)。 Activity: §27 audit_events (3 backends、 v37) + 主要操作の emission + GET /v1/spaces/:id/activity (secret / output 値は metadata に入れない)。 |
 | M9 `/api` surface + install link | §12 / §30 | conformant | §30 の `/api` surface に cutover (alias なし)。 connection 種別 subroutes (aws assume-role は 501)、 runs logs/events (MVP: diagnostics + audit)、 deployments get + rollback-plan、 output-shares は 501 surface。 internal seam (`/v1/plan-runs` / `/v1/apply-runs` / `/v1/runner-profiles` / `/v1/installations/:id` 読み) は accounts plane / CLI 用に /v1 のまま (公開語彙外)。 `/install` link は platform worker (accounts handler) で parse + URL policy 検証 + dashboard へ 302。 personal Space 自動作成は M10 で配線済み (session bootstrap `GET /v1/account/session/me` から fire-and-forget)。 |
 | M10 Dashboard | §31 | conformant | account-plane session-authed `/v1/control/*` pass-through (operations facade 経由、 dashboard は deploy-control bearer を持たない) + SolidJS views: Space selector / Installations (stale badge + depends-on) / Graph (topo layers) / Install from Git (4-step flow、 `/install` deep-link prefill) / Run summary + approve / RunGroup + approve-all / Activity / Connections (scope + operator defaults)。 Space membership 認可は post-MVP (単一 operator 前提、 module header に記載)。 |
+| M11 conformance 更新 + reference docs 追従 + 全体 gate | 全体 | conformant | reference docs を current 状態に refresh: 本 conformance §2 の invariant map file path を M1 後の path に更新 (該当 path の存在を検証)、 invariant 15 (log redaction) を現状どおり精密化 (source/build/dispatch redaction は稼働、 plan/apply stdout 汎用 scrubber は未強制)、 M2 row を conformant 化。 AGENTS.md Workspace tree を current layout (worker/ + packages/{schema,graph,policy,rootgen,…} + runner-image/ + opentofu-modules/ + dashboard/ + src/{service,runtime-agent,shared,cli} + deploy/) に更新し、 残る `src/service/*` → `worker/src/modules/*` consolidation は本書 M1 row で tracking。 RunnerProfile は public 語彙から外し internal execution profile として整理 (substrate/image/limits、 Connection + CapabilityBinding + policy layer に従属)。 gate: `bunx tsc --noEmit` (docs-only)。 |
 | MVP 外 (OutputShare / remote_state / published_output / backup / drift_check) | §15 / §18 / §33 | pending | §34 の MVP 外宣言どおり。 型と logical schema のみ先行定義。 |
 
 ### 意図的な divergence (gap ではない)
@@ -69,7 +70,8 @@ milestone は次のとおり。
 ## 2. security invariant map
 
 各 invariant (§32) を enforcing code / test に map します。 未強制のものは pending と記します。
-(file path は M1 物理再構成前の現行 path。 M1 で worker/src / packages へ移動後に更新する。)
+(M1 物理再構成は完了済み。 worker/src / packages / runner-image へ移動した path は更新済み。 `src/service/domains/*` は
+まだ consolidation 途中なので §28 の worker/src/modules ではなく現行の src/service path を指す。)
 
 | # | invariant | 状態 | enforcing code / test |
 | --- | --- | --- | --- |
@@ -87,7 +89,7 @@ milestone は次のとおり。
 | 12 | Sensitive output sharing requires explicit policy | conformant | sensitive flagged 出力は spaceOutputs / publicOutputs のどちらにも入らない (leak test in `installation_run_test.ts`)。 explicit 共有 policy は OutputShare (MVP 外) で導入。 |
 | 13 | Cross-Space sharing uses OutputShare | pending | OutputShare は MVP 外。 cross-space dependency は M6 で作成拒否として強制。 |
 | 14 | State, plan, raw outputs are encrypted artifacts | conformant | state/plan/raw outputs すべて暗号化 artifact (raw outputs は DO が §26 key に seal、 `runner_state_r2_test.ts`)。 |
-| 15 | Logs pass through redaction | in-progress | output projection + activity metadata (値なし) は稼働。 runner log redaction の網羅は M11 以降の hardening。 |
+| 15 | Logs pass through redaction | in-progress | source phase の git credential 出力 (`redactCredentialOutput`) と build phase 出力 (`redactBuildOutput` = 既知の全 provider / git credential env 名、 `runner-image/entrypoint.ts`)、 worker dispatch error の defense-in-depth redaction (`worker/src/handler.ts` `redactedDispatchError`)、 output projection + activity metadata (値なし) は稼働。 **未強制**: plan/apply phase の tofu stdout 全文に対する汎用 scrubber は未導入 (現状は既知 credential env 代入 `NAME=...` の strip のみで、 それ以外の形で echo された provider token は捕捉しない)。 網羅は post-MVP hardening。 |
 | 16 | Destroy uses destroy plan and approval | conformant | destroy 2-phase (destroy_plan → approval → destroy_apply)。 |
 
 ---

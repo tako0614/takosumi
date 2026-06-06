@@ -99,17 +99,35 @@ cloud profile (the `deploy/local-substrate/` cloud wrapper imports its server). 
 
 ## Workspace
 
-Current layout (the target layout is spec §28 — `worker/src/modules/*` + `packages/*` + `runner-image/` +
-`opentofu-modules/`; the physical restructure tracks the conformance doc's M1):
+The spec §28 physical restructure (M1) is **done**; this is the current layout. The remaining
+`src/service/*` → `worker/src/modules/*` domain consolidation happens per-domain as each module is rewritten and is
+tracked in the conformance doc (see its M1 row note).
 
 ```text
 takosumi/
 ├── package.json
+├── worker/
+│   └── src/            single-Worker entry (index.ts / handler.ts / routes.ts), durable/ (CoordinationObject,
+│                       OpenTofuRunnerObject), state crypto, D1 stores — the §28 worker shell
+├── packages/
+│   ├── schema/         public control-plane DTOs / contracts (formerly src/contract)
+│   ├── graph/          dependency-DAG topo / cycle rejection
+│   ├── policy/         provider / resource / action policy layers
+│   ├── rootgen/        generated OpenTofu root module
+│   ├── accounts-contract/
+│   ├── accounts-service/
+│   ├── platform-services/
+│   └── cli/
+├── runner-image/       Dockerfile + entrypoint.ts + tofu.rc + provider mirror (Container runner image)
+├── opentofu-modules/   official modules: core / cloudflare-worker-service / cloudflare-r2-storage /
+│                       cloudflare-static-site / aws-s3-storage
+├── dashboard/          dashboard SPA (SolidJS) build
 ├── src/
-│   ├── contract/        public control-plane DTOs and internal reference contracts
-│   ├── service/         service implementation consumed in-process by the platform / product workers
-│   ├── runtime-agent/   internal compatibility code, not a public subpath
-│   └── cli/             CLI implementation
+│   ├── service/        service implementation consumed in-process by the platform / product workers
+│   │                   (domains/* still being consolidated into worker/src/modules/* per conformance M1)
+│   ├── runtime-agent/  internal compatibility code, not a public subpath
+│   ├── shared/         shared runtime primitives (subprocess)
+│   └── cli/            CLI implementation
 ├── deploy/
 │   ├── platform/              operator Takosumi platform worker (app.takosumi.com) build target
 │   ├── accounts-cloudflare/   account-plane handler (in-process entry point)
@@ -147,9 +165,10 @@ bun run lint:json-ld
 
 ## Work Rules
 
-- Keep public contract changes in the contract layer (`src/contract/`, moving to `packages/schema/` per spec §28) and
-  update docs/tests in the same change.
-- Keep service-specific changes in the service layer (`src/service/`, moving to `worker/src/modules/` per spec §28).
+- Keep public contract changes in the contract layer (`packages/schema/` per spec §28) and update docs/tests in the
+  same change.
+- Keep service-specific changes in the service layer (`src/service/`, consolidating into `worker/src/modules/` per spec
+  §28 / conformance M1).
 - Keep API and CLI docs aligned with Space, Source, Connection, Installation, InstallConfig, Dependency, Run, RunGroup,
   Deployment, and OutputSnapshot.
 - Keep the control-plane and account-plane handlers consumable in-process by both build targets (the operator's Takosumi
