@@ -57,6 +57,18 @@ bucket_name = "takosumi-accounts-exports"
 binding = "TAKOS_ARTIFACTS"
 bucket_name = "takos-artifacts"
 
+# Source archive snapshots (immutable per-snapshot tar.zst). Written by the
+# runner DO during a source_sync run, keyed
+# spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst.
+[[r2_buckets]]
+binding = "R2_SOURCE"
+bucket_name = "takosumi-source"
+
+# OpenTofu state backend (used from M2).
+[[r2_buckets]]
+binding = "R2_STATE"
+bucket_name = "takosumi-state"
+
 # Coordination leases/alarms for the deploy-control plane.
 [[durable_objects.bindings]]
 name = "TAKOS_COORDINATION"
@@ -115,6 +127,12 @@ dead_letter_queue = "takosumi-opentofu-runs-dlq"
 queue = "takosumi-opentofu-runs-dlq"
 max_batch_size = 10
 max_batch_timeout = 5
+
+# Scheduled source polling (Core Specification §6). Every 5 minutes the worker's
+# scheduled() handler scans active autoSync sources and enqueues a deduped
+# source_sync (the consumer ls-remotes and only snapshots when the ref moved).
+[triggers]
+crons = ["*/5 * * * *"]
 
 [vars]
 TAKOSUMI_ACCOUNTS_ISSUER = "https://app.takosumi.com"

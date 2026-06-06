@@ -1245,4 +1245,54 @@ drop table if exists takosumi_connections;`,
 );`,
       down: `drop table if exists takosumi_plan_run_inputs;`,
     },
+    {
+      id: "deploy.takosumi_sources.create",
+      version: 32,
+      domain: "deploy",
+      description:
+        "Create the Source / SourceSnapshot / SourceSyncRun ledger (Core Specification §6). source_json carries the public Source plus internal hook-secret hash / lastSeenCommit / autoSync; the hook-secret plaintext and any git credential value never land in the database.",
+      sql: `create table if not exists takosumi_sources (
+  id          text   primary key,
+  space_id    text   not null,
+  status      text   not null
+    check (status in ('active','disabled','error')),
+  source_json jsonb  not null,
+  created_at  text   not null,
+  updated_at  text   not null
+);
+create index if not exists takosumi_sources_space_idx
+  on takosumi_sources (space_id);
+create index if not exists takosumi_sources_status_idx
+  on takosumi_sources (status);
+create table if not exists takosumi_source_snapshots (
+  id            text   primary key,
+  source_id     text   not null,
+  snapshot_json jsonb  not null,
+  fetched_at    text   not null
+);
+create index if not exists takosumi_source_snapshots_source_idx
+  on takosumi_source_snapshots (source_id, fetched_at);
+create table if not exists takosumi_source_sync_runs (
+  id         text   primary key,
+  source_id  text   not null,
+  space_id   text   not null,
+  status     text   not null
+    check (status in ('queued','running','succeeded','failed')),
+  run_json   jsonb  not null,
+  created_at text   not null,
+  updated_at text   not null
+);
+create index if not exists takosumi_source_sync_runs_source_idx
+  on takosumi_source_sync_runs (source_id, created_at);
+create index if not exists takosumi_source_sync_runs_status_idx
+  on takosumi_source_sync_runs (status);`,
+      down: `drop index if exists takosumi_source_sync_runs_status_idx;
+drop index if exists takosumi_source_sync_runs_source_idx;
+drop table if exists takosumi_source_sync_runs;
+drop index if exists takosumi_source_snapshots_source_idx;
+drop table if exists takosumi_source_snapshots;
+drop index if exists takosumi_sources_status_idx;
+drop index if exists takosumi_sources_space_idx;
+drop table if exists takosumi_sources;`,
+    },
   ]);

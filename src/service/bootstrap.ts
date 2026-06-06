@@ -35,6 +35,20 @@ import {
   OpenTofuDeploymentController,
   type OpenTofuRunner,
 } from "./domains/deploy-control/mod.ts";
+import {
+  type EnqueueSourceSync,
+  SourcesService,
+} from "./domains/sources/mod.ts";
+import type {
+  CreateSourceRequest,
+  CreateSourceResponse,
+  CreateSourceSyncResponse,
+  ListSourcesResponse,
+  ListSourceSnapshotsResponse,
+  PatchSourceRequest,
+  SourceResponse,
+  SourceSyncRun,
+} from "takosumi-contract/sources";
 import type {
   ApplyRunResponse,
   CreateApplyRunRequest,
@@ -46,8 +60,9 @@ import type {
   PlanRunResponse,
   RunnerProfile,
 } from "takosumi-contract/deploy-control-api";
-import type {
-  OpenTofuDeploymentStore,
+import {
+  InMemoryOpenTofuDeploymentStore,
+  type OpenTofuDeploymentStore,
 } from "./domains/deploy-control/store.ts";
 import {
   SqlOpenTofuDeploymentStore,
@@ -212,6 +227,13 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * (preserving create-executes-run for local / node substrates and tests).
    */
   readonly enqueueRun?: EnqueueRun;
+  /**
+   * Out-of-process source-sync dispatch seam (Core Specification §6). The
+   * Workers adapter injects a producer that enqueues onto the run queue with
+   * `action: "source_sync"`; when omitted the source-sync run stays queued for an
+   * external consumer.
+   */
+  readonly enqueueSourceSync?: EnqueueSourceSync;
   readonly runnerProfiles?: readonly RunnerProfile[];
   readonly defaultRunnerProfileId?: string;
 }
@@ -242,8 +264,31 @@ export interface TakosumiOperations {
    * idempotency guard, mints credentials, and drives the container dispatch.
    */
   dispatchQueuedRun(
-    dispatch: { action: "plan" | "apply"; runId: string; spaceId: string },
+    dispatch: {
+      action: "plan" | "apply" | "source_sync";
+      runId: string;
+      spaceId: string;
+    },
   ): Promise<void>;
+  // --- Sources (Core Specification §6) ---
+  createSource(request: CreateSourceRequest): Promise<CreateSourceResponse>;
+  listSources(spaceId: string): Promise<ListSourcesResponse>;
+  getSource(id: string): Promise<SourceResponse>;
+  patchSource(id: string, patch: PatchSourceRequest): Promise<SourceResponse>;
+  createSourceSync(
+    sourceId: string,
+    options?: { readonly dedupe?: boolean },
+  ): Promise<CreateSourceSyncResponse>;
+  listSourceSnapshots(sourceId: string): Promise<ListSourceSnapshotsResponse>;
+  getSourceSyncRun(id: string): Promise<SourceSyncRun>;
+  /**
+   * Verifies a per-source webhook bearer against the stored hook-secret hash.
+   * Used by the platform worker's `/hooks/sources/:id` route.
+   */
+  verifySourceHookSecret(
+    sourceId: string,
+    presentedSecret: string,
+  ): Promise<boolean>;
 }
 
 export interface CreatedTakosumiService {
@@ -324,10 +369,26 @@ export async function createTakosumiService(
     allowUnsafeProductionDefaults:
       runtimeConfig.allowUnsafeProductionDefaults ?? false,
   });
+  // Resolve a single concrete store so the controller and the Source domain
+  // service share the SAME ledger (when no durable store is injected the
+  // controller would otherwise build its own private in-memory store, leaving
+  // the SourcesService backed by a different instance).
+  const sharedOpenTofuStore = opentofuStore.store ??
+    new InMemoryOpenTofuDeploymentStore();
+  // Source domain service (Core Specification §6). The source REST API, webhook,
+  // and scheduler all reach it through the controller. The source_sync producer
+  // (when bound) enqueues onto the run queue with `action: "source_sync"`.
+  const sourcesService = new SourcesService({
+    store: sharedOpenTofuStore,
+    ...(options.enqueueSourceSync
+      ? { enqueueSourceSync: options.enqueueSourceSync }
+      : {}),
+  });
   const opentofuController = new OpenTofuDeploymentController({
-    ...(opentofuStore.store ? { store: opentofuStore.store } : {}),
+    store: sharedOpenTofuStore,
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
     ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),
+    sourcesService,
     ...(options.runnerProfiles ? { runnerProfiles: options.runnerProfiles } : {}),
     ...(options.defaultRunnerProfileId
       ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
@@ -403,6 +464,17 @@ export async function createTakosumiService(
       opentofuController.listDeploymentOutputs(installationId),
     dispatchQueuedRun: (dispatch) =>
       opentofuController.dispatchQueuedRun(dispatch),
+    createSource: (request) => opentofuController.createSource(request),
+    listSources: (spaceId) => opentofuController.listSources(spaceId),
+    getSource: (id) => opentofuController.getSource(id),
+    patchSource: (id, patch) => opentofuController.patchSource(id, patch),
+    createSourceSync: (sourceId, opts) =>
+      opentofuController.createSourceSync(sourceId, opts ?? {}),
+    listSourceSnapshots: (sourceId) =>
+      opentofuController.listSourceSnapshots(sourceId),
+    getSourceSyncRun: (id) => opentofuController.getSourceSyncRun(id),
+    verifySourceHookSecret: (sourceId, presentedSecret) =>
+      opentofuController.verifySourceHookSecret(sourceId, presentedSecret),
   };
   return { app, context, role, workerDaemon, operations };
 }

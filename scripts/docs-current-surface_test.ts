@@ -35,20 +35,22 @@ const RETIRED_DOC_PATHS = [
   docPath("reference", "public-spec-source-" + "map.md"),
 ] as const;
 
-const RETIRED_DOC_TERMS = [
+const RETIRED_DOC_TERMS: readonly (string | RegExp)[] = [
   "App" + "Spec",
   // The retired `.takosumi/` in-repo metadata convention (trailing slash keeps
   // legitimate hostnames like app.takosumi.com out of this check).
   "." + "takosumi/",
   "takosumi-" + "cloud",
-  "Takosumi " + "Cloud",
+  // Word-bounded: the retired product name must not match "Takosumi Cloudflare"
+  // (= service-owned Cloudflare wording in the core spec).
+  new RegExp("\\bTakosumi " + "Cloud\\b"),
   "takosumi-" + "plugins",
   "official " + "catalog",
   "kind " + "descriptor",
   "backend " + "plugin",
   "Deno" + "-first",
   "dn" + "t",
-] as const;
+];
 
 test("Takosumi docs are rebuilt around current OpenTofu-native surface", async () => {
   for (const path of REQUIRED_DOCS) {
@@ -65,7 +67,8 @@ test("Takosumi docs are rebuilt around current OpenTofu-native surface", async (
 
   const docs = await readDocs();
   for (const term of RETIRED_DOC_TERMS) {
-    assert.equal(docs.includes(term), false, `retired docs term: ${term}`);
+    const hit = typeof term === "string" ? docs.includes(term) : term.test(docs);
+    assert.equal(hit, false, `retired docs term: ${term}`);
   }
 
   assert.match(docs, /OpenTofu-native deploy control plane/);

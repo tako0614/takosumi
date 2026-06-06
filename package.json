@@ -13,7 +13,7 @@
   "scripts": {
     "check": "tsc --noEmit && bun run check:cloudflare-worker-build",
     "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers deploy/cloudflare/src/worker.ts --outfile /tmp/takosumi-cf-worker-check.mjs && bun build --target browser --format esm deploy/cloudflare/src/wfp_dispatch_worker.ts --outfile /tmp/takosumi-wfp-dispatch-worker-check.mjs",
-    "test": "bun test ./src/ ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./packages/platform-services/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src ./deploy/cloudflare/src",
+    "test": "bun test ./src/ ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./packages/platform-services/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src ./deploy/cloudflare/src ./deploy/platform",
     "test:service": "bun test ./src/",
     "test:accounts": "bun test ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src",
     "test:scripts": "bun test ./scripts/",
