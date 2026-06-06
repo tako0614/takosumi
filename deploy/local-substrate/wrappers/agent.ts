@@ -15,7 +15,7 @@
  * registry implementation.
  */
 import { serveRuntimeAgent } from "/workspace/src/runtime-agent/server.ts";
-import { LIFECYCLE_AGENT_TOKEN_ENV } from "/workspace/src/contract/runtime-agent-lifecycle.ts";
+import { LIFECYCLE_AGENT_TOKEN_ENV } from "/workspace/packages/schema/src/runtime-agent-lifecycle.ts";
 import { currentRuntime } from "/workspace/src/service/shared/runtime/index.ts";
 import { buildLocalSubstrateRegistry } from "/local-substrate-factories/local-substrate-factories.ts";
 

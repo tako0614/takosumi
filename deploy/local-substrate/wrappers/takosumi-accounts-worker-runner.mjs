@@ -16,7 +16,7 @@
  * ============================================================================
  *
  * Boots the takosumi Accounts Worker (the bundle produced by
- * `bun build` from takosumi/deploy/cloudflare/src/worker.ts)
+ * `bun build` from takosumi/worker/src/index.ts)
  * inside Miniflare with local D1 and R2 bindings. Mirrors the
  * accounts.takosumi.com production setup, just substituting Cloudflare D1/R2
  * with miniflare's emulated stores under /data.

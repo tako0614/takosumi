@@ -9,12 +9,12 @@ import {
   type OpenTofuDeploymentStore,
   type StoredSecretBlob,
 } from "./store.ts";
-import { CloudflareD1OpenTofuDeploymentStore } from "../../../../deploy/cloudflare/src/d1_opentofu_store.ts";
+import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import type {
   D1Database,
   D1PreparedStatement,
   D1Result,
-} from "../../../../deploy/cloudflare/src/bindings.ts";
+} from "../../../../worker/src/bindings.ts";
 import type { Connection } from "takosumi-contract/deploy-control-api";
 
 // -- Minimal D1 fake for the takosumi_cf_opentofu_ledger namespace table -------

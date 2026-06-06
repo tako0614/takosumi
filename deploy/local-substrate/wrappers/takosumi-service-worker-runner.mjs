@@ -56,11 +56,11 @@ const mf = new Miniflare({
   compatibilityFlags: ["nodejs_compat"],
   d1Databases: { TAKOS_D1: "takosumi-service" },
   d1Persist: "/data/d1",
-  r2Buckets: ["TAKOS_ARTIFACTS"],
+  r2Buckets: ["R2_ARTIFACTS"],
   r2Persist: "/data/r2",
   durableObjects: {
-    TAKOS_COORDINATION: {
-      className: "TakosCoordinationObject",
+    COORDINATION: {
+      className: "CoordinationObject",
       useSQLite: true,
     },
   },

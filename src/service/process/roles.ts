@@ -5,7 +5,7 @@
  * product root. They are not semantic microservice boundaries.
  *
  * The live worker only instantiates `takosumi-api` and `takosumi-runtime-agent`
- * (see `deploy/cloudflare/src/handler.ts`); `takosumi-worker` remains as the
+ * (see `worker/src/handler.ts`); `takosumi-worker` remains as the
  * background-daemon entrypoint consumed by `bootstrap/worker_daemon.ts` and the
  * Bun server target. The previous per-role capability/guard matrix (a stale
  * microservice model that was never enforced) has been removed.

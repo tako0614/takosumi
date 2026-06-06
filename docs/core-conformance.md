@@ -43,7 +43,7 @@ milestone は次のとおり。
 | Source / SourceSnapshot | §6 / §7 | conformant | 旧 M1 実装を流用。 URL policy / webhook / polling / source_sync 稼働。 |
 | Connection vault + per-phase mint | §8 / §32 | conformant | SecretBlob seal + phase mint (source→git / build→空 / plan・apply→provider)。 |
 | 暗号化 state + generation guard | §20 / §32 | conformant | R2_STATE + current.json + StateSnapshot 世代管理 (旧 M2 実装を流用)。 |
-| **M1 物理再構成 (§28 layout)** | §28 / §29 | in-progress | worker/src + packages + runner-image + opentofu-modules への移動。 alias seam 原子更新。 |
+| **M1 物理再構成 (§28 layout)** | §28 / §29 | conformant | worker/src (entry/durable) + packages/{schema,rootgen,graph} + runner-image + opentofu-modules を §28 配置に移動、 binding/class 名を §29 に整合。 `src/service/domains/*` の `worker/src/modules/*` への移設は各 milestone でその domain を書き換える際に行う (M3+)。 |
 | M2 新 contract 型 | §4-§21 | pending | |
 | M3 モデル移行 (lanes 廃止 / §27 schema / runs 統合) | §5 / §19 / §27 | pending | App / Environment / InstallProfile を Installation + InstallConfig に置換。 |
 | M4 operator defaults + CapabilityBinding | §8 / §9 | pending | |
@@ -70,7 +70,7 @@ milestone は次のとおり。
 | # | invariant | 状態 | enforcing code / test |
 | --- | --- | --- | --- |
 | 1 | Public API returns no raw secret | conformant | `src/service/api/deploy_control_connection_routes_test.ts`。 |
-| 2 | User source build runs in Container | conformant | runner container (`deploy/cloudflare/runner/`)。 Worker は build を実行しない。 |
+| 2 | User source build runs in Container | conformant | runner container (`runner-image/`)。 Worker は build を実行しない。 |
 | 3 | Build phase receives build inputs only | conformant | build mint 常に空。 vault `mintForPhase` + `phase_mint_test.ts`。 |
 | 4 | Source phase receives Git credential only | conformant | source phase mint を git-kind に限定。 `src/service/adapters/vault/mod.ts`。 |
 | 5 | Plan/apply phase receives provider credentials only | conformant | plan/apply/destroy は provider のみ。 vault mint policy で強制。 |
@@ -94,8 +94,8 @@ milestone は次のとおり。
 - vault mint / seal: `src/service/adapters/vault/mod.ts` (+ `phase_mint_test.ts`)。
 - async run lifecycle (digest / generation guard / immutable plan artifact):
   `src/service/domains/deploy-control/async_run_lifecycle_test.ts`。
-- state encryption: `deploy/cloudflare/src/state_crypto.ts`。
-- coordination lease: `deploy/cloudflare/src/coordination_object.ts`。
+- state encryption: `worker/src/state_crypto.ts`。
+- coordination lease: `worker/src/durable/CoordinationObject.ts`。
 - output projection: `src/service/domains/outputs/projection.ts`。
-- generated root: `src/service/domains/rootgen/mod.ts`。
+- generated root: `packages/rootgen/src/mod.ts`。
 - forge 非依存 guard: root `scripts/check-no-legacy-names.mjs`。
