@@ -21,6 +21,12 @@ import type { Space } from "takosumi-contract/spaces";
 import type { OperatorConnectionDefault } from "takosumi-contract/capability-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
 import type { SourceSyncRun } from "takosumi-contract/sources";
+import type {
+  Dependency,
+  DependencySnapshot,
+} from "takosumi-contract/dependencies";
+import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { RunGroup } from "takosumi-contract/runs";
 
 /**
  * Minimal in-memory SQL client that interprets exactly the Space-direct model
@@ -421,6 +427,73 @@ function sourceSyncRun(over: Partial<SourceSyncRun> = {}): SourceSyncRun {
   };
 }
 
+function dependency(over: Partial<Dependency> = {}): Dependency {
+  return {
+    id: "dep_edge_1",
+    spaceId: "space_1",
+    producerInstallationId: "inst_producer",
+    consumerInstallationId: "inst_consumer",
+    mode: "variable_injection",
+    outputs: {
+      bucket_name: { from: "bucket_name", to: "bucket", required: true },
+    },
+    visibility: "space",
+    createdAt: TS,
+    ...over,
+  };
+}
+
+function dependencySnapshot(
+  over: Partial<DependencySnapshot> = {},
+): DependencySnapshot {
+  return {
+    id: "depsnap_1",
+    runId: "run_plan_1",
+    mode: "strict",
+    dependencies: [
+      {
+        dependencyId: "dep_edge_1",
+        producerInstallationId: "inst_producer",
+        producerStateGeneration: 3,
+        producerOutputSnapshotId: "out_3",
+        producerOutputDigest: "sha256:prod",
+        valuesDigest: "sha256:vals",
+        values: { bucket: "my-bucket" },
+      },
+    ],
+    createdAt: TS,
+    ...over,
+  };
+}
+
+function outputSnapshot(over: Partial<OutputSnapshot> = {}): OutputSnapshot {
+  return {
+    id: "out_1",
+    spaceId: "space_1",
+    installationId: "inst_1",
+    stateGeneration: 1,
+    rawOutputArtifactKey:
+      "spaces/space_1/installations/inst_1/runs/run_apply_1/outputs.raw.json.enc",
+    publicOutputs: { launch_url: "https://x.example" },
+    spaceOutputs: { launch_url: "https://x.example", bucket_name: "my-bucket" },
+    outputDigest: "sha256:out1",
+    createdAt: TS,
+    ...over,
+  };
+}
+
+function runGroup(over: Partial<RunGroup> = {}): RunGroup {
+  return {
+    id: "rg_1",
+    spaceId: "space_1",
+    type: "space_update",
+    status: "queued",
+    graphJson: JSON.stringify({ order: [["inst_1"]], runs: { inst_1: "run_1" } }),
+    createdAt: TS,
+    ...over,
+  };
+}
+
 // Run the same assertions against both store implementations so the in-memory
 // dev/test store and the SQL production store stay symmetric.
 function bothStores(): readonly [string, OpenTofuDeploymentStore][] {
@@ -703,16 +776,130 @@ test("runs table: plan/apply/source_sync rows verify kind", async () => {
 
     const forSource = await store.listSourceSyncRuns("src_1");
     expect(forSource.map((r) => r.id), label).toEqual(["ssr_a", "ssr_b"]);
+
+    // A PlanRun created as a RunGroup member round-trips its runGroupId (§19).
+    await store.putPlanRun(makePlanRun("run_plan_grp", { runGroupId: "rg_x" }));
+    expect((await store.getPlanRun("run_plan_grp"))?.runGroupId, label)
+      .toBe("rg_x");
+  }
+});
+
+test("Dependency store: CRUD + list by space / consumer / producer are symmetric", async () => {
+  for (const [label, store] of bothStores()) {
+    // Two edges in space_1 sharing a producer; one unrelated edge in space_2.
+    await store.putDependency(
+      dependency({
+        id: "edge_a",
+        producerInstallationId: "inst_p",
+        consumerInstallationId: "inst_c1",
+      }),
+    );
+    await store.putDependency(
+      dependency({
+        id: "edge_b",
+        producerInstallationId: "inst_p",
+        consumerInstallationId: "inst_c2",
+        createdAt: "2026-06-07T00:00:00.000Z",
+      }),
+    );
+    await store.putDependency(
+      dependency({
+        id: "edge_other",
+        spaceId: "space_2",
+        producerInstallationId: "inst_x",
+        consumerInstallationId: "inst_y",
+      }),
+    );
+
+    expect((await store.getDependency("edge_a"))?.consumerInstallationId, label)
+      .toBe("inst_c1");
+    expect(await store.getDependency("missing"), label).toBeUndefined();
+
+    const bySpace = await store.listDependenciesBySpace("space_1");
+    expect(bySpace.map((d) => d.id), label).toEqual(["edge_a", "edge_b"]);
+
+    const byProducer = await store.listDependenciesForProducer("inst_p");
+    expect(byProducer.map((d) => d.id), label).toEqual(["edge_a", "edge_b"]);
+
+    const byConsumer = await store.listDependenciesForConsumer("inst_c2");
+    expect(byConsumer.map((d) => d.id), label).toEqual(["edge_b"]);
+
+    expect(await store.deleteDependency("edge_a"), label).toBe(true);
+    expect(await store.deleteDependency("edge_a"), label).toBe(false);
+    expect((await store.listDependenciesBySpace("space_1")).map((d) => d.id), label)
+      .toEqual(["edge_b"]);
+  }
+});
+
+test("DependencySnapshot store: put/get round-trips the pinned values", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putDependencySnapshot(
+      dependencySnapshot({ id: "ds_a", runId: "run_p" }),
+    );
+    const got = await store.getDependencySnapshot("ds_a");
+    expect(got?.runId, label).toBe("run_p");
+    expect(got?.mode, label).toBe("strict");
+    expect(got?.dependencies[0]?.values, label).toEqual({ bucket: "my-bucket" });
+    expect(await store.getDependencySnapshot("missing"), label).toBeUndefined();
+  }
+});
+
+test("OutputSnapshot store: put/get + latest by state generation are symmetric", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putOutputSnapshot(
+      outputSnapshot({ id: "out_g1", stateGeneration: 1 }),
+    );
+    await store.putOutputSnapshot(
+      outputSnapshot({ id: "out_g3", stateGeneration: 3 }),
+    );
+    await store.putOutputSnapshot(
+      outputSnapshot({ id: "out_g2", stateGeneration: 2 }),
+    );
+    // A different installation is isolated from the latest lookup.
+    await store.putOutputSnapshot(
+      outputSnapshot({ id: "out_other", installationId: "inst_2", stateGeneration: 9 }),
+    );
+
+    expect((await store.getOutputSnapshot("out_g2"))?.stateGeneration, label).toBe(2);
+    expect(await store.getOutputSnapshot("missing"), label).toBeUndefined();
+
+    // Latest by generation -> the gen-3 snapshot for inst_1.
+    const latest = await store.getLatestOutputSnapshot("inst_1");
+    expect(latest?.id, label).toBe("out_g3");
+    expect(latest?.stateGeneration, label).toBe(3);
+    expect((await store.getLatestOutputSnapshot("inst_2"))?.id, label).toBe("out_other");
+    expect(await store.getLatestOutputSnapshot("missing"), label).toBeUndefined();
+  }
+});
+
+test("RunGroup store: put/get/list-by-space round-trip", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putRunGroup(runGroup({ id: "rg_a" }));
+    await store.putRunGroup(
+      runGroup({ id: "rg_b", createdAt: "2026-06-07T00:00:00.000Z" }),
+    );
+    await store.putRunGroup(runGroup({ id: "rg_other", spaceId: "space_2" }));
+
+    const got = await store.getRunGroup("rg_a");
+    expect(got?.type, label).toBe("space_update");
+    expect(JSON.parse(got!.graphJson).order, label).toEqual([["inst_1"]]);
+    expect(await store.getRunGroup("missing"), label).toBeUndefined();
+
+    const forSpace = await store.listRunGroups("space_1");
+    expect(forSpace.map((g) => g.id), label).toEqual(["rg_a", "rg_b"]);
+    expect((await store.listRunGroups("space_2")).map((g) => g.id), label)
+      .toEqual(["rg_other"]);
   }
 });
 
 // --- internal run-record fixtures (epoch-number timestamps) -----------------
 
-function makePlanRun(id: string) {
+function makePlanRun(id: string, over: { readonly runGroupId?: string } = {}) {
   return {
     id,
     spaceId: "space_1",
     installationId: "inst_1",
+    ...(over.runGroupId ? { runGroupId: over.runGroupId } : {}),
     source: { kind: "git" as const, url: "https://example.com/repo.git" },
     sourceDigest: "sha256:src",
     operation: "apply" as const,

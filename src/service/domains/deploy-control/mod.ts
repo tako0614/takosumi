@@ -101,6 +101,7 @@ import {
   normalizePlanSummary,
   projectTemplatePublicOutputs,
   redactRunDiagnostics,
+  spaceOutputsFromOpenTofu,
   stateLockEvidence,
 } from "./projection.ts";
 import { evaluateTemplatePlanPolicy } from "./template_policy.ts";
@@ -117,7 +118,15 @@ import {
   type GeneratedRootInstallType,
   generateRootModule,
 } from "takosumi-rootgen";
+import { downstreamClosure } from "takosumi-graph";
 import type { Run } from "takosumi-contract/runs";
+import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type {
+  Dependency,
+  DependencySnapshot,
+  DependencySnapshotEntry,
+  DependencySnapshotMode,
+} from "takosumi-contract/dependencies";
 import {
   projectApplyRun,
   projectPlanRun,
@@ -242,6 +251,13 @@ export interface OpenTofuApplyResult {
    * Absent for runs without environment context (no R2_STATE persist).
    */
   readonly stateDigest?: string;
+  /**
+   * R2_ARTIFACTS key of the encrypted raw `tofu output -json` envelope, echoed
+   * by the runner DO after it sealed + wrote the object (M7 env-driven runs).
+   * Recorded as {@link OutputSnapshot.rawOutputArtifactKey}. Absent for runs
+   * without environment context (the DO does not persist the raw envelope).
+   */
+  readonly rawOutputsKey?: string;
 }
 
 export interface OpenTofuDestroyResult {
@@ -410,6 +426,30 @@ interface PlanRunInternalContext {
   readonly baseStateGeneration?: number;
   /** Install-type wiring for an installation-driven template plan (§13). */
   readonly installTypePlan?: InstallTypePlanContext;
+  /**
+   * RunGroup this plan belongs to (spec §19 / §24). Stamped onto the PlanRun by
+   * the RunGroup space-update path so the §19 Run projects `runGroupId` and the
+   * group status can be computed from its member runs. Absent for standalone
+   * plans.
+   */
+  readonly runGroupId?: string;
+}
+
+/**
+ * Resolved consumer Dependencies for an installation-driven plan (spec §15 / §17
+ * variable_injection). Built at plan creation BEFORE the run row exists:
+ *   - `injectedValues` are the producer-output values keyed by the consumer
+ *     input name (each mapping's `to`), merged into the plan inputs / variables;
+ *   - `entries` are the DependencySnapshotEntry pins (one per edge) minus the
+ *     run-level fields; the runId is stamped onto the snapshot, not the entries;
+ *   - `mode` is `strict` for a production consumer, else `pinned` (§17).
+ *
+ * Diagnostics carry only digests (never values).
+ */
+interface ResolvedDependencies {
+  readonly injectedValues: Readonly<Record<string, JsonValue>>;
+  readonly entries: readonly DependencySnapshotEntry[];
+  readonly mode: DependencySnapshotMode;
 }
 
 /**
@@ -420,6 +460,16 @@ interface PlanRunInternalContext {
  */
 export interface CreateInstallationPlanRequest {
   readonly installationId: string;
+}
+
+/**
+ * Internal options for an installation-driven plan created as a RunGroup member
+ * (spec §19 / §24). The RunGroupsService passes the group id so the plan (and
+ * its eventual apply) projects `runGroupId` onto the §19 Run. Not part of the
+ * public create request.
+ */
+export interface CreateInstallationPlanInternal {
+  readonly runGroupId?: string;
 }
 
 export class OpenTofuDeploymentController {
@@ -556,6 +606,7 @@ export class OpenTofuDeploymentController {
       ...(internal.installationContext
         ? { installationContext: internal.installationContext }
         : {}),
+      ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
       ...(templatePlan
         ? {
           templateBinding: {
@@ -638,8 +689,14 @@ export class OpenTofuDeploymentController {
   async createInstallationPlan(
     installationId: string,
     context: DeployControlActorContext = {},
+    internal: CreateInstallationPlanInternal = {},
   ): Promise<PlanRunResponse> {
-    return await this.#createInstallationPlanRun(installationId, false, context);
+    return await this.#createInstallationPlanRun(
+      installationId,
+      false,
+      context,
+      internal,
+    );
   }
 
   /**
@@ -659,6 +716,7 @@ export class OpenTofuDeploymentController {
     installationId: string,
     destroy: boolean,
     context: DeployControlActorContext,
+    internal: CreateInstallationPlanInternal = {},
   ): Promise<PlanRunResponse> {
     await this.#seededProfiles;
     requireNonEmptyString(installationId, "installationId");
@@ -717,12 +775,173 @@ export class OpenTofuDeploymentController {
       installationId: installation.id,
       environment: installation.environment,
     };
-    return await this.createPlanRun(planRequest, context, {
+    // Dependency variable_injection (spec §15 / §17). A destroy plan does NOT
+    // inject dependency values: there is nothing to wire into a teardown, and the
+    // pinned producer outputs would be irrelevant. For plan/update, resolve the
+    // consumer's Dependencies, read each producer's OutputSnapshot, build the
+    // injected values, and merge them into the plan inputs (template) / variables
+    // (raw module) BEFORE the run is created. The DependencySnapshot is pinned
+    // AFTER the run row exists (runId known), then the planRun is re-put with its
+    // id (order: resolve -> inject -> create plan -> snapshot -> re-put).
+    const resolvedDeps = destroy
+      ? undefined
+      : await this.#resolveConsumerDependencies(installation);
+    const injectedRequest = resolvedDeps
+      ? this.#injectDependencyValues(planRequest, resolvedDeps.injectedValues)
+      : planRequest;
+    const response = await this.createPlanRun(injectedRequest, context, {
       installationContext,
       sourceSnapshotId: snapshot.id,
       baseStateGeneration,
       ...(installTypePlan ? { installTypePlan } : {}),
+      ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
     });
+    if (!resolvedDeps || resolvedDeps.entries.length === 0) {
+      return response;
+    }
+    // Pin the DependencySnapshot against the just-created run, record it, and
+    // re-put the PlanRun carrying its id so the apply consumer re-reads + verifies
+    // it (invariant 9). Return the updated PlanRun.
+    return await this.#pinDependencySnapshot(response.planRun, resolvedDeps);
+  }
+
+  /**
+   * Resolves a consumer Installation's Dependencies into the injected values +
+   * pinned snapshot entries (spec §15 / §17). For each `variable_injection` edge
+   * it reads the producer's current OutputSnapshot and pulls each mapped output
+   * (`from`) into the injected values under the consumer input name (`to`). A
+   * required mapping whose producer output is absent (no current OutputSnapshot,
+   * or the named output is missing) is a typed `failed_precondition`
+   * (`dependency_outputs_unavailable`). Returns `undefined` when the consumer has
+   * no Dependencies. The snapshot `mode` is `strict` for a production environment,
+   * else `pinned` (§17).
+   */
+  async #resolveConsumerDependencies(
+    consumer: Installation,
+  ): Promise<ResolvedDependencies | undefined> {
+    const dependencies = await this.#store.listDependenciesForConsumer(
+      consumer.id,
+    );
+    if (dependencies.length === 0) return undefined;
+    const injectedValues: Record<string, JsonValue> = {};
+    const entries: DependencySnapshotEntry[] = [];
+    for (const dependency of dependencies) {
+      // MVP supports variable_injection only; the DependenciesService rejects
+      // other modes at creation, but guard here too (a stored remote_state /
+      // published_output edge cannot be honored yet).
+      if (dependency.mode !== "variable_injection") {
+        throw new OpenTofuControllerError(
+          "not_implemented",
+          `dependency ${dependency.id} mode ${dependency.mode} is not ` +
+            `implemented (only variable_injection is supported)`,
+        );
+      }
+      const producer = await this.#store.getInstallation(
+        dependency.producerInstallationId,
+      );
+      if (!producer) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `dependency_outputs_unavailable: dependency ${dependency.id} producer ` +
+            `installation ${dependency.producerInstallationId} not found`,
+        );
+      }
+      const outputSnapshot = producer.currentOutputSnapshotId
+        ? await this.#store.getOutputSnapshot(producer.currentOutputSnapshotId)
+        : undefined;
+      const values: Record<string, JsonValue> = {};
+      for (const mapping of Object.values(dependency.outputs)) {
+        const available = outputSnapshot?.spaceOutputs ?? {};
+        const present = Object.prototype.hasOwnProperty.call(
+          available,
+          mapping.from,
+        );
+        if (!present) {
+          if (mapping.required) {
+            throw new OpenTofuControllerError(
+              "failed_precondition",
+              `dependency_outputs_unavailable: dependency ${dependency.id} ` +
+                `requires producer output ${mapping.from} which the producer ` +
+                `installation ${producer.id} has not published`,
+            );
+          }
+          // An optional mapping with no producer value contributes nothing.
+          continue;
+        }
+        const value = available[mapping.from] as JsonValue;
+        values[mapping.to] = value;
+        injectedValues[mapping.to] = value;
+      }
+      // Pin the snapshot entry even when no producer output existed yet so the
+      // apply-time tamper check has the full edge set; the values digest is over
+      // exactly what was injected for this edge.
+      const valuesDigest = await stableJsonDigest(values);
+      entries.push({
+        dependencyId: dependency.id,
+        producerInstallationId: producer.id,
+        producerStateGeneration: producer.currentStateGeneration,
+        producerOutputSnapshotId: outputSnapshot?.id ?? "",
+        producerOutputDigest: outputSnapshot?.outputDigest ?? "",
+        valuesDigest,
+        values,
+      });
+    }
+    const mode: DependencySnapshotMode =
+      consumer.environment.trim().toLowerCase() === "production"
+        ? "strict"
+        : "pinned";
+    return { injectedValues, entries, mode };
+  }
+
+  /**
+   * Merges the dependency-injected values into a plan request (spec §15). A
+   * template-backed request (carries `templateId`) merges into `inputs` (only
+   * keys the template would accept; `validateTemplateInputs` downstream rejects
+   * unknown keys, so the injected `to` names MUST be declared template inputs —
+   * a required mapping to an undeclared input surfaces as `failed_precondition`
+   * via the template validator); a raw-module request merges into `variables`.
+   * Injected values win on a key collision (they are the resolved producer
+   * outputs the consumer was wired to consume).
+   */
+  #injectDependencyValues(
+    request: CreatePlanRunRequest,
+    injectedValues: Readonly<Record<string, JsonValue>>,
+  ): CreatePlanRunRequest {
+    if (Object.keys(injectedValues).length === 0) return request;
+    if (request.templateId !== undefined) {
+      return {
+        ...request,
+        inputs: { ...(request.inputs ?? {}), ...injectedValues },
+      };
+    }
+    return {
+      ...request,
+      variables: { ...(request.variables ?? {}), ...injectedValues },
+    };
+  }
+
+  /**
+   * Records the DependencySnapshot for a created PlanRun and re-puts the run with
+   * its id (spec §17). The snapshot pins exactly the entries resolved at plan
+   * creation; the apply consumer re-reads it to verify producer state generations
+   * (strict mode) + recompute the values digests (tamper check) before applying.
+   * Returns the updated PlanRunResponse.
+   */
+  async #pinDependencySnapshot(
+    planRun: PlanRun,
+    resolved: ResolvedDependencies,
+  ): Promise<PlanRunResponse> {
+    const snapshot: DependencySnapshot = {
+      id: this.#newId("depsnap"),
+      runId: planRun.id,
+      dependencies: resolved.entries,
+      mode: resolved.mode,
+      createdAt: new Date(this.#now()).toISOString(),
+    };
+    await this.#store.putDependencySnapshot(snapshot);
+    const updated: PlanRun = { ...planRun, dependencySnapshotId: snapshot.id };
+    await this.#store.putPlanRun(updated);
+    return { planRun: updated };
   }
 
   /**
@@ -1454,6 +1673,63 @@ export class OpenTofuDeploymentController {
   }
 
   /**
+   * Verifies the plan's pinned DependencySnapshot at apply time (spec §17 /
+   * invariant 9). No-ops when the plan pinned no snapshot.
+   *
+   *   - `strict` mode (production consumer): every entry's producer Installation
+   *     must STILL be at the `producerStateGeneration` pinned at plan time; a
+   *     moved producer is a typed `failed_precondition`
+   *     (`dependency_snapshot_stale`).
+   *   - both modes: recompute the per-entry `valuesDigest` over the pinned values
+   *     and fail on mismatch (`dependency_snapshot_tampered`) — the pinned values
+   *     are exactly what was injected and digested at plan time.
+   *
+   * `pinned` mode (preview / dev) intentionally tolerates a producer that moved
+   * after plan: it applies the values frozen at plan time regardless.
+   */
+  async #verifyDependencySnapshot(planRun: PlanRun): Promise<void> {
+    if (!planRun.dependencySnapshotId) return;
+    const snapshot = await this.#store.getDependencySnapshot(
+      planRun.dependencySnapshotId,
+    );
+    if (!snapshot) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `dependency_snapshot_missing: plan run ${planRun.id} references ` +
+          `DependencySnapshot ${planRun.dependencySnapshotId} which is no ` +
+          `longer present`,
+      );
+    }
+    for (const entry of snapshot.dependencies) {
+      // Tamper check (both modes): the pinned values must still hash to the
+      // pinned digest. A re-put that mutated the frozen values trips this.
+      const recomputed = await stableJsonDigest(entry.values);
+      if (recomputed !== entry.valuesDigest) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `dependency_snapshot_tampered: plan run ${planRun.id} dependency ` +
+            `${entry.dependencyId} pinned values no longer match the pinned digest`,
+        );
+      }
+      if (snapshot.mode !== "strict") continue;
+      // Strict freshness: the producer must not have moved since plan.
+      const producer = await this.#store.getInstallation(
+        entry.producerInstallationId,
+      );
+      const current = producer?.currentStateGeneration ?? 0;
+      if (current !== entry.producerStateGeneration) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `dependency_snapshot_stale: plan run ${planRun.id} dependency ` +
+            `${entry.dependencyId} producer installation ` +
+            `${entry.producerInstallationId} advanced from state generation ` +
+            `${entry.producerStateGeneration} to ${current} since plan`,
+        );
+      }
+    }
+  }
+
+  /**
    * Records the §6.9 StateSnapshot metadata after a successful env-driven apply /
    * destroy state persist. The object key mirrors the DO's R2_STATE key formula
    * (`spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/{NNNNNNNN}.tfstate.enc`)
@@ -1483,6 +1759,102 @@ export class OpenTofuDeploymentController {
       createdAt: new Date(input.now).toISOString(),
     };
     await this.#store.putStateSnapshot(snapshot);
+  }
+
+  /**
+   * Records the §16 OutputSnapshot after a successful (non-destroy) apply.
+   *
+   *   - `spaceOutputs` = EVERY non-sensitive output from the raw runner envelope
+   *     (name -> value), the same-Space dependency-consumption surface.
+   *   - `publicOutputs` = the existing public projection already computed for
+   *     `Deployment.outputsPublic` (well-known / template-allowlisted + secret
+   *     filter), the UI / display surface.
+   *   - Sensitive-flagged outputs appear in NEITHER (invariants 11/12).
+   *   - `outputDigest` = stableJsonDigest over `{ spaceOutputs, publicOutputs }`,
+   *     which drives stale propagation (§24).
+   *   - `rawOutputArtifactKey` = the §26 key the runner DO sealed + wrote the raw
+   *     envelope to (echoed as `result.rawOutputsKey`); falls back to the derived
+   *     key when the runner did not echo one (e.g. runs without env context).
+   *
+   * The raw envelope itself never enters the ledger — only the projection.
+   */
+  async #recordOutputSnapshot(input: {
+    readonly installation: Installation;
+    readonly applyRun: ApplyRun;
+    readonly result: OpenTofuApplyResult;
+    readonly publicOutputs: readonly DeploymentOutput[];
+    readonly stateGeneration: number;
+    readonly now: number;
+  }): Promise<OutputSnapshot> {
+    const spaceOutputs = spaceOutputsFromOpenTofu(input.result.outputs);
+    const publicOutputs = Object.fromEntries(
+      input.publicOutputs.map((output) => [output.name, output.value]),
+    );
+    const outputDigest = await stableJsonDigest({ spaceOutputs, publicOutputs });
+    const snapshot: OutputSnapshot = {
+      id: this.#newId("out"),
+      spaceId: input.installation.spaceId,
+      installationId: input.installation.id,
+      stateGeneration: input.stateGeneration,
+      rawOutputArtifactKey: input.result.rawOutputsKey ??
+        rawOutputArtifactKey({
+          spaceId: input.installation.spaceId,
+          installationId: input.installation.id,
+          runId: input.applyRun.id,
+        }),
+      publicOutputs,
+      spaceOutputs,
+      outputDigest,
+      createdAt: new Date(input.now).toISOString(),
+    };
+    await this.#store.putOutputSnapshot(snapshot);
+    return snapshot;
+  }
+
+  /**
+   * §24 stale propagation. After a successful apply records a new OutputSnapshot,
+   * compares its digest to the Installation's PREVIOUS OutputSnapshot digest;
+   * when they differ (the outputs changed) every transitive downstream consumer
+   * in the SAME Space that is currently `active` is patched to `stale`.
+   *
+   * The downstream closure is computed over the Space's `variable_injection`
+   * dependency edges (producer -> consumer) via {@link downstreamClosure}. Only
+   * `active` consumers are moved: `installing` / `error` / `destroyed` are left
+   * untouched (a stale flag on a not-yet-applied or torn-down Installation is
+   * meaningless). No-ops when the digest is unchanged, or when there are no
+   * downstream consumers. Each patch carries no guard: stale is an advisory flag,
+   * not a state-generation move, so it never races the currentDeployment pointer.
+   */
+  async #propagateStale(input: {
+    readonly installation: Installation;
+    readonly previousDigest: string | undefined;
+    readonly newDigest: string;
+    readonly now: number;
+  }): Promise<void> {
+    if (input.previousDigest === input.newDigest) return;
+    const edges = await this.#store.listDependenciesBySpace(
+      input.installation.spaceId,
+    );
+    if (edges.length === 0) return;
+    const closure = downstreamClosure(
+      edges.map((edge) => ({
+        from: edge.producerInstallationId,
+        to: edge.consumerInstallationId,
+      })),
+      input.installation.id,
+    );
+    if (closure.size === 0) return;
+    const updatedAt = new Date(input.now).toISOString();
+    for (const consumerId of closure) {
+      const consumer = await this.#store.getInstallation(consumerId);
+      // Only an active consumer becomes stale; skip the rest (and a consumer the
+      // ledger no longer holds).
+      if (!consumer || consumer.status !== "active") continue;
+      await this.#store.patchInstallation(consumerId, {
+        status: "stale",
+        updatedAt,
+      });
+    }
   }
 
   async #mintRunCredentials(
@@ -1741,6 +2113,8 @@ export class OpenTofuDeploymentController {
     installationId?: string;
     environment?: string;
     sourceSnapshotId?: string;
+    dependencySnapshotId?: string;
+    runGroupId?: string;
   } {
     return {
       ...(planRun.installationContext
@@ -1752,6 +2126,10 @@ export class OpenTofuDeploymentController {
       ...(planRun.sourceSnapshotId
         ? { sourceSnapshotId: planRun.sourceSnapshotId }
         : {}),
+      ...(planRun.dependencySnapshotId
+        ? { dependencySnapshotId: planRun.dependencySnapshotId }
+        : {}),
+      ...(planRun.runGroupId ? { runGroupId: planRun.runGroupId } : {}),
     };
   }
 
@@ -2213,6 +2591,13 @@ export class OpenTofuDeploymentController {
     // (spec invariant 10) just before dispatch, mirroring the digest/generation
     // pre-flight checks.
     await this.#revalidateSourceSnapshot(planRun);
+    // DependencySnapshot verification (spec §17 / invariant 9): when the plan
+    // pinned a DependencySnapshot, re-read it and verify producer state
+    // generations (strict mode) + recompute the pinned values digests (tamper
+    // check) before applying. A moved producer (strict) is
+    // `dependency_snapshot_stale`; a digest mismatch is
+    // `dependency_snapshot_tampered`.
+    await this.#verifyDependencySnapshot(planRun);
     const startedAt = this.#now();
     const running = await this.#markApplyRunning(applyRun, profile, startedAt);
     // Mint provider credentials NOW (just before dispatch). Apply runs resolve
@@ -2263,6 +2648,26 @@ export class OpenTofuDeploymentController {
       // currentDeployment pointer move). A create starts at base 0 -> 1; an
       // update advances the installation's generation by one.
       const nextStateGeneration = installation.currentStateGeneration + 1;
+      // §16 OutputSnapshot: capture the projected outputs after a successful
+      // apply. `spaceOutputs` is every non-sensitive output from the raw runner
+      // envelope; `publicOutputs` is the existing public projection (what
+      // Deployment.outputsPublic carries). Sensitive-flagged outputs appear in
+      // NEITHER (invariants 11/12); the raw envelope stays an encrypted artifact
+      // referenced by rawOutputArtifactKey. The Installation's PREVIOUS snapshot
+      // digest drives stale propagation (§24) after this record.
+      const previousOutputSnapshot = installation.currentOutputSnapshotId
+        ? await this.#store.getOutputSnapshot(
+          installation.currentOutputSnapshotId,
+        )
+        : undefined;
+      const outputSnapshot = await this.#recordOutputSnapshot({
+        installation,
+        applyRun,
+        result,
+        publicOutputs: outputs,
+        stateGeneration: nextStateGeneration,
+        now,
+      });
       const deployment: Deployment = {
         id: this.#newId("dep"),
         spaceId: planRun.spaceId,
@@ -2272,7 +2677,11 @@ export class OpenTofuDeploymentController {
         ...(planRun.sourceSnapshotId
           ? { sourceSnapshotId: planRun.sourceSnapshotId }
           : {}),
+        ...(planRun.dependencySnapshotId
+          ? { dependencySnapshotId: planRun.dependencySnapshotId }
+          : {}),
         stateGeneration: nextStateGeneration,
+        outputSnapshotId: outputSnapshot.id,
         outputsPublic: Object.fromEntries(
           outputs.map((output) => [output.name, output.value]),
         ),
@@ -2308,9 +2717,21 @@ export class OpenTofuDeploymentController {
         status: "active",
         updatedAt: new Date(now).toISOString(),
         currentStateGeneration: nextStateGeneration,
+        currentOutputSnapshotId: outputSnapshot.id,
       }, {
         currentDeploymentId: planRun.installationCurrentDeploymentId ?? undefined,
         status: plannedInstallation?.status,
+      });
+      // §24 stale propagation: when this apply's projected outputs changed
+      // versus the Installation's PREVIOUS OutputSnapshot, every transitive
+      // downstream consumer in the Space that is currently `active` is marked
+      // `stale`. The just-applied Installation itself stays `active` (patched
+      // above); installing/error/destroyed consumers are left untouched.
+      await this.#propagateStale({
+        installation,
+        previousDigest: previousOutputSnapshot?.outputDigest,
+        newDigest: outputSnapshot.outputDigest,
+        now,
       });
       const diagnostics = redactRunDiagnostics(result.diagnostics);
       const completed: ApplyRun = {
@@ -2860,6 +3281,26 @@ function stateObjectKeyForScope(scope: DispatchStateScope): string {
   return `spaces/${seg(scope.spaceId)}/installations/${
     seg(scope.installationId)
   }/envs/${seg(scope.environment)}/states/${generation}.tfstate.enc`;
+}
+
+/**
+ * Mirrors the runner DO's R2_ARTIFACTS key for the encrypted raw output envelope
+ * (spec §26): `spaces/{spaceId}/installations/{installationId}/runs/{runId}/
+ * outputs.raw.json.enc`, with each id segment sanitized. Kept in lockstep with
+ * `worker/src/durable/OpenTofuRunnerObject.ts` (the DO is the writer). Used to
+ * record {@link OutputSnapshot.rawOutputArtifactKey} when the runner did not echo
+ * a key (e.g. a run without environment context that never persisted the raw
+ * envelope).
+ */
+function rawOutputArtifactKey(input: {
+  readonly spaceId: string;
+  readonly installationId: string;
+  readonly runId: string;
+}): string {
+  const seg = (value: string) => value.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  return `spaces/${seg(input.spaceId)}/installations/${
+    seg(input.installationId)
+  }/runs/${seg(input.runId)}/outputs.raw.json.enc`;
 }
 
 /**

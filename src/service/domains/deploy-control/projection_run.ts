@@ -139,6 +139,7 @@ export function projectPlanRun(
     : undefined;
   return {
     id: planRun.id,
+    ...(planRun.runGroupId ? { runGroupId: planRun.runGroupId } : {}),
     spaceId: planRun.spaceId,
     ...(options.installationId
       ? { installationId: options.installationId }
@@ -148,6 +149,9 @@ export function projectPlanRun(
     status: planUnifiedStatus(planRun.status, options.awaitingApproval ?? false),
     ...(options.sourceSnapshotId
       ? { sourceSnapshotId: options.sourceSnapshotId }
+      : {}),
+    ...(planRun.dependencySnapshotId
+      ? { dependencySnapshotId: planRun.dependencySnapshotId }
       : {}),
     ...(planRun.baseStateGeneration !== undefined
       ? { baseStateGeneration: planRun.baseStateGeneration }
@@ -169,6 +173,10 @@ export interface ProjectApplyRunOptions {
   readonly installationId?: string;
   readonly environment?: string;
   readonly sourceSnapshotId?: string;
+  /** Pinned DependencySnapshot id (spec §17), threaded from the source PlanRun. */
+  readonly dependencySnapshotId?: string;
+  /** RunGroup id (spec §19), threaded from the source PlanRun. */
+  readonly runGroupId?: string;
 }
 
 /** Projects an ApplyRun (apply or destroy_apply) onto the unified §19 Run. */
@@ -182,6 +190,7 @@ export function projectApplyRun(
     : undefined;
   return {
     id: applyRun.id,
+    ...(options.runGroupId ? { runGroupId: options.runGroupId } : {}),
     spaceId: applyRun.spaceId,
     ...(options.installationId
       ? { installationId: options.installationId }
@@ -191,6 +200,9 @@ export function projectApplyRun(
     status: applyUnifiedStatus(applyRun.status),
     ...(options.sourceSnapshotId
       ? { sourceSnapshotId: options.sourceSnapshotId }
+      : {}),
+    ...(options.dependencySnapshotId
+      ? { dependencySnapshotId: options.dependencySnapshotId }
       : {}),
     ...(applyRun.expected.planDigest
       ? { planDigest: applyRun.expected.planDigest }

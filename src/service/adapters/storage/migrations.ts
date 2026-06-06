@@ -669,6 +669,57 @@ export const postgresStorageTableDefinitions:
       uniqueConstraints: [["installation_id", "environment", "generation"]],
       indexes: [["installation_id", "environment", "generation"]],
     },
+    {
+      // Dependency DAG edges (§14 / §15). One edge connects a producer
+      // Installation's outputs to a consumer Installation's inputs in one Space.
+      name: "takosumi_installation_dependencies",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "producer_installation_id",
+        "consumer_installation_id",
+        "dependency_json",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["space_id"], ["producer_installation_id"], [
+        "consumer_installation_id",
+      ]],
+    },
+    {
+      // Plan-time pin of one run's dependency inputs (§17).
+      name: "takosumi_dependency_snapshots",
+      domain: "deploy",
+      columns: ["id", "run_id", "snapshot_json", "created_at"],
+      primaryKey: ["id"],
+      indexes: [["run_id"]],
+    },
+    {
+      // Projected outputs captured after a successful apply (§16). The raw
+      // envelope stays an encrypted artifact; only the projection enters the DB.
+      name: "takosumi_output_snapshots",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "installation_id",
+        "state_generation",
+        "snapshot_json",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["installation_id", "state_generation"]],
+    },
+    {
+      // Ordered group of Runs across the dependency DAG (§19 / §24). The group
+      // status is COMPUTED at read time from member runs; not a stored column.
+      name: "takosumi_run_groups",
+      domain: "deploy",
+      columns: ["id", "space_id", "type", "group_json", "created_at"],
+      primaryKey: ["id"],
+      indexes: [["space_id"]],
+    },
   ]);
 
 export const postgresStorageMigrationStatements:
@@ -1576,5 +1627,64 @@ drop index if exists takosumi_runs_installation_idx;
 drop index if exists takosumi_runs_space_idx;
 drop index if exists takosumi_runs_kind_idx;
 drop table if exists takosumi_runs;`,
+    },
+    {
+      id: "deploy.takosumi_dependency_dag.create",
+      version: 36,
+      domain: "deploy",
+      description:
+        "Create the Dependency DAG ledger (Core Specification §14-§19 / §24 / §27): installation_dependencies (producer->consumer output edges within a Space), dependency_snapshots (plan-time pin of one run's injected inputs, §17), output_snapshots (the projected spaceOutputs / publicOutputs + digest captured after a successful apply, §16; the raw envelope stays an encrypted R2_ARTIFACTS artifact), and run_groups (ordered groups of Runs across the DAG for a Space update, §19/§24; the group status is computed at read time and is not a stored column). No data migration: additive new tables.",
+      sql: `create table if not exists takosumi_installation_dependencies (
+  id                        text   primary key,
+  space_id                  text   not null,
+  producer_installation_id  text   not null,
+  consumer_installation_id  text   not null,
+  dependency_json           jsonb  not null,
+  created_at                text   not null
+);
+create index if not exists takosumi_installation_dependencies_space_idx
+  on takosumi_installation_dependencies (space_id);
+create index if not exists takosumi_installation_dependencies_producer_idx
+  on takosumi_installation_dependencies (producer_installation_id);
+create index if not exists takosumi_installation_dependencies_consumer_idx
+  on takosumi_installation_dependencies (consumer_installation_id);
+create table if not exists takosumi_dependency_snapshots (
+  id            text   primary key,
+  run_id        text   not null,
+  snapshot_json jsonb  not null,
+  created_at    text   not null
+);
+create index if not exists takosumi_dependency_snapshots_run_idx
+  on takosumi_dependency_snapshots (run_id);
+create table if not exists takosumi_output_snapshots (
+  id               text    primary key,
+  space_id         text    not null,
+  installation_id  text    not null,
+  state_generation integer not null,
+  snapshot_json    jsonb   not null,
+  created_at       text    not null
+);
+create index if not exists takosumi_output_snapshots_installation_idx
+  on takosumi_output_snapshots (installation_id, state_generation);
+create table if not exists takosumi_run_groups (
+  id         text   primary key,
+  space_id   text   not null,
+  type       text   not null
+    check (type in ('space_update','installation_install','installation_update','installation_destroy','migration')),
+  group_json jsonb  not null,
+  created_at text   not null
+);
+create index if not exists takosumi_run_groups_space_idx
+  on takosumi_run_groups (space_id);`,
+      down: `drop index if exists takosumi_run_groups_space_idx;
+drop table if exists takosumi_run_groups;
+drop index if exists takosumi_output_snapshots_installation_idx;
+drop table if exists takosumi_output_snapshots;
+drop index if exists takosumi_dependency_snapshots_run_idx;
+drop table if exists takosumi_dependency_snapshots;
+drop index if exists takosumi_installation_dependencies_consumer_idx;
+drop index if exists takosumi_installation_dependencies_producer_idx;
+drop index if exists takosumi_installation_dependencies_space_idx;
+drop table if exists takosumi_installation_dependencies;`,
     },
   ]);

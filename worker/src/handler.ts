@@ -647,9 +647,20 @@ class CloudflareContainerOpenTofuRunner implements OpenTofuRunner {
       runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
     );
+    // The DO echoes the persisted state pointer (`state.digest`) and, for an
+    // apply that produced outputs, the encrypted raw-output artifact key
+    // (`rawOutputsKey`, spec §26). Thread both onto the result so the controller
+    // records them on the StateSnapshot / OutputSnapshot.
+    const state = recordFromRecord(result, "state");
     return {
       ...(recordFromRecord(result, "outputs")
         ? { outputs: recordFromRecord(result, "outputs") as OpenTofuApplyResult["outputs"] }
+        : {}),
+      ...(state && stringFromRecord(state, "digest")
+        ? { stateDigest: stringFromRecord(state, "digest") }
+        : {}),
+      ...(stringFromRecord(result, "rawOutputsKey")
+        ? { rawOutputsKey: stringFromRecord(result, "rawOutputsKey") }
         : {}),
       diagnostics: diagnosticsFromContainerResult(result),
     };

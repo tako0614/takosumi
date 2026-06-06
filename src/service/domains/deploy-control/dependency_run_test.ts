@@ -1,0 +1,302 @@
+/**
+ * Dependency variable_injection + DependencySnapshot integration tests (Core
+ * Specification §15 / §17 / invariant 9).
+ *
+ * A producer Installation applies (gen 1) and records an OutputSnapshot whose
+ * spaceOutputs carry `base_domain`. A consumer Installation declares a
+ * `variable_injection` Dependency on that output; its plan injects `base_domain`
+ * into the runner variables and pins a DependencySnapshot (digests only, no
+ * values in diagnostics). The §19 Run projects the dependencySnapshotId.
+ *
+ * Then the security behavior: in a PRODUCTION consumer (strict mode), the
+ * consumer's apply fails `dependency_snapshot_stale` once the producer's state
+ * generation moves after plan; in a PREVIEW consumer (pinned mode) the apply
+ * succeeds despite the producer moving, applying the frozen values.
+ */
+
+import { expect, test } from "bun:test";
+import type {
+  OpenTofuApplyJob,
+  OpenTofuPlanJob,
+  OpenTofuRunner,
+} from "./mod.ts";
+import {
+  applyExpectedGuardFromPlanRun,
+  OpenTofuDeploymentController,
+} from "./mod.ts";
+import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
+import type { OpenTofuDeploymentStore } from "./store.ts";
+import { DependenciesService } from "../dependencies/mod.ts";
+import { seedInstallationModel } from "./test_model_fixture.ts";
+import { stableJsonDigest } from "../../adapters/source/digest.ts";
+
+const PLAN_DIGEST =
+  "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+function deterministicIds(): (prefix: string) => string {
+  let next = 1;
+  return (prefix) => `${prefix}_${String(next++).padStart(4, "0")}`;
+}
+
+function sequenceNow(start: number): () => number {
+  let value = start;
+  return () => value++;
+}
+
+interface RecordingRunner extends OpenTofuRunner {
+  readonly planJobs: OpenTofuPlanJob[];
+  readonly applyJobs: OpenTofuApplyJob[];
+}
+
+/**
+ * A runner whose apply emits `base_domain` (a generic non-sensitive output that
+ * lands in spaceOutputs) so a downstream consumer can inject it. Records every
+ * plan/apply job so the test can assert the injected variables.
+ */
+function recordingRunner(): RecordingRunner {
+  const planJobs: OpenTofuPlanJob[] = [];
+  const applyJobs: OpenTofuApplyJob[] = [];
+  return {
+    planJobs,
+    applyJobs,
+    plan: (job) => {
+      planJobs.push(job);
+      return Promise.resolve({
+        planDigest: PLAN_DIGEST,
+        planArtifact: {
+          kind: "runner-local",
+          ref: "runner-local://plan/tfplan",
+          digest: PLAN_DIGEST,
+          contentType: "application/vnd.opentofu.plan",
+        },
+      });
+    },
+    apply: (job) => {
+      applyJobs.push(job);
+      return Promise.resolve({
+        outputs: {
+          base_domain: { sensitive: false, value: "shota.example.com" },
+        } as never,
+        stateDigest:
+          "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      });
+    },
+    destroy: () => Promise.resolve({}),
+  };
+}
+
+function controllerWith(
+  store: OpenTofuDeploymentStore,
+  runner: OpenTofuRunner,
+): OpenTofuDeploymentController {
+  return new OpenTofuDeploymentController({
+    store,
+    runner,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+}
+
+/**
+ * Seeds a producer + consumer in the same Space (distinct sources/snapshots) at
+ * the given environment, plus a `variable_injection` Dependency from producer's
+ * `base_domain` to the consumer's `base_domain` input.
+ */
+async function seedGraph(
+  store: OpenTofuDeploymentStore,
+  environment: string,
+): Promise<{ producer: string; consumer: string }> {
+  await seedInstallationModel(store, {
+    environment,
+    sourceId: "src_producer",
+    snapshotId: "snap_producer",
+    installConfigId: "cfg_producer",
+    installationId: "inst_producer",
+    name: "producer",
+  });
+  await seedInstallationModel(store, {
+    environment,
+    sourceId: "src_consumer",
+    snapshotId: "snap_consumer",
+    installConfigId: "cfg_consumer",
+    installationId: "inst_consumer",
+    name: "consumer",
+  });
+  const deps = new DependenciesService({
+    store,
+    newId: (prefix) => `${prefix}_edge0001`,
+    now: () => "2026-06-06T00:00:00.000Z",
+  });
+  await deps.createDependency({
+    spaceId: "space_test",
+    producerInstallationId: "inst_producer",
+    consumerInstallationId: "inst_consumer",
+    mode: "variable_injection",
+    visibility: "space",
+    outputs: {
+      base_domain: { from: "base_domain", to: "base_domain", required: true },
+    },
+  });
+  return { producer: "inst_producer", consumer: "inst_consumer" };
+}
+
+test("consumer plan injects the producer output and pins a DependencySnapshot", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const { consumer } = await seedGraph(store, "preview");
+  const controller = controllerWith(store, runner);
+
+  // Producer applies first -> gen 1 + OutputSnapshot with base_domain.
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+  const producer = (await controller.getInstallation("inst_producer")).installation;
+  expect(producer.currentStateGeneration).toEqual(1);
+  expect(producer.currentOutputSnapshotId).toBeDefined();
+
+  // Consumer plan: injects base_domain into the runner variables and pins a snapshot.
+  const consumerPlan = await controller.createInstallationPlan(consumer);
+  expect(consumerPlan.planRun.dependencySnapshotId).toBeDefined();
+
+  // The runner plan job for the consumer carries the injected variable.
+  const consumerPlanJob = runner.planJobs.find(
+    (job) => job.planRun.installationId === consumer,
+  );
+  expect(consumerPlanJob?.variables.base_domain).toEqual("shota.example.com");
+
+  // The DependencySnapshot pins the producer state generation + digests.
+  const snapshot = await store.getDependencySnapshot(
+    consumerPlan.planRun.dependencySnapshotId!,
+  );
+  expect(snapshot?.mode).toEqual("pinned"); // preview consumer
+  expect(snapshot?.dependencies).toHaveLength(1);
+  const entry = snapshot!.dependencies[0]!;
+  expect(entry.producerInstallationId).toEqual("inst_producer");
+  expect(entry.producerStateGeneration).toEqual(1);
+  expect(entry.producerOutputSnapshotId).toEqual(producer.currentOutputSnapshotId);
+  expect(entry.values).toEqual({ base_domain: "shota.example.com" });
+  expect(entry.valuesDigest).toEqual(
+    await stableJsonDigest({ base_domain: "shota.example.com" }),
+  );
+
+  // The §19 Run projects the dependencySnapshotId.
+  const run = await controller.getRun(consumerPlan.planRun.id);
+  expect(run.dependencySnapshotId).toEqual(consumerPlan.planRun.dependencySnapshotId);
+});
+
+test("strict consumer apply fails dependency_snapshot_stale after the producer moves", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  await seedGraph(store, "production");
+  const controller = controllerWith(store, runner);
+
+  // Producer applies -> gen 1. Production plans land waiting_approval; approve
+  // BEFORE the apply (apply marks the plan applied, clearing the gate).
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.approveRun(producerPlan.planRun.id);
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+
+  // Consumer plan (production -> strict snapshot).
+  const consumerPlan = await controller.createInstallationPlan("inst_consumer");
+  const snapshot = await store.getDependencySnapshot(
+    consumerPlan.planRun.dependencySnapshotId!,
+  );
+  expect(snapshot?.mode).toEqual("strict");
+
+  // Producer re-applies -> gen 2 (its state generation moves under the snapshot).
+  const producerPlan2 = await controller.createInstallationPlan("inst_producer");
+  await controller.approveRun(producerPlan2.planRun.id);
+  await controller.createApplyRun({
+    planRunId: producerPlan2.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan2.planRun),
+  });
+  expect(
+    (await controller.getInstallation("inst_producer")).installation
+      .currentStateGeneration,
+  ).toEqual(2);
+
+  // The consumer's strict apply now fails dependency_snapshot_stale.
+  await controller.approveRun(consumerPlan.planRun.id);
+  await expect(
+    controller.createApplyRun({
+      planRunId: consumerPlan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+    }),
+  ).rejects.toThrow(/dependency_snapshot_stale/);
+});
+
+test("pinned consumer apply succeeds despite the producer moving", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  await seedGraph(store, "preview");
+  const controller = controllerWith(store, runner);
+
+  // Producer applies -> gen 1 (preview: no approval gate).
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+
+  // Consumer plan (preview -> pinned snapshot).
+  const consumerPlan = await controller.createInstallationPlan("inst_consumer");
+  const snapshot = await store.getDependencySnapshot(
+    consumerPlan.planRun.dependencySnapshotId!,
+  );
+  expect(snapshot?.mode).toEqual("pinned");
+
+  // Producer re-applies -> gen 2.
+  const producerPlan2 = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan2.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan2.planRun),
+  });
+
+  // The consumer's pinned apply tolerates the producer movement and succeeds,
+  // applying the values frozen at plan time.
+  const consumerApply = await controller.createApplyRun({
+    planRunId: consumerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+  });
+  expect(consumerApply.applyRun.status).toEqual("succeeded");
+  expect(consumerApply.deployment?.dependencySnapshotId).toEqual(
+    consumerPlan.planRun.dependencySnapshotId,
+  );
+});
+
+test("a required dependency with no producer OutputSnapshot is dependency_outputs_unavailable", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  await seedGraph(store, "preview");
+  const controller = controllerWith(store, runner);
+
+  // The producer has NOT applied yet, so it has no OutputSnapshot. The consumer
+  // plan's required mapping cannot be satisfied.
+  await expect(
+    controller.createInstallationPlan("inst_consumer"),
+  ).rejects.toThrow(/dependency_outputs_unavailable/);
+});
+
+test("plan diagnostics never carry injected dependency values", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  await seedGraph(store, "preview");
+  const controller = controllerWith(store, runner);
+
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+  const consumerPlan = await controller.createInstallationPlan("inst_consumer");
+
+  // The public PlanRun keeps only digests: the injected value must not appear in
+  // the variablesDigest field name, audit events, or anywhere on the public run.
+  const serialized = JSON.stringify(consumerPlan.planRun);
+  expect(serialized).not.toContain("shota.example.com");
+});

@@ -1368,6 +1368,7 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     ListInstallationsResponse: jsonObject,
     ListInstallConfigsResponse: jsonObject,
     RunResponse: jsonObject,
+    RunGroupResponse: jsonObject,
     ApproveRunRequest: jsonObject,
     RuntimeAgentEnrollRequest: jsonObject,
     RuntimeAgentHeartbeatRequest: jsonObject,

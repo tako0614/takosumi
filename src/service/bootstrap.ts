@@ -43,6 +43,8 @@ import {
 import { InstallationsService } from "./domains/installations/mod.ts";
 import { SpacesService } from "./domains/spaces/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
+import { DependenciesService } from "./domains/dependencies/mod.ts";
+import { RunGroupsService } from "./domains/run-groups/mod.ts";
 import { seedOfficialInstallConfigs } from "./domains/installations/official_seed.ts";
 import type {
   CreateSourceRequest,
@@ -273,6 +275,16 @@ export interface TakosumiOperations {
    */
   readonly installations: InstallationsService;
   readonly connections: ConnectionsService;
+  /**
+   * Dependencies domain service (Core Specification §14 / §15): the Space
+   * Installation DAG edges over the same shared ledger.
+   */
+  readonly dependencies: DependenciesService;
+  /**
+   * RunGroups domain service (Core Specification §19 / §24): the space_update
+   * RunGroup over the same shared ledger + controller.
+   */
+  readonly runGroups: RunGroupsService;
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
   /**
@@ -436,6 +448,9 @@ export async function createTakosumiService(
   const installationsService = new InstallationsService({
     store: sharedOpenTofuStore,
   });
+  const dependenciesService = new DependenciesService({
+    store: sharedOpenTofuStore,
+  });
   // Seed the official InstallConfig catalog from the built-in template registry
   // (trustLevel "official"). Idempotent upsert keyed by the derived config id,
   // so a restart re-seeds the same rows. Fire-and-forget: a seed failure must
@@ -453,6 +468,14 @@ export async function createTakosumiService(
     ...(options.installationCoordination
       ? { installationCoordination: options.installationCoordination }
       : {}),
+  });
+  // RunGroups domain (Core Specification §19 / §24): the space_update RunGroup
+  // re-plans stale Installations through the controller and computes group
+  // status from member runs at read time. Constructed after the controller it
+  // drives.
+  const runGroupsService = new RunGroupsService({
+    store: sharedOpenTofuStore,
+    controller: opentofuController,
   });
   const app = await createApiApp({
     role,
@@ -487,6 +510,8 @@ export async function createTakosumiService(
       spacesService,
       installationsService,
       connectionsService,
+      dependenciesService,
+      runGroupsService,
       ...(deployControlToken ? { getDeployControlToken: () => deployControlToken } : {}),
     },
     readinessRouteProbes: createRoleReadinessProbes({
@@ -518,6 +543,8 @@ export async function createTakosumiService(
     spaces: spacesService,
     installations: installationsService,
     connections: connectionsService,
+    dependencies: dependenciesService,
+    runGroups: runGroupsService,
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
     createInstallationPlan: (installationId) =>
