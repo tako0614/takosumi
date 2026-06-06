@@ -23,6 +23,8 @@ import {
   type UpstreamOAuthOptions,
   type WorkloadPlatformServiceResolverHttpOptions,
 } from "@takosjp/takosumi-accounts-service";
+import { parseInstallLink } from "takosumi-contract/install-link";
+import { evaluateSourceUrl } from "../../../src/service/domains/sources/url-policy.ts";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 
 export interface CloudflareWorkerEnv {
@@ -183,6 +185,14 @@ export function createCloudflareWorker(
       }
       const exportDownload = await maybeHandleR2ExportDownload(request, env);
       if (exportDownload) return exportDownload;
+      // External install link (Core Specification §12 / §30). Parses the
+      // `?source=git::…` packed form or the simple `?git=&ref=&path=` form,
+      // validates the resolved Git URL against the canonical Source URL policy,
+      // and 302-redirects to the dashboard SPA install flow with the validated
+      // params re-encoded. Handled BEFORE the SPA fallback so `/install` is not
+      // shadowed by index.html.
+      const installLink = maybeHandleInstallLink(request, url);
+      if (installLink) return installLink;
       // Non-API paths = the dashboard SPA, served from this Worker's static
       // assets (deep links fall back to index.html via not_found_handling).
       // API namespaces, and any deploy without the ASSETS binding, fall
@@ -905,6 +915,61 @@ export function createR2InstallationExportWorker(options: {
       downloadExpiresAt,
     };
   };
+}
+
+/**
+ * External install link (Core Specification §12 / §30): `GET /install`.
+ *
+ * Parses both link forms via the contract `parseInstallLink`, validates the
+ * resolved Git URL against the canonical Source URL policy
+ * ({@link evaluateSourceUrl} — https/ssh only, no embedded credentials, no
+ * `file://`), and on success 302-redirects to the dashboard SPA install flow
+ * `/#/install?git=<url>&ref=<ref>&path=<path>` with the validated params
+ * re-encoded. A malformed link or a policy-rejected URL returns 400 JSON.
+ * Returns `undefined` for any path other than `/install` so the caller falls
+ * through to the rest of the worker surface.
+ */
+function maybeHandleInstallLink(
+  request: Request,
+  url: URL,
+): Response | undefined {
+  if (url.pathname !== "/install") return undefined;
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response("method not allowed", {
+      status: 405,
+      headers: { allow: "GET, HEAD" },
+    });
+  }
+  const target = parseInstallLink(url);
+  if (!target) {
+    return Response.json(
+      {
+        error: "invalid_install_link",
+        error_description:
+          "expected ?source=git::<url> or ?git=<url>&ref=<ref>&path=<path>",
+      },
+      { status: 400 },
+    );
+  }
+  const policy = evaluateSourceUrl(target.url);
+  if (!policy.ok) {
+    return Response.json(
+      {
+        error: "invalid_install_source_url",
+        error_description: `source url rejected by policy: ${policy.reason}`,
+      },
+      { status: 400 },
+    );
+  }
+  const params = new URLSearchParams();
+  params.set("git", target.url);
+  if (target.ref.length > 0) params.set("ref", target.ref);
+  if (target.path.length > 0 && target.path !== ".") {
+    params.set("path", target.path);
+  }
+  // Redirect into the SPA hash route so the dashboard owns the install flow UI.
+  const location = `/#/install?${params.toString()}`;
+  return new Response(null, { status: 302, headers: { location } });
 }
 
 async function maybeHandleR2ExportDownload(

@@ -563,6 +563,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return result.rows.map((row) => parseRow(row) as Connection);
   }
 
+  async listOperatorConnections(): Promise<readonly Connection[]> {
+    const result = await this.#query<JsonRow>(
+      "select connection_json as json from takosumi_connections " +
+        "where space_id is null order by created_at asc, id asc",
+    );
+    return result.rows.map((row) => parseRow(row) as Connection);
+  }
+
   async deleteConnection(id: string): Promise<boolean> {
     const result = await this.#query(
       "delete from takosumi_connections where id = $1",

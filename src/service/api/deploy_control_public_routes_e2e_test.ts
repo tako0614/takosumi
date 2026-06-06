@@ -25,8 +25,8 @@ function headers(extra: Record<string, string> = {}): Record<string, string> {
 /**
  * Stands up a service over a known in-memory store, then walks the new
  * Space-direct Installation model end-to-end through the public routes:
- *   POST /v1/spaces -> POST /v1/sources -> seed InstallConfig (operations
- *   facade) -> POST /v1/spaces/:id/installations -> seed a SourceSnapshot for
+ *   POST /api/spaces -> POST /api/sources -> seed InstallConfig (operations
+ *   facade) -> POST /api/spaces/:id/installations -> seed a SourceSnapshot for
  *   the source (so the installation plan does not 409 source_sync_required).
  *
  * Returns the wired app plus the seeded ids so the caller can drive the
@@ -51,7 +51,7 @@ async function seedInstallationViaRoutes(
     startWorkerDaemon: false,
   });
 
-  const spaceRes = await app.request("/v1/spaces", {
+  const spaceRes = await app.request("/api/spaces", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -64,7 +64,7 @@ async function seedInstallationViaRoutes(
   expect(spaceRes.status).toBe(201);
   const spaceId = (await spaceRes.json()).space.id as string;
 
-  const sourceRes = await app.request("/v1/sources", {
+  const sourceRes = await app.request("/api/sources", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -93,7 +93,7 @@ async function seedInstallationViaRoutes(
   };
   await operations.installations.putInstallConfig(config);
 
-  const installRes = await app.request(`/v1/spaces/${spaceId}/installations`, {
+  const installRes = await app.request(`/api/spaces/${spaceId}/installations`, {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -134,7 +134,7 @@ test("deployControl e2e exposes OpenTofu plan and apply runs", async () => {
   // Installation-driven plan (spec §23): resolves the latest SourceSnapshot and
   // dispatches with installation state scope.
   const planRes = await app.request(
-    `/v1/installations/${installationId}/plan`,
+    `/api/installations/${installationId}/plan`,
     { method: "POST", headers: headers() },
   );
   expect(planRes.status).toEqual(201);
@@ -146,7 +146,7 @@ test("deployControl e2e exposes OpenTofu plan and apply runs", async () => {
   // The plan introduces a delete/replace change, so the §25 action policy flags
   // it requiresApproval and the §19 Run projects waiting_approval; approve
   // before the apply.
-  const runRes = await app.request(`/v1/runs/${plan.planRun.id}`, {
+  const runRes = await app.request(`/api/runs/${plan.planRun.id}`, {
     headers: headers(),
   });
   expect(runRes.status).toEqual(200);
@@ -154,7 +154,7 @@ test("deployControl e2e exposes OpenTofu plan and apply runs", async () => {
     "waiting_approval",
   );
   const approveRes = await app.request(
-    `/v1/runs/${plan.planRun.id}/approve`,
+    `/api/runs/${plan.planRun.id}/approve`,
     { method: "POST", headers: headers({ "content-type": "application/json" }) },
   );
   expect(approveRes.status).toEqual(200);
@@ -195,11 +195,182 @@ test("deployControl e2e exposes OpenTofu plan and apply runs", async () => {
   ]);
 });
 
+test("run logs/events expose diagnostics + audit trail (§30)", async () => {
+  const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
+  const planRes = await app.request(
+    `/api/installations/${installationId}/plan`,
+    { method: "POST", headers: headers() },
+  );
+  const plan = await planRes.json() as PlanRunResponse;
+
+  const logsRes = await app.request(`/api/runs/${plan.planRun.id}/logs`, {
+    headers: headers(),
+  });
+  expect(logsRes.status).toEqual(200);
+  const logs = await logsRes.json();
+  expect(Array.isArray(logs.diagnostics)).toBe(true);
+  expect(Array.isArray(logs.auditEvents)).toBe(true);
+  // The plan recorded at least a plan.requested / plan.completed audit event.
+  expect(logs.auditEvents.length).toBeGreaterThan(0);
+
+  const eventsRes = await app.request(`/api/runs/${plan.planRun.id}/events`, {
+    headers: headers(),
+  });
+  expect(eventsRes.status).toEqual(200);
+  const events = await eventsRes.json();
+  expect(Array.isArray(events.auditEvents)).toBe(true);
+  expect(events.auditEvents.length).toBeGreaterThan(0);
+  // events is the audit-only subset; it carries no diagnostics field.
+  expect(events.diagnostics).toBeUndefined();
+});
+
+test("run logs for a missing run is 404", async () => {
+  const { app } = await seedInstallationViaRoutes(fakeRunner());
+  const res = await app.request("/api/runs/plan_missing00000001/logs", {
+    headers: headers(),
+  });
+  expect(res.status).toEqual(404);
+});
+
+test("deployment get + rollback-plan happy path; missing deployment is 404 (§30)", async () => {
+  const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
+
+  // Drive a full plan -> approve -> apply so a Deployment exists.
+  const planRes = await app.request(
+    `/api/installations/${installationId}/plan`,
+    { method: "POST", headers: headers() },
+  );
+  const plan = await planRes.json() as PlanRunResponse;
+  await app.request(`/api/runs/${plan.planRun.id}/approve`, {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+  });
+  const applyRes = await app.request("/v1/apply-runs", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      planRunId: plan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(plan.planRun),
+    }),
+  });
+  const apply = await applyRes.json() as ApplyRunResponse;
+  const deploymentId = apply.deployment?.id as string;
+  expect(deploymentId).toBeTruthy();
+
+  // Public §30 Installation read + deployments list.
+  const instRes = await app.request(`/api/installations/${installationId}`, {
+    headers: headers(),
+  });
+  expect(instRes.status).toEqual(200);
+  expect((await instRes.json()).installation.id).toEqual(installationId);
+
+  const deploymentsRes = await app.request(
+    `/api/installations/${installationId}/deployments`,
+    { headers: headers() },
+  );
+  expect(deploymentsRes.status).toEqual(200);
+  expect((await deploymentsRes.json()).deployments.length).toBeGreaterThan(0);
+
+  // GET /api/deployments/:id.
+  const getRes = await app.request(`/api/deployments/${deploymentId}`, {
+    headers: headers(),
+  });
+  expect(getRes.status).toEqual(200);
+  const got = await getRes.json();
+  expect(got.deployment.id).toEqual(deploymentId);
+  expect(got.deployment.installationId).toEqual(installationId);
+
+  // POST /api/deployments/:id/rollback-plan creates a NEW plan run pinned to the
+  // deployment's source snapshot; it flows through the normal plan lifecycle.
+  const rollbackRes = await app.request(
+    `/api/deployments/${deploymentId}/rollback-plan`,
+    { method: "POST", headers: headers() },
+  );
+  expect(rollbackRes.status).toEqual(201);
+  const rollback = await rollbackRes.json() as PlanRunResponse;
+  expect(rollback.planRun.id).not.toEqual(plan.planRun.id);
+  expect(rollback.planRun.sourceSnapshotId).toEqual(
+    apply.deployment?.sourceSnapshotId,
+  );
+
+  // Missing deployment is a typed 404.
+  const missing = await app.request("/api/deployments/deploy_missing0001", {
+    headers: headers(),
+  });
+  expect(missing.status).toEqual(404);
+  const missingRollback = await app.request(
+    "/api/deployments/deploy_missing0001/rollback-plan",
+    { method: "POST", headers: headers() },
+  );
+  expect(missingRollback.status).toEqual(404);
+});
+
+test("space PATCH updates displayName (§30 MVP)", async () => {
+  const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
+  // Recover the space id via the public Installation read.
+  const instRes = await app.request(`/api/installations/${installationId}`, {
+    headers: headers(),
+  });
+  const spaceId = (await instRes.json()).installation.spaceId as string;
+
+  const patchRes = await app.request(`/api/spaces/${spaceId}`, {
+    method: "PATCH",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({ displayName: "Acme Renamed" }),
+  });
+  expect(patchRes.status).toEqual(200);
+  expect((await patchRes.json()).space.displayName).toEqual("Acme Renamed");
+
+  // An unknown field is rejected (the allowlist is displayName-only for MVP).
+  const badRes = await app.request(`/api/spaces/${spaceId}`, {
+    method: "PATCH",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({ handle: "renamed" }),
+  });
+  expect(badRes.status).toEqual(400);
+});
+
+test("output-shares routes are 501 not_implemented (§30 surface, post-MVP)", async () => {
+  const { app } = await seedInstallationViaRoutes(fakeRunner());
+  const post = await app.request("/api/output-shares", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: "{}",
+  });
+  expect(post.status).toEqual(501);
+  expect((await post.json()).error.code).toEqual("not_implemented");
+
+  const list = await app.request("/api/output-shares", { headers: headers() });
+  expect(list.status).toEqual(501);
+
+  const revoke = await app.request(
+    "/api/output-shares/share_x/revoke",
+    { method: "POST", headers: headers() },
+  );
+  expect(revoke.status).toEqual(501);
+});
+
+test("installation PATCH and DELETE are 501 (use destroy-plan; §30 MVP)", async () => {
+  const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
+  const patch = await app.request(`/api/installations/${installationId}`, {
+    method: "PATCH",
+    headers: headers({ "content-type": "application/json" }),
+    body: "{}",
+  });
+  expect(patch.status).toEqual(501);
+  const del = await app.request(`/api/installations/${installationId}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  expect(del.status).toEqual(501);
+  expect((await del.json()).error.message).toContain("destroy-plan");
+});
+
 test("deployControl e2e rejects mismatched plan digest guard", async () => {
   const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
 
   const planRes = await app.request(
-    `/v1/installations/${installationId}/plan`,
+    `/api/installations/${installationId}/plan`,
     { method: "POST", headers: headers() },
   );
   expect(planRes.status).toEqual(201);
@@ -207,7 +378,7 @@ test("deployControl e2e rejects mismatched plan digest guard", async () => {
 
   // Approve so the apply is gated only by the plan-digest guard under test.
   const approveRes = await app.request(
-    `/v1/runs/${plan.planRun.id}/approve`,
+    `/api/runs/${plan.planRun.id}/approve`,
     { method: "POST", headers: headers({ "content-type": "application/json" }) },
   );
   expect(approveRes.status).toEqual(200);

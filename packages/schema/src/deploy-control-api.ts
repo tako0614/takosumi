@@ -10,6 +10,15 @@ import type { JsonValue } from "./types.ts";
 import type { Installation } from "./installations.ts";
 import type { Deployment } from "./deployments.ts";
 
+// ---------------------------------------------------------------------------
+// INTERNAL deploy-control seam paths (spec §30 binding: NOT part of the public
+// `/api` vocabulary). These `/v1/*` routes are the in-process fetch seam the
+// accounts plane + CLI consume (PlanRun / ApplyRun / RunnerProfile ledgers and
+// the Installation read + its deployments / deployment-outputs reads). They are
+// deliberately kept at `/v1` after the §30 `/api` cutover; do NOT move them and
+// do NOT add `/v1` aliases for the moved public routes.
+// ---------------------------------------------------------------------------
+
 export const RUNNER_PROFILES_PATH = "/v1/runner-profiles" as const;
 export const PLAN_RUNS_PATH = "/v1/plan-runs" as const;
 export const PLAN_RUN_PATH = (id: string): string =>
@@ -287,7 +296,7 @@ export interface PlanRun {
   readonly dependencySnapshotId?: string;
   /**
    * RunGroup this plan belongs to (spec §19 / §24). Set when the plan was
-   * created as a member of a Space-update RunGroup (`POST /v1/spaces/:id/
+   * created as a member of a Space-update RunGroup (`POST /api/spaces/:id/
    * plan-update`); the apply that follows carries it onto the §19 Run so the
    * group status can be computed from its member runs. Absent for standalone
    * plans. Projected onto the §19 Run `runGroupId`.
@@ -664,17 +673,36 @@ export interface ListDeploymentOutputsResponse {
 //
 // A Connection records that a Space has registered provider credentials with
 // Takosumi. The secret values are NEVER part of the public Connection type:
-// they are write-only on `POST /v1/connections` and are sealed into a separate
-// secret blob by the in-process Vault broker. Phase 1 supports the
+// they are write-only on the `POST /api/connections/...` creation subroutes and
+// are sealed into a separate secret blob by the in-process Vault broker. Phase 1
+// supports the
 // `static_secret` authMethod for the `cloudflare` provider end-to-end; the
 // type unions anticipate `aws_assume_role` / `github_app_installation` later.
 // ---------------------------------------------------------------------------
 
-export const CONNECTIONS_PATH = "/v1/connections" as const;
+// Public §30 Connections surface (`/api`, no version prefix). Connection
+// creation is split into kind-specific subroutes (thin validated wrappers over
+// the generic createConnection); the base path is the operator/space listing.
+export const CONNECTIONS_PATH = "/api/connections" as const;
+/** §30 source HTTPS-token Connection creation subroute. */
+export const CONNECTIONS_SOURCE_HTTPS_TOKEN_PATH =
+  "/api/connections/source/https-token" as const;
+/** §30 source SSH-key Connection creation subroute (knownHosts required). */
+export const CONNECTIONS_SOURCE_SSH_KEY_PATH =
+  "/api/connections/source/ssh-key" as const;
+/** §30 Cloudflare API-token Connection creation subroute. */
+export const CONNECTIONS_CLOUDFLARE_TOKEN_PATH =
+  "/api/connections/cloudflare/token" as const;
+/** §30 AWS assume-role Connection creation subroute (501 not_implemented). */
+export const CONNECTIONS_AWS_ASSUME_ROLE_PATH =
+  "/api/connections/aws/assume-role" as const;
 export const CONNECTION_PATH = (id: string): string =>
-  `/v1/connections/${encodeURIComponent(id)}`;
+  `/api/connections/${encodeURIComponent(id)}`;
 export const CONNECTION_TEST_PATH = (id: string): string =>
-  `/v1/connections/${encodeURIComponent(id)}/test`;
+  `/api/connections/${encodeURIComponent(id)}/test`;
+/** §30 Connection revoke subroute (replaces the former DELETE handler). */
+export const CONNECTION_REVOKE_PATH = (id: string): string =>
+  `/api/connections/${encodeURIComponent(id)}/revoke`;
 
 /**
  * Credential acquisition method. Phase 1 implements `static_secret`; the other

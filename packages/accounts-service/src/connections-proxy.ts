@@ -2,11 +2,19 @@ import type { DeployControlProxyOptions } from "./deploy-control-proxy.ts";
 
 /**
  * Account-plane proxy for the deploy-control Connections surface
- * (`/v1/connections`). Connections register provider credentials; the
- * deploy-control plane owns the secret blob and the Vault broker that mints
- * credential bundles for runs. The account plane only forwards the
- * session-authenticated, space-ownership-checked request to deploy-control over
- * the same in-process seam the PlanRun / ApplyRun proxy uses.
+ * (`/api/connections/...`, spec §30). Connections register provider
+ * credentials; the deploy-control plane owns the secret blob and the Vault
+ * broker that mints credential bundles for runs. The account plane only
+ * forwards the session-authenticated, space-ownership-checked request to
+ * deploy-control over the same in-process seam the PlanRun / ApplyRun proxy
+ * uses.
+ *
+ * Connection creation is split into kind-specific §30 subroutes
+ * (`/api/connections/source/https-token`, `/source/ssh-key`,
+ * `/cloudflare/token`, `/aws/assume-role`); this proxy selects the subroute
+ * from the create body's `kind` / `provider` (the body still carries the
+ * write-only credential `values`). Connection revoke maps to the §30
+ * `POST /api/connections/{id}/revoke` subroute (the former DELETE handler).
  *
  * SECRETS: the create body carries write-only `values` (credential material).
  * This module is a pure forwarder — it never logs, echoes, or serializes the
@@ -18,12 +26,32 @@ import type { DeployControlProxyOptions } from "./deploy-control-proxy.ts";
  * Unlike the PlanRun / ApplyRun proxy (which adapts to the typed
  * `DeployControlOperations` facade), the Connections routes are forwarded over
  * the {@link DeployControlProxyOptions.fetch} transport: that transport
- * dispatches into the embedded deploy-control router where the kernel lane
- * registers the `/v1/connections` routes. The single-worker host always injects
- * a `fetch` seam alongside `operations`, so this path is available in-process.
+ * dispatches into the embedded deploy-control router where the control plane
+ * registers the `/api/connections/...` routes. The single-worker host always
+ * injects a `fetch` seam alongside `operations`, so this path is available
+ * in-process.
  */
 
-const CONNECTIONS_PATH = "/v1/connections";
+const CONNECTIONS_PATH = "/api/connections";
+
+/**
+ * Selects the §30 connection-creation subroute from the create body. Mirrors
+ * the deploy-control subroutes; defaults to the Cloudflare provider-token
+ * subroute when the body is a plain provider credential.
+ */
+function connectionCreateSubroute(body: Record<string, unknown>): string {
+  const kind = typeof body.kind === "string" ? body.kind : undefined;
+  if (kind === "source_git_https_token") {
+    return `${CONNECTIONS_PATH}/source/https-token`;
+  }
+  if (kind === "source_git_ssh_key") {
+    return `${CONNECTIONS_PATH}/source/ssh-key`;
+  }
+  const provider = typeof body.provider === "string" ? body.provider : undefined;
+  if (provider === "aws") return `${CONNECTIONS_PATH}/aws/assume-role`;
+  // Default provider credential: Cloudflare API token.
+  return `${CONNECTIONS_PATH}/cloudflare/token`;
+}
 
 export interface ConnectionsProxyResult {
   readonly status: number;
@@ -31,7 +59,10 @@ export interface ConnectionsProxyResult {
   readonly payload: unknown;
 }
 
-/** POST /v1/connections — create a Connection (body carries write-only values). */
+/**
+ * POST a §30 connection-creation subroute (body carries write-only values). The
+ * subroute is selected from the body's `kind` / `provider`.
+ */
 export async function forwardCreateConnection(input: {
   deployControl: DeployControlProxyOptions;
   body: Record<string, unknown>;
@@ -39,12 +70,12 @@ export async function forwardCreateConnection(input: {
   return await forwardConnectionsJson({
     deployControl: input.deployControl,
     method: "POST",
-    path: CONNECTIONS_PATH,
+    path: connectionCreateSubroute(input.body),
     body: input.body,
   });
 }
 
-/** GET /v1/connections?spaceId=... — list Connections for a space. */
+/** GET /api/connections?spaceId=... — list Connections for a space. */
 export async function forwardListConnections(input: {
   deployControl: DeployControlProxyOptions;
   spaceId: string;
@@ -57,7 +88,7 @@ export async function forwardListConnections(input: {
   });
 }
 
-/** POST /v1/connections/{id}/test — verify a Connection's stored credential. */
+/** POST /api/connections/{id}/test — verify a Connection's stored credential. */
 export async function forwardTestConnection(input: {
   deployControl: DeployControlProxyOptions;
   connectionId: string;
@@ -73,7 +104,14 @@ export async function forwardTestConnection(input: {
   });
 }
 
-/** GET /v1/connections/{id} — read a single Connection (no secret values). */
+/**
+ * GET /api/connections/{id} — read a single Connection (no secret values). The
+ * §30 surface exposes per-id reads via the operator/space listing rather than a
+ * dedicated GET; the account plane resolves a single Connection's `spaceId` for
+ * its ownership check by listing the connection's Space and matching the id.
+ * Kept as a read helper consumed by {@link forwardTestConnection} /
+ * {@link forwardRevokeConnection} callers.
+ */
 export async function forwardGetConnection(input: {
   deployControl: DeployControlProxyOptions;
   connectionId: string;
@@ -86,23 +124,26 @@ export async function forwardGetConnection(input: {
   });
 }
 
-/** DELETE /v1/connections/{id} — revoke + delete the secret blob. */
-export async function forwardDeleteConnection(input: {
+/** POST /api/connections/{id}/revoke — revoke + delete the secret blob. */
+export async function forwardRevokeConnection(input: {
   deployControl: DeployControlProxyOptions;
   connectionId: string;
 }): Promise<ConnectionsProxyResult> {
-  const path = `${CONNECTIONS_PATH}/${encodeURIComponent(input.connectionId)}`;
+  const path = `${CONNECTIONS_PATH}/${
+    encodeURIComponent(input.connectionId)
+  }/revoke`;
   return await forwardConnectionsJson({
     deployControl: input.deployControl,
-    method: "DELETE",
+    method: "POST",
     path,
+    body: {},
   });
 }
 
 export function responseFromConnectionsResult(
   result: ConnectionsProxyResult,
 ): Response {
-  // 204 (DELETE) must not carry a body.
+  // 204 (revoke) must not carry a body.
   if (result.status === 204) {
     return new Response(null, { status: 204 });
   }
@@ -121,7 +162,7 @@ const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
  */
 async function forwardConnectionsJson(input: {
   deployControl: DeployControlProxyOptions;
-  method: "GET" | "POST" | "DELETE";
+  method: "GET" | "POST";
   path: string;
   body?: unknown;
 }): Promise<ConnectionsProxyResult> {

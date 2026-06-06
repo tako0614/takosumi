@@ -40,6 +40,65 @@ test("Cloudflare Accounts Worker keeps edge health local", async () => {
   });
 });
 
+test("Cloudflare Accounts Worker redirects a valid /install link to the SPA flow", async () => {
+  const d1 = new InitOnlyD1Database();
+  const worker = createCloudflareWorker();
+  const response = await worker.fetch(
+    new Request(
+      "https://accounts.example/install?git=https://github.com/acme/repo.git&ref=main&path=deploy",
+    ),
+    createEnv(d1),
+  );
+  // The install link is handled before any D1 access or the SPA fallback.
+  assert.equal(response.status, 302);
+  assert.equal(d1.execCount, 0);
+  const location = response.headers.get("location") ?? "";
+  assert.ok(location.startsWith("/#/install?"));
+  const params = new URLSearchParams(location.slice("/#/install?".length));
+  assert.equal(params.get("git"), "https://github.com/acme/repo.git");
+  assert.equal(params.get("ref"), "main");
+  assert.equal(params.get("path"), "deploy");
+});
+
+test("Cloudflare Accounts Worker handles the packed /install?source=git:: form", async () => {
+  const worker = createCloudflareWorker();
+  const response = await worker.fetch(
+    new Request(
+      "https://accounts.example/install?source=git::https://github.com/acme/repo.git//deploy?ref=main",
+    ),
+    createEnv(new InitOnlyD1Database()),
+  );
+  assert.equal(response.status, 302);
+  const params = new URLSearchParams(
+    (response.headers.get("location") ?? "").slice("/#/install?".length),
+  );
+  assert.equal(params.get("git"), "https://github.com/acme/repo.git");
+  assert.equal(params.get("ref"), "main");
+  assert.equal(params.get("path"), "deploy");
+});
+
+test("Cloudflare Accounts Worker rejects a malformed /install link with 400", async () => {
+  const worker = createCloudflareWorker();
+  const response = await worker.fetch(
+    new Request("https://accounts.example/install?nonsense=1"),
+    createEnv(new InitOnlyD1Database()),
+  );
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, "invalid_install_link");
+});
+
+test("Cloudflare Accounts Worker rejects a policy-violating /install source url with 400", async () => {
+  const worker = createCloudflareWorker();
+  const response = await worker.fetch(
+    new Request(
+      "https://accounts.example/install?git=https://user:secret@github.com/acme/repo.git",
+    ),
+    createEnv(new InitOnlyD1Database()),
+  );
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, "invalid_install_source_url");
+});
+
 test("Cloudflare Accounts Worker handles account-plane routes directly", async () => {
   const d1 = new InitOnlyD1Database();
   const worker = createCloudflareWorker();

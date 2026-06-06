@@ -38,6 +38,22 @@ export interface DeployControlOperations {
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   getInstallation(id: string): Promise<GetInstallationResponse>;
   listDeployments(installationId: string): Promise<ListDeploymentsResponse>;
+  /**
+   * Idempotent personal-Space creation for the account-plane first-login hook
+   * (spec §4: "初回ログイン時に個人 Space を自動作成する"). Exposed on the
+   * operations facade so the account plane CAN call it fire-and-forget once a
+   * clean first-login seam threads the deploy-control operations through the
+   * OAuth/OIDC route layer. NOT yet wired (see the TODO in
+   * `identity.ts#resolveUpstreamAccount`): the upstream-login seam does not
+   * currently have the deploy-control operations in scope, and threading them
+   * through the whole OAuth route layer is deep accounts surgery deferred past
+   * M9. `handle` must satisfy the spaces handle rule; the account's
+   * username/slug if one exists, else `u-<short id>`.
+   */
+  ensurePersonalSpace?(
+    ownerUserId: string,
+    handle: string,
+  ): Promise<{ readonly id: string }>;
 }
 
 export interface DeployControlProxyOptions {

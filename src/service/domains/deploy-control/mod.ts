@@ -130,7 +130,11 @@ import {
   generateRootModule,
 } from "takosumi-rootgen";
 import { downstreamClosure } from "takosumi-graph";
-import type { Run } from "takosumi-contract/runs";
+import type {
+  Run,
+  RunEventsResponse,
+  RunLogsResponse,
+} from "takosumi-contract/runs";
 import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import type {
   Dependency,
@@ -488,6 +492,14 @@ export interface CreateInstallationPlanRequest {
  */
 export interface CreateInstallationPlanInternal {
   readonly runGroupId?: string;
+  /**
+   * Pins the plan to a SPECIFIC SourceSnapshot id instead of resolving the
+   * Source's latest snapshot for its default ref. Used by the §30 deployment
+   * rollback-plan path (`POST /api/deployments/:id/rollback-plan`) to re-plan an
+   * Installation against the source snapshot a prior Deployment was built from.
+   * The snapshot must belong to the Installation's Source.
+   */
+  readonly sourceSnapshotId?: string;
 }
 
 export class OpenTofuDeploymentController {
@@ -773,10 +785,15 @@ export class OpenTofuDeploymentController {
         `source ${installation.sourceId} not found for installation ${installationId}`,
       );
     }
-    const snapshot = await this.#resolveLatestSnapshot(
-      source.id,
-      source.defaultRef,
-    );
+    // The rollback-plan path pins a SPECIFIC SourceSnapshot (a prior
+    // Deployment's snapshot); otherwise resolve the Source's latest snapshot for
+    // its default ref.
+    const snapshot = internal.sourceSnapshotId
+      ? await this.#requireSourceSnapshotForSource(
+        source.id,
+        internal.sourceSnapshotId,
+      )
+      : await this.#resolveLatestSnapshot(source.id, source.defaultRef);
     if (!snapshot) {
       // Typed 409: the Installation cannot plan until a SourceSnapshot exists
       // for its source. Callers run a source_sync first.
@@ -996,6 +1013,26 @@ export class OpenTofuDeploymentController {
     const refMatches = snapshots.filter((snap) => snap.ref === ref);
     const pool = refMatches.length > 0 ? refMatches : snapshots;
     return pool[pool.length - 1];
+  }
+
+  /**
+   * Resolves a SourceSnapshot by id and asserts it belongs to the given Source.
+   * Used by the rollback-plan path to pin a prior Deployment's snapshot; a
+   * snapshot from another Source (or a missing id) is a typed 404.
+   */
+  async #requireSourceSnapshotForSource(
+    sourceId: string,
+    snapshotId: string,
+  ): Promise<SourceSnapshot> {
+    const snapshots = await this.#store.listSourceSnapshots(sourceId);
+    const snapshot = snapshots.find((snap) => snap.id === snapshotId);
+    if (!snapshot) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `source snapshot ${snapshotId} not found for source ${sourceId}`,
+      );
+    }
+    return snapshot;
   }
 
   /**
@@ -2013,6 +2050,42 @@ export class OpenTofuDeploymentController {
     };
   }
 
+  /**
+   * Reads a single Deployment ledger record (spec §21 / §30 `GET
+   * /api/deployments/:id`). A missing id is a typed 404.
+   */
+  async getDeployment(id: string): Promise<Deployment> {
+    requireNonEmptyString(id, "deploymentId");
+    const deployment = await this.#store.getDeployment(id);
+    if (!deployment) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `deployment ${id} not found`,
+      );
+    }
+    return deployment;
+  }
+
+  /**
+   * Creates a rollback PLAN run for a Deployment (spec §30 `POST
+   * /api/deployments/:id/rollback-plan`): re-plans the Deployment's Installation
+   * pinned to THAT Deployment's `sourceSnapshotId`. The plan then flows through
+   * the normal approval/apply path. Reuses the installation plan path with an
+   * internal snapshot override.
+   */
+  async createDeploymentRollbackPlan(
+    deploymentId: string,
+    context: DeployControlActorContext = {},
+  ): Promise<PlanRunResponse> {
+    const deployment = await this.getDeployment(deploymentId);
+    return await this.#createInstallationPlanRun(
+      deployment.installationId,
+      false,
+      context,
+      { sourceSnapshotId: deployment.sourceSnapshotId },
+    );
+  }
+
   // --- Connections (provider credential registration; Phase 1A) -------------
 
   async createConnection(
@@ -2030,6 +2103,14 @@ export class OpenTofuDeploymentController {
   async listConnections(spaceId: string): Promise<ListConnectionsResponse> {
     requireNonEmptyString(spaceId, "spaceId");
     return { connections: await this.#store.listConnections(spaceId) };
+  }
+
+  /**
+   * Lists instance-wide `operator`-scoped Connections (spec §30 `GET
+   * /api/connections` with `?spaceId` omitted). Never includes secret values.
+   */
+  async listOperatorConnections(): Promise<ListConnectionsResponse> {
+    return { connections: await this.#store.listOperatorConnections() };
   }
 
   async getConnection(connectionId: string): Promise<Connection> {
@@ -2160,6 +2241,67 @@ export class OpenTofuDeploymentController {
     }
     const sync = await this.#store.getSourceSyncRun(id);
     if (sync) return projectSourceSyncRun(sync);
+    throw new OpenTofuControllerError("not_found", `run ${id} not found`);
+  }
+
+  /**
+   * Reads the run-level diagnostics + audit trail for a Run (spec §30 `GET
+   * /api/runs/:runId/logs`). Diagnostics + audit events are recorded on the
+   * underlying PlanRun / ApplyRun ledger record; a `source_sync` run carries no
+   * structured diagnostics, so its single `error`, when present, is surfaced as
+   * one error diagnostic. Returns the unified `{ diagnostics, auditEvents }`
+   * shape. A missing run is a typed 404.
+   */
+  async getRunLogs(id: string): Promise<RunLogsResponse> {
+    requireNonEmptyString(id, "runId");
+    const record = await this.#requireRunRecordWithLogs(id);
+    return { diagnostics: record.diagnostics, auditEvents: record.auditEvents };
+  }
+
+  /**
+   * Reads the run-level audit trail for a Run (spec §30 `GET
+   * /api/runs/:runId/events`). MVP: the run-level audit events only.
+   */
+  async getRunEvents(id: string): Promise<RunEventsResponse> {
+    requireNonEmptyString(id, "runId");
+    const record = await this.#requireRunRecordWithLogs(id);
+    return { auditEvents: record.auditEvents };
+  }
+
+  /**
+   * Resolves a Run id to its underlying ledger record's `{ diagnostics,
+   * auditEvents }`. PlanRun / ApplyRun carry both; a SourceSyncRun has neither,
+   * so its `error` is projected to a single error diagnostic and its audit trail
+   * is empty. A missing run is a typed 404. Used by the run logs/events routes;
+   * no credential material or sensitive output value enters these projections.
+   */
+  async #requireRunRecordWithLogs(id: string): Promise<{
+    readonly diagnostics: readonly RunDiagnostic[];
+    readonly auditEvents: readonly DeployControlAuditEvent[];
+  }> {
+    const planRun = await this.#store.getPlanRun(id);
+    if (planRun) {
+      return {
+        diagnostics: planRun.diagnostics ?? [],
+        auditEvents: planRun.auditEvents,
+      };
+    }
+    const applyRun = await this.#store.getApplyRun(id);
+    if (applyRun) {
+      return {
+        diagnostics: applyRun.diagnostics ?? [],
+        auditEvents: applyRun.auditEvents,
+      };
+    }
+    const sync = await this.#store.getSourceSyncRun(id);
+    if (sync) {
+      return {
+        diagnostics: sync.error
+          ? [{ severity: "error", message: sync.error }]
+          : [],
+        auditEvents: [],
+      };
+    }
     throw new OpenTofuControllerError("not_found", `run ${id} not found`);
   }
 
