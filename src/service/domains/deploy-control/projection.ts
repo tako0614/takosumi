@@ -16,6 +16,7 @@ import type {
   RunDiagnostic,
   RunnerStateBackend,
   RunnerStateLockEvidence,
+  TemplateDefinition,
 } from "takosumi-contract/deploy-control-api";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import { redactString } from "../../services/observability/redaction.ts";
@@ -37,6 +38,61 @@ export function deploymentOutputsFromOpenTofu(
     });
   }
   return result;
+}
+
+/**
+ * Template output allowlist projection (Phase 1C).
+ *
+ * For a template-backed run, project ONLY the template's declared public
+ * outputs. The Takosumi-generated root re-exports each public output under its
+ * public name (`output "<public>" { value = module.app.<from> }`), so the runner
+ * output envelope is keyed by the public names. We keep only those names, drop
+ * sensitive/non-publishable values via the same filter as the well-known
+ * projection, and stamp the template-declared display kind.
+ */
+export function projectTemplatePublicOutputs(
+  template: TemplateDefinition,
+  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
+): readonly DeploymentOutput[] {
+  if (!outputs) return [];
+  const byName = outputValuesByName(outputs);
+  const result: DeploymentOutput[] = [];
+  for (const [publicName, spec] of Object.entries(template.outputs.public)) {
+    const entry = byName.get(publicName);
+    if (!entry || entry.sensitive) continue;
+    const kind = templateOutputKind(spec.type);
+    if (!isPublishableDeploymentOutputValue(publicName, kind, entry.value)) {
+      continue;
+    }
+    result.push({ name: publicName, kind, value: entry.value, sensitive: false });
+  }
+  return result;
+}
+
+function outputValuesByName(
+  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[],
+): ReadonlyMap<string, { readonly value: JsonValue; readonly sensitive: boolean }> {
+  const map = new Map<string, { value: JsonValue; sensitive: boolean }>();
+  if (Array.isArray(outputs as unknown)) {
+    for (const output of outputs as readonly DeploymentOutput[]) {
+      map.set(output.name, { value: output.value, sensitive: output.sensitive });
+    }
+    return map;
+  }
+  for (const [name, output] of Object.entries(outputs as OpenTofuOutputEnvelope)) {
+    map.set(name, { value: output.value, sensitive: output.sensitive === true });
+  }
+  return map;
+}
+
+/**
+ * Maps a template public-output type hint to a DeploymentOutput display kind.
+ * A `*_url`-shaped public name keeps URL semantics so the sensitive-URL guard in
+ * `isPublishableDeploymentOutputValue` applies; everything else is a generic
+ * non-URL value passed through under its declared type.
+ */
+function templateOutputKind(type: string): DeploymentOutput["kind"] {
+  return typeof type === "string" && type.length > 0 ? type : "string";
 }
 
 export function normalizeDeploymentOutputs(
