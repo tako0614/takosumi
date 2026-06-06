@@ -14,7 +14,20 @@ import type {
   PlanRun,
   RunnerProfile,
 } from "takosumi-contract/deploy-control-api";
+import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
+
+/**
+ * Internal (non-public) plan inputs persisted alongside a PlanRun so the queue
+ * consumer can re-run the plan after the create call returns. The public PlanRun
+ * deliberately keeps only `variablesDigest`; the values live here and are never
+ * projected into the public ledger. Removed when the run reaches a terminal
+ * state.
+ */
+export interface PlanRunInputs {
+  readonly planRunId: string;
+  readonly variables: Readonly<Record<string, JsonValue>>;
+}
 
 /**
  * Sealed credential blob persisted alongside (but separate from) the public
@@ -80,6 +93,11 @@ export interface OpenTofuDeploymentStore {
   putPlanRun(run: PlanRun): Promise<PlanRun>;
   getPlanRun(id: string): Promise<PlanRun | undefined>;
 
+  // Internal (non-public) plan inputs for the queue consumer. Never projected.
+  putPlanRunInputs(inputs: PlanRunInputs): Promise<void>;
+  getPlanRunInputs(planRunId: string): Promise<PlanRunInputs | undefined>;
+  deletePlanRunInputs(planRunId: string): Promise<void>;
+
   putApplyRun(run: ApplyRun): Promise<ApplyRun>;
   getApplyRun(id: string): Promise<ApplyRun | undefined>;
 
@@ -96,6 +114,7 @@ export interface OpenTofuDeploymentStore {
         | "updatedAt"
         | "runnerProfileId"
         | "source"
+        | "stateGeneration"
       >
     >,
     guard?: InstallationPatchGuard,
@@ -122,6 +141,7 @@ export class InMemoryOpenTofuDeploymentStore
   implements OpenTofuDeploymentStore {
   readonly #runnerProfiles = new Map<string, RunnerProfile>();
   readonly #planRuns = new Map<string, PlanRun>();
+  readonly #planRunInputs = new Map<string, PlanRunInputs>();
   readonly #applyRuns = new Map<string, ApplyRun>();
   readonly #installations = new Map<string, Installation>();
   readonly #deployments = new Map<string, Deployment>();
@@ -156,6 +176,20 @@ export class InMemoryOpenTofuDeploymentStore
 
   getPlanRun(id: string): Promise<PlanRun | undefined> {
     return Promise.resolve(this.#planRuns.get(id));
+  }
+
+  putPlanRunInputs(inputs: PlanRunInputs): Promise<void> {
+    this.#planRunInputs.set(inputs.planRunId, inputs);
+    return Promise.resolve();
+  }
+
+  getPlanRunInputs(planRunId: string): Promise<PlanRunInputs | undefined> {
+    return Promise.resolve(this.#planRunInputs.get(planRunId));
+  }
+
+  deletePlanRunInputs(planRunId: string): Promise<void> {
+    this.#planRunInputs.delete(planRunId);
+    return Promise.resolve();
   }
 
   putApplyRun(run: ApplyRun): Promise<ApplyRun> {
@@ -194,6 +228,7 @@ export class InMemoryOpenTofuDeploymentStore
         | "updatedAt"
         | "runnerProfileId"
         | "source"
+        | "stateGeneration"
       >
     >,
     guard?: InstallationPatchGuard,

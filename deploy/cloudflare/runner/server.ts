@@ -79,9 +79,8 @@ const BASE_COMMAND_ENV_NAMES = [
   "GIT_SSL_CAINFO",
   "REQUESTS_CA_BUNDLE",
 ] as const;
-Bun.serve({
-  port,
-  async fetch(request) {
+async function handleRunnerRequest(request: Request): Promise<Response> {
+  {
     const url = new URL(request.url);
     if (url.pathname === "/healthz" || url.pathname === "/container/health") {
       return Response.json({ ok: true, runner: "opentofu" });
@@ -144,8 +143,14 @@ Bun.serve({
         { status: 500 },
       );
     }
-  },
-});
+  }
+}
+
+// Only bind a port when run as the container entrypoint; importing this module
+// (e.g. for a unit test of commandContextFromRequest) must not start a server.
+if (import.meta.main) {
+  Bun.serve({ port, fetch: handleRunnerRequest });
+}
 
 async function runPlan(
   runId: string,
@@ -948,13 +953,21 @@ function parseRequiredProviders(request: unknown): readonly string[] {
   return stringArray(providers);
 }
 
-function commandContextFromRequest(
+export function commandContextFromRequest(
   request: unknown,
   runnerProfile: JsonRecord | undefined,
 ): CommandContext {
   const env = baseCommandEnv();
   const requiredProviders = parseRequiredProviders(request);
   const credentialRefs = credentialRefsFromRunnerProfile(runnerProfile);
+  // Credentials minted by the Vault broker and threaded onto the dispatch
+  // payload (Phase 1B). Read these FIRST, filtered through the same
+  // provider-env-rules match the Bun.env path uses, so only env names the
+  // required providers actually allow are admitted. Falls back to Bun.env when a
+  // name is not supplied on the payload (e.g. local/dev runners with ambient
+  // credentials). The payload credential map is NEVER echoed back (see the run
+  // response builders, which return only run metadata + stdout/stderr).
+  const payloadCredentials = credentialsFromRequest(request);
   const maxRunSeconds = maxRunSecondsFromProfile(runnerProfile);
   const maxSourceArchiveBytes = positiveIntegerLimitFromProfile(
     runnerProfile,
@@ -969,6 +982,11 @@ function commandContextFromRequest(
       provider,
       credentialRefs.filter((ref) => providerMatches(provider, ref.provider)),
     )) {
+      const fromPayload = payloadCredentials[envName];
+      if (typeof fromPayload === "string") {
+        env[envName] = fromPayload;
+        continue;
+      }
       const value = Bun.env[envName];
       if (typeof value === "string") env[envName] = value;
     }
@@ -981,6 +999,25 @@ function commandContextFromRequest(
       ? { sourceArchiveMaxDecompressedBytes: maxSourceDecompressedBytes }
       : {}),
   };
+}
+
+/**
+ * Extracts the minted credential env map from the dispatch payload's
+ * `credentials` field. Only string values keyed by a valid env-name shape are
+ * admitted; everything else is ignored. The provider-allowlist filtering happens
+ * in {@link commandContextFromRequest} (only names a required provider allows are
+ * ever read out of this map).
+ */
+function credentialsFromRequest(request: unknown): Record<string, string> {
+  const credentials = recordField(request, "credentials");
+  if (!isRecord(credentials)) return {};
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(credentials)) {
+    if (typeof value === "string" && /^[A-Z_][A-Z0-9_]*$/.test(name)) {
+      out[name] = value;
+    }
+  }
+  return out;
 }
 
 function baseCommandEnv(): Record<string, string> {

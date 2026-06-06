@@ -21,6 +21,7 @@ import type {
 import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
+  PlanRunInputs,
   StoredSecretBlob,
 } from "./store.ts";
 import { InstallationPatchGuardConflict } from "./store.ts";
@@ -91,6 +92,32 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       [id],
     );
     return parseRow(result.rows[0]) as PlanRun | undefined;
+  }
+
+  async putPlanRunInputs(inputs: PlanRunInputs): Promise<void> {
+    await this.#query(
+      "insert into takosumi_plan_run_inputs (plan_run_id, inputs_json) " +
+        "values ($1, $2::jsonb) " +
+        "on conflict (plan_run_id) do update set inputs_json = excluded.inputs_json",
+      [inputs.planRunId, JSON.stringify(inputs)],
+    );
+  }
+
+  async getPlanRunInputs(
+    planRunId: string,
+  ): Promise<PlanRunInputs | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select inputs_json as json from takosumi_plan_run_inputs where plan_run_id = $1",
+      [planRunId],
+    );
+    return parseRow(result.rows[0]) as PlanRunInputs | undefined;
+  }
+
+  async deletePlanRunInputs(planRunId: string): Promise<void> {
+    await this.#query(
+      "delete from takosumi_plan_run_inputs where plan_run_id = $1",
+      [planRunId],
+    );
   }
 
   async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
@@ -191,6 +218,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         | "updatedAt"
         | "runnerProfileId"
         | "source"
+        | "stateGeneration"
       >
     >,
     guard?: InstallationPatchGuard,

@@ -31,6 +31,7 @@ import {
 } from "./domains/deploy-records/deployment_record_store.ts";
 import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy-records/deployment_record_store_sql.ts";
 import {
+  type EnqueueRun,
   OpenTofuDeploymentController,
   type OpenTofuRunner,
 } from "./domains/deploy-control/mod.ts";
@@ -204,6 +205,13 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * queued in the ledger for an external runner to pick up.
    */
   readonly opentofuRunner?: OpenTofuRunner;
+  /**
+   * Out-of-process run dispatch seam. The Workers adapter injects a producer
+   * that enqueues onto `TAKOS_OPENTOFU_RUN_QUEUE`; when omitted the controller
+   * defaults to an inline dispatcher that runs the consumer synchronously
+   * (preserving create-executes-run for local / node substrates and tests).
+   */
+  readonly enqueueRun?: EnqueueRun;
   readonly runnerProfiles?: readonly RunnerProfile[];
   readonly defaultRunnerProfileId?: string;
 }
@@ -228,6 +236,14 @@ export interface TakosumiOperations {
   listDeploymentOutputs(
     installationId: string,
   ): Promise<ListDeploymentOutputsResponse>;
+  /**
+   * Queue-consumer entry point. The Workers `queue()` consumer calls this for
+   * each dispatched run message (plan/apply); it loads the run, applies the
+   * idempotency guard, mints credentials, and drives the container dispatch.
+   */
+  dispatchQueuedRun(
+    dispatch: { action: "plan" | "apply"; runId: string; spaceId: string },
+  ): Promise<void>;
 }
 
 export interface CreatedTakosumiService {
@@ -311,6 +327,7 @@ export async function createTakosumiService(
   const opentofuController = new OpenTofuDeploymentController({
     ...(opentofuStore.store ? { store: opentofuStore.store } : {}),
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
+    ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),
     ...(options.runnerProfiles ? { runnerProfiles: options.runnerProfiles } : {}),
     ...(options.defaultRunnerProfileId
       ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
@@ -384,6 +401,8 @@ export async function createTakosumiService(
       opentofuController.listDeployments(installationId),
     listDeploymentOutputs: (installationId) =>
       opentofuController.listDeploymentOutputs(installationId),
+    dispatchQueuedRun: (dispatch) =>
+      opentofuController.dispatchQueuedRun(dispatch),
   };
   return { app, context, role, workerDaemon, operations };
 }

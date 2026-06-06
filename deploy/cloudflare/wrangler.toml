@@ -39,12 +39,24 @@ max_batch_timeout = 5
 max_retries = 3
 dead_letter_queue = "takosumi-control-plane-dlq"
 
+# Async OpenTofu run lifecycle. The create path persists the run `queued` and
+# returns; this consumer mints credentials and drives the container DO. One run
+# per delivery (max_batch_size = 1) so a failure only retries its own run. NOTE:
+# the queue consumer invocation budget (~15 min) bounds a single run; detaching
+# long runs from the consumer invocation is future work.
 [[queues.consumers]]
 queue = "takosumi-opentofu-runs"
-max_batch_size = 5
-max_batch_timeout = 5
-max_retries = 3
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 2
 dead_letter_queue = "takosumi-opentofu-runs-dlq"
+
+# Dead-letter consumer: marks runs that exhausted retries failed
+# ("retries-exhausted") if not already terminal.
+[[queues.consumers]]
+queue = "takosumi-opentofu-runs-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
 
 [[durable_objects.bindings]]
 name = "TAKOS_COORDINATION"

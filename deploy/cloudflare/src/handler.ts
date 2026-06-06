@@ -31,6 +31,7 @@ import { InMemoryObservabilitySink } from "../../../src/service/services/observa
 import { constantTimeEqualsString } from "../../../src/service/shared/constant_time.ts";
 import {
   createDefaultRunnerProfiles,
+  type EnqueueRun,
   type OpenTofuApplyJob,
   type OpenTofuApplyResult,
   type OpenTofuDestroyJob,
@@ -56,7 +57,7 @@ import {
   isServiceControlPlanePath,
 } from "./routes.ts";
 
-export type { CloudflareWorkerEnv } from "./bindings.ts";
+export type { CloudflareWorkerEnv, QueueBatch } from "./bindings.ts";
 
 // Durable Object classes that back the embedded deploy-control plane. Re-exported
 // from the single handler module so a host worker (e.g. the unified Takos worker)
@@ -132,14 +133,126 @@ export function createCloudflareWorker(
       return Response.json({ error: "not found" }, { status: 404 });
     },
     async queue(batch: QueueBatch, env: CloudflareWorkerEnv): Promise<void> {
-      for (const message of batch.messages) {
-        const run = parseOpenTofuRunQueueMessage(message.body);
-        if (!run) continue;
-        await dispatchOpenTofuRunToContainer(run, env);
-        message.ack?.();
-      }
+      await consumeOpenTofuRunBatch(batch, env);
     },
   };
+}
+
+/**
+ * The deploy-control queue consumer, factored out so a composing host worker
+ * (the operator's Takosumi platform worker) can mount it as its `queue()`
+ * handler. The platform worker owns the public fetch surface via the accounts
+ * handler but must run the OpenTofu run-queue consumer in-process; this is the
+ * single entry point it wires up.
+ */
+export function createDeployControlQueueConsumer(): (
+  batch: QueueBatch,
+  env: CloudflareWorkerEnv,
+) => Promise<void> {
+  return (batch, env) => consumeOpenTofuRunBatch(batch, env);
+}
+
+// Queue consumer config (mirrors deploy/*/wrangler.toml `max_retries`): one
+// initial delivery + this many retries. On the final attempt the consumer
+// records the run failed instead of rethrowing, so the message is not endlessly
+// redelivered; earlier attempts rethrow so Cloudflare Queues retries.
+const OPENTOFU_RUN_MAX_RETRIES = 2;
+const OPENTOFU_RUN_DLQ_SUFFIX = "-dlq";
+
+/**
+ * Drives a batch of OpenTofu run-dispatch messages.
+ *
+ * Main queue: load the run via the in-process deploy-control controller, run the
+ * idempotency-guarded consumer (which mints credentials and dispatches to the
+ * container DO), then `ack`. A thrown error is rethrown on non-final attempts so
+ * Queues retries; on the final attempt the run is marked failed (the controller
+ * already records redacted diagnostics) and the message is acked so it is not
+ * redelivered forever.
+ *
+ * DLQ: a run that exhausted retries is marked failed ("retries-exhausted") if it
+ * is not already terminal, then acked.
+ */
+async function consumeOpenTofuRunBatch(
+  batch: QueueBatch,
+  env: CloudflareWorkerEnv,
+): Promise<void> {
+  const isDeadLetter = typeof batch.queue === "string" &&
+    batch.queue.endsWith(OPENTOFU_RUN_DLQ_SUFFIX);
+  for (const message of batch.messages) {
+    const run = parseOpenTofuRunQueueMessage(message.body);
+    if (!run) {
+      // Unparseable message: ack so it does not loop. (Never logged with body.)
+      message.ack?.();
+      continue;
+    }
+    if (isDeadLetter) {
+      await markOpenTofuRunRetriesExhausted(run, env);
+      message.ack?.();
+      continue;
+    }
+    const attempt = typeof message.attempts === "number" ? message.attempts : 1;
+    const finalAttempt = attempt > OPENTOFU_RUN_MAX_RETRIES;
+    try {
+      await dispatchOpenTofuRun(run, env);
+      message.ack?.();
+    } catch (error) {
+      if (finalAttempt) {
+        // Out of retries: leave the run in its recorded terminal/failed state and
+        // stop redelivery. The DLQ consumer is the backstop for runs the consumer
+        // crashed on before it could record failed.
+        message.ack?.();
+        return;
+      }
+      // Rethrow so Cloudflare Queues counts the failure and retries the message.
+      throw redactedDispatchError(error);
+    }
+  }
+}
+
+/**
+ * Loads the deploy-control controller for this env and runs the queued plan/apply
+ * consumer. The controller mints credentials just before the container dispatch
+ * and records the terminal run status; this function never serializes or logs
+ * the run body or any credential value.
+ */
+async function dispatchOpenTofuRun(
+  run: OpenTofuRunQueueMessage,
+  env: CloudflareWorkerEnv,
+): Promise<void> {
+  if (run.action === "destroy") {
+    // Destroy is an apply-run variant; the controller routes by the PlanRun
+    // operation. Treat it as an apply dispatch for the consumer.
+    await dispatchToController(env, "apply", run.runId, run.spaceId);
+    return;
+  }
+  await dispatchToController(env, run.action, run.runId, run.spaceId);
+}
+
+async function dispatchToController(
+  env: CloudflareWorkerEnv,
+  action: "plan" | "apply",
+  runId: string,
+  spaceId: string,
+): Promise<void> {
+  const service = await cachedDeployControlService(env);
+  await service.operations.dispatchQueuedRun({ action, runId, spaceId });
+}
+
+async function markOpenTofuRunRetriesExhausted(
+  run: OpenTofuRunQueueMessage,
+  env: CloudflareWorkerEnv,
+): Promise<void> {
+  try {
+    const service = await cachedDeployControlService(env);
+    await markRunFailedIfNotTerminal(
+      service.operations.controller,
+      run,
+      "retries-exhausted",
+    );
+  } catch {
+    // Best-effort: the DLQ backstop must never throw (it would re-queue the
+    // dead letter). Swallow; the run simply stays in its last recorded state.
+  }
 }
 
 /**
@@ -275,6 +388,7 @@ async function createWorkerServiceApp(
     runtimeEnv,
     storage,
   });
+  const enqueueRun = openTofuRunEnqueuer(env);
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -286,35 +400,64 @@ async function createWorkerServiceApp(
       env.TAKOS_D1,
     ),
     opentofuRunner: new CloudflareContainerOpenTofuRunner(env),
+    // Async run lifecycle: when the run queue is bound, the create path persists
+    // the run `queued` and returns immediately; the `queue()` consumer in this
+    // same worker drives execution. Without the binding, the controller's
+    // default inline dispatcher preserves synchronous create-executes-run.
+    ...(enqueueRun ? { enqueueRun } : {}),
     ...(options.runnerProfiles
       ? { runnerProfiles: options.runnerProfiles }
       : {}),
   });
 }
 
-async function dispatchOpenTofuRunToContainer(
-  run: OpenTofuRunQueueMessage,
+/**
+ * Builds the producer half of the async run lifecycle: enqueues a
+ * run-dispatch message onto `TAKOS_OPENTOFU_RUN_QUEUE`. Returns undefined when
+ * the queue is not bound, so the controller falls back to its inline dispatcher.
+ * The message carries only the run identity (never variables or credentials).
+ */
+function openTofuRunEnqueuer(
   env: CloudflareWorkerEnv,
+): EnqueueRun | undefined {
+  const queue = env.TAKOS_OPENTOFU_RUN_QUEUE;
+  if (!queue) return undefined;
+  return async (dispatch) => {
+    await queue.send({
+      kind: "takosumi.opentofu-run@v1",
+      action: dispatch.action,
+      runId: dispatch.runId,
+      spaceId: dispatch.spaceId,
+      requestedAt: new Date().toISOString(),
+    });
+  };
+}
+
+/**
+ * Resolves the queued run's `action` to the controller's plan/apply consumer
+ * channel and marks it failed when not already terminal (DLQ backstop).
+ */
+async function markRunFailedIfNotTerminal(
+  controller: { markRunFailed: (
+    action: "plan" | "apply",
+    runId: string,
+    reason: string,
+  ) => Promise<boolean> },
+  run: OpenTofuRunQueueMessage,
+  reason: string,
 ): Promise<void> {
-  if (!env.TAKOS_OPENTOFU_RUNNER) {
-    throw new Error("TAKOS_OPENTOFU_RUNNER binding is not configured");
-  }
-  const id = env.TAKOS_OPENTOFU_RUNNER.idFromName(run.runId);
-  const response = await env.TAKOS_OPENTOFU_RUNNER.get(id).fetch(
-    new Request(
-      `https://opentofu-runner.internal/runs/${encodeURIComponent(run.runId)}`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(run),
-      },
-    ),
-  );
-  if (!response.ok) {
-    throw new Error(
-      `OpenTofu runner rejected ${run.action} run ${run.runId}: ${response.status}`,
-    );
-  }
+  const action = run.action === "plan" ? "plan" : "apply";
+  await controller.markRunFailed(action, run.runId, reason);
+}
+
+/**
+ * Reduces a dispatch error to a message-only Error so the queue retry path never
+ * propagates a credential value or run body that might be embedded in a richer
+ * error object. (The container DO already redacts; this is defense in depth.)
+ */
+function redactedDispatchError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : "opentofu run dispatch failed";
+  return new Error(message);
 }
 
 function isRuntimeAgentPath(pathname: string): boolean {
@@ -340,24 +483,23 @@ function parseOpenTofuRunQueueMessage(
   if (!runId) {
     throw new Error("OpenTofu run queue message runId is required");
   }
+  const spaceId = nonEmptyString(record.spaceId);
+  if (!spaceId) {
+    throw new Error("OpenTofu run queue message spaceId is required");
+  }
   const requestedAt = nonEmptyString(record.requestedAt);
-  if (!requestedAt) {
-    throw new Error("OpenTofu run queue message requestedAt is required");
-  }
   const request = record.request;
-  if (
-    typeof request !== "object" ||
-    request === null ||
-    Array.isArray(request)
-  ) {
-    throw new Error("OpenTofu run queue message request must be an object");
-  }
+  const requestObject =
+    typeof request === "object" && request !== null && !Array.isArray(request)
+      ? (request as Record<string, unknown>)
+      : undefined;
   return {
     kind: "takosumi.opentofu-run@v1",
     action,
     runId,
-    requestedAt,
-    request: request as Record<string, unknown>,
+    spaceId,
+    ...(requestedAt ? { requestedAt } : {}),
+    ...(requestObject ? { request: requestObject } : {}),
   };
 }
 
