@@ -49,6 +49,10 @@ import type {
   CreateInstallationRequest,
   InstallationsService,
 } from "../domains/installations/mod.ts";
+import type {
+  ConnectionsService,
+  PutOperatorConnectionDefaultRequest,
+} from "../domains/connections/mod.ts";
 import {
   OpenTofuControllerError,
   type OpenTofuControllerErrorCode,
@@ -81,6 +85,8 @@ export const TAKOSUMI_SOURCE_SYNC_ROUTE =
 export const TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE =
   "/v1/sources/:sourceId/snapshots" as const;
 export const TAKOSUMI_SPACES_ROUTE = "/v1/spaces" as const;
+export const TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE =
+  "/v1/operator-connection-defaults" as const;
 export const TAKOSUMI_SPACE_ROUTE = "/v1/spaces/:spaceId" as const;
 export const TAKOSUMI_SPACE_INSTALLATIONS_ROUTE =
   "/v1/spaces/:spaceId/installations" as const;
@@ -452,8 +458,8 @@ const ALLOWED_KEYS: Record<DeployControlRouteName, ReadonlySet<string>> = {
     "kind",
     "authMethod",
     "displayName",
-    "owner",
     "scope",
+    "scopeHints",
     "values",
   ]),
   sourceCreate: new Set([
@@ -470,6 +476,10 @@ const ALLOWED_KEYS: Record<DeployControlRouteName, ReadonlySet<string>> = {
     "defaultPath",
     "authConnectionId",
     "status",
+  ]),
+  operatorConnectionDefault: new Set([
+    "capability",
+    "connectionId",
   ]),
   spaceCreate: new Set([
     "handle",
@@ -495,6 +505,7 @@ type DeployControlRouteName =
   | "sourcePatch"
   | "spaceCreate"
   | "installationCreate"
+  | "operatorConnectionDefault"
   | "runApprove";
 
 const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
@@ -532,6 +543,8 @@ export interface DeployControlPublicRouteDependencies {
    * Installation / InstallConfig routes return 501 after successful auth.
    */
   readonly installationsService?: InstallationsService;
+  /** Operator default connections + capability resolution (spec §9). */
+  readonly connectionsService?: ConnectionsService;
 }
 
 export interface DeployControlBearerAuthorizationInput {
@@ -692,7 +705,7 @@ export function mountDeployControlPublicRoutes(
         c,
         "connectionCreate",
       );
-      ensureSpacePermission(auth.principal, body.spaceId);
+      ensureConnectionPermission(auth.principal, body.spaceId);
       const response = await controller.createConnection(body);
       return c.json(response, 201);
     });
@@ -721,7 +734,7 @@ export function mountDeployControlPublicRoutes(
     if (idCheck.kind === "invalid") return idCheck.response;
     return await runHandler(c, async () => {
       const connection = await controller.getConnection(idCheck.value);
-      ensureSpacePermission(auth.principal, connection.spaceId);
+      ensureConnectionPermission(auth.principal, connection.spaceId);
       return c.json(await controller.testConnection(idCheck.value), 200);
     });
   });
@@ -733,7 +746,7 @@ export function mountDeployControlPublicRoutes(
     if (idCheck.kind === "invalid") return idCheck.response;
     return await runHandler(c, async () => {
       const connection = await controller.getConnection(idCheck.value);
-      ensureSpacePermission(auth.principal, connection.spaceId);
+      ensureConnectionPermission(auth.principal, connection.spaceId);
       await controller.deleteConnection(idCheck.value);
       return c.body(null, 204);
     });
@@ -864,6 +877,51 @@ export function mountDeployControlPublicRoutes(
     return await runHandler(c, async () => {
       ensureSpacePermission(auth.principal, idCheck.value);
       return c.json({ space: await spaces.getSpace(idCheck.value) }, 200);
+    });
+  });
+
+  // --- Operator default connections (Core Specification §9) ------------------
+
+  const connectionsService = dependencies.connectionsService;
+
+  app.put(
+    TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE,
+    deployControlBodyLimit,
+    async (c) => {
+      const auth = await authorizeDeployControl(c, dependencies);
+      if (!auth.ok) return auth.response;
+      if (!connectionsService) {
+        return c.json(notImplemented(c, "connections not wired"), 501);
+      }
+      const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+      if (limit) return limit;
+      return await runHandler(c, async () => {
+        // Instance-wide defaults: only the unrestricted bearer may set them.
+        ensureConnectionPermission(auth.principal, undefined);
+        const body = await readJsonBody<PutOperatorConnectionDefaultRequest>(
+          c,
+          "operatorConnectionDefault",
+        );
+        const record = await connectionsService.putOperatorConnectionDefault(
+          body,
+        );
+        return c.json({ operatorConnectionDefault: record }, 200);
+      });
+    },
+  );
+
+  app.get(TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!connectionsService) {
+      return c.json(notImplemented(c, "connections not wired"), 501);
+    }
+    return await runHandler(c, async () => {
+      ensureConnectionPermission(auth.principal, undefined);
+      return c.json({
+        operatorConnectionDefaults: await connectionsService
+          .listOperatorConnectionDefaults(),
+      }, 200);
     });
   });
 
@@ -1186,6 +1244,26 @@ function ensureSpaceCreatePermission(principal: DeployControlPrincipal): void {
   throw new OpenTofuControllerError(
     "permission_denied",
     `deploy control principal ${principal.actor} cannot create spaces`,
+  );
+}
+
+/**
+ * Operator-scoped connections (spec §8: no owning Space) are instance-wide;
+ * only the unrestricted bearer may touch them. A space-scoped connection
+ * falls back to the normal space permission check.
+ */
+function ensureConnectionPermission(
+  principal: DeployControlPrincipal,
+  spaceId: string | undefined,
+): void {
+  if (spaceId !== undefined) {
+    ensureSpacePermission(principal, spaceId);
+    return;
+  }
+  if (principal.spaceIds === "*") return;
+  throw new OpenTofuControllerError(
+    "permission_denied",
+    `deploy control principal ${principal.actor} cannot manage operator-scoped connections`,
   );
 }
 

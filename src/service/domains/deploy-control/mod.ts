@@ -119,6 +119,10 @@ import {
   type InstallationCoordination,
   withInstallationLease,
 } from "./installation_lease.ts";
+import {
+  ConnectionsService,
+  mintableConnectionIds,
+} from "../connections/mod.ts";
 
 // Re-export the shared error primitive and the four decomposed concerns so the
 // domain's public entry point stays `./mod.ts` for importers and tests.
@@ -397,6 +401,7 @@ export class OpenTofuDeploymentController {
   readonly #installationCoordination?: InstallationCoordination;
   readonly #seededProfiles: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
+  #connectionsService?: ConnectionsService;
 
   constructor(dependencies: OpenTofuDeploymentControllerDependencies = {}) {
     this.#store = dependencies.store ?? new InMemoryOpenTofuDeploymentStore();
@@ -1114,10 +1119,7 @@ export class OpenTofuDeploymentController {
     const variables = normalizeVariables(inputs?.variables);
     const dispatch = templateDispatchFromInputs(inputs);
     const running = await this.#markPlanRunning(planRun);
-    const credentials = await this.#mintRunCredentials(
-      planRun.spaceId,
-      planRun.requiredProviders,
-    );
+    const credentials = await this.#mintRunCredentials(planRun);
     const result = await this.#executePlan(
       running,
       profile,
@@ -1332,16 +1334,47 @@ export class OpenTofuDeploymentController {
   }
 
   async #mintRunCredentials(
-    spaceId: string,
-    requiredProviders: readonly string[],
+    planRun: PlanRun,
   ): Promise<RunCredentials | undefined> {
-    if (!this.#vault || requiredProviders.length === 0) return undefined;
+    if (!this.#vault || planRun.requiredProviders.length === 0) {
+      return undefined;
+    }
     try {
-      const bundle = await this.#vault.mint(spaceId, requiredProviders);
+      const connectionIds = await this.#capabilityConnectionIds(planRun);
+      const bundle = await this.#vault.mint(
+        planRun.spaceId,
+        planRun.requiredProviders,
+        connectionIds !== undefined ? { connectionIds } : undefined,
+      );
       return bundle.env;
     } catch (error) {
       throw mapVaultError(error);
     }
+  }
+
+  /**
+   * Capability-resolved connection pool for an installation-driven run
+   * (spec §9). Resolution happens at mint time so binding changes take effect
+   * on the next run. Returns `undefined` (legacy space-wide pool) for runs
+   * without installation context, or while the installation has neither
+   * bindings nor operator defaults — the capability wiring becomes
+   * authoritative with the install types (conformance M5).
+   */
+  async #capabilityConnectionIds(
+    planRun: PlanRun,
+  ): Promise<readonly string[] | undefined> {
+    const ctx = planRun.installationContext;
+    if (!ctx) return undefined;
+    const installation = await this.#store.getInstallation(ctx.installationId);
+    if (!installation) return undefined;
+    this.#connectionsService ??= new ConnectionsService({
+      store: this.#store,
+    });
+    const resolved = await this.#connectionsService.resolveCapabilities(
+      installation,
+    );
+    const ids = mintableConnectionIds(resolved);
+    return ids.length > 0 ? ids : undefined;
   }
 
   async getApplyRun(id: string): Promise<ApplyRunResponse> {
@@ -2010,10 +2043,7 @@ export class OpenTofuDeploymentController {
     // Mint provider credentials NOW (just before dispatch). Apply runs resolve
     // requiredProviders from the reviewed PlanRun. The bundle is attached to the
     // runner dispatch ONLY — never stored, never logged.
-    const credentials = await this.#mintRunCredentials(
-      planRun.spaceId,
-      planRun.requiredProviders,
-    );
+    const credentials = await this.#mintRunCredentials(planRun);
     if (planRun.operation === "destroy") {
       return await this.#executeDestroyApply(
         running,

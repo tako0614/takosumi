@@ -37,7 +37,7 @@ async function registerHttps(vault: StaticSecretConnectionVault) {
     provider: "source_git_https_token",
     kind: "source_git_https_token",
     authMethod: "static_secret",
-    scope: { username: "git-bot" },
+    scopeHints: { username: "git-bot" },
     values: { GIT_HTTPS_TOKEN: "ghp_secret_token" },
   });
 }
@@ -48,7 +48,7 @@ async function registerSsh(vault: StaticSecretConnectionVault) {
     provider: "source_git_ssh_key",
     kind: "source_git_ssh_key",
     authMethod: "static_secret",
-    scope: { knownHostsEntry: "github.com ssh-ed25519 AAAAC3Nz..." },
+    scopeHints: { knownHostsEntry: "github.com ssh-ed25519 AAAAC3Nz..." },
     values: { GIT_SSH_PRIVATE_KEY: "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n" },
   });
 }
@@ -61,11 +61,12 @@ test("registers source_git_https_token with kind and single env", async () => {
   expect(conn.kind).toBe("source_git_https_token");
   expect(conn.provider).toBe("source_git_https_token");
   expect(conn.envNames).toEqual(["GIT_HTTPS_TOKEN"]);
-  expect(conn.scope).toEqual({ username: "git-bot" });
+  expect(conn.scope).toBe("space");
+  expect(conn.scopeHints).toEqual({ username: "git-bot" });
   expect(JSON.stringify(conn)).not.toContain("ghp_secret_token");
 });
 
-test("source_git_ssh_key REQUIRES scope.knownHostsEntry", async () => {
+test("source_git_ssh_key REQUIRES scopeHints.knownHostsEntry", async () => {
   const { vault } = makeVault();
   const err = await vault
     .register({
@@ -263,4 +264,65 @@ test("mint (legacy provider path) never selects a git connection", async () => {
   await expect(vault.mint("space_1", ["cloudflare"])).rejects.toThrow(
     /no connection registered for provider cloudflare/,
   );
+});
+
+// --- Operator-scoped connections + capability pool (spec §8 / §9) -----------
+
+test("registers an operator-scoped connection without a space", async () => {
+  const { vault } = makeVault();
+  const conn = await vault.register({
+    provider: "cloudflare",
+    authMethod: "static_secret",
+    values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
+  });
+  expect(conn.scope).toBe("operator");
+  expect(conn.spaceId).toBeUndefined();
+  expect(JSON.stringify(conn)).not.toContain("operator-cf-token");
+});
+
+test("capability pool mints an operator connection from any space", async () => {
+  const { vault } = makeVault();
+  const operatorConn = await vault.register({
+    provider: "cloudflare",
+    authMethod: "static_secret",
+    values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
+  });
+  // The space itself has NO cloudflare connection: only the resolved
+  // capability pool supplies one (operator default, spec §9).
+  const bundle = await vault.mintForPhase({
+    spaceId: "space_other",
+    phase: "plan",
+    providers: ["cloudflare"],
+    connectionIds: [operatorConn.id],
+  });
+  expect(bundle.env.CLOUDFLARE_API_TOKEN).toBe("operator-cf-token");
+});
+
+test("capability pool rejects a connection from another space", async () => {
+  const { vault } = makeVault();
+  const spaceConn = await registerProvider(vault); // space_1
+  const err = await vault.mintForPhase({
+    spaceId: "space_other",
+    phase: "plan",
+    providers: ["cloudflare"],
+    connectionIds: [spaceConn.id],
+  }).catch((e) => e);
+  expect(err).toBeInstanceOf(ConnectionVaultError);
+  expect(String(err)).toContain("belongs to another space");
+});
+
+test("capability pool restricts selection: provider outside the pool fails", async () => {
+  const { vault } = makeVault();
+  // space_1 HAS a cloudflare connection, but the resolved pool is empty-handed
+  // for aws — the mint must not silently fall back to the space-wide pool.
+  await registerProvider(vault);
+  const gitConn = await registerHttps(vault);
+  const err = await vault.mintForPhase({
+    spaceId: "space_1",
+    phase: "plan",
+    providers: ["cloudflare"],
+    connectionIds: [gitConn.id],
+  }).catch((e) => e);
+  expect(err).toBeInstanceOf(ConnectionVaultError);
+  expect(String(err)).toContain("no connection registered");
 });
