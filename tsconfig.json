@@ -63,12 +63,14 @@
       "takosumi-contract/installations": ["./packages/schema/src/installations.ts"],
       "takosumi-contract/capability-bindings": ["./packages/schema/src/capability-bindings.ts"],
       "takosumi-contract/dependencies": ["./packages/schema/src/dependencies.ts"],
+      "takosumi-contract/activity": ["./packages/schema/src/activity.ts"],
       "takosumi-contract/output-snapshots": ["./packages/schema/src/output-snapshots.ts"],
       "takosumi-contract/runs": ["./packages/schema/src/runs.ts"],
       "takosumi-contract/deployments": ["./packages/schema/src/deployments.ts"],
       "takosumi-contract/install-link": ["./packages/schema/src/install-link.ts"],
       "takosumi-rootgen": ["./packages/rootgen/src/mod.ts"],
       "takosumi-graph": ["./packages/graph/src/mod.ts"],
+      "takosumi-policy": ["./packages/policy/src/mod.ts"],
 
       "takosumi-runtime-agent/prepared-source-reader": [
         "./src/runtime-agent/prepared_source_reader.ts"

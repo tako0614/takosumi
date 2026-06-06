@@ -2,15 +2,19 @@
  * RunnerProfile policy engine for the deploy-control domain.
  *
  * `evaluatePolicy` derives a `PolicyDecision` from a runner profile and the
- * providers a plan declares/observes: template-disabled gating, required
- * providers, allow/deny lists, and credential-reference presence. Pure
- * functions over contract types; no controller or store state.
+ * providers a plan declares/observes: template-disabled gating + the §25 layer-4
+ * provider allowlist (delegated to `takosumi-policy`) + credential-reference
+ * presence. This file is a thin adapter: the provider-allowlist core lives in
+ * the policy package; here it is composed with the profile-specific concerns
+ * (template-disabled state, credential refs) into the contract `PolicyDecision`.
+ * Pure functions over contract types; no controller or store state.
  */
 
 import type {
   PolicyDecision,
   RunnerProfile,
 } from "takosumi-contract/deploy-control-api";
+import { evaluateProviderAllowlist, providerMatches } from "takosumi-policy";
 
 export function evaluatePolicy(input: {
   readonly profile: RunnerProfile;
@@ -28,30 +32,38 @@ export function evaluatePolicy(input: {
   const reasons: string[] = [];
   const templateReason = templateProfileDisabledReason(input.profile);
   if (templateReason) reasons.push(templateReason);
-  if (
-    input.profile.allowedProviders.length > 0 &&
-    input.requiredProviders.length === 0 &&
-    input.allowNoProviders !== true
-  ) {
+  // §25 layer 4 (provider allowlist) lives in the policy package. The
+  // profile-scoped reason wording is rebuilt here so the contract reasons keep
+  // naming the runner profile (the package is profile-agnostic).
+  const provider = evaluateProviderAllowlist(input.requiredProviders, {
+    allowed: input.profile.allowedProviders,
+    denied: input.profile.deniedProviders ?? [],
+    ...(input.allowNoProviders ? { allowNoProviders: true } : {}),
+  });
+  if (provider.missingProviders) {
     reasons.push(
       `runner profile ${input.profile.id} requires requiredProviders before OpenTofu init`,
     );
   }
-  for (const provider of input.requiredProviders) {
-    if (providerDenied(provider, input.profile.deniedProviders ?? [])) {
-      reasons.push(`provider ${provider} is denied by runner profile ${input.profile.id}`);
-      continue;
-    }
-    if (!providerAllowed(provider, input.profile.allowedProviders)) {
-      reasons.push(`provider ${provider} is not allowed by runner profile ${input.profile.id}`);
-    }
-    if (
-      input.profile.requireCredentialRefs === true &&
-      !credentialRefPresent(provider, input.profile.credentialRefs ?? [])
-    ) {
-      reasons.push(
-        `credential reference for provider ${provider} is missing from runner profile ${input.profile.id}`,
-      );
+  for (const denied of provider.denied) {
+    reasons.push(`provider ${denied} is denied by runner profile ${input.profile.id}`);
+  }
+  for (const notAllowed of provider.notAllowed) {
+    reasons.push(
+      `provider ${notAllowed} is not allowed by runner profile ${input.profile.id}`,
+    );
+  }
+  // Credential-reference presence is a profile concern (the package evaluates
+  // only the allow/deny verdict): a denied provider is skipped (its credential
+  // is moot), a not-allowed provider is still checked to surface a complete set.
+  if (input.profile.requireCredentialRefs === true) {
+    for (const provider2 of input.requiredProviders) {
+      if (providerDenied(provider2, input.profile.deniedProviders ?? [])) continue;
+      if (!credentialRefPresent(provider2, input.profile.credentialRefs ?? [])) {
+        reasons.push(
+          `credential reference for provider ${provider2} is missing from runner profile ${input.profile.id}`,
+        );
+      }
     }
   }
   return {
@@ -78,15 +90,6 @@ function credentialRefPresent(
   return refs.some((ref) => providerMatches(provider, ref.provider));
 }
 
-function providerAllowed(
-  provider: string,
-  allowedProviders: readonly string[],
-): boolean {
-  return allowedProviders.some((allowed) =>
-    allowed === "*" || providerMatches(provider, allowed)
-  );
-}
-
 function providerDenied(
   provider: string,
   deniedProviders: readonly string[],
@@ -94,13 +97,4 @@ function providerDenied(
   return deniedProviders.some((denied) => providerMatches(provider, denied));
 }
 
-export function providerMatches(provider: string, rule: string): boolean {
-  // Hierarchical, one-directional: a fully-qualified provider address
-  // (`registry/namespace/type`) matches a short allowlist rule (its trailing
-  // type), e.g. `registry.opentofu.org/cloudflare/cloudflare` matches rule
-  // `cloudflare`. The reverse must NOT hold — a specific fully-qualified RULE
-  // must not admit an ambiguous bare provider name (e.g. rule
-  // `registry.opentofu.org/hashicorp/aws` must not match provider `aws`), which
-  // would silently widen the allowlist (and inconsistently narrow the denylist).
-  return provider === rule || provider.endsWith(`/${rule}`);
-}
+export { providerMatches } from "takosumi-policy";

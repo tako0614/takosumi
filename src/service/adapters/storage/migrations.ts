@@ -1687,4 +1687,26 @@ drop index if exists takosumi_installation_dependencies_producer_idx;
 drop index if exists takosumi_installation_dependencies_space_idx;
 drop table if exists takosumi_installation_dependencies;`,
     },
+    {
+      id: "deploy.takosumi_audit_events.create",
+      version: 37,
+      domain: "deploy",
+      description:
+        "Create the Activity audit ledger (Core Specification §27 audit_events / §34 Activity): the Space-scoped audit trail surfaced in the dashboard Activity view. One row records a single state-changing action inside a Space (installation created, plan/apply/destroy milestone, dependency added/removed, stale propagation, run_group created). Searchable columns (space_id / created_at) drive the newest-first listing; the full non-secret event (identifiers / names / digests / counts only — never secret material or output VALUES) round trips through event_json. No data migration: additive new table.",
+      sql: `create table if not exists takosumi_audit_events (
+  id          text   primary key,
+  space_id    text   not null,
+  actor_id    text,
+  action      text   not null,
+  target_type text   not null,
+  target_id   text   not null,
+  run_id      text,
+  event_json  jsonb  not null,
+  created_at  text   not null
+);
+create index if not exists takosumi_audit_events_space_idx
+  on takosumi_audit_events (space_id, created_at desc);`,
+      down: `drop index if exists takosumi_audit_events_space_idx;
+drop table if exists takosumi_audit_events;`,
+    },
   ]);

@@ -50,7 +50,7 @@ milestone は次のとおり。
 | M5 install types (core / app_source 完成) | §10 / §13 | conformant | 公式 modules: core (provider-free 基盤、 4 標準 outputs) / cloudflare-worker-service / cloudflare-r2-storage / cloudflare-static-site / aws-s3-storage。 rootgen `generateInstallationRoot` が installType + 解決済み capability から §13 provider alias を生成 (**per-alias credential 分離は deferred** — 同一 provider の alias は env credential を共有)。 app_source は InstallConfig.build を credential-zero build phase に thread (template.build より優先)。 opentofu_root は snapshot を root として実行 (templateBinding 禁止)。 manual binding values は template 宣言済み input に限り variableMapping を override。 公式 seed: core / talk / files。 |
 | M6 Dependency DAG + variable_injection | §14 / §15 / §17 | conformant | dependencies domain (same-space / variable_injection のみ、 cycle 拒否 = takosumi-graph)、 plan 時 DependencySnapshot (strict=production / pinned)、 値は template inputs / raw variables に injection、 apply は invariant 9 検証 (dependency_snapshot_stale / _tampered)。 remote_state / published_output / cross_space は not_implemented (MVP 外)。 |
 | M7 OutputSnapshot + stale + RunGroup | §16 / §19 / §24 | conformant | apply が OutputSnapshot を記録 (spaceOutputs = 非 sensitive 全 outputs、 publicOutputs = allowlist projection、 raw は DO が暗号化して §26 key に書く)。 outputDigest 変化で downstream を stale 化。 RunGroup basic: space plan-update が topo 順に plan Run を発行、 status は member runs から計算 (orchestration daemon なし)。 |
-| M8 Policy basic + Activity | §25 | pending | |
+| M8 Policy basic + Activity | §25 / §27 | conformant | takosumi-policy package: provider allowlist (layer 4) / resource allowlist (layer 5、 InstallConfig.policy も評価) / action policy (layer 7: delete・replace → approval) を全 run に適用。 承認規則は「destroy / destructive change / template confirmation」のみ (M3 暫定の非-preview 一律承認は撤廃)。 scope boundary (layer 6) / quota (layer 10) は seam のみ (post-MVP)。 Activity: §27 audit_events (3 backends、 v37) + 主要操作の emission + GET /v1/spaces/:id/activity (secret / output 値は metadata に入れない)。 |
 | M9 `/api` surface + install link | §12 / §30 | pending | 現状は旧 `/v1` surface。 |
 | M10 Dashboard | §31 | pending | |
 | MVP 外 (OutputShare / remote_state / published_output / backup / drift_check) | §15 / §18 / §33 | pending | §34 の MVP 外宣言どおり。 型と logical schema のみ先行定義。 |
@@ -61,7 +61,7 @@ milestone は次のとおり。
 - `Deployment.sourceSnapshotId` / `outputSnapshotId` は §27 では NOT NULL だが、 raw plan path の残存 (M9 で削除) と OutputSnapshot 未実装 (M7) の間 optional。
 - `Run.installationId` / `environment` は §27 では NOT NULL だが、 Source-scoped な `source_sync` 行のため optional。
 - 内部 run 型 (PlanRun/ApplyRun) は internal 実装語彙として残る (public は §19 Run projection のみ)。
-- 承認規則: installation-driven plan は environment が `preview` 以外なら approval 必須 (旧 lanes の production default を引き継いだ暫定。 policy 層の action policy (M8) が正式な置き場) (M1 で binding 名を §29 に揃える。 realized operator config の追従は
+- (解消済み M8) 承認規則は §25 action policy へ移行: destroy / destructive change / template confirmation のみが approval を要求 (M1 で binding 名を §29 に揃える。 realized operator config の追従は
   `takosumi-private/platform/wrangler.toml` 側の operator 作業)。
 
 ---
@@ -87,7 +87,7 @@ milestone は次のとおり。
 | 12 | Sensitive output sharing requires explicit policy | conformant | sensitive flagged 出力は spaceOutputs / publicOutputs のどちらにも入らない (leak test in `installation_run_test.ts`)。 explicit 共有 policy は OutputShare (MVP 外) で導入。 |
 | 13 | Cross-Space sharing uses OutputShare | pending | OutputShare は MVP 外。 cross-space dependency は M6 で作成拒否として強制。 |
 | 14 | State, plan, raw outputs are encrypted artifacts | conformant | state/plan/raw outputs すべて暗号化 artifact (raw outputs は DO が §26 key に seal、 `runner_state_r2_test.ts`)。 |
-| 15 | Logs pass through redaction | in-progress | output projection は稼働。 log redaction の網羅は M8 以降。 |
+| 15 | Logs pass through redaction | in-progress | output projection + activity metadata (値なし) は稼働。 runner log redaction の網羅は M11 以降の hardening。 |
 | 16 | Destroy uses destroy plan and approval | conformant | destroy 2-phase (destroy_plan → approval → destroy_apply)。 |
 
 ---

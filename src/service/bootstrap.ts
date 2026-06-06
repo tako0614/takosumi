@@ -45,6 +45,7 @@ import { SpacesService } from "./domains/spaces/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
 import { DependenciesService } from "./domains/dependencies/mod.ts";
 import { RunGroupsService } from "./domains/run-groups/mod.ts";
+import { ActivityService } from "./domains/activity/mod.ts";
 import { seedOfficialInstallConfigs } from "./domains/installations/official_seed.ts";
 import type {
   CreateSourceRequest,
@@ -285,6 +286,11 @@ export interface TakosumiOperations {
    * RunGroup over the same shared ledger + controller.
    */
   readonly runGroups: RunGroupsService;
+  /**
+   * Activity domain service (Core Specification §27 / §34): the Space-scoped
+   * audit trail over the same shared ledger.
+   */
+  readonly activity: ActivityService;
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
   /**
@@ -429,6 +435,11 @@ export async function createTakosumiService(
   // the SourcesService backed by a different instance).
   const sharedOpenTofuStore = opentofuStore.store ??
     new InMemoryOpenTofuDeploymentStore();
+  // Activity domain (Core Specification §27 / §34): the Space-scoped audit
+  // trail. Constructed first so the controller + Installation / Dependency /
+  // RunGroup services can emit through it (fire-and-forget; a failed audit write
+  // never fails the action it records).
+  const activityService = new ActivityService({ store: sharedOpenTofuStore });
   // Source domain service (Core Specification §6). The source REST API, webhook,
   // and scheduler all reach it through the controller. The source_sync producer
   // (when bound) enqueues onto the run queue with `action: "source_sync"`.
@@ -447,9 +458,11 @@ export async function createTakosumiService(
   });
   const installationsService = new InstallationsService({
     store: sharedOpenTofuStore,
+    activity: activityService,
   });
   const dependenciesService = new DependenciesService({
     store: sharedOpenTofuStore,
+    activity: activityService,
   });
   // Seed the official InstallConfig catalog from the built-in template registry
   // (trustLevel "official"). Idempotent upsert keyed by the derived config id,
@@ -458,6 +471,7 @@ export async function createTakosumiService(
   void seedOfficialInstallConfigsOrWarn(sharedOpenTofuStore);
   const opentofuController = new OpenTofuDeploymentController({
     store: sharedOpenTofuStore,
+    activity: activityService,
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
     ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),
     sourcesService,
@@ -476,6 +490,7 @@ export async function createTakosumiService(
   const runGroupsService = new RunGroupsService({
     store: sharedOpenTofuStore,
     controller: opentofuController,
+    activity: activityService,
   });
   const app = await createApiApp({
     role,
@@ -512,6 +527,7 @@ export async function createTakosumiService(
       connectionsService,
       dependenciesService,
       runGroupsService,
+      activityService,
       ...(deployControlToken ? { getDeployControlToken: () => deployControlToken } : {}),
     },
     readinessRouteProbes: createRoleReadinessProbes({
@@ -545,6 +561,7 @@ export async function createTakosumiService(
     connections: connectionsService,
     dependencies: dependenciesService,
     runGroups: runGroupsService,
+    activity: activityService,
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
     createInstallationPlan: (installationId) =>

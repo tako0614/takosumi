@@ -37,6 +37,11 @@ import type {
 } from "takosumi-contract/capability-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
 import type { Dependency, DependencySnapshot } from "takosumi-contract/dependencies";
+import {
+  ACTIVITY_DEFAULT_LIMIT,
+  ACTIVITY_MAX_LIMIT,
+  type ActivityEvent,
+} from "takosumi-contract/activity";
 import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import type { RunGroup } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
@@ -296,6 +301,15 @@ export interface OpenTofuDeploymentStore {
   putRunGroup(group: RunGroup): Promise<RunGroup>;
   getRunGroup(id: string): Promise<RunGroup | undefined>;
   listRunGroups(spaceId: string): Promise<readonly RunGroup[]>;
+
+  // Activity audit-trail records (spec §27 audit_events / §34 Activity). The
+  // Space-scoped audit ledger surfaced in the dashboard Activity view. Listing
+  // orders newest first (createdAt desc, id desc) and defaults to 100 rows.
+  putActivityEvent(event: ActivityEvent): Promise<ActivityEvent>;
+  listActivityEvents(
+    spaceId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly ActivityEvent[]>;
 }
 
 export class InMemoryOpenTofuDeploymentStore
@@ -320,6 +334,7 @@ export class InMemoryOpenTofuDeploymentStore
   readonly #dependencySnapshots = new Map<string, DependencySnapshot>();
   readonly #outputSnapshots = new Map<string, OutputSnapshot>();
   readonly #runGroups = new Map<string, RunGroup>();
+  readonly #activityEvents = new Map<string, ActivityEvent>();
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuDeploymentStore");
@@ -817,6 +832,41 @@ export class InMemoryOpenTofuDeploymentStore
         ),
     );
   }
+
+  putActivityEvent(event: ActivityEvent): Promise<ActivityEvent> {
+    this.#activityEvents.set(event.id, event);
+    return Promise.resolve(event);
+  }
+
+  listActivityEvents(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly ActivityEvent[]> {
+    const limit = clampActivityLimit(options.limit);
+    const rows = Array.from(this.#activityEvents.values())
+      .filter((row) => row.spaceId === spaceId)
+      // Newest first: createdAt desc, then id desc as a stable tie-break.
+      .sort((a, b) =>
+        b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)
+      )
+      .slice(0, limit);
+    return Promise.resolve(rows);
+  }
+}
+
+/**
+ * Clamps an Activity listing limit to `1..ACTIVITY_MAX_LIMIT`, defaulting to
+ * `ACTIVITY_DEFAULT_LIMIT` when unset / non-finite (spec §27). The route layer
+ * already rejects an out-of-range explicit limit; this is the store-side floor.
+ */
+export function clampActivityLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) {
+    return ACTIVITY_DEFAULT_LIMIT;
+  }
+  const floored = Math.floor(limit);
+  if (floored < 1) return 1;
+  if (floored > ACTIVITY_MAX_LIMIT) return ACTIVITY_MAX_LIMIT;
+  return floored;
 }
 
 function maybeWarnInMemoryStore(storeName: string): void {

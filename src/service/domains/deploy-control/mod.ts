@@ -83,6 +83,11 @@ import {
   type OpenTofuDeploymentStore,
 } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
+import {
+  type ActivityRecorder,
+  NOOP_ACTIVITY_RECORDER,
+  type RecordActivityInput,
+} from "../activity/mod.ts";
 import { createDefaultRunnerProfiles } from "./runner_profiles.ts";
 import { evaluatePolicy } from "./policy.ts";
 import {
@@ -105,6 +110,12 @@ import {
   stateLockEvidence,
 } from "./projection.ts";
 import { evaluateTemplatePlanPolicy } from "./template_policy.ts";
+import {
+  type ActionPolicyResult,
+  evaluateActionPolicy,
+  evaluateResourceAllowlist,
+  type ResourceAllowlistResult,
+} from "takosumi-policy";
 import {
   defaultTemplateRegistry,
   type TemplateInputValue,
@@ -384,6 +395,13 @@ export interface OpenTofuDeploymentControllerDependencies {
    * seam). `source_sync` never takes the lease.
    */
   readonly installationCoordination?: InstallationCoordination;
+  /**
+   * Space-scoped Activity audit trail (spec §27 audit_events / §34 Activity).
+   * The controller emits run-lifecycle events (plan created, approved, applied,
+   * destroyed) and stale propagation through it. Fire-and-forget: a failed audit
+   * write never fails the run path. Defaults to a no-op recorder.
+   */
+  readonly activity?: ActivityRecorder;
 }
 
 export interface DeployControlActorContext {
@@ -483,6 +501,7 @@ export class OpenTofuDeploymentController {
   readonly #enqueueRun: EnqueueRun;
   readonly #templateRegistry: TemplateRegistry;
   readonly #installationCoordination?: InstallationCoordination;
+  readonly #activity: ActivityRecorder;
   readonly #seededProfiles: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
   #connectionsService?: ConnectionsService;
@@ -493,6 +512,7 @@ export class OpenTofuDeploymentController {
     this.#vault = dependencies.vault;
     this.#sourcesService = dependencies.sourcesService;
     this.#installationCoordination = dependencies.installationCoordination;
+    this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#defaultRunnerProfileId = dependencies.defaultRunnerProfileId ??
       "cloudflare-default";
     this.#newId = dependencies.newId ?? newId;
@@ -640,6 +660,21 @@ export class OpenTofuDeploymentController {
       ...(policy.status === "blocked" ? { finishedAt: now } : {}),
     };
     await this.#store.putPlanRun(planRun);
+    // Activity (§27 / §34): a plan / destroy-plan Run was created. Run id +
+    // operation + policy status only.
+    await this.#recordActivity({
+      spaceId: planRun.spaceId,
+      ...(context.actor ? { actorId: context.actor } : {}),
+      action: "run.plan_created",
+      targetType: "run",
+      targetId: planRun.id,
+      runId: planRun.id,
+      metadata: {
+        operation: planRun.operation,
+        installationId: planRun.installationId,
+        policyStatus: planRun.policy.status,
+      },
+    });
     // Persist the plan inputs out-of-band (internal, never part of the public
     // ledger projection) so the queue consumer can re-run the plan without the
     // controller retaining them on the public PlanRun record. This sidecar also
@@ -1854,6 +1889,32 @@ export class OpenTofuDeploymentController {
         status: "stale",
         updatedAt,
       });
+      // Activity (§27 / §34): a downstream consumer was marked stale by the
+      // producer's changed outputs (§24). One event per affected consumer.
+      await this.#recordActivity({
+        spaceId: consumer.spaceId,
+        action: "installation.stale",
+        targetType: "installation",
+        targetId: consumer.id,
+        metadata: { producerInstallationId: input.installation.id },
+      });
+    }
+  }
+
+  /**
+   * Fire-and-forget Activity emission (spec §27 / §34). Wraps the recorder so a
+   * failed audit write (or a recorder that throws) never propagates into the run
+   * path. The {@link ActivityService} already swallows store errors; this is the
+   * controller-side belt-and-suspenders.
+   */
+  async #recordActivity(event: RecordActivityInput): Promise<void> {
+    try {
+      await this.#activity.record(event);
+    } catch (error) {
+      console.warn(
+        `[takosumi-service] controller activity record failed ` +
+          `(action=${event.action}): ${String(error)}`,
+      );
     }
   }
 
@@ -2197,33 +2258,28 @@ export class OpenTofuDeploymentController {
 
   /**
    * Whether a plan run is parked awaiting an explicit approval before its apply
-   * may proceed. A succeeded, un-applied, un-approved plan awaits approval when:
-   *   - a template plan flagged a destructive change (`requiresConfirmation`); OR
-   *   - it is a destroy plan (spec §10.6 always-two-stage destroy); OR
-   *   - its Environment requires approval (M2 env-driven `requireApproval`).
-   * The env requirement is read from the run's recorded environment context.
+   * may proceed (§25 action policy). A succeeded, un-applied, un-approved plan
+   * awaits approval when:
+   *   - it is a destroy plan (spec §10.6 always-two-stage destroy / §25
+   *     `destroy: destroy flow`); OR
+   *   - the §25 action policy flagged a delete/replace change
+   *     (`requiresApproval`, recorded at plan completion); OR
+   *   - a template plan flagged a destructive change under
+   *     `requireExplicitConfirmation` (`requiresConfirmation`).
+   * The environment no longer gates approval on its own (the provisional
+   * "non-preview environments always require approval" rule is removed):
+   * approval is driven by the plan's actual changes.
    */
-  async #planAwaitsApproval(planRun: PlanRun): Promise<boolean> {
-    if (planRun.appliedApplyRunId) return false;
-    if (planRun.approval) return false;
-    if (planRun.status !== "succeeded") return false;
-    if (planRun.templateBinding?.requiresConfirmation === true) return true;
-    if (planRun.operation === "destroy") return true;
-    return await this.#environmentRequiresApproval(planRun);
-  }
-
-  /**
-   * Reads whether an installation-driven plan requires approval. Production
-   * environments are approval-gated (the conservative default the retired
-   * lanes model encoded); preview lanes auto-apply without approval. Returns
-   * false for runs without installation context.
-   */
-  #environmentRequiresApproval(planRun: PlanRun): Promise<boolean> {
-    const ctx = planRun.installationContext;
-    if (!ctx) return Promise.resolve(false);
-    return Promise.resolve(
-      ctx.environment.trim().toLowerCase() !== "preview",
-    );
+  #planAwaitsApproval(planRun: PlanRun): Promise<boolean> {
+    if (planRun.appliedApplyRunId) return Promise.resolve(false);
+    if (planRun.approval) return Promise.resolve(false);
+    if (planRun.status !== "succeeded") return Promise.resolve(false);
+    if (planRun.operation === "destroy") return Promise.resolve(true);
+    if (planRun.requiresApproval === true) return Promise.resolve(true);
+    if (planRun.templateBinding?.requiresConfirmation === true) {
+      return Promise.resolve(true);
+    }
+    return Promise.resolve(false);
   }
 
   /**
@@ -2282,6 +2338,19 @@ export class OpenTofuDeploymentController {
       updatedAt: now,
     };
     await this.#store.putPlanRun(approved);
+    // Activity (§27 / §34): the plan Run was approved.
+    await this.#recordActivity({
+      spaceId: approved.spaceId,
+      ...(input.approvedBy ? { actorId: input.approvedBy } : {}),
+      action: "run.approved",
+      targetType: "run",
+      targetId: approved.id,
+      runId: approved.id,
+      metadata: {
+        operation: approved.operation,
+        installationId: approved.installationId,
+      },
+    });
     return projectPlanRun(approved, {
       awaitingApproval: false,
       ...this.#installationProjection(approved),
@@ -2448,16 +2517,22 @@ export class OpenTofuDeploymentController {
         checkedAt: now,
         ...(this.#planAllowsNoProviders(running) ? { allowNoProviders: true } : {}),
       });
-      // Template plan-JSON policy: when the run is template-backed and the runner
-      // returned resource changes, enforce the template's allowedResourceTypes
-      // and detect destructive (delete/replace) changes. A disallowed resource
-      // type blocks the plan; a destructive change under
-      // requireExplicitConfirmation flags the binding so apply needs
-      // confirmDestructive=true.
-      const templatePolicy = this.#evaluateTemplatePlanPolicy(running, result);
-      const blockedByTemplate = templatePolicy?.reasons ?? [];
+      // Layered plan-JSON policy (§25). When the runner returned resource
+      // changes, evaluate the resource-type allowlist (layer 5) and the action
+      // policy (layer 7) over them for ALL runs — not only template-backed:
+      //   - template-backed runs use the recorded template.policy (tamper-safe);
+      //   - non-template installation-context runs use the Installation's
+      //     InstallConfig.policy (resolved via installConfigId);
+      //   - raw `/v1/plan-runs` runs without installation context keep today's
+      //     behavior (no allowlist source -> no resource enforcement).
+      // A disallowed resource type DENIES the plan; a delete/replace marks it
+      // requiresApproval (parked waiting_approval until approved). The template
+      // destructive-confirmation gate (requiresConfirmation) additionally needs
+      // confirmDestructive at apply.
+      const layered = await this.#evaluatePlanPolicy(running, result);
+      const blockedByResources = layered.resource?.reasons ?? [];
       const passedPolicy = policy.status === "passed" &&
-        blockedByTemplate.length === 0;
+        blockedByResources.length === 0;
       const policyDecisionDigest = await stableJsonDigest(policy);
       const planArtifact = normalizePlanArtifact({
         artifact: result.planArtifact,
@@ -2465,7 +2540,15 @@ export class OpenTofuDeploymentController {
         now,
       });
       const summary = normalizePlanSummary(result.summary);
-      const templateBinding = updatedTemplateBinding(running, templatePolicy);
+      const templateBinding = updatedTemplateBinding(
+        running,
+        layered.templatePolicy,
+      );
+      // §25 action policy: any delete/replace requires approval before apply.
+      // Recorded so the §19 Run projection parks the succeeded plan
+      // `waiting_approval`. Destroy plans are always-approval independently
+      // (#planAwaitsApproval), so they need no field.
+      const requiresApproval = layered.action?.requiresApproval === true;
       const updated: PlanRun = {
         ...running,
         status: passedPolicy ? "succeeded" : "blocked",
@@ -2474,7 +2557,7 @@ export class OpenTofuDeploymentController {
           ? policy
           : {
             status: "blocked",
-            reasons: [...policy.reasons, ...blockedByTemplate],
+            reasons: [...policy.reasons, ...blockedByResources],
             checkedAt: now,
           },
         policyDecisionDigest,
@@ -2487,17 +2570,21 @@ export class OpenTofuDeploymentController {
         ...(summary ? { summary } : {}),
         ...(diagnostics ? { diagnostics } : {}),
         ...(templateBinding ? { templateBinding } : {}),
+        ...(requiresApproval ? { requiresApproval: true } : {}),
         auditEvents: [
           ...running.auditEvents,
           auditEvent(running.id, "plan.policy_evaluated", now, {
             policyDecisionDigest,
             status: passedPolicy ? "passed" : "blocked",
             observedProviderCount: requiredProviders.length,
-            ...(templatePolicy
+            requiresApproval,
+            ...(layered.resource
+              ? { resourceTypesAllowed: blockedByResources.length === 0 }
+              : {}),
+            ...(layered.templatePolicy
               ? {
-                templateResourceTypesAllowed: blockedByTemplate.length === 0,
                 templateRequiresConfirmation:
-                  templatePolicy.requiresConfirmation,
+                  layered.templatePolicy.requiresConfirmation,
               }
               : {}),
           }),
@@ -2518,25 +2605,76 @@ export class OpenTofuDeploymentController {
   }
 
   /**
-   * Evaluates the template plan-JSON policy for a template-backed plan. Returns
-   * `undefined` for raw-module runs or when the runner returned no resource
-   * changes (a template plan with no observed changes leaves confirmation
-   * unrequired). The template policy is resolved from the recorded binding so a
-   * tampered catalog cannot retroactively widen a reviewed plan.
+   * Evaluates the layered plan-JSON policy (§25 layers 5 + 7) over the runner's
+   * resource changes for ANY run that returned them:
+   *   - `resource`: the resource-type allowlist verdict. The allowlist source is
+   *     the recorded template.policy (template-backed runs, tamper-safe) or the
+   *     Installation's InstallConfig.policy.allowedResourceTypes (non-template
+   *     installation-context runs). A raw `/v1/plan-runs` run without
+   *     installation context has no allowlist source -> no resource enforcement.
+   *   - `action`: the §25 action policy (delete/replace requires approval).
+   *   - `templatePolicy`: the template destructive-confirmation verdict (only
+   *     for template-backed runs) used to fold `requiresConfirmation` onto the
+   *     binding.
+   * Returns empty (`undefined` fields) when the runner reported no resource
+   * changes. Quota / scope-boundary (§25 layers 6 / 10) stay post-MVP; the typed
+   * seams are on {@link composePolicyVerdict}.
    */
-  #evaluateTemplatePlanPolicy(
+  async #evaluatePlanPolicy(
     planRun: PlanRun,
     result: OpenTofuPlanResult,
-  ): ReturnType<typeof evaluateTemplatePlanPolicy> | undefined {
-    const binding = planRun.templateBinding;
-    if (!binding) return undefined;
+  ): Promise<{
+    resource?: ResourceAllowlistResult;
+    action?: ActionPolicyResult;
+    templatePolicy?: ReturnType<typeof evaluateTemplatePlanPolicy>;
+  }> {
     const changes = result.planResourceChanges;
-    if (changes === undefined) return undefined;
-    const template = this.#templateRegistry.require(
-      binding.templateId,
-      binding.templateVersion,
+    if (changes === undefined) return {};
+    const action = evaluateActionPolicy(changes);
+    const binding = planRun.templateBinding;
+    if (binding) {
+      const template = this.#templateRegistry.require(
+        binding.templateId,
+        binding.templateVersion,
+      );
+      const templatePolicy = evaluateTemplatePlanPolicy({
+        policy: template.policy,
+        changes,
+      });
+      const resource = evaluateResourceAllowlist(
+        changes,
+        template.policy.allowedResourceTypes,
+      );
+      return { resource, action, templatePolicy };
+    }
+    // Non-template installation-context run: enforce the InstallConfig.policy
+    // resource-type allowlist. An undefined allowlist (or a run without
+    // installation context) means "not configured" -> no resource enforcement.
+    const allowedResourceTypes = await this.#installConfigResourceAllowlist(
+      planRun,
     );
-    return evaluateTemplatePlanPolicy({ policy: template.policy, changes });
+    const resource = evaluateResourceAllowlist(changes, allowedResourceTypes);
+    return { resource, action };
+  }
+
+  /**
+   * Resolves the resource-type allowlist for a non-template installation-context
+   * plan from its Installation's InstallConfig.policy. Returns `undefined` (the
+   * resource layer is skipped) for runs without installation context, or when
+   * the Installation / config / allowlist is absent.
+   */
+  async #installConfigResourceAllowlist(
+    planRun: PlanRun,
+  ): Promise<readonly string[] | undefined> {
+    const installationId = planRun.installationContext?.installationId ??
+      planRun.installationId;
+    if (!installationId) return undefined;
+    const installation = await this.#store.getInstallation(installationId);
+    if (!installation) return undefined;
+    const installConfig = await this.#store.getInstallConfig(
+      installation.installConfigId,
+    );
+    return installConfig?.policy.allowedResourceTypes;
   }
 
   /**
@@ -2764,6 +2902,22 @@ export class OpenTofuDeploymentController {
       if (dispatch.template) {
         await this.#store.deletePlanRunInputs(planRun.id);
       }
+      // Activity (§27 / §34): a successful apply produced a new Deployment. Run
+      // id + deployment id + state generation + output COUNT only (never output
+      // values).
+      await this.#recordActivity({
+        spaceId: completed.spaceId,
+        action: "run.applied",
+        targetType: "run",
+        targetId: completed.id,
+        runId: completed.id,
+        metadata: {
+          installationId: installation.id,
+          deploymentId: deployment.id,
+          stateGeneration: nextStateGeneration,
+          outputCount: outputs.length,
+        },
+      });
       return {
         applyRun: completed,
         installation: patched ?? installation,
@@ -2913,6 +3067,18 @@ export class OpenTofuDeploymentController {
       if (dispatch.template) {
         await this.#store.deletePlanRunInputs(planRun.id);
       }
+      // Activity (§27 / §34): a successful destroy tore the Installation down.
+      await this.#recordActivity({
+        spaceId: completed.spaceId,
+        action: "run.destroyed",
+        targetType: "run",
+        targetId: completed.id,
+        runId: completed.id,
+        metadata: {
+          installationId: installation.id,
+          stateGeneration: nextStateGeneration,
+        },
+      });
       return { applyRun: completed, installation: patched ?? installation };
     } catch (error) {
       if (error instanceof InstallationPatchGuardConflict) {

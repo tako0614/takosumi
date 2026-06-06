@@ -23,6 +23,10 @@ import {
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
+import {
+  type ActivityRecorder,
+  NOOP_ACTIVITY_RECORDER,
+} from "../activity/mod.ts";
 
 /**
  * Installation name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -43,17 +47,21 @@ export interface InstallationsServiceDependencies {
   readonly store: OpenTofuDeploymentStore;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
+  /** Space-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
+  readonly activity?: ActivityRecorder;
 }
 
 export class InstallationsService {
   readonly #store: OpenTofuDeploymentStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
+  readonly #activity: ActivityRecorder;
 
   constructor(deps: InstallationsServiceDependencies) {
     this.#store = deps.store;
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
+    this.#activity = deps.activity ?? NOOP_ACTIVITY_RECORDER;
   }
 
   // --- Installation (§5) ----------------------------------------------------
@@ -129,7 +137,22 @@ export class InstallationsService {
       createdAt: nowIso,
       updatedAt: nowIso,
     };
-    return await this.#store.putInstallation(installation);
+    const created = await this.#store.putInstallation(installation);
+    // Activity (§27 / §34): an Installation was created in the Space. Names /
+    // ids only — no secret material.
+    await this.#activity.record({
+      spaceId: created.spaceId,
+      action: "installation.created",
+      targetType: "installation",
+      targetId: created.id,
+      metadata: {
+        name: created.name,
+        environment: created.environment,
+        installType: created.installType,
+        sourceId: created.sourceId,
+      },
+    });
+    return created;
   }
 
   async getInstallation(id: string): Promise<Installation> {

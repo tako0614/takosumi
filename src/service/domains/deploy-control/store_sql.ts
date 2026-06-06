@@ -42,6 +42,7 @@ import type { DeploymentProfile } from "takosumi-contract/installations";
 import type { Dependency, DependencySnapshot } from "takosumi-contract/dependencies";
 import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import type { RunGroup } from "takosumi-contract/runs";
+import type { ActivityEvent } from "takosumi-contract/activity";
 import type {
   InstallationPatch,
   InstallationPatchGuard,
@@ -50,7 +51,7 @@ import type {
   StoredSecretBlob,
   StoredSource,
 } from "./store.ts";
-import { InstallationPatchGuardConflict } from "./store.ts";
+import { clampActivityLimit, InstallationPatchGuardConflict } from "./store.ts";
 
 /** Discriminator stored in the single `runs` table (§27). */
 // §27 runs.type values. Destroy runs persist their own discriminator
@@ -1027,6 +1028,60 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       [spaceId],
     );
     return result.rows.map((row) => parseRow(row) as RunGroup);
+  }
+
+  // --- audit_events (§27 / §34 Activity) ------------------------------------
+  //
+  // The §27 audit_events row keeps searchable columns (space_id / created_at)
+  // for the list path; the full event (including non-secret metadata) round
+  // trips through `event_json`. Listing is newest-first (created_at desc, id
+  // desc) with a clamped limit.
+
+  async putActivityEvent(event: ActivityEvent): Promise<ActivityEvent> {
+    await this.#query(
+      "insert into takosumi_audit_events " +
+        "(id, space_id, actor_id, action, target_type, target_id, run_id, " +
+        "event_json, created_at) " +
+        "values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9) " +
+        "on conflict (id) do update set " +
+        "space_id = excluded.space_id, " +
+        "actor_id = excluded.actor_id, " +
+        "action = excluded.action, " +
+        "target_type = excluded.target_type, " +
+        "target_id = excluded.target_id, " +
+        "run_id = excluded.run_id, " +
+        "event_json = excluded.event_json, " +
+        "created_at = excluded.created_at",
+      [
+        event.id,
+        event.spaceId,
+        event.actorId ?? null,
+        event.action,
+        event.targetType,
+        event.targetId,
+        event.runId ?? null,
+        JSON.stringify(event),
+        event.createdAt,
+      ],
+    );
+    return event;
+  }
+
+  async listActivityEvents(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly ActivityEvent[]> {
+    const limit = clampActivityLimit(options.limit);
+    const result = await this.#query<JsonRow>(
+      "select event_json as json from takosumi_audit_events " +
+        "where space_id = $1 order by created_at desc, id desc limit $2",
+      [spaceId, limit],
+    );
+    // The SQL `limit` is honored by the DB; slice defensively so the row cap
+    // also holds for any client that does not apply the limit clause.
+    return result.rows
+      .slice(0, limit)
+      .map((row) => parseRow(row) as ActivityEvent);
   }
 
   #query<Row extends Record<string, unknown> = Record<string, unknown>>(

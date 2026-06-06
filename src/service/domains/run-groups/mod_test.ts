@@ -62,6 +62,19 @@ function recordingRunner(
           digest: PLAN_DIGEST,
           contentType: "application/vnd.opentofu.plan",
         },
+        // A replace (delete+create) change so the §25 action policy flags the
+        // plan requiresApproval. This drives the RunGroup status transition
+        // through `waiting_approval` (approval is no longer gated by the
+        // environment alone — it follows the plan's actual changes). The apply
+        // path is not approval-gated, so the preview `applyPlan` helper still
+        // applies without an explicit approve.
+        planResourceChanges: [
+          {
+            address: "module.app.cloudflare_workers_script.this",
+            type: "cloudflare_workers_script",
+            actions: ["delete", "create"],
+          },
+        ],
       });
     },
     apply: (job) => {
@@ -288,12 +301,14 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
       ["inst_talk", "talk.example.com"],
     ]),
   );
-  // Production environment so plans land waiting_approval (drives the group
-  // status transition through waiting_approval).
+  // The runner emits a delete/replace change so the §25 action policy flags
+  // each plan requiresApproval -> the members land waiting_approval (drives the
+  // group status transition through waiting_approval). The environment no
+  // longer gates approval on its own.
   await seedChain(store, "production");
   const controller = controllerWith(store, runner);
 
-  // Initial bring-up (production needs approval before each apply).
+  // Initial bring-up (each plan requires approval before its apply).
   for (const id of ["inst_core", "inst_files", "inst_talk"]) {
     const plan = await controller.createInstallationPlan(id);
     await controller.approveRun(plan.planRun.id);
