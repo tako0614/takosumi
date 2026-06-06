@@ -238,7 +238,7 @@ services:
           mkdir -p deploy/cloudflare/.wrangler/dist
           bun build \
             --target browser \
-            deploy/cloudflare/src/worker.ts \
+            worker/src/index.ts \
             --outfile deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs
     volumes:
       - ../../../takosumi:/work
@@ -422,7 +422,7 @@ services:
           mkdir -p deploy/cloudflare/.wrangler/dist
           bun build \
             --target browser \
-            deploy/cloudflare/src/worker.ts \
+            worker/src/index.ts \
             --outfile deploy/cloudflare/.wrangler/dist/takosumi-accounts-worker.mjs
     volumes:
       - ../../../takosumi:/work

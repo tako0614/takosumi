@@ -15,7 +15,7 @@ That string was hard-coded in two places (env file + a comment) and did not corr
 
 ## What the local-substrate uses this for
 
-The cloud worker's managed-offering policy (`takosumi/deploy/cloudflare/src/handler.ts::parseManagedOfferingAccess`) expects:
+The cloud worker's managed-offering policy (`takosumi/worker/src/handler.ts::parseManagedOfferingAccess`) expects:
 
 | env var                                               | meaning                                                   |
 | ----------------------------------------------------- | --------------------------------------------------------- |

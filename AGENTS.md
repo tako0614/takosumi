@@ -25,7 +25,7 @@ The two in-process entry points (consumed by both targets) are:
 - `deploy/accounts-cloudflare/src/handler.ts` — account-plane handler (`createAccountsHandler`) mounted at the worker
   origin root. The issuer is the bare worker origin (`app.takosumi.com` for the platform worker, the self-hoster's own
   origin for a self-hosted takos worker); there is no `accounts.takosumi.com`.
-- `deploy/cloudflare/src/handler.ts` — control-plane handler. On the platform worker it serves the `/api` surface and
+- `worker/src/handler.ts` — control-plane handler. On the platform worker it serves the `/api` surface and
   the `/install` external install link; inside the takos product worker it is reached via the in-process fetch seam.
   There is no `deploy-control.takosumi.com`.
 

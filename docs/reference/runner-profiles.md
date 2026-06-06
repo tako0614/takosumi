@@ -52,7 +52,7 @@ Cloudflare 上の reference topology では、OpenTofu の `plan/apply` は Clou
   "cloudflareContainer": {
     "image": "registry.example.com/takosumi/opentofu-runner:1.10",
     "queueName": "takosumi-opentofu-runs",
-    "durableObjectBinding": "TAKOS_OPENTOFU_RUNNER"
+    "durableObjectBinding": "RUNNER"
   },
   "cloudflareWorkersForPlatforms": {
     "dispatchNamespace": "takosumi-tenants",
@@ -126,7 +126,7 @@ Cloudflare Container runner は hosted execution substrate の一つです。Tak
 
 container image、queue、Durable Object binding、work directory は RunnerProfile の `cloudflareContainer` に入ります。実際の secret delivery と provider account は operator environment の責務です。
 
-reference runner は PlanRun の `source` を run directory に materialize し、`variables` を `takosumi.auto.tfvars.json` として module directory に書きます。`tofu plan -out <tfplan>` で作った binary plan file の digest を `planDigest` / `planArtifact.digest` として返します。Cloudflare reference profile では Durable Object がその `tfplan` を `TAKOS_ARTIFACTS` R2 bucket の `opentofu-plan-runs/` prefix に昇格し、PlanRun には `object-storage` artifact ref を記録します。ApplyRun では artifact を R2 から runner に復元し、同じ digest を再計算して一致した場合だけ source materialize / `tofu init` / `tofu apply <tfplan>` に進みます。`terraform.tfstate` は `RunnerProfile.stateBackend.ref` の digest を含む `opentofu-state/backends/` prefix の operator-managed R2 sidecar として復元/保存され、Installation id がまだ無い create apply では source identity key を使います。
+reference runner は PlanRun の `source` を run directory に materialize し、`variables` を `takosumi.auto.tfvars.json` として module directory に書きます。`tofu plan -out <tfplan>` で作った binary plan file の digest を `planDigest` / `planArtifact.digest` として返します。Cloudflare reference profile では Durable Object がその `tfplan` を `R2_ARTIFACTS` R2 bucket の `opentofu-plan-runs/` prefix に昇格し、PlanRun には `object-storage` artifact ref を記録します。ApplyRun では artifact を R2 から runner に復元し、同じ digest を再計算して一致した場合だけ source materialize / `tofu init` / `tofu apply <tfplan>` に進みます。`terraform.tfstate` は `RunnerProfile.stateBackend.ref` の digest を含む `opentofu-state/backends/` prefix の operator-managed R2 sidecar として復元/保存され、Installation id がまだ無い create apply では source identity key を使います。
 
 ## Workers for Platforms
 
@@ -136,7 +136,7 @@ Workers for Platforms は OpenTofu runner ではありません。tenant / user 
 
 outbound Worker は tenant Worker からの外向き通信を operator policy に通すための場所です。`networkPolicy` がある profile では、outbound Worker でも同じ allowlist を enforce する必要があります。
 
-`deploy/cloudflare/src/wfp_dispatch_worker.ts` は ingress dispatch の scaffold であり、egress allowlist enforcement を実装しません。`outboundWorker.enforceNetworkPolicy: true` は、operator が dispatch namespace の outbound Worker 設定と allowlist enforcement の live evidence を示したときだけ満たされたものとして扱います。
+`worker/src/wfp_dispatch_worker.ts` は ingress dispatch の scaffold であり、egress allowlist enforcement を実装しません。`outboundWorker.enforceNetworkPolicy: true` は、operator が dispatch namespace の outbound Worker 設定と allowlist enforcement の live evidence を示したときだけ満たされたものとして扱います。
 
 ## Secret exposure policy
 

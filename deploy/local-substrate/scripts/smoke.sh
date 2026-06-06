@@ -41,11 +41,11 @@ bundle_freshness_gate() {
 	local repo_root
 	repo_root=$(cd "$SUBSTRATE_DIR/../../.." && pwd)
 	# Worker bundle: takosumi-accounts-worker.mjs is bundled from
-	# takosumi/packages/accounts-service/src + deploy/cloudflare/src.
+	# takosumi/packages/accounts-service/src + worker/src.
 	local worker_bundle="$repo_root/takosumi/deploy/cloudflare/.wrangler/dist/takosumi-accounts-worker.mjs"
 	local worker_sources=(
 		"$repo_root/takosumi/packages/accounts-service/src"
-		"$repo_root/takosumi/deploy/cloudflare/src"
+		"$repo_root/takosumi/worker/src"
 	)
 	if [[ -f "$worker_bundle" ]]; then
 		local newer
@@ -69,7 +69,7 @@ bundle_freshness_gate() {
 	# service in-process on workerd with D1/R2 bindings.
 	local service_worker_bundle="$repo_root/takosumi/deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs"
 	local service_worker_sources=(
-		"$repo_root/takosumi/deploy/cloudflare/src"
+		"$repo_root/takosumi/worker/src"
 		"$repo_root/takosumi/src/service"
 	)
 	if [[ -f "$service_worker_bundle" ]]; then

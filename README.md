@@ -16,7 +16,7 @@ Docs: <https://takosumi.com/docs/>
 | Handler | File | Mount |
 | --- | --- | --- |
 | Account plane | `deploy/accounts-cloudflare/src/handler.ts` (`createAccountsHandler`) | takos worker origin root; issuer is the bare origin |
-| Deploy control | `deploy/cloudflare/src/handler.ts` | takos worker in-process fetch seam; no public routes |
+| Deploy control | `worker/src/handler.ts` | takos worker in-process fetch seam; no public routes |
 
 `deploy/accounts-cloudflare/` stores account state in D1 and uses R2 only for metadata-only Installation export
 artifacts. Cloudflare Container is not used by the account-plane path; it is used by the deploy-control runner for

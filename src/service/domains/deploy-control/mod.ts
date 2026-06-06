@@ -109,7 +109,7 @@ import {
   type TemplateRegistry,
   validateTemplateInputs,
 } from "../templates/mod.ts";
-import { generateRootModule } from "../rootgen/mod.ts";
+import { generateRootModule } from "takosumi-rootgen";
 import type { App, Environment, Run } from "takosumi-contract/lanes";
 import {
   projectApplyRun,
@@ -290,7 +290,7 @@ export interface OpenTofuSourceSyncResult {
  * (`runQueuedPlan` / `runQueuedApply`).
  *
  * The Workers adapter supplies a producer that publishes onto
- * `TAKOS_OPENTOFU_RUN_QUEUE`. Tests and non-queue runtimes (local / node
+ * `RUN_QUEUE`. Tests and non-queue runtimes (local / node
  * substrates) get a default inline dispatcher that runs the consumer logic
  * immediately, preserving the historical create-executes-run behavior.
  */
@@ -338,7 +338,7 @@ export interface OpenTofuDeploymentControllerDependencies {
    * Out-of-process run dispatch. Defaults to an inline dispatcher that runs the
    * consumer immediately (preserving synchronous create-executes-run for
    * tests / local / node substrates). The Workers adapter injects a producer
-   * that enqueues onto `TAKOS_OPENTOFU_RUN_QUEUE`.
+   * that enqueues onto `RUN_QUEUE`.
    */
   readonly enqueueRun?: EnqueueRun;
   /**

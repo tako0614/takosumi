@@ -6,7 +6,7 @@
  * acquired by the queue consumer before it dispatches a write run, then released
  * in a `finally`. `source_sync` runs do NOT take the lease.
  *
- * The Workers implementation fronts the `TAKOS_COORDINATION` Durable Object
+ * The Workers implementation fronts the `COORDINATION` Durable Object
  * (`acquire-lease` / `release-lease`); the in-memory implementation here is for
  * tests and non-DO substrates. Both share the same narrow seam so the consumer
  * is agnostic to the substrate.

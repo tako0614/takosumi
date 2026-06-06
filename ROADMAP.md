@@ -7,7 +7,7 @@ ApplyRun, RunnerProfile, DeploymentOutput, policy decisions, state evidence, and
 ## Current Direction
 
 - Takosumi is consumed in-process by the takos worker via `tsconfig` aliases
-  (`deploy/accounts-cloudflare/src/handler.ts` + `deploy/cloudflare/src/handler.ts`). There is no standalone Takosumi
+  (`deploy/accounts-cloudflare/src/handler.ts` + `worker/src/handler.ts`). There is no standalone Takosumi
   worker, no `accounts.takosumi.com` / `deploy-control.takosumi.com`, and no npm publish.
 - Repositories are plain OpenTofu modules. Metadata comes from Git/prepared/local source identity, module path,
   variables, and well-known OpenTofu outputs.

@@ -286,8 +286,8 @@ const DEFAULT_CLOUDFLARE_CONTAINER_EXECUTION: NonNullable<
   RunnerProfile["cloudflareContainer"]
 > = {
   image: "ghcr.io/takosjp/takosumi-opentofu-runner:1",
-  queueName: "takosumi-opentofu-runs",
-  durableObjectBinding: "TAKOS_OPENTOFU_RUNNER",
+  queueName: "takosumi-runs",
+  durableObjectBinding: "RUNNER",
   workDir: "/workspace",
 };
 

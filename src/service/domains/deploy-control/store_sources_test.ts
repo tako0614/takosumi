@@ -9,12 +9,12 @@ import {
   type OpenTofuDeploymentStore,
   type StoredSource,
 } from "./store.ts";
-import { CloudflareD1OpenTofuDeploymentStore } from "../../../../deploy/cloudflare/src/d1_opentofu_store.ts";
+import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import type {
   D1Database,
   D1PreparedStatement,
   D1Result,
-} from "../../../../deploy/cloudflare/src/bindings.ts";
+} from "../../../../worker/src/bindings.ts";
 import type {
   SourceSnapshot,
   SourceSyncRun,
