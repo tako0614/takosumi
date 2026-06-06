@@ -5,6 +5,7 @@ import {
   type AppInstallationExportWorker,
   createAccountsHandler,
   createEphemeralAccountsHandler,
+  type ControlPlaneOperations,
   createOpenManagedOfferingAccessPolicy,
   customOidcOAuthProvider,
   D1AccountsStore,
@@ -130,6 +131,17 @@ export interface CreateCloudflareWorkerOptions {
   readonly deployControlOperations?: (
     env: CloudflareWorkerEnv,
   ) => Promise<DeployControlOperations | undefined>;
+  /**
+   * In-process control-plane operations facade backing the session-authed
+   * `/v1/control/*` account-plane routes the dashboard SPA calls (M10). The
+   * platform worker passes the embedded deploy-control service's typed
+   * `operations` facade here; it structurally satisfies {@link
+   * ControlPlaneOperations}. When omitted the control routes 503 after the
+   * session gate.
+   */
+  readonly controlPlaneOperations?: (
+    env: CloudflareWorkerEnv,
+  ) => Promise<ControlPlaneOperations | undefined>;
 }
 
 export interface R2Bucket {
@@ -268,6 +280,7 @@ async function buildAccountsHandler(
   const issuer = issuerEnv;
   const clients = parseClients(env);
   const deployControlOperations = await options.deployControlOperations?.(env);
+  const controlPlaneOperations = await options.controlPlaneOperations?.(env);
   const commonOptions = {
     issuer,
     clients,
@@ -281,6 +294,7 @@ async function buildAccountsHandler(
       options.deployControlFetch?.(env),
       deployControlOperations,
     ),
+    ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     workloadPlatformServices: parseWorkloadPlatformServices(env),
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(

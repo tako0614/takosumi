@@ -253,6 +253,16 @@ export class DependenciesService {
     requireNonEmptyString(id, "dependencyId");
     return await this.#store.getDependency(id);
   }
+
+  /**
+   * Lists every Dependency edge within a Space. Backs the Space dependency-graph
+   * projection (spec §14): the account-plane `/v1/control/spaces/:id/graph`
+   * route pairs these edges with the Space's Installations to render the DAG.
+   */
+  async listBySpace(spaceId: string): Promise<readonly Dependency[]> {
+    requireNonEmptyString(spaceId, "spaceId");
+    return await this.#store.listDependenciesBySpace(spaceId);
+  }
 }
 
 /**

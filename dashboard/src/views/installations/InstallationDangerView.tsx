@@ -21,7 +21,7 @@ function Inner() {
 
   const uninstall = createAction(async (installationId: string) => {
     await rpc.installations.uninstall(installationId);
-    nav("/installations");
+    nav("/apps");
   });
 
   const run = async () => {

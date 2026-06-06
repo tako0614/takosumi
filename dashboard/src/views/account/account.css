@@ -1348,3 +1348,336 @@
   gap: var(--tg-s-3);
   margin-top: var(--tg-s-2);
 }
+
+/* ===========================================================================
+   Control-plane views (spec §31, conformance M10): Space selector,
+   Installations table, dependency graph, Install-from-Git flow, Run / RunGroup
+   summary, Activity. Built on the same `--tg-*` tokens + .btn / .status-pill /
+   .detail-section / .data-table primitives above.
+   ======================================================================== */
+
+/* ----- Space selector (header control) ----- */
+.space-selector {
+  margin: var(--tg-s-5) 0 var(--tg-s-6);
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-elev);
+}
+.space-selector-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--tg-s-4);
+  flex-wrap: wrap;
+}
+.space-selector-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-1);
+  min-width: 260px;
+}
+.space-selector-label {
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+  color: var(--tg-fg-subtle);
+}
+.space-selector select {
+  padding: var(--tg-s-2) var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-sm);
+  background: var(--tg-bg);
+  color: var(--tg-fg);
+  font-family: var(--tg-font-body);
+  font-size: var(--tg-fs-base);
+}
+.space-selector-create {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--tg-s-3);
+  margin-top: var(--tg-s-4);
+  flex-wrap: wrap;
+}
+
+/* ----- Installations table ----- */
+.installations-table .installation-name {
+  font-weight: 600;
+}
+.installation-type {
+  font-size: var(--tg-fs-xs);
+  margin-top: 2px;
+}
+.installation-id {
+  font-size: var(--tg-fs-xs);
+}
+.depends-on-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+}
+.output-badge {
+  margin-left: var(--tg-s-2);
+  padding: 1px 6px;
+  border-radius: var(--tg-r-full);
+  font-size: var(--tg-fs-xs);
+  font-family: var(--tg-font-mono);
+  background: color-mix(in srgb, var(--tg-status-ready) 14%, transparent);
+  color: var(--tg-status-ready);
+}
+.installation-row-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* ----- Dependency graph (layered DAG) ----- */
+.graph-board {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-5);
+  margin-top: var(--tg-s-5);
+}
+.graph-layer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.graph-layer-label {
+  font-size: var(--tg-fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--tg-font-mono);
+}
+.graph-layer-nodes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-3);
+}
+.graph-node {
+  display: block;
+  min-width: 200px;
+  padding: var(--tg-s-3) var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+}
+.graph-node-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-2);
+}
+.graph-node-name {
+  font-weight: 600;
+}
+.graph-node-status {
+  font-size: var(--tg-fs-xs);
+  font-family: var(--tg-font-mono);
+  color: var(--tg-fg-muted);
+}
+.graph-node-status-active {
+  color: var(--tg-status-ready);
+}
+.graph-node-status-stale,
+.graph-node-status-installing {
+  color: var(--tg-status-installing);
+}
+.graph-node-status-error {
+  color: var(--tg-status-error);
+}
+.graph-node-env {
+  font-size: var(--tg-fs-sm);
+  margin-top: 2px;
+}
+.graph-node-deps {
+  font-size: var(--tg-fs-xs);
+  margin-top: var(--tg-s-2);
+}
+
+/* ----- Install-from-Git flow ----- */
+.install-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-4);
+  max-width: 720px;
+}
+.install-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--tg-s-4);
+}
+.install-form select,
+.install-form input {
+  width: 100%;
+  padding: var(--tg-s-2) var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-sm);
+  background: var(--tg-bg);
+  color: var(--tg-fg);
+  font-family: var(--tg-font-body);
+  font-size: var(--tg-fs-base);
+}
+.install-steps {
+  list-style: none;
+  margin: var(--tg-s-5) 0 0;
+  padding: var(--tg-s-4) 0 0;
+  border-top: 1px solid var(--tg-line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.install-steps li {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+  color: var(--tg-fg-muted);
+}
+.install-steps li.active {
+  color: var(--tg-fg);
+  font-weight: 600;
+}
+.install-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--tg-r-full);
+  border: 1px solid var(--tg-line);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-sm);
+}
+
+/* ----- Run / RunGroup summary ----- */
+.policy-pass {
+  background: color-mix(in srgb, var(--tg-status-ready) 14%, transparent);
+  color: var(--tg-status-ready);
+  border-color: color-mix(in srgb, var(--tg-status-ready) 30%, transparent);
+}
+.policy-warn {
+  background: color-mix(in srgb, var(--tg-status-installing) 14%, transparent);
+  color: var(--tg-status-installing);
+  border-color: color-mix(in srgb, var(--tg-status-installing) 30%, transparent);
+}
+.policy-deny {
+  background: color-mix(in srgb, var(--tg-status-error) 14%, transparent);
+  color: var(--tg-status-error);
+  border-color: color-mix(in srgb, var(--tg-status-error) 30%, transparent);
+}
+.run-approve {
+  margin-top: var(--tg-s-4);
+}
+.run-members-heading {
+  margin-top: var(--tg-s-6);
+}
+.run-inputs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+}
+.run-diagnostics {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.run-diagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-1);
+  padding: var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-sm);
+  background: var(--tg-bg-subtle);
+}
+.run-diagnostic-sev {
+  font-size: var(--tg-fs-xs);
+  font-family: var(--tg-font-mono);
+  text-transform: uppercase;
+  color: var(--tg-fg-subtle);
+}
+.run-diagnostic-error {
+  border-color: color-mix(in srgb, var(--tg-status-error) 35%, transparent);
+}
+.run-diagnostic-error .run-diagnostic-sev {
+  color: var(--tg-status-error);
+}
+.run-diagnostic-warning .run-diagnostic-sev {
+  color: var(--tg-status-installing);
+}
+.run-diagnostic-detail {
+  margin: 0;
+  padding: var(--tg-s-2);
+  background: var(--tg-code-bg);
+  color: var(--tg-code-fg);
+  border-radius: var(--tg-r-sm);
+  font-size: var(--tg-fs-xs);
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+/* ----- Activity ----- */
+.activity-list {
+  list-style: none;
+  margin: var(--tg-s-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+}
+.activity-row {
+  padding: var(--tg-s-3) var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+}
+.activity-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--tg-s-3);
+  flex-wrap: wrap;
+}
+.activity-action {
+  font-weight: 600;
+}
+.activity-target {
+  font-size: var(--tg-fs-sm);
+}
+.activity-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  font-size: var(--tg-fs-xs);
+  margin-top: var(--tg-s-1);
+}
+.activity-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  margin-top: var(--tg-s-2);
+}
+.activity-meta-chip {
+  font-size: var(--tg-fs-xs);
+  padding: 1px 6px;
+  border-radius: var(--tg-r-sm);
+  background: var(--tg-bg);
+  border: 1px solid var(--tg-line);
+}
+
+/* ----- Connections: scope chip ----- */
+.connection-scope {
+  font-size: var(--tg-fs-xs);
+  font-family: var(--tg-font-mono);
+}
+
+@media (max-width: 640px) {
+  .install-form-row {
+    grid-template-columns: 1fr;
+  }
+}

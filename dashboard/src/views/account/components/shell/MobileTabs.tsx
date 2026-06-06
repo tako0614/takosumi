@@ -3,7 +3,7 @@ import { Bell, Home, LayoutGrid, UserCircle2 } from "lucide-solid";
 
 const TABS = [
   { href: "/home", label: "ホーム", icon: Home },
-  { href: "/apps", label: "アプリ", icon: LayoutGrid },
+  { href: "/installations", label: "Installs", icon: LayoutGrid },
   { href: "/notifications", label: "通知", icon: Bell },
   { href: "/account", label: "アカウント", icon: UserCircle2 },
 ];

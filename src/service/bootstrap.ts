@@ -59,15 +59,18 @@ import type {
 } from "takosumi-contract/sources";
 import type {
   ApplyRunResponse,
+  Connection,
   CreateApplyRunRequest,
   CreatePlanRunRequest,
   GetInstallationResponse,
+  ListConnectionsResponse,
   ListDeploymentOutputsResponse,
   ListDeploymentsResponse,
   ListRunnerProfilesResponse,
   PlanRunResponse,
   RunnerProfile,
 } from "takosumi-contract/deploy-control-api";
+import type { RunLogsResponse } from "takosumi-contract/runs";
 import {
   InMemoryOpenTofuDeploymentStore,
   type OpenTofuDeploymentStore,
@@ -78,6 +81,7 @@ import {
 import { log } from "./shared/log.ts";
 import type { OperatorImplementation } from "takosumi-contract/reference/implementation";
 import type { Run } from "takosumi-contract/runs";
+import type { Dependency } from "takosumi-contract/dependencies";
 
 function resolveTakosumiDeploymentRecordStore(input: {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
@@ -282,6 +286,12 @@ export interface TakosumiOperations {
    */
   readonly dependencies: DependenciesService;
   /**
+   * Lists every Dependency edge in a Space (spec §14). Backs the account-plane
+   * `/v1/control/spaces/:id/graph` projection; delegates to
+   * `dependencies.listBySpace`.
+   */
+  listDependenciesBySpace(spaceId: string): Promise<readonly Dependency[]>;
+  /**
    * RunGroups domain service (Core Specification §19 / §24): the space_update
    * RunGroup over the same shared ledger + controller.
    */
@@ -313,11 +323,19 @@ export interface TakosumiOperations {
   ): Promise<ListDeploymentOutputsResponse>;
   /** Unified Run facade (§6.8): read / approve / cancel by run id. */
   getRun(id: string): Promise<Run>;
+  /** Reads a Run's structured diagnostics + redacted audit trail (spec §30). */
+  getRunLogs(id: string): Promise<RunLogsResponse>;
   approveRun(
     id: string,
     input?: { readonly approvedBy?: string; readonly reason?: string },
   ): Promise<Run>;
   cancelRun(id: string): Promise<Run>;
+  /** Lists a Space's Connections (never includes secret values; spec §30). */
+  listConnections(spaceId: string): Promise<ListConnectionsResponse>;
+  /** Lists operator-scoped (instance-wide) Connections (spec §30). */
+  listOperatorConnections(): Promise<ListConnectionsResponse>;
+  /** Reads a Connection projection by id (no secret values). */
+  getConnection(connectionId: string): Promise<Connection>;
   /**
    * Queue-consumer entry point. The Workers `queue()` consumer calls this for
    * each dispatched run message (plan/apply); it loads the run, applies the
@@ -560,6 +578,8 @@ export async function createTakosumiService(
     installations: installationsService,
     connections: connectionsService,
     dependencies: dependenciesService,
+    listDependenciesBySpace: (spaceId) =>
+      dependenciesService.listBySpace(spaceId),
     runGroups: runGroupsService,
     activity: activityService,
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
@@ -577,8 +597,13 @@ export async function createTakosumiService(
     listDeploymentOutputs: (installationId) =>
       opentofuController.listDeploymentOutputs(installationId),
     getRun: (id) => opentofuController.getRun(id),
+    getRunLogs: (id) => opentofuController.getRunLogs(id),
     approveRun: (id, input) => opentofuController.approveRun(id, input ?? {}),
     cancelRun: (id) => opentofuController.cancelRun(id),
+    listConnections: (spaceId) => opentofuController.listConnections(spaceId),
+    listOperatorConnections: () => opentofuController.listOperatorConnections(),
+    getConnection: (connectionId) =>
+      opentofuController.getConnection(connectionId),
     dispatchQueuedRun: (dispatch) =>
       opentofuController.dispatchQueuedRun(dispatch),
     createSource: (request) => opentofuController.createSource(request),
