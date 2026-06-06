@@ -16,6 +16,7 @@ import type {
   Installation,
   PlanRun,
   RunnerProfile,
+  StateSnapshot,
 } from "takosumi-contract/deploy-control-api";
 import type {
   Source,
@@ -218,6 +219,17 @@ export interface OpenTofuDeploymentStore {
   getDeploymentProfileByEnvironment(
     environmentId: string,
   ): Promise<DeploymentProfile | undefined>;
+
+  // StateSnapshot records (spec §6.9). Immutable per-(environment, generation)
+  // metadata recorded after a successful apply/destroy state persist. The
+  // encrypted state bytes live in R2_STATE; only the metadata enters the ledger.
+  putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot>;
+  getLatestStateSnapshot(
+    environmentId: string,
+  ): Promise<StateSnapshot | undefined>;
+  listStateSnapshots(
+    environmentId: string,
+  ): Promise<readonly StateSnapshot[]>;
 }
 
 export class InMemoryOpenTofuDeploymentStore
@@ -237,6 +249,7 @@ export class InMemoryOpenTofuDeploymentStore
   readonly #environments = new Map<string, Environment>();
   readonly #installProfiles = new Map<string, InstallProfile>();
   readonly #deploymentProfiles = new Map<string, DeploymentProfile>();
+  readonly #stateSnapshots = new Map<string, StateSnapshot>();
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuDeploymentStore");
@@ -546,6 +559,32 @@ export class InMemoryOpenTofuDeploymentStore
         (row) => row.environmentId === environmentId,
       ),
     );
+  }
+
+  putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot> {
+    this.#stateSnapshots.set(snapshot.id, snapshot);
+    return Promise.resolve(snapshot);
+  }
+
+  listStateSnapshots(
+    environmentId: string,
+  ): Promise<readonly StateSnapshot[]> {
+    return Promise.resolve(
+      Array.from(this.#stateSnapshots.values())
+        .filter((row) => row.environmentId === environmentId)
+        .sort((a, b) => a.generation - b.generation),
+    );
+  }
+
+  getLatestStateSnapshot(
+    environmentId: string,
+  ): Promise<StateSnapshot | undefined> {
+    let latest: StateSnapshot | undefined;
+    for (const row of this.#stateSnapshots.values()) {
+      if (row.environmentId !== environmentId) continue;
+      if (!latest || row.generation > latest.generation) latest = row;
+    }
+    return Promise.resolve(latest);
   }
 }
 

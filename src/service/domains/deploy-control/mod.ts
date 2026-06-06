@@ -29,9 +29,14 @@ import type {
   DeploymentOutput,
   DispatchBuildSpec,
   DispatchGeneratedRoot,
+  DispatchSourceArchive,
+  DispatchStateScope,
   DispatchTemplateRef,
   GetInstallationResponse,
   Installation,
+  OpenTofuModuleSource,
+  PlanRunEnvironmentContext,
+  StateSnapshot,
   ListConnectionsResponse,
   ListDeploymentsResponse,
   ListDeploymentOutputsResponse,
@@ -105,7 +110,7 @@ import {
   validateTemplateInputs,
 } from "../templates/mod.ts";
 import { generateRootModule } from "../rootgen/mod.ts";
-import type { Run } from "takosumi-contract/lanes";
+import type { App, Environment, Run } from "takosumi-contract/lanes";
 import {
   projectApplyRun,
   projectPlanRun,
@@ -161,14 +166,28 @@ interface ResolvedTemplatePlan {
   readonly build?: DispatchBuildSpec;
 }
 
-export interface OpenTofuPlanJob extends RunTemplateDispatch {
+/**
+ * Environment-context dispatch fields threaded onto a run job (M2). When the run
+ * carries environment context, the queue consumer attaches `stateScope`
+ * (encrypted state at the spec R2_STATE keys) and `sourceArchive` (the resolved
+ * SourceSnapshot archive). These map 1:1 onto the `request.stateScope` /
+ * `request.sourceArchive` fields the OpenTofu runner DO consumes. Absent for
+ * runs without environment context (the DO falls back to its legacy paths), so
+ * existing dispatch payloads are byte-for-byte unchanged.
+ */
+export interface RunEnvironmentDispatch {
+  readonly stateScope?: DispatchStateScope;
+  readonly sourceArchive?: DispatchSourceArchive;
+}
+
+export interface OpenTofuPlanJob extends RunTemplateDispatch, RunEnvironmentDispatch {
   readonly planRun: PlanRun;
   readonly runnerProfile: RunnerProfile;
   readonly variables: Readonly<Record<string, JsonValue>>;
   readonly credentials?: RunCredentials;
 }
 
-export interface OpenTofuApplyJob extends RunTemplateDispatch {
+export interface OpenTofuApplyJob extends RunTemplateDispatch, RunEnvironmentDispatch {
   readonly applyRun: ApplyRun;
   readonly planRun: PlanRun;
   readonly planArtifact: OpenTofuPlanArtifact;
@@ -176,7 +195,7 @@ export interface OpenTofuApplyJob extends RunTemplateDispatch {
   readonly credentials?: RunCredentials;
 }
 
-export interface OpenTofuDestroyJob extends RunTemplateDispatch {
+export interface OpenTofuDestroyJob extends RunTemplateDispatch, RunEnvironmentDispatch {
   readonly applyRun: ApplyRun;
   readonly planRun: PlanRun;
   readonly planArtifact: OpenTofuPlanArtifact;
@@ -205,6 +224,13 @@ export interface OpenTofuApplyResult {
   readonly outputs?: OpenTofuOutputEnvelope | readonly DeploymentOutput[];
   readonly stateLock?: RunnerStateLockEvidence;
   readonly diagnostics?: readonly RunDiagnostic[];
+  /**
+   * Plaintext digest of the persisted OpenTofu state, echoed by the runner DO
+   * after it sealed + wrote the state object to R2_STATE (M2 env-driven runs).
+   * Recorded on the StateSnapshot so the ledger digest matches the R2 object.
+   * Absent for runs without environment context (no R2_STATE persist).
+   */
+  readonly stateDigest?: string;
 }
 
 export interface OpenTofuDestroyResult {
@@ -337,6 +363,28 @@ export interface DeployControlActorContext {
   readonly actor?: string;
 }
 
+/**
+ * Internal plan-creation context for the M2 env-driven flow. Carried only by
+ * {@link OpenTofuDeploymentController.createEnvironmentPlan} /
+ * `createEnvironmentDestroyPlan`; the public `/v1/plan-runs` create path leaves
+ * it empty so existing PlanRuns are byte-for-byte unchanged.
+ */
+interface PlanRunInternalContext {
+  readonly environmentContext?: PlanRunEnvironmentContext;
+  readonly sourceSnapshotId?: string;
+  /** The Environment's current state generation (its latest StateSnapshot, or 0). */
+  readonly baseStateGeneration?: number;
+}
+
+/**
+ * Request to plan / destroy-plan an Environment lane (M2). Resolves the
+ * Environment -> App -> Source, picks the latest SourceSnapshot, and creates a
+ * plan run carrying environment context + the resolved snapshot.
+ */
+export interface CreateEnvironmentPlanRequest {
+  readonly environmentId: string;
+}
+
 export class OpenTofuDeploymentController {
   readonly #store: OpenTofuDeploymentStore;
   readonly #runner?: OpenTofuRunner;
@@ -380,6 +428,7 @@ export class OpenTofuDeploymentController {
   async createPlanRun(
     request: CreatePlanRunRequest,
     context: DeployControlActorContext = {},
+    internal: PlanRunInternalContext = {},
   ): Promise<PlanRunResponse> {
     await this.#seededProfiles;
     requireNonEmptyString(request.spaceId, "spaceId");
@@ -394,13 +443,20 @@ export class OpenTofuDeploymentController {
     const installation = request.installationId !== undefined
       ? await this.#requireInstallation(request.installationId)
       : undefined;
-    validateOperationInstallationShape({
-      operation,
-      installation,
-      requestedSpaceId: request.spaceId,
-      requestedSource: request.source,
-      runnerProfileId: profile.id,
-    });
+    // Env-driven runs (M2) are scoped by Environment/SourceSnapshot, not by an
+    // Installation: the Environment resolution already bound the App -> Source.
+    // An env destroy-plan therefore legitimately has no installationId, so the
+    // installation-shape guard (which requires one for destroy/update) is skipped
+    // for env-driven runs only. The public `/v1/plan-runs` path keeps the guard.
+    if (!internal.environmentContext) {
+      validateOperationInstallationShape({
+        operation,
+        installation,
+        requestedSpaceId: request.spaceId,
+        requestedSource: request.source,
+        runnerProfileId: profile.id,
+      });
+    }
     validateSourceAllowedByProfile(request.source, profile);
     const now = this.#now();
     const variables = normalizeVariables(request.variables);
@@ -422,10 +478,12 @@ export class OpenTofuDeploymentController {
     const variablesDigest = await stableJsonDigest(variables);
     const policyDecisionDigest = await stableJsonDigest(policy);
     // Snapshot the target's state generation so a stale plan cannot apply over a
-    // newer state. `create` plans have no prior target and record 0.
-    const baseStateGeneration = installation
-      ? installation.stateGeneration ?? 0
-      : 0;
+    // newer state. `create` plans have no prior target and record 0. An
+    // env-driven run carries the Environment's current generation (read from its
+    // latest StateSnapshot) so the M2 dispatch can derive the restore/persist
+    // generations even before the first Installation exists.
+    const baseStateGeneration = internal.baseStateGeneration ??
+      (installation ? installation.stateGeneration ?? 0 : 0);
     const planRun: PlanRun = {
       id: this.#newId("plan"),
       spaceId: request.spaceId,
@@ -440,6 +498,12 @@ export class OpenTofuDeploymentController {
       variablesDigest,
       requiredProviders: declaredProviders,
       baseStateGeneration,
+      ...(internal.sourceSnapshotId
+        ? { sourceSnapshotId: internal.sourceSnapshotId }
+        : {}),
+      ...(internal.environmentContext
+        ? { environmentContext: internal.environmentContext }
+        : {}),
       ...(templatePlan
         ? {
           templateBinding: {
@@ -509,6 +573,190 @@ export class OpenTofuDeploymentController {
       return { planRun: dispatched ?? planRun };
     }
     return { planRun };
+  }
+
+  /**
+   * Env-driven plan (M2; spec §10.4). Resolves Environment -> App -> Source,
+   * picks the LATEST SourceSnapshot for the source (preferring the Environment's
+   * ref), and creates a plan run carrying environment context + the resolved
+   * snapshot. The base state generation is the Environment's current generation
+   * (its latest StateSnapshot, or 0). The plan lands `waiting_approval` per the
+   * facade when the Environment requires approval; the env lease is enforced in
+   * the apply consumer.
+   */
+  async createEnvironmentPlan(
+    environmentId: string,
+    context: DeployControlActorContext = {},
+  ): Promise<PlanRunResponse> {
+    return await this.#createEnvironmentPlanRun(environmentId, "create", context);
+  }
+
+  /**
+   * Env-driven destroy-plan (M2; spec §10.6). Same resolution as
+   * {@link createEnvironmentPlan} with a destroy-flagged operation; the plan
+   * ALWAYS lands `waiting_approval` after completion (the unified Run facade maps
+   * a succeeded destroy_plan to waiting_approval).
+   */
+  async createEnvironmentDestroyPlan(
+    environmentId: string,
+    context: DeployControlActorContext = {},
+  ): Promise<PlanRunResponse> {
+    return await this.#createEnvironmentPlanRun(environmentId, "destroy", context);
+  }
+
+  async #createEnvironmentPlanRun(
+    environmentId: string,
+    operation: "create" | "destroy",
+    context: DeployControlActorContext,
+  ): Promise<PlanRunResponse> {
+    await this.#seededProfiles;
+    requireNonEmptyString(environmentId, "environmentId");
+    const environment = await this.#store.getEnvironment(environmentId);
+    if (!environment) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `environment ${environmentId} not found`,
+      );
+    }
+    const app = await this.#store.getApp(environment.appId);
+    if (!app) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `app ${environment.appId} not found for environment ${environmentId}`,
+      );
+    }
+    const source = await this.#store.getSource(app.sourceId);
+    if (!source) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `source ${app.sourceId} not found for app ${app.id}`,
+      );
+    }
+    const snapshot = await this.#resolveLatestSnapshot(source.id, environment.ref);
+    if (!snapshot) {
+      // Typed 409: the Environment cannot plan until a SourceSnapshot exists for
+      // its source/ref. Callers run a source_sync first.
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `source_sync_required: environment ${environmentId} has no SourceSnapshot ` +
+          `for source ${source.id} ref ${environment.ref}; run a source sync first`,
+      );
+    }
+    // The Environment's current state generation drives the M2 dispatch
+    // restore/persist arithmetic. No prior StateSnapshot -> generation 0.
+    const latestState = await this.#store.getLatestStateSnapshot(environmentId);
+    const baseStateGeneration = latestState?.generation ?? 0;
+    const planRequest = await this.#environmentPlanRequest({
+      app,
+      source,
+      snapshot,
+      operation,
+    });
+    const environmentContext: PlanRunEnvironmentContext = {
+      spaceId: app.spaceId,
+      appId: app.id,
+      environmentId,
+    };
+    return await this.createPlanRun(planRequest, context, {
+      environmentContext,
+      sourceSnapshotId: snapshot.id,
+      baseStateGeneration,
+    });
+  }
+
+  /**
+   * Picks the LATEST SourceSnapshot for a source, preferring one whose ref
+   * matches the Environment's ref when any such snapshot exists; otherwise the
+   * newest snapshot for the source. Returns `undefined` when the source has no
+   * snapshot yet.
+   */
+  async #resolveLatestSnapshot(
+    sourceId: string,
+    ref: string,
+  ): Promise<SourceSnapshot | undefined> {
+    const snapshots = await this.#store.listSourceSnapshots(sourceId);
+    if (snapshots.length === 0) return undefined;
+    // listSourceSnapshots is ordered oldest-first (fetchedAt asc); the last
+    // ref-matching snapshot is the newest for that ref.
+    const refMatches = snapshots.filter((snap) => snap.ref === ref);
+    const pool = refMatches.length > 0 ? refMatches : snapshots;
+    return pool[pool.length - 1];
+  }
+
+  /**
+   * Builds the {@link CreatePlanRunRequest} for an env-driven plan. The App's
+   * install profile selects the OpenTofu surface: a profile bound to a catalog
+   * template reuses the template plan path (templateId/version + inputs from the
+   * profile's variable mapping); an opentofu_module / opentofu_root profile with
+   * no catalog template (and the no-profile case) falls back to the raw-module
+   * plan path with the snapshot as the module source.
+   */
+  async #environmentPlanRequest(input: {
+    readonly app: App;
+    readonly source: Source;
+    readonly snapshot: SourceSnapshot;
+    readonly operation: "create" | "destroy";
+  }): Promise<CreatePlanRunRequest> {
+    const moduleSource = environmentModuleSource(input.source, input.snapshot);
+    const templateBinding = await this.#installProfileTemplateBinding(
+      input.app.installProfileId,
+    );
+    if (templateBinding) {
+      // Template-backed profile: reuse the existing template plan path. The
+      // profile's variableMapping supplies the template inputs (public, never
+      // secret); the user source archive is a build input only.
+      return {
+        spaceId: input.app.spaceId,
+        source: moduleSource,
+        operation: input.operation,
+        templateId: templateBinding.templateId,
+        templateVersion: templateBinding.templateVersion,
+        ...(templateBinding.inputs
+          ? { inputs: templateBinding.inputs }
+          : {}),
+      };
+    }
+    // Raw-module path: the snapshot is the OpenTofu module source. The runner
+    // profile's allowed providers are declared as the run's required providers so
+    // the create-time policy gate (which requires providers before init) is
+    // satisfied; the runner re-reports the providers it actually used.
+    const profile = await this.#requireRunnerProfile(this.#defaultRunnerProfileId);
+    return {
+      spaceId: input.app.spaceId,
+      source: moduleSource,
+      operation: input.operation,
+      runnerProfileId: profile.id,
+      requiredProviders: [...profile.allowedProviders],
+    };
+  }
+
+  /**
+   * Resolves an App's installProfileId to its catalog template binding + the
+   * profile's variable mapping (template inputs). Returns `undefined` when the
+   * profile is absent, not found, or has no template binding (an
+   * opentofu_module / opentofu_root profile that is not template-backed).
+   */
+  async #installProfileTemplateBinding(
+    installProfileId: string | undefined,
+  ): Promise<
+    | {
+      readonly templateId: string;
+      readonly templateVersion: string;
+      readonly inputs?: Readonly<Record<string, JsonValue>>;
+    }
+    | undefined
+  > {
+    if (!installProfileId) return undefined;
+    const profile = await this.#store.getInstallProfile(installProfileId);
+    if (!profile?.templateBinding) return undefined;
+    const inputs = profile.variableMapping;
+    return {
+      templateId: profile.templateBinding.templateId,
+      templateVersion: profile.templateBinding.templateVersion,
+      ...(inputs && Object.keys(inputs).length > 0
+        ? { inputs: inputs as Readonly<Record<string, JsonValue>> }
+        : {}),
+    };
   }
 
   async getPlanRun(id: string): Promise<PlanRunResponse> {
@@ -632,6 +880,12 @@ export class OpenTofuDeploymentController {
     if (planRun.installationId) {
       await this.#requireCurrentPlannedInstallation(planRun);
     }
+    // Source snapshot revalidation (spec invariant 10): an env-driven plan is
+    // pinned to a SourceSnapshot; the apply must run against the SAME snapshot
+    // the plan was reviewed against. Re-read the persisted plan and confirm its
+    // sourceSnapshotId is unchanged + still resolvable, mirroring the
+    // digest/generation guards. Runs without a recorded snapshot are unaffected.
+    await this.#revalidateSourceSnapshot(planRun);
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
     const now = this.#now();
     const applyRun: ApplyRun = {
@@ -963,6 +1217,128 @@ export class OpenTofuDeploymentController {
    * `undefined` (and dispatches with no credential override, leaving the runner
    * to fall back to its own env) when no Vault is wired. Never logs the bundle.
    */
+  /**
+   * Builds the M2 environment dispatch fields (`stateScope` + `sourceArchive`)
+   * for a run that carries environment context. The `generation` is the state
+   * generation this phase writes/restores at: a plan passes the CURRENT
+   * generation (restore base); an apply / destroy_apply passes `base + 1` (the
+   * persist generation the DO writes). Returns an empty object for a run WITHOUT
+   * environment context so existing dispatch payloads are byte-for-byte
+   * unchanged. Throws when the recorded SourceSnapshot is missing (a run cannot
+   * dispatch against a snapshot the ledger no longer holds).
+   */
+  async #environmentDispatch(
+    planRun: PlanRun,
+    generation: number,
+  ): Promise<RunEnvironmentDispatch> {
+    const envContext = planRun.environmentContext;
+    if (!envContext || !planRun.sourceSnapshotId) return {};
+    const snapshot = await this.#store.getSourceSnapshot(planRun.sourceSnapshotId);
+    if (!snapshot) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `source_snapshot_missing: plan run ${planRun.id} references ` +
+          `SourceSnapshot ${planRun.sourceSnapshotId} which is no longer present`,
+      );
+    }
+    const stateScope: DispatchStateScope = {
+      spaceId: envContext.spaceId,
+      appId: envContext.appId,
+      envId: envContext.environmentId,
+      generation,
+    };
+    const sourceArchive: DispatchSourceArchive = {
+      objectKey: snapshot.archiveObjectKey,
+      digest: snapshot.archiveDigest,
+    };
+    return { stateScope, sourceArchive };
+  }
+
+  /**
+   * Env-driven state generation guard (M2). For a run carrying environment
+   * context, rejects when the Environment's latest StateSnapshot generation no
+   * longer equals the generation this plan was created against (a sibling apply
+   * advanced the env state in between). Runs without env context are unaffected
+   * (the Installation-backed guard handles them).
+   */
+  async #assertEnvironmentStateGeneration(planRun: PlanRun): Promise<void> {
+    const envContext = planRun.environmentContext;
+    if (!envContext) return;
+    const base = planRun.baseStateGeneration ?? 0;
+    const latest = await this.#store.getLatestStateSnapshot(
+      envContext.environmentId,
+    );
+    const current = latest?.generation ?? 0;
+    if (current !== base) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `state_generation_mismatch: plan run ${planRun.id} was created against ` +
+          `environment ${envContext.environmentId} state generation ${base} but ` +
+          `the environment is now at generation ${current}`,
+      );
+    }
+  }
+
+  /**
+   * Source snapshot revalidation (spec invariant 10; M2). For a plan pinned to a
+   * SourceSnapshot, re-reads the persisted plan and confirms its sourceSnapshotId
+   * is unchanged and still resolves to a stored snapshot — so an apply cannot run
+   * against a snapshot the plan no longer references or the ledger has dropped.
+   * No-ops for runs without a recorded snapshot.
+   */
+  async #revalidateSourceSnapshot(planRun: PlanRun): Promise<void> {
+    if (!planRun.sourceSnapshotId) return;
+    const persisted = await this.#store.getPlanRun(planRun.id);
+    const persistedSnapshotId = persisted?.sourceSnapshotId;
+    if (persistedSnapshotId !== planRun.sourceSnapshotId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `source_snapshot_mismatch: plan run ${planRun.id} source snapshot ` +
+          `changed since review (${planRun.sourceSnapshotId} -> ` +
+          `${persistedSnapshotId ?? "<none>"})`,
+      );
+    }
+    const snapshot = await this.#store.getSourceSnapshot(planRun.sourceSnapshotId);
+    if (!snapshot) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `source_snapshot_missing: plan run ${planRun.id} references ` +
+          `SourceSnapshot ${planRun.sourceSnapshotId} which is no longer present`,
+      );
+    }
+  }
+
+  /**
+   * Records the §6.9 StateSnapshot metadata after a successful env-driven apply /
+   * destroy state persist. The object key mirrors the DO's R2_STATE key formula
+   * (`spaces/{spaceId}/apps/{appId}/envs/{envId}/states/{NNNNNNNN}.tfstate.enc`)
+   * so the ledger pointer matches the encrypted object the DO wrote at the same
+   * generation. No-ops for a run without environment context. The digest is the
+   * plaintext digest the runner DO echoed back, when present.
+   */
+  async #recordStateSnapshot(input: {
+    readonly planRun: PlanRun;
+    readonly envDispatch: RunEnvironmentDispatch;
+    readonly generation: number;
+    readonly stateDigest: string | undefined;
+    readonly runId: string;
+    readonly now: number;
+  }): Promise<void> {
+    const scope = input.envDispatch.stateScope;
+    if (!scope) return;
+    const snapshot: StateSnapshot = {
+      id: this.#newId("state"),
+      appId: scope.appId,
+      environmentId: scope.envId,
+      generation: input.generation,
+      objectKey: stateObjectKeyForScope(scope),
+      digest: input.stateDigest ?? "",
+      createdByRunId: input.runId,
+      createdAt: input.now,
+    };
+    await this.#store.putStateSnapshot(snapshot);
+  }
+
   async #mintRunCredentials(
     spaceId: string,
     requiredProviders: readonly string[],
@@ -1153,14 +1529,40 @@ export class OpenTofuDeploymentController {
     const planRun = await this.#store.getPlanRun(id);
     if (planRun) {
       return projectPlanRun(planRun, {
-        awaitingApproval: this.#planAwaitsApproval(planRun),
+        awaitingApproval: await this.#planAwaitsApproval(planRun),
+        ...this.#environmentProjection(planRun),
       });
     }
     const applyRun = await this.#store.getApplyRun(id);
-    if (applyRun) return projectApplyRun(applyRun);
+    if (applyRun) {
+      // The ApplyRun does not carry env context; recover it from its PlanRun so
+      // the unified Run still projects appId / environmentId / sourceSnapshotId.
+      const plan = await this.#store.getPlanRun(applyRun.planRunId);
+      return projectApplyRun(applyRun, plan ? this.#environmentProjection(plan) : {});
+    }
     const sync = await this.#store.getSourceSyncRun(id);
     if (sync) return projectSourceSyncRun(sync);
     throw new OpenTofuControllerError("not_found", `run ${id} not found`);
+  }
+
+  /**
+   * Projects a PlanRun's recorded environment context + source snapshot onto the
+   * unified Run facade options. Empty for runs without environment context.
+   */
+  #environmentProjection(
+    planRun: PlanRun,
+  ): { appId?: string; environmentId?: string; sourceSnapshotId?: string } {
+    return {
+      ...(planRun.environmentContext
+        ? {
+          appId: planRun.environmentContext.appId,
+          environmentId: planRun.environmentContext.environmentId,
+        }
+        : {}),
+      ...(planRun.sourceSnapshotId
+        ? { sourceSnapshotId: planRun.sourceSnapshotId }
+        : {}),
+    };
   }
 
   /**
@@ -1173,7 +1575,10 @@ export class OpenTofuDeploymentController {
     requireNonEmptyString(id, "runId");
     const planRun = await this.#store.getPlanRun(id);
     if (planRun) {
-      if (planRun.status !== "queued" && !this.#planAwaitsApproval(planRun)) {
+      if (
+        planRun.status !== "queued" &&
+        !(await this.#planAwaitsApproval(planRun))
+      ) {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `plan run ${id} is ${planRun.status}; only queued or waiting-approval runs can be cancelled`,
@@ -1192,7 +1597,10 @@ export class OpenTofuDeploymentController {
       };
       await this.#store.putPlanRun(cancelled);
       await this.#store.deletePlanRunInputs(id);
-      return projectPlanRun(cancelled, { awaitingApproval: false });
+      return projectPlanRun(cancelled, {
+        awaitingApproval: false,
+        ...this.#environmentProjection(cancelled),
+      });
     }
     const applyRun = await this.#store.getApplyRun(id);
     if (applyRun) {
@@ -1221,16 +1629,32 @@ export class OpenTofuDeploymentController {
 
   /**
    * Whether a plan run is parked awaiting an explicit approval before its apply
-   * may proceed: a template plan that flagged a destructive change
-   * (`requiresConfirmation`) and has not yet been approved. The
-   * environment-level approval requirement is enforced at apply-create time via
-   * the lanes plan flow; this predicate reflects the plan-intrinsic gate.
+   * may proceed. A succeeded, un-applied, un-approved plan awaits approval when:
+   *   - a template plan flagged a destructive change (`requiresConfirmation`); OR
+   *   - it is a destroy plan (spec §10.6 always-two-stage destroy); OR
+   *   - its Environment requires approval (M2 env-driven `requireApproval`).
+   * The env requirement is read from the run's recorded environment context.
    */
-  #planAwaitsApproval(planRun: PlanRun): boolean {
+  async #planAwaitsApproval(planRun: PlanRun): Promise<boolean> {
     if (planRun.appliedApplyRunId) return false;
     if (planRun.approval) return false;
-    return planRun.status === "succeeded" &&
-      planRun.templateBinding?.requiresConfirmation === true;
+    if (planRun.status !== "succeeded") return false;
+    if (planRun.templateBinding?.requiresConfirmation === true) return true;
+    if (planRun.operation === "destroy") return true;
+    return await this.#environmentRequiresApproval(planRun);
+  }
+
+  /**
+   * Reads whether the env-driven plan's Environment requires approval. Returns
+   * false for runs without environment context, or when the Environment is gone.
+   */
+  async #environmentRequiresApproval(planRun: PlanRun): Promise<boolean> {
+    const envContext = planRun.environmentContext;
+    if (!envContext) return false;
+    const environment = await this.#store.getEnvironment(
+      envContext.environmentId,
+    );
+    return environment?.requireApproval === true;
   }
 
   /**
@@ -1261,9 +1685,12 @@ export class OpenTofuDeploymentController {
       throw new OpenTofuControllerError("not_found", `run ${id} not found`);
     }
     if (planRun.approval) {
-      return projectPlanRun(planRun, { awaitingApproval: false });
+      return projectPlanRun(planRun, {
+        awaitingApproval: false,
+        ...this.#environmentProjection(planRun),
+      });
     }
-    if (!this.#planAwaitsApproval(planRun)) {
+    if (!(await this.#planAwaitsApproval(planRun))) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `plan run ${id} is not awaiting approval`,
@@ -1286,7 +1713,10 @@ export class OpenTofuDeploymentController {
       updatedAt: now,
     };
     await this.#store.putPlanRun(approved);
-    return projectPlanRun(approved, { awaitingApproval: false });
+    return projectPlanRun(approved, {
+      awaitingApproval: false,
+      ...this.#environmentProjection(approved),
+    });
   }
 
   async listAutoSyncSources(limit: number): Promise<readonly Source[]> {
@@ -1410,6 +1840,12 @@ export class OpenTofuDeploymentController {
     dispatch: RunTemplateDispatch,
   ): Promise<PlanRun> {
     try {
+      // M2 env dispatch: a plan restores against the CURRENT generation
+      // (`baseStateGeneration`). Empty for runs without environment context.
+      const envDispatch = await this.#environmentDispatch(
+        running,
+        running.baseStateGeneration ?? 0,
+      );
       const result = await this.#runner!.plan({
         planRun: running,
         runnerProfile: profile,
@@ -1419,6 +1855,11 @@ export class OpenTofuDeploymentController {
         ...(dispatch.template ? { template: dispatch.template } : {}),
         ...(dispatch.generatedRoot ? { generatedRoot: dispatch.generatedRoot } : {}),
         ...(dispatch.build ? { build: dispatch.build } : {}),
+        // M2 env dispatch (state scope + source archive). Absent without env ctx.
+        ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+        ...(envDispatch.sourceArchive
+          ? { sourceArchive: envDispatch.sourceArchive }
+          : {}),
         // Dispatch-only: the minted env never lands on the persisted run.
         ...(credentials ? { credentials } : {}),
       });
@@ -1551,6 +1992,13 @@ export class OpenTofuDeploymentController {
     // State generation guard: reject when the target's state advanced past the
     // generation this plan was created against (a stale plan over newer state).
     assertStateGenerationMatches(planRun, plannedInstallation);
+    // Env-driven runs guard against the Environment's latest StateSnapshot
+    // generation instead of an Installation generation (M2).
+    await this.#assertEnvironmentStateGeneration(planRun);
+    // Consumer pre-flight: re-assert the plan still references its SourceSnapshot
+    // (spec invariant 10) just before dispatch, mirroring the digest/generation
+    // pre-flight checks.
+    await this.#revalidateSourceSnapshot(planRun);
     const startedAt = this.#now();
     const running = await this.#markApplyRunning(applyRun, profile, startedAt);
     // Mint provider credentials NOW (just before dispatch). Apply runs resolve
@@ -1571,6 +2019,10 @@ export class OpenTofuDeploymentController {
         dispatch,
       );
     }
+    // M2 env dispatch: an apply persists state at `base + 1` (the DO writes the
+    // new state object + current.json at this generation). Empty without env ctx.
+    const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
+    const envDispatch = await this.#environmentDispatch(planRun, persistGeneration);
     try {
       const result = await this.#runner!.apply({
         applyRun: running,
@@ -1581,6 +2033,11 @@ export class OpenTofuDeploymentController {
         ...(dispatch.template ? { template: dispatch.template } : {}),
         ...(dispatch.generatedRoot ? { generatedRoot: dispatch.generatedRoot } : {}),
         ...(dispatch.build ? { build: dispatch.build } : {}),
+        // M2 env dispatch (state scope at base+1 + source archive).
+        ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+        ...(envDispatch.sourceArchive
+          ? { sourceArchive: envDispatch.sourceArchive }
+          : {}),
         ...(credentials ? { credentials } : {}),
       });
       const now = this.#now();
@@ -1619,6 +2076,19 @@ export class OpenTofuDeploymentController {
         completedAt: now,
       };
       await this.#store.putDeployment(deployment);
+      // M2: record the StateSnapshot metadata for an env-driven run, aligned to
+      // the SAME generation written to R2_STATE (persistGeneration). The DO wrote
+      // the encrypted object + current.json at this key; only metadata enters the
+      // ledger. Recorded BEFORE the installation generation bump so the two
+      // advance together.
+      await this.#recordStateSnapshot({
+        planRun,
+        envDispatch,
+        generation: persistGeneration,
+        stateDigest: result.stateDigest,
+        runId: applyRun.id,
+        now,
+      });
       // Bump the state generation atomically with the state persist (the
       // currentDeployment pointer move). A create starts at base 0 -> 1; an
       // update advances the planned installation's generation by one.
@@ -1712,20 +2182,36 @@ export class OpenTofuDeploymentController {
     credentials: RunCredentials | undefined,
     dispatch: RunTemplateDispatch,
   ): Promise<ApplyRunResponse> {
-    if (!planRun.installationId) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "destroy apply requires a PlanRun with installationId",
-      );
-    }
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `plan run ${planRun.id} has no immutable destroy plan artifact`,
       );
     }
+    // Env-driven destroy (M2): the run is scoped by Environment/SourceSnapshot
+    // and has no Installation; tear down the env state instead.
+    if (planRun.environmentContext && !planRun.installationId) {
+      return await this.#executeEnvironmentDestroyApply(
+        running,
+        planRun,
+        profile,
+        startedAt,
+        credentials,
+        dispatch,
+      );
+    }
+    if (!planRun.installationId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "destroy apply requires a PlanRun with installationId",
+      );
+    }
     const installation = plannedInstallation ??
       await this.#requireCurrentPlannedInstallation(planRun);
+    // M2 env dispatch: a destroy_apply persists the post-teardown state at
+    // `base + 1`. Empty for installation-backed runs without env context.
+    const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
+    const envDispatch = await this.#environmentDispatch(planRun, persistGeneration);
     try {
       if (typeof this.#runner!.destroy !== "function") {
         // Without a real teardown the Installation must NOT be marked
@@ -1746,6 +2232,11 @@ export class OpenTofuDeploymentController {
         ...(dispatch.template ? { template: dispatch.template } : {}),
         ...(dispatch.generatedRoot ? { generatedRoot: dispatch.generatedRoot } : {}),
         ...(dispatch.build ? { build: dispatch.build } : {}),
+        // M2 env dispatch (state scope at base+1 + source archive).
+        ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+        ...(envDispatch.sourceArchive
+          ? { sourceArchive: envDispatch.sourceArchive }
+          : {}),
         ...(credentials ? { credentials } : {}),
       });
       const now = this.#now();
@@ -1803,6 +2294,100 @@ export class OpenTofuDeploymentController {
         error,
       );
       return { applyRun: failed, installation };
+    }
+  }
+
+  /**
+   * Env-driven destroy_apply (M2). Tears down the Environment state: dispatches a
+   * destroy run carrying the env state scope (persist generation `base + 1`) and
+   * source archive, records the post-teardown StateSnapshot at that generation,
+   * and marks the destroy plan applied (apply-once). The run is scoped by
+   * Environment/SourceSnapshot, so there is no Installation to patch.
+   */
+  async #executeEnvironmentDestroyApply(
+    running: ApplyRun,
+    planRun: PlanRun,
+    profile: RunnerProfile,
+    startedAt: number,
+    credentials: RunCredentials | undefined,
+    dispatch: RunTemplateDispatch,
+  ): Promise<ApplyRunResponse> {
+    const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
+    const envDispatch = await this.#environmentDispatch(planRun, persistGeneration);
+    try {
+      if (typeof this.#runner!.destroy !== "function") {
+        // Without a real teardown, refusing to record a successful destroy keeps
+        // the ledger honest (no silent resource leak).
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "runner does not implement destroy; refusing to record env destroy without teardown",
+        );
+      }
+      const result = await this.#runner!.destroy({
+        applyRun: running,
+        planRun,
+        planArtifact: planRun.planArtifact!,
+        // Env destroys are Installation-less; pass a synthetic empty installation
+        // shape only to satisfy the job type — the runner never reads it for an
+        // env-scoped state teardown.
+        installation: envDestroyInstallationStub(planRun),
+        runnerProfile: profile,
+        ...(dispatch.template ? { template: dispatch.template } : {}),
+        ...(dispatch.generatedRoot ? { generatedRoot: dispatch.generatedRoot } : {}),
+        ...(dispatch.build ? { build: dispatch.build } : {}),
+        ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+        ...(envDispatch.sourceArchive
+          ? { sourceArchive: envDispatch.sourceArchive }
+          : {}),
+        ...(credentials ? { credentials } : {}),
+      });
+      const now = this.#now();
+      await this.#recordStateSnapshot({
+        planRun,
+        envDispatch,
+        generation: persistGeneration,
+        stateDigest: undefined,
+        runId: running.id,
+        now,
+      });
+      const diagnostics = redactRunDiagnostics(result?.diagnostics);
+      const completed: ApplyRun = {
+        ...running,
+        status: "succeeded",
+        stateLock: stateLockEvidence(profile.stateBackend, startedAt, now, "recorded"),
+        ...(diagnostics ? { diagnostics } : {}),
+        auditEvents: [
+          ...running.auditEvents,
+          auditEvent(running.id, "destroy.completed", now, {
+            environmentId: planRun.environmentContext!.environmentId,
+          }),
+          auditEvent(running.id, "apply.completed", now, {
+            operation: "destroy",
+            environmentId: planRun.environmentContext!.environmentId,
+          }),
+        ],
+        updatedAt: now,
+        finishedAt: now,
+      };
+      await this.#store.putApplyRun(completed);
+      await this.#store.putPlanRun({
+        ...planRun,
+        appliedApplyRunId: running.id,
+        updatedAt: now,
+      });
+      if (dispatch.template) {
+        await this.#store.deletePlanRunInputs(planRun.id);
+      }
+      return { applyRun: completed };
+    } catch (error) {
+      const failed = await this.#failApplyRun(
+        running,
+        profile,
+        startedAt,
+        "destroy.failed",
+        error,
+      );
+      return { applyRun: failed };
     }
   }
 
@@ -2034,6 +2619,95 @@ export function applyExpectedGuardFromPlanRun(planRun: PlanRun): ApplyExpectedGu
       ? { providerLockDigest: planRun.providerLockDigest }
       : {}),
   };
+}
+
+/**
+ * Builds a minimal Installation shape for an env-driven destroy job (M2). An
+ * env-scoped destroy has no Installation, but `OpenTofuDestroyJob` requires the
+ * field; the runner reads the state from the dispatch `stateScope`, not from
+ * this stub. Carries the env identity so any logging stays scoped.
+ */
+function envDestroyInstallationStub(planRun: PlanRun): Installation {
+  const env = planRun.environmentContext!;
+  return {
+    id: env.environmentId,
+    spaceId: env.spaceId,
+    appId: env.appId,
+    source: planRun.source,
+    runnerProfileId: planRun.runnerProfileId,
+    currentDeploymentId: null,
+    status: "destroying",
+    stateGeneration: planRun.baseStateGeneration ?? 0,
+    createdAt: planRun.createdAt,
+    updatedAt: planRun.updatedAt,
+  };
+}
+
+/**
+ * Mirrors the OpenTofu runner DO's R2_STATE object key formula (spec §11.3) so
+ * the StateSnapshot ledger pointer matches the encrypted object the DO writes:
+ * `spaces/{spaceId}/apps/{appId}/envs/{envId}/states/{NNNNNNNN}.tfstate.enc`,
+ * with each id segment sanitized and the generation zero-padded to 8 digits.
+ * Kept in lockstep with `opentofu_runner_container.ts` (the DO is the writer).
+ */
+function stateObjectKeyForScope(scope: DispatchStateScope): string {
+  const seg = (value: string) => value.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  const generation = String(scope.generation).padStart(8, "0");
+  return `spaces/${seg(scope.spaceId)}/apps/${seg(scope.appId)}/envs/${
+    seg(scope.envId)
+  }/states/${generation}.tfstate.enc`;
+}
+
+/**
+ * Builds the OpenTofu module source for an env-driven plan from the registered
+ * Source + resolved SourceSnapshot (M2). The bytes are restored from the
+ * snapshot archive via the `sourceArchive` dispatch field, so this descriptor is
+ * identity/metadata only: a `git` source pinned to the resolved commit and the
+ * snapshot module path. SSH / scp-style Source URLs are normalized to their
+ * https form so the descriptor satisfies the HTTPS-only git source validation
+ * (the real fetch never uses this URL).
+ */
+function environmentModuleSource(
+  source: Source,
+  snapshot: SourceSnapshot,
+): OpenTofuModuleSource {
+  const modulePath = normalizeModulePath(snapshot.path);
+  return {
+    kind: "git",
+    url: normalizeGitUrlToHttps(source.url),
+    ...(snapshot.resolvedCommit
+      ? { commit: snapshot.resolvedCommit.toLowerCase() }
+      : {}),
+    ...(modulePath ? { modulePath } : {}),
+  };
+}
+
+/**
+ * Normalizes a SourceSnapshot `path` (the module path within the repo) to the
+ * OpenTofu `modulePath` shape: drops a leading `./`, trims slashes, and returns
+ * `undefined` for the repo root (`.` / empty) so the descriptor omits it.
+ */
+function normalizeModulePath(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  const trimmed = path.replace(/^\.\/+/, "").replace(/^\/+|\/+$/g, "").trim();
+  if (trimmed.length === 0 || trimmed === ".") return undefined;
+  return trimmed;
+}
+
+/**
+ * Normalizes a Source URL (https / ssh:// / scp-style `git@host:path`) to an
+ * https URL for the OpenTofu module-source descriptor. The Source URL policy
+ * already rejected forbidden transports and embedded credentials; this only
+ * reshapes ssh/scp into https for the validation seam.
+ */
+function normalizeGitUrlToHttps(url: string): string {
+  const value = url.trim();
+  if (/^https:\/\//i.test(value)) return value;
+  const sshMatch = /^ssh:\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/i.exec(value);
+  if (sshMatch) return `https://${sshMatch[1]}/${sshMatch[2]}`;
+  const scpMatch = /^(?:[^@/:]+)@([^:/]+):(.+)$/.exec(value);
+  if (scpMatch) return `https://${scpMatch[1]}/${scpMatch[2]}`;
+  return value;
 }
 
 /**
