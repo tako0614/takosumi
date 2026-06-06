@@ -15,9 +15,11 @@ export * from "./install-link.ts";
 // `takosumi-contract/runs` subpath.
 export type {
   Run,
+  RunEventsResponse,
   RunGroup,
   RunGroupStatus,
   RunGroupType,
+  RunLogsResponse,
   RunPolicyStatus,
   RunType,
 } from "./runs.ts";

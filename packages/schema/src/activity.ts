@@ -19,7 +19,7 @@
  */
 
 export const SPACE_ACTIVITY_PATH = (spaceId: string): string =>
-  `/v1/spaces/${encodeURIComponent(spaceId)}/activity`;
+  `/api/spaces/${encodeURIComponent(spaceId)}/activity`;
 
 /** Default page size for an Activity listing when no limit is given (§27). */
 export const ACTIVITY_DEFAULT_LIMIT = 100;
@@ -58,7 +58,7 @@ export interface ActivityEvent {
   readonly createdAt: string;
 }
 
-/** The body of an Activity listing (`GET /v1/spaces/:spaceId/activity`). */
+/** The body of an Activity listing (`GET /api/spaces/:spaceId/activity`). */
 export interface ListActivityResponse {
   readonly events: readonly ActivityEvent[];
 }

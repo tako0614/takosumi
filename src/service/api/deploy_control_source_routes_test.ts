@@ -41,9 +41,9 @@ const HEADERS = {
   "content-type": "application/json",
 } as const;
 
-test("POST /v1/sources requires a bearer (401)", async () => {
+test("POST /api/sources requires a bearer (401)", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/sources", {
+  const response = await app.request("/api/sources", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -55,9 +55,9 @@ test("POST /v1/sources requires a bearer (401)", async () => {
   expect(response.status).toBe(401);
 });
 
-test("POST /v1/sources rejects an unknown field (400)", async () => {
+test("POST /api/sources rejects an unknown field (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/sources", {
+  const response = await app.request("/api/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -71,9 +71,9 @@ test("POST /v1/sources rejects an unknown field (400)", async () => {
   expect((await response.json()).error.code).toBe("invalid_argument");
 });
 
-test("POST /v1/sources enforces space scope (403)", async () => {
+test("POST /api/sources enforces space scope (403)", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/sources", {
+  const response = await app.request("/api/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -85,9 +85,9 @@ test("POST /v1/sources enforces space scope (403)", async () => {
   expect(response.status).toBe(403);
 });
 
-test("POST /v1/sources rejects a forbidden URL (400)", async () => {
+test("POST /api/sources rejects a forbidden URL (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/sources", {
+  const response = await app.request("/api/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -102,7 +102,7 @@ test("POST /v1/sources rejects a forbidden URL (400)", async () => {
 
 test("source register -> sync -> snapshots flow", async () => {
   const app = await makeApp();
-  const created = await app.request("/v1/sources", {
+  const created = await app.request("/api/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -117,35 +117,35 @@ test("source register -> sync -> snapshots flow", async () => {
   expect(createdBody.hookSecret).toBe("whk_route_secret");
   const sourceId = createdBody.source.id;
 
-  const list = await app.request("/v1/sources?spaceId=space_1", {
+  const list = await app.request("/api/sources?spaceId=space_1", {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect((await list.json()).sources).toHaveLength(1);
 
-  const got = await app.request(`/v1/sources/${sourceId}`, {
+  const got = await app.request(`/api/sources/${sourceId}`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(got.status).toBe(200);
   // The hook secret hash is never projected.
   expect(await got.text()).not.toContain("hookSecretHash");
 
-  const synced = await app.request(`/v1/sources/${sourceId}/sync`, {
+  const synced = await app.request(`/api/sources/${sourceId}/sync`, {
     method: "POST",
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(synced.status).toBe(201);
   expect((await synced.json()).run.status).toBe("queued");
 
-  const snaps = await app.request(`/v1/sources/${sourceId}/snapshots`, {
+  const snaps = await app.request(`/api/sources/${sourceId}/snapshots`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(snaps.status).toBe(200);
   expect((await snaps.json()).snapshots).toEqual([]);
 });
 
-test("PATCH /v1/sources updates fields", async () => {
+test("PATCH /api/sources updates fields", async () => {
   const app = await makeApp();
-  const created = await app.request("/v1/sources", {
+  const created = await app.request("/api/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -155,7 +155,7 @@ test("PATCH /v1/sources updates fields", async () => {
     }),
   });
   const { source } = await created.json();
-  const patched = await app.request(`/v1/sources/${source.id}`, {
+  const patched = await app.request(`/api/sources/${source.id}`, {
     method: "PATCH",
     headers: HEADERS,
     body: JSON.stringify({ status: "disabled", defaultRef: "release" }),
@@ -168,15 +168,15 @@ test("PATCH /v1/sources updates fields", async () => {
 
 test("source id with an unsupported shape is rejected (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/sources/not-a-source/snapshots", {
+  const response = await app.request("/api/sources/not-a-source/snapshots", {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(response.status).toBe(400);
 });
 
-test("GET /v1/sources requires spaceId (400)", async () => {
+test("GET /api/sources requires spaceId (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/sources", {
+  const response = await app.request("/api/sources", {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(response.status).toBe(400);

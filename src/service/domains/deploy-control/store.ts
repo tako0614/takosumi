@@ -214,6 +214,12 @@ export interface OpenTofuDeploymentStore {
   putConnection(connection: Connection): Promise<Connection>;
   getConnection(id: string): Promise<Connection | undefined>;
   listConnections(spaceId: string): Promise<readonly Connection[]>;
+  /**
+   * Lists instance-wide `operator`-scoped Connections (no owning Space). Backs
+   * the §30 operator-scope `GET /api/connections` listing for the unrestricted
+   * bearer when `?spaceId` is omitted.
+   */
+  listOperatorConnections(): Promise<readonly Connection[]>;
   deleteConnection(id: string): Promise<boolean>;
 
   putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob>;
@@ -563,6 +569,14 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#connections.values())
         .filter((row) => row.spaceId === spaceId)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
+    );
+  }
+
+  listOperatorConnections(): Promise<readonly Connection[]> {
+    return Promise.resolve(
+      Array.from(this.#connections.values())
+        .filter((row) => row.spaceId === undefined && row.scope === "operator")
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
     );
   }
