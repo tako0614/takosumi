@@ -1,6 +1,6 @@
 # Quickstart
 
-この手順は local Takosumi service に OpenTofu module の PlanRun / ApplyRun を作る最小例です。
+この手順は local Takosumi service に対して、Space 直下の Installation を作り plan / apply する最小例です (core-spec §23)。
 
 ## Prerequisites
 
@@ -19,76 +19,62 @@ export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
 bun src/cli/main.ts server --port 8788
 ```
 
-別 terminal で CLI を叩きます。
+別 terminal で `/api` を叩きます。
 
 ```bash
-cd takosumi
-export TAKOSUMI_REMOTE_URL=http://127.0.0.1:8788
-export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
+export BASE=http://127.0.0.1:8788
+export AUTH="Authorization: Bearer dev-token"
 ```
 
-## 2. OpenTofu module を用意
+## 2. Space と Source を登録
 
 ```bash
-mkdir -p /tmp/hello-takosumi
-cd /tmp/hello-takosumi
+curl -s -X POST "$BASE/api/spaces" -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"handle":"shota","displayName":"Shota","type":"personal","ownerUserId":"user_dev"}'
+# -> {"space":{"id":"space_...", ...}}
 
-cat > main.tf <<'EOF'
-terraform {
-  required_version = ">= 1.6.0"
-}
+curl -s -X POST "$BASE/api/sources" -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"spaceId":"<spaceId>","name":"hello","url":"https://git.example.com/example/hello.git","defaultRef":"main","defaultPath":"."}'
+# -> {"source":{"id":"src_...", ...}}  (public repo なら authConnectionId は不要)
 
-output "launch_url" {
-  value = "https://example.test"
-}
-EOF
-
-git init
-git add main.tf
-git commit -m "initial OpenTofu module"
+curl -s -X POST "$BASE/api/sources/<sourceId>/sync" -H "$AUTH"
+# source_sync Run が ref を commit に固定し SourceSnapshot を作ります
 ```
 
-## 3. PlanRun を作る
+## 3. Installation を作る
+
+InstallConfig は公式カタログ由来のもの (`GET /api/install-configs`) か Space 自身のものを使います。
 
 ```bash
-cd takosumi
-bun src/cli/main.ts plan /tmp/hello-takosumi \
-  --space space_personal \
-  --remote "$TAKOSUMI_REMOTE_URL" \
-  --token "$TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+curl -s "$BASE/api/install-configs" -H "$AUTH"
+
+curl -s -X POST "$BASE/api/spaces/<spaceId>/installations" -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"name":"hello","environment":"production","sourceId":"<sourceId>","installConfigId":"<installConfigId>"}'
+# -> {"installation":{"id":"inst_...","status":"installing", ...}}
 ```
 
-Plan command は PlanRun response を表示します。`status: "succeeded"`、`planDigest`、`sourceDigest`、`variablesDigest`、`policyDecisionDigest` が apply guard の入力になります。
-
-## 4. ApplyRun を作る
+## 4. plan → (approve) → apply
 
 ```bash
-cd takosumi
-bun src/cli/main.ts install /tmp/hello-takosumi \
-  --space space_personal \
-  --remote "$TAKOSUMI_REMOTE_URL" \
-  --token "$TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+curl -s -X POST "$BASE/api/installations/<installationId>/plan" -H "$AUTH"
+# -> plan Run。SourceSnapshot と DependencySnapshot が固定され、policy 層が plan JSON を評価します
+
+curl -s "$BASE/api/runs/<runId>" -H "$AUTH"
+# status が waiting_approval (destroy / destructive change のみ) なら:
+curl -s -X POST "$BASE/api/runs/<runId>/approve" -H "$AUTH"
 ```
 
-CLI は PlanRun response から expected guard を組み立てて apply します。review した plan と違う source / variables / policy decision / plan digest では ApplyRun が作れません。
+apply は saved plan のみを実行し、plan digest / source snapshot / dependency snapshot / state generation を検証します。成功すると StateSnapshot 世代が進み、OutputSnapshot と Deployment が記録されます。
 
-## Source syntax
-
-```text
-local path:
-  /path/to/module
-
-git repo:
-  git:https://github.com/example/module.git#main
-
-prepared archive:
-  prepared:https://example.com/module.tar.gz#sha256:<64 lowercase hex>
+```bash
+curl -s "$BASE/api/installations/<installationId>/deployments" -H "$AUTH"
+curl -s "$BASE/api/spaces/<spaceId>/activity" -H "$AUTH"
 ```
 
-module path が必要な場合は API request の `source.modulePath` で渡します。
+dashboard を使う場合は Install from Git flow (`/install?git=...&ref=...&path=...` link からの prefill 対応) が同じ手順を UI で実行します。
 
 ## 次
 
 - [Model](../reference/model.md)
-- [Deploy Control API](../reference/deploy-control-api.md)
+- [Control Plane API](../reference/deploy-control-api.md)
 - [Runner profiles](../reference/runner-profiles.md)

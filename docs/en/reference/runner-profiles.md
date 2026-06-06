@@ -1,6 +1,23 @@
 # Runner Profiles
 
-RunnerProfile is the operator execution boundary.
+> A runner profile is **not public vocabulary**. The 2026-06-06 [core spec](../../core-spec.md) closes the public surface
+> to Space / Source / Connection / Installation / Dependency / Run / RunGroup / Deployment / OutputSnapshot / Activity, and
+> a runner profile is demoted to an **internal execution profile** subordinate to Connections, CapabilityBindings, and the
+> policy layers.
+
+A runner profile is internal configuration for the OpenTofu execution boundary. It owns the substrate, runner image, resource limits, and a provider allowlist seed.
+
+What it **still** owns:
+
+- **substrate**: where OpenTofu runs (e.g. Cloudflare Containers).
+- **runner image**: container image / queue / Durable Object binding.
+- **resource limits**: run time / source archive size / decompressed size / memory.
+- **provider allowlist seed**: the OpenTofu provider source addresses the profile permits (final enforcement is the core-spec §25 policy layer evaluating the plan JSON).
+
+What **moved out**:
+
+- **credentials** live on [Connections](../../core-spec.md#8-connection) and [CapabilityBindings](../../core-spec.md#9-operator-default-connections), not embedded in the profile. Mint policy is decided inside the vault per run phase (source → git credential only, build → none, plan/apply/destroy → provider credentials only) and never trusts caller claims (core-spec §32).
+- **allowlists / action policy** live in the [takosumi-policy layers](../../core-spec.md#25-policy). Provider allowlist (layer 4), resource-type allowlist (layer 5), and action policy (layer 7) evaluate the plan JSON and apply to every Run.
 
 In the reference Cloudflare topology, OpenTofu `plan/apply` runs in the Cloudflare Container runner. Workers for Platforms is used only for tenant / user Worker dispatch and HTTP ingress. It is separate from the runner that holds provider credentials.
 
@@ -62,23 +79,23 @@ In the reference Cloudflare topology, OpenTofu `plan/apply` runs in the Cloudfla
 }
 ```
 
-Provider credentials, remote state, lock backend, runner image, network policy, and resource limits belong here. Takosumi records references and evidence, not secret values.
+The runner image, substrate, network policy, resource limits, and provider allowlist seed belong here. Provider credentials live on Connections (resolved through CapabilityBindings), and Takosumi records references and evidence, not secret values.
 
-PlanRun request `requiredProviders` is the pre-run provider source address contract. Operator-facing CLI / CI must list the reviewed OpenTofu providers used by the module. When a RunnerProfile has `allowedProviders`, empty `requiredProviders` is blocked before `tofu init`.
+A plan Run request's `requiredProviders` is the pre-run provider source address contract. Operator-facing CLI / CI must list the reviewed OpenTofu providers used by the module. When a profile has `allowedProviders`, an empty `requiredProviders` is blocked before `tofu init`.
 
-The final PlanRun `requiredProviders` value is confirmed or overwritten from the runner-observed OpenTofu plan / provider lock. If the observed provider set is outside the profile allowlist, the PlanRun is blocked and cannot be applied.
+The final `requiredProviders` value is confirmed or overwritten from the runner-observed OpenTofu plan / provider lock. If the observed provider set is outside the profile allowlist, the Run is blocked by the §25 policy layer and cannot be applied.
 
 ## Source Policy
 
-`git` and `prepared` sources are the normal production sources. `local` sources are for dev / operator-local profiles and are accepted only when the RunnerProfile explicitly sets `sourcePolicy.allowLocalSource: true`. Profiles that accept tenant input through the public Deploy Control API should not allow local paths.
+`git` and `prepared` sources are the normal production sources. `local` sources are for dev / operator-local profiles and are accepted only when the profile explicitly sets `sourcePolicy.allowLocalSource: true`. Profiles that accept tenant input should not allow local paths.
 
 A prepared source is an archive fetched by the runner. The reference runner uses `resourceLimits.maxSourceArchiveBytes` to cap wire size and `resourceLimits.maxSourceDecompressedBytes` to cap declared decompressed tar size, and rejects unsafe paths, duplicate normalized paths, links, and tar entries other than files or directories before extraction.
 
 ## Common Provider Profiles
 
-Default RunnerProfiles allow OpenTofu provider source addresses. This is not a provider adapter registry; it is the OpenTofu execution boundary selected by the operator.
+Default execution profiles seed an OpenTofu provider source address allowlist. This is not a provider adapter registry; it is the OpenTofu execution boundary selected by the operator.
 
-`cloudflare-default` is the enabled profile for the reference Cloudflare topology. AWS / GCP / Azure / Kubernetes / GitHub / DigitalOcean / Docker are templates until the operator validates credentials, state backend, network enforcement, and live proof. Template profiles are returned with `labels["takosumi.com/profile-state"] === "template"` and are blocked by policy until the operator sets `labels["takosumi.com/profile-enabled"] === "true"`.
+`cloudflare-default` is the enabled profile for the reference Cloudflare topology. AWS / GCP / Azure / Kubernetes / GitHub / DigitalOcean / Docker are templates until the operator validates credentials (Connections), state backend, network enforcement, and live proof. Template profiles are returned with `labels["takosumi.com/profile-state"] === "template"` and are blocked by policy until the operator sets `labels["takosumi.com/profile-enabled"] === "true"`.
 
 | Profile | State | Providers | Credential ref | Network policy |
 | --- | --- | --- | --- | --- |
@@ -105,12 +122,12 @@ The outbound Worker is where tenant Worker egress passes through operator policy
 
 ## Cloudflare Containers
 
-The reference runner materializes the PlanRun `source` into a run directory and writes `variables` as `takosumi.auto.tfvars.json` in the module directory. It returns the digest of the binary `tfplan` file as both `planDigest` and `planArtifact.digest`. In the Cloudflare reference profile, the Durable Object promotes that `tfplan` into the `R2_ARTIFACTS` R2 bucket under `opentofu-plan-runs/` and the PlanRun records an `object-storage` artifact ref. ApplyRun restores the artifact from R2 into the runner, recalculates the digest, and only then materializes source, runs `tofu init`, and runs `tofu apply <tfplan>` when the reviewed artifact still matches. `terraform.tfstate` is restored and persisted through an operator-managed R2 sidecar under `opentofu-state/backends/<stateBackendRefDigest>/`; create applies without an Installation id use a source-identity key until later runs can use the Installation key.
+The reference runner materializes the plan Run `source` into a run directory and writes `variables` as `takosumi.auto.tfvars.json` in the module directory. It returns the digest of the binary `tfplan` file as both `planDigest` and `planArtifact.digest`. In the Cloudflare reference profile, the Durable Object promotes that `tfplan` into the `R2_ARTIFACTS` R2 bucket under `opentofu-plan-runs/` and the plan Run records an `object-storage` artifact ref. The apply Run restores the artifact from R2 into the runner, recalculates the digest, and only then materializes source, runs `tofu init`, and runs `tofu apply <tfplan>` when the reviewed artifact still matches. `terraform.tfstate` is restored and persisted through an operator-managed R2 sidecar under `opentofu-state/backends/<stateBackendRefDigest>/` (core-spec §20 / §26 manage it as per-Installation StateSnapshot generations); create applies without an Installation id use a source-identity key until later runs can use the Installation key.
 
 ## Secret Exposure Policy
 
-`providerCredentials: "runner-only"` means provider credentials are resolved only inside the Container runner. The reference runner does not pass the whole host environment into OpenTofu subprocesses. Provider credentials are injected only from RunnerProfile `credentialRefs` and provider-specific env allowlists. `env://VAR_NAME` is an operator-local convention for injecting a named runner host env var. `secret://...` references are resolved by the operator secret delivery layer before the runner starts.
+`providerCredentials: "runner-only"` means provider credentials are resolved only inside the Container runner. The reference runner does not pass the whole host environment into OpenTofu subprocesses. Provider credentials are injected only from the profile's `credentialRefs` (references resolved through Connections / CapabilityBindings) and provider-specific env allowlists. `env://VAR_NAME` is an operator-local convention for injecting a named runner host env var. `secret://...` references are resolved by the operator secret delivery layer before the runner starts.
 
 `tenantWorkerOperatorSecrets: "forbidden"` means tenant / user Workers do not receive operator secrets. Tenant-visible values must be tenant-scoped bindings, short-lived tokens, or values materialized by the operator from `secret://` references.
 
-When `redactLogs` is true, runner diagnostics and failure audit messages are redacted before persistence. When `blockSensitiveOutputs` is true, sensitive OpenTofu outputs are not stored as DeploymentOutput records.
+When `redactLogs` is true, runner diagnostics and failure audit messages are redacted before persistence. When `blockSensitiveOutputs` is true, sensitive OpenTofu outputs are not projected into the [OutputSnapshot](../../core-spec.md#16-outputsnapshot) `publicOutputs` / `spaceOutputs` (core-spec §32 invariants 11-12).
