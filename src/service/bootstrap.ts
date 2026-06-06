@@ -42,6 +42,7 @@ import {
 } from "./domains/sources/mod.ts";
 import { InstallationsService } from "./domains/installations/mod.ts";
 import { SpacesService } from "./domains/spaces/mod.ts";
+import { ConnectionsService } from "./domains/connections/mod.ts";
 import { seedOfficialInstallConfigs } from "./domains/installations/official_seed.ts";
 import type {
   CreateSourceRequest,
@@ -271,6 +272,7 @@ export interface TakosumiOperations {
    * InstallConfig / DeploymentProfile over the same shared ledger.
    */
   readonly installations: InstallationsService;
+  readonly connections: ConnectionsService;
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
   /**
@@ -428,6 +430,9 @@ export async function createTakosumiService(
   // Installation / InstallConfig / DeploymentProfile over the SAME shared
   // ledger as the controller and Source service.
   const spacesService = new SpacesService({ store: sharedOpenTofuStore });
+  const connectionsService = new ConnectionsService({
+    store: sharedOpenTofuStore,
+  });
   const installationsService = new InstallationsService({
     store: sharedOpenTofuStore,
   });
@@ -481,6 +486,7 @@ export async function createTakosumiService(
       controller: opentofuController,
       spacesService,
       installationsService,
+      connectionsService,
       ...(deployControlToken ? { getDeployControlToken: () => deployControlToken } : {}),
     },
     readinessRouteProbes: createRoleReadinessProbes({
@@ -511,6 +517,7 @@ export async function createTakosumiService(
     controller: opentofuController,
     spaces: spacesService,
     installations: installationsService,
+    connections: connectionsService,
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
     createInstallationPlan: (installationId) =>

@@ -658,8 +658,13 @@ export type ConnectionAuthMethod =
   | "aws_assume_role"
   | "github_app_installation";
 
-/** Whether the credentials belong to the operator (service) or the customer. */
-export type ConnectionOwner = "service" | "customer";
+/**
+ * Connection scope (spec §8): `operator` connections are instance-wide (the
+ * operator's own resources when self-hosting; the service's when hosted) and
+ * back the operator default connections (§9); `space` connections belong to
+ * one Space and override per capability.
+ */
+export type ConnectionScopeKind = "operator" | "space";
 
 export type ConnectionStatus = "pending" | "verified" | "revoked";
 
@@ -667,7 +672,7 @@ export type ConnectionStatus = "pending" | "verified" | "revoked";
  * Optional provider-scope hints recorded alongside a Connection (non-secret).
  * For cloudflare these narrow the account / zone the credentials act on.
  */
-export interface ConnectionScope {
+export interface ConnectionScopeHints {
   readonly accountId?: string;
   readonly zoneId?: string;
   /**
@@ -691,7 +696,8 @@ export interface ConnectionScope {
  */
 export interface Connection {
   readonly id: string;
-  readonly spaceId: string;
+  /** Owning Space. Absent for an `operator`-scoped connection (spec §27). */
+  readonly spaceId?: string;
   /** `cloudflare` short name or a full registry path. */
   readonly provider: string;
   /**
@@ -701,11 +707,11 @@ export interface Connection {
    * for plan/apply/destroy.
    */
   readonly kind?: ConnectionKind;
-  readonly owner: ConnectionOwner;
+  readonly scope: ConnectionScopeKind;
   readonly authMethod: ConnectionAuthMethod;
   readonly displayName?: string;
   readonly status: ConnectionStatus;
-  readonly scope?: ConnectionScope;
+  readonly scopeHints?: ConnectionScopeHints;
   readonly envNames: readonly string[];
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -723,7 +729,8 @@ export type ConnectionKind =
   | "source_git_ssh_key";
 
 export interface CreateConnectionRequest {
-  readonly spaceId: string;
+  /** Omit for an `operator`-scoped connection. */
+  readonly spaceId?: string;
   readonly provider: string;
   /**
    * Connection kind. Omit (or `"provider"`) for a provider credential. Set a
@@ -733,8 +740,9 @@ export interface CreateConnectionRequest {
   readonly kind?: ConnectionKind;
   readonly authMethod: "static_secret";
   readonly displayName?: string;
-  readonly owner?: ConnectionOwner;
-  readonly scope?: ConnectionScope;
+  /** Defaults to `space` when spaceId is present, else `operator`. */
+  readonly scope?: ConnectionScopeKind;
+  readonly scopeHints?: ConnectionScopeHints;
   /**
    * Write-only credential values keyed by env name. Validated against the
    * provider's allowed env names and required groups (for provider kinds), or

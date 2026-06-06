@@ -18,7 +18,7 @@
 
 import type {
   Connection,
-  ConnectionScope,
+  ConnectionScopeHints,
   CreateConnectionRequest,
 } from "takosumi-contract/deploy-control-api";
 import {
@@ -43,6 +43,11 @@ import type { SecretBoundaryCrypto } from "../secret-store/memory.ts";
 import type { CloudPartition } from "../secret-store/types.ts";
 
 const CREDENTIAL_BUNDLE_MARKER = "[credential-bundle]";
+/**
+ * AAD spaceId label for operator-scoped connections (spec §8): they have no
+ * owning Space, so their sealed blobs bind to this fixed partition label.
+ */
+const OPERATOR_SCOPE_AAD = "__operator__";
 const SECRET_BLOB_KEY_SCHEME = "secret-boundary-aes-gcm/v1";
 
 /**
@@ -88,10 +93,7 @@ export class CredentialBundle {
   }
 }
 
-export interface RegisterConnectionInput extends CreateConnectionRequest {
-  /** Defaults to `"customer"` when omitted. */
-  readonly owner?: Connection["owner"];
-}
+export type RegisterConnectionInput = CreateConnectionRequest;
 
 export interface TestConnectionResult {
   readonly status: "verified" | "pending";
@@ -140,6 +142,14 @@ export interface MintRequest {
    * public repo (the source phase then returns an empty bundle).
    */
   readonly sourceConnectionId?: string;
+  /**
+   * Capability-resolved connection pool for the tofu phases (spec §9). When
+   * present, provider selection draws ONLY from these connections (each must
+   * be operator-scoped or belong to the space); when absent, the legacy
+   * space-wide pool applies. The vault re-validates each id — caller claims
+   * are never trusted.
+   */
+  readonly connectionIds?: readonly string[];
 }
 
 export interface ConnectionVault {
@@ -153,7 +163,11 @@ export interface ConnectionVault {
    * the backward-compatible provider-mint path; it is equivalent to
    * `mintForPhase({ phase: "plan", providers })`.
    */
-  mint(spaceId: string, providers: readonly string[]): Promise<CredentialBundle>;
+  mint(
+    spaceId: string,
+    providers: readonly string[],
+    options?: { readonly connectionIds?: readonly string[] },
+  ): Promise<CredentialBundle>;
   /**
    * Per-phase mint (spec §8.3 / §8.4). Enforces the phase rules in the vault and
    * returns a {@link MintResponse} carrying env (+ files for the source phase).
@@ -250,7 +264,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   }
 
   async register(input: RegisterConnectionInput): Promise<Connection> {
-    requireNonEmpty(input.spaceId, "spaceId");
+    // spaceId is absent for an operator-scoped connection (spec §8); when
+    // present it must be a real id.
+    if (input.spaceId !== undefined || input.scope === "space") {
+      requireNonEmpty(input.spaceId, "spaceId");
+    }
     if (input.authMethod !== "static_secret") {
       // Phase 1 implements static_secret only; other methods are reserved.
       throw new ConnectionVaultError(
@@ -321,7 +339,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       keyVersion: `${SECRET_BLOB_KEY_SCHEME}/${cloudPartition}`,
       aad: {
         cloudPartition,
-        spaceId: input.spaceId,
+        spaceId: input.spaceId ?? OPERATOR_SCOPE_AAD,
         provider: input.provider,
       },
     };
@@ -330,14 +348,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const nowIso = this.#now().toISOString();
     const connection: Connection = {
       id,
-      spaceId: input.spaceId,
+      ...(input.spaceId ? { spaceId: input.spaceId } : {}),
       provider: input.provider,
       kind: "provider",
-      owner: input.owner ?? "customer",
+      scope: input.scope ?? (input.spaceId ? "space" : "operator"),
       authMethod: "static_secret",
       ...(input.displayName ? { displayName: input.displayName } : {}),
       status: "pending",
-      ...(normalizeScope(input.scope) ? { scope: normalizeScope(input.scope) } : {}),
+      ...(normalizeScope(input.scopeHints)
+        ? { scopeHints: normalizeScope(input.scopeHints) }
+        : {}),
       envNames: [...envNames].sort(),
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -388,12 +408,15 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `value for ${expectedEnv} must be a non-empty string`,
       );
     }
-    const scope = normalizeScope(input.scope);
+    const scopeHints = normalizeScope(input.scopeHints);
     if (kind === "source_git_ssh_key") {
-      if (!scope?.knownHostsEntry || scope.knownHostsEntry.trim().length === 0) {
+      if (
+        !scopeHints?.knownHostsEntry ||
+        scopeHints.knownHostsEntry.trim().length === 0
+      ) {
         throw new ConnectionVaultError(
           "invalid_argument",
-          "source_git_ssh_key requires scope.knownHostsEntry (the known_hosts line for the host)",
+          "source_git_ssh_key requires scopeHints.knownHostsEntry (the known_hosts line for the host)",
         );
       }
     }
@@ -411,7 +434,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       keyVersion: `${SECRET_BLOB_KEY_SCHEME}/${cloudPartition}`,
       aad: {
         cloudPartition,
-        spaceId: input.spaceId,
+        spaceId: input.spaceId ?? OPERATOR_SCOPE_AAD,
         provider: kind,
       },
     };
@@ -420,14 +443,14 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const nowIso = this.#now().toISOString();
     const connection: Connection = {
       id,
-      spaceId: input.spaceId,
+      ...(input.spaceId ? { spaceId: input.spaceId } : {}),
       provider: kind,
       kind,
-      owner: input.owner ?? "customer",
+      scope: input.scope ?? (input.spaceId ? "space" : "operator"),
       authMethod: "static_secret",
       ...(input.displayName ? { displayName: input.displayName } : {}),
       status: "pending",
-      ...(scope ? { scope } : {}),
+      ...(scopeHints ? { scopeHints } : {}),
       envNames: [expectedEnv],
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -481,9 +504,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   async mint(
     spaceId: string,
     providers: readonly string[],
+    options?: { readonly connectionIds?: readonly string[] },
   ): Promise<CredentialBundle> {
     requireNonEmpty(spaceId, "spaceId");
-    const connections = await this.#store.listConnections(spaceId);
+    const connections = options?.connectionIds !== undefined
+      ? await this.#capabilityPool(spaceId, options.connectionIds)
+      : await this.#store.listConnections(spaceId);
     const env: Record<string, string> = {};
     const warnings: string[] = [];
     for (const provider of providers) {
@@ -513,6 +539,36 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       }
     }
     return new CredentialBundle(env, warnings);
+  }
+
+  /**
+   * Builds the capability-resolved connection pool for a tofu-phase mint. Each
+   * id is re-read from the store; a space-scoped connection must belong to the
+   * requesting space and an operator-scoped one is instance-wide. Unknown ids
+   * fail closed.
+   */
+  async #capabilityPool(
+    spaceId: string,
+    connectionIds: readonly string[],
+  ): Promise<readonly Connection[]> {
+    const pool: Connection[] = [];
+    for (const id of connectionIds) {
+      const connection = await this.#store.getConnection(id);
+      if (!connection) {
+        throw new ConnectionVaultError(
+          "not_found",
+          `connection ${id} not found`,
+        );
+      }
+      if (connection.scope === "space" && connection.spaceId !== spaceId) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `connection ${id} belongs to another space`,
+        );
+      }
+      pool.push(connection);
+    }
+    return pool;
   }
 
   /**
@@ -575,7 +631,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `${phase} phase must not request a git source connection`,
       );
     }
-    const bundle = await this.mint(request.spaceId, providers);
+    const bundle = await this.mint(request.spaceId, providers, {
+      ...(request.connectionIds !== undefined
+        ? { connectionIds: request.connectionIds }
+        : {}),
+    });
     return new PhaseMintBundle({ env: bundle.env }, bundle.warnings);
   }
 
@@ -590,7 +650,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     connectionId: string,
   ): Promise<PhaseMintBundle> {
     const connection = await this.#requireConnection(connectionId);
-    if (connection.spaceId !== spaceId) {
+    if (connection.scope === "space" && connection.spaceId !== spaceId) {
       throw new ConnectionVaultError(
         "not_found",
         `connection ${connectionId} not found in space ${spaceId}`,
@@ -621,7 +681,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           `connection ${connectionId} has no ${GIT_HTTPS_TOKEN_ENV}`,
         );
       }
-      const username = connection.scope?.username ?? "x-access-token";
+      const username = connection.scopeHints?.username ?? "x-access-token";
       const askpass = gitAskpassScript(username, token);
       return new PhaseMintBundle({
         env: {
@@ -646,7 +706,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `connection ${connectionId} has no ${GIT_SSH_PRIVATE_KEY_ENV}`,
       );
     }
-    const knownHosts = connection.scope?.knownHostsEntry;
+    const knownHosts = connection.scopeHints?.knownHostsEntry;
     if (!knownHosts) {
       throw new ConnectionVaultError(
         "failed_precondition",
@@ -782,8 +842,8 @@ function isCloudflareVerifyOk(body: unknown): boolean {
 }
 
 function normalizeScope(
-  scope: ConnectionScope | undefined,
-): ConnectionScope | undefined {
+  scope: ConnectionScopeHints | undefined,
+): ConnectionScopeHints | undefined {
   if (!scope) return undefined;
   const out: {
     accountId?: string;

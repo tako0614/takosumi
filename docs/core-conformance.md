@@ -46,7 +46,7 @@ milestone は次のとおり。
 | **M1 物理再構成 (§28 layout)** | §28 / §29 | conformant | worker/src (entry/durable) + packages/{schema,rootgen,graph} + runner-image + opentofu-modules を §28 配置に移動、 binding/class 名を §29 に整合。 `src/service/domains/*` の `worker/src/modules/*` への移設は各 milestone でその domain を書き換える際に行う (M3+)。 |
 | M2 新 contract 型 | §4-§21 | pending | |
 | M3 モデル移行 (lanes 廃止 / §27 schema / runs 統合) | §5 / §19 / §27 | conformant | lanes (App/Environment/InstallProfile) 削除、 Space/InstallConfig/Installation (UNIQUE(space_id,name,environment)) store + service + /v1 routes、 単一 runs table (kind 列 + run_json、 SQL/D1)、 installation lease (`installation:{id}:{env}`)、 stateScope/R2 key を §20 に re-key、 D1 を §27 実テーブル化。 create-on-apply legacy path は削除 (Installation-first)。 |
-| M4 operator defaults + CapabilityBinding | §8 / §9 | pending | |
+| M4 operator defaults + CapabilityBinding | §8 / §9 | conformant | Connection.scope (operator/space、 operator は spaceId なし + AAD `__operator__`)、 operator_connection_defaults CRUD (`/v1/operator-connection-defaults`、 unrestricted bearer のみ)、 ConnectionsService.resolveCapabilities (default/connection/manual/disabled + cross-space 拒否)、 vault mint の capability pool (caller 主張を信用せず id を再検証)。 manual values の module input 接続と rootgen capability alias は M5。 |
 | M5 install types (core / app_source 完成) | §10 / §13 | pending | |
 | M6 Dependency DAG + variable_injection | §14 / §15 / §17 | pending | |
 | M7 OutputSnapshot + stale + RunGroup | §16 / §19 / §24 | pending | |
