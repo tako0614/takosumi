@@ -84,11 +84,47 @@ test("OpenTofu runner image stays isolated from the Worker browser bundle", asyn
   assert.match(server, /return provider === rule \|\| provider\.endsWith/);
   assert.match(server, /"tofu",\s*"plan"/);
   assert.match(server, /"tofu",\s*"apply"/);
+  // M2: the source-archive restore route extracts the snapshot tar.zst into the
+  // source root through the SAME tar-slip hardening (escape quoting, file/dir
+  // only, decompressed cap) used for prepared sources.
+  assert.match(server, /handleSourceArchiveRestoreRequest/);
+  assert.match(server, /assertSafeZstdTarArchive/);
+  assert.match(server, /"tar",\s*"-x",\s*"--zstd"/);
   assert.doesNotMatch(server, /existingWorkspace/);
   assert.doesNotMatch(server, /-auto-approve/);
   assert.doesNotMatch(server, /rule\.endsWith/);
   assert.doesNotMatch(dockerfile.toLowerCase(), new RegExp("de" + "no"));
   assert.doesNotMatch(server.toLowerCase(), new RegExp("de" + "no"));
+});
+
+test("OpenTofu runner DO routes M2 state through R2_STATE with at-rest encryption", async () => {
+  const container = await readText(
+    new URL("src/opentofu_runner_container.ts", cloudflareRoot),
+  );
+  const stateCrypto = await readText(
+    new URL("src/state_crypto.ts", cloudflareRoot),
+  );
+
+  // State goes to the R2_STATE bucket under the spec key layout, encrypted at
+  // rest, with current.json written AFTER the state object.
+  assert.match(container, /env\.R2_STATE/);
+  assert.match(container, /spaces\/\$\{[\s\S]*?states/);
+  assert.match(container, /\.tfstate\.enc/);
+  assert.match(container, /current\.json/);
+  assert.match(container, /padStart\(8, "0"\)/);
+  // When no stateScope is present the legacy TAKOS_ARTIFACTS path is used.
+  assert.match(container, /parseStateScope/);
+  assert.match(container, /stateArtifactKeys/);
+  // Plan binary + plan JSON artifacts also gain `.enc` encryption.
+  assert.match(container, /encryptedKey\(key\)/);
+  assert.match(container, /encryptedKey\(planJsonArtifactKey/);
+  assert.match(container, /persistPlanJsonArtifact/);
+  // The DO reuses the existing secret-store crypto; it does NOT mint a new one.
+  assert.match(container, /StateArtifactCrypto/);
+  assert.match(stateCrypto, /selectSecretBoundaryCrypto/);
+  assert.match(stateCrypto, /content digest mismatch/);
+  // The container never sees the passphrase; decryption happens in the DO.
+  assert.doesNotMatch(container, /TAKOSUMI_SECRET_STORE_PASSPHRASE/);
 });
 
 async function readText(path: URL | string): Promise<string> {

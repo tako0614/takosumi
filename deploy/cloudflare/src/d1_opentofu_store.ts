@@ -11,6 +11,12 @@ import type {
   SourceSyncRun,
 } from "../../../src/contract/sources.ts";
 import type {
+  App,
+  DeploymentProfile,
+  Environment,
+  InstallProfile,
+} from "../../../src/contract/lanes.ts";
+import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
@@ -33,7 +39,11 @@ type Namespace =
   | "secret-blob"
   | "source"
   | "source-snapshot"
-  | "source-sync-run";
+  | "source-sync-run"
+  | "app"
+  | "environment"
+  | "install-profile"
+  | "deployment-profile";
 
 export class CloudflareD1OpenTofuDeploymentStore
   implements OpenTofuDeploymentStore {
@@ -322,6 +332,104 @@ export class CloudflareD1OpenTofuDeploymentStore
   ): Promise<readonly SourceSyncRun[]> {
     return await this.#list<SourceSyncRun>("source-sync-run", {
       installationId: sourceId,
+    });
+  }
+
+  async putApp(app: App): Promise<App> {
+    await this.#put("app", app.id, app, {
+      spaceId: app.spaceId,
+      createdAt: epochMillis(app.createdAt),
+      updatedAt: epochMillis(app.updatedAt),
+    });
+    return app;
+  }
+
+  async getApp(id: string): Promise<App | undefined> {
+    return await this.#get("app", id);
+  }
+
+  async listApps(spaceId?: string): Promise<readonly App[]> {
+    return await this.#list<App>("app", { spaceId });
+  }
+
+  async deleteApp(id: string): Promise<boolean> {
+    return await this.#delete("app", id);
+  }
+
+  async putEnvironment(environment: Environment): Promise<Environment> {
+    // Indexed by appId via the installation_id column so #list can scan an
+    // App's environments.
+    await this.#put("environment", environment.id, environment, {
+      installationId: environment.appId,
+      createdAt: epochMillis(environment.createdAt),
+      updatedAt: epochMillis(environment.updatedAt),
+    });
+    return environment;
+  }
+
+  async getEnvironment(id: string): Promise<Environment | undefined> {
+    return await this.#get("environment", id);
+  }
+
+  async listEnvironments(appId: string): Promise<readonly Environment[]> {
+    return await this.#list<Environment>("environment", {
+      installationId: appId,
+    });
+  }
+
+  async deleteEnvironment(id: string): Promise<boolean> {
+    return await this.#delete("environment", id);
+  }
+
+  async putInstallProfile(profile: InstallProfile): Promise<InstallProfile> {
+    await this.#put("install-profile", profile.id, profile, {
+      status: profile.trustLevel,
+      createdAt: epochMillis(profile.createdAt),
+      updatedAt: epochMillis(profile.updatedAt),
+    });
+    return profile;
+  }
+
+  async getInstallProfile(id: string): Promise<InstallProfile | undefined> {
+    return await this.#get("install-profile", id);
+  }
+
+  async listInstallProfiles(): Promise<readonly InstallProfile[]> {
+    return await this.#list<InstallProfile>("install-profile");
+  }
+
+  async putDeploymentProfile(
+    profile: DeploymentProfile,
+  ): Promise<DeploymentProfile> {
+    // One profile per environment: drop any stale row that referenced the same
+    // environment under a different id before upserting (the env id is indexed
+    // via the installation_id column).
+    const existing = await this.listDeploymentProfilesForEnvironment(
+      profile.environmentId,
+    );
+    for (const stale of existing) {
+      if (stale.id !== profile.id) await this.#delete("deployment-profile", stale.id);
+    }
+    await this.#put("deployment-profile", profile.id, profile, {
+      installationId: profile.environmentId,
+      createdAt: epochMillis(profile.createdAt),
+      updatedAt: epochMillis(profile.updatedAt),
+    });
+    return profile;
+  }
+
+  async getDeploymentProfileByEnvironment(
+    environmentId: string,
+  ): Promise<DeploymentProfile | undefined> {
+    const rows = await this.listDeploymentProfilesForEnvironment(environmentId);
+    return rows[rows.length - 1];
+  }
+
+  async listDeploymentProfilesForEnvironment(
+    environmentId: string,
+  ): Promise<readonly DeploymentProfile[]> {
+    return await this.#list<DeploymentProfile>("deployment-profile", {
+      installationId: environmentId,
     });
   }
 

@@ -22,6 +22,12 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+import type {
+  App,
+  DeploymentProfile,
+  Environment,
+  InstallProfile,
+} from "takosumi-contract/lanes";
 import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 
@@ -187,6 +193,31 @@ export interface OpenTofuDeploymentStore {
   putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun>;
   getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined>;
   listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]>;
+
+  // App records (spec §6.3). Space-scoped; bind a Source to one install type.
+  putApp(app: App): Promise<App>;
+  getApp(id: string): Promise<App | undefined>;
+  listApps(spaceId?: string): Promise<readonly App[]>;
+  deleteApp(id: string): Promise<boolean>;
+
+  // Environment records (spec §6.4). One execution target per App lane.
+  putEnvironment(environment: Environment): Promise<Environment>;
+  getEnvironment(id: string): Promise<Environment | undefined>;
+  listEnvironments(appId: string): Promise<readonly Environment[]>;
+  deleteEnvironment(id: string): Promise<boolean>;
+
+  // InstallProfile records (spec §6.6). Seeded from the official template
+  // catalog at bootstrap with trustLevel "official".
+  putInstallProfile(profile: InstallProfile): Promise<InstallProfile>;
+  getInstallProfile(id: string): Promise<InstallProfile | undefined>;
+  listInstallProfiles(): Promise<readonly InstallProfile[]>;
+
+  // DeploymentProfile records (spec §6.7). One per Environment; the upsert key
+  // is the environmentId.
+  putDeploymentProfile(profile: DeploymentProfile): Promise<DeploymentProfile>;
+  getDeploymentProfileByEnvironment(
+    environmentId: string,
+  ): Promise<DeploymentProfile | undefined>;
 }
 
 export class InMemoryOpenTofuDeploymentStore
@@ -202,6 +233,10 @@ export class InMemoryOpenTofuDeploymentStore
   readonly #sources = new Map<string, StoredSource>();
   readonly #sourceSnapshots = new Map<string, SourceSnapshot>();
   readonly #sourceSyncRuns = new Map<string, SourceSyncRun>();
+  readonly #apps = new Map<string, App>();
+  readonly #environments = new Map<string, Environment>();
+  readonly #installProfiles = new Map<string, InstallProfile>();
+  readonly #deploymentProfiles = new Map<string, DeploymentProfile>();
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuDeploymentStore");
@@ -421,6 +456,95 @@ export class InMemoryOpenTofuDeploymentStore
         .sort((a, b) =>
           a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
         ),
+    );
+  }
+
+  putApp(app: App): Promise<App> {
+    this.#apps.set(app.id, app);
+    return Promise.resolve(app);
+  }
+
+  getApp(id: string): Promise<App | undefined> {
+    return Promise.resolve(this.#apps.get(id));
+  }
+
+  listApps(spaceId?: string): Promise<readonly App[]> {
+    const rows = Array.from(this.#apps.values());
+    const filtered = spaceId === undefined
+      ? rows
+      : rows.filter((row) => row.spaceId === spaceId);
+    return Promise.resolve(
+      filtered.sort((a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+      ),
+    );
+  }
+
+  deleteApp(id: string): Promise<boolean> {
+    return Promise.resolve(this.#apps.delete(id));
+  }
+
+  putEnvironment(environment: Environment): Promise<Environment> {
+    this.#environments.set(environment.id, environment);
+    return Promise.resolve(environment);
+  }
+
+  getEnvironment(id: string): Promise<Environment | undefined> {
+    return Promise.resolve(this.#environments.get(id));
+  }
+
+  listEnvironments(appId: string): Promise<readonly Environment[]> {
+    return Promise.resolve(
+      Array.from(this.#environments.values())
+        .filter((row) => row.appId === appId)
+        .sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        ),
+    );
+  }
+
+  deleteEnvironment(id: string): Promise<boolean> {
+    return Promise.resolve(this.#environments.delete(id));
+  }
+
+  putInstallProfile(profile: InstallProfile): Promise<InstallProfile> {
+    this.#installProfiles.set(profile.id, profile);
+    return Promise.resolve(profile);
+  }
+
+  getInstallProfile(id: string): Promise<InstallProfile | undefined> {
+    return Promise.resolve(this.#installProfiles.get(id));
+  }
+
+  listInstallProfiles(): Promise<readonly InstallProfile[]> {
+    return Promise.resolve(
+      Array.from(this.#installProfiles.values()).sort((a, b) =>
+        a.id.localeCompare(b.id)
+      ),
+    );
+  }
+
+  putDeploymentProfile(
+    profile: DeploymentProfile,
+  ): Promise<DeploymentProfile> {
+    // The environmentId is the natural upsert key (one profile per env). Drop a
+    // stale row that referenced the same environment under a different id.
+    for (const [key, existing] of this.#deploymentProfiles) {
+      if (existing.environmentId === profile.environmentId && key !== profile.id) {
+        this.#deploymentProfiles.delete(key);
+      }
+    }
+    this.#deploymentProfiles.set(profile.id, profile);
+    return Promise.resolve(profile);
+  }
+
+  getDeploymentProfileByEnvironment(
+    environmentId: string,
+  ): Promise<DeploymentProfile | undefined> {
+    return Promise.resolve(
+      Array.from(this.#deploymentProfiles.values()).find(
+        (row) => row.environmentId === environmentId,
+      ),
     );
   }
 }

@@ -45,6 +45,13 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
           headers: { "content-type": "application/vnd.opentofu.plan" },
         });
       }
+      // No plan JSON produced in this mock; 404 means "skip plan-json promotion".
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_1/artifacts/tfplan-json"
+      ) {
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
       return Response.json({ error: "unexpected" }, { status: 500 });
     },
   });
@@ -64,13 +71,20 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
   assert.deepEqual(calls, [
     "POST /runs/plan_1",
     "GET /runs/plan_1/artifacts/tfplan",
+    "GET /runs/plan_1/artifacts/tfplan-json",
   ]);
   const payload = await response.json() as Record<string, unknown>;
   const artifact = payload.planArtifact as Record<string, unknown>;
   assert.equal(artifact.kind, "object-storage");
+  // The object-storage ref still names the plaintext key (the DO maps it to the
+  // `.enc` object transparently on restore); the stored object is encrypted.
   assert.equal(artifact.ref, "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan");
   assert.equal(artifact.digest, PLAN_DIGEST);
-  assert.deepEqual(r2.body("opentofu-plan-runs/plan_1/tfplan"), PLAN_BYTES);
+  // The plaintext plan binary is NOT stored; only the `.enc` ciphertext exists.
+  assert.equal(r2.body("opentofu-plan-runs/plan_1/tfplan"), undefined);
+  const encrypted = r2.body("opentofu-plan-runs/plan_1/tfplan.enc");
+  assert.ok(encrypted && encrypted.byteLength > 0);
+  assert.notDeepEqual(encrypted, PLAN_BYTES);
 });
 
 test("OpenTofu runner Durable Object restores reviewed R2 plan artifact before apply", async () => {
@@ -219,6 +233,12 @@ test("OpenTofu runner Durable Object uses the configured R2 bucket name in artif
       if (request.method === "GET" && path === "/runs/plan_1/artifacts/tfplan") {
         return new Response(PLAN_BYTES);
       }
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_1/artifacts/tfplan-json"
+      ) {
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
       return Response.json({ error: "unexpected" }, { status: 500 });
     },
   }, { bucketName: "takosumi-proof-artifacts" });
@@ -254,21 +274,27 @@ async function testStateBackendPrefix(ref: string): Promise<string> {
   return `opentofu-state/backends/${hex}`;
 }
 
+// At-rest encryption (M2) requires a secret-store passphrase; supply a fixed one
+// so the runner DO seals/opens plan binaries + state with real AES-GCM in tests.
+const TEST_PASSPHRASE = "takosumi-runner-container-test-passphrase-0123456789";
+
 function runnerWithContainer(
   r2: R2Bucket,
   container: ContainerRequestFetcher,
-  options: { readonly bucketName?: string } = {},
+  options: { readonly bucketName?: string; readonly stateBucket?: R2Bucket } = {},
 ): TakosumiOpenTofuRunner {
   const runner = new TakosumiOpenTofuRunner(
     { storage: new FakeDoStorage() },
     {
       TAKOS_D1: {} as CloudflareWorkerEnv["TAKOS_D1"],
       TAKOS_ARTIFACTS: r2,
+      ...(options.stateBucket ? { R2_STATE: options.stateBucket } : {}),
       ...(options.bucketName
         ? { TAKOS_ARTIFACTS_BUCKET_NAME: options.bucketName }
         : {}),
       TAKOS_COORDINATION: {} as CloudflareWorkerEnv["TAKOS_COORDINATION"],
-    },
+      TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+    } as CloudflareWorkerEnv,
   );
   Object.defineProperty(runner, "containerFetch", {
     value(request: Request, _port?: number) {

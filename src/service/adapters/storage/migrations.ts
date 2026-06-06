@@ -625,6 +625,65 @@ export const postgresStorageTableDefinitions:
         "created_at",
       ]],
     },
+    {
+      name: "takosumi_apps",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "source_id",
+        "install_type",
+        "install_profile_id",
+        "app_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["space_id"], ["source_id"]],
+    },
+    {
+      name: "takosumi_environments",
+      domain: "deploy",
+      columns: [
+        "id",
+        "app_id",
+        "name",
+        "environment_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["app_id", "name"]],
+      indexes: [["app_id"]],
+    },
+    {
+      name: "takosumi_install_profiles",
+      domain: "deploy",
+      columns: [
+        "id",
+        "install_type",
+        "trust_level",
+        "profile_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["install_type"], ["trust_level"]],
+    },
+    {
+      name: "takosumi_deployment_profiles",
+      domain: "deploy",
+      columns: [
+        "id",
+        "environment_id",
+        "profile_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["environment_id"]],
+      indexes: [["environment_id"]],
+    },
   ]);
 
 export const postgresStorageMigrationStatements:
@@ -1294,5 +1353,71 @@ drop table if exists takosumi_source_snapshots;
 drop index if exists takosumi_sources_status_idx;
 drop index if exists takosumi_sources_space_idx;
 drop table if exists takosumi_sources;`,
+    },
+    {
+      id: "deploy.takosumi_lanes.create",
+      version: 33,
+      domain: "deploy",
+      description:
+        "Create the App / Environment / InstallProfile / DeploymentProfile lane ledger (Core Specification §6.3-§6.7). An App binds a Source to one install type; an Environment is one execution lane; an InstallProfile is service-side install config (seeded from the official template catalog); a DeploymentProfile carries the per-Environment Connection binding (no secret values).",
+      sql: `create table if not exists takosumi_apps (
+  id                 text   primary key,
+  space_id           text   not null,
+  source_id          text   not null,
+  install_type       text   not null
+    check (install_type in ('app_source','opentofu_module','opentofu_root')),
+  install_profile_id text,
+  app_json           jsonb  not null,
+  created_at         text   not null,
+  updated_at         text   not null
+);
+create index if not exists takosumi_apps_space_idx
+  on takosumi_apps (space_id);
+create index if not exists takosumi_apps_source_idx
+  on takosumi_apps (source_id);
+create table if not exists takosumi_environments (
+  id               text   primary key,
+  app_id           text   not null,
+  name             text   not null,
+  environment_json jsonb  not null,
+  created_at       text   not null,
+  updated_at       text   not null,
+  unique (app_id, name)
+);
+create index if not exists takosumi_environments_app_idx
+  on takosumi_environments (app_id);
+create table if not exists takosumi_install_profiles (
+  id           text   primary key,
+  install_type text   not null
+    check (install_type in ('app_source','opentofu_module','opentofu_root')),
+  trust_level  text   not null
+    check (trust_level in ('official','trusted','customer','raw')),
+  profile_json jsonb  not null,
+  created_at   text   not null,
+  updated_at   text   not null
+);
+create index if not exists takosumi_install_profiles_install_type_idx
+  on takosumi_install_profiles (install_type);
+create index if not exists takosumi_install_profiles_trust_level_idx
+  on takosumi_install_profiles (trust_level);
+create table if not exists takosumi_deployment_profiles (
+  id             text   primary key,
+  environment_id text   not null unique,
+  profile_json   jsonb  not null,
+  created_at     text   not null,
+  updated_at     text   not null
+);
+create index if not exists takosumi_deployment_profiles_environment_idx
+  on takosumi_deployment_profiles (environment_id);`,
+      down: `drop index if exists takosumi_deployment_profiles_environment_idx;
+drop table if exists takosumi_deployment_profiles;
+drop index if exists takosumi_install_profiles_trust_level_idx;
+drop index if exists takosumi_install_profiles_install_type_idx;
+drop table if exists takosumi_install_profiles;
+drop index if exists takosumi_environments_app_idx;
+drop table if exists takosumi_environments;
+drop index if exists takosumi_apps_source_idx;
+drop index if exists takosumi_apps_space_idx;
+drop table if exists takosumi_apps;`,
     },
   ]);
