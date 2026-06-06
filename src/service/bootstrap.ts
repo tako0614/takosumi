@@ -267,6 +267,15 @@ export interface TakosumiOperations {
   readonly lanes: LanesService;
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
+  /**
+   * Env-driven plan (M2): resolves the Environment -> App -> Source, picks the
+   * latest SourceSnapshot, and dispatches with environment state scope.
+   */
+  createEnvironmentPlan(environmentId: string): Promise<PlanRunResponse>;
+  /** Env-driven destroy-plan (M2): always lands waiting_approval (spec §10.6). */
+  createEnvironmentDestroyPlan(
+    environmentId: string,
+  ): Promise<PlanRunResponse>;
   getPlanRun(id: string): Promise<PlanRunResponse>;
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   getApplyRun(id: string): Promise<ApplyRunResponse>;
@@ -492,6 +501,10 @@ export async function createTakosumiService(
     lanes: lanesService,
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
+    createEnvironmentPlan: (environmentId) =>
+      opentofuController.createEnvironmentPlan(environmentId),
+    createEnvironmentDestroyPlan: (environmentId) =>
+      opentofuController.createEnvironmentDestroyPlan(environmentId),
     getPlanRun: (id) => opentofuController.getPlanRun(id),
     createApplyRun: (request) => opentofuController.createApplyRun(request),
     getApplyRun: (id) => opentofuController.getApplyRun(id),
