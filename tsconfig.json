@@ -65,6 +65,7 @@
   },
   "include": [
     "src",
+    "templates",
     "packages/accounts-contract",
     "packages/accounts-service",
     "packages/cli",

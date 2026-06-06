@@ -10,6 +10,9 @@ import type {
   ApplyRun,
   Connection,
   Deployment,
+  DispatchBuildSpec,
+  DispatchGeneratedRoot,
+  DispatchTemplateRef,
   Installation,
   PlanRun,
   RunnerProfile,
@@ -27,6 +30,17 @@ import { currentRuntime } from "../../shared/runtime/index.ts";
 export interface PlanRunInputs {
   readonly planRunId: string;
   readonly variables: Readonly<Record<string, JsonValue>>;
+  /**
+   * Template dispatch data (Phase 1C). Present for template-backed PlanRuns: the
+   * resolved template reference (baked-in module path), the Takosumi-generated
+   * root module, and the optional build phase. The queue consumer re-reads this
+   * sidecar and threads it onto the runner dispatch payload (`request.template` /
+   * `request.generatedRoot` / `request.build`). Never projected into the public
+   * ledger.
+   */
+  readonly template?: DispatchTemplateRef;
+  readonly generatedRoot?: DispatchGeneratedRoot;
+  readonly build?: DispatchBuildSpec;
 }
 
 /**

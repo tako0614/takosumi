@@ -12,6 +12,7 @@ import { isAbsolute, join, normalize, resolve } from "node:path";
 // and is copied into the runner container image alongside this file so the
 // relative import resolves at container runtime (see runner/Dockerfile).
 import {
+  PROVIDER_CREDENTIAL_ENV_RULES,
   type ProviderCredentialEnvRule,
   providerEnvRule,
 } from "../../../src/contract/provider-env-rules.ts";
@@ -53,6 +54,33 @@ interface RunWorkspace {
   readonly planPath: string;
   readonly restoredStatePath: string;
   readonly moduleInfoPath: string;
+  // Template-path (Phase 1C) workspace dirs. `generatedRootDir` is where tofu
+  // runs for a template-based run (it holds the generated root module + the
+  // copied template-module); `artifactDir` receives the build artifact.
+  readonly generatedRootDir: string;
+  readonly templateModuleDir: string;
+  readonly artifactDir: string;
+}
+
+/** Optional baked official-template reference on the dispatch payload. */
+interface TemplateRef {
+  readonly id: string;
+  readonly version: string;
+  /** Absolute path INSIDE the runner image, e.g. /app/templates/<id>/module. */
+  readonly localModulePath: string;
+}
+
+/** Generated root module HCL files (filename -> content). */
+interface GeneratedRoot {
+  readonly files: Record<string, string>;
+}
+
+/** Optional credential-free build phase that runs before plan. */
+interface BuildSpec {
+  readonly runtime: "bun";
+  readonly commands: readonly string[];
+  /** File/dir relative to the source root; copied to /work/artifact. */
+  readonly artifactPath: string;
 }
 
 interface CommandContext {
@@ -78,7 +106,14 @@ const BASE_COMMAND_ENV_NAMES = [
   "SSL_CERT_DIR",
   "GIT_SSL_CAINFO",
   "REQUESTS_CA_BUNDLE",
+  // Baked CLI config pointing at the offline provider filesystem mirror +
+  // plugin cache (see runner/tofu.rc). Must be on the tofu process env so init
+  // resolves the mirrored providers from disk with no registry round-trip.
+  "TF_CLI_CONFIG_FILE",
 ] as const;
+// Well-known tofu input the runner sets when a build phase produced an artifact.
+// A generated root module may wire `var.artifact_path` to consume it.
+const ARTIFACT_PATH_TF_VAR = "TF_VAR_artifact_path";
 async function handleRunnerRequest(request: Request): Promise<Response> {
   {
     const url = new URL(request.url);
@@ -89,9 +124,17 @@ async function handleRunnerRequest(request: Request): Promise<Response> {
     const artifactMatch = /^\/runs\/([^/]+)\/artifacts\/tfplan$/.exec(
       url.pathname,
     );
+    const planJsonArtifactMatch = /^\/runs\/([^/]+)\/artifacts\/tfplan-json$/
+      .exec(url.pathname);
     const stateArtifactMatch = /^\/runs\/([^/]+)\/artifacts\/tfstate$/.exec(
       url.pathname,
     );
+    if (planJsonArtifactMatch) {
+      return await handlePlanJsonArtifactRequest(
+        decodeURIComponent(planJsonArtifactMatch[1]!),
+        request,
+      );
+    }
     if (artifactMatch) {
       return await handlePlanArtifactRequest(
         decodeURIComponent(artifactMatch[1]!),
@@ -156,6 +199,18 @@ async function runPlan(
   runId: string,
   request: unknown,
 ): Promise<JsonRecord> {
+  const template = parseTemplate(request);
+  const generatedRoot = parseGeneratedRoot(request);
+  if (template || generatedRoot) {
+    return await runTemplatePlan(runId, request, template, generatedRoot);
+  }
+  return await runRawModulePlan(runId, request);
+}
+
+async function runRawModulePlan(
+  runId: string,
+  request: unknown,
+): Promise<JsonRecord> {
   const operation = parseOperation(request);
   const source = parseSource(request);
   const variables = parseVariables(request);
@@ -171,14 +226,89 @@ async function runPlan(
   const sourceCommit = source.kind === "git"
     ? await gitRevParseHead(workspace.sourceRoot, commandContext)
     : undefined;
+  return await initPlanAndBuildResponse(runId, workspace, workspace.moduleDir, {
+    operation,
+    commandContext,
+    extra: sourceCommit ? { sourceCommit } : {},
+  });
+}
+
+// Template path (Phase 1C): the OpenTofu surface is the generated root module
+// (which references the baked official template module as ./template-module).
+// The user source, when present, is ONLY a BUILD input and is never the tofu
+// root. Build commands run with NO credentials before any tofu phase.
+async function runTemplatePlan(
+  runId: string,
+  request: unknown,
+  template: TemplateRef | undefined,
+  generatedRoot: GeneratedRoot | undefined,
+): Promise<JsonRecord> {
+  if (!template) throw new Error("template is required when generatedRoot is present");
+  if (!generatedRoot) throw new Error("generatedRoot is required when template is present");
+  const operation = parseOperation(request);
+  const build = parseBuild(request);
+  const runnerProfile = parseRunnerProfile(request);
+  const commandContext = commandContextFromRequest(request, runnerProfile);
+  assertRunnerPolicyBeforeInit(request, runnerProfile, commandContext);
+
+  const workspace = await prepareTemplateWorkspace(runId);
+  let buildLog = "";
+  let sourceCommit: string | undefined;
+  if (build) {
+    const buildSource = parseSource(request);
+    const built = await runBuildPhase(runId, workspace, buildSource, build);
+    if ("failure" in built) return built.failure;
+    buildLog = built.buildLog;
+    sourceCommit = built.sourceCommit;
+  }
+
+  await materializeGeneratedRoot(workspace, template, generatedRoot);
+  const planContext = build
+    ? withArtifactPathVar(commandContext, workspace, build)
+    : commandContext;
+  return await initPlanAndBuildResponse(
+    runId,
+    workspace,
+    workspace.generatedRootDir,
+    {
+      operation,
+      commandContext: planContext,
+      buildLog,
+      extra: {
+        template: { id: template.id, version: template.version },
+        ...(sourceCommit ? { sourceCommit } : {}),
+      },
+    },
+  );
+}
+
+interface PlanResponseOptions {
+  readonly operation: OpenTofuOperation;
+  readonly commandContext: CommandContext;
+  readonly buildLog?: string;
+  readonly extra?: JsonRecord;
+}
+
+// Shared init+plan+show pipeline for both the raw-module and template lanes.
+// `moduleDir` is the tofu root (the source module dir for raw modules, the
+// generated-root dir for templates).
+async function initPlanAndBuildResponse(
+  runId: string,
+  workspace: RunWorkspace,
+  moduleDir: string,
+  options: PlanResponseOptions,
+): Promise<JsonRecord> {
+  const { operation, commandContext } = options;
   const init = await runCommand(["tofu", "init", "-input=false", "-no-color"], {
-    cwd: workspace.moduleDir,
+    cwd: moduleDir,
     context: commandContext,
   });
   if (init.exitCode !== 0) {
-    return commandFailurePayload(runId, "plan", init);
+    return mergeBuildLog(
+      commandFailurePayload(runId, "plan", init),
+      options.buildLog,
+    );
   }
-
   const plan = await runCommand([
     "tofu",
     "plan",
@@ -187,16 +317,20 @@ async function runPlan(
     "-no-color",
     "-out",
     workspace.planPath,
-  ], { cwd: workspace.moduleDir, context: commandContext });
+  ], { cwd: moduleDir, context: commandContext });
   if (plan.exitCode !== 0) {
-    return commandFailurePayload(runId, "plan", plan);
+    return mergeBuildLog(
+      commandFailurePayload(runId, "plan", plan),
+      options.buildLog,
+    );
   }
 
   const planBytes = await readFile(workspace.planPath);
   const planDigest = await digestBytes(planBytes);
-  const planJson = await readOpenTofuPlanJson(workspace, commandContext);
+  const planJson = await readOpenTofuPlanJson(moduleDir, workspace, commandContext);
+  if (planJson) await writePlanJsonArtifact(workspace, planJson);
   const providerLockDigest = await digestFileIfExists(
-    join(workspace.moduleDir, ".terraform.lock.hcl"),
+    join(moduleDir, ".terraform.lock.hcl"),
   );
   return {
     runId,
@@ -213,11 +347,22 @@ async function runPlan(
     },
     requiredProviders: planJson ? providersFromPlanJson(planJson) : [],
     ...(planJson ? { summary: summaryFromPlanJson(planJson) } : {}),
-    ...(sourceCommit ? { sourceCommit } : {}),
+    ...(planJson
+      ? { planResourceChanges: resourceChangesFromPlanJson(planJson) }
+      : {}),
     ...(providerLockDigest ? { providerLockDigest } : {}),
-    stdout: [init.stdout, plan.stdout].filter(Boolean).join("\n"),
+    ...(options.extra ?? {}),
+    stdout: [options.buildLog, init.stdout, plan.stdout].filter(Boolean).join(
+      "\n",
+    ),
     stderr: [init.stderr, plan.stderr].filter(Boolean).join("\n"),
   };
+}
+
+function mergeBuildLog(payload: JsonRecord, buildLog: string | undefined): JsonRecord {
+  if (!buildLog) return payload;
+  const existing = typeof payload.stdout === "string" ? payload.stdout : "";
+  return { ...payload, stdout: [buildLog, existing].filter(Boolean).join("\n") };
 }
 
 async function runReviewedPlanApply(
@@ -225,15 +370,21 @@ async function runReviewedPlanApply(
   action: "apply" | "destroy",
   request: unknown,
 ): Promise<JsonRecord> {
-  const source = parseSource(request);
+  const template = parseTemplate(request);
+  const generatedRoot = parseGeneratedRoot(request);
   const runnerProfile = parseRunnerProfile(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
   assertRunnerPolicyBeforeInit(request, runnerProfile, commandContext);
   const planArtifact = parsePlanArtifact(request);
   await verifyPlanArtifact(workspaceForRun(runId).planPath, planArtifact);
-  const workspace = await prepareApplyWorkspace(runId, source, commandContext);
+
+  const moduleDir = template || generatedRoot
+    ? await restoreTemplateApplyWorkspace(runId, template, generatedRoot)
+    : (await prepareApplyWorkspace(runId, parseSource(request), commandContext))
+      .moduleDir;
+
   const init = await runCommand(["tofu", "init", "-input=false", "-no-color"], {
-    cwd: workspace.moduleDir,
+    cwd: moduleDir,
     context: commandContext,
   });
   if (init.exitCode !== 0) {
@@ -244,10 +395,10 @@ async function runReviewedPlanApply(
     "apply",
     "-input=false",
     "-no-color",
-    workspace.planPath,
-  ], { cwd: workspace.moduleDir, context: commandContext });
+    workspaceForRun(runId).planPath,
+  ], { cwd: moduleDir, context: commandContext });
   const outputs = action === "apply" && result.exitCode === 0
-    ? await readOpenTofuOutputs(workspace, commandContext)
+    ? await readOpenTofuOutputsIn(moduleDir, commandContext)
     : undefined;
   return {
     runId,
@@ -258,6 +409,122 @@ async function runReviewedPlanApply(
     stdout: [init.stdout, result.stdout].filter(Boolean).join("\n"),
     stderr: [init.stderr, result.stderr].filter(Boolean).join("\n"),
   };
+}
+
+// For template apply the consumer resends template + generatedRoot. Restore the
+// generated root the same way plan did so `tofu apply tfplan` runs against an
+// identical root (the saved plan binds to this module layout).
+async function restoreTemplateApplyWorkspace(
+  runId: string,
+  template: TemplateRef | undefined,
+  generatedRoot: GeneratedRoot | undefined,
+): Promise<string> {
+  if (!template || !generatedRoot) {
+    throw new Error("template apply requires both template and generatedRoot");
+  }
+  const workspace = workspaceForRun(runId);
+  await mkdir(workspace.root, { recursive: true });
+  await materializeGeneratedRoot(workspace, template, generatedRoot);
+  await restoreUploadedState(workspace, workspace.generatedRootDir);
+  return workspace.generatedRootDir;
+}
+
+// BUILD phase: clone/materialize the user source, run build.commands with a
+// CREDENTIAL-FREE env, then copy the declared artifact into /work/artifact.
+async function runBuildPhase(
+  runId: string,
+  workspace: RunWorkspace,
+  source: OpenTofuModuleSource,
+  build: BuildSpec,
+): Promise<
+  | { readonly buildLog: string; readonly sourceCommit: string | undefined }
+  | { readonly failure: JsonRecord }
+> {
+  const buildContext: CommandContext = { env: buildPhaseEnv() };
+  // Hard invariant: the build phase env must carry no provider credential.
+  assertBuildEnvHasNoCredentials(buildContext.env);
+  await materializeSource(source, workspace.sourceRoot, buildContext);
+  const sourceCommit = source.kind === "git"
+    ? await gitRevParseHead(workspace.sourceRoot, buildContext)
+    : undefined;
+  const logs: string[] = [];
+  for (const command of build.commands) {
+    const result = await runCommand(["bash", "-lc", command], {
+      cwd: workspace.sourceRoot,
+      context: buildContext,
+    });
+    logs.push(redactBuildOutput(`$ ${command}\n${result.stdout}\n${result.stderr}`));
+    if (result.exitCode !== 0) {
+      return {
+        failure: {
+          runId,
+          action: "plan",
+          status: "failed",
+          exitCode: result.exitCode,
+          phase: "build",
+          stdout: logs.join("\n"),
+          stderr: redactBuildOutput(
+            `build command failed (${result.exitCode}): ${command}\n${result.stderr}`,
+          ),
+        },
+      };
+    }
+  }
+  await copyBuildArtifact(workspace, build);
+  return { buildLog: logs.join("\n"), sourceCommit };
+}
+
+async function copyBuildArtifact(
+  workspace: RunWorkspace,
+  build: BuildSpec,
+): Promise<void> {
+  const artifactSource = resolve(workspace.sourceRoot, build.artifactPath);
+  const normalizedRoot = resolve(workspace.sourceRoot);
+  if (
+    artifactSource !== normalizedRoot &&
+    !artifactSource.startsWith(`${normalizedRoot}/`)
+  ) {
+    throw new Error("build.artifactPath must stay inside source root");
+  }
+  await assertRealPathInsideSourceRoot(
+    artifactSource,
+    workspace.sourceRoot,
+    "build artifact path",
+  );
+  await mkdir(workspace.artifactDir, { recursive: true });
+  const destination = join(workspace.artifactDir, build.artifactPath);
+  await mkdir(join(destination, ".."), { recursive: true });
+  await cp(artifactSource, destination, { recursive: true });
+}
+
+// Expose the well-known TF_VAR_artifact_path input pointing at the copied
+// artifact so a generated root may wire `var.artifact_path`.
+function withArtifactPathVar(
+  context: CommandContext,
+  workspace: RunWorkspace,
+  build: BuildSpec,
+): CommandContext {
+  return {
+    ...context,
+    env: {
+      ...context.env,
+      [ARTIFACT_PATH_TF_VAR]: join(workspace.artifactDir, build.artifactPath),
+    },
+  };
+}
+
+function redactBuildOutput(text: string): string {
+  // Build commands run credential-free, but redact any value that LOOKS like a
+  // known credential env assignment as defense-in-depth before it reaches the
+  // run record / diagnostics.
+  let redacted = text;
+  for (const name of allKnownCredentialEnvNames()) {
+    redacted = redacted.replaceAll(
+      new RegExp(`(${name}=)[^\\s]+`, "g"),
+      "$1[redacted]",
+    );
+  }
+  return redacted;
 }
 
 async function preparePlanWorkspace(
@@ -315,6 +582,81 @@ async function prepareApplyWorkspace(
   return prepared;
 }
 
+// Fresh per-run workspace for a template plan. Wipes any previous run dir and
+// records the generated-root as the state moduleDir so the DO's state artifact
+// GET (which reads module-info.json) finds terraform.tfstate after apply.
+async function prepareTemplateWorkspace(runId: string): Promise<RunWorkspace> {
+  const workspace = workspaceForRun(runId);
+  await rm(workspace.root, { recursive: true, force: true });
+  await mkdir(workspace.root, { recursive: true });
+  await mkdir(workspace.generatedRootDir, { recursive: true });
+  await writeModuleInfo(workspace, workspace.generatedRootDir);
+  return workspace;
+}
+
+// Writes the generated root module files and copies the baked official template
+// module into ./template-module so the generated root's `source =
+// "./template-module"` resolves. Both the generated-root files and the template
+// path are validated by the parsers before reaching here.
+async function materializeGeneratedRoot(
+  workspace: RunWorkspace,
+  template: TemplateRef,
+  generatedRoot: GeneratedRoot,
+): Promise<void> {
+  await mkdir(workspace.generatedRootDir, { recursive: true });
+  await rm(workspace.templateModuleDir, { recursive: true, force: true });
+  await assertDirectory(template.localModulePath, "template module directory");
+  await cp(template.localModulePath, workspace.templateModuleDir, {
+    recursive: true,
+  });
+  for (const [name, content] of Object.entries(generatedRoot.files)) {
+    await writeFile(join(workspace.generatedRootDir, name), content);
+  }
+  // Re-assert the state moduleDir after a restore-only path created the dir.
+  await writeModuleInfo(workspace, workspace.generatedRootDir);
+}
+
+// Stores the full `tofu show -json tfplan` JSON next to the plan binary so the
+// DO/relay can promote it. The DO already promotes the tfplan binary; the
+// plan-JSON sits beside it under the run root and is surfaced via the
+// /artifacts/tfplan-json route below.
+async function writePlanJsonArtifact(
+  workspace: RunWorkspace,
+  planJson: string,
+): Promise<void> {
+  await writeFile(planJsonPath(workspace), planJson);
+}
+
+function planJsonPath(workspace: RunWorkspace): string {
+  return join(workspace.root, "tfplan.json");
+}
+
+async function handlePlanJsonArtifactRequest(
+  runId: string,
+  request: Request,
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return Response.json(
+      { error: "method not allowed" },
+      { status: 405, headers: { allow: "GET" } },
+    );
+  }
+  try {
+    const bytes = await readFile(planJsonPath(workspaceForRun(runId)));
+    return new Response(bytes, {
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(bytes.byteLength),
+      },
+    });
+  } catch {
+    return Response.json(
+      { error: "plan-json artifact not found" },
+      { status: 404 },
+    );
+  }
+}
+
 async function handlePlanArtifactRequest(
   runId: string,
   request: Request,
@@ -360,6 +702,9 @@ function workspaceForRun(runId: string): RunWorkspace {
     planPath: join(root, "tfplan"),
     restoredStatePath: join(root, "restored.tfstate"),
     moduleInfoPath: join(root, "module-info.json"),
+    generatedRootDir: join(root, "generated-root"),
+    templateModuleDir: join(root, "generated-root", "template-module"),
+    artifactDir: join(root, "artifact"),
   };
 }
 
@@ -806,6 +1151,7 @@ async function runRequiredCommand(
 }
 
 async function readOpenTofuPlanJson(
+  moduleDir: string,
   workspace: RunWorkspace,
   context: CommandContext,
 ): Promise<string | undefined> {
@@ -814,18 +1160,18 @@ async function readOpenTofuPlanJson(
     "show",
     "-json",
     workspace.planPath,
-  ], { cwd: workspace.moduleDir, context });
+  ], { cwd: moduleDir, context });
   return result.exitCode === 0 && result.stdout.trim().length > 0
     ? result.stdout
     : undefined;
 }
 
-async function readOpenTofuOutputs(
-  workspace: RunWorkspace,
+async function readOpenTofuOutputsIn(
+  moduleDir: string,
   context: CommandContext,
 ): Promise<Record<string, unknown> | undefined> {
   const result = await runCommand(["tofu", "output", "-json"], {
-    cwd: workspace.moduleDir,
+    cwd: moduleDir,
     context,
   });
   if (result.exitCode !== 0 || result.stdout.trim().length === 0) {
@@ -943,6 +1289,106 @@ function parseVariables(request: unknown): JsonRecord {
   return isRecord(variables) ? variables : {};
 }
 
+export function parseTemplate(request: unknown): TemplateRef | undefined {
+  const template = recordField(request, "template");
+  if (!isRecord(template)) return undefined;
+  const id = requiredStringField(template, "id");
+  const version = requiredStringField(template, "version");
+  const localModulePath = requiredStringField(template, "localModulePath");
+  assertTemplateModulePath(localModulePath);
+  return { id, version, localModulePath };
+}
+
+export function parseGeneratedRoot(request: unknown): GeneratedRoot | undefined {
+  const generated = recordField(request, "generatedRoot");
+  if (!isRecord(generated)) return undefined;
+  const files = recordField(generated, "files");
+  if (!isRecord(files)) {
+    throw new Error("generatedRoot.files must be an object");
+  }
+  const out: Record<string, string> = {};
+  for (const [name, content] of Object.entries(files)) {
+    assertGeneratedRootFileName(name);
+    if (typeof content !== "string") {
+      throw new Error(`generatedRoot.files[${name}] must be a string`);
+    }
+    out[name] = content;
+  }
+  if (Object.keys(out).length === 0) {
+    throw new Error("generatedRoot.files must not be empty");
+  }
+  return { files: out };
+}
+
+export function parseBuild(request: unknown): BuildSpec | undefined {
+  const build = recordField(request, "build");
+  if (!isRecord(build)) return undefined;
+  if (stringField(build, "runtime") !== "bun") {
+    throw new Error("build.runtime must be 'bun'");
+  }
+  const commands = stringArray(recordField(build, "commands"));
+  if (commands.length === 0) {
+    throw new Error("build.commands must be a non-empty string array");
+  }
+  const artifactPath = requiredStringField(build, "artifactPath");
+  assertSafeRelativePath(artifactPath, "build.artifactPath");
+  return { runtime: "bun", commands, artifactPath };
+}
+
+// The template module is baked into the image under /app/templates. Only allow
+// an absolute path inside that root with no traversal so a crafted payload can
+// never point the copy at, e.g., /etc or the source checkout.
+const TEMPLATE_MODULE_ROOT = "/app/templates/";
+
+function assertTemplateModulePath(path: string): void {
+  if (!isAbsolute(path)) {
+    throw new Error("template.localModulePath must be an absolute image path");
+  }
+  const normalized = normalize(path);
+  if (
+    !normalized.startsWith(TEMPLATE_MODULE_ROOT) ||
+    normalized.includes("/../") ||
+    normalized.endsWith("/..")
+  ) {
+    throw new Error(
+      `template.localModulePath must stay inside ${TEMPLATE_MODULE_ROOT}`,
+    );
+  }
+}
+
+function assertGeneratedRootFileName(name: string): void {
+  if (
+    name.length === 0 ||
+    name.includes("/") ||
+    name.includes("\\") ||
+    name.includes("\0") ||
+    name === "." ||
+    name === ".." ||
+    isAbsolute(name)
+  ) {
+    throw new Error(`generatedRoot.files key is not a safe filename: ${name}`);
+  }
+}
+
+function assertSafeRelativePath(path: string, label: string): void {
+  if (
+    path.length === 0 ||
+    isAbsolute(path) ||
+    path.includes("\0") ||
+    /^[A-Za-z]:[\\/]/.test(path)
+  ) {
+    throw new Error(`${label} must be a relative path inside the source root`);
+  }
+  const normalized = normalize(path).replaceAll("\\", "/");
+  if (
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
+    throw new Error(`${label} must not escape the source root`);
+  }
+}
+
 function parseRunnerProfile(request: unknown): JsonRecord | undefined {
   return recordField(request, "runnerProfile") as JsonRecord | undefined;
 }
@@ -1032,6 +1478,52 @@ function baseCommandEnv(): Record<string, string> {
   }
   if (!env.PATH) env.PATH = "/usr/local/bin:/usr/bin:/bin";
   return env;
+}
+
+/** Every credential env name any known provider may supply. */
+function allKnownCredentialEnvNames(): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const rule of PROVIDER_CREDENTIAL_ENV_RULES) {
+    for (const name of rule.envNames) names.add(name);
+  }
+  return names;
+}
+
+/**
+ * Builds the env for the BUILD phase. The build phase runs user-supplied
+ * commands against the user source checkout and MUST NOT see any cloud
+ * credential: it is the only phase that runs untrusted commands, and it runs
+ * BEFORE the credentialed tofu phases. We start from {@link baseCommandEnv}
+ * (which carries only PATH/HOME/TLS-CA/TF_CLI_CONFIG_FILE etc., never
+ * credentials) and additionally assert that no known credential env name leaked
+ * in. The minted payload credentials live only on the dispatch payload and are
+ * never written into the process env, so they cannot reach here regardless.
+ */
+export function buildPhaseEnv(): Record<string, string> {
+  const env = baseCommandEnv();
+  const credentialNames = allKnownCredentialEnvNames();
+  for (const name of Object.keys(env)) {
+    if (credentialNames.has(name)) {
+      // baseCommandEnv never includes these; this is defense-in-depth so a
+      // future edit to BASE_COMMAND_ENV_NAMES can never silently leak a
+      // credential into untrusted build commands.
+      delete env[name];
+    }
+  }
+  return env;
+}
+
+function assertBuildEnvHasNoCredentials(
+  env: Readonly<Record<string, string>>,
+): void {
+  const credentialNames = allKnownCredentialEnvNames();
+  for (const name of Object.keys(env)) {
+    if (credentialNames.has(name)) {
+      throw new Error(
+        `build phase env unexpectedly carries credential env name ${name}`,
+      );
+    }
+  }
 }
 
 function assertRunnerPolicyBeforeInit(
@@ -1216,6 +1708,30 @@ function summaryFromPlanJson(planJson: string): {
     }
   }
   return { add, change, destroy };
+}
+
+// Trimmed per-resource change list (address/type/actions only) extracted from
+// `tofu show -json tfplan`. Used by the plan-JSON policy on the service side.
+export function resourceChangesFromPlanJson(
+  planJson: string,
+): Array<{ address: string; type: string; actions: string[] }> {
+  const parsed = JSON.parse(planJson) as { readonly resource_changes?: unknown };
+  const out: Array<{ address: string; type: string; actions: string[] }> = [];
+  if (!Array.isArray(parsed.resource_changes)) return out;
+  for (const changeRecord of parsed.resource_changes) {
+    const address = stringField(changeRecord, "address");
+    const type = stringField(changeRecord, "type");
+    const actions = recordField(recordField(changeRecord, "change"), "actions");
+    if (!address || !type || !Array.isArray(actions)) continue;
+    out.push({
+      address,
+      type,
+      actions: actions.filter((action): action is string =>
+        typeof action === "string"
+      ),
+    });
+  }
+  return out;
 }
 
 async function gitRevParseHead(
