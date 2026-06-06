@@ -72,7 +72,8 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
   {
     method: "POST",
     path: TAKOSUMI_PLAN_RUNS_ROUTE,
-    summary: "Creates an OpenTofu plan run for a plain module source.",
+    summary:
+      "Creates an OpenTofu plan run for a plain module source or an official template (templateId+inputs).",
     auth: "deploy-control-token",
     operationId: "createPlanRun",
     openapi: {
@@ -92,7 +93,8 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
   {
     method: "POST",
     path: TAKOSUMI_APPLY_RUNS_ROUTE,
-    summary: "Creates an apply run from a succeeded PlanRun.",
+    summary:
+      "Creates an apply run from a succeeded PlanRun (confirmDestructive required for flagged destructive template plans).",
     auth: "deploy-control-token",
     operationId: "createApplyRun",
     openapi: {
@@ -210,8 +212,16 @@ const ALLOWED_KEYS: Record<DeployControlRouteName, ReadonlySet<string>> = {
     "operation",
     "variables",
     "requiredProviders",
+    "templateId",
+    "templateVersion",
+    "inputs",
   ]),
-  applyRunCreate: new Set(["planRunId", "approval", "expected"]),
+  applyRunCreate: new Set([
+    "planRunId",
+    "approval",
+    "expected",
+    "confirmDestructive",
+  ]),
   connectionCreate: new Set([
     "spaceId",
     "provider",

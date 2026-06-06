@@ -1,0 +1,33 @@
+# Baked OpenTofu CLI config for the runner container (TF_CLI_CONFIG_FILE).
+#
+# plugin_cache_dir: shared on-disk plugin cache so repeated inits in the same
+#   image reuse already-extracted provider binaries.
+#
+# provider_installation:
+#   filesystem_mirror is authoritative for the providers pre-mirrored into the
+#   image at build time (cloudflare/cloudflare, hashicorp/random, hashicorp/tls).
+#   `direct { exclude = [...] }` forbids the registry/network path for exactly
+#   those providers, so a `tofu init` for the official templates resolves them
+#   from disk with no network — which is what lets plan run under `--network
+#   none`. Any other provider (e.g. aws/google, not yet mirrored for size) falls
+#   through to `direct` and is fetched from the registry as usual.
+
+plugin_cache_dir = "/opt/opentofu/provider-cache"
+
+provider_installation {
+  filesystem_mirror {
+    path = "/opt/opentofu/provider-mirror"
+    include = [
+      "registry.opentofu.org/cloudflare/cloudflare",
+      "registry.opentofu.org/hashicorp/random",
+      "registry.opentofu.org/hashicorp/tls",
+    ]
+  }
+  direct {
+    exclude = [
+      "registry.opentofu.org/cloudflare/cloudflare",
+      "registry.opentofu.org/hashicorp/random",
+      "registry.opentofu.org/hashicorp/tls",
+    ]
+  }
+}

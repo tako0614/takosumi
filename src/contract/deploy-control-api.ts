@@ -232,6 +232,26 @@ export interface PlanRun {
    * applied only once. Cleared/unset means the plan has not yet been applied.
    */
   readonly appliedApplyRunId?: string;
+  /**
+   * Resolved template binding for a template-backed PlanRun (Phase 1C). Records
+   * the official template id/version this plan targets and the plan-JSON policy
+   * outcome (allowlist verdict + destructive-confirmation requirement). Absent
+   * for raw-module plans. Never carries input values (those live in the
+   * plan-run-inputs sidecar) — only the public binding + policy verdict.
+   */
+  readonly templateBinding?: PlanRunTemplateBinding;
+}
+
+export interface PlanRunTemplateBinding {
+  readonly templateId: string;
+  readonly templateVersion: string;
+  /**
+   * Set once the runner returns `planResourceChanges` and the template plan-JSON
+   * policy has been evaluated: `true` when a delete/replace change requires an
+   * explicit apply-time confirmation (`requireExplicitConfirmation`). Absent
+   * before the plan completes.
+   */
+  readonly requiresConfirmation?: boolean;
 }
 
 export interface PlanRunSummary {
@@ -399,6 +419,139 @@ export interface CreatePlanRunRequest {
   readonly operation?: OpenTofuOperation;
   readonly variables?: Readonly<Record<string, JsonValue>>;
   readonly requiredProviders?: readonly string[];
+  /**
+   * Official template path (Phase 1C). When `templateId` is present the plan
+   * runs against a Takosumi-generated root module that wires the official
+   * template (baked into the runner image) with the supplied `inputs`. The user
+   * `source` is then a BUILD input only (used by the template's optional build
+   * phase, never as the OpenTofu surface). `requiredProviders` is derived from
+   * the template policy and must not be supplied explicitly alongside a template.
+   */
+  readonly templateId?: string;
+  readonly templateVersion?: string;
+  /**
+   * Typed input values for the template, validated against `template.inputs`.
+   * Literal scalars only (string / number / boolean); rendered into HCL by the
+   * Takosumi rootgen.
+   */
+  readonly inputs?: Readonly<Record<string, JsonValue>>;
+  /**
+   * Apply-time confirmation that the operator accepts the destructive plan
+   * (delete / replace) a template policy flagged with
+   * `destructiveChanges.requireExplicitConfirmation`. Carried on the ApplyRun
+   * request, not here; see {@link CreateApplyRunRequest.confirmDestructive}.
+   */
+}
+
+// ---------------------------------------------------------------------------
+// Official template catalog (Phase 1C). The public surface stays
+// Installation / Deployment / PlanRun / ApplyRun / RunnerProfile /
+// DeploymentOutput; templates are an authoring convenience that produces a
+// Takosumi-generated OpenTofu root module. These DTOs describe the template
+// reference + rootgen output threaded onto the runner dispatch payload only;
+// they are never projected into the public ledger.
+// ---------------------------------------------------------------------------
+
+export type TemplateInputType = "string" | "number" | "boolean";
+
+export interface TemplateInputSpec {
+  readonly type: TemplateInputType;
+  readonly title: string;
+  readonly required: boolean;
+  readonly description?: string;
+  /** Optional default applied when the input is omitted and not required. */
+  readonly default?: string | number | boolean;
+}
+
+export interface TemplatePublicOutputSpec {
+  /** OpenTofu output type hint for display (e.g. "string"). */
+  readonly type: string;
+  /** Name of the template-module output this public output reads from. */
+  readonly from: string;
+}
+
+export interface TemplateBuildSpec {
+  readonly runtime: "bun";
+  /** Commands run sequentially in the user source checkout, NO credentials. */
+  readonly commands: readonly string[];
+  /** File/dir relative to the source root copied to /work/artifact. */
+  readonly artifactPath: string;
+}
+
+export interface TemplateDestructivePolicy {
+  readonly requireExplicitConfirmation: boolean;
+}
+
+export interface TemplatePolicySpec {
+  readonly allowedProviders: readonly string[];
+  readonly allowedResourceTypes: readonly string[];
+  readonly destructiveChanges: TemplateDestructivePolicy;
+}
+
+export interface TemplateSourceSpec {
+  /**
+   * Path INSIDE the runner image to the official template module, e.g.
+   * `/app/templates/cloudflare-r2-bucket/module`. The runner copies it to
+   * `/work/generated-root/template-module`.
+   */
+  readonly localModulePath: string;
+}
+
+export interface TemplateDefinition {
+  readonly id: string;
+  readonly name: string;
+  readonly version: string;
+  readonly description?: string;
+  readonly source: TemplateSourceSpec;
+  readonly build?: TemplateBuildSpec;
+  readonly inputs: Readonly<Record<string, TemplateInputSpec>>;
+  readonly outputs: {
+    readonly public: Readonly<Record<string, TemplatePublicOutputSpec>>;
+  };
+  readonly policy: TemplatePolicySpec;
+}
+
+/**
+ * Template reference threaded onto the runner dispatch payload (the `request`
+ * field of the `takosumi.opentofu-run@v1` envelope). Points the runner at the
+ * baked-in official module.
+ */
+export interface DispatchTemplateRef {
+  readonly id: string;
+  readonly version: string;
+  readonly localModulePath: string;
+}
+
+/**
+ * Takosumi-generated OpenTofu root module threaded onto the dispatch payload.
+ * `files` maps a filename to HCL content; the runner writes these into
+ * `/work/generated-root` and copies the template module to
+ * `/work/generated-root/template-module`.
+ */
+export interface DispatchGeneratedRoot {
+  readonly files: Readonly<Record<string, string>>;
+}
+
+/**
+ * Optional build phase threaded onto the dispatch payload. Runs BEFORE plan
+ * with NO credentials in the user source checkout; its `artifactPath` is copied
+ * to `/work/artifact` for the template module to consume.
+ */
+export interface DispatchBuildSpec {
+  readonly runtime: "bun";
+  readonly commands: readonly string[];
+  readonly artifactPath: string;
+}
+
+/**
+ * One resource change line projected from `tofu show -json tfplan`
+ * (`resource_changes`). `actions` mirrors the OpenTofu change actions, e.g.
+ * `["create"]`, `["delete"]`, `["delete","create"]` (replace), `["no-op"]`.
+ */
+export interface PlanResourceChange {
+  readonly address: string;
+  readonly type: string;
+  readonly actions: readonly string[];
 }
 
 export interface PlanRunResponse {
@@ -409,6 +562,14 @@ export interface CreateApplyRunRequest {
   readonly planRunId: string;
   readonly approval?: RunApproval;
   readonly expected: ApplyExpectedGuard;
+  /**
+   * Required to be `true` to apply a PlanRun whose template policy flagged the
+   * plan as destructive (delete / replace under
+   * `destructiveChanges.requireExplicitConfirmation`). Absent / false on a
+   * destructive plan rejects the apply with `failed_precondition`. Ignored for
+   * non-destructive and non-template plans.
+   */
+  readonly confirmDestructive?: boolean;
 }
 
 export interface ApplyRunResponse {

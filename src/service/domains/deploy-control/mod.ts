@@ -27,6 +27,9 @@ import type {
   DeployControlAuditEvent,
   Deployment,
   DeploymentOutput,
+  DispatchBuildSpec,
+  DispatchGeneratedRoot,
+  DispatchTemplateRef,
   GetInstallationResponse,
   Installation,
   ListConnectionsResponse,
@@ -35,13 +38,16 @@ import type {
   ListRunnerProfilesResponse,
   OpenTofuOutputEnvelope,
   OpenTofuPlanArtifact,
+  PlanResourceChange,
   PlanRun,
   PlanRunResponse,
   PlanRunSummary,
+  PlanRunTemplateBinding,
   RunnerProfile,
   RunnerStateLockEvidence,
   RunDiagnostic,
   RunStatus,
+  TemplateDefinition,
   TestConnectionResponse,
 } from "takosumi-contract/deploy-control-api";
 import type {
@@ -74,9 +80,18 @@ import {
   normalizeDeploymentOutputs,
   normalizePlanArtifact,
   normalizePlanSummary,
+  projectTemplatePublicOutputs,
   redactRunDiagnostics,
   stateLockEvidence,
 } from "./projection.ts";
+import { evaluateTemplatePlanPolicy } from "./template_policy.ts";
+import {
+  defaultTemplateRegistry,
+  type TemplateInputValue,
+  type TemplateRegistry,
+  validateTemplateInputs,
+} from "../templates/mod.ts";
+import { generateRootModule } from "../rootgen/mod.ts";
 
 // Re-export the shared error primitive and the four decomposed concerns so the
 // domain's public entry point stays `./mod.ts` for importers and tests.
@@ -101,14 +116,36 @@ export { deploymentOutputsFromOpenTofu } from "./projection.ts";
  */
 export type RunCredentials = Readonly<Record<string, string>>;
 
-export interface OpenTofuPlanJob {
+/**
+ * Template dispatch fields threaded onto a run job (Phase 1C). When present the
+ * runner runs `tofu` in `/work/generated-root` against the baked-in template
+ * module; the optional build phase runs first in the user source checkout with
+ * NO credentials. These map 1:1 onto the `request.template` / `generatedRoot` /
+ * `build` fields of the `takosumi.opentofu-run@v1` dispatch envelope.
+ */
+export interface RunTemplateDispatch {
+  readonly template?: DispatchTemplateRef;
+  readonly generatedRoot?: DispatchGeneratedRoot;
+  readonly build?: DispatchBuildSpec;
+}
+
+/** Internal resolution of a template-backed plan request (never persisted as-is). */
+interface ResolvedTemplatePlan {
+  readonly template: TemplateDefinition;
+  readonly inputs: Readonly<Record<string, TemplateInputValue>>;
+  readonly generatedRoot: DispatchGeneratedRoot;
+  readonly requiredProviders: readonly string[];
+  readonly build?: DispatchBuildSpec;
+}
+
+export interface OpenTofuPlanJob extends RunTemplateDispatch {
   readonly planRun: PlanRun;
   readonly runnerProfile: RunnerProfile;
   readonly variables: Readonly<Record<string, JsonValue>>;
   readonly credentials?: RunCredentials;
 }
 
-export interface OpenTofuApplyJob {
+export interface OpenTofuApplyJob extends RunTemplateDispatch {
   readonly applyRun: ApplyRun;
   readonly planRun: PlanRun;
   readonly planArtifact: OpenTofuPlanArtifact;
@@ -116,7 +153,7 @@ export interface OpenTofuApplyJob {
   readonly credentials?: RunCredentials;
 }
 
-export interface OpenTofuDestroyJob {
+export interface OpenTofuDestroyJob extends RunTemplateDispatch {
   readonly applyRun: ApplyRun;
   readonly planRun: PlanRun;
   readonly planArtifact: OpenTofuPlanArtifact;
@@ -133,6 +170,12 @@ export interface OpenTofuPlanResult {
   readonly providerLockDigest?: string;
   readonly summary?: PlanRunSummary;
   readonly diagnostics?: readonly RunDiagnostic[];
+  /**
+   * Resource-change projection from `tofu show -json tfplan` (Phase 1C). Used by
+   * the template plan-JSON policy to enforce allowedResourceTypes and to flag
+   * destructive (delete/replace) changes. Absent for non-template runs.
+   */
+  readonly planResourceChanges?: readonly PlanResourceChange[];
 }
 
 export interface OpenTofuApplyResult {
@@ -201,6 +244,11 @@ export interface OpenTofuDeploymentControllerDependencies {
    * that enqueues onto `TAKOS_OPENTOFU_RUN_QUEUE`.
    */
   readonly enqueueRun?: EnqueueRun;
+  /**
+   * Official template catalog (Phase 1C). Defaults to the built-in registry.
+   * Resolves template-backed plan runs, validates inputs, and drives rootgen.
+   */
+  readonly templateRegistry?: TemplateRegistry;
 }
 
 export interface DeployControlActorContext {
@@ -215,6 +263,7 @@ export class OpenTofuDeploymentController {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #enqueueRun: EnqueueRun;
+  readonly #templateRegistry: TemplateRegistry;
   readonly #seededProfiles: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
 
@@ -230,6 +279,8 @@ export class OpenTofuDeploymentController {
     // node substrates and tests keep the historical synchronous semantics.
     this.#enqueueRun = dependencies.enqueueRun ??
       ((dispatch) => this.dispatchQueuedRun(dispatch));
+    this.#templateRegistry = dependencies.templateRegistry ??
+      defaultTemplateRegistry;
     this.#seededProfiles = this.#seedRunnerProfiles(
       dependencies.runnerProfiles ?? createDefaultRunnerProfiles(this.#now()),
     );
@@ -267,7 +318,15 @@ export class OpenTofuDeploymentController {
     validateSourceAllowedByProfile(request.source, profile);
     const now = this.#now();
     const variables = normalizeVariables(request.variables);
-    const declaredProviders = normalizeProviders(request.requiredProviders ?? []);
+    // Template path (Phase 1C). When templateId is present the official template
+    // is the OpenTofu surface: requiredProviders come from the template policy
+    // (the request must NOT also pass requiredProviders), inputs are validated
+    // against the template, and rootgen produces the generated root module that
+    // is threaded onto the dispatch payload via the plan-run-inputs sidecar.
+    const templatePlan = this.#resolveTemplatePlan(request);
+    const declaredProviders = templatePlan
+      ? normalizeProviders(templatePlan.requiredProviders)
+      : normalizeProviders(request.requiredProviders ?? []);
     const policy = evaluatePolicy({
       profile,
       requiredProviders: declaredProviders,
@@ -295,6 +354,14 @@ export class OpenTofuDeploymentController {
       variablesDigest,
       requiredProviders: declaredProviders,
       baseStateGeneration,
+      ...(templatePlan
+        ? {
+          templateBinding: {
+            templateId: templatePlan.template.id,
+            templateVersion: templatePlan.template.version,
+          } satisfies PlanRunTemplateBinding,
+        }
+        : {}),
       status: policy.status === "passed" ? "queued" : "blocked",
       policy,
       policyDecisionDigest,
@@ -303,6 +370,12 @@ export class OpenTofuDeploymentController {
           sourceDigest,
           variablesDigest,
           runnerProfileId: profile.id,
+          ...(templatePlan
+            ? {
+              templateId: templatePlan.template.id,
+              templateVersion: templatePlan.template.version,
+            }
+            : {}),
         }, context.actor),
         auditEvent("plan", "plan.policy_evaluated", now, {
           policyDecisionDigest,
@@ -314,14 +387,26 @@ export class OpenTofuDeploymentController {
       ...(policy.status === "blocked" ? { finishedAt: now } : {}),
     };
     await this.#store.putPlanRun(planRun);
-    // Persist the plan variables out-of-band (internal, never part of the public
+    // Persist the plan inputs out-of-band (internal, never part of the public
     // ledger projection) so the queue consumer can re-run the plan without the
-    // controller retaining them on the public PlanRun record. Skipped when there
-    // are no variables to avoid a needless write.
-    if (Object.keys(variables).length > 0) {
+    // controller retaining them on the public PlanRun record. This sidecar also
+    // carries the template dispatch data (template ref / generated root / build)
+    // for template-backed runs. Skipped only when there is nothing to persist.
+    if (Object.keys(variables).length > 0 || templatePlan) {
       await this.#store.putPlanRunInputs({
         planRunId: planRun.id,
         variables,
+        ...(templatePlan
+          ? {
+            template: {
+              id: templatePlan.template.id,
+              version: templatePlan.template.version,
+              localModulePath: templatePlan.template.source.localModulePath,
+            },
+            generatedRoot: templatePlan.generatedRoot,
+            ...(templatePlan.build ? { build: templatePlan.build } : {}),
+          }
+          : {}),
       });
     }
     if (policy.status === "passed" && this.#runner) {
@@ -347,6 +432,65 @@ export class OpenTofuDeploymentController {
       throw new OpenTofuControllerError("not_found", `plan run ${id} not found`);
     }
     return { planRun };
+  }
+
+  /**
+   * Resolves a template-backed plan request into its resolved template, derived
+   * required providers, generated root module, and optional build phase. Returns
+   * `undefined` for raw-module plans. Throws on a malformed template request
+   * (missing version, conflicting requiredProviders, unknown template, invalid
+   * inputs).
+   */
+  #resolveTemplatePlan(
+    request: CreatePlanRunRequest,
+  ): ResolvedTemplatePlan | undefined {
+    if (request.templateId === undefined) {
+      // A bare inputs/templateVersion without templateId is a request error: it
+      // would otherwise silently fall back to a raw-module plan that ignores them.
+      if (request.templateVersion !== undefined || request.inputs !== undefined) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          "templateVersion/inputs require templateId",
+        );
+      }
+      return undefined;
+    }
+    requireNonEmptyString(request.templateId, "templateId");
+    requireNonEmptyString(request.templateVersion, "templateVersion");
+    if (request.requiredProviders !== undefined) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "requiredProviders is derived from the template; do not pass it with templateId",
+      );
+    }
+    const template = this.#templateRegistry.require(
+      request.templateId,
+      request.templateVersion!,
+    );
+    const inputs = validateTemplateInputs(template, request.inputs);
+    const generatedRoot = generateRootModule(template, inputs);
+    return {
+      template,
+      inputs,
+      generatedRoot,
+      // Canonicalize the template's provider rules (OpenTofu source form, e.g.
+      // `cloudflare/cloudflare`) to fully-qualified registry addresses so they
+      // satisfy a runner profile allowlist (whose rules are fully-qualified or
+      // short — `providerMatches` admits a fully-qualified provider against
+      // either form, but not a short provider against a fully-qualified rule).
+      requiredProviders: template.policy.allowedProviders.map(
+        canonicalProviderAddress,
+      ),
+      ...(template.build
+        ? {
+          build: {
+            runtime: template.build.runtime,
+            commands: [...template.build.commands],
+            artifactPath: template.build.artifactPath,
+          },
+        }
+        : {}),
+    };
   }
 
   async createApplyRun(
@@ -383,6 +527,19 @@ export class OpenTofuDeploymentController {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `plan run ${planRun.id} has already been applied by apply run ${planRun.appliedApplyRunId}`,
+      );
+    }
+    // Destructive-confirmation gate (Phase 1C): a template plan-JSON policy that
+    // flagged delete/replace under requireExplicitConfirmation requires the apply
+    // request to carry confirmDestructive=true. Non-template and non-destructive
+    // plans are unaffected.
+    if (
+      planRun.templateBinding?.requiresConfirmation === true &&
+      request.confirmDestructive !== true
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${planRun.id} contains destructive changes; resubmit apply with confirmDestructive=true`,
       );
     }
     await checkApplyExpected(request.expected, planRun);
@@ -493,13 +650,29 @@ export class OpenTofuDeploymentController {
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
     const inputs = await this.#store.getPlanRunInputs(runId);
     const variables = normalizeVariables(inputs?.variables);
+    const dispatch = templateDispatchFromInputs(inputs);
     const running = await this.#markPlanRunning(planRun);
     const credentials = await this.#mintRunCredentials(
       planRun.spaceId,
       planRun.requiredProviders,
     );
-    const result = await this.#executePlan(running, profile, variables, credentials);
-    await this.#store.deletePlanRunInputs(runId);
+    const result = await this.#executePlan(
+      running,
+      profile,
+      variables,
+      credentials,
+      dispatch,
+    );
+    // Retain the inputs sidecar for a SUCCEEDED template run: the apply consumer
+    // re-reads the generated root / build / template ref to build the apply
+    // dispatch payload (the same generated root the plan was reviewed against).
+    // It is deleted once the plan is applied (apply-once) or the run is failed.
+    // Raw-module runs and non-succeeded template plans drop the sidecar now.
+    const retainForApply = result.status === "succeeded" &&
+      dispatch.template !== undefined;
+    if (!retainForApply) {
+      await this.#store.deletePlanRunInputs(runId);
+    }
     return result;
   }
 
@@ -519,10 +692,14 @@ export class OpenTofuDeploymentController {
     }
     const planRun = await this.#requirePlanRun(applyRun.planRunId);
     const profile = await this.#requireRunnerProfile(applyRun.runnerProfileId);
+    // Template dispatch for apply: re-read the retained inputs sidecar so the
+    // apply runs tofu in the SAME generated root the plan was reviewed against.
+    const inputs = await this.#store.getPlanRunInputs(planRun.id);
+    const dispatch = templateDispatchFromInputs(inputs);
     const key = planRun.installationId ?? planRun.id;
     return await this.#runSerialized(
       key,
-      () => this.#executeApply(applyRun, planRun, profile),
+      () => this.#executeApply(applyRun, planRun, profile, dispatch),
     );
   }
 
@@ -777,12 +954,18 @@ export class OpenTofuDeploymentController {
     profile: RunnerProfile,
     variables: Readonly<Record<string, JsonValue>>,
     credentials: RunCredentials | undefined,
+    dispatch: RunTemplateDispatch,
   ): Promise<PlanRun> {
     try {
       const result = await this.#runner!.plan({
         planRun: running,
         runnerProfile: profile,
         variables,
+        // Template dispatch (Phase 1C): the runner runs tofu in the generated
+        // root against the baked-in template module. Empty for raw-module runs.
+        ...(dispatch.template ? { template: dispatch.template } : {}),
+        ...(dispatch.generatedRoot ? { generatedRoot: dispatch.generatedRoot } : {}),
+        ...(dispatch.build ? { build: dispatch.build } : {}),
         // Dispatch-only: the minted env never lands on the persisted run.
         ...(credentials ? { credentials } : {}),
       });
@@ -796,6 +979,16 @@ export class OpenTofuDeploymentController {
         requiredProviders,
         checkedAt: now,
       });
+      // Template plan-JSON policy: when the run is template-backed and the runner
+      // returned resource changes, enforce the template's allowedResourceTypes
+      // and detect destructive (delete/replace) changes. A disallowed resource
+      // type blocks the plan; a destructive change under
+      // requireExplicitConfirmation flags the binding so apply needs
+      // confirmDestructive=true.
+      const templatePolicy = this.#evaluateTemplatePlanPolicy(running, result);
+      const blockedByTemplate = templatePolicy?.reasons ?? [];
+      const passedPolicy = policy.status === "passed" &&
+        blockedByTemplate.length === 0;
       const policyDecisionDigest = await stableJsonDigest(policy);
       const planArtifact = normalizePlanArtifact({
         artifact: result.planArtifact,
@@ -803,11 +996,18 @@ export class OpenTofuDeploymentController {
         now,
       });
       const summary = normalizePlanSummary(result.summary);
+      const templateBinding = updatedTemplateBinding(running, templatePolicy);
       const updated: PlanRun = {
         ...running,
-        status: policy.status === "passed" ? "succeeded" : "blocked",
+        status: passedPolicy ? "succeeded" : "blocked",
         requiredProviders,
-        policy,
+        policy: passedPolicy
+          ? policy
+          : {
+            status: "blocked",
+            reasons: [...policy.reasons, ...blockedByTemplate],
+            checkedAt: now,
+          },
         policyDecisionDigest,
         planDigest: result.planDigest,
         planArtifact,
@@ -817,12 +1017,20 @@ export class OpenTofuDeploymentController {
           : {}),
         ...(summary ? { summary } : {}),
         ...(diagnostics ? { diagnostics } : {}),
+        ...(templateBinding ? { templateBinding } : {}),
         auditEvents: [
           ...running.auditEvents,
           auditEvent(running.id, "plan.policy_evaluated", now, {
             policyDecisionDigest,
-            status: policy.status,
+            status: passedPolicy ? "passed" : "blocked",
             observedProviderCount: requiredProviders.length,
+            ...(templatePolicy
+              ? {
+                templateResourceTypesAllowed: blockedByTemplate.length === 0,
+                templateRequiresConfirmation:
+                  templatePolicy.requiresConfirmation,
+              }
+              : {}),
           }),
           auditEvent(running.id, "plan.completed", now, {
             planDigest: result.planDigest,
@@ -840,10 +1048,33 @@ export class OpenTofuDeploymentController {
     }
   }
 
+  /**
+   * Evaluates the template plan-JSON policy for a template-backed plan. Returns
+   * `undefined` for raw-module runs or when the runner returned no resource
+   * changes (a template plan with no observed changes leaves confirmation
+   * unrequired). The template policy is resolved from the recorded binding so a
+   * tampered catalog cannot retroactively widen a reviewed plan.
+   */
+  #evaluateTemplatePlanPolicy(
+    planRun: PlanRun,
+    result: OpenTofuPlanResult,
+  ): ReturnType<typeof evaluateTemplatePlanPolicy> | undefined {
+    const binding = planRun.templateBinding;
+    if (!binding) return undefined;
+    const changes = result.planResourceChanges;
+    if (changes === undefined) return undefined;
+    const template = this.#templateRegistry.require(
+      binding.templateId,
+      binding.templateVersion,
+    );
+    return evaluateTemplatePlanPolicy({ policy: template.policy, changes });
+  }
+
   async #executeApply(
     applyRun: ApplyRun,
     planRun: PlanRun,
     profile: RunnerProfile,
+    dispatch: RunTemplateDispatch,
   ): Promise<ApplyRunResponse> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
@@ -884,6 +1115,7 @@ export class OpenTofuDeploymentController {
         startedAt,
         plannedInstallation,
         credentials,
+        dispatch,
       );
     }
     try {
@@ -892,10 +1124,18 @@ export class OpenTofuDeploymentController {
         planRun,
         planArtifact: planRun.planArtifact,
         runnerProfile: profile,
+        // Template dispatch (Phase 1C): apply tofu in the generated root.
+        ...(dispatch.template ? { template: dispatch.template } : {}),
+        ...(dispatch.generatedRoot ? { generatedRoot: dispatch.generatedRoot } : {}),
+        ...(dispatch.build ? { build: dispatch.build } : {}),
         ...(credentials ? { credentials } : {}),
       });
       const now = this.#now();
-      const outputs = normalizeDeploymentOutputs(result.outputs);
+      // Output allowlist: a template run projects ONLY the template's public
+      // outputs (mapped from their `from` module-output names) after the existing
+      // sensitive/redaction filter. Raw-module runs keep the well-known
+      // projection.
+      const outputs = this.#projectApplyOutputs(planRun, result);
       const installation = await this.#upsertInstallationFromApply({
         planRun,
         profile,
@@ -970,6 +1210,10 @@ export class OpenTofuDeploymentController {
         appliedApplyRunId: applyRun.id,
         updatedAt: now,
       });
+      // The retained template inputs sidecar is no longer needed once applied.
+      if (dispatch.template) {
+        await this.#store.deletePlanRunInputs(planRun.id);
+      }
       return {
         applyRun: completed,
         installation: patched ?? installation,
@@ -987,6 +1231,25 @@ export class OpenTofuDeploymentController {
     }
   }
 
+  /**
+   * Projects the public DeploymentOutputs for an apply result. Template runs are
+   * restricted to the template's allowlisted public outputs (resolved from the
+   * recorded binding); raw-module runs use the well-known output projection.
+   * Both run AFTER the sensitive/redaction filter in `projection.ts`.
+   */
+  #projectApplyOutputs(
+    planRun: PlanRun,
+    result: OpenTofuApplyResult,
+  ): readonly DeploymentOutput[] {
+    const binding = planRun.templateBinding;
+    if (!binding) return normalizeDeploymentOutputs(result.outputs);
+    const template = this.#templateRegistry.require(
+      binding.templateId,
+      binding.templateVersion,
+    );
+    return projectTemplatePublicOutputs(template, result.outputs);
+  }
+
   async #executeDestroyApply(
     running: ApplyRun,
     planRun: PlanRun,
@@ -994,6 +1257,7 @@ export class OpenTofuDeploymentController {
     startedAt: number,
     plannedInstallation: Installation | undefined,
     credentials: RunCredentials | undefined,
+    dispatch: RunTemplateDispatch,
   ): Promise<ApplyRunResponse> {
     if (!planRun.installationId) {
       throw new OpenTofuControllerError(
@@ -1025,6 +1289,10 @@ export class OpenTofuDeploymentController {
         planArtifact: planRun.planArtifact,
         installation,
         runnerProfile: profile,
+        // Template dispatch (Phase 1C): destroy tofu in the generated root.
+        ...(dispatch.template ? { template: dispatch.template } : {}),
+        ...(dispatch.generatedRoot ? { generatedRoot: dispatch.generatedRoot } : {}),
+        ...(dispatch.build ? { build: dispatch.build } : {}),
         ...(credentials ? { credentials } : {}),
       });
       const now = this.#now();
@@ -1066,6 +1334,9 @@ export class OpenTofuDeploymentController {
         appliedApplyRunId: running.id,
         updatedAt: now,
       });
+      if (dispatch.template) {
+        await this.#store.deletePlanRunInputs(planRun.id);
+      }
       return { applyRun: completed, installation: patched ?? installation };
     } catch (error) {
       if (error instanceof InstallationPatchGuardConflict) {
@@ -1310,6 +1581,49 @@ export function applyExpectedGuardFromPlanRun(planRun: PlanRun): ApplyExpectedGu
       ? { providerLockDigest: planRun.providerLockDigest }
       : {}),
   };
+}
+
+/**
+ * Canonicalizes a provider rule to a fully-qualified OpenTofu registry address.
+ * A bare `namespace/type` (the OpenTofu source form templates declare) is
+ * prefixed with the default registry host; an already-qualified address (3+
+ * segments) is returned unchanged.
+ */
+function canonicalProviderAddress(rule: string): string {
+  const segments = rule.split("/").filter((part) => part.length > 0);
+  if (segments.length === 2) return `registry.opentofu.org/${rule}`;
+  return rule;
+}
+
+/**
+ * Reads the template dispatch fields off the persisted plan-run-inputs sidecar.
+ * Returns an empty dispatch for raw-module runs. Defensive copies are not needed
+ * because the store hands back its own records and the runner job only reads.
+ */
+function templateDispatchFromInputs(
+  inputs: { readonly template?: DispatchTemplateRef; readonly generatedRoot?: DispatchGeneratedRoot; readonly build?: DispatchBuildSpec } | undefined,
+): RunTemplateDispatch {
+  if (!inputs?.template) return {};
+  return {
+    template: inputs.template,
+    ...(inputs.generatedRoot ? { generatedRoot: inputs.generatedRoot } : {}),
+    ...(inputs.build ? { build: inputs.build } : {}),
+  };
+}
+
+/**
+ * Folds the template plan-JSON policy verdict into the recorded template
+ * binding, setting `requiresConfirmation`. Returns `undefined` (binding unchanged
+ * / absent) for raw-module runs or when there is no policy verdict yet.
+ */
+function updatedTemplateBinding(
+  planRun: PlanRun,
+  templatePolicy: ReturnType<typeof evaluateTemplatePlanPolicy> | undefined,
+): PlanRunTemplateBinding | undefined {
+  const binding = planRun.templateBinding;
+  if (!binding) return undefined;
+  if (!templatePolicy) return binding;
+  return { ...binding, requiresConfirmation: templatePolicy.requiresConfirmation };
 }
 
 function auditEvent(
