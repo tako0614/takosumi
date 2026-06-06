@@ -265,6 +265,24 @@ export interface PlanRun {
    * material.
    */
   readonly installationContext?: PlanRunInstallationContext;
+  /**
+   * Pinned DependencySnapshot id (spec §17) for an installation-driven plan whose
+   * consumer Installation declares Dependencies. Set at plan creation by the
+   * installation plan path; the apply consumer re-reads the snapshot to verify
+   * the producer state generations / pinned values before applying (invariant 9)
+   * and the successful Deployment carries it forward. Absent for plans whose
+   * consumer has no dependencies (or for the raw `/v1/plan-runs` path). Projected
+   * onto the §19 Run `dependencySnapshotId`.
+   */
+  readonly dependencySnapshotId?: string;
+  /**
+   * RunGroup this plan belongs to (spec §19 / §24). Set when the plan was
+   * created as a member of a Space-update RunGroup (`POST /v1/spaces/:id/
+   * plan-update`); the apply that follows carries it onto the §19 Run so the
+   * group status can be computed from its member runs. Absent for standalone
+   * plans. Projected onto the §19 Run `runGroupId`.
+   */
+  readonly runGroupId?: string;
 }
 
 /**

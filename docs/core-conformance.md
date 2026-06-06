@@ -48,8 +48,8 @@ milestone は次のとおり。
 | M3 モデル移行 (lanes 廃止 / §27 schema / runs 統合) | §5 / §19 / §27 | conformant | lanes (App/Environment/InstallProfile) 削除、 Space/InstallConfig/Installation (UNIQUE(space_id,name,environment)) store + service + /v1 routes、 単一 runs table (kind 列 + run_json、 SQL/D1)、 installation lease (`installation:{id}:{env}`)、 stateScope/R2 key を §20 に re-key、 D1 を §27 実テーブル化。 create-on-apply legacy path は削除 (Installation-first)。 |
 | M4 operator defaults + CapabilityBinding | §8 / §9 | conformant | Connection.scope (operator/space、 operator は spaceId なし + AAD `__operator__`)、 operator_connection_defaults CRUD (`/v1/operator-connection-defaults`、 unrestricted bearer のみ)、 ConnectionsService.resolveCapabilities (default/connection/manual/disabled + cross-space 拒否)、 vault mint の capability pool (caller 主張を信用せず id を再検証)。 manual values の module input 接続と rootgen capability alias は M5。 |
 | M5 install types (core / app_source 完成) | §10 / §13 | conformant | 公式 modules: core (provider-free 基盤、 4 標準 outputs) / cloudflare-worker-service / cloudflare-r2-storage / cloudflare-static-site / aws-s3-storage。 rootgen `generateInstallationRoot` が installType + 解決済み capability から §13 provider alias を生成 (**per-alias credential 分離は deferred** — 同一 provider の alias は env credential を共有)。 app_source は InstallConfig.build を credential-zero build phase に thread (template.build より優先)。 opentofu_root は snapshot を root として実行 (templateBinding 禁止)。 manual binding values は template 宣言済み input に限り variableMapping を override。 公式 seed: core / talk / files。 |
-| M6 Dependency DAG + variable_injection | §14 / §15 / §17 | pending | |
-| M7 OutputSnapshot + stale + RunGroup | §16 / §19 / §24 | pending | |
+| M6 Dependency DAG + variable_injection | §14 / §15 / §17 | conformant | dependencies domain (same-space / variable_injection のみ、 cycle 拒否 = takosumi-graph)、 plan 時 DependencySnapshot (strict=production / pinned)、 値は template inputs / raw variables に injection、 apply は invariant 9 検証 (dependency_snapshot_stale / _tampered)。 remote_state / published_output / cross_space は not_implemented (MVP 外)。 |
+| M7 OutputSnapshot + stale + RunGroup | §16 / §19 / §24 | conformant | apply が OutputSnapshot を記録 (spaceOutputs = 非 sensitive 全 outputs、 publicOutputs = allowlist projection、 raw は DO が暗号化して §26 key に書く)。 outputDigest 変化で downstream を stale 化。 RunGroup basic: space plan-update が topo 順に plan Run を発行、 status は member runs から計算 (orchestration daemon なし)。 |
 | M8 Policy basic + Activity | §25 | pending | |
 | M9 `/api` surface + install link | §12 / §30 | pending | 現状は旧 `/v1` surface。 |
 | M10 Dashboard | §31 | pending | |
@@ -81,12 +81,12 @@ milestone は次のとおり。
 | 6 | Apply uses saved plan | conformant | reviewed `tfplan` artifact を復元して apply。 `async_run_lifecycle_test.ts`。 |
 | 7 | Apply verifies plan digest | conformant | expected guard 検証。 `async_run_lifecycle_test.ts`。 |
 | 8 | Apply verifies source snapshot | conformant | apply 時の snapshot id / digest 再検証。 |
-| 9 | Apply verifies dependency snapshot | pending | DependencySnapshot は M6。 |
+| 9 | Apply verifies dependency snapshot | conformant | `#verifyDependencySnapshot` (strict freshness + valuesDigest tamper check)。 `dependency_run_test.ts`。 |
 | 10 | Apply verifies state generation | conformant | generation guard。 `installation_run_test.ts` / `apply_lease_test.ts`。 |
 | 11 | Output publication uses allowlist | conformant | output projection allowlist (`src/service/domains/outputs/projection.ts`)。 OutputSnapshot 化は M7。 |
-| 12 | Sensitive output sharing requires explicit policy | pending | spaceOutputs / publicOutputs 分離と leak test は M7。 |
+| 12 | Sensitive output sharing requires explicit policy | conformant | sensitive flagged 出力は spaceOutputs / publicOutputs のどちらにも入らない (leak test in `installation_run_test.ts`)。 explicit 共有 policy は OutputShare (MVP 外) で導入。 |
 | 13 | Cross-Space sharing uses OutputShare | pending | OutputShare は MVP 外。 cross-space dependency は M6 で作成拒否として強制。 |
-| 14 | State, plan, raw outputs are encrypted artifacts | conformant | state/plan は暗号化済み (旧 M2)。 raw outputs の暗号化 artifact 化は M7。 |
+| 14 | State, plan, raw outputs are encrypted artifacts | conformant | state/plan/raw outputs すべて暗号化 artifact (raw outputs は DO が §26 key に seal、 `runner_state_r2_test.ts`)。 |
 | 15 | Logs pass through redaction | in-progress | output projection は稼働。 log redaction の網羅は M8 以降。 |
 | 16 | Destroy uses destroy plan and approval | conformant | destroy 2-phase (destroy_plan → approval → destroy_apply)。 |
 

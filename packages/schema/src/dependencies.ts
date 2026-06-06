@@ -17,6 +17,11 @@
 
 import type { OutputValueType } from "./installations.ts";
 
+export const INSTALLATION_DEPENDENCIES_PATH = (installationId: string): string =>
+  `/v1/installations/${encodeURIComponent(installationId)}/dependencies`;
+export const DEPENDENCY_PATH = (dependencyId: string): string =>
+  `/v1/dependencies/${encodeURIComponent(dependencyId)}`;
+
 export type DependencyMode =
   | "remote_state"
   | "variable_injection"

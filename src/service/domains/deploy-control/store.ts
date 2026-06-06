@@ -36,6 +36,9 @@ import type {
   OperatorConnectionDefault,
 } from "takosumi-contract/capability-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
+import type { Dependency, DependencySnapshot } from "takosumi-contract/dependencies";
+import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { RunGroup } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 
@@ -256,6 +259,43 @@ export interface OpenTofuDeploymentStore {
     installationId: string,
     environment: string,
   ): Promise<readonly StateSnapshot[]>;
+
+  // Dependency DAG edges (spec §14 / §15 / §27 installation_dependencies). A
+  // Dependency connects a producer Installation's outputs to a consumer
+  // Installation's inputs within the SAME Space.
+  putDependency(dependency: Dependency): Promise<Dependency>;
+  getDependency(id: string): Promise<Dependency | undefined>;
+  listDependenciesBySpace(spaceId: string): Promise<readonly Dependency[]>;
+  listDependenciesForConsumer(
+    consumerInstallationId: string,
+  ): Promise<readonly Dependency[]>;
+  listDependenciesForProducer(
+    producerInstallationId: string,
+  ): Promise<readonly Dependency[]>;
+  deleteDependency(id: string): Promise<boolean>;
+
+  // DependencySnapshot records (spec §17 / §27 dependency_snapshots). The plan
+  // path pins one per run; the apply path re-reads it to verify producer state
+  // generations / pinned values before applying (invariant 9).
+  putDependencySnapshot(
+    snapshot: DependencySnapshot,
+  ): Promise<DependencySnapshot>;
+  getDependencySnapshot(id: string): Promise<DependencySnapshot | undefined>;
+
+  // OutputSnapshot records (spec §16 / §27 output_snapshots). Recorded after a
+  // successful apply: the projected spaceOutputs / publicOutputs + digest; the
+  // raw envelope stays an encrypted R2_ARTIFACTS artifact (rawOutputArtifactKey).
+  putOutputSnapshot(snapshot: OutputSnapshot): Promise<OutputSnapshot>;
+  getOutputSnapshot(id: string): Promise<OutputSnapshot | undefined>;
+  getLatestOutputSnapshot(
+    installationId: string,
+  ): Promise<OutputSnapshot | undefined>;
+
+  // RunGroup records (spec §19 / §24 / §27 run_groups). Orders multiple Runs
+  // across the dependency DAG (e.g. a Space update after stale propagation).
+  putRunGroup(group: RunGroup): Promise<RunGroup>;
+  getRunGroup(id: string): Promise<RunGroup | undefined>;
+  listRunGroups(spaceId: string): Promise<readonly RunGroup[]>;
 }
 
 export class InMemoryOpenTofuDeploymentStore
@@ -276,6 +316,10 @@ export class InMemoryOpenTofuDeploymentStore
   readonly #sourceSnapshots = new Map<string, SourceSnapshot>();
   readonly #deploymentProfiles = new Map<string, DeploymentProfile>();
   readonly #stateSnapshots = new Map<string, StateSnapshot>();
+  readonly #dependencies = new Map<string, Dependency>();
+  readonly #dependencySnapshots = new Map<string, DependencySnapshot>();
+  readonly #outputSnapshots = new Map<string, OutputSnapshot>();
+  readonly #runGroups = new Map<string, RunGroup>();
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuDeploymentStore");
@@ -666,6 +710,112 @@ export class InMemoryOpenTofuDeploymentStore
       if (!latest || row.generation > latest.generation) latest = row;
     }
     return Promise.resolve(latest);
+  }
+
+  putDependency(dependency: Dependency): Promise<Dependency> {
+    this.#dependencies.set(dependency.id, dependency);
+    return Promise.resolve(dependency);
+  }
+
+  getDependency(id: string): Promise<Dependency | undefined> {
+    return Promise.resolve(this.#dependencies.get(id));
+  }
+
+  listDependenciesBySpace(spaceId: string): Promise<readonly Dependency[]> {
+    return Promise.resolve(
+      Array.from(this.#dependencies.values())
+        .filter((row) => row.spaceId === spaceId)
+        .sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        ),
+    );
+  }
+
+  listDependenciesForConsumer(
+    consumerInstallationId: string,
+  ): Promise<readonly Dependency[]> {
+    return Promise.resolve(
+      Array.from(this.#dependencies.values())
+        .filter((row) => row.consumerInstallationId === consumerInstallationId)
+        .sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        ),
+    );
+  }
+
+  listDependenciesForProducer(
+    producerInstallationId: string,
+  ): Promise<readonly Dependency[]> {
+    return Promise.resolve(
+      Array.from(this.#dependencies.values())
+        .filter((row) => row.producerInstallationId === producerInstallationId)
+        .sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        ),
+    );
+  }
+
+  deleteDependency(id: string): Promise<boolean> {
+    return Promise.resolve(this.#dependencies.delete(id));
+  }
+
+  putDependencySnapshot(
+    snapshot: DependencySnapshot,
+  ): Promise<DependencySnapshot> {
+    this.#dependencySnapshots.set(snapshot.id, snapshot);
+    return Promise.resolve(snapshot);
+  }
+
+  getDependencySnapshot(id: string): Promise<DependencySnapshot | undefined> {
+    return Promise.resolve(this.#dependencySnapshots.get(id));
+  }
+
+  putOutputSnapshot(snapshot: OutputSnapshot): Promise<OutputSnapshot> {
+    this.#outputSnapshots.set(snapshot.id, snapshot);
+    return Promise.resolve(snapshot);
+  }
+
+  getOutputSnapshot(id: string): Promise<OutputSnapshot | undefined> {
+    return Promise.resolve(this.#outputSnapshots.get(id));
+  }
+
+  getLatestOutputSnapshot(
+    installationId: string,
+  ): Promise<OutputSnapshot | undefined> {
+    let latest: OutputSnapshot | undefined;
+    for (const row of this.#outputSnapshots.values()) {
+      if (row.installationId !== installationId) continue;
+      // The latest projection is the one at the highest state generation; ties
+      // (re-applied same generation) break to the most recently created.
+      if (
+        !latest ||
+        row.stateGeneration > latest.stateGeneration ||
+        (row.stateGeneration === latest.stateGeneration &&
+          row.createdAt.localeCompare(latest.createdAt) >= 0)
+      ) {
+        latest = row;
+      }
+    }
+    return Promise.resolve(latest);
+  }
+
+  putRunGroup(group: RunGroup): Promise<RunGroup> {
+    this.#runGroups.set(group.id, group);
+    return Promise.resolve(group);
+  }
+
+  getRunGroup(id: string): Promise<RunGroup | undefined> {
+    return Promise.resolve(this.#runGroups.get(id));
+  }
+
+  listRunGroups(spaceId: string): Promise<readonly RunGroup[]> {
+    return Promise.resolve(
+      Array.from(this.#runGroups.values())
+        .filter((row) => row.spaceId === spaceId)
+        .sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        ),
+    );
   }
 }
 

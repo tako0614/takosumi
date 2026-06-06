@@ -45,6 +45,9 @@ import type {
   OperatorConnectionDefault,
 } from "takosumi-contract/capability-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
+import type { Dependency, DependencySnapshot } from "takosumi-contract/dependencies";
+import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { RunGroup } from "takosumi-contract/runs";
 import type {
   InstallationPatch,
   InstallationPatchGuard,
@@ -785,6 +788,176 @@ export class CloudflareD1OpenTofuDeploymentStore
     return (result.results ?? []).map(stateSnapshotFromRow);
   }
 
+  // -- Dependency DAG (§14 / §15 / §27 installation_dependencies) --------------
+
+  async putDependency(dependency: Dependency): Promise<Dependency> {
+    await this.#run(
+      `insert into installation_dependencies
+        (id, space_id, producer_installation_id, consumer_installation_id,
+         record_json, created_at)
+       values (?, ?, ?, ?, ?, ?)
+       on conflict (id) do update set
+        space_id = excluded.space_id,
+        producer_installation_id = excluded.producer_installation_id,
+        consumer_installation_id = excluded.consumer_installation_id,
+        record_json = excluded.record_json,
+        created_at = excluded.created_at`,
+      [
+        dependency.id,
+        dependency.spaceId,
+        dependency.producerInstallationId,
+        dependency.consumerInstallationId,
+        JSON.stringify(dependency),
+        dependency.createdAt,
+      ],
+    );
+    return dependency;
+  }
+
+  async getDependency(id: string): Promise<Dependency | undefined> {
+    return await this.#first<Dependency>(
+      "select record_json from installation_dependencies where id = ?",
+      [id],
+    );
+  }
+
+  async listDependenciesBySpace(
+    spaceId: string,
+  ): Promise<readonly Dependency[]> {
+    return await this.#many<Dependency>(
+      `select record_json from installation_dependencies
+       where space_id = ? order by created_at asc, id asc`,
+      [spaceId],
+    );
+  }
+
+  async listDependenciesForConsumer(
+    consumerInstallationId: string,
+  ): Promise<readonly Dependency[]> {
+    return await this.#many<Dependency>(
+      `select record_json from installation_dependencies
+       where consumer_installation_id = ? order by created_at asc, id asc`,
+      [consumerInstallationId],
+    );
+  }
+
+  async listDependenciesForProducer(
+    producerInstallationId: string,
+  ): Promise<readonly Dependency[]> {
+    return await this.#many<Dependency>(
+      `select record_json from installation_dependencies
+       where producer_installation_id = ? order by created_at asc, id asc`,
+      [producerInstallationId],
+    );
+  }
+
+  async deleteDependency(id: string): Promise<boolean> {
+    return await this.#delete(
+      "delete from installation_dependencies where id = ?",
+      [id],
+    );
+  }
+
+  // -- DependencySnapshot (§17 / §27 dependency_snapshots) ---------------------
+
+  async putDependencySnapshot(
+    snapshot: DependencySnapshot,
+  ): Promise<DependencySnapshot> {
+    await this.#run(
+      `insert into dependency_snapshots (id, run_id, record_json, created_at)
+       values (?, ?, ?, ?)
+       on conflict (id) do update set
+        run_id = excluded.run_id,
+        record_json = excluded.record_json,
+        created_at = excluded.created_at`,
+      [snapshot.id, snapshot.runId, JSON.stringify(snapshot), snapshot.createdAt],
+    );
+    return snapshot;
+  }
+
+  async getDependencySnapshot(
+    id: string,
+  ): Promise<DependencySnapshot | undefined> {
+    return await this.#first<DependencySnapshot>(
+      "select record_json from dependency_snapshots where id = ?",
+      [id],
+    );
+  }
+
+  // -- OutputSnapshot (§16 / §27 output_snapshots) -----------------------------
+
+  async putOutputSnapshot(snapshot: OutputSnapshot): Promise<OutputSnapshot> {
+    await this.#run(
+      `insert into output_snapshots
+        (id, space_id, installation_id, state_generation, record_json, created_at)
+       values (?, ?, ?, ?, ?, ?)
+       on conflict (id) do update set
+        space_id = excluded.space_id,
+        installation_id = excluded.installation_id,
+        state_generation = excluded.state_generation,
+        record_json = excluded.record_json,
+        created_at = excluded.created_at`,
+      [
+        snapshot.id,
+        snapshot.spaceId,
+        snapshot.installationId,
+        snapshot.stateGeneration,
+        JSON.stringify(snapshot),
+        snapshot.createdAt,
+      ],
+    );
+    return snapshot;
+  }
+
+  async getOutputSnapshot(id: string): Promise<OutputSnapshot | undefined> {
+    return await this.#first<OutputSnapshot>(
+      "select record_json from output_snapshots where id = ?",
+      [id],
+    );
+  }
+
+  async getLatestOutputSnapshot(
+    installationId: string,
+  ): Promise<OutputSnapshot | undefined> {
+    return await this.#first<OutputSnapshot>(
+      `select record_json from output_snapshots
+       where installation_id = ?
+       order by state_generation desc, created_at desc, id desc limit 1`,
+      [installationId],
+    );
+  }
+
+  // -- RunGroup (§19 / §24 / §27 run_groups) -----------------------------------
+
+  async putRunGroup(group: RunGroup): Promise<RunGroup> {
+    await this.#run(
+      `insert into run_groups (id, space_id, type, record_json, created_at)
+       values (?, ?, ?, ?, ?)
+       on conflict (id) do update set
+        space_id = excluded.space_id,
+        type = excluded.type,
+        record_json = excluded.record_json,
+        created_at = excluded.created_at`,
+      [group.id, group.spaceId, group.type, JSON.stringify(group), group.createdAt],
+    );
+    return group;
+  }
+
+  async getRunGroup(id: string): Promise<RunGroup | undefined> {
+    return await this.#first<RunGroup>(
+      "select record_json from run_groups where id = ?",
+      [id],
+    );
+  }
+
+  async listRunGroups(spaceId: string): Promise<readonly RunGroup[]> {
+    return await this.#many<RunGroup>(
+      `select record_json from run_groups
+       where space_id = ? order by created_at asc, id asc`,
+      [spaceId],
+    );
+  }
+
   // -- shared D1 helpers ------------------------------------------------------
 
   async #putRun(row: {
@@ -1136,6 +1309,47 @@ export async function ensureD1OpenTofuLedgerSchema(
       record_json text not null,
       created_at text not null default ""
     )`,
+    `create table if not exists installation_dependencies (
+      id text primary key,
+      space_id text not null,
+      producer_installation_id text not null,
+      consumer_installation_id text not null,
+      record_json text not null,
+      created_at text not null
+    )`,
+    `create index if not exists installation_dependencies_space_idx
+      on installation_dependencies (space_id, created_at)`,
+    `create index if not exists installation_dependencies_consumer_idx
+      on installation_dependencies (consumer_installation_id, created_at)`,
+    `create index if not exists installation_dependencies_producer_idx
+      on installation_dependencies (producer_installation_id, created_at)`,
+    `create table if not exists dependency_snapshots (
+      id text primary key,
+      run_id text not null,
+      record_json text not null,
+      created_at text not null
+    )`,
+    `create index if not exists dependency_snapshots_run_idx
+      on dependency_snapshots (run_id)`,
+    `create table if not exists output_snapshots (
+      id text primary key,
+      space_id text not null,
+      installation_id text not null,
+      state_generation integer not null,
+      record_json text not null,
+      created_at text not null
+    )`,
+    `create index if not exists output_snapshots_installation_idx
+      on output_snapshots (installation_id, state_generation, created_at)`,
+    `create table if not exists run_groups (
+      id text primary key,
+      space_id text not null,
+      type text not null,
+      record_json text not null,
+      created_at text not null
+    )`,
+    `create index if not exists run_groups_space_idx
+      on run_groups (space_id, created_at)`,
   ];
   for (const sql of statements) {
     await db.prepare(sql).run();

@@ -185,7 +185,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       runnerResponse.ok
     ) {
       if (stateScope) {
-        return await this.#persistStateToR2State(runId, stateScope, url, runnerResponse);
+        return await this.#persistStateToR2State(
+          runId,
+          stateScope,
+          url,
+          runnerResponse,
+          envelope.action,
+        );
       }
       if (stateKeys.length > 0) {
         await this.#persistStateArtifact(runId, stateKeys, url);
@@ -353,6 +359,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     scope: StateScope,
     baseUrl: URL,
     runnerResponse: Response,
+    action: string | undefined,
   ): Promise<Response> {
     const stateResponse = await this.#containerFetch(
       new Request(stateArtifactUrl(baseUrl, runId), { method: "GET" }),
@@ -386,6 +393,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       customMetadata: { "takosumi-run-id": runId },
     });
     const payload = await readJsonObject(runnerResponse);
+    // M7: an apply persists the raw `tofu output -json` envelope encrypted at
+    // rest to R2_ARTIFACTS (spec §26) and echoes `rawOutputsKey` so the
+    // controller records it on the OutputSnapshot. A destroy has no outputs.
+    const rawOutputsKey = action === "apply"
+      ? await this.#persistRawOutputs(runId, scope, payload)
+      : undefined;
     return jsonResponse({
       ...payload,
       state: {
@@ -394,7 +407,33 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         digest: sealed.contentDigest,
         ciphertextLength: sealed.ciphertextLength,
       },
+      ...(rawOutputsKey ? { rawOutputsKey } : {}),
     }, runnerResponse.status);
+  }
+
+  // M7: seal the raw `tofu output -json` envelope (the runner's `outputs` field,
+  // which carries the per-output sensitive flags) and write it encrypted at rest
+  // to R2_ARTIFACTS under the spec §26 key. Returns the key for the controller
+  // to record on the OutputSnapshot. No-op when the apply produced no outputs.
+  async #persistRawOutputs(
+    runId: string,
+    scope: StateScope,
+    payload: Record<string, unknown>,
+  ): Promise<string | undefined> {
+    const outputs = payload.outputs;
+    if (outputs === undefined || outputs === null) return undefined;
+    const key = rawOutputsKey(scope, runId);
+    const plaintext = new TextEncoder().encode(JSON.stringify(outputs));
+    const sealed = await this.#stateCrypto().seal(plaintext);
+    await this.env.R2_ARTIFACTS.put(key, sealed.ciphertext, {
+      httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
+      customMetadata: {
+        "takosumi-run-id": runId,
+        "takosumi-content-digest": sealed.contentDigest,
+        "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+      },
+    });
+    return key;
   }
 
   async #persistPlanArtifact(
@@ -645,6 +684,16 @@ function stateObjectKey(scope: StateScope): string {
 
 function currentStateKey(scope: StateScope): string {
   return `${stateScopePrefix(scope)}/current.json`;
+}
+
+// R2_ARTIFACTS key for the encrypted raw `tofu output -json` envelope (spec §26):
+//   spaces/{spaceId}/installations/{installationId}/runs/{runId}/outputs.raw.json.enc
+// Kept in lockstep with the controller's `rawOutputArtifactKey` formatter so the
+// recorded OutputSnapshot pointer matches the object the DO wrote.
+function rawOutputsKey(scope: StateScope, runId: string): string {
+  return `spaces/${safeKeySegment(scope.spaceId)}/installations/${
+    safeKeySegment(scope.installationId)
+  }/runs/${safeKeySegment(runId)}/outputs.raw.json.enc`;
 }
 
 function formatGeneration(generation: number): string {

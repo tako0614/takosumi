@@ -39,6 +39,9 @@ import type {
   OperatorConnectionDefault,
 } from "takosumi-contract/capability-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
+import type { Dependency, DependencySnapshot } from "takosumi-contract/dependencies";
+import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { RunGroup } from "takosumi-contract/runs";
 import type {
   InstallationPatch,
   InstallationPatchGuard,
@@ -842,6 +845,188 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       [installationId, environment],
     );
     return result.rows.map((row) => parseRow(row) as StateSnapshot);
+  }
+
+  // --- installation_dependencies (§14 / §15) --------------------------------
+
+  async putDependency(dependency: Dependency): Promise<Dependency> {
+    await this.#query(
+      "insert into takosumi_installation_dependencies " +
+        "(id, space_id, producer_installation_id, consumer_installation_id, " +
+        "dependency_json, created_at) " +
+        "values ($1, $2, $3, $4, $5::jsonb, $6) " +
+        "on conflict (id) do update set " +
+        "space_id = excluded.space_id, " +
+        "producer_installation_id = excluded.producer_installation_id, " +
+        "consumer_installation_id = excluded.consumer_installation_id, " +
+        "dependency_json = excluded.dependency_json, " +
+        "created_at = excluded.created_at",
+      [
+        dependency.id,
+        dependency.spaceId,
+        dependency.producerInstallationId,
+        dependency.consumerInstallationId,
+        JSON.stringify(dependency),
+        dependency.createdAt,
+      ],
+    );
+    return dependency;
+  }
+
+  async getDependency(id: string): Promise<Dependency | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select dependency_json as json from takosumi_installation_dependencies where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as Dependency | undefined;
+  }
+
+  async listDependenciesBySpace(
+    spaceId: string,
+  ): Promise<readonly Dependency[]> {
+    const result = await this.#query<JsonRow>(
+      "select dependency_json as json from takosumi_installation_dependencies " +
+        "where space_id = $1 order by created_at asc, id asc",
+      [spaceId],
+    );
+    return result.rows.map((row) => parseRow(row) as Dependency);
+  }
+
+  async listDependenciesForConsumer(
+    consumerInstallationId: string,
+  ): Promise<readonly Dependency[]> {
+    const result = await this.#query<JsonRow>(
+      "select dependency_json as json from takosumi_installation_dependencies " +
+        "where consumer_installation_id = $1 order by created_at asc, id asc",
+      [consumerInstallationId],
+    );
+    return result.rows.map((row) => parseRow(row) as Dependency);
+  }
+
+  async listDependenciesForProducer(
+    producerInstallationId: string,
+  ): Promise<readonly Dependency[]> {
+    const result = await this.#query<JsonRow>(
+      "select dependency_json as json from takosumi_installation_dependencies " +
+        "where producer_installation_id = $1 order by created_at asc, id asc",
+      [producerInstallationId],
+    );
+    return result.rows.map((row) => parseRow(row) as Dependency);
+  }
+
+  async deleteDependency(id: string): Promise<boolean> {
+    const result = await this.#query(
+      "delete from takosumi_installation_dependencies where id = $1",
+      [id],
+    );
+    return result.rowCount > 0;
+  }
+
+  // --- dependency_snapshots (§17) -------------------------------------------
+
+  async putDependencySnapshot(
+    snapshot: DependencySnapshot,
+  ): Promise<DependencySnapshot> {
+    await this.#query(
+      "insert into takosumi_dependency_snapshots " +
+        "(id, run_id, snapshot_json, created_at) " +
+        "values ($1, $2, $3::jsonb, $4) " +
+        "on conflict (id) do update set " +
+        "run_id = excluded.run_id, " +
+        "snapshot_json = excluded.snapshot_json, " +
+        "created_at = excluded.created_at",
+      [snapshot.id, snapshot.runId, JSON.stringify(snapshot), snapshot.createdAt],
+    );
+    return snapshot;
+  }
+
+  async getDependencySnapshot(
+    id: string,
+  ): Promise<DependencySnapshot | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select snapshot_json as json from takosumi_dependency_snapshots where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as DependencySnapshot | undefined;
+  }
+
+  // --- output_snapshots (§16) -----------------------------------------------
+
+  async putOutputSnapshot(snapshot: OutputSnapshot): Promise<OutputSnapshot> {
+    await this.#query(
+      "insert into takosumi_output_snapshots " +
+        "(id, space_id, installation_id, state_generation, snapshot_json, created_at) " +
+        "values ($1, $2, $3, $4, $5::jsonb, $6) " +
+        "on conflict (id) do update set " +
+        "space_id = excluded.space_id, " +
+        "installation_id = excluded.installation_id, " +
+        "state_generation = excluded.state_generation, " +
+        "snapshot_json = excluded.snapshot_json, " +
+        "created_at = excluded.created_at",
+      [
+        snapshot.id,
+        snapshot.spaceId,
+        snapshot.installationId,
+        snapshot.stateGeneration,
+        JSON.stringify(snapshot),
+        snapshot.createdAt,
+      ],
+    );
+    return snapshot;
+  }
+
+  async getOutputSnapshot(id: string): Promise<OutputSnapshot | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select snapshot_json as json from takosumi_output_snapshots where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as OutputSnapshot | undefined;
+  }
+
+  async getLatestOutputSnapshot(
+    installationId: string,
+  ): Promise<OutputSnapshot | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select snapshot_json as json from takosumi_output_snapshots " +
+        "where installation_id = $1 " +
+        "order by state_generation desc, created_at desc, id desc limit 1",
+      [installationId],
+    );
+    return parseRow(result.rows[0]) as OutputSnapshot | undefined;
+  }
+
+  // --- run_groups (§19 / §24) -----------------------------------------------
+
+  async putRunGroup(group: RunGroup): Promise<RunGroup> {
+    await this.#query(
+      "insert into takosumi_run_groups " +
+        "(id, space_id, type, group_json, created_at) " +
+        "values ($1, $2, $3, $4::jsonb, $5) " +
+        "on conflict (id) do update set " +
+        "space_id = excluded.space_id, " +
+        "type = excluded.type, " +
+        "group_json = excluded.group_json, " +
+        "created_at = excluded.created_at",
+      [group.id, group.spaceId, group.type, JSON.stringify(group), group.createdAt],
+    );
+    return group;
+  }
+
+  async getRunGroup(id: string): Promise<RunGroup | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select group_json as json from takosumi_run_groups where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as RunGroup | undefined;
+  }
+
+  async listRunGroups(spaceId: string): Promise<readonly RunGroup[]> {
+    const result = await this.#query<JsonRow>(
+      "select group_json as json from takosumi_run_groups " +
+        "where space_id = $1 order by created_at asc, id asc",
+      [spaceId],
+    );
+    return result.rows.map((row) => parseRow(row) as RunGroup);
   }
 
   #query<Row extends Record<string, unknown> = Record<string, unknown>>(
