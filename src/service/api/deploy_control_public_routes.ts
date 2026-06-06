@@ -58,6 +58,8 @@ import type {
   DependenciesService,
 } from "../domains/dependencies/mod.ts";
 import type { RunGroupsService } from "../domains/run-groups/mod.ts";
+import type { ActivityService } from "../domains/activity/mod.ts";
+import { ACTIVITY_MAX_LIMIT } from "takosumi-contract/activity";
 import {
   OpenTofuControllerError,
   type OpenTofuControllerErrorCode,
@@ -113,6 +115,8 @@ export const TAKOSUMI_RUN_GROUP_ROUTE =
   "/v1/run-groups/:runGroupId" as const;
 export const TAKOSUMI_RUN_GROUP_APPROVE_ROUTE =
   "/v1/run-groups/:runGroupId/approve" as const;
+export const TAKOSUMI_SPACE_ACTIVITY_ROUTE =
+  "/v1/spaces/:spaceId/activity" as const;
 
 /**
  * Endpoint inventory for the `deployControl-public` family, co-located with the
@@ -500,6 +504,15 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
     operationId: "approveRunGroup",
     openapi: { pathParams: ["runGroupId"], okSchema: "RunGroupResponse" },
   },
+  {
+    method: "GET",
+    path: TAKOSUMI_SPACE_ACTIVITY_ROUTE,
+    summary:
+      "Lists a Space's recent Activity audit trail (newest first; ?limit= 1..500).",
+    auth: "deploy-control-token",
+    operationId: "listSpaceActivity",
+    openapi: { pathParams: ["spaceId"], okSchema: "ListActivityResponse" },
+  },
 ] as const;
 
 export const DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
@@ -647,6 +660,12 @@ export interface DeployControlPublicRouteDependencies {
    * plan-update / run-group routes return 501 after successful auth.
    */
   readonly runGroupsService?: RunGroupsService;
+  /**
+   * Activity domain service (Core Specification §27 / §34). When unset, the
+   * Activity listing route returns 501 after successful auth, and the connection
+   * route skips its Space-scoped audit emission.
+   */
+  readonly activityService?: ActivityService;
 }
 
 export interface DeployControlBearerAuthorizationInput {
@@ -809,6 +828,25 @@ export function mountDeployControlPublicRoutes(
       );
       ensureConnectionPermission(auth.principal, body.spaceId);
       const response = await controller.createConnection(body);
+      // Activity (§27 / §34): a Connection was registered. The route owns the
+      // Space context; we emit ONLY for a space-scoped Connection (operator-scope
+      // defaults are instance-wide, not Space activity). Names / ids only — the
+      // credential values never enter the audit trail.
+      const connection = response.connection;
+      if (dependencies.activityService && connection.spaceId) {
+        await dependencies.activityService.record({
+          spaceId: connection.spaceId,
+          actorId: auth.principal.actor,
+          action: "connection.created",
+          targetType: "connection",
+          targetId: connection.id,
+          metadata: {
+            provider: connection.provider,
+            kind: connection.kind ?? "provider",
+            scope: connection.scope,
+          },
+        });
+      }
       return c.json(response, 201);
     });
   });
@@ -1320,6 +1358,54 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
+  // --- Activity audit trail (§27 / §34) -------------------------------------
+
+  app.get(TAKOSUMI_SPACE_ACTIVITY_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const activityService = dependencies.activityService;
+    if (!activityService) {
+      return c.json(notImplemented(c, "activity not wired"), 501);
+    }
+    const idCheck = ensureValidParam(c, "spaceId", SPACE_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    const limit = parseActivityLimit(c.req.query("limit"));
+    if (limit.kind === "invalid") {
+      return c.json(
+        errorEnvelope(
+          c,
+          "invalid_argument",
+          `limit must be an integer in 1..${ACTIVITY_MAX_LIMIT}`,
+        ),
+        400,
+      );
+    }
+    return await runHandler(c, async () => {
+      ensureSpacePermission(auth.principal, idCheck.value);
+      const events = await activityService.list(idCheck.value, limit.value);
+      return c.json({ events }, 200);
+    });
+  });
+
+}
+
+/**
+ * Parses + validates the `?limit=` query for the Activity listing: an integer in
+ * `1..ACTIVITY_MAX_LIMIT`, or absent (returns `undefined`, letting the service
+ * apply its default). Anything else is a 400.
+ */
+function parseActivityLimit(
+  raw: string | undefined,
+):
+  | { readonly kind: "ok"; readonly value: number | undefined }
+  | { readonly kind: "invalid" } {
+  if (raw === undefined || raw === "") return { kind: "ok", value: undefined };
+  if (!/^\d+$/.test(raw)) return { kind: "invalid" };
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > ACTIVITY_MAX_LIMIT) {
+    return { kind: "invalid" };
+  }
+  return { kind: "ok", value };
 }
 
 function mountNotImplementedRoutes(
@@ -1384,6 +1470,7 @@ function mountNotImplementedRoutes(
   app.post(TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE, post("run groups not wired"));
   app.get(TAKOSUMI_RUN_GROUP_ROUTE, get("run groups not wired"));
   app.post(TAKOSUMI_RUN_GROUP_APPROVE_ROUTE, post("run groups not wired"));
+  app.get(TAKOSUMI_SPACE_ACTIVITY_ROUTE, get("activity not wired"));
 }
 
 async function authorizeDeployControl(

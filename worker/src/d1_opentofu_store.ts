@@ -48,6 +48,7 @@ import type { DeploymentProfile } from "takosumi-contract/installations";
 import type { Dependency, DependencySnapshot } from "takosumi-contract/dependencies";
 import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import type { RunGroup } from "takosumi-contract/runs";
+import type { ActivityEvent } from "takosumi-contract/activity";
 import type {
   InstallationPatch,
   InstallationPatchGuard,
@@ -56,7 +57,10 @@ import type {
   StoredSecretBlob,
   StoredSource,
 } from "../../src/service/domains/deploy-control/store.ts";
-import { InstallationPatchGuardConflict } from "../../src/service/domains/deploy-control/store.ts";
+import {
+  clampActivityLimit,
+  InstallationPatchGuardConflict,
+} from "../../src/service/domains/deploy-control/store.ts";
 import type { D1Database, D1Result } from "./bindings.ts";
 
 /**
@@ -958,6 +962,54 @@ export class CloudflareD1OpenTofuDeploymentStore
     );
   }
 
+  // -- Activity audit_events (§27 audit_events / §34 Activity) ------------------
+  //
+  // The §27 audit_events table keeps searchable columns (space_id / created_at)
+  // for the Space-scoped Activity list; the full non-secret event round trips
+  // through record_json. Listing is newest-first with a clamped limit.
+
+  async putActivityEvent(event: ActivityEvent): Promise<ActivityEvent> {
+    await this.#run(
+      `insert into audit_events
+        (id, space_id, actor_id, action, target_type, target_id, run_id,
+         record_json, created_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       on conflict (id) do update set
+        space_id = excluded.space_id,
+        actor_id = excluded.actor_id,
+        action = excluded.action,
+        target_type = excluded.target_type,
+        target_id = excluded.target_id,
+        run_id = excluded.run_id,
+        record_json = excluded.record_json,
+        created_at = excluded.created_at`,
+      [
+        event.id,
+        event.spaceId,
+        event.actorId ?? null,
+        event.action,
+        event.targetType,
+        event.targetId,
+        event.runId ?? null,
+        JSON.stringify(event),
+        event.createdAt,
+      ],
+    );
+    return event;
+  }
+
+  async listActivityEvents(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly ActivityEvent[]> {
+    const limit = clampActivityLimit(options.limit);
+    return await this.#many<ActivityEvent>(
+      `select record_json from audit_events
+       where space_id = ? order by created_at desc, id desc limit ?`,
+      [spaceId, limit],
+    );
+  }
+
   // -- shared D1 helpers ------------------------------------------------------
 
   async #putRun(row: {
@@ -1350,6 +1402,19 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create index if not exists run_groups_space_idx
       on run_groups (space_id, created_at)`,
+    `create table if not exists audit_events (
+      id text primary key,
+      space_id text not null,
+      actor_id text,
+      action text not null,
+      target_type text not null,
+      target_id text not null,
+      run_id text,
+      record_json text not null,
+      created_at text not null
+    )`,
+    `create index if not exists audit_events_space_idx
+      on audit_events (space_id, created_at)`,
   ];
   for (const sql of statements) {
     await db.prepare(sql).run();

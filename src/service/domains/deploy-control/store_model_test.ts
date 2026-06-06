@@ -27,6 +27,7 @@ import type {
 } from "takosumi-contract/dependencies";
 import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import type { RunGroup } from "takosumi-contract/runs";
+import type { ActivityEvent } from "takosumi-contract/activity";
 
 /**
  * Minimal in-memory SQL client that interprets exactly the Space-direct model
@@ -482,6 +483,20 @@ function outputSnapshot(over: Partial<OutputSnapshot> = {}): OutputSnapshot {
   };
 }
 
+function activityEvent(over: Partial<ActivityEvent> = {}): ActivityEvent {
+  return {
+    id: "act_1",
+    spaceId: "space_1",
+    actorId: "user_1",
+    action: "installation.created",
+    targetType: "installation",
+    targetId: "inst_1",
+    metadata: { name: "shop", environment: "production" },
+    createdAt: TS,
+    ...over,
+  };
+}
+
 function runGroup(over: Partial<RunGroup> = {}): RunGroup {
   return {
     id: "rg_1",
@@ -889,6 +904,57 @@ test("RunGroup store: put/get/list-by-space round-trip", async () => {
     expect(forSpace.map((g) => g.id), label).toEqual(["rg_a", "rg_b"]);
     expect((await store.listRunGroups("space_2")).map((g) => g.id), label)
       .toEqual(["rg_other"]);
+  }
+});
+
+test("Activity store: put/list newest-first, space-scoped, limit-clamped", async () => {
+  for (const [label, store] of bothStores()) {
+    // Three events in space_1 at distinct timestamps + one in space_2.
+    await store.putActivityEvent(
+      activityEvent({ id: "act_a", createdAt: "2026-06-06T00:00:01.000Z" }),
+    );
+    await store.putActivityEvent(
+      activityEvent({
+        id: "act_b",
+        action: "run.plan_created",
+        targetType: "run",
+        targetId: "plan_1",
+        runId: "plan_1",
+        createdAt: "2026-06-06T00:00:03.000Z",
+      }),
+    );
+    await store.putActivityEvent(
+      activityEvent({
+        id: "act_c",
+        action: "run.applied",
+        targetType: "run",
+        targetId: "apply_1",
+        runId: "apply_1",
+        metadata: { deploymentId: "dep_1" },
+        createdAt: "2026-06-06T00:00:02.000Z",
+      }),
+    );
+    await store.putActivityEvent(
+      activityEvent({ id: "act_other", spaceId: "space_2" }),
+    );
+
+    // Newest-first within the space (act_b @ :03, act_c @ :02, act_a @ :01).
+    const listed = await store.listActivityEvents("space_1");
+    expect(listed.map((e) => e.id), label).toEqual(["act_b", "act_c", "act_a"]);
+    // Full record (incl. metadata + optional runId) round-trips.
+    expect(listed[0]!.runId, label).toBe("plan_1");
+    expect(listed[1]!.metadata.deploymentId, label).toBe("dep_1");
+
+    // Space isolation: space_2 sees only its own event.
+    expect((await store.listActivityEvents("space_2")).map((e) => e.id), label)
+      .toEqual(["act_other"]);
+    // An empty Space sees nothing.
+    expect((await store.listActivityEvents("space_missing")).length, label)
+      .toBe(0);
+
+    // Limit caps the page (newest two).
+    const limited = await store.listActivityEvents("space_1", { limit: 2 });
+    expect(limited.map((e) => e.id), label).toEqual(["act_b", "act_c"]);
   }
 });
 

@@ -143,8 +143,9 @@ test("deployControl e2e exposes OpenTofu plan and apply runs", async () => {
   expect(plan.planRun.planDigest).toEqual(PLAN_DIGEST);
   expect(plan.planRun.planArtifact?.digest).toEqual(PLAN_DIGEST);
 
-  // A production installation-driven plan lands waiting_approval (spec §10.6 /
-  // §19 Run projection); approve before the apply.
+  // The plan introduces a delete/replace change, so the §25 action policy flags
+  // it requiresApproval and the §19 Run projects waiting_approval; approve
+  // before the apply.
   const runRes = await app.request(`/v1/runs/${plan.planRun.id}`, {
     headers: headers(),
   });
@@ -235,6 +236,17 @@ function fakeRunner(): OpenTofuRunner {
           ref: "runner-local://plan_e2e/tfplan",
           digest: PLAN_DIGEST,
         },
+        // A replace (delete+create) change so the §25 action policy flags the
+        // plan requiresApproval (parks waiting_approval), exercising the
+        // approve -> apply roundtrip below. Approval is no longer gated by the
+        // environment alone — it is driven by the plan's actual changes.
+        planResourceChanges: [
+          {
+            address: "module.app.cloudflare_workers_script.this",
+            type: "cloudflare_workers_script",
+            actions: ["delete", "create"],
+          },
+        ],
       }),
     apply: () =>
       Promise.resolve({

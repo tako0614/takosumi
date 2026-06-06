@@ -12,6 +12,7 @@ import {
 import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "./sqlite_fake_d1.ts";
 import type { Connection } from "takosumi-contract/deploy-control-api";
+import type { ActivityEvent } from "takosumi-contract/activity";
 
 // -- Fixtures ------------------------------------------------------------------
 
@@ -92,4 +93,51 @@ for (const [name, make] of STORES) {
     expect(serialized).not.toContain("ciphertext");
     expect(serialized).not.toContain("Y2lwaGVydGV4dA==");
   });
+
+  test(`${name}: activity event put/list newest-first + space-scoped + limit`, async () => {
+    const store = make();
+    await store.putActivityEvent(activityEvent({
+      id: "act_a",
+      createdAt: "2026-06-06T00:00:01.000Z",
+    }));
+    await store.putActivityEvent(activityEvent({
+      id: "act_b",
+      action: "run.applied",
+      targetType: "run",
+      targetId: "apply_1",
+      runId: "apply_1",
+      metadata: { deploymentId: "dep_1" },
+      createdAt: "2026-06-06T00:00:02.000Z",
+    }));
+    await store.putActivityEvent(activityEvent({
+      id: "act_other",
+      spaceId: "space_2",
+      createdAt: "2026-06-06T00:00:03.000Z",
+    }));
+
+    const listed = await store.listActivityEvents("space_1");
+    expect(listed.map((e) => e.id)).toEqual(["act_b", "act_a"]);
+    expect(listed[0]!.runId).toBe("apply_1");
+    expect(listed[0]!.metadata.deploymentId).toBe("dep_1");
+
+    expect((await store.listActivityEvents("space_2")).map((e) => e.id))
+      .toEqual(["act_other"]);
+    expect((await store.listActivityEvents("space_1", { limit: 1 })).map((e) =>
+      e.id
+    )).toEqual(["act_b"]);
+  });
+}
+
+function activityEvent(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
+  return {
+    id: "act_default",
+    spaceId: "space_1",
+    actorId: "user_1",
+    action: "installation.created",
+    targetType: "installation",
+    targetId: "inst_1",
+    metadata: { name: "shop" },
+    createdAt: "2026-06-06T00:00:00.000Z",
+    ...overrides,
+  };
 }

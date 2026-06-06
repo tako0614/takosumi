@@ -69,6 +69,19 @@ function recordingRunner(): RecordingRunner {
           digest: PLAN_DIGEST,
           contentType: "application/vnd.opentofu.plan",
         },
+        // A delete/replace change so the §25 action policy flags the plan
+        // requiresApproval -> a production plan parks waiting_approval, keeping
+        // the `approveRun` calls in the strict-staleness test valid. Approval is
+        // no longer gated by the environment alone. (Preview plans also require
+        // approval now, but the preview tests apply directly — apply is not
+        // approval-gated.)
+        planResourceChanges: [
+          {
+            address: "module.app.cloudflare_workers_script.this",
+            type: "cloudflare_workers_script",
+            actions: ["delete", "create"],
+          },
+        ],
       });
     },
     apply: (job) => {
@@ -192,8 +205,9 @@ test("strict consumer apply fails dependency_snapshot_stale after the producer m
   await seedGraph(store, "production");
   const controller = controllerWith(store, runner);
 
-  // Producer applies -> gen 1. Production plans land waiting_approval; approve
-  // BEFORE the apply (apply marks the plan applied, clearing the gate).
+  // Producer applies -> gen 1. The plan's delete/replace change flags
+  // requiresApproval so it parks waiting_approval; approve BEFORE the apply
+  // (apply marks the plan applied, clearing the gate).
   const producerPlan = await controller.createInstallationPlan("inst_producer");
   await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
