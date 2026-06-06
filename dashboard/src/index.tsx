@@ -76,6 +76,27 @@ const ConnectionsView = lazy(() =>
   import("./views/connections/ConnectionsView.tsx")
 );
 
+// Control-plane views (spec §31, conformance M10) — session-authed dashboard
+// over the `/v1/control/*` account-plane pass-through routes.
+const ControlInstallationsView = lazy(() =>
+  import("./views/control/ControlInstallationsView.tsx")
+);
+const ControlGraphView = lazy(() =>
+  import("./views/control/ControlGraphView.tsx")
+);
+const InstallFromGitView = lazy(() =>
+  import("./views/control/InstallFromGitView.tsx")
+);
+const ControlRunView = lazy(() =>
+  import("./views/control/ControlRunView.tsx")
+);
+const ControlRunGroupView = lazy(() =>
+  import("./views/control/ControlRunGroupView.tsx")
+);
+const ControlActivityView = lazy(() =>
+  import("./views/control/ControlActivityView.tsx")
+);
+
 function App() {
   return (
     <Router>
@@ -93,10 +114,21 @@ function App() {
       <Route path="/account/profile" component={AccountProfileView} />
       <Route path="/account/sessions" component={AccountSessionsView} />
 
-      <Route path="/install" component={InstallByUrlView} />
-      <Route path="/installations" component={InstallationsListView} />
-      <Route path="/installations/:id" component={InstallationDetailView} />
-      <Route path="/installations/:id/danger" component={InstallationDangerView} />
+      {/* Control-plane surface (spec §31). `/install` and `/installations` map
+          to the control views; the legacy account-plane install-by-URL wizard
+          and installation detail/danger screens stay reachable under /apps/*. */}
+      <Route path="/install" component={InstallFromGitView} />
+      <Route path="/installations" component={ControlInstallationsView} />
+      <Route path="/graph" component={ControlGraphView} />
+      <Route path="/runs/:id" component={ControlRunView} />
+      <Route path="/run-groups/:id" component={ControlRunGroupView} />
+      <Route path="/activity" component={ControlActivityView} />
+
+      {/* Legacy account-plane installation screens (snake-case `/v1/*`). */}
+      <Route path="/apps" component={InstallationsListView} />
+      <Route path="/apps/install" component={InstallByUrlView} />
+      <Route path="/apps/:id" component={InstallationDetailView} />
+      <Route path="/apps/:id/danger" component={InstallationDangerView} />
 
       <Route path="/connections" component={ConnectionsView} />
 

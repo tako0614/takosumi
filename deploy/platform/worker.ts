@@ -46,6 +46,10 @@ function deployControlSeam(env: CloudflareWorkerEnv) {
 const accountsWorker = createCloudflareWorker({
   deployControlFetch: (env) => deployControlSeam(env).fetch,
   deployControlOperations: (env) => deployControlSeam(env).operations(),
+  // The session-authed `/v1/control/*` dashboard surface (M10) reads the SAME
+  // in-process operations facade the deploy-control proxy uses; `TakosumiOperations`
+  // structurally satisfies `ControlPlaneOperations`.
+  controlPlaneOperations: (env) => deployControlSeam(env).operations(),
 });
 
 // The platform worker owns the public fetch surface (accounts handler) AND runs
