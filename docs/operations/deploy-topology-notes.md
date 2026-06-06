@@ -12,7 +12,7 @@
   `app.takosumi.com`) のみ。 Takos product worker はユーザーが自分のインフラに
   self-host するもので、operator は deploy しない。
 - platform worker は Takosumi の accounts plane
-  (`deploy/accounts-cloudflare/src/handler.ts`) と deploy-control
+  (`deploy/accounts-cloudflare/src/handler.ts`) と control plane
   (`deploy/cloudflare/src/handler.ts`) を **in-process** で mount する。 別 worker
   / 別サブドメイン (`accounts.takosumi.com` / `deploy-control.takosumi.com`) は
   持たない。
@@ -23,7 +23,7 @@
 worker が束ねる surface:
 
 - account plane: bare-origin OIDC issuer / Installation 参照 / billing
-- deploy control: PlanRun / ApplyRun / Installation ledger (`/v1/installations/*`)
+- control plane: Space / Source / Installation / Run ledger
 - Accounts D1 / Installation export 用 R2、OpenTofu runner 用 Container / queue
 
 これらの D1 / R2 / Container / queue binding と secret は、 operator が
@@ -33,7 +33,7 @@ materialize する。
 
 ## Current Guard
 
-operator-facing docs / private deploy artifacts do not model the single worker
+operator-facing docs / private deploy state do not model the single worker
 as a multi-service workload topology. The current service keys are:
 
 - `takosApp`
