@@ -500,7 +500,7 @@ export interface TemplatePolicySpec {
 export interface TemplateSourceSpec {
   /**
    * Path INSIDE the runner image to the official template module, e.g.
-   * `/app/templates/cloudflare-r2-bucket/module`. The runner copies it to
+   * `/app/templates/cloudflare-r2-storage/module`. The runner copies it to
    * `/work/generated-root/template-module`.
    */
   readonly localModulePath: string;

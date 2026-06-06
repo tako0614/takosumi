@@ -1,5 +1,5 @@
 /**
- * Official template: cloudflare-worker-hono.
+ * Official template: cloudflare-worker-service.
  *
  * Deploys a module-syntax Cloudflare Worker (Hono or any bundled module) from a
  * build artifact. Authored as TypeScript catalog data; the `module/` directory
@@ -9,14 +9,14 @@
 
 import type { TemplateDefinition } from "takosumi-contract/deploy-control-api";
 
-export const cloudflareWorkerHonoTemplate: TemplateDefinition = {
-  id: "cloudflare-worker-hono",
-  name: "Cloudflare Worker (Hono)",
+export const cloudflareWorkerServiceTemplate: TemplateDefinition = {
+  id: "cloudflare-worker-service",
+  name: "Cloudflare Worker Service",
   version: "1.0.0",
   description:
     "Builds a Bun project and deploys the bundled module to a Cloudflare Worker, optionally on workers.dev.",
   source: {
-    localModulePath: "/app/templates/cloudflare-worker-hono/module",
+    localModulePath: "/app/templates/cloudflare-worker-service/module",
   },
   build: {
     runtime: "bun",

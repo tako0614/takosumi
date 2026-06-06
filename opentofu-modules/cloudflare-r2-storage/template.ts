@@ -1,5 +1,5 @@
 /**
- * Official template: cloudflare-r2-bucket.
+ * Official template: cloudflare-r2-storage.
  *
  * Authored as TypeScript catalog data (the service cannot read the filesystem
  * in Workers). The `module/` directory next to this file is the human-readable
@@ -9,14 +9,14 @@
 
 import type { TemplateDefinition } from "takosumi-contract/deploy-control-api";
 
-export const cloudflareR2BucketTemplate: TemplateDefinition = {
-  id: "cloudflare-r2-bucket",
-  name: "Cloudflare R2 Bucket",
+export const cloudflareR2StorageTemplate: TemplateDefinition = {
+  id: "cloudflare-r2-storage",
+  name: "Cloudflare R2 Storage",
   version: "1.0.0",
   description:
     "Provisions a single Cloudflare R2 bucket from a name and account id.",
   source: {
-    localModulePath: "/app/templates/cloudflare-r2-bucket/module",
+    localModulePath: "/app/templates/cloudflare-r2-storage/module",
   },
   inputs: {
     bucketName: {

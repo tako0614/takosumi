@@ -13,15 +13,21 @@
  */
 
 import type { TemplateDefinition } from "takosumi-contract/deploy-control-api";
-import { cloudflareR2BucketTemplate } from "../../../../opentofu-modules/cloudflare-r2-bucket/template.ts";
-import { cloudflareWorkerHonoTemplate } from "../../../../opentofu-modules/cloudflare-worker-hono/template.ts";
+import { awsS3StorageTemplate } from "../../../../opentofu-modules/aws-s3-storage/template.ts";
+import { cloudflareR2StorageTemplate } from "../../../../opentofu-modules/cloudflare-r2-storage/template.ts";
+import { cloudflareStaticSiteTemplate } from "../../../../opentofu-modules/cloudflare-static-site/template.ts";
+import { cloudflareWorkerServiceTemplate } from "../../../../opentofu-modules/cloudflare-worker-service/template.ts";
+import { coreTemplate } from "../../../../opentofu-modules/core/template.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import { assertValidTemplate } from "./validation.ts";
 
 /** Source-of-truth catalog list. Add new templates here. */
 const CATALOG: readonly TemplateDefinition[] = [
-  cloudflareR2BucketTemplate,
-  cloudflareWorkerHonoTemplate,
+  coreTemplate,
+  cloudflareR2StorageTemplate,
+  cloudflareWorkerServiceTemplate,
+  cloudflareStaticSiteTemplate,
+  awsS3StorageTemplate,
 ];
 
 function registryKey(id: string, version: string): string {

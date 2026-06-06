@@ -66,15 +66,15 @@ test("parseTemplate accepts a baked image path and rejects traversal/escape", ()
   expect(parseTemplate({})).toBeUndefined();
   const ok = parseTemplate({
     template: {
-      id: "cloudflare-r2-bucket",
+      id: "cloudflare-r2-storage",
       version: "1.0.0",
-      localModulePath: "/app/templates/cloudflare-r2-bucket/module",
+      localModulePath: "/app/templates/cloudflare-r2-storage/module",
     },
   });
   expect(ok).toEqual({
-    id: "cloudflare-r2-bucket",
+    id: "cloudflare-r2-storage",
     version: "1.0.0",
-    localModulePath: "/app/templates/cloudflare-r2-bucket/module",
+    localModulePath: "/app/templates/cloudflare-r2-storage/module",
   });
   expect(() =>
     parseTemplate({

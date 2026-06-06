@@ -33,8 +33,10 @@ import type {
   DispatchStateScope,
   DispatchTemplateRef,
   GetInstallationResponse,
+  InstallBuildConfig,
   InstallConfig,
   Installation,
+  InstallType,
   OpenTofuModuleSource,
   PlanRunInstallationContext,
   StateSnapshot,
@@ -108,7 +110,13 @@ import {
   type TemplateRegistry,
   validateTemplateInputs,
 } from "../templates/mod.ts";
-import { generateRootModule } from "takosumi-rootgen";
+import {
+  type CapabilityKind,
+  type CapabilityProvider,
+  generateInstallationRoot,
+  type GeneratedRootInstallType,
+  generateRootModule,
+} from "takosumi-rootgen";
 import type { Run } from "takosumi-contract/runs";
 import {
   projectApplyRun,
@@ -122,6 +130,7 @@ import {
 import {
   ConnectionsService,
   mintableConnectionIds,
+  type ResolvedCapability,
 } from "../connections/mod.ts";
 
 // Re-export the shared error primitive and the four decomposed concerns so the
@@ -366,6 +375,29 @@ export interface DeployControlActorContext {
 }
 
 /**
+ * Install-type wiring for an installation-driven template plan (§13). Carried
+ * through {@link PlanRunInternalContext} so {@link
+ * OpenTofuDeploymentController.createPlanRun} can drive `generateInstallationRoot`
+ * (installType-aware generated root + per-capability provider aliases + the
+ * `app_source` build) instead of the raw {@link generateRootModule}. Absent for
+ * the raw `/v1/plan-runs` template path (no installation context = no
+ * capabilities), which stays on `generateRootModule`.
+ */
+interface InstallTypePlanContext {
+  /** §13 generated-root install type (core / opentofu_module / app_source). */
+  readonly installType: GeneratedRootInstallType;
+  /** Per-capability provider mapping derived from the resolved capabilities. */
+  readonly capabilityProviders: readonly CapabilityProvider[];
+  /**
+   * Manual-mode capability values flattened into module input overrides (§13
+   * decision: manual values override the InstallConfig variableMapping).
+   */
+  readonly manualValues: Readonly<Record<string, JsonValue>>;
+  /** InstallConfig.build, when enabled (overrides the template build). */
+  readonly build?: DispatchBuildSpec;
+}
+
+/**
  * Internal plan-creation context for the Installation-driven flow. Carried only
  * by {@link OpenTofuDeploymentController.createInstallationPlan} /
  * `createInstallationDestroyPlan`; the raw `/v1/plan-runs` create path leaves
@@ -376,6 +408,8 @@ interface PlanRunInternalContext {
   readonly sourceSnapshotId?: string;
   /** The Installation's current state generation (its latest StateSnapshot, or 0). */
   readonly baseStateGeneration?: number;
+  /** Install-type wiring for an installation-driven template plan (§13). */
+  readonly installTypePlan?: InstallTypePlanContext;
 }
 
 /**
@@ -469,14 +503,21 @@ export class OpenTofuDeploymentController {
     // (the request must NOT also pass requiredProviders), inputs are validated
     // against the template, and rootgen produces the generated root module that
     // is threaded onto the dispatch payload via the plan-run-inputs sidecar.
-    const templatePlan = this.#resolveTemplatePlan(request);
+    const templatePlan = this.#resolveTemplatePlan(request, internal.installTypePlan);
     const declaredProviders = templatePlan
       ? normalizeProviders(templatePlan.requiredProviders)
       : normalizeProviders(request.requiredProviders ?? []);
+    // A template that declares zero allowed providers is an intentionally
+    // provider-free §10 install (e.g. `core`, pure value plumbing): the
+    // "requiredProviders before init" gate does not apply. A raw cloud run still
+    // must declare providers.
+    const allowNoProviders = templatePlan !== undefined &&
+      templatePlan.template.policy.allowedProviders.length === 0;
     const policy = evaluatePolicy({
       profile,
       requiredProviders: declaredProviders,
       checkedAt: now,
+      ...(allowNoProviders ? { allowNoProviders: true } : {}),
     });
     const sourceDigest = await stableJsonDigest(request.source);
     const variablesDigest = await stableJsonDigest(variables);
@@ -663,13 +704,14 @@ export class OpenTofuDeploymentController {
     const operation = destroy
       ? "destroy"
       : (installation.currentDeploymentId ? "update" : "create");
-    const planRequest = await this.#installationPlanRequest({
-      installation,
-      installConfig,
-      source,
-      snapshot,
-      operation,
-    });
+    const { request: planRequest, installTypePlan } = await this
+      .#installationPlanRequest({
+        installation,
+        installConfig,
+        source,
+        snapshot,
+        operation,
+      });
     const installationContext: PlanRunInstallationContext = {
       spaceId: installation.spaceId,
       installationId: installation.id,
@@ -679,6 +721,7 @@ export class OpenTofuDeploymentController {
       installationContext,
       sourceSnapshotId: snapshot.id,
       baseStateGeneration,
+      ...(installTypePlan ? { installTypePlan } : {}),
     });
   }
 
@@ -702,12 +745,19 @@ export class OpenTofuDeploymentController {
   }
 
   /**
-   * Builds the {@link CreatePlanRunRequest} for an installation-driven plan.
-   * The InstallConfig selects the OpenTofu surface: a config bound to a catalog
-   * template reuses the template plan path (templateId/version + inputs from
-   * the config's variable mapping); an opentofu_module / opentofu_root config
-   * with no catalog template falls back to the raw-module plan path with the
-   * snapshot as the module source.
+   * Builds the {@link CreatePlanRunRequest} (+ install-type plan context) for an
+   * installation-driven plan. The InstallConfig's installType selects the
+   * OpenTofu surface (§10 / §13):
+   *
+   *   - `core` / `opentofu_module` / `app_source`: a template-bound config reuses
+   *     the template plan path with an {@link InstallTypePlanContext} so the
+   *     generated root comes from {@link generateInstallationRoot} (installType +
+   *     per-capability provider aliases + the app_source build); the config's
+   *     variableMapping supplies the template inputs and manual-mode capability
+   *     values override them. A non-template `opentofu_module` / `app_source`
+   *     config has no generated root to build yet and falls back to the raw path.
+   *   - `opentofu_root`: the SourceSnapshot IS the root configuration — no
+   *     generated root, no template (asserted) — exactly the raw-module path.
    */
   async #installationPlanRequest(input: {
     readonly installation: Installation;
@@ -715,29 +765,72 @@ export class OpenTofuDeploymentController {
     readonly source: Source;
     readonly snapshot: SourceSnapshot;
     readonly operation: "create" | "update" | "destroy";
-  }): Promise<CreatePlanRunRequest> {
+  }): Promise<{
+    readonly request: CreatePlanRunRequest;
+    readonly installTypePlan?: InstallTypePlanContext;
+  }> {
     const moduleSource = snapshotModuleSource(input.source, input.snapshot);
+    const installType = input.installConfig.installType;
     const templateBinding = installConfigTemplateBinding(input.installConfig);
+    // opentofu_root: the SourceSnapshot IS the root configuration (no generated
+    // root, no template). A templateBinding here is a config error — it would
+    // silently generate a root over a config that asked for the raw root path.
+    if (installType === "opentofu_root") {
+      if (templateBinding) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `install config ${input.installConfig.id} is opentofu_root but ` +
+            `carries a templateBinding; opentofu_root uses the SourceSnapshot ` +
+            `as the root configuration directly (no generated root)`,
+        );
+      }
+      return { request: await this.#rawModulePlanRequest(input, moduleSource) };
+    }
     if (templateBinding) {
-      // Template-backed config: reuse the existing template plan path. The
-      // config's variableMapping supplies the template inputs (public, never
-      // secret); the user source archive is a build input only.
+      // Template-backed config (core / opentofu_module / app_source): reuse the
+      // template plan path. The config's variableMapping supplies the template
+      // inputs (public, never secret); the user source archive is a build input
+      // only. The install-type context drives the §13 generated root.
+      const installTypePlan = await this.#resolveInstallTypePlan(
+        input.installation,
+        input.installConfig,
+        installType,
+      );
       return {
-        spaceId: input.installation.spaceId,
-        installationId: input.installation.id,
-        source: moduleSource,
-        operation: input.operation,
-        templateId: templateBinding.templateId,
-        templateVersion: templateBinding.templateVersion,
-        ...(templateBinding.inputs
-          ? { inputs: templateBinding.inputs }
-          : {}),
+        request: {
+          spaceId: input.installation.spaceId,
+          installationId: input.installation.id,
+          source: moduleSource,
+          operation: input.operation,
+          templateId: templateBinding.templateId,
+          templateVersion: templateBinding.templateVersion,
+          ...(templateBinding.inputs
+            ? { inputs: templateBinding.inputs }
+            : {}),
+        },
+        installTypePlan,
       };
     }
-    // Raw-module path: the snapshot is the OpenTofu module source. The runner
-    // profile's allowed providers are declared as the run's required providers so
-    // the create-time policy gate (which requires providers before init) is
-    // satisfied; the runner re-reports the providers it actually used.
+    // Non-template opentofu_module / app_source / core config: no catalog
+    // template to generate a root from — fall back to the raw-module path with
+    // the snapshot as the module source.
+    return { request: await this.#rawModulePlanRequest(input, moduleSource) };
+  }
+
+  /**
+   * Raw-module plan request: the snapshot is the OpenTofu module source (used by
+   * opentofu_root and by template-less configs). The runner profile's allowed
+   * providers are declared as the run's required providers so the create-time
+   * policy gate (which requires providers before init) is satisfied; the runner
+   * re-reports the providers it actually used.
+   */
+  async #rawModulePlanRequest(
+    input: {
+      readonly installation: Installation;
+      readonly operation: "create" | "update" | "destroy";
+    },
+    moduleSource: OpenTofuModuleSource,
+  ): Promise<CreatePlanRunRequest> {
     const profile = await this.#requireRunnerProfile(this.#defaultRunnerProfileId);
     return {
       spaceId: input.installation.spaceId,
@@ -746,6 +839,38 @@ export class OpenTofuDeploymentController {
       operation: input.operation,
       runnerProfileId: profile.id,
       requiredProviders: [...profile.allowedProviders],
+    };
+  }
+
+  /**
+   * Derives the §13 install-type plan context for a template-bound installation
+   * config: the generated-root install type, the per-capability provider aliases
+   * (from the installation's resolved capabilities), the flattened manual-mode
+   * values, and the build override. Capabilities resolve through the
+   * {@link ConnectionsService} so binding changes take effect on the next plan.
+   * `source` and `disabled` capabilities (and `manual`, which contributes values
+   * not a provider) are skipped for the provider-alias derivation.
+   */
+  async #resolveInstallTypePlan(
+    installation: Installation,
+    installConfig: InstallConfig,
+    installType: InstallType,
+  ): Promise<InstallTypePlanContext> {
+    this.#connectionsService ??= new ConnectionsService({ store: this.#store });
+    const resolved = await this.#connectionsService.resolveCapabilities(
+      installation,
+    );
+    const capabilityProviders = capabilityProvidersFromResolved(resolved);
+    const manualValues = manualValuesFromResolved(resolved);
+    return {
+      // opentofu_root never reaches here (asserted in #installationPlanRequest);
+      // core / opentofu_module / app_source map 1:1 to the generated-root types.
+      installType: installType as GeneratedRootInstallType,
+      capabilityProviders,
+      manualValues,
+      ...(installConfig.build?.enabled
+        ? { build: installConfigBuildSpec(installConfig.build) }
+        : {}),
     };
   }
 
@@ -764,9 +889,19 @@ export class OpenTofuDeploymentController {
    * `undefined` for raw-module plans. Throws on a malformed template request
    * (missing version, conflicting requiredProviders, unknown template, invalid
    * inputs).
+   *
+   * `installTypePlan` is present only for an installation-driven plan (§13). When
+   * present the generated root comes from {@link generateInstallationRoot}
+   * (installType-aware, per-capability provider aliases, the `app_source` build);
+   * the manual-mode capability values are merged into the template inputs with
+   * manual values overriding the InstallConfig variableMapping (§13 decision:
+   * manual values are per-installation overrides). When absent (the raw
+   * `/v1/plan-runs` template path, no installation context = no capabilities) the
+   * generated root stays on {@link generateRootModule} byte-for-byte.
    */
   #resolveTemplatePlan(
     request: CreatePlanRunRequest,
+    installTypePlan?: InstallTypePlanContext,
   ): ResolvedTemplatePlan | undefined {
     if (request.templateId === undefined) {
       // A bare inputs/templateVersion without templateId is a request error: it
@@ -791,8 +926,33 @@ export class OpenTofuDeploymentController {
       request.templateId,
       request.templateVersion!,
     );
-    const inputs = validateTemplateInputs(template, request.inputs);
-    const generatedRoot = generateRootModule(template, inputs);
+    // Manual-mode capability values are per-installation overrides: they win on a
+    // key collision with the InstallConfig variableMapping (which flows in via
+    // request.inputs). Only keys the template DECLARES as inputs survive
+    // validation (validateTemplateInputs rejects unknown keys), so an unknown
+    // manual key would otherwise throw — filter to declared inputs for MVP and
+    // ignore the rest (no DependencySnapshot/manual-value contract here yet).
+    const mergedInputs = installTypePlan
+      ? mergeManualInputs(template, request.inputs, installTypePlan.manualValues)
+      : request.inputs;
+    const inputs = validateTemplateInputs(template, mergedInputs);
+    // Installation-driven (§13): installType-aware generated root with
+    // per-capability provider aliases + the app_source artifact_path wiring.
+    // Raw template path (no installation context): the byte-stable wrapper.
+    const generatedRoot = installTypePlan
+      ? generateInstallationRoot({
+        template,
+        inputs,
+        installType: installTypePlan.installType,
+        ...(installTypePlan.capabilityProviders.length > 0
+          ? { capabilityProviders: installTypePlan.capabilityProviders }
+          : {}),
+      })
+      : generateRootModule(template, inputs);
+    // Build phase precedence: an installation-driven app_source InstallConfig.build
+    // (when enabled) overrides the template's own build; otherwise the template
+    // build is used (§13 / M5 decision: InstallConfig.build takes precedence).
+    const build = installTypePlan?.build ?? templateBuildSpec(template);
     return {
       template,
       inputs,
@@ -805,15 +965,7 @@ export class OpenTofuDeploymentController {
       requiredProviders: template.policy.allowedProviders.map(
         canonicalProviderAddress,
       ),
-      ...(template.build
-        ? {
-          build: {
-            runtime: template.build.runtime,
-            commands: [...template.build.commands],
-            artifactPath: template.build.artifactPath,
-          },
-        }
-        : {}),
+      ...(build ? { build } : {}),
     };
   }
 
@@ -1907,10 +2059,16 @@ export class OpenTofuDeploymentController {
       const requiredProviders = normalizeProviders(
         result.requiredProviders ?? running.requiredProviders,
       );
+      // Re-evaluate against the SAME provider-free allowance as the create gate:
+      // a provider-free template (e.g. `core`) that observes zero providers at
+      // plan time stays passed instead of tripping the "providers before init"
+      // gate. Resolved from the recorded binding so a tampered catalog cannot
+      // retroactively change the allowance.
       const policy = evaluatePolicy({
         profile,
         requiredProviders,
         checkedAt: now,
+        ...(this.#planAllowsNoProviders(running) ? { allowNoProviders: true } : {}),
       });
       // Template plan-JSON policy: when the run is template-backed and the runner
       // returned resource changes, enforce the template's allowedResourceTypes
@@ -2001,6 +2159,23 @@ export class OpenTofuDeploymentController {
       binding.templateVersion,
     );
     return evaluateTemplatePlanPolicy({ policy: template.policy, changes });
+  }
+
+  /**
+   * Whether a plan run targets a provider-free §10 install (a template whose
+   * policy declares zero allowed providers, e.g. `core`). Such a run is allowed
+   * to declare/observe zero providers without tripping the profile's
+   * "requiredProviders before init" gate. Resolved from the recorded binding;
+   * raw-module runs are never provider-free here.
+   */
+  #planAllowsNoProviders(planRun: PlanRun): boolean {
+    const binding = planRun.templateBinding;
+    if (!binding) return false;
+    const template = this.#templateRegistry.require(
+      binding.templateId,
+      binding.templateVersion,
+    );
+    return template.policy.allowedProviders.length === 0;
   }
 
   async #executeApply(
@@ -2554,6 +2729,120 @@ function installConfigTemplateBinding(
     ...(inputs && Object.keys(inputs).length > 0
       ? { inputs: inputs as Readonly<Record<string, JsonValue>> }
       : {}),
+  };
+}
+
+/**
+ * §13 capability kinds the generated root emits provider aliases for. The
+ * `source` capability is a git credential (mapped only at the source phase, not
+ * a provider in the generated root) so it has no rootgen CapabilityKind.
+ */
+const PROVIDER_CAPABILITY_KINDS = {
+  compute: "compute",
+  dns: "dns",
+  storage: "storage",
+  database: "database",
+  secrets: "secrets",
+} as const satisfies Readonly<Record<string, CapabilityKind>>;
+
+/**
+ * Derives the §13 per-capability provider mapping from an installation's
+ * resolved capabilities: one {@link CapabilityProvider} per capability that
+ * resolved to a Connection (mode `connection` or `default` with an operator
+ * default) and carries a provider. `source` (git credential, not a provider),
+ * `disabled`, and `manual` (values, not a provider) contribute no alias.
+ */
+function capabilityProvidersFromResolved(
+  resolved: readonly ResolvedCapability[],
+): readonly CapabilityProvider[] {
+  const providers: CapabilityProvider[] = [];
+  for (const entry of resolved) {
+    const kind = PROVIDER_CAPABILITY_KINDS[
+      entry.capability as keyof typeof PROVIDER_CAPABILITY_KINDS
+    ];
+    if (!kind) continue;
+    const provider = entry.connection?.provider;
+    if (!provider) continue;
+    providers.push({ capability: kind, provider });
+  }
+  return providers;
+}
+
+/**
+ * Flattens an installation's manual-mode capability values into module input
+ * overrides (§13 decision). Manual values are per-installation overrides; only
+ * JSON-scalar values flow through (the template input validator rejects unknown
+ * keys downstream, and rootgen renders scalars only). Later capabilities win on
+ * a key collision (deterministic by the fixed CAPABILITIES order).
+ */
+function manualValuesFromResolved(
+  resolved: readonly ResolvedCapability[],
+): Readonly<Record<string, JsonValue>> {
+  const merged: Record<string, JsonValue> = {};
+  for (const entry of resolved) {
+    if (entry.mode !== "manual" || !entry.values) continue;
+    for (const [key, value] of Object.entries(entry.values)) {
+      if (isJsonScalar(value)) merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Merges the manual-mode capability values OVER the InstallConfig variableMapping
+ * (§13 decision: manual values are per-installation overrides and win on a key
+ * collision). Returns `undefined` when neither side contributes a key so the
+ * caller passes `undefined` (byte-identical to no inputs).
+ */
+function mergeManualInputs(
+  template: TemplateDefinition,
+  configInputs: Readonly<Record<string, JsonValue>> | undefined,
+  manualValues: Readonly<Record<string, JsonValue>>,
+): Readonly<Record<string, JsonValue>> | undefined {
+  const manualForTemplate: Record<string, JsonValue> = {};
+  for (const [key, value] of Object.entries(manualValues)) {
+    // Only keys the template declares as inputs are merged; unknown manual keys
+    // are ignored for MVP (no DependencySnapshot / typed manual-value contract
+    // yet), avoiding a validateTemplateInputs "unknown input" rejection.
+    if (key in template.inputs) manualForTemplate[key] = value;
+  }
+  if (
+    (!configInputs || Object.keys(configInputs).length === 0) &&
+    Object.keys(manualForTemplate).length === 0
+  ) {
+    return configInputs;
+  }
+  return { ...(configInputs ?? {}), ...manualForTemplate };
+}
+
+function isJsonScalar(value: unknown): value is string | number | boolean {
+  const t = typeof value;
+  return t === "string" || t === "number" || t === "boolean";
+}
+
+/** Maps a TemplateDefinition's optional build into a DispatchBuildSpec. */
+function templateBuildSpec(
+  template: TemplateDefinition,
+): DispatchBuildSpec | undefined {
+  if (!template.build) return undefined;
+  return {
+    runtime: template.build.runtime,
+    commands: [...template.build.commands],
+    artifactPath: template.build.artifactPath,
+  };
+}
+
+/**
+ * Maps an enabled InstallConfig.build into the DispatchBuildSpec the runner build
+ * phase consumes (M5 decision: same DispatchBuildSpec threading the template
+ * build uses; the build runs in the Container with ZERO credentials — invariant
+ * 3). `artifactPath` defaults to `dist` when the config omits it.
+ */
+function installConfigBuildSpec(build: InstallBuildConfig): DispatchBuildSpec {
+  return {
+    runtime: "bun",
+    commands: [...build.commands],
+    artifactPath: build.artifactPath ?? "dist",
   };
 }
 

@@ -132,19 +132,21 @@ function assertValidOutputs(template: TemplateDefinition, where: string): void {
 function assertValidPolicy(template: TemplateDefinition, where: string): void {
   const policy = template.policy;
   if (!policy) fail(`${where}: policy is required`);
+  // Empty allowlists are valid and meaningful: a pure value-plumbing module
+  // (e.g. the `core` base installation) declares zero providers / zero resource
+  // types so its plan must contain neither. When entries are present they must
+  // each be well-formed.
   if (
     !Array.isArray(policy.allowedProviders) ||
-    policy.allowedProviders.length === 0 ||
     policy.allowedProviders.some((p) => typeof p !== "string" || !PROVIDER_RULE_RE.test(p))
   ) {
-    fail(`${where}: policy.allowedProviders must be non-empty provider rules`);
+    fail(`${where}: policy.allowedProviders must be an array of provider rules`);
   }
   if (
     !Array.isArray(policy.allowedResourceTypes) ||
-    policy.allowedResourceTypes.length === 0 ||
     policy.allowedResourceTypes.some((t) => typeof t !== "string" || !RESOURCE_TYPE_RE.test(t))
   ) {
-    fail(`${where}: policy.allowedResourceTypes must be non-empty resource type names`);
+    fail(`${where}: policy.allowedResourceTypes must be an array of resource type names`);
   }
   if (
     !policy.destructiveChanges ||
