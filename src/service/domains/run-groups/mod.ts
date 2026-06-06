@@ -31,6 +31,10 @@ import { topologicalLayers } from "takosumi-graph";
 import { OpenTofuControllerError, requireNonEmptyString } from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentController } from "../deploy-control/mod.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
+import {
+  type ActivityRecorder,
+  NOOP_ACTIVITY_RECORDER,
+} from "../activity/mod.ts";
 
 /**
  * The graphJson recorded on a `space_update` RunGroup row: the topological
@@ -58,6 +62,8 @@ export interface RunGroupsServiceDependencies {
   readonly newId?: (prefix: string) => string;
   readonly now?: () => string;
   readonly actor?: string;
+  /** Space-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
+  readonly activity?: ActivityRecorder;
 }
 
 export class RunGroupsService {
@@ -66,6 +72,7 @@ export class RunGroupsService {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
   readonly #actor?: string;
+  readonly #activity: ActivityRecorder;
 
   constructor(dependencies: RunGroupsServiceDependencies) {
     this.#store = dependencies.store;
@@ -74,6 +81,7 @@ export class RunGroupsService {
       ((prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`);
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#actor = dependencies.actor;
+    this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
   }
 
   /**
@@ -156,6 +164,20 @@ export class RunGroupsService {
       createdAt: this.#now(),
     };
     await this.#store.putRunGroup(runGroup);
+    // Activity (§27 / §34): a space_update RunGroup was created. Member ids +
+    // run ids only.
+    await this.#activity.record({
+      spaceId,
+      ...(this.#actor ? { actorId: this.#actor } : {}),
+      action: "run_group.created",
+      targetType: "run_group",
+      targetId: runGroup.id,
+      metadata: {
+        type: runGroup.type,
+        memberInstallationIds: [...members],
+        runIds: Object.values(runs),
+      },
+    });
     return { runGroup, runs: memberRuns };
   }
 

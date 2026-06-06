@@ -30,6 +30,10 @@ import type {
 import { detectCycle, type GraphEdge } from "takosumi-graph";
 import { OpenTofuControllerError, requireNonEmptyString } from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
+import {
+  type ActivityRecorder,
+  NOOP_ACTIVITY_RECORDER,
+} from "../activity/mod.ts";
 
 /**
  * Create-dependency request: the public {@link Dependency} minus the
@@ -56,18 +60,22 @@ export interface DependenciesServiceDependencies {
   readonly store: OpenTofuDeploymentStore;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => string;
+  /** Space-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
+  readonly activity?: ActivityRecorder;
 }
 
 export class DependenciesService {
   readonly #store: OpenTofuDeploymentStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
+  readonly #activity: ActivityRecorder;
 
   constructor(dependencies: DependenciesServiceDependencies) {
     this.#store = dependencies.store;
     this.#newId = dependencies.newId ??
       ((prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`);
     this.#now = dependencies.now ?? (() => new Date().toISOString());
+    this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
   }
 
   /**
@@ -183,7 +191,22 @@ export class DependenciesService {
       visibility: request.visibility,
       createdAt: this.#now(),
     };
-    return await this.#store.putDependency(dependency);
+    const created = await this.#store.putDependency(dependency);
+    // Activity (§27 / §34): a Dependency edge was added. Edge ids + output
+    // mapping names only — no values.
+    await this.#activity.record({
+      spaceId: created.spaceId,
+      action: "dependency.created",
+      targetType: "dependency",
+      targetId: created.id,
+      metadata: {
+        producerInstallationId: created.producerInstallationId,
+        consumerInstallationId: created.consumerInstallationId,
+        mode: created.mode,
+        outputNames: Object.keys(created.outputs),
+      },
+    });
+    return created;
   }
 
   /**
@@ -206,7 +229,23 @@ export class DependenciesService {
   /** Deletes a Dependency edge. Returns whether a row was removed. */
   async deleteDependency(id: string): Promise<boolean> {
     requireNonEmptyString(id, "dependencyId");
-    return await this.#store.deleteDependency(id);
+    // Read the edge first so the audit event can carry the Space + endpoints.
+    const existing = await this.#store.getDependency(id);
+    const removed = await this.#store.deleteDependency(id);
+    if (removed && existing) {
+      // Activity (§27 / §34): a Dependency edge was removed.
+      await this.#activity.record({
+        spaceId: existing.spaceId,
+        action: "dependency.deleted",
+        targetType: "dependency",
+        targetId: existing.id,
+        metadata: {
+          producerInstallationId: existing.producerInstallationId,
+          consumerInstallationId: existing.consumerInstallationId,
+        },
+      });
+    }
+    return removed;
   }
 
   /** Reads a Dependency edge by id (used by routes for space-permission gating). */

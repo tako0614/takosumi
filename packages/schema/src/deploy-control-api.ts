@@ -243,11 +243,21 @@ export interface PlanRun {
    */
   readonly templateBinding?: PlanRunTemplateBinding;
   /**
+   * Set once the plan completes and the §25 layer-7 action policy evaluated the
+   * runner's `planResourceChanges`: `true` when any change is a delete or a
+   * replace (`actions` containing `"delete"`), which requires an explicit
+   * approval before apply. Independent of `templateBinding.requiresConfirmation`
+   * (the template destructive-confirmation gate, which additionally requires
+   * `confirmDestructive` at apply). Absent before the plan completes / for runs
+   * with no observed resource changes.
+   */
+  readonly requiresApproval?: boolean;
+  /**
    * Explicit approval recorded against a plan that was parked
-   * `waiting_approval` (a destroy plan, a template-flagged destructive change,
-   * or an Environment whose `requireApproval` is set). Set by the approve API;
-   * its presence is the gate the apply path checks before a guarded plan may be
-   * applied. Absent means the plan has not been approved.
+   * `waiting_approval` (a destroy plan, a delete/replace action-policy change, or
+   * a template-flagged destructive change). Set by the approve API; its presence
+   * clears the approval gate so a guarded plan may be applied. Absent means the
+   * plan has not been approved.
    */
   readonly approval?: RunApproval;
   /**

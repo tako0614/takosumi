@@ -5,6 +5,7 @@ export * from "./spaces.ts";
 export * from "./installations.ts";
 export * from "./capability-bindings.ts";
 export * from "./dependencies.ts";
+export * from "./activity.ts";
 export * from "./output-snapshots.ts";
 export * from "./deployments.ts";
 export * from "./install-link.ts";
