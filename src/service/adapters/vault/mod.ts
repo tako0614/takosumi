@@ -22,6 +22,13 @@ import type {
   CreateConnectionRequest,
 } from "takosumi-contract/deploy-control-api";
 import {
+  GIT_HTTPS_TOKEN_ENV,
+  GIT_SSH_PRIVATE_KEY_ENV,
+  type MintPhase,
+  type MintResponse,
+  type SourceGitConnectionKind,
+} from "takosumi-contract/sources";
+import {
   allowedEnvNamesForProvider,
   cloudFamilyForProvider,
   providerEnvRule,
@@ -116,6 +123,25 @@ export class ConnectionVaultError extends Error {
   }
 }
 
+/**
+ * A per-phase mint request (spec §8.3 / §8.4). The vault enforces the phase
+ * rules IN the vault:
+ *   - `source`  -> ONLY git-kind connections; returns env + files.
+ *   - `build`   -> ALWAYS empty; error if any connection / provider is asked for.
+ *   - `plan` / `apply` / `destroy` -> ONLY provider connections; git excluded.
+ */
+export interface MintRequest {
+  readonly spaceId: string;
+  readonly phase: MintPhase;
+  /** Provider short names / registry paths for the tofu phases. */
+  readonly providers?: readonly string[];
+  /**
+   * The git source Connection id to mint for the `source` phase. None for a
+   * public repo (the source phase then returns an empty bundle).
+   */
+  readonly sourceConnectionId?: string;
+}
+
 export interface ConnectionVault {
   register(input: RegisterConnectionInput): Promise<Connection>;
   test(connectionId: string): Promise<TestConnectionResult>;
@@ -123,9 +149,74 @@ export interface ConnectionVault {
   /**
    * Mints a {@link CredentialBundle} of env vars for the given providers within
    * a space. Phase 1: static pass-through of decrypted values for matching
-   * verified connections (falls back to pending with a flagged warning).
+   * verified connections (falls back to pending with a flagged warning). This is
+   * the backward-compatible provider-mint path; it is equivalent to
+   * `mintForPhase({ phase: "plan", providers })`.
    */
   mint(spaceId: string, providers: readonly string[]): Promise<CredentialBundle>;
+  /**
+   * Per-phase mint (spec §8.3 / §8.4). Enforces the phase rules in the vault and
+   * returns a {@link MintResponse} carrying env (+ files for the source phase).
+   * The result is wrapped so callers can attach it to a runner dispatch only.
+   */
+  mintForPhase(request: MintRequest): Promise<PhaseMintBundle>;
+}
+
+/**
+ * Opaque carrier for a per-phase mint result (env + files). Like
+ * {@link CredentialBundle}, every serialization seam collapses to a marker so the
+ * values cannot leak into logs.
+ */
+export class PhaseMintBundle {
+  readonly #env: Readonly<Record<string, string>>;
+  readonly #files: readonly MintedFileInternal[];
+  readonly warnings: readonly string[];
+
+  constructor(
+    response: MintResponse,
+    warnings: readonly string[] = [],
+  ) {
+    this.#env = Object.freeze({ ...response.env });
+    this.#files = Object.freeze(
+      (response.files ?? []).map((f) => Object.freeze({ ...f })),
+    );
+    this.warnings = Object.freeze([...warnings]);
+  }
+
+  /** Decrypted env vars. Dispatch-path only — do not log the result. */
+  get env(): Readonly<Record<string, string>> {
+    return this.#env;
+  }
+
+  /** Materialized credential files (source phase). Dispatch-path only. */
+  get files(): readonly MintedFileInternal[] {
+    return this.#files;
+  }
+
+  /** Plain {@link MintResponse} for the dispatch payload. Do not log. */
+  toMintResponse(): MintResponse {
+    return this.#files.length > 0
+      ? { env: this.#env, files: this.#files.map((f) => ({ ...f })) }
+      : { env: this.#env };
+  }
+
+  toJSON(): string {
+    return CREDENTIAL_BUNDLE_MARKER;
+  }
+
+  toString(): string {
+    return CREDENTIAL_BUNDLE_MARKER;
+  }
+
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    return CREDENTIAL_BUNDLE_MARKER;
+  }
+}
+
+interface MintedFileInternal {
+  readonly path: string;
+  readonly mode: number;
+  readonly content: string;
 }
 
 /** Injected fetch seam so `test()` is unit-testable without real network. */
@@ -160,7 +251,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
 
   async register(input: RegisterConnectionInput): Promise<Connection> {
     requireNonEmpty(input.spaceId, "spaceId");
-    requireNonEmpty(input.provider, "provider");
     if (input.authMethod !== "static_secret") {
       // Phase 1 implements static_secret only; other methods are reserved.
       throw new ConnectionVaultError(
@@ -168,6 +258,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `authMethod ${String(input.authMethod)} is not implemented (Phase 1 supports static_secret)`,
       );
     }
+    if (isSourceGitKind(input.kind)) {
+      return await this.#registerGitConnection(input, input.kind);
+    }
+    requireNonEmpty(input.provider, "provider");
     const rule = providerEnvRule(input.provider);
     if (!rule) {
       throw new ConnectionVaultError(
@@ -238,12 +332,103 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       id,
       spaceId: input.spaceId,
       provider: input.provider,
+      kind: "provider",
       owner: input.owner ?? "customer",
       authMethod: "static_secret",
       ...(input.displayName ? { displayName: input.displayName } : {}),
       status: "pending",
       ...(normalizeScope(input.scope) ? { scope: normalizeScope(input.scope) } : {}),
       envNames: [...envNames].sort(),
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    await this.#store.putConnection(connection);
+    return connection;
+  }
+
+  /**
+   * Registers a git source credential (`source_git_https_token` /
+   * `source_git_ssh_key`). The value shape and required scope are enforced here:
+   *   - https token: `values.GIT_HTTPS_TOKEN` (string, non-empty). Optional
+   *     `scope.username`.
+   *   - ssh key: `values.GIT_SSH_PRIVATE_KEY` (string, non-empty). REQUIRES
+   *     `scope.knownHostsEntry` so the runner can pin the host key
+   *     (StrictHostKeyChecking=yes always; =no is forbidden).
+   *
+   * Git connections are sealed under the `local-adapters` partition (no provider
+   * cloud family) and recorded with `kind` so the mint phase rules can exclude
+   * them from the tofu phases.
+   */
+  async #registerGitConnection(
+    input: RegisterConnectionInput,
+    kind: SourceGitConnectionKind,
+  ): Promise<Connection> {
+    const values = input.values;
+    if (
+      values === null || typeof values !== "object" || Array.isArray(values)
+    ) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        "values must be an object of { envName: value }",
+      );
+    }
+    const expectedEnv = kind === "source_git_https_token"
+      ? GIT_HTTPS_TOKEN_ENV
+      : GIT_SSH_PRIVATE_KEY_ENV;
+    const envNames = Object.keys(values);
+    if (envNames.length !== 1 || envNames[0] !== expectedEnv) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        `${kind} requires exactly one value: ${expectedEnv}`,
+      );
+    }
+    if (typeof values[expectedEnv] !== "string" || values[expectedEnv].length === 0) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        `value for ${expectedEnv} must be a non-empty string`,
+      );
+    }
+    const scope = normalizeScope(input.scope);
+    if (kind === "source_git_ssh_key") {
+      if (!scope?.knownHostsEntry || scope.knownHostsEntry.trim().length === 0) {
+        throw new ConnectionVaultError(
+          "invalid_argument",
+          "source_git_ssh_key requires scope.knownHostsEntry (the known_hosts line for the host)",
+        );
+      }
+    }
+
+    const id = this.#newId();
+    const cloudPartition = "local-adapters" as CloudPartition;
+    const sealed = await this.#crypto.seal(
+      JSON.stringify(values),
+      cloudPartition,
+    );
+    const blob: StoredSecretBlob = {
+      connectionId: id,
+      ciphertext: bytesToBase64(sealed),
+      iv: bytesToBase64(sealed.slice(0, 12)),
+      keyVersion: `${SECRET_BLOB_KEY_SCHEME}/${cloudPartition}`,
+      aad: {
+        cloudPartition,
+        spaceId: input.spaceId,
+        provider: kind,
+      },
+    };
+    await this.#store.putSecretBlob(blob);
+
+    const nowIso = this.#now().toISOString();
+    const connection: Connection = {
+      id,
+      spaceId: input.spaceId,
+      provider: kind,
+      kind,
+      owner: input.owner ?? "customer",
+      authMethod: "static_secret",
+      ...(input.displayName ? { displayName: input.displayName } : {}),
+      status: "pending",
+      ...(scope ? { scope } : {}),
+      envNames: [expectedEnv],
       createdAt: nowIso,
       updatedAt: nowIso,
     };
@@ -330,6 +515,173 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     return new CredentialBundle(env, warnings);
   }
 
+  /**
+   * Per-phase mint (spec §8.3 / §8.4). Enforces the phase rules IN the vault:
+   *
+   *   1. `source`  + provider asked -> rejected (source phase is git-only).
+   *   2. `source`  + git connection -> env + files (askpass / ssh key file).
+   *   3. `source`  + no connection (public repo) -> empty bundle.
+   *   4. `build`   + anything asked -> rejected (build NEVER gets credentials).
+   *   5. `build`   + nothing asked -> empty bundle.
+   *   6. `plan`    + providers      -> provider env only (git excluded).
+   *   7. `apply`   + providers      -> provider env only (git excluded).
+   *   8. `destroy` + providers      -> provider env only (git excluded).
+   *
+   * A git connection is NEVER minted for a tofu phase, and a provider connection
+   * is NEVER minted for the source phase.
+   */
+  async mintForPhase(request: MintRequest): Promise<PhaseMintBundle> {
+    requireNonEmpty(request.spaceId, "spaceId");
+    const phase = request.phase;
+
+    if (phase === "build") {
+      // Rule 4/5: the build phase gets NO credentials, ever.
+      if (
+        (request.providers && request.providers.length > 0) ||
+        request.sourceConnectionId
+      ) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          "build phase must not request any credentials",
+        );
+      }
+      return new PhaseMintBundle({ env: {} });
+    }
+
+    if (phase === "source") {
+      // Rule 1: the source phase is git-only; providers are forbidden.
+      if (request.providers && request.providers.length > 0) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          "source phase must not request provider credentials",
+        );
+      }
+      // Rule 3: public repo (no connection) -> empty.
+      if (!request.sourceConnectionId) {
+        return new PhaseMintBundle({ env: {} });
+      }
+      // Rule 2: git connection -> env + files.
+      return await this.#mintSourceGit(
+        request.spaceId,
+        request.sourceConnectionId,
+      );
+    }
+
+    // Rules 6/7/8: plan / apply / destroy -> provider-only.
+    const providers = request.providers ?? [];
+    if (request.sourceConnectionId) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `${phase} phase must not request a git source connection`,
+      );
+    }
+    const bundle = await this.mint(request.spaceId, providers);
+    return new PhaseMintBundle({ env: bundle.env }, bundle.warnings);
+  }
+
+  /**
+   * Mints a git source credential for the source phase. Verifies the connection
+   * is a git kind in the right space, opens the sealed value, and returns the
+   * runner-facing env + files: an askpass script (HTTPS) or the ssh key file plus
+   * GIT_SSH_COMMAND with the pinned known_hosts (SSH; StrictHostKeyChecking=yes).
+   */
+  async #mintSourceGit(
+    spaceId: string,
+    connectionId: string,
+  ): Promise<PhaseMintBundle> {
+    const connection = await this.#requireConnection(connectionId);
+    if (connection.spaceId !== spaceId) {
+      throw new ConnectionVaultError(
+        "not_found",
+        `connection ${connectionId} not found in space ${spaceId}`,
+      );
+    }
+    if (connection.status === "revoked") {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connectionId} is revoked`,
+      );
+    }
+    if (!isSourceGitKind(connection.kind)) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connectionId} is not a git source connection`,
+      );
+    }
+    const values = await this.#openValues(connection);
+    const warnings = connection.status === "pending"
+      ? [`connection ${connection.id} is pending (not verified)`]
+      : [];
+
+    if (connection.kind === "source_git_https_token") {
+      const token = values[GIT_HTTPS_TOKEN_ENV];
+      if (!token) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `connection ${connectionId} has no ${GIT_HTTPS_TOKEN_ENV}`,
+        );
+      }
+      const username = connection.scope?.username ?? "x-access-token";
+      const askpass = gitAskpassScript(username, token);
+      return new PhaseMintBundle({
+        env: {
+          GIT_ASKPASS: "/work/.git-credentials/askpass.sh",
+          GIT_TERMINAL_PROMPT: "0",
+        },
+        files: [
+          {
+            path: "/work/.git-credentials/askpass.sh",
+            mode: 0o700,
+            content: askpass,
+          },
+        ],
+      }, warnings);
+    }
+
+    // source_git_ssh_key
+    const key = values[GIT_SSH_PRIVATE_KEY_ENV];
+    if (!key) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connectionId} has no ${GIT_SSH_PRIVATE_KEY_ENV}`,
+      );
+    }
+    const knownHosts = connection.scope?.knownHostsEntry;
+    if (!knownHosts) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connectionId} is missing its known_hosts entry`,
+      );
+    }
+    const keyContent = key.endsWith("\n") ? key : `${key}\n`;
+    const knownHostsContent = knownHosts.endsWith("\n")
+      ? knownHosts
+      : `${knownHosts}\n`;
+    return new PhaseMintBundle({
+      env: {
+        // StrictHostKeyChecking=yes always; the pinned known_hosts is the only
+        // trusted source. StrictHostKeyChecking=no is forbidden by the spec.
+        GIT_SSH_COMMAND:
+          "ssh -i /work/.git-credentials/id_source " +
+          "-o IdentitiesOnly=yes " +
+          "-o StrictHostKeyChecking=yes " +
+          "-o UserKnownHostsFile=/work/.git-credentials/known_hosts",
+      },
+      files: [
+        {
+          path: "/work/.git-credentials/id_source",
+          mode: 0o600,
+          content: keyContent,
+        },
+        {
+          path: "/work/.git-credentials/known_hosts",
+          mode: 0o600,
+          content: knownHostsContent,
+        },
+      ],
+    }, warnings);
+  }
+
   async #requireConnection(id: string): Promise<Connection> {
     const connection = await this.#store.getConnection(id);
     if (!connection) {
@@ -397,7 +749,10 @@ function selectConnectionForProvider(
   provider: string,
 ): Connection | undefined {
   const matches = connections.filter(
-    (c) => c.status !== "revoked" && providerMatches(c.provider, provider),
+    (c) =>
+      c.status !== "revoked" &&
+      !isSourceGitKind(c.kind) &&
+      providerMatches(c.provider, provider),
   );
   // Prefer a verified connection over a pending one; newest first within a tier.
   const verified = matches
@@ -430,14 +785,34 @@ function normalizeScope(
   scope: ConnectionScope | undefined,
 ): ConnectionScope | undefined {
   if (!scope) return undefined;
-  const out: { accountId?: string; zoneId?: string } = {};
+  const out: {
+    accountId?: string;
+    zoneId?: string;
+    username?: string;
+    knownHostsEntry?: string;
+  } = {};
   if (typeof scope.accountId === "string" && scope.accountId.length > 0) {
     out.accountId = scope.accountId;
   }
   if (typeof scope.zoneId === "string" && scope.zoneId.length > 0) {
     out.zoneId = scope.zoneId;
   }
+  if (typeof scope.username === "string" && scope.username.length > 0) {
+    out.username = scope.username;
+  }
+  if (
+    typeof scope.knownHostsEntry === "string" &&
+    scope.knownHostsEntry.length > 0
+  ) {
+    out.knownHostsEntry = scope.knownHostsEntry;
+  }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function isSourceGitKind(
+  kind: Connection["kind"] | undefined,
+): kind is SourceGitConnectionKind {
+  return kind === "source_git_https_token" || kind === "source_git_ssh_key";
 }
 
 function requireNonEmpty(value: unknown, field: string): asserts value is string {
@@ -451,6 +826,30 @@ function requireNonEmpty(value: unknown, field: string): asserts value is string
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Builds a GIT_ASKPASS script that echoes the username on the first prompt and
+ * the token on the password prompt. Git invokes the script with the prompt text
+ * as `$1`; a prompt containing "Username" yields the user, anything else (the
+ * password prompt) yields the token. Single quotes in the values are escaped so
+ * the script cannot break out of the quoting.
+ */
+function gitAskpassScript(username: string, token: string): string {
+  const u = shellSingleQuote(username);
+  const t = shellSingleQuote(token);
+  return [
+    "#!/bin/sh",
+    `case "$1" in`,
+    `  *sername*) printf '%s' ${u} ;;`,
+    `  *) printf '%s' ${t} ;;`,
+    "esac",
+    "",
+  ].join("\n");
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 function defaultConnectionId(): string {

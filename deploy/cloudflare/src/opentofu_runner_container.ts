@@ -3,6 +3,7 @@ import type { CloudflareWorkerEnv } from "./bindings.ts";
 const DEFAULT_PLAN_ARTIFACT_BUCKET = "takos-artifacts";
 const PLAN_ARTIFACT_CONTENT_TYPE = "application/vnd.opentofu.plan";
 const STATE_ARTIFACT_CONTENT_TYPE = "application/json";
+const SOURCE_ARCHIVE_CONTENT_TYPE = "application/zstd";
 
 export interface ContainerRequestFetcher {
   containerFetch(request: Request, port?: number): Promise<Response>;
@@ -115,6 +116,11 @@ export class TakosumiOpenTofuRunner extends OpenTofuRunnerContainerBase<Cloudfla
     const runId = decodeURIComponent(match[1]!);
     const bodyText = await request.text();
     const envelope = parseRunEnvelope(bodyText);
+    // Source-sync runs (LANE M1) never touch OpenTofu state; they run, leave the
+    // archive on the container, and the DO pulls + persists it to R2_SOURCE.
+    if (isSourceSyncEnvelope(envelope)) {
+      return await this.#fetchWithSourceArchive(runId, request, bodyText);
+    }
     const stateKeys = await stateArtifactKeys(envelope.request);
     if (envelope.action === "apply" || envelope.action === "destroy") {
       await this.#restorePlanArtifact(runId, envelope.request, url);
@@ -140,6 +146,69 @@ export class TakosumiOpenTofuRunner extends OpenTofuRunnerContainerBase<Cloudfla
       return runnerResponse;
     }
     return await this.#persistPlanArtifact(runId, runnerResponse, url);
+  }
+
+  // Source-sync relay: dispatch the run to the container, then on success pull
+  // the deterministic source archive and persist it to R2_SOURCE under the
+  // archiveObjectKey the runner echoes back. Mirrors the tfplan pull-then-persist
+  // protocol but writes to the dedicated source bucket and never touches state.
+  async #fetchWithSourceArchive(
+    runId: string,
+    request: Request,
+    bodyText: string,
+  ): Promise<Response> {
+    const url = new URL(request.url);
+    const runnerResponse = await this.#containerFetch(
+      new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: bodyText,
+      }),
+    );
+    if (!runnerResponse.ok) return runnerResponse;
+    const payload = await readJsonObject(runnerResponse);
+    const archive = recordField(payload, "sourceArchive");
+    if (!archive || stringField(archive, "kind") !== "runner-local") {
+      return jsonResponse(payload, runnerResponse.status);
+    }
+    const archiveObjectKey = requiredStringField(archive, "archiveObjectKey");
+    assertSafeSourceArchiveKey(archiveObjectKey);
+    const bucket = this.env.R2_SOURCE;
+    if (!bucket) {
+      throw new Error("R2_SOURCE binding is not configured for source archives");
+    }
+    const archiveResponse = await this.#containerFetch(
+      new Request(sourceArchiveUrl(url, runId), { method: "GET" }),
+    );
+    if (!archiveResponse.ok) {
+      throw new Error(
+        `container source archive fetch failed: ${archiveResponse.status}`,
+      );
+    }
+    const bytes = new Uint8Array(await archiveResponse.arrayBuffer());
+    const digest = await digestBytes(bytes);
+    const expectedDigest = stringField(archive, "digest");
+    if (expectedDigest && expectedDigest !== digest) {
+      throw new Error(`source archive digest mismatch: ${digest}`);
+    }
+    const stored = await bucket.put(archiveObjectKey, bytes, {
+      httpMetadata: { contentType: SOURCE_ARCHIVE_CONTENT_TYPE },
+      customMetadata: {
+        "takosumi-run-id": runId,
+        "takosumi-digest": digest,
+      },
+    });
+    return jsonResponse({
+      ...payload,
+      sourceArchive: {
+        kind: "object-storage",
+        archiveObjectKey,
+        digest,
+        contentType: SOURCE_ARCHIVE_CONTENT_TYPE,
+        sizeBytes: stored.size,
+        createdAt: Date.now(),
+      },
+    }, runnerResponse.status);
   }
 
   async #persistPlanArtifact(
@@ -289,6 +358,38 @@ function stateArtifactUrl(baseUrl: URL, runId: string): string {
   url.pathname = `/runs/${encodeURIComponent(runId)}/artifacts/tfstate`;
   url.search = "";
   return url.toString();
+}
+
+function sourceArchiveUrl(baseUrl: URL, runId: string): string {
+  const url = new URL(baseUrl);
+  url.pathname = `/runs/${encodeURIComponent(runId)}/artifacts/source-archive`;
+  url.search = "";
+  return url.toString();
+}
+
+function isSourceSyncEnvelope(envelope: {
+  readonly action: string | undefined;
+  readonly request: unknown;
+}): boolean {
+  if (envelope.action === "source_sync") return true;
+  const request = envelope.request;
+  return isRecord(request) && stringField(request, "action") === "source_sync";
+}
+
+// Re-assert the R2_SOURCE archive key (agreed layout
+// spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst) is
+// a safe, traversal-free relative key before writing to the bucket.
+function assertSafeSourceArchiveKey(key: string): void {
+  if (
+    key.length === 0 ||
+    key.startsWith("/") ||
+    key.includes("..") ||
+    key.includes("\0") ||
+    key.includes("\\") ||
+    !key.startsWith("spaces/")
+  ) {
+    throw new Error(`unsafe source archive object key: ${key}`);
+  }
 }
 
 function planArtifactKey(runId: string): string {

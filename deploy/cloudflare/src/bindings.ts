@@ -1,6 +1,17 @@
 export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOS_D1: D1Database;
   readonly TAKOS_ARTIFACTS: R2Bucket;
+  /**
+   * Source-archive bucket (`takosumi-source`). The OpenTofu runner DO persists
+   * the deterministic source archive produced by a `source_sync` run here, under
+   * the agreed key layout
+   * `spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst`.
+   * Separate from `TAKOS_ARTIFACTS` (plan/state) so source bytes have their own
+   * lifecycle. The binding is wired by the service lane; this type is additive.
+   */
+  readonly R2_SOURCE?: R2Bucket;
+  /** OpenTofu state bucket (`takosumi-state`). Used from M2. */
+  readonly R2_STATE?: R2Bucket;
   readonly TAKOS_QUEUE?: Queue<unknown>;
   readonly TAKOS_OPENTOFU_RUN_QUEUE?: Queue<OpenTofuRunQueueMessage>;
   readonly TAKOS_COORDINATION: DurableObjectNamespace;
@@ -21,7 +32,11 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_ENABLED_RUNNER_PROFILES?: string;
 }
 
-export type OpenTofuRunAction = "plan" | "apply" | "destroy";
+export type OpenTofuRunAction =
+  | "plan"
+  | "apply"
+  | "destroy"
+  | "source_sync";
 
 /**
  * Run-dispatch message on `TAKOS_OPENTOFU_RUN_QUEUE`. The producer (the

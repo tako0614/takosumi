@@ -629,6 +629,17 @@ export type ConnectionStatus = "pending" | "verified" | "revoked";
 export interface ConnectionScope {
   readonly accountId?: string;
   readonly zoneId?: string;
+  /**
+   * Git HTTPS username (optional) for a `source_git_https_token` connection.
+   * Non-secret; the token itself lives in the sealed secret blob.
+   */
+  readonly username?: string;
+  /**
+   * Full `known_hosts` line(s) for the SSH host of a `source_git_ssh_key`
+   * connection. REQUIRED for the ssh kind so the runner can pin the host key with
+   * `StrictHostKeyChecking=yes` (StrictHostKeyChecking=no is forbidden).
+   */
+  readonly knownHostsEntry?: string;
 }
 
 /**
@@ -642,6 +653,13 @@ export interface Connection {
   readonly spaceId: string;
   /** `cloudflare` short name or a full registry path. */
   readonly provider: string;
+  /**
+   * Connection kind. Absent (or `"provider"`) for a provider credential
+   * connection. Git source credential connections set this to a
+   * `source_git_*` kind; those are minted ONLY for the source phase and NEVER
+   * for plan/apply/destroy.
+   */
+  readonly kind?: ConnectionKind;
   readonly owner: ConnectionOwner;
   readonly authMethod: ConnectionAuthMethod;
   readonly displayName?: string;
@@ -653,16 +671,33 @@ export interface Connection {
   readonly verifiedAt?: string;
 }
 
+/**
+ * Connection kind discriminator. `"provider"` is a cloud provider credential
+ * (the default when `kind` is absent). The `source_git_*` kinds are git source
+ * credentials with phase-restricted minting.
+ */
+export type ConnectionKind =
+  | "provider"
+  | "source_git_https_token"
+  | "source_git_ssh_key";
+
 export interface CreateConnectionRequest {
   readonly spaceId: string;
   readonly provider: string;
+  /**
+   * Connection kind. Omit (or `"provider"`) for a provider credential. Set a
+   * `source_git_*` kind to register a git source credential (the `provider`
+   * field is then ignored / may be the kind label).
+   */
+  readonly kind?: ConnectionKind;
   readonly authMethod: "static_secret";
   readonly displayName?: string;
   readonly owner?: ConnectionOwner;
   readonly scope?: ConnectionScope;
   /**
    * Write-only credential values keyed by env name. Validated against the
-   * provider's allowed env names and required groups. Never echoed back.
+   * provider's allowed env names and required groups (for provider kinds), or
+   * the git-kind value shape. Never echoed back.
    */
   readonly values: Readonly<Record<string, string>>;
 }

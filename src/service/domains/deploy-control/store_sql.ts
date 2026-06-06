@@ -19,10 +19,15 @@ import type {
   SqlQueryResult,
 } from "../../adapters/storage/sql.ts";
 import type {
+  SourceSnapshot,
+  SourceSyncRun,
+} from "takosumi-contract/sources";
+import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
   StoredSecretBlob,
+  StoredSource,
 } from "./store.ts";
 import { InstallationPatchGuardConflict } from "./store.ts";
 
@@ -401,6 +406,139 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       [connectionId],
     );
     return result.rowCount > 0;
+  }
+
+  async putSource(source: StoredSource): Promise<StoredSource> {
+    await this.#query(
+      "insert into takosumi_sources " +
+        "(id, space_id, status, source_json, created_at, updated_at) " +
+        "values ($1, $2, $3, $4::jsonb, $5, $6) " +
+        "on conflict (id) do update set " +
+        "space_id = excluded.space_id, " +
+        "status = excluded.status, " +
+        "source_json = excluded.source_json, " +
+        "created_at = excluded.created_at, " +
+        "updated_at = excluded.updated_at",
+      [
+        source.id,
+        source.spaceId,
+        source.status,
+        JSON.stringify(source),
+        source.createdAt,
+        source.updatedAt,
+      ],
+    );
+    return source;
+  }
+
+  async getSource(id: string): Promise<StoredSource | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select source_json as json from takosumi_sources where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as StoredSource | undefined;
+  }
+
+  async listSources(spaceId?: string): Promise<readonly StoredSource[]> {
+    const result = spaceId === undefined
+      ? await this.#query<JsonRow>(
+        "select source_json as json from takosumi_sources order by created_at asc, id asc",
+      )
+      : await this.#query<JsonRow>(
+        "select source_json as json from takosumi_sources where space_id = $1 order by created_at asc, id asc",
+        [spaceId],
+      );
+    return result.rows.map((row) => parseRow(row) as StoredSource);
+  }
+
+  async deleteSource(id: string): Promise<boolean> {
+    const result = await this.#query(
+      "delete from takosumi_sources where id = $1",
+      [id],
+    );
+    return result.rowCount > 0;
+  }
+
+  async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
+    await this.#query(
+      "insert into takosumi_source_snapshots " +
+        "(id, source_id, snapshot_json, fetched_at) " +
+        "values ($1, $2, $3::jsonb, $4) " +
+        "on conflict (id) do update set " +
+        "source_id = excluded.source_id, " +
+        "snapshot_json = excluded.snapshot_json, " +
+        "fetched_at = excluded.fetched_at",
+      [
+        snapshot.id,
+        snapshot.sourceId,
+        JSON.stringify(snapshot),
+        snapshot.fetchedAt,
+      ],
+    );
+    return snapshot;
+  }
+
+  async getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select snapshot_json as json from takosumi_source_snapshots where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as SourceSnapshot | undefined;
+  }
+
+  async listSourceSnapshots(
+    sourceId: string,
+  ): Promise<readonly SourceSnapshot[]> {
+    const result = await this.#query<JsonRow>(
+      "select snapshot_json as json from takosumi_source_snapshots " +
+        "where source_id = $1 order by fetched_at asc, id asc",
+      [sourceId],
+    );
+    return result.rows.map((row) => parseRow(row) as SourceSnapshot);
+  }
+
+  async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
+    await this.#query(
+      "insert into takosumi_source_sync_runs " +
+        "(id, source_id, space_id, status, run_json, created_at, updated_at) " +
+        "values ($1, $2, $3, $4, $5::jsonb, $6, $7) " +
+        "on conflict (id) do update set " +
+        "source_id = excluded.source_id, " +
+        "space_id = excluded.space_id, " +
+        "status = excluded.status, " +
+        "run_json = excluded.run_json, " +
+        "created_at = excluded.created_at, " +
+        "updated_at = excluded.updated_at",
+      [
+        run.id,
+        run.sourceId,
+        run.spaceId,
+        run.status,
+        JSON.stringify(run),
+        run.createdAt,
+        run.updatedAt,
+      ],
+    );
+    return run;
+  }
+
+  async getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select run_json as json from takosumi_source_sync_runs where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as SourceSyncRun | undefined;
+  }
+
+  async listSourceSyncRuns(
+    sourceId: string,
+  ): Promise<readonly SourceSyncRun[]> {
+    const result = await this.#query<JsonRow>(
+      "select run_json as json from takosumi_source_sync_runs " +
+        "where source_id = $1 order by created_at asc, id asc",
+      [sourceId],
+    );
+    return result.rows.map((row) => parseRow(row) as SourceSyncRun);
   }
 
   #query<Row extends Record<string, unknown> = Record<string, unknown>>(

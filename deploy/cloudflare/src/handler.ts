@@ -39,8 +39,11 @@ import {
   type OpenTofuPlanJob,
   type OpenTofuPlanResult,
   type OpenTofuRunner,
+  type OpenTofuSourceSyncJob,
+  type OpenTofuSourceSyncResult,
   resolveEnabledRunnerProfiles,
 } from "../../../src/service/domains/deploy-control/mod.ts";
+import type { EnqueueSourceSync } from "../../../src/service/domains/sources/mod.ts";
 import type { RunnerProfile } from "takosumi-contract/deploy-control-api";
 import type {
   CloudflareWorkerEnv,
@@ -230,7 +233,7 @@ async function dispatchOpenTofuRun(
 
 async function dispatchToController(
   env: CloudflareWorkerEnv,
-  action: "plan" | "apply",
+  action: "plan" | "apply" | "source_sync",
   runId: string,
   spaceId: string,
 ): Promise<void> {
@@ -389,6 +392,7 @@ async function createWorkerServiceApp(
     storage,
   });
   const enqueueRun = openTofuRunEnqueuer(env);
+  const enqueueSourceSync = openTofuSourceSyncEnqueuer(env);
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -405,6 +409,7 @@ async function createWorkerServiceApp(
     // same worker drives execution. Without the binding, the controller's
     // default inline dispatcher preserves synchronous create-executes-run.
     ...(enqueueRun ? { enqueueRun } : {}),
+    ...(enqueueSourceSync ? { enqueueSourceSync } : {}),
     ...(options.runnerProfiles
       ? { runnerProfiles: options.runnerProfiles }
       : {}),
@@ -434,6 +439,28 @@ function openTofuRunEnqueuer(
 }
 
 /**
+ * Source-sync producer (Core Specification §6). Enqueues a `source_sync`
+ * dispatch onto the same run queue; the consumer loads the SourceSyncRun, mints
+ * source-phase (git-only) credentials, and drives the runner DO. Returns
+ * undefined when the queue is not bound so the run stays queued.
+ */
+function openTofuSourceSyncEnqueuer(
+  env: CloudflareWorkerEnv,
+): EnqueueSourceSync | undefined {
+  const queue = env.TAKOS_OPENTOFU_RUN_QUEUE;
+  if (!queue) return undefined;
+  return async (dispatch) => {
+    await queue.send({
+      kind: "takosumi.opentofu-run@v1",
+      action: "source_sync",
+      runId: dispatch.runId,
+      spaceId: dispatch.spaceId,
+      requestedAt: new Date().toISOString(),
+    });
+  };
+}
+
+/**
  * Resolves the queued run's `action` to the controller's plan/apply consumer
  * channel and marks it failed when not already terminal (DLQ backstop).
  */
@@ -446,6 +473,9 @@ async function markRunFailedIfNotTerminal(
   run: OpenTofuRunQueueMessage,
   reason: string,
 ): Promise<void> {
+  // source_sync runs own their own terminal recording in the source consumer;
+  // the DLQ backstop only covers plan/apply runs.
+  if (run.action === "source_sync") return;
   const action = run.action === "plan" ? "plan" : "apply";
   await controller.markRunFailed(action, run.runId, reason);
 }
@@ -476,7 +506,10 @@ function parseOpenTofuRunQueueMessage(
   const record = value as Record<string, unknown>;
   if (record.kind !== "takosumi.opentofu-run@v1") return undefined;
   const action = record.action;
-  if (action !== "plan" && action !== "apply" && action !== "destroy") {
+  if (
+    action !== "plan" && action !== "apply" && action !== "destroy" &&
+    action !== "source_sync"
+  ) {
     throw new Error("OpenTofu run queue message action is invalid");
   }
   const runId = nonEmptyString(record.runId);
@@ -568,6 +601,42 @@ class CloudflareContainerOpenTofuRunner implements OpenTofuRunner {
       job,
     );
     return { diagnostics: diagnosticsFromContainerResult(result) };
+  }
+
+  async sourceSync(
+    job: OpenTofuSourceSyncJob,
+  ): Promise<OpenTofuSourceSyncResult> {
+    // The runner resolves the ref, fetches a shallow checkout, builds the
+    // deterministic archive, and PUTs its bytes to the source-archive route on
+    // the DO (which persists them to R2_SOURCE under archiveObjectKey). It then
+    // returns only the resolved commit + archive metadata. The request carries
+    // the source-phase mint result (git env + files); never logged.
+    const result = await this.#runContainer("source_sync", job.runId, {
+      action: "source_sync",
+      runId: job.runId,
+      source: job.source,
+      archiveObjectKey: job.archiveObjectKey,
+      ...(job.credentials ? { credentials: job.credentials } : {}),
+    });
+    // The DO persists the archive to R2_SOURCE and rewrites `sourceArchive` to
+    // the object-storage form ({ digest, sizeBytes }); `resolvedCommit` stays at
+    // the top level. Read both top-level and `sourceArchive` so either shape is
+    // accepted.
+    const archive = recordFromRecord(result, "sourceArchive");
+    const resolvedCommit = stringFromRecord(result, "resolvedCommit");
+    const archiveDigest = stringFromRecord(result, "archiveDigest") ??
+      (archive ? stringFromRecord(archive, "digest") : undefined);
+    const archiveSizeBytes = typeof result.archiveSizeBytes === "number"
+      ? result.archiveSizeBytes
+      : (archive && typeof archive.sizeBytes === "number"
+        ? archive.sizeBytes
+        : undefined);
+    if (!resolvedCommit || !archiveDigest || archiveSizeBytes === undefined) {
+      throw new Error(
+        `OpenTofu runner source_sync ${job.runId} returned an incomplete result`,
+      );
+    }
+    return { resolvedCommit, archiveDigest, archiveSizeBytes };
   }
 
   async #runContainer(

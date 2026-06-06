@@ -1,4 +1,5 @@
 import {
+  chmod,
   cp,
   mkdir,
   readFile,
@@ -114,6 +115,9 @@ const BASE_COMMAND_ENV_NAMES = [
 // Well-known tofu input the runner sets when a build phase produced an artifact.
 // A generated root module may wire `var.artifact_path` to consume it.
 const ARTIFACT_PATH_TF_VAR = "TF_VAR_artifact_path";
+// Default cap for the produced source archive when the runner profile does not
+// pin `resourceLimits.maxSourceArchiveBytes`. Source repos are small modules.
+const DEFAULT_SOURCE_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024;
 async function handleRunnerRequest(request: Request): Promise<Response> {
   {
     const url = new URL(request.url);
@@ -129,6 +133,14 @@ async function handleRunnerRequest(request: Request): Promise<Response> {
     const stateArtifactMatch = /^\/runs\/([^/]+)\/artifacts\/tfstate$/.exec(
       url.pathname,
     );
+    const sourceArchiveArtifactMatch =
+      /^\/runs\/([^/]+)\/artifacts\/source-archive$/.exec(url.pathname);
+    if (sourceArchiveArtifactMatch) {
+      return await handleSourceArchiveArtifactRequest(
+        decodeURIComponent(sourceArchiveArtifactMatch[1]!),
+        request,
+      );
+    }
     if (planJsonArtifactMatch) {
       return await handlePlanJsonArtifactRequest(
         decodeURIComponent(planJsonArtifactMatch[1]!),
@@ -158,6 +170,33 @@ async function handleRunnerRequest(request: Request): Promise<Response> {
     }
 
     const body = (await readJsonObject(request)) as RunRequest;
+    const runId = decodeURIComponent(match[1]);
+
+    // Source-sync (LANE M1) is a distinct job carried on the `request` field as
+    // `{ action: "source_sync", source, credentials?, archiveObjectKey }`. It
+    // resolves a commit, builds a deterministic archive of source.path, PUTs the
+    // bytes to the DO source-archive route, and returns resolution metadata. It
+    // never runs tofu and never restores/persists OpenTofu state.
+    if (isSourceSyncRequest(body.request)) {
+      try {
+        const result = await runSourceSync(runId, body.request);
+        return Response.json(result, { status: 200 });
+      } catch (error) {
+        return Response.json(
+          {
+            runId,
+            action: "source_sync",
+            status: "failed",
+            exitCode: 1,
+            stderr: redactCredentialOutput(
+              error instanceof Error ? error.message : String(error),
+            ),
+          },
+          { status: 500 },
+        );
+      }
+    }
+
     const action = parseAction(body.action);
     if (!action) {
       return Response.json(
@@ -166,7 +205,6 @@ async function handleRunnerRequest(request: Request): Promise<Response> {
       );
     }
 
-    const runId = decodeURIComponent(match[1]);
     try {
       const result = action === "plan"
         ? await runPlan(runId, body.request)
@@ -682,6 +720,569 @@ async function handlePlanArtifactRequest(
     return Response.json({
       runId,
       artifact: "tfplan",
+      digest: await digestBytes(bytes),
+      sizeBytes: bytes.byteLength,
+    });
+  }
+  return Response.json(
+    { error: "method not allowed" },
+    { status: 405, headers: { allow: "GET, PUT" } },
+  );
+}
+
+// ===========================================================================
+// SOURCE SYNC (LANE M1)
+//
+// A source_sync job resolves a Git ref to a commit, makes a deterministic
+// archive of `source.path`, uploads it to the DO (which persists to R2_SOURCE),
+// and returns { resolvedCommit, archiveDigest, archiveSizeBytes }. Git
+// credentials, when present, are minted by the Vault for the `source` phase and
+// arrive as { env, files }. The runner writes credential files to a per-run temp
+// dir with the given mode, uses them via GIT_ASKPASS / GIT_SSH_COMMAND, and
+// shreds them afterward. Credentials are NEVER embedded in the URL and NEVER
+// logged.
+// ===========================================================================
+
+interface SourceSyncSource {
+  readonly url: string;
+  readonly ref: string;
+  readonly path: string;
+}
+
+interface SourceCredentialFile {
+  readonly path: string;
+  readonly mode: number;
+  readonly content: string;
+}
+
+interface SourceCredentials {
+  readonly env: Record<string, string>;
+  readonly files: readonly SourceCredentialFile[];
+}
+
+export function isSourceSyncRequest(request: unknown): boolean {
+  return stringField(request, "action") === "source_sync";
+}
+
+export function parseSourceSyncSource(request: unknown): SourceSyncSource {
+  const source = recordField(request, "source");
+  if (!isRecord(source)) throw new Error("source_sync.source is required");
+  const url = requiredStringField(source, "url");
+  const ref = requiredStringField(source, "ref");
+  // Defense in depth: re-check the URL policy locally (the service already
+  // validated it). The rules are small and duplicated intentionally so a runner
+  // never clones a forbidden scheme even if a malformed job reaches it.
+  assertSourceUrlPolicy(url);
+  assertSafeGitSelector(ref, "source_sync.source.ref");
+  const rawPath = stringField(source, "path") ?? ".";
+  const path = normalizeSourceSubtreePath(rawPath);
+  return { url, ref, path };
+}
+
+// URL policy (spec 7.1): allow https://host/path(.git), ssh://git@host/...,
+// git@host:path. Forbid file://, absolute/relative filesystem paths, git://,
+// ext::, and embedded credentials (user:pass@).
+export function assertSourceUrlPolicy(url: string): void {
+  if (url.length === 0) throw new Error("source url must not be empty");
+  const lower = url.toLowerCase();
+  if (lower.startsWith("file://")) {
+    throw new Error("source url scheme file:// is forbidden");
+  }
+  if (lower.startsWith("git://")) {
+    throw new Error("source url scheme git:// is forbidden");
+  }
+  if (lower.startsWith("ext::")) {
+    throw new Error("source url transport ext:: is forbidden");
+  }
+  // scp-like shorthand: git@host:path (no scheme, single colon before path).
+  const scpLike = /^([^@/\s]+)@([^:/\s]+):(.+)$/.exec(url);
+  if (scpLike && !url.includes("://")) {
+    const user = scpLike[1]!;
+    const host = scpLike[2]!;
+    const remotePath = scpLike[3]!;
+    if (user.includes(":")) {
+      throw new Error("source url must not embed credentials");
+    }
+    if (host.length === 0 || remotePath.length === 0) {
+      throw new Error("source url is malformed");
+    }
+    if (/[\r\n\0]/.test(url) || url.startsWith("-")) {
+      throw new Error("source url contains control characters");
+    }
+    return;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("source url must be a valid https/ssh URL or git@host:path");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "ssh:") {
+    throw new Error(`source url scheme ${parsed.protocol} is forbidden`);
+  }
+  if (parsed.username || parsed.password) {
+    // ssh://git@host carries only a username (the ssh login, conventionally
+    // "git") and no password; that is allowed. A password is always rejected.
+    if (parsed.password) {
+      throw new Error("source url must not embed credentials");
+    }
+    if (parsed.protocol === "https:" && parsed.username) {
+      throw new Error("source url must not embed credentials");
+    }
+  }
+  if (!parsed.hostname) throw new Error("source url must include a host");
+  if (/[\r\n\0]/.test(url)) {
+    throw new Error("source url contains control characters");
+  }
+}
+
+// The source subtree path is a relative path INSIDE the cloned repo. Reject
+// absolute paths and any traversal so a job can only ever archive a directory
+// that lives under the checkout.
+function normalizeSourceSubtreePath(path: string): string {
+  if (path === "" || path === ".") return ".";
+  if (
+    isAbsolute(path) ||
+    path.includes("\0") ||
+    /^[A-Za-z]:[\\/]/.test(path)
+  ) {
+    throw new Error(`source_sync.source.path is not a safe relative path: ${path}`);
+  }
+  const normalized = normalize(path).replaceAll("\\", "/").replace(/^\.\//, "")
+    .replace(/\/+$/, "");
+  if (
+    normalized.length === 0 ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
+    throw new Error(`source_sync.source.path is not a safe relative path: ${path}`);
+  }
+  return normalized;
+}
+
+export function parseSourceCredentials(request: unknown): SourceCredentials {
+  const credentials = recordField(request, "credentials");
+  if (!isRecord(credentials)) return { env: {}, files: [] };
+  const env: Record<string, string> = {};
+  const rawEnv = recordField(credentials, "env");
+  if (isRecord(rawEnv)) {
+    for (const [name, value] of Object.entries(rawEnv)) {
+      if (typeof value === "string" && /^[A-Z_][A-Z0-9_]*$/.test(name)) {
+        env[name] = value;
+      }
+    }
+  }
+  const files: SourceCredentialFile[] = [];
+  const rawFiles = recordField(credentials, "files");
+  if (Array.isArray(rawFiles)) {
+    for (const entry of rawFiles) {
+      if (!isRecord(entry)) continue;
+      const path = stringField(entry, "path");
+      const content = entry.content;
+      const mode = entry.mode;
+      if (
+        typeof path !== "string" ||
+        typeof content !== "string" ||
+        typeof mode !== "number"
+      ) {
+        throw new Error("source_sync credential file is malformed");
+      }
+      assertSafeCredentialFileName(path);
+      files.push({ path, mode: Math.floor(mode), content });
+    }
+  }
+  return { env, files };
+}
+
+// The R2_SOURCE archive object key (agreed layout
+// spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst) is
+// minted by the service and persisted by the DO. The runner forwards it to the
+// DO; re-assert here that it is a safe, traversal-free relative key.
+export function assertSafeArchiveObjectKey(key: string): void {
+  if (
+    key.length === 0 ||
+    key.startsWith("/") ||
+    key.includes("\0") ||
+    key.includes("..") ||
+    key.includes("\\") ||
+    key.startsWith("spaces/") === false
+  ) {
+    throw new Error(`unsafe source archive object key: ${key}`);
+  }
+}
+
+// Minted credential files are referenced only by basename inside the per-run
+// credential dir; reject anything with a separator/traversal so a job can never
+// write outside that dir.
+function assertSafeCredentialFileName(name: string): void {
+  if (
+    name.length === 0 ||
+    name.includes("/") ||
+    name.includes("\\") ||
+    name.includes("\0") ||
+    name === "." ||
+    name === ".." ||
+    isAbsolute(name)
+  ) {
+    throw new Error(`source_sync credential file path is unsafe: ${name}`);
+  }
+}
+
+async function runSourceSync(
+  runId: string,
+  request: unknown,
+): Promise<JsonRecord> {
+  const source = parseSourceSyncSource(request);
+  const credentials = parseSourceCredentials(request);
+  const runnerProfile = parseRunnerProfile(request);
+  // archiveObjectKey may sit at the request root or alongside source; accept
+  // either so the service lane can place it wherever the run record holds it.
+  const archiveObjectKey = stringField(request, "archiveObjectKey") ??
+    stringField(recordField(request, "source"), "archiveObjectKey");
+  if (!archiveObjectKey) throw new Error("archiveObjectKey is required");
+  assertSafeArchiveObjectKey(archiveObjectKey);
+  const maxArchiveBytes = positiveIntegerLimitFromProfile(
+    runnerProfile,
+    "maxSourceArchiveBytes",
+  ) ?? DEFAULT_SOURCE_ARCHIVE_MAX_BYTES;
+
+  const workspace = workspaceForRun(runId);
+  await rm(workspace.root, { recursive: true, force: true });
+  await mkdir(workspace.root, { recursive: true });
+  const credentialDir = join(workspace.root, "source-credentials");
+
+  try {
+    const gitContext = await prepareSourceGitContext(
+      source,
+      credentials,
+      credentialDir,
+    );
+    const resolvedCommit = await resolveSourceCommit(source, gitContext);
+    await shallowCloneAtCommit(source, resolvedCommit, workspace.sourceRoot, gitContext);
+    const subtree = await resolveSourceSubtree(workspace.sourceRoot, source.path);
+    const archivePath = sourceArchivePath(workspace);
+    await createDeterministicArchive(subtree, archivePath, gitContext);
+    const archiveBytes = await readFile(archivePath);
+    if (archiveBytes.byteLength > maxArchiveBytes) {
+      throw new Error(
+        `source archive ${archiveBytes.byteLength} bytes exceeds limit ${maxArchiveBytes}`,
+      );
+    }
+    const archiveDigest = await digestBytes(archiveBytes);
+    // The archive is left at sourceArchivePath; the DO pulls it via
+    // GET /runs/{runId}/artifacts/source-archive and persists to R2_SOURCE under
+    // archiveObjectKey (mirrors the tfplan pull-then-persist protocol). The key
+    // is echoed back so the DO knows where to write.
+    return {
+      runId,
+      action: "source_sync",
+      status: "succeeded",
+      exitCode: 0,
+      resolvedCommit,
+      archiveDigest,
+      archiveSizeBytes: archiveBytes.byteLength,
+      sourceArchive: {
+        kind: "runner-local",
+        ref: `runner-local://${runId}/source-archive`,
+        archiveObjectKey,
+        digest: archiveDigest,
+        contentType: "application/zstd",
+        sizeBytes: archiveBytes.byteLength,
+      },
+    };
+  } finally {
+    await shredCredentialDir(credentialDir);
+  }
+}
+
+interface SourceGitContext {
+  readonly context: CommandContext;
+}
+
+// Writes any minted credential files to the per-run credential dir and builds
+// the command env that wires git to use them WITHOUT ever putting a secret in
+// the URL or process arg list. https token flow uses GIT_ASKPASS; ssh-key flow
+// uses GIT_SSH_COMMAND with StrictHostKeyChecking=yes against the minted
+// known_hosts (StrictHostKeyChecking=no is forbidden).
+async function prepareSourceGitContext(
+  source: SourceSyncSource,
+  credentials: SourceCredentials,
+  credentialDir: string,
+): Promise<SourceGitContext> {
+  const env: Record<string, string> = {
+    ...baseCommandEnv(),
+    GIT_TERMINAL_PROMPT: "0",
+    // Minted env (e.g. GIT_HTTPS_TOKEN, or a username) is threaded through but
+    // is consumed by the askpass script, never written to the URL.
+    ...credentials.env,
+  };
+
+  let wroteKeyFile = false;
+  let keyFilePath = "";
+  let knownHostsPath = "";
+  let askpassPath = "";
+
+  if (credentials.files.length > 0) {
+    await mkdir(credentialDir, { recursive: true, mode: 0o700 });
+    for (const file of credentials.files) {
+      const target = join(credentialDir, file.path);
+      await writeFile(target, file.content, { mode: file.mode });
+      // writeFile honors umask on some platforms; force the requested mode.
+      await chmod(target, file.mode);
+      if (/known_hosts/i.test(file.path)) knownHostsPath = target;
+      else if (/askpass/i.test(file.path)) askpassPath = target;
+      else {
+        keyFilePath = target;
+        wroteKeyFile = true;
+      }
+    }
+  }
+
+  const scheme = sourceUrlScheme(source.url);
+  if (scheme === "ssh") {
+    // SECURITY INVARIANT: an ssh source ALWAYS requires a minted known_hosts
+    // entry so host verification runs with StrictHostKeyChecking=yes. Without
+    // it the job cannot verify the host and we fail closed rather than fall back
+    // to a permissive default (StrictHostKeyChecking=no is forbidden). A key is
+    // also required in practice; reject when neither is minted.
+    if (!knownHostsPath) {
+      throw new Error(
+        wroteKeyFile
+          ? "ssh source requires a known_hosts entry; StrictHostKeyChecking=no is forbidden"
+          : "ssh source requires a minted ssh key and known_hosts (StrictHostKeyChecking=yes)",
+      );
+    }
+    const sshParts = [
+      "ssh",
+      "-o",
+      "StrictHostKeyChecking=yes",
+      "-o",
+      `UserKnownHostsFile=${shellQuote(knownHostsPath)}`,
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+    ];
+    if (wroteKeyFile) {
+      sshParts.push("-i", shellQuote(keyFilePath));
+    }
+    env.GIT_SSH_COMMAND = sshParts.join(" ");
+  } else if (askpassPath) {
+    // https token flow: GIT_ASKPASS points at the minted script which echoes
+    // the token (and optional username). GIT_TERMINAL_PROMPT=0 ensures git never
+    // falls back to an interactive prompt.
+    await chmod(askpassPath, 0o500);
+    env.GIT_ASKPASS = askpassPath;
+  }
+
+  return { context: { env } };
+}
+
+function sourceUrlScheme(url: string): "https" | "ssh" {
+  const lower = url.toLowerCase();
+  if (lower.startsWith("ssh://")) return "ssh";
+  if (lower.startsWith("https://")) return "https";
+  // scp-like git@host:path is ssh transport.
+  if (/^[^@/\s]+@[^:/\s]+:.+$/.test(url) && !url.includes("://")) return "ssh";
+  return "https";
+}
+
+// Resolve the requested ref to a full commit sha. A full 40/64-hex ref is taken
+// verbatim (it is a commit id already); otherwise ls-remote resolves the
+// branch/tag. The ref is passed as a literal arg (never interpolated into a
+// shell string) and is validated by assertSafeGitSelector.
+async function resolveSourceCommit(
+  source: SourceSyncSource,
+  git: SourceGitContext,
+): Promise<string> {
+  if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(source.ref)) {
+    return source.ref.toLowerCase();
+  }
+  const result = await runCommand(
+    ["git", "ls-remote", "--", source.url, source.ref],
+    { cwd: RUN_ROOT, context: git.context },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `git ls-remote failed: ${redactCredentialOutput(result.stderr || result.stdout)}`,
+    );
+  }
+  const commit = parseLsRemoteCommit(result.stdout, source.ref);
+  if (!commit) {
+    throw new Error(`source ref did not resolve to a commit: ${source.ref}`);
+  }
+  return commit;
+}
+
+// Parse `git ls-remote` output ("<sha>\t<refname>") and pick the commit for the
+// requested ref. Prefers an exact refs/heads|refs/tags match, then a peeled tag
+// (^{}), then the bare ref, then a single-line fallback.
+export function parseLsRemoteCommit(
+  stdout: string,
+  ref: string,
+): string | undefined {
+  const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const rows = lines.flatMap((line) => {
+    const [sha, name] = line.split(/\s+/, 2);
+    if (!sha || !name || !/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(sha)) return [];
+    return [{ sha: sha.toLowerCase(), name }];
+  });
+  if (rows.length === 0) return undefined;
+  const candidates = [
+    `refs/heads/${ref}`,
+    `refs/tags/${ref}^{}`,
+    `refs/tags/${ref}`,
+    ref,
+  ];
+  for (const candidate of candidates) {
+    const match = rows.find((row) => row.name === candidate);
+    if (match) return match.sha;
+  }
+  // Annotated-tag peel: prefer the peeled object when both forms are present.
+  const peeled = rows.find((row) => row.name.endsWith("^{}"));
+  if (peeled) return peeled.sha;
+  return rows.length === 1 ? rows[0]!.sha : undefined;
+}
+
+async function shallowCloneAtCommit(
+  source: SourceSyncSource,
+  commit: string,
+  sourceRoot: string,
+  git: SourceGitContext,
+): Promise<void> {
+  await mkdir(sourceRoot, { recursive: true });
+  await runRequiredCommand(["git", "init", "-q"], {
+    cwd: sourceRoot,
+    context: git.context,
+  });
+  await runRequiredCommand(
+    ["git", "remote", "add", "origin", "--", source.url],
+    { cwd: sourceRoot, context: git.context },
+  );
+  // Fetch exactly the resolved commit at depth 1. Server must allow fetching by
+  // sha (uploadpack.allowReachableSHA1InWant / allowAnySHA1InWant); most hosts
+  // (GitHub/GitLab) do. Fall back to a shallow fetch of the ref then checkout.
+  const fetchSha = await runCommand(
+    ["git", "fetch", "--depth", "1", "--no-tags", "origin", commit],
+    { cwd: sourceRoot, context: git.context },
+  );
+  if (fetchSha.exitCode === 0) {
+    await runRequiredCommand(["git", "checkout", "-q", "--detach", commit], {
+      cwd: sourceRoot,
+      context: git.context,
+    });
+    return;
+  }
+  await runRequiredCommand(
+    ["git", "fetch", "--depth", "1", "--no-tags", "origin", "--", source.ref],
+    { cwd: sourceRoot, context: git.context },
+  );
+  await runRequiredCommand(["git", "checkout", "-q", "--detach", commit], {
+    cwd: sourceRoot,
+    context: git.context,
+  });
+}
+
+async function resolveSourceSubtree(
+  sourceRoot: string,
+  path: string,
+): Promise<string> {
+  const subtree = path === "." ? sourceRoot : resolve(sourceRoot, path);
+  await assertDirectory(subtree, "source subtree");
+  await assertRealPathInsideSourceRoot(subtree, sourceRoot, "source subtree");
+  return subtree;
+}
+
+// Build a deterministic tar of the subtree (sorted entries, numeric owners,
+// excluding .git) and compress with zstd. Determinism makes the digest stable
+// across two runs of the same commit.
+async function createDeterministicArchive(
+  subtree: string,
+  archivePath: string,
+  git: SourceGitContext,
+): Promise<void> {
+  await runRequiredCommand([
+    "tar",
+    "--sort=name",
+    "--numeric-owner",
+    "--owner=0",
+    "--group=0",
+    "--mtime=@0",
+    "--exclude=.git",
+    "--format=gnu",
+    "-C",
+    subtree,
+    "-cf",
+    `${archivePath}.tar`,
+    ".",
+  ], { cwd: RUN_ROOT, context: git.context });
+  await runRequiredCommand(
+    ["zstd", "-q", "-19", "-f", "-o", archivePath, `${archivePath}.tar`],
+    { cwd: RUN_ROOT, context: git.context },
+  );
+  await rm(`${archivePath}.tar`, { force: true });
+}
+
+function sourceArchivePath(workspace: RunWorkspace): string {
+  return join(workspace.root, "source.tar.zst");
+}
+
+async function shredCredentialDir(credentialDir: string): Promise<void> {
+  await rm(credentialDir, { recursive: true, force: true }).catch(() => {});
+}
+
+// Redact any minted git credential env value that might appear in command
+// output. Git never receives the secret in the URL, but ls-remote/fetch errors
+// can echo the URL or env; this strips known credential env assignments and the
+// literal token value if it is known.
+function redactCredentialOutput(text: string): string {
+  let redacted = text;
+  for (const name of ["GIT_HTTPS_TOKEN", "GIT_SSH_PRIVATE_KEY"]) {
+    redacted = redacted.replaceAll(
+      new RegExp(`(${name}=)[^\\s]+`, "g"),
+      "$1[redacted]",
+    );
+  }
+  return redacted;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+// Stores the uploaded source archive bytes under the run root so the DO can GET
+// them; in practice the DO PUTs and immediately persists to R2, so this route is
+// the relay seam. The bytes are kept until the next run wipes the workspace.
+async function handleSourceArchiveArtifactRequest(
+  runId: string,
+  request: Request,
+): Promise<Response> {
+  const workspace = workspaceForRun(runId);
+  const archivePath = sourceArchivePath(workspace);
+  if (request.method === "GET") {
+    try {
+      const bytes = await readFile(archivePath);
+      return new Response(bytes, {
+        headers: {
+          "content-type": "application/zstd",
+          "content-length": String(bytes.byteLength),
+        },
+      });
+    } catch {
+      return Response.json(
+        { error: "source archive artifact not found" },
+        { status: 404 },
+      );
+    }
+  }
+  if (request.method === "PUT") {
+    await mkdir(workspace.root, { recursive: true });
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    await writeFile(archivePath, bytes);
+    return Response.json({
+      runId,
+      artifact: "source-archive",
       digest: await digestBytes(bytes),
       sizeBytes: bytes.byteLength,
     });

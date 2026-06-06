@@ -29,6 +29,11 @@ import type {
   ListRunnerProfilesResponse,
   OpenTofuOperation,
 } from "takosumi-contract/deploy-control-api";
+import { SOURCES_PATH } from "takosumi-contract/sources";
+import type {
+  CreateSourceRequest,
+  PatchSourceRequest,
+} from "takosumi-contract/sources";
 import {
   OpenTofuControllerError,
   type OpenTofuControllerErrorCode,
@@ -54,6 +59,12 @@ export const TAKOSUMI_CONNECTION_ROUTE =
   "/v1/connections/:connectionId" as const;
 export const TAKOSUMI_CONNECTION_TEST_ROUTE =
   "/v1/connections/:connectionId/test" as const;
+export const TAKOSUMI_SOURCES_ROUTE = SOURCES_PATH;
+export const TAKOSUMI_SOURCE_ROUTE = "/v1/sources/:sourceId" as const;
+export const TAKOSUMI_SOURCE_SYNC_ROUTE =
+  "/v1/sources/:sourceId/sync" as const;
+export const TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE =
+  "/v1/sources/:sourceId/snapshots" as const;
 
 /**
  * Endpoint inventory for the `deployControl-public` family, co-located with the
@@ -189,6 +200,71 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
       okSchema: "EmptyResponse",
     },
   },
+  {
+    method: "POST",
+    path: TAKOSUMI_SOURCES_ROUTE,
+    summary:
+      "Registers a git Source (URL-policy checked; ls-remote verification is a queued source_sync). Returns the hook secret once.",
+    auth: "deploy-control-token",
+    operationId: "createSource",
+    openapi: {
+      requestSchema: "CreateSourceRequest",
+      okStatus: "201",
+      okSchema: "CreateSourceResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_SOURCES_ROUTE,
+    summary: "Lists Sources for a Space (never includes the hook secret).",
+    auth: "deploy-control-token",
+    operationId: "listSources",
+    openapi: { query: ["spaceId"], okSchema: "ListSourcesResponse" },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_SOURCE_ROUTE,
+    summary: "Reads a Source record.",
+    auth: "deploy-control-token",
+    operationId: "getSource",
+    openapi: { pathParams: ["sourceId"], okSchema: "SourceResponse" },
+  },
+  {
+    method: "PATCH",
+    path: TAKOSUMI_SOURCE_ROUTE,
+    summary: "Updates a Source (name / defaultRef / defaultPath / auth / status).",
+    auth: "deploy-control-token",
+    operationId: "patchSource",
+    openapi: {
+      pathParams: ["sourceId"],
+      requestSchema: "PatchSourceRequest",
+      okSchema: "SourceResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_SOURCE_SYNC_ROUTE,
+    summary:
+      "Creates a source_sync run that resolves the source's default ref to an archive snapshot in the runner.",
+    auth: "deploy-control-token",
+    operationId: "createSourceSync",
+    openapi: {
+      pathParams: ["sourceId"],
+      okStatus: "201",
+      okSchema: "CreateSourceSyncResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE,
+    summary: "Lists archive snapshots resolved for a Source.",
+    auth: "deploy-control-token",
+    operationId: "listSourceSnapshots",
+    openapi: {
+      pathParams: ["sourceId"],
+      okSchema: "ListSourceSnapshotsResponse",
+    },
+  },
 ] as const;
 
 export const DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
@@ -225,20 +301,39 @@ const ALLOWED_KEYS: Record<DeployControlRouteName, ReadonlySet<string>> = {
   connectionCreate: new Set([
     "spaceId",
     "provider",
+    "kind",
     "authMethod",
     "displayName",
     "owner",
     "scope",
     "values",
   ]),
+  sourceCreate: new Set([
+    "spaceId",
+    "name",
+    "url",
+    "defaultRef",
+    "defaultPath",
+    "authConnectionId",
+  ]),
+  sourcePatch: new Set([
+    "name",
+    "defaultRef",
+    "defaultPath",
+    "authConnectionId",
+    "status",
+  ]),
 };
 
 type DeployControlRouteName =
   | "planRunCreate"
   | "applyRunCreate"
-  | "connectionCreate";
+  | "connectionCreate"
+  | "sourceCreate"
+  | "sourcePatch";
 
 const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
+const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
 
 export interface DeployControlPublicRouteDependencies {
   /**
@@ -467,6 +562,88 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
+  // --- Sources (Core Specification §6) --------------------------------------
+
+  app.post(TAKOSUMI_SOURCES_ROUTE, deployControlBodyLimit, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+    if (limit) return limit;
+    return await runHandler(c, async () => {
+      const body = await readJsonBody<CreateSourceRequest>(c, "sourceCreate");
+      ensureSpacePermission(auth.principal, body.spaceId);
+      const response = await controller.createSource(body);
+      return c.json(response, 201);
+    });
+  });
+
+  app.get(TAKOSUMI_SOURCES_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const spaceId = c.req.query("spaceId") ?? "";
+    if (spaceId.trim().length === 0) {
+      return c.json(
+        errorEnvelope(c, "invalid_argument", "spaceId query is required"),
+        400,
+      );
+    }
+    return await runHandler(c, async () => {
+      ensureSpacePermission(auth.principal, spaceId);
+      return c.json(await controller.listSources(spaceId), 200);
+    });
+  });
+
+  app.get(TAKOSUMI_SOURCE_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidSourceId(c);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const response = await controller.getSource(idCheck.value);
+      ensureSpacePermission(auth.principal, response.source.spaceId);
+      return c.json(response, 200);
+    });
+  });
+
+  app.patch(TAKOSUMI_SOURCE_ROUTE, deployControlBodyLimit, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidSourceId(c);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+    if (limit) return limit;
+    return await runHandler(c, async () => {
+      const existing = await controller.getSource(idCheck.value);
+      ensureSpacePermission(auth.principal, existing.source.spaceId);
+      const body = await readJsonBody<PatchSourceRequest>(c, "sourcePatch");
+      return c.json(await controller.patchSource(idCheck.value, body), 200);
+    });
+  });
+
+  app.post(TAKOSUMI_SOURCE_SYNC_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidSourceId(c);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const existing = await controller.getSource(idCheck.value);
+      ensureSpacePermission(auth.principal, existing.source.spaceId);
+      return c.json(await controller.createSourceSync(idCheck.value), 201);
+    });
+  });
+
+  app.get(TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidSourceId(c);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const existing = await controller.getSource(idCheck.value);
+      ensureSpacePermission(auth.principal, existing.source.spaceId);
+      return c.json(await controller.listSourceSnapshots(idCheck.value), 200);
+    });
+  });
+
 }
 
 function mountNotImplementedRoutes(
@@ -496,6 +673,12 @@ function mountNotImplementedRoutes(
   app.get(TAKOSUMI_CONNECTIONS_ROUTE, get("connections not wired"));
   app.post(TAKOSUMI_CONNECTION_TEST_ROUTE, post("connections not wired"));
   app.delete(TAKOSUMI_CONNECTION_ROUTE, post("connections not wired"));
+  app.post(TAKOSUMI_SOURCES_ROUTE, post("sources not wired"));
+  app.get(TAKOSUMI_SOURCES_ROUTE, get("sources not wired"));
+  app.get(TAKOSUMI_SOURCE_ROUTE, get("sources not wired"));
+  app.patch(TAKOSUMI_SOURCE_ROUTE, post("sources not wired"));
+  app.post(TAKOSUMI_SOURCE_SYNC_ROUTE, post("sources not wired"));
+  app.get(TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE, get("sources not wired"));
 }
 
 async function authorizeDeployControl(
@@ -774,6 +957,24 @@ function ensureValidConnectionId(
       kind: "invalid",
       response: c.json(
         errorEnvelope(c, "invalid_argument", "connectionId has an unsupported shape"),
+        400,
+      ),
+    };
+  }
+  return { kind: "ok", value: raw };
+}
+
+function ensureValidSourceId(
+  c: Context,
+):
+  | { readonly kind: "ok"; readonly value: string }
+  | { readonly kind: "invalid"; readonly response: Response } {
+  const raw = c.req.param("sourceId") ?? "";
+  if (!SOURCE_ID_PATTERN.test(raw)) {
+    return {
+      kind: "invalid",
+      response: c.json(
+        errorEnvelope(c, "invalid_argument", "sourceId has an unsupported shape"),
         400,
       ),
     };
