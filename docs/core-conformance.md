@@ -45,7 +45,7 @@ milestone は次のとおり。
 | 暗号化 state + generation guard | §20 / §32 | conformant | R2_STATE + current.json + StateSnapshot 世代管理 (旧 M2 実装を流用)。 |
 | **M1 物理再構成 (§28 layout)** | §28 / §29 | conformant | worker/src (entry/durable) + packages/{schema,rootgen,graph} + runner-image + opentofu-modules を §28 配置に移動、 binding/class 名を §29 に整合。 `src/service/domains/*` の `worker/src/modules/*` への移設は各 milestone でその domain を書き換える際に行う (M3+)。 |
 | M2 新 contract 型 | §4-§21 | pending | |
-| M3 モデル移行 (lanes 廃止 / §27 schema / runs 統合) | §5 / §19 / §27 | pending | App / Environment / InstallProfile を Installation + InstallConfig に置換。 |
+| M3 モデル移行 (lanes 廃止 / §27 schema / runs 統合) | §5 / §19 / §27 | conformant | lanes (App/Environment/InstallProfile) 削除、 Space/InstallConfig/Installation (UNIQUE(space_id,name,environment)) store + service + /v1 routes、 単一 runs table (kind 列 + run_json、 SQL/D1)、 installation lease (`installation:{id}:{env}`)、 stateScope/R2 key を §20 に re-key、 D1 を §27 実テーブル化。 create-on-apply legacy path は削除 (Installation-first)。 |
 | M4 operator defaults + CapabilityBinding | §8 / §9 | pending | |
 | M5 install types (core / app_source 完成) | §10 / §13 | pending | |
 | M6 Dependency DAG + variable_injection | §14 / §15 / §17 | pending | |
@@ -57,7 +57,11 @@ milestone は次のとおり。
 
 ### 意図的な divergence (gap ではない)
 
-- なし (M1 で binding 名を §29 に揃える。 realized operator config の追従は
+- Postgres/D1 の物理テーブルは既存規約の `takosumi_` prefix を維持 (D1 は素の §27 名)。 §27 名は logical schema。
+- `Deployment.sourceSnapshotId` / `outputSnapshotId` は §27 では NOT NULL だが、 raw plan path の残存 (M9 で削除) と OutputSnapshot 未実装 (M7) の間 optional。
+- `Run.installationId` / `environment` は §27 では NOT NULL だが、 Source-scoped な `source_sync` 行のため optional。
+- 内部 run 型 (PlanRun/ApplyRun) は internal 実装語彙として残る (public は §19 Run projection のみ)。
+- 承認規則: installation-driven plan は environment が `preview` 以外なら approval 必須 (旧 lanes の production default を引き継いだ暫定。 policy 層の action policy (M8) が正式な置き場) (M1 で binding 名を §29 に揃える。 realized operator config の追従は
   `takosumi-private/platform/wrangler.toml` 側の operator 作業)。
 
 ---
@@ -78,7 +82,7 @@ milestone は次のとおり。
 | 7 | Apply verifies plan digest | conformant | expected guard 検証。 `async_run_lifecycle_test.ts`。 |
 | 8 | Apply verifies source snapshot | conformant | apply 時の snapshot id / digest 再検証。 |
 | 9 | Apply verifies dependency snapshot | pending | DependencySnapshot は M6。 |
-| 10 | Apply verifies state generation | conformant | generation guard。 `m2_environment_run_test.ts` 系。 |
+| 10 | Apply verifies state generation | conformant | generation guard。 `installation_run_test.ts` / `apply_lease_test.ts`。 |
 | 11 | Output publication uses allowlist | conformant | output projection allowlist (`src/service/domains/outputs/projection.ts`)。 OutputSnapshot 化は M7。 |
 | 12 | Sensitive output sharing requires explicit policy | pending | spaceOutputs / publicOutputs 分離と leak test は M7。 |
 | 13 | Cross-Space sharing uses OutputShare | pending | OutputShare は MVP 外。 cross-space dependency は M6 で作成拒否として強制。 |

@@ -1,10 +1,11 @@
 /**
- * Environment lease seam (Core Specification §10.2).
+ * Installation lease seam (core-spec.md §22 / §23).
  *
  * One WRITE run (plan / apply / destroy_plan / destroy_apply) may execute per
- * Environment at a time. The lease is keyed `environment:{environmentId}` and is
- * acquired by the queue consumer before it dispatches a write run, then released
- * in a `finally`. `source_sync` runs do NOT take the lease.
+ * (Installation, environment) at a time. The lease is keyed
+ * `installation:{installationId}:{environment}` and is acquired by the queue
+ * consumer before it dispatches a write run, then released in a `finally`.
+ * `source_sync` runs do NOT take the lease.
  *
  * The Workers implementation fronts the `COORDINATION` Durable Object
  * (`acquire-lease` / `release-lease`); the in-memory implementation here is for
@@ -12,13 +13,16 @@
  * is agnostic to the substrate.
  */
 
-/** The lease key for an environment write run. */
-export function environmentLeaseScope(environmentId: string): string {
-  return `environment:${environmentId}`;
+/** The lease key for an installation write run. */
+export function installationLeaseScope(
+  installationId: string,
+  environment: string,
+): string {
+  return `installation:${installationId}:${environment}`;
 }
 
 /** An acquired lease handle. `acquired=false` means the lease was busy. */
-export interface EnvironmentLease {
+export interface InstallationLease {
   readonly scope: string;
   readonly holderId: string;
   readonly token: string;
@@ -26,13 +30,13 @@ export interface EnvironmentLease {
   readonly expiresAt: string;
 }
 
-export interface AcquireEnvironmentLeaseInput {
+export interface AcquireInstallationLeaseInput {
   readonly scope: string;
   readonly holderId: string;
   readonly ttlMs: number;
 }
 
-export interface ReleaseEnvironmentLeaseInput {
+export interface ReleaseInstallationLeaseInput {
   readonly scope: string;
   readonly holderId: string;
   readonly token: string;
@@ -43,54 +47,57 @@ export interface ReleaseEnvironmentLeaseInput {
  * CoordinationObject's `acquire-lease` / `release-lease` POST API but is
  * substrate-agnostic so tests can inject an in-memory impl.
  */
-export interface EnvironmentCoordination {
+export interface InstallationCoordination {
   acquireLease(
-    input: AcquireEnvironmentLeaseInput,
-  ): Promise<EnvironmentLease>;
+    input: AcquireInstallationLeaseInput,
+  ): Promise<InstallationLease>;
   releaseLease(
-    input: ReleaseEnvironmentLeaseInput,
+    input: ReleaseInstallationLeaseInput,
   ): Promise<boolean>;
 }
 
 /**
- * Raised when an environment write run cannot acquire the lease because another
- * write run for the same environment holds it. The consumer should rethrow this
- * so the queue redelivers the message (the lease holder releases on completion).
+ * Raised when an installation write run cannot acquire the lease because
+ * another write run for the same (installation, environment) holds it. The
+ * consumer should rethrow this so the queue redelivers the message (the lease
+ * holder releases on completion).
  */
-export class EnvironmentLeaseBusyError extends Error {
+export class InstallationLeaseBusyError extends Error {
   readonly scope: string;
   constructor(scope: string) {
-    super(`environment lease busy: ${scope}`);
-    this.name = "EnvironmentLeaseBusyError";
+    super(`installation lease busy: ${scope}`);
+    this.name = "InstallationLeaseBusyError";
     this.scope = scope;
   }
 }
 
 /** Default lease TTL: long enough to cover a slow runner dispatch. */
-export const DEFAULT_ENVIRONMENT_LEASE_TTL_MS = 15 * 60 * 1000;
+export const DEFAULT_INSTALLATION_LEASE_TTL_MS = 15 * 60 * 1000;
 
 /**
- * Acquires the environment lease, runs `work`, and releases in `finally`. Throws
- * {@link EnvironmentLeaseBusyError} when the lease is held by another holder
- * (the run is left for redelivery). Returns the `work` result on success.
+ * Acquires the installation lease, runs `work`, and releases in `finally`.
+ * Throws {@link InstallationLeaseBusyError} when the lease is held by another
+ * holder (the run is left for redelivery). Returns the `work` result on
+ * success.
  */
-export async function withEnvironmentLease<T>(
-  coordination: EnvironmentCoordination,
+export async function withInstallationLease<T>(
+  coordination: InstallationCoordination,
   input: {
-    readonly environmentId: string;
+    readonly installationId: string;
+    readonly environment: string;
     readonly holderId: string;
     readonly ttlMs?: number;
   },
   work: () => Promise<T>,
 ): Promise<T> {
-  const scope = environmentLeaseScope(input.environmentId);
+  const scope = installationLeaseScope(input.installationId, input.environment);
   const lease = await coordination.acquireLease({
     scope,
     holderId: input.holderId,
-    ttlMs: input.ttlMs ?? DEFAULT_ENVIRONMENT_LEASE_TTL_MS,
+    ttlMs: input.ttlMs ?? DEFAULT_INSTALLATION_LEASE_TTL_MS,
   });
   if (!lease.acquired) {
-    throw new EnvironmentLeaseBusyError(scope);
+    throw new InstallationLeaseBusyError(scope);
   }
   try {
     return await work();
@@ -110,12 +117,12 @@ interface StoredLease {
 }
 
 /**
- * In-memory {@link EnvironmentCoordination} for tests / single-process
+ * In-memory {@link InstallationCoordination} for tests / single-process
  * substrates. Mirrors the CoordinationObject semantics: a non-expired lease held
  * by another holder cannot be re-acquired; the holder's own re-acquire returns
  * `acquired=false` too (one holder, one run). Release is holder+token gated.
  */
-export class InMemoryEnvironmentCoordination implements EnvironmentCoordination {
+export class InMemoryInstallationCoordination implements InstallationCoordination {
   readonly #leases = new Map<string, StoredLease>();
   readonly #now: () => number;
   readonly #newToken: () => string;
@@ -129,8 +136,8 @@ export class InMemoryEnvironmentCoordination implements EnvironmentCoordination 
   }
 
   acquireLease(
-    input: AcquireEnvironmentLeaseInput,
-  ): Promise<EnvironmentLease> {
+    input: AcquireInstallationLeaseInput,
+  ): Promise<InstallationLease> {
     const now = this.#now();
     const existing = this.#leases.get(input.scope);
     if (existing && existing.expiresAt > now) {
@@ -158,7 +165,7 @@ export class InMemoryEnvironmentCoordination implements EnvironmentCoordination 
     });
   }
 
-  releaseLease(input: ReleaseEnvironmentLeaseInput): Promise<boolean> {
+  releaseLease(input: ReleaseInstallationLeaseInput): Promise<boolean> {
     const existing = this.#leases.get(input.scope);
     if (
       !existing ||

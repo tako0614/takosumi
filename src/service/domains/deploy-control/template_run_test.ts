@@ -12,6 +12,8 @@ import type {
   PlanResourceChange,
   TestConnectionResponse,
 } from "takosumi-contract/deploy-control-api";
+import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
+import { seedInstallationModel } from "./test_model_fixture.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -79,6 +81,45 @@ function fakeVault() {
   };
 }
 
+const INSTALLATION_ID = "inst_template";
+// The Installation is seeded with a prior current Deployment so the
+// installation-first apply guard (`installationCurrentDeploymentId`) is
+// satisfiable; the template tests drive templateId directly through
+// createPlanRun (the user source stays a build input only), so the seeded
+// Source/Snapshot are present only to keep the Installation row well-formed.
+const SEED_DEPLOYMENT_ID = "dep_seed";
+
+/**
+ * Builds a controller whose store already holds the Space-direct Installation
+ * model (spec §5) the installation-first plan/apply path requires, plus a
+ * seeded current Deployment so a template-driven apply passes the
+ * `installationCurrentDeploymentId` guard. Returns the controller and the
+ * seeded installation id used as `createPlanRun({ installationId })`.
+ */
+async function seededTemplateController(
+  deps: Omit<
+    ConstructorParameters<typeof OpenTofuDeploymentController>[0],
+    "store"
+  > = {},
+): Promise<{
+  controller: OpenTofuDeploymentController;
+  installationId: string;
+}> {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  // Raw template-driven createPlanRun never sets installationContext, so the
+  // environment never gates approval here; the prior deployment attached below
+  // is what unlocks the apply guard.
+  await seedInstallationModel(store, { installationId: INSTALLATION_ID });
+  // Attach a prior current Deployment so the apply guard has a concrete cursor.
+  const installation = await store.getInstallation(INSTALLATION_ID);
+  await store.putInstallation({
+    ...installation!,
+    currentDeploymentId: SEED_DEPLOYMENT_ID,
+  });
+  const controller = new OpenTofuDeploymentController({ ...deps, store });
+  return { controller, installationId: INSTALLATION_ID };
+}
+
 test("template plan dispatch carries template ref, generated root, and build; never credentials in build", async () => {
   const runner = recordingRunner({
     planResourceChanges: [
@@ -94,7 +135,7 @@ test("template plan dispatch carries template ref, generated root, and build; ne
       },
     ],
   });
-  const controller = new OpenTofuDeploymentController({
+  const { controller, installationId } = await seededTemplateController({
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner,
@@ -103,6 +144,7 @@ test("template plan dispatch carries template ref, generated root, and build; ne
 
   const { planRun } = await controller.createPlanRun({
     spaceId: "space_test",
+    installationId,
     source: SOURCE,
     templateId: "cloudflare-worker-hono",
     templateVersion: "1.0.0",
@@ -157,7 +199,7 @@ test("template plan is blocked when the plan introduces a disallowed resource ty
       },
     ],
   });
-  const controller = new OpenTofuDeploymentController({
+  const { controller, installationId } = await seededTemplateController({
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner,
@@ -165,6 +207,7 @@ test("template plan is blocked when the plan introduces a disallowed resource ty
 
   const { planRun } = await controller.createPlanRun({
     spaceId: "space_test",
+    installationId,
     source: SOURCE,
     templateId: "cloudflare-r2-bucket",
     templateVersion: "1.0.0",
@@ -188,7 +231,7 @@ test("destructive template plan requires confirmDestructive at apply", async () 
       },
     ],
   });
-  const controller = new OpenTofuDeploymentController({
+  const { controller, installationId } = await seededTemplateController({
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner,
@@ -196,6 +239,7 @@ test("destructive template plan requires confirmDestructive at apply", async () 
 
   const { planRun } = await controller.createPlanRun({
     spaceId: "space_test",
+    installationId,
     source: SOURCE,
     templateId: "cloudflare-r2-bucket",
     templateVersion: "1.0.0",
@@ -247,7 +291,7 @@ test("output allowlist projects only template public outputs after the sensitive
       // Declared public name but sensitive: must be dropped.
     },
   });
-  const controller = new OpenTofuDeploymentController({
+  const { controller, installationId } = await seededTemplateController({
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner,
@@ -255,6 +299,7 @@ test("output allowlist projects only template public outputs after the sensitive
 
   const { planRun } = await controller.createPlanRun({
     spaceId: "space_test",
+    installationId,
     source: SOURCE,
     templateId: "cloudflare-r2-bucket",
     templateVersion: "1.0.0",
@@ -265,12 +310,20 @@ test("output allowlist projects only template public outputs after the sensitive
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
 
-  const names = (applied.deployment?.outputs ?? []).map((o) => o.name).sort();
+  // The §21 Deployment records the projected public outputs as `outputsPublic`
+  // (name -> value); the ApplyRun keeps the full projected DeploymentOutput[]
+  // (both filtered through the sensitive/redaction step). The template output
+  // allowlist must leave only the two declared public names.
+  const names = (applied.applyRun.outputs ?? []).map((o) => o.name).sort();
   expect(names).toEqual(["bucket_name", "location"]);
+  expect(Object.keys(applied.deployment?.outputsPublic ?? {}).sort()).toEqual([
+    "bucket_name",
+    "location",
+  ]);
 });
 
 test("templateVersion/inputs without templateId is rejected", async () => {
-  const controller = new OpenTofuDeploymentController({
+  const { controller, installationId } = await seededTemplateController({
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner: recordingRunner(),
@@ -278,6 +331,7 @@ test("templateVersion/inputs without templateId is rejected", async () => {
   await expect(
     controller.createPlanRun({
       spaceId: "space_test",
+      installationId,
       source: SOURCE,
       templateVersion: "1.0.0",
     }),
@@ -285,7 +339,7 @@ test("templateVersion/inputs without templateId is rejected", async () => {
 });
 
 test("requiredProviders must not be passed alongside a template", async () => {
-  const controller = new OpenTofuDeploymentController({
+  const { controller, installationId } = await seededTemplateController({
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner: recordingRunner(),
@@ -293,6 +347,7 @@ test("requiredProviders must not be passed alongside a template", async () => {
   await expect(
     controller.createPlanRun({
       spaceId: "space_test",
+      installationId,
       source: SOURCE,
       templateId: "cloudflare-r2-bucket",
       templateVersion: "1.0.0",

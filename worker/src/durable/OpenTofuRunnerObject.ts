@@ -10,16 +10,19 @@ const ENCRYPTED_ARTIFACT_CONTENT_TYPE = "application/octet-stream";
 
 /**
  * Optional dispatch payload field locating the R2_STATE object for this run.
- * Present from M2 when the controller (other lane) carries environment context
- * in the job. When ABSENT the DO falls back to the legacy R2_ARTIFACTS
+ * Present when the controller (other lane) carries installation context in the
+ * job. When ABSENT the DO falls back to the legacy R2_ARTIFACTS
  * `opentofu-state/...` path so existing jobs/tests keep working (additive, no
  * flag-day). The `generation` is the 8-digit state generation the controller
  * owns; the DO only writes the object at the derived key and returns its digest.
+ * Mirrors the contract `DispatchStateScope` ({ spaceId, installationId,
+ * environment, generation }); kept as a local interface so the DO does not pull
+ * a contract import into the worker bundle.
  */
 interface StateScope {
   readonly spaceId: string;
-  readonly appId: string;
-  readonly envId: string;
+  readonly installationId: string;
+  readonly environment: string;
   readonly generation: number;
 }
 
@@ -623,17 +626,17 @@ function planJsonArtifactUrl(baseUrl: URL, runId: string): string {
 }
 
 // ===========================================================================
-// R2_STATE keys (spec §11.3):
-//   spaces/{spaceId}/apps/{appId}/envs/{envId}/states/{NNNNNNNN}.tfstate.enc
-//   spaces/{spaceId}/apps/{appId}/envs/{envId}/states/current.json
+// R2_STATE keys (spec §20 / §26):
+//   spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/{NNNNNNNN}.tfstate.enc
+//   spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/current.json
 // The generation is owned by the controller (other lane); the DO formats it as
 // an 8-digit, zero-padded segment for the object key.
 // ===========================================================================
 
 function stateScopePrefix(scope: StateScope): string {
-  return `spaces/${safeKeySegment(scope.spaceId)}/apps/${
-    safeKeySegment(scope.appId)
-  }/envs/${safeKeySegment(scope.envId)}/states`;
+  return `spaces/${safeKeySegment(scope.spaceId)}/installations/${
+    safeKeySegment(scope.installationId)
+  }/envs/${safeKeySegment(scope.environment)}/states`;
 }
 
 function stateObjectKey(scope: StateScope): string {
@@ -691,15 +694,18 @@ function parseStateScope(requestPayload: unknown): StateScope | undefined {
   const scope = recordField(requestPayload, "stateScope");
   if (!scope) return undefined;
   const spaceId = stringField(scope, "spaceId");
-  const appId = stringField(scope, "appId");
-  const envId = stringField(scope, "envId");
+  const installationId = stringField(scope, "installationId");
+  const environment = stringField(scope, "environment");
   const generation = scope.generation;
-  if (!spaceId || !appId || !envId || typeof generation !== "number") {
+  if (
+    !spaceId || !installationId || !environment ||
+    typeof generation !== "number"
+  ) {
     throw new Error(
-      "stateScope requires spaceId, appId, envId, and a numeric generation",
+      "stateScope requires spaceId, installationId, environment, and a numeric generation",
     );
   }
-  return { spaceId, appId, envId, generation };
+  return { spaceId, installationId, environment, generation };
 }
 
 function parseSourceArchiveRestore(

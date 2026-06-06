@@ -1,5 +1,5 @@
 /**
- * Unified Run facade (Core Specification §6.8).
+ * Unified Run facade (Core Specification §19).
  *
  * The internal ledger keeps three concrete record kinds: SourceSyncRun, PlanRun,
  * and ApplyRun (the latter covers both apply and destroy_apply). The spec
@@ -9,7 +9,7 @@
  * Status mapping (the load-bearing part):
  *   - PlanRun.status `blocked` projects to `waiting_approval` when the block is a
  *     policy gate that an approval can clear (template `requiresConfirmation`, a
- *     destroy_plan, or an environment that requires approval); otherwise a
+ *     destroy_plan, or an Installation that requires approval); otherwise a
  *     genuinely policy-denied plan projects to `failed`.
  *   - The remaining internal statuses map 1:1 to the unified statuses; the
  *     internal model has no `expired`, so it is never produced here.
@@ -17,15 +17,30 @@
 
 import type {
   ApplyRun,
+  OpenTofuOperation,
   PlanRun,
 } from "takosumi-contract/deploy-control-api";
 import type { SourceSyncRun } from "takosumi-contract/sources";
-import type { Run, RunType, UnifiedRunStatus } from "takosumi-contract/lanes";
-import { runTypeForOperation } from "takosumi-contract/lanes";
+import type { Run, RunStatus, RunType } from "takosumi-contract/runs";
 
 /** ISO timestamp from an epoch-millis field, or undefined when absent. */
 function iso(at: number | undefined): string | undefined {
   return at === undefined ? undefined : new Date(at).toISOString();
+}
+
+/**
+ * The §19 RunType for an internal PlanRun/ApplyRun, given the run phase. A
+ * `destroy` operation splits into `destroy_plan` / `destroy_apply` (invariant
+ * 16); every other operation collapses to the bare phase (`plan` / `apply`).
+ */
+function runTypeForOperation(
+  operation: OpenTofuOperation,
+  phase: "plan" | "apply",
+): RunType {
+  if (operation === "destroy") {
+    return phase === "plan" ? "destroy_plan" : "destroy_apply";
+  }
+  return phase;
 }
 
 /**
@@ -37,7 +52,7 @@ function iso(at: number | undefined): string | undefined {
 function planUnifiedStatus(
   status: PlanRun["status"],
   awaitingApproval: boolean,
-): UnifiedRunStatus {
+): RunStatus {
   switch (status) {
     case "queued":
       return "queued";
@@ -56,7 +71,7 @@ function planUnifiedStatus(
   }
 }
 
-function applyUnifiedStatus(status: ApplyRun["status"]): UnifiedRunStatus {
+function applyUnifiedStatus(status: ApplyRun["status"]): RunStatus {
   switch (status) {
     case "queued":
       return "queued";
@@ -74,7 +89,7 @@ function applyUnifiedStatus(status: ApplyRun["status"]): UnifiedRunStatus {
   }
 }
 
-function syncUnifiedStatus(status: SourceSyncRun["status"]): UnifiedRunStatus {
+function syncUnifiedStatus(status: SourceSyncRun["status"]): RunStatus {
   switch (status) {
     case "queued":
       return "queued";
@@ -95,6 +110,9 @@ function policyStatusFor(
   return status === "passed" ? "pass" : "deny";
 }
 
+/** §19 Run.createdBy is required; default when the internal record has none. */
+const DEFAULT_CREATED_BY = "system";
+
 export interface ProjectPlanRunOptions {
   /**
    * Whether this plan is waiting on an approval (the environment requires
@@ -103,13 +121,14 @@ export interface ProjectPlanRunOptions {
    * `waiting_approval`.
    */
   readonly awaitingApproval?: boolean;
-  readonly appId?: string;
-  readonly environmentId?: string;
+  /** Installation the plan targets (spec §5: one Installation = one root). */
+  readonly installationId?: string;
+  readonly environment?: string;
   /** Resolved SourceSnapshot id, when the plan referenced one. */
   readonly sourceSnapshotId?: string;
 }
 
-/** Projects a PlanRun onto the unified §6.8 Run. */
+/** Projects a PlanRun onto the unified §19 Run. */
 export function projectPlanRun(
   planRun: PlanRun,
   options: ProjectPlanRunOptions = {},
@@ -121,8 +140,10 @@ export function projectPlanRun(
   return {
     id: planRun.id,
     spaceId: planRun.spaceId,
-    ...(options.appId ? { appId: options.appId } : {}),
-    ...(options.environmentId ? { environmentId: options.environmentId } : {}),
+    ...(options.installationId
+      ? { installationId: options.installationId }
+      : {}),
+    ...(options.environment ? { environment: options.environment } : {}),
     type,
     status: planUnifiedStatus(planRun.status, options.awaitingApproval ?? false),
     ...(options.sourceSnapshotId
@@ -137,6 +158,7 @@ export function projectPlanRun(
       : {}),
     policyStatus: policyStatusFor(planRun.policy.status),
     ...(errorCode ? { errorCode } : {}),
+    createdBy: DEFAULT_CREATED_BY,
     createdAt: new Date(planRun.createdAt).toISOString(),
     ...(iso(planRun.startedAt) ? { startedAt: iso(planRun.startedAt)! } : {}),
     ...(iso(planRun.finishedAt) ? { finishedAt: iso(planRun.finishedAt)! } : {}),
@@ -144,12 +166,12 @@ export function projectPlanRun(
 }
 
 export interface ProjectApplyRunOptions {
-  readonly appId?: string;
-  readonly environmentId?: string;
+  readonly installationId?: string;
+  readonly environment?: string;
   readonly sourceSnapshotId?: string;
 }
 
-/** Projects an ApplyRun (apply or destroy_apply) onto the unified §6.8 Run. */
+/** Projects an ApplyRun (apply or destroy_apply) onto the unified §19 Run. */
 export function projectApplyRun(
   applyRun: ApplyRun,
   options: ProjectApplyRunOptions = {},
@@ -161,8 +183,10 @@ export function projectApplyRun(
   return {
     id: applyRun.id,
     spaceId: applyRun.spaceId,
-    ...(options.appId ? { appId: options.appId } : {}),
-    ...(options.environmentId ? { environmentId: options.environmentId } : {}),
+    ...(options.installationId
+      ? { installationId: options.installationId }
+      : {}),
+    ...(options.environment ? { environment: options.environment } : {}),
     type,
     status: applyUnifiedStatus(applyRun.status),
     ...(options.sourceSnapshotId
@@ -172,13 +196,14 @@ export function projectApplyRun(
       ? { planDigest: applyRun.expected.planDigest }
       : {}),
     ...(errorCode ? { errorCode } : {}),
+    createdBy: DEFAULT_CREATED_BY,
     createdAt: new Date(applyRun.createdAt).toISOString(),
     ...(iso(applyRun.startedAt) ? { startedAt: iso(applyRun.startedAt)! } : {}),
     ...(iso(applyRun.finishedAt) ? { finishedAt: iso(applyRun.finishedAt)! } : {}),
   };
 }
 
-/** Projects a SourceSyncRun onto the unified §6.8 Run. */
+/** Projects a SourceSyncRun onto the unified §19 Run. */
 export function projectSourceSyncRun(run: SourceSyncRun): Run {
   return {
     id: run.id,
@@ -188,6 +213,7 @@ export function projectSourceSyncRun(run: SourceSyncRun): Run {
     ...(run.snapshotId && run.status === "succeeded"
       ? { sourceSnapshotId: run.snapshotId }
       : {}),
+    createdBy: DEFAULT_CREATED_BY,
     createdAt: run.createdAt,
     ...(run.startedAt ? { startedAt: run.startedAt } : {}),
     ...(run.finishedAt ? { finishedAt: run.finishedAt } : {}),

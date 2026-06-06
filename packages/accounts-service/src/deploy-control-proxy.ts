@@ -233,7 +233,10 @@ export async function requestRollback(input: {
     deployControl: input.deployControl,
     installationId: input.installationId,
     body: {
-      source: target.source,
+      // The Space-direct Deployment no longer carries a `source`; the source
+      // identity comes from the reviewed PlanRun (resolved by planRunId inside
+      // requestDeploymentApply), so the rollback apply body only needs the
+      // planRunId + the optional expected guard.
       planRunId,
       ...(isRecord(input.body.expected) ? { expected: input.body.expected } : {}),
     },
@@ -367,9 +370,12 @@ async function createPlanRunForFacadeRequest(input: {
       : undefined;
   }
 
+  // The Space-direct Installation no longer carries a `source` (its source
+  // identity lives in the control plane behind `sourceId`, not resolvable
+  // in-process here). The plan source must therefore come from the request
+  // body; there is no Installation-derived fallback.
   const source = openTofuSourceFromRequestSource({
     source: isRecord(input.body.source) ? input.body.source : undefined,
-    fallback: installation?.source,
   });
   if (!source) {
     return {
@@ -626,8 +632,14 @@ function adaptApplyRunResult(input: {
   if (!isRecord(input.payload)) return input;
   const response = input.payload as Partial<ApplyRunResponse>;
   if (!response.applyRun) return input;
-  const deployment = response.deployment
-    ? deploymentProjection(response.deployment)
+  const deployment = response.deployment;
+  // The Space-direct Deployment dropped its embedded `source` / `planDigest` /
+  // `sourceCommit` projections (those now live on the reviewed PlanRun and in
+  // the control-plane SourceSnapshot, not on the Deployment row). The only
+  // public payload still derivable from the Deployment is the launch URL, which
+  // comes from the projected outputsPublic map.
+  const outputs = deployment
+    ? deploymentOutputsFromPublic(deployment.outputsPublic)
     : undefined;
   return {
     ...input,
@@ -637,13 +649,7 @@ function adaptApplyRunResult(input: {
       applyRun: response.applyRun,
       ...(response.installation ? { installation: response.installation } : {}),
       ...(deployment ? { deployment } : {}),
-      ...(deployment ? { source: deployment.source } : {}),
-      ...(deployment?.planDigest
-        ? {
-          planDigest: deployment.planDigest,
-        }
-        : {}),
-      ...(deployment ? launchProjection(deployment.outputs) : {}),
+      ...(outputs ? launchProjection(outputs) : {}),
       response: {
         status: input.status,
       },
@@ -651,18 +657,26 @@ function adaptApplyRunResult(input: {
   };
 }
 
-function deploymentProjection(deployment: Deployment): Deployment & {
-  readonly planDigest?: string;
-  readonly source: OpenTofuModuleSource & {
-    readonly url?: string;
-    readonly commit?: string;
-  };
-} {
-  return {
-    ...deployment,
-    planDigest: deployment.planDigest,
-    source: sourceProjection(deployment.source, deployment.sourceCommit),
-  };
+/**
+ * Projects the Space-direct Deployment's `outputsPublic` map into the legacy
+ * {@link DeploymentOutput} list shape the launch projection consumes. The
+ * Space-direct model only retains the public (allowlisted) outputs as a plain
+ * record; sensitivity and typed kinds are no longer carried here, so `kind`
+ * mirrors the output name and `sensitive` is always false.
+ */
+function deploymentOutputsFromPublic(
+  outputsPublic: Readonly<Record<string, unknown>> | undefined,
+): readonly DeploymentOutput[] {
+  // The wire Deployment may omit `outputsPublic` (no allowlisted outputs, or a
+  // control-plane response that has not yet adopted the field); tolerate it
+  // rather than throw, matching the forgiving wire-reading style of this proxy.
+  if (!isRecord(outputsPublic)) return [];
+  return Object.entries(outputsPublic).map(([name, value]) => ({
+    name,
+    kind: name as DeploymentOutput["kind"],
+    value: value as DeploymentOutput["value"],
+    sensitive: false,
+  }));
 }
 
 function sourceProjection(

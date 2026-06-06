@@ -6,7 +6,9 @@ import {
   OpenTofuControllerError,
   OpenTofuDeploymentController,
 } from "./mod.ts";
-import type { RunnerProfile } from "takosumi-contract/deploy-control-api";
+import type { CreatePlanRunRequest, RunnerProfile } from "takosumi-contract/deploy-control-api";
+import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
+import { seedInstallationModel } from "./test_model_fixture.ts";
 
 const SOURCE = {
   kind: "git",
@@ -14,22 +16,68 @@ const SOURCE = {
   ref: "main",
 } as const;
 
+/**
+ * Installation-first model setup (spec §5). Seeds Space + Source + Snapshot +
+ * InstallConfig + Installation into a freshly constructed store and returns it
+ * alongside an `update` plan-run request bound to the seeded Installation. The
+ * Installation is seeded WITH a current deployment so the apply-expected guard is
+ * well-formed (an `update` PlanRun carries `installationCurrentDeploymentId`; a
+ * fresh installation has no prior deployment to guard against). The store is
+ * passed back so the caller can wire it into the controller it constructs.
+ */
+async function seedUpdatableInstallation(options: {
+  readonly store?: InMemoryOpenTofuDeploymentStore;
+  readonly spaceId?: string;
+  readonly installationId?: string;
+  readonly source?: CreatePlanRunRequest["source"];
+  readonly runnerProfileId?: string;
+  readonly requiredProviders?: readonly string[];
+} = {}): Promise<{
+  readonly store: InMemoryOpenTofuDeploymentStore;
+  readonly installationId: string;
+  readonly currentDeploymentId: string;
+  readonly request: CreatePlanRunRequest;
+}> {
+  const store = options.store ?? new InMemoryOpenTofuDeploymentStore();
+  const installationId = options.installationId ?? "inst_fixture";
+  const { installation } = await seedInstallationModel(store, {
+    spaceId: options.spaceId,
+    installationId,
+  });
+  const currentDeploymentId = `dep_seed_${installationId}`;
+  await store.putInstallation({
+    ...installation,
+    currentDeploymentId,
+    status: "active",
+  });
+  const request: CreatePlanRunRequest = {
+    spaceId: installation.spaceId,
+    installationId: installation.id,
+    operation: "update",
+    source: options.source ?? SOURCE,
+    requiredProviders: options.requiredProviders ??
+      ["registry.opentofu.org/cloudflare/cloudflare"],
+    ...(options.runnerProfileId
+      ? { runnerProfileId: options.runnerProfileId }
+      : {}),
+  };
+  return { store, installationId, currentDeploymentId, request };
+}
+
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const LOCK_DIGEST =
   "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
 test("plan run stays queued when no OpenTofu runner is injected", async () => {
+  const { store, request } = await seedUpdatableInstallation();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: () => 1,
     newId: deterministicIds(),
   });
 
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  });
+  const { planRun } = await controller.createPlanRun(request);
 
   expect(planRun.id).toEqual("plan_0001");
   expect(planRun.status).toEqual("queued");
@@ -38,7 +86,9 @@ test("plan run stays queued when no OpenTofu runner is injected", async () => {
 
 test("PlanRun stores variable digest without retaining variable values", async () => {
   let runnerVariables: Readonly<Record<string, unknown>> | undefined;
+  const { store, request } = await seedUpdatableInstallation();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(2),
     newId: deterministicIds(),
     runner: {
@@ -55,13 +105,11 @@ test("PlanRun stores variable digest without retaining variable values", async (
   });
 
   const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
+    ...request,
     variables: {
       account_id: "acct_123",
       token: "super-secret-plan-token",
     },
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   const persisted = await controller.getPlanRun(planRun.id);
   const payload = JSON.stringify({
@@ -81,17 +129,15 @@ test("PlanRun stores variable digest without retaining variable values", async (
 });
 
 test("plan/apply records Installation, Deployment, and non-sensitive well-known outputs", async () => {
+  const { store, request, installationId } = await seedUpdatableInstallation();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(10),
     newId: deterministicIds(),
     runner: fakeRunner(),
   });
 
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  });
+  const { planRun } = await controller.createPlanRun(request);
 
   expect(planRun.status).toEqual("succeeded");
   expect(planRun.planDigest).toEqual(PLAN_DIGEST);
@@ -101,10 +147,29 @@ test("plan/apply records Installation, Deployment, and non-sensitive well-known 
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
 
+  // A successful apply patches the pre-existing Installation to `active` with the
+  // new current deployment + bumped state generation (§21), and records a
+  // Deployment whose public outputs project only the non-sensitive well-known
+  // value (`launch_url`); the sensitive output never lands on the run.
   expect(applied.applyRun.status).toEqual("succeeded");
-  expect(applied.installation?.status).toEqual("ready");
-  expect(applied.deployment?.status).toEqual("succeeded");
-  expect(applied.deployment?.outputs).toEqual([
+  expect(applied.installation?.id).toEqual(installationId);
+  expect(applied.installation?.status).toEqual("active");
+  expect(applied.installation?.currentDeploymentId).toEqual(
+    applied.deployment!.id,
+  );
+  expect(applied.installation?.currentStateGeneration).toEqual(1);
+  expect(applied.deployment?.status).toEqual("active");
+  expect(applied.deployment?.installationId).toEqual(installationId);
+  expect(applied.deployment?.stateGeneration).toEqual(1);
+  expect(applied.deployment?.outputsPublic).toEqual({
+    launch_url: "https://app.example.test",
+  });
+  expect(applied.applyRun.stateBackend.kind).toEqual("operator-managed");
+  expect(applied.applyRun.stateLock.status).toEqual("recorded");
+  expect(applied.applyRun.stateLock.backendRef).toEqual(
+    "state://takosumi/cloudflare-default",
+  );
+  expect(applied.applyRun.outputs).toEqual([
     {
       name: "launch_url",
       kind: "launch_url",
@@ -112,11 +177,6 @@ test("plan/apply records Installation, Deployment, and non-sensitive well-known 
       sensitive: false,
     },
   ]);
-  expect(applied.applyRun.stateBackend.kind).toEqual("operator-managed");
-  expect(applied.applyRun.stateLock.status).toEqual("recorded");
-  expect(applied.applyRun.stateLock.backendRef).toEqual(
-    "state://takosumi/cloudflare-default",
-  );
   expect(applied.applyRun.outputs?.some((output) =>
     output.name === "secret_value"
   )).toEqual(false);
@@ -133,31 +193,30 @@ test("plan/apply records Installation, Deployment, and non-sensitive well-known 
 });
 
 test("PlanRun rejects installation operations outside the requested space", async () => {
+  const { store, installationId } = await seedUpdatableInstallation({
+    spaceId: "space_a",
+  });
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(20),
     newId: deterministicIds(),
     runner: fakeRunner(),
   });
-  const created = await controller.createPlanRun({
-    spaceId: "space_a",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  });
-  const applied = await controller.createApplyRun({
-    planRunId: created.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(created.planRun),
-  });
 
   await expect(controller.createPlanRun({
     spaceId: "space_b",
-    installationId: applied.installation!.id,
+    installationId,
     operation: "update",
     source: SOURCE,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   })).rejects.toThrow(/belongs to space space_a/);
 });
 
-test("PlanRun operation and installationId shape is explicit", async () => {
+test("PlanRun requires an existing Installation regardless of operation", async () => {
+  // Installation-first model (spec §5): every plan / destroy plan targets an
+  // existing Installation row. A raw createPlanRun with no installationId is a
+  // failed_precondition for any operation; the create-on-apply legacy path is
+  // removed.
   const controller = new OpenTofuDeploymentController({
     now: sequenceNow(30),
     newId: deterministicIds(),
@@ -169,111 +228,102 @@ test("PlanRun operation and installationId shape is explicit", async () => {
     operation: "update",
     source: SOURCE,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  })).rejects.toThrow(/update PlanRun requires installationId/);
+  })).rejects.toThrow(/plan requires an existing installationId/);
 
   await expect(controller.createPlanRun({
     spaceId: "space_test",
     operation: "destroy",
     source: SOURCE,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  })).rejects.toThrow(/destroy PlanRun requires installationId/);
+  })).rejects.toThrow(/plan requires an existing installationId/);
+
+  // A missing installationId target is a typed not_found (the id is consulted
+  // before any operation-specific handling).
+  await expect(controller.createPlanRun({
+    spaceId: "space_test",
+    installationId: "inst_missing",
+    operation: "update",
+    source: SOURCE,
+    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+  })).rejects.toMatchObject({
+    name: "OpenTofuControllerError",
+    code: "not_found",
+  });
 });
 
-test("update and destroy PlanRuns stay bound to the Installation source and runner profile", async () => {
-  const defaultProfile = createDefaultRunnerProfiles(60)[0]!;
-  const otherProfile: RunnerProfile = {
-    ...defaultProfile,
-    id: "other-cloudflare",
-    name: "Other Cloudflare",
-    stateBackend: {
-      ...defaultProfile.stateBackend,
-      ref: "state://takosumi/other-cloudflare",
-    },
-  };
+test("update and destroy PlanRuns stay bound to the targeted Installation", async () => {
+  // The Space-direct Installation no longer carries a `source` identity or a
+  // `runnerProfileId` (those are resolved through the InstallConfig / Source), so
+  // the binding the run preserves is the Installation + its current Deployment
+  // cursor: an update / destroy plan records the installationId, the operation,
+  // and the Installation's current Deployment as the apply guard.
+  const { store, installationId, currentDeploymentId } =
+    await seedUpdatableInstallation();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(60),
     newId: deterministicIds(),
     runner: fakeRunner(),
-    runnerProfiles: [defaultProfile, otherProfile],
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  });
-  const applied = await controller.createApplyRun({
-    planRunId: planRun.id,
-    expected: applyExpectedGuardFromPlanRun(planRun),
-  });
-
-  await expect(controller.createPlanRun({
-    spaceId: "space_test",
-    installationId: applied.installation!.id,
-    operation: "update",
-    source: SOURCE,
-    runnerProfileId: otherProfile.id,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  })).rejects.toThrow(/uses runner profile cloudflare-default/);
-
-  await expect(controller.createPlanRun({
-    spaceId: "space_test",
-    installationId: applied.installation!.id,
-    operation: "update",
-    source: {
-      kind: "git",
-      url: "https://github.com/example/other.git",
-      ref: "main",
-    },
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  })).rejects.toThrow(/source identity does not match/);
 
   const { planRun: updatePlan } = await controller.createPlanRun({
     spaceId: "space_test",
-    installationId: applied.installation!.id,
+    installationId,
     operation: "update",
     source: { ...SOURCE, ref: "release-2" },
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   expect(updatePlan.status).toEqual("succeeded");
-  expect(updatePlan.installationCurrentDeploymentId).toEqual(
-    applied.deployment!.id,
+  expect(updatePlan.installationId).toEqual(installationId);
+  expect(updatePlan.operation).toEqual("update");
+  expect(updatePlan.installationCurrentDeploymentId).toEqual(currentDeploymentId);
+
+  const { planRun: destroyPlan } = await controller.createPlanRun({
+    spaceId: "space_test",
+    installationId,
+    operation: "destroy",
+    source: SOURCE,
+    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+  });
+  expect(destroyPlan.status).toEqual("succeeded");
+  expect(destroyPlan.installationId).toEqual(installationId);
+  expect(destroyPlan.operation).toEqual("destroy");
+  expect(destroyPlan.installationCurrentDeploymentId).toEqual(
+    currentDeploymentId,
   );
 });
 
 test("apply rejects a stale update PlanRun after the current Deployment changes", async () => {
+  const { store, installationId } = await seedUpdatableInstallation();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(80),
     newId: deterministicIds(),
     runner: fakeRunner(),
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  });
-  const applied = await controller.createApplyRun({
-    planRunId: planRun.id,
-    expected: applyExpectedGuardFromPlanRun(planRun),
-  });
+  // Two update plans are created against the SAME current Deployment.
   const { planRun: staleUpdate } = await controller.createPlanRun({
     spaceId: "space_test",
-    installationId: applied.installation!.id,
+    installationId,
     operation: "update",
     source: { ...SOURCE, ref: "release-2" },
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   const { planRun: freshUpdate } = await controller.createPlanRun({
     spaceId: "space_test",
-    installationId: applied.installation!.id,
+    installationId,
     operation: "update",
     source: { ...SOURCE, ref: "release-3" },
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
+  // Applying the fresh plan moves the Installation's current Deployment forward.
   await controller.createApplyRun({
     planRunId: freshUpdate.id,
     expected: applyExpectedGuardFromPlanRun(freshUpdate),
   });
 
+  // The stale plan was created against the prior current Deployment; its apply
+  // must be rejected.
   await expect(controller.createApplyRun({
     planRunId: staleUpdate.id,
     expected: applyExpectedGuardFromPlanRun(staleUpdate),
@@ -366,16 +416,18 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
 });
 
 test("local source requires runner profile opt-in", async () => {
+  const denying = await seedUpdatableInstallation({
+    source: { kind: "local", path: "/workspace/module" },
+  });
   const controller = new OpenTofuDeploymentController({
+    store: denying.store,
     now: sequenceNow(40),
     newId: deterministicIds(),
   });
 
-  await expect(controller.createPlanRun({
-    spaceId: "space_test",
-    source: { kind: "local", path: "/workspace/module" },
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  })).rejects.toThrow(/does not allow local source paths/);
+  await expect(controller.createPlanRun(denying.request)).rejects.toThrow(
+    /does not allow local source paths/,
+  );
 
   const localProfile: RunnerProfile = {
     ...createDefaultRunnerProfiles(40)[0],
@@ -383,22 +435,26 @@ test("local source requires runner profile opt-in", async () => {
     name: "Local dev",
     sourcePolicy: { allowLocalSource: true },
   };
+  const allowing = await seedUpdatableInstallation({
+    installationId: "inst_local",
+    source: { kind: "local", path: "/workspace/module" },
+    runnerProfileId: "local-dev",
+  });
   const localController = new OpenTofuDeploymentController({
+    store: allowing.store,
     now: sequenceNow(50),
     newId: deterministicIds(),
     runnerProfiles: [localProfile],
     defaultRunnerProfileId: "local-dev",
   });
-  const { planRun } = await localController.createPlanRun({
-    spaceId: "space_test",
-    source: { kind: "local", path: "/workspace/module" },
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  });
+  const { planRun } = await localController.createPlanRun(allowing.request);
   expect(planRun.status).toEqual("queued");
 });
 
 test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", async () => {
+  const { store, request } = await seedUpdatableInstallation();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(15),
     newId: deterministicIds(),
     runner: {
@@ -423,11 +479,7 @@ test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", 
     },
   });
 
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  });
+  const { planRun } = await controller.createPlanRun(request);
   const applied = await controller.createApplyRun({
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
@@ -447,16 +499,14 @@ test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", 
 });
 
 test("apply expected guard compares against the succeeded PlanRun", async () => {
+  const { store, request } = await seedUpdatableInstallation();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(20),
     newId: deterministicIds(),
     runner: fakeRunner(),
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  });
+  const { planRun } = await controller.createPlanRun(request);
 
   await expect(
     controller.createApplyRun({
@@ -473,16 +523,14 @@ test("apply expected guard compares against the succeeded PlanRun", async () => 
 });
 
 test("apply requires the full reviewed PlanRun guard", async () => {
+  const { store, request } = await seedUpdatableInstallation();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(25),
     newId: deterministicIds(),
     runner: fakeRunner(),
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  });
+  const { planRun } = await controller.createPlanRun(request);
 
   await expect(
     controller.createApplyRun({
@@ -500,17 +548,17 @@ test("apply requires the full reviewed PlanRun guard", async () => {
 });
 
 test("runner profile policy blocks unsupported providers before execution", async () => {
+  const { store, request } = await seedUpdatableInstallation({
+    requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
+  });
   const controller = new OpenTofuDeploymentController({
+    store,
     now: () => 30,
     newId: deterministicIds(),
     runner: fakeRunner(),
   });
 
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
-  });
+  const { planRun } = await controller.createPlanRun(request);
 
   expect(planRun.status).toEqual("blocked");
   expect(planRun.policy.status).toEqual("blocked");
@@ -519,7 +567,11 @@ test("runner profile policy blocks unsupported providers before execution", asyn
 
 test("runner profile policy requires declared providers before execution", async () => {
   let runnerCalled = false;
+  const { store, request } = await seedUpdatableInstallation({
+    requiredProviders: [],
+  });
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(31),
     newId: deterministicIds(),
     runner: {
@@ -535,11 +587,7 @@ test("runner profile policy requires declared providers before execution", async
     },
   });
 
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: [],
-  });
+  const { planRun } = await controller.createPlanRun(request);
 
   expect(planRun.status).toEqual("blocked");
   expect(runnerCalled).toEqual(false);
@@ -580,7 +628,9 @@ test("runner profile policy blocks denied providers and missing credential refs"
     credentialRefs: [],
     createdAt: 1,
   };
+  const { store, request } = await seedUpdatableInstallation();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: () => 35,
     newId: deterministicIds(),
     runner: fakeRunner(),
@@ -589,9 +639,8 @@ test("runner profile policy blocks denied providers and missing credential refs"
   });
 
   const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    ...request,
+    runnerProfileId: profile.id,
   });
 
   expect(planRun.status).toEqual("blocked");
@@ -612,7 +661,9 @@ test("runner profile policy blocks required providers without credential refs", 
     credentialRefs: [],
     createdAt: 1,
   };
+  const { store, request } = await seedUpdatableInstallation();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: () => 36,
     newId: deterministicIds(),
     runner: fakeRunner(),
@@ -621,9 +672,8 @@ test("runner profile policy blocks required providers without credential refs", 
   });
 
   const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    ...request,
+    runnerProfileId: profile.id,
   });
 
   expect(planRun.status).toEqual("blocked");
@@ -745,18 +795,19 @@ test("default runner profiles record provider network policy patterns", () => {
 });
 
 test("template runner profiles are blocked until operator validation enables them", async () => {
+  const { store, request } = await seedUpdatableInstallation({
+    requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
+    runnerProfileId: "aws-default",
+  });
   const controller = new OpenTofuDeploymentController({
+    store,
     now: () => 38,
     newId: deterministicIds(),
     runner: fakeRunner(),
     defaultRunnerProfileId: "aws-default",
   });
 
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
-  });
+  const { planRun } = await controller.createPlanRun(request);
 
   expect(planRun.status).toEqual("blocked");
   expect(planRun.policy.reasons.join("\n")).toContain("disabled template");
@@ -766,7 +817,12 @@ test("operator-enabled template runner profiles can pass provider policy", async
   const profile = createDefaultRunnerProfiles(123).find((candidate) =>
     candidate.id === "aws-default"
   )!;
+  const { store, request } = await seedUpdatableInstallation({
+    requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
+    runnerProfileId: profile.id,
+  });
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(39),
     newId: deterministicIds(),
     runner: {
@@ -788,36 +844,24 @@ test("operator-enabled template runner profiles can pass provider policy", async
     defaultRunnerProfileId: profile.id,
   });
 
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
-  });
+  const { planRun } = await controller.createPlanRun(request);
 
   expect(planRun.status).toEqual("succeeded");
   expect(planRun.policy.status).toEqual("passed");
 });
 
 test("destroy is recorded as an ApplyRun when the runner succeeds", async () => {
+  const { store, installationId } = await seedUpdatableInstallation();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(40),
     newId: deterministicIds(),
     runner: fakeRunner(),
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  });
-  const applied = await controller.createApplyRun({
-    planRunId: planRun.id,
-    expected: applyExpectedGuardFromPlanRun(planRun),
-  });
-  const installation = applied.installation!;
 
   const { planRun: destroyPlan } = await controller.createPlanRun({
-    spaceId: installation.spaceId,
-    installationId: installation.id,
+    spaceId: "space_test",
+    installationId,
     source: SOURCE,
     operation: "destroy",
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
@@ -830,7 +874,7 @@ test("destroy is recorded as an ApplyRun when the runner succeeds", async () => 
   expect(destroyed.applyRun.operation).toEqual("destroy");
   expect(destroyed.applyRun.status).toEqual("succeeded");
   expect(destroyed.installation?.status).toEqual("destroyed");
-  expect(destroyed.installation?.currentDeploymentId).toEqual(null);
+  expect(destroyed.installation?.currentDeploymentId ?? null).toEqual(null);
   expect(destroyed.applyRun.auditEvents.map((event) => event.type)).toContain(
     "destroy.completed",
   );

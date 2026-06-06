@@ -23,11 +23,11 @@ const NEW_STATE_BYTES = new TextEncoder().encode('{"version":4,"serial":2}');
 
 const SCOPE = {
   spaceId: "spc_1",
-  appId: "app_1",
-  envId: "env_1",
+  installationId: "inst_1",
+  environment: "production",
   generation: 2,
 };
-const STATE_PREFIX = "spaces/spc_1/apps/app_1/envs/env_1/states";
+const STATE_PREFIX = "spaces/spc_1/installations/inst_1/envs/production/states";
 const NEXT_STATE_KEY = `${STATE_PREFIX}/00000002.tfstate.enc`;
 const CURRENT_KEY = `${STATE_PREFIX}/current.json`;
 

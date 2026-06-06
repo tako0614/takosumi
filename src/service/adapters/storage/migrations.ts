@@ -540,54 +540,63 @@ export const postgresStorageTableDefinitions:
       primaryKey: ["id"],
     },
     {
-      name: "takosumi_plan_runs",
+      // Single §27 run ledger: PlanRun (kind plan), ApplyRun (kind apply), and
+      // SourceSyncRun (kind source_sync) persist as rows discriminated by kind.
+      name: "takosumi_runs",
       domain: "deploy",
       columns: [
         "id",
+        "kind",
         "space_id",
         "installation_id",
-        "runner_profile_id",
-        "status",
-        "run_json",
         "created_at",
-        "updated_at",
+        "run_json",
       ],
       primaryKey: ["id"],
-      indexes: [["space_id"], ["installation_id"], ["status"], ["created_at"]],
+      indexes: [["kind"], ["space_id"], ["installation_id"], ["created_at"]],
     },
     {
-      name: "takosumi_apply_runs",
+      name: "takosumi_spaces",
       domain: "deploy",
       columns: [
         "id",
-        "plan_run_id",
-        "space_id",
-        "installation_id",
-        "deployment_id",
-        "runner_profile_id",
-        "status",
-        "run_json",
+        "handle",
+        "space_json",
         "created_at",
         "updated_at",
       ],
       primaryKey: ["id"],
-      indexes: [["plan_run_id"], ["space_id"], ["installation_id"], ["status"]],
+      uniqueConstraints: [["handle"]],
     },
     {
-      name: "takosumi_destroy_runs",
+      name: "takosumi_install_configs",
       domain: "deploy",
       columns: [
         "id",
-        "installation_id",
         "space_id",
-        "runner_profile_id",
-        "status",
-        "run_json",
+        "install_type",
+        "trust_level",
+        "config_json",
         "created_at",
         "updated_at",
       ],
       primaryKey: ["id"],
-      indexes: [["installation_id"], ["space_id"], ["status"]],
+      indexes: [["space_id"], ["install_type"]],
+    },
+    {
+      name: "takosumi_operator_connection_defaults",
+      domain: "deploy",
+      columns: [
+        "id",
+        "capability",
+        "provider",
+        "connection_id",
+        "default_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["capability"]],
     },
     {
       name: "takosumi_opentofu_installations",
@@ -595,15 +604,18 @@ export const postgresStorageTableDefinitions:
       columns: [
         "id",
         "space_id",
-        "app_id",
+        "name",
+        "environment",
+        "source_id",
+        "install_config_id",
         "current_deployment_id",
-        "runner_profile_id",
         "status",
         "installation_json",
         "created_at",
         "updated_at",
       ],
       primaryKey: ["id"],
+      uniqueConstraints: [["space_id", "name", "environment"]],
       indexes: [["space_id"], ["current_deployment_id"], ["created_at"]],
     },
     {
@@ -611,92 +623,51 @@ export const postgresStorageTableDefinitions:
       domain: "deploy",
       columns: [
         "id",
+        "space_id",
         "installation_id",
-        "plan_run_id",
+        "environment",
         "apply_run_id",
-        "runner_profile_id",
+        "state_generation",
         "status",
         "deployment_json",
         "created_at",
-        "completed_at",
       ],
       primaryKey: ["id"],
-      indexes: [["installation_id"], ["plan_run_id"], ["apply_run_id"], [
+      indexes: [["installation_id"], ["space_id"], ["apply_run_id"], [
         "created_at",
       ]],
-    },
-    {
-      name: "takosumi_apps",
-      domain: "deploy",
-      columns: [
-        "id",
-        "space_id",
-        "source_id",
-        "install_type",
-        "install_profile_id",
-        "app_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [["space_id"], ["source_id"]],
-    },
-    {
-      name: "takosumi_environments",
-      domain: "deploy",
-      columns: [
-        "id",
-        "app_id",
-        "name",
-        "environment_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      uniqueConstraints: [["app_id", "name"]],
-      indexes: [["app_id"]],
-    },
-    {
-      name: "takosumi_install_profiles",
-      domain: "deploy",
-      columns: [
-        "id",
-        "install_type",
-        "trust_level",
-        "profile_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [["install_type"], ["trust_level"]],
     },
     {
       name: "takosumi_deployment_profiles",
       domain: "deploy",
       columns: [
         "id",
-        "environment_id",
+        "space_id",
+        "installation_id",
+        "environment",
         "profile_json",
         "created_at",
         "updated_at",
       ],
       primaryKey: ["id"],
-      uniqueConstraints: [["environment_id"]],
-      indexes: [["environment_id"]],
+      uniqueConstraints: [["installation_id", "environment"]],
+      indexes: [["installation_id", "environment"]],
     },
     {
       name: "takosumi_state_snapshots",
       domain: "deploy",
       columns: [
         "id",
-        "environment_id",
+        "space_id",
+        "installation_id",
+        "environment",
         "generation",
         "snapshot_json",
         "created_at",
       ],
       primaryKey: ["id"],
-      uniqueConstraints: [["environment_id", "generation"]],
-      indexes: [["environment_id", "generation"]],
+      uniqueConstraints: [["installation_id", "environment", "generation"]],
+      indexes: [["installation_id", "environment", "generation"]],
     },
   ]);
 
@@ -1452,5 +1423,158 @@ create index if not exists takosumi_state_snapshots_environment_idx
   on takosumi_state_snapshots (environment_id, generation);`,
       down: `drop index if exists takosumi_state_snapshots_environment_idx;
 drop table if exists takosumi_state_snapshots;`,
+    },
+    {
+      id: "deploy.takosumi_space_direct_model.create",
+      version: 35,
+      domain: "deploy",
+      description:
+        "Migrate the deploy-control ledger to the Space-direct Installation model (Core Specification §27). Destructively drops the retired App / Environment / InstallProfile lane tables, the split plan/apply/destroy run tables, and the App/Environment-keyed installations / deployments / deployment_profiles / state_snapshots, then creates: spaces, install_configs, operator_connection_defaults, the new-shape installations (UNIQUE(space_id, name, environment)), deployments, deployment_profiles (keyed (installation_id, environment)), state_snapshots (keyed (installation_id, environment, generation) UNIQUE), and a SINGLE runs table (rows discriminated by kind plan / apply / source_sync). No data migration: the prior model is pre-GA and is dropped.",
+      sql: `drop table if exists takosumi_apps;
+drop table if exists takosumi_environments;
+drop table if exists takosumi_install_profiles;
+drop table if exists takosumi_destroy_runs;
+drop table if exists takosumi_plan_runs;
+drop table if exists takosumi_apply_runs;
+drop table if exists takosumi_deployment_profiles;
+drop table if exists takosumi_state_snapshots;
+drop table if exists takosumi_opentofu_deployments;
+drop table if exists takosumi_opentofu_installations;
+create table if not exists takosumi_runs (
+  id              text   primary key,
+  kind            text   not null
+    check (kind in ('plan','destroy_plan','apply','destroy_apply','source_sync')),
+  space_id        text   not null,
+  installation_id text,
+  created_at      text   not null,
+  run_json        jsonb  not null
+);
+create index if not exists takosumi_runs_kind_idx
+  on takosumi_runs (kind);
+create index if not exists takosumi_runs_space_idx
+  on takosumi_runs (space_id);
+create index if not exists takosumi_runs_installation_idx
+  on takosumi_runs (installation_id);
+create index if not exists takosumi_runs_created_at_idx
+  on takosumi_runs (created_at);
+create table if not exists takosumi_spaces (
+  id          text   primary key,
+  handle      text   not null unique,
+  space_json  jsonb  not null,
+  created_at  text   not null,
+  updated_at  text   not null
+);
+create table if not exists takosumi_install_configs (
+  id           text   primary key,
+  space_id     text,
+  install_type text   not null
+    check (install_type in ('core','opentofu_module','opentofu_root','app_source')),
+  trust_level  text   not null
+    check (trust_level in ('official','trusted','space','raw')),
+  config_json  jsonb  not null,
+  created_at   text   not null,
+  updated_at   text   not null
+);
+create index if not exists takosumi_install_configs_space_idx
+  on takosumi_install_configs (space_id);
+create index if not exists takosumi_install_configs_install_type_idx
+  on takosumi_install_configs (install_type);
+create table if not exists takosumi_operator_connection_defaults (
+  id            text   primary key,
+  capability    text   not null unique,
+  provider      text   not null,
+  connection_id text   not null,
+  default_json  jsonb  not null,
+  created_at    text   not null,
+  updated_at    text   not null
+);
+create table if not exists takosumi_opentofu_installations (
+  id                     text   primary key,
+  space_id               text   not null,
+  name                   text   not null,
+  environment            text   not null,
+  source_id              text   not null,
+  install_config_id      text   not null,
+  current_deployment_id  text,
+  status                 text   not null
+    check (status in ('installing','active','stale','error','destroying','destroyed')),
+  installation_json      jsonb  not null,
+  created_at             text   not null,
+  updated_at             text   not null,
+  unique (space_id, name, environment)
+);
+create index if not exists takosumi_opentofu_installations_space_idx
+  on takosumi_opentofu_installations (space_id);
+create index if not exists takosumi_opentofu_installations_current_deployment_idx
+  on takosumi_opentofu_installations (current_deployment_id);
+create index if not exists takosumi_opentofu_installations_created_at_idx
+  on takosumi_opentofu_installations (created_at);
+create table if not exists takosumi_opentofu_deployments (
+  id               text    primary key,
+  space_id         text    not null,
+  installation_id  text    not null,
+  environment      text    not null,
+  apply_run_id     text    not null,
+  state_generation integer not null,
+  status           text    not null
+    check (status in ('active','superseded','rolled_back','destroyed')),
+  deployment_json  jsonb   not null,
+  created_at       text    not null
+);
+create index if not exists takosumi_opentofu_deployments_installation_idx
+  on takosumi_opentofu_deployments (installation_id);
+create index if not exists takosumi_opentofu_deployments_space_idx
+  on takosumi_opentofu_deployments (space_id);
+create index if not exists takosumi_opentofu_deployments_apply_idx
+  on takosumi_opentofu_deployments (apply_run_id);
+create index if not exists takosumi_opentofu_deployments_created_at_idx
+  on takosumi_opentofu_deployments (created_at);
+create table if not exists takosumi_deployment_profiles (
+  id              text   primary key,
+  space_id        text   not null,
+  installation_id text   not null,
+  environment     text   not null,
+  profile_json    jsonb  not null,
+  created_at      text   not null,
+  updated_at      text   not null,
+  unique (installation_id, environment)
+);
+create index if not exists takosumi_deployment_profiles_installation_idx
+  on takosumi_deployment_profiles (installation_id, environment);
+create table if not exists takosumi_state_snapshots (
+  id              text    primary key,
+  space_id        text    not null,
+  installation_id text    not null,
+  environment     text    not null,
+  generation      integer not null,
+  snapshot_json   jsonb   not null,
+  created_at      text    not null,
+  unique (installation_id, environment, generation)
+);
+create index if not exists takosumi_state_snapshots_installation_idx
+  on takosumi_state_snapshots (installation_id, environment, generation);`,
+      down: `drop index if exists takosumi_state_snapshots_installation_idx;
+drop table if exists takosumi_state_snapshots;
+drop index if exists takosumi_deployment_profiles_installation_idx;
+drop table if exists takosumi_deployment_profiles;
+drop index if exists takosumi_opentofu_deployments_created_at_idx;
+drop index if exists takosumi_opentofu_deployments_apply_idx;
+drop index if exists takosumi_opentofu_deployments_space_idx;
+drop index if exists takosumi_opentofu_deployments_installation_idx;
+drop table if exists takosumi_opentofu_deployments;
+drop index if exists takosumi_opentofu_installations_created_at_idx;
+drop index if exists takosumi_opentofu_installations_current_deployment_idx;
+drop index if exists takosumi_opentofu_installations_space_idx;
+drop table if exists takosumi_opentofu_installations;
+drop table if exists takosumi_operator_connection_defaults;
+drop index if exists takosumi_install_configs_install_type_idx;
+drop index if exists takosumi_install_configs_space_idx;
+drop table if exists takosumi_install_configs;
+drop table if exists takosumi_spaces;
+drop index if exists takosumi_runs_created_at_idx;
+drop index if exists takosumi_runs_installation_idx;
+drop index if exists takosumi_runs_space_idx;
+drop index if exists takosumi_runs_kind_idx;
+drop table if exists takosumi_runs;`,
     },
   ]);
