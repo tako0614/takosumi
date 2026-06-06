@@ -1,10 +1,16 @@
 /**
- * Persistence boundary for the OpenTofu deployment-control-plane ledger.
+ * Persistence boundary for the control-plane ledger (core-spec.md §27).
+ *
+ * The logical schema is the Space-direct Installation DAG model: spaces,
+ * sources(+snapshots), connections(+secret blobs), install_configs,
+ * installations (UNIQUE(space_id, name, environment)), deployment_profiles,
+ * a SINGLE `runs` table (internal PlanRun / ApplyRun / SourceSyncRun records
+ * persist as rows discriminated by run kind; the public §19 Run is a
+ * projection), state_snapshots, and deployments.
  *
  * The in-memory implementation is for dev/test only. Production/staging hosts
- * should inject the SQL store (or another durable store) so PlanRun and
- * ApplyRun records, Installation records, Deployment records, and runner profiles survive
- * restarts and Worker isolate recycling.
+ * inject the SQL store or the D1 store, both of which materialize the §27
+ * tables.
  */
 import type {
   ApplyRun,
@@ -13,6 +19,7 @@ import type {
   DispatchBuildSpec,
   DispatchGeneratedRoot,
   DispatchTemplateRef,
+  InstallConfig,
   Installation,
   PlanRun,
   RunnerProfile,
@@ -23,12 +30,12 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+import type { Space } from "takosumi-contract/spaces";
 import type {
-  App,
-  DeploymentProfile,
-  Environment,
-  InstallProfile,
-} from "takosumi-contract/lanes";
+  Capability,
+  OperatorConnectionDefault,
+} from "takosumi-contract/capability-bindings";
+import type { DeploymentProfile } from "takosumi-contract/installations";
 import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 
@@ -43,9 +50,9 @@ export interface PlanRunInputs {
   readonly planRunId: string;
   readonly variables: Readonly<Record<string, JsonValue>>;
   /**
-   * Template dispatch data (Phase 1C). Present for template-backed PlanRuns: the
-   * resolved template reference (baked-in module path), the Takosumi-generated
-   * root module, and the optional build phase. The queue consumer re-reads this
+   * Template dispatch data. Present for template-backed PlanRuns: the resolved
+   * template reference (baked-in module path), the Takosumi-generated root
+   * module, and the optional build phase. The queue consumer re-reads this
    * sidecar and threads it onto the runner dispatch payload (`request.template` /
    * `request.generatedRoot` / `request.build`). Never projected into the public
    * ledger.
@@ -84,8 +91,7 @@ export interface StoredSecretBlob {
  *     is returned exactly once at creation and never stored).
  *   - `lastSeenCommit` — last commit the scheduler/webhook observed via a
  *     `source_sync`; used to skip re-syncing when the ref has not moved.
- *   - `autoSync` — whether the scheduler should poll this source (M1: default
- *     false; flips true when an Environment with autoSync references it in M2+).
+ *   - `autoSync` — whether the scheduler should poll this source.
  */
 export interface StoredSource extends Source {
   readonly hookSecretHash: string;
@@ -94,20 +100,20 @@ export interface StoredSource extends Source {
 }
 
 export interface InstallationPatchGuard {
-  readonly currentDeploymentId: string | null;
+  readonly currentDeploymentId: string | undefined;
   readonly status?: Installation["status"];
 }
 
 export class InstallationPatchGuardConflict extends Error {
-  readonly expectedCurrentDeploymentId: string | null;
-  readonly actualCurrentDeploymentId: string | null;
+  readonly expectedCurrentDeploymentId: string | undefined;
+  readonly actualCurrentDeploymentId: string | undefined;
   readonly expectedStatus?: Installation["status"];
   readonly actualStatus?: Installation["status"];
 
   constructor(input: {
     readonly id: string;
-    readonly expectedCurrentDeploymentId: string | null;
-    readonly actualCurrentDeploymentId: string | null;
+    readonly expectedCurrentDeploymentId: string | undefined;
+    readonly actualCurrentDeploymentId: string | undefined;
     readonly expectedStatus?: Installation["status"];
     readonly actualStatus?: Installation["status"];
   }) {
@@ -127,11 +133,27 @@ export class InstallationPatchGuardConflict extends Error {
   }
 }
 
+/** Fields a controller may patch on an Installation row. */
+export type InstallationPatch = Partial<
+  Pick<
+    Installation,
+    | "currentDeploymentId"
+    | "currentStateGeneration"
+    | "currentOutputSnapshotId"
+    | "status"
+    | "updatedAt"
+  >
+>;
+
 export interface OpenTofuDeploymentStore {
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile>;
   getRunnerProfile(id: string): Promise<RunnerProfile | undefined>;
   listRunnerProfiles(): Promise<readonly RunnerProfile[]>;
 
+  // Internal run records. PHYSICALLY these persist into the single §27 `runs`
+  // table (discriminated by run kind: plan/destroy_plan rows for PlanRun,
+  // apply/destroy_apply rows for ApplyRun, source_sync rows for SourceSyncRun);
+  // the typed accessors stay so the controller keeps its internal shapes.
   putPlanRun(run: PlanRun): Promise<PlanRun>;
   getPlanRun(id: string): Promise<PlanRun | undefined>;
 
@@ -143,22 +165,34 @@ export interface OpenTofuDeploymentStore {
   putApplyRun(run: ApplyRun): Promise<ApplyRun>;
   getApplyRun(id: string): Promise<ApplyRun | undefined>;
 
+  // SourceSyncRun ledger records (rows of `runs` with kind source_sync).
+  putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun>;
+  getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined>;
+  listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]>;
+
+  // Space records (spec §4). The owner namespace Installations live under.
+  putSpace(space: Space): Promise<Space>;
+  getSpace(id: string): Promise<Space | undefined>;
+  getSpaceByHandle(handle: string): Promise<Space | undefined>;
+  listSpaces(): Promise<readonly Space[]>;
+
+  // InstallConfig records (spec §11). `spaceId` absent = official catalog config.
+  putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
+  getInstallConfig(id: string): Promise<InstallConfig | undefined>;
+  listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]>;
+
+  // Installation records (spec §5 / §27, UNIQUE(space_id, name, environment)).
   putInstallation(installation: Installation): Promise<Installation>;
   getInstallation(id: string): Promise<Installation | undefined>;
+  getInstallationByName(
+    spaceId: string,
+    name: string,
+    environment: string,
+  ): Promise<Installation | undefined>;
   listInstallations(spaceId?: string): Promise<readonly Installation[]>;
   patchInstallation(
     id: string,
-    patch: Partial<
-      Pick<
-        Installation,
-        | "currentDeploymentId"
-        | "status"
-        | "updatedAt"
-        | "runnerProfileId"
-        | "source"
-        | "stateGeneration"
-      >
-    >,
+    patch: InstallationPatch,
     guard?: InstallationPatchGuard,
   ): Promise<Installation | undefined>;
 
@@ -178,6 +212,17 @@ export interface OpenTofuDeploymentStore {
   getSecretBlob(connectionId: string): Promise<StoredSecretBlob | undefined>;
   deleteSecretBlob(connectionId: string): Promise<boolean>;
 
+  // Operator default connections (spec §9 / §27 operator_connection_defaults).
+  putOperatorConnectionDefault(
+    record: OperatorConnectionDefault,
+  ): Promise<OperatorConnectionDefault>;
+  getOperatorConnectionDefault(
+    capability: Capability,
+  ): Promise<OperatorConnectionDefault | undefined>;
+  listOperatorConnectionDefaults(): Promise<
+    readonly OperatorConnectionDefault[]
+  >;
+
   // Source records (public fields + internal hook-secret hash / lastSeenCommit /
   // autoSync). The hook secret plaintext is NEVER stored.
   putSource(source: StoredSource): Promise<StoredSource>;
@@ -190,45 +235,26 @@ export interface OpenTofuDeploymentStore {
   getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined>;
   listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]>;
 
-  // SourceSyncRun ledger records.
-  putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun>;
-  getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined>;
-  listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]>;
-
-  // App records (spec §6.3). Space-scoped; bind a Source to one install type.
-  putApp(app: App): Promise<App>;
-  getApp(id: string): Promise<App | undefined>;
-  listApps(spaceId?: string): Promise<readonly App[]>;
-  deleteApp(id: string): Promise<boolean>;
-
-  // Environment records (spec §6.4). One execution target per App lane.
-  putEnvironment(environment: Environment): Promise<Environment>;
-  getEnvironment(id: string): Promise<Environment | undefined>;
-  listEnvironments(appId: string): Promise<readonly Environment[]>;
-  deleteEnvironment(id: string): Promise<boolean>;
-
-  // InstallProfile records (spec §6.6). Seeded from the official template
-  // catalog at bootstrap with trustLevel "official".
-  putInstallProfile(profile: InstallProfile): Promise<InstallProfile>;
-  getInstallProfile(id: string): Promise<InstallProfile | undefined>;
-  listInstallProfiles(): Promise<readonly InstallProfile[]>;
-
-  // DeploymentProfile records (spec §6.7). One per Environment; the upsert key
-  // is the environmentId.
+  // DeploymentProfile records (spec §9 / §27 deployment_profiles). One per
+  // (installation, environment); the upsert key is that pair.
   putDeploymentProfile(profile: DeploymentProfile): Promise<DeploymentProfile>;
-  getDeploymentProfileByEnvironment(
-    environmentId: string,
+  getDeploymentProfileByInstallation(
+    installationId: string,
+    environment: string,
   ): Promise<DeploymentProfile | undefined>;
 
-  // StateSnapshot records (spec §6.9). Immutable per-(environment, generation)
-  // metadata recorded after a successful apply/destroy state persist. The
-  // encrypted state bytes live in R2_STATE; only the metadata enters the ledger.
+  // StateSnapshot records (spec §20). Immutable per-(installation, environment,
+  // generation) metadata recorded after a successful apply/destroy state
+  // persist. The encrypted state bytes live in R2_STATE; only the metadata
+  // enters the ledger.
   putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot>;
   getLatestStateSnapshot(
-    environmentId: string,
+    installationId: string,
+    environment: string,
   ): Promise<StateSnapshot | undefined>;
   listStateSnapshots(
-    environmentId: string,
+    installationId: string,
+    environment: string,
   ): Promise<readonly StateSnapshot[]>;
 }
 
@@ -238,16 +264,16 @@ export class InMemoryOpenTofuDeploymentStore
   readonly #planRuns = new Map<string, PlanRun>();
   readonly #planRunInputs = new Map<string, PlanRunInputs>();
   readonly #applyRuns = new Map<string, ApplyRun>();
+  readonly #sourceSyncRuns = new Map<string, SourceSyncRun>();
+  readonly #spaces = new Map<string, Space>();
+  readonly #installConfigs = new Map<string, InstallConfig>();
   readonly #installations = new Map<string, Installation>();
   readonly #deployments = new Map<string, Deployment>();
   readonly #connections = new Map<string, Connection>();
   readonly #secretBlobs = new Map<string, StoredSecretBlob>();
+  readonly #operatorDefaults = new Map<string, OperatorConnectionDefault>();
   readonly #sources = new Map<string, StoredSource>();
   readonly #sourceSnapshots = new Map<string, SourceSnapshot>();
-  readonly #sourceSyncRuns = new Map<string, SourceSyncRun>();
-  readonly #apps = new Map<string, App>();
-  readonly #environments = new Map<string, Environment>();
-  readonly #installProfiles = new Map<string, InstallProfile>();
   readonly #deploymentProfiles = new Map<string, DeploymentProfile>();
   readonly #stateSnapshots = new Map<string, StateSnapshot>();
 
@@ -304,7 +330,86 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(this.#applyRuns.get(id));
   }
 
+  putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
+    this.#sourceSyncRuns.set(run.id, run);
+    return Promise.resolve(run);
+  }
+
+  getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
+    return Promise.resolve(this.#sourceSyncRuns.get(id));
+  }
+
+  listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]> {
+    return Promise.resolve(
+      Array.from(this.#sourceSyncRuns.values())
+        .filter((row) => row.sourceId === sourceId)
+        .sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        ),
+    );
+  }
+
+  putSpace(space: Space): Promise<Space> {
+    this.#spaces.set(space.id, space);
+    return Promise.resolve(space);
+  }
+
+  getSpace(id: string): Promise<Space | undefined> {
+    return Promise.resolve(this.#spaces.get(id));
+  }
+
+  getSpaceByHandle(handle: string): Promise<Space | undefined> {
+    return Promise.resolve(
+      Array.from(this.#spaces.values()).find((row) => row.handle === handle),
+    );
+  }
+
+  listSpaces(): Promise<readonly Space[]> {
+    return Promise.resolve(
+      Array.from(this.#spaces.values()).sort((a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+      ),
+    );
+  }
+
+  putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
+    this.#installConfigs.set(config.id, config);
+    return Promise.resolve(config);
+  }
+
+  getInstallConfig(id: string): Promise<InstallConfig | undefined> {
+    return Promise.resolve(this.#installConfigs.get(id));
+  }
+
+  listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]> {
+    const rows = Array.from(this.#installConfigs.values());
+    const filtered = spaceId === undefined
+      ? rows
+      : rows.filter((row) => row.spaceId === spaceId);
+    return Promise.resolve(
+      filtered.sort((a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+      ),
+    );
+  }
+
   putInstallation(installation: Installation): Promise<Installation> {
+    for (const existing of this.#installations.values()) {
+      if (
+        existing.id !== installation.id &&
+        existing.spaceId === installation.spaceId &&
+        existing.name === installation.name &&
+        existing.environment === installation.environment
+      ) {
+        return Promise.reject(
+          new Error(
+            `installation unique(space_id, name, environment) violated: ` +
+              `@${installation.spaceId}/${installation.name} ` +
+              `(${installation.environment})`,
+          ),
+        );
+      }
+    }
     this.#installations.set(installation.id, installation);
     return Promise.resolve(installation);
   }
@@ -313,27 +418,36 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(this.#installations.get(id));
   }
 
+  getInstallationByName(
+    spaceId: string,
+    name: string,
+    environment: string,
+  ): Promise<Installation | undefined> {
+    return Promise.resolve(
+      Array.from(this.#installations.values()).find(
+        (row) =>
+          row.spaceId === spaceId &&
+          row.name === name &&
+          row.environment === environment,
+      ),
+    );
+  }
+
   listInstallations(spaceId?: string): Promise<readonly Installation[]> {
     const rows = Array.from(this.#installations.values());
     const filtered = spaceId === undefined
       ? rows
       : rows.filter((row) => row.spaceId === spaceId);
-    return Promise.resolve(filtered.sort((a, b) => a.createdAt - b.createdAt));
+    return Promise.resolve(
+      filtered.sort((a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+      ),
+    );
   }
 
   patchInstallation(
     id: string,
-    patch: Partial<
-      Pick<
-        Installation,
-        | "currentDeploymentId"
-        | "status"
-        | "updatedAt"
-        | "runnerProfileId"
-        | "source"
-        | "stateGeneration"
-      >
-    >,
+    patch: InstallationPatch,
     guard?: InstallationPatchGuard,
   ): Promise<Installation | undefined> {
     const existing = this.#installations.get(id);
@@ -371,7 +485,9 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#deployments.values())
         .filter((row) => row.installationId === installationId)
-        .sort((a, b) => a.createdAt - b.createdAt),
+        .sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        ),
     );
   }
 
@@ -407,6 +523,39 @@ export class InMemoryOpenTofuDeploymentStore
 
   deleteSecretBlob(connectionId: string): Promise<boolean> {
     return Promise.resolve(this.#secretBlobs.delete(connectionId));
+  }
+
+  putOperatorConnectionDefault(
+    record: OperatorConnectionDefault,
+  ): Promise<OperatorConnectionDefault> {
+    // One default per capability: the capability is the natural upsert key.
+    for (const [key, existing] of this.#operatorDefaults) {
+      if (existing.capability === record.capability && key !== record.id) {
+        this.#operatorDefaults.delete(key);
+      }
+    }
+    this.#operatorDefaults.set(record.id, record);
+    return Promise.resolve(record);
+  }
+
+  getOperatorConnectionDefault(
+    capability: Capability,
+  ): Promise<OperatorConnectionDefault | undefined> {
+    return Promise.resolve(
+      Array.from(this.#operatorDefaults.values()).find(
+        (row) => row.capability === capability,
+      ),
+    );
+  }
+
+  listOperatorConnectionDefaults(): Promise<
+    readonly OperatorConnectionDefault[]
+  > {
+    return Promise.resolve(
+      Array.from(this.#operatorDefaults.values()).sort((a, b) =>
+        a.capability.localeCompare(b.capability)
+      ),
+    );
   }
 
   putSource(source: StoredSource): Promise<StoredSource> {
@@ -453,97 +602,17 @@ export class InMemoryOpenTofuDeploymentStore
     );
   }
 
-  putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
-    this.#sourceSyncRuns.set(run.id, run);
-    return Promise.resolve(run);
-  }
-
-  getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
-    return Promise.resolve(this.#sourceSyncRuns.get(id));
-  }
-
-  listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]> {
-    return Promise.resolve(
-      Array.from(this.#sourceSyncRuns.values())
-        .filter((row) => row.sourceId === sourceId)
-        .sort((a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
-        ),
-    );
-  }
-
-  putApp(app: App): Promise<App> {
-    this.#apps.set(app.id, app);
-    return Promise.resolve(app);
-  }
-
-  getApp(id: string): Promise<App | undefined> {
-    return Promise.resolve(this.#apps.get(id));
-  }
-
-  listApps(spaceId?: string): Promise<readonly App[]> {
-    const rows = Array.from(this.#apps.values());
-    const filtered = spaceId === undefined
-      ? rows
-      : rows.filter((row) => row.spaceId === spaceId);
-    return Promise.resolve(
-      filtered.sort((a, b) =>
-        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
-      ),
-    );
-  }
-
-  deleteApp(id: string): Promise<boolean> {
-    return Promise.resolve(this.#apps.delete(id));
-  }
-
-  putEnvironment(environment: Environment): Promise<Environment> {
-    this.#environments.set(environment.id, environment);
-    return Promise.resolve(environment);
-  }
-
-  getEnvironment(id: string): Promise<Environment | undefined> {
-    return Promise.resolve(this.#environments.get(id));
-  }
-
-  listEnvironments(appId: string): Promise<readonly Environment[]> {
-    return Promise.resolve(
-      Array.from(this.#environments.values())
-        .filter((row) => row.appId === appId)
-        .sort((a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
-        ),
-    );
-  }
-
-  deleteEnvironment(id: string): Promise<boolean> {
-    return Promise.resolve(this.#environments.delete(id));
-  }
-
-  putInstallProfile(profile: InstallProfile): Promise<InstallProfile> {
-    this.#installProfiles.set(profile.id, profile);
-    return Promise.resolve(profile);
-  }
-
-  getInstallProfile(id: string): Promise<InstallProfile | undefined> {
-    return Promise.resolve(this.#installProfiles.get(id));
-  }
-
-  listInstallProfiles(): Promise<readonly InstallProfile[]> {
-    return Promise.resolve(
-      Array.from(this.#installProfiles.values()).sort((a, b) =>
-        a.id.localeCompare(b.id)
-      ),
-    );
-  }
-
   putDeploymentProfile(
     profile: DeploymentProfile,
   ): Promise<DeploymentProfile> {
-    // The environmentId is the natural upsert key (one profile per env). Drop a
-    // stale row that referenced the same environment under a different id.
+    // One profile per (installation, environment): drop a stale row under a
+    // different id for the same pair.
     for (const [key, existing] of this.#deploymentProfiles) {
-      if (existing.environmentId === profile.environmentId && key !== profile.id) {
+      if (
+        existing.installationId === profile.installationId &&
+        existing.environment === profile.environment &&
+        key !== profile.id
+      ) {
         this.#deploymentProfiles.delete(key);
       }
     }
@@ -551,12 +620,15 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(profile);
   }
 
-  getDeploymentProfileByEnvironment(
-    environmentId: string,
+  getDeploymentProfileByInstallation(
+    installationId: string,
+    environment: string,
   ): Promise<DeploymentProfile | undefined> {
     return Promise.resolve(
       Array.from(this.#deploymentProfiles.values()).find(
-        (row) => row.environmentId === environmentId,
+        (row) =>
+          row.installationId === installationId &&
+          row.environment === environment,
       ),
     );
   }
@@ -567,21 +639,30 @@ export class InMemoryOpenTofuDeploymentStore
   }
 
   listStateSnapshots(
-    environmentId: string,
+    installationId: string,
+    environment: string,
   ): Promise<readonly StateSnapshot[]> {
     return Promise.resolve(
       Array.from(this.#stateSnapshots.values())
-        .filter((row) => row.environmentId === environmentId)
+        .filter(
+          (row) =>
+            row.installationId === installationId &&
+            row.environment === environment,
+        )
         .sort((a, b) => a.generation - b.generation),
     );
   }
 
   getLatestStateSnapshot(
-    environmentId: string,
+    installationId: string,
+    environment: string,
   ): Promise<StateSnapshot | undefined> {
     let latest: StateSnapshot | undefined;
     for (const row of this.#stateSnapshots.values()) {
-      if (row.environmentId !== environmentId) continue;
+      if (
+        row.installationId !== installationId ||
+        row.environment !== environment
+      ) continue;
       if (!latest || row.generation > latest.generation) latest = row;
     }
     return Promise.resolve(latest);

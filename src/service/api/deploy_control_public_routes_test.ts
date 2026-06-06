@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 
 import { createApiApp } from "./app.ts";
 import { OpenTofuDeploymentController } from "../domains/deploy-control/mod.ts";
+import { InMemoryOpenTofuDeploymentStore } from "../domains/deploy-control/store.ts";
+import { seedInstallationModel } from "../domains/deploy-control/test_model_fixture.ts";
 
 test("deploy_control_public_routes — OpenTofu endpoints respond with 501 when controller is absent",
   async () => {
@@ -81,10 +83,20 @@ test("deploy_control_public_routes — rejects invalid bearer", async () => {
 });
 
 test("deploy_control_public_routes — scoped bearer enforces space and records actor", async () => {
+  // Installation-first model (spec §5): a raw POST /v1/plan-runs targets an
+  // existing Installation. Seed one in the allowed space so the controller has a
+  // valid plan target; the denied case is rejected by the route's space-scope
+  // check before the controller is reached.
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const { installation } = await seedInstallationModel(store, {
+    spaceId: "space_allowed",
+    installationId: "inst_allowed1",
+  });
   const app = await createApiApp({
     registerDeployControlPublicRoutes: true,
     deployControlPublicRouteOptions: {
       controller: new OpenTofuDeploymentController({
+        store,
         now: () => 1,
         newId: () => "plan_abcdef12",
       }),
@@ -109,6 +121,8 @@ test("deploy_control_public_routes — scoped bearer enforces space and records 
     },
     body: JSON.stringify({
       spaceId: "space_denied",
+      installationId: installation.id,
+      operation: "create",
       source: { kind: "git", url: "https://github.com/example/app.git" },
       runnerProfileId: "cloudflare-default",
     }),
@@ -123,6 +137,11 @@ test("deploy_control_public_routes — scoped bearer enforces space and records 
     },
     body: JSON.stringify({
       spaceId: "space_allowed",
+      installationId: installation.id,
+      // The principal is scoped to `create`; pass it explicitly so the route's
+      // permission check matches (installationId would otherwise default to
+      // `update`).
+      operation: "create",
       source: { kind: "git", url: "https://github.com/example/app.git" },
       runnerProfileId: "cloudflare-default",
     }),

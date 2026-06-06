@@ -1,14 +1,21 @@
 /**
- * Public OpenTofu deployment-control-plane HTTP surface.
+ * Public OpenTofu deployment-control-plane HTTP surface (Space-direct
+ * Installation model).
  *
- *   GET  /v1/runner-profiles
- *   POST /v1/plan-runs
- *   GET  /v1/plan-runs/{id}
- *   POST /v1/apply-runs
- *   GET  /v1/apply-runs/{id}
+ *   POST /v1/spaces
+ *   GET  /v1/spaces
+ *   GET  /v1/spaces/{spaceId}
+ *   POST /v1/spaces/{spaceId}/installations
+ *   GET  /v1/spaces/{spaceId}/installations
+ *   GET  /v1/install-configs
  *   GET  /v1/installations/{id}
+ *   POST /v1/installations/{id}/plan
+ *   POST /v1/installations/{id}/destroy-plan
  *   GET  /v1/installations/{id}/deployments
  *   GET  /v1/installations/{id}/deployment-outputs
+ *   GET  /v1/runner-profiles
+ *   POST /v1/plan-runs ; GET /v1/plan-runs/{id}
+ *   POST /v1/apply-runs ; GET /v1/apply-runs/{id}
  */
 
 import type { Context, Hono } from "hono";
@@ -34,18 +41,14 @@ import type {
   CreateSourceRequest,
   PatchSourceRequest,
 } from "takosumi-contract/sources";
-import {
-  APPS_PATH,
-  INSTALL_PROFILES_PATH,
-} from "takosumi-contract/lanes";
 import type {
-  CreateAppRequest,
-  CreateEnvironmentRequest,
-  PatchAppRequest,
-  PatchEnvironmentRequest,
-  PutDeploymentProfileRequest,
-} from "takosumi-contract/lanes";
-import type { LanesService } from "../domains/lanes/mod.ts";
+  CreateSpaceRequest,
+  SpacesService,
+} from "../domains/spaces/mod.ts";
+import type {
+  CreateInstallationRequest,
+  InstallationsService,
+} from "../domains/installations/mod.ts";
 import {
   OpenTofuControllerError,
   type OpenTofuControllerErrorCode,
@@ -77,21 +80,15 @@ export const TAKOSUMI_SOURCE_SYNC_ROUTE =
   "/v1/sources/:sourceId/sync" as const;
 export const TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE =
   "/v1/sources/:sourceId/snapshots" as const;
-export const TAKOSUMI_APPS_ROUTE = APPS_PATH;
-export const TAKOSUMI_APP_ROUTE = "/v1/apps/:appId" as const;
-export const TAKOSUMI_APP_ENVIRONMENTS_ROUTE =
-  "/v1/apps/:appId/environments" as const;
-export const TAKOSUMI_ENVIRONMENT_ROUTE =
-  "/v1/environments/:environmentId" as const;
-export const TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE =
-  "/v1/environments/:environmentId/deployment-profile" as const;
-export const TAKOSUMI_ENVIRONMENT_PLAN_ROUTE =
-  "/v1/environments/:environmentId/plan" as const;
-export const TAKOSUMI_ENVIRONMENT_DESTROY_PLAN_ROUTE =
-  "/v1/environments/:environmentId/destroy-plan" as const;
-export const TAKOSUMI_INSTALL_PROFILES_ROUTE = INSTALL_PROFILES_PATH;
-export const TAKOSUMI_INSTALL_PROFILE_ROUTE =
-  "/v1/install-profiles/:installProfileId" as const;
+export const TAKOSUMI_SPACES_ROUTE = "/v1/spaces" as const;
+export const TAKOSUMI_SPACE_ROUTE = "/v1/spaces/:spaceId" as const;
+export const TAKOSUMI_SPACE_INSTALLATIONS_ROUTE =
+  "/v1/spaces/:spaceId/installations" as const;
+export const TAKOSUMI_INSTALL_CONFIGS_ROUTE = "/v1/install-configs" as const;
+export const TAKOSUMI_INSTALLATION_PLAN_ROUTE =
+  "/v1/installations/:installationId/plan" as const;
+export const TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE =
+  "/v1/installations/:installationId/destroy-plan" as const;
 export const TAKOSUMI_RUN_ROUTE = "/v1/runs/:runId" as const;
 export const TAKOSUMI_RUN_APPROVE_ROUTE = "/v1/runs/:runId/approve" as const;
 export const TAKOSUMI_RUN_CANCEL_ROUTE = "/v1/runs/:runId/cancel" as const;
@@ -297,173 +294,91 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
   },
   {
     method: "POST",
-    path: TAKOSUMI_APPS_ROUTE,
-    summary: "Creates an App binding a Source to one install type.",
+    path: TAKOSUMI_SPACES_ROUTE,
+    summary:
+      "Creates a Space (owner namespace `@handle`) Installations live directly under.",
     auth: "deploy-control-token",
-    operationId: "createApp",
+    operationId: "createSpace",
     openapi: {
-      requestSchema: "CreateAppRequest",
+      requestSchema: "CreateSpaceRequest",
       okStatus: "201",
-      okSchema: "AppResponse",
+      okSchema: "SpaceResponse",
     },
   },
   {
     method: "GET",
-    path: TAKOSUMI_APPS_ROUTE,
-    summary: "Lists Apps for a Space.",
+    path: TAKOSUMI_SPACES_ROUTE,
+    summary: "Lists Spaces visible to the principal.",
     auth: "deploy-control-token",
-    operationId: "listApps",
-    openapi: { query: ["spaceId"], okSchema: "ListAppsResponse" },
+    operationId: "listSpaces",
+    openapi: { okSchema: "ListSpacesResponse" },
   },
   {
     method: "GET",
-    path: TAKOSUMI_APP_ROUTE,
-    summary: "Reads an App record.",
+    path: TAKOSUMI_SPACE_ROUTE,
+    summary: "Reads a Space record.",
     auth: "deploy-control-token",
-    operationId: "getApp",
-    openapi: { pathParams: ["appId"], okSchema: "AppResponse" },
-  },
-  {
-    method: "PATCH",
-    path: TAKOSUMI_APP_ROUTE,
-    summary: "Updates an App (name / install profile binding).",
-    auth: "deploy-control-token",
-    operationId: "patchApp",
-    openapi: {
-      pathParams: ["appId"],
-      requestSchema: "PatchAppRequest",
-      okSchema: "AppResponse",
-    },
-  },
-  {
-    method: "DELETE",
-    path: TAKOSUMI_APP_ROUTE,
-    summary: "Deletes an App (refused while Environments exist).",
-    auth: "deploy-control-token",
-    operationId: "deleteApp",
-    openapi: {
-      pathParams: ["appId"],
-      okStatus: "204",
-      okSchema: "EmptyResponse",
-    },
+    operationId: "getSpace",
+    openapi: { pathParams: ["spaceId"], okSchema: "SpaceResponse" },
   },
   {
     method: "POST",
-    path: TAKOSUMI_APP_ENVIRONMENTS_ROUTE,
+    path: TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
     summary:
-      "Creates an Environment lane for an App (automation defaults by name production/preview).",
+      "Creates an Installation under a Space (UNIQUE(space, name, environment)) from a Source + InstallConfig.",
     auth: "deploy-control-token",
-    operationId: "createEnvironment",
+    operationId: "createInstallation",
     openapi: {
-      pathParams: ["appId"],
-      requestSchema: "CreateEnvironmentRequest",
+      pathParams: ["spaceId"],
+      requestSchema: "CreateInstallationRequest",
       okStatus: "201",
-      okSchema: "EnvironmentResponse",
+      okSchema: "InstallationResponse",
     },
   },
   {
     method: "GET",
-    path: TAKOSUMI_APP_ENVIRONMENTS_ROUTE,
-    summary: "Lists the Environment lanes of an App.",
+    path: TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
+    summary: "Lists the Installations of a Space.",
     auth: "deploy-control-token",
-    operationId: "listEnvironments",
+    operationId: "listInstallations",
     openapi: {
-      pathParams: ["appId"],
-      okSchema: "ListEnvironmentsResponse",
+      pathParams: ["spaceId"],
+      okSchema: "ListInstallationsResponse",
     },
   },
   {
     method: "GET",
-    path: TAKOSUMI_ENVIRONMENT_ROUTE,
-    summary: "Reads an Environment record.",
-    auth: "deploy-control-token",
-    operationId: "getEnvironment",
-    openapi: {
-      pathParams: ["environmentId"],
-      okSchema: "EnvironmentResponse",
-    },
-  },
-  {
-    method: "PATCH",
-    path: TAKOSUMI_ENVIRONMENT_ROUTE,
+    path: TAKOSUMI_INSTALL_CONFIGS_ROUTE,
     summary:
-      "Updates an Environment (ref / path / autoSync / autoPlan / autoApply / requireApproval).",
+      "Lists InstallConfigs (official catalog, plus the Space's own configs when spaceId is given).",
     auth: "deploy-control-token",
-    operationId: "patchEnvironment",
-    openapi: {
-      pathParams: ["environmentId"],
-      requestSchema: "PatchEnvironmentRequest",
-      okSchema: "EnvironmentResponse",
-    },
-  },
-  {
-    method: "GET",
-    path: TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE,
-    summary: "Reads the per-Environment Connection binding (DeploymentProfile).",
-    auth: "deploy-control-token",
-    operationId: "getDeploymentProfile",
-    openapi: {
-      pathParams: ["environmentId"],
-      okSchema: "DeploymentProfileResponse",
-    },
-  },
-  {
-    method: "PUT",
-    path: TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE,
-    summary:
-      "Replaces the per-Environment Connection binding (DeploymentProfile). References Connection ids only.",
-    auth: "deploy-control-token",
-    operationId: "putDeploymentProfile",
-    openapi: {
-      pathParams: ["environmentId"],
-      requestSchema: "PutDeploymentProfileRequest",
-      okSchema: "DeploymentProfileResponse",
-    },
+    operationId: "listInstallConfigs",
+    openapi: { query: ["spaceId"], okSchema: "ListInstallConfigsResponse" },
   },
   {
     method: "POST",
-    path: TAKOSUMI_ENVIRONMENT_PLAN_ROUTE,
+    path: TAKOSUMI_INSTALLATION_PLAN_ROUTE,
     summary:
-      "Creates an env-driven plan run: resolves the Environment's latest SourceSnapshot and dispatches with environment state scope.",
+      "Creates an Installation-driven plan run: resolves the Source's latest SourceSnapshot and dispatches with installation state scope.",
     auth: "deploy-control-token",
-    operationId: "createEnvironmentPlan",
+    operationId: "createInstallationPlan",
     openapi: {
-      pathParams: ["environmentId"],
+      pathParams: ["installationId"],
       okStatus: "201",
       okSchema: "PlanRunResponse",
     },
   },
   {
     method: "POST",
-    path: TAKOSUMI_ENVIRONMENT_DESTROY_PLAN_ROUTE,
+    path: TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE,
     summary:
-      "Creates an env-driven destroy-plan run (always lands waiting_approval per spec §10.6).",
+      "Creates an Installation-driven destroy-plan run (always lands waiting_approval per spec §23).",
     auth: "deploy-control-token",
-    operationId: "createEnvironmentDestroyPlan",
+    operationId: "createInstallationDestroyPlan",
     openapi: {
-      pathParams: ["environmentId"],
+      pathParams: ["installationId"],
       okStatus: "201",
       okSchema: "PlanRunResponse",
-    },
-  },
-  {
-    method: "GET",
-    path: TAKOSUMI_INSTALL_PROFILES_ROUTE,
-    summary:
-      "Lists InstallProfiles (the official catalog seeded from templates plus operator profiles).",
-    auth: "deploy-control-token",
-    operationId: "listInstallProfiles",
-    openapi: { okSchema: "ListInstallProfilesResponse" },
-  },
-  {
-    method: "GET",
-    path: TAKOSUMI_INSTALL_PROFILE_ROUTE,
-    summary: "Reads an InstallProfile record.",
-    auth: "deploy-control-token",
-    operationId: "getInstallProfile",
-    openapi: {
-      pathParams: ["installProfileId"],
-      okSchema: "InstallProfileResponse",
     },
   },
   {
@@ -503,7 +418,9 @@ export const DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
 const ID_PATTERNS = {
   planRunId: /^plan_[0-9a-zA-Z]{8,64}$/,
   applyRunId: /^apply_[0-9a-zA-Z]{8,64}$/,
-  installationId: /^ins_[0-9a-zA-Z]{8,64}$/,
+  // The InstallationsService mints `inst_...`; the legacy ledger fixtures used
+  // `ins_...`. Accept either prefix so both shapes validate.
+  installationId: /^inst?_[0-9a-zA-Z]{8,64}$/,
 } as const;
 
 const UUID_PATTERN =
@@ -554,32 +471,19 @@ const ALLOWED_KEYS: Record<DeployControlRouteName, ReadonlySet<string>> = {
     "authConnectionId",
     "status",
   ]),
-  appCreate: new Set([
-    "spaceId",
+  spaceCreate: new Set([
+    "handle",
+    "displayName",
+    "type",
+    "ownerUserId",
+    "billingAccountId",
+  ]),
+  installationCreate: new Set([
     "name",
+    "environment",
     "sourceId",
-    "installType",
-    "installProfileId",
+    "installConfigId",
   ]),
-  appPatch: new Set(["name", "installProfileId"]),
-  environmentCreate: new Set([
-    "name",
-    "ref",
-    "path",
-    "autoSync",
-    "autoPlan",
-    "autoApply",
-    "requireApproval",
-  ]),
-  environmentPatch: new Set([
-    "ref",
-    "path",
-    "autoSync",
-    "autoPlan",
-    "autoApply",
-    "requireApproval",
-  ]),
-  deploymentProfilePut: new Set(["bindings"]),
   runApprove: new Set(["approvedBy", "reason"]),
 };
 
@@ -589,19 +493,14 @@ type DeployControlRouteName =
   | "connectionCreate"
   | "sourceCreate"
   | "sourcePatch"
-  | "appCreate"
-  | "appPatch"
-  | "environmentCreate"
-  | "environmentPatch"
-  | "deploymentProfilePut"
+  | "spaceCreate"
+  | "installationCreate"
   | "runApprove";
 
 const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
 const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
-const APP_ID_PATTERN = /^app_[0-9a-zA-Z]{8,64}$/;
-const ENVIRONMENT_ID_PATTERN = /^env_[0-9a-zA-Z]{8,64}$/;
+const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
 const RUN_ID_PATTERN = /^(plan|apply|ssr)_[0-9a-zA-Z]{8,64}$/;
-const INSTALL_PROFILE_ID_PATTERN = /^profile_[0-9a-zA-Z_]{1,96}$/;
 
 export interface DeployControlPublicRouteDependencies {
   /**
@@ -624,11 +523,15 @@ export interface DeployControlPublicRouteDependencies {
    */
   readonly controller?: OpenTofuDeploymentController;
   /**
-   * Lanes domain service (Core Specification §6.3-§6.7). When unset, the
-   * App / Environment / InstallProfile / DeploymentProfile routes return 501
-   * after successful auth.
+   * Spaces domain service (Core Specification §4). When unset, the Space routes
+   * return 501 after successful auth.
    */
-  readonly lanesService?: LanesService;
+  readonly spacesService?: SpacesService;
+  /**
+   * Installations domain service (Core Specification §5 / §11). When unset, the
+   * Installation / InstallConfig routes return 501 after successful auth.
+   */
+  readonly installationsService?: InstallationsService;
 }
 
 export interface DeployControlBearerAuthorizationInput {
@@ -918,269 +821,151 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
-  // --- Lanes: App / Environment / InstallProfile / DeploymentProfile (§6) ---
+  // --- Spaces (Core Specification §4) ----------------------------------------
 
-  const lanes = dependencies.lanesService;
+  const spaces = dependencies.spacesService;
+  const installations = dependencies.installationsService;
 
-  app.post(TAKOSUMI_APPS_ROUTE, deployControlBodyLimit, async (c) => {
+  app.post(TAKOSUMI_SPACES_ROUTE, deployControlBodyLimit, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
+    if (!spaces) return c.json(notImplemented(c, "spaces not wired"), 501);
     const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
     if (limit) return limit;
     return await runHandler(c, async () => {
-      const body = await readJsonBody<CreateAppRequest>(c, "appCreate");
-      ensureSpacePermission(auth.principal, body.spaceId);
-      return c.json({ app: await lanes.createApp(body) }, 201);
+      // Space creation is not scoped by an existing space id, so only an
+      // unrestricted principal (`spaceIds: "*"`) may mint new Spaces.
+      ensureSpaceCreatePermission(auth.principal);
+      const body = await readJsonBody<CreateSpaceRequest>(c, "spaceCreate");
+      return c.json({ space: await spaces.createSpace(body) }, 201);
     });
   });
 
-  app.get(TAKOSUMI_APPS_ROUTE, async (c) => {
+  app.get(TAKOSUMI_SPACES_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const spaceId = c.req.query("spaceId") ?? "";
-    if (spaceId.trim().length === 0) {
-      return c.json(
-        errorEnvelope(c, "invalid_argument", "spaceId query is required"),
-        400,
-      );
-    }
+    if (!spaces) return c.json(notImplemented(c, "spaces not wired"), 501);
     return await runHandler(c, async () => {
-      ensureSpacePermission(auth.principal, spaceId);
-      return c.json({ apps: await lanes.listApps(spaceId) }, 200);
+      const all = await spaces.listSpaces();
+      // A scoped principal only sees the Spaces it may access.
+      const visible = auth.principal.spaceIds === "*"
+        ? all
+        : all.filter((space) => scopeAllows(auth.principal.spaceIds, space.id));
+      return c.json({ spaces: visible }, 200);
     });
   });
 
-  app.get(TAKOSUMI_APP_ROUTE, async (c) => {
+  app.get(TAKOSUMI_SPACE_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const idCheck = ensureValidParam(c, "appId", APP_ID_PATTERN);
+    if (!spaces) return c.json(notImplemented(c, "spaces not wired"), 501);
+    const idCheck = ensureValidParam(c, "spaceId", SPACE_ID_PATTERN);
     if (idCheck.kind === "invalid") return idCheck.response;
     return await runHandler(c, async () => {
-      const app = await lanes.getApp(idCheck.value);
-      ensureSpacePermission(auth.principal, app.spaceId);
-      return c.json({ app }, 200);
+      ensureSpacePermission(auth.principal, idCheck.value);
+      return c.json({ space: await spaces.getSpace(idCheck.value) }, 200);
     });
   });
 
-  app.patch(TAKOSUMI_APP_ROUTE, deployControlBodyLimit, async (c) => {
-    const auth = await authorizeDeployControl(c, dependencies);
-    if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const idCheck = ensureValidParam(c, "appId", APP_ID_PATTERN);
-    if (idCheck.kind === "invalid") return idCheck.response;
-    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
-    if (limit) return limit;
-    return await runHandler(c, async () => {
-      const app = await lanes.getApp(idCheck.value);
-      ensureSpacePermission(auth.principal, app.spaceId);
-      const body = await readJsonBody<PatchAppRequest>(c, "appPatch");
-      return c.json({ app: await lanes.patchApp(idCheck.value, body) }, 200);
-    });
-  });
-
-  app.delete(TAKOSUMI_APP_ROUTE, async (c) => {
-    const auth = await authorizeDeployControl(c, dependencies);
-    if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const idCheck = ensureValidParam(c, "appId", APP_ID_PATTERN);
-    if (idCheck.kind === "invalid") return idCheck.response;
-    return await runHandler(c, async () => {
-      const app = await lanes.getApp(idCheck.value);
-      ensureSpacePermission(auth.principal, app.spaceId);
-      await lanes.deleteApp(idCheck.value);
-      return c.body(null, 204);
-    });
-  });
+  // --- Installations + InstallConfigs (Core Specification §5 / §11) -----------
 
   app.post(
-    TAKOSUMI_APP_ENVIRONMENTS_ROUTE,
+    TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
     deployControlBodyLimit,
     async (c) => {
       const auth = await authorizeDeployControl(c, dependencies);
       if (!auth.ok) return auth.response;
-      if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-      const idCheck = ensureValidParam(c, "appId", APP_ID_PATTERN);
+      if (!installations) {
+        return c.json(notImplemented(c, "installations not wired"), 501);
+      }
+      const idCheck = ensureValidParam(c, "spaceId", SPACE_ID_PATTERN);
       if (idCheck.kind === "invalid") return idCheck.response;
       const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
       if (limit) return limit;
       return await runHandler(c, async () => {
-        const app = await lanes.getApp(idCheck.value);
-        ensureSpacePermission(auth.principal, app.spaceId);
-        const body = await readJsonBody<CreateEnvironmentRequest>(
-          c,
-          "environmentCreate",
-        );
-        return c.json(
-          { environment: await lanes.createEnvironment(idCheck.value, body) },
-          201,
-        );
+        ensureSpacePermission(auth.principal, idCheck.value);
+        const body = await readJsonBody<
+          Omit<CreateInstallationRequest, "spaceId">
+        >(c, "installationCreate");
+        const installation = await installations.createInstallation({
+          ...body,
+          spaceId: idCheck.value,
+        });
+        return c.json({ installation }, 201);
       });
     },
   );
 
-  app.get(TAKOSUMI_APP_ENVIRONMENTS_ROUTE, async (c) => {
+  app.get(TAKOSUMI_SPACE_INSTALLATIONS_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const idCheck = ensureValidParam(c, "appId", APP_ID_PATTERN);
+    if (!installations) {
+      return c.json(notImplemented(c, "installations not wired"), 501);
+    }
+    const idCheck = ensureValidParam(c, "spaceId", SPACE_ID_PATTERN);
     if (idCheck.kind === "invalid") return idCheck.response;
     return await runHandler(c, async () => {
-      const app = await lanes.getApp(idCheck.value);
-      ensureSpacePermission(auth.principal, app.spaceId);
+      ensureSpacePermission(auth.principal, idCheck.value);
       return c.json(
-        { environments: await lanes.listEnvironments(idCheck.value) },
+        { installations: await installations.listInstallations(idCheck.value) },
         200,
       );
     });
   });
 
-  app.get(TAKOSUMI_ENVIRONMENT_ROUTE, async (c) => {
+  app.get(TAKOSUMI_INSTALL_CONFIGS_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
-    if (idCheck.kind === "invalid") return idCheck.response;
+    if (!installations) {
+      return c.json(notImplemented(c, "installations not wired"), 501);
+    }
+    const spaceId = c.req.query("spaceId");
     return await runHandler(c, async () => {
-      const environment = await lanes.getEnvironment(idCheck.value);
-      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
-      return c.json({ environment }, 200);
-    });
-  });
-
-  app.patch(TAKOSUMI_ENVIRONMENT_ROUTE, deployControlBodyLimit, async (c) => {
-    const auth = await authorizeDeployControl(c, dependencies);
-    if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
-    if (idCheck.kind === "invalid") return idCheck.response;
-    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
-    if (limit) return limit;
-    return await runHandler(c, async () => {
-      const environment = await lanes.getEnvironment(idCheck.value);
-      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
-      const body = await readJsonBody<PatchEnvironmentRequest>(
-        c,
-        "environmentPatch",
-      );
-      return c.json(
-        { environment: await lanes.patchEnvironment(idCheck.value, body) },
-        200,
-      );
-    });
-  });
-
-  app.get(TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE, async (c) => {
-    const auth = await authorizeDeployControl(c, dependencies);
-    if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
-    if (idCheck.kind === "invalid") return idCheck.response;
-    return await runHandler(c, async () => {
-      const environment = await lanes.getEnvironment(idCheck.value);
-      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
-      const deploymentProfile = await lanes.getDeploymentProfile(idCheck.value);
-      if (!deploymentProfile) {
-        return c.json(
-          errorEnvelope(c, "not_found", "deployment profile not set"),
-          404,
-        );
+      if (spaceId !== undefined) {
+        ensureSpacePermission(auth.principal, spaceId);
       }
-      return c.json({ deploymentProfile }, 200);
+      // Without a spaceId only the official catalog (spaceId-less configs) is
+      // returned; with one, the official catalog plus that Space's own configs.
+      const official = (await installations.listInstallConfigs()).filter(
+        (config) => config.spaceId === undefined,
+      );
+      const scoped = spaceId === undefined
+        ? []
+        : await installations.listInstallConfigs(spaceId);
+      return c.json({ installConfigs: [...official, ...scoped] }, 200);
     });
   });
 
-  app.put(TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE, deployControlBodyLimit, async (c) => {
+  // --- Installation-driven plan / destroy-plan (§10 / §23) ------------------
+
+  app.post(TAKOSUMI_INSTALLATION_PLAN_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
-    if (idCheck.kind === "invalid") return idCheck.response;
-    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
-    if (limit) return limit;
-    return await runHandler(c, async () => {
-      const environment = await lanes.getEnvironment(idCheck.value);
-      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
-      const body = await readJsonBody<PutDeploymentProfileRequest>(
-        c,
-        "deploymentProfilePut",
-      );
-      return c.json(
-        {
-          deploymentProfile: await lanes.putDeploymentProfile(
-            idCheck.value,
-            body,
-          ),
-        },
-        200,
-      );
-    });
-  });
-
-  // --- Env-driven plan / destroy-plan (§10.4 / §10.6; M2) -------------------
-
-  app.post(TAKOSUMI_ENVIRONMENT_PLAN_ROUTE, async (c) => {
-    const auth = await authorizeDeployControl(c, dependencies);
-    if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
+    const idCheck = ensureValidId(c, "installationId");
     if (idCheck.kind === "invalid") return idCheck.response;
     return await runHandler(c, async () => {
-      const environment = await lanes.getEnvironment(idCheck.value);
-      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
-      const response = await controller.createEnvironmentPlan(idCheck.value, {
+      const installation = await controller.getInstallation(idCheck.value);
+      ensureSpacePermission(auth.principal, installation.installation.spaceId);
+      const response = await controller.createInstallationPlan(idCheck.value, {
         actor: auth.principal.actor,
       });
       return c.json(response, 201);
     });
   });
 
-  app.post(TAKOSUMI_ENVIRONMENT_DESTROY_PLAN_ROUTE, async (c) => {
+  app.post(TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const idCheck = ensureValidParam(c, "environmentId", ENVIRONMENT_ID_PATTERN);
+    const idCheck = ensureValidId(c, "installationId");
     if (idCheck.kind === "invalid") return idCheck.response;
     return await runHandler(c, async () => {
-      const environment = await lanes.getEnvironment(idCheck.value);
-      await ensureEnvironmentSpacePermission(lanes, auth.principal, environment.appId);
-      const response = await controller.createEnvironmentDestroyPlan(
+      const installation = await controller.getInstallation(idCheck.value);
+      ensureSpacePermission(auth.principal, installation.installation.spaceId);
+      const response = await controller.createInstallationDestroyPlan(
         idCheck.value,
         { actor: auth.principal.actor },
       );
       return c.json(response, 201);
-    });
-  });
-
-  app.get(TAKOSUMI_INSTALL_PROFILES_ROUTE, async (c) => {
-    const auth = await authorizeDeployControl(c, dependencies);
-    if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    return await runHandler(c, async () => {
-      return c.json(
-        { installProfiles: await lanes.listInstallProfiles() },
-        200,
-      );
-    });
-  });
-
-  app.get(TAKOSUMI_INSTALL_PROFILE_ROUTE, async (c) => {
-    const auth = await authorizeDeployControl(c, dependencies);
-    if (!auth.ok) return auth.response;
-    if (!lanes) return c.json(notImplemented(c, "lanes not wired"), 501);
-    const idCheck = ensureValidParam(
-      c,
-      "installProfileId",
-      INSTALL_PROFILE_ID_PATTERN,
-    );
-    if (idCheck.kind === "invalid") return idCheck.response;
-    return await runHandler(c, async () => {
-      return c.json(
-        { installProfile: await lanes.getInstallProfile(idCheck.value) },
-        200,
-      );
     });
   });
 
@@ -1238,20 +1023,6 @@ export function mountDeployControlPublicRoutes(
 
 }
 
-/**
- * Resolves an environment's owning Space (via its App) and enforces the
- * principal's space permission. Used by the environment / deployment-profile
- * routes whose id does not itself carry the space.
- */
-async function ensureEnvironmentSpacePermission(
-  lanes: LanesService,
-  principal: DeployControlPrincipal,
-  appId: string,
-): Promise<void> {
-  const app = await lanes.getApp(appId);
-  ensureSpacePermission(principal, app.spaceId);
-}
-
 function mountNotImplementedRoutes(
   app: Hono,
   dependencies: DeployControlPublicRouteDependencies,
@@ -1285,21 +1056,20 @@ function mountNotImplementedRoutes(
   app.patch(TAKOSUMI_SOURCE_ROUTE, post("sources not wired"));
   app.post(TAKOSUMI_SOURCE_SYNC_ROUTE, post("sources not wired"));
   app.get(TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE, get("sources not wired"));
-  app.post(TAKOSUMI_APPS_ROUTE, post("lanes not wired"));
-  app.get(TAKOSUMI_APPS_ROUTE, get("lanes not wired"));
-  app.get(TAKOSUMI_APP_ROUTE, get("lanes not wired"));
-  app.patch(TAKOSUMI_APP_ROUTE, post("lanes not wired"));
-  app.delete(TAKOSUMI_APP_ROUTE, post("lanes not wired"));
-  app.post(TAKOSUMI_APP_ENVIRONMENTS_ROUTE, post("lanes not wired"));
-  app.get(TAKOSUMI_APP_ENVIRONMENTS_ROUTE, get("lanes not wired"));
-  app.get(TAKOSUMI_ENVIRONMENT_ROUTE, get("lanes not wired"));
-  app.patch(TAKOSUMI_ENVIRONMENT_ROUTE, post("lanes not wired"));
-  app.get(TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE, get("lanes not wired"));
-  app.put(TAKOSUMI_DEPLOYMENT_PROFILE_ROUTE, post("lanes not wired"));
-  app.post(TAKOSUMI_ENVIRONMENT_PLAN_ROUTE, post("lanes not wired"));
-  app.post(TAKOSUMI_ENVIRONMENT_DESTROY_PLAN_ROUTE, post("lanes not wired"));
-  app.get(TAKOSUMI_INSTALL_PROFILES_ROUTE, get("lanes not wired"));
-  app.get(TAKOSUMI_INSTALL_PROFILE_ROUTE, get("lanes not wired"));
+  app.post(TAKOSUMI_SPACES_ROUTE, post("spaces not wired"));
+  app.get(TAKOSUMI_SPACES_ROUTE, get("spaces not wired"));
+  app.get(TAKOSUMI_SPACE_ROUTE, get("spaces not wired"));
+  app.post(
+    TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
+    post("installations not wired"),
+  );
+  app.get(TAKOSUMI_SPACE_INSTALLATIONS_ROUTE, get("installations not wired"));
+  app.get(TAKOSUMI_INSTALL_CONFIGS_ROUTE, get("installations not wired"));
+  app.post(TAKOSUMI_INSTALLATION_PLAN_ROUTE, post("installations not wired"));
+  app.post(
+    TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE,
+    post("installations not wired"),
+  );
   app.get(TAKOSUMI_RUN_ROUTE, get("runs not wired"));
   app.post(TAKOSUMI_RUN_APPROVE_ROUTE, post("runs not wired"));
   app.post(TAKOSUMI_RUN_CANCEL_ROUTE, post("runs not wired"));
@@ -1403,6 +1173,19 @@ function ensureSpacePermission(
   throw new OpenTofuControllerError(
     "permission_denied",
     `deploy control principal ${principal.actor} cannot access space ${spaceId}`,
+  );
+}
+
+/**
+ * Space creation is not gated by an existing space id, so a space-scoped
+ * principal (`spaceIds: string[]`) cannot mint arbitrary Spaces; only the
+ * unrestricted deploy-control bearer (`spaceIds: "*"`) may.
+ */
+function ensureSpaceCreatePermission(principal: DeployControlPrincipal): void {
+  if (principal.spaceIds === "*") return;
+  throw new OpenTofuControllerError(
+    "permission_denied",
+    `deploy control principal ${principal.actor} cannot create spaces`,
   );
 }
 

@@ -44,7 +44,7 @@ import {
   resolveEnabledRunnerProfiles,
 } from "../../src/service/domains/deploy-control/mod.ts";
 import type { EnqueueSourceSync } from "../../src/service/domains/sources/mod.ts";
-import type { EnvironmentCoordination } from "../../src/service/domains/deploy-control/environment_lease.ts";
+import type { InstallationCoordination } from "../../src/service/domains/deploy-control/installation_lease.ts";
 import type { RunnerProfile } from "takosumi-contract/deploy-control-api";
 import type {
   CloudflareWorkerEnv,
@@ -394,7 +394,7 @@ async function createWorkerServiceApp(
   });
   const enqueueRun = openTofuRunEnqueuer(env);
   const enqueueSourceSync = openTofuSourceSyncEnqueuer(env);
-  const environmentCoordination = durableObjectEnvironmentCoordination(env);
+  const installationCoordination = durableObjectInstallationCoordination(env);
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -414,7 +414,7 @@ async function createWorkerServiceApp(
     ...(enqueueSourceSync ? { enqueueSourceSync } : {}),
     // Environment lease (spec §10.2): front the shared CoordinationObject so the
     // apply consumer serializes write runs per environment across isolates.
-    ...(environmentCoordination ? { environmentCoordination } : {}),
+    ...(installationCoordination ? { installationCoordination } : {}),
     ...(options.runnerProfiles
       ? { runnerProfiles: options.runnerProfiles }
       : {}),
@@ -422,16 +422,16 @@ async function createWorkerServiceApp(
 }
 
 /**
- * Builds an {@link EnvironmentCoordination} that fronts the shared
+ * Builds an {@link InstallationCoordination} that fronts the shared
  * {@link CoordinationObject} via its `acquire-lease` / `release-lease` POST
  * API. Returns undefined when the DO binding is absent, leaving the controller
  * on its in-process serialization. The same single DO instance
  * (`takos-control-plane`) backs the lease keyspace used by the rest of the
  * coordination surface, so environment leases share that storage.
  */
-function durableObjectEnvironmentCoordination(
+function durableObjectInstallationCoordination(
   env: CloudflareWorkerEnv,
-): EnvironmentCoordination | undefined {
+): InstallationCoordination | undefined {
   const namespace = env.COORDINATION;
   if (!namespace) return undefined;
   const stub = () =>

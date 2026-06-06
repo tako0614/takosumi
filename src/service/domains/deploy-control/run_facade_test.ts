@@ -4,6 +4,8 @@ import {
   OpenTofuControllerError,
   OpenTofuDeploymentController,
 } from "./mod.ts";
+import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
+import { seedInstallationModel } from "./test_model_fixture.ts";
 
 const SOURCE = {
   kind: "git",
@@ -39,34 +41,66 @@ function succeedingRunner() {
   };
 }
 
+/**
+ * Seeds the Space-direct Installation model (spec §5) and returns a plan-run
+ * request for an UPDATE against the seeded Installation. The Installation is
+ * seeded WITH a current deployment so the apply-expected guard is well-formed
+ * (an `update` PlanRun carries `installationCurrentDeploymentId`).
+ */
+async function seedUpdatableInstallation(
+  store: InMemoryOpenTofuDeploymentStore,
+  ids: { installationId: string },
+) {
+  const { installation } = await seedInstallationModel(store, {
+    installationId: ids.installationId,
+  });
+  // A current deployment so the update plan carries a defined current-deployment
+  // guard (a fresh installation has no prior deployment to guard against).
+  await store.putInstallation({
+    ...installation,
+    currentDeploymentId: `dep_seed_${ids.installationId}`,
+    status: "active",
+  });
+  return {
+    spaceId: installation.spaceId,
+    installationId: installation.id,
+    operation: "update" as const,
+    source: SOURCE,
+    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+  };
+}
+
 test("getRun projects a queued plan run as the unified Run", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: () => 1,
     newId: deterministicIds(),
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+  const request = await seedUpdatableInstallation(store, {
+    installationId: "inst_queued",
   });
+  const { planRun } = await controller.createPlanRun(request);
   const run = await controller.getRun(planRun.id);
   expect(run.id).toBe(planRun.id);
   expect(run.type).toBe("plan");
   expect(run.status).toBe("queued");
   expect(run.policyStatus).toBe("pass");
+  expect(run.createdBy).toBe("system");
 });
 
 test("getRun projects a succeeded plan + its apply run", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner: succeedingRunner(),
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+  const request = await seedUpdatableInstallation(store, {
+    installationId: "inst_applied",
   });
+  const { planRun } = await controller.createPlanRun(request);
   const planView = await controller.getRun(planRun.id);
   expect(planView.status).toBe("succeeded");
 
@@ -87,15 +121,16 @@ test("getRun throws not_found for an unknown id", async () => {
 });
 
 test("cancelRun cancels a queued plan run and is rejected once running/terminal", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
   const controller = new OpenTofuDeploymentController({
+    store,
     now: () => 1,
     newId: deterministicIds(),
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+  const request = await seedUpdatableInstallation(store, {
+    installationId: "inst_cancel",
   });
+  const { planRun } = await controller.createPlanRun(request);
   const cancelled = await controller.cancelRun(planRun.id);
   expect(cancelled.status).toBe("cancelled");
 
@@ -108,6 +143,8 @@ test("cancelRun cancels a queued plan run and is rejected once running/terminal"
 // Reconstruct the expected guard the apply needs from the reviewed plan.
 function applyExpectedFrom(planRun: {
   readonly id: string;
+  readonly installationId?: string;
+  readonly installationCurrentDeploymentId?: string | null;
   readonly runnerProfileId: string;
   readonly sourceDigest: string;
   readonly variablesDigest: string;
@@ -116,6 +153,12 @@ function applyExpectedFrom(planRun: {
 }) {
   return {
     planRunId: planRun.id,
+    ...(planRun.installationId
+      ? { installationId: planRun.installationId }
+      : {}),
+    ...(planRun.installationId
+      ? { currentDeploymentId: planRun.installationCurrentDeploymentId ?? null }
+      : {}),
     runnerProfileId: planRun.runnerProfileId,
     sourceDigest: planRun.sourceDigest,
     variablesDigest: planRun.variablesDigest,

@@ -1,19 +1,21 @@
 import { expect, test } from "bun:test";
 
 import {
-  EnvironmentLeaseBusyError,
-  InMemoryEnvironmentCoordination,
-  environmentLeaseScope,
-  withEnvironmentLease,
-} from "./environment_lease.ts";
+  InstallationLeaseBusyError,
+  InMemoryInstallationCoordination,
+  installationLeaseScope,
+  withInstallationLease,
+} from "./installation_lease.ts";
 
-test("environmentLeaseScope keys by environment id", () => {
-  expect(environmentLeaseScope("env_1")).toBe("environment:env_1");
+test("installationLeaseScope keys by installation id + environment", () => {
+  expect(installationLeaseScope("inst_1", "production")).toBe(
+    "installation:inst_1:production",
+  );
 });
 
 test("two write runs for the SAME environment serialize: second is blocked until release", async () => {
   let token = 0;
-  const coordination = new InMemoryEnvironmentCoordination({
+  const coordination = new InMemoryInstallationCoordination({
     newToken: () => `tok_${(token += 1)}`,
   });
 
@@ -24,9 +26,9 @@ test("two write runs for the SAME environment serialize: second is blocked until
   });
 
   // First run acquires the lease and holds it until we let it finish.
-  const firstRun = withEnvironmentLease(
+  const firstRun = withInstallationLease(
     coordination,
-    { environmentId: "env_1", holderId: "run_a" },
+    { installationId: "env_1", environment: "production", holderId: "run_a" },
     async () => {
       await firstHolds;
       firstReleased = true;
@@ -40,12 +42,12 @@ test("two write runs for the SAME environment serialize: second is blocked until
   // Second run for the SAME environment is rejected (lease busy) — it must be
   // redelivered, not run concurrently.
   await expect(
-    withEnvironmentLease(
+    withInstallationLease(
       coordination,
-      { environmentId: "env_1", holderId: "run_b" },
+      { installationId: "env_1", environment: "production", holderId: "run_b" },
       () => Promise.resolve("second"),
     ),
-  ).rejects.toBeInstanceOf(EnvironmentLeaseBusyError);
+  ).rejects.toBeInstanceOf(InstallationLeaseBusyError);
   expect(firstReleased).toBe(false);
 
   // Release the first run; it completes and frees the lease.
@@ -54,16 +56,16 @@ test("two write runs for the SAME environment serialize: second is blocked until
   expect(firstReleased).toBe(true);
 
   // Now a fresh run for the same environment can acquire it.
-  const retried = await withEnvironmentLease(
+  const retried = await withInstallationLease(
     coordination,
-    { environmentId: "env_1", holderId: "run_b" },
+    { installationId: "env_1", environment: "production", holderId: "run_b" },
     () => Promise.resolve("retried"),
   );
   expect(retried).toBe("retried");
 });
 
 test("write runs for DIFFERENT environments run in parallel", async () => {
-  const coordination = new InMemoryEnvironmentCoordination();
+  const coordination = new InMemoryInstallationCoordination();
 
   let aReleased = false;
   let releaseA!: () => void;
@@ -71,9 +73,9 @@ test("write runs for DIFFERENT environments run in parallel", async () => {
     releaseA = resolve;
   });
 
-  const runA = withEnvironmentLease(
+  const runA = withInstallationLease(
     coordination,
-    { environmentId: "env_a", holderId: "run_a" },
+    { installationId: "env_a", environment: "production", holderId: "run_a" },
     async () => {
       await aHolds;
       aReleased = true;
@@ -84,9 +86,9 @@ test("write runs for DIFFERENT environments run in parallel", async () => {
   await Promise.resolve();
 
   // A different environment acquires its own lease while env_a is still held.
-  const runB = await withEnvironmentLease(
+  const runB = await withInstallationLease(
     coordination,
-    { environmentId: "env_b", holderId: "run_b" },
+    { installationId: "env_b", environment: "production", holderId: "run_b" },
     () => Promise.resolve("b"),
   );
   expect(runB).toBe("b");
@@ -97,18 +99,18 @@ test("write runs for DIFFERENT environments run in parallel", async () => {
 });
 
 test("the lease is released even when the work throws", async () => {
-  const coordination = new InMemoryEnvironmentCoordination();
+  const coordination = new InMemoryInstallationCoordination();
   await expect(
-    withEnvironmentLease(
+    withInstallationLease(
       coordination,
-      { environmentId: "env_1", holderId: "run_a" },
+      { installationId: "env_1", environment: "production", holderId: "run_a" },
       () => Promise.reject(new Error("boom")),
     ),
   ).rejects.toThrow("boom");
   // The lease was released in the finally, so a subsequent run acquires it.
-  const after = await withEnvironmentLease(
+  const after = await withInstallationLease(
     coordination,
-    { environmentId: "env_1", holderId: "run_b" },
+    { installationId: "env_1", environment: "production", holderId: "run_b" },
     () => Promise.resolve("ok"),
   );
   expect(after).toBe("ok");
@@ -116,11 +118,11 @@ test("the lease is released even when the work throws", async () => {
 
 test("an expired lease can be re-acquired by a new holder", async () => {
   let nowMs = 1000;
-  const coordination = new InMemoryEnvironmentCoordination({
+  const coordination = new InMemoryInstallationCoordination({
     now: () => nowMs,
   });
   const lease = await coordination.acquireLease({
-    scope: environmentLeaseScope("env_1"),
+    scope: installationLeaseScope("env_1", "production"),
     holderId: "run_a",
     ttlMs: 100,
   });
@@ -128,7 +130,7 @@ test("an expired lease can be re-acquired by a new holder", async () => {
 
   // Before expiry: busy.
   const busy = await coordination.acquireLease({
-    scope: environmentLeaseScope("env_1"),
+    scope: installationLeaseScope("env_1", "production"),
     holderId: "run_b",
     ttlMs: 100,
   });
@@ -137,7 +139,7 @@ test("an expired lease can be re-acquired by a new holder", async () => {
   // After expiry: a new holder takes over.
   nowMs += 200;
   const taken = await coordination.acquireLease({
-    scope: environmentLeaseScope("env_1"),
+    scope: installationLeaseScope("env_1", "production"),
     holderId: "run_b",
     ttlMs: 100,
   });

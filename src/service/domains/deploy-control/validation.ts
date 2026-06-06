@@ -2,9 +2,9 @@
  * Request / source validation and identity checks for the deploy-control domain.
  *
  * These pure guards validate PlanRun/ApplyRun request shape, OpenTofu module
- * source identity, operation/installation invariants, and derive normalized
- * variables/providers and an appId from a source. They throw
- * `OpenTofuControllerError` on invalid input; no controller or store state.
+ * source identity, the planned-installation generation guard, and derive
+ * normalized variables/providers. They throw `OpenTofuControllerError` on
+ * invalid input; no controller or store state.
  */
 
 import type { JsonValue } from "takosumi-contract";
@@ -27,61 +27,19 @@ import {
 
 const SHA256_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 
-export function validateOperationInstallationShape(input: {
-  readonly operation: OpenTofuOperation;
-  readonly installation?: Installation;
-  readonly requestedSpaceId: string;
-  readonly requestedSource: OpenTofuModuleSource;
-  readonly runnerProfileId: string;
-}): void {
-  if (input.operation === "create" && input.installation) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "create PlanRun must not target an existing installationId",
-    );
-  }
-  if (
-    (input.operation === "update" || input.operation === "destroy") &&
-    !input.installation
-  ) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${input.operation} PlanRun requires installationId`,
-    );
-  }
-  if (
-    input.installation &&
-    input.installation.spaceId !== input.requestedSpaceId
-  ) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} belongs to space ${input.installation.spaceId}, not ${input.requestedSpaceId}`,
-    );
-  }
-  if (!input.installation) return;
-  if (
-    (input.operation === "update" || input.operation === "destroy") &&
-    input.installation.currentDeploymentId === null
-  ) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `${input.operation} PlanRun requires an Installation with a current Deployment`,
-    );
-  }
-  if (input.installation.runnerProfileId !== input.runnerProfileId) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} uses runner profile ${input.installation.runnerProfileId}, not ${input.runnerProfileId}`,
-    );
-  }
-  if (!sourceIdentityMatches(input.installation.source, input.requestedSource)) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} source identity does not match the requested OpenTofu module source`,
-    );
-  }
-}
-
+/**
+ * Apply-time guard that the planned Installation still matches the PlanRun: it
+ * has not moved to another Space and its current Deployment has not advanced
+ * since the plan was created.
+ *
+ * The Space-direct Installation no longer carries `runnerProfileId` or a
+ * `source` identity (those are resolved through the InstallConfig / Source),
+ * so only the Space binding and the current-Deployment cursor are checked here.
+ * `Installation.currentDeploymentId` is optional (`string | undefined`) while
+ * `PlanRun.installationCurrentDeploymentId` stays `string | null` internally;
+ * both null and undefined mean "no current Deployment", so they are normalized
+ * before comparison.
+ */
 export function validatePlannedInstallationCurrent(input: {
   readonly planRun: PlanRun;
   readonly installation: Installation;
@@ -92,46 +50,16 @@ export function validatePlannedInstallationCurrent(input: {
       `installation ${input.installation.id} no longer belongs to PlanRun space ${input.planRun.spaceId}`,
     );
   }
-  if (input.installation.runnerProfileId !== input.planRun.runnerProfileId) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} runner profile changed since PlanRun ${input.planRun.id}`,
-    );
-  }
-  if (
-    !sourceIdentityMatches(input.installation.source, input.planRun.source)
-  ) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `installation ${input.installation.id} source identity changed since PlanRun ${input.planRun.id}`,
-    );
-  }
+  const actualCurrentDeploymentId =
+    input.installation.currentDeploymentId ?? null;
   const expectedCurrentDeploymentId =
     input.planRun.installationCurrentDeploymentId ?? null;
-  if (input.installation.currentDeploymentId !== expectedCurrentDeploymentId) {
+  if (actualCurrentDeploymentId !== expectedCurrentDeploymentId) {
     throw new OpenTofuControllerError(
       "failed_precondition",
       `installation ${input.installation.id} current Deployment changed since PlanRun ${input.planRun.id}`,
     );
   }
-}
-
-function sourceIdentityMatches(
-  existing: OpenTofuModuleSource,
-  requested: OpenTofuModuleSource,
-): boolean {
-  if (existing.kind !== requested.kind) return false;
-  if ((existing.modulePath ?? "") !== (requested.modulePath ?? "")) return false;
-  if (existing.kind === "git" && requested.kind === "git") {
-    return existing.url === requested.url;
-  }
-  if (existing.kind === "prepared" && requested.kind === "prepared") {
-    return existing.url === requested.url;
-  }
-  if (existing.kind === "local" && requested.kind === "local") {
-    return existing.path === requested.path;
-  }
-  return false;
 }
 
 export function validateSourceAllowedByProfile(
@@ -285,17 +213,4 @@ function validateSafeModulePath(modulePath: string): void {
       "source.modulePath must stay inside the source root",
     );
   }
-}
-
-export function appIdFromSource(source: OpenTofuModuleSource): string {
-  const seed = source.kind === "local" ? source.path : source.url;
-  const withoutQuery = seed.split(/[?#]/)[0] ?? seed;
-  const parts = withoutQuery.split(/[/:]/).filter((part) => part.length > 0);
-  const name = (parts[parts.length - 1] ?? source.kind).replace(/\.git$/, "");
-  const moduleSuffix = source.modulePath
-    ? `-${source.modulePath.replace(/[^a-zA-Z0-9._-]+/g, "-")}`
-    : "";
-  return `${name}${moduleSuffix}`.toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "opentofu-module";
 }
