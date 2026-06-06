@@ -7946,7 +7946,7 @@ test("accounts handler proxies Connection create to deployControl with space own
   expect(response.status).toEqual(201);
   expect(proxiedRequests.length).toEqual(1);
   expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/v1/connections",
+    "http://takosumi.internal:8788/api/connections/cloudflare/token",
   );
   expect(proxiedRequests[0].headers.get("authorization")).toEqual(
     "Bearer deploy-control-secret",
@@ -8031,7 +8031,7 @@ test("accounts handler proxies Connection list with the spaceId query", async ()
   expect(response.status).toEqual(200);
   expect(proxiedRequests.length).toEqual(1);
   expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/v1/connections?spaceId=space_conn_1",
+    "http://takosumi.internal:8788/api/connections?spaceId=space_conn_1",
   );
 });
 
@@ -8078,8 +8078,8 @@ test("accounts handler resolves Connection spaceId before forwarding delete", as
 
   expect(response.status).toEqual(204);
   expect(proxiedPaths).toEqual([
-    "GET /v1/connections/conn_del",
-    "DELETE /v1/connections/conn_del",
+    "GET /api/connections/conn_del",
+    "POST /api/connections/conn_del/revoke",
   ]);
 });
 

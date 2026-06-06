@@ -26,26 +26,30 @@ function makeApp(options: { fetch?: typeof fetch } = {}) {
       authorizeDeployControlBearer: ({ token }) =>
         token === "scoped-token"
           ? { actor: "acct_1", spaceIds: ["space_1"], operations: "*", runnerProfileIds: "*" }
+          : token === "operator-token"
+          ? { actor: "op", spaceIds: "*", operations: "*", runnerProfileIds: "*" }
           : undefined,
     },
     requestCorrelation: false,
   });
 }
 
+const CF_PATH = "/api/connections/cloudflare/token";
+const HTTPS_PATH = "/api/connections/source/https-token";
+const SSH_PATH = "/api/connections/source/ssh-key";
+
 const HEADERS = {
   authorization: "Bearer scoped-token",
   "content-type": "application/json",
 } as const;
 
-test("POST /v1/connections requires a bearer (401)", async () => {
+test("POST /api/connections/cloudflare/token requires a bearer (401)", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/connections", {
+  const response = await app.request(CF_PATH, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       spaceId: "space_1",
-      provider: "cloudflare",
-      authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "cf" },
     }),
   });
@@ -53,15 +57,13 @@ test("POST /v1/connections requires a bearer (401)", async () => {
   expect((await response.json()).error.code).toBe("unauthenticated");
 });
 
-test("POST /v1/connections rejects an unknown body field (400)", async () => {
+test("POST /api/connections/cloudflare/token rejects an unknown body field (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/connections", {
+  const response = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
       spaceId: "space_1",
-      provider: "cloudflare",
-      authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "cf" },
       sneaky: "field",
     }),
@@ -70,15 +72,13 @@ test("POST /v1/connections rejects an unknown body field (400)", async () => {
   expect((await response.json()).error.code).toBe("invalid_argument");
 });
 
-test("POST /v1/connections enforces space scope (403)", async () => {
+test("POST /api/connections/cloudflare/token enforces space scope (403)", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/connections", {
+  const response = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
       spaceId: "space_denied",
-      provider: "cloudflare",
-      authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "cf" },
     }),
   });
@@ -86,15 +86,13 @@ test("POST /v1/connections enforces space scope (403)", async () => {
   expect((await response.json()).error.code).toBe("permission_denied");
 });
 
-test("POST /v1/connections happy path returns 201 and never echoes values", async () => {
+test("POST /api/connections/cloudflare/token happy path returns 201 and never echoes values", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/connections", {
+  const response = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
       spaceId: "space_1",
-      provider: "cloudflare",
-      authMethod: "static_secret",
       displayName: "prod",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
     }),
@@ -104,24 +102,88 @@ test("POST /v1/connections happy path returns 201 and never echoes values", asyn
   expect(text).not.toContain("cf-secret-token");
   const payload = JSON.parse(text);
   expect(payload.connection.status).toBe("pending");
+  expect(payload.connection.provider).toBe("cloudflare");
   expect(payload.connection.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
   expect(payload.connection.values).toBeUndefined();
 });
 
-test("GET /v1/connections lists connections without secret values", async () => {
+test("POST /api/connections/source/https-token returns 201 with the source kind", async () => {
   const app = await makeApp();
-  await app.request("/v1/connections", {
+  const response = await app.request(HTTPS_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
       spaceId: "space_1",
-      provider: "cloudflare",
-      authMethod: "static_secret",
+      displayName: "github",
+      scopeHints: { username: "git" },
+      values: { GIT_HTTPS_TOKEN: "ghp-secret" },
+    }),
+  });
+  expect(response.status).toBe(201);
+  const text = await response.text();
+  expect(text).not.toContain("ghp-secret");
+  const payload = JSON.parse(text);
+  expect(payload.connection.kind).toBe("source_git_https_token");
+});
+
+test("POST /api/connections/source/ssh-key requires knownHosts (400)", async () => {
+  const app = await makeApp();
+  const response = await app.request(SSH_PATH, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      spaceId: "space_1",
+      values: { GIT_SSH_PRIVATE_KEY: "-----BEGIN KEY-----" },
+    }),
+  });
+  expect(response.status).toBe(400);
+  const payload = await response.json();
+  expect(payload.error.code).toBe("invalid_argument");
+  expect(payload.error.message).toContain("knownHostsEntry");
+});
+
+test("POST /api/connections/source/ssh-key with knownHosts returns 201", async () => {
+  const app = await makeApp();
+  const response = await app.request(SSH_PATH, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      spaceId: "space_1",
+      scopeHints: { knownHostsEntry: "github.com ssh-ed25519 AAAA..." },
+      values: {
+        GIT_SSH_PRIVATE_KEY: "-----BEGIN KEY-----\nprivatekeymaterial\n-----END KEY-----",
+      },
+    }),
+  });
+  expect(response.status).toBe(201);
+  const text = await response.text();
+  expect(text).not.toContain("privatekeymaterial");
+  expect(JSON.parse(text).connection.kind).toBe("source_git_ssh_key");
+});
+
+test("POST /api/connections/aws/assume-role returns 501 not_implemented", async () => {
+  const app = await makeApp();
+  const response = await app.request("/api/connections/aws/assume-role", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({ spaceId: "space_1", values: {} }),
+  });
+  expect(response.status).toBe(501);
+  expect((await response.json()).error.code).toBe("not_implemented");
+});
+
+test("GET /api/connections lists connections without secret values", async () => {
+  const app = await makeApp();
+  await app.request(CF_PATH, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      spaceId: "space_1",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
     }),
   });
 
-  const response = await app.request("/v1/connections?spaceId=space_1", {
+  const response = await app.request("/api/connections?spaceId=space_1", {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(response.status).toBe(200);
@@ -132,16 +194,37 @@ test("GET /v1/connections lists connections without secret values", async () => 
   expect(payload.connections[0].provider).toBe("cloudflare");
 });
 
-test("GET /v1/connections requires spaceId (400)", async () => {
+test("GET /api/connections with no spaceId lists operator-scoped connections for the unrestricted bearer", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/connections", {
-    headers: { authorization: "Bearer scoped-token" },
+  // Operator-scoped connection (no spaceId): only the unrestricted bearer.
+  await app.request(CF_PATH, {
+    method: "POST",
+    headers: { authorization: "Bearer operator-token", "content-type": "application/json" },
+    body: JSON.stringify({
+      scope: "operator",
+      values: { CLOUDFLARE_API_TOKEN: "op-secret-token" },
+    }),
   });
-  expect(response.status).toBe(400);
-  expect((await response.json()).error.code).toBe("invalid_argument");
+
+  const response = await app.request("/api/connections", {
+    headers: { authorization: "Bearer operator-token" },
+  });
+  expect(response.status).toBe(200);
+  const payload = await response.json();
+  expect(payload.connections).toHaveLength(1);
+  expect(payload.connections[0].scope).toBe("operator");
 });
 
-test("POST /v1/connections/{id}/test verifies via injected fetch (200 verified)", async () => {
+test("GET /api/connections with no spaceId is denied for a scoped bearer (403)", async () => {
+  const app = await makeApp();
+  const response = await app.request("/api/connections", {
+    headers: { authorization: "Bearer scoped-token" },
+  });
+  expect(response.status).toBe(403);
+  expect((await response.json()).error.code).toBe("permission_denied");
+});
+
+test("POST /api/connections/{id}/test verifies via injected fetch (200 verified)", async () => {
   const fakeFetch = (): Promise<Response> =>
     Promise.resolve(
       new Response(
@@ -150,19 +233,17 @@ test("POST /v1/connections/{id}/test verifies via injected fetch (200 verified)"
       ),
     );
   const app = await makeApp({ fetch: fakeFetch as never });
-  const created = await app.request("/v1/connections", {
+  const created = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
       spaceId: "space_1",
-      provider: "cloudflare",
-      authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
     }),
   });
   const { connection } = await created.json();
 
-  const tested = await app.request(`/v1/connections/${connection.id}/test`, {
+  const tested = await app.request(`/api/connections/${connection.id}/test`, {
     method: "POST",
     headers: HEADERS,
   });
@@ -170,27 +251,25 @@ test("POST /v1/connections/{id}/test verifies via injected fetch (200 verified)"
   expect((await tested.json()).status).toBe("verified");
 });
 
-test("DELETE /v1/connections/{id} revokes and returns 204", async () => {
+test("POST /api/connections/{id}/revoke revokes and returns 204", async () => {
   const app = await makeApp();
-  const created = await app.request("/v1/connections", {
+  const created = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
       spaceId: "space_1",
-      provider: "cloudflare",
-      authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
     }),
   });
   const { connection } = await created.json();
 
-  const deleted = await app.request(`/v1/connections/${connection.id}`, {
-    method: "DELETE",
+  const revoked = await app.request(`/api/connections/${connection.id}/revoke`, {
+    method: "POST",
     headers: { authorization: "Bearer scoped-token" },
   });
-  expect(deleted.status).toBe(204);
+  expect(revoked.status).toBe(204);
 
-  const list = await app.request("/v1/connections?spaceId=space_1", {
+  const list = await app.request("/api/connections?spaceId=space_1", {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect((await list.json()).connections).toHaveLength(0);
@@ -198,7 +277,7 @@ test("DELETE /v1/connections/{id} revokes and returns 204", async () => {
 
 test("connection id with an unsupported shape is rejected (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/v1/connections/not-a-conn-id/test", {
+  const response = await app.request("/api/connections/not-a-conn-id/test", {
     method: "POST",
     headers: HEADERS,
   });

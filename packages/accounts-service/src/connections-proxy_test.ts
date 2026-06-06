@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 
 import {
   forwardCreateConnection,
-  forwardDeleteConnection,
   forwardListConnections,
+  forwardRevokeConnection,
   forwardTestConnection,
   responseFromConnectionsResult,
 } from "./connections-proxy.ts";
@@ -44,7 +44,7 @@ const deployControl = (fetchImpl: typeof fetch) => ({
   fetch: fetchImpl,
 });
 
-test("forwardCreateConnection POSTs /v1/connections with the body and bearer", async () => {
+test("forwardCreateConnection POSTs the cloudflare/token subroute with the body and bearer", async () => {
   const created = {
     id: "conn_abc",
     spaceId: "space_1",
@@ -73,7 +73,10 @@ test("forwardCreateConnection POSTs /v1/connections with the body and bearer", a
   expect(result.status).toEqual(201);
   expect(calls).toHaveLength(1);
   expect(calls[0]?.method).toEqual("POST");
-  expect(calls[0]?.url).toEqual("https://deploy-control.internal/v1/connections");
+  // A provider credential routes to the §30 cloudflare/token subroute.
+  expect(calls[0]?.url).toEqual(
+    "https://deploy-control.internal/api/connections/cloudflare/token",
+  );
   expect(calls[0]?.authorization).toEqual("Bearer deploy-secret");
   expect(calls[0]?.contentType).toEqual("application/json");
   // The write-only values are forwarded to deploy-control verbatim...
@@ -87,7 +90,25 @@ test("forwardCreateConnection POSTs /v1/connections with the body and bearer", a
   expect(text).toContain("conn_abc");
 });
 
-test("forwardListConnections GETs /v1/connections?spaceId=...", async () => {
+test("forwardCreateConnection routes a source_git_ssh_key body to the ssh-key subroute", async () => {
+  const { fetch: fetchImpl, calls } = recordingFetch(() =>
+    Response.json({ id: "conn_ssh" }, { status: 201 })
+  );
+  await forwardCreateConnection({
+    deployControl: deployControl(fetchImpl),
+    body: {
+      spaceId: "space_1",
+      kind: "source_git_ssh_key",
+      scopeHints: { knownHostsEntry: "github.com ssh-ed25519 AAAA..." },
+      values: { GIT_SSH_PRIVATE_KEY: "k" },
+    },
+  });
+  expect(calls[0]?.url).toEqual(
+    "https://deploy-control.internal/api/connections/source/ssh-key",
+  );
+});
+
+test("forwardListConnections GETs /api/connections?spaceId=...", async () => {
   const { fetch: fetchImpl, calls } = recordingFetch(() =>
     Response.json({ connections: [] }, { status: 200 })
   );
@@ -100,12 +121,12 @@ test("forwardListConnections GETs /v1/connections?spaceId=...", async () => {
   expect(result.status).toEqual(200);
   expect(calls[0]?.method).toEqual("GET");
   expect(calls[0]?.url).toEqual(
-    "https://deploy-control.internal/v1/connections?spaceId=space%201%2Fwith%3Fchars",
+    "https://deploy-control.internal/api/connections?spaceId=space%201%2Fwith%3Fchars",
   );
   expect(calls[0]?.body).toBeUndefined();
 });
 
-test("forwardTestConnection POSTs /v1/connections/{id}/test", async () => {
+test("forwardTestConnection POSTs /api/connections/{id}/test", async () => {
   const { fetch: fetchImpl, calls } = recordingFetch(() =>
     Response.json({ status: "verified" }, { status: 200 })
   );
@@ -118,24 +139,24 @@ test("forwardTestConnection POSTs /v1/connections/{id}/test", async () => {
   expect(result.status).toEqual(200);
   expect(calls[0]?.method).toEqual("POST");
   expect(calls[0]?.url).toEqual(
-    "https://deploy-control.internal/v1/connections/conn_abc/test",
+    "https://deploy-control.internal/api/connections/conn_abc/test",
   );
 });
 
-test("forwardDeleteConnection DELETEs /v1/connections/{id} and yields a bodyless 204", async () => {
+test("forwardRevokeConnection POSTs /api/connections/{id}/revoke and yields a bodyless 204", async () => {
   const { fetch: fetchImpl, calls } = recordingFetch(() =>
     new Response(null, { status: 204 })
   );
 
-  const result = await forwardDeleteConnection({
+  const result = await forwardRevokeConnection({
     deployControl: deployControl(fetchImpl),
     connectionId: "conn_abc",
   });
 
   expect(result.status).toEqual(204);
-  expect(calls[0]?.method).toEqual("DELETE");
+  expect(calls[0]?.method).toEqual("POST");
   expect(calls[0]?.url).toEqual(
-    "https://deploy-control.internal/v1/connections/conn_abc",
+    "https://deploy-control.internal/api/connections/conn_abc/revoke",
   );
 
   const response = responseFromConnectionsResult(result);

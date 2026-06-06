@@ -1,32 +1,60 @@
 /**
  * Public OpenTofu deployment-control-plane HTTP surface (Space-direct
- * Installation model).
+ * Installation model). Spec §30: the public vocabulary is mounted under `/api`
+ * with NO version prefix.
  *
- *   POST /v1/spaces
- *   GET  /v1/spaces
- *   GET  /v1/spaces/{spaceId}
- *   POST /v1/spaces/{spaceId}/installations
- *   GET  /v1/spaces/{spaceId}/installations
- *   GET  /v1/install-configs
- *   GET  /v1/installations/{id}
- *   POST /v1/installations/{id}/plan
- *   POST /v1/installations/{id}/destroy-plan
- *   GET  /v1/installations/{id}/deployments
- *   GET  /v1/installations/{id}/deployment-outputs
- *   GET  /v1/runner-profiles
- *   POST /v1/plan-runs ; GET /v1/plan-runs/{id}
- *   POST /v1/apply-runs ; GET /v1/apply-runs/{id}
+ *   POST  /api/spaces ; GET /api/spaces ; GET /api/spaces/{spaceId}
+ *   PATCH /api/spaces/{spaceId}                        (displayName only — MVP)
+ *   POST  /api/sources ; GET /api/sources ; GET /api/sources/{id}
+ *   POST  /api/sources/{id}/sync ; POST /hooks/sources/{id}
+ *   POST  /api/connections/source/https-token
+ *   POST  /api/connections/source/ssh-key
+ *   POST  /api/connections/cloudflare/token
+ *   POST  /api/connections/aws/assume-role               (501 not_implemented)
+ *   GET   /api/connections
+ *   POST  /api/connections/{id}/test ; POST /api/connections/{id}/revoke
+ *   POST  /api/spaces/{spaceId}/installations
+ *   GET   /api/spaces/{spaceId}/installations
+ *   GET   /api/installations/{id}
+ *   PATCH /api/installations/{id}                                 (501 — MVP)
+ *   DELETE /api/installations/{id}            (501 — use destroy-plan for MVP)
+ *   GET   /api/install-configs
+ *   POST  /api/installations/{id}/dependencies
+ *   GET   /api/installations/{id}/dependencies
+ *   DELETE /api/dependencies/{dependencyId}
+ *   POST/GET /api/output-shares ; POST /api/output-shares/{id}/revoke (501)
+ *   POST  /api/installations/{id}/plan ; /destroy-plan
+ *   GET   /api/runs/{id} ; /logs ; /events
+ *   POST  /api/runs/{id}/approve ; /cancel
+ *   POST  /api/spaces/{spaceId}/plan-update
+ *   GET   /api/run-groups/{id} ; POST /api/run-groups/{id}/approve
+ *   GET   /api/installations/{id}/deployments
+ *   GET   /api/deployments/{id}
+ *   POST  /api/deployments/{id}/rollback-plan
+ *   GET   /api/spaces/{spaceId}/activity
+ *   GET/PUT /api/operator-connection-defaults
+ *
+ * The PlanRun / ApplyRun / RunnerProfile ledger routes and the Installation
+ * read (+ deployments / deployment-outputs) used by the accounts plane + CLI
+ * stay on the INTERNAL `/v1/*` seam (see `deploy-control-api.ts`); they are NOT
+ * part of the §30 public vocabulary.
  */
 
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
   APPLY_RUNS_PATH,
+  CONNECTIONS_AWS_ASSUME_ROLE_PATH,
+  CONNECTIONS_CLOUDFLARE_TOKEN_PATH,
   CONNECTIONS_PATH,
+  CONNECTIONS_SOURCE_HTTPS_TOKEN_PATH,
+  CONNECTIONS_SOURCE_SSH_KEY_PATH,
   DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
   RUNNER_PROFILES_PATH,
 } from "takosumi-contract/deploy-control-api";
 import type {
+  ConnectionKind,
+  ConnectionScopeHints,
   CreateApplyRunRequest,
   CreateConnectionRequest,
   DeployControlErrorCode,
@@ -69,54 +97,85 @@ import { log } from "../shared/log.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 
+// --- INTERNAL `/v1` seam routes (spec §30 binding: NOT public `/api`). These
+// are the in-process fetch seam the accounts plane + CLI consume; they keep the
+// `/v1` prefix after the §30 `/api` cutover. ----------------------------------
 export const TAKOSUMI_RUNNER_PROFILES_ROUTE = RUNNER_PROFILES_PATH;
 export const TAKOSUMI_PLAN_RUNS_ROUTE = "/v1/plan-runs" as const;
 export const TAKOSUMI_PLAN_RUN_ROUTE = "/v1/plan-runs/:planRunId" as const;
 export const TAKOSUMI_APPLY_RUNS_ROUTE = APPLY_RUNS_PATH;
 export const TAKOSUMI_APPLY_RUN_ROUTE = "/v1/apply-runs/:applyRunId" as const;
+/** INTERNAL Installation read used by the accounts plane (stays `/v1`). */
 export const TAKOSUMI_INSTALLATION_ROUTE =
   "/v1/installations/:installationId" as const;
+/** INTERNAL Deployment list read used by the accounts plane (stays `/v1`). */
 export const TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE =
   "/v1/installations/:installationId/deployments" as const;
+/** INTERNAL DeploymentOutput read used by the accounts plane (stays `/v1`). */
 export const TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE =
   "/v1/installations/:installationId/deployment-outputs" as const;
+
+// --- PUBLIC §30 `/api` routes. ------------------------------------------------
 export const TAKOSUMI_CONNECTIONS_ROUTE = CONNECTIONS_PATH;
-export const TAKOSUMI_CONNECTION_ROUTE =
-  "/v1/connections/:connectionId" as const;
+export const TAKOSUMI_CONNECTIONS_SOURCE_HTTPS_TOKEN_ROUTE =
+  CONNECTIONS_SOURCE_HTTPS_TOKEN_PATH;
+export const TAKOSUMI_CONNECTIONS_SOURCE_SSH_KEY_ROUTE =
+  CONNECTIONS_SOURCE_SSH_KEY_PATH;
+export const TAKOSUMI_CONNECTIONS_CLOUDFLARE_TOKEN_ROUTE =
+  CONNECTIONS_CLOUDFLARE_TOKEN_PATH;
+export const TAKOSUMI_CONNECTIONS_AWS_ASSUME_ROLE_ROUTE =
+  CONNECTIONS_AWS_ASSUME_ROLE_PATH;
 export const TAKOSUMI_CONNECTION_TEST_ROUTE =
-  "/v1/connections/:connectionId/test" as const;
+  "/api/connections/:connectionId/test" as const;
+export const TAKOSUMI_CONNECTION_REVOKE_ROUTE =
+  "/api/connections/:connectionId/revoke" as const;
 export const TAKOSUMI_SOURCES_ROUTE = SOURCES_PATH;
-export const TAKOSUMI_SOURCE_ROUTE = "/v1/sources/:sourceId" as const;
+export const TAKOSUMI_SOURCE_ROUTE = "/api/sources/:sourceId" as const;
 export const TAKOSUMI_SOURCE_SYNC_ROUTE =
-  "/v1/sources/:sourceId/sync" as const;
+  "/api/sources/:sourceId/sync" as const;
 export const TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE =
-  "/v1/sources/:sourceId/snapshots" as const;
-export const TAKOSUMI_SPACES_ROUTE = "/v1/spaces" as const;
+  "/api/sources/:sourceId/snapshots" as const;
+export const TAKOSUMI_SPACES_ROUTE = "/api/spaces" as const;
 export const TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE =
-  "/v1/operator-connection-defaults" as const;
-export const TAKOSUMI_SPACE_ROUTE = "/v1/spaces/:spaceId" as const;
+  "/api/operator-connection-defaults" as const;
+export const TAKOSUMI_SPACE_ROUTE = "/api/spaces/:spaceId" as const;
 export const TAKOSUMI_SPACE_INSTALLATIONS_ROUTE =
-  "/v1/spaces/:spaceId/installations" as const;
-export const TAKOSUMI_INSTALL_CONFIGS_ROUTE = "/v1/install-configs" as const;
+  "/api/spaces/:spaceId/installations" as const;
+/** PUBLIC Installation read / patch / delete (spec §30 `/api`). */
+export const TAKOSUMI_API_INSTALLATION_ROUTE =
+  "/api/installations/:installationId" as const;
+/** PUBLIC Deployment list for an Installation (spec §30 `/api`). */
+export const TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE =
+  "/api/installations/:installationId/deployments" as const;
+export const TAKOSUMI_DEPLOYMENT_ROUTE =
+  "/api/deployments/:deploymentId" as const;
+export const TAKOSUMI_DEPLOYMENT_ROLLBACK_PLAN_ROUTE =
+  "/api/deployments/:deploymentId/rollback-plan" as const;
+export const TAKOSUMI_INSTALL_CONFIGS_ROUTE = "/api/install-configs" as const;
 export const TAKOSUMI_INSTALLATION_PLAN_ROUTE =
-  "/v1/installations/:installationId/plan" as const;
+  "/api/installations/:installationId/plan" as const;
 export const TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE =
-  "/v1/installations/:installationId/destroy-plan" as const;
-export const TAKOSUMI_RUN_ROUTE = "/v1/runs/:runId" as const;
-export const TAKOSUMI_RUN_APPROVE_ROUTE = "/v1/runs/:runId/approve" as const;
-export const TAKOSUMI_RUN_CANCEL_ROUTE = "/v1/runs/:runId/cancel" as const;
+  "/api/installations/:installationId/destroy-plan" as const;
+export const TAKOSUMI_RUN_ROUTE = "/api/runs/:runId" as const;
+export const TAKOSUMI_RUN_LOGS_ROUTE = "/api/runs/:runId/logs" as const;
+export const TAKOSUMI_RUN_EVENTS_ROUTE = "/api/runs/:runId/events" as const;
+export const TAKOSUMI_RUN_APPROVE_ROUTE = "/api/runs/:runId/approve" as const;
+export const TAKOSUMI_RUN_CANCEL_ROUTE = "/api/runs/:runId/cancel" as const;
 export const TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE =
-  "/v1/installations/:installationId/dependencies" as const;
+  "/api/installations/:installationId/dependencies" as const;
 export const TAKOSUMI_DEPENDENCY_ROUTE =
-  "/v1/dependencies/:dependencyId" as const;
+  "/api/dependencies/:dependencyId" as const;
+export const TAKOSUMI_OUTPUT_SHARES_ROUTE = "/api/output-shares" as const;
+export const TAKOSUMI_OUTPUT_SHARE_REVOKE_ROUTE =
+  "/api/output-shares/:shareId/revoke" as const;
 export const TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE =
-  "/v1/spaces/:spaceId/plan-update" as const;
+  "/api/spaces/:spaceId/plan-update" as const;
 export const TAKOSUMI_RUN_GROUP_ROUTE =
-  "/v1/run-groups/:runGroupId" as const;
+  "/api/run-groups/:runGroupId" as const;
 export const TAKOSUMI_RUN_GROUP_APPROVE_ROUTE =
-  "/v1/run-groups/:runGroupId/approve" as const;
+  "/api/run-groups/:runGroupId/approve" as const;
 export const TAKOSUMI_SPACE_ACTIVITY_ROUTE =
-  "/v1/spaces/:spaceId/activity" as const;
+  "/api/spaces/:spaceId/activity" as const;
 
 /**
  * Endpoint inventory for the `deployControl-public` family, co-located with the
@@ -177,7 +236,8 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
   {
     method: "GET",
     path: TAKOSUMI_INSTALLATION_ROUTE,
-    summary: "Reads an Installation ledger record.",
+    summary:
+      "INTERNAL seam: reads an Installation ledger record (accounts-plane consumer; not part of the §30 public surface).",
     auth: "deploy-control-token",
     operationId: "getInstallation",
     openapi: {
@@ -188,7 +248,8 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
   {
     method: "GET",
     path: TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE,
-    summary: "Lists Deployment records for an Installation.",
+    summary:
+      "INTERNAL seam: lists Deployment records for an Installation (accounts-plane consumer; not part of the §30 public surface).",
     auth: "deploy-control-token",
     operationId: "listInstallationDeployments",
     openapi: {
@@ -200,7 +261,7 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
     method: "GET",
     path: TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
     summary:
-      "Lists non-sensitive DeploymentOutput records for the current Deployment of an Installation.",
+      "INTERNAL seam: lists non-sensitive DeploymentOutput records for the current Deployment of an Installation (accounts-plane consumer; not part of the §30 public surface).",
     auth: "deploy-control-token",
     operationId: "listInstallationDeploymentOutputs",
     openapi: {
@@ -210,11 +271,11 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
   },
   {
     method: "POST",
-    path: TAKOSUMI_CONNECTIONS_ROUTE,
+    path: TAKOSUMI_CONNECTIONS_SOURCE_HTTPS_TOKEN_ROUTE,
     summary:
-      "Registers provider credentials as a Connection (credential values are write-only).",
+      "Registers a git source HTTPS-token Connection (token write-only; optional username).",
     auth: "deploy-control-token",
-    operationId: "createConnection",
+    operationId: "createSourceHttpsTokenConnection",
     openapi: {
       requestSchema: "CreateConnectionRequest",
       okStatus: "201",
@@ -222,9 +283,47 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
     },
   },
   {
+    method: "POST",
+    path: TAKOSUMI_CONNECTIONS_SOURCE_SSH_KEY_ROUTE,
+    summary:
+      "Registers a git source SSH-key Connection (private key write-only; knownHosts required for StrictHostKeyChecking=yes).",
+    auth: "deploy-control-token",
+    operationId: "createSourceSshKeyConnection",
+    openapi: {
+      requestSchema: "CreateConnectionRequest",
+      okStatus: "201",
+      okSchema: "ConnectionResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_CONNECTIONS_CLOUDFLARE_TOKEN_ROUTE,
+    summary:
+      "Registers a Cloudflare API-token Connection (token write-only; optional account/zone scope).",
+    auth: "deploy-control-token",
+    operationId: "createCloudflareTokenConnection",
+    openapi: {
+      requestSchema: "CreateConnectionRequest",
+      okStatus: "201",
+      okSchema: "ConnectionResponse",
+    },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_CONNECTIONS_AWS_ASSUME_ROLE_ROUTE,
+    summary: "AWS assume-role Connection creation (not implemented for MVP).",
+    auth: "deploy-control-token",
+    operationId: "createAwsAssumeRoleConnection",
+    openapi: {
+      okStatus: "201",
+      okSchema: "ConnectionResponse",
+    },
+  },
+  {
     method: "GET",
     path: TAKOSUMI_CONNECTIONS_ROUTE,
-    summary: "Lists Connections for a Space (never includes secret values).",
+    summary:
+      "Lists Connections for a Space, or operator-scoped Connections when spaceId is omitted (never includes secret values).",
     auth: "deploy-control-token",
     operationId: "listConnections",
     openapi: { query: ["spaceId"], okSchema: "ListConnectionsResponse" },
@@ -241,11 +340,11 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
     },
   },
   {
-    method: "DELETE",
-    path: TAKOSUMI_CONNECTION_ROUTE,
+    method: "POST",
+    path: TAKOSUMI_CONNECTION_REVOKE_ROUTE,
     summary: "Revokes a Connection and deletes its sealed secret blob.",
     auth: "deploy-control-token",
-    operationId: "deleteConnection",
+    operationId: "revokeConnection",
     openapi: {
       pathParams: ["connectionId"],
       okStatus: "204",
@@ -347,6 +446,18 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
     openapi: { pathParams: ["spaceId"], okSchema: "SpaceResponse" },
   },
   {
+    method: "PATCH",
+    path: TAKOSUMI_SPACE_ROUTE,
+    summary: "Updates a Space (displayName only for MVP).",
+    auth: "deploy-control-token",
+    operationId: "patchSpace",
+    openapi: {
+      pathParams: ["spaceId"],
+      requestSchema: "PatchSpaceRequest",
+      okSchema: "SpaceResponse",
+    },
+  },
+  {
     method: "POST",
     path: TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
     summary:
@@ -369,6 +480,74 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
     openapi: {
       pathParams: ["spaceId"],
       okSchema: "ListInstallationsResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_API_INSTALLATION_ROUTE,
+    summary: "Reads an Installation ledger record (§30 public surface).",
+    auth: "deploy-control-token",
+    operationId: "getApiInstallation",
+    openapi: {
+      pathParams: ["installationId"],
+      okSchema: "GetInstallationResponse",
+    },
+  },
+  {
+    method: "PATCH",
+    path: TAKOSUMI_API_INSTALLATION_ROUTE,
+    summary:
+      "Updates an Installation (not implemented for MVP; status note via run lifecycle).",
+    auth: "deploy-control-token",
+    operationId: "patchApiInstallation",
+    openapi: {
+      pathParams: ["installationId"],
+      okSchema: "GetInstallationResponse",
+    },
+  },
+  {
+    method: "DELETE",
+    path: TAKOSUMI_API_INSTALLATION_ROUTE,
+    summary:
+      "Deletes an Installation (not implemented for MVP; use the destroy-plan flow instead).",
+    auth: "deploy-control-token",
+    operationId: "deleteApiInstallation",
+    openapi: {
+      pathParams: ["installationId"],
+      okStatus: "204",
+      okSchema: "EmptyResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE,
+    summary: "Lists Deployment records for an Installation (§30 public surface).",
+    auth: "deploy-control-token",
+    operationId: "listApiInstallationDeployments",
+    openapi: {
+      pathParams: ["installationId"],
+      okSchema: "ListDeploymentsResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_DEPLOYMENT_ROUTE,
+    summary: "Reads a Deployment ledger record.",
+    auth: "deploy-control-token",
+    operationId: "getDeployment",
+    openapi: { pathParams: ["deploymentId"], okSchema: "DeploymentResponse" },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_DEPLOYMENT_ROLLBACK_PLAN_ROUTE,
+    summary:
+      "Creates a rollback plan run for a Deployment, pinned to that Deployment's source snapshot (flows through normal approval/apply).",
+    auth: "deploy-control-token",
+    operationId: "createDeploymentRollbackPlan",
+    openapi: {
+      pathParams: ["deploymentId"],
+      okStatus: "201",
+      okSchema: "PlanRunResponse",
     },
   },
   {
@@ -414,6 +593,23 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
     auth: "deploy-control-token",
     operationId: "getRun",
     openapi: { pathParams: ["runId"], okSchema: "RunResponse" },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_RUN_LOGS_ROUTE,
+    summary:
+      "Reads a Run's structured diagnostics + run-level audit trail (redacted).",
+    auth: "deploy-control-token",
+    operationId: "getRunLogs",
+    openapi: { pathParams: ["runId"], okSchema: "RunLogsResponse" },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_RUN_EVENTS_ROUTE,
+    summary: "Reads a Run's run-level audit-event trail.",
+    auth: "deploy-control-token",
+    operationId: "getRunEvents",
+    openapi: { pathParams: ["runId"], okSchema: "RunEventsResponse" },
   },
   {
     method: "POST",
@@ -473,6 +669,30 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
       okStatus: "204",
       okSchema: "EmptyResponse",
     },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_OUTPUT_SHARES_ROUTE,
+    summary: "Creates a cross-Space OutputShare (not implemented for MVP).",
+    auth: "deploy-control-token",
+    operationId: "createOutputShare",
+    openapi: { okStatus: "201", okSchema: "OutputShareResponse" },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_OUTPUT_SHARES_ROUTE,
+    summary: "Lists cross-Space OutputShares (not implemented for MVP).",
+    auth: "deploy-control-token",
+    operationId: "listOutputShares",
+    openapi: { okSchema: "ListOutputSharesResponse" },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_OUTPUT_SHARE_REVOKE_ROUTE,
+    summary: "Revokes a cross-Space OutputShare (not implemented for MVP).",
+    auth: "deploy-control-token",
+    operationId: "revokeOutputShare",
+    openapi: { pathParams: ["shareId"], okSchema: "OutputShareResponse" },
   },
   {
     method: "POST",
@@ -584,6 +804,7 @@ const ALLOWED_KEYS: Record<DeployControlRouteName, ReadonlySet<string>> = {
     "ownerUserId",
     "billingAccountId",
   ]),
+  spacePatch: new Set(["displayName"]),
   installationCreate: new Set([
     "name",
     "environment",
@@ -606,6 +827,7 @@ type DeployControlRouteName =
   | "sourceCreate"
   | "sourcePatch"
   | "spaceCreate"
+  | "spacePatch"
   | "installationCreate"
   | "operatorConnectionDefault"
   | "runApprove"
@@ -617,6 +839,75 @@ const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
 const RUN_ID_PATTERN = /^(plan|apply|ssr)_[0-9a-zA-Z]{8,64}$/;
 const DEPENDENCY_ID_PATTERN = /^dep_[0-9a-zA-Z]{8,64}$/;
 const RUN_GROUP_ID_PATTERN = /^rg_[0-9a-zA-Z]{8,64}$/;
+const DEPLOYMENT_ID_PATTERN = /^dep(loy)?_[0-9a-zA-Z]{8,64}$/;
+
+/**
+ * §30 connection-creation subroute body. The subroute fixes the
+ * `provider` / `kind` / `authMethod`; the body carries only the Space binding,
+ * display name, optional scope, optional non-secret scope hints, and the
+ * write-only credential `values`.
+ */
+interface ConnectionSubrouteBody {
+  readonly spaceId?: string;
+  readonly displayName?: string;
+  readonly scope?: "operator" | "space";
+  readonly scopeHints?: ConnectionScopeHints;
+  readonly values: Readonly<Record<string, string>>;
+}
+
+/**
+ * Builds a git-source Connection create request (§30 source subroutes). The
+ * `source_git_ssh_key` kind REQUIRES `scopeHints.knownHostsEntry` so the runner
+ * can pin the host key with `StrictHostKeyChecking=yes` (spec §7 / invariant on
+ * SSH host-key pinning); omitting it is a typed invalid_argument.
+ */
+function buildSourceConnectionRequest(
+  body: ConnectionSubrouteBody,
+  kind: Extract<
+    ConnectionKind,
+    "source_git_https_token" | "source_git_ssh_key"
+  >,
+): CreateConnectionRequest {
+  if (
+    kind === "source_git_ssh_key" &&
+    !nonEmptyString(body.scopeHints?.knownHostsEntry)
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "scopeHints.knownHostsEntry is required for a source_git_ssh_key connection",
+    );
+  }
+  return {
+    ...(body.spaceId ? { spaceId: body.spaceId } : {}),
+    provider: kind,
+    kind,
+    authMethod: "static_secret",
+    ...(body.displayName ? { displayName: body.displayName } : {}),
+    ...(body.scope ? { scope: body.scope } : {}),
+    ...(body.scopeHints ? { scopeHints: body.scopeHints } : {}),
+    values: body.values,
+  };
+}
+
+/** Builds a Cloudflare API-token Connection create request (§30 subroute). */
+function buildCloudflareConnectionRequest(
+  body: ConnectionSubrouteBody,
+): CreateConnectionRequest {
+  return {
+    ...(body.spaceId ? { spaceId: body.spaceId } : {}),
+    provider: "cloudflare",
+    kind: "provider",
+    authMethod: "static_secret",
+    ...(body.displayName ? { displayName: body.displayName } : {}),
+    ...(body.scope ? { scope: body.scope } : {}),
+    ...(body.scopeHints ? { scopeHints: body.scopeHints } : {}),
+    values: body.values,
+  };
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
 
 export interface DeployControlPublicRouteDependencies {
   /**
@@ -816,22 +1107,35 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
-  app.post(TAKOSUMI_CONNECTIONS_ROUTE, deployControlBodyLimit, async (c) => {
+  // --- Connection creation subroutes (§30): thin validated wrappers over the
+  // generic createConnection with the right kind/provider. -------------------
+
+  /**
+   * Shared §30 connection-creation handler: validates the subroute body,
+   * resolves the connection-permission, creates the Connection through the
+   * controller, emits Space activity (space-scoped only), and returns 201. The
+   * credential `values` are forwarded write-only and never logged or echoed.
+   */
+  const createConnectionFromSubroute = (
+    build: (body: ConnectionSubrouteBody) => CreateConnectionRequest,
+  ) =>
+  async (c: Context): Promise<Response> => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
     const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
     if (limit) return limit;
     return await runHandler(c, async () => {
-      const body = await readJsonBody<CreateConnectionRequest>(
+      const body = await readJsonBody<ConnectionSubrouteBody>(
         c,
         "connectionCreate",
       );
-      ensureConnectionPermission(auth.principal, body.spaceId);
-      const response = await controller.createConnection(body);
-      // Activity (§27 / §34): a Connection was registered. The route owns the
-      // Space context; we emit ONLY for a space-scoped Connection (operator-scope
-      // defaults are instance-wide, not Space activity). Names / ids only — the
-      // credential values never enter the audit trail.
+      const request = build(body);
+      ensureConnectionPermission(auth.principal, request.spaceId);
+      const response = await controller.createConnection(request);
+      // Activity (§27 / §34): a Connection was registered. Emit ONLY for a
+      // space-scoped Connection (operator-scope defaults are instance-wide, not
+      // Space activity). Names / ids only — credential values never enter the
+      // audit trail.
       const connection = response.connection;
       if (dependencies.activityService && connection.spaceId) {
         await dependencies.activityService.record({
@@ -849,17 +1153,51 @@ export function mountDeployControlPublicRoutes(
       }
       return c.json(response, 201);
     });
+  };
+
+  app.post(
+    TAKOSUMI_CONNECTIONS_SOURCE_HTTPS_TOKEN_ROUTE,
+    deployControlBodyLimit,
+    createConnectionFromSubroute((body) =>
+      buildSourceConnectionRequest(body, "source_git_https_token")
+    ),
+  );
+
+  app.post(
+    TAKOSUMI_CONNECTIONS_SOURCE_SSH_KEY_ROUTE,
+    deployControlBodyLimit,
+    createConnectionFromSubroute((body) =>
+      buildSourceConnectionRequest(body, "source_git_ssh_key")
+    ),
+  );
+
+  app.post(
+    TAKOSUMI_CONNECTIONS_CLOUDFLARE_TOKEN_ROUTE,
+    deployControlBodyLimit,
+    createConnectionFromSubroute((body) => buildCloudflareConnectionRequest(body)),
+  );
+
+  app.post(TAKOSUMI_CONNECTIONS_AWS_ASSUME_ROLE_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    return c.json(
+      notImplemented(c, "aws assume-role connections are not implemented yet"),
+      501,
+    );
   });
 
   app.get(TAKOSUMI_CONNECTIONS_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
     const spaceId = c.req.query("spaceId") ?? "";
+    // §30: with no spaceId, list operator-scoped Connections (instance-wide).
+    // Only the unrestricted bearer (spaceIds: "*") may; a scoped principal is
+    // rejected by ensureConnectionPermission(undefined).
     if (spaceId.trim().length === 0) {
-      return c.json(
-        errorEnvelope(c, "invalid_argument", "spaceId query is required"),
-        400,
-      );
+      return await runHandler(c, async () => {
+        ensureConnectionPermission(auth.principal, undefined);
+        return c.json(await controller.listOperatorConnections(), 200);
+      });
     }
     return await runHandler(c, async () => {
       ensureSpacePermission(auth.principal, spaceId);
@@ -879,7 +1217,7 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
-  app.delete(TAKOSUMI_CONNECTION_ROUTE, async (c) => {
+  app.post(TAKOSUMI_CONNECTION_REVOKE_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
     const idCheck = ensureValidConnectionId(c);
@@ -887,6 +1225,7 @@ export function mountDeployControlPublicRoutes(
     return await runHandler(c, async () => {
       const connection = await controller.getConnection(idCheck.value);
       ensureConnectionPermission(auth.principal, connection.spaceId);
+      // Maps to the vault revoke path (the former DELETE handler logic).
       await controller.deleteConnection(idCheck.value);
       return c.body(null, 204);
     });
@@ -1020,6 +1359,34 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
+  // §30 `PATCH /api/spaces/:spaceId` — MVP: displayName only.
+  app.patch(TAKOSUMI_SPACE_ROUTE, deployControlBodyLimit, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    if (!spaces) return c.json(notImplemented(c, "spaces not wired"), 501);
+    const idCheck = ensureValidParam(c, "spaceId", SPACE_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+    if (limit) return limit;
+    return await runHandler(c, async () => {
+      ensureSpacePermission(auth.principal, idCheck.value);
+      const body = await readJsonBody<{ readonly displayName: string }>(
+        c,
+        "spacePatch",
+      );
+      if (!nonEmptyString(body.displayName)) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          "displayName is required",
+        );
+      }
+      const space = await spaces.updateSpace(idCheck.value, {
+        displayName: body.displayName,
+      });
+      return c.json({ space }, 200);
+    });
+  });
+
   // --- Operator default connections (Core Specification §9) ------------------
 
   const connectionsService = dependencies.connectionsService;
@@ -1111,6 +1478,87 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
+  // --- PUBLIC §30 Installation + Deployment reads --------------------------
+
+  app.get(TAKOSUMI_API_INSTALLATION_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidId(c, "installationId");
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const response = await controller.getInstallation(idCheck.value);
+      ensureSpacePermission(auth.principal, response.installation.spaceId);
+      return c.json(response, 200);
+    });
+  });
+
+  // §30: Installation PATCH is minimal for MVP (status note handled via run
+  // lifecycle); the surface exists but is not implemented.
+  app.patch(TAKOSUMI_API_INSTALLATION_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    return c.json(
+      notImplemented(c, "installation patch is not implemented yet"),
+      501,
+    );
+  });
+
+  // §30: Installation DELETE is NOT a destroy shortcut for MVP; callers use the
+  // destroy-plan flow (`POST /api/installations/:id/destroy-plan`).
+  app.delete(TAKOSUMI_API_INSTALLATION_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    return c.json(
+      notImplemented(
+        c,
+        "installation delete is not implemented; use POST /api/installations/:installationId/destroy-plan",
+      ),
+      501,
+    );
+  });
+
+  app.get(TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidId(c, "installationId");
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const installation = await controller.getInstallation(idCheck.value);
+      ensureSpacePermission(auth.principal, installation.installation.spaceId);
+      return c.json(await controller.listDeployments(idCheck.value), 200);
+    });
+  });
+
+  app.get(TAKOSUMI_DEPLOYMENT_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidParam(c, "deploymentId", DEPLOYMENT_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const deployment = await controller.getDeployment(idCheck.value);
+      ensureSpacePermission(auth.principal, deployment.spaceId);
+      return c.json({ deployment }, 200);
+    });
+  });
+
+  app.post(TAKOSUMI_DEPLOYMENT_ROLLBACK_PLAN_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidParam(c, "deploymentId", DEPLOYMENT_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      // Resolve the Deployment first so the rollback plan is space-permission
+      // gated via its Space, then create the pinned rollback plan.
+      const deployment = await controller.getDeployment(idCheck.value);
+      ensureSpacePermission(auth.principal, deployment.spaceId);
+      const response = await controller.createDeploymentRollbackPlan(
+        idCheck.value,
+        { actor: auth.principal.actor },
+      );
+      return c.json(response, 201);
+    });
+  });
+
   app.get(TAKOSUMI_INSTALL_CONFIGS_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
@@ -1178,6 +1626,31 @@ export function mountDeployControlPublicRoutes(
       const run = await controller.getRun(idCheck.value);
       ensureSpacePermission(auth.principal, run.spaceId);
       return c.json({ run }, 200);
+    });
+  });
+
+  app.get(TAKOSUMI_RUN_LOGS_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidParam(c, "runId", RUN_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      // Resolve the run's space first so logs are space-permission gated.
+      const run = await controller.getRun(idCheck.value);
+      ensureSpacePermission(auth.principal, run.spaceId);
+      return c.json(await controller.getRunLogs(idCheck.value), 200);
+    });
+  });
+
+  app.get(TAKOSUMI_RUN_EVENTS_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidParam(c, "runId", RUN_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const run = await controller.getRun(idCheck.value);
+      ensureSpacePermission(auth.principal, run.spaceId);
+      return c.json(await controller.getRunEvents(idCheck.value), 200);
     });
   });
 
@@ -1293,6 +1766,26 @@ export function mountDeployControlPublicRoutes(
       await dependenciesService.deleteDependency(idCheck.value);
       return c.body(null, 204);
     });
+  });
+
+  // --- Output shares (Core Specification §18 — surface exists, post-MVP) -----
+  // The cross-Space OutputShare surface is defined but not implemented for MVP
+  // (spec §34 / §35 Phase 8). The routes authenticate and then 501 so the
+  // surface is discoverable without leaking an unconfigured handler.
+  app.post(TAKOSUMI_OUTPUT_SHARES_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    return c.json(notImplemented(c, "output shares are not implemented yet"), 501);
+  });
+  app.get(TAKOSUMI_OUTPUT_SHARES_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    return c.json(notImplemented(c, "output shares are not implemented yet"), 501);
+  });
+  app.post(TAKOSUMI_OUTPUT_SHARE_REVOKE_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    return c.json(notImplemented(c, "output shares are not implemented yet"), 501);
   });
 
   // --- RunGroups (Core Specification §19 / §24) -----------------------------
@@ -1431,10 +1924,25 @@ function mountNotImplementedRoutes(
     TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
     get("deployment outputs not wired"),
   );
-  app.post(TAKOSUMI_CONNECTIONS_ROUTE, post("connections not wired"));
+  app.post(
+    TAKOSUMI_CONNECTIONS_SOURCE_HTTPS_TOKEN_ROUTE,
+    post("connections not wired"),
+  );
+  app.post(
+    TAKOSUMI_CONNECTIONS_SOURCE_SSH_KEY_ROUTE,
+    post("connections not wired"),
+  );
+  app.post(
+    TAKOSUMI_CONNECTIONS_CLOUDFLARE_TOKEN_ROUTE,
+    post("connections not wired"),
+  );
+  app.post(
+    TAKOSUMI_CONNECTIONS_AWS_ASSUME_ROLE_ROUTE,
+    post("aws assume-role connections are not implemented yet"),
+  );
   app.get(TAKOSUMI_CONNECTIONS_ROUTE, get("connections not wired"));
   app.post(TAKOSUMI_CONNECTION_TEST_ROUTE, post("connections not wired"));
-  app.delete(TAKOSUMI_CONNECTION_ROUTE, post("connections not wired"));
+  app.post(TAKOSUMI_CONNECTION_REVOKE_ROUTE, post("connections not wired"));
   app.post(TAKOSUMI_SOURCES_ROUTE, post("sources not wired"));
   app.get(TAKOSUMI_SOURCES_ROUTE, get("sources not wired"));
   app.get(TAKOSUMI_SOURCE_ROUTE, get("sources not wired"));
@@ -1444,11 +1952,32 @@ function mountNotImplementedRoutes(
   app.post(TAKOSUMI_SPACES_ROUTE, post("spaces not wired"));
   app.get(TAKOSUMI_SPACES_ROUTE, get("spaces not wired"));
   app.get(TAKOSUMI_SPACE_ROUTE, get("spaces not wired"));
+  app.patch(TAKOSUMI_SPACE_ROUTE, post("spaces not wired"));
   app.post(
     TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
     post("installations not wired"),
   );
   app.get(TAKOSUMI_SPACE_INSTALLATIONS_ROUTE, get("installations not wired"));
+  app.get(TAKOSUMI_API_INSTALLATION_ROUTE, get("installations not wired"));
+  app.patch(
+    TAKOSUMI_API_INSTALLATION_ROUTE,
+    post("installation patch is not implemented yet"),
+  );
+  app.delete(
+    TAKOSUMI_API_INSTALLATION_ROUTE,
+    post(
+      "installation delete is not implemented; use POST /api/installations/:installationId/destroy-plan",
+    ),
+  );
+  app.get(
+    TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE,
+    get("deployment ledger not wired"),
+  );
+  app.get(TAKOSUMI_DEPLOYMENT_ROUTE, get("deployment ledger not wired"));
+  app.post(
+    TAKOSUMI_DEPLOYMENT_ROLLBACK_PLAN_ROUTE,
+    post("deployment rollback not wired"),
+  );
   app.get(TAKOSUMI_INSTALL_CONFIGS_ROUTE, get("installations not wired"));
   app.post(TAKOSUMI_INSTALLATION_PLAN_ROUTE, post("installations not wired"));
   app.post(
@@ -1456,6 +1985,8 @@ function mountNotImplementedRoutes(
     post("installations not wired"),
   );
   app.get(TAKOSUMI_RUN_ROUTE, get("runs not wired"));
+  app.get(TAKOSUMI_RUN_LOGS_ROUTE, get("runs not wired"));
+  app.get(TAKOSUMI_RUN_EVENTS_ROUTE, get("runs not wired"));
   app.post(TAKOSUMI_RUN_APPROVE_ROUTE, post("runs not wired"));
   app.post(TAKOSUMI_RUN_CANCEL_ROUTE, post("runs not wired"));
   app.post(
@@ -1467,6 +1998,18 @@ function mountNotImplementedRoutes(
     get("dependencies not wired"),
   );
   app.delete(TAKOSUMI_DEPENDENCY_ROUTE, post("dependencies not wired"));
+  app.post(
+    TAKOSUMI_OUTPUT_SHARES_ROUTE,
+    post("output shares are not implemented yet"),
+  );
+  app.get(
+    TAKOSUMI_OUTPUT_SHARES_ROUTE,
+    get("output shares are not implemented yet"),
+  );
+  app.post(
+    TAKOSUMI_OUTPUT_SHARE_REVOKE_ROUTE,
+    post("output shares are not implemented yet"),
+  );
   app.post(TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE, post("run groups not wired"));
   app.get(TAKOSUMI_RUN_GROUP_ROUTE, get("run groups not wired"));
   app.post(TAKOSUMI_RUN_GROUP_APPROVE_ROUTE, post("run groups not wired"));

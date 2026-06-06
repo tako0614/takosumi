@@ -13,6 +13,11 @@
  * update after stale propagation); `graphJson` records the planned order.
  */
 
+import type {
+  DeployControlAuditEvent,
+  RunDiagnostic,
+} from "./deploy-control-api.ts";
+
 export type RunType =
   | "source_sync"
   | "plan"
@@ -58,6 +63,25 @@ export interface Run {
   readonly createdAt: string;
   readonly startedAt?: string;
   readonly finishedAt?: string;
+}
+
+/**
+ * Body of `GET /api/runs/:runId/logs` (spec §30). MVP: the run record's
+ * structured diagnostics + the run-level audit trail (the per-run policy /
+ * lease / dispatch trace). Logs pass through redaction (invariant 15); no
+ * credential material or sensitive output values appear here.
+ */
+export interface RunLogsResponse {
+  readonly diagnostics: readonly RunDiagnostic[];
+  readonly auditEvents: readonly DeployControlAuditEvent[];
+}
+
+/**
+ * Body of `GET /api/runs/:runId/events` (spec §30). MVP: the run-level audit
+ * trail only.
+ */
+export interface RunEventsResponse {
+  readonly auditEvents: readonly DeployControlAuditEvent[];
 }
 
 export type RunGroupType =

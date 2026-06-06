@@ -133,9 +133,9 @@ import {
 } from "./deploy-control-proxy.ts";
 import {
   forwardCreateConnection,
-  forwardDeleteConnection,
   forwardGetConnection,
   forwardListConnections,
+  forwardRevokeConnection,
   forwardTestConnection,
   responseFromConnectionsResult,
 } from "./connections-proxy.ts";
@@ -1207,7 +1207,10 @@ function connectionsNotConfigured(): Response {
 }
 
 /**
- * POST /v1/connections (create) and GET /v1/connections?spaceId=... (list).
+ * Account-plane Connections collection route (create + list). The inbound
+ * account-plane path is owned by the accounts contract; the create is forwarded
+ * to the deploy-control §30 connection-creation subroute selected from the body
+ * (`/api/connections/...`) and the list to `GET /api/connections?spaceId=...`.
  *
  * Both gate on space ownership: the authenticated subject must own the
  * LedgerAccount that owns the spaceId named in the body (create) or query
@@ -1279,7 +1282,9 @@ async function handleConnectionsCollection(input: {
 }
 
 /**
- * POST /v1/connections/{id}/test and DELETE /v1/connections/{id}.
+ * Account-plane Connection item route (test + revoke). Forwarded to the
+ * deploy-control §30 `POST /api/connections/{id}/test` and
+ * `POST /api/connections/{id}/revoke` subroutes.
  *
  * The request only names the connection id, so space ownership is enforced by
  * first reading the Connection from deploy-control (a non-secret projection —
@@ -1344,7 +1349,7 @@ async function handleConnectionItem(input: {
     });
     return responseFromConnectionsResult(result);
   }
-  const result = await forwardDeleteConnection({
+  const result = await forwardRevokeConnection({
     deployControl,
     connectionId: route.connectionId,
   });

@@ -179,18 +179,18 @@ export interface MintResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Public API paths (spec §6 — /v1 for now; /api comes in M3)
+// Public API paths (spec §30 — `/api`, no version prefix).
 // ---------------------------------------------------------------------------
 
-export const SOURCES_PATH = "/v1/sources" as const;
+export const SOURCES_PATH = "/api/sources" as const;
 export const SOURCE_PATH = (id: string): string =>
-  `/v1/sources/${encodeURIComponent(id)}`;
+  `/api/sources/${encodeURIComponent(id)}`;
 export const SOURCE_SYNC_PATH = (id: string): string =>
-  `/v1/sources/${encodeURIComponent(id)}/sync`;
+  `/api/sources/${encodeURIComponent(id)}/sync`;
 export const SOURCE_SNAPSHOTS_PATH = (id: string): string =>
-  `/v1/sources/${encodeURIComponent(id)}/snapshots`;
+  `/api/sources/${encodeURIComponent(id)}/snapshots`;
 
-/** Webhook route on the PLATFORM worker surface (not the deploy-control /v1). */
+/** Webhook route on the PLATFORM worker surface (not the deploy-control /api). */
 export const SOURCE_HOOK_PATH = (id: string): string =>
   `/hooks/sources/${encodeURIComponent(id)}`;
 

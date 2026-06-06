@@ -97,6 +97,26 @@ export class SpacesService {
     return space;
   }
 
+  /**
+   * Updates the mutable, non-identity fields of a Space (spec §30 `PATCH
+   * /api/spaces/:spaceId`). MVP scope: `displayName` only — the handle, type,
+   * owner, and billing are immutable here. Bumps `updatedAt`.
+   */
+  async updateSpace(
+    id: string,
+    patch: { readonly displayName: string },
+  ): Promise<Space> {
+    requireNonEmptyString(id, "id");
+    requireNonEmptyString(patch.displayName, "displayName");
+    const space = await this.getSpace(id);
+    const updated: Space = {
+      ...space,
+      displayName: patch.displayName,
+      updatedAt: this.#now().toISOString(),
+    };
+    return await this.#store.putSpace(updated);
+  }
+
   async getSpaceByHandle(handle: string): Promise<Space | undefined> {
     requireNonEmptyString(handle, "handle");
     return await this.#store.getSpaceByHandle(handle);
