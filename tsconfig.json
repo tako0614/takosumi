@@ -27,7 +27,6 @@
       ],
       "takosumi-contract": ["./packages/schema/src/index.ts"],
       "takosumi-contract/deploy-control-api": ["./packages/schema/src/deploy-control-api.ts"],
-      "takosumi-contract/lanes": ["./packages/schema/src/lanes.ts"],
       "takosumi-contract/sources": ["./packages/schema/src/sources.ts"],
       "takosumi-contract/provider-env-rules": ["./packages/schema/src/provider-env-rules.ts"],
       "takosumi-contract/reference/compat": [

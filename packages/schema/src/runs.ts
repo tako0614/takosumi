@@ -38,8 +38,13 @@ export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
   readonly spaceId: string;
-  readonly installationId: string;
-  readonly environment: string;
+  /**
+   * Spec-required (§27 NOT NULL); optional here only because `source_sync`
+   * rows are Source-scoped until sources bind to Installations — tracked in
+   * core-conformance.md.
+   */
+  readonly installationId?: string;
+  readonly environment?: string;
   readonly type: RunType;
   readonly status: RunStatus;
   readonly sourceSnapshotId?: string;

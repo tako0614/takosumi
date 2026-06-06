@@ -4,6 +4,8 @@ import type {
   CreateApplyRunRequest,
   CreatePlanRunRequest,
   Deployment,
+  DeploymentOutput,
+  DispatchStateScope,
   GetInstallationResponse,
   Installation,
   DeployControlErrorEnvelope,
@@ -13,6 +15,7 @@ import type {
   PlanRun,
   PlanRunResponse,
   RunnerProfile,
+  StateSnapshot,
 } from "./deploy-control-api.ts";
 
 const runnerProfile = {
@@ -78,6 +81,12 @@ const runnerProfile = {
   createdAt: 1716000000000,
 } satisfies RunnerProfile;
 
+// Space-direct Installation coordinates shared across the fixtures: one
+// Installation = one OpenTofu root/state, keyed (spaceId, name, environment).
+const spaceId = "space_personal";
+const installationId = "ins_0123456789abcdef";
+const environment = "production";
+
 const source = {
   kind: "git",
   url: "https://github.com/example/notes",
@@ -86,9 +95,19 @@ const source = {
   modulePath: "infra",
 } as const;
 
+// One projected, non-sensitive OpenTofu output. The runner envelope narrows
+// `sensitive` to the literal `false`; sensitive outputs never enter the ledger.
+const deploymentOutput = {
+  name: "launch_url",
+  kind: "launch_url",
+  value: "https://notes.example.test",
+  sensitive: false,
+} satisfies DeploymentOutput;
+
 const planRun = {
   id: "plan_0123456789abcdef",
-  spaceId: "space_personal",
+  spaceId,
+  installationId,
   source,
   sourceDigest:
     "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -120,6 +139,13 @@ const planRun = {
   providerLockDigest:
     "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
   summary: { add: 2, change: 0, destroy: 0 },
+  // Installation context (spec §5) the queue consumer reads to build the
+  // `stateScope` dispatch field; renamed from the retired `environmentContext`.
+  installationContext: {
+    spaceId,
+    installationId,
+    environment,
+  },
   auditEvents: [{
     id: "plan_0123456789abcdef:plan.completed:1716000000002",
     type: "plan.completed",
@@ -134,50 +160,72 @@ const planRun = {
   finishedAt: 1716000000002,
 } satisfies PlanRun;
 
+// Installation-scoped state location threaded onto the run dispatch payload
+// (spec §20). An apply carries `base + 1` as the persist generation.
+const dispatchStateScope = {
+  spaceId,
+  installationId,
+  environment,
+  generation: 1,
+} satisfies DispatchStateScope;
+
+// Installation ledger record (spec §5 / §27): Space-direct, ISO timestamps,
+// `status: "active"`. The App/Environment/InstallProfile lanes are retired.
 const installation = {
-  id: "ins_0123456789abcdef",
-  spaceId: "space_personal",
-  appId: "notes-infra",
-  source,
-  runnerProfileId: runnerProfile.id,
+  id: installationId,
+  spaceId,
+  name: "notes",
+  slug: "notes",
+  sourceId: "src_0123456789abcdef",
+  installType: "opentofu_module",
+  installConfigId: "cfg_0123456789abcdef",
+  environment,
   currentDeploymentId: "dep_0123456789abcdef",
-  status: "ready",
-  createdAt: 1716000000003,
-  updatedAt: 1716000000005,
+  currentStateGeneration: 1,
+  currentOutputSnapshotId: "snap_0123456789abcdef",
+  status: "active",
+  createdAt: "2024-05-18T03:00:00.000Z",
+  updatedAt: "2024-05-18T03:00:05.000Z",
 } satisfies Installation;
 
+// One tfstate generation (spec §20). Metadata-only; the encrypted bytes live
+// in R2_STATE under the spec §20 keys.
+const stateSnapshot = {
+  id: "sst_0123456789abcdef",
+  spaceId,
+  installationId,
+  environment,
+  generation: 1,
+  objectKey:
+    "spaces/space_personal/installations/ins_0123456789abcdef/envs/production/states/00000001.tfstate.enc",
+  digest:
+    "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  createdByRunId: "apply_0123456789abcdef",
+  createdAt: "2024-05-18T03:00:05.000Z",
+} satisfies StateSnapshot;
+
+// Successful apply record (spec §21): Space-direct, `outputsPublic` map,
+// `status: "active"`, ISO `createdAt`. The legacy rich Deployment (source,
+// runnerProfileId, outputs[], auditEvents) is gone.
 const deployment = {
   id: "dep_0123456789abcdef",
-  installationId: installation.id,
-  planRunId: planRun.id,
+  spaceId,
+  installationId,
+  environment,
   applyRunId: "apply_0123456789abcdef",
-  source,
-  runnerProfileId: runnerProfile.id,
-  status: "succeeded",
-  planDigest: planRun.planDigest,
-  sourceCommit: planRun.sourceCommit,
-  providerLockDigest: planRun.providerLockDigest,
-  outputs: [{
-    name: "launch_url",
-    kind: "launch_url",
-    value: "https://notes.example.test",
-    sensitive: false,
-  }],
-  auditEvents: [{
-    id: "deployment:deployment.recorded:1716000000005",
-    type: "deployment.recorded",
-    at: 1716000000005,
-    data: { outputCount: 1 },
-  }],
-  createdAt: 1716000000004,
-  completedAt: 1716000000005,
+  sourceSnapshotId: "ssn_0123456789abcdef",
+  stateGeneration: stateSnapshot.generation,
+  outputSnapshotId: installation.currentOutputSnapshotId,
+  outputsPublic: { launch_url: deploymentOutput.value },
+  status: "active",
+  createdAt: "2024-05-18T03:00:05.000Z",
 } satisfies Deployment;
 
 const applyRun = {
   id: "apply_0123456789abcdef",
   planRunId: planRun.id,
   spaceId: planRun.spaceId,
-  installationId: installation.id,
+  installationId,
   deploymentId: deployment.id,
   operation: planRun.operation,
   runnerProfileId: runnerProfile.id,
@@ -201,7 +249,7 @@ const applyRun = {
     acquiredAt: 1716000000003,
     releasedAt: 1716000000005,
   },
-  outputs: deployment.outputs,
+  outputs: [deploymentOutput],
   auditEvents: [{
     id: "apply_0123456789abcdef:apply.completed:1716000000005",
     type: "apply.completed",
@@ -219,7 +267,7 @@ export const DEPLOY_CONTROL_API_CONTRACT_FIXTURES = {
   } satisfies ListRunnerProfilesResponse,
 
   createPlanRunRequest: {
-    spaceId: "space_personal",
+    spaceId,
     source,
     runnerProfileId: runnerProfile.id,
     variables: { account_id: "acct_123" },
@@ -229,6 +277,9 @@ export const DEPLOY_CONTROL_API_CONTRACT_FIXTURES = {
   planRunResponse: {
     planRun,
   } satisfies PlanRunResponse,
+
+  // Run-dispatch state scope pinned for the spec §20 R2_STATE key derivation.
+  dispatchStateScope,
 
   createApplyRunRequest: {
     planRunId: planRun.id,
@@ -255,12 +306,15 @@ export const DEPLOY_CONTROL_API_CONTRACT_FIXTURES = {
     installation,
   } satisfies GetInstallationResponse,
 
+  // StateSnapshot metadata recorded after a successful apply (spec §20).
+  stateSnapshot,
+
   listDeploymentsResponse: {
     deployments: [deployment],
   } satisfies ListDeploymentsResponse,
 
   listDeploymentOutputsResponse: {
-    outputs: deployment.outputs,
+    outputs: [deploymentOutput],
   } satisfies ListDeploymentOutputsResponse,
 
   errorEnvelope: {

@@ -22,6 +22,8 @@ import {
   type OpenTofuPlanJob,
   type OpenTofuRunner,
 } from "../src/service/domains/deploy-control/mod.ts";
+import { InMemoryOpenTofuDeploymentStore } from "../src/service/domains/deploy-control/store.ts";
+import { seedInstallationModel } from "../src/service/domains/deploy-control/test_model_fixture.ts";
 
 const DEFAULT_INPUT =
   "fixtures/opentofu-deployment-output-proof/proof-input.json";
@@ -131,7 +133,23 @@ export async function runOpenTofuDeploymentOutputProof(
     outputEnvelope,
     outputsDigest: digestBytes(outputBytes),
   });
+  // Installation-first model (spec §5): a plan/apply targets an existing
+  // Installation row. Seed the Space-direct Installation model into the store and
+  // attach a prior current Deployment so the apply guard
+  // (`installationCurrentDeploymentId`) is satisfiable for this single-shot proof.
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const seeded = await seedInstallationModel(store, {
+    spaceId: input.spaceId,
+    installationId: ids.next("inst"),
+    sourceUrl: source.kind === "git" ? source.url : undefined,
+  });
+  const seedDeploymentId = ids.next("dep");
+  await store.putInstallation({
+    ...seeded.installation,
+    currentDeploymentId: seedDeploymentId,
+  });
   const controller = new OpenTofuDeploymentController({
+    store,
     runner,
     runnerProfiles: [runnerProfile],
     defaultRunnerProfileId: runnerProfile.id,
@@ -141,6 +159,7 @@ export async function runOpenTofuDeploymentOutputProof(
 
   const plan = await controller.createPlanRun({
     spaceId: input.spaceId,
+    installationId: seeded.installation.id,
     source,
     runnerProfileId: input.runnerProfileId ?? runnerProfile.id,
     requiredProviders: input.requiredProviders ?? [],
@@ -170,9 +189,20 @@ export async function runOpenTofuDeploymentOutputProof(
     throw new Error("fixture ApplyRun did not materialize Installation/Deployment");
   }
 
-  const applyRunOutputsDigest = digestJson(applied.applyRun.outputs ?? []);
-  const deploymentOutputsDigest = digestJson(applied.deployment.outputs);
-  if (applyRunOutputsDigest !== deploymentOutputsDigest) {
+  // §21 model: the ApplyRun keeps the full projected DeploymentOutput[] while the
+  // Deployment records the public name -> value projection as `outputsPublic`.
+  // The DeploymentOutput snapshot is the ApplyRun outputs; assert the Deployment's
+  // public projection is exactly its name -> value reduction (same source).
+  const deploymentOutputs = applied.applyRun.outputs ?? [];
+  const applyRunOutputsDigest = digestJson(deploymentOutputs);
+  const deploymentOutputsDigest = applyRunOutputsDigest;
+  const expectedOutputsPublic = Object.fromEntries(
+    deploymentOutputs.map((output) => [output.name, output.value]),
+  );
+  if (
+    digestJson(applied.deployment.outputsPublic) !==
+      digestJson(expectedOutputsPublic)
+  ) {
     throw new Error("ApplyRun outputs do not match Deployment output snapshot");
   }
   if (deploymentOutputsDigest !== digestJson(expectedOutputs)) {
@@ -198,7 +228,7 @@ export async function runOpenTofuDeploymentOutputProof(
       applyAuditEventCount: applied.applyRun.auditEvents.length,
       stateLockStatus: applied.applyRun.stateLock.status,
     },
-    source: applied.deployment.source,
+    source,
     planRun: {
       id: plan.planRun.id,
       status: plan.planRun.status,
@@ -216,7 +246,7 @@ export async function runOpenTofuDeploymentOutputProof(
     deployment: {
       id: applied.deployment.id,
       status: applied.deployment.status,
-      outputs: applied.deployment.outputs,
+      outputs: deploymentOutputs,
     },
     checks: [
       {

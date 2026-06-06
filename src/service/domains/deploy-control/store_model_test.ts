@@ -1,0 +1,755 @@
+import { expect, test } from "bun:test";
+
+import {
+  InMemoryOpenTofuDeploymentStore,
+  InstallationPatchGuardConflict,
+} from "./store.ts";
+import { SqlOpenTofuDeploymentStore } from "./store_sql.ts";
+import type { OpenTofuDeploymentStore } from "./store.ts";
+import type {
+  SqlClient,
+  SqlParameters,
+  SqlQueryResult,
+} from "../../adapters/storage/sql.ts";
+import type {
+  Deployment,
+  InstallConfig,
+  Installation,
+  StateSnapshot,
+} from "takosumi-contract/deploy-control-api";
+import type { Space } from "takosumi-contract/spaces";
+import type { OperatorConnectionDefault } from "takosumi-contract/capability-bindings";
+import type { DeploymentProfile } from "takosumi-contract/installations";
+import type { SourceSyncRun } from "takosumi-contract/sources";
+
+/**
+ * Minimal in-memory SQL client that interprets exactly the Space-direct model
+ * statements the {@link SqlOpenTofuDeploymentStore} emits: `insert ... on
+ * conflict`, `select` by id / single column / composite columns / kind-scoped
+ * filter, `delete` by id and by `<col> = $ and id <> $`, and the guarded
+ * `update ... returning`. Rows are keyed per logical table by primary id; column
+ * values are read out of the stored JSON blob so no positional bookkeeping per
+ * table is needed. Lets the SQL store run its real SQL paths without a Postgres.
+ */
+class ModelSqlClient implements SqlClient {
+  // table -> id -> { id, json }
+  readonly #tables = new Map<string, Map<string, StoredRow>>();
+
+  query<Row extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    parameters?: SqlParameters,
+  ): Promise<SqlQueryResult<Row>> {
+    const lower = sql.trim().toLowerCase();
+    const params = (parameters ?? []) as readonly unknown[];
+    const cast = (value: {
+      rows: readonly unknown[];
+      rowCount: number;
+    }): SqlQueryResult<Row> => value as unknown as SqlQueryResult<Row>;
+
+    if (lower.startsWith("insert into")) {
+      const table = this.#table(tableName(lower));
+      const id = String(params[0]);
+      // The JSON blob is the last text param that parses as an object.
+      const json = lastJsonParam(params);
+      // Capture the explicit insert columns -> values so synthetic columns that
+      // are NOT in the JSON blob (e.g. the `runs` table `kind` discriminator) are
+      // still filterable. Falls back to the JSON blob for everything else.
+      table.set(id, {
+        id,
+        json: json ?? "{}",
+        columns: insertColumns(lower, params),
+      });
+      return Promise.resolve(cast({ rows: [], rowCount: 1 }));
+    }
+    if (lower.startsWith("update")) {
+      const result = this.#update(lower, params);
+      return Promise.resolve(cast(result));
+    }
+    if (lower.startsWith("delete from")) {
+      const result = this.#delete(lower, params);
+      return Promise.resolve(cast(result));
+    }
+    if (lower.startsWith("select")) {
+      const result = this.#select(lower, params);
+      return Promise.resolve(cast({ rows: result, rowCount: result.length }));
+    }
+    throw new Error(`unhandled SQL: ${sql}`);
+  }
+
+  #update(
+    lower: string,
+    params: readonly unknown[],
+  ): { rows: { json: unknown }[]; rowCount: number } {
+    // Only the guarded installation patch emits an UPDATE. The predicate fences
+    // on `id = $1`, `current_deployment_id is not distinct from $11`, and an
+    // optional status. Param order matches the store: $1 id, last json blob,
+    // $11 guard current_deployment_id, $12 guard status (or null).
+    const table = this.#table(tableName(lower));
+    const id = String(params[0]);
+    const row = table.get(id);
+    if (!row) return { rows: [], rowCount: 0 };
+    const guardDeployment = params[10];
+    const guardStatus = params[11];
+    const current = parseJsonObject(row.json);
+    const currentDeployment = current?.currentDeploymentId ?? null;
+    const currentStatus = current?.status;
+    const guardDeploymentValue = guardDeployment ?? null;
+    if (currentDeployment !== guardDeploymentValue) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (
+      guardStatus !== null && guardStatus !== undefined &&
+      currentStatus !== guardStatus
+    ) {
+      return { rows: [], rowCount: 0 };
+    }
+    const json = lastJsonParam(params) ?? row.json;
+    table.set(id, { id, json, columns: row.columns });
+    return { rows: [{ json }], rowCount: 1 };
+  }
+
+  #delete(
+    lower: string,
+    params: readonly unknown[],
+  ): { rows: never[]; rowCount: number } {
+    const table = this.#table(tableName(lower));
+    // `delete ... where <col> = $1 and id <> $2` (single-default / one-per-pair
+    // upsert) or `delete ... where <col> = $1 and <col2> = $2 and id <> $3`.
+    if (lower.includes("and id <>")) {
+      const cols = whereColumns(lower).filter((c) => c.column !== "id");
+      const keepId = String(params[cols.length]);
+      let removed = 0;
+      for (const [key, row] of [...table]) {
+        const matches = cols.every((c, i) =>
+          rowCol(row, c.column) === String(params[i])
+        );
+        if (matches && key !== keepId) {
+          table.delete(key);
+          removed += 1;
+        }
+      }
+      return { rows: [], rowCount: removed };
+    }
+    // `delete ... where <pk> = $1`
+    const id = String(params[0]);
+    const existed = table.delete(id);
+    return { rows: [], rowCount: existed ? 1 : 0 };
+  }
+
+  #select(
+    lower: string,
+    params: readonly unknown[],
+  ): { json: unknown }[] {
+    const table = this.#table(tableName(lower));
+    const all = [...table.values()];
+    const cols = whereColumns(lower);
+    const matched = cols.length === 0
+      ? all
+      : all.filter((row) =>
+        cols.every((c) =>
+          c.indexes.some((index) => rowCol(row, c.column) === String(params[index]))
+        )
+      );
+    const ordered = applyOrder(lower, matched);
+    const limited = lower.includes("limit 1") ? ordered.slice(0, 1) : ordered;
+    return limited.map((row) => ({ json: row.json }));
+  }
+
+  #table(name: string): Map<string, StoredRow> {
+    let table = this.#tables.get(name);
+    if (!table) {
+      table = new Map();
+      this.#tables.set(name, table);
+    }
+    return table;
+  }
+}
+
+interface StoredRow {
+  readonly id: string;
+  readonly json: string;
+  /** Explicit insert column -> value, for synthetic (non-JSON) columns. */
+  readonly columns: Readonly<Record<string, string | undefined>>;
+}
+
+/** Parses `insert into t (a, b, c) values (...)` into column -> param value. */
+function insertColumns(
+  lower: string,
+  params: readonly unknown[],
+): Record<string, string | undefined> {
+  const match = lower.match(/insert\s+into\s+takosumi_[a-z_]+\s*\(([^)]*)\)/);
+  if (!match) return {};
+  const cols = match[1].split(",").map((c) => c.trim());
+  const out: Record<string, string | undefined> = {};
+  cols.forEach((column, i) => {
+    const value = params[i];
+    out[column] = value === undefined || value === null
+      ? undefined
+      : String(value);
+  });
+  return out;
+}
+
+interface WhereColumn {
+  readonly column: string;
+  /** Zero-based positional param indexes ($1 -> 0). `=` has one; `in` has N. */
+  readonly indexes: readonly number[];
+}
+
+/**
+ * Parses `where a = $1 and b in ($2, $3) ...` into column/param-index pairs
+ * (an `in` list carries every member index; a match against ANY succeeds).
+ */
+function whereColumns(lower: string): readonly WhereColumn[] {
+  const whereStart = lower.indexOf(" where ");
+  if (whereStart === -1) return [];
+  const after = lower.slice(whereStart + 7);
+  const clause = after
+    .replace(/\border\s+by\b[\s\S]*$/, "")
+    .replace(/\blimit\b[\s\S]*$/, "")
+    .replace(/\breturning\b[\s\S]*$/, "");
+  const cols: WhereColumn[] = [];
+  const eqPattern = /([a-z_][a-z0-9_]*)\s*=\s*\$(\d+)/g;
+  for (const match of clause.matchAll(eqPattern)) {
+    cols.push({ column: match[1], indexes: [Number(match[2]) - 1] });
+  }
+  const inPattern = /([a-z_][a-z0-9_]*)\s+in\s*\(([^)]*)\)/g;
+  for (const match of clause.matchAll(inPattern)) {
+    const indexes = [...match[2].matchAll(/\$(\d+)/g)].map(
+      (m) => Number(m[1]) - 1,
+    );
+    if (indexes.length > 0) cols.push({ column: match[1], indexes });
+  }
+  return cols;
+}
+
+/** Stable order by the first `order by` column (generation numeric, else text). */
+function applyOrder(
+  lower: string,
+  rows: readonly StoredRow[],
+): readonly StoredRow[] {
+  const match = /order\s+by\s+([a-z_][a-z0-9_]*)\s*(asc|desc)?/.exec(lower);
+  if (!match) return rows;
+  const column = match[1];
+  const direction = match[2] === "desc" ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    const av = rowCol(a, column) ?? "";
+    const bv = rowCol(b, column) ?? "";
+    const an = Number(av);
+    const bn = Number(bv);
+    const cmp = !Number.isNaN(an) && !Number.isNaN(bn) && av !== "" && bv !== ""
+      ? an - bn
+      : av.localeCompare(bv);
+    return cmp * direction;
+  });
+}
+
+/**
+ * Resolves a snake_case column value for a stored row: explicit insert columns
+ * first (so synthetic columns not present in the JSON blob, like the `runs`
+ * table `kind`, are filterable / orderable), then the parsed JSON (camelCase).
+ */
+function rowCol(row: StoredRow, column: string): string | undefined {
+  if (column in row.columns) return row.columns[column];
+  return col(parseJsonObject(row.json), column);
+}
+
+/** Reads a snake_case column value from the row's parsed JSON (camelCase keys). */
+function col(
+  obj: Record<string, unknown> | undefined,
+  column: string,
+): string | undefined {
+  if (!obj) return undefined;
+  const camel = column.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+  const value = obj[camel];
+  if (value === undefined || value === null) return undefined;
+  return String(value);
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function lastJsonParam(params: readonly unknown[]): string | undefined {
+  for (let i = params.length - 1; i >= 0; i -= 1) {
+    const p = params[i];
+    if (typeof p === "string" && p.startsWith("{")) return p;
+  }
+  return undefined;
+}
+
+function tableName(lower: string): string {
+  const match = lower.match(
+    /(?:into|from|update)\s+(takosumi_[a-z_]+)/,
+  );
+  if (!match) throw new Error(`no table in SQL: ${lower}`);
+  return match[1];
+}
+
+// --- fixtures --------------------------------------------------------------
+
+const TS = "2026-06-06T00:00:00.000Z";
+
+function space(over: Partial<Space> = {}): Space {
+  return {
+    id: "space_1",
+    handle: "shota",
+    displayName: "Shota",
+    type: "personal",
+    ownerUserId: "user_1",
+    createdAt: TS,
+    updatedAt: TS,
+    ...over,
+  };
+}
+
+function installConfig(over: Partial<InstallConfig> = {}): InstallConfig {
+  return {
+    id: "cfg_1",
+    name: "Cloudflare R2",
+    installType: "opentofu_module",
+    trustLevel: "official",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: TS,
+    updatedAt: TS,
+    ...over,
+  };
+}
+
+function operatorDefault(
+  over: Partial<OperatorConnectionDefault> = {},
+): OperatorConnectionDefault {
+  return {
+    id: "ocd_1",
+    capability: "compute",
+    provider: "cloudflare",
+    connectionId: "conn_1",
+    createdAt: TS,
+    updatedAt: TS,
+    ...over,
+  };
+}
+
+function installation(over: Partial<Installation> = {}): Installation {
+  return {
+    id: "inst_1",
+    spaceId: "space_1",
+    name: "shop",
+    slug: "shop",
+    sourceId: "src_1",
+    installType: "opentofu_module",
+    installConfigId: "cfg_1",
+    environment: "production",
+    currentStateGeneration: 0,
+    status: "installing",
+    createdAt: TS,
+    updatedAt: TS,
+    ...over,
+  };
+}
+
+function deployment(over: Partial<Deployment> = {}): Deployment {
+  return {
+    id: "dep_1",
+    spaceId: "space_1",
+    installationId: "inst_1",
+    environment: "production",
+    applyRunId: "run_apply_1",
+    stateGeneration: 1,
+    outputsPublic: {},
+    status: "active",
+    createdAt: TS,
+    ...over,
+  };
+}
+
+function deploymentProfile(
+  over: Partial<DeploymentProfile> = {},
+): DeploymentProfile {
+  return {
+    id: "dpf_1",
+    spaceId: "space_1",
+    installationId: "inst_1",
+    environment: "production",
+    bindings: { compute: { mode: "default" } },
+    createdAt: TS,
+    updatedAt: TS,
+    ...over,
+  };
+}
+
+function stateSnapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
+  return {
+    id: "snap_1",
+    spaceId: "space_1",
+    installationId: "inst_1",
+    environment: "production",
+    generation: 1,
+    objectKey:
+      "spaces/space_1/installations/inst_1/envs/production/states/00000001.tfstate.enc",
+    digest: "sha256:abc",
+    createdByRunId: "run_apply_1",
+    createdAt: TS,
+    ...over,
+  };
+}
+
+function sourceSyncRun(over: Partial<SourceSyncRun> = {}): SourceSyncRun {
+  return {
+    id: "ssr_1",
+    kind: "source_sync",
+    spaceId: "space_1",
+    sourceId: "src_1",
+    url: "https://example.com/repo.git",
+    ref: "main",
+    path: ".",
+    archiveObjectKey:
+      "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+    status: "queued",
+    createdAt: TS,
+    updatedAt: TS,
+    ...over,
+  };
+}
+
+// Run the same assertions against both store implementations so the in-memory
+// dev/test store and the SQL production store stay symmetric.
+function bothStores(): readonly [string, OpenTofuDeploymentStore][] {
+  return [
+    ["in-memory", new InMemoryOpenTofuDeploymentStore()],
+    ["sql", new SqlOpenTofuDeploymentStore({ client: new ModelSqlClient() })],
+  ];
+}
+
+test("Space store: put/get/get-by-handle/list are symmetric", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putSpace(space({ id: "space_a", handle: "alice" }));
+    await store.putSpace(
+      space({
+        id: "space_b",
+        handle: "bob",
+        createdAt: "2026-06-07T00:00:00.000Z",
+      }),
+    );
+
+    expect((await store.getSpace("space_a"))?.handle, label).toBe("alice");
+    expect(await store.getSpace("missing"), label).toBeUndefined();
+    expect((await store.getSpaceByHandle("bob"))?.id, label).toBe("space_b");
+    expect(await store.getSpaceByHandle("nobody"), label).toBeUndefined();
+    expect((await store.listSpaces()).map((s) => s.id), label)
+      .toEqual(["space_a", "space_b"]);
+  }
+});
+
+test("InstallConfig store: put/get/list-by-space + official catalog", async () => {
+  for (const [label, store] of bothStores()) {
+    // Space-authored config + an official catalog config (no spaceId).
+    await store.putInstallConfig(
+      installConfig({ id: "cfg_a", spaceId: "space_1" }),
+    );
+    await store.putInstallConfig(installConfig({ id: "cfg_official" }));
+
+    expect((await store.getInstallConfig("cfg_a"))?.name, label)
+      .toBe("Cloudflare R2");
+    expect(await store.getInstallConfig("missing"), label).toBeUndefined();
+
+    const forSpace = await store.listInstallConfigs("space_1");
+    expect(forSpace.map((c) => c.id), label).toEqual(["cfg_a"]);
+    expect((await store.listInstallConfigs()).length, label).toBe(2);
+  }
+});
+
+test("OperatorConnectionDefault store: one default per capability", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putOperatorConnectionDefault(
+      operatorDefault({
+        id: "ocd_a",
+        capability: "compute",
+        provider: "cloudflare",
+      }),
+    );
+    // A second default for the SAME capability replaces the first.
+    await store.putOperatorConnectionDefault(
+      operatorDefault({ id: "ocd_b", capability: "compute", provider: "fly" }),
+    );
+    await store.putOperatorConnectionDefault(
+      operatorDefault({ id: "ocd_dns", capability: "dns", provider: "cloudflare" }),
+    );
+
+    const compute = await store.getOperatorConnectionDefault("compute");
+    expect(compute?.id, label).toBe("ocd_b");
+    expect(compute?.provider, label).toBe("fly");
+    expect(await store.getOperatorConnectionDefault("storage"), label)
+      .toBeUndefined();
+    expect(
+      (await store.listOperatorConnectionDefaults()).map((d) => d.capability),
+      label,
+    ).toEqual(["compute", "dns"]);
+  }
+});
+
+test("Installation store: put/get/get-by-name/list/unique are symmetric", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putInstallation(
+      installation({ id: "inst_a", spaceId: "space_1" }),
+    );
+    await store.putInstallation(
+      installation({ id: "inst_b", spaceId: "space_2", name: "blog" }),
+    );
+
+    expect((await store.getInstallation("inst_a"))?.name, label).toBe("shop");
+    expect(await store.getInstallation("missing"), label).toBeUndefined();
+
+    const byName = await store.getInstallationByName(
+      "space_1",
+      "shop",
+      "production",
+    );
+    expect(byName?.id, label).toBe("inst_a");
+    expect(
+      await store.getInstallationByName("space_1", "shop", "staging"),
+      label,
+    ).toBeUndefined();
+
+    const forSpace = await store.listInstallations("space_1");
+    expect(forSpace.map((i) => i.id), label).toEqual(["inst_a"]);
+    expect((await store.listInstallations()).length, label).toBe(2);
+  }
+});
+
+test("Installation unique(space_id, name, environment) is enforced (in-memory)", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putInstallation(installation({ id: "inst_a" }));
+  await expect(
+    store.putInstallation(installation({ id: "inst_dup" })),
+  ).rejects.toThrow(/unique/);
+  // A different environment under the same name/space is allowed.
+  await store.putInstallation(
+    installation({ id: "inst_staging", environment: "staging" }),
+  );
+  expect((await store.listInstallations("space_1")).length).toBe(2);
+});
+
+test("Installation patch: unguarded mutate is symmetric", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putInstallation(installation({ id: "inst_p" }));
+    const patched = await store.patchInstallation("inst_p", {
+      status: "active",
+      currentStateGeneration: 1,
+      currentDeploymentId: "dep_1",
+      updatedAt: "2026-06-07T00:00:00.000Z",
+    });
+    expect(patched?.status, label).toBe("active");
+    expect(patched?.currentStateGeneration, label).toBe(1);
+    expect(patched?.currentDeploymentId, label).toBe("dep_1");
+    expect((await store.getInstallation("inst_p"))?.status, label).toBe("active");
+    expect(await store.patchInstallation("missing", { status: "error" }), label)
+      .toBeUndefined();
+  }
+});
+
+test("Installation patch: guard fences on currentDeploymentId", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putInstallation(installation({ id: "inst_g" }));
+    // Guard matches (undefined cursor) -> succeeds and advances the cursor.
+    const ok = await store.patchInstallation(
+      "inst_g",
+      { currentDeploymentId: "dep_1", status: "active" },
+      { currentDeploymentId: undefined },
+    );
+    expect(ok?.currentDeploymentId, label).toBe("dep_1");
+
+    // Guard with the stale cursor (undefined) now loses the race.
+    await expect(
+      store.patchInstallation(
+        "inst_g",
+        { currentDeploymentId: "dep_2" },
+        { currentDeploymentId: undefined },
+      ),
+    ).rejects.toBeInstanceOf(InstallationPatchGuardConflict);
+
+    // Guard with the correct cursor succeeds.
+    const ok2 = await store.patchInstallation(
+      "inst_g",
+      { currentDeploymentId: "dep_2" },
+      { currentDeploymentId: "dep_1" },
+    );
+    expect(ok2?.currentDeploymentId, label).toBe("dep_2");
+  }
+});
+
+test("Deployment store: put/get/list-by-installation are symmetric", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putDeployment(
+      deployment({ id: "dep_a", installationId: "inst_1" }),
+    );
+    await store.putDeployment(
+      deployment({
+        id: "dep_b",
+        installationId: "inst_1",
+        stateGeneration: 2,
+        createdAt: "2026-06-07T00:00:00.000Z",
+      }),
+    );
+    await store.putDeployment(
+      deployment({ id: "dep_c", installationId: "inst_2" }),
+    );
+
+    expect((await store.getDeployment("dep_a"))?.stateGeneration, label).toBe(1);
+    expect(await store.getDeployment("missing"), label).toBeUndefined();
+    const forInst = await store.listDeployments("inst_1");
+    expect(forInst.map((d) => d.id), label).toEqual(["dep_a", "dep_b"]);
+  }
+});
+
+test("DeploymentProfile store: upsert keyed (installation, environment)", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putDeploymentProfile(deploymentProfile({ id: "dpf_a" }));
+    // A second profile for the SAME (installation, environment) replaces it.
+    await store.putDeploymentProfile(
+      deploymentProfile({
+        id: "dpf_b",
+        bindings: { dns: { mode: "connection", connectionId: "conn_dns" } },
+      }),
+    );
+    // A different environment for the same installation coexists.
+    await store.putDeploymentProfile(
+      deploymentProfile({ id: "dpf_staging", environment: "staging" }),
+    );
+
+    const prod = await store.getDeploymentProfileByInstallation(
+      "inst_1",
+      "production",
+    );
+    expect(prod?.id, label).toBe("dpf_b");
+    expect(prod?.bindings.dns?.connectionId, label).toBe("conn_dns");
+    expect(prod?.bindings.compute, label).toBeUndefined();
+
+    const staging = await store.getDeploymentProfileByInstallation(
+      "inst_1",
+      "staging",
+    );
+    expect(staging?.id, label).toBe("dpf_staging");
+    expect(
+      await store.getDeploymentProfileByInstallation("inst_1", "missing"),
+      label,
+    ).toBeUndefined();
+  }
+});
+
+test("StateSnapshot store: put/latest/list keyed (installation, environment, generation)", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putStateSnapshot(stateSnapshot({ id: "snap_g1", generation: 1 }));
+    await store.putStateSnapshot(stateSnapshot({ id: "snap_g3", generation: 3 }));
+    await store.putStateSnapshot(stateSnapshot({ id: "snap_g2", generation: 2 }));
+    // A different environment is isolated.
+    await store.putStateSnapshot(
+      stateSnapshot({ id: "snap_staging", environment: "staging", generation: 5 }),
+    );
+
+    const latest = await store.getLatestStateSnapshot("inst_1", "production");
+    expect(latest?.generation, label).toBe(3);
+    const list = await store.listStateSnapshots("inst_1", "production");
+    expect(list.map((s) => s.generation), label).toEqual([1, 2, 3]);
+    expect(
+      (await store.getLatestStateSnapshot("inst_1", "staging"))?.generation,
+      label,
+    ).toBe(5);
+    expect(
+      await store.getLatestStateSnapshot("inst_1", "missing"),
+      label,
+    ).toBeUndefined();
+  }
+});
+
+test("runs table: plan/apply/source_sync rows verify kind", async () => {
+  for (const [label, store] of bothStores()) {
+    const plan = makePlanRun("run_plan_1");
+    const apply = makeApplyRun("run_apply_1", "run_plan_1");
+    await store.putPlanRun(plan);
+    await store.putApplyRun(apply);
+    await store.putSourceSyncRun(
+      sourceSyncRun({ id: "ssr_a", sourceId: "src_1" }),
+    );
+    await store.putSourceSyncRun(
+      sourceSyncRun({
+        id: "ssr_b",
+        sourceId: "src_1",
+        createdAt: "2026-06-07T00:00:00.000Z",
+      }),
+    );
+    await store.putSourceSyncRun(
+      sourceSyncRun({ id: "ssr_c", sourceId: "src_2" }),
+    );
+
+    expect((await store.getPlanRun("run_plan_1"))?.id, label).toBe("run_plan_1");
+    expect((await store.getApplyRun("run_apply_1"))?.planRunId, label)
+      .toBe("run_plan_1");
+    expect((await store.getSourceSyncRun("ssr_a"))?.sourceId, label).toBe("src_1");
+
+    // Kind is verified: a plan id is not an apply, and vice versa.
+    expect(await store.getApplyRun("run_plan_1"), label).toBeUndefined();
+    expect(await store.getPlanRun("run_apply_1"), label).toBeUndefined();
+    expect(await store.getSourceSyncRun("run_plan_1"), label).toBeUndefined();
+
+    const forSource = await store.listSourceSyncRuns("src_1");
+    expect(forSource.map((r) => r.id), label).toEqual(["ssr_a", "ssr_b"]);
+  }
+});
+
+// --- internal run-record fixtures (epoch-number timestamps) -----------------
+
+function makePlanRun(id: string) {
+  return {
+    id,
+    spaceId: "space_1",
+    installationId: "inst_1",
+    source: { kind: "git" as const, url: "https://example.com/repo.git" },
+    sourceDigest: "sha256:src",
+    operation: "apply" as const,
+    runnerProfileId: "rp_1",
+    variablesDigest: "sha256:vars",
+    requiredProviders: ["cloudflare"],
+    status: "queued" as const,
+    policy: { status: "passed" as const, reasons: [], checkedAt: 0 },
+    policyDecisionDigest: "sha256:pol",
+    auditEvents: [],
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  };
+}
+
+function makeApplyRun(id: string, planRunId: string) {
+  return {
+    id,
+    planRunId,
+    spaceId: "space_1",
+    installationId: "inst_1",
+    operation: "apply" as const,
+    runnerProfileId: "rp_1",
+    status: "queued" as const,
+    expected: {
+      planRunId,
+      runnerProfileId: "rp_1",
+      sourceDigest: "sha256:src",
+      variablesDigest: "sha256:vars",
+      policyDecisionDigest: "sha256:pol",
+      planDigest: "sha256:plan",
+      planArtifactDigest: "sha256:art",
+    },
+    stateBackend: { kind: "encrypted-r2" as const },
+    stateLock: { status: "not_required" as const, backendRef: "ref" },
+    auditEvents: [],
+    createdAt: 2_000,
+    updatedAt: 2_000,
+  };
+}

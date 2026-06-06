@@ -10,7 +10,7 @@ import type {
   PlanRun,
 } from "takosumi-contract/deploy-control-api";
 import type { SourceSyncRun } from "takosumi-contract/sources";
-import type { UnifiedRunStatus } from "takosumi-contract/lanes";
+import type { RunStatus } from "takosumi-contract/runs";
 
 function planRun(over: Partial<PlanRun> = {}): PlanRun {
   return {
@@ -61,7 +61,7 @@ function applyRun(over: Partial<ApplyRun> = {}): ApplyRun {
 // --- The §6.8 status mapping table ----------------------------------------
 
 const PLAN_STATUS_TABLE: ReadonlyArray<
-  [PlanRun["status"], boolean, UnifiedRunStatus]
+  [PlanRun["status"], boolean, RunStatus]
 > = [
   ["queued", false, "queued"],
   ["running", false, "running"],
@@ -98,15 +98,20 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
       planArtifact: { kind: "object-storage", ref: "key/plan.bin", digest: "d" },
       baseStateGeneration: 3,
     }),
-    { sourceSnapshotId: "snap_1", appId: "app_1", environmentId: "env_1" },
+    {
+      sourceSnapshotId: "snap_1",
+      installationId: "inst_1",
+      environment: "production",
+    },
   );
   expect(run.sourceSnapshotId).toBe("snap_1");
   expect(run.baseStateGeneration).toBe(3);
   expect(run.planDigest).toBe("sha256:plan");
   expect(run.planArtifactKey).toBe("key/plan.bin");
   expect(run.policyStatus).toBe("pass");
-  expect(run.appId).toBe("app_1");
-  expect(run.environmentId).toBe("env_1");
+  expect(run.installationId).toBe("inst_1");
+  expect(run.environment).toBe("production");
+  expect(run.createdBy).toBe("system");
 });
 
 test("projectPlanRun surfaces a compact error code from a failed plan", () => {

@@ -1,14 +1,24 @@
 /**
- * SQL-backed OpenTofu deployment-control-plane ledger.
+ * SQL-backed OpenTofu deployment-control-plane ledger (core-spec.md §27).
  *
  * The store keeps searchable columns for common list/read paths and persists
  * the contract object as JSON so the public run ledger can evolve without a
  * schema migration for every non-indexed field.
+ *
+ * Logical schema is the Space-direct Installation model: spaces, install_configs,
+ * operator_connection_defaults, installations (UNIQUE(space_id, name,
+ * environment)), deployment_profiles (keyed (installation_id, environment)),
+ * state_snapshots (keyed (installation_id, environment, generation) UNIQUE),
+ * deployments (new shape), and a SINGLE `runs` table — the internal PlanRun
+ * (kind `plan`), ApplyRun (kind `apply`), and SourceSyncRun (kind `source_sync`)
+ * records persist as rows discriminated by `kind`; the typed accessors verify the
+ * row kind before parsing.
  */
 import type {
   ApplyRun,
   Connection,
   Deployment,
+  InstallConfig,
   Installation,
   PlanRun,
   RunnerProfile,
@@ -23,13 +33,14 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+import type { Space } from "takosumi-contract/spaces";
 import type {
-  App,
-  DeploymentProfile,
-  Environment,
-  InstallProfile,
-} from "takosumi-contract/lanes";
+  Capability,
+  OperatorConnectionDefault,
+} from "takosumi-contract/capability-bindings";
+import type { DeploymentProfile } from "takosumi-contract/installations";
 import type {
+  InstallationPatch,
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
@@ -37,6 +48,14 @@ import type {
   StoredSource,
 } from "./store.ts";
 import { InstallationPatchGuardConflict } from "./store.ts";
+
+/** Discriminator stored in the single `runs` table (§27). */
+// §27 runs.type values. Destroy runs persist their own discriminator
+// (destroy_plan / destroy_apply) so the raw table matches the spec enum and
+// the D1 backend; the typed accessors read both kinds of their family.
+const RUN_KINDS_PLAN = ["plan", "destroy_plan"] as const;
+const RUN_KINDS_APPLY = ["apply", "destroy_apply"] as const;
+const RUN_KIND_SOURCE_SYNC = "source_sync";
 
 export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   readonly #client: SqlClient;
@@ -71,40 +90,117 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return result.rows.map((row) => parseRow(row) as RunnerProfile);
   }
 
+  // --- runs (single §27 table; rows discriminated by kind) -----------------
+
   async putPlanRun(run: PlanRun): Promise<PlanRun> {
-    await this.#query(
-      "insert into takosumi_plan_runs " +
-        "(id, space_id, installation_id, runner_profile_id, status, run_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "installation_id = excluded.installation_id, " +
-        "runner_profile_id = excluded.runner_profile_id, " +
-        "status = excluded.status, " +
-        "run_json = excluded.run_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        run.id,
-        run.spaceId,
-        run.installationId ?? null,
-        run.runnerProfileId,
-        run.status,
-        JSON.stringify(run),
-        run.createdAt,
-        run.updatedAt,
-      ],
-    );
+    await this.#putRun(run.operation === "destroy" ? "destroy_plan" : "plan", {
+      id: run.id,
+      spaceId: run.spaceId,
+      installationId: run.installationId ?? null,
+      createdAt: run.createdAt,
+      json: JSON.stringify(run),
+    });
     return run;
   }
 
   async getPlanRun(id: string): Promise<PlanRun | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select run_json as json from takosumi_plan_runs where id = $1",
-      [id],
-    );
-    return parseRow(result.rows[0]) as PlanRun | undefined;
+    return await this.#getRun<PlanRun>(id, RUN_KINDS_PLAN);
   }
+
+  async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
+    await this.#putRun(
+      run.operation === "destroy" ? "destroy_apply" : "apply",
+      {
+        id: run.id,
+        spaceId: run.spaceId,
+        installationId: run.installationId ?? null,
+        createdAt: run.createdAt,
+        json: JSON.stringify(run),
+      },
+    );
+    return run;
+  }
+
+  async getApplyRun(id: string): Promise<ApplyRun | undefined> {
+    return await this.#getRun<ApplyRun>(id, RUN_KINDS_APPLY);
+  }
+
+  async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
+    await this.#putRun(RUN_KIND_SOURCE_SYNC, {
+      id: run.id,
+      spaceId: run.spaceId,
+      // SourceSyncRun is Source-scoped; carry the source id in the indexed
+      // installation_id slot so listSourceSyncRuns can filter without a JSON scan.
+      installationId: run.sourceId,
+      createdAt: run.createdAt,
+      json: JSON.stringify(run),
+    });
+    return run;
+  }
+
+  async getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
+    return await this.#getRun<SourceSyncRun>(id, RUN_KIND_SOURCE_SYNC);
+  }
+
+  async listSourceSyncRuns(
+    sourceId: string,
+  ): Promise<readonly SourceSyncRun[]> {
+    const result = await this.#query<JsonRow>(
+      "select run_json as json from takosumi_runs " +
+        "where kind = $1 and installation_id = $2 " +
+        "order by created_at asc, id asc",
+      [RUN_KIND_SOURCE_SYNC, sourceId],
+    );
+    return result.rows.map((row) => parseRow(row) as SourceSyncRun);
+  }
+
+  async #putRun(
+    kind: string,
+    fields: {
+      readonly id: string;
+      readonly spaceId: string;
+      readonly installationId: string | null;
+      readonly createdAt: number | string;
+      readonly json: string;
+    },
+  ): Promise<void> {
+    await this.#query(
+      "insert into takosumi_runs " +
+        "(id, kind, space_id, installation_id, created_at, run_json) " +
+        "values ($1, $2, $3, $4, $5, $6::jsonb) " +
+        "on conflict (id) do update set " +
+        "kind = excluded.kind, " +
+        "space_id = excluded.space_id, " +
+        "installation_id = excluded.installation_id, " +
+        "created_at = excluded.created_at, " +
+        "run_json = excluded.run_json",
+      [
+        fields.id,
+        kind,
+        fields.spaceId,
+        fields.installationId,
+        // created_at is TEXT so it can hold both the internal epoch-number runs
+        // and the ISO-string SourceSyncRun without a per-kind column.
+        String(fields.createdAt),
+        fields.json,
+      ],
+    );
+  }
+
+  async #getRun<T>(
+    id: string,
+    kinds: string | readonly string[],
+  ): Promise<T | undefined> {
+    const list = typeof kinds === "string" ? [kinds] : kinds;
+    const placeholders = list.map((_, i) => `$${i + 2}`).join(", ");
+    const result = await this.#query<JsonRow>(
+      `select run_json as json from takosumi_runs where id = $1 and kind in (${placeholders})`,
+      [id, ...list],
+    );
+    return parseRow(result.rows[0]) as T | undefined;
+  }
+
+  // --- plan-run inputs sidecar (never projected into the public ledger) -----
 
   async putPlanRunInputs(inputs: PlanRunInputs): Promise<void> {
     await this.#query(
@@ -132,55 +228,119 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
-  async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
+  // --- spaces (§4) ----------------------------------------------------------
+
+  async putSpace(space: Space): Promise<Space> {
     await this.#query(
-      "insert into takosumi_apply_runs " +
-        "(id, plan_run_id, space_id, installation_id, deployment_id, runner_profile_id, status, run_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10) " +
+      "insert into takosumi_spaces " +
+        "(id, handle, space_json, created_at, updated_at) " +
+        "values ($1, $2, $3::jsonb, $4, $5) " +
         "on conflict (id) do update set " +
-        "plan_run_id = excluded.plan_run_id, " +
-        "space_id = excluded.space_id, " +
-        "installation_id = excluded.installation_id, " +
-        "deployment_id = excluded.deployment_id, " +
-        "runner_profile_id = excluded.runner_profile_id, " +
-        "status = excluded.status, " +
-        "run_json = excluded.run_json, " +
+        "handle = excluded.handle, " +
+        "space_json = excluded.space_json, " +
         "created_at = excluded.created_at, " +
         "updated_at = excluded.updated_at",
       [
-        run.id,
-        run.planRunId,
-        run.spaceId,
-        run.installationId ?? null,
-        run.deploymentId ?? null,
-        run.runnerProfileId,
-        run.status,
-        JSON.stringify(run),
-        run.createdAt,
-        run.updatedAt,
+        space.id,
+        space.handle,
+        JSON.stringify(space),
+        space.createdAt,
+        space.updatedAt,
       ],
     );
-    return run;
+    return space;
   }
 
-  async getApplyRun(id: string): Promise<ApplyRun | undefined> {
+  async getSpace(id: string): Promise<Space | undefined> {
     const result = await this.#query<JsonRow>(
-      "select run_json as json from takosumi_apply_runs where id = $1",
+      "select space_json as json from takosumi_spaces where id = $1",
       [id],
     );
-    return parseRow(result.rows[0]) as ApplyRun | undefined;
+    return parseRow(result.rows[0]) as Space | undefined;
   }
+
+  async getSpaceByHandle(handle: string): Promise<Space | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select space_json as json from takosumi_spaces where handle = $1",
+      [handle],
+    );
+    return parseRow(result.rows[0]) as Space | undefined;
+  }
+
+  async listSpaces(): Promise<readonly Space[]> {
+    const result = await this.#query<JsonRow>(
+      "select space_json as json from takosumi_spaces " +
+        "order by created_at asc, id asc",
+    );
+    return result.rows.map((row) => parseRow(row) as Space);
+  }
+
+  // --- install_configs (§11) ------------------------------------------------
+
+  async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
+    await this.#query(
+      "insert into takosumi_install_configs " +
+        "(id, space_id, install_type, trust_level, config_json, created_at, updated_at) " +
+        "values ($1, $2, $3, $4, $5::jsonb, $6, $7) " +
+        "on conflict (id) do update set " +
+        "space_id = excluded.space_id, " +
+        "install_type = excluded.install_type, " +
+        "trust_level = excluded.trust_level, " +
+        "config_json = excluded.config_json, " +
+        "created_at = excluded.created_at, " +
+        "updated_at = excluded.updated_at",
+      [
+        config.id,
+        config.spaceId ?? null,
+        config.installType,
+        config.trustLevel,
+        JSON.stringify(config),
+        config.createdAt,
+        config.updatedAt,
+      ],
+    );
+    return config;
+  }
+
+  async getInstallConfig(id: string): Promise<InstallConfig | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select config_json as json from takosumi_install_configs where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as InstallConfig | undefined;
+  }
+
+  async listInstallConfigs(
+    spaceId?: string,
+  ): Promise<readonly InstallConfig[]> {
+    const result = spaceId === undefined
+      ? await this.#query<JsonRow>(
+        "select config_json as json from takosumi_install_configs " +
+          "order by created_at asc, id asc",
+      )
+      : await this.#query<JsonRow>(
+        "select config_json as json from takosumi_install_configs " +
+          "where space_id = $1 order by created_at asc, id asc",
+        [spaceId],
+      );
+    return result.rows.map((row) => parseRow(row) as InstallConfig);
+  }
+
+  // --- installations (§5 / §27, UNIQUE(space_id, name, environment)) --------
 
   async putInstallation(installation: Installation): Promise<Installation> {
     await this.#query(
       "insert into takosumi_opentofu_installations " +
-        "(id, space_id, app_id, current_deployment_id, runner_profile_id, status, installation_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9) " +
+        "(id, space_id, name, environment, source_id, install_config_id, " +
+        "current_deployment_id, status, installation_json, created_at, updated_at) " +
+        "values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11) " +
         "on conflict (id) do update set " +
         "space_id = excluded.space_id, " +
-        "app_id = excluded.app_id, " +
+        "name = excluded.name, " +
+        "environment = excluded.environment, " +
+        "source_id = excluded.source_id, " +
+        "install_config_id = excluded.install_config_id, " +
         "current_deployment_id = excluded.current_deployment_id, " +
-        "runner_profile_id = excluded.runner_profile_id, " +
         "status = excluded.status, " +
         "installation_json = excluded.installation_json, " +
         "created_at = excluded.created_at, " +
@@ -188,9 +348,11 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       [
         installation.id,
         installation.spaceId,
-        installation.appId,
-        installation.currentDeploymentId,
-        installation.runnerProfileId,
+        installation.name,
+        installation.environment,
+        installation.sourceId,
+        installation.installConfigId,
+        installation.currentDeploymentId ?? null,
         installation.status,
         JSON.stringify(installation),
         installation.createdAt,
@@ -208,13 +370,28 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return parseRow(result.rows[0]) as Installation | undefined;
   }
 
+  async getInstallationByName(
+    spaceId: string,
+    name: string,
+    environment: string,
+  ): Promise<Installation | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select installation_json as json from takosumi_opentofu_installations " +
+        "where space_id = $1 and name = $2 and environment = $3",
+      [spaceId, name, environment],
+    );
+    return parseRow(result.rows[0]) as Installation | undefined;
+  }
+
   async listInstallations(spaceId?: string): Promise<readonly Installation[]> {
     const result = spaceId === undefined
       ? await this.#query<JsonRow>(
-        "select installation_json as json from takosumi_opentofu_installations order by created_at asc",
+        "select installation_json as json from takosumi_opentofu_installations " +
+          "order by created_at asc, id asc",
       )
       : await this.#query<JsonRow>(
-        "select installation_json as json from takosumi_opentofu_installations where space_id = $1 order by created_at asc",
+        "select installation_json as json from takosumi_opentofu_installations " +
+          "where space_id = $1 order by created_at asc, id asc",
         [spaceId],
       );
     return result.rows.map((row) => parseRow(row) as Installation);
@@ -222,17 +399,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
 
   async patchInstallation(
     id: string,
-    patch: Partial<
-      Pick<
-        Installation,
-        | "currentDeploymentId"
-        | "status"
-        | "updatedAt"
-        | "runnerProfileId"
-        | "source"
-        | "stateGeneration"
-      >
-    >,
+    patch: InstallationPatch,
     guard?: InstallationPatchGuard,
   ): Promise<Installation | undefined> {
     const current = await this.getInstallation(id);
@@ -252,28 +419,35 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     }
     const updated: Installation = { ...current, ...patch };
     if (!guard) return await this.putInstallation(updated);
+    // Guarded path: fence on current_deployment_id (and optionally status) in the
+    // UPDATE predicate so a concurrent writer cannot win the race between read and
+    // write. `is not distinct from` matches NULL == NULL for the unset cursor.
     const result = await this.#query<JsonRow>(
       "update takosumi_opentofu_installations set " +
         "space_id = $2, " +
-        "app_id = $3, " +
-        "current_deployment_id = $4, " +
-        "runner_profile_id = $5, " +
-        "status = $6, " +
-        "installation_json = $7::jsonb, " +
-        "updated_at = $8 " +
-        "where id = $1 and current_deployment_id is not distinct from $9 " +
-        "and ($10::text is null or status = $10) " +
+        "name = $3, " +
+        "environment = $4, " +
+        "source_id = $5, " +
+        "install_config_id = $6, " +
+        "current_deployment_id = $7, " +
+        "status = $8, " +
+        "installation_json = $9::jsonb, " +
+        "updated_at = $10 " +
+        "where id = $1 and current_deployment_id is not distinct from $11 " +
+        "and ($12::text is null or status = $12) " +
         "returning installation_json as json",
       [
         updated.id,
         updated.spaceId,
-        updated.appId,
-        updated.currentDeploymentId,
-        updated.runnerProfileId,
+        updated.name,
+        updated.environment,
+        updated.sourceId,
+        updated.installConfigId,
+        updated.currentDeploymentId ?? null,
         updated.status,
         JSON.stringify(updated),
         updated.updatedAt,
-        guard.currentDeploymentId,
+        guard.currentDeploymentId ?? null,
         guard.status ?? null,
       ],
     );
@@ -290,30 +464,33 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     });
   }
 
+  // --- deployments (§21, new shape) -----------------------------------------
+
   async putDeployment(deployment: Deployment): Promise<Deployment> {
     await this.#query(
       "insert into takosumi_opentofu_deployments " +
-        "(id, installation_id, plan_run_id, apply_run_id, runner_profile_id, status, deployment_json, created_at, completed_at) " +
-        "values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9) " +
+        "(id, space_id, installation_id, environment, apply_run_id, " +
+        "state_generation, status, deployment_json, created_at) " +
+        "values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9) " +
         "on conflict (id) do update set " +
+        "space_id = excluded.space_id, " +
         "installation_id = excluded.installation_id, " +
-        "plan_run_id = excluded.plan_run_id, " +
+        "environment = excluded.environment, " +
         "apply_run_id = excluded.apply_run_id, " +
-        "runner_profile_id = excluded.runner_profile_id, " +
+        "state_generation = excluded.state_generation, " +
         "status = excluded.status, " +
         "deployment_json = excluded.deployment_json, " +
-        "created_at = excluded.created_at, " +
-        "completed_at = excluded.completed_at",
+        "created_at = excluded.created_at",
       [
         deployment.id,
+        deployment.spaceId,
         deployment.installationId,
-        deployment.planRunId,
+        deployment.environment,
         deployment.applyRunId,
-        deployment.runnerProfileId,
+        deployment.stateGeneration,
         deployment.status,
         JSON.stringify(deployment),
         deployment.createdAt,
-        deployment.completedAt ?? null,
       ],
     );
     return deployment;
@@ -331,11 +508,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     installationId: string,
   ): Promise<readonly Deployment[]> {
     const result = await this.#query<JsonRow>(
-      "select deployment_json as json from takosumi_opentofu_deployments where installation_id = $1 order by created_at asc",
+      "select deployment_json as json from takosumi_opentofu_deployments " +
+        "where installation_id = $1 order by created_at asc, id asc",
       [installationId],
     );
     return result.rows.map((row) => parseRow(row) as Deployment);
   }
+
+  // --- connections + sealed secret blobs ------------------------------------
 
   async putConnection(connection: Connection): Promise<Connection> {
     await this.#query(
@@ -414,6 +594,67 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
     return result.rowCount > 0;
   }
+
+  // --- operator_connection_defaults (§9) ------------------------------------
+
+  async putOperatorConnectionDefault(
+    record: OperatorConnectionDefault,
+  ): Promise<OperatorConnectionDefault> {
+    // One default per capability: drop any stale row for the same capability under
+    // a different id before upserting (the capability is the natural upsert key).
+    await this.#query(
+      "delete from takosumi_operator_connection_defaults " +
+        "where capability = $1 and id <> $2",
+      [record.capability, record.id],
+    );
+    await this.#query(
+      "insert into takosumi_operator_connection_defaults " +
+        "(id, capability, provider, connection_id, default_json, created_at, updated_at) " +
+        "values ($1, $2, $3, $4, $5::jsonb, $6, $7) " +
+        "on conflict (id) do update set " +
+        "capability = excluded.capability, " +
+        "provider = excluded.provider, " +
+        "connection_id = excluded.connection_id, " +
+        "default_json = excluded.default_json, " +
+        "created_at = excluded.created_at, " +
+        "updated_at = excluded.updated_at",
+      [
+        record.id,
+        record.capability,
+        record.provider,
+        record.connectionId,
+        JSON.stringify(record),
+        record.createdAt,
+        record.updatedAt,
+      ],
+    );
+    return record;
+  }
+
+  async getOperatorConnectionDefault(
+    capability: Capability,
+  ): Promise<OperatorConnectionDefault | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select default_json as json from takosumi_operator_connection_defaults " +
+        "where capability = $1 limit 1",
+      [capability],
+    );
+    return parseRow(result.rows[0]) as OperatorConnectionDefault | undefined;
+  }
+
+  async listOperatorConnectionDefaults(): Promise<
+    readonly OperatorConnectionDefault[]
+  > {
+    const result = await this.#query<JsonRow>(
+      "select default_json as json from takosumi_operator_connection_defaults " +
+        "order by capability asc",
+    );
+    return result.rows.map((row) =>
+      parseRow(row) as OperatorConnectionDefault
+    );
+  }
+
+  // --- sources (public + internal hook-secret hash / lastSeenCommit) --------
 
   async putSource(source: StoredSource): Promise<StoredSource> {
     await this.#query(
@@ -504,212 +745,34 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return result.rows.map((row) => parseRow(row) as SourceSnapshot);
   }
 
-  async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
-    await this.#query(
-      "insert into takosumi_source_sync_runs " +
-        "(id, source_id, space_id, status, run_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4, $5::jsonb, $6, $7) " +
-        "on conflict (id) do update set " +
-        "source_id = excluded.source_id, " +
-        "space_id = excluded.space_id, " +
-        "status = excluded.status, " +
-        "run_json = excluded.run_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        run.id,
-        run.sourceId,
-        run.spaceId,
-        run.status,
-        JSON.stringify(run),
-        run.createdAt,
-        run.updatedAt,
-      ],
-    );
-    return run;
-  }
-
-  async getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select run_json as json from takosumi_source_sync_runs where id = $1",
-      [id],
-    );
-    return parseRow(result.rows[0]) as SourceSyncRun | undefined;
-  }
-
-  async listSourceSyncRuns(
-    sourceId: string,
-  ): Promise<readonly SourceSyncRun[]> {
-    const result = await this.#query<JsonRow>(
-      "select run_json as json from takosumi_source_sync_runs " +
-        "where source_id = $1 order by created_at asc, id asc",
-      [sourceId],
-    );
-    return result.rows.map((row) => parseRow(row) as SourceSyncRun);
-  }
-
-  async putApp(app: App): Promise<App> {
-    await this.#query(
-      "insert into takosumi_apps " +
-        "(id, space_id, source_id, install_type, install_profile_id, app_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "source_id = excluded.source_id, " +
-        "install_type = excluded.install_type, " +
-        "install_profile_id = excluded.install_profile_id, " +
-        "app_json = excluded.app_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        app.id,
-        app.spaceId,
-        app.sourceId,
-        app.installType,
-        app.installProfileId ?? null,
-        JSON.stringify(app),
-        app.createdAt,
-        app.updatedAt,
-      ],
-    );
-    return app;
-  }
-
-  async getApp(id: string): Promise<App | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select app_json as json from takosumi_apps where id = $1",
-      [id],
-    );
-    return parseRow(result.rows[0]) as App | undefined;
-  }
-
-  async listApps(spaceId?: string): Promise<readonly App[]> {
-    const result = spaceId === undefined
-      ? await this.#query<JsonRow>(
-        "select app_json as json from takosumi_apps order by created_at asc, id asc",
-      )
-      : await this.#query<JsonRow>(
-        "select app_json as json from takosumi_apps where space_id = $1 order by created_at asc, id asc",
-        [spaceId],
-      );
-    return result.rows.map((row) => parseRow(row) as App);
-  }
-
-  async deleteApp(id: string): Promise<boolean> {
-    const result = await this.#query(
-      "delete from takosumi_apps where id = $1",
-      [id],
-    );
-    return result.rowCount > 0;
-  }
-
-  async putEnvironment(environment: Environment): Promise<Environment> {
-    await this.#query(
-      "insert into takosumi_environments " +
-        "(id, app_id, name, environment_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4::jsonb, $5, $6) " +
-        "on conflict (id) do update set " +
-        "app_id = excluded.app_id, " +
-        "name = excluded.name, " +
-        "environment_json = excluded.environment_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        environment.id,
-        environment.appId,
-        environment.name,
-        JSON.stringify(environment),
-        environment.createdAt,
-        environment.updatedAt,
-      ],
-    );
-    return environment;
-  }
-
-  async getEnvironment(id: string): Promise<Environment | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select environment_json as json from takosumi_environments where id = $1",
-      [id],
-    );
-    return parseRow(result.rows[0]) as Environment | undefined;
-  }
-
-  async listEnvironments(appId: string): Promise<readonly Environment[]> {
-    const result = await this.#query<JsonRow>(
-      "select environment_json as json from takosumi_environments " +
-        "where app_id = $1 order by created_at asc, id asc",
-      [appId],
-    );
-    return result.rows.map((row) => parseRow(row) as Environment);
-  }
-
-  async deleteEnvironment(id: string): Promise<boolean> {
-    const result = await this.#query(
-      "delete from takosumi_environments where id = $1",
-      [id],
-    );
-    return result.rowCount > 0;
-  }
-
-  async putInstallProfile(profile: InstallProfile): Promise<InstallProfile> {
-    await this.#query(
-      "insert into takosumi_install_profiles " +
-        "(id, install_type, trust_level, profile_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4::jsonb, $5, $6) " +
-        "on conflict (id) do update set " +
-        "install_type = excluded.install_type, " +
-        "trust_level = excluded.trust_level, " +
-        "profile_json = excluded.profile_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        profile.id,
-        profile.installType,
-        profile.trustLevel,
-        JSON.stringify(profile),
-        profile.createdAt,
-        profile.updatedAt,
-      ],
-    );
-    return profile;
-  }
-
-  async getInstallProfile(id: string): Promise<InstallProfile | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select profile_json as json from takosumi_install_profiles where id = $1",
-      [id],
-    );
-    return parseRow(result.rows[0]) as InstallProfile | undefined;
-  }
-
-  async listInstallProfiles(): Promise<readonly InstallProfile[]> {
-    const result = await this.#query<JsonRow>(
-      "select profile_json as json from takosumi_install_profiles order by id asc",
-    );
-    return result.rows.map((row) => parseRow(row) as InstallProfile);
-  }
+  // --- deployment_profiles (§9, keyed (installation_id, environment)) -------
 
   async putDeploymentProfile(
     profile: DeploymentProfile,
   ): Promise<DeploymentProfile> {
-    // One profile per environment: delete any stale row that referenced the
-    // same environment under a different id before upserting.
+    // One profile per (installation, environment): delete any stale row for the
+    // same pair under a different id before upserting.
     await this.#query(
-      "delete from takosumi_deployment_profiles where environment_id = $1 and id <> $2",
-      [profile.environmentId, profile.id],
+      "delete from takosumi_deployment_profiles " +
+        "where installation_id = $1 and environment = $2 and id <> $3",
+      [profile.installationId, profile.environment, profile.id],
     );
     await this.#query(
       "insert into takosumi_deployment_profiles " +
-        "(id, environment_id, profile_json, created_at, updated_at) " +
-        "values ($1, $2, $3::jsonb, $4, $5) " +
+        "(id, space_id, installation_id, environment, profile_json, created_at, updated_at) " +
+        "values ($1, $2, $3, $4, $5::jsonb, $6, $7) " +
         "on conflict (id) do update set " +
-        "environment_id = excluded.environment_id, " +
+        "space_id = excluded.space_id, " +
+        "installation_id = excluded.installation_id, " +
+        "environment = excluded.environment, " +
         "profile_json = excluded.profile_json, " +
         "created_at = excluded.created_at, " +
         "updated_at = excluded.updated_at",
       [
         profile.id,
-        profile.environmentId,
+        profile.spaceId,
+        profile.installationId,
+        profile.environment,
         JSON.stringify(profile),
         profile.createdAt,
         profile.updatedAt,
@@ -718,29 +781,36 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return profile;
   }
 
-  async getDeploymentProfileByEnvironment(
-    environmentId: string,
+  async getDeploymentProfileByInstallation(
+    installationId: string,
+    environment: string,
   ): Promise<DeploymentProfile | undefined> {
     const result = await this.#query<JsonRow>(
       "select profile_json as json from takosumi_deployment_profiles " +
-        "where environment_id = $1 order by created_at desc, id desc limit 1",
-      [environmentId],
+        "where installation_id = $1 and environment = $2 " +
+        "order by created_at desc, id desc limit 1",
+      [installationId, environment],
     );
     return parseRow(result.rows[0]) as DeploymentProfile | undefined;
   }
 
+  // --- state_snapshots (§20, keyed (installation_id, environment, generation)) -
+
   async putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot> {
     await this.#query(
       "insert into takosumi_state_snapshots " +
-        "(id, environment_id, generation, snapshot_json, created_at) " +
-        "values ($1, $2, $3, $4::jsonb, $5) " +
-        "on conflict (environment_id, generation) do update set " +
+        "(id, space_id, installation_id, environment, generation, snapshot_json, created_at) " +
+        "values ($1, $2, $3, $4, $5, $6::jsonb, $7) " +
+        "on conflict (installation_id, environment, generation) do update set " +
         "id = excluded.id, " +
+        "space_id = excluded.space_id, " +
         "snapshot_json = excluded.snapshot_json, " +
         "created_at = excluded.created_at",
       [
         snapshot.id,
-        snapshot.environmentId,
+        snapshot.spaceId,
+        snapshot.installationId,
+        snapshot.environment,
         snapshot.generation,
         JSON.stringify(snapshot),
         snapshot.createdAt,
@@ -749,26 +819,29 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return snapshot;
   }
 
-  async listStateSnapshots(
-    environmentId: string,
-  ): Promise<readonly StateSnapshot[]> {
-    const result = await this.#query<JsonRow>(
-      "select snapshot_json as json from takosumi_state_snapshots " +
-        "where environment_id = $1 order by generation asc",
-      [environmentId],
-    );
-    return result.rows.map((row) => parseRow(row) as StateSnapshot);
-  }
-
   async getLatestStateSnapshot(
-    environmentId: string,
+    installationId: string,
+    environment: string,
   ): Promise<StateSnapshot | undefined> {
     const result = await this.#query<JsonRow>(
       "select snapshot_json as json from takosumi_state_snapshots " +
-        "where environment_id = $1 order by generation desc limit 1",
-      [environmentId],
+        "where installation_id = $1 and environment = $2 " +
+        "order by generation desc limit 1",
+      [installationId, environment],
     );
     return parseRow(result.rows[0]) as StateSnapshot | undefined;
+  }
+
+  async listStateSnapshots(
+    installationId: string,
+    environment: string,
+  ): Promise<readonly StateSnapshot[]> {
+    const result = await this.#query<JsonRow>(
+      "select snapshot_json as json from takosumi_state_snapshots " +
+        "where installation_id = $1 and environment = $2 order by generation asc",
+      [installationId, environment],
+    );
+    return result.rows.map((row) => parseRow(row) as StateSnapshot);
   }
 
   #query<Row extends Record<string, unknown> = Record<string, unknown>>(

@@ -14,17 +14,24 @@ export type DeploymentStatus =
   | "rolled_back"
   | "destroyed";
 
-/** Successful apply record (spec §21). Immutable once written. */
+/**
+ * Successful apply record (spec §21). Immutable once written.
+ *
+ * `sourceSnapshotId` and `outputSnapshotId` are spec-required (§27 NOT NULL);
+ * they are optional here only while the raw plan path (no snapshot pin) and
+ * the OutputSnapshot milestone (M7) are pending — tracked as divergences in
+ * core-conformance.md.
+ */
 export interface Deployment {
   readonly id: string;
   readonly spaceId: string;
   readonly installationId: string;
   readonly environment: string;
   readonly applyRunId: string;
-  readonly sourceSnapshotId: string;
+  readonly sourceSnapshotId?: string;
   readonly dependencySnapshotId?: string;
   readonly stateGeneration: number;
-  readonly outputSnapshotId: string;
+  readonly outputSnapshotId?: string;
   readonly outputsPublic: Readonly<Record<string, unknown>>;
   readonly status: DeploymentStatus;
   readonly createdAt: string;

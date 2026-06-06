@@ -35,13 +35,14 @@ import {
   OpenTofuDeploymentController,
   type OpenTofuRunner,
 } from "./domains/deploy-control/mod.ts";
-import type { EnvironmentCoordination } from "./domains/deploy-control/environment_lease.ts";
+import type { InstallationCoordination } from "./domains/deploy-control/installation_lease.ts";
 import {
   type EnqueueSourceSync,
   SourcesService,
 } from "./domains/sources/mod.ts";
-import { LanesService } from "./domains/lanes/mod.ts";
-import { officialInstallProfiles } from "./domains/lanes/install_profile_seed.ts";
+import { InstallationsService } from "./domains/installations/mod.ts";
+import { SpacesService } from "./domains/spaces/mod.ts";
+import { seedOfficialInstallConfigs } from "./domains/installations/official_seed.ts";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
@@ -72,7 +73,7 @@ import {
 } from "./domains/deploy-control/store_sql.ts";
 import { log } from "./shared/log.ts";
 import type { OperatorImplementation } from "takosumi-contract/reference/implementation";
-import type { Run } from "takosumi-contract/lanes";
+import type { Run } from "takosumi-contract/runs";
 
 function resolveTakosumiDeploymentRecordStore(input: {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
@@ -241,13 +242,13 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly runnerProfiles?: readonly RunnerProfile[];
   readonly defaultRunnerProfileId?: string;
   /**
-   * Environment lease seam (Core Specification §10.2). The Workers adapter
+   * Installation lease seam (Core Specification §10.2). The Workers adapter
    * injects a DO-backed implementation fronting the `COORDINATION`
-   * CoordinationObject so only ONE write run per environment runs at a time
-   * across isolates; when omitted the controller relies on its in-process
-   * serialization (single-isolate safe).
+   * CoordinationObject so only ONE write run per (installation, environment)
+   * runs at a time across isolates; when omitted the controller relies on its
+   * in-process serialization (single-isolate safe).
    */
-  readonly environmentCoordination?: EnvironmentCoordination;
+  readonly installationCoordination?: InstallationCoordination;
 }
 
 /**
@@ -261,20 +262,26 @@ export interface TakosumiOperations {
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuDeploymentController;
   /**
-   * Lanes domain service (Core Specification §6.3-§6.7): App / Environment /
-   * InstallProfile / DeploymentProfile over the same shared ledger.
+   * Spaces domain service (Core Specification §4): Space identity + handle
+   * uniqueness over the same shared ledger.
    */
-  readonly lanes: LanesService;
+  readonly spaces: SpacesService;
+  /**
+   * Installations domain service (Core Specification §5 / §11): Installation /
+   * InstallConfig / DeploymentProfile over the same shared ledger.
+   */
+  readonly installations: InstallationsService;
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
   /**
-   * Env-driven plan (M2): resolves the Environment -> App -> Source, picks the
-   * latest SourceSnapshot, and dispatches with environment state scope.
+   * Installation-driven plan (spec §23): resolves the Installation ->
+   * InstallConfig -> Source, picks the latest SourceSnapshot, and dispatches
+   * with installation state scope.
    */
-  createEnvironmentPlan(environmentId: string): Promise<PlanRunResponse>;
-  /** Env-driven destroy-plan (M2): always lands waiting_approval (spec §10.6). */
-  createEnvironmentDestroyPlan(
-    environmentId: string,
+  createInstallationPlan(installationId: string): Promise<PlanRunResponse>;
+  /** Installation-driven destroy-plan: always lands waiting_approval (spec §23). */
+  createInstallationDestroyPlan(
+    installationId: string,
   ): Promise<PlanRunResponse>;
   getPlanRun(id: string): Promise<PlanRunResponse>;
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
@@ -417,15 +424,18 @@ export async function createTakosumiService(
       ? { enqueueSourceSync: options.enqueueSourceSync }
       : {}),
   });
-  // Lanes domain (Core Specification §6.3-§6.7): App / Environment /
-  // InstallProfile / DeploymentProfile over the SAME shared ledger as the
-  // controller and Source service.
-  const lanesService = new LanesService({ store: sharedOpenTofuStore });
-  // Seed the official InstallProfile catalog from the built-in template
-  // registry (trustLevel "official"). Idempotent upsert keyed by the derived
-  // profile id, so a restart re-seeds the same rows. Fire-and-forget: a seed
-  // failure must not block boot, and lanes read paths tolerate an empty catalog.
-  void seedOfficialInstallProfiles(sharedOpenTofuStore);
+  // Spaces + Installations domains (Core Specification §4 / §5 / §11): Space /
+  // Installation / InstallConfig / DeploymentProfile over the SAME shared
+  // ledger as the controller and Source service.
+  const spacesService = new SpacesService({ store: sharedOpenTofuStore });
+  const installationsService = new InstallationsService({
+    store: sharedOpenTofuStore,
+  });
+  // Seed the official InstallConfig catalog from the built-in template registry
+  // (trustLevel "official"). Idempotent upsert keyed by the derived config id,
+  // so a restart re-seeds the same rows. Fire-and-forget: a seed failure must
+  // not block boot, and install read paths tolerate an empty catalog.
+  void seedOfficialInstallConfigsOrWarn(sharedOpenTofuStore);
   const opentofuController = new OpenTofuDeploymentController({
     store: sharedOpenTofuStore,
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
@@ -435,8 +445,8 @@ export async function createTakosumiService(
     ...(options.defaultRunnerProfileId
       ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
       : {}),
-    ...(options.environmentCoordination
-      ? { environmentCoordination: options.environmentCoordination }
+    ...(options.installationCoordination
+      ? { installationCoordination: options.installationCoordination }
       : {}),
   });
   const app = await createApiApp({
@@ -469,7 +479,8 @@ export async function createTakosumiService(
       : undefined,
     deployControlPublicRouteOptions: {
       controller: opentofuController,
-      lanesService,
+      spacesService,
+      installationsService,
       ...(deployControlToken ? { getDeployControlToken: () => deployControlToken } : {}),
     },
     readinessRouteProbes: createRoleReadinessProbes({
@@ -498,13 +509,14 @@ export async function createTakosumiService(
   // controller; does not duplicate controller logic.
   const operations: TakosumiOperations = {
     controller: opentofuController,
-    lanes: lanesService,
+    spaces: spacesService,
+    installations: installationsService,
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
-    createEnvironmentPlan: (environmentId) =>
-      opentofuController.createEnvironmentPlan(environmentId),
-    createEnvironmentDestroyPlan: (environmentId) =>
-      opentofuController.createEnvironmentDestroyPlan(environmentId),
+    createInstallationPlan: (installationId) =>
+      opentofuController.createInstallationPlan(installationId),
+    createInstallationDestroyPlan: (installationId) =>
+      opentofuController.createInstallationDestroyPlan(installationId),
     getPlanRun: (id) => opentofuController.getPlanRun(id),
     createApplyRun: (request) => opentofuController.createApplyRun(request),
     getApplyRun: (id) => opentofuController.getApplyRun(id),
@@ -534,19 +546,17 @@ export async function createTakosumiService(
 }
 
 /**
- * Seeds the official InstallProfile catalog into the shared ledger. The profile
- * id is derived from the template id+version so the upsert is idempotent across
- * restarts. Logs and swallows a seed failure so it never blocks service boot.
+ * Seeds the official InstallConfig catalog into the shared ledger. The config id
+ * is derived from the template id so the upsert is idempotent across restarts.
+ * Logs and swallows a seed failure so it never blocks service boot.
  */
-async function seedOfficialInstallProfiles(
+async function seedOfficialInstallConfigsOrWarn(
   store: OpenTofuDeploymentStore,
 ): Promise<void> {
   try {
-    for (const profile of officialInstallProfiles()) {
-      await store.putInstallProfile(profile);
-    }
+    await seedOfficialInstallConfigs(store);
   } catch (error) {
-    log.warn("service.lanes.install_profile_seed_failed", {
+    log.warn("service.installations.install_config_seed_failed", {
       error: error instanceof Error ? error.message : String(error),
     });
   }

@@ -10,141 +10,11 @@ import {
   type StoredSource,
 } from "./store.ts";
 import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
-import type {
-  D1Database,
-  D1PreparedStatement,
-  D1Result,
-} from "../../../../worker/src/bindings.ts";
+import { SqliteFakeD1 } from "./sqlite_fake_d1.ts";
 import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
-
-interface LedgerRow {
-  namespace: string;
-  key: string;
-  space_id: string | null;
-  installation_id: string | null;
-  status: string | null;
-  record_json: string;
-  created_at: number;
-  updated_at: number;
-}
-
-class FakeLedgerD1 implements D1Database {
-  readonly rows = new Map<string, LedgerRow>();
-  prepare(query: string): D1PreparedStatement {
-    return new FakeLedgerStatement(this, query);
-  }
-}
-
-class FakeLedgerStatement implements D1PreparedStatement {
-  #bound: readonly unknown[] = [];
-  constructor(
-    private readonly db: FakeLedgerD1,
-    private readonly query: string,
-  ) {}
-
-  bind(...values: readonly unknown[]): D1PreparedStatement {
-    this.#bound = values;
-    return this;
-  }
-
-  first<T = unknown>(): Promise<T | null> {
-    const q = normalize(this.query);
-    if (q.includes("where namespace = ? and key = ?")) {
-      const [namespace, key] = this.#bound as [string, string];
-      const row = this.db.rows.get(rowKey(namespace, key));
-      return Promise.resolve(row ? ({ record_json: row.record_json } as T) : null);
-    }
-    return Promise.resolve(null);
-  }
-
-  all<T = unknown>(): Promise<D1Result<T>> {
-    const q = normalize(this.query);
-    if (q.includes("space_id = ?")) {
-      const [namespace, spaceId] = this.#bound as [string, string];
-      return Promise.resolve({ results: this.#scan(namespace, "space_id", spaceId) as T[], success: true });
-    }
-    if (q.includes("installation_id = ?")) {
-      const [namespace, id] = this.#bound as [string, string];
-      return Promise.resolve({ results: this.#scan(namespace, "installation_id", id) as T[], success: true });
-    }
-    if (q.includes("where namespace = ?")) {
-      const [namespace] = this.#bound as [string];
-      const matched = [...this.db.rows.values()]
-        .filter((row) => row.namespace === namespace)
-        .sort((a, b) => a.created_at - b.created_at || a.key.localeCompare(b.key))
-        .map((row) => ({ record_json: row.record_json }) as T);
-      return Promise.resolve({ results: matched, success: true });
-    }
-    return Promise.resolve({ results: [], success: true });
-  }
-
-  #scan(
-    namespace: string,
-    column: "space_id" | "installation_id",
-    value: string,
-  ): { record_json: string }[] {
-    return [...this.db.rows.values()]
-      .filter((row) => row.namespace === namespace && row[column] === value)
-      .sort((a, b) => a.created_at - b.created_at || a.key.localeCompare(b.key))
-      .map((row) => ({ record_json: row.record_json }));
-  }
-
-  run<T = unknown>(): Promise<D1Result<T>> {
-    const q = normalize(this.query);
-    if (q.startsWith("create table") || q.startsWith("create index")) {
-      return Promise.resolve({ success: true, meta: { changes: 0 } });
-    }
-    if (q.startsWith("insert into")) {
-      const [
-        namespace,
-        key,
-        space_id,
-        installation_id,
-        status,
-        record_json,
-        created_at,
-        updated_at,
-      ] = this.#bound as [
-        string,
-        string,
-        string | null,
-        string | null,
-        string | null,
-        string,
-        number,
-        number,
-      ];
-      this.db.rows.set(rowKey(namespace, key), {
-        namespace,
-        key,
-        space_id,
-        installation_id,
-        status,
-        record_json,
-        created_at,
-        updated_at,
-      });
-      return Promise.resolve({ success: true, meta: { changes: 1 } });
-    }
-    if (q.startsWith("delete from")) {
-      const [namespace, key] = this.#bound as [string, string];
-      const existed = this.db.rows.delete(rowKey(namespace, key));
-      return Promise.resolve({ success: true, meta: { changes: existed ? 1 : 0 } });
-    }
-    return Promise.resolve({ success: true, meta: { changes: 0 } });
-  }
-}
-
-function rowKey(namespace: string, key: string): string {
-  return `${namespace}\0${key}`;
-}
-
-function normalize(query: string): string {
-  return query.replace(/\s+/g, " ").trim().toLowerCase();
-}
 
 function source(overrides: Partial<StoredSource> = {}): StoredSource {
   return {
@@ -199,7 +69,7 @@ function syncRun(overrides: Partial<SourceSyncRun> = {}): SourceSyncRun {
 
 const STORES: ReadonlyArray<[string, () => OpenTofuDeploymentStore]> = [
   ["in-memory", () => new InMemoryOpenTofuDeploymentStore()],
-  ["d1", () => new CloudflareD1OpenTofuDeploymentStore(new FakeLedgerD1())],
+  ["d1", () => new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1())],
 ];
 
 for (const [name, make] of STORES) {

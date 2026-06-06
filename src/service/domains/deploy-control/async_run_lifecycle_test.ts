@@ -9,13 +9,17 @@ import {
   type OpenTofuRunner,
 } from "./mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
+import { seedInstallationModel } from "./test_model_fixture.ts";
 import {
   type ConnectionVault,
   CredentialBundle,
   type RegisterConnectionInput,
   type TestConnectionResult,
 } from "../../adapters/vault/mod.ts";
-import type { Connection } from "takosumi-contract/deploy-control-api";
+import type {
+  Connection,
+  CreatePlanRunRequest,
+} from "takosumi-contract/deploy-control-api";
 
 const SOURCE = {
   kind: "git",
@@ -30,6 +34,36 @@ const LOCK_DIGEST =
 const CLOUDFLARE = "registry.opentofu.org/cloudflare/cloudflare";
 const SECRET_TOKEN = "cf-token-super-secret-value";
 
+/**
+ * Seeds the Space-direct Installation model (spec §5) and returns an UPDATE
+ * plan-run request bound to the seeded Installation (raw `createPlanRun` now
+ * requires an existing installationId). The Installation is seeded WITH a
+ * current deployment + state generation `gen` so the apply-expected guard is
+ * well-formed and the plan's base generation matches.
+ */
+async function seedUpdatable(
+  store: InMemoryOpenTofuDeploymentStore,
+  options: { installationId: string; generation?: number },
+): Promise<CreatePlanRunRequest> {
+  const generation = options.generation ?? 0;
+  const { installation } = await seedInstallationModel(store, {
+    installationId: options.installationId,
+  });
+  await store.putInstallation({
+    ...installation,
+    currentDeploymentId: `dep_seed_${options.installationId}`,
+    currentStateGeneration: generation,
+    status: "active",
+  });
+  return {
+    spaceId: installation.spaceId,
+    installationId: installation.id,
+    operation: "update",
+    source: SOURCE,
+    requiredProviders: [CLOUDFLARE],
+  };
+}
+
 // --- happy-path plan + apply: credentials reach the dispatch, never the store ---
 
 test("consumer plan + apply: credentials reach the dispatch payload but never the store or logs", async () => {
@@ -42,12 +76,9 @@ test("consumer plan + apply: credentials reach the dispatch payload but never th
     runner: capturingRunner(captured),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
   });
+  const request = await seedUpdatable(store, { installationId: "inst_happy" });
 
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: [CLOUDFLARE],
-  });
+  const { planRun } = await controller.createPlanRun(request);
   expect(planRun.status).toEqual("succeeded");
 
   // The plan job saw the minted credential...
@@ -97,11 +128,8 @@ test("idempotency: dispatching a terminal run no-ops", async () => {
     newId: deterministicIds(),
     runner: countingRunner(() => planCalls++),
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: [CLOUDFLARE],
-  });
+  const request = await seedUpdatable(store, { installationId: "inst_idem" });
+  const { planRun } = await controller.createPlanRun(request);
   expect(planRun.status).toEqual("succeeded");
   expect(planCalls).toEqual(1);
 
@@ -126,11 +154,8 @@ test("idempotency: a fresh-heartbeat running run is not taken over", async () =>
     // Hold dispatch so the run stays queued; we drive the consumer by hand.
     enqueueRun: noopEnqueue,
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: [CLOUDFLARE],
-  });
+  const request = await seedUpdatable(store, { installationId: "inst_fresh" });
+  const { planRun } = await controller.createPlanRun(request);
   // Simulate a sibling consumer that marked it running with a fresh heartbeat.
   await store.putPlanRun({
     ...(await store.getPlanRun(planRun.id))!,
@@ -156,11 +181,8 @@ test("stale-heartbeat running run is taken over by the consumer", async () => {
     runner: countingRunner(() => planCalls++),
     enqueueRun: noopEnqueue,
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: [CLOUDFLARE],
-  });
+  const request = await seedUpdatable(store, { installationId: "inst_stale" });
+  const { planRun } = await controller.createPlanRun(request);
   // Marked running by a consumer that then crashed; heartbeat is far in the past.
   await store.putPlanRun({
     ...(await store.getPlanRun(planRun.id))!,
@@ -194,11 +216,8 @@ test("a runner failure records the run failed and never persists the minted cred
     },
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: [CLOUDFLARE],
-  });
+  const request = await seedUpdatable(store, { installationId: "inst_fail" });
+  const { planRun } = await controller.createPlanRun(request);
   expect(planRun.status).toEqual("failed");
   expect(planRun.diagnostics?.[0]?.severity).toEqual("error");
   const dump = JSON.stringify(await store.getPlanRun(planRun.id));
@@ -214,11 +233,8 @@ test("DLQ backstop marks a non-terminal run failed (retries-exhausted)", async (
     runner: stubRunner(),
     enqueueRun: noopEnqueue, // leave the run queued
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: [CLOUDFLARE],
-  });
+  const request = await seedUpdatable(store, { installationId: "inst_dlq" });
+  const { planRun } = await controller.createPlanRun(request);
   expect(planRun.status).toEqual("queued");
 
   const transitioned = await controller.markRunFailed(
@@ -246,16 +262,13 @@ test("state generation: a successful apply increments the installation generatio
     newId: deterministicIds(),
     runner: stubRunner(),
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: [CLOUDFLARE],
-  });
+  const request = await seedUpdatable(store, { installationId: "inst_gen" });
+  const { planRun } = await controller.createPlanRun(request);
   const applied = await controller.createApplyRun({
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
-  expect(applied.installation?.stateGeneration).toEqual(1);
+  expect(applied.installation?.currentStateGeneration).toEqual(1);
 });
 
 test("state generation: a stale plan is rejected at apply (state_generation_mismatch)", async () => {
@@ -266,39 +279,41 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
     newId: deterministicIds(),
     runner: stubRunner(),
   });
-  // create -> apply (installation now at generation 1).
-  const { planRun: createPlan } = await controller.createPlanRun({
-    spaceId: "space_test",
-    source: SOURCE,
-    requiredProviders: [CLOUDFLARE],
-  });
-  const created = await controller.createApplyRun({
-    planRunId: createPlan.id,
-    expected: applyExpectedGuardFromPlanRun(createPlan),
-  });
-  const installationId = created.installation!.id;
+  // Installation seeded at generation 0 with a current deployment.
+  const request = await seedUpdatable(store, { installationId: "inst_stale_gen" });
+  const installationId = request.installationId!;
 
-  // Two update plans created against generation 1.
-  const updateA = (await controller.createPlanRun({
-    spaceId: "space_test",
+  // First update against generation 0 -> apply advances to generation 1.
+  const updateA = (await controller.createPlanRun(request)).planRun;
+  expect(updateA.baseStateGeneration).toEqual(0);
+  await controller.createApplyRun({
+    planRunId: updateA.id,
+    expected: applyExpectedGuardFromPlanRun(updateA),
+  });
+  const afterA = await store.getInstallation(installationId);
+  expect(afterA?.currentStateGeneration).toEqual(1);
+
+  // Second update created against generation 1.
+  const updateB = (await controller.createPlanRun({
+    spaceId: request.spaceId,
     installationId,
     operation: "update",
     source: { ...SOURCE, ref: "release-2" },
     requiredProviders: [CLOUDFLARE],
   })).planRun;
-  expect(updateA.baseStateGeneration).toEqual(1);
+  expect(updateB.baseStateGeneration).toEqual(1);
 
-  // Apply updateA -> generation advances to 2.
+  // Apply updateB -> generation advances to 2.
   await controller.createApplyRun({
-    planRunId: updateA.id,
-    expected: applyExpectedGuardFromPlanRun(updateA),
+    planRunId: updateB.id,
+    expected: applyExpectedGuardFromPlanRun(updateB),
   });
   const installation = await store.getInstallation(installationId);
-  expect(installation?.stateGeneration).toEqual(2);
+  expect(installation?.currentStateGeneration).toEqual(2);
 
   // Forge a stale plan that still claims generation 1, bypassing the
   // currentDeployment guard, to prove the generation guard fires inside execute.
-  const stalePlan = (await store.getPlanRun(updateA.id))!;
+  const stalePlan = (await store.getPlanRun(updateB.id))!;
   const forgedId = "plan_forged_stale";
   await store.putPlanRun({
     ...stalePlan,

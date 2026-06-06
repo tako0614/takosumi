@@ -7,6 +7,8 @@
  */
 
 import type { JsonValue } from "./types.ts";
+import type { Installation } from "./installations.ts";
+import type { Deployment } from "./deployments.ts";
 
 export const RUNNER_PROFILES_PATH = "/v1/runner-profiles" as const;
 export const PLAN_RUNS_PATH = "/v1/plan-runs" as const;
@@ -249,33 +251,33 @@ export interface PlanRun {
    */
   readonly approval?: RunApproval;
   /**
-   * Resolved SourceSnapshot this plan was created against (M2 env-driven flow).
-   * Set only for runs created through the Environment plan/destroy-plan path;
-   * absent for the raw `/v1/plan-runs` create path. The apply consumer
+   * Resolved SourceSnapshot this plan was created against. Set for runs created
+   * through the Installation plan/destroy-plan path. The apply consumer
    * revalidates the ApplyRun's plan still references this snapshot (spec
-   * invariant 10) and threads the snapshot's archive into the dispatch.
+   * invariant 8) and threads the snapshot's archive into the dispatch.
    */
   readonly sourceSnapshotId?: string;
   /**
-   * Environment context this plan was created against (M2 env-driven flow).
-   * Present only for Environment-driven runs; absent for the raw create path.
+   * Installation context this plan was created against (spec §5: one
+   * Installation = one OpenTofu root/state, with `environment` as a column).
    * Used by the queue consumer to attach the `stateScope` / `sourceArchive`
-   * dispatch fields and by the unified Run facade to project appId /
-   * environmentId. Never carries secret material.
+   * dispatch fields and by the unified Run projection. Never carries secret
+   * material.
    */
-  readonly environmentContext?: PlanRunEnvironmentContext;
+  readonly installationContext?: PlanRunInstallationContext;
 }
 
 /**
- * Environment context recorded on an env-driven PlanRun (M2). Locates the run's
- * App / Environment within its Space so the queue consumer can build the
- * `stateScope` dispatch field (`{ spaceId, appId, envId, generation }`) the DO
- * consumes to persist encrypted state at the spec R2_STATE keys.
+ * Installation context recorded on a PlanRun. Locates the run's Installation +
+ * environment within its Space so the queue consumer can build the
+ * `stateScope` dispatch field (`{ spaceId, installationId, environment,
+ * generation }`) the DO consumes to persist encrypted state at the spec §20
+ * R2_STATE keys.
  */
-export interface PlanRunEnvironmentContext {
+export interface PlanRunInstallationContext {
   readonly spaceId: string;
-  readonly appId: string;
-  readonly environmentId: string;
+  readonly installationId: string;
+  readonly environment: string;
 }
 
 export interface PlanRunTemplateBinding {
@@ -367,55 +369,26 @@ export interface ApplyExpectedGuard {
   readonly providerLockDigest?: string;
 }
 
-export type InstallationStatus =
-  | "installing"
-  | "ready"
-  | "failed"
-  | "destroying"
-  | "destroyed"
-  | "suspended";
-
-export interface Installation {
-  readonly id: string;
-  readonly spaceId: string;
-  readonly appId: string;
-  readonly source: OpenTofuModuleSource;
-  readonly runnerProfileId: string;
-  readonly currentDeploymentId: string | null;
-  readonly status: InstallationStatus;
-  /**
-   * Monotonic state generation for this Installation's OpenTofu state. Bumped
-   * atomically with each successful apply/destroy state persist; a PlanRun that
-   * recorded an older `baseStateGeneration` is rejected at apply. Absent on
-   * legacy records is read as `0`.
-   */
-  readonly stateGeneration?: number;
-  readonly createdAt: number;
-  readonly updatedAt: number;
-}
-
-export type DeploymentStatus =
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "destroyed";
-
-export interface Deployment {
-  readonly id: string;
-  readonly installationId: string;
-  readonly planRunId: string;
-  readonly applyRunId: string;
-  readonly source: OpenTofuModuleSource;
-  readonly runnerProfileId: string;
-  readonly status: DeploymentStatus;
-  readonly planDigest?: string;
-  readonly sourceCommit?: string;
-  readonly providerLockDigest?: string;
-  readonly outputs: readonly DeploymentOutput[];
-  readonly auditEvents: readonly DeployControlAuditEvent[];
-  readonly createdAt: number;
-  readonly completedAt?: number;
-}
+// Installation / InstallConfig (spec §5 / §11) live in ./installations.ts and
+// Deployment / StateSnapshot (spec §20 / §21) in ./deployments.ts; both are
+// re-exported below so existing imports through this module keep resolving.
+export type {
+  DeploymentProfile,
+  InstallBuildConfig,
+  InstallConfig,
+  Installation,
+  InstallationStatus,
+  InstallType,
+  OutputAllowlistEntry,
+  OutputValueType,
+  PolicyConfig,
+  TrustLevel,
+} from "./installations.ts";
+export type {
+  Deployment,
+  DeploymentStatus,
+  StateSnapshot,
+} from "./deployments.ts";
 
 export type DeploymentOutputKind =
   | "launch_url"
@@ -580,19 +553,20 @@ export interface DispatchBuildSpec {
 }
 
 /**
- * Environment-scoped state location threaded onto the run dispatch payload (M2).
+ * Installation-scoped state location threaded onto the run dispatch payload.
  * The OpenTofu runner DO consumes `request.stateScope` to persist OpenTofu state
- * encrypted to R2_STATE at the spec §11.3 keys
- * (`spaces/{spaceId}/apps/{appId}/envs/{envId}/states/{NNNNNNNN}.tfstate.enc` +
- * `current.json`). The controller owns the generation arithmetic: a plan dispatch
- * carries the CURRENT generation (restore base); an apply / destroy_apply carries
- * `base + 1` (persist generation). Absent for runs without environment context,
- * in which case the DO falls back to its legacy R2_ARTIFACTS state path.
+ * encrypted to R2_STATE at the spec §20 keys
+ * (`spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/
+ * {NNNNNNNN}.tfstate.enc` + `current.json`). The controller owns the generation
+ * arithmetic: a plan dispatch carries the CURRENT generation (restore base); an
+ * apply / destroy_apply carries `base + 1` (persist generation). Absent for runs
+ * without installation context, in which case the DO falls back to its legacy
+ * R2_ARTIFACTS state path.
  */
 export interface DispatchStateScope {
   readonly spaceId: string;
-  readonly appId: string;
-  readonly envId: string;
+  readonly installationId: string;
+  readonly environment: string;
   readonly generation: number;
 }
 
@@ -608,23 +582,7 @@ export interface DispatchSourceArchive {
   readonly digest: string;
 }
 
-/**
- * Immutable OpenTofu state snapshot metadata (spec §6.9). Recorded in the ledger
- * after a successful apply / destroy_apply persists state to R2_STATE; pairs the
- * encrypted object key + plaintext digest with the generation the controller
- * bumped the Installation to. The encrypted bytes live in R2_STATE; only this
- * metadata enters the ledger.
- */
-export interface StateSnapshot {
-  readonly id: string;
-  readonly appId: string;
-  readonly environmentId: string;
-  readonly generation: number;
-  readonly objectKey: string;
-  readonly digest: string;
-  readonly createdByRunId: string;
-  readonly createdAt: number;
-}
+// StateSnapshot (spec §20) lives in ./deployments.ts and is re-exported below.
 
 /**
  * One resource change line projected from `tofu show -json tfplan`

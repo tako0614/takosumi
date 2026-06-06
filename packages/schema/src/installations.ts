@@ -97,6 +97,15 @@ export interface InstallConfig {
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly policy: PolicyConfig;
   readonly backup?: BackupConfig;
+  /**
+   * Internal seam: binds an official catalog config to its template (the
+   * rootgen module baked into the runner image). Absent for space-authored
+   * configs. Reworked when the install types land (conformance M5).
+   */
+  readonly templateBinding?: {
+    readonly templateId: string;
+    readonly templateVersion: string;
+  };
   readonly createdAt: string;
   readonly updatedAt: string;
 }

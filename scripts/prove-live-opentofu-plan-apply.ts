@@ -15,6 +15,8 @@ import {
   type OpenTofuPlanJob,
   type OpenTofuRunner,
 } from "../src/service/domains/deploy-control/mod.ts";
+import { InMemoryOpenTofuDeploymentStore } from "../src/service/domains/deploy-control/store.ts";
+import { seedInstallationModel } from "../src/service/domains/deploy-control/test_model_fixture.ts";
 import { parseOpenTofuOutputs } from "../packages/platform-services/src/opentofu-output-resolver.ts";
 
 const FIXTURE_SOURCE = "fixtures/opentofu-deployment-output-proof/source";
@@ -45,7 +47,20 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
     await cp(resolve(FIXTURE_SOURCE), workdir, { recursive: true });
     const runnerProfile = liveLocalRunnerProfile(Date.now());
     const ids = deterministicIds();
+    // Installation-first model (spec §5): seed the Space-direct Installation
+    // model and attach a prior current Deployment so this single-shot proof's
+    // apply passes the `installationCurrentDeploymentId` guard.
+    const store = new InMemoryOpenTofuDeploymentStore();
+    const seeded = await seedInstallationModel(store, {
+      spaceId: "space_live_local",
+      installationId: ids.next("inst"),
+    });
+    await store.putInstallation({
+      ...seeded.installation,
+      currentDeploymentId: ids.next("dep"),
+    });
     const controller = new OpenTofuDeploymentController({
+      store,
       runner: new LocalTofuRunner(workdir),
       runnerProfiles: [runnerProfile],
       defaultRunnerProfileId: runnerProfile.id,
@@ -54,6 +69,7 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
     });
     const planned = await controller.createPlanRun({
       spaceId: "space_live_local",
+      installationId: seeded.installation.id,
       source: { kind: "local", path: workdir },
       runnerProfileId: runnerProfile.id,
       requiredProviders: [],
@@ -81,7 +97,9 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
       runnerProfileId: runnerProfile.id,
       evidence: {
         planDigest: planned.planRun.planDigest!,
-        outputCount: applied.deployment?.outputs.length ?? 0,
+        // §21 model: the DeploymentOutput snapshot is the ApplyRun outputs (the
+        // Deployment records the public projection as `outputsPublic`).
+        outputCount: applied.applyRun.outputs?.length ?? 0,
         stateLockStatus: applied.applyRun.stateLock.status,
         applyAuditEventCount: applied.applyRun.auditEvents.length,
       },
