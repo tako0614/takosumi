@@ -13,7 +13,7 @@
   self-host するもので、operator は deploy しない。
 - platform worker は Takosumi の accounts plane
   (`deploy/accounts-cloudflare/src/handler.ts`) と control plane
-  (`deploy/cloudflare/src/handler.ts`) を **in-process** で mount する。 別 worker
+  (`worker/src/handler.ts`) を **in-process** で mount する。 別 worker
   / 別サブドメイン (`accounts.takosumi.com` / `deploy-control.takosumi.com`) は
   持たない。
 - `/internal/*` HTTP は opentofu-runner / executor container callback 専用。

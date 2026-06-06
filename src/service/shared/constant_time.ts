@@ -16,4 +16,4 @@
 export {
   constantTimeEqualsBytes,
   constantTimeEqualsString,
-} from "../../contract/internal-crypto.ts";
+} from "takosumi-contract/internal/crypto";

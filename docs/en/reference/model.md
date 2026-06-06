@@ -20,7 +20,7 @@ Sources are `git`, `prepared`, or `local`. `local` is for dev / operator-local p
 
 A PlanRun records source digest, variables digest, runner-observed required providers, policy decision, policy decision digest, immutable plan artifact metadata, plan digest, provider lock digest, diagnostics, audit events, and for update / destroy the Installation current Deployment pointer observed at plan time.
 
-`planArtifact.digest` must equal `planDigest`; in the reference runner this is the digest of the binary `tfplan` file. The Cloudflare reference profile stores the reviewed `tfplan` under the `opentofu-plan-runs/` prefix in the `TAKOS_ARTIFACTS` R2 bucket and records an `object-storage` artifact ref on the PlanRun. ApplyRun restores that immutable artifact into the runner and applies it directly, so apply does not re-plan from source after review.
+`planArtifact.digest` must equal `planDigest`; in the reference runner this is the digest of the binary `tfplan` file. The Cloudflare reference profile stores the reviewed `tfplan` under the `opentofu-plan-runs/` prefix in the `R2_ARTIFACTS` R2 bucket and records an `object-storage` artifact ref on the PlanRun. ApplyRun restores that immutable artifact into the runner and applies it directly, so apply does not re-plan from source after review.
 
 ## ApplyRun
 

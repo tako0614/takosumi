@@ -18,11 +18,11 @@ import {
   createDeployControlQueueConsumer,
   createInProcessDeployControlSeam,
   type QueueBatch,
-  TakosCoordinationObject,
-  TakosumiOpenTofuRunner,
-} from "../cloudflare/src/handler.ts";
+  CoordinationObject,
+  OpenTofuRunnerObject,
+} from "../../worker/src/handler.ts";
 
-export { TakosCoordinationObject, TakosumiOpenTofuRunner };
+export { CoordinationObject, OpenTofuRunnerObject };
 
 // In-process deploy-control seam, one cached service per env, shared with the
 // unified Takos worker. The accounts deploy-control proxy calls the typed

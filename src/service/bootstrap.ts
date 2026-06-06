@@ -226,7 +226,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly opentofuRunner?: OpenTofuRunner;
   /**
    * Out-of-process run dispatch seam. The Workers adapter injects a producer
-   * that enqueues onto `TAKOS_OPENTOFU_RUN_QUEUE`; when omitted the controller
+   * that enqueues onto `RUN_QUEUE`; when omitted the controller
    * defaults to an inline dispatcher that runs the consumer synchronously
    * (preserving create-executes-run for local / node substrates and tests).
    */
@@ -242,7 +242,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly defaultRunnerProfileId?: string;
   /**
    * Environment lease seam (Core Specification §10.2). The Workers adapter
-   * injects a DO-backed implementation fronting the `TAKOS_COORDINATION`
+   * injects a DO-backed implementation fronting the `COORDINATION`
    * CoordinationObject so only ONE write run per environment runs at a time
    * across isolates; when omitted the controller relies on its in-process
    * serialization (single-isolate safe).

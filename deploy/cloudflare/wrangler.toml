@@ -9,8 +9,8 @@ compatibility_flags = ["nodejs_compat"]
 no_bundle = true
 
 [build]
-command = 'ROOT=.; if [ ! -f "$ROOT/deploy/cloudflare/wrangler.toml" ]; then ROOT=../..; fi; mkdir -p "$ROOT/deploy/cloudflare/.wrangler/dist" && bun build --target browser --format esm --external cloudflare:workers "$ROOT/deploy/cloudflare/src/worker.ts" --outfile "$ROOT/deploy/cloudflare/.wrangler/dist/takosumi-cloudflare-worker.mjs"'
-watch_dir = "deploy/cloudflare/src"
+command = 'ROOT=.; if [ ! -f "$ROOT/deploy/cloudflare/wrangler.toml" ]; then ROOT=../..; fi; mkdir -p "$ROOT/deploy/cloudflare/.wrangler/dist" && bun build --target browser --format esm --external cloudflare:workers "$ROOT/worker/src/index.ts" --outfile "$ROOT/deploy/cloudflare/.wrangler/dist/takosumi-cloudflare-worker.mjs"'
+watch_dir = "worker/src"
 
 [observability]
 enabled = true
@@ -21,16 +21,28 @@ database_name = "takosumi"
 database_id = "<cloudflare-d1-database-id>"
 
 [[r2_buckets]]
-binding = "TAKOS_ARTIFACTS"
+binding = "R2_ARTIFACTS"
 bucket_name = "takos-artifacts"
+
+[[r2_buckets]]
+binding = "R2_SOURCE"
+bucket_name = "takosumi-source"
+
+[[r2_buckets]]
+binding = "R2_STATE"
+bucket_name = "takosumi-state"
+
+[[r2_buckets]]
+binding = "R2_BACKUPS"
+bucket_name = "takosumi-backups"
 
 [[queues.producers]]
 binding = "TAKOS_QUEUE"
 queue = "takosumi-control-plane"
 
 [[queues.producers]]
-binding = "TAKOS_OPENTOFU_RUN_QUEUE"
-queue = "takosumi-opentofu-runs"
+binding = "RUN_QUEUE"
+queue = "takosumi-runs"
 
 [[queues.consumers]]
 queue = "takosumi-control-plane"
@@ -45,50 +57,50 @@ dead_letter_queue = "takosumi-control-plane-dlq"
 # the queue consumer invocation budget (~15 min) bounds a single run; detaching
 # long runs from the consumer invocation is future work.
 [[queues.consumers]]
-queue = "takosumi-opentofu-runs"
+queue = "takosumi-runs"
 max_batch_size = 1
 max_batch_timeout = 1
 max_retries = 2
-dead_letter_queue = "takosumi-opentofu-runs-dlq"
+dead_letter_queue = "takosumi-runs-dlq"
 
 # Dead-letter consumer: marks runs that exhausted retries failed
 # ("retries-exhausted") if not already terminal.
 [[queues.consumers]]
-queue = "takosumi-opentofu-runs-dlq"
+queue = "takosumi-runs-dlq"
 max_batch_size = 10
 max_batch_timeout = 5
 
 [[durable_objects.bindings]]
-name = "TAKOS_COORDINATION"
-class_name = "TakosCoordinationObject"
+name = "COORDINATION"
+class_name = "CoordinationObject"
 
 [[durable_objects.bindings]]
-name = "TAKOS_OPENTOFU_RUNNER"
-class_name = "TakosumiOpenTofuRunner"
+name = "RUNNER"
+class_name = "OpenTofuRunnerObject"
 
 [vars]
 TAKOS_RUNTIME_MODE = "cloudflare-worker"
 TAKOSUMI_ENVIRONMENT = "staging"
 TAKOSUMI_RUN_MODEL = "opentofu-plan-apply-destroy"
-TAKOS_ARTIFACTS_BUCKET_NAME = "takos-artifacts"
+R2_ARTIFACTS_BUCKET_NAME = "takos-artifacts"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["TakosCoordinationObject"]
+new_sqlite_classes = ["CoordinationObject"]
 
 [[migrations]]
 tag = "v2"
-new_sqlite_classes = ["TakosumiOpenTofuRunner"]
+new_sqlite_classes = ["OpenTofuRunnerObject"]
 
 # OpenTofu run executor. The embedded Takosumi service calls this
 # container-backed Durable Object through its OpenTofu runner adapter.
 [[containers]]
-class_name = "TakosumiOpenTofuRunner"
+class_name = "OpenTofuRunnerObject"
 # Build context is the repo root so the runner can COPY the dependency-free
-# shared provider->env-name table (src/contract/provider-env-rules.ts) it
-# imports. The Dockerfile copies only that file plus runner/server.ts; no other
+# shared provider->env-name table (packages/schema/src/provider-env-rules.ts) it
+# imports. The Dockerfile copies only that file plus runner-image/entrypoint.ts; no other
 # repo source is included in the image.
-image = "deploy/cloudflare/runner/Dockerfile"
+image = "runner-image/Dockerfile"
 image_build_context = "../.."
 # Custom sizing: the runner image bakes an OpenTofu provider filesystem mirror
 # and each run materializes a per-run workspace (source checkout + build

@@ -637,7 +637,7 @@ test("default Cloudflare runner keeps Workers for Platforms separate from OpenTo
 
   expect(cloudflare?.substrate).toEqual("cloudflare-containers");
   expect(cloudflare?.cloudflareContainer?.queueName).toEqual(
-    "takosumi-opentofu-runs",
+    "takosumi-runs",
   );
   expect(cloudflare?.resourceLimits).toEqual({
     maxRunSeconds: 900,

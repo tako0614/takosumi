@@ -54,7 +54,7 @@ bucket_name = "takosumi-accounts-exports"
 
 # Deploy-control plan/state artifacts.
 [[r2_buckets]]
-binding = "TAKOS_ARTIFACTS"
+binding = "R2_ARTIFACTS"
 bucket_name = "takos-artifacts"
 
 # Source archive snapshots (immutable per-snapshot tar.zst). Written by the
@@ -69,28 +69,34 @@ bucket_name = "takosumi-source"
 binding = "R2_STATE"
 bucket_name = "takosumi-state"
 
+# Backup/export artifacts (core-spec.md §26 R2_BACKUPS; implementation is
+# post-MVP, the binding is declared for spec parity).
+[[r2_buckets]]
+binding = "R2_BACKUPS"
+bucket_name = "takosumi-backups"
+
 # Coordination leases/alarms for the deploy-control plane.
 [[durable_objects.bindings]]
-name = "TAKOS_COORDINATION"
-class_name = "TakosCoordinationObject"
+name = "COORDINATION"
+class_name = "CoordinationObject"
 
 # OpenTofu run executor (container-backed DO security sandbox).
 [[durable_objects.bindings]]
-name = "TAKOS_OPENTOFU_RUNNER"
-class_name = "TakosumiOpenTofuRunner"
+name = "RUNNER"
+class_name = "OpenTofuRunnerObject"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["TakosCoordinationObject", "TakosumiOpenTofuRunner"]
+new_sqlite_classes = ["CoordinationObject", "OpenTofuRunnerObject"]
 
 # OpenTofu run executor container. The embedded deploy-control service reaches
 # this through its OpenTofu runner adapter (idFromName(runId) -> .fetch). Build
 # context is the takosumi repo root: the runner Dockerfile copies
-# src/contract/provider-env-rules.ts (shared provider->env table) alongside
-# runner/server.ts.
+# packages/schema/src/provider-env-rules.ts (shared provider->env table) alongside
+# runner-image/entrypoint.ts.
 [[containers]]
-class_name = "TakosumiOpenTofuRunner"
-image = "../cloudflare/runner/Dockerfile"
+class_name = "OpenTofuRunnerObject"
+image = "../../runner-image/Dockerfile"
 image_build_context = "../.."
 # Custom sizing: the runner image bakes an OpenTofu provider filesystem mirror
 # and each run materializes a per-run workspace (source checkout + build
@@ -106,8 +112,8 @@ binding = "TAKOS_QUEUE"
 queue = "takosumi-control-plane"
 
 [[queues.producers]]
-binding = "TAKOS_OPENTOFU_RUN_QUEUE"
-queue = "takosumi-opentofu-runs"
+binding = "RUN_QUEUE"
+queue = "takosumi-runs"
 
 # Consumer: the platform worker runs the OpenTofu run-queue consumer in-process
 # (see deploy/platform/worker.ts `queue`). It loads the run, mints credentials,
@@ -115,16 +121,16 @@ queue = "takosumi-opentofu-runs"
 # own run. NOTE: the queue consumer invocation budget (~15 min) bounds a single
 # run; detaching long runs from the consumer invocation is future work.
 [[queues.consumers]]
-queue = "takosumi-opentofu-runs"
+queue = "takosumi-runs"
 max_batch_size = 1
 max_batch_timeout = 1
 max_retries = 2
-dead_letter_queue = "takosumi-opentofu-runs-dlq"
+dead_letter_queue = "takosumi-runs-dlq"
 
 # Dead-letter consumer: marks runs that exhausted retries failed
 # ("retries-exhausted") if not already terminal.
 [[queues.consumers]]
-queue = "takosumi-opentofu-runs-dlq"
+queue = "takosumi-runs-dlq"
 max_batch_size = 10
 max_batch_timeout = 5
 

@@ -1,7 +1,7 @@
 /**
  * Official template registry.
  *
- * The catalog is authored as TypeScript data (see `templates/README.md`) and
+ * The catalog is authored as TypeScript data (see `opentofu-modules/README.md`) and
  * imported statically here. The registry validates every entry once at module
  * load (fail fast on a malformed catalog object) and indexes by `id@version`.
  *
@@ -13,8 +13,8 @@
  */
 
 import type { TemplateDefinition } from "takosumi-contract/deploy-control-api";
-import { cloudflareR2BucketTemplate } from "../../../../templates/cloudflare-r2-bucket/template.ts";
-import { cloudflareWorkerHonoTemplate } from "../../../../templates/cloudflare-worker-hono/template.ts";
+import { cloudflareR2BucketTemplate } from "../../../../opentofu-modules/cloudflare-r2-bucket/template.ts";
+import { cloudflareWorkerHonoTemplate } from "../../../../opentofu-modules/cloudflare-worker-hono/template.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import { assertValidTemplate } from "./validation.ts";
 
