@@ -9,6 +9,7 @@ import type {
 import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
+  PlanRunInputs,
   StoredSecretBlob,
 } from "../../../src/service/domains/deploy-control/store.ts";
 import { InstallationPatchGuardConflict } from "../../../src/service/domains/deploy-control/store.ts";
@@ -19,6 +20,7 @@ const TABLE = "takosumi_cf_opentofu_ledger";
 type Namespace =
   | "runner-profile"
   | "plan-run"
+  | "plan-run-inputs"
   | "apply-run"
   | "installation"
   | "deployment"
@@ -60,6 +62,24 @@ export class CloudflareD1OpenTofuDeploymentStore
 
   async getPlanRun(id: string): Promise<PlanRun | undefined> {
     return await this.#get("plan-run", id);
+  }
+
+  async putPlanRunInputs(inputs: PlanRunInputs): Promise<void> {
+    // Internal sidecar: never list-indexed, so omit space_id/status columns.
+    await this.#put("plan-run-inputs", inputs.planRunId, inputs, {
+      createdAt: 0,
+      updatedAt: 0,
+    });
+  }
+
+  async getPlanRunInputs(
+    planRunId: string,
+  ): Promise<PlanRunInputs | undefined> {
+    return await this.#get("plan-run-inputs", planRunId);
+  }
+
+  async deletePlanRunInputs(planRunId: string): Promise<void> {
+    await this.#delete("plan-run-inputs", planRunId);
   }
 
   async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
@@ -106,6 +126,7 @@ export class CloudflareD1OpenTofuDeploymentStore
         | "updatedAt"
         | "runnerProfileId"
         | "source"
+        | "stateGeneration"
       >
     >,
     guard?: InstallationPatchGuard,

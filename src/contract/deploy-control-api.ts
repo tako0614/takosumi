@@ -209,7 +209,22 @@ export interface PlanRun {
   readonly auditEvents: readonly DeployControlAuditEvent[];
   readonly createdAt: number;
   readonly updatedAt: number;
+  /** Set when the queued run begins executing in the consumer. */
+  readonly startedAt?: number;
+  /**
+   * Liveness marker refreshed while the run executes. Used by the queue consumer
+   * idempotency guard to take over a run left `running` by a crashed consumer
+   * once the heartbeat is stale (older than the takeover window).
+   */
+  readonly heartbeatAt?: number;
   readonly finishedAt?: number;
+  /**
+   * State generation observed for this PlanRun's target at creation time. The
+   * apply consumer rejects when the target's current generation has advanced
+   * past this value (`state_generation_mismatch`), so a stale plan cannot apply
+   * over a newer state. `create` plans have no prior target and record `0`.
+   */
+  readonly baseStateGeneration?: number;
   /**
    * Set to the ApplyRun id once this PlanRun has been successfully applied.
    * Enforces apply-once: a succeeded PlanRun (especially a `create` plan, which
@@ -258,6 +273,13 @@ export interface ApplyRun {
   readonly auditEvents: readonly DeployControlAuditEvent[];
   readonly createdAt: number;
   readonly updatedAt: number;
+  /** Set when the queued run begins executing in the consumer. */
+  readonly startedAt?: number;
+  /**
+   * Liveness marker refreshed while the run executes. Drives the queue consumer
+   * idempotency guard's stale-takeover window (see {@link PlanRun.heartbeatAt}).
+   */
+  readonly heartbeatAt?: number;
   readonly finishedAt?: number;
 }
 
@@ -305,6 +327,13 @@ export interface Installation {
   readonly runnerProfileId: string;
   readonly currentDeploymentId: string | null;
   readonly status: InstallationStatus;
+  /**
+   * Monotonic state generation for this Installation's OpenTofu state. Bumped
+   * atomically with each successful apply/destroy state persist; a PlanRun that
+   * recorded an older `baseStateGeneration` is rejected at apply. Absent on
+   * legacy records is read as `0`.
+   */
+  readonly stateGeneration?: number;
   readonly createdAt: number;
   readonly updatedAt: number;
 }

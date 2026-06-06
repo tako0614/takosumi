@@ -23,12 +23,21 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
 
 export type OpenTofuRunAction = "plan" | "apply" | "destroy";
 
+/**
+ * Run-dispatch message on `TAKOS_OPENTOFU_RUN_QUEUE`. The producer (the
+ * controller's `enqueueRun` seam) publishes only the run identity; the queue
+ * consumer loads the full run from the deploy-control store, applies the
+ * idempotency guard, mints credentials, and drives the container dispatch. The
+ * legacy `requestedAt` / `request` fields are retained as optional so older
+ * messages still parse, but the consumer no longer depends on them.
+ */
 export interface OpenTofuRunQueueMessage {
   readonly kind: "takosumi.opentofu-run@v1";
   readonly action: OpenTofuRunAction;
   readonly runId: string;
-  readonly requestedAt: string;
-  readonly request: Record<string, unknown>;
+  readonly spaceId: string;
+  readonly requestedAt?: string;
+  readonly request?: Record<string, unknown>;
 }
 
 export interface D1Database {
@@ -107,12 +116,16 @@ export interface Queue<T> {
 }
 
 export interface QueueBatch<T = unknown> {
+  /** The queue this batch was delivered from (used to detect the DLQ). */
+  readonly queue?: string;
   readonly messages: readonly QueueMessage<T>[];
 }
 
 export interface QueueMessage<T = unknown> {
   readonly id: string;
   readonly body: T;
+  /** Delivery attempt count (1-based) when the runtime provides it. */
+  readonly attempts?: number;
   ack?(): void;
   retry?(): void;
 }

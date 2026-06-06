@@ -122,34 +122,65 @@ test("Cloudflare Worker preserves method, query, headers, and body", async () =>
   assert.equal(call.body, body);
 });
 
-test("Cloudflare Worker dispatches OpenTofu run queue messages to runner container binding", async () => {
-  const runnerCalls: CapturedRequest[] = [];
+test("OpenTofu run queue consumer rethrows for retry on a non-final attempt", async () => {
+  // Async run lifecycle: the consumer loads the run from the in-process
+  // deploy-control controller (D1-backed). The fake D1 returns no rows, so the
+  // run is not found; on a non-final attempt the consumer rethrows so Cloudflare
+  // Queues retries the message. (Happy-path / idempotency / mint behavior is
+  // covered against the controller directly in the deploy-control consumer tests.)
   const worker = createCloudflareWorker();
+  await assert.rejects(
+    worker.queue(
+      createQueueBatch({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "run_queue_1",
+        spaceId: "space_test",
+      }, { attempts: 1 }),
+      createEnv(),
+    ),
+  );
+});
 
+test("OpenTofu run queue consumer acks (no rethrow) on the final attempt", async () => {
+  // On the final delivery the consumer must not rethrow (that would redeliver
+  // forever); the message is acked and the DLQ consumer is the backstop.
+  const worker = createCloudflareWorker();
+  let acked = false;
   await worker.queue(
     createQueueBatch({
       kind: "takosumi.opentofu-run@v1",
       action: "plan",
-      runId: "run_queue_1",
-      requestedAt: "2026-06-02T00:00:00.000Z",
-      request: { sourceRef: "git:example" },
-    }),
-    createEnv({ runnerCalls }),
+      runId: "run_queue_final",
+      spaceId: "space_test",
+    }, { attempts: 3, onAck: () => (acked = true) }),
+    createEnv(),
   );
+  assert.equal(acked, true);
+});
 
-  assert.equal(runnerCalls.length, 1);
-  assert.equal(
-    runnerCalls[0].url,
-    "https://opentofu-runner.internal/runs/run_queue_1",
+test("OpenTofu run DLQ consumer acks dead letters without rethrowing", async () => {
+  const worker = createCloudflareWorker();
+  let acked = false;
+  await worker.queue(
+    {
+      queue: "takosumi-opentofu-runs-dlq",
+      messages: [
+        {
+          id: "msg_dlq",
+          body: {
+            kind: "takosumi.opentofu-run@v1",
+            action: "apply",
+            runId: "run_dead",
+            spaceId: "space_test",
+          },
+          ack: () => (acked = true),
+        },
+      ],
+    },
+    createEnv(),
   );
-  assert.equal(runnerCalls[0].method, "POST");
-  assert.deepEqual(JSON.parse(runnerCalls[0].body), {
-    kind: "takosumi.opentofu-run@v1",
-    action: "plan",
-    runId: "run_queue_1",
-    requestedAt: "2026-06-02T00:00:00.000Z",
-    request: { sourceRef: "git:example" },
-  });
+  assert.equal(acked, true);
 });
 
 test("Cloudflare Worker does not forward the old Deploy Control API paths", async () => {
@@ -349,12 +380,16 @@ function createEnv(options: CreateEnvOptions = {}): CloudflareWorkerEnv {
 
 function createQueueBatch(
   message: OpenTofuRunQueueMessage,
+  options: { readonly attempts?: number; readonly onAck?: () => void } = {},
 ): QueueBatch<OpenTofuRunQueueMessage> {
   return {
+    queue: "takosumi-opentofu-runs",
     messages: [
       {
         id: "msg_1",
         body: message,
+        ...(options.attempts !== undefined ? { attempts: options.attempts } : {}),
+        ...(options.onAck ? { ack: options.onAck } : {}),
       },
     ],
   };
