@@ -53,11 +53,12 @@ test("Cloudflare Accounts Worker redirects a valid /install link to the SPA flow
   assert.equal(response.status, 302);
   assert.equal(d1.execCount, 0);
   const location = response.headers.get("location") ?? "";
-  assert.ok(location.startsWith("/#/install?"));
-  const params = new URLSearchParams(location.slice("/#/install?".length));
+  assert.ok(location.startsWith("/install?"));
+  const params = new URLSearchParams(location.slice("/install?".length));
   assert.equal(params.get("git"), "https://github.com/acme/repo.git");
   assert.equal(params.get("ref"), "main");
   assert.equal(params.get("path"), "deploy");
+  assert.equal(params.get("takosumiInstall"), "1");
 });
 
 test("Cloudflare Accounts Worker handles the packed /install?source=git:: form", async () => {
@@ -70,11 +71,32 @@ test("Cloudflare Accounts Worker handles the packed /install?source=git:: form",
   );
   assert.equal(response.status, 302);
   const params = new URLSearchParams(
-    (response.headers.get("location") ?? "").slice("/#/install?".length),
+    (response.headers.get("location") ?? "").slice("/install?".length),
   );
   assert.equal(params.get("git"), "https://github.com/acme/repo.git");
   assert.equal(params.get("ref"), "main");
   assert.equal(params.get("path"), "deploy");
+  assert.equal(params.get("takosumiInstall"), "1");
+});
+
+test("Cloudflare Accounts Worker serves the normalized /install SPA URL without redirecting again", async () => {
+  const worker = createCloudflareWorker();
+  const response = await worker.fetch(
+    new Request(
+      "https://accounts.example/install?git=https%3A%2F%2Fgithub.com%2Facme%2Frepo.git&ref=main&path=deploy&takosumiInstall=1",
+    ),
+    createEnv(new InitOnlyD1Database(), {
+      ASSETS: {
+        fetch: async (request) =>
+          new Response(`asset:${new URL(request.url).pathname}`, {
+            status: 200,
+          }),
+      },
+    }),
+  );
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "asset:/install");
+  assert.equal(response.headers.get("location"), null);
 });
 
 test("Cloudflare Accounts Worker rejects a malformed /install link with 400", async () => {
@@ -114,10 +136,7 @@ test("Cloudflare Accounts Worker handles account-plane routes directly", async (
   // latter is the schema version bookkeeping table that
   // ensureD1SchemaVersion reads (same table the migrate-d1 runner writes).
   assert.equal(d1.execCount, 2);
-  assert.equal(
-    (await discovery.json()).issuer,
-    "https://accounts.example",
-  );
+  assert.equal((await discovery.json()).issuer, "https://accounts.example");
 
   const unknown = await worker.fetch(
     new Request("https://accounts.example/unknown"),
@@ -134,11 +153,13 @@ test("Cloudflare Accounts Worker parses env clients without a container proxy", 
     new Request("https://accounts.example/.well-known/openid-configuration"),
     createEnv(d1, {
       TAKOSUMI_ACCOUNTS_ISSUER: "https://issuer.example",
-      TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([{
-        clientId: "takos",
-        redirectUris: ["https://takos.example/auth/callback"],
-        tokenEndpointAuthMethod: "none",
-      }]),
+      TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([
+        {
+          clientId: "takos",
+          redirectUris: ["https://takos.example/auth/callback"],
+          tokenEndpointAuthMethod: "none",
+        },
+      ]),
     }),
   );
 
@@ -165,7 +186,7 @@ test("Cloudflare Accounts Worker can use a stable OIDC signing key", async () =>
   );
 
   assert.equal(response.status, 200);
-  const jwks = await response.json() as {
+  const jwks = (await response.json()) as {
     keys?: readonly { readonly kid?: string; readonly d?: string }[];
   };
   assert.equal(jwks.keys?.[0]?.kid, "stable-key-1");
@@ -223,7 +244,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
     response.headers.get("content-type"),
     "application/json; charset=utf-8",
   );
-  const body = await response.json() as {
+  const body = (await response.json()) as {
     kind?: string;
     operationId?: string;
     bundle?: { installation?: { installationId?: string } };
@@ -319,10 +340,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
     }),
   );
   assert.equal(expiredResponse.status, 410);
-  assert.equal(
-    (await expiredResponse.json()).error,
-    "export_download_expired",
-  );
+  assert.equal((await expiredResponse.json()).error, "export_download_expired");
 
   const malformedDownloadResponse = await worker.fetch(
     new Request(
@@ -400,7 +418,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
     routeEnv,
   );
   assert.equal(exportResponse.status, 202, await exportResponse.clone().text());
-  const exported = await exportResponse.json() as {
+  const exported = (await exportResponse.json()) as {
     status?: string;
     operationId?: string;
     downloadUrl?: string;
@@ -434,8 +452,8 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
     routeEnv,
   );
   assert.equal(operationDownloadResponse.status, 302);
-  const signedLocation = operationDownloadResponse.headers.get("location") ??
-    "";
+  const signedLocation =
+    operationDownloadResponse.headers.get("location") ?? "";
   assert.ok(
     signedLocation.startsWith(exported.downloadUrl),
     `signed location ${signedLocation} should embed ${exported.downloadUrl}`,
@@ -448,7 +466,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
     routeEnv,
   );
   assert.equal(routedDownloadResponse.status, 200);
-  const routedDownload = await routedDownloadResponse.json() as {
+  const routedDownload = (await routedDownloadResponse.json()) as {
     bundle?: { installation?: { installationId?: string } };
   };
   assert.equal(
@@ -466,38 +484,32 @@ test("Cloudflare R2 metadata export refuses data-bearing archive modes", async (
   const installation = sampleInstallation();
   const bundle = buildInstallationExportBundle({ installation });
 
-  await assert.rejects(
-    async () => {
-      await exportWorker({
-        installation,
-        operationId: "op_export_data",
-        request: {
-          includeData: true,
-          format: "bundle",
-          encryption: { method: "none", recipients: [] },
-          scope: {},
-        },
-        bundle,
-      });
-    },
-    /does not include tenant data/,
-  );
-  await assert.rejects(
-    async () => {
-      await exportWorker({
-        installation,
-        operationId: "op_export_age",
-        request: {
-          includeData: false,
-          format: "bundle",
-          encryption: { method: "age", recipients: ["age1example"] },
-          scope: {},
-        },
-        bundle,
-      });
-    },
-    /does not support archive encryption/,
-  );
+  await assert.rejects(async () => {
+    await exportWorker({
+      installation,
+      operationId: "op_export_data",
+      request: {
+        includeData: true,
+        format: "bundle",
+        encryption: { method: "none", recipients: [] },
+        scope: {},
+      },
+      bundle,
+    });
+  }, /does not include tenant data/);
+  await assert.rejects(async () => {
+    await exportWorker({
+      installation,
+      operationId: "op_export_age",
+      request: {
+        includeData: false,
+        format: "bundle",
+        encryption: { method: "age", recipients: ["age1example"] },
+        scope: {},
+      },
+      bundle,
+    });
+  }, /does not support archive encryption/);
 });
 
 // Static, test-only ES256 signing key fixture. The default worker env uses an
@@ -557,12 +569,12 @@ test("managed-offering 'open' allowed on a production issuer with final audit en
   const d1 = new InitOnlyD1Database();
   const worker = createCloudflareWorker();
   const env = createEnv(d1, {
-    TAKOSUMI_ACCOUNTS_ISSUER: "https://accounts.takosumi.com",
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
     ...LOCAL_READINESS_ENV,
   });
 
   const response = await worker.fetch(
-    new Request("https://accounts.takosumi.com/.well-known/openid-configuration"),
+    new Request("https://app.takosumi.com/.well-known/openid-configuration"),
     env,
   );
   assert.equal(response.status, 200);
@@ -576,7 +588,9 @@ test("managed-offering 'open' allowed on a .test issuer (local-substrate)", asyn
     ...LOCAL_READINESS_ENV,
   });
   const response = await worker.fetch(
-    new Request("https://accounts.takosumi.test/.well-known/openid-configuration"),
+    new Request(
+      "https://accounts.takosumi.test/.well-known/openid-configuration",
+    ),
     env,
   );
   assert.equal(response.status, 200);
@@ -623,7 +637,7 @@ test("managed-offering 'open' refuses an invalid issuer URL", async () => {
     env,
   );
   assert.equal(response.status, 500);
-  const body = await response.json() as {
+  const body = (await response.json()) as {
     error?: string;
     error_description?: string;
   };
@@ -634,41 +648,36 @@ test("managed-offering 'open' refuses an invalid issuer URL", async () => {
   );
 });
 
-for (
-  const issuer of [
-    "https://accounts.takosumi.test",
-    "https://accounts.local",
-    "https://app.localhost",
-    "http://localhost:8080",
-    "http://127.0.0.1:9000",
-    "http://[::1]:9000",
-    "http://10.0.0.5",
-    "http://192.168.1.20",
-    "http://172.20.10.5",
-    "http://169.254.169.254", // IPv4 link-local (AWS-style metadata)
-    "http://100.64.0.5", // CGNAT
-    "http://100.127.0.5", // CGNAT upper edge
-    "http://[fc00::1]", // IPv6 ULA
-    "http://[fd00::1]", // IPv6 ULA
-    "http://[fe80::1]", // IPv6 link-local
-  ]
-) {
-  test(
-    `managed-offering 'open' accepts final audit env on issuer ${issuer}`,
-    async () => {
-      const d1 = new InitOnlyD1Database();
-      const worker = createCloudflareWorker();
-      const env = createEnv(d1, {
-        TAKOSUMI_ACCOUNTS_ISSUER: issuer,
-        ...LOCAL_READINESS_ENV,
-      });
-      const response = await worker.fetch(
-        new Request(`${issuer}/.well-known/openid-configuration`),
-        env,
-      );
-      assert.equal(response.status, 200);
-    },
-  );
+for (const issuer of [
+  "https://accounts.takosumi.test",
+  "https://accounts.local",
+  "https://app.localhost",
+  "http://localhost:8080",
+  "http://127.0.0.1:9000",
+  "http://[::1]:9000",
+  "http://10.0.0.5",
+  "http://192.168.1.20",
+  "http://172.20.10.5",
+  "http://169.254.169.254", // IPv4 link-local (AWS-style metadata)
+  "http://100.64.0.5", // CGNAT
+  "http://100.127.0.5", // CGNAT upper edge
+  "http://[fc00::1]", // IPv6 ULA
+  "http://[fd00::1]", // IPv6 ULA
+  "http://[fe80::1]", // IPv6 link-local
+]) {
+  test(`managed-offering 'open' accepts final audit env on issuer ${issuer}`, async () => {
+    const d1 = new InitOnlyD1Database();
+    const worker = createCloudflareWorker();
+    const env = createEnv(d1, {
+      TAKOSUMI_ACCOUNTS_ISSUER: issuer,
+      ...LOCAL_READINESS_ENV,
+    });
+    const response = await worker.fetch(
+      new Request(`${issuer}/.well-known/openid-configuration`),
+      env,
+    );
+    assert.equal(response.status, 200);
+  });
 }
 
 test("Worker fails fast when TAKOSUMI_ACCOUNTS_ISSUER is unset (fail-closed)", async () => {
@@ -686,7 +695,7 @@ test("Worker fails fast when TAKOSUMI_ACCOUNTS_ISSUER is unset (fail-closed)", a
     envWithoutIssuer,
   );
   assert.equal(response.status, 500);
-  const body = await response.json() as {
+  const body = (await response.json()) as {
     error?: string;
     error_description?: string;
   };
@@ -705,8 +714,9 @@ class InitOnlyD1Database implements D1Database {
     // bookkeeping table to refuse drifted schemas. Allow that read; reject
     // every other query so the test still verifies no document-level traffic.
     if (
-      /^\s*SELECT\s+version\s+FROM\s+takosumi_accounts_schema_migrations\b/i
-        .test(query)
+      /^\s*SELECT\s+version\s+FROM\s+takosumi_accounts_schema_migrations\b/i.test(
+        query,
+      )
     ) {
       return new InitOnlySchemaMigrationsStatement();
     }
@@ -736,9 +746,7 @@ class InitOnlySchemaMigrationsStatement implements D1PreparedStatement {
   }
 }
 
-async function seedD1AccountSession(
-  store: D1AccountsStore,
-): Promise<string> {
+async function seedD1AccountSession(store: D1AccountsStore): Promise<string> {
   const now = Date.now();
   const subject = "tsub_route_export";
   const sessionId = "sess_route_export";
@@ -799,6 +807,77 @@ class MemoryD1Statement implements D1PreparedStatement {
 
   run(): Promise<D1Result> {
     const query = normalizedQuery(this.query);
+    const canonical = canonicalQuery(this.query);
+    if (
+      canonical.startsWith(
+        "insert into takosumi_accounts_documents (bucket, key, document, updated_at) values (?, ?, ?, ?) on conflict",
+      )
+    ) {
+      const [bucket, key] = this.#stringValues(2);
+      const document = stringBindValue(this.#rawValues()[4]);
+      this.db.documents.set(documentKey(bucket, key), document);
+      this.db.lastChanges = 1;
+      return Promise.resolve({ success: true, meta: { changes: 1 } });
+    }
+    if (
+      canonical.startsWith(
+        "insert into takosumi_accounts_indexes (index_name, index_key, bucket, document_key, sort_key) values (?, ?, ?, ?, ?) on conflict",
+      )
+    ) {
+      const [indexName, indexKey, bucket, key] = this.#stringValues(4);
+      const sortKey = numberValue(this.#values[4]);
+      this.db.indexes.set(indexRowKey(indexName, indexKey, bucket, key), {
+        indexName,
+        indexKey,
+        bucket,
+        documentKey: key,
+        sortKey,
+      });
+      this.db.lastChanges = 1;
+      return Promise.resolve({ success: true, meta: { changes: 1 } });
+    }
+    if (
+      canonical.startsWith(
+        "delete from takosumi_accounts_indexes where (takosumi_accounts_indexes.bucket = ? and takosumi_accounts_indexes.document_key = ?)",
+      )
+    ) {
+      const [bucket, key] = this.#stringValues(2);
+      for (const [indexKey, row] of this.db.indexes) {
+        if (row.bucket === bucket && row.documentKey === key) {
+          this.db.indexes.delete(indexKey);
+        }
+      }
+      this.db.lastChanges = 1;
+      return Promise.resolve({ success: true, meta: { changes: 1 } });
+    }
+    if (
+      canonical.startsWith(
+        "delete from takosumi_accounts_indexes where (takosumi_accounts_indexes.index_name = ? and takosumi_accounts_indexes.index_key = ?)",
+      )
+    ) {
+      const [indexName, indexKey] = this.#stringValues(2);
+      for (const [rowKey, row] of this.db.indexes) {
+        if (row.indexName === indexName && row.indexKey === indexKey) {
+          this.db.indexes.delete(rowKey);
+        }
+      }
+      this.db.lastChanges = 1;
+      return Promise.resolve({ success: true, meta: { changes: 1 } });
+    }
+    if (
+      canonical.startsWith(
+        "delete from takosumi_accounts_documents where (takosumi_accounts_documents.bucket = ? and takosumi_accounts_documents.key = ?)",
+      )
+    ) {
+      const [bucket, key] = this.#stringValues(2);
+      this.db.lastChanges = this.db.documents.delete(documentKey(bucket, key))
+        ? 1
+        : 0;
+      return Promise.resolve({
+        success: true,
+        meta: { changes: this.db.lastChanges },
+      });
+    }
     if (
       query.startsWith("INSERT OR REPLACE INTO takosumi_accounts_documents")
     ) {
@@ -807,9 +886,7 @@ class MemoryD1Statement implements D1PreparedStatement {
       this.db.lastChanges = 1;
       return Promise.resolve({ success: true, meta: { changes: 1 } });
     }
-    if (
-      query.startsWith("INSERT OR IGNORE INTO takosumi_accounts_documents")
-    ) {
+    if (query.startsWith("INSERT OR IGNORE INTO takosumi_accounts_documents")) {
       const [bucket, key, document] = this.#stringValues(3);
       const keyValue = documentKey(bucket, key);
       if (this.db.documents.has(keyValue)) {
@@ -851,10 +928,13 @@ class MemoryD1Statement implements D1PreparedStatement {
     if (query.startsWith("INSERT OR REPLACE INTO takosumi_accounts_indexes")) {
       const [indexName, indexKey, bucket, key] = this.#stringValues(4);
       const sortKey = numberValue(this.#values[4]);
-      this.db.indexes.set(
-        indexRowKey(indexName, indexKey, bucket, key),
-        { indexName, indexKey, bucket, documentKey: key, sortKey },
-      );
+      this.db.indexes.set(indexRowKey(indexName, indexKey, bucket, key), {
+        indexName,
+        indexKey,
+        bucket,
+        documentKey: key,
+        sortKey,
+      });
       this.db.lastChanges = 1;
       return Promise.resolve({ success: true, meta: { changes: 1 } });
     }
@@ -884,9 +964,7 @@ class MemoryD1Statement implements D1PreparedStatement {
     ) {
       const [bucket, key] = this.#stringValues(2);
       const document = this.db.documents.get(documentKey(bucket, key));
-      return Promise.resolve(
-        document ? ({ document } as T) : null,
-      );
+      return Promise.resolve(document ? ({ document } as T) : null);
     }
     if (
       query.startsWith(
@@ -897,9 +975,7 @@ class MemoryD1Statement implements D1PreparedStatement {
       const keyValue = documentKey(bucket, key);
       const document = this.db.documents.get(keyValue);
       this.db.lastChanges = this.db.documents.delete(keyValue) ? 1 : 0;
-      return Promise.resolve(
-        document ? ({ document } as T) : null,
-      );
+      return Promise.resolve(document ? ({ document } as T) : null);
     }
     if (query === "SELECT changes() AS changes") {
       return Promise.resolve({ changes: this.db.lastChanges } as T);
@@ -922,12 +998,13 @@ class MemoryD1Statement implements D1PreparedStatement {
     if (query.startsWith("SELECT d.document FROM takosumi_accounts_indexes")) {
       const [indexName, indexKey] = this.#stringValues(2);
       const rows = [...this.db.indexes.values()]
-        .filter((row) =>
-          row.indexName === indexName && row.indexKey === indexKey
+        .filter(
+          (row) => row.indexName === indexName && row.indexKey === indexKey,
         )
-        .sort((left, right) =>
-          left.sortKey - right.sortKey ||
-          left.documentKey.localeCompare(right.documentKey)
+        .sort(
+          (left, right) =>
+            left.sortKey - right.sortKey ||
+            left.documentKey.localeCompare(right.documentKey),
         )
         .flatMap((row): DocumentRow[] => {
           const document = this.db.documents.get(
@@ -952,6 +1029,55 @@ class MemoryD1Statement implements D1PreparedStatement {
     throw new Error(`unexpected D1 all query: ${this.query}`);
   }
 
+  raw(): Promise<unknown[][]> {
+    const canonical = canonicalQuery(this.query);
+    if (
+      canonical.startsWith(
+        "select document from takosumi_accounts_documents where (takosumi_accounts_documents.bucket = ? and takosumi_accounts_documents.key = ?)",
+      )
+    ) {
+      const [bucket, key] = this.#stringValues(2);
+      const document = this.db.documents.get(documentKey(bucket, key));
+      return Promise.resolve(document ? [[document]] : []);
+    }
+    if (
+      canonical.startsWith(
+        "select takosumi_accounts_documents.document from takosumi_accounts_indexes inner join takosumi_accounts_documents",
+      )
+    ) {
+      const [indexName, indexKey] = this.#stringValues(2);
+      const rows = [...this.db.indexes.values()]
+        .filter(
+          (row) => row.indexName === indexName && row.indexKey === indexKey,
+        )
+        .sort(
+          (left, right) =>
+            left.sortKey - right.sortKey ||
+            left.documentKey.localeCompare(right.documentKey),
+        )
+        .flatMap((row): unknown[][] => {
+          const document = this.db.documents.get(
+            documentKey(row.bucket, row.documentKey),
+          );
+          return document ? [[document]] : [];
+        });
+      return Promise.resolve(rows);
+    }
+    if (
+      canonical.startsWith(
+        "select document from takosumi_accounts_documents where takosumi_accounts_documents.bucket = ? order by takosumi_accounts_documents.key",
+      )
+    ) {
+      const [bucket] = this.#stringValues(1);
+      const rows = [...this.db.documents.entries()]
+        .filter(([key]) => key.startsWith(`${bucket}\n`))
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([, document]) => [document]);
+      return Promise.resolve(rows);
+    }
+    throw new Error(`unexpected D1 raw query: ${this.query}`);
+  }
+
   #stringValues(count: number): string[] {
     return this.#values.slice(0, count).map((value) => {
       if (typeof value !== "string") {
@@ -962,6 +1088,17 @@ class MemoryD1Statement implements D1PreparedStatement {
       return value;
     });
   }
+
+  #rawValues(): readonly D1Value[] {
+    return this.#values;
+  }
+}
+
+function stringBindValue(value: D1Value): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`expected string D1 bind value, got ${typeof value}`);
+  }
+  return value;
 }
 
 function documentKey(bucket: string, key: string): string {
@@ -979,6 +1116,10 @@ function indexRowKey(
 
 function normalizedQuery(query: string): string {
   return query.replace(/\s+/g, " ").trim();
+}
+
+function canonicalQuery(query: string): string {
+  return query.replace(/"/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 function numberValue(value: D1Value): number {
@@ -1013,10 +1154,13 @@ class MemoryR2Bucket implements R2Bucket {
     readonly body: string;
     readonly options?: R2PutOptions;
   }[] = [];
-  readonly #objects = new Map<string, {
-    readonly body: string;
-    readonly options?: R2PutOptions;
-  }>();
+  readonly #objects = new Map<
+    string,
+    {
+      readonly body: string;
+      readonly options?: R2PutOptions;
+    }
+  >();
 
   put(
     key: string,

@@ -57,113 +57,132 @@ export interface ProviderCredentialEnvRule {
  * The canonical provider credential env-name table. Lifted from the runner so
  * the runner and the Connection/Vault core agree byte-for-byte.
  */
-export const PROVIDER_CREDENTIAL_ENV_RULES: readonly ProviderCredentialEnvRule[] = [
-  {
-    shortName: "cloudflare",
-    match: /(^|\/)cloudflare\/cloudflare$/,
-    cloudFamily: "cloudflare",
-    envNames: [
-      "CLOUDFLARE_API_TOKEN",
-      "CLOUDFLARE_API_KEY",
-      "CLOUDFLARE_EMAIL",
-      "CLOUDFLARE_ACCOUNT_ID",
-      "CLOUDFLARE_ZONE_ID",
-      "CF_API_TOKEN",
-    ],
-    requiredGroups: [
-      ["CLOUDFLARE_API_TOKEN"],
-      ["CF_API_TOKEN"],
-      ["CLOUDFLARE_API_KEY", "CLOUDFLARE_EMAIL"],
-    ],
-  },
-  {
-    shortName: "aws",
-    match: /(^|\/)hashicorp\/aws$/,
-    cloudFamily: "aws",
-    envNames: [
-      "AWS_ACCESS_KEY_ID",
-      "AWS_SECRET_ACCESS_KEY",
-      "AWS_SESSION_TOKEN",
-      "AWS_WEB_IDENTITY_TOKEN_FILE",
-      "AWS_ROLE_ARN",
-      "AWS_REGION",
-      "AWS_DEFAULT_REGION",
-    ],
-    requiredGroups: [
-      ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
-      ["AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN"],
-    ],
-  },
-  {
-    shortName: "google",
-    match: /(^|\/)hashicorp\/google$/,
-    cloudFamily: "gcp",
-    envNames: [
-      "GOOGLE_CREDENTIALS",
-      "GOOGLE_APPLICATION_CREDENTIALS",
-      "GOOGLE_CLOUD_PROJECT",
-      "GOOGLE_PROJECT",
-      "GOOGLE_REGION",
-    ],
-    requiredGroups: [
-      ["GOOGLE_CREDENTIALS"],
-      ["GOOGLE_APPLICATION_CREDENTIALS"],
-    ],
-  },
-  {
-    shortName: "azurerm",
-    match: /(^|\/)hashicorp\/azurerm$/,
-    cloudFamily: "local-adapters",
-    envNames: [
-      "ARM_CLIENT_ID",
-      "ARM_CLIENT_SECRET",
-      "ARM_TENANT_ID",
-      "ARM_SUBSCRIPTION_ID",
-      "AZURE_CLIENT_ID",
-      "AZURE_CLIENT_SECRET",
-      "AZURE_TENANT_ID",
-      "AZURE_SUBSCRIPTION_ID",
-    ],
-    requiredGroups: [
-      ["ARM_CLIENT_ID", "ARM_CLIENT_SECRET", "ARM_TENANT_ID", "ARM_SUBSCRIPTION_ID"],
-      ["AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID"],
-    ],
-  },
-  {
-    shortName: "github",
-    match: /(^|\/)(integrations\/github|github\/github)$/,
-    cloudFamily: "local-adapters",
-    envNames: ["GITHUB_TOKEN"],
-    requiredGroups: [["GITHUB_TOKEN"]],
-  },
-  {
-    shortName: "digitalocean",
-    match: /(^|\/)digitalocean\/digitalocean$/,
-    cloudFamily: "local-adapters",
-    envNames: ["DIGITALOCEAN_TOKEN", "SPACES_ACCESS_KEY_ID", "SPACES_SECRET_ACCESS_KEY"],
-    requiredGroups: [["DIGITALOCEAN_TOKEN"]],
-  },
-  {
-    shortName: "kubernetes",
-    match: /(^|\/)hashicorp\/kubernetes$/,
-    cloudFamily: "k8s",
-    envNames: ["KUBE_CONFIG_PATH", "KUBE_HOST", "KUBE_TOKEN", "KUBE_CLUSTER_CA_CERT_DATA"],
-    requiredGroups: [
-      ["KUBE_CONFIG_PATH"],
-      ["KUBE_HOST", "KUBE_TOKEN"],
-    ],
-  },
-  {
-    shortName: "helm",
-    match: /(^|\/)hashicorp\/helm$/,
-    cloudFamily: "k8s",
-    envNames: ["KUBE_CONFIG_PATH", "KUBE_HOST", "KUBE_TOKEN", "KUBE_CLUSTER_CA_CERT_DATA"],
-    requiredGroups: [
-      ["KUBE_CONFIG_PATH"],
-      ["KUBE_HOST", "KUBE_TOKEN"],
-    ],
-  },
-] as const;
+export const PROVIDER_CREDENTIAL_ENV_RULES: readonly ProviderCredentialEnvRule[] =
+  [
+    {
+      shortName: "cloudflare",
+      match: /(^|\/)cloudflare\/cloudflare$/,
+      cloudFamily: "cloudflare",
+      envNames: [
+        "CLOUDFLARE_API_TOKEN",
+        "CLOUDFLARE_API_KEY",
+        "CLOUDFLARE_EMAIL",
+        "CLOUDFLARE_ACCOUNT_ID",
+        "CLOUDFLARE_ZONE_ID",
+        "CF_API_TOKEN",
+      ],
+      requiredGroups: [
+        ["CLOUDFLARE_API_TOKEN"],
+        ["CF_API_TOKEN"],
+        ["CLOUDFLARE_API_KEY", "CLOUDFLARE_EMAIL"],
+      ],
+    },
+    {
+      shortName: "aws",
+      match: /(^|\/)hashicorp\/aws$/,
+      cloudFamily: "aws",
+      envNames: [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_ROLE_ARN",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+      ],
+      requiredGroups: [
+        ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
+        ["AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN"],
+      ],
+    },
+    {
+      shortName: "google",
+      match: /(^|\/)hashicorp\/google$/,
+      cloudFamily: "gcp",
+      envNames: [
+        "GOOGLE_CREDENTIALS",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_PROJECT",
+        "GOOGLE_REGION",
+      ],
+      requiredGroups: [
+        ["GOOGLE_CREDENTIALS"],
+        ["GOOGLE_APPLICATION_CREDENTIALS"],
+      ],
+    },
+    {
+      shortName: "azurerm",
+      match: /(^|\/)hashicorp\/azurerm$/,
+      cloudFamily: "local-adapters",
+      envNames: [
+        "ARM_CLIENT_ID",
+        "ARM_CLIENT_SECRET",
+        "ARM_TENANT_ID",
+        "ARM_SUBSCRIPTION_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_TENANT_ID",
+        "AZURE_SUBSCRIPTION_ID",
+      ],
+      requiredGroups: [
+        [
+          "ARM_CLIENT_ID",
+          "ARM_CLIENT_SECRET",
+          "ARM_TENANT_ID",
+          "ARM_SUBSCRIPTION_ID",
+        ],
+        [
+          "AZURE_CLIENT_ID",
+          "AZURE_CLIENT_SECRET",
+          "AZURE_TENANT_ID",
+          "AZURE_SUBSCRIPTION_ID",
+        ],
+      ],
+    },
+    {
+      shortName: "github",
+      match: /(^|\/)(integrations\/github|github\/github)$/,
+      cloudFamily: "local-adapters",
+      envNames: ["GITHUB_TOKEN"],
+      requiredGroups: [["GITHUB_TOKEN"]],
+    },
+    {
+      shortName: "digitalocean",
+      match: /(^|\/)digitalocean\/digitalocean$/,
+      cloudFamily: "local-adapters",
+      envNames: [
+        "DIGITALOCEAN_TOKEN",
+        "SPACES_ACCESS_KEY_ID",
+        "SPACES_SECRET_ACCESS_KEY",
+      ],
+      requiredGroups: [["DIGITALOCEAN_TOKEN"]],
+    },
+    {
+      shortName: "kubernetes",
+      match: /(^|\/)hashicorp\/kubernetes$/,
+      cloudFamily: "k8s",
+      envNames: [
+        "KUBE_CONFIG_PATH",
+        "KUBE_HOST",
+        "KUBE_TOKEN",
+        "KUBE_CLUSTER_CA_CERT_DATA",
+      ],
+      requiredGroups: [["KUBE_CONFIG_PATH"], ["KUBE_HOST", "KUBE_TOKEN"]],
+    },
+    {
+      shortName: "helm",
+      match: /(^|\/)hashicorp\/helm$/,
+      cloudFamily: "k8s",
+      envNames: [
+        "KUBE_CONFIG_PATH",
+        "KUBE_HOST",
+        "KUBE_TOKEN",
+        "KUBE_CLUSTER_CA_CERT_DATA",
+      ],
+      requiredGroups: [["KUBE_CONFIG_PATH"], ["KUBE_HOST", "KUBE_TOKEN"]],
+    },
+  ] as const;
 
 /**
  * Resolves the rule for a provider given either its short name or its full /
@@ -215,7 +234,7 @@ export function requiredEnvGroupsSatisfied(
     return rule.envNames.some((name) => supplied.has(name));
   }
   return rule.requiredGroups.some((group) =>
-    group.every((name) => supplied.has(name))
+    group.every((name) => supplied.has(name)),
   );
 }
 
@@ -230,7 +249,7 @@ export function requiredEnvGroupsForProvider(
 }
 
 // ---------------------------------------------------------------------------
-// Per-alias credential split (core-spec.md §13).
+// Per-alias credential split for Takosumi generated root modules.
 // ---------------------------------------------------------------------------
 
 /**
@@ -249,7 +268,7 @@ export interface ProviderCredentialArg {
 
 /**
  * Per-provider credential env-name -> OpenTofu provider-argument mapping for the
- * §13 per-alias credential split. A provider listed here gets, for each resolved
+ * per-alias credential split. A provider listed here gets, for each resolved
  * capability, a `TF_VAR_<localProvider>_<capability>_<arg>` variable wired into
  * its alias block (rootgen) whose value the Vault mints from the resolved
  * Connection (vault). A provider ABSENT from this table keeps the credential-free

@@ -15,7 +15,7 @@ import type {
   RuntimeObservedStateId,
   RuntimeObservedStateSnapshot,
 } from "../../../domains/runtime/types.ts";
-import { immutable } from "./helpers.ts";
+import { filterValues, getFrom, immutable, putValue } from "./helpers.ts";
 
 export class MemoryRuntimeDesiredStateStore
   implements RuntimeDesiredStateStore {
@@ -24,13 +24,11 @@ export class MemoryRuntimeDesiredStateStore
   ) {}
 
   put(state: RuntimeDesiredState): Promise<RuntimeDesiredState> {
-    const value = immutable(state);
-    this.states.set(value.id, value);
-    return Promise.resolve(value);
+    return putValue(this.states, state.id, state);
   }
 
   get(id: RuntimeDesiredStateId): Promise<RuntimeDesiredState | undefined> {
-    return Promise.resolve(this.states.get(id));
+    return getFrom(this.states, id);
   }
 
   findByActivation(
@@ -53,10 +51,9 @@ export class MemoryRuntimeDesiredStateStore
     spaceId: string,
     groupId: string,
   ): Promise<readonly RuntimeDesiredState[]> {
-    return Promise.resolve(
-      [...this.states.values()].filter((state) =>
-        state.spaceId === spaceId && state.groupId === groupId
-      ),
+    return filterValues(
+      this.states,
+      (state) => state.spaceId === spaceId && state.groupId === groupId,
     );
   }
 }
@@ -73,15 +70,13 @@ export class MemoryRuntimeObservedStateStore
   record(
     snapshot: RuntimeObservedStateSnapshot,
   ): Promise<RuntimeObservedStateSnapshot> {
-    const value = immutable(snapshot);
-    this.snapshots.set(value.id, value);
-    return Promise.resolve(value);
+    return putValue(this.snapshots, snapshot.id, snapshot);
   }
 
   get(
     id: RuntimeObservedStateId,
   ): Promise<RuntimeObservedStateSnapshot | undefined> {
-    return Promise.resolve(this.snapshots.get(id));
+    return getFrom(this.snapshots, id);
   }
 
   latestForGroup(
@@ -101,10 +96,9 @@ export class MemoryRuntimeObservedStateStore
     spaceId: string,
     groupId: string,
   ): Promise<readonly RuntimeObservedStateSnapshot[]> {
-    return Promise.resolve(
-      [...this.snapshots.values()].filter((snapshot) =>
-        snapshot.spaceId === spaceId && snapshot.groupId === groupId
-      ),
+    return filterValues(
+      this.snapshots,
+      (snapshot) => snapshot.spaceId === spaceId && snapshot.groupId === groupId,
     );
   }
 }

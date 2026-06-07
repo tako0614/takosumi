@@ -12,6 +12,10 @@
  *     The template plan-JSON policy (`deploy-control/template_policy.ts`) uses it.
  *   - {@link evaluateActionPolicy} — §25 layer 7 (action policy): create/update
  *     allowed; any delete/replace requires approval.
+ *   - {@link evaluateScopeBoundary} — §25 layer 6 (scope boundary): validates
+ *     sanitized provider scope metadata when configured.
+ *   - {@link evaluateQuotaPolicy} — §25 layer 10 (quota): mutating resource
+ *     count ceilings.
  *   - {@link composePolicyVerdict} — folds the layer results into a single
  *     {@link PolicyVerdict} (pass / warn / deny + requiresApproval + reasons).
  *
@@ -20,9 +24,6 @@
  * allowlists) so both the RunnerProfile engine and the controller's post-runner
  * evaluation can reuse it without pulling in any service dependency.
  *
- * Scope-boundary (§25 layer 6) and quota (§25 layer 10) are post-MVP. The
- * composition seam accepts typed (currently unused) `scope` / `quota` inputs so
- * those layers can land without changing callers.
  */
 
 /**
@@ -35,6 +36,12 @@ export interface PlanResourceChange {
   readonly address: string;
   readonly type: string;
   readonly actions: readonly string[];
+  readonly scope?: {
+    readonly cloudflareAccountId?: string;
+    readonly cloudflareZoneId?: string;
+    readonly awsAccountId?: string;
+    readonly awsRegion?: string;
+  };
 }
 
 /** Stable package identity for an import-surface smoke. */
@@ -162,6 +169,127 @@ export interface ActionPolicyResult {
   readonly reasons: readonly string[];
 }
 
+// ---------------------------------------------------------------------------
+// §25 layer 6 — scope boundary
+// ---------------------------------------------------------------------------
+
+export interface ScopeBoundaryPolicy {
+  /**
+   * `strict` fails closed when a resource belongs to a configured provider
+   * family but the plan projection lacks the configured scope metadata.
+   */
+  readonly mode?: "permissive" | "strict";
+  readonly cloudflare?: {
+    readonly accountIds?: readonly string[];
+    readonly zoneIds?: readonly string[];
+  };
+  readonly aws?: {
+    readonly accountIds?: readonly string[];
+    readonly regions?: readonly string[];
+  };
+}
+
+export interface ScopeBoundaryResult {
+  readonly outOfScope: readonly string[];
+  readonly reasons: readonly string[];
+}
+
+export function evaluateScopeBoundary(
+  changes: readonly PlanResourceChange[],
+  policy: ScopeBoundaryPolicy | undefined,
+): ScopeBoundaryResult {
+  if (policy === undefined) return { outOfScope: [], reasons: [] };
+  const strict = policy.mode === "strict";
+  const violations = new Set<string>();
+  for (const change of changes) {
+    if (!isMutating(change.actions)) continue;
+    if (change.type.startsWith("cloudflare_") && policy.cloudflare) {
+      evaluateScopedValue({
+        change,
+        configuredValues: policy.cloudflare.accountIds,
+        observedValue: change.scope?.cloudflareAccountId,
+        strict,
+        label: "Cloudflare account",
+        violations,
+      });
+      evaluateScopedValue({
+        change,
+        configuredValues: policy.cloudflare.zoneIds,
+        observedValue: change.scope?.cloudflareZoneId,
+        strict,
+        label: "Cloudflare zone",
+        violations,
+      });
+    }
+    if (isAwsResource(change.type) && policy.aws) {
+      evaluateScopedValue({
+        change,
+        configuredValues: policy.aws.accountIds,
+        observedValue: change.scope?.awsAccountId,
+        strict,
+        label: "AWS account",
+        violations,
+      });
+      evaluateScopedValue({
+        change,
+        configuredValues: policy.aws.regions,
+        observedValue: change.scope?.awsRegion,
+        strict,
+        label: "AWS region",
+        violations,
+      });
+    }
+  }
+  const outOfScope = Array.from(violations).sort();
+  return {
+    outOfScope,
+    reasons: outOfScope.map((entry) => `resource ${entry} is out of scope`),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// §25 layer 10 — quota
+// ---------------------------------------------------------------------------
+
+export interface QuotaResult {
+  readonly exceeded: readonly string[];
+  readonly reasons: readonly string[];
+}
+
+/**
+ * Enforces simple mutating resource-count quotas. Supported keys:
+ * - `resources` / `resources.total`: total mutating resource changes.
+ * - `<resource_type>`: mutating changes for a specific OpenTofu resource type.
+ */
+export function evaluateQuotaPolicy(
+  changes: readonly PlanResourceChange[],
+  quota: Readonly<Record<string, number>> | undefined,
+): QuotaResult {
+  if (quota === undefined) return { exceeded: [], reasons: [] };
+  const mutating = changes.filter((change) => isMutating(change.actions));
+  const counts = new Map<string, number>([
+    ["resources", mutating.length],
+    ["resources.total", mutating.length],
+  ]);
+  for (const change of mutating) {
+    counts.set(change.type, (counts.get(change.type) ?? 0) + 1);
+  }
+  const exceeded: string[] = [];
+  for (const [key, limit] of Object.entries(quota)) {
+    if (!Number.isFinite(limit) || limit < 0) {
+      exceeded.push(`${key} limit is invalid`);
+      continue;
+    }
+    const count = counts.get(key) ?? 0;
+    if (count > limit) exceeded.push(`${key} count ${count} exceeds ${limit}`);
+  }
+  exceeded.sort();
+  return {
+    exceeded,
+    reasons: exceeded.map((entry) => `quota ${entry} is exceeded`),
+  };
+}
+
 /**
  * Evaluates the §25 action policy over the plan's changes: create allowed,
  * update allowed, any delete or replace (`actions` containing `"delete"`,
@@ -202,21 +330,19 @@ export interface PolicyVerdict {
 }
 
 /**
- * Post-MVP scope-boundary inputs (§25 layer 6). Accepted now (and currently
- * unused) so the layer can land without changing callers. A non-empty
- * `outOfScope` list will deny.
+ * Scope-boundary inputs (§25 layer 6). A non-empty `outOfScope` list denies.
  */
 export interface ScopeBoundaryInput {
   readonly outOfScope?: readonly string[];
+  readonly reasons?: readonly string[];
 }
 
 /**
- * Post-MVP quota inputs (§25 layer 10). Accepted now (and currently unused) so
- * the layer can land without changing callers. A non-empty `exceeded` list
- * will deny.
+ * Quota inputs (§25 layer 10). A non-empty `exceeded` list denies.
  */
 export interface QuotaInput {
   readonly exceeded?: readonly string[];
+  readonly reasons?: readonly string[];
 }
 
 export interface ComposePolicyVerdictInput {
@@ -232,13 +358,11 @@ export interface ComposePolicyVerdictInput {
    */
   readonly destroy?: boolean;
   /**
-   * §25 layer 6 — scope boundary. Post-MVP; currently unused. Reserved so the
-   * layer can be wired in without changing the composition signature.
+   * §25 layer 6 — scope boundary.
    */
   readonly scope?: ScopeBoundaryInput;
   /**
-   * §25 layer 10 — quota. Post-MVP; currently unused. Reserved so the layer can
-   * be wired in without changing the composition signature.
+   * §25 layer 10 — quota.
    */
   readonly quota?: QuotaInput;
 }
@@ -251,8 +375,6 @@ export interface ComposePolicyVerdictInput {
  * approval). `warn` is reserved for future advisory layers; the MVP layers emit
  * only `pass` / `deny`.
  *
- * The `scope` / `quota` inputs are accepted but currently unused (post-MVP §25
- * layers 6 / 10); they are folded in here when those layers land.
  */
 export function composePolicyVerdict(
   input: ComposePolicyVerdictInput,
@@ -273,18 +395,15 @@ export function composePolicyVerdict(
     reasons.push(...input.resource.reasons);
     if (input.resource.disallowedResourceTypes.length > 0) deny = true;
   }
-  // Post-MVP layers (currently unused; folded in here when they land).
   if (input.scope?.outOfScope && input.scope.outOfScope.length > 0) {
     deny = true;
-    reasons.push(
-      ...input.scope.outOfScope.map((r) => `resource ${r} is out of scope`),
-    );
+    reasons.push(...(input.scope.reasons ??
+      input.scope.outOfScope.map((r) => `resource ${r} is out of scope`)));
   }
   if (input.quota?.exceeded && input.quota.exceeded.length > 0) {
     deny = true;
-    reasons.push(
-      ...input.quota.exceeded.map((r) => `quota ${r} is exceeded`),
-    );
+    reasons.push(...(input.quota.reasons ??
+      input.quota.exceeded.map((r) => `quota ${r} is exceeded`)));
   }
   const requiresApproval = (input.action?.requiresApproval ?? false) ||
     (input.destroy ?? false);
@@ -302,6 +421,34 @@ export function composePolicyVerdict(
 
 function isMutating(actions: readonly string[]): boolean {
   return actions.some((action) => !NON_MUTATING_ACTIONS.has(action));
+}
+
+function evaluateScopedValue(input: {
+  readonly change: PlanResourceChange;
+  readonly configuredValues: readonly string[] | undefined;
+  readonly observedValue: string | undefined;
+  readonly strict: boolean;
+  readonly label: string;
+  readonly violations: Set<string>;
+}): void {
+  if (input.configuredValues === undefined) return;
+  if (!input.observedValue) {
+    if (input.strict) {
+      input.violations.add(
+        `${input.change.address} missing ${input.label} metadata`,
+      );
+    }
+    return;
+  }
+  if (!input.configuredValues.includes(input.observedValue)) {
+    input.violations.add(
+      `${input.change.address} ${input.label} ${input.observedValue}`,
+    );
+  }
+}
+
+function isAwsResource(type: string): boolean {
+  return type.startsWith("aws_");
 }
 
 function providerAllowed(

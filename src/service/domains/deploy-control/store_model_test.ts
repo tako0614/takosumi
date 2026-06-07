@@ -32,6 +32,7 @@ import type {
 import type { RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { BackupRecord } from "takosumi-contract/backups";
+import type { CredentialMintEvent } from "takosumi-contract/security";
 
 /**
  * Minimal in-memory SQL client that interprets exactly the Space-direct model
@@ -90,33 +91,46 @@ class ModelSqlClient implements SqlClient {
   #update(
     lower: string,
     params: readonly unknown[],
-  ): { rows: { json: unknown }[]; rowCount: number } {
-    // Only the guarded installation patch emits an UPDATE. The predicate fences
-    // on `id = $1`, `current_deployment_id is not distinct from $11`, and an
-    // optional status. Param order matches the store: $1 id, last json blob,
-    // $11 guard current_deployment_id, $12 guard status (or null).
+  ): { rows: Record<string, unknown>[]; rowCount: number } {
+    // Only the guarded installation patch emits an UPDATE. Support both the
+    // former handwritten-SQL parameter order and Drizzle's generated order by
+    // reading predicate parameter indexes from the WHERE clause.
     const table = this.#table(tableName(lower));
-    const id = String(params[0]);
+    const where = whereColumns(lower);
+    const idWhere = where.find((c) => c.column === "id");
+    const id = String(params[idWhere?.indexes[0] ?? 0]);
     const row = table.get(id);
     if (!row) return { rows: [], rowCount: 0 };
-    const guardDeployment = params[10];
-    const guardStatus = params[11];
     const current = parseJsonObject(row.json);
     const currentDeployment = current?.currentDeploymentId ?? null;
     const currentStatus = current?.status;
-    const guardDeploymentValue = guardDeployment ?? null;
+    const deploymentWhere = where.find(
+      (c) => c.column === "current_deployment_id",
+    );
+    const guardDeploymentValue =
+      lower.includes('"current_deployment_id" is null') ||
+      lower.includes("current_deployment_id is null")
+        ? null
+        : deploymentWhere
+          ? (params[deploymentWhere.indexes[0]] ?? null)
+          : (params[10] ?? null);
     if (currentDeployment !== guardDeploymentValue) {
       return { rows: [], rowCount: 0 };
     }
+    const statusWhere = where.find((c) => c.column === "status");
+    const guardStatus = statusWhere
+      ? params[statusWhere.indexes[0]]
+      : params[11];
     if (
-      guardStatus !== null && guardStatus !== undefined &&
+      guardStatus !== null &&
+      guardStatus !== undefined &&
       currentStatus !== guardStatus
     ) {
       return { rows: [], rowCount: 0 };
     }
     const json = lastJsonParam(params) ?? row.json;
     table.set(id, { id, json, columns: row.columns });
-    return { rows: [{ json }], rowCount: 1 };
+    return { rows: [jsonResultRow(json, lower)], rowCount: 1 };
   }
 
   #delete(
@@ -126,44 +140,59 @@ class ModelSqlClient implements SqlClient {
     const table = this.#table(tableName(lower));
     // `delete ... where <col> = $1 and id <> $2` (single-default / one-per-pair
     // upsert) or `delete ... where <col> = $1 and <col2> = $2 and id <> $3`.
-    if (lower.includes("and id <>")) {
+    if (/\.?"?id"?\s*<>/.test(lower)) {
       const cols = whereColumns(lower).filter((c) => c.column !== "id");
-      const keepId = String(params[cols.length]);
+      const keepIndex =
+        Number(/\.?"?id"?\s*<>\s*\$(\d+)/.exec(lower)?.[1] ?? cols.length + 1) -
+        1;
+      const keepId = String(params[keepIndex]);
       let removed = 0;
       for (const [key, row] of [...table]) {
-        const matches = cols.every((c, i) =>
-          rowCol(row, c.column) === String(params[i])
+        const matches = cols.every(
+          (c, i) => rowCol(row, c.column) === String(params[i]),
         );
         if (matches && key !== keepId) {
           table.delete(key);
           removed += 1;
         }
       }
-      return { rows: [], rowCount: removed };
+      return {
+        rows: lower.includes(" returning ")
+          ? Array.from({ length: removed }, () => ({}) as never)
+          : [],
+        rowCount: removed,
+      };
     }
     // `delete ... where <pk> = $1`
-    const id = String(params[0]);
+    const idWhere = whereColumns(lower).find((c) => c.column === "id");
+    const id = String(params[idWhere?.indexes[0] ?? 0]);
     const existed = table.delete(id);
-    return { rows: [], rowCount: existed ? 1 : 0 };
+    return {
+      rows: existed && lower.includes(" returning ") ? [{} as never] : [],
+      rowCount: existed ? 1 : 0,
+    };
   }
 
   #select(
     lower: string,
     params: readonly unknown[],
-  ): { json: unknown }[] {
+  ): Record<string, unknown>[] {
     const table = this.#table(tableName(lower));
     const all = [...table.values()];
     const cols = whereColumns(lower);
-    const matched = cols.length === 0
-      ? all
-      : all.filter((row) =>
-        cols.every((c) =>
-          c.indexes.some((index) => rowCol(row, c.column) === String(params[index]))
-        )
-      );
+    const matched =
+      cols.length === 0
+        ? all
+        : all.filter((row) =>
+            cols.every((c) =>
+              c.indexes.some(
+                (index) => rowCol(row, c.column) === String(params[index]),
+              ),
+            ),
+          );
     const ordered = applyOrder(lower, matched);
-    const limited = lower.includes("limit 1") ? ordered.slice(0, 1) : ordered;
-    return limited.map((row) => ({ json: row.json }));
+    const limited = applyLimit(lower, params, ordered);
+    return limited.map((row) => jsonResultRow(row.json, lower));
   }
 
   #table(name: string): Map<string, StoredRow> {
@@ -188,15 +217,16 @@ function insertColumns(
   lower: string,
   params: readonly unknown[],
 ): Record<string, string | undefined> {
-  const match = lower.match(/insert\s+into\s+takosumi_[a-z_]+\s*\(([^)]*)\)/);
+  const match = lower.match(
+    /insert\s+into\s+"?takosumi_[a-z_]+"?\s*\(([^)]*)\)/,
+  );
   if (!match) return {};
-  const cols = match[1].split(",").map((c) => c.trim());
+  const cols = match[1].split(",").map((c) => c.trim().replaceAll('"', ""));
   const out: Record<string, string | undefined> = {};
   cols.forEach((column, i) => {
     const value = params[i];
-    out[column] = value === undefined || value === null
-      ? undefined
-      : String(value);
+    out[column] =
+      value === undefined || value === null ? undefined : String(value);
   });
   return out;
 }
@@ -220,11 +250,11 @@ function whereColumns(lower: string): readonly WhereColumn[] {
     .replace(/\blimit\b[\s\S]*$/, "")
     .replace(/\breturning\b[\s\S]*$/, "");
   const cols: WhereColumn[] = [];
-  const eqPattern = /([a-z_][a-z0-9_]*)\s*=\s*\$(\d+)/g;
+  const eqPattern = /"?([a-z_][a-z0-9_]*)"?\s*=\s*\$(\d+)/g;
   for (const match of clause.matchAll(eqPattern)) {
     cols.push({ column: match[1], indexes: [Number(match[2]) - 1] });
   }
-  const inPattern = /([a-z_][a-z0-9_]*)\s+in\s*\(([^)]*)\)/g;
+  const inPattern = /"?([a-z_][a-z0-9_]*)"?\s+in\s*\(([^)]*)\)/g;
   for (const match of clause.matchAll(inPattern)) {
     const indexes = [...match[2].matchAll(/\$(\d+)/g)].map(
       (m) => Number(m[1]) - 1,
@@ -234,25 +264,55 @@ function whereColumns(lower: string): readonly WhereColumn[] {
   return cols;
 }
 
-/** Stable order by the first `order by` column (generation numeric, else text). */
+/** Stable order by every `order by` column (generation numeric, else text). */
 function applyOrder(
   lower: string,
   rows: readonly StoredRow[],
 ): readonly StoredRow[] {
-  const match = /order\s+by\s+([a-z_][a-z0-9_]*)\s*(asc|desc)?/.exec(lower);
-  if (!match) return rows;
-  const column = match[1];
-  const direction = match[2] === "desc" ? -1 : 1;
+  const order = /\border\s+by\s+([\s\S]+?)(?:\blimit\b|\breturning\b|$)/.exec(
+    lower,
+  )?.[1];
+  if (!order) return rows;
+  const terms = order
+    .split(",")
+    .map((term) => {
+      const direction = /\bdesc\b/.test(term) ? -1 : 1;
+      const identifiers = [...term.matchAll(/"?([a-z_][a-z0-9_]*)"?/g)]
+        .map((match) => match[1])
+        .filter((identifier) => identifier !== "asc" && identifier !== "desc");
+      return { column: identifiers.at(-1), direction };
+    })
+    .filter(
+      (term): term is { column: string; direction: number } =>
+        term.column !== undefined,
+    );
+  if (terms.length === 0) return rows;
   return [...rows].sort((a, b) => {
-    const av = rowCol(a, column) ?? "";
-    const bv = rowCol(b, column) ?? "";
-    const an = Number(av);
-    const bn = Number(bv);
-    const cmp = !Number.isNaN(an) && !Number.isNaN(bn) && av !== "" && bv !== ""
-      ? an - bn
-      : av.localeCompare(bv);
-    return cmp * direction;
+    for (const term of terms) {
+      const av = rowCol(a, term.column) ?? "";
+      const bv = rowCol(b, term.column) ?? "";
+      const an = Number(av);
+      const bn = Number(bv);
+      const cmp =
+        !Number.isNaN(an) && !Number.isNaN(bn) && av !== "" && bv !== ""
+          ? an - bn
+          : av.localeCompare(bv);
+      if (cmp !== 0) return cmp * term.direction;
+    }
+    return 0;
   });
+}
+
+function applyLimit(
+  lower: string,
+  params: readonly unknown[],
+  rows: readonly StoredRow[],
+): readonly StoredRow[] {
+  const match = /\blimit\s+(?:\$(\d+)|(\d+))/.exec(lower);
+  if (!match) return rows;
+  const raw = match[1] !== undefined ? params[Number(match[1]) - 1] : match[2];
+  const limit = Number(raw);
+  return Number.isFinite(limit) ? rows.slice(0, limit) : rows;
 }
 
 /**
@@ -281,7 +341,7 @@ function parseJsonObject(raw: string): Record<string, unknown> | undefined {
   try {
     const parsed = JSON.parse(raw);
     return typeof parsed === "object" && parsed !== null
-      ? parsed as Record<string, unknown>
+      ? (parsed as Record<string, unknown>)
       : undefined;
   } catch {
     return undefined;
@@ -297,11 +357,27 @@ function lastJsonParam(params: readonly unknown[]): string | undefined {
 }
 
 function tableName(lower: string): string {
-  const match = lower.match(
-    /(?:into|from|update)\s+(takosumi_[a-z_]+)/,
-  );
+  const match = lower.match(/(?:into|from|update)\s+"?(takosumi_[a-z_]+)"?/);
   if (!match) throw new Error(`no table in SQL: ${lower}`);
   return match[1];
+}
+
+function jsonResultRow(json: unknown, lower: string): Record<string, unknown> {
+  const row: Record<string, unknown> = { json };
+  for (const column of selectedColumns(lower)) {
+    row[column] = json;
+  }
+  return row;
+}
+
+function selectedColumns(lower: string): readonly string[] {
+  const select = lower.match(/^select\s+([\s\S]+?)\s+from\s/);
+  const returning = lower.match(/\sreturning\s+([\s\S]+)$/);
+  const list = select?.[1] ?? returning?.[1];
+  if (!list) return [];
+  return [...list.matchAll(/"?([a-z_][a-z0-9_]*)"?/g)]
+    .map((match) => match[1])
+    .filter((column) => column !== "as");
 }
 
 // --- fixtures --------------------------------------------------------------
@@ -361,7 +437,7 @@ function installation(over: Partial<Installation> = {}): Installation {
     installConfigId: "cfg_1",
     environment: "production",
     currentStateGeneration: 0,
-    status: "installing",
+    status: "pending",
     createdAt: TS,
     updatedAt: TS,
     ...over,
@@ -375,7 +451,9 @@ function deployment(over: Partial<Deployment> = {}): Deployment {
     installationId: "inst_1",
     environment: "production",
     applyRunId: "run_apply_1",
+    sourceSnapshotId: "snap_1",
     stateGeneration: 1,
+    outputSnapshotId: "out_1",
     outputsPublic: {},
     status: "active",
     createdAt: TS,
@@ -514,13 +592,32 @@ function activityEvent(over: Partial<ActivityEvent> = {}): ActivityEvent {
   };
 }
 
+function credentialMintEvent(
+  over: Partial<CredentialMintEvent> = {},
+): CredentialMintEvent {
+  return {
+    id: "credmint_1",
+    runId: "run_1",
+    spaceId: "space_1",
+    installationId: "inst_1",
+    connectionId: "conn_1",
+    phase: "plan",
+    capabilities: ["compute"],
+    createdAt: TS,
+    ...over,
+  };
+}
+
 function runGroup(over: Partial<RunGroup> = {}): RunGroup {
   return {
     id: "rg_1",
     spaceId: "space_1",
     type: "space_update",
     status: "queued",
-    graphJson: JSON.stringify({ order: [["inst_1"]], runs: { inst_1: "run_1" } }),
+    graphJson: JSON.stringify({
+      order: [["inst_1"]],
+      runs: { inst_1: "run_1" },
+    }),
     createdAt: TS,
     ...over,
   };
@@ -562,8 +659,10 @@ test("Space store: put/get/get-by-handle/list are symmetric", async () => {
     expect(await store.getSpace("missing"), label).toBeUndefined();
     expect((await store.getSpaceByHandle("bob"))?.id, label).toBe("space_b");
     expect(await store.getSpaceByHandle("nobody"), label).toBeUndefined();
-    expect((await store.listSpaces()).map((s) => s.id), label)
-      .toEqual(["space_a", "space_b"]);
+    expect(
+      (await store.listSpaces()).map((s) => s.id),
+      label,
+    ).toEqual(["space_a", "space_b"]);
   }
 });
 
@@ -575,12 +674,16 @@ test("InstallConfig store: put/get/list-by-space + official catalog", async () =
     );
     await store.putInstallConfig(installConfig({ id: "cfg_official" }));
 
-    expect((await store.getInstallConfig("cfg_a"))?.name, label)
-      .toBe("Cloudflare R2");
+    expect((await store.getInstallConfig("cfg_a"))?.name, label).toBe(
+      "Cloudflare R2",
+    );
     expect(await store.getInstallConfig("missing"), label).toBeUndefined();
 
     const forSpace = await store.listInstallConfigs("space_1");
-    expect(forSpace.map((c) => c.id), label).toEqual(["cfg_a"]);
+    expect(
+      forSpace.map((c) => c.id),
+      label,
+    ).toEqual(["cfg_a"]);
     expect((await store.listInstallConfigs()).length, label).toBe(2);
   }
 });
@@ -599,14 +702,20 @@ test("OperatorConnectionDefault store: one default per capability", async () => 
       operatorDefault({ id: "ocd_b", capability: "compute", provider: "fly" }),
     );
     await store.putOperatorConnectionDefault(
-      operatorDefault({ id: "ocd_dns", capability: "dns", provider: "cloudflare" }),
+      operatorDefault({
+        id: "ocd_dns",
+        capability: "dns",
+        provider: "cloudflare",
+      }),
     );
 
     const compute = await store.getOperatorConnectionDefault("compute");
     expect(compute?.id, label).toBe("ocd_b");
     expect(compute?.provider, label).toBe("fly");
-    expect(await store.getOperatorConnectionDefault("storage"), label)
-      .toBeUndefined();
+    expect(
+      await store.getOperatorConnectionDefault("storage"),
+      label,
+    ).toBeUndefined();
     expect(
       (await store.listOperatorConnectionDefaults()).map((d) => d.capability),
       label,
@@ -638,7 +747,10 @@ test("Installation store: put/get/get-by-name/list/unique are symmetric", async 
     ).toBeUndefined();
 
     const forSpace = await store.listInstallations("space_1");
-    expect(forSpace.map((i) => i.id), label).toEqual(["inst_a"]);
+    expect(
+      forSpace.map((i) => i.id),
+      label,
+    ).toEqual(["inst_a"]);
     expect((await store.listInstallations()).length, label).toBe(2);
   }
 });
@@ -668,9 +780,13 @@ test("Installation patch: unguarded mutate is symmetric", async () => {
     expect(patched?.status, label).toBe("active");
     expect(patched?.currentStateGeneration, label).toBe(1);
     expect(patched?.currentDeploymentId, label).toBe("dep_1");
-    expect((await store.getInstallation("inst_p"))?.status, label).toBe("active");
-    expect(await store.patchInstallation("missing", { status: "error" }), label)
-      .toBeUndefined();
+    expect((await store.getInstallation("inst_p"))?.status, label).toBe(
+      "active",
+    );
+    expect(
+      await store.patchInstallation("missing", { status: "error" }),
+      label,
+    ).toBeUndefined();
   }
 });
 
@@ -721,10 +837,15 @@ test("Deployment store: put/get/list-by-installation are symmetric", async () =>
       deployment({ id: "dep_c", installationId: "inst_2" }),
     );
 
-    expect((await store.getDeployment("dep_a"))?.stateGeneration, label).toBe(1);
+    expect((await store.getDeployment("dep_a"))?.stateGeneration, label).toBe(
+      1,
+    );
     expect(await store.getDeployment("missing"), label).toBeUndefined();
     const forInst = await store.listDeployments("inst_1");
-    expect(forInst.map((d) => d.id), label).toEqual(["dep_a", "dep_b"]);
+    expect(
+      forInst.map((d) => d.id),
+      label,
+    ).toEqual(["dep_a", "dep_b"]);
   }
 });
 
@@ -765,18 +886,31 @@ test("DeploymentProfile store: upsert keyed (installation, environment)", async 
 
 test("StateSnapshot store: put/latest/list keyed (installation, environment, generation)", async () => {
   for (const [label, store] of bothStores()) {
-    await store.putStateSnapshot(stateSnapshot({ id: "snap_g1", generation: 1 }));
-    await store.putStateSnapshot(stateSnapshot({ id: "snap_g3", generation: 3 }));
-    await store.putStateSnapshot(stateSnapshot({ id: "snap_g2", generation: 2 }));
+    await store.putStateSnapshot(
+      stateSnapshot({ id: "snap_g1", generation: 1 }),
+    );
+    await store.putStateSnapshot(
+      stateSnapshot({ id: "snap_g3", generation: 3 }),
+    );
+    await store.putStateSnapshot(
+      stateSnapshot({ id: "snap_g2", generation: 2 }),
+    );
     // A different environment is isolated.
     await store.putStateSnapshot(
-      stateSnapshot({ id: "snap_staging", environment: "staging", generation: 5 }),
+      stateSnapshot({
+        id: "snap_staging",
+        environment: "staging",
+        generation: 5,
+      }),
     );
 
     const latest = await store.getLatestStateSnapshot("inst_1", "production");
     expect(latest?.generation, label).toBe(3);
     const list = await store.listStateSnapshots("inst_1", "production");
-    expect(list.map((s) => s.generation), label).toEqual([1, 2, 3]);
+    expect(
+      list.map((s) => s.generation),
+      label,
+    ).toEqual([1, 2, 3]);
     expect(
       (await store.getLatestStateSnapshot("inst_1", "staging"))?.generation,
       label,
@@ -808,10 +942,15 @@ test("runs table: plan/apply/source_sync rows verify kind", async () => {
       sourceSyncRun({ id: "ssr_c", sourceId: "src_2" }),
     );
 
-    expect((await store.getPlanRun("run_plan_1"))?.id, label).toBe("run_plan_1");
-    expect((await store.getApplyRun("run_apply_1"))?.planRunId, label)
-      .toBe("run_plan_1");
-    expect((await store.getSourceSyncRun("ssr_a"))?.sourceId, label).toBe("src_1");
+    expect((await store.getPlanRun("run_plan_1"))?.id, label).toBe(
+      "run_plan_1",
+    );
+    expect((await store.getApplyRun("run_apply_1"))?.planRunId, label).toBe(
+      "run_plan_1",
+    );
+    expect((await store.getSourceSyncRun("ssr_a"))?.sourceId, label).toBe(
+      "src_1",
+    );
 
     // Kind is verified: a plan id is not an apply, and vice versa.
     expect(await store.getApplyRun("run_plan_1"), label).toBeUndefined();
@@ -819,12 +958,16 @@ test("runs table: plan/apply/source_sync rows verify kind", async () => {
     expect(await store.getSourceSyncRun("run_plan_1"), label).toBeUndefined();
 
     const forSource = await store.listSourceSyncRuns("src_1");
-    expect(forSource.map((r) => r.id), label).toEqual(["ssr_a", "ssr_b"]);
+    expect(
+      forSource.map((r) => r.id),
+      label,
+    ).toEqual(["ssr_a", "ssr_b"]);
 
     // A PlanRun created as a RunGroup member round-trips its runGroupId (§19).
     await store.putPlanRun(makePlanRun("run_plan_grp", { runGroupId: "rg_x" }));
-    expect((await store.getPlanRun("run_plan_grp"))?.runGroupId, label)
-      .toBe("rg_x");
+    expect((await store.getPlanRun("run_plan_grp"))?.runGroupId, label).toBe(
+      "rg_x",
+    );
   }
 });
 
@@ -855,23 +998,36 @@ test("Dependency store: CRUD + list by space / consumer / producer are symmetric
       }),
     );
 
-    expect((await store.getDependency("edge_a"))?.consumerInstallationId, label)
-      .toBe("inst_c1");
+    expect(
+      (await store.getDependency("edge_a"))?.consumerInstallationId,
+      label,
+    ).toBe("inst_c1");
     expect(await store.getDependency("missing"), label).toBeUndefined();
 
     const bySpace = await store.listDependenciesBySpace("space_1");
-    expect(bySpace.map((d) => d.id), label).toEqual(["edge_a", "edge_b"]);
+    expect(
+      bySpace.map((d) => d.id),
+      label,
+    ).toEqual(["edge_a", "edge_b"]);
 
     const byProducer = await store.listDependenciesForProducer("inst_p");
-    expect(byProducer.map((d) => d.id), label).toEqual(["edge_a", "edge_b"]);
+    expect(
+      byProducer.map((d) => d.id),
+      label,
+    ).toEqual(["edge_a", "edge_b"]);
 
     const byConsumer = await store.listDependenciesForConsumer("inst_c2");
-    expect(byConsumer.map((d) => d.id), label).toEqual(["edge_b"]);
+    expect(
+      byConsumer.map((d) => d.id),
+      label,
+    ).toEqual(["edge_b"]);
 
     expect(await store.deleteDependency("edge_a"), label).toBe(true);
     expect(await store.deleteDependency("edge_a"), label).toBe(false);
-    expect((await store.listDependenciesBySpace("space_1")).map((d) => d.id), label)
-      .toEqual(["edge_b"]);
+    expect(
+      (await store.listDependenciesBySpace("space_1")).map((d) => d.id),
+      label,
+    ).toEqual(["edge_b"]);
   }
 });
 
@@ -883,7 +1039,9 @@ test("DependencySnapshot store: put/get round-trips the pinned values", async ()
     const got = await store.getDependencySnapshot("ds_a");
     expect(got?.runId, label).toBe("run_p");
     expect(got?.mode, label).toBe("strict");
-    expect(got?.dependencies[0]?.values, label).toEqual({ bucket: "my-bucket" });
+    expect(got?.dependencies[0]?.values, label).toEqual({
+      bucket: "my-bucket",
+    });
     expect(await store.getDependencySnapshot("missing"), label).toBeUndefined();
   }
 });
@@ -901,18 +1059,30 @@ test("OutputSnapshot store: put/get + latest by state generation are symmetric",
     );
     // A different installation is isolated from the latest lookup.
     await store.putOutputSnapshot(
-      outputSnapshot({ id: "out_other", installationId: "inst_2", stateGeneration: 9 }),
+      outputSnapshot({
+        id: "out_other",
+        installationId: "inst_2",
+        stateGeneration: 9,
+      }),
     );
 
-    expect((await store.getOutputSnapshot("out_g2"))?.stateGeneration, label).toBe(2);
+    expect(
+      (await store.getOutputSnapshot("out_g2"))?.stateGeneration,
+      label,
+    ).toBe(2);
     expect(await store.getOutputSnapshot("missing"), label).toBeUndefined();
 
     // Latest by generation -> the gen-3 snapshot for inst_1.
     const latest = await store.getLatestOutputSnapshot("inst_1");
     expect(latest?.id, label).toBe("out_g3");
     expect(latest?.stateGeneration, label).toBe(3);
-    expect((await store.getLatestOutputSnapshot("inst_2"))?.id, label).toBe("out_other");
-    expect(await store.getLatestOutputSnapshot("missing"), label).toBeUndefined();
+    expect((await store.getLatestOutputSnapshot("inst_2"))?.id, label).toBe(
+      "out_other",
+    );
+    expect(
+      await store.getLatestOutputSnapshot("missing"),
+      label,
+    ).toBeUndefined();
   }
 });
 
@@ -920,7 +1090,11 @@ test("OutputShare store: put/get + list from/to space are symmetric", async () =
   for (const [label, store] of bothStores()) {
     // space_1 grants two shares to space_2; space_3 grants one to space_1.
     await store.putOutputShare(
-      outputShare({ id: "osh_a", fromSpaceId: "space_1", toSpaceId: "space_2" }),
+      outputShare({
+        id: "osh_a",
+        fromSpaceId: "space_1",
+        toSpaceId: "space_2",
+      }),
     );
     await store.putOutputShare(
       outputShare({
@@ -931,10 +1105,16 @@ test("OutputShare store: put/get + list from/to space are symmetric", async () =
       }),
     );
     await store.putOutputShare(
-      outputShare({ id: "osh_c", fromSpaceId: "space_3", toSpaceId: "space_1" }),
+      outputShare({
+        id: "osh_c",
+        fromSpaceId: "space_3",
+        toSpaceId: "space_1",
+      }),
     );
 
-    expect((await store.getOutputShare("osh_a"))?.toSpaceId, label).toBe("space_2");
+    expect((await store.getOutputShare("osh_a"))?.toSpaceId, label).toBe(
+      "space_2",
+    );
     expect(await store.getOutputShare("missing"), label).toBeUndefined();
     // The OutputShareEntry round-trips alias + sensitive:false.
     expect((await store.getOutputShare("osh_a"))?.outputs, label).toEqual([
@@ -943,15 +1123,24 @@ test("OutputShare store: put/get + list from/to space are symmetric", async () =
 
     // From space_1: the two grants it GRANTED, oldest-first.
     const fromSpace1 = await store.listOutputSharesFromSpace("space_1");
-    expect(fromSpace1.map((s) => s.id), label).toEqual(["osh_a", "osh_b"]);
+    expect(
+      fromSpace1.map((s) => s.id),
+      label,
+    ).toEqual(["osh_a", "osh_b"]);
 
     // To space_1: the one grant it RECEIVED.
     const toSpace1 = await store.listOutputSharesToSpace("space_1");
-    expect(toSpace1.map((s) => s.id), label).toEqual(["osh_c"]);
+    expect(
+      toSpace1.map((s) => s.id),
+      label,
+    ).toEqual(["osh_c"]);
 
     // To space_2: the two grants it received.
     const toSpace2 = await store.listOutputSharesToSpace("space_2");
-    expect(toSpace2.map((s) => s.id), label).toEqual(["osh_a", "osh_b"]);
+    expect(
+      toSpace2.map((s) => s.id),
+      label,
+    ).toEqual(["osh_a", "osh_b"]);
 
     // Revoke updates the row in place (status + revokedAt).
     await store.putOutputShare(
@@ -963,7 +1152,9 @@ test("OutputShare store: put/get + list from/to space are symmetric", async () =
         revokedAt: "2026-06-08T00:00:00.000Z",
       }),
     );
-    expect((await store.getOutputShare("osh_a"))?.status, label).toBe("revoked");
+    expect((await store.getOutputShare("osh_a"))?.status, label).toBe(
+      "revoked",
+    );
     expect((await store.getOutputShare("osh_a"))?.revokedAt, label).toBe(
       "2026-06-08T00:00:00.000Z",
     );
@@ -984,9 +1175,14 @@ test("RunGroup store: put/get/list-by-space round-trip", async () => {
     expect(await store.getRunGroup("missing"), label).toBeUndefined();
 
     const forSpace = await store.listRunGroups("space_1");
-    expect(forSpace.map((g) => g.id), label).toEqual(["rg_a", "rg_b"]);
-    expect((await store.listRunGroups("space_2")).map((g) => g.id), label)
-      .toEqual(["rg_other"]);
+    expect(
+      forSpace.map((g) => g.id),
+      label,
+    ).toEqual(["rg_a", "rg_b"]);
+    expect(
+      (await store.listRunGroups("space_2")).map((g) => g.id),
+      label,
+    ).toEqual(["rg_other"]);
   }
 });
 
@@ -1023,21 +1219,72 @@ test("Activity store: put/list newest-first, space-scoped, limit-clamped", async
 
     // Newest-first within the space (act_b @ :03, act_c @ :02, act_a @ :01).
     const listed = await store.listActivityEvents("space_1");
-    expect(listed.map((e) => e.id), label).toEqual(["act_b", "act_c", "act_a"]);
+    expect(
+      listed.map((e) => e.id),
+      label,
+    ).toEqual(["act_b", "act_c", "act_a"]);
     // Full record (incl. metadata + optional runId) round-trips.
     expect(listed[0]!.runId, label).toBe("plan_1");
     expect(listed[1]!.metadata.deploymentId, label).toBe("dep_1");
 
     // Space isolation: space_2 sees only its own event.
-    expect((await store.listActivityEvents("space_2")).map((e) => e.id), label)
-      .toEqual(["act_other"]);
+    expect(
+      (await store.listActivityEvents("space_2")).map((e) => e.id),
+      label,
+    ).toEqual(["act_other"]);
     // An empty Space sees nothing.
-    expect((await store.listActivityEvents("space_missing")).length, label)
-      .toBe(0);
+    expect(
+      (await store.listActivityEvents("space_missing")).length,
+      label,
+    ).toBe(0);
 
     // Limit caps the page (newest two).
     const limited = await store.listActivityEvents("space_1", { limit: 2 });
-    expect(limited.map((e) => e.id), label).toEqual(["act_b", "act_c"]);
+    expect(
+      limited.map((e) => e.id),
+      label,
+    ).toEqual(["act_b", "act_c"]);
+  }
+});
+
+test("Credential mint audit store: put/list by run without values", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putCredentialMintEvent(
+      credentialMintEvent({
+        id: "credmint_plan",
+        runId: "plan_1",
+        phase: "plan",
+        createdAt: "2026-06-06T00:00:01.000Z",
+      }),
+    );
+    await store.putCredentialMintEvent(
+      credentialMintEvent({
+        id: "credmint_apply",
+        runId: "apply_1",
+        phase: "apply",
+        capabilities: ["compute", "dns"],
+        createdAt: "2026-06-06T00:00:02.000Z",
+      }),
+    );
+
+    const planEvents = await store.listCredentialMintEventsForRun("plan_1");
+    expect(planEvents, label).toHaveLength(1);
+    expect(planEvents[0], label).toEqual(
+      credentialMintEvent({
+        id: "credmint_plan",
+        runId: "plan_1",
+        phase: "plan",
+        createdAt: "2026-06-06T00:00:01.000Z",
+      }),
+    );
+    expect(JSON.stringify(planEvents), label).not.toContain("secret");
+    expect(
+      (await store.listCredentialMintEventsForRun("apply_1"))[0]!.capabilities,
+      label,
+    ).toEqual(["compute", "dns"]);
+    expect(await store.listCredentialMintEventsForRun("missing"), label).toEqual(
+      [],
+    );
   }
 });
 
@@ -1060,7 +1307,10 @@ test("Backup store: put/list newest-first, space-scoped, round-trips", async () 
 
     // Newest-first within the space (bkp_b @ :03, bkp_a @ :01).
     const listed = await store.listBackupRecords("space_1");
-    expect(listed.map((b) => b.id), label).toEqual(["bkp_b", "bkp_a"]);
+    expect(
+      listed.map((b) => b.id),
+      label,
+    ).toEqual(["bkp_b", "bkp_a"]);
     // Full pointer (incl. optional createdByRunId + sizeBytes) round-trips.
     expect(listed[0]!.createdByRunId, label).toBe("apply_1");
     expect(listed[0]!.sizeBytes, label).toBe(4096);
@@ -1070,11 +1320,14 @@ test("Backup store: put/list newest-first, space-scoped, round-trips", async () 
     expect(listed[1]!.createdByRunId, label).toBeUndefined();
 
     // Space isolation: space_2 sees only its own pointer.
-    expect((await store.listBackupRecords("space_2")).map((b) => b.id), label)
-      .toEqual(["bkp_other"]);
+    expect(
+      (await store.listBackupRecords("space_2")).map((b) => b.id),
+      label,
+    ).toEqual(["bkp_other"]);
     // An empty Space sees nothing.
-    expect((await store.listBackupRecords("space_missing")).length, label)
-      .toBe(0);
+    expect((await store.listBackupRecords("space_missing")).length, label).toBe(
+      0,
+    );
   }
 });
 

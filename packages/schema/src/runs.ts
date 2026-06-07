@@ -1,6 +1,5 @@
 /**
- * Run + RunGroup contract (Core Specification §19 / §27 `runs` /
- * `run_groups`).
+ * Run + RunGroup contract (`runs` / `run_groups`).
  *
  * A Run is ONE execution against an Installation — the single ledger row that
  * replaces the retired PlanRun/ApplyRun split; the kind lives in `type`.
@@ -20,6 +19,7 @@ import type {
 
 export type RunType =
   | "source_sync"
+  | "compatibility_check"
   | "plan"
   | "apply"
   | "destroy_plan"
@@ -44,7 +44,7 @@ export interface Run {
   readonly runGroupId?: string;
   readonly spaceId: string;
   /**
-   * Spec-required (§27 NOT NULL); optional here only because `source_sync`
+   * Required by the canonical run ledger; optional here only because `source_sync`
    * rows are Source-scoped until sources bind to Installations — tracked in
    * core-conformance.md.
    */
@@ -54,6 +54,7 @@ export interface Run {
   readonly status: RunStatus;
   readonly sourceSnapshotId?: string;
   readonly dependencySnapshotId?: string;
+  readonly compatibilityReportId?: string;
   readonly baseStateGeneration?: number;
   readonly planDigest?: string;
   readonly planArtifactKey?: string;
@@ -66,7 +67,7 @@ export interface Run {
 }
 
 /**
- * Body of `GET /api/runs/:runId/logs` (spec §30). MVP: the run record's
+ * Body of `GET /api/runs/:runId/logs`. MVP: the run record's
  * structured diagnostics + the run-level audit trail (the per-run policy /
  * lease / dispatch trace). Logs pass through redaction (invariant 15); no
  * credential material or sensitive output values appear here.
@@ -77,7 +78,7 @@ export interface RunLogsResponse {
 }
 
 /**
- * Body of `GET /api/runs/:runId/events` (spec §30). MVP: the run-level audit
+ * Body of `GET /api/runs/:runId/events`. MVP: the run-level audit
  * trail only.
  */
 export interface RunEventsResponse {

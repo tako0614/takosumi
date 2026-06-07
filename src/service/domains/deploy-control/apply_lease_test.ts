@@ -44,7 +44,7 @@ async function seedApply(
 ): Promise<{ environment: string }> {
   const environment = ids.environment ?? "production";
   const seedDeploymentId = `dep_seed_${ids.installationId}`;
-  const { installation, source } = await seedInstallationModel(store, {
+  const { installation, source, snapshot } = await seedInstallationModel(store, {
     installationId: ids.installationId,
     spaceId: `space_${ids.installationId}`,
     sourceId: `src_${ids.installationId}`,
@@ -69,6 +69,7 @@ async function seedApply(
     installationId: ids.installationId,
     installationCurrentDeploymentId: seedDeploymentId,
     source: moduleSource,
+    sourceSnapshotId: snapshot.id,
     sourceDigest: "sha256:src",
     operation: "update",
     runnerProfileId: "cloudflare-default",

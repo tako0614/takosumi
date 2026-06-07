@@ -4,8 +4,9 @@
  * Covers the structural invariants the service enforces: producer belongs to
  * fromSpace, consumer Space exists, from != to, non-empty outputs, every name
  * present in the producer's latest OutputSnapshot.spaceOutputs, sensitive
- * sharing rejected, duplicate names rejected; plus the ACTIVE-on-create status,
- * the listForSpace union (granted + received), and revoke (idempotent + 404).
+ * sharing requiring explicit policy, duplicate names rejected; plus the
+ * pending -> active lifecycle, the listForSpace union (granted + received), and
+ * revoke (idempotent + 404).
  */
 
 import { expect, test } from "bun:test";
@@ -17,7 +18,9 @@ import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import {
   type CreateOutputShareRequest,
   OutputSharesService,
+  type SensitiveOutputResolver,
 } from "./mod.ts";
+import type { ActivityRecorder, RecordActivityInput } from "../activity/mod.ts";
 
 const TS = "2026-06-06T00:00:00.000Z";
 
@@ -26,11 +29,33 @@ function deterministicIds(): (prefix: string) => string {
   return (prefix) => `${prefix}_${String(next++).padStart(4, "0")}`;
 }
 
-function service(store: OpenTofuDeploymentStore): OutputSharesService {
+function sensitiveResolver(
+  values: Record<string, unknown> = { admin_token: "super-secret-token" },
+): SensitiveOutputResolver {
+  return {
+    resolve: (input) => {
+      const value = values[input.outputName];
+      if (value === undefined) return Promise.resolve(undefined);
+      return Promise.resolve({ value: value as never, sensitive: true });
+    },
+  };
+}
+
+function service(
+  store: OpenTofuDeploymentStore,
+  options: {
+    readonly sensitiveOutputResolver?: SensitiveOutputResolver;
+    readonly activity?: ActivityRecorder;
+  } = {},
+): OutputSharesService {
   return new OutputSharesService({
     store,
     newId: deterministicIds(),
     now: () => TS,
+    ...(options.sensitiveOutputResolver
+      ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
+      : {}),
+    ...(options.activity ? { activity: options.activity } : {}),
   });
 }
 
@@ -97,7 +122,7 @@ function baseRequest(
   };
 }
 
-test("createShare persists an ACTIVE cross-Space grant", async () => {
+test("createShare persists a PENDING cross-Space grant", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   await seedProducerWithOutputs(store);
   const svc = service(store);
@@ -108,12 +133,13 @@ test("createShare persists an ACTIVE cross-Space grant", async () => {
   expect(share.fromSpaceId).toEqual("space_from");
   expect(share.toSpaceId).toEqual("space_to");
   expect(share.producerInstallationId).toEqual("inst_producer");
-  expect(share.status).toEqual("active");
+  expect(share.status).toEqual("pending");
   expect(share.outputs).toEqual([{ name: "bucket_name", sensitive: false }]);
+  expect(share.acceptedAt).toBeUndefined();
   expect(share.revokedAt).toBeUndefined();
 
   const persisted = await store.getOutputShare("oshare_0001");
-  expect(persisted?.status).toEqual("active");
+  expect(persisted?.status).toEqual("pending");
 });
 
 test("createShare carries an alias and forces sensitive false", async () => {
@@ -149,7 +175,7 @@ test("createShare rejects an empty outputs list invalid_argument", async () => {
   ).rejects.toMatchObject({ code: "invalid_argument" });
 });
 
-test("createShare rejects a sensitive entry not_implemented", async () => {
+test("createShare rejects a sensitive entry without explicit policy", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   await seedProducerWithOutputs(store);
   const svc = service(store);
@@ -158,7 +184,96 @@ test("createShare rejects a sensitive entry not_implemented", async () => {
     svc.createShare(
       baseRequest({ outputs: [{ name: "bucket_name", sensitive: true }] }),
     ),
-  ).rejects.toMatchObject({ code: "not_implemented" });
+  ).rejects.toMatchObject({ code: "failed_precondition" });
+});
+
+test("createShare rejects a sensitive entry without a resolver even with policy", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seedProducerWithOutputs(store, { spaceOutputs: { bucket_name: "my-bucket" } });
+  const svc = service(store);
+
+  await expect(
+    svc.createShare(
+      baseRequest({
+        outputs: [{ name: "admin_token", sensitive: true }],
+        sensitivePolicy: { allow: true, reason: "approved by both spaces" },
+      }),
+    ),
+  ).rejects.toMatchObject({ code: "failed_precondition" });
+});
+
+test("createShare records a sensitive entry only with explicit policy and resolver", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seedProducerWithOutputs(store, { spaceOutputs: { bucket_name: "my-bucket" } });
+  const svc = service(store, { sensitiveOutputResolver: sensitiveResolver() });
+
+  const share = await svc.createShare(
+    baseRequest({
+      outputs: [{ name: "admin_token", sensitive: true }],
+      sensitivePolicy: { allow: true, reason: "approved by both spaces" },
+    }),
+  );
+
+  expect(share.status).toEqual("pending");
+  expect(share.outputs).toEqual([{ name: "admin_token", sensitive: true }]);
+});
+
+test("createShare requires a reason for sensitive output policy", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seedProducerWithOutputs(store);
+  const svc = service(store, { sensitiveOutputResolver: sensitiveResolver() });
+
+  await expect(
+    svc.createShare(
+      baseRequest({
+        outputs: [{ name: "admin_token", sensitive: true }],
+        sensitivePolicy: { allow: true },
+      }),
+    ),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
+});
+
+test("createShare rejects a sensitive name absent from raw resolver", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seedProducerWithOutputs(store);
+  const svc = service(store, {
+    sensitiveOutputResolver: sensitiveResolver({ other_token: "secret" }),
+  });
+
+  await expect(
+    svc.createShare(
+      baseRequest({
+        outputs: [{ name: "admin_token", sensitive: true }],
+        sensitivePolicy: { allow: true, reason: "approved by both spaces" },
+      }),
+    ),
+  ).rejects.toMatchObject({ code: "failed_precondition" });
+});
+
+test("createShare activity records names only for sensitive outputs", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seedProducerWithOutputs(store);
+  const events: RecordActivityInput[] = [];
+  const svc = service(store, {
+    sensitiveOutputResolver: sensitiveResolver(),
+    activity: {
+      record: (event) => {
+        events.push(event);
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  await svc.createShare(
+    baseRequest({
+      outputs: [{ name: "admin_token", sensitive: true }],
+      sensitivePolicy: { allow: true, reason: "super-secret-token approved" },
+    }),
+  );
+
+  const serialized = JSON.stringify(events);
+  expect(serialized).toContain("admin_token");
+  expect(serialized).not.toContain("super-secret-token");
 });
 
 test("createShare rejects duplicate names invalid_argument", async () => {
@@ -278,7 +393,22 @@ test("listForSpace unions granted + received, de-duped, oldest-first", async () 
   );
 });
 
-test("revokeShare moves ACTIVE -> revoked and stamps revokedAt", async () => {
+test("approveShare moves pending -> active and stamps acceptedAt", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seedProducerWithOutputs(store);
+  const svc = service(store);
+
+  const share = await svc.createShare(baseRequest());
+  const active = await svc.approveShare(share.id);
+  expect(active.status).toEqual("active");
+  expect(active.acceptedAt).toEqual(TS);
+
+  const again = await svc.approveShare(share.id);
+  expect(again.status).toEqual("active");
+  expect((await store.getOutputShare(share.id))?.acceptedAt).toEqual(TS);
+});
+
+test("approveShare rejects revoked and missing shares", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   await seedProducerWithOutputs(store);
   const svc = service(store);
@@ -286,12 +416,34 @@ test("revokeShare moves ACTIVE -> revoked and stamps revokedAt", async () => {
   const share = await svc.createShare(baseRequest());
   const revoked = await svc.revokeShare(share.id);
   expect(revoked.status).toEqual("revoked");
+  await expect(svc.approveShare(share.id)).rejects.toMatchObject({
+    code: "failed_precondition",
+  });
+  await expect(svc.approveShare("oshare_missing")).rejects.toMatchObject({
+    code: "not_found",
+  });
+});
+
+test("revokeShare moves pending or active -> revoked and stamps revokedAt", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seedProducerWithOutputs(store);
+  const svc = service(store);
+
+  const pending = await svc.createShare(baseRequest());
+  const revokedPending = await svc.revokeShare(pending.id);
+  expect(revokedPending.status).toEqual("revoked");
+  expect(revokedPending.revokedAt).toEqual(TS);
+
+  const activeShare = await svc.createShare(baseRequest({ outputs: [{ name: "region" }] }));
+  await svc.approveShare(activeShare.id);
+  const revoked = await svc.revokeShare(activeShare.id);
+  expect(revoked.status).toEqual("revoked");
   expect(revoked.revokedAt).toEqual(TS);
 
   // Idempotent: revoking again returns the already-revoked share unchanged.
-  const again = await svc.revokeShare(share.id);
+  const again = await svc.revokeShare(activeShare.id);
   expect(again.status).toEqual("revoked");
-  expect((await store.getOutputShare(share.id))?.status).toEqual("revoked");
+  expect((await store.getOutputShare(activeShare.id))?.status).toEqual("revoked");
 });
 
 test("revokeShare on a missing share is not_found", async () => {

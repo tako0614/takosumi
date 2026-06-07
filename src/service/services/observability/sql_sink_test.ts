@@ -57,12 +57,15 @@ class FakeAuditSqlClient implements SqlClient {
     parameters?: SqlParameters,
   ): SqlQueryResult {
     const normalized = sql.trim().toLowerCase();
-    if (normalized.startsWith("insert into audit_events")) {
+    if (
+      normalized.startsWith("insert into audit_events") ||
+      normalized.startsWith('insert into "audit_events"')
+    ) {
       if (this.failOnNextInsert) {
         this.failOnNextInsert = false;
         throw new Error("simulated insert failure");
       }
-      const params = parameters as Record<string, unknown>;
+      const params = auditInsertParams(parameters);
       if (this.rows.some((row) => row.id === params.id)) {
         const error = new Error("duplicate key value");
         (error as { code?: string }).code = "23505";
@@ -90,13 +93,24 @@ class FakeAuditSqlClient implements SqlClient {
       return { rows: [], rowCount: 1 };
     }
     if (
-      normalized.startsWith("select") && normalized.includes("audit_events")
+      normalized.startsWith("select") &&
+      (
+        normalized.includes("audit_events") ||
+        normalized.includes('"audit_events"')
+      )
     ) {
       const params = (parameters ?? {}) as Record<string, unknown>;
       let rows = [...this.rows];
-      if (normalized.includes("where id = :id")) {
-        rows = rows.filter((r) => r.id === params.id);
-      } else if (normalized.includes("where sequence is not null")) {
+      if (
+        normalized.includes("where id = :id") ||
+        normalized.includes('"audit_events"."id" = $1')
+      ) {
+        const id = bindAt(parameters, 0) ?? params.id;
+        rows = rows.filter((r) => r.id === id);
+      } else if (
+        normalized.includes("where sequence is not null") ||
+        normalized.includes('"audit_events"."sequence" is not null')
+      ) {
         rows = rows
           .filter((r) => r.sequence !== null)
           .sort((a, b) => b.sequence - a.sequence)
@@ -112,10 +126,13 @@ class FakeAuditSqlClient implements SqlClient {
         rowCount: rows.length,
       };
     }
-    if (normalized.startsWith("update audit_events")) {
+    if (
+      normalized.startsWith("update audit_events") ||
+      normalized.startsWith('update "audit_events"')
+    ) {
       const params = (parameters ?? {}) as Record<string, unknown>;
       let count = 0;
-      const cutoff = String(params.cutoff);
+      const cutoff = String(bindAt(parameters, 2) ?? params.cutoff);
       for (const row of this.rows) {
         if (!row.archived && row.occurred_at < cutoff) {
           row.archived = true;
@@ -124,9 +141,12 @@ class FakeAuditSqlClient implements SqlClient {
       }
       return { rows: [], rowCount: count };
     }
-    if (normalized.startsWith("delete from audit_events")) {
+    if (
+      normalized.startsWith("delete from audit_events") ||
+      normalized.startsWith('delete from "audit_events"')
+    ) {
       const params = (parameters ?? {}) as Record<string, unknown>;
-      const cutoff = String(params.cutoff);
+      const cutoff = String(bindAt(parameters, 1) ?? params.cutoff);
       const before = this.rows.length;
       const remaining = this.rows.filter(
         (row) => !(row.archived && row.occurred_at < cutoff),
@@ -148,6 +168,37 @@ class FakeAuditSqlClient implements SqlClient {
     if (!row) throw new Error(`no row ${id}`);
     row.payload_json = JSON.stringify(newPayload);
   }
+}
+
+function bindAt(parameters: SqlParameters | undefined, index: number): unknown {
+  return Array.isArray(parameters) ? parameters[index] : undefined;
+}
+
+function auditInsertParams(
+  parameters: SqlParameters | undefined,
+): Record<string, unknown> {
+  if (!Array.isArray(parameters)) {
+    return parameters as Record<string, unknown>;
+  }
+  return {
+    id: parameters[0],
+    eventClass: parameters[1],
+    type: parameters[2],
+    severity: parameters[3],
+    actorJson: parameters[4],
+    spaceId: parameters[5],
+    groupId: parameters[6],
+    targetType: parameters[7],
+    targetId: parameters[8],
+    payloadJson: parameters[9],
+    occurredAt: parameters[10],
+    requestId: parameters[11],
+    correlationId: parameters[12],
+    sequence: parameters[13],
+    previousHash: parameters[14],
+    currentHash: parameters[15],
+    archived: parameters[16],
+  };
 }
 
 interface AuditRow {

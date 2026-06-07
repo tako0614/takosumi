@@ -4,6 +4,7 @@ import {
   BackupsService,
   type ControlBackupBundle,
   InMemoryBackupArtifactStore,
+  type ServiceDataBackupManifest,
 } from "./mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import type { StoredSource } from "../deploy-control/store.ts";
@@ -14,25 +15,29 @@ import type { Connection } from "takosumi-contract/deploy-control-api";
 
 const TS = "2026-06-06T00:00:00.000Z";
 
-function makeService(options: {
-  readonly store?: InMemoryOpenTofuDeploymentStore;
-  readonly artifactStore?: InMemoryBackupArtifactStore | null;
-} = {}): {
+function makeService(
+  options: {
+    readonly store?: InMemoryOpenTofuDeploymentStore;
+    readonly artifactStore?: InMemoryBackupArtifactStore | null;
+  } = {},
+): {
   readonly service: BackupsService;
   readonly store: InMemoryOpenTofuDeploymentStore;
   readonly artifactStore: InMemoryBackupArtifactStore | undefined;
 } {
   const store = options.store ?? new InMemoryOpenTofuDeploymentStore();
-  const artifactStore = options.artifactStore === null
-    ? undefined
-    : options.artifactStore ?? new InMemoryBackupArtifactStore();
+  const artifactStore =
+    options.artifactStore === null
+      ? undefined
+      : (options.artifactStore ?? new InMemoryBackupArtifactStore());
   let counter = 0;
   const service = new BackupsService({
     store,
     ...(artifactStore ? { artifactStore } : {}),
     activity: new ActivityService({ store, now: () => new Date(TS) }),
     now: () => new Date(TS),
-    newId: (prefix) => `${prefix}_${(counter += 1).toString().padStart(4, "0")}`,
+    newId: (prefix) =>
+      `${prefix}_${(counter += 1).toString().padStart(4, "0")}`,
   });
   return { service, store, artifactStore };
 }
@@ -42,15 +47,32 @@ async function readBundle(
   artifactStore: InMemoryBackupArtifactStore,
   objectKey: string,
 ): Promise<ControlBackupBundle> {
+  return await readGzipJson<ControlBackupBundle>(artifactStore, objectKey);
+}
+
+async function readServiceDataManifest(
+  artifactStore: InMemoryBackupArtifactStore,
+  objectKey: string,
+): Promise<ServiceDataBackupManifest> {
+  return await readGzipJson<ServiceDataBackupManifest>(
+    artifactStore,
+    objectKey,
+  );
+}
+
+async function readGzipJson<T>(
+  artifactStore: InMemoryBackupArtifactStore,
+  objectKey: string,
+): Promise<T> {
   const bytes = artifactStore.get(objectKey);
   if (!bytes) throw new Error(`no object at ${objectKey}`);
   const stream = new Response(
-    new Blob([bytes.buffer.slice(0) as ArrayBuffer]).stream().pipeThrough(
-      new DecompressionStream("gzip"),
-    ),
+    new Blob([bytes.buffer.slice(0) as ArrayBuffer])
+      .stream()
+      .pipeThrough(new DecompressionStream("gzip")),
   );
   const text = await stream.text();
-  return JSON.parse(text) as ControlBackupBundle;
+  return JSON.parse(text) as T;
 }
 
 test("createBackup writes a sealed bundle + records a pointer + emits activity", async () => {
@@ -191,7 +213,11 @@ test("control bundle includes PUBLIC connection records, never blobs", async () 
     ciphertext: "SEALED-CIPHERTEXT-BYTES",
     iv: "SEALED-IV",
     keyVersion: "global",
-    aad: { cloudPartition: "global", spaceId: "space_1", provider: "cloudflare" },
+    aad: {
+      cloudPartition: "global",
+      spaceId: "space_1",
+      provider: "cloudflare",
+    },
   });
 
   const record = await service.createBackup({ spaceId: "space_1" });
@@ -246,6 +272,186 @@ test("control bundle carries state-snapshot metadata + output projection only", 
   );
 });
 
+test("artifact_export service-data backup writes a sealed artifact manifest", async () => {
+  const { service, store, artifactStore } = makeService();
+  const seeded = await seedInstallationModel(store, { spaceId: "space_1" });
+  await store.putInstallConfig({
+    ...seeded.installConfig,
+    backup: {
+      enabled: true,
+      mode: "artifact_export",
+      outputPath: "backup.artifact",
+    },
+  });
+  await store.putOutputSnapshot({
+    id: "out_backup",
+    spaceId: "space_1",
+    installationId: seeded.installation.id,
+    stateGeneration: 1,
+    rawOutputArtifactKey: "spaces/space_1/raw-output.json.enc",
+    publicOutputs: {},
+    spaceOutputs: {
+      backup: {
+        artifact: {
+          ref: "r2://service-data/exports/talk-20260606.tar.zst.enc",
+          digest: "sha256:" + "d".repeat(64),
+          sizeBytes: 12345,
+          contentType: "application/zstd",
+        },
+      },
+    },
+    outputDigest: "sha256:" + "e".repeat(64),
+    createdAt: TS,
+  });
+
+  const record = await service.createBackup({ spaceId: "space_1" });
+
+  expect(record.serviceData).toBeDefined();
+  expect(record.serviceData!.objectKey).toBe(
+    "spaces/space_1/backups/bkp_0001/service-data-artifacts.json.gz.enc",
+  );
+  expect(record.serviceData!.exportedCount).toBe(1);
+  expect(record.serviceData!.unsupportedCount).toBe(0);
+  expect(record.serviceData!.missingCount).toBe(0);
+
+  const manifest = await readServiceDataManifest(
+    artifactStore!,
+    record.serviceData!.objectKey,
+  );
+  expect(manifest.kind).toBe("service-data-artifact-export");
+  expect(manifest.entries.length).toBe(1);
+  const entry = manifest.entries[0]!;
+  expect(entry.status).toBe("exported");
+  expect(entry.installationId).toBe(seeded.installation.id);
+  if (entry.status === "exported") {
+    expect(entry.outputPath).toBe("backup.artifact");
+    expect(entry.artifact.ref).toBe(
+      "r2://service-data/exports/talk-20260606.tar.zst.enc",
+    );
+    expect(entry.artifact.digest).toBe("sha256:" + "d".repeat(64));
+    expect(entry.artifact.sizeBytes).toBe(12345);
+  }
+
+  const events = await store.listActivityEvents("space_1");
+  const backupEvent = events.find((e) => e.action === "backup.created");
+  expect(
+    (backupEvent!.metadata.serviceData as { exportedCount: number })
+      .exportedCount,
+  ).toBe(1);
+});
+
+test("provider_snapshot and custom_command service-data backup modes are explicit unsupported entries", async () => {
+  const { service, store, artifactStore } = makeService();
+  const one = await seedInstallationModel(store, { spaceId: "space_1" });
+  await store.putInstallConfig({
+    ...one.installConfig,
+    backup: {
+      enabled: true,
+      mode: "provider_snapshot",
+    },
+  });
+  await store.putSource({
+    id: "src_two",
+    spaceId: "space_1",
+    name: "two",
+    url: "https://git.example.com/two.git",
+    defaultRef: "main",
+    defaultPath: ".",
+    status: "active",
+    hookSecretHash: "hash",
+    autoSync: false,
+    createdAt: TS,
+    updatedAt: TS,
+  });
+  await store.putInstallConfig({
+    id: "cfg_two",
+    name: "two",
+    installType: "opentofu_module",
+    trustLevel: "space",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    backup: {
+      enabled: true,
+      mode: "custom_command",
+      command: ["backup"],
+      outputPath: "/work/artifact/service-data.tar.zst",
+    },
+    createdAt: TS,
+    updatedAt: TS,
+  });
+  await store.putInstallation({
+    id: "inst_two",
+    spaceId: "space_1",
+    name: "two",
+    slug: "two",
+    sourceId: "src_two",
+    installType: "opentofu_module",
+    installConfigId: "cfg_two",
+    environment: "production",
+    currentStateGeneration: 0,
+    status: "active",
+    createdAt: TS,
+    updatedAt: TS,
+  });
+
+  const record = await service.createBackup({ spaceId: "space_1" });
+
+  expect(record.serviceData).toBeDefined();
+  expect(record.serviceData!.exportedCount).toBe(0);
+  expect(record.serviceData!.unsupportedCount).toBe(2);
+  expect(record.serviceData!.missingCount).toBe(0);
+  const manifest = await readServiceDataManifest(
+    artifactStore!,
+    record.serviceData!.objectKey,
+  );
+  expect(manifest.entries.map((entry) => entry.status)).toEqual([
+    "unsupported",
+    "unsupported",
+  ]);
+  expect(manifest.entries.map((entry) => entry.mode).sort()).toEqual([
+    "custom_command",
+    "provider_snapshot",
+  ]);
+  expect(JSON.stringify(manifest)).toContain("requires");
+});
+
+test("artifact_export without a projected artifact pointer is recorded as missing", async () => {
+  const { service, store, artifactStore } = makeService();
+  const seeded = await seedInstallationModel(store, { spaceId: "space_1" });
+  await store.putInstallConfig({
+    ...seeded.installConfig,
+    backup: {
+      enabled: true,
+      mode: "artifact_export",
+      outputPath: "backup.ref",
+    },
+  });
+  await store.putOutputSnapshot({
+    id: "out_backup",
+    spaceId: "space_1",
+    installationId: seeded.installation.id,
+    stateGeneration: 1,
+    rawOutputArtifactKey: "spaces/space_1/raw-output.json.enc",
+    publicOutputs: {},
+    spaceOutputs: { backup: { ref: "https://example.com/not-owned.tar" } },
+    outputDigest: "sha256:" + "f".repeat(64),
+    createdAt: TS,
+  });
+
+  const record = await service.createBackup({ spaceId: "space_1" });
+  expect(record.serviceData).toBeDefined();
+  expect(record.serviceData!.missingCount).toBe(1);
+  const manifest = await readServiceDataManifest(
+    artifactStore!,
+    record.serviceData!.objectKey,
+  );
+  expect(manifest.entries[0]!.status).toBe("missing");
+  if (manifest.entries[0]!.status === "missing") {
+    expect(manifest.entries[0]!.reason).toContain("artifact pointer");
+  }
+});
+
 test("createBackup is not_implemented when no artifact store is wired", async () => {
   const { service, store } = makeService({ artifactStore: null });
   await seedInstallationModel(store, { spaceId: "space_1" });
@@ -292,9 +498,7 @@ test("listBackups returns the Space's pointers newest-first", async () => {
 
   const listed = await service.listBackups("space_1");
   // Same createdAt -> tie-break by id desc; both pointers present.
-  expect(listed.map((b) => b.id).sort()).toEqual(
-    [first.id, second.id].sort(),
-  );
+  expect(listed.map((b) => b.id).sort()).toEqual([first.id, second.id].sort());
   const withRun = listed.find((b) => b.id === second.id);
   expect(withRun!.createdByRunId).toBe("apply_9");
 });

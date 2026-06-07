@@ -1,11 +1,8 @@
 import { expect, test } from "bun:test";
 
-import {
-  parseInstallLink,
-  parseInstallSourceParam,
-} from "./install-link.ts";
+import { parseInstallLink, parseInstallSourceParam } from "./install-link.ts";
 
-test("packed source form parses url//path?ref (spec §12 canonical example)", () => {
+test("packed source form parses url//path?ref canonical example", () => {
   const link = new URL(
     "https://app.takosumi.com/install?source=git::https://git.example.com/takos/talk.git//deploy?ref=main",
   );
@@ -29,7 +26,9 @@ test("packed source form without path defaults to '.'", () => {
 
 test("packed source form without ref yields empty ref and accepts top-level fallback", () => {
   expect(
-    parseInstallSourceParam("git::https://git.example.com/takos/talk.git//deploy"),
+    parseInstallSourceParam(
+      "git::https://git.example.com/takos/talk.git//deploy",
+    ),
   ).toEqual({
     url: "https://git.example.com/takos/talk.git",
     ref: "",
@@ -58,7 +57,7 @@ test("scp-style ssh address parses (no scheme '://')", () => {
   });
 });
 
-test("simple git=&ref=&path= form parses (spec §12 簡易形)", () => {
+test("simple git=&ref=&path= form parses", () => {
   const link = new URL(
     "https://app.takosumi.com/install?git=https://git.example.com/takos/talk.git&ref=main&path=deploy",
   );
@@ -85,9 +84,9 @@ test("malformed inputs yield undefined, never throw", () => {
     undefined,
   );
   expect(parseInstallSourceParam("git::")).toBe(undefined);
-  expect(
-    parseInstallLink(new URL("https://app.takosumi.com/install")),
-  ).toBe(undefined);
+  expect(parseInstallLink(new URL("https://app.takosumi.com/install"))).toBe(
+    undefined,
+  );
   expect(
     parseInstallLink(new URL("https://app.takosumi.com/install?git=")),
   ).toBe(undefined);

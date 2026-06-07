@@ -2,16 +2,16 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import {
-  createSpaceDomainServices,
-  createInMemorySpaceDomainDependencies,
+  createMembershipDomainServices,
+  createInMemoryMembershipDomainDependencies,
 } from "./services.ts";
 
 test("space creates a space, grants owner membership, and permits owner group creation", async () => {
-  const deps = createInMemorySpaceDomainDependencies({
+  const deps = createInMemoryMembershipDomainDependencies({
     clock: { now: () => new Date("2026-04-27T00:00:00.000Z") },
     idGenerator: { create: (prefix) => `${prefix}_test` },
   });
-  const services = createSpaceDomainServices(deps);
+  const services = createMembershipDomainServices(deps);
   const actor = actorContext("acct_owner", "req_owner");
 
   const createdSpace = await services.spaces.createSpace({
@@ -65,11 +65,11 @@ test("space creates a space, grants owner membership, and permits owner group cr
 });
 
 test("space denies group creation and entitlement for non-admin members", async () => {
-  const deps = createInMemorySpaceDomainDependencies({
+  const deps = createInMemoryMembershipDomainDependencies({
     clock: { now: () => new Date("2026-04-27T00:00:00.000Z") },
     idGenerator: { create: (prefix) => `${prefix}_${crypto.randomUUID()}` },
   });
-  const services = createSpaceDomainServices(deps);
+  const services = createMembershipDomainServices(deps);
   const owner = actorContext("acct_owner", "req_owner");
   const member = actorContext("acct_member", "req_member");
 

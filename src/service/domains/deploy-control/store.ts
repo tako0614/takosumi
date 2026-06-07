@@ -1,7 +1,7 @@
 /**
  * Persistence boundary for the control-plane ledger (core-spec.md §27).
  *
- * The logical schema is the Space-direct Installation DAG model: spaces,
+ * The logical schema is the Space-direct OpenTofu Capsule DAG model: spaces,
  * sources(+snapshots), connections(+secret blobs), install_configs,
  * installations (UNIQUE(space_id, name, environment)), deployment_profiles,
  * a SINGLE `runs` table (internal PlanRun / ApplyRun / SourceSyncRun records
@@ -25,6 +25,7 @@ import type {
   RunnerProfile,
   StateSnapshot,
 } from "takosumi-contract/deploy-control-api";
+import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type {
   Source,
   SourceSnapshot,
@@ -36,7 +37,10 @@ import type {
   OperatorConnectionDefault,
 } from "takosumi-contract/capability-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
-import type { Dependency, DependencySnapshot } from "takosumi-contract/dependencies";
+import type {
+  Dependency,
+  DependencySnapshot,
+} from "takosumi-contract/dependencies";
 import {
   ACTIVITY_DEFAULT_LIMIT,
   ACTIVITY_MAX_LIMIT,
@@ -48,8 +52,10 @@ import type {
 } from "takosumi-contract/output-snapshots";
 import type { RunGroup } from "takosumi-contract/runs";
 import type { BackupRecord } from "takosumi-contract/backups";
+import type { CredentialMintEvent } from "takosumi-contract/security";
 import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
+import { log } from "../../shared/log.ts";
 
 /**
  * Internal (non-public) plan inputs persisted alongside a PlanRun so the queue
@@ -253,6 +259,14 @@ export interface OpenTofuDeploymentStore {
   getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined>;
   listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]>;
 
+  // CapsuleCompatibilityReport records (spec §12 / §27).
+  putCapsuleCompatibilityReport(
+    report: CapsuleCompatibilityReport,
+  ): Promise<CapsuleCompatibilityReport>;
+  getCapsuleCompatibilityReport(
+    id: string,
+  ): Promise<CapsuleCompatibilityReport | undefined>;
+
   // DeploymentProfile records (spec §9 / §27 deployment_profiles). One per
   // (installation, environment); the upsert key is that pair.
   putDeploymentProfile(profile: DeploymentProfile): Promise<DeploymentProfile>;
@@ -335,6 +349,15 @@ export interface OpenTofuDeploymentStore {
     options?: { readonly limit?: number },
   ): Promise<readonly ActivityEvent[]>;
 
+  // Credential mint audit rows (spec invariant 17). Values are never persisted;
+  // this ledger records only run/space/installation/connection/phase metadata.
+  putCredentialMintEvent(
+    event: CredentialMintEvent,
+  ): Promise<CredentialMintEvent>;
+  listCredentialMintEventsForRun(
+    runId: string,
+  ): Promise<readonly CredentialMintEvent[]>;
+
   // Control-backup ledger pointers (spec §33 layer 1 / §26 R2_BACKUPS). One row
   // per sealed control-backup bundle written to R2_BACKUPS. The bundle bytes
   // live in object storage; only the pointer (objectKey / digest / sizeBytes)
@@ -343,8 +366,7 @@ export interface OpenTofuDeploymentStore {
   listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]>;
 }
 
-export class InMemoryOpenTofuDeploymentStore
-  implements OpenTofuDeploymentStore {
+export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   readonly #runnerProfiles = new Map<string, RunnerProfile>();
   readonly #planRuns = new Map<string, PlanRun>();
   readonly #planRunInputs = new Map<string, PlanRunInputs>();
@@ -359,6 +381,10 @@ export class InMemoryOpenTofuDeploymentStore
   readonly #operatorDefaults = new Map<string, OperatorConnectionDefault>();
   readonly #sources = new Map<string, StoredSource>();
   readonly #sourceSnapshots = new Map<string, SourceSnapshot>();
+  readonly #capsuleCompatibilityReports = new Map<
+    string,
+    CapsuleCompatibilityReport
+  >();
   readonly #deploymentProfiles = new Map<string, DeploymentProfile>();
   readonly #stateSnapshots = new Map<string, StateSnapshot>();
   readonly #dependencies = new Map<string, Dependency>();
@@ -367,6 +393,7 @@ export class InMemoryOpenTofuDeploymentStore
   readonly #outputShares = new Map<string, OutputShare>();
   readonly #runGroups = new Map<string, RunGroup>();
   readonly #activityEvents = new Map<string, ActivityEvent>();
+  readonly #credentialMintEvents = new Map<string, CredentialMintEvent>();
   readonly #backupRecords = new Map<string, BackupRecord>();
 
   constructor() {
@@ -385,7 +412,7 @@ export class InMemoryOpenTofuDeploymentStore
   listRunnerProfiles(): Promise<readonly RunnerProfile[]> {
     return Promise.resolve(
       Array.from(this.#runnerProfiles.values()).sort((a, b) =>
-        a.id.localeCompare(b.id)
+        a.id.localeCompare(b.id),
       ),
     );
   }
@@ -435,8 +462,9 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#sourceSyncRuns.values())
         .filter((row) => row.sourceId === sourceId)
-        .sort((a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         ),
     );
   }
@@ -458,8 +486,9 @@ export class InMemoryOpenTofuDeploymentStore
 
   listSpaces(): Promise<readonly Space[]> {
     return Promise.resolve(
-      Array.from(this.#spaces.values()).sort((a, b) =>
-        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+      Array.from(this.#spaces.values()).sort(
+        (a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
       ),
     );
   }
@@ -475,12 +504,14 @@ export class InMemoryOpenTofuDeploymentStore
 
   listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]> {
     const rows = Array.from(this.#installConfigs.values());
-    const filtered = spaceId === undefined
-      ? rows
-      : rows.filter((row) => row.spaceId === spaceId);
+    const filtered =
+      spaceId === undefined
+        ? rows
+        : rows.filter((row) => row.spaceId === spaceId);
     return Promise.resolve(
-      filtered.sort((a, b) =>
-        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+      filtered.sort(
+        (a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
       ),
     );
   }
@@ -527,12 +558,14 @@ export class InMemoryOpenTofuDeploymentStore
 
   listInstallations(spaceId?: string): Promise<readonly Installation[]> {
     const rows = Array.from(this.#installations.values());
-    const filtered = spaceId === undefined
-      ? rows
-      : rows.filter((row) => row.spaceId === spaceId);
+    const filtered =
+      spaceId === undefined
+        ? rows
+        : rows.filter((row) => row.spaceId === spaceId);
     return Promise.resolve(
-      filtered.sort((a, b) =>
-        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+      filtered.sort(
+        (a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
       ),
     );
   }
@@ -577,8 +610,9 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#deployments.values())
         .filter((row) => row.installationId === installationId)
-        .sort((a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         ),
     );
   }
@@ -596,7 +630,10 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#connections.values())
         .filter((row) => row.spaceId === spaceId)
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
     );
   }
 
@@ -604,7 +641,10 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#connections.values())
         .filter((row) => row.spaceId === undefined && row.scope === "operator")
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
     );
   }
 
@@ -653,7 +693,7 @@ export class InMemoryOpenTofuDeploymentStore
   > {
     return Promise.resolve(
       Array.from(this.#operatorDefaults.values()).sort((a, b) =>
-        a.capability.localeCompare(b.capability)
+        a.capability.localeCompare(b.capability),
       ),
     );
   }
@@ -669,12 +709,14 @@ export class InMemoryOpenTofuDeploymentStore
 
   listSources(spaceId?: string): Promise<readonly StoredSource[]> {
     const rows = Array.from(this.#sources.values());
-    const filtered = spaceId === undefined
-      ? rows
-      : rows.filter((row) => row.spaceId === spaceId);
+    const filtered =
+      spaceId === undefined
+        ? rows
+        : rows.filter((row) => row.spaceId === spaceId);
     return Promise.resolve(
-      filtered.sort((a, b) =>
-        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+      filtered.sort(
+        (a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
       ),
     );
   }
@@ -696,15 +738,27 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#sourceSnapshots.values())
         .filter((row) => row.sourceId === sourceId)
-        .sort((a, b) =>
-          a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id)
+        .sort(
+          (a, b) =>
+            a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id),
         ),
     );
   }
 
-  putDeploymentProfile(
-    profile: DeploymentProfile,
-  ): Promise<DeploymentProfile> {
+  putCapsuleCompatibilityReport(
+    report: CapsuleCompatibilityReport,
+  ): Promise<CapsuleCompatibilityReport> {
+    this.#capsuleCompatibilityReports.set(report.id, report);
+    return Promise.resolve(report);
+  }
+
+  getCapsuleCompatibilityReport(
+    id: string,
+  ): Promise<CapsuleCompatibilityReport | undefined> {
+    return Promise.resolve(this.#capsuleCompatibilityReports.get(id));
+  }
+
+  putDeploymentProfile(profile: DeploymentProfile): Promise<DeploymentProfile> {
     // One profile per (installation, environment): drop a stale row under a
     // different id for the same pair.
     for (const [key, existing] of this.#deploymentProfiles) {
@@ -762,7 +816,8 @@ export class InMemoryOpenTofuDeploymentStore
       if (
         row.installationId !== installationId ||
         row.environment !== environment
-      ) continue;
+      )
+        continue;
       if (!latest || row.generation > latest.generation) latest = row;
     }
     return Promise.resolve(latest);
@@ -781,8 +836,9 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#dependencies.values())
         .filter((row) => row.spaceId === spaceId)
-        .sort((a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         ),
     );
   }
@@ -793,8 +849,9 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#dependencies.values())
         .filter((row) => row.consumerInstallationId === consumerInstallationId)
-        .sort((a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         ),
     );
   }
@@ -805,8 +862,9 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#dependencies.values())
         .filter((row) => row.producerInstallationId === producerInstallationId)
-        .sort((a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         ),
     );
   }
@@ -870,8 +928,9 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#outputShares.values())
         .filter((row) => row.fromSpaceId === fromSpaceId)
-        .sort((a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         ),
     );
   }
@@ -880,8 +939,9 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#outputShares.values())
         .filter((row) => row.toSpaceId === toSpaceId)
-        .sort((a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         ),
     );
   }
@@ -899,8 +959,9 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(
       Array.from(this.#runGroups.values())
         .filter((row) => row.spaceId === spaceId)
-        .sort((a, b) =>
-          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         ),
     );
   }
@@ -918,11 +979,32 @@ export class InMemoryOpenTofuDeploymentStore
     const rows = Array.from(this.#activityEvents.values())
       .filter((row) => row.spaceId === spaceId)
       // Newest first: createdAt desc, then id desc as a stable tie-break.
-      .sort((a, b) =>
-        b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
       )
       .slice(0, limit);
     return Promise.resolve(rows);
+  }
+
+  putCredentialMintEvent(
+    event: CredentialMintEvent,
+  ): Promise<CredentialMintEvent> {
+    this.#credentialMintEvents.set(event.id, event);
+    return Promise.resolve(event);
+  }
+
+  listCredentialMintEventsForRun(
+    runId: string,
+  ): Promise<readonly CredentialMintEvent[]> {
+    return Promise.resolve(
+      Array.from(this.#credentialMintEvents.values())
+        .filter((row) => row.runId === runId)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
+    );
   }
 
   putBackupRecord(record: BackupRecord): Promise<BackupRecord> {
@@ -935,8 +1017,9 @@ export class InMemoryOpenTofuDeploymentStore
       Array.from(this.#backupRecords.values())
         .filter((row) => row.spaceId === spaceId)
         // Newest first: createdAt desc, then id desc as a stable tie-break.
-        .sort((a, b) =>
-          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)
+        .sort(
+          (a, b) =>
+            b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
         ),
     );
   }
@@ -959,11 +1042,13 @@ export function clampActivityLimit(limit: number | undefined): number {
 
 function maybeWarnInMemoryStore(storeName: string): void {
   if (!shouldWarnInMemoryStore()) return;
-  console.warn(
-    `[takosumi-service] WARNING: ${storeName} is in-memory; OpenTofu run, ` +
-      `Installation, and Deployment records will NOT persist across restart ` +
-      `or isolate recycle. Inject a durable store for production/staging.`,
-  );
+  log.warn("service.deploy_control.in_memory_store", {
+    store: storeName,
+    detail:
+      "OpenTofu run, Installation, and Deployment records will NOT persist " +
+      "across restart or isolate recycle. Inject a durable store for " +
+      "production/staging.",
+  });
 }
 
 function shouldWarnInMemoryStore(): boolean {

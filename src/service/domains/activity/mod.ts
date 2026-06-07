@@ -11,15 +11,17 @@
  * it, and NEVER throws into the caller's path (a failed audit write must not fail
  * the action it describes). On a store error it warns and returns `undefined`.
  *
- * Security invariant: callers pass identifiers / names / digests / counts in
- * `metadata` only — never secret material and never resolved output VALUES
- * (spec §9 / §16). This service does not inspect or redact metadata; emission
- * points are responsible for keeping secrets out.
+ * Security invariant: callers should pass identifiers / names / digests / counts
+ * in `metadata` only — never secret material and never resolved output VALUES
+ * (spec §9 / §16). The service still redacts secret-shaped metadata as a central
+ * backstop so a bad emission site cannot persist obvious token/password fields.
  */
 
 import type { ActivityEvent } from "takosumi-contract/activity";
 import { clampActivityLimit } from "../deploy-control/store.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
+import { log } from "../../shared/log.ts";
+import { redactRecord } from "../../shared/redaction.ts";
 
 /** The {@link ActivityEvent} fields a caller supplies; id + createdAt are minted. */
 export type RecordActivityInput = Omit<ActivityEvent, "id" | "createdAt">;
@@ -49,6 +51,7 @@ export class ActivityService implements ActivityRecorder {
   readonly #store: OpenTofuDeploymentStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
+  #lastTimestampMs = 0;
 
   constructor(deps: ActivityServiceDependencies) {
     this.#store = deps.store;
@@ -62,20 +65,32 @@ export class ActivityService implements ActivityRecorder {
    * caller's action is never failed by an audit write.
    */
   async record(event: RecordActivityInput): Promise<ActivityEvent | undefined> {
+    const createdAt = this.#nextCreatedAt();
     const full: ActivityEvent = {
       ...event,
+      metadata: redactRecord(event.metadata),
       id: this.#newId("act"),
-      createdAt: this.#now().toISOString(),
+      createdAt,
     };
     try {
       return await this.#store.putActivityEvent(full);
     } catch (error) {
-      console.warn(
-        `[takosumi-service] activity record failed (action=${event.action} ` +
-          `space=${event.spaceId}): ${stringifyError(error)}`,
-      );
+      log.warn("service.activity.record_failed", {
+        action: event.action,
+        spaceId: event.spaceId,
+        error,
+      });
       return undefined;
     }
+  }
+
+  #nextCreatedAt(): string {
+    const observed = this.#now().getTime();
+    const next = observed <= this.#lastTimestampMs
+      ? this.#lastTimestampMs + 1
+      : observed;
+    this.#lastTimestampMs = next;
+    return new Date(next).toISOString();
   }
 
   /**
@@ -94,9 +109,4 @@ export class ActivityService implements ActivityRecorder {
 
 function defaultId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
-}
-
-function stringifyError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
 }

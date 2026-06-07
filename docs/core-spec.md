@@ -1,15 +1,17 @@
 # Takosumi Core Specification
 
-> **このドキュメントは Takosumi core の正本 (canonical spec) です。** 2026-06-06 全面改訂 (Space 直下 Installation DAG モデル採用)。
-> 個別の reference docs (`docs/reference/*.md`) や AGENTS.md は本 spec に従属し、矛盾した場合は本 spec が優先します。
-> 適合状況は [`core-conformance.md`](./core-conformance.md) を参照してください。
+> **このドキュメントは Takosumi core の正本 (canonical spec) です。**
+> 2026-06-07 改訂: OpenTofu Capsule DAG モデルを採用。reference docs、AGENTS.md、
+> implementation docs が本書と矛盾する場合は本書を優先します。適合状況は
+> [`core-conformance.md`](./core-conformance.md) に記録します。
 
-## 1. 一言定義
+## 1. 定義
 
-**Takosumi は、Space 直下の OpenTofu Installation DAG を管理する OSS control plane。**
+**Takosumi は、Space 直下の OpenTofu Capsule DAG を管理する OSS control plane。**
 
-ユーザーは Git URL から Service を Space にインストールする。
-Takosumi はそれを OpenTofu で plan / apply / destroy し、state・outputs・依存関係・credential・artifact・履歴を管理する。
+ユーザーは Git URL から OpenTofu Capsule を Space にインストールする。Takosumi はその Capsule を正規化し、
+生成した root module で包み、OpenTofu で plan / apply / destroy し、state・outputs・dependencies・credentials・
+artifacts・activity・billing を管理する。
 
 ```txt
 Space: @shota
@@ -18,66 +20,117 @@ Space: @shota
   ├─ Installation: talk
   └─ Installation: blog
 
-Graph:
-  core.base_domain          → files.base_domain
-  core.base_domain          → talk.base_domain
-  core.member_issuer        → talk.member_issuer
-  files.attachments_bucket  → talk.attachments_bucket
+Dependency Graph:
+  core.base_domain          -> files.base_domain
+  core.base_domain          -> talk.base_domain
+  core.member_issuer        -> talk.member_issuer
+  files.attachments_bucket  -> talk.attachments_bucket
 ```
 
-この構造は filesystem ではなく **Installation graph**。
-保存上は R2 prefix を階層化するが、正本は D1 上の DAG。
+この構造は filesystem ではなく **D1 上の OpenTofu Capsule DAG**。R2 の保存パスは階層化するが、正本は
+D1 の Space / Installation / Dependency / StateSnapshot / OutputSnapshot / Run。
 
----
+## 2. コア思想
 
-## 2. コンセプト
+### 2.1 すべては Capsule
 
-Takosumi のプロダクトコンセプトはこれ。
+Takosumi にインストールされる単位はすべて **OpenTofu Capsule**。
 
 ```txt
-SaaSを借りるのではなく、自分のSpaceにServiceとして持つ。
+OpenTofu Capsule =
+  Git URLから取得できるOpenTofu configurationを、
+  Takosumiが child module として呼べる形に正規化し、
+  Takosumi generated root module で包んで実行する単位。
 ```
 
-Talk / Files / Blog / Calls のような機能は Takosumi に内蔵するのではなく、全部 Git URL から入る Installation として扱う。
+ユーザーから見ると、常にこれだけ。
 
 ```txt
-@shota/talk
-@shota/files
-@family/talk
-@company/internal-chat
+Git URLからOpenTofu Capsuleをインストール
 ```
 
-Service の配布元は任意の Git repository。
+内部では Capsule Normalizer が互換性を判定し、必要なら runner の一時 workspace 上で module 化する。
+
+### 2.2 Takosumi が root を所有する
+
+Capsule の source 側は child module。Takosumi 側は root module。
 
 ```txt
-https://git.example.com/takos/talk.git
-https://github.com/user/talk.git
-git@git.example.com:company/internal-chat.git
+Git Source
+  -> SourceSnapshot
+  -> Capsule Normalizer
+  -> Takosumi Generated Root
+       ├─ backend/state
+       ├─ provider configuration
+       ├─ credentials
+       ├─ dependency injection
+       ├─ policy boundary
+       └─ module "service" { source = "../module" }
+  -> tofu plan / apply
 ```
 
-外部サイトにはこういう導線を置ける。
+Provider configuration、backend、state、credential は Takosumi generated root が所有する。
+
+### 2.3 OpenTofu-native
+
+Takosumi の正本は OpenTofu の構造に合わせる。
 
 ```txt
-Install to Takosumi
+入力値      = variables
+出力値      = outputs
+値交換      = outputs -> variables / remote_state
+実行単位    = root module
+再利用単位  = child module
+実行計画    = tofu plan
+反映        = tofu apply saved plan
+状態        = tfstate
+検査        = tofu show -json
+provider   = OpenTofu provider
 ```
 
-リンク先。
+### 2.4 Space は軽い owner namespace
+
+Space は GitHub の user / org に近い。
 
 ```txt
-https://app.takosumi.com/install?source=git::https://git.example.com/takos/talk.git//deploy?ref=main
+@shota
+@takos
+@family
+@company
 ```
 
----
+Space は作成者・所有者・権限・state namespace・connection・billing の単位。
 
-## 3. 最終アーキテクチャ
+### 2.5 Connections は default と override
+
+Takosumi instance には operator default connections がある。
+
+```txt
+compute default
+dns default
+storage default
+source default
+```
+
+Space は必要に応じて connection を追加し、capability ごとに default を上書きできる。
+
+```txt
+compute = default
+dns     = connection: my-cloudflare-zone
+storage = default
+```
+
+Self-host では operator default connection が自分のリソース。Hosted では operator default connection が運営側リソース。
+
+## 3. 全体アーキテクチャ
 
 ```txt
 Takosumi Instance
   ├─ Operator Default Connections
-  │    ├─ compute default
-  │    ├─ dns default
-  │    ├─ storage default
-  │    └─ source default
+  │    ├─ compute
+  │    ├─ dns
+  │    ├─ storage
+  │    └─ source
   │
   └─ Spaces
        ├─ @shota
@@ -89,6 +142,7 @@ Takosumi Instance
        │    ├─ Deployments
        │    ├─ StateSnapshots
        │    ├─ OutputSnapshots
+       │    ├─ UsageEvents
        │    └─ Activity
        │
        └─ @takos
@@ -111,27 +165,471 @@ Cloudflare Worker: takosumi
        └─ Runner Container
 ```
 
-実行境界はこれ。
+実行境界。
 
 ```txt
 Takosumi Worker
   trusted control plane
 
 Runner Container
-  Git clone / build / OpenTofu execution boundary
+  Git clone / normalize / build / OpenTofu execution boundary
 ```
 
----
+## 4. OpenTofu Capsule Pipeline
 
-## 4. Space
-
-Space は GitHub の user / org に近い owner namespace。
+すべての Installation は同じ pipeline を通る。
 
 ```txt
-@shota
-@takos
-@family
-@company
+Git URL
+  -> SourceSnapshot
+  -> Capsule Normalizer
+  -> Compatibility Report
+  -> tofu init without provider credentials
+  -> Capsule Gate
+  -> Generated Root
+  -> DependencySnapshot
+  -> Credential Mint
+  -> tofu plan -out=tfplan
+  -> tofu show -json
+  -> Policy Evaluation
+  -> Approval
+  -> Credential Re-mint
+  -> tofu apply saved plan
+  -> StateSnapshot
+  -> OutputSnapshot
+  -> Deployment
+  -> Stale Propagation
+```
+
+Compatibility check は provider credential を mint しない。Provider credential は Capsule Gate 通過後の plan / apply /
+destroy phase だけで mint する。
+
+## 5. Capsule Normalizer
+
+Capsule Normalizer は Git URL から取得した OpenTofu configuration を、Takosumi が扱える Capsule へ正規化する。
+
+### 5.1 Compatibility levels
+
+ユーザーには mode を選ばせず、互換性レベルとして表示する。
+
+```txt
+Ready
+Auto-capsulized
+Needs patch
+Unsupported
+```
+
+#### Ready
+
+そのまま child module として呼べる。
+
+```txt
+- reusable OpenTofu moduleとして成立
+- provider configurationをrootへ委譲できる
+- backendを持たない、または影響なし
+- required_providersが明確
+- variables / outputs が明確
+- providerがallowlist内
+- data sourceがallowlist内
+- provisionerがpolicy内
+```
+
+#### Auto-capsulized
+
+一時 workspace 上で安全に module 化できる。
+
+```txt
+backend "s3"        -> Takosumi managed state
+provider "aws"      -> generated root provider
+provider region     -> DeploymentProfile / provider config
+root-like config     -> child module copy
+```
+
+UI 表示例。
+
+```txt
+Takosumi will adapt:
+- backend "s3" -> Takosumi managed state
+- provider "aws" -> default storage connection
+- provider "cloudflare" -> default dns connection
+```
+
+#### Needs patch
+
+安全な自動変換には少し修正が必要。
+
+```txt
+- provider configにcredential入力が含まれる
+- required_providersが不足
+- provider aliasesが不明確
+- outputが不足
+- data sourceが未許可
+- module化に必要なvariableが足りない
+```
+
+UI 表示例。
+
+```txt
+Needs changes:
+1. Move provider configuration to the caller.
+2. Add required_providers.
+3. Expose public_url as output.
+```
+
+#### Unsupported
+
+ワンタッチ安全実行の範囲外。
+
+```txt
+- raw credentialをvariableとして要求
+- local-exec / remote-execが本質的に必要
+- external programが必要
+- allowlist外providerが必要
+- allowlist外data sourceが必要
+- plan前にsecret data sourceを読む必要がある
+- root backend/stateに強く依存
+- import/state surgery前提
+```
+
+## 6. Capsule Gate
+
+Capsule Gate は credential mint 前に実行する互換性・安全性検査。
+
+```txt
+SourceSnapshot
+  -> Normalizer
+  -> tofu init without provider credentials
+  -> module tree scan
+  -> Capsule Gate
+  -> credential mint
+```
+
+Gate が見るもの。
+
+```txt
+- required_providers
+- provider blocks
+- backend blocks
+- resource types
+- data source types
+- provisioners
+- module sources
+- provider aliases
+- variables
+- outputs
+- dependency lock
+- filesystem-sensitive expressions
+```
+
+Gate の出力は Compatibility Report に統合される。
+
+```ts
+type CapsuleCompatibilityReport = {
+  id: string;
+  sourceSnapshotId: string;
+
+  level:
+    | "ready"
+    | "auto_capsulized"
+    | "needs_patch"
+    | "unsupported";
+
+  findings: Array<{
+    severity: "info" | "warning" | "error";
+    code: string;
+    message: string;
+    path?: string;
+    suggestion?: string;
+  }>;
+
+  providers: Array<{
+    source: string;
+    versionConstraint?: string;
+    aliases: string[];
+    allowed: boolean;
+  }>;
+
+  resources: Array<{
+    type: string;
+    count?: number;
+    allowed: boolean;
+  }>;
+
+  dataSources: Array<{
+    type: string;
+    allowed: boolean;
+  }>;
+
+  provisioners: Array<{
+    type: string;
+    allowed: boolean;
+  }>;
+
+  normalizedObjectKey?: string;
+  normalizedDigest?: string;
+
+  createdAt: string;
+};
+```
+
+## 7. Generated Root Module
+
+Takosumi は必ず root module を生成する。
+
+```hcl
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+variable "takosumi_aws_storage" {
+  type = object({
+    access_key    = string
+    secret_key    = string
+    session_token = string
+  })
+
+  sensitive = true
+  ephemeral = true
+}
+
+variable "takosumi_cloudflare_compute_token" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+
+variable "takosumi_cloudflare_dns_token" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+
+provider "aws" {
+  alias      = "storage"
+  region     = var.aws_storage_region
+  access_key = var.takosumi_aws_storage.access_key
+  secret_key = var.takosumi_aws_storage.secret_key
+  token      = var.takosumi_aws_storage.session_token
+}
+
+provider "cloudflare" {
+  alias     = "compute"
+  api_token = var.takosumi_cloudflare_compute_token
+}
+
+provider "cloudflare" {
+  alias     = "dns"
+  api_token = var.takosumi_cloudflare_dns_token
+}
+
+module "service" {
+  source = "../module"
+
+  providers = {
+    aws.storage         = aws.storage
+    cloudflare.compute = cloudflare.compute
+    cloudflare.dns     = cloudflare.dns
+  }
+
+  base_domain   = var.base_domain
+  member_issuer = var.member_issuer
+  service_slug  = var.service_slug
+}
+```
+
+Capsule 側は普通の OpenTofu reusable module。
+
+```hcl
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+      configuration_aliases = [
+        cloudflare.compute,
+        cloudflare.dns
+      ]
+    }
+
+    aws = {
+      source = "hashicorp/aws"
+      configuration_aliases = [
+        aws.storage
+      ]
+    }
+  }
+}
+
+variable "base_domain" {
+  type = string
+}
+
+variable "service_slug" {
+  type = string
+}
+
+output "public_url" {
+  value = "https://${var.base_domain}/${var.service_slug}"
+}
+```
+
+Provider credentials は module-readable file、normal tfvars、public output に materialize しない。Generated root の
+provider configuration だけが credential を受け取る。
+
+## 8. Provider and credential handling
+
+### 8.1 Credential classes
+
+```txt
+Operator root secret
+  Worker secret / bootstrap secret
+
+Operator connection
+  instance default connection
+  encrypted SecretBlob
+
+Space connection
+  Space-owned connection
+  encrypted SecretBlob
+
+Run credential
+  run/phase/capability scoped temporary credential
+
+App secret
+  runtime secret for installed services
+```
+
+### 8.2 Credential phases
+
+```txt
+source phase
+  Git credential
+
+normalize phase
+  no provider credential
+
+build phase
+  build inputs
+
+plan phase
+  provider credentials
+
+apply phase
+  provider credentials
+
+destroy phase
+  provider credentials
+```
+
+### 8.3 Mint request
+
+```ts
+type MintRequest = {
+  runId: string;
+  installationId: string;
+  phase:
+    | "source"
+    | "normalize"
+    | "build"
+    | "plan"
+    | "apply"
+    | "destroy";
+
+  capabilities: Array<
+    | "source"
+    | "compute"
+    | "dns"
+    | "storage"
+    | "database"
+    | "secrets"
+  >;
+};
+```
+
+### 8.4 Mint response
+
+```ts
+type MintResponse = {
+  expiresAt: string;
+
+  env: Record<string, string>;
+
+  files: Array<{
+    path: string;
+    mode: "0400" | "0600";
+    content: string;
+  }>;
+};
+```
+
+Provider credentials は module が読める normal tfvars file に materialize しない。Generated root の provider
+configuration にだけ渡す。
+
+### 8.5 Git source credentials
+
+HTTPS token。
+
+```txt
+GIT_TERMINAL_PROMPT=0
+GIT_ASKPASS=/tmp/takosumi-askpass
+```
+
+SSH key。
+
+```txt
+GIT_SSH_COMMAND="ssh -i /tmp/source_key -o UserKnownHostsFile=/tmp/known_hosts -o StrictHostKeyChecking=yes"
+```
+
+### 8.6 AWS operator connection
+
+AWS は operator bootstrap から STS AssumeRole で run-scoped temporary credential を作る。
+
+```txt
+operator bootstrap credential
+  -> sts:AssumeRole
+  -> run-scoped temporary credential
+  -> generated root provider config
+```
+
+AWS 側の制限。
+
+```txt
+- session policy
+- permission boundary
+- SCP
+- resource prefix
+- tag boundary
+- region allowlist
+- quota
+```
+
+## 9. Space
+
+```ts
+type Space = {
+  id: string;
+
+  handle: string;
+  displayName: string;
+
+  type:
+    | "personal"
+    | "organization";
+
+  ownerUserId: string;
+
+  billingAccountId?: string;
+
+  createdAt: string;
+  updatedAt: string;
+};
 ```
 
 Space が持つもの。
@@ -142,102 +640,15 @@ roles
 sources
 connections
 installations
-dependency graph
-outputs
+dependencies
+output shares
 state namespace
 policy
 activity
-optional billing
+billing
 ```
 
-Billing は Space に紐づけられる。
-
-```txt
-@shota
-  billing: personal
-
-@company
-  billing: company invoice
-
-@family
-  billing: optional
-```
-
-Space は軽い所有単位。
-初回ログイン時に個人 Space を自動作成する。
-
-```txt
-@shota
-```
-
-Organization 的に使いたい場合は追加 Space を作る。
-
-```txt
-@takos
-@family
-@company
-```
-
----
-
-## 5. Installation
-
-Installation は Space 直下の OpenTofu 実行単位。
-
-```txt
-@shota/core
-@shota/talk
-@shota/files
-@takos/talk
-```
-
-1 Installation = 1 OpenTofu root/state。
-
-Installation が持つもの。
-
-```txt
-Source
-SourceSnapshot
-InstallConfig
-DeploymentProfile
-Dependencies
-Runs
-StateSnapshots
-OutputSnapshots
-Deployments
-```
-
-Installation full name。
-
-```txt
-@space/name
-```
-
-例。
-
-```txt
-@shota/core
-@shota/talk
-@shota/files
-@company/internal-chat
-```
-
-`core` は標準の基盤 Installation。
-普通の Installation と同じ扱いで、他 Installation に共有する outputs を出す。
-
-```txt
-@shota/core outputs:
-  base_domain
-  public_origin
-  member_issuer
-  service_registry_url
-```
-
----
-
-## 6. Source
-
-Source は Git repository。
+## 10. Source
 
 ```ts
 type Source = {
@@ -252,7 +663,10 @@ type Source = {
 
   authConnectionId?: string;
 
-  status: "active" | "disabled" | "error";
+  status:
+    | "active"
+    | "disabled"
+    | "error";
 
   createdAt: string;
   updatedAt: string;
@@ -267,30 +681,7 @@ ssh://git@host/path/repo.git
 git@host:path/repo.git
 ```
 
-GitHub / GitLab / Gitea / Forgejo / Bitbucket / 自前 Git server はすべて同じ Source として扱う。
-
-core は **GitHub 非依存**。 git source の抽象は `GitAddress` (`{ url, ref, path, credentialId? }`) のみで、
-`githubInstallationId` 等の forge 固有 identifier を core 型に持ち込まない。 forge 連携は core の外の optional adapter。
-
-user repo に Takosumi 独自 manifest は要求しない。 install 設定は service-side DB config (InstallConfig) として持つ。
-
----
-
-## 7. SourceSnapshot
-
-SourceSnapshot は Git ref を commit に固定した immutable input。
-
-```txt
-Git URL + ref + path
-  ↓
-resolved commit
-  ↓
-source archive
-  ↓
-digest
-  ↓
-R2_SOURCE
-```
+SourceSnapshot。
 
 ```ts
 type SourceSnapshot = {
@@ -325,52 +716,16 @@ Lifecycle。
 9. SourceSnapshot 作成
 ```
 
-HTTPS token。
-
-```txt
-GIT_TERMINAL_PROMPT=0
-GIT_ASKPASS=/tmp/takosumi-askpass
-```
-
-SSH key。
-
-```txt
-GIT_SSH_COMMAND="ssh -i /tmp/source_key -o UserKnownHostsFile=/tmp/known_hosts -o StrictHostKeyChecking=yes"
-```
-
----
-
-## 8. Connection
-
-Connection は外部接続。
-
-```txt
-Git token
-Git SSH key
-Cloudflare API token
-AWS AssumeRole
-static secret
-manual value
-```
-
-Connection scope は2種類。
-
-```txt
-operator
-  Takosumi instance 全体の接続
-
-space
-  Space に追加された接続
-```
-
-Self-host では operator connection は自分のリソース。
-Hosted SaaS では operator connection は運営側リソース。
+## 11. Connection
 
 ```ts
 type Connection = {
   id: string;
 
-  scope: "operator" | "space";
+  scope:
+    | "operator"
+    | "space";
+
   spaceId?: string;
 
   kind:
@@ -400,6 +755,7 @@ type Connection = {
   >;
 
   scopeJson: Record<string, unknown>;
+
   secretRef?: string;
 
   createdAt: string;
@@ -413,6 +769,7 @@ SecretBlob。
 ```ts
 type SecretBlob = {
   id: string;
+
   spaceId?: string;
 
   kind:
@@ -433,62 +790,29 @@ type SecretBlob = {
 };
 ```
 
----
+Operator default connections。
 
-## 9. Operator Default Connections
+```ts
+type OperatorConnectionDefault = {
+  id: string;
 
-Takosumi instance 全体の default 接続。
+  capability:
+    | "source"
+    | "compute"
+    | "dns"
+    | "storage"
+    | "database"
+    | "secrets";
 
-```json
-{
-  "defaults": {
-    "compute": "conn_operator_cloudflare",
-    "dns": "conn_operator_cloudflare",
-    "storage": "conn_operator_r2",
-    "source": "conn_operator_git"
-  }
-}
+  provider: string;
+  connectionId: string;
+
+  createdAt: string;
+  updatedAt: string;
+};
 ```
 
-Installation 側は capability ごとに binding する。
-
-```json
-{
-  "compute": { "mode": "default" },
-  "dns": { "mode": "default" },
-  "storage": { "mode": "default" }
-}
-```
-
-Space connection で上書きする場合。
-
-```json
-{
-  "compute": { "mode": "default" },
-  "dns": {
-    "mode": "connection",
-    "connectionId": "conn_space_cloudflare_dns"
-  },
-  "storage": { "mode": "default" }
-}
-```
-
-手動設定。
-
-```json
-{
-  "dns": {
-    "mode": "manual",
-    "values": {
-      "type": "CNAME",
-      "name": "talk.example.com",
-      "target": "cname.takosumi.example"
-    }
-  }
-}
-```
-
-CapabilityBinding。
+Capability binding。
 
 ```ts
 type CapabilityBinding = {
@@ -501,100 +825,73 @@ type CapabilityBinding = {
   connectionId?: string;
   provider?: string;
   region?: string;
+
   values?: Record<string, unknown>;
 };
 ```
 
----
+## 12. Installation
 
-## 10. Install type
+```ts
+type Installation = {
+  id: string;
 
-Installation の実行方式。
+  spaceId: string;
 
-```txt
-core
-opentofu_module
-opentofu_root
-app_source
+  name: string;
+  slug: string;
+
+  sourceId: string;
+
+  installConfigId: string;
+
+  environment: string;
+
+  currentDeploymentId?: string;
+  currentStateGeneration: number;
+  currentOutputSnapshotId?: string;
+
+  compatibilityReportId?: string;
+
+  status:
+    | "pending"
+    | "active"
+    | "stale"
+    | "error"
+    | "disabled"
+    | "destroyed";
+
+  createdAt: string;
+  updatedAt: string;
+};
 ```
 
-### core
-
-Space の基盤用 Installation。
-
-標準 outputs。
+Installation full name。
 
 ```txt
-base_domain
-public_origin
-member_issuer
-service_registry_url
+@space/name
 ```
 
-### opentofu_module
-
-Git repo の指定 path を OpenTofu module として扱い、Takosumi が generated root module を作る。
+Example。
 
 ```txt
-SourceSnapshot
-  ↓
-moduleとして展開
-  ↓
-generated root
-  ↓
-tofu plan/apply
+@shota/core
+@shota/talk
+@shota/files
+@company/internal-chat
 ```
 
-標準的な Service install mode。
+## 13. InstallConfig
 
-### opentofu_root
-
-Git repo の指定 path を OpenTofu root configuration として実行する。
-
-```txt
-SourceSnapshot
-  ↓
-tofu init
-  ↓
-tofu plan
-  ↓
-tofu apply
-```
-
-### app_source
-
-Git repo をアプリソースとして build し、artifact を公式 OpenTofu deploy module に渡す。
-
-```txt
-app source
-  ↓
-build
-  ↓
-artifact
-  ↓
-official deploy module
-  ↓
-tofu plan/apply
-```
-
----
-
-## 11. InstallConfig
-
-InstallConfig は Takosumi 側 DB に保存される「この Source をどう扱うか」の設定。
+InstallConfig は service-side config。
 
 ```ts
 type InstallConfig = {
   id: string;
+
   spaceId?: string;
 
   name: string;
-
-  installType:
-    | "core"
-    | "opentofu_module"
-    | "opentofu_root"
-    | "app_source";
 
   trustLevel:
     | "official"
@@ -603,6 +900,12 @@ type InstallConfig = {
     | "raw";
 
   modulePath?: string;
+
+  normalization: {
+    allowBackendRewrite: boolean;
+    allowProviderLift: boolean;
+    allowAliasInjection: boolean;
+  };
 
   build?: {
     enabled: boolean;
@@ -634,126 +937,68 @@ type InstallConfig = {
 };
 ```
 
----
+## 14. DeploymentProfile
 
-## 12. External install link
+```ts
+type DeploymentProfile = {
+  id: string;
 
-外部サイトは Git URL を渡す。
+  spaceId: string;
+  installationId: string;
+  environment: string;
 
-```txt
-https://app.takosumi.com/install?source=git::https://git.example.com/takos/talk.git//deploy?ref=main
+  bindings: {
+    source?: CapabilityBinding;
+    compute?: CapabilityBinding;
+    dns?: CapabilityBinding;
+    storage?: CapabilityBinding;
+    database?: CapabilityBinding;
+    secrets?: CapabilityBinding;
+  };
+
+  createdAt: string;
+  updatedAt: string;
+};
 ```
 
-簡易形。
+Example。
 
-```txt
-https://app.takosumi.com/install?git=https://git.example.com/takos/talk.git&ref=main&path=deploy
-```
-
-UI。
-
-```txt
-Install Service
-
-Source:
-git.example.com/takos/talk.git
-
-Ref:
-main
-
-Path:
-deploy
-
-Install into:
-@shota
-
-Installation name:
-talk
-
-Environment:
-production
-```
-
----
-
-## 13. Generated root module
-
-`opentofu_module` では Takosumi が OpenTofu root module を生成する。
-
-```hcl
-provider "cloudflare" {
-  alias     = "compute"
-  api_token = var.cloudflare_compute_token
-}
-
-provider "cloudflare" {
-  alias     = "dns"
-  api_token = var.cloudflare_dns_token
-}
-
-provider "aws" {
-  alias      = "storage"
-  region     = var.aws_storage_region
-  access_key = var.aws_storage_access_key
-  secret_key = var.aws_storage_secret_key
-  token      = var.aws_storage_session_token
-}
-
-module "service" {
-  source = "./module"
-
-  providers = {
-    cloudflare.compute = cloudflare.compute
-    cloudflare.dns     = cloudflare.dns
-    aws.storage        = aws.storage
-  }
-
-  service_slug = var.service_slug
-}
-```
-
-Module 側。
-
-```hcl
-terraform {
-  required_providers {
-    cloudflare = {
-      source = "cloudflare/cloudflare"
-      configuration_aliases = [
-        cloudflare.compute,
-        cloudflare.dns
-      ]
+```json
+{
+  "bindings": {
+    "source": {
+      "mode": "default"
+    },
+    "compute": {
+      "mode": "default"
+    },
+    "dns": {
+      "mode": "connection",
+      "connectionId": "conn_space_cloudflare_zone"
+    },
+    "storage": {
+      "mode": "default"
     }
   }
 }
 ```
 
----
+## 15. Dependencies
 
-## 14. Dependency graph
-
-Space 内の Installation は DAG として管理する。
-
-```txt
-core ───────▶ talk
-  │            ▲
-  ▼            │
-files ─────────┘
-```
-
-Dependency model。
+Dependency は Installation 同士の output/input 接続。
 
 ```ts
 type Dependency = {
   id: string;
+
   spaceId: string;
 
   producerInstallationId: string;
   consumerInstallationId: string;
 
   mode:
-    | "remote_state"
     | "variable_injection"
+    | "remote_state"
     | "published_output";
 
   outputs: Record<string, {
@@ -777,38 +1022,9 @@ type Dependency = {
 };
 ```
 
-Example.
+### 15.1 variable_injection
 
-```json
-{
-  "producerInstallationId": "inst_core",
-  "consumerInstallationId": "inst_talk",
-  "mode": "variable_injection",
-  "outputs": {
-    "base_domain": {
-      "from": "base_domain",
-      "to": "base_domain",
-      "required": true,
-      "type": "hostname"
-    },
-    "member_issuer": {
-      "from": "member_issuer",
-      "to": "member_issuer",
-      "required": true,
-      "type": "url"
-    }
-  },
-  "visibility": "space"
-}
-```
-
----
-
-## 15. Dependency modes
-
-### variable_injection
-
-Takosumi が producer output を読み、consumer の `.auto.tfvars.json` を生成する。
+標準 mode。Producer output から `.auto.tfvars.json` を生成する。
 
 ```json
 {
@@ -818,27 +1034,9 @@ Takosumi が producer output を読み、consumer の `.auto.tfvars.json` を生
 }
 ```
 
-Consumer module。
+### 15.2 remote_state
 
-```hcl
-variable "base_domain" {
-  type = string
-}
-
-variable "member_issuer" {
-  type = string
-}
-
-variable "attachments_bucket" {
-  type = string
-}
-```
-
-標準 mode。
-
-### remote_state
-
-同一 Space 内で producer state を read-only materialize し、consumer が `terraform_remote_state` で読む。
+同一 Space の trusted dependency 用。
 
 ```hcl
 data "terraform_remote_state" "core" {
@@ -848,40 +1046,25 @@ data "terraform_remote_state" "core" {
     path = "/work/deps/core.tfstate"
   }
 }
-
-module "service" {
-  source = "./module"
-
-  base_domain   = data.terraform_remote_state.core.outputs.base_domain
-  member_issuer = data.terraform_remote_state.core.outputs.member_issuer
-}
 ```
 
-OpenTofu-native な強結合 mode。
-
-### published_output
+### 15.3 published_output
 
 Space 間共有用。
 
 ```txt
 producer OutputSnapshot
-  ↓
-OutputShare
-  ↓
-consumer Space
-  ↓
-variable_injection
+  -> OutputShare
+  -> consumer Space
+  -> variable_injection
 ```
 
----
-
 ## 16. OutputSnapshot
-
-Apply 後に `tofu output -json` を取得して保存する。
 
 ```ts
 type OutputSnapshot = {
   id: string;
+
   spaceId: string;
   installationId: string;
 
@@ -909,24 +1092,18 @@ space outputs
   same Space dependency で利用
 
 public outputs
-  UI / install summary / external display
+  UI / summary / external display
 ```
 
-Output projection。
+Projection pipeline。
 
 ```txt
 tofu output -json
-  ↓
-sensitive flag check
-  ↓
-InstallConfig outputAllowlist
-  ↓
-type validation
-  ↓
-OutputSnapshot
+  -> sensitive flag check
+  -> InstallConfig outputAllowlist
+  -> type validation
+  -> OutputSnapshot
 ```
-
----
 
 ## 17. DependencySnapshot
 
@@ -935,6 +1112,7 @@ Plan 時に依存入力を固定する。
 ```ts
 type DependencySnapshot = {
   id: string;
+
   runId: string;
 
   dependencies: Array<{
@@ -947,7 +1125,9 @@ type DependencySnapshot = {
     values: Record<string, unknown>;
   }>;
 
-  mode: "strict" | "pinned";
+  mode:
+    | "strict"
+    | "pinned";
 
   createdAt: string;
 };
@@ -956,11 +1136,11 @@ type DependencySnapshot = {
 Plan 時。
 
 ```txt
-1. consumer Installation の Dependencies を読む
+1. consumer Installation の dependencies を読む
 2. producer OutputSnapshot を読む
 3. 必要な値を固定
 4. DependencySnapshot を作る
-5. その snapshot で tofu plan
+5. snapshot で tofu plan
 ```
 
 Apply 時。
@@ -976,20 +1156,16 @@ Apply 時。
 Production default。
 
 ```txt
-DependencySnapshot.mode = strict
+strict
 ```
 
-Preview / dev default。
+Preview / development default。
 
 ```txt
-DependencySnapshot.mode = pinned
+pinned
 ```
 
----
-
 ## 18. OutputShare
-
-Space 間で output を共有する。
 
 ```ts
 type OutputShare = {
@@ -1017,31 +1193,12 @@ type OutputShare = {
 };
 ```
 
-UI。
-
-```txt
-Share outputs
-
-From:
-@company/domain
-
-To:
-@shota
-
-Outputs:
-✓ domain
-✓ public_origin
-```
-
-Consumer 側では variable として受け取る。
-
----
-
 ## 19. Run
 
 ```ts
 type Run = {
   id: string;
+
   runGroupId?: string;
 
   spaceId: string;
@@ -1050,6 +1207,7 @@ type Run = {
 
   type:
     | "source_sync"
+    | "compatibility_check"
     | "plan"
     | "apply"
     | "destroy_plan"
@@ -1069,13 +1227,18 @@ type Run = {
 
   sourceSnapshotId?: string;
   dependencySnapshotId?: string;
+  compatibilityReportId?: string;
 
   baseStateGeneration?: number;
 
   planDigest?: string;
   planArtifactKey?: string;
 
-  policyStatus?: "pass" | "warn" | "deny";
+  policyStatus?:
+    | "pass"
+    | "warn"
+    | "deny";
+
   errorCode?: string;
 
   createdBy: string;
@@ -1091,6 +1254,7 @@ RunGroup。
 ```ts
 type RunGroup = {
   id: string;
+
   spaceId: string;
 
   type:
@@ -1115,11 +1279,7 @@ type RunGroup = {
 };
 ```
 
----
-
 ## 20. StateSnapshot
-
-Installation ごとの tfstate 世代。
 
 ```ts
 type StateSnapshot = {
@@ -1139,16 +1299,6 @@ type StateSnapshot = {
 };
 ```
 
-R2 layout。
-
-```txt
-R2_STATE/
-  spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/
-    00000001.tfstate.enc
-    00000002.tfstate.enc
-    current.json
-```
-
 Generation guard。
 
 ```txt
@@ -1158,8 +1308,6 @@ Plan:
 Apply:
   currentStateGeneration == plan.baseStateGeneration
 ```
-
----
 
 ## 21. Deployment
 
@@ -1181,46 +1329,37 @@ type Deployment = {
 
   outputsPublic: Record<string, unknown>;
 
+  status:
+    | "active"
+    | "superseded"
+    | "rolled_back"
+    | "destroyed";
+
   createdAt: string;
 };
 ```
 
-Deployment status。
+## 22. Runner
 
-```txt
-active
-superseded
-rolled_back
-destroyed
-```
-
----
-
-## 22. Runner architecture
+Execution path。
 
 ```txt
 API request
-  ↓
-Run作成
-  ↓
-Queue投入
-  ↓
-Queue consumer
-  ↓
-CoordinationObject
-  ↓
-OpenTofuRunnerObject
-  ↓
-Runner Container
-  ↓
-git / build / tofu
+  -> Run作成
+  -> Queue投入
+  -> Queue consumer
+  -> CoordinationObject
+  -> OpenTofuRunnerObject
+  -> Runner Container
+  -> git / normalize / tofu
 ```
 
-Runner workspace。
+Workspace。
 
 ```txt
 /work
   /source
+  /normalized
   /module
   /root
   /deps
@@ -1241,37 +1380,39 @@ tar
 zstd
 jq
 ca-certificates
+hcl parser / normalizer helper
 ```
 
 Phases。
 
 ```txt
-source phase
+source
   Git credential
 
-build phase
+normalize
+  no provider credential
+
+build
   build inputs
 
-plan phase
+plan
   provider credentials
-  dependency states / variables
+  dependency values/states
   tofu plan
 
-apply phase
+apply
   provider credentials
   saved plan
   tfstate
 
-destroy phase
+destroy
   provider credentials
   saved destroy plan
 ```
 
----
-
 ## 23. Run lifecycle
 
-### Source sync
+### 23.1 Source sync
 
 ```txt
 1. Run作成
@@ -1287,72 +1428,84 @@ destroy phase
 11. Run succeeded
 ```
 
-### Plan
+### 23.2 Compatibility check
+
+```txt
+1. SourceSnapshot展開
+2. Capsule Normalizer実行
+3. generated normalized module作成
+4. tofu init without provider credentials
+5. module tree scan
+6. Capsule Gate
+7. CompatibilityReport保存
+8. Run succeeded / failed
+```
+
+### 23.3 Plan
 
 ```txt
 1. Plan Run作成
 2. Installation lease取得
 3. SourceSnapshot確定
-4. DependencySnapshot作成
-5. current state generation取得
-6. source展開
-7. dependencies展開
-8. build phase
+4. CompatibilityReport確認
+5. DependencySnapshot作成
+6. current state generation取得
+7. source/normalized module展開
+8. dependencies展開
 9. generated root作成
 10. provider credential mint
 11. tofu init
 12. tofu plan -out=tfplan
 13. tofu show -json tfplan
 14. policy evaluation
-15. plan artifact保存
-16. Run waiting_approval / succeeded
+15. cost estimate
+16. credit reservation
+17. plan artifact保存
+18. Run waiting_approval / succeeded
 ```
 
-### Apply
+### 23.4 Apply
 
 ```txt
 1. Apply Run作成
 2. 対象Plan Run取得
 3. plan digest検証
 4. source snapshot検証
-5. dependency snapshot検証
-6. current state generation検証
-7. Installation lease取得
-8. tfstate復元
-9. dependencies復元
-10. provider credential再mint
-11. tofu apply saved plan
-12. new tfstate保存
-13. StateSnapshot generation +1
-14. tofu output -json
-15. OutputSnapshot作成
-16. Deployment作成
-17. downstream stale marking
+5. compatibility report検証
+6. dependency snapshot検証
+7. current state generation検証
+8. credit reservation確認
+9. Installation lease取得
+10. tfstate復元
+11. dependencies復元
+12. provider credential再mint
+13. tofu apply saved plan
+14. new tfstate保存
+15. StateSnapshot generation +1
+16. tofu output -json
+17. OutputSnapshot作成
+18. Deployment作成
+19. UsageEvent確定
+20. CreditReservation capture/release
+21. downstream stale marking
 ```
 
-### Destroy
+### 23.5 Destroy
 
 ```txt
 destroy_plan
-  ↓
-approval
-  ↓
-destroy_apply
+  -> approval
+  -> destroy_apply
 ```
-
----
 
 ## 24. Stale propagation
 
 Producer output が変わると downstream Installation を stale にする。
 
-例。
-
 ```txt
 core.base_domain changed
-  ↓
-files stale
-talk stale
+  -> files stale
+     talk stale
 ```
 
 Graph。
@@ -1373,13 +1526,13 @@ core.base_domain changed
 [Create plan]
 ```
 
-RunGroup でまとめて更新。
+RunGroup。
 
 ```txt
 Space update
 
 1. core
-   ~ domain changed
+   ~ base_domain changed
 
 2. files
    no changes
@@ -1390,25 +1543,35 @@ Space update
 [Apply update]
 ```
 
----
-
 ## 25. Policy
 
-Policy は OpenTofu plan JSON を評価する。
+Policy は2段階。
+
+```txt
+Capsule Gate
+  credential mint前の静的/構造検査
+
+Plan Policy
+  tofu show -json 後のresource/action/scope検査
+```
 
 Layers。
 
 ```txt
 1. Space policy
 2. InstallConfig trust
-3. install type
+3. compatibility level
 4. provider allowlist
-5. resource type allowlist
-6. scope boundary
-7. action policy
-8. dependency policy
-9. output policy
-10. quota
+5. provider mirror / lockfile
+6. data source allowlist
+7. provisioner policy
+8. resource type allowlist
+9. action policy
+10. scope boundary
+11. dependency policy
+12. output policy
+13. quota
+14. billing reservation
 ```
 
 Provider allowlist。
@@ -1467,7 +1630,7 @@ same Space + variable_injection:
   allow
 
 same Space + remote_state:
-  allow
+  trusted dependency
 
 cross Space:
   OutputShare
@@ -1476,28 +1639,36 @@ sensitive output:
   explicit permission
 ```
 
-Capability binding trust。
+## 26. Security invariants
 
 ```txt
-official / trusted:
-  default connection available
-
-app_source:
-  build phase isolated
-  official deploy adapter uses default connection
-
-opentofu_module:
-  trust policy decides default / connection
-
-opentofu_root:
-  space connection focused
+1. Public API returns no raw secret
+2. User source executes only in Runner Container
+3. Provider credentials are root-only
+4. Provider credentials are ephemeral
+5. Provider credentials are not normal tfvars files
+6. Source phase receives Git credential only
+7. Normalize phase receives no provider credential
+8. Build phase receives build inputs only
+9. Plan/apply phase receives provider credentials only
+10. Capsule Gate runs before provider credential mint
+11. Apply uses saved plan
+12. Apply verifies plan digest
+13. Apply verifies source snapshot
+14. Apply verifies compatibility report
+15. Apply verifies dependency snapshot
+16. Apply verifies state generation
+17. Output publication uses allowlist
+18. Sensitive output sharing requires explicit policy
+19. Cross-Space sharing uses OutputShare
+20. State, plan, raw outputs are encrypted artifacts
+21. Logs pass through redaction
+22. Destroy uses destroy plan and approval
+23. Credential mint is audited
+24. Provider install uses allowlist/mirror/lockfile policy
 ```
 
-`local-exec` provisioner / `external` data source は forbidden-by-default。
-
----
-
-## 26. Storage layout
+## 27. Storage layout
 
 ```txt
 R2_SOURCE/
@@ -1507,12 +1678,15 @@ R2_SOURCE/
 
 R2_ARTIFACTS/
   spaces/{spaceId}/installations/{installationId}/runs/{runId}/
+    normalized-module.tar.zst
     generated-root.tar.zst
     build.log.ndjson.zst
     plan.bin.enc
     plan.json.zst.enc
     policy.json
+    compatibility-report.json
     dependency-snapshot.json
+    cost-estimate.json
     apply.log.ndjson.zst
     outputs.raw.json.enc
     outputs.public.json
@@ -1532,13 +1706,302 @@ R2_BACKUPS/
     service-data.tar.zst.enc
 ```
 
----
+## 28. Billing
 
-## 27. D1 schema
+### 28.1 Billing concept
 
-以下は **logical schema の正本**。 D1 / Postgres / in-memory の各 store backend はこの schema に対称に従う。
+課金単位は Space。
+
+```txt
+Space Plan
+  基本料
+
+Managed Credits
+  operator default connectionを使うmanaged resourceとrunner usage
+
+Space connection
+  ユーザー側クラウド費用 + Takosumi管理料/runner usage
+
+Manual
+  Takosumi管理料/runner usage
+```
+
+Billing machinery は常に ledger として実装するが、operator / self-host 設定で mode を切り替える。
+
+```txt
+disabled
+  billing ledger を表示せず、apply を止めない。self-host default。
+
+showback
+  cost estimate / usage capture を記録するが apply は止めない。
+
+enforce
+  credit reservation を plan/apply gate に入れる。hosted SaaS default。
+```
+
+### 28.2 Plans
+
+```txt
+Free
+Pro
+Team
+Enterprise
+Self-hosted
+```
+
+### 28.3 Credit Ledger
+
+Apply 前に credit を見積もり、予約する。
+
+```txt
+tofu plan
+  -> policy
+  -> cost estimate
+  -> credit reservation
+  -> approval
+  -> apply
+  -> usage event
+  -> capture/release reservation
+```
+
+### 28.4 Billing types
+
+```txt
+runner_minute
+managed_compute
+managed_storage_gb_hour
+artifact_storage_gb_hour
+backup_storage_gb_hour
+egress_gb
+operation
+```
+
+### 28.5 Billing models
+
+```ts
+type BillingAccount = {
+  id: string;
+
+  ownerType:
+    | "user"
+    | "space";
+
+  ownerId: string;
+
+  provider:
+    | "stripe"
+    | "manual"
+    | "none";
+
+  stripeCustomerId?: string;
+
+  status:
+    | "active"
+    | "past_due"
+    | "disabled"
+    | "trialing";
+
+  createdAt: string;
+};
+
+type SpaceSubscription = {
+  id: string;
+
+  spaceId: string;
+  billingAccountId: string;
+  planId: string;
+
+  status:
+    | "active"
+    | "trialing"
+    | "past_due"
+    | "cancelled";
+
+  currentPeriodStart: string;
+  currentPeriodEnd: string;
+
+  createdAt: string;
+};
+
+type CreditBalance = {
+  spaceId: string;
+
+  availableCredits: number;
+  reservedCredits: number;
+
+  monthlyIncludedCredits: number;
+  purchasedCredits: number;
+
+  updatedAt: string;
+};
+
+type UsageEvent = {
+  id: string;
+
+  spaceId: string;
+  installationId?: string;
+  runId?: string;
+
+  kind:
+    | "runner_minute"
+    | "managed_compute"
+    | "managed_storage_gb_hour"
+    | "artifact_storage_gb_hour"
+    | "backup_storage_gb_hour"
+    | "egress_gb"
+    | "operation";
+
+  quantity: number;
+  credits: number;
+
+  source:
+    | "runner"
+    | "resource_meter"
+    | "billing_reconciliation"
+    | "manual_adjustment";
+
+  idempotencyKey: string;
+
+  createdAt: string;
+};
+
+type CreditReservation = {
+  id: string;
+
+  spaceId: string;
+  runId: string;
+
+  estimatedCredits: number;
+
+  status:
+    | "reserved"
+    | "captured"
+    | "released"
+    | "expired";
+
+  createdAt: string;
+  expiresAt: string;
+};
+```
+
+### 28.6 Apply UI
+
+```txt
+Billing impact
+
+Takosumi credits:
++ 28 credits estimated
+
+Included:
+Runner: 3 credits
+Managed compute: 20 credits/month
+Managed storage: 5 credits/month
+
+Your cloud accounts:
+none
+
+Available credits:
+680
+
+[Apply]
+```
+
+Space connection 使用時。
+
+```txt
+Billing impact
+
+Takosumi credits:
++ 3 credits for runner
+
+Your AWS:
+S3 charges may apply
+
+Connections:
+storage = my-aws-role
+```
+
+Self-host。
+
+```txt
+Billing disabled
+or
+Showback mode
+```
+
+## 29. Backup / Export
+
+Backup は2層。
+
+### 29.1 Control backup
+
+Takosumi が管理する制御情報。
+
+```txt
+spaces
+sources
+connections metadata
+installations
+dependencies
+runs
+deployments
+state snapshots
+output snapshots
+artifacts manifest
+audit events
+```
+
+### 29.2 Service data backup
+
+Installation 固有データ。
+
+```txt
+messages
+attachments
+files
+posts
+profiles
+```
+
+BackupConfig。
+
+```ts
+type BackupConfig = {
+  enabled: boolean;
+
+  mode:
+    | "none"
+    | "artifact_export"
+    | "provider_snapshot"
+    | "custom_command";
+
+  command?: string[];
+  outputPath?: string;
+};
+```
+
+## 30. D1 schema
+
+This is the logical D1 schema. Physical implementations may use Drizzle and compact JSON ledger columns, but the
+logical records, uniqueness constraints, and cross-record references must preserve this model.
 
 ```sql
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  email TEXT UNIQUE,
+  name TEXT,
+  avatar_url TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE spaces (
   id TEXT PRIMARY KEY,
   handle TEXT NOT NULL UNIQUE,
@@ -1548,6 +2011,14 @@ CREATE TABLE spaces (
   billing_account_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE space_members (
+  space_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (space_id, user_id)
 );
 
 CREATE TABLE sources (
@@ -1618,9 +2089,9 @@ CREATE TABLE install_configs (
   id TEXT PRIMARY KEY,
   space_id TEXT,
   name TEXT NOT NULL,
-  install_type TEXT NOT NULL,
   trust_level TEXT NOT NULL,
   module_path TEXT,
+  normalization_json TEXT NOT NULL,
   build_json TEXT,
   variable_mapping_json TEXT NOT NULL,
   output_allowlist_json TEXT NOT NULL,
@@ -1630,18 +2101,32 @@ CREATE TABLE install_configs (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE capsule_compatibility_reports (
+  id TEXT PRIMARY KEY,
+  source_snapshot_id TEXT NOT NULL,
+  level TEXT NOT NULL,
+  findings_json TEXT NOT NULL,
+  providers_json TEXT NOT NULL,
+  resources_json TEXT NOT NULL,
+  data_sources_json TEXT NOT NULL,
+  provisioners_json TEXT NOT NULL,
+  normalized_object_key TEXT,
+  normalized_digest TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE installations (
   id TEXT PRIMARY KEY,
   space_id TEXT NOT NULL,
   name TEXT NOT NULL,
   slug TEXT NOT NULL,
   source_id TEXT NOT NULL,
-  install_type TEXT NOT NULL,
   install_config_id TEXT NOT NULL,
   environment TEXT NOT NULL,
   current_deployment_id TEXT,
   current_state_generation INTEGER NOT NULL DEFAULT 0,
   current_output_snapshot_id TEXT,
+  compatibility_report_id TEXT,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -1720,6 +2205,7 @@ CREATE TABLE runs (
   status TEXT NOT NULL,
   source_snapshot_id TEXT,
   dependency_snapshot_id TEXT,
+  compatibility_report_id TEXT,
   base_state_generation INTEGER,
   plan_digest TEXT,
   plan_artifact_key TEXT,
@@ -1755,6 +2241,7 @@ CREATE TABLE deployments (
   state_generation INTEGER NOT NULL,
   output_snapshot_id TEXT NOT NULL,
   outputs_public_json TEXT NOT NULL,
+  status TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 
@@ -1766,6 +2253,95 @@ CREATE TABLE artifacts (
   digest TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE credential_mint_events (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  installation_id TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  capabilities_json TEXT NOT NULL,
+  actor_id TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE security_findings (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL,
+  installation_id TEXT,
+  run_id TEXT,
+  severity TEXT NOT NULL,
+  type TEXT NOT NULL,
+  message TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE billing_accounts (
+  id TEXT PRIMARY KEY,
+  owner_type TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  stripe_customer_id TEXT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE plans (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  monthly_base_price INTEGER NOT NULL,
+  included_credits INTEGER NOT NULL,
+  limits_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE space_subscriptions (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL,
+  billing_account_id TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  current_period_start TEXT NOT NULL,
+  current_period_end TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE credit_balances (
+  space_id TEXT PRIMARY KEY,
+  available_credits INTEGER NOT NULL,
+  reserved_credits INTEGER NOT NULL,
+  monthly_included_credits INTEGER NOT NULL,
+  purchased_credits INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE usage_events (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL,
+  installation_id TEXT,
+  run_id TEXT,
+  kind TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  credits INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE credit_reservations (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  estimated_credits INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
 );
 
 CREATE TABLE audit_events (
@@ -1781,9 +2357,10 @@ CREATE TABLE audit_events (
 );
 ```
 
----
+## 31. Single Worker code layout
 
-## 28. Single Worker code layout
+This is the canonical logical code layout for the product. Current physical paths may be in migration; conformance
+tracks those differences.
 
 ```txt
 takosumi/
@@ -1800,6 +2377,9 @@ takosumi/
         connections/
         vault/
         install-configs/
+        capsule-normalizer/
+        capsule-gate/
+        compatibility/
         installations/
         dependencies/
         outputs/
@@ -1808,8 +2388,8 @@ takosumi/
         policy/
         state/
         artifacts/
-        backups/
         billing/
+        backups/
 
       durable/
         CoordinationObject.ts
@@ -1822,6 +2402,7 @@ takosumi/
         polling.ts
         cleanup.ts
         drift.ts
+        billing.ts
 
   dashboard/
     src/
@@ -1835,10 +2416,13 @@ takosumi/
     schema/
     crypto/
     git/
+    hcl/
     rootgen/
+    normalizer/
     graph/
     policy/
     opentofu/
+    billing/
     audit/
 
   opentofu-modules/
@@ -1849,13 +2433,7 @@ takosumi/
     aws-s3-storage/
 ```
 
-`modules/accounts` / `modules/auth` / `modules/billing` は accounts plane
-(`packages/accounts-service` / `packages/accounts-contract`) への thin mount であり、 accounts plane の実装 package は
-物理的には `packages/` に残る。
-
----
-
-## 29. wrangler shape
+## 32. wrangler shape
 
 ```toml
 name = "takosumi"
@@ -1898,15 +2476,9 @@ name = "RUNNER"
 class_name = "OpenTofuRunnerObject"
 ```
 
-platform worker はこれに加えて accounts plane の binding (`TAKOSUMI_ACCOUNTS_DB` /
-`TAKOSUMI_ACCOUNTS_EXPORTS` 等) を持つ。 realized config (実 resource ID) は operator-private の
-`takosumi-private/platform/wrangler.toml` に置き、 この repo の wrangler.toml は placeholder template とする。
+## 33. API
 
----
-
-## 30. API
-
-Version prefix は置かず `/api` にまとめる。
+Version prefix は置かず `/api` にまとめる。`/install` は public deep link で、dashboard session gate へ渡す。
 
 ### Spaces
 
@@ -1937,6 +2509,13 @@ POST /api/connections/aws/assume-role
 GET  /api/connections
 POST /api/connections/:connectionId/test
 POST /api/connections/:connectionId/revoke
+```
+
+### Capsule compatibility
+
+```txt
+POST /api/sources/:sourceId/compatibility-check
+GET  /api/compatibility-reports/:reportId
 ```
 
 ### Installations
@@ -1993,6 +2572,15 @@ GET /api/deployments/:deploymentId
 POST /api/deployments/:deploymentId/rollback-plan
 ```
 
+### Billing
+
+```txt
+GET  /api/spaces/:spaceId/billing
+GET  /api/spaces/:spaceId/usage
+POST /api/spaces/:spaceId/credits/top-up
+POST /api/spaces/:spaceId/subscription/change
+```
+
 ### Install link
 
 ```txt
@@ -2000,9 +2588,7 @@ GET /install?source=git::https://...
 GET /install?git=https://...&ref=...&path=...
 ```
 
----
-
-## 31. UI
+## 34. UI
 
 ### Space selector
 
@@ -2023,11 +2609,11 @@ Sources
 Connections
 Graph
 Activity
-Settings
 Billing
+Settings
 ```
 
-### Installations view
+### Installations
 
 ```txt
 core
@@ -2045,19 +2631,19 @@ talk
   outputs: public_url, websocket_url
 ```
 
-### Graph view
+### Graph
 
 ```txt
-core ───────▶ talk
-  │            ▲
-  ▼            │
-files ─────────┘
+core -----> talk
+  |          ^
+  v          |
+files -------+
 ```
 
 ### Install from Git
 
 ```txt
-Install Service
+Install OpenTofu Capsule
 
 Git URL:
 [ https://git.example.com/takos/talk.git ]
@@ -2074,21 +2660,47 @@ Install into:
 Installation name:
 [ talk ]
 
-Mode:
-[ OpenTofu module ]
+[Check compatibility]
+```
+
+Compatibility result。
+
+```txt
+Compatibility:
+Auto-capsulized
+
+Takosumi will adapt:
+- backend "s3" -> Takosumi managed state
+- provider "aws" -> default storage connection
+- provider "cloudflare" -> default dns connection
 
 [Continue]
 ```
 
-### Plan summary
+Inputs。
+
+```txt
+Inputs
+
+base_domain
+  <- core.base_domain
+
+member_issuer
+  <- core.member_issuer
+
+attachments_bucket
+  <- files.attachments_bucket
+```
+
+Plan summary。
 
 ```txt
 Changes
 
 Create
-+ Worker: talk-production
-+ Route: /talk
-+ Storage binding: attachments
++ aws_s3_bucket.attachments
++ cloudflare_workers_script.talk
++ cloudflare_dns_record.talk
 
 Update
 none
@@ -2097,9 +2709,9 @@ Delete
 none
 
 Inputs
-base_domain        ← core.base_domain
-member_issuer      ← core.member_issuer
-attachments_bucket ← files.attachments_bucket
+base_domain        <- core.base_domain
+member_issuer      <- core.member_issuer
+attachments_bucket <- files.attachments_bucket
 
 Connections
 compute: default
@@ -2109,95 +2721,30 @@ dns: default
 Policy
 passed
 
+Billing
+28 credits estimated
+680 credits available
+
 [Apply]
 [Details]
 ```
 
----
-
-## 32. Security invariants
+Needs patch。
 
 ```txt
-1. Public API returns no raw secret
-2. User source build runs in Container
-3. Build phase receives build inputs only
-4. Source phase receives Git credential only
-5. Plan/apply phase receives provider credentials only
-6. Apply uses saved plan
-7. Apply verifies plan digest
-8. Apply verifies source snapshot
-9. Apply verifies dependency snapshot
-10. Apply verifies state generation
-11. Output publication uses allowlist
-12. Sensitive output sharing requires explicit policy
-13. Cross-Space sharing uses OutputShare
-14. State, plan, raw outputs are encrypted artifacts
-15. Logs pass through redaction
-16. Destroy uses destroy plan and approval
+Compatibility:
+Needs patch
+
+Reasons:
+1. provider "aws" includes credential settings.
+2. output "public_url" is missing.
+
+Suggested changes:
+- Move provider configuration to the caller.
+- Add public_url output.
 ```
 
-credential の取り扱い原則:
-
-- mint policy は vault 内で判定し、 caller の主張を信用しない。
-- credential は arg / URL に書かず、 askpass file / key file / env で渡す。
-- SSH は `StrictHostKeyChecking=yes` を強制する。
-
----
-
-## 33. Backup / Export
-
-Backup は2層。
-
-### Control backup
-
-Takosumi が管理する制御情報。
-
-```txt
-spaces
-sources
-connections metadata
-installations
-dependencies
-runs
-deployments
-state snapshots
-output snapshots
-artifacts manifest
-audit events
-```
-
-### Service data backup
-
-Installation 固有データ。
-
-```txt
-messages
-attachments
-files
-posts
-profiles
-```
-
-BackupConfig。
-
-```ts
-type BackupConfig = {
-  enabled: boolean;
-
-  mode:
-    | "none"
-    | "artifact_export"
-    | "provider_snapshot"
-    | "custom_command";
-
-  command?: string[];
-  outputPath?: string;
-};
-```
-
----
-
-## 34. MVP
+## 35. MVP
 
 最初に作る範囲。
 
@@ -2206,11 +2753,14 @@ Single Worker
 Dashboard
 Space作成
 Operator default connections
+Connection vault
 Git URL Source
 SourceSnapshot
-core Installation
-opentofu_module Installation
-app_source Installation
+Capsule Normalizer basic
+Compatibility Report
+Capsule Gate basic
+Generated Root
+OpenTofu Capsule Installation
 External install link
 Connection: Cloudflare token
 Connection: Git HTTPS token
@@ -2226,11 +2776,13 @@ StateSnapshot
 OutputSnapshot
 Plan/Apply
 Policy basic
+Credit Ledger basic
+Apply credit reservation
 Stale propagation
 Activity
 ```
 
-最初の公式 Installation。
+最初の公式 Capsule。
 
 ```txt
 core
@@ -2238,14 +2790,7 @@ talk
 files
 ```
 
-Talk も Files も Git URL から入る公式 Installation。
-
-OutputShare / remote_state / published_output / backup 実装 / drift_check は MVP 外 (§35 Phase 8)。
-型と logical schema は §27 のとおり先に定義するが、 実装は MVP 後。
-
----
-
-## 35. 実装順序
+## 36. 実装順序
 
 ### Phase 1: Foundation
 
@@ -2268,6 +2813,7 @@ Cloudflare token
 Git token
 Git SSH key
 Capability binding
+Credential mint audit
 ```
 
 ### Phase 3: Source
@@ -2281,11 +2827,20 @@ External install link
 Generic webhook
 ```
 
-### Phase 4: Core Installation
+### Phase 4: Capsule core
 
 ```txt
-core official module
-generated root
+Capsule Normalizer basic
+Generated Root Builder
+Capsule Gate basic
+Compatibility Report
+provider allowlist
+```
+
+### Phase 5: core Installation
+
+```txt
+core official Capsule
 tofu init
 tofu plan
 tofu apply
@@ -2294,17 +2849,16 @@ OutputSnapshot
 Deployment
 ```
 
-### Phase 5: Service Installation
+### Phase 6: Capsule Installation
 
 ```txt
-opentofu_module install
-app_source install
+OpenTofu Capsule install
 provider alias
 capability binding
 Plan/Apply
 ```
 
-### Phase 6: Dependency Graph
+### Phase 7: Dependency Graph
 
 ```txt
 installation_dependencies
@@ -2315,35 +2869,46 @@ Graph UI
 RunGroup basic
 ```
 
-### Phase 7: Policy
+### Phase 8: Policy
 
 ```txt
 provider allowlist
 resource allowlist
+data source allowlist
+provisioner policy
 scope boundary
 action policy
-dependency policy
 output policy
 quota
 ```
 
-### Phase 8: Advanced
+### Phase 9: Billing
+
+```txt
+Space plan
+CreditBalance
+UsageEvent
+CreditReservation
+Apply estimate
+Apply reservation
+Stripe subscription integration
+```
+
+### Phase 10: Advanced
 
 ```txt
 remote_state same-Space
 OutputShare cross-Space
-opentofu_root advanced
+Auto-capsulized provider/backend lift
 backup/export
 migration
 provider mirror/cache
 ```
 
----
-
-## 36. Final canonical model
+## 37. 最終正本
 
 ```txt
-Takosumi = Space直下のOpenTofu Installation DAG Manager
+Takosumi = Space直下のOpenTofu Capsule DAG Manager
 ```
 
 ```txt
@@ -2351,14 +2916,24 @@ Space
   GitHubのuser/orgに近い軽いowner namespace。
   billingはoptional。
 
-Installation
-  Space直下のOpenTofu root/state単位。
+Capsule
+  Git URLから取得したOpenTofu configurationを
+  Takosumi generated rootで包んで実行する単位。
 
-Source
-  Git URL / ref / path / credential。
+Installation
+  Capsule + environment + state + outputs + deployments。
 
 SourceSnapshot
   Git commit固定入力。
+
+Capsule Normalizer
+  OpenTofuをTakosumi Capsuleに正規化する。
+
+Compatibility Report
+  Ready / Auto-capsulized / Needs patch / Unsupported。
+
+Capsule Gate
+  credential mint前の互換性・安全性検査。
 
 Connection
   operator default or space connection。
@@ -2384,26 +2959,10 @@ Run
 Deployment
   成功したapply。
 
-Talk / Files / Blog
-  Git URLから入るInstallation。
+Billing
+  Space plan + managed credits + apply reservation。
 ```
 
-この構成で、OSS self-host と hosted SaaS の両方を同じモデルで扱える。Self-host では operator default connection が自分のリソースになり、hosted では operator default connection が運営側リソースになる。Space connection は capability ごとの上書きとして機能する。
-
----
-
-## Appendix A: Build targets と alias seam
-
-`takosumi/` は source module であり、 2 つの build target に in-process で組み込まれる:
-
-- **Takosumi platform worker** (`deploy/platform/`, operator が `app.takosumi.com` で運用): accounts plane
-  (bare-origin OIDC issuer) + 本 spec の control plane + dashboard SPA + OpenTofu runner container。
-- **Takos product worker** (`takos/deploy/cloudflare/` template, self-hoster が自分の origin で運用): Takos product +
-  embedded accounts plane + 本 spec の control plane を同一プロセスに持つ。
-
-takos からは tsconfig path alias で source を直接参照する。 control plane は public route を takos 側に要求せず、
-in-process fetch seam (handler export) 経由でも到達できる。 §28 / §29 の layout を変更するときはこの alias seam
-(`takos/tsconfig.json` / `takosumi/tsconfig.json`) を同一変更で原子的に再ポイントする。
-
-Takos は plain OpenTofu module として完結する self-hostable application であり、 Takosumi にとって何の特権もない。
-Takos の self-host に Takosumi は不要 (この原則は本 spec でも不変)。
+この仕様で、OpenTofu ecosystem を使いながら、顧客の Git URL をワンタッチで安全寄りにインストールできる。鍵は
+generated root の provider configuration に閉じ、Capsule Gate と plan policy と IAM/connection boundary で不正利用を
+抑え、互換性は Compatibility Report で明確に出す。

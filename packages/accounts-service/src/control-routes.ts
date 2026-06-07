@@ -14,18 +14,14 @@
  *      the controller's typed `OpenTofuControllerError` codes to HTTP via the
  *      contract's code->status map.
  *
- * Authorization MVP: any authenticated session may act. This is a
- * single-operator instance; Space-membership enforcement (binding the §30
- * deploy-control Space DAG to the accounts-plane LedgerAccount ownership model)
- * is post-MVP. The accounts-plane Space ledger (SpaceRecord keyed by
- * accountId/legalOwnerSubject) is a SEPARATE namespace from the deploy-control
- * Space model (`space_...` ids); the two are not yet reconciled, so we do not
- * cross-check the deploy-control spaceId against the accounts ledger here.
+ * Authorization: the session subject must own the target deploy-control Space
+ * (`Space.ownerUserId`) or own the accounts-ledger account that contains that
+ * Space (`SpaceRecord.accountId -> LedgerAccount.legalOwnerSubject`). Routes
+ * addressing Installation / Run / RunGroup / Source / Dependency first resolve
+ * the target record and check its `spaceId` before dispatching mutations.
  */
 
-import {
-  DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
-} from "takosumi-contract/deploy-control-api";
+import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "takosumi-contract/deploy-control-api";
 import type {
   Connection,
   DeployControlErrorCode,
@@ -34,14 +30,17 @@ import type {
   PlanRunResponse,
 } from "takosumi-contract/deploy-control-api";
 import type {
+  Source,
   CreateSourceRequest,
   CreateSourceResponse,
   ListSourcesResponse,
 } from "takosumi-contract/sources";
 import type { Space, SpaceType } from "takosumi-contract/spaces";
 import type {
+  DeploymentProfile,
   InstallConfig,
   Installation,
+  PolicyConfig,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -50,9 +49,24 @@ import type {
   DependencyVisibility,
 } from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
-import type { OperatorConnectionDefault } from "takosumi-contract/capability-bindings";
+import type {
+  Capability,
+  CapabilityBinding,
+  CapabilityBindingMode,
+  CapabilityBindings,
+  OperatorConnectionDefault,
+} from "takosumi-contract/capability-bindings";
+import type {
+  OutputShare,
+  OutputShareEntry,
+} from "takosumi-contract/output-snapshots";
 import type { Run } from "takosumi-contract/runs";
-import { json, methodNotAllowed, readJsonObject, stringValue } from "./http-helpers.ts";
+import {
+  json,
+  methodNotAllowed,
+  readJsonObject,
+  stringValue,
+} from "./http-helpers.ts";
 import { requireAccountSession } from "./account-session.ts";
 import type { AccountsStore } from "./store.ts";
 
@@ -75,6 +89,13 @@ export interface ControlPlaneOperations {
       readonly type: SpaceType;
       readonly ownerUserId: string;
     }): Promise<Space>;
+    updateSpace(
+      id: string,
+      patch: {
+        readonly displayName?: string;
+        readonly policy?: PolicyConfig;
+      },
+    ): Promise<Space>;
   };
   // --- Installations + InstallConfigs (§5 / §11) ---
   readonly installations: {
@@ -88,6 +109,13 @@ export interface ControlPlaneOperations {
       readonly installConfigId: string;
     }): Promise<Installation>;
     listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]>;
+    putDeploymentProfile(
+      profile: DeploymentProfile,
+    ): Promise<DeploymentProfile>;
+    getDeploymentProfileByInstallation(
+      installationId: string,
+      environment: string,
+    ): Promise<DeploymentProfile | undefined>;
   };
   // --- Dependencies (§14 / §15) ---
   readonly dependencies: {
@@ -119,14 +147,35 @@ export interface ControlPlaneOperations {
   };
   // --- Connections (§9) ---
   readonly connections: {
-    listOperatorConnectionDefaults(): Promise<readonly OperatorConnectionDefault[]>;
+    listOperatorConnectionDefaults(): Promise<
+      readonly OperatorConnectionDefault[]
+    >;
+  };
+  // --- OutputShares (§18) ---
+  readonly outputShares: {
+    createShare(request: {
+      readonly fromSpaceId: string;
+      readonly toSpaceId: string;
+      readonly producerInstallationId: string;
+      readonly outputs: readonly {
+        readonly name: string;
+        readonly alias?: string;
+        readonly sensitive?: boolean;
+      }[];
+    }): Promise<OutputShare>;
+    listForSpace(spaceId: string): Promise<readonly OutputShare[]>;
+    getShare(id: string): Promise<OutputShare | undefined>;
+    approveShare(id: string): Promise<OutputShare>;
+    revokeShare(id: string): Promise<OutputShare>;
   };
   listConnections(spaceId: string): Promise<ListConnectionsResponse>;
   listOperatorConnections(): Promise<ListConnectionsResponse>;
   getConnection(connectionId: string): Promise<Connection>;
   // --- Runs (§6.8 / §19 / §23) ---
   createInstallationPlan(installationId: string): Promise<PlanRunResponse>;
-  createInstallationDestroyPlan(installationId: string): Promise<PlanRunResponse>;
+  createInstallationDestroyPlan(
+    installationId: string,
+  ): Promise<PlanRunResponse>;
   getRun(id: string): Promise<Run>;
   approveRun(
     id: string,
@@ -136,6 +185,7 @@ export interface ControlPlaneOperations {
   // --- Sources (§6) ---
   createSource(request: CreateSourceRequest): Promise<CreateSourceResponse>;
   listSources(spaceId: string): Promise<ListSourcesResponse>;
+  getSource(id: string): Promise<Source>;
   createSourceSync(
     sourceId: string,
     options?: { readonly dedupe?: boolean },
@@ -157,7 +207,9 @@ const CONTROL_PREFIX = "/v1/control";
  * `mod.ts` to route into {@link handleControlRoute} before the generic 404.
  */
 export function isControlRoutePath(pathname: string): boolean {
-  return pathname === CONTROL_PREFIX || pathname.startsWith(`${CONTROL_PREFIX}/`);
+  return (
+    pathname === CONTROL_PREFIX || pathname.startsWith(`${CONTROL_PREFIX}/`)
+  );
 }
 
 interface ControlRouteContext {
@@ -177,7 +229,8 @@ function controllerErrorResponse(error: unknown): Response {
     return json(
       {
         error: code,
-        error_description: error instanceof Error ? error.message : String(error),
+        error_description:
+          error instanceof Error ? error.message : String(error),
       },
       DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE[code],
     );
@@ -185,20 +238,25 @@ function controllerErrorResponse(error: unknown): Response {
   return json({ error: "internal_error" }, 500);
 }
 
-function controllerErrorCode(error: unknown): DeployControlErrorCode | undefined {
+function controllerErrorCode(
+  error: unknown,
+): DeployControlErrorCode | undefined {
   if (typeof error !== "object" || error === null) return undefined;
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" &&
-      code in DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE
-    ? code as DeployControlErrorCode
+    code in DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE
+    ? (code as DeployControlErrorCode)
     : undefined;
 }
 
 function controlPlaneUnavailable(): Response {
-  return json({
-    error: "feature_unavailable",
-    error_description: "The control plane is temporarily unavailable.",
-  }, 503);
+  return json(
+    {
+      error: "feature_unavailable",
+      error_description: "The control plane is temporarily unavailable.",
+    },
+    503,
+  );
 }
 
 /**
@@ -215,9 +273,8 @@ export async function handleControlRoute(
 
   // Authn gate: every control route requires a live account session. The
   // dashboard presents the HttpOnly `takosumi_session` cookie; PAT/header
-  // callers are accepted by `requireAccountSession` too. Authorization MVP:
-  // any authenticated session may act (single-operator; Space membership is
-  // post-MVP — see module header).
+  // callers are accepted by `requireAccountSession` too. Space authorization is
+  // enforced per route below after the target Space is known.
   const session = await requireAccountSession({ request, store });
   if (!session.ok) return session.response;
 
@@ -226,7 +283,7 @@ export async function handleControlRoute(
 
   const tail = url.pathname.slice(CONTROL_PREFIX.length); // e.g. "/spaces"
   try {
-    return await dispatch({ request, url, tail, operations, session });
+    return await dispatch({ request, url, tail, operations, store, session });
   } catch (error) {
     return controllerErrorResponse(error);
   }
@@ -237,31 +294,55 @@ interface DispatchInput {
   readonly url: URL;
   readonly tail: string;
   readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
   readonly session: { readonly subject: string };
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
-  const { request, url, tail, operations } = input;
+  const { request, url, tail, operations, store } = input;
   const method = request.method;
   const segments = tail.split("/").filter(Boolean); // ["spaces", ":id", ...]
 
   // GET/POST /v1/control/spaces
   if (segments.length === 1 && segments[0] === "spaces") {
-    if (method === "GET") return await listSpaces(operations);
+    if (method === "GET") {
+      return await listSpaces(operations, store, input.session.subject);
+    }
     if (method === "POST") {
       return await createSpace(request, operations, input.session.subject);
     }
     return methodNotAllowed("GET, POST");
   }
 
-  // /v1/control/spaces/:spaceId/...
-  if (segments[0] === "spaces" && segments.length >= 3) {
+  // /v1/control/spaces/:spaceId ; /v1/control/spaces/:spaceId/...
+  if (segments[0] === "spaces" && segments.length >= 2) {
     const spaceId = decodeURIComponent(segments[1] ?? "");
+    const auth = await requireSpaceAccess({
+      operations,
+      store,
+      spaceId,
+      subject: input.session.subject,
+    });
+    if (!auth.ok) return auth.response;
+    if (segments.length === 2) {
+      if (method === "GET")
+        return json({ space: await operations.spaces.getSpace(spaceId) });
+      if (method === "PATCH")
+        return await updateSpace(request, operations, spaceId);
+      return methodNotAllowed("GET, PATCH");
+    }
     const leaf = segments[2];
     if (leaf === "installations" && segments.length === 3) {
-      if (method === "GET") return await listSpaceInstallations(operations, spaceId);
+      if (method === "GET")
+        return await listSpaceInstallations(operations, spaceId);
       if (method === "POST") {
-        return await createInstallation(request, operations, spaceId);
+        return await createInstallation(
+          request,
+          operations,
+          store,
+          input.session.subject,
+          spaceId,
+        );
       }
       return methodNotAllowed("GET, POST");
     }
@@ -282,9 +363,18 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   // /v1/control/installations/:id ; .../plan ; .../destroy-plan ; .../dependencies
   if (segments[0] === "installations" && segments.length >= 2) {
     const installationId = decodeURIComponent(segments[1] ?? "");
+    const installation =
+      await operations.installations.getInstallation(installationId);
+    const auth = await requireSpaceAccess({
+      operations,
+      store,
+      spaceId: installation.spaceId,
+      subject: input.session.subject,
+    });
+    if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await getInstallation(operations, installationId);
+      return json({ installation });
     }
     const leaf = segments[2];
     if (leaf === "plan" && segments.length === 3) {
@@ -303,33 +393,75 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
     if (leaf === "dependencies" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await createDependency(request, operations, installationId);
+      return await createDependency(
+        request,
+        operations,
+        store,
+        input.session.subject,
+        installationId,
+      );
+    }
+    if (leaf === "deployment-profile" && segments.length === 3) {
+      if (method === "GET") {
+        return await getDeploymentProfile(operations, installation);
+      }
+      if (method === "PUT") {
+        return await putDeploymentProfile(request, operations, installation);
+      }
+      return methodNotAllowed("GET, PUT");
     }
   }
 
   // /v1/control/install-configs
   if (segments.length === 1 && segments[0] === "install-configs") {
     if (method !== "GET") return methodNotAllowed("GET");
-    return await listInstallConfigs(operations, url);
+    return await listInstallConfigs(
+      operations,
+      store,
+      input.session.subject,
+      url,
+    );
   }
 
   // /v1/control/dependencies/:id
   if (segments[0] === "dependencies" && segments.length === 2) {
     const dependencyId = decodeURIComponent(segments[1] ?? "");
     if (method !== "DELETE") return methodNotAllowed("DELETE");
-    return await deleteDependency(operations, dependencyId);
+    return await deleteDependency(
+      operations,
+      store,
+      input.session.subject,
+      dependencyId,
+    );
   }
 
   // /v1/control/sources ; /v1/control/sources/:id/sync
   if (segments[0] === "sources") {
     if (segments.length === 1) {
-      if (method === "GET") return await listSources(operations, url);
-      if (method === "POST") return await createSource(request, operations);
+      if (method === "GET") {
+        return await listSources(operations, store, input.session.subject, url);
+      }
+      if (method === "POST") {
+        return await createSource(
+          request,
+          operations,
+          store,
+          input.session.subject,
+        );
+      }
       return methodNotAllowed("GET, POST");
     }
     if (segments.length === 3 && segments[2] === "sync") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "POST") return methodNotAllowed("POST");
+      const source = await operations.getSource(sourceId);
+      const auth = await requireSpaceAccess({
+        operations,
+        store,
+        spaceId: source.spaceId,
+        subject: input.session.subject,
+      });
+      if (!auth.ok) return auth.response;
       return jsonStatus(await operations.createSourceSync(sourceId), 201);
     }
   }
@@ -337,14 +469,27 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   // /v1/control/runs/:id ; .../approve ; .../logs
   if (segments[0] === "runs" && segments.length >= 2) {
     const runId = decodeURIComponent(segments[1] ?? "");
+    const run = await operations.getRun(runId);
+    const auth = await requireSpaceAccess({
+      operations,
+      store,
+      spaceId: run.spaceId,
+      subject: input.session.subject,
+    });
+    if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return json({ run: await operations.getRun(runId) });
+      return json({ run });
     }
     const leaf = segments[2];
     if (leaf === "approve" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await approveRun(request, operations, runId, input.session.subject);
+      return await approveRun(
+        request,
+        operations,
+        runId,
+        input.session.subject,
+      );
     }
     if (leaf === "logs" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -355,9 +500,18 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   // /v1/control/run-groups/:id ; .../approve
   if (segments[0] === "run-groups" && segments.length >= 2) {
     const runGroupId = decodeURIComponent(segments[1] ?? "");
+    const existing = await operations.runGroups.getRunGroup(runGroupId);
+    if (!existing) return json({ error: "not_found" }, 404);
+    const auth = await requireSpaceAccess({
+      operations,
+      store,
+      spaceId: existing.runGroup.spaceId,
+      subject: input.session.subject,
+    });
+    if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await getRunGroup(operations, runGroupId);
+      return json(existing);
     }
     if (segments[2] === "approve" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -368,16 +522,68 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   // /v1/control/connections?spaceId=
   if (segments.length === 1 && segments[0] === "connections") {
     if (method !== "GET") return methodNotAllowed("GET");
-    return await listControlConnections(operations, url);
+    return await listControlConnections(
+      operations,
+      store,
+      input.session.subject,
+      url,
+    );
   }
 
-  // /v1/control/operator-connection-defaults
+  // /v1/control/output-shares ; /v1/control/output-shares/:id/{approve,revoke}
+  if (segments[0] === "output-shares") {
+    if (segments.length === 1) {
+      if (method === "GET") {
+        return await listOutputShares(
+          operations,
+          store,
+          input.session.subject,
+          url,
+        );
+      }
+      if (method === "POST") {
+        return await createOutputShare(
+          request,
+          operations,
+          store,
+          input.session.subject,
+        );
+      }
+      return methodNotAllowed("GET, POST");
+    }
+    if (segments.length === 3) {
+      const shareId = decodeURIComponent(segments[1] ?? "");
+      const action = segments[2];
+      if (action === "approve") {
+        if (method !== "POST") return methodNotAllowed("POST");
+        return await approveOutputShare(
+          operations,
+          store,
+          input.session.subject,
+          shareId,
+        );
+      }
+      if (action === "revoke") {
+        if (method !== "POST") return methodNotAllowed("POST");
+        return await revokeOutputShare(
+          operations,
+          store,
+          input.session.subject,
+          shareId,
+        );
+      }
+    }
+  }
+
+  // /v1/control/operator-connection-defaults?spaceId=
   if (segments.length === 1 && segments[0] === "operator-connection-defaults") {
     if (method !== "GET") return methodNotAllowed("GET");
-    return json({
-      operatorConnectionDefaults: await operations.connections
-        .listOperatorConnectionDefaults(),
-    });
+    return await listOperatorConnectionDefaults(
+      operations,
+      store,
+      input.session.subject,
+      url,
+    );
   }
 
   return json({ error: "not_found" }, 404);
@@ -385,11 +591,27 @@ async function dispatch(input: DispatchInput): Promise<Response> {
 
 // --- Spaces ----------------------------------------------------------------
 
-async function listSpaces(operations: ControlPlaneOperations): Promise<Response> {
-  // MVP: list ALL deploy-control Spaces. The account-plane membership model
-  // (binding deploy-control Spaces to the accounts LedgerAccount owner) is
-  // post-MVP; until then a single-operator instance sees every Space.
-  return json({ spaces: await operations.spaces.listSpaces() });
+async function listSpaces(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+): Promise<Response> {
+  const spaces = await operations.spaces.listSpaces();
+  const visible: Space[] = [];
+  for (const space of spaces) {
+    if (
+      await canAccessSpace({
+        operations,
+        store,
+        subject: sessionSubject,
+        spaceId: space.id,
+        space,
+      })
+    ) {
+      visible.push(space);
+    }
+  }
+  return json({ spaces: visible });
 }
 
 async function createSpace(
@@ -403,10 +625,13 @@ async function createSpace(
   const displayName = stringValue(body.displayName) ?? handle;
   const type = spaceTypeValue(body.type) ?? "personal";
   if (!handle) {
-    return json({
-      error: "invalid_request",
-      error_description: "handle is required",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "handle is required",
+      },
+      400,
+    );
   }
   // ownerUserId is the session account id (the authenticated subject); the
   // dashboard never supplies it. Space-membership reconciliation is post-MVP.
@@ -417,6 +642,54 @@ async function createSpace(
     ownerUserId: sessionSubject,
   });
   return jsonStatus({ space }, 201);
+}
+
+async function updateSpace(
+  request: Request,
+  operations: ControlPlaneOperations,
+  spaceId: string,
+): Promise<Response> {
+  const body = await readJsonObject(request);
+  if (!body) return json({ error: "invalid_request" }, 400);
+  const patch: {
+    displayName?: string;
+    policy?: PolicyConfig;
+  } = {};
+  if (body.displayName !== undefined) {
+    const displayName = stringValue(body.displayName)?.trim();
+    if (!displayName) {
+      return json(
+        {
+          error: "invalid_argument",
+          error_description: "displayName is required",
+        },
+        400,
+      );
+    }
+    patch.displayName = displayName;
+  }
+  if (body.policy !== undefined) {
+    if (!isPlainJsonObject(body.policy)) {
+      return json(
+        {
+          error: "invalid_argument",
+          error_description: "policy must be an object",
+        },
+        400,
+      );
+    }
+    patch.policy = body.policy as PolicyConfig;
+  }
+  if (patch.displayName === undefined && patch.policy === undefined) {
+    return json(
+      {
+        error: "invalid_argument",
+        error_description: "displayName or policy is required",
+      },
+      400,
+    );
+  }
+  return json({ space: await operations.spaces.updateSpace(spaceId, patch) });
 }
 
 // --- Installations ---------------------------------------------------------
@@ -435,13 +708,16 @@ async function getInstallation(
   installationId: string,
 ): Promise<Response> {
   return json({
-    installation: await operations.installations.getInstallation(installationId),
+    installation:
+      await operations.installations.getInstallation(installationId),
   });
 }
 
 async function createInstallation(
   request: Request,
   operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
   spaceId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
@@ -451,11 +727,31 @@ async function createInstallation(
   const sourceId = stringValue(body.sourceId);
   const installConfigId = stringValue(body.installConfigId);
   if (!name || !environment || !sourceId || !installConfigId) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "name, environment, sourceId, and installConfigId are required",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description:
+          "name, environment, sourceId, and installConfigId are required",
+      },
+      400,
+    );
+  }
+  const source = await operations.getSource(sourceId);
+  if (source.spaceId !== spaceId) {
+    const auth = await requireSpaceAccess({
+      operations,
+      store,
+      spaceId: source.spaceId,
+      subject: sessionSubject,
+    });
+    if (!auth.ok) return auth.response;
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "sourceId must belong to the target Space.",
+      },
+      400,
+    );
   }
   const installation = await operations.installations.createInstallation({
     spaceId,
@@ -467,20 +763,83 @@ async function createInstallation(
   return jsonStatus({ installation }, 201);
 }
 
+async function getDeploymentProfile(
+  operations: ControlPlaneOperations,
+  installation: Installation,
+): Promise<Response> {
+  const profile =
+    await operations.installations.getDeploymentProfileByInstallation(
+      installation.id,
+      installation.environment,
+    );
+  return json({ deploymentProfile: profile ?? null });
+}
+
+async function putDeploymentProfile(
+  request: Request,
+  operations: ControlPlaneOperations,
+  installation: Installation,
+): Promise<Response> {
+  const body = await readJsonObject(request);
+  if (!body) return json({ error: "invalid_request" }, 400);
+  const parsed = parseCapabilityBindings(body.bindings);
+  if (!parsed.ok) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: parsed.message,
+      },
+      400,
+    );
+  }
+  const existing =
+    await operations.installations.getDeploymentProfileByInstallation(
+      installation.id,
+      installation.environment,
+    );
+  const now = new Date().toISOString();
+  const profile = await operations.installations.putDeploymentProfile({
+    id:
+      existing?.id ??
+      `dpf_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
+    spaceId: installation.spaceId,
+    installationId: installation.id,
+    environment: installation.environment,
+    bindings: parsed.bindings,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  });
+  return json({ deploymentProfile: profile });
+}
+
 async function listInstallConfigs(
   operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const spaceId = stringValue(url.searchParams.get("spaceId") ?? undefined) ??
+  const spaceId =
+    stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   // Without a spaceId only the official catalog (spaceId-less configs) is
   // returned; with one, the official catalog plus that Space's own configs —
   // mirroring the §30 `/api/install-configs` projection.
-  const official = (await operations.installations.listInstallConfigs())
-    .filter((config) => config.spaceId === undefined);
-  const scoped = spaceId === undefined
-    ? []
-    : await operations.installations.listInstallConfigs(spaceId);
+  const official = (await operations.installations.listInstallConfigs()).filter(
+    (config) => config.spaceId === undefined,
+  );
+  if (spaceId !== undefined) {
+    const auth = await requireSpaceAccess({
+      operations,
+      store,
+      spaceId,
+      subject: sessionSubject,
+    });
+    if (!auth.ok) return auth.response;
+  }
+  const scoped =
+    spaceId === undefined
+      ? []
+      : await operations.installations.listInstallConfigs(spaceId);
   return json({ installConfigs: [...official, ...scoped] });
 }
 
@@ -514,22 +873,44 @@ async function spaceGraph(
 async function createDependency(
   request: Request,
   operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
   consumerInstallationId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return json({ error: "invalid_request" }, 400);
   const producerInstallationId = stringValue(body.producerInstallationId);
   if (!producerInstallationId) {
-    return json({
-      error: "invalid_request",
-      error_description: "producerInstallationId is required",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "producerInstallationId is required",
+      },
+      400,
+    );
   }
   // The consumer is the path Installation; resolve its Space so the edge is
   // created in the right Space (mirrors the §30 dependency-create handler).
   const consumer = await operations.installations.getInstallation(
     consumerInstallationId,
   );
+  const consumerAuth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId: consumer.spaceId,
+    subject: sessionSubject,
+  });
+  if (!consumerAuth.ok) return consumerAuth.response;
+  const producer = await operations.installations.getInstallation(
+    producerInstallationId,
+  );
+  const producerAuth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId: producer.spaceId,
+    subject: sessionSubject,
+  });
+  if (!producerAuth.ok) return producerAuth.response;
   const dependency = await operations.dependencies.createDependency({
     spaceId: consumer.spaceId,
     producerInstallationId,
@@ -543,10 +924,19 @@ async function createDependency(
 
 async function deleteDependency(
   operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
   dependencyId: string,
 ): Promise<Response> {
   const existing = await operations.dependencies.getDependency(dependencyId);
   if (!existing) return json({ error: "not_found" }, 404);
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId: existing.spaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
   await operations.dependencies.deleteDependency(dependencyId);
   return new Response(null, { status: 204 });
 }
@@ -560,10 +950,13 @@ async function spaceActivity(
 ): Promise<Response> {
   const limit = parseLimit(url.searchParams.get("limit"));
   if (limit === "invalid") {
-    return json({
-      error: "invalid_request",
-      error_description: "limit must be a positive integer",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "limit must be a positive integer",
+      },
+      400,
+    );
   }
   const events = await operations.activity.list(spaceId, limit);
   return json({ events });
@@ -573,22 +966,37 @@ async function spaceActivity(
 
 async function listSources(
   operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const spaceId = stringValue(url.searchParams.get("spaceId") ?? undefined) ??
+  const spaceId =
+    stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   if (!spaceId) {
-    return json({
-      error: "invalid_request",
-      error_description: "spaceId query parameter is required",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "spaceId query parameter is required",
+      },
+      400,
+    );
   }
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
   return json(await operations.listSources(spaceId));
 }
 
 async function createSource(
   request: Request,
   operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return json({ error: "invalid_request" }, 400);
@@ -596,19 +1004,56 @@ async function createSource(
   const name = stringValue(body.name);
   const sourceUrl = stringValue(body.url);
   if (!spaceId || !name || !sourceUrl) {
-    return json({
-      error: "invalid_request",
-      error_description: "spaceId, name, and url are required",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "spaceId, name, and url are required",
+      },
+      400,
+    );
+  }
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
+  const authConnectionId = stringValue(body.authConnectionId);
+  if (authConnectionId) {
+    const connection = await operations.getConnection(authConnectionId);
+    if (connection.scope !== "space" || connection.spaceId !== spaceId) {
+      const connectionSpaceId = connection.spaceId;
+      if (connectionSpaceId) {
+        const connectionAuth = await requireSpaceAccess({
+          operations,
+          store,
+          spaceId: connectionSpaceId,
+          subject: sessionSubject,
+        });
+        if (!connectionAuth.ok) return connectionAuth.response;
+      }
+      return json(
+        {
+          error: "invalid_request",
+          error_description:
+            "authConnectionId must belong to the target Space.",
+        },
+        400,
+      );
+    }
   }
   const requestBody: CreateSourceRequest = {
     spaceId,
     name,
     url: sourceUrl,
-    ...(stringValue(body.defaultRef) ? { defaultRef: stringValue(body.defaultRef) } : {}),
+    ...(stringValue(body.defaultRef)
+      ? { defaultRef: stringValue(body.defaultRef) }
+      : {}),
     ...(stringValue(body.defaultPath)
       ? { defaultPath: stringValue(body.defaultPath) }
       : {}),
+    ...(authConnectionId ? { authConnectionId } : {}),
   };
   return jsonStatus(await operations.createSource(requestBody), 201);
 }
@@ -622,10 +1067,9 @@ async function approveRun(
   sessionSubject: string,
 ): Promise<Response> {
   const body = await readJsonObject(request.clone()).catch(() => null);
-  const approvedBy = (body && stringValue(body.approvedBy)) ?? sessionSubject;
   const reason = body ? stringValue(body.reason) : undefined;
   const run = await operations.approveRun(runId, {
-    approvedBy,
+    approvedBy: sessionSubject,
     ...(reason ? { reason } : {}),
   });
   return json({ run });
@@ -662,21 +1106,250 @@ async function approveRunGroup(
 
 async function listControlConnections(
   operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const spaceId = stringValue(url.searchParams.get("spaceId") ?? undefined) ??
+  const spaceId =
+    stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   // The accounts plane has no admin notion distinct from a normal session, so
   // a spaceId is REQUIRED here; operator-scoped Connection listing stays on the
   // operator-bearer §30 surface. (If/when the accounts plane grows an admin
   // role, this can branch to listOperatorConnections.)
   if (!spaceId) {
-    return json({
-      error: "invalid_request",
-      error_description: "spaceId query parameter is required",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "spaceId query parameter is required",
+      },
+      400,
+    );
   }
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
   return json(await operations.listConnections(spaceId));
+}
+
+async function listOperatorConnectionDefaults(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+  url: URL,
+): Promise<Response> {
+  const spaceId =
+    stringValue(url.searchParams.get("spaceId") ?? undefined) ??
+    stringValue(url.searchParams.get("space_id") ?? undefined);
+  if (!spaceId) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "spaceId query parameter is required",
+      },
+      400,
+    );
+  }
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
+  return json({
+    operatorConnectionDefaults:
+      await operations.connections.listOperatorConnectionDefaults(),
+  });
+}
+
+// --- OutputShares ----------------------------------------------------------
+
+async function listOutputShares(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+  url: URL,
+): Promise<Response> {
+  const spaceId =
+    stringValue(url.searchParams.get("spaceId") ?? undefined) ??
+    stringValue(url.searchParams.get("space_id") ?? undefined);
+  if (!spaceId) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "spaceId query parameter is required",
+      },
+      400,
+    );
+  }
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
+  return json({ shares: await operations.outputShares.listForSpace(spaceId) });
+}
+
+async function createOutputShare(
+  request: Request,
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+): Promise<Response> {
+  const body = await readJsonObject(request);
+  if (!body) return json({ error: "invalid_request" }, 400);
+  const fromSpaceId = stringValue(body.fromSpaceId);
+  const toSpaceId = stringValue(body.toSpaceId);
+  const producerInstallationId = stringValue(body.producerInstallationId);
+  const outputs = outputShareEntries(body.outputs);
+  const sensitivePolicy = outputShareSensitivePolicy(body.sensitivePolicy);
+  if (!fromSpaceId || !toSpaceId || !producerInstallationId || !outputs) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description:
+          "fromSpaceId, toSpaceId, producerInstallationId, and outputs are required",
+      },
+      400,
+    );
+  }
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId: fromSpaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
+  const producer = await operations.installations.getInstallation(
+    producerInstallationId,
+  );
+  if (producer.spaceId !== fromSpaceId) {
+    const producerAuth = await requireSpaceAccess({
+      operations,
+      store,
+      spaceId: producer.spaceId,
+      subject: sessionSubject,
+    });
+    if (!producerAuth.ok) return producerAuth.response;
+    return json(
+      {
+        error: "invalid_request",
+        error_description:
+          "producerInstallationId must belong to the source Space.",
+      },
+      400,
+    );
+  }
+  const share = await operations.outputShares.createShare({
+    fromSpaceId,
+    toSpaceId,
+    producerInstallationId,
+    outputs,
+    ...(sensitivePolicy ? { sensitivePolicy } : {}),
+  });
+  return jsonStatus({ share }, 201);
+}
+
+async function approveOutputShare(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+  shareId: string,
+): Promise<Response> {
+  const existing = await operations.outputShares.getShare(shareId);
+  if (!existing) return json({ error: "not_found" }, 404);
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId: existing.toSpaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
+  return json({ share: await operations.outputShares.approveShare(shareId) });
+}
+
+async function revokeOutputShare(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+  shareId: string,
+): Promise<Response> {
+  const existing = await operations.outputShares.getShare(shareId);
+  if (!existing) return json({ error: "not_found" }, 404);
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId: existing.fromSpaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
+  return json({ share: await operations.outputShares.revokeShare(shareId) });
+}
+
+// --- Space authorization ---------------------------------------------------
+
+type SpaceAccessResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly response: Response;
+    };
+
+async function requireSpaceAccess(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
+  readonly subject: string;
+  readonly spaceId: string;
+  readonly space?: Space;
+}): Promise<SpaceAccessResult> {
+  if (
+    await canAccessSpace({
+      operations: input.operations,
+      store: input.store,
+      subject: input.subject,
+      spaceId: input.spaceId,
+      ...(input.space ? { space: input.space } : {}),
+    })
+  ) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    response: json(
+      {
+        error: "forbidden",
+        error_description:
+          "The authenticated session cannot access this Space.",
+      },
+      403,
+    ),
+  };
+}
+
+async function canAccessSpace(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
+  readonly subject: string;
+  readonly spaceId: string;
+  readonly space?: Space;
+}): Promise<boolean> {
+  const space =
+    input.space ?? (await input.operations.spaces.getSpace(input.spaceId));
+  if (space.ownerUserId === input.subject) return true;
+
+  const ledgerSpace = await input.store.findSpace(input.spaceId);
+  if (!ledgerSpace) return false;
+  const ledgerAccount = await input.store.findLedgerAccount(
+    ledgerSpace.accountId,
+  );
+  return ledgerAccount?.legalOwnerSubject === input.subject;
 }
 
 // --- value coercion --------------------------------------------------------
@@ -685,13 +1358,109 @@ function jsonStatus(body: unknown, status: number): Response {
   return json(body, status);
 }
 
+const CAPABILITIES: readonly Capability[] = [
+  "source",
+  "compute",
+  "dns",
+  "storage",
+  "database",
+  "secrets",
+];
+
+function parseCapabilityBindings(value: unknown):
+  | { readonly ok: true; readonly bindings: CapabilityBindings }
+  | {
+      readonly ok: false;
+      readonly message: string;
+    } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { ok: false, message: "bindings must be an object" };
+  }
+  const input = value as Record<string, unknown>;
+  const bindings: Partial<Record<Capability, CapabilityBinding>> = {};
+  for (const capability of CAPABILITIES) {
+    if (!(capability in input)) continue;
+    const parsed = parseCapabilityBinding(input[capability]);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        message: `${capability}: ${parsed.message}`,
+      };
+    }
+    bindings[capability] = parsed.binding;
+  }
+  return { ok: true, bindings };
+}
+
+function parseCapabilityBinding(value: unknown):
+  | { readonly ok: true; readonly binding: CapabilityBinding }
+  | {
+      readonly ok: false;
+      readonly message: string;
+    } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { ok: false, message: "binding must be an object" };
+  }
+  const input = value as Record<string, unknown>;
+  const mode = capabilityBindingModeValue(input.mode);
+  if (!mode) return { ok: false, message: "mode is invalid" };
+  const binding: {
+    mode: CapabilityBindingMode;
+    connectionId?: string;
+    provider?: string;
+    region?: string;
+    values?: Readonly<Record<string, unknown>>;
+  } = { mode };
+  const connectionId = stringValue(input.connectionId);
+  if (connectionId) binding.connectionId = connectionId;
+  const provider = stringValue(input.provider);
+  if (provider) binding.provider = provider;
+  const region = stringValue(input.region);
+  if (region) binding.region = region;
+  if (input.values !== undefined) {
+    if (
+      typeof input.values !== "object" ||
+      input.values === null ||
+      Array.isArray(input.values)
+    ) {
+      return { ok: false, message: "values must be an object" };
+    }
+    binding.values = input.values as Readonly<Record<string, unknown>>;
+  }
+  if (mode === "connection" && !binding.connectionId) {
+    return { ok: false, message: "connectionId is required" };
+  }
+  if (mode === "manual" && !binding.values) {
+    return { ok: false, message: "values is required" };
+  }
+  return { ok: true, binding };
+}
+
+function capabilityBindingModeValue(
+  value: unknown,
+): CapabilityBindingMode | undefined {
+  return value === "default" ||
+    value === "connection" ||
+    value === "manual" ||
+    value === "disabled"
+    ? value
+    : undefined;
+}
+
+function isPlainJsonObject(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function spaceTypeValue(value: unknown): SpaceType | undefined {
   return value === "personal" || value === "organization" ? value : undefined;
 }
 
 function dependencyModeValue(value: unknown): DependencyMode | undefined {
-  return value === "variable_injection" || value === "remote_state" ||
-      value === "published_output"
+  return value === "variable_injection" ||
+    value === "remote_state" ||
+    value === "published_output"
     ? value
     : undefined;
 }
@@ -706,6 +1475,50 @@ function isOutputsMapping(
   value: unknown,
 ): value is Readonly<Record<string, DependencyOutputMapping>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function outputShareEntries(value: unknown):
+  | readonly {
+      readonly name: string;
+      readonly alias?: string;
+      readonly sensitive?: boolean;
+    }[]
+  | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: {
+    name: string;
+    alias?: string;
+    sensitive?: boolean;
+  }[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) return undefined;
+    const record = item as Record<string, unknown>;
+    const name = stringValue(record.name);
+    if (!name) return undefined;
+    out.push({
+      name,
+      ...(stringValue(record.alias)
+        ? { alias: stringValue(record.alias) }
+        : {}),
+      ...(record.sensitive === true ? { sensitive: true } : {}),
+    });
+  }
+  return out;
+}
+
+function outputShareSensitivePolicy(
+  value: unknown,
+): { readonly allow: boolean; readonly reason?: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.allow !== true) return undefined;
+  const reason = stringValue(record.reason);
+  return {
+    allow: true,
+    ...(reason ? { reason } : {}),
+  };
 }
 
 function parseLimit(value: string | null): number | undefined | "invalid" {

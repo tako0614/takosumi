@@ -49,6 +49,7 @@
  */
 
 import { currentRuntime } from "./runtime/index.ts";
+import { redactRecord, redactString } from "./redaction.ts";
 
 export type TakosumiLogLevel = "info" | "warn" | "error";
 
@@ -79,11 +80,11 @@ function normalizeError(value: unknown): Record<string, unknown> {
   if (value instanceof Error) {
     return {
       name: value.name,
-      message: value.message,
-      stack: value.stack,
+      message: redactString(value.message),
+      stack: value.stack ? redactString(value.stack) : undefined,
     };
   }
-  return { message: String(value) };
+  return { message: redactString(String(value)) };
 }
 
 function normalizeFields(
@@ -94,7 +95,7 @@ function normalizeFields(
   for (const [key, value] of Object.entries(fields)) {
     out[key] = value instanceof Error ? normalizeError(value) : value;
   }
-  return out;
+  return redactRecord(out);
 }
 
 function resolveDefaultFormat(

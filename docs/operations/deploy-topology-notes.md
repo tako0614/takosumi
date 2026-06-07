@@ -1,46 +1,61 @@
-# Deploy topology notes
+# Deploy Topology Notes
 
-> このページでわかること: Takos デプロイのサービスセット構成と topology
-> の注意点。
+> このページでわかること: Takosumi operated environment の single-worker
+> topology と、再導入してはいけない split-worker / manifest-era 前提。
 
-## Service-set alignment done here
+## Canonical Topology
 
-- Takos product の service set は `takos-app` / `takos-git` / `takos-agent`。
-- `takos-app` は public Web/API gateway。browser と API client は `takos-app`
-  から入り、owning internal service が呼ばれる。
-- operator がデプロイするのは単一 Cloudflare worker (= Takosumi platform worker、
-  `app.takosumi.com`) のみ。 Takos product worker はユーザーが自分のインフラに
-  self-host するもので、operator は deploy しない。
-- platform worker は Takosumi の accounts plane
-  (`deploy/accounts-cloudflare/src/handler.ts`) と control plane
-  (`worker/src/handler.ts`) を **in-process** で mount する。 別 worker
-  / 別サブドメイン (`accounts.takosumi.com` / `deploy-control.takosumi.com`) は
-  持たない。
-- `/internal/*` HTTP は opentofu-runner / executor container callback 専用。
-- local-substrate dev stack も同じ単一 worker 構成を local-substrate hostname で
-  mirror する。
+operator がデプロイするのは **単一 Cloudflare Worker**
+(Takosumi platform worker, `app.takosumi.com`) のみです。Takos product
+worker はユーザーが自分のインフラに self-host するもので、operator は
+production hosting しません。
 
-worker が束ねる surface:
+platform worker が in-process で束ねる surface:
 
-- account plane: bare-origin OIDC issuer / Installation 参照 / billing
-- control plane: Space / Source / Installation / Run ledger
-- Accounts D1 / Installation export 用 R2、OpenTofu runner 用 Container / queue
+- accounts plane: account / billing / bare-origin OIDC issuer / dashboard contract
+- control plane: `/api` と `/install`
+- dashboard SPA: `ASSETS`
+- queue consumer / scheduled handlers
+- `CoordinationObject`
+- `OpenTofuRunnerObject` + Runner Container
 
-これらの D1 / R2 / Container / queue binding と secret は、 operator が
-[`./platform-worker-deploy.md`](./platform-worker-deploy.md) の手順
-(`takosumi/deploy/platform/`) で platform worker を deploy する際に配線して
-materialize する。
+`/internal/*` HTTP routes are reserved for opentofu-runner / executor container
+callbacks. They are not public API and are not a split service boundary.
 
-## Current Guard
+## OpenTofu Capsule Boundary
 
-operator-facing docs / private deploy state do not model the single worker
-as a multi-service workload topology. The current service keys are:
+Takosumi installs Git URLs as OpenTofu Capsules under a Space. User repos stay
+plain Git repos containing OpenTofu module-compatible configuration; no in-repo
+Takosumi manifest is required. The D1 control ledger is the source of truth for
+Space / Source / Connection / Installation / Dependency / Run / Deployment /
+StateSnapshot / OutputSnapshot / Billing / Activity. R2 paths are storage layout
+only.
 
-- `takosApp`
-- `takosGit`
-- `takosAgent`
+## Bindings
 
-Dashboard queries, port-forward snippets, and operator TODOs should select by
-`takos.io/service-id` rather than by process role, and removed workload names
-such as `control-web`, `control-dispatch`, `runtime-host`, or `executor-host`
-must not reappear.
+The platform worker owns these binding classes:
+
+- D1 / SQL ledger for accounts and control-plane records
+- R2 source / artifact / state / backup buckets
+- `RUN_QUEUE`
+- `COORDINATION`
+- `RUNNER`
+- dashboard `ASSETS`
+
+Real binding names and ids live in `takosumi-private/platform/wrangler.toml`.
+Secret values live in the operator vault and are never committed.
+
+## Guardrails
+
+Do not reintroduce:
+
+- separate public accounts / control / dashboard workers
+- retired `apps/control` or manifest-era deploy engine language
+- GitHub-specific core identifiers such as `githubInstallationId`
+- source metadata files required in user repos
+- public HTTP service boundaries for runner internals
+- old workload names such as `control-web`, `control-dispatch`,
+  `runtime-host`, `executor-host`, or `deployment-paas`
+
+Local-substrate mirrors the same single platform worker topology under
+`app.takosumi.test`.

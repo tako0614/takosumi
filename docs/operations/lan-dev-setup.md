@@ -5,9 +5,7 @@
 
 dev environment を LAN 内別マシンに移した場合 (= browser を開く Linux PC と、
 dev stack を起動するマシンが LAN 内別ホスト) の LAN client 側手順。 dev
-マシン側手順は takosumi の
-[`deploy/local-substrate/docs/lan-host.md`](../../deploy/local-substrate/docs/lan-host.md)
-を参照。
+マシン側手順は takosumi の `deploy/local-substrate/docs/lan-host.md` を参照。
 
 本 runbook は **Linux + systemd-resolved** 環境を前提。 macOS / Windows は scope
 外。
@@ -111,7 +109,7 @@ curl https://hello.takosumi.test/
 # → "hello from local-substrate (Phase 0)"
 ```
 
-profile=postgres / workers を起動済なら (account plane と deploy control は
+profile=postgres / workers を起動済なら (accounts plane と control plane は
 `app.takosumi.test` の単一 worker origin に in-process mount される。issuer は
 bare origin):
 
@@ -150,9 +148,8 @@ sudo update-ca-certificates --fresh
 dev マシンが Docker を持っていない場合は、 host 上に `dnsmasq` + `caddy` を
 native binary install する **binary-native variant** で代用可能。 Pebble +
 CoreDNS の代わりに Caddy `tls internal` で self-signed CA を発行する単純化
-された stack。 詳細は
-[`takosumi/deploy/local-substrate/docs/lan-host.md`](../../deploy/local-substrate/docs/lan-host.md)
-の「Binary-native variant」 section を参照。
+された stack。 詳細は `takosumi/deploy/local-substrate/docs/lan-host.md` の
+「Binary-native variant」 section を参照。
 
 LAN client (= 本 runbook の対象) 側手順は **同じ** で、 違いは Step 1 で
 取得する root CA だけ:
@@ -173,14 +170,14 @@ LAN client が踏める dev hostname は production hostname を `.com/jp → .t
 に置換した形のみ。 invented subdomain (= `docs.takos.test` / `slide.takos.test`
 等の production に存在しない hostname) は廃止 (Wave M-F)。
 
-| dev hostname (= production mirror) | 用途                                                                  |
-| ---------------------------------- | --------------------------------------------------------------------- |
-| `https://takosumi.test/`           | takosumi.com landing + `/docs/` VitePress + `/contexts/*` JSON-LD CDN |
-| `https://app.takosumi.test/`          | app.takosumi.com (single worker: product UI + account plane + deploy control) |
-| `https://takos.test/`              | takos.jp (admin / Takos product UI)                                   |
-| `https://road.takos.test/`         | road.takos.jp                                                         |
-| `https://yurucommu.test/`          | yurucommu.com                                                         |
-| `https://<tenant>.app.takos.test/` | Takosumi が deploy した app の動的 tenant subdomain                   |
+| dev hostname (= production mirror) | 用途                                                                          |
+| ---------------------------------- | ----------------------------------------------------------------------------- |
+| `https://takosumi.test/`           | takosumi.com landing + `/docs/` VitePress + `/contexts/*` JSON-LD CDN         |
+| `https://app.takosumi.test/`       | app.takosumi.com (single worker: dashboard SPA + accounts plane + control plane + runner) |
+| `https://takos.test/`              | takos.jp (admin / Takos product UI)                                           |
+| `https://road.takos.test/`         | road.takos.jp                                                                 |
+| `https://yurucommu.test/`          | yurucommu.com                                                                 |
+| `https://<tenant>.app.takos.test/` | Takosumi が deploy した app の動的 tenant subdomain                           |
 
 bundled apps (= `takos-docs` / `takos-slide` / `takos-excel` / `takos-computer`)
 は Takos space 内 install で `*.app.takos.jp` tenant subdomain で serve される
@@ -188,8 +185,7 @@ bundled apps (= `takos-docs` / `takos-slide` / `takos-excel` / `takos-computer`)
 
 ## 関連 runbook
 
-- [`takosumi/deploy/local-substrate/docs/lan-host.md`](../../deploy/local-substrate/docs/lan-host.md)
-  — dev マシン側 setup (= 本 runbook の対岸)、 binary-native variant の手順
-  も含む
-- [`takosumi/deploy/local-substrate/docs/root-ca-install.md`](../../deploy/local-substrate/docs/root-ca-install.md)
-  — single-machine 版 root CA + DNS split (= 本 runbook の参照元)
+- `takosumi/deploy/local-substrate/docs/lan-host.md` — dev マシン側 setup
+  (= 本 runbook の対岸)、 binary-native variant の手順も含む
+- `takosumi/deploy/local-substrate/docs/root-ca-install.md` — single-machine
+  版 root CA + DNS split (= 本 runbook の参照元)

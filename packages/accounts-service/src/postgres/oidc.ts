@@ -3,62 +3,68 @@
 // original PostgresAccountsStore.
 
 import type { OidcClientRecord } from "../store.ts";
+import { eq } from "drizzle-orm";
+import { pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import {
   oidcClientFromRow,
   type OidcClientRow,
-  oidcClientSelect,
+  postgresDrizzle,
   type PostgresQueryClient,
-  runFirst,
-  runQuery,
   toDate,
 } from "./internal.ts";
+
+const installation = pgSchema("installation_v1");
+
+const oidcClients = installation.table("oidc_clients", {
+  clientId: text("client_id").primaryKey(),
+  installationId: text("installation_id").notNull(),
+  serviceId: text("service_id").notNull(),
+  issuerUrl: text("issuer_url").notNull(),
+  redirectUris: text("redirect_uris").array().notNull(),
+  allowedScopes: text("allowed_scopes").array().notNull(),
+  subjectMode: text("subject_mode").notNull(),
+  tokenEndpointAuthMethod: text("token_endpoint_auth_method").notNull(),
+  clientSecretHash: text("client_secret_hash"),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull(),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull(),
+});
+
+const oidcSchema = { oidcClients };
 
 export async function saveOidcClient(
   client: PostgresQueryClient,
   record: OidcClientRecord,
 ): Promise<void> {
-  await runQuery(
-    client,
-    `INSERT INTO installation_v1.oidc_clients (
-        client_id, installation_id, service_id, issuer_url, redirect_uris,
-        allowed_scopes, subject_mode, token_endpoint_auth_method,
-        client_secret_hash, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      ON CONFLICT (client_id) DO UPDATE SET
-        installation_id = EXCLUDED.installation_id,
-        service_id = EXCLUDED.service_id,
-        issuer_url = EXCLUDED.issuer_url,
-        redirect_uris = EXCLUDED.redirect_uris,
-        allowed_scopes = EXCLUDED.allowed_scopes,
-        subject_mode = EXCLUDED.subject_mode,
-        token_endpoint_auth_method = EXCLUDED.token_endpoint_auth_method,
-        client_secret_hash = EXCLUDED.client_secret_hash,
-        updated_at = EXCLUDED.updated_at`,
-    [
-      record.clientId,
-      record.installationId,
-      record.namespacePath,
-      record.issuerUrl,
-      [...record.redirectUris],
-      [...record.allowedScopes],
-      record.subjectMode,
-      record.tokenEndpointAuthMethod,
-      record.clientSecretHash ?? null,
-      toDate(record.createdAt),
-      toDate(record.updatedAt),
-    ],
-  );
+  const values = oidcClientValues(record);
+  await postgresDrizzle(client, oidcSchema)
+    .insert(oidcClients)
+    .values(values)
+    .onConflictDoUpdate({
+      target: oidcClients.clientId,
+      set: {
+        installationId: values.installationId,
+        serviceId: values.serviceId,
+        issuerUrl: values.issuerUrl,
+        redirectUris: values.redirectUris,
+        allowedScopes: values.allowedScopes,
+        subjectMode: values.subjectMode,
+        tokenEndpointAuthMethod: values.tokenEndpointAuthMethod,
+        clientSecretHash: values.clientSecretHash,
+        updatedAt: values.updatedAt,
+      },
+    });
 }
 
 export async function findOidcClient(
   client: PostgresQueryClient,
   clientId: string,
 ): Promise<OidcClientRecord | undefined> {
-  const row = await runFirst<OidcClientRow>(
-    client,
-    oidcClientSelect("client_id = $1"),
-    [clientId],
-  );
+  const row = await postgresDrizzle(client, oidcSchema)
+    .select(oidcClientColumns)
+    .from(oidcClients)
+    .where(eq(oidcClients.clientId, clientId))
+    .limit(1)
+    .then((rows) => rows[0] as OidcClientRow | undefined);
   return row ? oidcClientFromRow(row) : undefined;
 }
 
@@ -66,10 +72,41 @@ export async function findOidcClientForInstallation(
   client: PostgresQueryClient,
   installationId: string,
 ): Promise<OidcClientRecord | undefined> {
-  const row = await runFirst<OidcClientRow>(
-    client,
-    oidcClientSelect("installation_id = $1"),
-    [installationId],
-  );
+  const row = await postgresDrizzle(client, oidcSchema)
+    .select(oidcClientColumns)
+    .from(oidcClients)
+    .where(eq(oidcClients.installationId, installationId))
+    .limit(1)
+    .then((rows) => rows[0] as OidcClientRow | undefined);
   return row ? oidcClientFromRow(row) : undefined;
+}
+
+const oidcClientColumns = {
+  client_id: oidcClients.clientId,
+  installation_id: oidcClients.installationId,
+  service_id: oidcClients.serviceId,
+  issuer_url: oidcClients.issuerUrl,
+  redirect_uris: oidcClients.redirectUris,
+  allowed_scopes: oidcClients.allowedScopes,
+  subject_mode: oidcClients.subjectMode,
+  token_endpoint_auth_method: oidcClients.tokenEndpointAuthMethod,
+  client_secret_hash: oidcClients.clientSecretHash,
+  created_at: oidcClients.createdAt,
+  updated_at: oidcClients.updatedAt,
+};
+
+function oidcClientValues(record: OidcClientRecord) {
+  return {
+    clientId: record.clientId,
+    installationId: record.installationId,
+    serviceId: record.namespacePath,
+    issuerUrl: record.issuerUrl,
+    redirectUris: [...record.redirectUris],
+    allowedScopes: [...record.allowedScopes],
+    subjectMode: record.subjectMode,
+    tokenEndpointAuthMethod: record.tokenEndpointAuthMethod,
+    clientSecretHash: record.clientSecretHash ?? null,
+    createdAt: toDate(record.createdAt),
+    updatedAt: toDate(record.updatedAt),
+  };
 }

@@ -103,6 +103,7 @@ async function seededTemplateController(
   > = {},
 ): Promise<{
   controller: OpenTofuDeploymentController;
+  store: InMemoryOpenTofuDeploymentStore;
   installationId: string;
 }> {
   const store = new InMemoryOpenTofuDeploymentStore();
@@ -117,7 +118,7 @@ async function seededTemplateController(
     currentDeploymentId: SEED_DEPLOYMENT_ID,
   });
   const controller = new OpenTofuDeploymentController({ ...deps, store });
-  return { controller, installationId: INSTALLATION_ID };
+  return { controller, store, installationId: INSTALLATION_ID };
 }
 
 test("template plan dispatch carries template ref, generated root, and build; never credentials in build", async () => {
@@ -220,6 +221,60 @@ test("template plan is blocked when the plan introduces a disallowed resource ty
   expect(planRun.policy.status).toEqual("blocked");
   expect(planRun.policy.reasons.join("\n")).toMatch(
     /cloudflare_workers_script is not allowed/,
+  );
+});
+
+test("template plan enforces InstallConfig scope boundary and quota", async () => {
+  const runner = recordingRunner({
+    planResourceChanges: [
+      {
+        address: "module.app.cloudflare_r2_bucket.this",
+        type: "cloudflare_r2_bucket",
+        actions: ["create"],
+        scope: { cloudflareAccountId: "acct_allowed" },
+      },
+      {
+        address: "module.app.cloudflare_r2_bucket.logs",
+        type: "cloudflare_r2_bucket",
+        actions: ["create"],
+        scope: { cloudflareAccountId: "acct_allowed" },
+      },
+    ],
+  });
+  const { controller, store, installationId } = await seededTemplateController({
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+    runner,
+  });
+  const installation = await store.getInstallation(installationId);
+  const installConfig = await store.getInstallConfig(
+    installation!.installConfigId,
+  );
+  await store.putInstallConfig({
+    ...installConfig!,
+    policy: {
+      ...installConfig!.policy,
+      scopeBoundary: {
+        mode: "strict",
+        cloudflare: { accountIds: ["acct_allowed"] },
+      },
+      quota: { "resources.total": 1 },
+    },
+  });
+
+  const { planRun } = await controller.createPlanRun({
+    spaceId: "space_test",
+    installationId,
+    source: SOURCE,
+    templateId: "cloudflare-r2-storage",
+    templateVersion: "1.0.0",
+    inputs: { bucketName: "b", accountId: "acct_allowed" },
+  });
+
+  expect(planRun.status).toEqual("blocked");
+  expect(planRun.policy.reasons.join("\n")).not.toContain("out of scope");
+  expect(planRun.policy.reasons.join("\n")).toContain(
+    "resources.total count 2 exceeds 1",
   );
 });
 

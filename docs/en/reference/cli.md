@@ -1,14 +1,13 @@
 # CLI
 
 The Takosumi CLI is not npm-published. It runs in-repo against the cloned source. The source of truth is
-[`packages/cli/src`](../../../packages/cli) and [`src/cli`](../../../src/cli); when this doc conflicts with the code, the
-code wins.
+`packages/cli/src` and `src/cli`; when this doc conflicts with the code, the code wins.
 
-The CLI splits into two surfaces:
+The CLI has two uses:
 
 - **in-repo operator CLI** (`src/cli`): start the service and run migrations / scaffolds. `server` / `migrate` /
   `init` / `version` / `completions`.
-- **accounts / installations CLI** (`packages/cli`): a thin client over the accounts plane's internal `/v1` seam.
+- **accounts / installations CLI** (`packages/cli`): a thin client over the operator distribution's account/session path.
   `accounts ...` / `installations ...` / `launch-readiness ...`.
 
 It is not the source of truth for interpreting OpenTofu configuration. The canonical install / plan / apply flow is the
@@ -40,16 +39,17 @@ operator config (see [Operator](./operator.md)).
 
 ```bash
 bun src/cli/main.ts migrate          # apply schema migrations
-bun src/cli/main.ts init [output]    # scaffold generic repository metadata
+bun src/cli/main.ts init [output]    # scaffold local starter files
 ```
 
-`init` does not require a Takosumi-specific manifest in the user repo (core is no-in-repo-manifest). It only scaffolds
-generic repository metadata.
+`init` does not require a Takosumi-specific manifest in the user repo (core is no-in-repo-manifest). The canonical
+Capsule install input is Git URL / ref / modulePath plus a service-side InstallConfig.
 
 ## Accounts / installations CLI
 
-A client over the accounts plane's internal `/v1` seam (outside the public vocabulary). The operator selects the
-endpoint and bearer.
+A client over the operator distribution's account/session path. This path is not the public control-plane surface.
+External integrations and Capsule install / plan / apply use [`/api`](./deploy-control-api.md) and the dashboard flow as
+the source of truth. The operator selects the endpoint and bearer.
 
 ```bash
 export TAKOSUMI_ACCOUNTS_URL=https://app.takosumi.com
@@ -67,11 +67,11 @@ Read or change Installation ledger records.
 bun packages/cli/src/main.ts installations list --space space_personal
 bun packages/cli/src/main.ts installations inspect ins_01ABCDEF
 bun packages/cli/src/main.ts installations uninstall ins_01ABCDEF --reason "..."
-bun packages/cli/src/main.ts installations status ins_01ABCDEF --status ready
+bun packages/cli/src/main.ts installations status ins_01ABCDEF --status active
 ```
 
-When `--space` is omitted, `TAKOS_SPACE_ID` is used. These hit the accounts plane's `/v1/installations` seam (plan /
-apply happen on the dashboard or the Run surface of [`/api`](./deploy-control-api.md)).
+When `--space` is omitted, `TAKOS_SPACE_ID` is used. Plan / apply happen on the dashboard or the Run surface of
+[`/api`](./deploy-control-api.md).
 
 ### accounts / launch-readiness
 
@@ -86,11 +86,11 @@ launch evidence. Run `--help` on each subcommand for its options.
 
 ## Environment
 
-| Variable | Surface | Purpose |
-| --- | --- | --- |
-| `TAKOSUMI_DEV_MODE` | in-repo CLI | dev in-memory storage / relaxed auth (never in production) |
-| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | in-repo CLI | control-plane bearer |
-| `TAKOSUMI_DATABASE_URL` | in-repo CLI | Postgres substrate |
-| `TAKOSUMI_ACCOUNTS_URL` | accounts CLI | accounts plane endpoint (override with `--accountsUrl`) |
-| `TAKOSUMI_ACCOUNTS_TOKEN` / `TAKOS_TOKEN` | accounts CLI | accounts session / PAT bearer (override with `--token`) |
-| `TAKOS_SPACE_ID` | accounts CLI | default Space (override with `--space`) |
+| Variable                                  | Surface      | Purpose                                                    |
+| ----------------------------------------- | ------------ | ---------------------------------------------------------- |
+| `TAKOSUMI_DEV_MODE`                       | in-repo CLI  | dev in-memory storage / relaxed auth (never in production) |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN`           | in-repo CLI  | control-plane bearer                                       |
+| `TAKOSUMI_DATABASE_URL`                   | in-repo CLI  | Postgres substrate                                         |
+| `TAKOSUMI_ACCOUNTS_URL`                   | accounts CLI | accounts plane endpoint (override with `--accountsUrl`)    |
+| `TAKOSUMI_ACCOUNTS_TOKEN` / `TAKOS_TOKEN` | accounts CLI | accounts session / PAT bearer (override with `--token`)    |
+| `TAKOS_SPACE_ID`                          | accounts CLI | default Space (override with `--space`)                    |

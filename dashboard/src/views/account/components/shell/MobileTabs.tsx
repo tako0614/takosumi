@@ -1,11 +1,12 @@
 import { A, useLocation } from "@solidjs/router";
-import { Bell, Home, LayoutGrid, UserCircle2 } from "lucide-solid";
+import { GitBranch, Home, KeyRound, LayoutGrid, Network } from "lucide-solid";
 
 const TABS = [
   { href: "/home", label: "ホーム", icon: Home },
   { href: "/installations", label: "Installs", icon: LayoutGrid },
-  { href: "/notifications", label: "通知", icon: Bell },
-  { href: "/account", label: "アカウント", icon: UserCircle2 },
+  { href: "/sources", label: "Sources", icon: GitBranch },
+  { href: "/graph", label: "Graph", icon: Network },
+  { href: "/connections", label: "接続", icon: KeyRound },
 ];
 
 /** Ported from takosumi dashboard-ui/src/components/shell/MobileTabs.tsx. */

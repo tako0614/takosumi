@@ -16,7 +16,7 @@ export default function Home() {
       <Title>Takosumi — OpenTofu-native deploy control plane</Title>
       <Meta
         name="description"
-        content="plain な OpenTofu module を Installation に。plan / apply / destroy を PlanRun / ApplyRun として記録し、RunnerProfile が実行先を所有。cloud でも VM でも cluster でも、同じ台帳で deploy。"
+        content="plain な OpenTofu module を Capsule Installation に。plan / apply / destroy は Run として記録し、Connection と policy が実行境界を決めます。cloud でも VM でも cluster でも、同じ台帳で deploy。"
       />
       <Meta property="og:site_name" content="Takosumi" />
       <Meta property="og:locale" content="ja_JP" />
@@ -26,7 +26,7 @@ export default function Home() {
       />
       <Meta
         property="og:description"
-        content="plain な OpenTofu module を Installation に。plan / apply を PlanRun / ApplyRun として記録し、RunnerProfile が実行先を所有。cloud でも VM でも cluster でも、同じ台帳で deploy。"
+        content="plain な OpenTofu module を Capsule Installation に。plan / apply は Run として記録し、Connection と policy が実行境界を決めます。cloud でも VM でも cluster でも、同じ台帳で deploy。"
       />
       <Meta property="og:url" content="https://takosumi.com/" />
       <Meta property="og:type" content="website" />
@@ -48,7 +48,7 @@ export default function Home() {
       />
       <Meta
         name="twitter:description"
-        content="plain な OpenTofu module を Installation に。plan / apply を PlanRun / ApplyRun として記録し、RunnerProfile が実行先を所有。cloud でも VM でも cluster でも、同じ台帳で deploy。"
+        content="plain な OpenTofu module を Capsule Installation に。plan / apply は Run として記録し、Connection と policy が実行境界を決めます。cloud でも VM でも cluster でも、同じ台帳で deploy。"
       />
       <Meta
         name="twitter:image"

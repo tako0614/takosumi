@@ -1,6 +1,5 @@
 /**
- * Control-backup contract (Core Specification §33 "Backup / Export" layer 1 +
- * §26 R2_BACKUPS object layout).
+ * Control-backup contract and R2_BACKUPS object layout.
  *
  * A {@link BackupRecord} is the ledger pointer to one sealed control-backup
  * bundle written to the R2_BACKUPS bucket. The bundle is a JSON export of a
@@ -13,19 +12,24 @@
  * values — only public ledger metadata + the projected `publicOutputs` /
  * `spaceOutputs`.
  *
- * Spec §33 layer 2 ("service data backup": messages / files / posts / …) stays
- * out of this contract; it is per-Installation data owned by the Installation,
- * driven by `BackupConfig.mode` (`none` for the control plane).
+ * Service data backup (messages / files / posts / etc.) is
+ * represented as a separate sealed service-data manifest when Installations opt
+ * into `BackupConfig.mode = "artifact_export"`. MVP artifact export is
+ * metadata-only: the Installation publishes an artifact pointer in a projected
+ * OpenTofu output, and Takosumi records that pointer without reading service
+ * bytes or minting provider credentials. Provider-native snapshots and custom
+ * commands are intentionally reported as unsupported until their runner /
+ * credential boundaries are implemented.
  *
- * DIVERGENCE (object key): spec §26 names the object `control.json.zst.enc`
- * (zstd). zstd has no streaming primitive in workerd, so the control backup is
+ * DIVERGENCE (object key): the canonical layout names the object
+ * `control.json.zst.enc` (zstd). zstd has no streaming primitive in workerd, so the control backup is
  * gzip-compressed (`CompressionStream("gzip")`) and the object key is
  * `control.json.gz.enc`. The seal is the same secret-boundary AES-GCM used for
  * state/secret artifacts; `digest` is the SHA-256 over the SEALED bytes that are
  * written to R2.
  */
 
-/** Object-key prefix for a Space's control backups (spec §26 R2_BACKUPS). */
+/** Object-key prefix for a Space's control backups in R2_BACKUPS. */
 export const BACKUPS_KEY_PREFIX = (spaceId: string): string =>
   `spaces/${spaceId}/backups`;
 
@@ -40,11 +44,24 @@ export const CONTROL_BACKUP_OBJECT_KEY = (
   backupId: string,
 ): string => `${BACKUPS_KEY_PREFIX(spaceId)}/${backupId}/control.json.gz.enc`;
 
-/** Content type of the sealed control-backup object as stored in R2. */
-export const CONTROL_BACKUP_CONTENT_TYPE =
-  "application/octet-stream" as const;
+/**
+ * Full object key for the service-data artifact-export manifest.
+ *
+ * DIVERGENCE: the canonical layout names `service-data.tar.zst.enc`. MVP artifact export does
+ * not copy service bytes into a tarball; it records a sealed JSON manifest of
+ * service-owned artifact pointers. As with control backups, workerd gzip is
+ * used instead of zstd.
+ */
+export const SERVICE_DATA_BACKUP_OBJECT_KEY = (
+  spaceId: string,
+  backupId: string,
+): string =>
+  `${BACKUPS_KEY_PREFIX(spaceId)}/${backupId}/service-data-artifacts.json.gz.enc`;
 
-/** Path of the Space-scoped control-backup REST surface (§30 `/api`). */
+/** Content type of the sealed control-backup object as stored in R2. */
+export const CONTROL_BACKUP_CONTENT_TYPE = "application/octet-stream" as const;
+
+/** Path of the Space-scoped control-backup REST surface. */
 export const SPACE_BACKUPS_PATH = (spaceId: string): string =>
   `/api/spaces/${encodeURIComponent(spaceId)}/backups`;
 
@@ -68,8 +85,19 @@ export interface BackupRecord {
   readonly objectKey: string;
   readonly digest: string;
   readonly sizeBytes: number;
+  readonly serviceData?: ServiceDataBackupPointer;
   readonly createdByRunId?: string;
   readonly createdAt: string;
+}
+
+/** Pointer to the sealed service-data artifact-export manifest, when present. */
+export interface ServiceDataBackupPointer {
+  readonly objectKey: string;
+  readonly digest: string;
+  readonly sizeBytes: number;
+  readonly exportedCount: number;
+  readonly unsupportedCount: number;
+  readonly missingCount: number;
 }
 
 /** Response body for a created control backup (`POST .../backups`). */

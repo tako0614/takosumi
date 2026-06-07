@@ -50,6 +50,13 @@ class SqliteFakeStatement implements D1PreparedStatement {
     return Promise.resolve({ results: rows, success: true });
   }
 
+  raw<T = unknown[]>(): Promise<T[]> {
+    const rows = this.db
+      .query(this.query)
+      .values(...this.#params()) as T[];
+    return Promise.resolve(rows);
+  }
+
   run<T = unknown>(): Promise<D1Result<T>> {
     const result = this.db.run(this.query, this.#params());
     return Promise.resolve({

@@ -61,7 +61,7 @@ export type ApiEndpointMethod =
 export interface ApiEndpointOpenApi {
   /** Response schema component name for the success status. */
   readonly okSchema: string;
-  readonly okStatus?: "200" | "201" | "204";
+  readonly okStatus?: "200" | "201" | "202" | "204";
   /** Request body schema component name (`application/json`). */
   readonly requestSchema?: string;
   /** Explicit request body object (e.g. multipart upload). */

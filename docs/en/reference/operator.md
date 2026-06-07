@@ -1,61 +1,61 @@
 # Operator
 
-An operator runs the Takosumi platform worker and owns the internal execution profiles (runners), storage, auth, dashboard, billing / OIDC surfaces, and hosted runners.
+An operator runs the Takosumi platform worker and owns storage, auth, dashboard, billing / OIDC surfaces, hosted
+runners, and internal execution profiles. The core public surface is Space, Source, Connection, OpenTofu Capsule,
+Installation, Dependency, Run, RunGroup, Deployment, OutputSnapshot, Billing, and Activity.
 
 ## Responsibilities
 
 - configure control-plane auth
-- define internal execution profiles (substrate / runner image / resource limits / provider allowlist seed); see [Runner profiles](./runner-profiles.md)
-- manage [Connections](../../core-spec.md#8-connection) / operator default connections and secret delivery
+- define internal execution profiles (substrate / runner image / resource limits / provider allowlist seed); see [Internal execution profiles](./runner-profiles.md)
+- manage Connections / operator default connections and secret delivery
 - manage state backend and lock backend
 - manage OpenTofu runner image / container / queue
 - when using Cloudflare Workers for Platforms, manage the dispatch namespace, outbound Worker, and tenant Worker binding policy
 - keep provider credentials, control-plane tokens, and state backend credentials out of tenant Workers
-- expose dashboard views for Installation, Run, Deployment, OutputSnapshot, Activity, and Workload Service projections
+- expose dashboard views for Installation, Run, Deployment, OutputSnapshot, Activity, and Billing projections
 - collect production evidence before managed public access
 
-## Workload Services
+## Workload integrations
 
-Workload Services are service projections that the Accounts / operator distribution exposes to deployed workloads. They
-are not Takosumi core public concepts. The core public surface is Space, Source, Connection, Installation, Dependency,
-Run, RunGroup, Deployment, OutputSnapshot, and Activity (see the [core spec](../../core-spec.md)).
+Hosted/operator distributions can expose integration tokens or service projections to deployed workloads, such as OIDC
+client material, billing portal links, webhook ingest endpoints, or same-Space control callbacks. These are **operator
+integration details**, not Takosumi core public concepts. They must be derived from Installation, Deployment,
+OutputSnapshot, Billing, Activity, and Connection policy records rather than becoming new core resources.
 
-The v1 reference distribution exposes:
+Integration token rules:
 
-| Service | Material kind | Secret | Meaning |
-| --- | --- | --- | --- |
-| `identity.primary.oidc` | `identity.oidc@v1` | no | operator OIDC issuer and per-installation public client |
-| `billing.primary.default` | `billing.port@v1` | yes | billing portal and usage report endpoint |
-| `deployment.outputs.http` | `deployment.outputs.http@v1` | no | public HTTP URLs projected from the OutputSnapshot |
-| `events.webhook.default` | `events.webhook@v1` | yes | workload event ingest into the Accounts event ledger |
-| `takosumi.control.space` | `takosumi.control@v1` | yes | same-space workload control service |
-
-API:
-
-| Method | Path | Auth |
-| --- | --- | --- |
-| GET | `/v1/workload-services` | account session / PAT read |
-| GET | `/v1/installations/{id}/services` | owner account session / PAT read |
-| POST | `/v1/installations/{id}/services/{serviceId}/rotate-token` | owner account session / PAT write |
-| POST | `/v1/installations/{id}/events/ingest` | current `events.webhook.default` workload token |
-
-`rotate-token` returns the raw token once. Normal GET responses, Installation detail, OutputSnapshot, and public event
-serialization only expose `secret_ref` and expiry. Rotation validity is recorded through the InstallationEvent ledger's
-current token hash, so old tokens are invalid after the next rotation on both D1 and Postgres stores.
-
-The `takosumi.control.space` token is for same-space workload control. It is limited to same-space installation list /
-detail / events / outputs / deploy / rollback / materialize / export / usage report operations. It cannot manage
-execution profiles (runners), provider credentials (Connections), state backends, billing owners, account tokens, or the
-OIDC issuer.
+- raw token values are returned once at creation/rotation time only
+- normal reads expose only a secret reference, expiry, and non-secret metadata
+- tokens are scoped to one Space and one intended capability
+- tokens cannot manage execution profiles, provider credentials, state backends, billing ownership, account tokens, or
+  OIDC issuer configuration
+- token creation, rotation, and use are recorded as Activity or internal redacted audit evidence without storing token
+  values
 
 ## Production Readiness
 
-| Area | Required evidence |
-| --- | --- |
-| Hosted runner | Cloudflare Container runner plan/apply evidence |
-| Tenant runtime | Workers for Platforms dispatch namespace and outbound Worker isolation proof |
-| Provider live proof | non-production `plan/apply/destroy` evidence for each enabled Cloudflare / AWS / GCP / Azure / Kubernetes / GitHub / DigitalOcean profile |
-| Secret boundary | leak tests for runner diagnostics, failure audit messages, OpenTofu outputs, and tenant Worker bindings |
+| Area                | Required evidence                                                                                                                         |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Website             | `takosumi.com` custom domain, TLS, `/docs/` build                                                                                         |
+| Hosted runner       | Cloudflare Container runner plan/apply evidence                                                                                           |
+| Account surface     | dashboard, OIDC, billing, credential delivery, audit trail                                                                                |
+| State               | remote state backend and lock evidence                                                                                                    |
+| Policy              | provider allowlist / credential delivery evidence / network policy / allowed host pattern enforcement                                     |
+| Tenant runtime      | Workers for Platforms dispatch namespace and outbound Worker isolation proof                                                              |
+| Provider live proof | non-production `plan/apply/destroy` evidence for each enabled Cloudflare / AWS / GCP / Azure / Kubernetes / GitHub / DigitalOcean execution boundary |
+| Secret boundary     | leak tests for runner diagnostics, failure audit messages, OpenTofu outputs, and tenant Worker bindings                                   |
+
+## Local service
+
+```bash
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<token>
+export TAKOSUMI_DEV_MODE=1
+bun src/cli/main.ts server --port 8788
+```
+
+In production, do not use `TAKOSUMI_DEV_MODE`; inject persistent storage, managed auth, secret store, and runner
+substrate through operator config.
 
 ## Public site
 

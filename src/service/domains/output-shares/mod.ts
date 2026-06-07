@@ -7,7 +7,7 @@
  * outputs cross a Space boundary (invariant 13); a same-Space dependency edge
  * never needs one.
  *
- * This service owns OutputShare creation / listing / revocation and enforces
+ * This service owns OutputShare creation / acceptance / listing / revocation and enforces
  * the structural invariants of a grant:
  *
  *   - the producer Installation must exist and belong to `fromSpaceId`;
@@ -17,16 +17,13 @@
  *   - the outputs list must be non-empty and every requested name must exist in
  *     the producer's LATEST OutputSnapshot.spaceOutputs (`failed_precondition`
  *     otherwise — you cannot grant an output the producer has not projected);
- *   - sensitive sharing is NOT supported: every stored entry is `sensitive:
- *     false`, and a request that tries to set `sensitive: true` is rejected
- *     `not_implemented` (invariant 12 — secret values never cross a Space
- *     boundary through the public ledger).
+ *   - sensitive entries require an explicit policy acknowledgement on the
+ *     request. Even then, the share records names only; value injection remains
+ *     limited to non-sensitive projected outputs.
  *
- * Status lifecycle (single-operator instance): a created share goes ACTIVE
- * directly. The spec's `pending` handshake (the consumer Space explicitly
- * accepting an incoming grant) is a later multi-tenant concern; on a
- * single-operator instance the operator already controls both Spaces, so there
- * is no counter-party to wait on. `revoke` moves an ACTIVE share to `revoked`.
+ * Status lifecycle: a created share starts `pending`, the receiving Space calls
+ * approve/accept to move it to `active`, and `revoke` moves a pending or active
+ * share to `revoked`.
  *
  * The plan-time `published_output` consumption (injecting a shared output into a
  * consumer Installation's variables, pinned by a DependencySnapshot) lands in a
@@ -37,7 +34,9 @@
 import type {
   OutputShare,
   OutputShareEntry,
+  OutputSnapshot,
 } from "takosumi-contract/output-snapshots";
+import type { JsonValue } from "takosumi-contract";
 import { OpenTofuControllerError, requireNonEmptyString } from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import {
@@ -51,12 +50,34 @@ export interface CreateOutputShareEntry {
   readonly name: string;
   /** Optional consumer-side rename; defaults to `name` when omitted. */
   readonly alias?: string;
-  /**
-   * Sensitive sharing is not supported (invariant 12). Present only so a request
-   * setting it `true` can be rejected `not_implemented`; stored entries are
-   * always `sensitive: false`.
-   */
+  /** Marks a sensitive output name. Requires `sensitivePolicy.allow === true`. */
   readonly sensitive?: boolean;
+}
+
+export interface SensitiveOutputSharePolicy {
+  readonly allow: boolean;
+  readonly reason?: string;
+}
+
+export interface SensitiveOutputValue {
+  readonly value: JsonValue;
+  readonly sensitive: true;
+}
+
+/**
+ * Host-injected resolver for sensitive output values. The service core only sees
+ * the latest OutputSnapshot pointer and the requested output name; the host owns
+ * decrypting the encrypted raw output artifact. Implementations must return a
+ * value only when the raw OpenTofu output exists and is flagged sensitive.
+ */
+export interface SensitiveOutputResolver {
+  resolve(input: {
+    readonly outputSnapshot: OutputSnapshot;
+    readonly outputName: string;
+    readonly fromSpaceId: string;
+    readonly toSpaceId: string;
+    readonly producerInstallationId: string;
+  }): Promise<SensitiveOutputValue | undefined>;
 }
 
 /** Create-share request: the public {@link OutputShare} minus the service-assigned fields. */
@@ -65,6 +86,7 @@ export interface CreateOutputShareRequest {
   readonly toSpaceId: string;
   readonly producerInstallationId: string;
   readonly outputs: readonly CreateOutputShareEntry[];
+  readonly sensitivePolicy?: SensitiveOutputSharePolicy;
 }
 
 export interface OutputSharesServiceDependencies {
@@ -73,6 +95,12 @@ export interface OutputSharesServiceDependencies {
   readonly now?: () => string;
   /** Space-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder;
+  /**
+   * Optional sensitive-output resolver. Required for creating sensitive shares:
+   * without it the service fails closed rather than granting an unverifiable raw
+   * output name. The resolver never affects public/list responses.
+   */
+  readonly sensitiveOutputResolver?: SensitiveOutputResolver;
 }
 
 export class OutputSharesService {
@@ -80,6 +108,7 @@ export class OutputSharesService {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
   readonly #activity: ActivityRecorder;
+  readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
 
   constructor(dependencies: OutputSharesServiceDependencies) {
     this.#store = dependencies.store;
@@ -87,6 +116,7 @@ export class OutputSharesService {
       ((prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`);
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
+    this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
   }
 
   /**
@@ -94,8 +124,9 @@ export class OutputSharesService {
    * §18). The producer Installation must exist and belong to `fromSpaceId`; the
    * consumer Space must exist; `fromSpaceId` != `toSpaceId`; the outputs list is
    * non-empty; every requested name exists in the producer's latest
-   * OutputSnapshot.spaceOutputs; and no entry requests `sensitive: true`. The
-   * created share is ACTIVE.
+   * OutputSnapshot.spaceOutputs; and sensitive entries carry an explicit policy
+   * acknowledgement. The created share is PENDING until the receiving Space
+   * approves it.
    */
   async createShare(request: CreateOutputShareRequest): Promise<OutputShare> {
     requireNonEmptyString(request.fromSpaceId, "fromSpaceId");
@@ -120,7 +151,7 @@ export class OutputSharesService {
         "output share must declare at least one output to share",
       );
     }
-    const entries = normalizeEntries(request.outputs);
+    const entries = normalizeEntries(request.outputs, request.sensitivePolicy);
 
     const producer = await this.#store.getInstallation(
       request.producerInstallationId,
@@ -149,8 +180,11 @@ export class OutputSharesService {
       );
     }
 
-    // Every shared name must exist in the producer's LATEST projected
-    // spaceOutputs: you cannot grant an output the producer has not produced.
+    // Every non-sensitive shared name must exist in the producer's LATEST
+    // projected spaceOutputs: you cannot grant an ordinary output the producer
+    // has not produced. Sensitive entries are policy acknowledgements only; raw
+    // values are never stored in OutputSnapshot.spaceOutputs and are never
+    // injected through published_output.
     const latest = await this.#store.getLatestOutputSnapshot(
       request.producerInstallationId,
     );
@@ -158,14 +192,46 @@ export class OutputSharesService {
       latest ? Object.keys(latest.spaceOutputs) : [],
     );
     const missing = entries
+      .filter((entry) => entry.sensitive !== true)
       .map((entry) => entry.name)
       .filter((name) => !available.has(name));
     if (missing.length > 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `output share names not present in the producer's latest output ` +
-          `snapshot: ${missing.join(", ")}`,
+        `snapshot: ${missing.join(", ")}`,
       );
+    }
+    const sensitiveEntries = entries.filter((entry) => entry.sensitive === true);
+    if (sensitiveEntries.length > 0) {
+      if (!latest) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "sensitive output share requires a latest producer OutputSnapshot",
+        );
+      }
+      if (!this.#sensitiveOutputResolver) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "sensitive output sharing requires a configured sensitive output resolver",
+        );
+      }
+      for (const entry of sensitiveEntries) {
+        const resolved = await this.#sensitiveOutputResolver.resolve({
+          outputSnapshot: latest,
+          outputName: entry.name,
+          fromSpaceId: request.fromSpaceId,
+          toSpaceId: request.toSpaceId,
+          producerInstallationId: request.producerInstallationId,
+        });
+        if (!resolved) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `sensitive output ${entry.name} is not present as a sensitive ` +
+              "output in the producer's latest raw output artifact",
+          );
+        }
+      }
     }
 
     const share: OutputShare = {
@@ -174,10 +240,7 @@ export class OutputSharesService {
       toSpaceId: request.toSpaceId,
       producerInstallationId: request.producerInstallationId,
       outputs: entries,
-      // Single-operator instance: an OutputShare is created ACTIVE directly. The
-      // spec `pending` handshake (consumer Space accepting an incoming grant) is
-      // a later multi-tenant concern.
-      status: "active",
+      status: "pending",
       createdAt: this.#now(),
     };
     const created = await this.#store.putOutputShare(share);
@@ -193,6 +256,9 @@ export class OutputSharesService {
         toSpaceId: created.toSpaceId,
         producerInstallationId: created.producerInstallationId,
         outputNames: created.outputs.map((entry) => entry.name),
+        sensitiveOutputNames: created.outputs
+          .filter((entry) => entry.sensitive)
+          .map((entry) => entry.name),
       },
     });
     return created;
@@ -220,6 +286,49 @@ export class OutputSharesService {
   async getShare(id: string): Promise<OutputShare | undefined> {
     requireNonEmptyString(id, "shareId");
     return await this.#store.getOutputShare(id);
+  }
+
+  /**
+   * Approves a pending OutputShare from the receiving Space side. Active shares
+   * are idempotent; revoked shares cannot be reactivated.
+   */
+  async approveShare(id: string): Promise<OutputShare> {
+    requireNonEmptyString(id, "shareId");
+    const existing = await this.#store.getOutputShare(id);
+    if (!existing) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `output share ${id} not found`,
+      );
+    }
+    if (existing.status === "active") return existing;
+    if (existing.status === "revoked") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `output share ${id} has been revoked and cannot be approved`,
+      );
+    }
+    const active: OutputShare = {
+      ...existing,
+      status: "active",
+      acceptedAt: this.#now(),
+    };
+    const stored = await this.#store.putOutputShare(active);
+    await this.#activity.record({
+      spaceId: stored.toSpaceId,
+      action: "output_share.approved",
+      targetType: "output_share",
+      targetId: stored.id,
+      metadata: {
+        fromSpaceId: stored.fromSpaceId,
+        producerInstallationId: stored.producerInstallationId,
+        outputNames: stored.outputs.map((entry) => entry.name),
+        sensitiveOutputNames: stored.outputs
+          .filter((entry) => entry.sensitive)
+          .map((entry) => entry.name),
+      },
+    });
+    return stored;
   }
 
   /**
@@ -262,12 +371,13 @@ export class OutputSharesService {
 /**
  * Validates + normalizes the requested entries into stored {@link
  * OutputShareEntry} records. Each `name` must be non-empty; an explicit `alias`
- * must be non-empty when present; `sensitive: true` is rejected
- * `not_implemented` (invariant 12); and a duplicate `name` is rejected
- * `invalid_argument`. Stored entries always carry `sensitive: false`.
+ * must be non-empty when present; `sensitive: true` requires explicit policy;
+ * and a duplicate `name` is rejected `invalid_argument`. Stored entries carry
+ * only names / aliases / sensitive flags, never output values.
  */
 function normalizeEntries(
   outputs: readonly CreateOutputShareEntry[],
+  sensitivePolicy?: SensitiveOutputSharePolicy,
 ): readonly OutputShareEntry[] {
   const seen = new Set<string>();
   const entries: OutputShareEntry[] = [];
@@ -276,14 +386,23 @@ function normalizeEntries(
     if (entry.alias !== undefined) {
       requireNonEmptyString(entry.alias, `outputs.${entry.name}.alias`);
     }
-    // Sensitive sharing is not supported (invariant 12): secret values must not
-    // cross a Space boundary through the public ledger.
     if (entry.sensitive === true) {
-      throw new OpenTofuControllerError(
-        "not_implemented",
-        `sharing sensitive output ${entry.name} is not supported ` +
-          "(sensitive values never cross a Space boundary)",
-      );
+      if (sensitivePolicy?.allow !== true) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `sharing sensitive output ${entry.name} requires explicit ` +
+            "sensitivePolicy.allow",
+        );
+      }
+      if (sensitivePolicy.reason?.trim()) {
+        // The reason is intentionally not persisted on the OutputShare record or
+        // activity metadata; it is an explicit request-time acknowledgement.
+      } else {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          "sensitivePolicy.reason is required for sensitive output sharing",
+        );
+      }
     }
     if (seen.has(entry.name)) {
       throw new OpenTofuControllerError(
@@ -295,7 +414,7 @@ function normalizeEntries(
     entries.push({
       name: entry.name,
       ...(entry.alias !== undefined ? { alias: entry.alias } : {}),
-      sensitive: false,
+      sensitive: entry.sensitive === true,
     });
   }
   return entries;

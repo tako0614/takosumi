@@ -1,16 +1,22 @@
 # Takosumi
 
-Takosumi は **Space 直下の OpenTofu Installation DAG を管理する OSS control plane** です。ユーザーは任意の Git URL から Service を Space (`@handle`) にインストールし、Takosumi が plan / apply / destroy の実行記録、state 世代、outputs、Installation 間の依存 DAG、credential、audit trail を管理します。
+Takosumi は **Space 直下の OpenTofu Capsule DAG を管理する OSS control plane** です。ユーザーは任意の Git URL から OpenTofu Capsule を Space (`@handle`) にインストールします。Takosumi はその Capsule を child module として呼べる形に正規化し、generated root で包み、OpenTofu の plan / apply / destroy を実行し、state 世代、outputs、Installation 間の依存 DAG、credentials、artifacts、activity、billing mode を管理します。
 
-OpenTofu の設定が resource definition です。Takosumi は別の設定形式で infrastructure を再定義しません。repo の Git URL、commit、module path、OpenTofu provider lock、`tofu plan`、`tofu output -json` から必要な情報を記録します。
+OpenTofu configuration が resource definition です。Takosumi は独自 manifest や別の infrastructure 定義形式を要求しません。repo の Git URL、commit、module path、OpenTofu provider lock、Compatibility Report、`tofu plan`、`tofu output -json`、Run ledger から必要な情報を記録します。
+
+完成形の正本仕様は [Core spec](./core-spec.md) です。現時点の実装適合状況と未完了項目は [Core conformance](./core-conformance.md) に分けて記録します。
 
 ## 何をするか
 
-1. Operator が operator default connections (compute / dns / storage / source) を用意します。
-2. User または dashboard が Git URL を Source として登録し、Space 直下に Installation を作ります (`@space/name`)。
-3. Takosumi が plan Run を作り、SourceSnapshot と DependencySnapshot を固定し、plan JSON を policy 層 (provider / resource allowlist / action policy) で評価します。
-4. 承認が必要な plan (destroy / destructive change) は approve を経て apply されます。apply は saved plan のみを実行し、plan digest / source snapshot / dependency snapshot / state generation を検証します。
-5. 成功した apply は StateSnapshot 世代を進め、OutputSnapshot (spaceOutputs / publicOutputs、raw は暗号化 artifact) と Deployment を記録し、downstream Installation を stale にします。
+1. Operator が operator default connections (compute / dns / storage / source) と billing mode (`disabled` / `showback` / `enforce`) を用意します。
+2. User または dashboard が Git URL を Source として登録し、Space 直下に Capsule Installation を作ります (`@space/name`)。
+3. Compatibility Check が SourceSnapshot を固定し、Capsule Normalizer と Capsule Gate で Ready / Auto-capsulized / Needs patch / Unsupported を判定します。
+4. Plan Run が DependencySnapshot と base StateSnapshot generation を固定し、generated root を作り、provider credentials を mint して `tofu plan -out=tfplan` と `tofu show -json` を実行します。
+5. Policy は Compatibility Report と plan JSON を、provider / module source / data source / resource allowlist、action policy、dependency policy、output policy、quota、billing reservation で評価します。
+6. 承認が必要な plan (destroy / destructive change) は approve を経て apply されます。apply は saved plan のみを実行し、plan digest / source snapshot / compatibility report / dependency snapshot / state generation を検証します。
+7. 成功した apply は StateSnapshot 世代を進め、OutputSnapshot (spaceOutputs / publicOutputs、raw は暗号化 artifact) と Deployment を記録し、UsageEvent / CreditReservation を確定し、downstream Installation を stale にします。
+
+Runner-backed Capsule Normalizer / Capsule Gate、Compatibility Report の apply guard 統合、billing enforce は実装中です。入口 docs では完成形の contract を説明し、実装差分は conformance に集約します。
 
 ## 何ではないか
 
@@ -27,11 +33,14 @@ Takosumi は 2 層 product ではありません。managed dashboard、account p
 | Space | GitHub の user/org に近い owner namespace (`@handle`)。members / sources / connections / installations / dependency graph / policy / activity / optional billing を持つ |
 | Source | 登録された Git repository。immutable な SourceSnapshot (commit 固定 + digest) を生む |
 | Connection | 外部接続 (Git token / SSH key / Cloudflare token 等)。scope は operator / space。Installation は capability ごとに CapabilityBinding (default / connection / manual / disabled) で束ねる |
-| Installation | Space 直下の OpenTofu root/state 単位 (`@space/name`)。InstallConfig (install type / trust / variable mapping / output allowlist / policy) が扱いを決める |
+| OpenTofu Capsule | Git URL から取得する OpenTofu module-compatible configuration。Normalizer / Gate を通って generated root から呼ばれる |
+| Compatibility Report | Capsule Normalizer / Capsule Gate の結果。Ready / Auto-capsulized / Needs patch / Unsupported と findings を記録する |
+| Installation | Space 直下の Capsule + generated root + StateSnapshot + OutputSnapshot + Deployment の単位 (`@space/name`)。InstallConfig (trust / modulePath / normalization / variable mapping / output allowlist / policy) が扱いを決める |
 | Dependency | producer outputs → consumer inputs の DAG edge (variable_injection が標準)。plan 時に DependencySnapshot で固定 |
-| Run | 1 回の実行 (source_sync / plan / apply / destroy_plan / destroy_apply)。RunGroup が DAG 順の一括更新を束ねる |
+| Run | 1 回の実行 (source_sync / compatibility_check / plan / apply / destroy_plan / destroy_apply)。RunGroup が DAG 順の一括更新を束ねる |
 | Deployment | 成功した apply の ledger record (active → superseded / destroyed) |
 | OutputSnapshot | apply 後の `tofu output -json` 世代。spaceOutputs / publicOutputs に projection、raw は暗号化 artifact |
+| Billing | Space 単位の credit / usage ledger。`disabled` は非表示、`showback` は記録のみ、`enforce` は apply 前の credit reservation で gate する |
 | Activity | Space 単位の audit trail |
 
 次に読む: [Quickstart](./getting-started/quickstart.md)

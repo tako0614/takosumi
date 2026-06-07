@@ -20,9 +20,13 @@
  *   - raw output VALUES (only the projected `publicOutputs` / `spaceOutputs` +
  *     the raw artifact KEY are included — the encrypted raw envelope is not copied).
  *
- * Spec §33 layer 2 ("service data backup": messages / files / posts / …) is out
- * of scope here — that is per-Installation data owned by the Installation and
- * driven by `BackupConfig.mode` (the control plane's mode is `none`).
+ * Spec §33 layer 2 ("service data backup": messages / files / posts / …) is
+ * implemented for the safe MVP case: `BackupConfig.mode = "artifact_export"`
+ * records a sealed manifest of service-owned artifact pointers published through
+ * projected OpenTofu outputs. It does not fetch provider data, run arbitrary
+ * commands, or copy raw service bytes. `provider_snapshot` and `custom_command`
+ * are explicitly recorded as unsupported until their runner / credential
+ * boundaries exist.
  *
  * DIVERGENCE (spec §26 names `control.json.zst.enc`): zstd has no streaming
  * primitive in workerd, so the bundle is gzip-compressed
@@ -35,8 +39,14 @@ import {
   type BackupRecord,
   CONTROL_BACKUP_CONTENT_TYPE,
   CONTROL_BACKUP_OBJECT_KEY,
+  SERVICE_DATA_BACKUP_OBJECT_KEY,
 } from "takosumi-contract/backups";
-import type { Connection } from "takosumi-contract/deploy-control-api";
+import type {
+  Connection,
+  InstallConfig,
+  Installation,
+} from "takosumi-contract/deploy-control-api";
+import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import type {
   OpenTofuDeploymentStore,
@@ -151,6 +161,11 @@ export class BackupsService {
       compressed,
       contentType: CONTROL_BACKUP_CONTENT_TYPE,
     });
+    const serviceData = await this.#writeServiceDataManifest({
+      backupId,
+      spaceId,
+      capturedAt: createdAt,
+    });
 
     const record: BackupRecord = {
       id: backupId,
@@ -158,7 +173,10 @@ export class BackupsService {
       objectKey,
       digest,
       sizeBytes,
-      ...(request.createdByRunId ? { createdByRunId: request.createdByRunId } : {}),
+      ...(serviceData ? { serviceData } : {}),
+      ...(request.createdByRunId
+        ? { createdByRunId: request.createdByRunId }
+        : {}),
       createdAt,
     };
     await this.#store.putBackupRecord(record);
@@ -174,6 +192,7 @@ export class BackupsService {
         objectKey,
         digest,
         sizeBytes,
+        ...(serviceData ? { serviceData } : {}),
         ...(request.createdByRunId ? { runId: request.createdByRunId } : {}),
       },
     });
@@ -238,15 +257,15 @@ export class BackupsService {
     const stateSnapshots: BundleStateSnapshot[] = [];
     const outputSnapshots: BundleOutputSnapshot[] = [];
     for (const installation of installations) {
-      for (const deployment of await this.#store.listDeployments(installation.id)) {
+      for (const deployment of await this.#store.listDeployments(
+        installation.id,
+      )) {
         deployments.push(deployment);
       }
-      for (
-        const snapshot of await this.#store.listStateSnapshots(
-          installation.id,
-          installation.environment,
-        )
-      ) {
+      for (const snapshot of await this.#store.listStateSnapshots(
+        installation.id,
+        installation.environment,
+      )) {
         // METADATA only — the encrypted state bytes are NOT copied (objectKey is
         // the pointer to the R2_STATE object).
         stateSnapshots.push({
@@ -298,6 +317,149 @@ export class BackupsService {
       connections: connections.map(publicConnection),
     };
   }
+
+  async #writeServiceDataManifest(input: {
+    readonly backupId: string;
+    readonly spaceId: string;
+    readonly capturedAt: string;
+  }): Promise<BackupRecord["serviceData"] | undefined> {
+    if (!this.#artifactStore) return undefined;
+    const manifest = await this.#collectServiceDataManifest(
+      input.spaceId,
+      input.capturedAt,
+    );
+    if (manifest.entries.length === 0) return undefined;
+
+    const objectKey = SERVICE_DATA_BACKUP_OBJECT_KEY(
+      input.spaceId,
+      input.backupId,
+    );
+    const compressed = await gzip(
+      new TextEncoder().encode(JSON.stringify(manifest)),
+    );
+    const { digest, sizeBytes } = await this.#artifactStore.put({
+      objectKey,
+      compressed,
+      contentType: CONTROL_BACKUP_CONTENT_TYPE,
+    });
+    return {
+      objectKey,
+      digest,
+      sizeBytes,
+      exportedCount: manifest.entries.filter((e) => e.status === "exported")
+        .length,
+      unsupportedCount: manifest.entries.filter(
+        (e) => e.status === "unsupported",
+      ).length,
+      missingCount: manifest.entries.filter((e) => e.status === "missing")
+        .length,
+    };
+  }
+
+  async #collectServiceDataManifest(
+    spaceId: string,
+    capturedAt: string,
+  ): Promise<ServiceDataBackupManifest> {
+    const installConfigs = new Map(
+      (await this.#store.listInstallConfigs(spaceId)).map((config) => [
+        config.id,
+        config,
+      ]),
+    );
+    for (const config of await this.#store.listInstallConfigs()) {
+      if (!installConfigs.has(config.id)) {
+        installConfigs.set(config.id, config);
+      }
+    }
+
+    const entries: ServiceDataBackupEntry[] = [];
+    for (const installation of await this.#store.listInstallations(spaceId)) {
+      const config = installConfigs.get(installation.installConfigId);
+      const backup = config?.backup;
+      if (!backup?.enabled || backup.mode === "none") continue;
+
+      if (backup.mode === "provider_snapshot") {
+        entries.push(
+          serviceDataEntry(installation, config, {
+            status: "unsupported",
+            mode: backup.mode,
+            reason:
+              "provider_snapshot requires provider-native snapshot orchestration and short-lived provider credential vending",
+          }),
+        );
+        continue;
+      }
+      if (backup.mode === "custom_command") {
+        entries.push(
+          serviceDataEntry(installation, config, {
+            status: "unsupported",
+            mode: backup.mode,
+            reason:
+              "custom_command requires an isolated backup run phase and explicit command allowlist",
+          }),
+        );
+        continue;
+      }
+
+      const outputPath = backup.outputPath?.trim();
+      if (!outputPath) {
+        entries.push(
+          serviceDataEntry(installation, config, {
+            status: "missing",
+            mode: backup.mode,
+            reason: "artifact_export requires BackupConfig.outputPath",
+          }),
+        );
+        continue;
+      }
+
+      const output = await this.#store.getLatestOutputSnapshot(installation.id);
+      if (!output) {
+        entries.push(
+          serviceDataEntry(installation, config, {
+            status: "missing",
+            mode: backup.mode,
+            outputPath,
+            reason:
+              "installation has no OutputSnapshot to read artifact pointer from",
+          }),
+        );
+        continue;
+      }
+
+      const value = lookupOutputValue(output, outputPath);
+      const artifact = parseArtifactPointer(value);
+      if (!artifact) {
+        entries.push(
+          serviceDataEntry(installation, config, {
+            status: "missing",
+            mode: backup.mode,
+            outputPath,
+            reason:
+              "outputPath did not resolve to an artifact pointer string/object in projected outputs",
+          }),
+        );
+        continue;
+      }
+
+      entries.push(
+        serviceDataEntry(installation, config, {
+          status: "exported",
+          mode: backup.mode,
+          outputPath,
+          artifact,
+        }),
+      );
+    }
+
+    return {
+      bundleVersion: 1,
+      kind: "service-data-artifact-export",
+      spaceId,
+      capturedAt,
+      entries,
+    };
+  }
 }
 
 /**
@@ -321,6 +483,59 @@ export interface ControlBackupBundle {
   readonly runGroups: readonly unknown[];
   readonly activity: readonly unknown[];
   readonly connections: readonly Connection[];
+}
+
+/** Sealed JSON manifest for §33 service-data artifact export. */
+export interface ServiceDataBackupManifest {
+  readonly bundleVersion: 1;
+  readonly kind: "service-data-artifact-export";
+  readonly spaceId: string;
+  readonly capturedAt: string;
+  readonly entries: readonly ServiceDataBackupEntry[];
+}
+
+export type ServiceDataBackupEntry =
+  | ServiceDataBackupExportedEntry
+  | ServiceDataBackupUnsupportedEntry
+  | ServiceDataBackupMissingEntry;
+
+interface ServiceDataBackupEntryBase {
+  readonly installationId: string;
+  readonly installationName: string;
+  readonly environment: string;
+  readonly installConfigId: string;
+  readonly installConfigName?: string;
+  readonly mode: "artifact_export" | "provider_snapshot" | "custom_command";
+  readonly outputPath?: string;
+}
+
+export interface ServiceDataBackupExportedEntry extends ServiceDataBackupEntryBase {
+  readonly status: "exported";
+  readonly mode: "artifact_export";
+  readonly artifact: ServiceDataArtifactPointer;
+}
+
+export interface ServiceDataBackupUnsupportedEntry extends ServiceDataBackupEntryBase {
+  readonly status: "unsupported";
+  readonly reason: string;
+}
+
+export interface ServiceDataBackupMissingEntry extends ServiceDataBackupEntryBase {
+  readonly status: "missing";
+  readonly reason: string;
+}
+
+/**
+ * Service-owned artifact pointer published by an Installation output. Takosumi
+ * records the pointer only; it does not read provider data or include service
+ * bytes in the control ledger.
+ */
+export interface ServiceDataArtifactPointer {
+  readonly ref: string;
+  readonly digest?: string;
+  readonly sizeBytes?: number;
+  readonly contentType?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
 /** SourceSnapshot metadata as captured in a control bundle. */
@@ -372,8 +587,12 @@ export type PublicSource = Omit<
 
 /** Strips the internal {@link StoredSource} fields, keeping the public Source. */
 function stripSource(source: StoredSource): PublicSource {
-  const { hookSecretHash: _h, lastSeenCommit: _l, autoSync: _a, ...rest } =
-    source;
+  const {
+    hookSecretHash: _h,
+    lastSeenCommit: _l,
+    autoSync: _a,
+    ...rest
+  } = source;
   return rest;
 }
 
@@ -386,12 +605,108 @@ function publicConnection(connection: Connection): Connection {
   return connection;
 }
 
+function serviceDataEntry(
+  installation: Installation,
+  config: InstallConfig | undefined,
+  rest:
+    | ServiceDataBackupEntryRest<ServiceDataBackupExportedEntry>
+    | ServiceDataBackupEntryRest<ServiceDataBackupUnsupportedEntry>
+    | ServiceDataBackupEntryRest<ServiceDataBackupMissingEntry>,
+): ServiceDataBackupEntry {
+  return {
+    installationId: installation.id,
+    installationName: installation.name,
+    environment: installation.environment,
+    installConfigId: installation.installConfigId,
+    ...(config ? { installConfigName: config.name } : {}),
+    ...rest,
+  } as ServiceDataBackupEntry;
+}
+
+type ServiceDataBackupEntryRest<T extends ServiceDataBackupEntry> = Omit<
+  T,
+  | "installationId"
+  | "installationName"
+  | "environment"
+  | "installConfigId"
+  | "installConfigName"
+>;
+
+function lookupOutputValue(output: OutputSnapshot, path: string): unknown {
+  const segments = path.split(".").filter((part) => part.length > 0);
+  if (segments.length === 0) return undefined;
+  const fromSpace = getPath(output.spaceOutputs, segments);
+  if (fromSpace !== undefined) return fromSpace;
+  return getPath(output.publicOutputs, segments);
+}
+
+function getPath(
+  root: Readonly<Record<string, unknown>>,
+  path: readonly string[],
+): unknown {
+  let current: unknown = root;
+  for (const segment of path) {
+    if (!isRecord(current) || !(segment in current)) return undefined;
+    current = current[segment];
+  }
+  return current;
+}
+
+function parseArtifactPointer(
+  value: unknown,
+): ServiceDataArtifactPointer | undefined {
+  if (typeof value === "string") {
+    const ref = value.trim();
+    return isSafeArtifactRef(ref) ? { ref } : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  const refValue =
+    value.ref ?? value.objectKey ?? value.artifactKey ?? value.key;
+  if (typeof refValue !== "string") return undefined;
+  const ref = refValue.trim();
+  if (!isSafeArtifactRef(ref)) return undefined;
+  const pointer: ServiceDataArtifactPointer = { ref };
+  if (typeof value.digest === "string" && value.digest.trim().length > 0) {
+    (pointer as { digest?: string }).digest = value.digest.trim();
+  }
+  if (
+    typeof value.sizeBytes === "number" &&
+    Number.isInteger(value.sizeBytes) &&
+    value.sizeBytes >= 0
+  ) {
+    (pointer as { sizeBytes?: number }).sizeBytes = value.sizeBytes;
+  }
+  if (
+    typeof value.contentType === "string" &&
+    value.contentType.trim().length > 0
+  ) {
+    (pointer as { contentType?: string }).contentType =
+      value.contentType.trim();
+  }
+  if (isRecord(value.metadata)) {
+    (pointer as { metadata?: Readonly<Record<string, unknown>> }).metadata =
+      value.metadata;
+  }
+  return pointer;
+}
+
+function isSafeArtifactRef(ref: string): boolean {
+  if (ref.length === 0 || ref.includes("\0")) return false;
+  if (/^https?:\/\//i.test(ref)) return false;
+  if (/^r2:\/\/[A-Za-z0-9._-]+\/[^\s]+$/u.test(ref)) return true;
+  return /^[A-Za-z0-9._/@:+-]+$/u.test(ref) && !ref.includes("..");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** gzip-compresses bytes via the platform `CompressionStream` (workerd / Bun). */
 async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
   const stream = new Response(
-    new Blob([toArrayBuffer(bytes)]).stream().pipeThrough(
-      new CompressionStream("gzip"),
-    ),
+    new Blob([toArrayBuffer(bytes)])
+      .stream()
+      .pipeThrough(new CompressionStream("gzip")),
   );
   return new Uint8Array(await stream.arrayBuffer());
 }
@@ -439,9 +754,7 @@ export class InMemoryBackupArtifactStore implements BackupArtifactStore {
 
 async function digestBytes(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", toArrayBuffer(bytes));
-  return `sha256:${
-    Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("")
-  }`;
+  return `sha256:${Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
 }

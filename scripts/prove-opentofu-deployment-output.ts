@@ -133,8 +133,8 @@ export async function runOpenTofuDeploymentOutputProof(
     outputEnvelope,
     outputsDigest: digestBytes(outputBytes),
   });
-  // Installation-first model (spec §5): a plan/apply targets an existing
-  // Installation row. Seed the Space-direct Installation model into the store and
+  // Capsule Installation model: a plan/apply targets an existing Installation
+  // row. Seed the Space-direct Installation model into the store and
   // attach a prior current Deployment so the apply guard
   // (`installationCurrentDeploymentId`) is satisfiable for this single-shot proof.
   const store = new InMemoryOpenTofuDeploymentStore();
@@ -157,14 +157,7 @@ export async function runOpenTofuDeploymentOutputProof(
     newId: ids.next,
   });
 
-  const plan = await controller.createPlanRun({
-    spaceId: input.spaceId,
-    installationId: seeded.installation.id,
-    source,
-    runnerProfileId: input.runnerProfileId ?? runnerProfile.id,
-    requiredProviders: input.requiredProviders ?? [],
-    variables: input.variables,
-  });
+  const plan = await controller.createInstallationPlan(seeded.installation.id);
   if (plan.planRun.status !== "succeeded") {
     throw new Error(
       `fixture PlanRun did not succeed: ${JSON.stringify(plan.planRun.diagnostics ?? [])}`,
@@ -189,7 +182,7 @@ export async function runOpenTofuDeploymentOutputProof(
     throw new Error("fixture ApplyRun did not materialize Installation/Deployment");
   }
 
-  // §21 model: the ApplyRun keeps the full projected DeploymentOutput[] while the
+  // ApplyRun keeps the full projected DeploymentOutput[] while the
   // Deployment records the public name -> value projection as `outputsPublic`.
   // The DeploymentOutput snapshot is the ApplyRun outputs; assert the Deployment's
   // public projection is exactly its name -> value reduction (same source).

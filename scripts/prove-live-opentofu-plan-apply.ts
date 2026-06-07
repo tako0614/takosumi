@@ -47,7 +47,7 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
     await cp(resolve(FIXTURE_SOURCE), workdir, { recursive: true });
     const runnerProfile = liveLocalRunnerProfile(Date.now());
     const ids = deterministicIds();
-    // Installation-first model (spec §5): seed the Space-direct Installation
+    // Capsule Installation model: seed the Space-direct Installation
     // model and attach a prior current Deployment so this single-shot proof's
     // apply passes the `installationCurrentDeploymentId` guard.
     const store = new InMemoryOpenTofuDeploymentStore();
@@ -67,13 +67,9 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
       now: () => Date.parse(options.now?.() ?? new Date().toISOString()),
       newId: ids.next,
     });
-    const planned = await controller.createPlanRun({
-      spaceId: "space_live_local",
-      installationId: seeded.installation.id,
-      source: { kind: "local", path: workdir },
-      runnerProfileId: runnerProfile.id,
-      requiredProviders: [],
-    });
+    const planned = await controller.createInstallationPlan(
+      seeded.installation.id,
+    );
     if (planned.planRun.status !== "succeeded") {
       throw new Error(`PlanRun failed: ${JSON.stringify(planned.planRun.diagnostics ?? [])}`);
     }
@@ -97,7 +93,7 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
       runnerProfileId: runnerProfile.id,
       evidence: {
         planDigest: planned.planRun.planDigest!,
-        // §21 model: the DeploymentOutput snapshot is the ApplyRun outputs (the
+        // DeploymentOutput snapshot is the ApplyRun outputs (the
         // Deployment records the public projection as `outputsPublic`).
         outputCount: applied.applyRun.outputs?.length ?? 0,
         stateLockStatus: applied.applyRun.stateLock.status,

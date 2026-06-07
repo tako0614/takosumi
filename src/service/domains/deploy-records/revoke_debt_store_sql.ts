@@ -1,4 +1,7 @@
 import type { JsonObject } from "takosumi-contract/reference/compat";
+import { and, asc, eq, isNotNull, lte } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/pg-proxy";
+import { integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import type {
   SqlClient,
   SqlParameters,
@@ -26,6 +29,7 @@ import {
 
 export class SqlRevokeDebtStore implements RevokeDebtStore {
   readonly #client: SqlClient;
+  readonly #db: DrizzleSqlBuilder;
   readonly #idFactory: () => string;
 
   constructor(input: {
@@ -33,6 +37,7 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     readonly idFactory?: () => string;
   }) {
     this.#client = input.client;
+    this.#db = createDrizzleSqlBuilder();
     this.#idFactory = input.idFactory ??
       (() => `revoke-debt:${crypto.randomUUID()}`);
   }
@@ -43,32 +48,36 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     // `revokeDebtSourceKey` returns a Promise now (Web Crypto digest).
     const sourceKey = await revokeDebtSourceKey(input);
     const retryPolicy = input.retryPolicy ?? defaultRetryPolicy();
-    const inserted = await this.#query<RevokeDebtRow>(
-      "insert into takosumi_revoke_debts " +
-        "(id, source_key, generated_object_id, source_export_snapshot_id, external_participant_id, reason, status, owner_space_id, originating_space_id, deployment_name, operation_plan_digest, journal_entry_id, operation_id, resource_name, provider_id, retry_policy_json, retry_attempts, last_retry_at, next_retry_at, last_retry_error_json, detail_json, created_at, status_updated_at, aged_at, cleared_at) " +
-        "values ($1, $2, $3, $4, $5, $6, 'open', $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, 0, null, $16::timestamptz, null, $17::jsonb, $18::timestamptz, $18::timestamptz, null, null) " +
-        "on conflict (source_key) do nothing " +
-        RETURNING_COLUMNS,
-      [
-        this.#idFactory(),
+    const inserted = await this.#drizzleQuery<RevokeDebtRow>(
+      this.#db.insert(takosumiRevokeDebts).values({
+        id: this.#idFactory(),
         sourceKey,
-        input.generatedObjectId,
-        input.sourceExportSnapshotId ?? null,
-        input.externalParticipantId ?? null,
-        input.reason,
-        input.ownerSpaceId,
-        input.originatingSpaceId ?? input.ownerSpaceId,
-        input.deploymentName ?? null,
-        input.operationPlanDigest ?? null,
-        input.journalEntryId ?? null,
-        input.operationId ?? null,
-        input.resourceName ?? null,
-        input.providerId ?? null,
-        JSON.stringify(retryPolicy),
-        input.now,
-        input.detail ? JSON.stringify(input.detail) : null,
-        input.now,
-      ],
+        generatedObjectId: input.generatedObjectId,
+        sourceExportSnapshotId: input.sourceExportSnapshotId ?? null,
+        externalParticipantId: input.externalParticipantId ?? null,
+        reason: input.reason,
+        status: "open",
+        ownerSpaceId: input.ownerSpaceId,
+        originatingSpaceId: input.originatingSpaceId ?? input.ownerSpaceId,
+        deploymentName: input.deploymentName ?? null,
+        operationPlanDigest: input.operationPlanDigest ?? null,
+        journalEntryId: input.journalEntryId ?? null,
+        operationId: input.operationId ?? null,
+        resourceName: input.resourceName ?? null,
+        providerId: input.providerId ?? null,
+        retryPolicyJson: retryPolicy,
+        retryAttempts: 0,
+        lastRetryAt: null,
+        nextRetryAt: input.now,
+        lastRetryErrorJson: null,
+        detailJson: input.detail ?? null,
+        createdAt: input.now,
+        statusUpdatedAt: input.now,
+        agedAt: null,
+        clearedAt: null,
+      }).onConflictDoNothing({
+        target: takosumiRevokeDebts.sourceKey,
+      }).returning(),
     );
     const row = inserted.rows[0];
     if (row) return rowToRecord(row);
@@ -83,11 +92,13 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
   async listByOwnerSpace(
     ownerSpaceId: string,
   ): Promise<readonly RevokeDebtRecord[]> {
-    const result = await this.#query<RevokeDebtRow>(
-      SELECT_COLUMNS +
-        " from takosumi_revoke_debts where owner_space_id = $1 " +
-        "order by created_at asc, id asc",
-      [ownerSpaceId],
+    const result = await this.#drizzleQuery<RevokeDebtRow>(
+      this.#db.select().from(takosumiRevokeDebts).where(
+        eq(takosumiRevokeDebts.ownerSpaceId, ownerSpaceId),
+      ).orderBy(
+        asc(takosumiRevokeDebts.createdAt),
+        asc(takosumiRevokeDebts.id),
+      ),
     );
     return result.rows.map(rowToRecord).sort(compareRevokeDebtRecords);
   }
@@ -96,19 +107,27 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     ownerSpaceId: string,
     deploymentName: string,
   ): Promise<readonly RevokeDebtRecord[]> {
-    const result = await this.#query<RevokeDebtRow>(
-      SELECT_COLUMNS +
-        " from takosumi_revoke_debts where owner_space_id = $1 and deployment_name = $2 " +
-        "order by created_at asc, id asc",
-      [ownerSpaceId, deploymentName],
+    const result = await this.#drizzleQuery<RevokeDebtRow>(
+      this.#db.select().from(takosumiRevokeDebts).where(
+        and(
+          eq(takosumiRevokeDebts.ownerSpaceId, ownerSpaceId),
+          eq(takosumiRevokeDebts.deploymentName, deploymentName),
+        ),
+      ).orderBy(
+        asc(takosumiRevokeDebts.createdAt),
+        asc(takosumiRevokeDebts.id),
+      ),
     );
     return result.rows.map(rowToRecord).sort(compareRevokeDebtRecords);
   }
 
   async listOpenOwnerSpaces(): Promise<readonly string[]> {
-    const result = await this.#query<OwnerSpaceRow>(
-      "select distinct owner_space_id from takosumi_revoke_debts " +
-        "where status = 'open' order by owner_space_id asc",
+    const result = await this.#drizzleQuery<OwnerSpaceRow>(
+      this.#db.selectDistinct({
+        owner_space_id: takosumiRevokeDebts.ownerSpaceId,
+      }).from(takosumiRevokeDebts).where(
+        eq(takosumiRevokeDebts.status, "open"),
+      ).orderBy(asc(takosumiRevokeDebts.ownerSpaceId)),
     );
     return result.rows.map((row) => row.owner_space_id).sort();
   }
@@ -120,16 +139,19 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     // index (the `(owner_space_id, status, next_retry_at)` index covers this
     // predicate). `limit` bounds the per-tick scan. Ordering matches
     // `compareRevokeDebtRecords` (created_at asc, id asc).
-    const params: SqlParameters = input.limit !== undefined
-      ? [input.ownerSpaceId, input.now, input.limit]
-      : [input.ownerSpaceId, input.now];
-    const result = await this.#query<RevokeDebtRow>(
-      SELECT_COLUMNS +
-        " from takosumi_revoke_debts where owner_space_id = $1 and status = 'open' " +
-        "and next_retry_at is not null and next_retry_at <= $2::timestamptz " +
-        "order by created_at asc, id asc" +
-        (input.limit !== undefined ? " limit $3" : ""),
-      params,
+    const dueQuery = this.#db.select().from(takosumiRevokeDebts).where(
+      and(
+        eq(takosumiRevokeDebts.ownerSpaceId, input.ownerSpaceId),
+        eq(takosumiRevokeDebts.status, "open"),
+        isNotNull(takosumiRevokeDebts.nextRetryAt),
+        lte(takosumiRevokeDebts.nextRetryAt, input.now),
+      ),
+    ).orderBy(
+      asc(takosumiRevokeDebts.createdAt),
+      asc(takosumiRevokeDebts.id),
+    ).$dynamic();
+    const result = await this.#drizzleQuery<RevokeDebtRow>(
+      input.limit !== undefined ? dueQuery.limit(input.limit) : dueQuery,
     );
     return result.rows.map(rowToRecord).sort(compareRevokeDebtRecords);
   }
@@ -147,11 +169,16 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
   async ageOpenDebts(
     input: RevokeDebtAgeOpenInput,
   ): Promise<readonly RevokeDebtRecord[]> {
-    const result = await this.#query<RevokeDebtRow>(
-      SELECT_COLUMNS +
-        " from takosumi_revoke_debts where owner_space_id = $1 and status = 'open' " +
-        "order by created_at asc, id asc",
-      [input.ownerSpaceId],
+    const result = await this.#drizzleQuery<RevokeDebtRow>(
+      this.#db.select().from(takosumiRevokeDebts).where(
+        and(
+          eq(takosumiRevokeDebts.ownerSpaceId, input.ownerSpaceId),
+          eq(takosumiRevokeDebts.status, "open"),
+        ),
+      ).orderBy(
+        asc(takosumiRevokeDebts.createdAt),
+        asc(takosumiRevokeDebts.id),
+      ),
     );
     const aged: RevokeDebtRecord[] = [];
     for (const row of result.rows) {
@@ -200,9 +227,10 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
   async #getBySourceKey(
     sourceKey: `sha256:${string}`,
   ): Promise<RevokeDebtRecord | undefined> {
-    const result = await this.#query<RevokeDebtRow>(
-      SELECT_COLUMNS + " from takosumi_revoke_debts where source_key = $1",
-      [sourceKey],
+    const result = await this.#drizzleQuery<RevokeDebtRow>(
+      this.#db.select().from(takosumiRevokeDebts).where(
+        eq(takosumiRevokeDebts.sourceKey, sourceKey),
+      ),
     );
     const row = result.rows[0];
     return row ? rowToRecord(row) : undefined;
@@ -212,10 +240,13 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     ownerSpaceId: string,
     id: string,
   ): Promise<RevokeDebtRecord | undefined> {
-    const result = await this.#query<RevokeDebtRow>(
-      SELECT_COLUMNS +
-        " from takosumi_revoke_debts where owner_space_id = $1 and id = $2",
-      [ownerSpaceId, id],
+    const result = await this.#drizzleQuery<RevokeDebtRow>(
+      this.#db.select().from(takosumiRevokeDebts).where(
+        and(
+          eq(takosumiRevokeDebts.ownerSpaceId, ownerSpaceId),
+          eq(takosumiRevokeDebts.id, id),
+        ),
+      ),
     );
     const row = result.rows[0];
     return row ? rowToRecord(row) : undefined;
@@ -244,25 +275,24 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
       readonly retryAttempts: number;
     },
   ): Promise<UpdateOutcome> {
-    const result = await this.#query<RevokeDebtRow>(
-      "update takosumi_revoke_debts set " +
-        "status = $3, retry_attempts = $4, last_retry_at = $5::timestamptz, next_retry_at = $6::timestamptz, last_retry_error_json = $7::jsonb, status_updated_at = $8::timestamptz, aged_at = $9::timestamptz, cleared_at = $10::timestamptz " +
-        "where owner_space_id = $1 and id = $2 and status = $11 and retry_attempts = $12 " +
-        RETURNING_COLUMNS,
-      [
-        record.ownerSpaceId,
-        record.id,
-        record.status,
-        record.retryAttempts,
-        record.lastRetryAt ?? null,
-        record.nextRetryAt ?? null,
-        record.lastRetryError ? JSON.stringify(record.lastRetryError) : null,
-        record.statusUpdatedAt,
-        record.agedAt ?? null,
-        record.clearedAt ?? null,
-        expected.status,
-        expected.retryAttempts,
-      ],
+    const result = await this.#drizzleQuery<RevokeDebtRow>(
+      this.#db.update(takosumiRevokeDebts).set({
+        status: record.status,
+        retryAttempts: record.retryAttempts,
+        lastRetryAt: record.lastRetryAt ?? null,
+        nextRetryAt: record.nextRetryAt ?? null,
+        lastRetryErrorJson: record.lastRetryError ?? null,
+        statusUpdatedAt: record.statusUpdatedAt,
+        agedAt: record.agedAt ?? null,
+        clearedAt: record.clearedAt ?? null,
+      }).where(
+        and(
+          eq(takosumiRevokeDebts.ownerSpaceId, record.ownerSpaceId),
+          eq(takosumiRevokeDebts.id, record.id),
+          eq(takosumiRevokeDebts.status, expected.status),
+          eq(takosumiRevokeDebts.retryAttempts, expected.retryAttempts),
+        ),
+      ).returning(),
     );
     const row = result.rows[0];
     if (row) return { won: true, record: rowToRecord(row) };
@@ -273,11 +303,11 @@ export class SqlRevokeDebtStore implements RevokeDebtStore {
     return { won: false, ...(current ? { record: current } : {}) };
   }
 
-  #query<Row extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    parameters?: SqlParameters,
+  #drizzleQuery<Row extends Record<string, unknown> = Record<string, unknown>>(
+    query: DrizzleQuery,
   ): Promise<SqlQueryResult<Row>> {
-    return this.#client.query<Row>(sql, parameters);
+    const { sql, params } = query.toSQL();
+    return this.#client.query<Row>(sql, params as SqlParameters);
   }
 }
 
@@ -304,10 +334,54 @@ function expectedGuard(
   return { status: record.status, retryAttempts: record.retryAttempts };
 }
 
-const SELECT_COLUMNS =
-  "select id, source_key, generated_object_id, source_export_snapshot_id, external_participant_id, reason, status, owner_space_id, originating_space_id, deployment_name, operation_plan_digest, journal_entry_id, operation_id, resource_name, provider_id, retry_policy_json, retry_attempts, last_retry_at, next_retry_at, last_retry_error_json, detail_json, created_at, status_updated_at, aged_at, cleared_at";
-const RETURNING_COLUMNS =
-  "returning id, source_key, generated_object_id, source_export_snapshot_id, external_participant_id, reason, status, owner_space_id, originating_space_id, deployment_name, operation_plan_digest, journal_entry_id, operation_id, resource_name, provider_id, retry_policy_json, retry_attempts, last_retry_at, next_retry_at, last_retry_error_json, detail_json, created_at, status_updated_at, aged_at, cleared_at";
+const takosumiRevokeDebts = pgTable("takosumi_revoke_debts", {
+  id: text("id").primaryKey(),
+  sourceKey: text("source_key").notNull().unique(),
+  generatedObjectId: text("generated_object_id").notNull(),
+  sourceExportSnapshotId: text("source_export_snapshot_id"),
+  externalParticipantId: text("external_participant_id"),
+  reason: text("reason").notNull(),
+  status: text("status").notNull(),
+  ownerSpaceId: text("owner_space_id").notNull(),
+  originatingSpaceId: text("originating_space_id").notNull(),
+  deploymentName: text("deployment_name"),
+  operationPlanDigest: text("operation_plan_digest"),
+  journalEntryId: text("journal_entry_id"),
+  operationId: text("operation_id"),
+  resourceName: text("resource_name"),
+  providerId: text("provider_id"),
+  retryPolicyJson: jsonb("retry_policy_json").$type<unknown>().notNull(),
+  retryAttempts: integer("retry_attempts").notNull(),
+  lastRetryAt: timestamp("last_retry_at", {
+    mode: "string",
+    withTimezone: true,
+  }),
+  nextRetryAt: timestamp("next_retry_at", {
+    mode: "string",
+    withTimezone: true,
+  }),
+  lastRetryErrorJson: jsonb("last_retry_error_json").$type<unknown>(),
+  detailJson: jsonb("detail_json").$type<unknown>(),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true })
+    .notNull(),
+  statusUpdatedAt: timestamp("status_updated_at", {
+    mode: "string",
+    withTimezone: true,
+  }).notNull(),
+  agedAt: timestamp("aged_at", { mode: "string", withTimezone: true }),
+  clearedAt: timestamp("cleared_at", { mode: "string", withTimezone: true }),
+});
+
+type DrizzleSqlBuilder = ReturnType<typeof createDrizzleSqlBuilder>;
+type DrizzleQuery = {
+  toSQL(): { readonly sql: string; readonly params: readonly unknown[] };
+};
+
+function createDrizzleSqlBuilder() {
+  return drizzle(async () => ({ rows: [] }), {
+    schema: { takosumiRevokeDebts },
+  });
+}
 
 interface RevokeDebtRow extends Record<string, unknown> {
   readonly id: string;

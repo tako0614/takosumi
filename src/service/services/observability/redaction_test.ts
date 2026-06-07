@@ -28,3 +28,14 @@ test("redaction masks bearer and assignment secrets inside strings", () => {
     "Authorization: Bearer [REDACTED] token=[REDACTED]&safe=true",
   );
 });
+
+test("redaction masks prefixed env-style secret assignments and DSN passwords", () => {
+  assert.equal(
+    redactString(
+      "AWS_SECRET_ACCESS_KEY=aws-secret CLOUDFLARE_API_TOKEN=cf-token " +
+        "DATABASE_URL=postgres://user:db-pass@db.example/takos",
+    ),
+    "AWS_SECRET_ACCESS_KEY=[REDACTED] CLOUDFLARE_API_TOKEN=[REDACTED] " +
+      "DATABASE_URL=[REDACTED]",
+  );
+});

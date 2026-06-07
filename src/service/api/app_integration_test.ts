@@ -45,8 +45,13 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   const endpointPaths = capabilities.endpoints.map((
     endpoint: { path: string },
   ) => endpoint.path);
-  assert.ok(endpointPaths.includes("/v1/plan-runs"));
-  assert.ok(endpointPaths.includes("/v1/apply-runs"));
+  assert.equal(endpointPaths.includes("/v1/plan-runs"), false);
+  assert.equal(endpointPaths.includes("/v1/apply-runs"), false);
+  assert.equal(endpointPaths.includes("/v1/runner-profiles"), false);
+  assert.equal(
+    endpointPaths.includes("/v1/installations/:installationId/deployments"),
+    false,
+  );
   assert.equal(
     endpointPaths.some((path: string) => path.includes("/api/public/v1")),
     false,
@@ -54,10 +59,14 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   assert.equal(endpointPaths.includes("/v1/deployments"), false);
 
   const openapi = await (await app.request("/openapi.json")).json();
-  assert.ok(openapi.paths["/v1/plan-runs"]);
-  assert.ok(openapi.paths["/v1/apply-runs"]);
-  assert.ok(openapi.paths["/v1/installations/{installationId}"]);
-  assert.ok(openapi.paths["/v1/installations/{installationId}/deployments"]);
+  assert.equal(openapi.paths["/v1/plan-runs"], undefined);
+  assert.equal(openapi.paths["/v1/apply-runs"], undefined);
+  assert.equal(openapi.paths["/v1/runner-profiles"], undefined);
+  assert.equal(openapi.paths["/v1/installations/{installationId}"], undefined);
+  assert.equal(
+    openapi.paths["/v1/installations/{installationId}/deployments"],
+    undefined,
+  );
   assert.equal(openapi.paths["/v1/installations"], undefined);
   assert.equal(
     openapi.paths["/v1/installations/:installationId/deployments"],
@@ -68,23 +77,11 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   assert.equal(openapi.paths["/v1/artifacts/kinds"], undefined);
   assert.equal(openapi.components.schemas.StatusSummaryResponse, undefined);
   assert.equal(
-    openapi.paths["/v1/plan-runs"].post.requestBody.content[
-      "application/json"
-    ].schema.$ref,
-    "#/components/schemas/CreatePlanRunRequest",
-  );
-  assert.equal(
     openapi.components.schemas.ErrorResponse.properties.error.required
       .includes("requestId"),
     true,
   );
-  assert.ok(
-    openapi.components.schemas.RunnerProfile.properties
-      .cloudflareWorkersForPlatforms,
-  );
-  assert.ok(
-    openapi.components.schemas.RunnerProfile.properties.secretExposurePolicy,
-  );
+  assert.equal(openapi.components.schemas.RunnerProfile, undefined);
 });
 
 test("createApiApp mounts runtime-agent routes fail-closed when enabled", async () => {

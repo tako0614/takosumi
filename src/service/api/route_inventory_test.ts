@@ -26,10 +26,9 @@ function toOpenApiPath(path: string): string {
 /**
  * The /capabilities inventory and the /openapi.json paths must be derived from
  * the SAME route-family endpoint descriptors. Before item [17] these were three
- * hand-maintained enumerations that had drifted (deployment-outputs and
- * /v1/artifacts/kinds were missing from one or both; the runtime-agent gateway
- * manifest was missing from capabilities; capabilities invented a
- * `metrics-token` auth value). This locks the two surfaces together.
+ * hand-maintained enumerations that had drifted (artifact kinds and the
+ * runtime-agent gateway manifest were missing from capabilities; capabilities
+ * invented a `metrics-token` auth value). This locks the two surfaces together.
  */
 test("capabilities and openapi cover the same (method, path) endpoint set", () => {
   const capabilities = createApiCapabilitiesDescription(
@@ -63,12 +62,16 @@ test("previously-drifted endpoints are present in both surfaces", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   const capPaths = capabilities.endpoints.map((e) => e.path);
 
-  // BUG FIX: deployment-outputs was in openapi but missing from capabilities.
+  // §30 public deployment routes must be represented in both surfaces.
+  assert.ok(capPaths.includes("/api/deployments/:deploymentId"));
+  assert.ok(openapi.paths["/api/deployments/{deploymentId}"]?.get);
   assert.ok(
-    capPaths.includes("/v1/installations/:installationId/deployment-outputs"),
+    capPaths.includes(
+      "/api/deployments/:deploymentId/rollback-plan",
+    ),
   );
   assert.ok(
-    openapi.paths["/v1/installations/{installationId}/deployment-outputs"]?.get,
+    openapi.paths["/api/deployments/{deploymentId}/rollback-plan"]?.post,
   );
 
   // BUG FIX: GET /v1/artifacts/kinds appeared in neither surface.

@@ -52,6 +52,7 @@ import type {
   PlanRunResponse,
   PlanRunSummary,
   PlanRunTemplateBinding,
+  PolicyConfig,
   RunnerProfile,
   RunnerStateLockEvidence,
   RunDiagnostic,
@@ -64,15 +65,18 @@ import type {
   ConnectionVault,
   CredentialBundle,
 } from "../../adapters/vault/mod.ts";
-import { ConnectionVaultError } from "../../adapters/vault/mod.ts";
+import type { Capability } from "takosumi-contract/capability-bindings";
 import type { SourcesService } from "../sources/mod.ts";
+import type {
+  CapsuleCompatibilityReportResponse,
+  CreateSourceCompatibilityCheckRequest,
+} from "takosumi-contract/capsules";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
   CreateSourceSyncResponse,
   ListSourcesResponse,
   ListSourceSnapshotsResponse,
-  MintPhase,
   PatchSourceRequest,
   Source,
   SourceResponse,
@@ -80,12 +84,17 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
+import { log } from "../../shared/log.ts";
 import {
   InMemoryOpenTofuDeploymentStore,
   InstallationPatchGuardConflict,
   type OpenTofuDeploymentStore,
 } from "./store.ts";
-import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
+import {
+  mapVaultError,
+  OpenTofuControllerError,
+  requireNonEmptyString,
+} from "./errors.ts";
 import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
@@ -116,8 +125,14 @@ import { evaluateTemplatePlanPolicy } from "./template_policy.ts";
 import {
   type ActionPolicyResult,
   evaluateActionPolicy,
+  evaluateProviderAllowlist,
+  evaluateQuotaPolicy,
   evaluateResourceAllowlist,
+  evaluateScopeBoundary,
+  type QuotaResult,
+  type ProviderAllowlistResult,
   type ResourceAllowlistResult,
+  type ScopeBoundaryResult,
 } from "takosumi-policy";
 import {
   defaultTemplateRegistry,
@@ -140,6 +155,10 @@ import type {
 } from "takosumi-contract/runs";
 import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import type {
+  SensitiveOutputResolver,
+  SensitiveOutputValue,
+} from "../output-shares/mod.ts";
+import type {
   Dependency,
   DependencySnapshot,
   DependencySnapshotEntry,
@@ -159,6 +178,8 @@ import {
   mintableConnectionIds,
   type ResolvedCapability,
 } from "../connections/mod.ts";
+import { SourceManagement } from "./source_management.ts";
+import { ConnectionManagement } from "./connection_management.ts";
 
 // Re-export the shared error primitive and the four decomposed concerns so the
 // domain's public entry point stays `./mod.ts` for importers and tests.
@@ -226,14 +247,16 @@ export interface RunInstallationDispatch {
   readonly depStates?: readonly DispatchDepState[];
 }
 
-export interface OpenTofuPlanJob extends RunTemplateDispatch, RunInstallationDispatch {
+export interface OpenTofuPlanJob
+  extends RunTemplateDispatch, RunInstallationDispatch {
   readonly planRun: PlanRun;
   readonly runnerProfile: RunnerProfile;
   readonly variables: Readonly<Record<string, JsonValue>>;
   readonly credentials?: RunCredentials;
 }
 
-export interface OpenTofuApplyJob extends RunTemplateDispatch, RunInstallationDispatch {
+export interface OpenTofuApplyJob
+  extends RunTemplateDispatch, RunInstallationDispatch {
   readonly applyRun: ApplyRun;
   readonly planRun: PlanRun;
   readonly planArtifact: OpenTofuPlanArtifact;
@@ -241,7 +264,8 @@ export interface OpenTofuApplyJob extends RunTemplateDispatch, RunInstallationDi
   readonly credentials?: RunCredentials;
 }
 
-export interface OpenTofuDestroyJob extends RunTemplateDispatch, RunInstallationDispatch {
+export interface OpenTofuDestroyJob
+  extends RunTemplateDispatch, RunInstallationDispatch {
   readonly applyRun: ApplyRun;
   readonly planRun: PlanRun;
   readonly planArtifact: OpenTofuPlanArtifact;
@@ -303,6 +327,25 @@ export interface OpenTofuRunner {
    * leaves source_sync runs queued.
    */
   sourceSync?(job: OpenTofuSourceSyncJob): Promise<OpenTofuSourceSyncResult>;
+  /**
+   * Expands an immutable SourceSnapshot archive in the Runner Container and
+   * returns the OpenTofu source files needed by the Capsule Compatibility
+   * analyzer. This keeps archive extraction and path validation on the same
+   * untrusted execution boundary used for plan/apply.
+   */
+  readCapsuleSourceFiles?(
+    job: OpenTofuCapsuleSourceFilesJob,
+  ): Promise<readonly OpenTofuCapsuleSourceFile[]>;
+}
+
+export interface OpenTofuCapsuleSourceFile {
+  readonly path: string;
+  readonly text: string;
+}
+
+export interface OpenTofuCapsuleSourceFilesJob {
+  readonly runId: string;
+  readonly sourceSnapshot: SourceSnapshot;
 }
 
 /**
@@ -417,6 +460,13 @@ export interface OpenTofuDeploymentControllerDependencies {
    * write never fails the run path. Defaults to a no-op recorder.
    */
   readonly activity?: ActivityRecorder;
+  /**
+   * Host-injected sensitive output resolver. Required only when a cross-Space
+   * published_output edge consumes an OutputShare entry marked sensitive. The
+   * resolver reads/decrypts the raw output artifact and returns the value for
+   * dependency injection; values are never persisted outside DependencySnapshot.
+   */
+  readonly sensitiveOutputResolver?: SensitiveOutputResolver;
 }
 
 export interface DeployControlActorContext {
@@ -495,9 +545,13 @@ interface ResolvedDependencies {
  * The names a `published_output` cross-Space edge may consume, resolved from the
  * consumer Space's ACTIVE OutputShares for one producer Installation. Maps the
  * SHARED name (the grant alias, else the producer output name) -> the producer's
- * actual output name (the key into the producer's OutputSnapshot.spaceOutputs).
+ * actual output name plus whether it must be resolved from the raw sensitive
+ * output artifact instead of OutputSnapshot.spaceOutputs.
  */
-type ShareCoverage = ReadonlyMap<string, string>;
+type ShareCoverage = ReadonlyMap<
+  string,
+  { readonly outputName: string; readonly sensitive: boolean }
+>;
 
 /**
  * Request to plan / destroy-plan an Installation (spec §23). Resolves the
@@ -546,8 +600,11 @@ export class OpenTofuDeploymentController {
   readonly #templateRegistry: TemplateRegistry;
   readonly #installationCoordination?: InstallationCoordination;
   readonly #activity: ActivityRecorder;
+  readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
   readonly #seededProfiles: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
+  readonly #sources: SourceManagement;
+  readonly #connections: ConnectionManagement;
   #connectionsService?: ConnectionsService;
 
   constructor(dependencies: OpenTofuDeploymentControllerDependencies = {}) {
@@ -555,18 +612,22 @@ export class OpenTofuDeploymentController {
     this.#runner = dependencies.runner;
     this.#vault = dependencies.vault;
     this.#sourcesService = dependencies.sourcesService;
+    this.#sources = new SourceManagement(dependencies.sourcesService);
+    this.#connections = new ConnectionManagement(this.#store, this.#vault);
     this.#installationCoordination = dependencies.installationCoordination;
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
-    this.#defaultRunnerProfileId = dependencies.defaultRunnerProfileId ??
-      "cloudflare-default";
+    this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
+    this.#defaultRunnerProfileId =
+      dependencies.defaultRunnerProfileId ?? "cloudflare-default";
     this.#newId = dependencies.newId ?? newId;
     this.#now = dependencies.now ?? (() => Date.now());
     // Default to an inline dispatcher: run the consumer immediately so local /
     // node substrates and tests keep the historical synchronous semantics.
-    this.#enqueueRun = dependencies.enqueueRun ??
+    this.#enqueueRun =
+      dependencies.enqueueRun ??
       ((dispatch) => this.dispatchQueuedRun(dispatch));
-    this.#templateRegistry = dependencies.templateRegistry ??
-      defaultTemplateRegistry;
+    this.#templateRegistry =
+      dependencies.templateRegistry ?? defaultTemplateRegistry;
     this.#seededProfiles = this.#seedRunnerProfiles(
       dependencies.runnerProfiles ?? createDefaultRunnerProfiles(this.#now()),
     );
@@ -588,13 +649,13 @@ export class OpenTofuDeploymentController {
     const profile = await this.#requireRunnerProfile(
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
     );
-    const operation = request.operation ?? (request.installationId
-      ? "update"
-      : "create");
+    const operation =
+      request.operation ?? (request.installationId ? "update" : "create");
     validateOperation(operation);
-    const installation = request.installationId !== undefined
-      ? await this.#requireInstallation(request.installationId)
-      : undefined;
+    const installation =
+      request.installationId !== undefined
+        ? await this.#requireInstallation(request.installationId)
+        : undefined;
     // Installation-first model (spec §5): every plan / destroy plan targets an
     // existing Installation row. The create-on-apply legacy path is removed.
     if (!installation) {
@@ -617,7 +678,10 @@ export class OpenTofuDeploymentController {
     // (the request must NOT also pass requiredProviders), inputs are validated
     // against the template, and rootgen produces the generated root module that
     // is threaded onto the dispatch payload via the plan-run-inputs sidecar.
-    const templatePlan = this.#resolveTemplatePlan(request, internal.installTypePlan);
+    const templatePlan = this.#resolveTemplatePlan(
+      request,
+      internal.installTypePlan,
+    );
     const declaredProviders = templatePlan
       ? normalizeProviders(templatePlan.requiredProviders)
       : normalizeProviders(request.requiredProviders ?? []);
@@ -625,7 +689,8 @@ export class OpenTofuDeploymentController {
     // provider-free §10 install (e.g. `core`, pure value plumbing): the
     // "requiredProviders before init" gate does not apply. A raw cloud run still
     // must declare providers.
-    const allowNoProviders = templatePlan !== undefined &&
+    const allowNoProviders =
+      templatePlan !== undefined &&
       templatePlan.template.policy.allowedProviders.length === 0;
     const policy = evaluatePolicy({
       profile,
@@ -636,26 +701,32 @@ export class OpenTofuDeploymentController {
     const sourceDigest = await stableJsonDigest(request.source);
     const variablesDigest = await stableJsonDigest(variables);
     const policyDecisionDigest = await stableJsonDigest(policy);
+    const sourceSnapshotId =
+      internal.sourceSnapshotId ??
+      (await this.#resolvePlanSourceSnapshotId(installation));
     // Snapshot the target's state generation so a stale plan cannot apply over a
     // newer state. `create` plans have no prior target and record 0. An
     // env-driven run carries the Environment's current generation (read from its
     // latest StateSnapshot) so the M2 dispatch can derive the restore/persist
     // generations even before the first Installation exists.
-    const baseStateGeneration = internal.baseStateGeneration ??
+    const baseStateGeneration =
+      internal.baseStateGeneration ??
       (installation ? installation.currentStateGeneration : 0);
     const planRun: PlanRun = {
       id: this.#newId("plan"),
       spaceId: request.spaceId,
-      ...(request.installationId ? { installationId: request.installationId } : {}),
+      ...(request.installationId
+        ? { installationId: request.installationId }
+        : {}),
       ...(installation
         ? {
-          // A fresh Installation has no current Deployment yet; record an
-          // explicit `null` (not `undefined`) so the apply expected-guard
-          // precondition treats the run as having recorded its installation
-          // context (the guard builder normalizes undefined -> null anyway).
-          installationCurrentDeploymentId: installation.currentDeploymentId ??
-            null,
-        }
+            // A fresh Installation has no current Deployment yet; record an
+            // explicit `null` (not `undefined`) so the apply expected-guard
+            // precondition treats the run as having recorded its installation
+            // context (the guard builder normalizes undefined -> null anyway).
+            installationCurrentDeploymentId:
+              installation.currentDeploymentId ?? null,
+          }
         : {}),
       source: request.source,
       sourceDigest,
@@ -664,9 +735,7 @@ export class OpenTofuDeploymentController {
       variablesDigest,
       requiredProviders: declaredProviders,
       baseStateGeneration,
-      ...(internal.sourceSnapshotId
-        ? { sourceSnapshotId: internal.sourceSnapshotId }
-        : {}),
+      ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
       ...(internal.installationContext
         ? { installationContext: internal.installationContext }
         : {}),
@@ -674,31 +743,43 @@ export class OpenTofuDeploymentController {
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
       ...(templatePlan
         ? {
-          templateBinding: {
-            templateId: templatePlan.template.id,
-            templateVersion: templatePlan.template.version,
-          } satisfies PlanRunTemplateBinding,
-        }
+            templateBinding: {
+              templateId: templatePlan.template.id,
+              templateVersion: templatePlan.template.version,
+            } satisfies PlanRunTemplateBinding,
+          }
         : {}),
       status: policy.status === "passed" ? "queued" : "blocked",
       policy,
       policyDecisionDigest,
       auditEvents: [
-        auditEvent("plan", "plan.requested", now, {
-          sourceDigest,
-          variablesDigest,
-          runnerProfileId: profile.id,
-          ...(templatePlan
-            ? {
-              templateId: templatePlan.template.id,
-              templateVersion: templatePlan.template.version,
-            }
-            : {}),
-        }, context.actor),
-        auditEvent("plan", "plan.policy_evaluated", now, {
-          policyDecisionDigest,
-          status: policy.status,
-        }, context.actor),
+        auditEvent(
+          "plan",
+          "plan.requested",
+          now,
+          {
+            sourceDigest,
+            variablesDigest,
+            runnerProfileId: profile.id,
+            ...(templatePlan
+              ? {
+                  templateId: templatePlan.template.id,
+                  templateVersion: templatePlan.template.version,
+                }
+              : {}),
+          },
+          context.actor,
+        ),
+        auditEvent(
+          "plan",
+          "plan.policy_evaluated",
+          now,
+          {
+            policyDecisionDigest,
+            status: policy.status,
+          },
+          context.actor,
+        ),
       ],
       createdAt: now,
       updatedAt: now,
@@ -731,14 +812,14 @@ export class OpenTofuDeploymentController {
         variables,
         ...(templatePlan
           ? {
-            template: {
-              id: templatePlan.template.id,
-              version: templatePlan.template.version,
-              localModulePath: templatePlan.template.source.localModulePath,
-            },
-            generatedRoot: templatePlan.generatedRoot,
-            ...(templatePlan.build ? { build: templatePlan.build } : {}),
-          }
+              template: {
+                id: templatePlan.template.id,
+                version: templatePlan.template.version,
+                localModulePath: templatePlan.template.source.localModulePath,
+              },
+              generatedRoot: templatePlan.generatedRoot,
+              ...(templatePlan.build ? { build: templatePlan.build } : {}),
+            }
           : {}),
       });
     }
@@ -793,8 +874,8 @@ export class OpenTofuDeploymentController {
   }
 
   /**
-   * Installation-driven drift check (spec §19 `drift_check` run type; Phase 8 —
-   * MVP 外 per core-conformance). Creates a plan-kind internal run flagged
+   * Installation-driven drift check (spec §19 `drift_check` run type; Phase 8
+   * advanced). Creates a plan-kind internal run flagged
    * {@link PlanRun.driftCheck} that:
    *   - resolves the Installation -> InstallConfig -> Source -> latest snapshot
    *     exactly like {@link createInstallationPlan} (an `update`-kind plan), so
@@ -816,9 +897,14 @@ export class OpenTofuDeploymentController {
     installationId: string,
     context: DeployControlActorContext = {},
   ): Promise<PlanRunResponse> {
-    return await this.#createInstallationPlanRun(installationId, false, context, {
-      driftCheck: true,
-    });
+    return await this.#createInstallationPlanRun(
+      installationId,
+      false,
+      context,
+      {
+        driftCheck: true,
+      },
+    );
   }
 
   async #createInstallationPlanRun(
@@ -852,9 +938,9 @@ export class OpenTofuDeploymentController {
     // its default ref.
     const snapshot = internal.sourceSnapshotId
       ? await this.#requireSourceSnapshotForSource(
-        source.id,
-        internal.sourceSnapshotId,
-      )
+          source.id,
+          internal.sourceSnapshotId,
+        )
       : await this.#resolveLatestSnapshot(source.id, source.defaultRef);
     if (!snapshot) {
       // Typed 409: the Installation cannot plan until a SourceSnapshot exists
@@ -875,9 +961,11 @@ export class OpenTofuDeploymentController {
     const baseStateGeneration = latestState?.generation ?? 0;
     const operation = destroy
       ? "destroy"
-      : (installation.currentDeploymentId ? "update" : "create");
-    const { request: planRequest, installTypePlan } = await this
-      .#installationPlanRequest({
+      : installation.currentDeploymentId
+        ? "update"
+        : "create";
+    const { request: planRequest, installTypePlan } =
+      await this.#installationPlanRequest({
         installation,
         installConfig,
         source,
@@ -973,9 +1061,10 @@ export class OpenTofuDeploymentController {
       // active OutputShare) both pull producer outputs into the consumer inputs.
       // published_output restricts the readable names to the active grant and
       // resolves each mapped SHARED name back to the producer output name.
-      const coverage = dependency.mode === "published_output"
-        ? await this.#resolveShareCoverage(producer, consumer)
-        : undefined;
+      const coverage =
+        dependency.mode === "published_output"
+          ? await this.#resolveShareCoverage(producer, consumer)
+          : undefined;
       const outputSnapshot = producer.currentOutputSnapshotId
         ? await this.#store.getOutputSnapshot(producer.currentOutputSnapshotId)
         : undefined;
@@ -986,6 +1075,7 @@ export class OpenTofuDeploymentController {
         // output_share_revoked when the active grant no longer covers it). For
         // variable_injection `from` IS the producer output name.
         let producerOutputName = mapping.from;
+        let sensitive = false;
         if (coverage) {
           const resolved = coverage.get(mapping.from);
           if (resolved === undefined) {
@@ -996,14 +1086,18 @@ export class OpenTofuDeploymentController {
                 `${producer.id} but no active OutputShare covers it`,
             );
           }
-          producerOutputName = resolved;
+          producerOutputName = resolved.outputName;
+          sensitive = resolved.sensitive;
         }
-        const available = outputSnapshot?.spaceOutputs ?? {};
-        const present = Object.prototype.hasOwnProperty.call(
-          available,
+        const resolvedValue = await this.#resolveDependencyOutputValue({
+          dependencyId: dependency.id,
+          producer,
+          consumer,
+          outputSnapshot,
           producerOutputName,
-        );
-        if (!present) {
+          sensitive,
+        });
+        if (!resolvedValue) {
           if (mapping.required) {
             throw new OpenTofuControllerError(
               "failed_precondition",
@@ -1015,7 +1109,7 @@ export class OpenTofuDeploymentController {
           // An optional mapping with no producer value contributes nothing.
           continue;
         }
-        const value = available[producerOutputName] as JsonValue;
+        const value = resolvedValue.value;
         values[mapping.to] = value;
         injectedValues[mapping.to] = value;
       }
@@ -1056,18 +1150,65 @@ export class OpenTofuDeploymentController {
     consumer: Installation,
   ): Promise<ShareCoverage> {
     const shares = await this.#store.listOutputSharesToSpace(consumer.spaceId);
-    const coverage = new Map<string, string>();
+    const coverage = new Map<
+      string,
+      { readonly outputName: string; readonly sensitive: boolean }
+    >();
     for (const share of shares) {
       if (
         share.status !== "active" ||
         share.fromSpaceId !== producer.spaceId ||
         share.producerInstallationId !== producer.id
-      ) continue;
+      )
+        continue;
       for (const entry of share.outputs) {
-        coverage.set(entry.alias ?? entry.name, entry.name);
+        coverage.set(entry.alias ?? entry.name, {
+          outputName: entry.name,
+          sensitive: entry.sensitive === true,
+        });
       }
     }
     return coverage;
+  }
+
+  async #resolveDependencyOutputValue(input: {
+    readonly dependencyId: string;
+    readonly producer: Installation;
+    readonly consumer: Installation;
+    readonly outputSnapshot: OutputSnapshot | undefined;
+    readonly producerOutputName: string;
+    readonly sensitive: boolean;
+  }): Promise<{ readonly value: JsonValue } | undefined> {
+    if (!input.sensitive) {
+      const available = input.outputSnapshot?.spaceOutputs ?? {};
+      if (
+        !Object.prototype.hasOwnProperty.call(
+          available,
+          input.producerOutputName,
+        )
+      ) {
+        return undefined;
+      }
+      return { value: available[input.producerOutputName] as JsonValue };
+    }
+    if (!input.outputSnapshot) return undefined;
+    if (!this.#sensitiveOutputResolver) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `sensitive_output_resolver_unavailable: dependency ${input.dependencyId} ` +
+          `requires sensitive output ${input.producerOutputName}`,
+      );
+    }
+    const resolved: SensitiveOutputValue | undefined =
+      await this.#sensitiveOutputResolver.resolve({
+        outputSnapshot: input.outputSnapshot,
+        outputName: input.producerOutputName,
+        fromSpaceId: input.producer.spaceId,
+        toSpaceId: input.consumer.spaceId,
+        producerInstallationId: input.producer.id,
+      });
+    if (!resolved) return undefined;
+    return { value: resolved.value };
   }
 
   /**
@@ -1138,6 +1279,29 @@ export class OpenTofuDeploymentController {
     const refMatches = snapshots.filter((snap) => snap.ref === ref);
     const pool = refMatches.length > 0 ? refMatches : snapshots;
     return pool[pool.length - 1];
+  }
+
+  async #resolvePlanSourceSnapshotId(
+    installation: Installation,
+  ): Promise<string> {
+    const source = await this.#store.getSource(installation.sourceId);
+    if (!source) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `source ${installation.sourceId} not found for installation ${installation.id}`,
+      );
+    }
+    const snapshot = await this.#resolveLatestSnapshot(
+      source.id,
+      source.defaultRef,
+    );
+    if (!snapshot) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `source_sync_required: installation ${installation.id} has no SourceSnapshot for source ${source.id}; run a source sync first`,
+      );
+    }
+    return snapshot.id;
   }
 
   /**
@@ -1220,9 +1384,7 @@ export class OpenTofuDeploymentController {
           operation: input.operation,
           templateId: templateBinding.templateId,
           templateVersion: templateBinding.templateVersion,
-          ...(templateBinding.inputs
-            ? { inputs: templateBinding.inputs }
-            : {}),
+          ...(templateBinding.inputs ? { inputs: templateBinding.inputs } : {}),
         },
         installTypePlan,
       };
@@ -1247,7 +1409,9 @@ export class OpenTofuDeploymentController {
     },
     moduleSource: OpenTofuModuleSource,
   ): Promise<CreatePlanRunRequest> {
-    const profile = await this.#requireRunnerProfile(this.#defaultRunnerProfileId);
+    const profile = await this.#requireRunnerProfile(
+      this.#defaultRunnerProfileId,
+    );
     return {
       spaceId: input.installation.spaceId,
       installationId: input.installation.id,
@@ -1273,9 +1437,8 @@ export class OpenTofuDeploymentController {
     installType: InstallType,
   ): Promise<InstallTypePlanContext> {
     this.#connectionsService ??= new ConnectionsService({ store: this.#store });
-    const resolved = await this.#connectionsService.resolveCapabilities(
-      installation,
-    );
+    const resolved =
+      await this.#connectionsService.resolveCapabilities(installation);
     const capabilityProviders = capabilityProvidersFromResolved(resolved);
     const manualValues = manualValuesFromResolved(resolved);
     return {
@@ -1294,7 +1457,10 @@ export class OpenTofuDeploymentController {
     requireNonEmptyString(id, "planRunId");
     const planRun = await this.#store.getPlanRun(id);
     if (!planRun) {
-      throw new OpenTofuControllerError("not_found", `plan run ${id} not found`);
+      throw new OpenTofuControllerError(
+        "not_found",
+        `plan run ${id} not found`,
+      );
     }
     return { planRun };
   }
@@ -1322,7 +1488,10 @@ export class OpenTofuDeploymentController {
     if (request.templateId === undefined) {
       // A bare inputs/templateVersion without templateId is a request error: it
       // would otherwise silently fall back to a raw-module plan that ignores them.
-      if (request.templateVersion !== undefined || request.inputs !== undefined) {
+      if (
+        request.templateVersion !== undefined ||
+        request.inputs !== undefined
+      ) {
         throw new OpenTofuControllerError(
           "invalid_argument",
           "templateVersion/inputs require templateId",
@@ -1349,7 +1518,11 @@ export class OpenTofuDeploymentController {
     // manual key would otherwise throw — filter to declared inputs for MVP and
     // ignore the rest (no DependencySnapshot/manual-value contract here yet).
     const mergedInputs = installTypePlan
-      ? mergeManualInputs(template, request.inputs, installTypePlan.manualValues)
+      ? mergeManualInputs(
+          template,
+          request.inputs,
+          installTypePlan.manualValues,
+        )
       : request.inputs;
     const inputs = validateTemplateInputs(template, mergedInputs);
     // Installation-driven (§13): installType-aware generated root with
@@ -1357,13 +1530,13 @@ export class OpenTofuDeploymentController {
     // Raw template path (no installation context): the byte-stable wrapper.
     const generatedRoot = installTypePlan
       ? generateInstallationRoot({
-        template,
-        inputs,
-        installType: installTypePlan.installType,
-        ...(installTypePlan.capabilityProviders.length > 0
-          ? { capabilityProviders: installTypePlan.capabilityProviders }
-          : {}),
-      })
+          template,
+          inputs,
+          installType: installTypePlan.installType,
+          ...(installTypePlan.capabilityProviders.length > 0
+            ? { capabilityProviders: installTypePlan.capabilityProviders }
+            : {}),
+        })
       : generateRootModule(template, inputs);
     // Build phase precedence: an installation-driven app_source InstallConfig.build
     // (when enabled) overrides the template's own build; otherwise the template
@@ -1459,7 +1632,9 @@ export class OpenTofuDeploymentController {
       id: this.#newId("apply"),
       planRunId: planRun.id,
       spaceId: planRun.spaceId,
-      ...(planRun.installationId ? { installationId: planRun.installationId } : {}),
+      ...(planRun.installationId
+        ? { installationId: planRun.installationId }
+        : {}),
       operation: planRun.operation,
       runnerProfileId: profile.id,
       status: "queued",
@@ -1468,10 +1643,16 @@ export class OpenTofuDeploymentController {
       stateBackend: profile.stateBackend,
       stateLock: stateLockEvidence(profile.stateBackend, now, now, "pending"),
       auditEvents: [
-        auditEvent("apply", "apply.queued", now, {
-          planRunId: planRun.id,
-          runnerProfileId: profile.id,
-        }, context.actor),
+        auditEvent(
+          "apply",
+          "apply.queued",
+          now,
+          {
+            planRunId: planRun.id,
+            runnerProfileId: profile.id,
+          },
+          context.actor,
+        ),
       ],
       createdAt: now,
       updatedAt: now,
@@ -1685,7 +1866,10 @@ export class OpenTofuDeploymentController {
     if (!this.#runner) return await this.#store.getPlanRun(runId);
     const planRun = await this.#store.getPlanRun(runId);
     if (!planRun) {
-      throw new OpenTofuControllerError("not_found", `plan run ${runId} not found`);
+      throw new OpenTofuControllerError(
+        "not_found",
+        `plan run ${runId} not found`,
+      );
     }
     if (!this.#shouldProcessRun(planRun.status, planRun.heartbeatAt)) {
       // Terminal, or a sibling consumer holds it with a fresh heartbeat: no-op.
@@ -1696,7 +1880,11 @@ export class OpenTofuDeploymentController {
     const variables = normalizeVariables(inputs?.variables);
     const dispatch = templateDispatchFromInputs(inputs);
     const running = await this.#markPlanRunning(planRun);
-    const credentials = await this.#mintRunCredentials(planRun);
+    const credentials = await this.#mintRunCredentials(
+      planRun,
+      "plan",
+      planRun.id,
+    );
     const result = await this.#executePlan(
       running,
       profile,
@@ -1709,8 +1897,8 @@ export class OpenTofuDeploymentController {
     // dispatch payload (the same generated root the plan was reviewed against).
     // It is deleted once the plan is applied (apply-once) or the run is failed.
     // Raw-module runs and non-succeeded template plans drop the sidecar now.
-    const retainForApply = result.status === "succeeded" &&
-      dispatch.template !== undefined;
+    const retainForApply =
+      result.status === "succeeded" && dispatch.template !== undefined;
     if (!retainForApply) {
       await this.#store.deletePlanRunInputs(runId);
     }
@@ -1741,15 +1929,17 @@ export class OpenTofuDeploymentController {
       spaceId: planRun.spaceId,
       action: "installation.drift_detected",
       targetType: "installation",
-      targetId: planRun.installationContext?.installationId ??
-        planRun.installationId ?? planRun.id,
+      targetId:
+        planRun.installationContext?.installationId ??
+        planRun.installationId ??
+        planRun.id,
       runId: planRun.id,
       metadata: {
         ...(planRun.installationContext?.installationId
           ? { installationId: planRun.installationContext.installationId }
           : planRun.installationId
-          ? { installationId: planRun.installationId }
-          : {}),
+            ? { installationId: planRun.installationId }
+            : {}),
         add,
         change,
         destroy,
@@ -1765,7 +1955,10 @@ export class OpenTofuDeploymentController {
   async runQueuedApply(runId: string): Promise<ApplyRunResponse> {
     const applyRun = await this.#store.getApplyRun(runId);
     if (!applyRun) {
-      throw new OpenTofuControllerError("not_found", `apply run ${runId} not found`);
+      throw new OpenTofuControllerError(
+        "not_found",
+        `apply run ${runId} not found`,
+      );
     }
     if (!this.#runner) return { applyRun };
     if (!this.#shouldProcessRun(applyRun.status, applyRun.heartbeatAt)) {
@@ -1785,12 +1978,12 @@ export class OpenTofuDeploymentController {
     // the queue redelivers. The in-process serialization stays as the inner
     // guard (single-isolate correctness).
     const runWork = () =>
-      this.#runSerialized(
-        key,
-        () => this.#executeApply(applyRun, planRun, profile, dispatch),
+      this.#runSerialized(key, () =>
+        this.#executeApply(applyRun, planRun, profile, dispatch),
       );
     if (this.#installationCoordination && planRun.installationId) {
-      const environment = planRun.installationContext?.environment ??
+      const environment =
+        planRun.installationContext?.environment ??
         (await this.#requireInstallation(planRun.installationId)).environment;
       return await withInstallationLease(
         this.#installationCoordination,
@@ -1842,7 +2035,9 @@ export class OpenTofuDeploymentController {
   ): Promise<RunInstallationDispatch> {
     const ctx = planRun.installationContext;
     if (!ctx || !planRun.sourceSnapshotId) return {};
-    const snapshot = await this.#store.getSourceSnapshot(planRun.sourceSnapshotId);
+    const snapshot = await this.#store.getSourceSnapshot(
+      planRun.sourceSnapshotId,
+    );
     if (!snapshot) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -1866,7 +2061,9 @@ export class OpenTofuDeploymentController {
     // init/plan/apply. Derived at dispatch (not pinned) so the consumer reads the
     // producer's current state; the pinned generation in the DependencySnapshot
     // is what strict mode guards against.
-    const depStates = await this.#resolveRemoteStateDispatch(ctx.installationId);
+    const depStates = await this.#resolveRemoteStateDispatch(
+      ctx.installationId,
+    );
     return {
       stateScope,
       sourceArchive,
@@ -1971,7 +2168,9 @@ export class OpenTofuDeploymentController {
           `${persistedSnapshotId ?? "<none>"})`,
       );
     }
-    const snapshot = await this.#store.getSourceSnapshot(planRun.sourceSnapshotId);
+    const snapshot = await this.#store.getSourceSnapshot(
+      planRun.sourceSnapshotId,
+    );
     if (!snapshot) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -2142,13 +2341,17 @@ export class OpenTofuDeploymentController {
     const publicOutputs = Object.fromEntries(
       input.publicOutputs.map((output) => [output.name, output.value]),
     );
-    const outputDigest = await stableJsonDigest({ spaceOutputs, publicOutputs });
+    const outputDigest = await stableJsonDigest({
+      spaceOutputs,
+      publicOutputs,
+    });
     const snapshot: OutputSnapshot = {
       id: this.#newId("out"),
       spaceId: input.installation.spaceId,
       installationId: input.installation.id,
       stateGeneration: input.stateGeneration,
-      rawOutputArtifactKey: input.result.rawOutputsKey ??
+      rawOutputArtifactKey:
+        input.result.rawOutputsKey ??
         rawOutputArtifactKey({
           spaceId: input.installation.spaceId,
           installationId: input.installation.id,
@@ -2171,7 +2374,7 @@ export class OpenTofuDeploymentController {
    *
    * The downstream closure is computed over the Space's `variable_injection`
    * dependency edges (producer -> consumer) via {@link downstreamClosure}. Only
-   * `active` consumers are moved: `installing` / `error` / `destroyed` are left
+   * `active` consumers are moved: `pending` / `error` / `destroyed` are left
    * untouched (a stale flag on a not-yet-applied or torn-down Installation is
    * meaningless). No-ops when the digest is unchanged, or when there are no
    * downstream consumers. Each patch carries no guard: stale is an advisory flag,
@@ -2228,15 +2431,17 @@ export class OpenTofuDeploymentController {
     try {
       await this.#activity.record(event);
     } catch (error) {
-      console.warn(
-        `[takosumi-service] controller activity record failed ` +
-          `(action=${event.action}): ${String(error)}`,
-      );
+      log.warn("service.deploy_control.activity_record_failed", {
+        action: event.action,
+        error,
+      });
     }
   }
 
   async #mintRunCredentials(
     planRun: PlanRun,
+    phase: "plan" | "apply" | "destroy",
+    auditRunId: string,
   ): Promise<RunCredentials | undefined> {
     if (!this.#vault || planRun.requiredProviders.length === 0) {
       return undefined;
@@ -2255,8 +2460,18 @@ export class OpenTofuDeploymentController {
       const bundle = await this.#vault.mint(
         planRun.spaceId,
         planRun.requiredProviders,
-        connectionIds && connectionIds.length > 0 ? { connectionIds } : undefined,
+        connectionIds && connectionIds.length > 0
+          ? { connectionIds }
+          : undefined,
       );
+      if (resolved) {
+        await this.#recordProviderCredentialMintEvents(
+          planRun,
+          resolved,
+          phase,
+          auditRunId,
+        );
+      }
       // §13 per-alias split: merge the per-capability TF_VAR env ON TOP of the
       // shared mint. The same resolved entries that produced the rootgen aliases
       // produce these TF_VAR_<provider>_<capability>_<arg> vars; the shared env
@@ -2270,11 +2485,38 @@ export class OpenTofuDeploymentController {
       const perAlias = await this.#vault.mintForCapabilities(
         planRun.spaceId,
         capabilityEntries,
-        { phase: applyMintPhase(planRun) },
+        { phase },
       );
       return { ...bundle.env, ...perAlias.env };
     } catch (error) {
       throw mapVaultError(error);
+    }
+  }
+
+  async #recordProviderCredentialMintEvents(
+    planRun: PlanRun,
+    resolved: readonly ResolvedCapability[],
+    phase: "plan" | "apply" | "destroy",
+    auditRunId: string,
+  ): Promise<void> {
+    const byConnection = credentialMintAuditEntries(resolved);
+    if (byConnection.length === 0) return;
+    const createdAt = new Date(this.#now()).toISOString();
+    const installationId =
+      planRun.installationContext?.installationId ??
+      planRun.installationId ??
+      "legacy_unscoped";
+    for (const entry of byConnection) {
+      await this.#store.putCredentialMintEvent({
+        id: this.#newId("credmint"),
+        runId: auditRunId,
+        spaceId: planRun.spaceId,
+        installationId,
+        connectionId: entry.connectionId,
+        phase,
+        capabilities: entry.capabilities,
+        createdAt,
+      });
     }
   }
 
@@ -2305,7 +2547,10 @@ export class OpenTofuDeploymentController {
     requireNonEmptyString(id, "applyRunId");
     const applyRun = await this.#store.getApplyRun(id);
     if (!applyRun) {
-      throw new OpenTofuControllerError("not_found", `apply run ${id} not found`);
+      throw new OpenTofuControllerError(
+        "not_found",
+        `apply run ${id} not found`,
+      );
     }
     const installation = applyRun.installationId
       ? await this.#store.getInstallation(applyRun.installationId)
@@ -2327,7 +2572,7 @@ export class OpenTofuDeploymentController {
   /**
    * Lists ACTIVE Installations across all Spaces, capped at `limit` (spec §28
    * scheduled drift sweep; Phase 8). Only `active` Installations are drift-checkable
-   * (an `installing` / `destroying` / `destroyed` / `error` Installation has no
+   * (a `pending` / `disabled` / `destroyed` / `error` Installation has no
    * stable deployed state to compare against). The scheduled sweep iterates this
    * bounded set and creates one drift check per Installation. A non-positive
    * limit returns an empty list.
@@ -2409,18 +2654,11 @@ export class OpenTofuDeploymentController {
   async createConnection(
     request: CreateConnectionRequest,
   ): Promise<ConnectionResponse> {
-    const vault = this.#requireVault();
-    try {
-      const connection = await vault.register(request);
-      return { connection };
-    } catch (error) {
-      throw mapVaultError(error);
-    }
+    return await this.#connections.createConnection(request);
   }
 
   async listConnections(spaceId: string): Promise<ListConnectionsResponse> {
-    requireNonEmptyString(spaceId, "spaceId");
-    return { connections: await this.#store.listConnections(spaceId) };
+    return await this.#connections.listConnections(spaceId);
   }
 
   /**
@@ -2428,41 +2666,19 @@ export class OpenTofuDeploymentController {
    * /api/connections` with `?spaceId` omitted). Never includes secret values.
    */
   async listOperatorConnections(): Promise<ListConnectionsResponse> {
-    return { connections: await this.#store.listOperatorConnections() };
+    return await this.#connections.listOperatorConnections();
   }
 
   async getConnection(connectionId: string): Promise<Connection> {
-    requireNonEmptyString(connectionId, "connectionId");
-    const connection = await this.#store.getConnection(connectionId);
-    if (!connection) {
-      throw new OpenTofuControllerError(
-        "not_found",
-        `connection ${connectionId} not found`,
-      );
-    }
-    return connection;
+    return await this.#connections.getConnection(connectionId);
   }
 
-  async testConnection(
-    connectionId: string,
-  ): Promise<TestConnectionResponse> {
-    const vault = this.#requireVault();
-    requireNonEmptyString(connectionId, "connectionId");
-    try {
-      return await vault.test(connectionId);
-    } catch (error) {
-      throw mapVaultError(error);
-    }
+  async testConnection(connectionId: string): Promise<TestConnectionResponse> {
+    return await this.#connections.testConnection(connectionId);
   }
 
   async deleteConnection(connectionId: string): Promise<boolean> {
-    const vault = this.#requireVault();
-    requireNonEmptyString(connectionId, "connectionId");
-    try {
-      return await vault.revoke(connectionId);
-    } catch (error) {
-      throw mapVaultError(error);
-    }
+    return await this.#connections.deleteConnection(connectionId);
   }
 
   /**
@@ -2474,12 +2690,7 @@ export class OpenTofuDeploymentController {
     spaceId: string,
     providers: readonly string[],
   ): Promise<CredentialBundle> {
-    const vault = this.#requireVault();
-    try {
-      return await vault.mint(spaceId, providers);
-    } catch (error) {
-      throw mapVaultError(error);
-    }
+    return await this.#connections.mintCredentialBundle(spaceId, providers);
   }
 
   #requireVault(): ConnectionVault {
@@ -2497,39 +2708,55 @@ export class OpenTofuDeploymentController {
   async createSource(
     request: CreateSourceRequest,
   ): Promise<CreateSourceResponse> {
-    return await this.#requireSources().createSource(request);
+    return await this.#sources.createSource(request);
   }
 
   async listSources(spaceId: string): Promise<ListSourcesResponse> {
-    return await this.#requireSources().listSources(spaceId);
+    return await this.#sources.listSources(spaceId);
   }
 
   async getSource(id: string): Promise<SourceResponse> {
-    return await this.#requireSources().getSource(id);
+    return await this.#sources.getSource(id);
   }
 
   async patchSource(
     id: string,
     patch: PatchSourceRequest,
   ): Promise<SourceResponse> {
-    return await this.#requireSources().patchSource(id, patch);
+    return await this.#sources.patchSource(id, patch);
   }
 
   async createSourceSync(
     sourceId: string,
     options: { readonly dedupe?: boolean } = {},
   ): Promise<CreateSourceSyncResponse> {
-    return await this.#requireSources().createSync(sourceId, options);
+    return await this.#sources.createSourceSync(sourceId, options);
   }
 
   async listSourceSnapshots(
     sourceId: string,
   ): Promise<ListSourceSnapshotsResponse> {
-    return await this.#requireSources().listSnapshots(sourceId);
+    return await this.#sources.listSourceSnapshots(sourceId);
+  }
+
+  async createSourceCompatibilityCheck(
+    sourceId: string,
+    request: CreateSourceCompatibilityCheckRequest = {},
+  ): Promise<CapsuleCompatibilityReportResponse> {
+    return await this.#sources.createSourceCompatibilityCheck(
+      sourceId,
+      request,
+    );
+  }
+
+  async getCompatibilityReport(
+    reportId: string,
+  ): Promise<CapsuleCompatibilityReportResponse> {
+    return await this.#sources.getCompatibilityReport(reportId);
   }
 
   async getSourceSyncRun(id: string): Promise<SourceSyncRun> {
-    return await this.#requireSources().getSyncRun(id);
+    return await this.#sources.getSourceSyncRun(id);
   }
 
   // --- Unified Run facade (Core Specification §6.8) -------------------------
@@ -2555,7 +2782,10 @@ export class OpenTofuDeploymentController {
       // The ApplyRun does not carry env context; recover it from its PlanRun so
       // the unified Run still projects installationId / environment / sourceSnapshotId.
       const plan = await this.#store.getPlanRun(applyRun.planRunId);
-      return projectApplyRun(applyRun, plan ? this.#installationProjection(plan) : {});
+      return projectApplyRun(
+        applyRun,
+        plan ? this.#installationProjection(plan) : {},
+      );
     }
     const sync = await this.#store.getSourceSyncRun(id);
     if (sync) return projectSourceSyncRun(sync);
@@ -2628,9 +2858,7 @@ export class OpenTofuDeploymentController {
    * the §19 Run projection options. Empty for runs without installation
    * context.
    */
-  #installationProjection(
-    planRun: PlanRun,
-  ): {
+  #installationProjection(planRun: PlanRun): {
     installationId?: string;
     environment?: string;
     sourceSnapshotId?: string;
@@ -2640,9 +2868,9 @@ export class OpenTofuDeploymentController {
     return {
       ...(planRun.installationContext
         ? {
-          installationId: planRun.installationContext.installationId,
-          environment: planRun.installationContext.environment,
-        }
+            installationId: planRun.installationContext.installationId,
+            environment: planRun.installationContext.environment,
+          }
         : {}),
       ...(planRun.sourceSnapshotId
         ? { sourceSnapshotId: planRun.sourceSnapshotId }
@@ -2794,9 +3022,15 @@ export class OpenTofuDeploymentController {
       },
       auditEvents: [
         ...planRun.auditEvents,
-        auditEvent(planRun.id, "plan.approved", now, {
-          ...(input.approvedBy ? { approvedBy: input.approvedBy } : {}),
-        }, input.approvedBy),
+        auditEvent(
+          planRun.id,
+          "plan.approved",
+          now,
+          {
+            ...(input.approvedBy ? { approvedBy: input.approvedBy } : {}),
+          },
+          input.approvedBy,
+        ),
       ],
       updatedAt: now,
     };
@@ -2821,27 +3055,17 @@ export class OpenTofuDeploymentController {
   }
 
   async listAutoSyncSources(limit: number): Promise<readonly Source[]> {
-    return await this.#requireSources().listAutoSyncSources(limit);
+    return await this.#sources.listAutoSyncSources(limit);
   }
 
   async verifySourceHookSecret(
     sourceId: string,
     presentedSecret: string,
   ): Promise<boolean> {
-    return await this.#requireSources().verifyHookSecret(
+    return await this.#sources.verifySourceHookSecret(
       sourceId,
       presentedSecret,
     );
-  }
-
-  #requireSources(): SourcesService {
-    if (!this.#sourcesService) {
-      throw new OpenTofuControllerError(
-        "not_implemented",
-        "sources service is not configured",
-      );
-    }
-    return this.#sourcesService;
   }
 
   // Status-transition ceremony shared by the three execute paths: clone the run
@@ -2874,7 +3098,12 @@ export class OpenTofuDeploymentController {
       status: "running",
       startedAt,
       heartbeatAt: startedAt,
-      stateLock: stateLockEvidence(profile.stateBackend, startedAt, startedAt, "pending"),
+      stateLock: stateLockEvidence(
+        profile.stateBackend,
+        startedAt,
+        startedAt,
+        "pending",
+      ),
       auditEvents: [
         ...applyRun.auditEvents,
         auditEvent(applyRun.id, "apply.started", startedAt),
@@ -2918,7 +3147,12 @@ export class OpenTofuDeploymentController {
     const failed: ApplyRun = {
       ...running,
       status: "failed",
-      stateLock: stateLockEvidence(profile.stateBackend, startedAt, now, "recorded"),
+      stateLock: stateLockEvidence(
+        profile.stateBackend,
+        startedAt,
+        now,
+        "recorded",
+      ),
       diagnostics: [errorDiagnostic(error)],
       auditEvents: [
         ...running.auditEvents,
@@ -2954,10 +3188,14 @@ export class OpenTofuDeploymentController {
         // Template dispatch (Phase 1C): the runner runs tofu in the generated
         // root against the baked-in template module. Empty for raw-module runs.
         ...(dispatch.template ? { template: dispatch.template } : {}),
-        ...(dispatch.generatedRoot ? { generatedRoot: dispatch.generatedRoot } : {}),
+        ...(dispatch.generatedRoot
+          ? { generatedRoot: dispatch.generatedRoot }
+          : {}),
         ...(dispatch.build ? { build: dispatch.build } : {}),
         // M2 env dispatch (state scope + source archive). Absent without env ctx.
-        ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+        ...(envDispatch.stateScope
+          ? { stateScope: envDispatch.stateScope }
+          : {}),
         ...(envDispatch.sourceArchive
           ? { sourceArchive: envDispatch.sourceArchive }
           : {}),
@@ -2980,14 +3218,18 @@ export class OpenTofuDeploymentController {
         profile,
         requiredProviders,
         checkedAt: now,
-        ...(this.#planAllowsNoProviders(running) ? { allowNoProviders: true } : {}),
+        ...(this.#planAllowsNoProviders(running)
+          ? { allowNoProviders: true }
+          : {}),
       });
       // Layered plan-JSON policy (§25). When the runner returned resource
       // changes, evaluate the resource-type allowlist (layer 5) and the action
       // policy (layer 7) over them for ALL runs — not only template-backed:
-      //   - template-backed runs use the recorded template.policy (tamper-safe);
+      //   - template-backed runs use the recorded template.policy for resource
+      //     types (tamper-safe) and the target Space/InstallConfig for scope +
+      //     quota;
       //   - non-template installation-context runs use the Installation's
-      //     InstallConfig.policy (resolved via installConfigId);
+      //     Space/InstallConfig policy (resolved via installConfigId);
       //   - raw `/v1/plan-runs` runs without installation context keep today's
       //     behavior (no allowlist source -> no resource enforcement).
       // A disallowed resource type DENIES the plan; a delete/replace marks it
@@ -2995,10 +3237,22 @@ export class OpenTofuDeploymentController {
       // destructive-confirmation gate (requiresConfirmation) additionally needs
       // confirmDestructive at apply.
       const layered = await this.#evaluatePlanPolicy(running, result);
-      const blockedByResources = layered.resource?.reasons ?? [];
-      const passedPolicy = policy.status === "passed" &&
-        blockedByResources.length === 0;
-      const policyDecisionDigest = await stableJsonDigest(policy);
+      const blockedByLayeredPolicy = [
+        ...(layered.provider?.reasons ?? []),
+        ...(layered.resource?.reasons ?? []),
+        ...(layered.scope?.reasons ?? []),
+        ...(layered.quota?.reasons ?? []),
+      ];
+      const passedPolicy =
+        policy.status === "passed" && blockedByLayeredPolicy.length === 0;
+      const completedPolicy = passedPolicy
+        ? policy
+        : {
+            status: "blocked" as const,
+            reasons: [...policy.reasons, ...blockedByLayeredPolicy],
+            checkedAt: now,
+          };
+      const policyDecisionDigest = await stableJsonDigest(completedPolicy);
       const planArtifact = normalizePlanArtifact({
         artifact: result.planArtifact,
         planDigest: result.planDigest,
@@ -3014,19 +3268,14 @@ export class OpenTofuDeploymentController {
       // `waiting_approval`. Destroy plans are always-approval independently
       // (#planAwaitsApproval), so they need no field. A drift_check is read-only
       // and can never be applied (Phase 8), so it never carries requiresApproval.
-      const requiresApproval = running.driftCheck !== true &&
+      const requiresApproval =
+        running.driftCheck !== true &&
         layered.action?.requiresApproval === true;
       const updated: PlanRun = {
         ...running,
         status: passedPolicy ? "succeeded" : "blocked",
         requiredProviders,
-        policy: passedPolicy
-          ? policy
-          : {
-            status: "blocked",
-            reasons: [...policy.reasons, ...blockedByResources],
-            checkedAt: now,
-          },
+        policy: completedPolicy,
         policyDecisionDigest,
         planDigest: result.planDigest,
         planArtifact,
@@ -3045,14 +3294,31 @@ export class OpenTofuDeploymentController {
             status: passedPolicy ? "passed" : "blocked",
             observedProviderCount: requiredProviders.length,
             requiresApproval,
+            ...(layered.provider
+              ? {
+                  installConfigProvidersAllowed:
+                    layered.provider.denied.length === 0 &&
+                    layered.provider.notAllowed.length === 0 &&
+                    !layered.provider.missingProviders,
+                }
+              : {}),
             ...(layered.resource
-              ? { resourceTypesAllowed: blockedByResources.length === 0 }
+              ? {
+                  resourceTypesAllowed:
+                    layered.resource.disallowedResourceTypes.length === 0,
+                }
+              : {}),
+            ...(layered.scope
+              ? { scopeBoundaryPassed: layered.scope.outOfScope.length === 0 }
+              : {}),
+            ...(layered.quota
+              ? { quotaPassed: layered.quota.exceeded.length === 0 }
               : {}),
             ...(layered.templatePolicy
               ? {
-                templateRequiresConfirmation:
-                  layered.templatePolicy.requiresConfirmation,
-              }
+                  templateRequiresConfirmation:
+                    layered.templatePolicy.requiresConfirmation,
+                }
               : {}),
           }),
           auditEvent(running.id, "plan.completed", now, {
@@ -3076,27 +3342,38 @@ export class OpenTofuDeploymentController {
    * resource changes for ANY run that returned them:
    *   - `resource`: the resource-type allowlist verdict. The allowlist source is
    *     the recorded template.policy (template-backed runs, tamper-safe) or the
-   *     Installation's InstallConfig.policy.allowedResourceTypes (non-template
-   *     installation-context runs). A raw `/v1/plan-runs` run without
-   *     installation context has no allowlist source -> no resource enforcement.
+   *     Space/InstallConfig policy (non-template installation-context runs). A
+   *     raw `/v1/plan-runs` run without installation context has no allowlist
+   *     source -> no resource enforcement.
+   *   - `scope`: the §25 scope boundary using sanitized provider metadata when
+   *     configured.
    *   - `action`: the §25 action policy (delete/replace requires approval).
+   *   - `quota`: the §25 simple mutating-resource count quota when configured.
    *   - `templatePolicy`: the template destructive-confirmation verdict (only
    *     for template-backed runs) used to fold `requiresConfirmation` onto the
    *     binding.
    * Returns empty (`undefined` fields) when the runner reported no resource
-   * changes. Quota / scope-boundary (§25 layers 6 / 10) stay post-MVP; the typed
-   * seams are on {@link composePolicyVerdict}.
+   * changes.
    */
   async #evaluatePlanPolicy(
     planRun: PlanRun,
     result: OpenTofuPlanResult,
   ): Promise<{
+    provider?: ProviderAllowlistResult;
     resource?: ResourceAllowlistResult;
+    scope?: ScopeBoundaryResult;
     action?: ActionPolicyResult;
+    quota?: QuotaResult;
     templatePolicy?: ReturnType<typeof evaluateTemplatePlanPolicy>;
   }> {
     const changes = result.planResourceChanges;
-    if (changes === undefined) return {};
+    const policy = await this.#policyForPlanRun(planRun);
+    const provider = evaluateConfiguredProviderAllowlist(
+      result.requiredProviders ?? planRun.requiredProviders,
+      policy,
+      this.#planAllowsNoProviders(planRun),
+    );
+    if (changes === undefined) return provider ? { provider } : {};
     const action = evaluateActionPolicy(changes);
     const binding = planRun.templateBinding;
     if (binding) {
@@ -3112,36 +3389,39 @@ export class OpenTofuDeploymentController {
         changes,
         template.policy.allowedResourceTypes,
       );
-      return { resource, action, templatePolicy };
+      const scope = evaluateScopeBoundary(changes, policy?.scopeBoundary);
+      const quota = evaluateQuotaPolicy(changes, policy?.quota);
+      return { provider, resource, scope, action, quota, templatePolicy };
     }
-    // Non-template installation-context run: enforce the InstallConfig.policy
-    // resource-type allowlist. An undefined allowlist (or a run without
+    // Non-template installation-context run: enforce the composed
+    // Space/InstallConfig policy. An undefined allowlist (or a run without
     // installation context) means "not configured" -> no resource enforcement.
-    const allowedResourceTypes = await this.#installConfigResourceAllowlist(
-      planRun,
+    const resource = evaluateResourceAllowlist(
+      changes,
+      policy?.allowedResourceTypes,
     );
-    const resource = evaluateResourceAllowlist(changes, allowedResourceTypes);
-    return { resource, action };
+    const scope = evaluateScopeBoundary(changes, policy?.scopeBoundary);
+    const quota = evaluateQuotaPolicy(changes, policy?.quota);
+    return { provider, resource, scope, action, quota };
   }
 
   /**
-   * Resolves the resource-type allowlist for a non-template installation-context
-   * plan from its Installation's InstallConfig.policy. Returns `undefined` (the
-   * resource layer is skipped) for runs without installation context, or when
-   * the Installation / config / allowlist is absent.
+   * Resolves the Space + InstallConfig policy for an installation-context plan.
+   * Space policy is a ceiling; InstallConfig policy can narrow it but not widen
+   * it. Returns `undefined` for runs without installation context or when the
+   * Installation / config is absent.
    */
-  async #installConfigResourceAllowlist(
-    planRun: PlanRun,
-  ): Promise<readonly string[] | undefined> {
-    const installationId = planRun.installationContext?.installationId ??
-      planRun.installationId;
+  async #policyForPlanRun(planRun: PlanRun): Promise<PolicyConfig | undefined> {
+    const installationId =
+      planRun.installationContext?.installationId ?? planRun.installationId;
     if (!installationId) return undefined;
     const installation = await this.#store.getInstallation(installationId);
     if (!installation) return undefined;
-    const installConfig = await this.#store.getInstallConfig(
-      installation.installConfigId,
-    );
-    return installConfig?.policy.allowedResourceTypes;
+    const [space, installConfig] = await Promise.all([
+      this.#store.getSpace(installation.spaceId),
+      this.#store.getInstallConfig(installation.installConfigId),
+    ]);
+    return mergePolicyConfigs(space?.policy, installConfig?.policy);
   }
 
   /**
@@ -3208,7 +3488,11 @@ export class OpenTofuDeploymentController {
     // Mint provider credentials NOW (just before dispatch). Apply runs resolve
     // requiredProviders from the reviewed PlanRun. The bundle is attached to the
     // runner dispatch ONLY — never stored, never logged.
-    const credentials = await this.#mintRunCredentials(planRun);
+    const credentials = await this.#mintRunCredentials(
+      planRun,
+      planRun.operation === "destroy" ? "destroy" : "apply",
+      running.id,
+    );
     if (planRun.operation === "destroy") {
       return await this.#executeDestroyApply(
         running,
@@ -3223,7 +3507,10 @@ export class OpenTofuDeploymentController {
     // M2 env dispatch: an apply persists state at `base + 1` (the DO writes the
     // new state object + current.json at this generation). Empty without env ctx.
     const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
-    const envDispatch = await this.#installationDispatch(planRun, persistGeneration);
+    const envDispatch = await this.#installationDispatch(
+      planRun,
+      persistGeneration,
+    );
     try {
       const result = await this.#runner!.apply({
         applyRun: running,
@@ -3232,10 +3519,14 @@ export class OpenTofuDeploymentController {
         runnerProfile: profile,
         // Template dispatch (Phase 1C): apply tofu in the generated root.
         ...(dispatch.template ? { template: dispatch.template } : {}),
-        ...(dispatch.generatedRoot ? { generatedRoot: dispatch.generatedRoot } : {}),
+        ...(dispatch.generatedRoot
+          ? { generatedRoot: dispatch.generatedRoot }
+          : {}),
         ...(dispatch.build ? { build: dispatch.build } : {}),
         // M2 env dispatch (state scope at base+1 + source archive).
-        ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+        ...(envDispatch.stateScope
+          ? { stateScope: envDispatch.stateScope }
+          : {}),
         ...(envDispatch.sourceArchive
           ? { sourceArchive: envDispatch.sourceArchive }
           : {}),
@@ -3249,8 +3540,9 @@ export class OpenTofuDeploymentController {
       // sensitive/redaction filter. Raw-module runs keep the well-known
       // projection.
       const outputs = this.#projectApplyOutputs(planRun, result);
-      const installation = plannedInstallation ??
-        await this.#requireCurrentPlannedInstallation(planRun);
+      const installation =
+        plannedInstallation ??
+        (await this.#requireCurrentPlannedInstallation(planRun));
       // Bump the state generation atomically with the state persist (the
       // currentDeployment pointer move). A create starts at base 0 -> 1; an
       // update advances the installation's generation by one.
@@ -3264,9 +3556,14 @@ export class OpenTofuDeploymentController {
       // digest drives stale propagation (§24) after this record.
       const previousOutputSnapshot = installation.currentOutputSnapshotId
         ? await this.#store.getOutputSnapshot(
-          installation.currentOutputSnapshotId,
-        )
+            installation.currentOutputSnapshotId,
+          )
         : undefined;
+      if (!planRun.sourceSnapshotId) {
+        throw new Error(
+          `PlanRun ${planRun.id} has no SourceSnapshot for Deployment recording`,
+        );
+      }
       const outputSnapshot = await this.#recordOutputSnapshot({
         installation,
         applyRun,
@@ -3281,9 +3578,7 @@ export class OpenTofuDeploymentController {
         installationId: installation.id,
         environment: installation.environment,
         applyRunId: applyRun.id,
-        ...(planRun.sourceSnapshotId
-          ? { sourceSnapshotId: planRun.sourceSnapshotId }
-          : {}),
+        sourceSnapshotId: planRun.sourceSnapshotId,
         ...(planRun.dependencySnapshotId
           ? { dependencySnapshotId: planRun.dependencySnapshotId }
           : {}),
@@ -3303,7 +3598,10 @@ export class OpenTofuDeploymentController {
           installation.currentDeploymentId,
         );
         if (previous && previous.status === "active") {
-          await this.#store.putDeployment({ ...previous, status: "superseded" });
+          await this.#store.putDeployment({
+            ...previous,
+            status: "superseded",
+          });
         }
       }
       // Record the StateSnapshot metadata aligned to the SAME generation
@@ -3319,21 +3617,26 @@ export class OpenTofuDeploymentController {
         runId: applyRun.id,
         now,
       });
-      const patched = await this.#store.patchInstallation(installation.id, {
-        currentDeploymentId: deployment.id,
-        status: "active",
-        updatedAt: new Date(now).toISOString(),
-        currentStateGeneration: nextStateGeneration,
-        currentOutputSnapshotId: outputSnapshot.id,
-      }, {
-        currentDeploymentId: planRun.installationCurrentDeploymentId ?? undefined,
-        status: plannedInstallation?.status,
-      });
+      const patched = await this.#store.patchInstallation(
+        installation.id,
+        {
+          currentDeploymentId: deployment.id,
+          status: "active",
+          updatedAt: new Date(now).toISOString(),
+          currentStateGeneration: nextStateGeneration,
+          currentOutputSnapshotId: outputSnapshot.id,
+        },
+        {
+          currentDeploymentId:
+            planRun.installationCurrentDeploymentId ?? undefined,
+          status: plannedInstallation?.status,
+        },
+      );
       // §24 stale propagation: when this apply's projected outputs changed
       // versus the Installation's PREVIOUS OutputSnapshot, every transitive
       // downstream consumer in the Space that is currently `active` is marked
       // `stale`. The just-applied Installation itself stays `active` (patched
-      // above); installing/error/destroyed consumers are left untouched.
+      // above); pending/error/destroyed consumers are left untouched.
       await this.#propagateStale({
         installation,
         previousDigest: previousOutputSnapshot?.outputDigest,
@@ -3346,7 +3649,8 @@ export class OpenTofuDeploymentController {
         installationId: installation.id,
         deploymentId: deployment.id,
         status: "succeeded",
-        stateLock: result.stateLock ??
+        stateLock:
+          result.stateLock ??
           stateLockEvidence(profile.stateBackend, startedAt, now, "recorded"),
         outputs,
         ...(diagnostics ? { diagnostics } : {}),
@@ -3444,12 +3748,16 @@ export class OpenTofuDeploymentController {
         "destroy apply requires a PlanRun with installationId",
       );
     }
-    const installation = plannedInstallation ??
-      await this.#requireCurrentPlannedInstallation(planRun);
+    const installation =
+      plannedInstallation ??
+      (await this.#requireCurrentPlannedInstallation(planRun));
     // A destroy_apply persists the post-teardown state at `base + 1`. Empty for
     // runs without installation context.
     const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
-    const envDispatch = await this.#installationDispatch(planRun, persistGeneration);
+    const envDispatch = await this.#installationDispatch(
+      planRun,
+      persistGeneration,
+    );
     try {
       if (typeof this.#runner!.destroy !== "function") {
         // Without a real teardown the Installation must NOT be marked
@@ -3468,10 +3776,14 @@ export class OpenTofuDeploymentController {
         runnerProfile: profile,
         // Template dispatch (Phase 1C): destroy tofu in the generated root.
         ...(dispatch.template ? { template: dispatch.template } : {}),
-        ...(dispatch.generatedRoot ? { generatedRoot: dispatch.generatedRoot } : {}),
+        ...(dispatch.generatedRoot
+          ? { generatedRoot: dispatch.generatedRoot }
+          : {}),
         ...(dispatch.build ? { build: dispatch.build } : {}),
         // M2 env dispatch (state scope at base+1 + source archive).
-        ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+        ...(envDispatch.stateScope
+          ? { stateScope: envDispatch.stateScope }
+          : {}),
         ...(envDispatch.sourceArchive
           ? { sourceArchive: envDispatch.sourceArchive }
           : {}),
@@ -3502,20 +3814,30 @@ export class OpenTofuDeploymentController {
         }
       }
       const nextStateGeneration = installation.currentStateGeneration + 1;
-      const patched = await this.#store.patchInstallation(installation.id, {
-        currentDeploymentId: undefined,
-        status: "destroyed",
-        updatedAt: new Date(now).toISOString(),
-        currentStateGeneration: nextStateGeneration,
-      }, {
-        currentDeploymentId: planRun.installationCurrentDeploymentId ?? undefined,
-        status: installation.status,
-      });
+      const patched = await this.#store.patchInstallation(
+        installation.id,
+        {
+          currentDeploymentId: undefined,
+          status: "destroyed",
+          updatedAt: new Date(now).toISOString(),
+          currentStateGeneration: nextStateGeneration,
+        },
+        {
+          currentDeploymentId:
+            planRun.installationCurrentDeploymentId ?? undefined,
+          status: installation.status,
+        },
+      );
       const diagnostics = redactRunDiagnostics(result?.diagnostics);
       const completed: ApplyRun = {
         ...running,
         status: "succeeded",
-        stateLock: stateLockEvidence(profile.stateBackend, startedAt, now, "recorded"),
+        stateLock: stateLockEvidence(
+          profile.stateBackend,
+          startedAt,
+          now,
+          "recorded",
+        ),
         ...(diagnostics ? { diagnostics } : {}),
         auditEvents: [
           ...running.auditEvents,
@@ -3583,7 +3905,10 @@ export class OpenTofuDeploymentController {
   async #requirePlanRun(id: string): Promise<PlanRun> {
     const planRun = await this.#store.getPlanRun(id);
     if (!planRun) {
-      throw new OpenTofuControllerError("not_found", `plan run ${id} not found`);
+      throw new OpenTofuControllerError(
+        "not_found",
+        `plan run ${id} not found`,
+      );
     }
     return planRun;
   }
@@ -3609,29 +3934,29 @@ export class OpenTofuDeploymentController {
         "PlanRun does not target an existing Installation",
       );
     }
-    const installation = await this.#requireInstallation(planRun.installationId);
+    const installation = await this.#requireInstallation(
+      planRun.installationId,
+    );
     validatePlannedInstallationCurrent({ planRun, installation });
     return installation;
   }
 
-  async #seedRunnerProfiles(
-    profiles: readonly RunnerProfile[],
-  ): Promise<void> {
+  async #seedRunnerProfiles(profiles: readonly RunnerProfile[]): Promise<void> {
     for (const profile of profiles) {
       await this.#store.putRunnerProfile(profile);
     }
   }
 
-  #runSerialized<T>(
-    key: string,
-    work: () => Promise<T>,
-  ): Promise<T> {
+  #runSerialized<T>(key: string, work: () => Promise<T>): Promise<T> {
     const previous = this.#mutationChains.get(key) ?? Promise.resolve();
     let release!: () => void;
     const next = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const chain = previous.then(() => next, () => next);
+    const chain = previous.then(
+      () => next,
+      () => next,
+    );
     this.#mutationChains.set(key, chain);
     return previous
       .catch(() => {})
@@ -3725,7 +4050,9 @@ function projectApplyExpectedGuard(
   return projection;
 }
 
-export function applyExpectedGuardFromPlanRun(planRun: PlanRun): ApplyExpectedGuard {
+export function applyExpectedGuardFromPlanRun(
+  planRun: PlanRun,
+): ApplyExpectedGuard {
   if (!planRun.planDigest) {
     throw new OpenTofuControllerError(
       "failed_precondition",
@@ -3749,7 +4076,9 @@ export function applyExpectedGuardFromPlanRun(planRun: PlanRun): ApplyExpectedGu
   }
   return {
     planRunId: planRun.id,
-    ...(planRun.installationId ? { installationId: planRun.installationId } : {}),
+    ...(planRun.installationId
+      ? { installationId: planRun.installationId }
+      : {}),
     ...(planRun.installationId
       ? { currentDeploymentId: planRun.installationCurrentDeploymentId ?? null }
       : {}),
@@ -3772,14 +4101,12 @@ export function applyExpectedGuardFromPlanRun(planRun: PlanRun): ApplyExpectedGu
  * binding (an opentofu_module / opentofu_root config that is not
  * template-backed).
  */
-function installConfigTemplateBinding(
-  config: InstallConfig,
-):
+function installConfigTemplateBinding(config: InstallConfig):
   | {
-    readonly templateId: string;
-    readonly templateVersion: string;
-    readonly inputs?: Readonly<Record<string, JsonValue>>;
-  }
+      readonly templateId: string;
+      readonly templateVersion: string;
+      readonly inputs?: Readonly<Record<string, JsonValue>>;
+    }
   | undefined {
   if (!config.templateBinding) return undefined;
   const inputs = config.variableMapping;
@@ -3817,9 +4144,10 @@ function capabilityProvidersFromResolved(
 ): readonly CapabilityProvider[] {
   const providers: CapabilityProvider[] = [];
   for (const entry of resolved) {
-    const kind = PROVIDER_CAPABILITY_KINDS[
-      entry.capability as keyof typeof PROVIDER_CAPABILITY_KINDS
-    ];
+    const kind =
+      PROVIDER_CAPABILITY_KINDS[
+        entry.capability as keyof typeof PROVIDER_CAPABILITY_KINDS
+      ];
     if (!kind) continue;
     const provider = entry.connection?.provider;
     if (!provider) continue;
@@ -3842,9 +4170,10 @@ function capabilityMintEntriesFromResolved(
 ): readonly CapabilityMintEntry[] {
   const entries: CapabilityMintEntry[] = [];
   for (const entry of resolved) {
-    const kind = PROVIDER_CAPABILITY_KINDS[
-      entry.capability as keyof typeof PROVIDER_CAPABILITY_KINDS
-    ];
+    const kind =
+      PROVIDER_CAPABILITY_KINDS[
+        entry.capability as keyof typeof PROVIDER_CAPABILITY_KINDS
+      ];
     if (!kind) continue;
     const connection = entry.connection;
     if (!connection) continue;
@@ -3854,13 +4183,36 @@ function capabilityMintEntriesFromResolved(
 }
 
 /**
- * Maps a run's operation to the tofu mint phase used by the §13 per-alias mint.
- * A `destroy` mints at `destroy`; create/update mint at `plan` (the per-alias
- * mint treats plan/apply/destroy identically — they are all tofu phases — so
- * this is precise without distinguishing plan vs apply).
+ * Produces the non-secret audit rows for provider credential mints. `source`
+ * capability is intentionally excluded: it is a git credential minted by the
+ * source-sync path, not a provider credential for the generated root.
  */
-function applyMintPhase(planRun: PlanRun): MintPhase {
-  return planRun.operation === "destroy" ? "destroy" : "plan";
+function credentialMintAuditEntries(
+  resolved: readonly ResolvedCapability[],
+): readonly {
+  readonly connectionId: string;
+  readonly capabilities: readonly Capability[];
+}[] {
+  const byConnection = new Map<string, Set<Capability>>();
+  for (const entry of resolved) {
+    const kind =
+      PROVIDER_CAPABILITY_KINDS[
+        entry.capability as keyof typeof PROVIDER_CAPABILITY_KINDS
+      ];
+    if (!kind || !entry.connection) continue;
+    let capabilities = byConnection.get(entry.connection.id);
+    if (!capabilities) {
+      capabilities = new Set<Capability>();
+      byConnection.set(entry.connection.id, capabilities);
+    }
+    capabilities.add(kind);
+  }
+  return Array.from(byConnection.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([connectionId, capabilities]) => ({
+      connectionId,
+      capabilities: Array.from(capabilities).sort(),
+    }));
 }
 
 /**
@@ -3952,9 +4304,9 @@ function installConfigBuildSpec(build: InstallBuildConfig): DispatchBuildSpec {
 function stateObjectKeyForScope(scope: DispatchStateScope): string {
   const seg = (value: string) => value.replace(/[^a-zA-Z0-9._-]+/g, "_");
   const generation = String(scope.generation).padStart(8, "0");
-  return `spaces/${seg(scope.spaceId)}/installations/${
-    seg(scope.installationId)
-  }/envs/${seg(scope.environment)}/states/${generation}.tfstate.enc`;
+  return `spaces/${seg(scope.spaceId)}/installations/${seg(
+    scope.installationId,
+  )}/envs/${seg(scope.environment)}/states/${generation}.tfstate.enc`;
 }
 
 /**
@@ -3972,9 +4324,9 @@ function rawOutputArtifactKey(input: {
   readonly runId: string;
 }): string {
   const seg = (value: string) => value.replace(/[^a-zA-Z0-9._-]+/g, "_");
-  return `spaces/${seg(input.spaceId)}/installations/${
-    seg(input.installationId)
-  }/runs/${seg(input.runId)}/outputs.raw.json.enc`;
+  return `spaces/${seg(input.spaceId)}/installations/${seg(
+    input.installationId,
+  )}/runs/${seg(input.runId)}/outputs.raw.json.enc`;
 }
 
 /**
@@ -4008,7 +4360,10 @@ function snapshotModuleSource(
  */
 function normalizeModulePath(path: string | undefined): string | undefined {
   if (!path) return undefined;
-  const trimmed = path.replace(/^\.\/+/, "").replace(/^\/+|\/+$/g, "").trim();
+  const trimmed = path
+    .replace(/^\.\/+/, "")
+    .replace(/^\/+|\/+$/g, "")
+    .trim();
   if (trimmed.length === 0 || trimmed === ".") return undefined;
   return trimmed;
 }
@@ -4047,7 +4402,13 @@ function canonicalProviderAddress(rule: string): string {
  * because the store hands back its own records and the runner job only reads.
  */
 function templateDispatchFromInputs(
-  inputs: { readonly template?: DispatchTemplateRef; readonly generatedRoot?: DispatchGeneratedRoot; readonly build?: DispatchBuildSpec } | undefined,
+  inputs:
+    | {
+        readonly template?: DispatchTemplateRef;
+        readonly generatedRoot?: DispatchGeneratedRoot;
+        readonly build?: DispatchBuildSpec;
+      }
+    | undefined,
 ): RunTemplateDispatch {
   if (!inputs?.template) return {};
   return {
@@ -4069,7 +4430,104 @@ function updatedTemplateBinding(
   const binding = planRun.templateBinding;
   if (!binding) return undefined;
   if (!templatePolicy) return binding;
-  return { ...binding, requiresConfirmation: templatePolicy.requiresConfirmation };
+  return {
+    ...binding,
+    requiresConfirmation: templatePolicy.requiresConfirmation,
+  };
+}
+
+function mergePolicyConfigs(
+  spacePolicy: PolicyConfig | undefined,
+  installPolicy: PolicyConfig | undefined,
+): PolicyConfig | undefined {
+  if (!spacePolicy && !installPolicy) return undefined;
+  return {
+    allowedProviders: intersectOptionalLists(
+      spacePolicy?.allowedProviders,
+      installPolicy?.allowedProviders,
+    ),
+    allowedResourceTypes: intersectOptionalLists(
+      spacePolicy?.allowedResourceTypes,
+      installPolicy?.allowedResourceTypes,
+    ),
+    destructiveChanges:
+      installPolicy?.destructiveChanges ?? spacePolicy?.destructiveChanges,
+    scopeBoundary: mergeScopeBoundary(
+      spacePolicy?.scopeBoundary,
+      installPolicy?.scopeBoundary,
+    ),
+    quota: mergeQuota(spacePolicy?.quota, installPolicy?.quota),
+  };
+}
+
+function evaluateConfiguredProviderAllowlist(
+  requiredProviders: readonly string[],
+  policy: PolicyConfig | undefined,
+  allowNoProviders: boolean,
+): ProviderAllowlistResult | undefined {
+  if (policy?.allowedProviders === undefined) return undefined;
+  return evaluateProviderAllowlist(requiredProviders, {
+    allowed: policy.allowedProviders,
+    ...(allowNoProviders ? { allowNoProviders: true } : {}),
+  });
+}
+
+function intersectOptionalLists(
+  ceiling: readonly string[] | undefined,
+  local: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (ceiling === undefined) return local;
+  if (local === undefined) return ceiling;
+  const allowed = new Set(ceiling);
+  return local.filter((entry) => allowed.has(entry)).sort();
+}
+
+function mergeScopeBoundary(
+  ceiling: PolicyConfig["scopeBoundary"] | undefined,
+  local: PolicyConfig["scopeBoundary"] | undefined,
+): PolicyConfig["scopeBoundary"] | undefined {
+  if (!ceiling) return local;
+  if (!local) return ceiling;
+  const cloudflare = mergeScopeProvider(ceiling.cloudflare, local.cloudflare);
+  const aws = mergeScopeProvider(ceiling.aws, local.aws);
+  return {
+    mode:
+      ceiling.mode === "strict" || local.mode === "strict"
+        ? "strict"
+        : (ceiling.mode ?? local.mode),
+    ...(cloudflare ? { cloudflare } : {}),
+    ...(aws ? { aws } : {}),
+  };
+}
+
+function mergeScopeProvider<
+  T extends Readonly<Record<string, readonly string[] | undefined>>,
+>(ceiling: T | undefined, local: T | undefined): T | undefined {
+  if (!ceiling) return local;
+  if (!local) return ceiling;
+  const out: Record<string, readonly string[]> = {};
+  const keys = new Set([...Object.keys(ceiling), ...Object.keys(local)]);
+  for (const key of keys) {
+    const merged = intersectOptionalLists(ceiling[key], local[key]);
+    if (merged !== undefined) out[key] = merged;
+  }
+  return out as T;
+}
+
+function mergeQuota(
+  ceiling: Readonly<Record<string, number>> | undefined,
+  local: Readonly<Record<string, number>> | undefined,
+): Readonly<Record<string, number>> | undefined {
+  if (!ceiling) return local;
+  if (!local) return ceiling;
+  const out: Record<string, number> = {};
+  const keys = new Set([...Object.keys(ceiling), ...Object.keys(local)]);
+  for (const key of keys) {
+    const a = ceiling[key];
+    const b = local[key];
+    out[key] = a === undefined ? b! : b === undefined ? a : Math.min(a, b);
+  }
+  return out;
 }
 
 function auditEvent(
@@ -4093,18 +4551,10 @@ function newId(prefix: string): string {
 }
 
 function isTerminalStatus(status: RunStatus): boolean {
-  return status === "succeeded" || status === "failed" ||
-    status === "blocked" || status === "cancelled";
-}
-
-// Translate a Vault error into the controller error vocabulary. Missing env
-// groups (no values) are appended to the message so callers can fix their
-// registration without the Vault ever exposing secret material.
-function mapVaultError(error: unknown): unknown {
-  if (!(error instanceof ConnectionVaultError)) return error;
-  const groups = error.missingEnvGroups;
-  const suffix = groups && groups.length > 0
-    ? `: provide one of [${groups.map((group) => group.join("+")).join(", ")}]`
-    : "";
-  return new OpenTofuControllerError(error.code, `${error.message}${suffix}`);
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "blocked" ||
+    status === "cancelled"
+  );
 }

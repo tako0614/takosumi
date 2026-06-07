@@ -82,7 +82,8 @@ const runnerProfile = {
 } satisfies RunnerProfile;
 
 // Space-direct Installation coordinates shared across the fixtures: one
-// Installation = one OpenTofu root/state, keyed (spaceId, name, environment).
+// Installation = Capsule + generated root + tfstate + outputs, keyed
+// (spaceId, name, environment).
 const spaceId = "space_personal";
 const installationId = "ins_0123456789abcdef";
 const environment = "production";
@@ -139,7 +140,7 @@ const planRun = {
   providerLockDigest:
     "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
   summary: { add: 2, change: 0, destroy: 0 },
-  // Installation context (spec §5) the queue consumer reads to build the
+  // Installation context the queue consumer reads to build the
   // `stateScope` dispatch field; renamed from the retired `environmentContext`.
   installationContext: {
     spaceId,
@@ -161,7 +162,7 @@ const planRun = {
 } satisfies PlanRun;
 
 // Installation-scoped state location threaded onto the run dispatch payload
-// (spec §20). An apply carries `base + 1` as the persist generation.
+// An apply carries `base + 1` as the persist generation.
 const dispatchStateScope = {
   spaceId,
   installationId,
@@ -169,7 +170,7 @@ const dispatchStateScope = {
   generation: 1,
 } satisfies DispatchStateScope;
 
-// Installation ledger record (spec §5 / §27): Space-direct, ISO timestamps,
+// Installation ledger record: Space-direct, ISO timestamps,
 // `status: "active"`. The App/Environment/InstallProfile lanes are retired.
 const installation = {
   id: installationId,
@@ -188,8 +189,7 @@ const installation = {
   updatedAt: "2024-05-18T03:00:05.000Z",
 } satisfies Installation;
 
-// One tfstate generation (spec §20). Metadata-only; the encrypted bytes live
-// in R2_STATE under the spec §20 keys.
+// One tfstate generation. Metadata-only; the encrypted bytes live in R2_STATE.
 const stateSnapshot = {
   id: "sst_0123456789abcdef",
   spaceId,
@@ -204,7 +204,7 @@ const stateSnapshot = {
   createdAt: "2024-05-18T03:00:05.000Z",
 } satisfies StateSnapshot;
 
-// Successful apply record (spec §21): Space-direct, `outputsPublic` map,
+// Successful apply record: Space-direct, `outputsPublic` map,
 // `status: "active"`, ISO `createdAt`. The legacy rich Deployment (source,
 // runnerProfileId, outputs[], auditEvents) is gone.
 const deployment = {
@@ -278,7 +278,7 @@ export const DEPLOY_CONTROL_API_CONTRACT_FIXTURES = {
     planRun,
   } satisfies PlanRunResponse,
 
-  // Run-dispatch state scope pinned for the spec §20 R2_STATE key derivation.
+  // Run-dispatch state scope pinned for the R2_STATE key derivation.
   dispatchStateScope,
 
   createApplyRunRequest: {
@@ -306,7 +306,7 @@ export const DEPLOY_CONTROL_API_CONTRACT_FIXTURES = {
     installation,
   } satisfies GetInstallationResponse,
 
-  // StateSnapshot metadata recorded after a successful apply (spec §20).
+  // StateSnapshot metadata recorded after a successful apply.
   stateSnapshot,
 
   listDeploymentsResponse: {

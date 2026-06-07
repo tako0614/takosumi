@@ -27,6 +27,7 @@ import {
 import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import { DependenciesService } from "../dependencies/mod.ts";
+import type { SensitiveOutputResolver } from "../output-shares/mod.ts";
 import { seedInstallationModel } from "./test_model_fixture.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 
@@ -98,15 +99,47 @@ function recordingRunner(): RecordingRunner {
   };
 }
 
+function sensitiveOutputRunner(): RecordingRunner {
+  const runner = recordingRunner();
+  return {
+    ...runner,
+    apply: (job) => {
+      runner.applyJobs.push(job);
+      return Promise.resolve({
+        outputs: {
+          admin_token: { sensitive: true, value: "super-secret-token" },
+        } as never,
+        stateDigest:
+          "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      });
+    },
+  };
+}
+
+function staticSensitiveResolver(): SensitiveOutputResolver {
+  return {
+    resolve: (input) =>
+      Promise.resolve(
+        input.outputName === "admin_token"
+          ? { value: "super-secret-token", sensitive: true }
+          : undefined,
+      ),
+  };
+}
+
 function controllerWith(
   store: OpenTofuDeploymentStore,
   runner: OpenTofuRunner,
+  options: { readonly sensitiveOutputResolver?: SensitiveOutputResolver } = {},
 ): OpenTofuDeploymentController {
   return new OpenTofuDeploymentController({
     store,
     runner,
     now: sequenceNow(1),
     newId: deterministicIds(),
+    ...(options.sensitiveOutputResolver
+      ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
+      : {}),
   });
 }
 
@@ -437,6 +470,105 @@ test("revoking the share between plan and apply fails the consumer apply output_
       expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
     }),
   ).rejects.toThrow(/output_share_revoked/);
+});
+
+test("pending share does not authorize cross-space published_output planning", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const { consumer } = await seedCrossSpaceGraph(store, "preview");
+  const controller = controllerWith(store, runner);
+
+  const share = await store.getOutputShare("oshare_1");
+  await store.putOutputShare({ ...share!, status: "pending" });
+
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+
+  await expect(controller.createInstallationPlan(consumer)).rejects.toThrow(
+    /output_share_revoked/,
+  );
+});
+
+test("sensitive published_output injects only through explicit share resolver and never leaks on public run/activity", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = sensitiveOutputRunner();
+  const { consumer } = await seedCrossSpaceGraph(store, "preview");
+  const share = await store.getOutputShare("oshare_1");
+  await store.putOutputShare({
+    ...share!,
+    outputs: [{ name: "admin_token", sensitive: true }],
+  });
+  const dependency = await store.getDependency("dep_edge0001");
+  await store.putDependency({
+    ...dependency!,
+    outputs: {
+      admin_token: {
+        from: "admin_token",
+        to: "admin_token",
+        required: true,
+      },
+    },
+  });
+  const controller = controllerWith(store, runner, {
+    sensitiveOutputResolver: staticSensitiveResolver(),
+  });
+
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+  const producer = (await controller.getInstallation("inst_producer")).installation;
+  const outputSnapshot = await store.getOutputSnapshot(
+    producer.currentOutputSnapshotId!,
+  );
+  expect(outputSnapshot?.spaceOutputs).not.toHaveProperty("admin_token");
+  expect(outputSnapshot?.publicOutputs).not.toHaveProperty("admin_token");
+
+  const consumerPlan = await controller.createInstallationPlan(consumer);
+  const consumerPlanJob = runner.planJobs.find(
+    (job) => job.planRun.installationId === consumer,
+  );
+  expect(consumerPlanJob?.variables.admin_token).toEqual("super-secret-token");
+  expect(JSON.stringify(consumerPlan.planRun)).not.toContain("super-secret-token");
+  expect(JSON.stringify(await store.listActivityEvents("space_consumer"))).not
+    .toContain("super-secret-token");
+});
+
+test("sensitive published_output fails closed when controller has no resolver", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = sensitiveOutputRunner();
+  const { consumer } = await seedCrossSpaceGraph(store, "preview");
+  const share = await store.getOutputShare("oshare_1");
+  await store.putOutputShare({
+    ...share!,
+    outputs: [{ name: "admin_token", sensitive: true }],
+  });
+  const dependency = await store.getDependency("dep_edge0001");
+  await store.putDependency({
+    ...dependency!,
+    outputs: {
+      admin_token: {
+        from: "admin_token",
+        to: "admin_token",
+        required: true,
+      },
+    },
+  });
+  const controller = controllerWith(store, runner);
+
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+
+  await expect(controller.createInstallationPlan(consumer)).rejects.toThrow(
+    /sensitive_output_resolver_unavailable/,
+  );
 });
 
 // ---------------------------------------------------------------------------

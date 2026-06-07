@@ -19,6 +19,12 @@ import type {
   SourceResponse,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+import type {
+  CapsuleCompatibilityReport,
+  CapsuleCompatibilityReportResponse,
+  CreateSourceCompatibilityCheckRequest,
+} from "takosumi-contract/capsules";
+import type { SourceSnapshot } from "takosumi-contract/sources";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import {
   OpenTofuControllerError,
@@ -28,6 +34,11 @@ import type {
   OpenTofuDeploymentStore,
   StoredSource,
 } from "../deploy-control/store.ts";
+import {
+  StaticHclCapsuleCompatibilityAnalyzer,
+  type CapsuleCompatibilityAnalyzer,
+  type CapsuleSourceFile,
+} from "./capsule_compatibility.ts";
 import { evaluateSourceUrl } from "./url-policy.ts";
 
 const DEFAULT_REF = "main";
@@ -40,18 +51,22 @@ const DEFAULT_PATH = ".";
  * consumer. Defaults to a no-op so callers without a queue keep the run queued
  * (the inline/local path drives it differently in M2).
  */
-export type EnqueueSourceSync = (
-  dispatch: {
-    readonly action: "source_sync";
-    readonly runId: string;
-    readonly spaceId: string;
-    readonly sourceId: string;
-  },
-) => Promise<void>;
+export type EnqueueSourceSync = (dispatch: {
+  readonly action: "source_sync";
+  readonly runId: string;
+  readonly spaceId: string;
+  readonly sourceId: string;
+}) => Promise<void>;
+
+export type ReadCapsuleSourceFiles = (
+  snapshot: SourceSnapshot,
+) => Promise<readonly CapsuleSourceFile[]>;
 
 export interface SourcesServiceDependencies {
   readonly store: OpenTofuDeploymentStore;
   readonly enqueueSourceSync?: EnqueueSourceSync;
+  readonly compatibilityAnalyzer?: CapsuleCompatibilityAnalyzer;
+  readonly readCapsuleSourceFiles?: ReadCapsuleSourceFiles;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
   /** Per-source webhook secret generator. Defaults to a random URL-safe token. */
@@ -61,6 +76,8 @@ export interface SourcesServiceDependencies {
 export class SourcesService {
   readonly #store: OpenTofuDeploymentStore;
   readonly #enqueue: EnqueueSourceSync;
+  readonly #compatibilityAnalyzer: CapsuleCompatibilityAnalyzer;
+  readonly #readCapsuleSourceFiles: ReadCapsuleSourceFiles;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
   readonly #newHookSecret: () => string;
@@ -68,6 +85,10 @@ export class SourcesService {
   constructor(deps: SourcesServiceDependencies) {
     this.#store = deps.store;
     this.#enqueue = deps.enqueueSourceSync ?? (() => Promise.resolve());
+    this.#compatibilityAnalyzer =
+      deps.compatibilityAnalyzer ?? new StaticHclCapsuleCompatibilityAnalyzer();
+    this.#readCapsuleSourceFiles =
+      deps.readCapsuleSourceFiles ?? (() => Promise.resolve([]));
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
     this.#newHookSecret = deps.newHookSecret ?? defaultHookSecret;
@@ -154,8 +175,8 @@ export class SourcesService {
       (next as { name: string }).name = patch.name;
     }
     if (patch.defaultRef !== undefined) {
-      (next as { defaultRef: string }).defaultRef = nonEmpty(patch.defaultRef) ??
-        DEFAULT_REF;
+      (next as { defaultRef: string }).defaultRef =
+        nonEmpty(patch.defaultRef) ?? DEFAULT_REF;
     }
     if (patch.defaultPath !== undefined) {
       (next as { defaultPath: string }).defaultPath =
@@ -182,9 +203,7 @@ export class SourcesService {
     return { source: toPublicSource(next) };
   }
 
-  async listSnapshots(
-    sourceId: string,
-  ): Promise<ListSourceSnapshotsResponse> {
+  async listSnapshots(sourceId: string): Promise<ListSourceSnapshotsResponse> {
     await this.#requireSource(sourceId);
     return { snapshots: await this.#store.listSourceSnapshots(sourceId) };
   }
@@ -252,6 +271,58 @@ export class SourcesService {
     return { run };
   }
 
+  async createCompatibilityCheck(
+    sourceId: string,
+    request: CreateSourceCompatibilityCheckRequest = {},
+  ): Promise<CapsuleCompatibilityReportResponse> {
+    const stored = await this.#requireSource(sourceId);
+    const snapshot = await this.#resolveCompatibilitySnapshot(
+      sourceId,
+      request.sourceSnapshotId,
+    );
+    const files = await this.#readCapsuleSourceFiles(snapshot);
+    const analysis = await this.#compatibilityAnalyzer.analyze({
+      sourceId,
+      sourceSnapshot: snapshot,
+      files,
+    });
+    const id = this.#newId("caprep");
+    const report: CapsuleCompatibilityReport = {
+      id,
+      sourceId,
+      ...(request.installationId
+        ? { installationId: request.installationId }
+        : {}),
+      sourceSnapshotId: snapshot.id,
+      level: analysis.level,
+      findings: analysis.findings,
+      providers: analysis.providers,
+      resources: analysis.resources,
+      dataSources: analysis.dataSources,
+      provisioners: analysis.provisioners,
+      normalizedObjectKey: analysis.normalizedObjectKey,
+      normalizedDigest: analysis.normalizedDigest,
+      createdAt: this.#now().toISOString(),
+    };
+    await this.#store.putCapsuleCompatibilityReport(report);
+    void stored;
+    return { report };
+  }
+
+  async getCompatibilityReport(
+    id: string,
+  ): Promise<CapsuleCompatibilityReportResponse> {
+    requireNonEmptyString(id, "reportId");
+    const report = await this.#store.getCapsuleCompatibilityReport(id);
+    if (!report) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `compatibility report ${id} not found`,
+      );
+    }
+    return { report };
+  }
+
   async getSyncRun(id: string): Promise<SourceSyncRun> {
     requireNonEmptyString(id, "runId");
     const run = await this.#store.getSourceSyncRun(id);
@@ -262,6 +333,32 @@ export class SourcesService {
       );
     }
     return run;
+  }
+
+  async #resolveCompatibilitySnapshot(
+    sourceId: string,
+    requestedSnapshotId: string | undefined,
+  ): Promise<SourceSnapshot> {
+    const snapshots = await this.#store.listSourceSnapshots(sourceId);
+    if (requestedSnapshotId !== undefined) {
+      requireNonEmptyString(requestedSnapshotId, "sourceSnapshotId");
+      const snapshot = snapshots.find((row) => row.id === requestedSnapshotId);
+      if (!snapshot) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          `sourceSnapshotId ${requestedSnapshotId} does not exist for source ${sourceId}`,
+        );
+      }
+      return snapshot;
+    }
+    const latest = snapshots.at(-1);
+    if (!latest) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `source_sync_required: source ${sourceId} has no SourceSnapshot; run a source sync first`,
+      );
+    }
+    return latest;
   }
 
   /**
@@ -281,9 +378,7 @@ export class SourcesService {
     return timingSafeHexEquals(presentedHash, stored.hookSecretHash);
   }
 
-  async #activeSyncRun(
-    sourceId: string,
-  ): Promise<SourceSyncRun | undefined> {
+  async #activeSyncRun(sourceId: string): Promise<SourceSyncRun | undefined> {
     const runs = await this.#store.listSourceSyncRuns(sourceId);
     return runs.find(
       (run) => run.status === "queued" || run.status === "running",

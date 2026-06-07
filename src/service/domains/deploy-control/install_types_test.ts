@@ -451,6 +451,16 @@ test("apply dispatch carries TF_VAR_<provider>_<capability>_<arg> per-alias cred
   const planCreds = runner.planJobs[0]!.credentials!;
   expect(planCreds.TF_VAR_cloudflare_compute_api_token).toEqual(SECRET_TOKEN);
   expect(planCreds.CLOUDFLARE_API_TOKEN).toEqual(SECRET_TOKEN);
+  const planMintEvents = await store.listCredentialMintEventsForRun(planRun.id);
+  expect(planMintEvents).toHaveLength(1);
+  expect(planMintEvents[0]).toMatchObject({
+    runId: planRun.id,
+    spaceId: "space_test",
+    installationId: "inst_fixture",
+    connectionId: conn.id,
+    phase: "plan",
+    capabilities: ["compute"],
+  });
 
   const { applyRun } = await controller.createApplyRun({
     planRunId: planRun.id,
@@ -461,6 +471,15 @@ test("apply dispatch carries TF_VAR_<provider>_<capability>_<arg> per-alias cred
   // The apply dispatch ALSO carries the per-alias TF_VAR (re-resolved at mint).
   const applyCreds = runner.applyJobs[0]!.credentials!;
   expect(applyCreds.TF_VAR_cloudflare_compute_api_token).toEqual(SECRET_TOKEN);
+  expect(await store.listCredentialMintEventsForRun(planRun.id)).toHaveLength(1);
+  const applyMintEvents = await store.listCredentialMintEventsForRun(applyRun.id);
+  expect(applyMintEvents).toHaveLength(1);
+  expect(applyMintEvents[0]).toMatchObject({
+    runId: applyRun.id,
+    phase: "apply",
+    connectionId: conn.id,
+    capabilities: ["compute"],
+  });
 
   // The secret value must NEVER reach any persisted run record (plan / apply /
   // deployment / state). Credentials live only on the dispatch payload.

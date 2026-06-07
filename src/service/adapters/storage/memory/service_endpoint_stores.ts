@@ -20,7 +20,7 @@ import type {
   ServiceTrustRecord,
   ServiceTrustRecordId,
 } from "../../../domains/service-endpoints/types.ts";
-import { immutable } from "./helpers.ts";
+import { filterValues, getFrom, immutable, putValue } from "./helpers.ts";
 
 export class MemoryServiceEndpointStore implements ServiceEndpointStore {
   constructor(
@@ -28,20 +28,17 @@ export class MemoryServiceEndpointStore implements ServiceEndpointStore {
   ) {}
 
   put(endpoint: ServiceEndpoint): Promise<ServiceEndpoint> {
-    const value = immutable(endpoint);
-    this.endpoints.set(value.id, value);
-    return Promise.resolve(value);
+    return putValue(this.endpoints, endpoint.id, endpoint);
   }
 
   get(id: ServiceEndpointId): Promise<ServiceEndpoint | undefined> {
-    return Promise.resolve(this.endpoints.get(id));
+    return getFrom(this.endpoints, id);
   }
 
   listByService(serviceId: ServiceId): Promise<readonly ServiceEndpoint[]> {
-    return Promise.resolve(
-      [...this.endpoints.values()].filter((endpoint) =>
-        endpoint.serviceId === serviceId
-      ),
+    return filterValues(
+      this.endpoints,
+      (endpoint) => endpoint.serviceId === serviceId,
     );
   }
 
@@ -49,10 +46,9 @@ export class MemoryServiceEndpointStore implements ServiceEndpointStore {
     spaceId: string,
     groupId: string,
   ): Promise<readonly ServiceEndpoint[]> {
-    return Promise.resolve(
-      [...this.endpoints.values()].filter((endpoint) =>
-        endpoint.spaceId === spaceId && endpoint.groupId === groupId
-      ),
+    return filterValues(
+      this.endpoints,
+      (endpoint) => endpoint.spaceId === spaceId && endpoint.groupId === groupId,
     );
   }
 
@@ -83,22 +79,19 @@ export class MemoryServiceTrustRecordStore implements ServiceTrustRecordStore {
   ) {}
 
   put(record: ServiceTrustRecord): Promise<ServiceTrustRecord> {
-    const value = immutable(record);
-    this.records.set(value.id, value);
-    return Promise.resolve(value);
+    return putValue(this.records, record.id, record);
   }
 
   get(id: ServiceTrustRecordId): Promise<ServiceTrustRecord | undefined> {
-    return Promise.resolve(this.records.get(id));
+    return getFrom(this.records, id);
   }
 
   listByEndpoint(
     endpointId: ServiceEndpointId,
   ): Promise<readonly ServiceTrustRecord[]> {
-    return Promise.resolve(
-      [...this.records.values()].filter((record) =>
-        record.endpointId === endpointId
-      ),
+    return filterValues(
+      this.records,
+      (record) => record.endpointId === endpointId,
     );
   }
 
@@ -106,12 +99,12 @@ export class MemoryServiceTrustRecordStore implements ServiceTrustRecordStore {
     endpointId: ServiceEndpointId,
     now?: string,
   ): Promise<readonly ServiceTrustRecord[]> {
-    return Promise.resolve(
-      [...this.records.values()].filter((record) =>
+    return filterValues(
+      this.records,
+      (record) =>
         record.endpointId === endpointId && record.status === "active" &&
         (now === undefined || record.expiresAt === undefined ||
-          record.expiresAt > now)
-      ),
+          record.expiresAt > now),
     );
   }
 
@@ -140,28 +133,23 @@ export class MemoryServiceGrantStore implements ServiceGrantStore {
   constructor(private readonly grants: Map<ServiceGrantId, ServiceGrant>) {}
 
   put(grant: ServiceGrant): Promise<ServiceGrant> {
-    const value = immutable(grant);
-    this.grants.set(value.id, value);
-    return Promise.resolve(value);
+    return putValue(this.grants, grant.id, grant);
   }
 
   get(id: ServiceGrantId): Promise<ServiceGrant | undefined> {
-    return Promise.resolve(this.grants.get(id));
+    return getFrom(this.grants, id);
   }
 
   listByTrustRecord(
     trustRecordId: ServiceTrustRecordId,
   ): Promise<readonly ServiceGrant[]> {
-    return Promise.resolve(
-      [...this.grants.values()].filter((grant) =>
-        grant.trustRecordId === trustRecordId
-      ),
+    return filterValues(
+      this.grants,
+      (grant) => grant.trustRecordId === trustRecordId,
     );
   }
 
   listBySubject(subject: string): Promise<readonly ServiceGrant[]> {
-    return Promise.resolve(
-      [...this.grants.values()].filter((grant) => grant.subject === subject),
-    );
+    return filterValues(this.grants, (grant) => grant.subject === subject);
   }
 }

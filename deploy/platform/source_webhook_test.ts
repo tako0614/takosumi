@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import {
   driftCheckEnabled,
+  evaluateProductionHardeningGates,
   handleSourceWebhookRequest,
   pollAutoSyncSources,
   type SourcePollOperations,
@@ -139,6 +140,70 @@ test("drift sweep is OFF by default and only enabled by the =1 flag", () => {
   expect(
     driftCheckEnabled({ ...base, TAKOSUMI_DRIFT_CHECK_ENABLED: "1" } as never),
   ).toBe(true);
+});
+
+test("production hardening gates require container smoke and egress evidence", () => {
+  const missing = evaluateProductionHardeningGates({
+    TAKOSUMI_PRODUCTION_HARDENING_GATE: "enforce",
+  } as never);
+  expect(missing.ok).toBe(false);
+  expect(missing.enforced).toBe(true);
+  expect(missing.checks.containerSmoke.reason).toBe("missing_evidence_ref");
+  expect(missing.checks.egressEnforcement.reason).toBe("missing_evidence_ref");
+
+  const invalidDigest = evaluateProductionHardeningGates({
+    TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF:
+      "git+ssh://git@example.com/operator/proofs.git#container.md",
+    TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST: "not-a-digest",
+    TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF:
+      "git+ssh://git@example.com/operator/proofs.git#egress.md",
+    TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST:
+      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  } as never);
+  expect(invalidDigest.ok).toBe(false);
+  expect(invalidDigest.checks.containerSmoke.reason).toBe(
+    "evidence_digest_must_be_sha256",
+  );
+
+  const ok = evaluateProductionHardeningGates({
+    TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF:
+      "git+ssh://git@example.com/operator/proofs.git#container.md",
+    TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST:
+      "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF:
+      "git+ssh://git@example.com/operator/proofs.git#egress.md",
+    TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST:
+      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  } as never);
+  expect(ok.ok).toBe(true);
+});
+
+test("hardening gates route is operator bearer gated and returns 503 when enforced evidence is missing", async () => {
+  const worker = (await import("./worker.ts")).default;
+  const env = {
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret",
+    TAKOSUMI_PRODUCTION_HARDENING_GATE: "enforce",
+  } as never;
+
+  expect(
+    (
+      await worker.fetch(
+        new Request(
+          "https://app.takosumi.com/internal/platform/hardening-gates",
+        ),
+        env,
+      )
+    ).status,
+  ).toBe(401);
+
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.com/internal/platform/hardening-gates", {
+      headers: { authorization: "Bearer operator-secret" },
+    }),
+    env,
+  );
+  expect(response.status).toBe(503);
+  expect((await response.json()).ok).toBe(false);
 });
 
 test("scheduled poll continues past a failing source", async () => {

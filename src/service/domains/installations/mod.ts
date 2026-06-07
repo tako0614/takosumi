@@ -1,11 +1,12 @@
 /**
- * Installations domain service (Core Specification §5 / §11).
+ * Installations domain service (Core Specification §5 / §6 / §16).
  *
- * An Installation is the OpenTofu execution unit directly under a Space
- * (`@space/name`): one Installation = one OpenTofu root/state, configured by a
- * service-side InstallConfig and pinned to one Source. The App / Environment /
- * InstallProfile lanes model is retired; `environment` is a column on the
- * Installation (UNIQUE(space_id, name, environment)).
+ * An Installation is the OpenTofu Capsule execution unit directly under a Space
+ * (`@space/name`): one Installation = one Capsule normalized into a generated
+ * root, one tfstate lineage, outputs, deployments, and activity. It is
+ * configured by a service-side InstallConfig and pinned to one Source. The App /
+ * Environment / InstallProfile lanes model is retired; `environment` is a
+ * column on the Installation (UNIQUE(space_id, name, environment)).
  *
  * This service owns Installation creation + lookup and InstallConfig /
  * DeploymentProfile passthroughs with validation. No secret material flows
@@ -133,7 +134,7 @@ export class InstallationsService {
       installConfigId: request.installConfigId,
       environment: request.environment,
       currentStateGeneration: 0,
-      status: "installing",
+      status: "pending",
       createdAt: nowIso,
       updatedAt: nowIso,
     };
@@ -217,7 +218,9 @@ export class InstallationsService {
     return config;
   }
 
-  async listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]> {
+  async listInstallConfigs(
+    spaceId?: string,
+  ): Promise<readonly InstallConfig[]> {
     return await this.#store.listInstallConfigs(spaceId);
   }
 
@@ -229,7 +232,9 @@ export class InstallationsService {
     requireNonEmptyString(profile.id, "id");
     requireNonEmptyString(profile.installationId, "installationId");
     requireNonEmptyString(profile.environment, "environment");
-    const installation = await this.#requireInstallation(profile.installationId);
+    const installation = await this.#requireInstallation(
+      profile.installationId,
+    );
     if (installation.spaceId !== profile.spaceId) {
       throw new OpenTofuControllerError(
         "invalid_argument",

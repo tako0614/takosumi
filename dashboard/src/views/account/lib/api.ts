@@ -87,14 +87,14 @@ export type {
 
 export type {
   CreateInstallationInput,
-  DeploymentOutput,
+  InstallationOutput,
   ExportInput,
   ExportOperation,
   Installation,
   InstallationEvent,
   InstallationEventsResult,
-  InstallationPlanRunInput,
-  InstallationPlanRunResponse,
+  InstallationPlanInput,
+  InstallationPlanResponse,
   MaterializeInput,
   OidcClientConfig,
   RotateWorkloadServiceTokenResult,

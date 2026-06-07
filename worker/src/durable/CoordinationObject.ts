@@ -47,6 +47,10 @@ export class CoordinationObject {
               typeof body.scope === "string" ? body.scope : undefined,
             ),
           });
+        case "run-due-alarms":
+          return Response.json({
+            result: await this.runDueAlarms(Date.now()),
+          });
         default:
           return Response.json({ error: "not found" }, { status: 404 });
       }
@@ -132,6 +136,7 @@ export class CoordinationObject {
       payload: input.payload,
     };
     await this.state.storage.put(alarmKey(input.id), alarm);
+    await this.rescheduleDurableObjectAlarm();
     return alarm;
   }
 
@@ -139,6 +144,7 @@ export class CoordinationObject {
     if (!id) return false;
     const existing = await this.state.storage.get(alarmKey(id));
     await this.state.storage.delete(alarmKey(id));
+    await this.rescheduleDurableObjectAlarm();
     return existing !== undefined;
   }
 
@@ -154,6 +160,71 @@ export class CoordinationObject {
           left.id.localeCompare(right.id),
       );
   }
+
+  async alarm(): Promise<void> {
+    try {
+      await this.runDueAlarms(Date.now());
+    } catch {
+      await this.rescheduleDurableObjectAlarm(Date.now() + 60_000);
+    }
+  }
+
+  async runDueAlarms(nowMs: number): Promise<{
+    readonly fired: readonly string[];
+    readonly nextAlarmAt?: string;
+  }> {
+    const fired: string[] = [];
+    const alarms = await this.state.storage.list<CoordinationAlarm>({
+      prefix: "alarm:",
+    });
+    for (const [key, alarm] of alarms) {
+      if (Date.parse(alarm.fireAt) > nowMs) continue;
+      await this.state.storage.delete(key);
+      fired.push(alarm.id);
+    }
+    await this.deleteExpiredLeases(nowMs);
+    const nextAlarmMs = await this.rescheduleDurableObjectAlarm();
+    return {
+      fired: fired.sort(),
+      ...(nextAlarmMs !== undefined
+        ? { nextAlarmAt: new Date(nextAlarmMs).toISOString() }
+        : {}),
+    };
+  }
+
+  private async deleteExpiredLeases(nowMs: number): Promise<void> {
+    const leases = await this.state.storage.list<CoordinationLease>({
+      prefix: "lease:",
+    });
+    for (const [key, lease] of leases) {
+      if (Date.parse(lease.expiresAt) <= nowMs) {
+        await this.state.storage.delete(key);
+      }
+    }
+  }
+
+  private async rescheduleDurableObjectAlarm(
+    fallbackMs?: number,
+  ): Promise<number | undefined> {
+    if (typeof this.state.storage.setAlarm !== "function") return undefined;
+    const alarms = await this.state.storage.list<CoordinationAlarm>({
+      prefix: "alarm:",
+    });
+    let nextAlarmMs = fallbackMs;
+    for (const alarm of alarms.values()) {
+      const fireAtMs = Date.parse(alarm.fireAt);
+      if (!Number.isFinite(fireAtMs)) continue;
+      if (nextAlarmMs === undefined || fireAtMs < nextAlarmMs) {
+        nextAlarmMs = fireAtMs;
+      }
+    }
+    if (nextAlarmMs === undefined) {
+      await this.state.storage.deleteAlarm?.();
+      return undefined;
+    }
+    await this.state.storage.setAlarm(nextAlarmMs);
+    return nextAlarmMs;
+  }
 }
 
 interface DurableObjectState {
@@ -167,6 +238,8 @@ interface DurableObjectStorage {
   list<T = unknown>(options?: {
     readonly prefix?: string;
   }): Promise<Map<string, T>>;
+  setAlarm?(scheduledTime: number): Promise<void>;
+  deleteAlarm?(): Promise<void>;
 }
 
 interface CoordinationLease {

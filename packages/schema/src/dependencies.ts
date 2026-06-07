@@ -1,18 +1,18 @@
 /**
- * Dependency DAG contract (Core Specification §14 / §15 / §17 / §27
- * `installation_dependencies` / `dependency_snapshots`).
+ * Dependency DAG contract (`installation_dependencies` /
+ * `dependency_snapshots`).
  *
  * Installations within a Space form a DAG: a Dependency edge connects a
  * producer Installation's outputs to a consumer Installation's inputs.
  * The canonical store is the D1 ledger, not the filesystem.
  *
- * Modes (spec §15):
+ * Modes:
  *   - `variable_injection` (standard): Takosumi reads the producer
  *     OutputSnapshot and generates the consumer's `.auto.tfvars.json`.
  *   - `remote_state`: same-Space only; the producer state is materialized
  *     read-only at `/work/deps/<name>.tfstate` for `terraform_remote_state`.
  *   - `published_output`: cross-Space via an OutputShare, then injected as
- *     variables. (remote_state / published_output are post-MVP.)
+ *     variables.
  */
 
 import type { OutputValueType } from "./installations.ts";
@@ -49,7 +49,7 @@ export interface Dependency {
 }
 
 /**
- * Plan-time pin of one dependency's inputs (spec §17). Apply verifies the
+ * Plan-time pin of one dependency's inputs. Apply verifies the
  * snapshot (invariant 9); `strict` mode additionally fails when the producer
  * state generation moved since plan.
  */

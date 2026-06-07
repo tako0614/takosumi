@@ -10,40 +10,20 @@ import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useParams } from "@solidjs/router";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
+import StatusPill from "../account/components/StatusPill.tsx";
 import {
   approveRunGroup,
   type ControlApiError,
   getRunGroup,
-  type Run,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
-import { controlRunStatusLabel } from "../../lib/status-labels.ts";
+import {
+  controlRunStatusClass,
+  controlRunStatusLabel,
+} from "../../lib/status-labels.ts";
 
 export default function ControlRunGroupView() {
   return <Page title="Space 更新">{() => <Inner />}</Page>;
-}
-
-function RunStatusPill(props: { status: Run["status"] }) {
-  const cls = createMemo(() => {
-    switch (props.status) {
-      case "succeeded":
-        return "status-ready";
-      case "running":
-      case "queued":
-      case "waiting_approval":
-        return "status-installing";
-      case "failed":
-      case "expired":
-        return "status-error";
-      default:
-        return "status-suspended";
-    }
-  });
-  return (
-    <span class={`status-pill ${cls()}`}>
-      {controlRunStatusLabel(props.status)}
-    </span>
-  );
 }
 
 function Inner() {
@@ -140,7 +120,11 @@ function Inner() {
                             <a href={`/runs/${r.id}`}><code>{r.id}</code></a>
                           </td>
                           <td><code>{r.type}</code></td>
-                          <td><RunStatusPill status={r.status} /></td>
+                          <td>
+                            <StatusPill class={controlRunStatusClass(r.status)}>
+                              {controlRunStatusLabel(r.status)}
+                            </StatusPill>
+                          </td>
                           <td>
                             <Show
                               when={r.installationId}

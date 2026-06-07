@@ -1,5 +1,5 @@
 /**
- * CapabilityBinding contract (Core Specification §9).
+ * CapabilityBinding contract.
  *
  * Connections own external credentials at two scopes: `operator` (instance-wide
  * defaults) and `space`. An Installation binds each capability (compute / dns /
@@ -11,7 +11,7 @@
  *   - `disabled`   the capability is not available to this Installation
  *
  * Resolution happens service-side; the vault still decides per-phase what a
- * resolved connection may mint (spec §22 / §32 invariants 3-5).
+ * resolved connection may mint.
  */
 
 export type Capability =
@@ -38,14 +38,14 @@ export interface CapabilityBinding {
   readonly values?: Readonly<Record<string, unknown>>;
 }
 
-/** Per-Installation capability binding map (spec §27 `deployment_profiles`). */
+/** Per-Installation capability binding map (`deployment_profiles`). */
 export type CapabilityBindings = Readonly<
   Partial<Record<Capability, CapabilityBinding>>
 >;
 
 /**
- * Instance-wide operator default connection for one capability (spec §9 /
- * §27 `operator_connection_defaults`).
+ * Instance-wide operator default connection for one capability
+ * (`operator_connection_defaults`).
  */
 export interface OperatorConnectionDefault {
   readonly id: string;

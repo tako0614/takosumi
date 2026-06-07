@@ -3,6 +3,9 @@
 // and `PostgresAccountsStore` delegates to them. Behaviour preserved verbatim.
 
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import { and, asc, eq } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/pg-proxy";
+import { pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type {
   AuthorizationCodeRecord,
   PersonalAccessTokenRecord,
@@ -14,61 +17,207 @@ import {
   hashSecret,
   personalAccessTokenFromRow,
   type PersonalAccessTokenRow,
-  personalAccessTokenSelect,
   type PostgresQueryClient,
-  runFirst,
   runQuery,
-  runRows,
   toDate,
   tokenFromRow,
   type TokenRow,
 } from "./internal.ts";
 
 type OAuthTokenTable = "oauth_access_tokens" | "oauth_refresh_tokens";
+type DrizzleQuery = {
+  toSQL(): { readonly sql: string; readonly params: readonly unknown[] };
+};
+
+const accountsV1 = pgSchema("accounts_v1");
+
+const authorizationCodes = accountsV1.table("authorization_codes", {
+  codeHash: text("code_hash").primaryKey(),
+  clientId: text("client_id").notNull(),
+  redirectUri: text("redirect_uri").notNull(),
+  scope: text("scope").notNull(),
+  subject: text("subject").notNull(),
+  takosumiSubject: text("takosumi_subject"),
+  installationId: text("installation_id"),
+  appId: text("app_id"),
+  spaceId: text("space_id"),
+  role: text("role"),
+  nonce: text("nonce"),
+  codeChallenge: text("code_challenge"),
+  codeChallengeMethod: text("code_challenge_method"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
+const oauthAccessTokens = accountsV1.table("oauth_access_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  clientId: text("client_id").notNull(),
+  scope: text("scope").notNull(),
+  subject: text("subject").notNull(),
+  takosumiSubject: text("takosumi_subject"),
+  installationId: text("installation_id"),
+  appId: text("app_id"),
+  spaceId: text("space_id"),
+  role: text("role"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
+const oauthRefreshTokens = accountsV1.table("oauth_refresh_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  clientId: text("client_id").notNull(),
+  scope: text("scope").notNull(),
+  subject: text("subject").notNull(),
+  takosumiSubject: text("takosumi_subject"),
+  installationId: text("installation_id"),
+  appId: text("app_id"),
+  spaceId: text("space_id"),
+  role: text("role"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
+const personalAccessTokens = accountsV1.table("personal_access_tokens", {
+  tokenId: text("token_id").primaryKey(),
+  tokenHash: text("token_hash").notNull(),
+  tokenPrefix: text("token_prefix").notNull(),
+  subject: text("subject").notNull(),
+  name: text("name").notNull(),
+  scopes: text("scopes").array().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+});
+
+const db = drizzle(async () => ({ rows: [] }), {
+  schema: {
+    authorizationCodes,
+    oauthAccessTokens,
+    oauthRefreshTokens,
+    personalAccessTokens,
+  },
+});
+
+function oauthTokenTable(table: OAuthTokenTable) {
+  return table === "oauth_access_tokens"
+    ? oauthAccessTokens
+    : oauthRefreshTokens;
+}
+
+async function runDrizzle<T = Record<string, unknown>>(
+  client: PostgresQueryClient,
+  query: DrizzleQuery,
+) {
+  const built = query.toSQL();
+  return await runQuery<T>(client, built.sql, built.params);
+}
+
+async function runDrizzleRows<T>(
+  client: PostgresQueryClient,
+  query: DrizzleQuery,
+): Promise<T[]> {
+  return (await runDrizzle<T>(client, query)).rows;
+}
+
+async function runDrizzleFirst<T>(
+  client: PostgresQueryClient,
+  query: DrizzleQuery,
+): Promise<T | undefined> {
+  return (await runDrizzleRows<T>(client, query))[0];
+}
+
+function authorizationCodeSelection() {
+  return {
+    client_id: authorizationCodes.clientId,
+    redirect_uri: authorizationCodes.redirectUri,
+    scope: authorizationCodes.scope,
+    subject: authorizationCodes.subject,
+    takosumi_subject: authorizationCodes.takosumiSubject,
+    installation_id: authorizationCodes.installationId,
+    app_id: authorizationCodes.appId,
+    space_id: authorizationCodes.spaceId,
+    role: authorizationCodes.role,
+    nonce: authorizationCodes.nonce,
+    code_challenge: authorizationCodes.codeChallenge,
+    code_challenge_method: authorizationCodes.codeChallengeMethod,
+    expires_at: authorizationCodes.expiresAt,
+  };
+}
+
+function tokenSelection(table: ReturnType<typeof oauthTokenTable>) {
+  return {
+    client_id: table.clientId,
+    scope: table.scope,
+    subject: table.subject,
+    takosumi_subject: table.takosumiSubject,
+    installation_id: table.installationId,
+    app_id: table.appId,
+    space_id: table.spaceId,
+    role: table.role,
+    expires_at: table.expiresAt,
+  };
+}
+
+function personalAccessTokenSelection() {
+  return {
+    token_id: personalAccessTokens.tokenId,
+    token_prefix: personalAccessTokens.tokenPrefix,
+    subject: personalAccessTokens.subject,
+    name: personalAccessTokens.name,
+    scopes: personalAccessTokens.scopes,
+    created_at: personalAccessTokens.createdAt,
+    expires_at: personalAccessTokens.expiresAt,
+    revoked_at: personalAccessTokens.revokedAt,
+    last_used_at: personalAccessTokens.lastUsedAt,
+  };
+}
 
 export async function saveAuthorizationCode(
   client: PostgresQueryClient,
   code: string,
   record: AuthorizationCodeRecord,
 ): Promise<void> {
-  await runQuery(
+  const values = {
+    codeHash: await hashSecret(code),
+    clientId: record.clientId,
+    redirectUri: record.redirectUri,
+    scope: record.scope,
+    subject: record.subject,
+    takosumiSubject: record.takosumiSubject ?? null,
+    installationId: record.installationId ?? null,
+    appId: record.appId ?? null,
+    spaceId: record.spaceId ?? null,
+    role: record.role ?? null,
+    nonce: record.nonce ?? null,
+    codeChallenge: record.codeChallenge ?? null,
+    codeChallengeMethod: record.codeChallengeMethod ?? null,
+    createdAt: toDate(Date.now()),
+    expiresAt: toDate(record.expiresAt),
+  };
+  await runDrizzle(
     client,
-    `INSERT INTO accounts_v1.authorization_codes (
-        code_hash, client_id, redirect_uri, scope, subject, takosumi_subject,
-        installation_id, app_id, space_id, role, nonce, code_challenge,
-        code_challenge_method, created_at, expires_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-      ON CONFLICT (code_hash) DO UPDATE SET
-        client_id = EXCLUDED.client_id,
-        redirect_uri = EXCLUDED.redirect_uri,
-        scope = EXCLUDED.scope,
-        subject = EXCLUDED.subject,
-       takosumi_subject = EXCLUDED.takosumi_subject,
-        installation_id = EXCLUDED.installation_id,
-        app_id = EXCLUDED.app_id,
-        space_id = EXCLUDED.space_id,
-        role = EXCLUDED.role,
-        nonce = EXCLUDED.nonce,
-        code_challenge = EXCLUDED.code_challenge,
-        code_challenge_method = EXCLUDED.code_challenge_method,
-        expires_at = EXCLUDED.expires_at`,
-    [
-      await hashSecret(code),
-      record.clientId,
-      record.redirectUri,
-      record.scope,
-      record.subject,
-      record.takosumiSubject ?? null,
-      record.installationId ?? null,
-      record.appId ?? null,
-      record.spaceId ?? null,
-      record.role ?? null,
-      record.nonce ?? null,
-      record.codeChallenge ?? null,
-      record.codeChallengeMethod ?? null,
-      toDate(Date.now()),
-      toDate(record.expiresAt),
-    ],
+    db
+      .insert(authorizationCodes)
+      .values(values)
+      .onConflictDoUpdate({
+        target: authorizationCodes.codeHash,
+        set: {
+          clientId: values.clientId,
+          redirectUri: values.redirectUri,
+          scope: values.scope,
+          subject: values.subject,
+          takosumiSubject: values.takosumiSubject,
+          installationId: values.installationId,
+          appId: values.appId,
+          spaceId: values.spaceId,
+          role: values.role,
+          nonce: values.nonce,
+          codeChallenge: values.codeChallenge,
+          codeChallengeMethod: values.codeChallengeMethod,
+          expiresAt: values.expiresAt,
+        },
+      }),
   );
 }
 
@@ -76,14 +225,12 @@ export async function consumeAuthorizationCode(
   client: PostgresQueryClient,
   code: string,
 ): Promise<AuthorizationCodeRecord | undefined> {
-  const row = await runFirst<AuthorizationCodeRow>(
+  const row = await runDrizzleFirst<AuthorizationCodeRow>(
     client,
-    `DELETE FROM accounts_v1.authorization_codes
-       WHERE code_hash = $1
-       RETURNING client_id, redirect_uri, scope, subject, takosumi_subject,
-         installation_id, app_id, space_id, role, nonce, code_challenge,
-         code_challenge_method, expires_at`,
-    [await hashSecret(code)],
+    db
+      .delete(authorizationCodes)
+      .where(eq(authorizationCodes.codeHash, await hashSecret(code)))
+      .returning(authorizationCodeSelection()),
   );
   return row ? authorizationCodeFromRow(row) : undefined;
 }
@@ -94,35 +241,39 @@ export async function saveOAuthToken(
   token: string,
   record: TokenRecord,
 ): Promise<void> {
-  await runQuery(
+  const tokenTable = oauthTokenTable(table);
+  const values = {
+    tokenHash: await hashSecret(token),
+    clientId: record.clientId,
+    scope: record.scope,
+    subject: record.subject,
+    takosumiSubject: record.takosumiSubject ?? null,
+    installationId: record.installationId ?? null,
+    appId: record.appId ?? null,
+    spaceId: record.spaceId ?? null,
+    role: record.role ?? null,
+    createdAt: toDate(Date.now()),
+    expiresAt: toDate(record.expiresAt),
+  };
+  await runDrizzle(
     client,
-    `INSERT INTO accounts_v1.${table} (
-        token_hash, client_id, scope, subject, takosumi_subject, installation_id,
-        app_id, space_id, role, created_at, expires_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      ON CONFLICT (token_hash) DO UPDATE SET
-        client_id = EXCLUDED.client_id,
-        scope = EXCLUDED.scope,
-        subject = EXCLUDED.subject,
-       takosumi_subject = EXCLUDED.takosumi_subject,
-        installation_id = EXCLUDED.installation_id,
-        app_id = EXCLUDED.app_id,
-        space_id = EXCLUDED.space_id,
-        role = EXCLUDED.role,
-        expires_at = EXCLUDED.expires_at`,
-    [
-      await hashSecret(token),
-      record.clientId,
-      record.scope,
-      record.subject,
-      record.takosumiSubject ?? null,
-      record.installationId ?? null,
-      record.appId ?? null,
-      record.spaceId ?? null,
-      record.role ?? null,
-      toDate(Date.now()),
-      toDate(record.expiresAt),
-    ],
+    db
+      .insert(tokenTable)
+      .values(values)
+      .onConflictDoUpdate({
+        target: tokenTable.tokenHash,
+        set: {
+          clientId: values.clientId,
+          scope: values.scope,
+          subject: values.subject,
+          takosumiSubject: values.takosumiSubject,
+          installationId: values.installationId,
+          appId: values.appId,
+          spaceId: values.spaceId,
+          role: values.role,
+          expiresAt: values.expiresAt,
+        },
+      }),
   );
 }
 
@@ -131,13 +282,13 @@ export async function findOAuthToken(
   table: OAuthTokenTable,
   token: string,
 ): Promise<TokenRecord | undefined> {
-  const row = await runFirst<TokenRow>(
+  const tokenTable = oauthTokenTable(table);
+  const row = await runDrizzleFirst<TokenRow>(
     client,
-    `SELECT client_id, scope, subject, takosumi_subject, installation_id,
-         app_id, space_id, role, expires_at
-       FROM accounts_v1.${table}
-       WHERE token_hash = $1`,
-    [await hashSecret(token)],
+    db
+      .select(tokenSelection(tokenTable))
+      .from(tokenTable)
+      .where(eq(tokenTable.tokenHash, await hashSecret(token))),
   );
   return row ? tokenFromRow(row) : undefined;
 }
@@ -147,15 +298,17 @@ export async function deleteOAuthToken(
   token: string,
 ): Promise<void> {
   const tokenHash = await hashSecret(token);
-  await runQuery(
+  await runDrizzle(
     client,
-    `DELETE FROM accounts_v1.oauth_access_tokens WHERE token_hash = $1`,
-    [tokenHash],
+    db
+      .delete(oauthAccessTokens)
+      .where(eq(oauthAccessTokens.tokenHash, tokenHash)),
   );
-  await runQuery(
+  await runDrizzle(
     client,
-    `DELETE FROM accounts_v1.oauth_refresh_tokens WHERE token_hash = $1`,
-    [tokenHash],
+    db
+      .delete(oauthRefreshTokens)
+      .where(eq(oauthRefreshTokens.tokenHash, tokenHash)),
   );
 }
 
@@ -164,33 +317,37 @@ export async function savePersonalAccessToken(
   token: string,
   record: PersonalAccessTokenRecord,
 ): Promise<void> {
-  await runQuery(
-    client,
-    `INSERT INTO accounts_v1.personal_access_tokens (
-        token_id, token_hash, token_prefix, subject, name, scopes, created_at,
-        expires_at, revoked_at, last_used_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      ON CONFLICT (token_id) DO UPDATE SET
-        token_hash = EXCLUDED.token_hash,
-        token_prefix = EXCLUDED.token_prefix,
-        subject = EXCLUDED.subject,
-        name = EXCLUDED.name,
-        scopes = EXCLUDED.scopes,
-        expires_at = EXCLUDED.expires_at,
-        revoked_at = EXCLUDED.revoked_at,
-        last_used_at = EXCLUDED.last_used_at`,
-    [
-      record.tokenId,
-      await hashSecret(token),
-      record.tokenPrefix,
-      record.subject,
-      record.name,
-      [...record.scopes],
-      toDate(record.createdAt),
-      record.expiresAt === undefined ? null : toDate(record.expiresAt),
-      record.revokedAt === undefined ? null : toDate(record.revokedAt),
+  const values = {
+    tokenId: record.tokenId,
+    tokenHash: await hashSecret(token),
+    tokenPrefix: record.tokenPrefix,
+    subject: record.subject,
+    name: record.name,
+    scopes: [...record.scopes],
+    createdAt: toDate(record.createdAt),
+    expiresAt: record.expiresAt === undefined ? null : toDate(record.expiresAt),
+    revokedAt: record.revokedAt === undefined ? null : toDate(record.revokedAt),
+    lastUsedAt:
       record.lastUsedAt === undefined ? null : toDate(record.lastUsedAt),
-    ],
+  };
+  await runDrizzle(
+    client,
+    db
+      .insert(personalAccessTokens)
+      .values(values)
+      .onConflictDoUpdate({
+        target: personalAccessTokens.tokenId,
+        set: {
+          tokenHash: values.tokenHash,
+          tokenPrefix: values.tokenPrefix,
+          subject: values.subject,
+          name: values.name,
+          scopes: values.scopes,
+          expiresAt: values.expiresAt,
+          revokedAt: values.revokedAt,
+          lastUsedAt: values.lastUsedAt,
+        },
+      }),
   );
 }
 
@@ -198,10 +355,12 @@ export async function findPersonalAccessToken(
   client: PostgresQueryClient,
   token: string,
 ): Promise<PersonalAccessTokenRecord | undefined> {
-  const row = await runFirst<PersonalAccessTokenRow>(
+  const row = await runDrizzleFirst<PersonalAccessTokenRow>(
     client,
-    personalAccessTokenSelect("token_hash = $1"),
-    [await hashSecret(token)],
+    db
+      .select(personalAccessTokenSelection())
+      .from(personalAccessTokens)
+      .where(eq(personalAccessTokens.tokenHash, await hashSecret(token))),
   );
   return row ? personalAccessTokenFromRow(row) : undefined;
 }
@@ -210,12 +369,16 @@ export async function listPersonalAccessTokensForSubject(
   client: PostgresQueryClient,
   subject: TakosumiSubject,
 ): Promise<readonly PersonalAccessTokenRecord[]> {
-  const rows = await runRows<PersonalAccessTokenRow>(
+  const rows = await runDrizzleRows<PersonalAccessTokenRow>(
     client,
-    `${
-      personalAccessTokenSelect("subject = $1")
-    } ORDER BY created_at, token_id`,
-    [subject],
+    db
+      .select(personalAccessTokenSelection())
+      .from(personalAccessTokens)
+      .where(eq(personalAccessTokens.subject, subject))
+      .orderBy(
+        asc(personalAccessTokens.createdAt),
+        asc(personalAccessTokens.tokenId),
+      ),
   );
   return rows.map(personalAccessTokenFromRow);
 }
@@ -228,14 +391,18 @@ export async function revokePersonalAccessToken(
     revokedAt: number;
   },
 ): Promise<PersonalAccessTokenRecord | undefined> {
-  const row = await runFirst<PersonalAccessTokenRow>(
+  const row = await runDrizzleFirst<PersonalAccessTokenRow>(
     client,
-    `UPDATE accounts_v1.personal_access_tokens
-       SET revoked_at = $3
-       WHERE subject = $1 AND token_id = $2
-       RETURNING token_id, token_prefix, subject, name, scopes, created_at,
-         expires_at, revoked_at, last_used_at`,
-    [input.subject, input.tokenId, toDate(input.revokedAt)],
+    db
+      .update(personalAccessTokens)
+      .set({ revokedAt: toDate(input.revokedAt) })
+      .where(
+        and(
+          eq(personalAccessTokens.subject, input.subject),
+          eq(personalAccessTokens.tokenId, input.tokenId),
+        ),
+      )
+      .returning(personalAccessTokenSelection()),
   );
   return row ? personalAccessTokenFromRow(row) : undefined;
 }
@@ -245,11 +412,11 @@ export async function recordPersonalAccessTokenUsed(
   tokenId: string,
   lastUsedAt: number,
 ): Promise<void> {
-  await runQuery(
+  await runDrizzle(
     client,
-    `UPDATE accounts_v1.personal_access_tokens
-       SET last_used_at = $2
-       WHERE token_id = $1`,
-    [tokenId, toDate(lastUsedAt)],
+    db
+      .update(personalAccessTokens)
+      .set({ lastUsedAt: toDate(lastUsedAt) })
+      .where(eq(personalAccessTokens.tokenId, tokenId)),
   );
 }

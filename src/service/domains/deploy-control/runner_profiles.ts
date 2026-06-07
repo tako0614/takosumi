@@ -7,6 +7,7 @@
  */
 
 import type { RunnerProfile } from "takosumi-contract/deploy-control-api";
+import { log } from "../../shared/log.ts";
 
 /**
  * Resolve the operator-curated set of enabled runner profiles from a CSV env
@@ -43,11 +44,10 @@ export function resolveEnabledRunnerProfiles(
     enabled.push(withProfileEnabledLabel(profile));
   }
   if (unknownIds.length > 0) {
-    console.warn(
-      `[takosumi-service] WARNING: TAKOSUMI_ENABLED_RUNNER_PROFILES lists ` +
-        `unknown runner profile id(s) ${unknownIds.join(", ")}; skipping. ` +
-        `Known ids: ${Array.from(byId.keys()).join(", ")}.`,
-    );
+    log.warn("service.runner_profiles.unknown_enabled_ids", {
+      unknownIds,
+      knownIds: Array.from(byId.keys()),
+    });
   }
   return enabled;
 }

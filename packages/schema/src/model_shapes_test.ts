@@ -1,20 +1,31 @@
 /**
- * Type-shape pins for the Space-direct Installation DAG contract
- * (core-spec.md §4-§21, §27). These tests freeze the canonical field sets so
+ * Type-shape pins for the Space-direct OpenTofu Capsule DAG contract. These
+ * tests freeze the canonical field sets so
  * accidental contract drift fails loudly, mirroring the existing contract
  * test idiom.
  */
 import { expect, test } from "bun:test";
 
-import type { CapabilityBinding, OperatorConnectionDefault } from "./capability-bindings.ts";
+import type {
+  CapabilityBinding,
+  OperatorConnectionDefault,
+} from "./capability-bindings.ts";
+import type {
+  BillingAccount,
+  BillingSettings,
+  CreditReservation,
+  UsageEvent,
+} from "./billing.ts";
+import type { CapsuleCompatibilityReport } from "./capsules.ts";
 import type { Dependency, DependencySnapshot } from "./dependencies.ts";
 import type { Deployment, StateSnapshot } from "./deployments.ts";
 import type { InstallConfig, Installation } from "./installations.ts";
 import type { OutputShare, OutputSnapshot } from "./output-snapshots.ts";
 import type { Run, RunGroup } from "./runs.ts";
+import type { CredentialMintEvent, SecurityFinding } from "./security.ts";
 import { formatInstallationFullName, type Space } from "./spaces.ts";
 
-test("Space shape (§4/§27 spaces)", () => {
+test("Space shape", () => {
   const space: Space = {
     id: "space_1",
     handle: "shota",
@@ -24,18 +35,26 @@ test("Space shape (§4/§27 spaces)", () => {
     createdAt: "2026-06-06T00:00:00Z",
     updatedAt: "2026-06-06T00:00:00Z",
   };
-  expect(formatInstallationFullName({
-    spaceHandle: space.handle,
-    installationName: "talk",
-  })).toBe("@shota/talk");
+  expect(
+    formatInstallationFullName({
+      spaceHandle: space.handle,
+      installationName: "talk",
+    }),
+  ).toBe("@shota/talk");
 });
 
-test("Installation + InstallConfig shape (§5/§11)", () => {
+test("Installation + InstallConfig shape", () => {
   const config: InstallConfig = {
     id: "cfg_talk",
     name: "talk",
     installType: "opentofu_module",
     trustLevel: "official",
+    capsulePath: "deploy",
+    normalization: {
+      allowBackendRewrite: true,
+      allowProviderLift: true,
+      allowAliasInjection: true,
+    },
     modulePath: "deploy",
     variableMapping: {},
     outputAllowlist: {
@@ -59,7 +78,8 @@ test("Installation + InstallConfig shape (§5/§11)", () => {
     installConfigId: config.id,
     environment: "production",
     currentStateGeneration: 0,
-    status: "installing",
+    compatibilityReportId: "caprep_1",
+    status: "pending",
     createdAt: "2026-06-06T00:00:00Z",
     updatedAt: "2026-06-06T00:00:00Z",
   };
@@ -67,7 +87,39 @@ test("Installation + InstallConfig shape (§5/§11)", () => {
   expect(config.outputAllowlist.public_url?.type).toBe("url");
 });
 
-test("CapabilityBinding modes (§9)", () => {
+test("Capsule compatibility report shape", () => {
+  const report: CapsuleCompatibilityReport = {
+    id: "caprep_1",
+    sourceSnapshotId: "snap_1",
+    level: "auto_capsulized",
+    findings: [
+      {
+        severity: "warning",
+        code: "backend_overridden",
+        message: "backend block will be overridden by Takosumi managed state",
+        path: "main.tf",
+        suggestion: "Remove the backend block and let Takosumi manage state.",
+      },
+    ],
+    providers: [
+      {
+        source: "registry.opentofu.org/hashicorp/aws",
+        aliases: ["storage"],
+        allowed: true,
+      },
+    ],
+    resources: [{ type: "aws_s3_bucket", count: 1, allowed: true }],
+    dataSources: [],
+    provisioners: [],
+    normalizedObjectKey:
+      "spaces/space_1/installations/inst_talk/runs/run_1/normalized-module.tar.zst",
+    normalizedDigest: "sha256:normalized",
+    createdAt: "2026-06-07T00:00:00Z",
+  };
+  expect(report.level).toBe("auto_capsulized");
+});
+
+test("CapabilityBinding modes", () => {
   const bindings: readonly CapabilityBinding[] = [
     { mode: "default" },
     { mode: "connection", connectionId: "conn_space_dns" },
@@ -86,7 +138,7 @@ test("CapabilityBinding modes (§9)", () => {
   expect(operatorDefault.capability).toBe("compute");
 });
 
-test("Dependency + DependencySnapshot shape (§14/§17 canonical example)", () => {
+test("Dependency + DependencySnapshot shape", () => {
   const dependency: Dependency = {
     id: "dep_1",
     spaceId: "space_1",
@@ -131,7 +183,7 @@ test("Dependency + DependencySnapshot shape (§14/§17 canonical example)", () =
   expect(snapshot.dependencies[0]?.producerStateGeneration).toBe(3);
 });
 
-test("OutputSnapshot projects raw -> space/public lanes (§16)", () => {
+test("OutputSnapshot projects raw -> space/public lanes", () => {
   const snapshot: OutputSnapshot = {
     id: "out_1",
     spaceId: "space_1",
@@ -147,7 +199,7 @@ test("OutputSnapshot projects raw -> space/public lanes (§16)", () => {
   expect(snapshot.rawOutputArtifactKey.endsWith(".enc")).toBe(true);
 });
 
-test("OutputShare lifecycle states (§18)", () => {
+test("OutputShare lifecycle states", () => {
   const share: OutputShare = {
     id: "share_1",
     fromSpaceId: "space_company",
@@ -160,7 +212,7 @@ test("OutputShare lifecycle states (§18)", () => {
   expect(share.status).toBe("pending");
 });
 
-test("single Run table covers all run kinds (§19)", () => {
+test("single Run table covers all run kinds", () => {
   const run: Run = {
     id: "run_1",
     spaceId: "space_1",
@@ -188,7 +240,23 @@ test("single Run table covers all run kinds (§19)", () => {
   expect(group.type).toBe("space_update");
 });
 
-test("Deployment + StateSnapshot shape (§20/§21)", () => {
+test("compatibility_check Run kind is part of the unified ledger", () => {
+  const run: Run = {
+    id: "run_compat",
+    spaceId: "space_1",
+    installationId: "inst_talk",
+    environment: "production",
+    type: "compatibility_check",
+    status: "succeeded",
+    sourceSnapshotId: "snap_1",
+    compatibilityReportId: "caprep_1",
+    createdBy: "user_1",
+    createdAt: "2026-06-07T00:00:00Z",
+  };
+  expect(run.type).toBe("compatibility_check");
+});
+
+test("Deployment + StateSnapshot shape", () => {
   const deployment: Deployment = {
     id: "dpl_1",
     spaceId: "space_1",
@@ -216,4 +284,69 @@ test("Deployment + StateSnapshot shape (§20/§21)", () => {
     createdAt: "2026-06-06T00:00:00Z",
   };
   expect(deployment.stateGeneration).toBe(state.generation);
+});
+
+test("Billing and security ledger shapes", () => {
+  const billing: BillingAccount = {
+    id: "ba_1",
+    ownerType: "space",
+    ownerId: "space_1",
+    provider: "stripe",
+    status: "active",
+    createdAt: "2026-06-07T00:00:00Z",
+    updatedAt: "2026-06-07T00:00:00Z",
+  };
+  const settings: BillingSettings = {
+    mode: "showback",
+    provider: "none",
+  };
+  const reservation: CreditReservation = {
+    id: "cr_1",
+    spaceId: "space_1",
+    runId: "run_1",
+    estimatedCredits: 32,
+    status: "reserved",
+    mode: "enforce",
+    createdAt: "2026-06-07T00:00:00Z",
+    expiresAt: "2026-06-07T01:00:00Z",
+  };
+  const usage: UsageEvent = {
+    id: "usage_1",
+    spaceId: "space_1",
+    installationId: "inst_talk",
+    runId: "run_1",
+    kind: "runner_minute",
+    quantity: 3,
+    credits: 3,
+    source: "runner",
+    idempotencyKey: "run_1:runner",
+    createdAt: "2026-06-07T00:00:00Z",
+  };
+  const mint: CredentialMintEvent = {
+    id: "mint_1",
+    runId: "run_1",
+    spaceId: "space_1",
+    installationId: "inst_talk",
+    connectionId: "conn_1",
+    phase: "plan",
+    capabilities: ["compute"],
+    createdAt: "2026-06-07T00:00:00Z",
+  };
+  const finding: SecurityFinding = {
+    id: "sec_1",
+    spaceId: "space_1",
+    installationId: "inst_talk",
+    runId: "run_1",
+    severity: "warning",
+    type: "capsule_gate",
+    message: "backend block was overridden",
+    metadata: { code: "backend_overridden" },
+    createdAt: "2026-06-07T00:00:00Z",
+  };
+  expect(billing.provider).toBe("stripe");
+  expect(settings.mode).toBe("showback");
+  expect(reservation.estimatedCredits).toBe(32);
+  expect(usage.kind).toBe("runner_minute");
+  expect(mint.capabilities).toEqual(["compute"]);
+  expect(finding.severity).toBe("warning");
 });

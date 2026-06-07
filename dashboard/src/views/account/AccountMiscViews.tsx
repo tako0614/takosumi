@@ -1,20 +1,10 @@
-import {
-  createEffect,
-  createSignal,
-  type JSX,
-  onMount,
-  Show,
-} from "solid-js";
+import { createEffect, createSignal, type JSX, onMount, Show } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 import AppShell from "./components/shell/AppShell.tsx";
 import Page from "./components/auth/Page.tsx";
 import InkdropMark from "./components/brand/InkdropMark.tsx";
 import { Icons } from "../../lib/Icons.tsx";
-import {
-  ApiError,
-  type InstallationPlanRunResponse,
-  rpc,
-} from "./lib/api.ts";
+import { ApiError, type InstallationPlanResponse, rpc } from "./lib/api.ts";
 import {
   readSession,
   refreshSession,
@@ -63,9 +53,9 @@ type Mode = "shared-cell" | "dedicated" | "self-hosted";
  * in-dashboard `/apps/install` route. Pre-fills from URL query
  * (?git=...&ref=...&mode=...&space=...&account=...&autoplan=1) so product
  * landing pages can deep-link straight into install with the source already
- * filled in, and `autoplan=1` runs the PlanRun on mount.
+ * filled in, and `autoplan=1` creates a plan run on mount.
  *
- * API: POST /v1/installations/plan-runs (PlanRun), POST /v1/installations.
+ * API: POST /v1/installations/plan-runs, POST /v1/installations.
  */
 export function InstallWizard() {
   const nav = useNavigate();
@@ -94,55 +84,56 @@ export function InstallWizard() {
     params.space ?? storedValue("tg_apps_space_id") ?? generatedId("space"),
   );
   const [accountId, setAccountId] = createSignal(
-    params.account ?? storedValue("tg_apps_account_id") ??
-      readSession()?.primaryAccountId ?? generatedId("acct"),
+    params.account ??
+      storedValue("tg_apps_account_id") ??
+      readSession()?.primaryAccountId ??
+      generatedId("acct"),
   );
 
-  const [planRun, setPlanRun] = createSignal<
-    InstallationPlanRunResponse | null
-  >(null);
-  const [planRunning, setPlanRunning] = createSignal(false);
+  const [planPreview, setPlanPreview] =
+    createSignal<InstallationPlanResponse | null>(null);
+  const [planChecking, setPlanChecking] = createSignal(false);
   const [installing, setInstalling] = createSignal(false);
   const [err, setErr] = createSignal<string | null>(null);
   const [autoPlanFired, setAutoPlanFired] = createSignal(false);
 
-  const runPlanRun = async (e?: Event) => {
+  const runPlanPreview = async (e?: Event) => {
     e?.preventDefault();
     setErr(null);
-    setPlanRun(null);
-    setPlanRunning(true);
+    setPlanPreview(null);
+    setPlanChecking(true);
     try {
       const result = await rpc.installations.plan({
         gitUrl: gitUrl(),
         ref: ref(),
         spaceId: spaceId(),
       });
-      setPlanRun(result);
+      setPlanPreview(result);
     } catch (e) {
       setErr((e as ApiError).message);
     } finally {
-      setPlanRunning(false);
+      setPlanChecking(false);
     }
   };
 
-  // ?autoplan=1 with a git URL runs PlanRun once on mount.
+  // ?autoplan=1 with a git URL creates a plan run once on mount.
   createEffect(() => {
     if (
       params.autoplan === "1" &&
       gitUrl() &&
       spaceId() &&
       !autoPlanFired() &&
-      !planRunning() &&
-      !planRun()
+      !planChecking() &&
+      !planPreview()
     ) {
       setAutoPlanFired(true);
-      void runPlanRun();
+      void runPlanPreview();
     }
   });
 
   const runInstall = async () => {
     setErr(null);
-    const p = planRun();
+    const p = planPreview();
     if (!p) {
       setErr("先に「変更を確認」を実行してください。");
       return;
@@ -201,7 +192,7 @@ export function InstallWizard() {
 
       <section class="detail-section">
         <h2>Source</h2>
-        <form class="install-form" onSubmit={runPlanRun}>
+        <form class="install-form" onSubmit={runPlanPreview}>
           <label>
             Git URL
             <input
@@ -225,16 +216,15 @@ export function InstallWizard() {
           <button
             class="btn btn-secondary"
             type="submit"
-            disabled={planRunning() || !gitUrl() || !spaceId()}
+            disabled={planChecking() || !gitUrl() || !spaceId()}
           >
-            <Icons.GitBranch class="w-4 h-4" /> {planRunning()
-              ? "変更を確認中..."
-              : "変更を確認"}
+            <Icons.GitBranch class="w-4 h-4" />{" "}
+            {planChecking() ? "変更を確認中..." : "変更を確認"}
           </button>
         </form>
       </section>
 
-      <Show when={planRun()}>
+      <Show when={planPreview()}>
         {(p) => (
           <section class="detail-section">
             <h2>変更内容の確認</h2>
@@ -250,8 +240,10 @@ export function InstallWizard() {
               <dt>Commit</dt>
               <dd>
                 <code>
-                  {pickString(p(), ["source.commit", "expected.sourceCommit"]) ??
-                    "—"}
+                  {pickString(p(), [
+                    "source.commit",
+                    "expected.sourceCommit",
+                  ]) ?? "—"}
                 </code>
               </dd>
               <dt>Plan digest</dt>
@@ -309,11 +301,11 @@ export function InstallWizard() {
           class="btn btn-primary"
           type="button"
           onClick={runInstall}
-          disabled={installing() || !planRun() || !accountId() || !spaceId()}
+          disabled={
+            installing() || !planPreview() || !accountId() || !spaceId()
+          }
         >
-          <Icons.Server class="w-4 h-4" /> {installing()
-            ? "公開中..."
-            : "公開"}
+          <Icons.Server class="w-4 h-4" /> {installing() ? "公開中..." : "公開"}
         </button>
         <a href="/apps" class="btn btn-secondary" style="margin-left: 8px;">
           キャンセル
@@ -329,7 +321,7 @@ export function InstallWizard() {
 /**
  * Canonical install-by-URL entry. The official, advertised way to install any
  * OpenTofu-module repo: open `/install?git=<repo>&ref=<ref>&mode=<mode>&autoplan=1`
- * and the wizard pre-fills + runs the PlanRun.
+ * and the wizard pre-fills + creates the plan run.
  */
 export function InstallByUrlView() {
   return <Page title="アプリを追加">{() => <InstallWizard />}</Page>;
@@ -538,15 +530,18 @@ export function SignInCallbackView() {
     // Upstream providers don't pass `provider` back in the URL — recall it
     // from sessionStorage (stashed by startUpstreamOAuth) and fall back to the
     // URL only if the SPA initiated the flow via a deep link.
-    const provider = (params.provider as "google" | "github" | undefined) ??
-      rpc.auth.recallOAuthProvider() ?? undefined;
+    const provider =
+      (params.provider as "google" | "github" | undefined) ??
+      rpc.auth.recallOAuthProvider() ??
+      undefined;
     if (typeof code !== "string" || typeof state !== "string" || !provider) {
       setError(
         "OAuth response が不完全です (code / state / provider のいずれかが欠落)。 再度 sign-in を試してください。",
       );
       return;
     }
-    rpc.auth.completeUpstreamOAuth(code, state, provider)
+    rpc.auth
+      .completeUpstreamOAuth(code, state, provider)
       .then(async ({ returnTo }: { returnTo: string }) => {
         // Populate the session cache from the just-set HttpOnly cookie BEFORE
         // we navigate; otherwise the next route's AuthGuard runs before the
@@ -564,7 +559,9 @@ export function SignInCallbackView() {
         fallback={
           <div class="sign-in-panel">
             <h1 class="sign-in-title">サインインに失敗しました</h1>
-            <p class="sign-in-error" role="alert">{error()}</p>
+            <p class="sign-in-error" role="alert">
+              {error()}
+            </p>
             <a
               href="/sign-in"
               class="btn btn-secondary"
@@ -611,18 +608,20 @@ interface UseTakosStartUrlInput {
  */
 function tryDefaultTakosUrlForHost(hostname: string): string | undefined {
   if (isLocalHost(hostname)) return "https://takos.test";
-  const configured =
-    (import.meta.env.VITE_TAKOSUMI_DASHBOARD_TAKOS_URL as string | undefined)
-      ?.trim();
+  const configured = (
+    import.meta.env.VITE_TAKOSUMI_DASHBOARD_TAKOS_URL as string | undefined
+  )?.trim();
   if (configured) return configured;
   return undefined;
 }
 
 function isLocalHost(hostname: string): boolean {
-  return hostname.endsWith(".test") ||
+  return (
+    hostname.endsWith(".test") ||
     hostname === "localhost" ||
     hostname === "127.0.0.1" ||
-    hostname === "::1";
+    hostname === "::1"
+  );
 }
 
 function safeReturnTo(value: string | undefined, spaceId: string): string {
@@ -647,7 +646,10 @@ function buildUseTakosStartUrl(input: UseTakosStartUrlInput): string {
     input.termsVersion ?? DEFAULT_USE_TAKOS_TERMS_VERSION,
   );
   url.searchParams.set("terms_accepted", "true");
-  url.searchParams.set("return_to", safeReturnTo(input.returnTo, input.spaceId));
+  url.searchParams.set(
+    "return_to",
+    safeReturnTo(input.returnTo, input.spaceId),
+  );
   return url.toString();
 }
 
@@ -659,7 +661,9 @@ export function TakosStartView() {
   useDocumentTitle("Start Takos");
   return (
     <Page>
-      {(session: SessionRecord) => <TakosStartInner subject={session.subject} />}
+      {(session: SessionRecord) => (
+        <TakosStartInner subject={session.subject} />
+      )}
     </Page>
   );
 }
@@ -682,24 +686,34 @@ function TakosStartInner(props: { subject: string }) {
     returnTo?: string;
   }>();
   const host = typeof location === "undefined" ? "" : location.hostname;
-  const origin = typeof location === "undefined"
-    ? "https://accounts.takosumi.com"
-    : location.origin;
-  const storage = typeof localStorage === "undefined" ? undefined : localStorage;
+  const origin =
+    typeof location === "undefined"
+      ? "https://app.takosumi.com"
+      : location.origin;
+  const storage =
+    typeof localStorage === "undefined" ? undefined : localStorage;
 
   const [takosUrl, setTakosUrl] = createSignal(
-    params.takos_url ?? params.takosUrl ?? tryDefaultTakosUrlForHost(host) ?? "",
+    params.takos_url ??
+      params.takosUrl ??
+      tryDefaultTakosUrlForHost(host) ??
+      "",
   );
   const [accountId, setAccountId] = createSignal(
-    params.account_id ?? params.accountId ??
-      storage?.getItem("tg_apps_account_id") ?? "",
+    params.account_id ??
+      params.accountId ??
+      storage?.getItem("tg_apps_account_id") ??
+      "",
   );
   const [spaceId, setSpaceId] = createSignal(
-    params.space_id ?? params.spaceId ??
-      storage?.getItem("tg_apps_space_id") ?? "",
+    params.space_id ??
+      params.spaceId ??
+      storage?.getItem("tg_apps_space_id") ??
+      "",
   );
   const [termsVersion, setTermsVersion] = createSignal(
-    params.terms_version ?? params.termsVersion ??
+    params.terms_version ??
+      params.termsVersion ??
       DEFAULT_USE_TAKOS_TERMS_VERSION,
   );
   const [termsAccepted, setTermsAccepted] = createSignal(false);
@@ -718,17 +732,19 @@ function TakosStartInner(props: { subject: string }) {
     }
     storage?.setItem("tg_apps_account_id", accountId());
     storage?.setItem("tg_apps_space_id", spaceId());
-    location.assign(buildUseTakosStartUrl({
-      origin,
-      takosUrl: takosUrl(),
-      subject: props.subject,
-      accountId: accountId(),
-      spaceId: spaceId(),
-      installationId: params.installation_id ?? params.installationId,
-      appId: params.app_id ?? params.appId,
-      termsVersion: termsVersion(),
-      returnTo: params.return_to ?? params.returnTo,
-    }));
+    location.assign(
+      buildUseTakosStartUrl({
+        origin,
+        takosUrl: takosUrl(),
+        subject: props.subject,
+        accountId: accountId(),
+        spaceId: spaceId(),
+        installationId: params.installation_id ?? params.installationId,
+        appId: params.app_id ?? params.appId,
+        termsVersion: termsVersion(),
+        returnTo: params.return_to ?? params.returnTo,
+      }),
+    );
   };
 
   return (
@@ -802,13 +818,18 @@ function TakosStartInner(props: { subject: string }) {
             <span>Takosumi の利用規約に同意します。</span>
           </label>
           <Show when={err()}>
-            {(m) => <p class="sign-in-error" role="alert">{m()}</p>}
+            {(m) => (
+              <p class="sign-in-error" role="alert">
+                {m()}
+              </p>
+            )}
           </Show>
           <button
             class="btn btn-primary"
             type="submit"
-            disabled={!accountId() || !spaceId() || !takosUrl() ||
-              !termsAccepted()}
+            disabled={
+              !accountId() || !spaceId() || !takosUrl() || !termsAccepted()
+            }
           >
             <Icons.Play class="w-4 h-4" /> Launch Takos
           </button>
@@ -851,8 +872,18 @@ export function HomeView() {
 }
 
 function SignedInAs(props: { name?: string; sub: string; email?: string }) {
-  if (props.name) return <>Signed in as {props.name} ({props.sub})</>;
-  if (props.email) return <>Signed in as {props.email} ({props.sub})</>;
+  if (props.name)
+    return (
+      <>
+        Signed in as {props.name} ({props.sub})
+      </>
+    );
+  if (props.email)
+    return (
+      <>
+        Signed in as {props.email} ({props.sub})
+      </>
+    );
   return <>Signed in as {props.sub}</>;
 }
 
@@ -931,7 +962,11 @@ function pickString(
 function lookupPath(obj: Record<string, unknown>, path: string): unknown {
   let cur: unknown = obj;
   for (const k of path.split(".")) {
-    if (cur && typeof cur === "object" && k in (cur as Record<string, unknown>)) {
+    if (
+      cur &&
+      typeof cur === "object" &&
+      k in (cur as Record<string, unknown>)
+    ) {
       cur = (cur as Record<string, unknown>)[k];
     } else {
       return undefined;

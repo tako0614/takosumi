@@ -21,7 +21,7 @@ import type {
   ResourceInstance,
   ResourceInstanceId,
 } from "../../../domains/resources/types.ts";
-import { immutable } from "./helpers.ts";
+import { createIfAbsent, filterValues, getFrom, putValue } from "./helpers.ts";
 
 export class MemoryResourceInstanceStore implements ResourceInstanceStore {
   constructor(
@@ -29,37 +29,29 @@ export class MemoryResourceInstanceStore implements ResourceInstanceStore {
   ) {}
 
   create(instance: ResourceInstance): Promise<ResourceInstance> {
-    const existing = this.instances.get(instance.id);
-    if (existing) return Promise.resolve(existing);
-    const value = immutable(instance);
-    this.instances.set(instance.id, value);
-    return Promise.resolve(value);
+    return createIfAbsent(this.instances, instance.id, instance);
   }
 
   get(id: ResourceInstanceId): Promise<ResourceInstance | undefined> {
-    return Promise.resolve(this.instances.get(id));
+    return getFrom(this.instances, id);
   }
 
   listBySpace(spaceId: string): Promise<readonly ResourceInstance[]> {
-    return Promise.resolve(
-      [...this.instances.values()].filter((instance) =>
-        instance.spaceId === spaceId
-      ),
+    return filterValues(
+      this.instances,
+      (instance) => instance.spaceId === spaceId,
     );
   }
 
   listByGroup(groupId: GroupId): Promise<readonly ResourceInstance[]> {
-    return Promise.resolve(
-      [...this.instances.values()].filter((instance) =>
-        instance.groupId === groupId
-      ),
+    return filterValues(
+      this.instances,
+      (instance) => instance.groupId === groupId,
     );
   }
 
   update(instance: ResourceInstance): Promise<ResourceInstance> {
-    const value = immutable(instance);
-    this.instances.set(instance.id, value);
-    return Promise.resolve(value);
+    return putValue(this.instances, instance.id, instance);
   }
 }
 
@@ -69,15 +61,11 @@ export class MemoryResourceBindingStore implements ResourceBindingStore {
   ) {}
 
   create(binding: ResourceBinding): Promise<ResourceBinding> {
-    const existing = this.bindings.get(binding.id);
-    if (existing) return Promise.resolve(existing);
-    const value = immutable(binding);
-    this.bindings.set(binding.id, value);
-    return Promise.resolve(value);
+    return createIfAbsent(this.bindings, binding.id, binding);
   }
 
   get(id: ResourceBindingId): Promise<ResourceBinding | undefined> {
-    return Promise.resolve(this.bindings.get(id));
+    return getFrom(this.bindings, id);
   }
 
   findByClaim(
@@ -95,20 +83,15 @@ export class MemoryResourceBindingStore implements ResourceBindingStore {
   }
 
   listByGroup(groupId: GroupId): Promise<readonly ResourceBinding[]> {
-    return Promise.resolve(
-      [...this.bindings.values()].filter((binding) =>
-        binding.groupId === groupId
-      ),
-    );
+    return filterValues(this.bindings, (binding) => binding.groupId === groupId);
   }
 
   listByInstance(
     instanceId: ResourceInstanceId,
   ): Promise<readonly ResourceBinding[]> {
-    return Promise.resolve(
-      [...this.bindings.values()].filter((binding) =>
-        binding.instanceId === instanceId
-      ),
+    return filterValues(
+      this.bindings,
+      (binding) => binding.instanceId === instanceId,
     );
   }
 }
@@ -119,22 +102,17 @@ export class MemoryBindingSetRevisionStore implements BindingSetRevisionStore {
   ) {}
 
   create(revision: BindingSetRevision): Promise<BindingSetRevision> {
-    const existing = this.revisions.get(revision.id);
-    if (existing) return Promise.resolve(existing);
-    const value = immutable(revision);
-    this.revisions.set(revision.id, value);
-    return Promise.resolve(value);
+    return createIfAbsent(this.revisions, revision.id, revision);
   }
 
   get(id: BindingSetRevisionId): Promise<BindingSetRevision | undefined> {
-    return Promise.resolve(this.revisions.get(id));
+    return getFrom(this.revisions, id);
   }
 
   listByGroup(groupId: GroupId): Promise<readonly BindingSetRevision[]> {
-    return Promise.resolve(
-      [...this.revisions.values()].filter((revision) =>
-        revision.groupId === groupId
-      ),
+    return filterValues(
+      this.revisions,
+      (revision) => revision.groupId === groupId,
     );
   }
 }
@@ -145,24 +123,19 @@ export class MemoryMigrationLedgerStore implements MigrationLedgerStore {
   ) {}
 
   append(entry: MigrationLedgerEntry): Promise<MigrationLedgerEntry> {
-    const existing = this.entries.get(entry.id);
-    if (existing) return Promise.resolve(existing);
-    const value = immutable(entry);
-    this.entries.set(entry.id, value);
-    return Promise.resolve(value);
+    return createIfAbsent(this.entries, entry.id, entry);
   }
 
   get(id: MigrationLedgerId): Promise<MigrationLedgerEntry | undefined> {
-    return Promise.resolve(this.entries.get(id));
+    return getFrom(this.entries, id);
   }
 
   listByResource(
     instanceId: ResourceInstanceId,
   ): Promise<readonly MigrationLedgerEntry[]> {
-    return Promise.resolve(
-      [...this.entries.values()].filter((entry) =>
-        entry.resourceInstanceId === instanceId
-      ),
+    return filterValues(
+      this.entries,
+      (entry) => entry.resourceInstanceId === instanceId,
     );
   }
 }

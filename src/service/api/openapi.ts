@@ -146,7 +146,7 @@ function filterMountedRouteFamilies(
       .map(([path, item]) => {
         const filtered = Object.fromEntries(
           Object.entries(item).filter(([, operation]) =>
-            operation.tags.some((tag) => mountedTags.has(tag))
+            operation.tags.some((tag) => mountedTags.has(tag)),
           ),
         ) as OpenApiPathItem;
         return [path, filtered] as const;
@@ -255,7 +255,7 @@ function operation(input: {
     | "internal-service"
     | "metrics-scrape";
   readonly okSchema: string;
-  readonly okStatus?: "200" | "201" | "204";
+  readonly okStatus?: "200" | "201" | "202" | "204";
   readonly requestSchema?: string;
   readonly requestBody?: Record<string, unknown>;
   readonly query?: readonly string[];
@@ -273,12 +273,13 @@ function operation(input: {
     ...(input.requestBody
       ? { requestBody: input.requestBody }
       : input.requestSchema
-      ? { requestBody: jsonRequestBody(input.requestSchema) }
-      : {}),
+        ? { requestBody: jsonRequestBody(input.requestSchema) }
+        : {}),
     responses: {
-      [input.okStatus ?? "200"]: input.okStatus === "204"
-        ? { description: "No content" }
-        : jsonResponse(input.okSchema),
+      [input.okStatus ?? "200"]:
+        input.okStatus === "204"
+          ? { description: "No content" }
+          : jsonResponse(input.okSchema),
       ...(input.auth === "none" ? {} : { "401": errorResponse() }),
       ...(input.auth === "internal-service" ? { "403": errorResponse() } : {}),
       ...(input.requestSchema || input.requestBody
@@ -286,13 +287,13 @@ function operation(input: {
         : {}),
       ...(input.tag === "deployControl-public"
         ? {
-          "403": errorResponse(),
-          "404": errorResponse(),
-          "409": errorResponse(),
-          "413": errorResponse(),
-          "500": errorResponse(),
-          "501": errorResponse(),
-        }
+            "403": errorResponse(),
+            "404": errorResponse(),
+            "409": errorResponse(),
+            "413": errorResponse(),
+            "500": errorResponse(),
+            "501": errorResponse(),
+          }
         : {}),
     },
     "x-takos-auth": input.auth,
@@ -375,7 +376,7 @@ function errorResponse(): Record<string, unknown> {
 }
 
 function ref(schemaName: string): Record<string, string> {
-  return { "$ref": `#/components/schemas/${schemaName}` };
+  return { $ref: `#/components/schemas/${schemaName}` };
 }
 
 function filterReferencedSchemas(
@@ -397,12 +398,10 @@ function filterReferencedSchemas(
     }
   }
   return Object.fromEntries(
-    [...referenced]
-      .sort()
-      .flatMap((schemaName) => {
-        const schema = schemas[schemaName];
-        return schema ? [[schemaName, schema] as const] : [];
-      }),
+    [...referenced].sort().flatMap((schemaName) => {
+      const schema = schemas[schemaName];
+      return schema ? [[schemaName, schema] as const] : [];
+    }),
   );
 }
 
@@ -434,7 +433,7 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     properties: {
       type: { type: "string" },
       status: { enum: ["true", "false", "unknown"] },
-      reason: { "$ref": "#/components/schemas/CoreConditionReason" },
+      reason: { $ref: "#/components/schemas/CoreConditionReason" },
       message: { type: "string" },
       observedGeneration: { type: "number" },
       lastTransitionAt: { type: "string", format: "date-time" },
@@ -785,7 +784,14 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         },
         requiredProviders: { type: "array", items: { type: "string" } },
         status: {
-          enum: ["queued", "running", "succeeded", "failed", "blocked", "cancelled"],
+          enum: [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "blocked",
+            "cancelled",
+          ],
         },
         policy: ref("PolicyDecision"),
         policyDecisionDigest: {
@@ -894,12 +900,7 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     },
     DeploymentOutput: {
       type: "object",
-      required: [
-        "name",
-        "kind",
-        "value",
-        "sensitive",
-      ],
+      required: ["name", "kind", "value", "sensitive"],
       properties: {
         name: { type: "string" },
         kind: { type: "string" },
@@ -946,7 +947,14 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         operation: { enum: ["create", "update", "destroy"] },
         runnerProfileId: { type: "string" },
         status: {
-          enum: ["queued", "running", "succeeded", "failed", "blocked", "cancelled"],
+          enum: [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "blocked",
+            "cancelled",
+          ],
         },
         approval: ref("RunApproval"),
         expected: ref("ApplyExpectedGuard"),
@@ -972,7 +980,6 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         "name",
         "slug",
         "sourceId",
-        "installType",
         "installConfigId",
         "environment",
         "currentStateGeneration",
@@ -988,17 +995,92 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         sourceId: { type: "string" },
         installType: {
           enum: ["core", "opentofu_module", "opentofu_root", "app_source"],
+          description:
+            "Compatibility field for older generated-root implementations. Capsule-native clients should use the Installation's InstallConfig capsulePath and compatibilityStatus.",
         },
         installConfigId: { type: "string" },
         environment: { type: "string" },
         currentDeploymentId: { type: "string" },
         currentStateGeneration: { type: "number" },
         currentOutputSnapshotId: { type: "string" },
+        compatibilityStatus: {
+          enum: ["ready", "auto_capsulized", "needs_patch", "unsupported"],
+        },
         status: {
-          enum: ["installing", "active", "stale", "error", "destroying", "destroyed"],
+          enum: [
+            "pending",
+            "active",
+            "stale",
+            "error",
+            "disabled",
+            "destroyed",
+          ],
         },
         createdAt: { type: "string" },
         updatedAt: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    CapsuleCompatibilityFinding: {
+      type: "object",
+      required: ["severity", "code", "message"],
+      properties: {
+        severity: { enum: ["info", "warning", "error"] },
+        code: { type: "string" },
+        message: { type: "string" },
+        path: { type: "string" },
+        suggestion: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    CapsuleCompatibilityReport: {
+      type: "object",
+      required: [
+        "id",
+        "sourceSnapshotId",
+        "level",
+        "findings",
+        "providers",
+        "resources",
+        "dataSources",
+        "provisioners",
+        "createdAt",
+      ],
+      properties: {
+        id: { type: "string" },
+        sourceId: { type: "string" },
+        installationId: { type: "string" },
+        sourceSnapshotId: { type: "string" },
+        level: {
+          enum: ["ready", "auto_capsulized", "needs_patch", "unsupported"],
+        },
+        findings: {
+          type: "array",
+          items: ref("CapsuleCompatibilityFinding"),
+        },
+        providers: { type: "array", items: { type: "object" } },
+        resources: { type: "array", items: { type: "object" } },
+        dataSources: { type: "array", items: { type: "object" } },
+        provisioners: { type: "array", items: { type: "object" } },
+        normalizedObjectKey: { type: "string" },
+        normalizedDigest: { type: "string" },
+        createdAt: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    CreateSourceCompatibilityCheckRequest: {
+      type: "object",
+      properties: {
+        sourceSnapshotId: { type: "string" },
+        installationId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    CapsuleCompatibilityReportResponse: {
+      type: "object",
+      required: ["report"],
+      properties: {
+        report: ref("CapsuleCompatibilityReport"),
       },
       additionalProperties: false,
     },
@@ -1072,6 +1154,9 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         zoneId: { type: "string" },
         username: { type: "string" },
         knownHostsEntry: { type: "string" },
+        awsRoleArn: { type: "string" },
+        awsExternalId: { type: "string" },
+        awsRegion: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -1079,9 +1164,8 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: [
         "id",
-        "spaceId",
         "provider",
-        "owner",
+        "scope",
         "authMethod",
         "status",
         "envNames",
@@ -1095,13 +1179,13 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         kind: {
           enum: ["provider", "source_git_https_token", "source_git_ssh_key"],
         },
-        owner: { enum: ["service", "customer"] },
+        scope: { enum: ["operator", "space"] },
         authMethod: {
-          enum: ["static_secret", "aws_assume_role", "github_app_installation"],
+          enum: ["static_secret", "aws_assume_role"],
         },
         displayName: { type: "string" },
         status: { enum: ["pending", "verified", "revoked"] },
-        scope: ref("ConnectionScope"),
+        scopeHints: ref("ConnectionScope"),
         envNames: { type: "array", items: { type: "string" } },
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },
@@ -1111,7 +1195,7 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     },
     CreateConnectionRequest: {
       type: "object",
-      required: ["spaceId", "provider", "authMethod", "values"],
+      required: ["provider", "authMethod", "values"],
       properties: {
         spaceId: { type: "string" },
         provider: { type: "string" },
@@ -1120,12 +1204,13 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         },
         authMethod: { enum: ["static_secret"] },
         displayName: { type: "string" },
-        owner: { enum: ["service", "customer"] },
-        scope: ref("ConnectionScope"),
+        scope: { enum: ["operator", "space"] },
+        scopeHints: ref("ConnectionScope"),
         values: {
           type: "object",
           additionalProperties: { type: "string" },
-          description: "Write-only credential values keyed by env name. Never echoed.",
+          description:
+            "Write-only credential values keyed by env name. Never echoed.",
         },
       },
       additionalProperties: false,
@@ -1364,6 +1449,7 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     SpaceResponse: jsonObject,
     ListSpacesResponse: jsonObject,
     CreateInstallationRequest: jsonObject,
+    PatchInstallationRequest: jsonObject,
     InstallationResponse: jsonObject,
     ListInstallationsResponse: jsonObject,
     ListInstallConfigsResponse: jsonObject,
@@ -1379,7 +1465,13 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     CreateOutputShareRequest: jsonObject,
     OutputShareResponse: jsonObject,
     ListOutputSharesResponse: jsonObject,
-    ApproveRunRequest: jsonObject,
+    ApproveRunRequest: {
+      type: "object",
+      properties: {
+        reason: { type: "string" },
+      },
+      additionalProperties: false,
+    },
     RuntimeAgentEnrollRequest: jsonObject,
     RuntimeAgentHeartbeatRequest: jsonObject,
     RuntimeAgentLeaseRequest: jsonObject,

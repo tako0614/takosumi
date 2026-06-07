@@ -74,7 +74,10 @@ function ConnectionsInner() {
     () => (spaceId() ? spaceId() : null),
     listControlConnections,
   );
-  const [operatorDefaults] = createResource(listOperatorConnectionDefaults);
+  const [operatorDefaults] = createResource(
+    () => (spaceId() ? spaceId() : null),
+    async (id) => id ? await listOperatorConnectionDefaults(id) : [],
+  );
 
   // connectionId -> scope, from the control listing, so each registered row can
   // show whether it is operator-default-backed or space-scoped.

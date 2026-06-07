@@ -20,14 +20,17 @@ export const AUDIENCES: readonly Audience[] = [
     persona:
       "自分の service を operator-owned runtime に。vendor に縛られず、好きな cloud にも VM にも出せる。",
     exampleStack: "web + API + DB を 1 つの module set で",
-    cta: { label: "Module を install", href: "/docs/reference/deploy-control-api" },
+    cta: {
+      label: "Module を install",
+      href: "/docs/reference/deploy-control-api",
+    },
   },
   {
     name: "小チーム / コミュニティ",
     persona:
       "reviewed な plan と audit trail を付けて、チームの deploy を共有する。",
-    exampleStack: "複数 module + 共有 RunnerProfile",
-    cta: { label: "Cloud で試す", href: "https://accounts.takosumi.com/" },
+    exampleStack: "複数 module + 共有 Connection / policy",
+    cta: { label: "App を開く", href: "https://app.takosumi.com/" },
   },
   {
     name: "学校 / 組織 / 公共",

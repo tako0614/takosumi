@@ -6,10 +6,10 @@
 import type { AuditEvent, AuditEventId } from "../../../domains/audit/types.ts";
 import type {
   Group,
-  Space,
+  MembershipSpace,
   SpaceId,
   SpaceMembership,
-} from "../../../domains/space/types.ts";
+} from "../../../domains/membership/types.ts";
 import type {
   BindingSetRevision,
   BindingSetRevisionId,
@@ -50,7 +50,7 @@ import type {
 import { immutable } from "./helpers.ts";
 
 export interface MemoryStorageSnapshot {
-  readonly spaces: readonly Space[];
+  readonly spaces: readonly MembershipSpace[];
   readonly groups: readonly Group[];
   readonly spaceMemberships: readonly SpaceMembership[];
   readonly runtimeDesiredStates: readonly RuntimeDesiredState[];
@@ -73,7 +73,7 @@ export interface MemoryStorageSnapshot {
 
 export interface MemoryStorageState {
   readonly space: {
-    readonly spaces: Map<SpaceId, Space>;
+    readonly spaces: Map<SpaceId, MembershipSpace>;
     readonly groups: Map<string, Group>;
     readonly spaceMemberships: Map<string, SpaceMembership>;
   };
