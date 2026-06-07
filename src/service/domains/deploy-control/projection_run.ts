@@ -133,7 +133,11 @@ export function projectPlanRun(
   planRun: PlanRun,
   options: ProjectPlanRunOptions = {},
 ): Run {
-  const type: RunType = runTypeForOperation(planRun.operation, "plan");
+  // A drift-check plan projects to the §19 `drift_check` run type regardless of
+  // its underlying operation (it is created as an `update`-kind internal plan).
+  const type: RunType = planRun.driftCheck === true
+    ? "drift_check"
+    : runTypeForOperation(planRun.operation, "plan");
   const errorCode = planRun.status === "failed"
     ? errorCodeFromPlan(planRun)
     : undefined;

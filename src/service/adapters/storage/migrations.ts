@@ -720,6 +720,39 @@ export const postgresStorageTableDefinitions:
       primaryKey: ["id"],
       indexes: [["space_id"]],
     },
+    {
+      // Cross-Space OutputShare grants (§18). A grant from a producer
+      // Installation's projected outputs (in from_space_id) to a consumer
+      // Space (to_space_id). share_json carries names + optional aliases only —
+      // sensitive sharing is not supported (invariant 12) and resolved output
+      // VALUES never land in the share.
+      name: "takosumi_output_shares",
+      domain: "deploy",
+      columns: [
+        "id",
+        "from_space_id",
+        "to_space_id",
+        "producer_installation_id",
+        "status",
+        "share_json",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["from_space_id"], ["to_space_id"], [
+        "producer_installation_id",
+      ]],
+    },
+    {
+      // Control-backup ledger pointers (§33 layer 1 / §26 R2_BACKUPS). One row
+      // per sealed control-backup bundle written to R2_BACKUPS. The bundle
+      // bytes live in object storage; only the pointer (objectKey / digest /
+      // sizeBytes) round trips through backup_json — never secret material.
+      name: "takosumi_backups",
+      domain: "deploy",
+      columns: ["id", "space_id", "backup_json", "created_at"],
+      primaryKey: ["id"],
+      indexes: [["space_id"]],
+    },
   ]);
 
 export const postgresStorageMigrationStatements:
@@ -1708,5 +1741,49 @@ create index if not exists takosumi_audit_events_space_idx
   on takosumi_audit_events (space_id, created_at desc);`,
       down: `drop index if exists takosumi_audit_events_space_idx;
 drop table if exists takosumi_audit_events;`,
+    },
+    {
+      id: "deploy.takosumi_output_shares.create",
+      version: 38,
+      domain: "deploy",
+      description:
+        "Create the cross-Space OutputShare ledger (Core Specification §18 output_shares): a grant from a producer Installation's projected spaceOutputs (in from_space_id) to a consumer Space (to_space_id). share_json carries the public OutputShare — entry names + optional aliases only; sensitive sharing is not supported (invariant 12) and resolved output VALUES never land in the share. Searchable columns (from_space_id / to_space_id / producer_installation_id) drive the per-Space listings. No data migration: additive new table.",
+      sql: `create table if not exists takosumi_output_shares (
+  id                       text   primary key,
+  from_space_id            text   not null,
+  to_space_id              text   not null,
+  producer_installation_id text   not null,
+  status                   text   not null
+    check (status in ('pending','active','revoked')),
+  share_json               jsonb  not null,
+  created_at               text   not null
+);
+create index if not exists takosumi_output_shares_from_space_idx
+  on takosumi_output_shares (from_space_id, created_at);
+create index if not exists takosumi_output_shares_to_space_idx
+  on takosumi_output_shares (to_space_id, created_at);
+create index if not exists takosumi_output_shares_producer_idx
+  on takosumi_output_shares (producer_installation_id);`,
+      down: `drop index if exists takosumi_output_shares_producer_idx;
+drop index if exists takosumi_output_shares_to_space_idx;
+drop index if exists takosumi_output_shares_from_space_idx;
+drop table if exists takosumi_output_shares;`,
+    },
+    {
+      id: "deploy.takosumi_backups.create",
+      version: 39,
+      domain: "deploy",
+      description:
+        "Create the control-backup ledger (Core Specification §33 layer 1 / §26 R2_BACKUPS): one pointer row per sealed control-backup bundle written to the R2_BACKUPS bucket. backup_json carries the public BackupRecord pointer (objectKey / digest / sizeBytes / optional createdByRunId) — the bundle bytes (gzip-compressed, sealed JSON export of the Space's control ledger) live in object storage, never the DB, and the bundle never contains secret material. The space_id column drives the newest-first per-Space listing. No data migration: additive new table.",
+      sql: `create table if not exists takosumi_backups (
+  id          text   primary key,
+  space_id    text   not null,
+  backup_json jsonb  not null,
+  created_at  text   not null
+);
+create index if not exists takosumi_backups_space_idx
+  on takosumi_backups (space_id, created_at desc);`,
+      down: `drop index if exists takosumi_backups_space_idx;
+drop table if exists takosumi_backups;`,
     },
   ]);

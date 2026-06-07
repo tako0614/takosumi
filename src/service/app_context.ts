@@ -18,9 +18,6 @@ import type {
 } from "./domains/resources/mod.ts";
 import type {
   BundledRegistry,
-  CatalogReleaseAdoptionStore,
-  CatalogReleaseDescriptorStore,
-  CatalogReleasePublisherKeyStore,
   PackageDescriptorStore,
   PackageResolutionStore,
   TrustRecordStore,
@@ -155,9 +152,6 @@ export interface RegistryStores {
   readonly resolutions: PackageResolutionStore;
   readonly trustRecords: TrustRecordStore;
   readonly bundledRegistry: BundledRegistry;
-  readonly catalogReleases: CatalogReleaseDescriptorStore;
-  readonly catalogPublisherKeys: CatalogReleasePublisherKeyStore;
-  readonly catalogReleaseAdoptions: CatalogReleaseAdoptionStore;
 }
 
 export interface AuditStores {

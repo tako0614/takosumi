@@ -22,9 +22,6 @@ import {
 } from "./domains/resources/mod.ts";
 import {
   InMemoryBundledRegistry,
-  InMemoryCatalogReleaseAdoptionStore,
-  InMemoryCatalogReleaseDescriptorStore,
-  InMemoryCatalogReleasePublisherKeyStore,
   InMemoryPackageDescriptorStore,
   InMemoryPackageResolutionStore,
   InMemoryTrustRecordStore,
@@ -112,13 +109,6 @@ function createStorageBackedAppStores(
       storageBackedStore(driver, (tx) => tx.registry.trustRecords),
     bundledRegistry: options.stores?.registry?.bundledRegistry ??
       storageBackedStore(driver, (tx) => tx.registry.bundledRegistry),
-    catalogReleases: options.stores?.registry?.catalogReleases ??
-      new InMemoryCatalogReleaseDescriptorStore(),
-    catalogPublisherKeys: options.stores?.registry?.catalogPublisherKeys ??
-      new InMemoryCatalogReleasePublisherKeyStore(),
-    catalogReleaseAdoptions:
-      options.stores?.registry?.catalogReleaseAdoptions ??
-        new InMemoryCatalogReleaseAdoptionStore(),
   };
   return {
     space: createInMemorySpaceDomainDependencies({
@@ -206,11 +196,5 @@ function createRegistryStores(
     trustRecords,
     bundledRegistry: overrides?.bundledRegistry ??
       new InMemoryBundledRegistry(descriptors, resolutions, trustRecords),
-    catalogReleases: overrides?.catalogReleases ??
-      new InMemoryCatalogReleaseDescriptorStore(),
-    catalogPublisherKeys: overrides?.catalogPublisherKeys ??
-      new InMemoryCatalogReleasePublisherKeyStore(),
-    catalogReleaseAdoptions: overrides?.catalogReleaseAdoptions ??
-      new InMemoryCatalogReleaseAdoptionStore(),
   };
 }

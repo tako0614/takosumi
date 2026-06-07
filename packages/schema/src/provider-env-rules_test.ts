@@ -3,7 +3,9 @@ import { expect, test } from "bun:test";
 import {
   allowedEnvNamesForProvider,
   cloudFamilyForProvider,
+  PROVIDER_CREDENTIAL_ARG_MAP,
   PROVIDER_CREDENTIAL_ENV_RULES,
+  providerCredentialArgs,
   providerEnvRule,
   requiredEnvGroupsForProvider,
   requiredEnvGroupsSatisfied,
@@ -70,6 +72,33 @@ test("every rule's envNames superset includes all required-group members", () =>
       for (const name of group) {
         expect(allowed.has(name)).toBe(true);
       }
+    }
+  }
+});
+
+test("providerCredentialArgs maps cloudflare/aws and resolves by short or path form", () => {
+  expect(providerCredentialArgs("cloudflare")).toEqual([
+    { envName: "CLOUDFLARE_API_TOKEN", arg: "api_token" },
+  ]);
+  // Registry-path form resolves to the same rule -> same args.
+  expect(providerCredentialArgs("cloudflare/cloudflare")).toEqual(
+    providerCredentialArgs("cloudflare"),
+  );
+  expect(providerCredentialArgs("hashicorp/aws")).toEqual([
+    { envName: "AWS_ACCESS_KEY_ID", arg: "access_key" },
+    { envName: "AWS_SECRET_ACCESS_KEY", arg: "secret_key" },
+    { envName: "AWS_SESSION_TOKEN", arg: "token" },
+  ]);
+  // A provider without an arg mapping (and an unknown provider) get no split.
+  expect(providerCredentialArgs("kubernetes")).toEqual([]);
+  expect(providerCredentialArgs("totally-unknown")).toEqual([]);
+});
+
+test("every credential arg env name is a declared env name for its provider", () => {
+  for (const [shortName, args] of Object.entries(PROVIDER_CREDENTIAL_ARG_MAP)) {
+    const allowed = new Set(allowedEnvNamesForProvider(shortName));
+    for (const { envName } of args) {
+      expect(allowed.has(envName)).toBe(true);
     }
   }
 });

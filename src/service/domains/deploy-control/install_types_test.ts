@@ -34,6 +34,8 @@ import type {
 } from "takosumi-contract/deploy-control-api";
 import type { CapabilityBindings } from "takosumi-contract/capability-bindings";
 import { seedInstallationModel } from "./test_model_fixture.ts";
+import { StaticSecretConnectionVault } from "../../adapters/vault/mod.ts";
+import { MultiCloudSecretBoundaryCrypto } from "../../adapters/secret-store/memory.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -251,14 +253,18 @@ test("opentofu_module install emits per-capability provider aliases from resolve
   expect(planRun.status).toEqual("succeeded");
 
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
-  // The compute capability resolved to the cloudflare connection -> a credential-
-  // free aliased provider block + a providers map on the module (§13).
+  // The compute capability resolved to the cloudflare connection -> an aliased
+  // provider block wired from a sensitive per-alias credential var + a providers
+  // map on the module (§13).
   expect(mainTf).toContain("provider \"cloudflare\" {");
   expect(mainTf).toContain('alias = "compute"');
   expect(mainTf).toContain("providers = {");
   expect(mainTf).toContain("cloudflare.compute = cloudflare.compute");
-  // Per-alias credential split is deferred (header comment present).
-  expect(mainTf).toContain("Per-alias credential split is DEFERRED");
+  // Per-alias credential split (§13): a sensitive credential var is declared and
+  // wired into the alias; the deferred wording is gone.
+  expect(mainTf).toContain('variable "cloudflare_compute_api_token" {');
+  expect(mainTf).toContain("  api_token = var.cloudflare_compute_api_token");
+  expect(mainTf).not.toContain("DEFERRED");
   // The template input is still wired.
   expect(mainTf).toContain('appName = "my-worker"');
 });
@@ -384,6 +390,91 @@ test("opentofu_root install config rejects a templateBinding", async () => {
   await expect(
     controller.createInstallationPlan("inst_fixture"),
   ).rejects.toThrow(/opentofu_root .* templateBinding/);
+});
+
+test("apply dispatch carries TF_VAR_<provider>_<capability>_<arg> per-alias creds and never leaks values into run records (§13)", async () => {
+  const SECRET_TOKEN = "cf-secret-per-alias-token";
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const vault = new StaticSecretConnectionVault({
+    store,
+    crypto: new MultiCloudSecretBoundaryCrypto({
+      globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
+    }),
+    now: () => new Date("2026-06-06T00:00:00.000Z"),
+  });
+  // Register the cloudflare connection THROUGH the vault so its sealed blob
+  // exists; bind compute to it so resolveCapabilities -> per-alias mint resolves.
+  const conn = await vault.register({
+    spaceId: "space_test",
+    provider: "cloudflare",
+    authMethod: "static_secret",
+    values: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN },
+  });
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "my-worker", accountId: "acct_123" },
+      policy: {},
+    },
+  });
+  await store.putDeploymentProfile({
+    id: "profile_creds",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: { compute: { mode: "connection", connectionId: conn.id } },
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const runner = recordingRunner({
+    worker_name: { sensitive: false, value: "my-worker" },
+    url: { sensitive: false, value: "https://my-worker.workers.dev" },
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    vault,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  expect(planRun.status).toEqual("succeeded");
+
+  // The plan dispatch already carries the per-alias TF_VAR credential, merged on
+  // top of the shared provider env (CLOUDFLARE_API_TOKEN for compatibility).
+  const planCreds = runner.planJobs[0]!.credentials!;
+  expect(planCreds.TF_VAR_cloudflare_compute_api_token).toEqual(SECRET_TOKEN);
+  expect(planCreds.CLOUDFLARE_API_TOKEN).toEqual(SECRET_TOKEN);
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(applyRun.status).toEqual("succeeded");
+
+  // The apply dispatch ALSO carries the per-alias TF_VAR (re-resolved at mint).
+  const applyCreds = runner.applyJobs[0]!.credentials!;
+  expect(applyCreds.TF_VAR_cloudflare_compute_api_token).toEqual(SECRET_TOKEN);
+
+  // The secret value must NEVER reach any persisted run record (plan / apply /
+  // deployment / state). Credentials live only on the dispatch payload.
+  const persistedPlan = await store.getPlanRun(planRun.id);
+  const persistedApply = await store.getApplyRun(applyRun.id);
+  expect(JSON.stringify(persistedPlan)).not.toContain(SECRET_TOKEN);
+  expect(JSON.stringify(persistedApply)).not.toContain(SECRET_TOKEN);
+  const installation = (await store.getInstallation("inst_fixture"))!;
+  const deployment = installation.currentDeploymentId
+    ? await store.getDeployment(installation.currentDeploymentId)
+    : undefined;
+  expect(JSON.stringify(deployment)).not.toContain(SECRET_TOKEN);
+  const latest = await store.getLatestStateSnapshot("inst_fixture", "preview");
+  expect(JSON.stringify(latest)).not.toContain(SECRET_TOKEN);
 });
 
 test("opentofu_root install uses the raw-module path (snapshot as root, no generated root)", async () => {

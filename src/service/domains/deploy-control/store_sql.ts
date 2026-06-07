@@ -40,9 +40,13 @@ import type {
 } from "takosumi-contract/capability-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
 import type { Dependency, DependencySnapshot } from "takosumi-contract/dependencies";
-import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type {
+  OutputShare,
+  OutputSnapshot,
+} from "takosumi-contract/output-snapshots";
 import type { RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import type { BackupRecord } from "takosumi-contract/backups";
 import type {
   InstallationPatch,
   InstallationPatchGuard,
@@ -1004,6 +1008,64 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return parseRow(result.rows[0]) as OutputSnapshot | undefined;
   }
 
+  // --- output_shares (§18) --------------------------------------------------
+
+  async putOutputShare(share: OutputShare): Promise<OutputShare> {
+    await this.#query(
+      "insert into takosumi_output_shares " +
+        "(id, from_space_id, to_space_id, producer_installation_id, status, " +
+        "share_json, created_at) " +
+        "values ($1, $2, $3, $4, $5, $6::jsonb, $7) " +
+        "on conflict (id) do update set " +
+        "from_space_id = excluded.from_space_id, " +
+        "to_space_id = excluded.to_space_id, " +
+        "producer_installation_id = excluded.producer_installation_id, " +
+        "status = excluded.status, " +
+        "share_json = excluded.share_json, " +
+        "created_at = excluded.created_at",
+      [
+        share.id,
+        share.fromSpaceId,
+        share.toSpaceId,
+        share.producerInstallationId,
+        share.status,
+        JSON.stringify(share),
+        share.createdAt,
+      ],
+    );
+    return share;
+  }
+
+  async getOutputShare(id: string): Promise<OutputShare | undefined> {
+    const result = await this.#query<JsonRow>(
+      "select share_json as json from takosumi_output_shares where id = $1",
+      [id],
+    );
+    return parseRow(result.rows[0]) as OutputShare | undefined;
+  }
+
+  async listOutputSharesFromSpace(
+    fromSpaceId: string,
+  ): Promise<readonly OutputShare[]> {
+    const result = await this.#query<JsonRow>(
+      "select share_json as json from takosumi_output_shares " +
+        "where from_space_id = $1 order by created_at asc, id asc",
+      [fromSpaceId],
+    );
+    return result.rows.map((row) => parseRow(row) as OutputShare);
+  }
+
+  async listOutputSharesToSpace(
+    toSpaceId: string,
+  ): Promise<readonly OutputShare[]> {
+    const result = await this.#query<JsonRow>(
+      "select share_json as json from takosumi_output_shares " +
+        "where to_space_id = $1 order by created_at asc, id asc",
+      [toSpaceId],
+    );
+    return result.rows.map((row) => parseRow(row) as OutputShare);
+  }
+
   // --- run_groups (§19 / §24) -----------------------------------------------
 
   async putRunGroup(group: RunGroup): Promise<RunGroup> {
@@ -1090,6 +1152,35 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return result.rows
       .slice(0, limit)
       .map((row) => parseRow(row) as ActivityEvent);
+  }
+
+  // --- backups (§33 layer 1 / §26 R2_BACKUPS) -------------------------------
+  //
+  // One ledger pointer row per sealed control-backup bundle. The bundle bytes
+  // live in R2_BACKUPS; only the pointer round trips through `backup_json`.
+  // Listing is newest-first (created_at desc, id desc).
+
+  async putBackupRecord(record: BackupRecord): Promise<BackupRecord> {
+    await this.#query(
+      "insert into takosumi_backups " +
+        "(id, space_id, backup_json, created_at) " +
+        "values ($1, $2, $3::jsonb, $4) " +
+        "on conflict (id) do update set " +
+        "space_id = excluded.space_id, " +
+        "backup_json = excluded.backup_json, " +
+        "created_at = excluded.created_at",
+      [record.id, record.spaceId, JSON.stringify(record), record.createdAt],
+    );
+    return record;
+  }
+
+  async listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]> {
+    const result = await this.#query<JsonRow>(
+      "select backup_json as json from takosumi_backups " +
+        "where space_id = $1 order by created_at desc, id desc",
+      [spaceId],
+    );
+    return result.rows.map((row) => parseRow(row) as BackupRecord);
   }
 
   #query<Row extends Record<string, unknown> = Record<string, unknown>>(

@@ -22,7 +22,7 @@
  *   POST  /api/installations/{id}/dependencies
  *   GET   /api/installations/{id}/dependencies
  *   DELETE /api/dependencies/{dependencyId}
- *   POST/GET /api/output-shares ; POST /api/output-shares/{id}/revoke (501)
+ *   POST/GET /api/output-shares ; POST /api/output-shares/{shareId}/revoke
  *   POST  /api/installations/{id}/plan ; /destroy-plan
  *   GET   /api/runs/{id} ; /logs ; /events
  *   POST  /api/runs/{id}/approve ; /cancel
@@ -85,8 +85,13 @@ import type {
   CreateDependencyRequest,
   DependenciesService,
 } from "../domains/dependencies/mod.ts";
+import type {
+  CreateOutputShareRequest,
+  OutputSharesService,
+} from "../domains/output-shares/mod.ts";
 import type { RunGroupsService } from "../domains/run-groups/mod.ts";
 import type { ActivityService } from "../domains/activity/mod.ts";
+import type { BackupsService } from "../domains/backups/mod.ts";
 import { ACTIVITY_MAX_LIMIT } from "takosumi-contract/activity";
 import {
   OpenTofuControllerError,
@@ -156,6 +161,14 @@ export const TAKOSUMI_INSTALLATION_PLAN_ROUTE =
   "/api/installations/:installationId/plan" as const;
 export const TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE =
   "/api/installations/:installationId/destroy-plan" as const;
+/**
+ * Installation drift-check route (spec §19 `drift_check`; Phase 8). Spec
+ * extension: §30 does not enumerate it, but §19 defines the run type. Creates a
+ * read-only drift-check plan that never parks waiting_approval and can never be
+ * applied.
+ */
+export const TAKOSUMI_INSTALLATION_DRIFT_CHECK_ROUTE =
+  "/api/installations/:installationId/drift-check" as const;
 export const TAKOSUMI_RUN_ROUTE = "/api/runs/:runId" as const;
 export const TAKOSUMI_RUN_LOGS_ROUTE = "/api/runs/:runId/logs" as const;
 export const TAKOSUMI_RUN_EVENTS_ROUTE = "/api/runs/:runId/events" as const;
@@ -176,6 +189,8 @@ export const TAKOSUMI_RUN_GROUP_APPROVE_ROUTE =
   "/api/run-groups/:runGroupId/approve" as const;
 export const TAKOSUMI_SPACE_ACTIVITY_ROUTE =
   "/api/spaces/:spaceId/activity" as const;
+export const TAKOSUMI_SPACE_BACKUPS_ROUTE =
+  "/api/spaces/:spaceId/backups" as const;
 
 /**
  * Endpoint inventory for the `deployControl-public` family, co-located with the
@@ -586,6 +601,19 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
     },
   },
   {
+    method: "POST",
+    path: TAKOSUMI_INSTALLATION_DRIFT_CHECK_ROUTE,
+    summary:
+      "Creates an Installation-driven drift-check run (read-only §19 drift_check; never applyable; spec extension over §30).",
+    auth: "deploy-control-token",
+    operationId: "createInstallationDriftCheck",
+    openapi: {
+      pathParams: ["installationId"],
+      okStatus: "201",
+      okSchema: "PlanRunResponse",
+    },
+  },
+  {
     method: "GET",
     path: TAKOSUMI_RUN_ROUTE,
     summary:
@@ -673,15 +701,21 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
   {
     method: "POST",
     path: TAKOSUMI_OUTPUT_SHARES_ROUTE,
-    summary: "Creates a cross-Space OutputShare (not implemented for MVP).",
+    summary:
+      "Creates a cross-Space OutputShare (space-permission gated on the granting fromSpace; created active).",
     auth: "deploy-control-token",
     operationId: "createOutputShare",
-    openapi: { okStatus: "201", okSchema: "OutputShareResponse" },
+    openapi: {
+      requestSchema: "CreateOutputShareRequest",
+      okStatus: "201",
+      okSchema: "OutputShareResponse",
+    },
   },
   {
     method: "GET",
     path: TAKOSUMI_OUTPUT_SHARES_ROUTE,
-    summary: "Lists cross-Space OutputShares (not implemented for MVP).",
+    summary:
+      "Lists the OutputShares a Space granted or received (?spaceId=, space-permission gated).",
     auth: "deploy-control-token",
     operationId: "listOutputShares",
     openapi: { okSchema: "ListOutputSharesResponse" },
@@ -689,7 +723,8 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
   {
     method: "POST",
     path: TAKOSUMI_OUTPUT_SHARE_REVOKE_ROUTE,
-    summary: "Revokes a cross-Space OutputShare (not implemented for MVP).",
+    summary:
+      "Revokes a cross-Space OutputShare (space-permission gated via its granting fromSpace).",
     auth: "deploy-control-token",
     operationId: "revokeOutputShare",
     openapi: { pathParams: ["shareId"], okSchema: "OutputShareResponse" },
@@ -732,6 +767,27 @@ export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] = [
     auth: "deploy-control-token",
     operationId: "listSpaceActivity",
     openapi: { pathParams: ["spaceId"], okSchema: "ListActivityResponse" },
+  },
+  {
+    method: "POST",
+    path: TAKOSUMI_SPACE_BACKUPS_ROUTE,
+    summary:
+      "Creates a sealed control backup of a Space's ledger (gzip+sealed to R2_BACKUPS; no secret material).",
+    auth: "deploy-control-token",
+    operationId: "createSpaceBackup",
+    openapi: {
+      pathParams: ["spaceId"],
+      okStatus: "201",
+      okSchema: "CreateBackupResponse",
+    },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_SPACE_BACKUPS_ROUTE,
+    summary: "Lists a Space's control backups (newest first).",
+    auth: "deploy-control-token",
+    operationId: "listSpaceBackups",
+    openapi: { pathParams: ["spaceId"], okSchema: "ListBackupsResponse" },
   },
 ] as const;
 
@@ -818,6 +874,12 @@ const ALLOWED_KEYS: Record<DeployControlRouteName, ReadonlySet<string>> = {
     "outputs",
     "visibility",
   ]),
+  outputShareCreate: new Set([
+    "fromSpaceId",
+    "toSpaceId",
+    "producerInstallationId",
+    "outputs",
+  ]),
 };
 
 type DeployControlRouteName =
@@ -831,13 +893,15 @@ type DeployControlRouteName =
   | "installationCreate"
   | "operatorConnectionDefault"
   | "runApprove"
-  | "dependencyCreate";
+  | "dependencyCreate"
+  | "outputShareCreate";
 
 const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
 const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
 const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
 const RUN_ID_PATTERN = /^(plan|apply|ssr)_[0-9a-zA-Z]{8,64}$/;
 const DEPENDENCY_ID_PATTERN = /^dep_[0-9a-zA-Z]{8,64}$/;
+const OUTPUT_SHARE_ID_PATTERN = /^oshare_[0-9a-zA-Z]{8,64}$/;
 const RUN_GROUP_ID_PATTERN = /^rg_[0-9a-zA-Z]{8,64}$/;
 const DEPLOYMENT_ID_PATTERN = /^dep(loy)?_[0-9a-zA-Z]{8,64}$/;
 
@@ -947,6 +1011,11 @@ export interface DeployControlPublicRouteDependencies {
    */
   readonly dependenciesService?: DependenciesService;
   /**
+   * OutputShares domain service (Core Specification §18). When unset, the
+   * cross-Space OutputShare routes return 501 after successful auth.
+   */
+  readonly outputSharesService?: OutputSharesService;
+  /**
    * RunGroups domain service (Core Specification §19 / §24). When unset, the
    * plan-update / run-group routes return 501 after successful auth.
    */
@@ -957,6 +1026,13 @@ export interface DeployControlPublicRouteDependencies {
    * route skips its Space-scoped audit emission.
    */
   readonly activityService?: ActivityService;
+  /**
+   * Control-backups domain service (Core Specification §33 / §26). When unset,
+   * the backup routes return 501 after successful auth. The service is itself
+   * disabled (createBackup -> 501) until a host wires the R2_BACKUPS artifact
+   * store + crypto seam.
+   */
+  readonly backupsService?: BackupsService;
 }
 
 export interface DeployControlBearerAuthorizationInput {
@@ -1615,6 +1691,24 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
+  // Drift check (§19 drift_check; Phase 8). Spec extension: §30 does not list it,
+  // but §19 defines the run type. Space-permission gated like plan/destroy-plan.
+  app.post(TAKOSUMI_INSTALLATION_DRIFT_CHECK_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const idCheck = ensureValidId(c, "installationId");
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      const installation = await controller.getInstallation(idCheck.value);
+      ensureSpacePermission(auth.principal, installation.installation.spaceId);
+      const response = await controller.createInstallationDriftCheck(
+        idCheck.value,
+        { actor: auth.principal.actor },
+      );
+      return c.json(response, 201);
+    });
+  });
+
   // --- Unified Run facade (§6.8) --------------------------------------------
 
   app.get(TAKOSUMI_RUN_ROUTE, async (c) => {
@@ -1768,24 +1862,82 @@ export function mountDeployControlPublicRoutes(
     });
   });
 
-  // --- Output shares (Core Specification §18 — surface exists, post-MVP) -----
-  // The cross-Space OutputShare surface is defined but not implemented for MVP
-  // (spec §34 / §35 Phase 8). The routes authenticate and then 501 so the
-  // surface is discoverable without leaking an unconfigured handler.
-  app.post(TAKOSUMI_OUTPUT_SHARES_ROUTE, async (c) => {
+  // --- Output shares (Core Specification §18) --------------------------------
+  // The cross-Space OutputShare grant: a producer Installation's Space authorizes
+  // a consumer Space to consume named projected outputs. Create + revoke are
+  // gated by space-permission on the GRANTING (from) Space; the list returns the
+  // grants a Space granted OR received.
+  const outputSharesService = dependencies.outputSharesService;
+
+  app.post(TAKOSUMI_OUTPUT_SHARES_ROUTE, deployControlBodyLimit, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
-    return c.json(notImplemented(c, "output shares are not implemented yet"), 501);
+    if (!outputSharesService) {
+      return c.json(notImplemented(c, "output shares not wired"), 501);
+    }
+    const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
+    if (limit) return limit;
+    return await runHandler(c, async () => {
+      const body = await readJsonBody<CreateOutputShareRequest>(
+        c,
+        "outputShareCreate",
+      );
+      // The grant is authorized by the GRANTING (from) Space: only a principal
+      // with permission on fromSpaceId may share that Space's outputs.
+      ensureSpacePermission(auth.principal, body.fromSpaceId);
+      const share = await outputSharesService.createShare(body);
+      return c.json({ share }, 201);
+    });
   });
+
   app.get(TAKOSUMI_OUTPUT_SHARES_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
-    return c.json(notImplemented(c, "output shares are not implemented yet"), 501);
+    if (!outputSharesService) {
+      return c.json(notImplemented(c, "output shares not wired"), 501);
+    }
+    const spaceId = c.req.query("spaceId");
+    if (!spaceId || !SPACE_ID_PATTERN.test(spaceId)) {
+      return c.json(
+        errorEnvelope(
+          c,
+          "invalid_argument",
+          "spaceId query parameter is required and must be a valid space id",
+        ),
+        400,
+      );
+    }
+    return await runHandler(c, async () => {
+      // Listing is gated on the queried Space: the principal must be able to
+      // access the Space whose grants (granted OR received) it is reading.
+      ensureSpacePermission(auth.principal, spaceId);
+      const shares = await outputSharesService.listForSpace(spaceId);
+      return c.json({ shares }, 200);
+    });
   });
+
   app.post(TAKOSUMI_OUTPUT_SHARE_REVOKE_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
-    return c.json(notImplemented(c, "output shares are not implemented yet"), 501);
+    if (!outputSharesService) {
+      return c.json(notImplemented(c, "output shares not wired"), 501);
+    }
+    const idCheck = ensureValidParam(c, "shareId", OUTPUT_SHARE_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      // Resolve the share first so revoke is space-permission gated via the
+      // GRANTING (from) Space, the side that owns the grant.
+      const existing = await outputSharesService.getShare(idCheck.value);
+      if (!existing) {
+        throw new OpenTofuControllerError(
+          "not_found",
+          `output share ${idCheck.value} not found`,
+        );
+      }
+      ensureSpacePermission(auth.principal, existing.fromSpaceId);
+      const share = await outputSharesService.revokeShare(idCheck.value);
+      return c.json({ share }, 200);
+    });
   });
 
   // --- RunGroups (Core Specification §19 / §24) -----------------------------
@@ -1877,6 +2029,42 @@ export function mountDeployControlPublicRoutes(
       ensureSpacePermission(auth.principal, idCheck.value);
       const events = await activityService.list(idCheck.value, limit.value);
       return c.json({ events }, 200);
+    });
+  });
+
+  // --- Control backups (Core Specification §33 / §26 R2_BACKUPS) -------------
+
+  app.post(TAKOSUMI_SPACE_BACKUPS_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const backupsService = dependencies.backupsService;
+    if (!backupsService) {
+      return c.json(notImplemented(c, "backups not wired"), 501);
+    }
+    const idCheck = ensureValidParam(c, "spaceId", SPACE_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      ensureSpacePermission(auth.principal, idCheck.value);
+      const backup = await backupsService.createBackup({
+        spaceId: idCheck.value,
+      });
+      return c.json({ backup }, 201);
+    });
+  });
+
+  app.get(TAKOSUMI_SPACE_BACKUPS_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const backupsService = dependencies.backupsService;
+    if (!backupsService) {
+      return c.json(notImplemented(c, "backups not wired"), 501);
+    }
+    const idCheck = ensureValidParam(c, "spaceId", SPACE_ID_PATTERN);
+    if (idCheck.kind === "invalid") return idCheck.response;
+    return await runHandler(c, async () => {
+      ensureSpacePermission(auth.principal, idCheck.value);
+      const backups = await backupsService.listBackups(idCheck.value);
+      return c.json({ backups }, 200);
     });
   });
 
@@ -1984,6 +2172,10 @@ function mountNotImplementedRoutes(
     TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE,
     post("installations not wired"),
   );
+  app.post(
+    TAKOSUMI_INSTALLATION_DRIFT_CHECK_ROUTE,
+    post("installations not wired"),
+  );
   app.get(TAKOSUMI_RUN_ROUTE, get("runs not wired"));
   app.get(TAKOSUMI_RUN_LOGS_ROUTE, get("runs not wired"));
   app.get(TAKOSUMI_RUN_EVENTS_ROUTE, get("runs not wired"));
@@ -2014,6 +2206,8 @@ function mountNotImplementedRoutes(
   app.get(TAKOSUMI_RUN_GROUP_ROUTE, get("run groups not wired"));
   app.post(TAKOSUMI_RUN_GROUP_APPROVE_ROUTE, post("run groups not wired"));
   app.get(TAKOSUMI_SPACE_ACTIVITY_ROUTE, get("activity not wired"));
+  app.post(TAKOSUMI_SPACE_BACKUPS_ROUTE, post("backups not wired"));
+  app.get(TAKOSUMI_SPACE_BACKUPS_ROUTE, get("backups not wired"));
 }
 
 async function authorizeDeployControl(

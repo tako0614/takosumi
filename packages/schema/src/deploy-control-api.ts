@@ -302,6 +302,18 @@ export interface PlanRun {
    * plans. Projected onto the §19 Run `runGroupId`.
    */
   readonly runGroupId?: string;
+  /**
+   * Set when this plan is a §19 `drift_check`: an internal read-only plan that
+   * detects whether the live state has drifted from the recorded configuration.
+   * A drift-check plan NEVER parks `waiting_approval` and can NEVER be applied
+   * (`createApplyRun` rejects it with `failed_precondition`); on completion with
+   * a non-empty change summary the controller emits an
+   * `installation.drift_detected` Activity event (counts only — no installation
+   * status change; the spec has no `drifted` status). The §19 Run projection
+   * maps a drift-check PlanRun to `type: "drift_check"`. Absent for every other
+   * plan. (Spec §19 run type / Phase 8 — MVP 外 per core-conformance.)
+   */
+  readonly driftCheck?: true;
 }
 
 /**
@@ -616,6 +628,34 @@ export interface DispatchStateScope {
  */
 export interface DispatchSourceArchive {
   readonly objectKey: string;
+  readonly digest: string;
+}
+
+/**
+ * Remote-state dependency descriptor threaded onto a plan/apply run dispatch
+ * (spec §15 `remote_state`). For each `remote_state` Dependency edge the
+ * controller resolves the producer Installation's LATEST StateSnapshot and emits
+ * one entry; the OpenTofu runner DO fetches + decrypts the producer state (the
+ * same StateArtifactCrypto path as its own state restore), verifies the recorded
+ * plaintext `digest`, and streams the bytes to the container which writes them
+ * read-only to `/work/deps/<name>.tfstate` BEFORE init/plan/apply. `name` is the
+ * producer Installation name the consumer references via `terraform_remote_state`
+ * (file backend over `/work/deps/<name>.tfstate`). The encrypted state bytes
+ * live in R2_STATE at `objectKey`; the DO never exposes the passphrase or the
+ * ciphertext to the container. Absent for runs with no `remote_state` edges.
+ */
+export interface DispatchDepState {
+  /** Producer Installation name (the `/work/deps/<name>.tfstate` filename). */
+  readonly name: string;
+  /** Producer Installation id (audit / cross-reference only). */
+  readonly installationId: string;
+  /** Producer environment (locates the R2_STATE prefix). */
+  readonly environment: string;
+  /** Producer LATEST StateSnapshot generation (the restored state generation). */
+  readonly generation: number;
+  /** R2_STATE object key of the encrypted producer state at `generation`. */
+  readonly objectKey: string;
+  /** Recorded plaintext digest of the producer state (DO verifies on decrypt). */
   readonly digest: string;
 }
 

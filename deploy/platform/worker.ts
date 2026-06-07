@@ -21,6 +21,10 @@ import {
   CoordinationObject,
   OpenTofuRunnerObject,
 } from "../../worker/src/handler.ts";
+import {
+  driftSweep,
+  type DriftSweepOperations,
+} from "../../worker/src/scheduled/drift.ts";
 
 export { CoordinationObject, OpenTofuRunnerObject };
 
@@ -72,10 +76,15 @@ export default {
   queue(batch: QueueBatch, env: CloudflareWorkerEnv): Promise<void> {
     return runQueueConsumer(batch, env as unknown as DeployControlEnv);
   },
-  // Scheduled source polling (Core Specification §6). Every cron tick, scan the
-  // active sources whose autoSync flag is set and enqueue a deduped source_sync.
-  scheduled(_event: unknown, env: CloudflareWorkerEnv): Promise<void> {
-    return runScheduledSourcePoll(env as unknown as DeployControlEnv);
+  // Scheduled cron tick. Always runs source polling (Core Specification §6: scan
+  // active autoSync sources and enqueue a deduped source_sync). When the
+  // `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO runs the
+  // §28 drift sweep (create a read-only drift_check per ACTIVE Installation).
+  async scheduled(_event: unknown, env: CloudflareWorkerEnv): Promise<void> {
+    await runScheduledSourcePoll(env as unknown as DeployControlEnv);
+    if (driftCheckEnabled(env)) {
+      await runScheduledDriftSweep(env as unknown as DeployControlEnv);
+    }
   },
 };
 
@@ -183,4 +192,31 @@ export async function pollAutoSyncSources(
       // Best-effort: one bad source must not abort the whole poll.
     }
   }
+}
+
+// Cap so a single cron tick never creates an unbounded number of drift checks.
+const SCHEDULED_DRIFT_SWEEP_LIMIT = 20;
+
+/**
+ * Drift-check flag (spec §28; Phase 8). The scheduled drift sweep runs ONLY when
+ * `TAKOSUMI_DRIFT_CHECK_ENABLED=1` (default OFF), mirroring how the platform
+ * keeps the new sweep opt-in alongside the always-on source poll.
+ */
+export function driftCheckEnabled(env: CloudflareWorkerEnv): boolean {
+  const flag = env.TAKOSUMI_DRIFT_CHECK_ENABLED;
+  return typeof flag === "string" && flag === "1";
+}
+
+async function runScheduledDriftSweep(env: DeployControlEnv): Promise<void> {
+  const operations = await deployControlSeam(env).operations();
+  // The in-process operations facade structurally satisfies DriftSweepOperations
+  // (it exposes listActiveInstallations via its controller and
+  // createInstallationDriftCheck directly). Adapt the two methods the sweep needs.
+  const driftOps: DriftSweepOperations = {
+    listActiveInstallations: (limit) =>
+      operations.controller.listActiveInstallations(limit),
+    createInstallationDriftCheck: (installationId) =>
+      operations.createInstallationDriftCheck(installationId),
+  };
+  await driftSweep(driftOps, { limit: SCHEDULED_DRIFT_SWEEP_LIMIT });
 }

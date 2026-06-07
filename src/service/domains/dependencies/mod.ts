@@ -6,15 +6,25 @@
  * owns Dependency creation / listing / deletion and enforces the structural
  * invariants of the dependency graph:
  *
- *   - producer and consumer must exist and share the SAME Space (no cross-Space
- *     edge without an OutputShare — post-MVP, rejected here);
+ *   - structural endpoints by mode/visibility (spec §15 / §18):
+ *       - `variable_injection` + `space`: same-Space edge (no OutputShare);
+ *       - `remote_state` + `space`: same-Space edge; outputs mapping MAY be
+ *         empty (a bare `terraform_remote_state` read), but a non-empty mapping
+ *         is still validated;
+ *       - `published_output` + `cross_space`: cross-Space edge backed by an
+ *         ACTIVE OutputShare from the producer's Space to the consumer's Space
+ *         covering EVERY mapped `from` name (the consumer maps from the SHARED
+ *         name/alias the grant exposes);
+ *       - every other mode/visibility combination is rejected (notably
+ *         `cross_space` + `variable_injection`, which would cross a Space
+ *         boundary without a grant);
  *   - no self-edge (an Installation cannot depend on itself);
  *   - adding the edge must not create a cycle (checked via takosumi-graph
- *     `detectCycle` over the Space's existing edges + the candidate);
- *   - MVP supports `variable_injection` only (`remote_state` /
- *     `published_output` are rejected `not_implemented`);
- *   - `cross_space` visibility is rejected (requires an OutputShare, post-MVP);
- *   - the outputs mapping must be non-empty.
+ *     `detectCycle` over the Space's existing edges + the candidate) for ALL
+ *     modes;
+ *   - the outputs mapping must be non-empty for `variable_injection` /
+ *     `published_output` (an empty map pins nothing); `remote_state` relaxes
+ *     this.
  *
  * The plan-time DependencySnapshot pinning + apply-time verification live in the
  * deploy-control controller (it has the OutputSnapshot + state-generation
@@ -80,9 +90,17 @@ export class DependenciesService {
 
   /**
    * Creates a Dependency edge after enforcing every structural invariant
-   * (spec §14 / §15). The producer + consumer must exist and share the request
-   * Space; the edge must be `variable_injection` + `space` visibility for MVP;
-   * the outputs mapping must be non-empty; and the edge must not create a cycle.
+   * (spec §14 / §15 / §18). The accepted mode/visibility combinations are:
+   *
+   *   - `variable_injection` + `space`: same-Space edge, non-empty mapping;
+   *   - `remote_state` + `space`: same-Space edge, mapping MAY be empty (a bare
+   *     `terraform_remote_state` read);
+   *   - `published_output` + `cross_space`: cross-Space edge backed by an ACTIVE
+   *     OutputShare from the producer's Space to the consumer's Space covering
+   *     every mapped `from` name (the consumer maps from the SHARED name/alias).
+   *
+   * Every other combination is rejected. The edge must not create a cycle, and a
+   * self-edge is rejected for all modes.
    */
   async createDependency(request: CreateDependencyRequest): Promise<Dependency> {
     requireNonEmptyString(request.spaceId, "spaceId");
@@ -94,34 +112,28 @@ export class DependenciesService {
       request.consumerInstallationId,
       "consumerInstallationId",
     );
-    // MVP modes (spec §15): only variable_injection is implemented. The other
-    // two modes have a place in the contract but no execution path yet.
-    if (request.mode !== "variable_injection") {
-      throw new OpenTofuControllerError(
-        "not_implemented",
-        `dependency mode ${request.mode} is not implemented (only ` +
-          `variable_injection is supported for MVP)`,
-      );
-    }
-    // cross_space visibility requires an OutputShare (spec §18, post-MVP).
-    if (request.visibility !== "space") {
-      throw new OpenTofuControllerError(
-        "not_implemented",
-        `dependency visibility ${request.visibility} requires an OutputShare ` +
-          `(cross-Space sharing is post-MVP); only space visibility is supported`,
-      );
-    }
+    // Mode/visibility gate (spec §15 / §18). Only three combinations are
+    // executable: variable_injection+space, remote_state+space, and
+    // published_output+cross_space. Everything else (notably
+    // cross_space+variable_injection, which would cross a Space boundary without
+    // a grant) is rejected.
+    assertSupportedModeVisibility(request.mode, request.visibility);
     // No self-edge: an Installation depending on itself is the smallest cycle
-    // and never has a producer OutputSnapshot to consume.
+    // and never has a producer OutputSnapshot to consume. Applies to all modes.
     if (request.producerInstallationId === request.consumerInstallationId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "a dependency cannot connect an installation to itself (self-edge)",
       );
     }
-    // The outputs mapping is the whole point of a variable_injection edge: an
-    // empty map would pin nothing.
-    if (Object.keys(request.outputs).length === 0) {
+    // The outputs mapping is the whole point of a variable_injection /
+    // published_output edge: an empty map would pin nothing. remote_state relaxes
+    // this — a bare `terraform_remote_state` read needs no name mapping — but a
+    // non-empty remote_state mapping is still validated below.
+    if (
+      request.mode !== "remote_state" &&
+      Object.keys(request.outputs).length === 0
+    ) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "dependency outputs mapping must declare at least one producer->consumer output",
@@ -147,17 +159,37 @@ export class DependenciesService {
         `consumer installation ${request.consumerInstallationId} not found`,
       );
     }
-    // Same-Space invariant: both endpoints must belong to the request Space.
-    // A cross-Space edge needs an OutputShare (post-MVP).
-    if (
-      producer.spaceId !== request.spaceId ||
-      consumer.spaceId !== request.spaceId
-    ) {
+    // The consumer always belongs to the request Space (a Dependency is the
+    // consumer's edge; its spaceId is the consumer Space).
+    if (consumer.spaceId !== request.spaceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `dependency producer (${producer.spaceId}) and consumer ` +
-          `(${consumer.spaceId}) must both belong to space ${request.spaceId}`,
+        `dependency consumer (${consumer.spaceId}) must belong to space ` +
+          `${request.spaceId}`,
       );
+    }
+    if (request.visibility === "space") {
+      // Same-Space invariant (variable_injection / remote_state): the producer
+      // must also belong to the request Space.
+      if (producer.spaceId !== request.spaceId) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `dependency producer (${producer.spaceId}) and consumer ` +
+            `(${consumer.spaceId}) must both belong to space ${request.spaceId}`,
+        );
+      }
+    } else {
+      // cross_space (published_output): the producer lives in ANOTHER Space and
+      // the edge is authorized by an ACTIVE OutputShare from the producer's Space
+      // to the consumer's Space covering every mapped `from` name.
+      if (producer.spaceId === consumer.spaceId) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `cross_space dependency producer and consumer both belong to space ` +
+            `${producer.spaceId}; use a space-visibility dependency instead`,
+        );
+      }
+      await this.#assertActiveShareCovers(producer, consumer, request.outputs);
     }
 
     // Cycle prevention: would adding producer -> consumer create a cycle in the
@@ -207,6 +239,47 @@ export class DependenciesService {
       },
     });
     return created;
+  }
+
+  /**
+   * Asserts a `published_output` cross-Space edge is authorized (spec §18): an
+   * ACTIVE OutputShare from the producer's Space to the consumer's Space, for the
+   * producer Installation, covering EVERY mapped `from` name. The consumer maps
+   * from the SHARED name the grant exposes (the share entry's `alias` when set,
+   * else its `name`), so the covered set is the union of those shared names
+   * across the consumer's active shares. A missing/revoked grant, or one that
+   * does not cover a mapped name, is a typed `failed_precondition`.
+   */
+  async #assertActiveShareCovers(
+    producer: { readonly id: string; readonly spaceId: string },
+    consumer: { readonly spaceId: string },
+    outputs: Readonly<Record<string, DependencyOutputMapping>>,
+  ): Promise<void> {
+    const shares = await this.#store.listOutputSharesToSpace(consumer.spaceId);
+    // Only ACTIVE shares from THIS producer in THIS producer Space count.
+    const covered = new Set<string>();
+    for (const share of shares) {
+      if (
+        share.status !== "active" ||
+        share.fromSpaceId !== producer.spaceId ||
+        share.producerInstallationId !== producer.id
+      ) continue;
+      for (const entry of share.outputs) {
+        // The consumer references the SHARED name the grant exposes: the alias
+        // when set, otherwise the producer output name.
+        covered.add(entry.alias ?? entry.name);
+      }
+    }
+    const requested = Object.values(outputs).map((mapping) => mapping.from);
+    const missing = requested.filter((name) => !covered.has(name));
+    if (missing.length > 0) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `output_share_required: no active OutputShare from space ` +
+          `${producer.spaceId} to space ${consumer.spaceId} covers ` +
+          `${missing.join(", ")} for producer installation ${producer.id}`,
+      );
+    }
   }
 
   /**
@@ -263,6 +336,45 @@ export class DependenciesService {
     requireNonEmptyString(spaceId, "spaceId");
     return await this.#store.listDependenciesBySpace(spaceId);
   }
+}
+
+/**
+ * Gates the (mode, visibility) pair (spec §15 / §18). Only three combinations
+ * have an execution path:
+ *   - `variable_injection` + `space`
+ *   - `remote_state` + `space`
+ *   - `published_output` + `cross_space`
+ * Every other pair is rejected. `cross_space` with a non-published_output mode
+ * (e.g. `variable_injection`) would cross a Space boundary without an
+ * OutputShare; a `space` `published_output` is meaningless (same-Space output
+ * flow is `variable_injection`).
+ */
+function assertSupportedModeVisibility(
+  mode: DependencyMode,
+  visibility: DependencyVisibility,
+): void {
+  const ok = (mode === "variable_injection" && visibility === "space") ||
+    (mode === "remote_state" && visibility === "space") ||
+    (mode === "published_output" && visibility === "cross_space");
+  if (ok) return;
+  if (mode === "published_output" && visibility === "space") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "published_output requires cross_space visibility (same-Space output " +
+        "flow uses variable_injection)",
+    );
+  }
+  if (visibility === "cross_space") {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `dependency mode ${mode} cannot cross a Space boundary; cross_space ` +
+        "requires published_output (backed by an OutputShare)",
+    );
+  }
+  throw new OpenTofuControllerError(
+    "invalid_argument",
+    `unsupported dependency mode/visibility combination: ${mode}/${visibility}`,
+  );
 }
 
 /**

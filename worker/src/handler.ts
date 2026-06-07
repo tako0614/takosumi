@@ -56,6 +56,7 @@ import { createCloudflareD1DeployStores } from "./d1_deploy_stores.ts";
 import { createCloudflareD1OpenTofuDeploymentStore } from "./d1_opentofu_store.ts";
 import { CloudflareD1SnapshotStorageDriver } from "./d1_storage.ts";
 import { CloudflareR2ObjectStorage } from "./r2_object_storage.ts";
+import { backupArtifactStoreFromEnv } from "./backup_artifact_store.ts";
 import {
   createServiceWorkerRequest,
   isServiceControlPlanePath,
@@ -395,6 +396,9 @@ async function createWorkerServiceApp(
   const enqueueRun = openTofuRunEnqueuer(env);
   const enqueueSourceSync = openTofuSourceSyncEnqueuer(env);
   const installationCoordination = durableObjectInstallationCoordination(env);
+  // Control backups (spec §33 / §26): seal the bundle with the at-rest crypto
+  // and write to R2_BACKUPS. Absent binding -> backups stay disabled (501).
+  const backupArtifactStore = backupArtifactStoreFromEnv(env.R2_BACKUPS, runtimeEnv);
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -418,6 +422,7 @@ async function createWorkerServiceApp(
     ...(options.runnerProfiles
       ? { runnerProfiles: options.runnerProfiles }
       : {}),
+    ...(backupArtifactStore ? { backupArtifactStore } : {}),
   });
 }
 

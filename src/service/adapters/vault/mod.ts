@@ -31,6 +31,7 @@ import {
 import {
   allowedEnvNamesForProvider,
   cloudFamilyForProvider,
+  providerCredentialArgs,
   providerEnvRule,
   requiredEnvGroupsForProvider,
   requiredEnvGroupsSatisfied,
@@ -152,6 +153,21 @@ export interface MintRequest {
   readonly connectionIds?: readonly string[];
 }
 
+/**
+ * One (capability, connection) pair for the §13 per-alias credential mint. The
+ * capability label is the alias the generated root declared the provider under;
+ * the connectionId is the Connection that capability resolved to. The vault
+ * re-validates the id (existence + space ownership) — caller claims are never
+ * trusted — and maps the connection's credential env into
+ * `TF_VAR_<provider>_<capability>_<arg>` entries.
+ */
+export interface CapabilityMintEntry {
+  /** Provider-alias capability label (e.g. `compute` / `dns` / `storage`). */
+  readonly capability: string;
+  /** The Connection this capability resolved to. */
+  readonly connectionId: string;
+}
+
 export interface ConnectionVault {
   register(input: RegisterConnectionInput): Promise<Connection>;
   test(connectionId: string): Promise<TestConnectionResult>;
@@ -174,6 +190,23 @@ export interface ConnectionVault {
    * The result is wrapped so callers can attach it to a runner dispatch only.
    */
   mintForPhase(request: MintRequest): Promise<PhaseMintBundle>;
+  /**
+   * §13 per-alias credential mint. For each (capability, connectionId) entry the
+   * vault re-validates the id (existence + space ownership, like
+   * {@link MintRequest.connectionIds}), opens the connection's sealed values, and
+   * maps its credential env names to `TF_VAR_<provider>_<capability>_<arg>`
+   * entries using the provider arg mapping (cloudflare: `api_token`; aws:
+   * `access_key` / `secret_key` / `token`). A connection whose provider has no arg
+   * mapping contributes no TF_VAR (its alias inherits the shared provider env).
+   * Phase rule: tofu phases only (plan / apply / destroy). The returned bundle
+   * carries ONLY the per-alias TF_VAR env; the caller merges it on top of the
+   * shared provider mint. Never serialized into logs.
+   */
+  mintForCapabilities(
+    spaceId: string,
+    entries: readonly CapabilityMintEntry[],
+    options?: { readonly phase?: MintPhase },
+  ): Promise<PhaseMintBundle>;
 }
 
 /**
@@ -542,6 +575,76 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   }
 
   /**
+   * §13 per-alias credential mint. See {@link ConnectionVault.mintForCapabilities}.
+   * Re-validates each connection id (existence + space ownership) before opening
+   * any value, so a caller can never mint a connection from another space. Maps
+   * each connection's credential env to `TF_VAR_<provider>_<capability>_<arg>`
+   * using the provider arg mapping. Returns ONLY the TF_VAR env.
+   */
+  async mintForCapabilities(
+    spaceId: string,
+    entries: readonly CapabilityMintEntry[],
+    options?: { readonly phase?: MintPhase },
+  ): Promise<PhaseMintBundle> {
+    requireNonEmpty(spaceId, "spaceId");
+    // Phase rule: per-alias provider credentials are tofu-phase only. A source /
+    // build phase must never request provider credentials (invariants 3-5).
+    const phase = options?.phase;
+    if (phase !== undefined && phase !== "plan" && phase !== "apply" && phase !== "destroy") {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `mintForCapabilities is tofu-phase only; ${phase} phase must not request provider credentials`,
+      );
+    }
+    const env: Record<string, string> = {};
+    const warnings: string[] = [];
+    for (const entry of entries) {
+      requireNonEmpty(entry.capability, "capability");
+      requireNonEmpty(entry.connectionId, "connectionId");
+      // Re-validate the id like #capabilityPool: existence + space ownership.
+      const connection = await this.#store.getConnection(entry.connectionId);
+      if (!connection) {
+        throw new ConnectionVaultError(
+          "not_found",
+          `connection ${entry.connectionId} not found`,
+        );
+      }
+      if (connection.scope === "space" && connection.spaceId !== spaceId) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `connection ${entry.connectionId} belongs to another space`,
+        );
+      }
+      if (isSourceGitKind(connection.kind)) {
+        // A git connection is never a provider alias credential (invariants 4/5).
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `connection ${entry.connectionId} is a git source connection and cannot back a provider capability`,
+        );
+      }
+      const argMap = providerCredentialArgs(connection.provider);
+      if (argMap.length === 0) {
+        // No per-alias split for this provider: its alias inherits the shared
+        // provider env credential (rootgen emits a credential-free alias).
+        continue;
+      }
+      if (connection.status === "pending") {
+        warnings.push(
+          `connection ${connection.id} for capability ${entry.capability} is pending (not verified)`,
+        );
+      }
+      const values = await this.#openValues(connection);
+      const localProvider = providerLocalName(connection.provider);
+      for (const { envName, arg } of argMap) {
+        const value = values[envName];
+        if (typeof value !== "string") continue;
+        env[`TF_VAR_${localProvider}_${entry.capability}_${arg}`] = value;
+      }
+    }
+    return new PhaseMintBundle({ env }, warnings);
+  }
+
+  /**
    * Builds the capability-resolved connection pool for a tofu-phase mint. Each
    * id is re-read from the store; a space-scoped connection must belong to the
    * requesting space and an operator-scoped one is instance-wide. Unknown ids
@@ -802,6 +905,19 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (isCloudflareVerifyOk(body)) return { ok: true };
     return { ok: false, detail: "token verify reported the token is not active" };
   }
+}
+
+/**
+ * Local provider name used as the `<provider>` segment of the §13 per-alias
+ * credential var (`TF_VAR_<provider>_<capability>_<arg>`). Mirrors rootgen's
+ * `providerLocalName`: the trailing type segment of the provider rule (e.g.
+ * `cloudflare/cloudflare` / `cloudflare` -> `cloudflare`; `hashicorp/aws` ->
+ * `aws`). The connection's `provider` is a registered short name in practice, so
+ * this is usually identity; the split handles a registry-path provider too.
+ */
+function providerLocalName(provider: string): string {
+  const parts = provider.split("/");
+  return parts[parts.length - 1] ?? provider;
 }
 
 function selectConnectionForProvider(
