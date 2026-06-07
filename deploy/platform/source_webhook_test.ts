@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import {
+  driftCheckEnabled,
   handleSourceWebhookRequest,
   pollAutoSyncSources,
   type SourcePollOperations,
@@ -122,6 +123,22 @@ test("scheduled poll enqueues a deduped sync per autoSync source, capped", async
   };
   await pollAutoSyncSources(ops, 50);
   expect(syncCalls).toEqual(["src_a", "src_b"]);
+});
+
+test("drift sweep is OFF by default and only enabled by the =1 flag", () => {
+  // Default OFF: the scheduled() handler skips the drift sweep unless the flag is
+  // explicitly set to "1" (spec §28 / Phase 8 opt-in).
+  const base = { TAKOSUMI_ACCOUNTS_DB: {} } as never;
+  expect(driftCheckEnabled(base)).toBe(false);
+  expect(
+    driftCheckEnabled({ ...base, TAKOSUMI_DRIFT_CHECK_ENABLED: "0" } as never),
+  ).toBe(false);
+  expect(
+    driftCheckEnabled({ ...base, TAKOSUMI_DRIFT_CHECK_ENABLED: "true" } as never),
+  ).toBe(false);
+  expect(
+    driftCheckEnabled({ ...base, TAKOSUMI_DRIFT_CHECK_ENABLED: "1" } as never),
+  ).toBe(true);
 });
 
 test("scheduled poll continues past a failing source", async () => {

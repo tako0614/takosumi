@@ -9,6 +9,7 @@ export * from "./activity.ts";
 export * from "./output-snapshots.ts";
 export * from "./deployments.ts";
 export * from "./install-link.ts";
+export * from "./backups.ts";
 // `RunStatus` from ./runs.ts is exported selectively: the internal run ledger
 // in ./deploy-control-api.ts still owns a `RunStatus` union for its
 // PlanRun/ApplyRun records. The public §19 status union is reachable via the

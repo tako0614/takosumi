@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   createOutboxDispatcherTask,
   createRegistrySyncWorkerTask,
-  createRepairWorkerTask,
   createRevokeDebtCleanupWorkerTask,
   createRuntimeAgentStaleDetectionTask,
   WorkerDaemon,
@@ -20,7 +19,6 @@ test("WorkerDaemon runOnce ticks each configured task once", async () => {
         intervalMs: 100,
         tick: () => calls.push("registry-sync"),
       },
-      { name: "repair", intervalMs: 100, tick: () => calls.push("repair") },
     ],
   });
 
@@ -28,11 +26,11 @@ test("WorkerDaemon runOnce ticks each configured task once", async () => {
 
   assert.deepEqual(
     calls.sort(),
-    ["apply", "outbox", "registry-sync", "repair"].sort(),
+    ["apply", "outbox", "registry-sync"].sort(),
   );
-  assert.equal(results.length, 4);
+  assert.equal(results.length, 3);
   assert.equal(results.every((result) => result.ok), true);
-  assert.deepEqual(results.map((result) => result.iteration), [0, 0, 0, 0]);
+  assert.deepEqual(results.map((result) => result.iteration), [0, 0, 0]);
 });
 
 test("WorkerDaemon applies backoff after failed ticks and stops on cancellation", async () => {
@@ -74,7 +72,7 @@ test("WorkerDaemon applies backoff after failed ticks and stops on cancellation"
   assert.equal(results[0].nextDelayMs, 25);
 });
 
-test("worker task factories adapt outbox, registry, repair, runtime-agent, and cleanup workers", async () => {
+test("worker task factories adapt outbox, registry, runtime-agent, and cleanup workers", async () => {
   const calls: string[] = [];
   const outboxTask = createOutboxDispatcherTask({
     intervalMs: 1,
@@ -97,16 +95,6 @@ test("worker task factories adapt outbox, registry, repair, runtime-agent, and c
       },
       syncProviderSupport: () => {
         calls.push("registry-support");
-        return Promise.resolve();
-      },
-    },
-  });
-  const repairTask = createRepairWorkerTask({
-    intervalMs: 1,
-    groups: [{ spaceId: "space_1", groupId: "group_1" }],
-    worker: {
-      inspectGroup: (group) => {
-        calls.push(`repair:${group.spaceId}:${group.groupId}`);
         return Promise.resolve();
       },
     },
@@ -147,7 +135,6 @@ test("worker task factories adapt outbox, registry, repair, runtime-agent, and c
     tasks: [
       outboxTask,
       registryTask,
-      repairTask,
       runtimeAgentTask,
       revokeDebtTask,
     ],
@@ -161,7 +148,6 @@ test("worker task factories adapt outbox, registry, repair, runtime-agent, and c
       "outbox:2",
       "registry-support",
       "registry:1",
-      "repair:space_1:group_1",
       "revoke-debt:space:one:3",
       "revoke-debt:space:two:3",
       "runtime-agent:60000:2026-04-30T00:00:00.000Z",

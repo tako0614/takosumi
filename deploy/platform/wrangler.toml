@@ -69,8 +69,10 @@ bucket_name = "takosumi-source"
 binding = "R2_STATE"
 bucket_name = "takosumi-state"
 
-# Backup/export artifacts (core-spec.md §26 R2_BACKUPS; implementation is
-# post-MVP, the binding is declared for spec parity).
+# Backup/export artifacts (core-spec.md §26 R2_BACKUPS / §33 control backup).
+# Holds the sealed control-backup bundles written by the backups service
+# (spaces/{spaceId}/backups/{backupId}/control.json.gz.enc; gzip instead of the
+# spec's .zst since zstd is unavailable in workerd).
 [[r2_buckets]]
 binding = "R2_BACKUPS"
 bucket_name = "takosumi-backups"

@@ -28,6 +28,7 @@ import type {
   Deployment,
   DeploymentOutput,
   DispatchBuildSpec,
+  DispatchDepState,
   DispatchGeneratedRoot,
   DispatchSourceArchive,
   DispatchStateScope,
@@ -59,6 +60,7 @@ import type {
   TestConnectionResponse,
 } from "takosumi-contract/deploy-control-api";
 import type {
+  CapabilityMintEntry,
   ConnectionVault,
   CredentialBundle,
 } from "../../adapters/vault/mod.ts";
@@ -70,6 +72,7 @@ import type {
   CreateSourceSyncResponse,
   ListSourcesResponse,
   ListSourceSnapshotsResponse,
+  MintPhase,
   PatchSourceRequest,
   Source,
   SourceResponse,
@@ -213,6 +216,14 @@ interface ResolvedTemplatePlan {
 export interface RunInstallationDispatch {
   readonly stateScope?: DispatchStateScope;
   readonly sourceArchive?: DispatchSourceArchive;
+  /**
+   * Remote-state dependency descriptors (spec §15 `remote_state`). One per
+   * `remote_state` Dependency edge of the consumer Installation; the runner DO
+   * fetches + decrypts each producer state and the container writes it read-only
+   * to `/work/deps/<name>.tfstate` before init/plan/apply. Absent for runs with
+   * no `remote_state` edges.
+   */
+  readonly depStates?: readonly DispatchDepState[];
 }
 
 export interface OpenTofuPlanJob extends RunTemplateDispatch, RunInstallationDispatch {
@@ -455,6 +466,12 @@ interface PlanRunInternalContext {
    * plans.
    */
   readonly runGroupId?: string;
+  /**
+   * Marks this plan as a §19 `drift_check` (Phase 8). Stamped onto the PlanRun
+   * so it projects `type: "drift_check"`, never parks `waiting_approval`, and is
+   * rejected by `createApplyRun`. Set only by `createInstallationDriftCheck`.
+   */
+  readonly driftCheck?: true;
 }
 
 /**
@@ -473,6 +490,14 @@ interface ResolvedDependencies {
   readonly entries: readonly DependencySnapshotEntry[];
   readonly mode: DependencySnapshotMode;
 }
+
+/**
+ * The names a `published_output` cross-Space edge may consume, resolved from the
+ * consumer Space's ACTIVE OutputShares for one producer Installation. Maps the
+ * SHARED name (the grant alias, else the producer output name) -> the producer's
+ * actual output name (the key into the producer's OutputSnapshot.spaceOutputs).
+ */
+type ShareCoverage = ReadonlyMap<string, string>;
 
 /**
  * Request to plan / destroy-plan an Installation (spec §23). Resolves the
@@ -500,6 +525,13 @@ export interface CreateInstallationPlanInternal {
    * The snapshot must belong to the Installation's Source.
    */
   readonly sourceSnapshotId?: string;
+  /**
+   * Marks the resulting plan as a §19 `drift_check` (Phase 8). Set only by
+   * {@link OpenTofuDeploymentController.createInstallationDriftCheck}; threaded
+   * onto the created PlanRun so it projects `type: "drift_check"`, never parks
+   * `waiting_approval`, and is rejected by `createApplyRun`.
+   */
+  readonly driftCheck?: true;
 }
 
 export class OpenTofuDeploymentController {
@@ -639,6 +671,7 @@ export class OpenTofuDeploymentController {
         ? { installationContext: internal.installationContext }
         : {}),
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
+      ...(internal.driftCheck ? { driftCheck: true as const } : {}),
       ...(templatePlan
         ? {
           templateBinding: {
@@ -759,6 +792,35 @@ export class OpenTofuDeploymentController {
     return await this.#createInstallationPlanRun(installationId, true, context);
   }
 
+  /**
+   * Installation-driven drift check (spec §19 `drift_check` run type; Phase 8 —
+   * MVP 外 per core-conformance). Creates a plan-kind internal run flagged
+   * {@link PlanRun.driftCheck} that:
+   *   - resolves the Installation -> InstallConfig -> Source -> latest snapshot
+   *     exactly like {@link createInstallationPlan} (an `update`-kind plan), so
+   *     the runner produces a real `tofu plan` against the live state;
+   *   - NEVER parks `waiting_approval` (`#planAwaitsApproval` short-circuits a
+   *     drift check) — it is a read-only signal, not an applyable plan;
+   *   - can NEVER be applied (`createApplyRun` rejects a drift-check plan with
+   *     `failed_precondition`);
+   *   - on completion with a non-empty change summary emits an
+   *     `installation.drift_detected` Activity event (COUNTS ONLY — no values,
+   *     no installation status change; the spec has no `drifted` status).
+   * The §19 Run projection maps it to `type: "drift_check"`.
+   *
+   * Spec divergence note: §30 does not enumerate a drift-check create route, but
+   * §19 defines the run type; the public route is registered as a documented
+   * spec-extension (see deploy_control_public_routes.ts).
+   */
+  async createInstallationDriftCheck(
+    installationId: string,
+    context: DeployControlActorContext = {},
+  ): Promise<PlanRunResponse> {
+    return await this.#createInstallationPlanRun(installationId, false, context, {
+      driftCheck: true,
+    });
+  }
+
   async #createInstallationPlanRun(
     installationId: string,
     destroy: boolean,
@@ -847,6 +909,7 @@ export class OpenTofuDeploymentController {
       baseStateGeneration,
       ...(installTypePlan ? { installTypePlan } : {}),
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
+      ...(internal.driftCheck ? { driftCheck: true as const } : {}),
     });
     if (!resolvedDeps || resolvedDeps.entries.length === 0) {
       return response;
@@ -878,16 +941,6 @@ export class OpenTofuDeploymentController {
     const injectedValues: Record<string, JsonValue> = {};
     const entries: DependencySnapshotEntry[] = [];
     for (const dependency of dependencies) {
-      // MVP supports variable_injection only; the DependenciesService rejects
-      // other modes at creation, but guard here too (a stored remote_state /
-      // published_output edge cannot be honored yet).
-      if (dependency.mode !== "variable_injection") {
-        throw new OpenTofuControllerError(
-          "not_implemented",
-          `dependency ${dependency.id} mode ${dependency.mode} is not ` +
-            `implemented (only variable_injection is supported)`,
-        );
-      }
       const producer = await this.#store.getInstallation(
         dependency.producerInstallationId,
       );
@@ -898,29 +951,71 @@ export class OpenTofuDeploymentController {
             `installation ${dependency.producerInstallationId} not found`,
         );
       }
+      // remote_state injects NO values: the producer state is materialized into
+      // the container at dispatch time (#installationDispatch derives depStates
+      // from the producer's LATEST StateSnapshot). The snapshot entry still pins
+      // the producer state generation so strict mode can detect a moved producer;
+      // the values digest is over `{}` (empty mapping or otherwise no injection).
+      if (dependency.mode === "remote_state") {
+        const values: Record<string, JsonValue> = {};
+        entries.push({
+          dependencyId: dependency.id,
+          producerInstallationId: producer.id,
+          producerStateGeneration: producer.currentStateGeneration,
+          producerOutputSnapshotId: "",
+          producerOutputDigest: "",
+          valuesDigest: await stableJsonDigest(values),
+          values,
+        });
+        continue;
+      }
+      // variable_injection (same-Space) and published_output (cross-Space via an
+      // active OutputShare) both pull producer outputs into the consumer inputs.
+      // published_output restricts the readable names to the active grant and
+      // resolves each mapped SHARED name back to the producer output name.
+      const coverage = dependency.mode === "published_output"
+        ? await this.#resolveShareCoverage(producer, consumer)
+        : undefined;
       const outputSnapshot = producer.currentOutputSnapshotId
         ? await this.#store.getOutputSnapshot(producer.currentOutputSnapshotId)
         : undefined;
       const values: Record<string, JsonValue> = {};
       for (const mapping of Object.values(dependency.outputs)) {
+        // For published_output the mapping `from` is the SHARED name the grant
+        // exposes; resolve it to the producer output name (and fail
+        // output_share_revoked when the active grant no longer covers it). For
+        // variable_injection `from` IS the producer output name.
+        let producerOutputName = mapping.from;
+        if (coverage) {
+          const resolved = coverage.get(mapping.from);
+          if (resolved === undefined) {
+            throw new OpenTofuControllerError(
+              "failed_precondition",
+              `output_share_revoked: dependency ${dependency.id} consumes ` +
+                `shared output ${mapping.from} from producer installation ` +
+                `${producer.id} but no active OutputShare covers it`,
+            );
+          }
+          producerOutputName = resolved;
+        }
         const available = outputSnapshot?.spaceOutputs ?? {};
         const present = Object.prototype.hasOwnProperty.call(
           available,
-          mapping.from,
+          producerOutputName,
         );
         if (!present) {
           if (mapping.required) {
             throw new OpenTofuControllerError(
               "failed_precondition",
               `dependency_outputs_unavailable: dependency ${dependency.id} ` +
-                `requires producer output ${mapping.from} which the producer ` +
-                `installation ${producer.id} has not published`,
+                `requires producer output ${producerOutputName} which the ` +
+                `producer installation ${producer.id} has not published`,
             );
           }
           // An optional mapping with no producer value contributes nothing.
           continue;
         }
-        const value = available[mapping.from] as JsonValue;
+        const value = available[producerOutputName] as JsonValue;
         values[mapping.to] = value;
         injectedValues[mapping.to] = value;
       }
@@ -943,6 +1038,36 @@ export class OpenTofuDeploymentController {
         ? "strict"
         : "pinned";
     return { injectedValues, entries, mode };
+  }
+
+  /**
+   * Resolves the ACTIVE OutputShare coverage for a `published_output` edge (spec
+   * §18) into a SHARED-name -> producer-output-name map. Reads the consumer
+   * Space's shares granted by the producer Space for this producer Installation,
+   * keeps only `active` grants, and exposes each entry under its SHARED name (the
+   * grant `alias` when set, else its `name`) mapped to the producer output name.
+   * A revoked grant simply drops its entries from the map, so a mapped name the
+   * grant no longer covers surfaces as `output_share_revoked` upstream. Re-run at
+   * BOTH plan and apply (the apply path re-resolves consumer dependencies),
+   * so a revoke between plan and apply fails the apply.
+   */
+  async #resolveShareCoverage(
+    producer: Installation,
+    consumer: Installation,
+  ): Promise<ShareCoverage> {
+    const shares = await this.#store.listOutputSharesToSpace(consumer.spaceId);
+    const coverage = new Map<string, string>();
+    for (const share of shares) {
+      if (
+        share.status !== "active" ||
+        share.fromSpaceId !== producer.spaceId ||
+        share.producerInstallationId !== producer.id
+      ) continue;
+      for (const entry of share.outputs) {
+        coverage.set(entry.alias ?? entry.name, entry.name);
+      }
+    }
+    return coverage;
   }
 
   /**
@@ -1267,6 +1392,15 @@ export class OpenTofuDeploymentController {
     await this.#seededProfiles;
     requireNonEmptyString(request.planRunId, "planRunId");
     const planRun = await this.#requirePlanRun(request.planRunId);
+    // A §19 drift_check is a read-only signal: it can NEVER be applied (Phase 8).
+    // Rejected up front, independent of status, so a succeeded drift check cannot
+    // be promoted into a write run.
+    if (planRun.driftCheck === true) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${planRun.id} is a drift_check and cannot be applied`,
+      );
+    }
     if (planRun.status !== "succeeded") {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -1580,7 +1714,47 @@ export class OpenTofuDeploymentController {
     if (!retainForApply) {
       await this.#store.deletePlanRunInputs(runId);
     }
+    // Drift check (§19 drift_check; Phase 8): a succeeded drift check whose plan
+    // observed any change (add/change/destroy > 0) means the live state has
+    // drifted from the recorded configuration. Emit `installation.drift_detected`
+    // with COUNTS ONLY — no installation status change (the spec has no `drifted`
+    // status) and never any resource names/values.
+    if (result.driftCheck === true && result.status === "succeeded") {
+      await this.#recordDriftDetected(result);
+    }
     return result;
+  }
+
+  /**
+   * Emits `installation.drift_detected` (§27 / §34 Activity) when a succeeded
+   * drift_check observed a non-empty change summary. Metadata carries the run id
+   * + the add/change/destroy counts only (never resource names or values). A run
+   * with an empty summary (no drift) emits nothing.
+   */
+  async #recordDriftDetected(planRun: PlanRun): Promise<void> {
+    const summary = planRun.summary;
+    const add = summary?.add ?? 0;
+    const change = summary?.change ?? 0;
+    const destroy = summary?.destroy ?? 0;
+    if (add + change + destroy <= 0) return;
+    await this.#recordActivity({
+      spaceId: planRun.spaceId,
+      action: "installation.drift_detected",
+      targetType: "installation",
+      targetId: planRun.installationContext?.installationId ??
+        planRun.installationId ?? planRun.id,
+      runId: planRun.id,
+      metadata: {
+        ...(planRun.installationContext?.installationId
+          ? { installationId: planRun.installationContext.installationId }
+          : planRun.installationId
+          ? { installationId: planRun.installationId }
+          : {}),
+        add,
+        change,
+        destroy,
+      },
+    });
   }
 
   /**
@@ -1686,7 +1860,70 @@ export class OpenTofuDeploymentController {
       objectKey: snapshot.archiveObjectKey,
       digest: snapshot.archiveDigest,
     };
-    return { stateScope, sourceArchive };
+    // remote_state dependencies (spec §15): for each remote_state edge of the
+    // consumer Installation, resolve the producer's LATEST StateSnapshot and emit
+    // a depState the DO fetches + decrypts into /work/deps/<name>.tfstate before
+    // init/plan/apply. Derived at dispatch (not pinned) so the consumer reads the
+    // producer's current state; the pinned generation in the DependencySnapshot
+    // is what strict mode guards against.
+    const depStates = await this.#resolveRemoteStateDispatch(ctx.installationId);
+    return {
+      stateScope,
+      sourceArchive,
+      ...(depStates.length > 0 ? { depStates } : {}),
+    };
+  }
+
+  /**
+   * Builds the {@link DispatchDepState} list for a consumer Installation's
+   * `remote_state` Dependency edges (spec §15). For each edge it reads the
+   * producer Installation + its LATEST StateSnapshot (the env's current
+   * generation); a producer with no StateSnapshot yet (never applied) is a typed
+   * `dependency_state_unavailable`. `name` is the producer Installation name —
+   * the `/work/deps/<name>.tfstate` filename the consumer references via
+   * `terraform_remote_state`. Returns an empty list when the consumer has no
+   * remote_state edges.
+   */
+  async #resolveRemoteStateDispatch(
+    consumerInstallationId: string,
+  ): Promise<readonly DispatchDepState[]> {
+    const dependencies = await this.#store.listDependenciesForConsumer(
+      consumerInstallationId,
+    );
+    const depStates: DispatchDepState[] = [];
+    for (const dependency of dependencies) {
+      if (dependency.mode !== "remote_state") continue;
+      const producer = await this.#store.getInstallation(
+        dependency.producerInstallationId,
+      );
+      if (!producer) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `dependency_state_unavailable: dependency ${dependency.id} producer ` +
+            `installation ${dependency.producerInstallationId} not found`,
+        );
+      }
+      const latest = await this.#store.getLatestStateSnapshot(
+        producer.id,
+        producer.environment,
+      );
+      if (!latest) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `dependency_state_unavailable: dependency ${dependency.id} producer ` +
+            `installation ${producer.id} has no StateSnapshot yet (apply it first)`,
+        );
+      }
+      depStates.push({
+        name: producer.name,
+        installationId: producer.id,
+        environment: producer.environment,
+        generation: latest.generation,
+        objectKey: latest.objectKey,
+        digest: latest.digest,
+      });
+    }
+    return depStates;
   }
 
   /**
@@ -1758,6 +1995,11 @@ export class OpenTofuDeploymentController {
    *
    * `pinned` mode (preview / dev) intentionally tolerates a producer that moved
    * after plan: it applies the values frozen at plan time regardless.
+   *
+   * INDEPENDENTLY of mode, a `published_output` edge re-verifies the backing
+   * OutputShare is STILL active and covers every mapped name (spec §18): a grant
+   * revoked between plan and apply fails the apply `output_share_revoked`, even
+   * in `pinned` mode (a revoked grant must not be applied from frozen values).
    */
   async #verifyDependencySnapshot(planRun: PlanRun): Promise<void> {
     if (!planRun.dependencySnapshotId) return;
@@ -1783,6 +2025,9 @@ export class OpenTofuDeploymentController {
             `${entry.dependencyId} pinned values no longer match the pinned digest`,
         );
       }
+      // published_output: re-verify the backing OutputShare at apply (spec §18).
+      // A revoke after plan must fail the apply regardless of snapshot mode.
+      await this.#reverifyPublishedOutputShare(planRun, entry.dependencyId);
       if (snapshot.mode !== "strict") continue;
       // Strict freshness: the producer must not have moved since plan.
       const producer = await this.#store.getInstallation(
@@ -1796,6 +2041,41 @@ export class OpenTofuDeploymentController {
             `${entry.dependencyId} producer installation ` +
             `${entry.producerInstallationId} advanced from state generation ` +
             `${entry.producerStateGeneration} to ${current} since plan`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Re-verifies the OutputShare backing a `published_output` dependency is STILL
+   * active and covers every mapped name at apply time (spec §18). No-ops for a
+   * non-published_output edge or one whose Dependency row is gone (the snapshot
+   * already pinned the values; a missing edge cannot be re-validated and the
+   * tamper/staleness checks still apply). A grant revoked (or narrowed) between
+   * plan and apply throws `output_share_revoked`.
+   */
+  async #reverifyPublishedOutputShare(
+    planRun: PlanRun,
+    dependencyId: string,
+  ): Promise<void> {
+    const dependency = await this.#store.getDependency(dependencyId);
+    if (!dependency || dependency.mode !== "published_output") return;
+    const producer = await this.#store.getInstallation(
+      dependency.producerInstallationId,
+    );
+    const consumer = await this.#store.getInstallation(
+      dependency.consumerInstallationId,
+    );
+    if (!producer || !consumer) return;
+    const coverage = await this.#resolveShareCoverage(producer, consumer);
+    for (const mapping of Object.values(dependency.outputs)) {
+      if (!coverage.has(mapping.from)) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `output_share_revoked: plan run ${planRun.id} dependency ` +
+            `${dependencyId} consumes shared output ${mapping.from} from ` +
+            `producer installation ${producer.id} but no active OutputShare ` +
+            `covers it`,
         );
       }
     }
@@ -1962,29 +2242,55 @@ export class OpenTofuDeploymentController {
       return undefined;
     }
     try {
-      const connectionIds = await this.#capabilityConnectionIds(planRun);
+      // Resolve the installation's capabilities ONCE: the same resolution feeds
+      // BOTH the shared provider-pool selection (connectionIds) AND the §13
+      // per-alias credential split (TF_VAR entries) so the minted TF_VAR vars
+      // line up byte-for-byte with the rootgen aliases (resolved once per
+      // dispatch). Runs without installation context resolve to undefined/[].
+      const resolved = await this.#resolveRunCapabilities(planRun);
+      const connectionIds = resolved
+        ? mintableConnectionIds(resolved)
+        : undefined;
+      // Shared provider env (compatibility): a single credential per provider.
       const bundle = await this.#vault.mint(
         planRun.spaceId,
         planRun.requiredProviders,
-        connectionIds !== undefined ? { connectionIds } : undefined,
+        connectionIds && connectionIds.length > 0 ? { connectionIds } : undefined,
       );
-      return bundle.env;
+      // §13 per-alias split: merge the per-capability TF_VAR env ON TOP of the
+      // shared mint. The same resolved entries that produced the rootgen aliases
+      // produce these TF_VAR_<provider>_<capability>_<arg> vars; the shared env
+      // stays for providers without an arg mapping.
+      const capabilityEntries = resolved
+        ? capabilityMintEntriesFromResolved(resolved)
+        : [];
+      if (capabilityEntries.length === 0) {
+        return bundle.env;
+      }
+      const perAlias = await this.#vault.mintForCapabilities(
+        planRun.spaceId,
+        capabilityEntries,
+        { phase: applyMintPhase(planRun) },
+      );
+      return { ...bundle.env, ...perAlias.env };
     } catch (error) {
       throw mapVaultError(error);
     }
   }
 
   /**
-   * Capability-resolved connection pool for an installation-driven run
-   * (spec §9). Resolution happens at mint time so binding changes take effect
-   * on the next run. Returns `undefined` (legacy space-wide pool) for runs
-   * without installation context, or while the installation has neither
-   * bindings nor operator defaults — the capability wiring becomes
-   * authoritative with the install types (conformance M5).
+   * Resolves an installation-driven run's capabilities (spec §9) at mint time so
+   * binding changes take effect on the next run. Returns `undefined` for runs
+   * without installation context or whose installation row is gone — the legacy
+   * space-wide pool then applies and no per-alias split is produced. The result
+   * feeds BOTH {@link mintableConnectionIds} (shared pool) and
+   * {@link capabilityMintEntriesFromResolved} (the §13 per-alias TF_VAR split),
+   * mirroring `capabilityProvidersFromResolved` so the minted vars match the
+   * rootgen aliases.
    */
-  async #capabilityConnectionIds(
+  async #resolveRunCapabilities(
     planRun: PlanRun,
-  ): Promise<readonly string[] | undefined> {
+  ): Promise<readonly ResolvedCapability[] | undefined> {
     const ctx = planRun.installationContext;
     if (!ctx) return undefined;
     const installation = await this.#store.getInstallation(ctx.installationId);
@@ -1992,11 +2298,7 @@ export class OpenTofuDeploymentController {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
     });
-    const resolved = await this.#connectionsService.resolveCapabilities(
-      installation,
-    );
-    const ids = mintableConnectionIds(resolved);
-    return ids.length > 0 ? ids : undefined;
+    return await this.#connectionsService.resolveCapabilities(installation);
   }
 
   async getApplyRun(id: string): Promise<ApplyRunResponse> {
@@ -2020,6 +2322,22 @@ export class OpenTofuDeploymentController {
 
   async getInstallation(id: string): Promise<GetInstallationResponse> {
     return { installation: await this.#requireInstallation(id) };
+  }
+
+  /**
+   * Lists ACTIVE Installations across all Spaces, capped at `limit` (spec §28
+   * scheduled drift sweep; Phase 8). Only `active` Installations are drift-checkable
+   * (an `installing` / `destroying` / `destroyed` / `error` Installation has no
+   * stable deployed state to compare against). The scheduled sweep iterates this
+   * bounded set and creates one drift check per Installation. A non-positive
+   * limit returns an empty list.
+   */
+  async listActiveInstallations(
+    limit: number,
+  ): Promise<readonly Installation[]> {
+    if (!Number.isFinite(limit) || limit <= 0) return [];
+    const all = await this.#store.listInstallations();
+    return all.filter((i) => i.status === "active").slice(0, Math.floor(limit));
   }
 
   async listDeployments(
@@ -2413,6 +2731,9 @@ export class OpenTofuDeploymentController {
    * approval is driven by the plan's actual changes.
    */
   #planAwaitsApproval(planRun: PlanRun): Promise<boolean> {
+    // A §19 drift_check is read-only and can never be applied (Phase 8): it never
+    // parks waiting_approval regardless of the changes it observed.
+    if (planRun.driftCheck === true) return Promise.resolve(false);
     if (planRun.appliedApplyRunId) return Promise.resolve(false);
     if (planRun.approval) return Promise.resolve(false);
     if (planRun.status !== "succeeded") return Promise.resolve(false);
@@ -2640,6 +2961,8 @@ export class OpenTofuDeploymentController {
         ...(envDispatch.sourceArchive
           ? { sourceArchive: envDispatch.sourceArchive }
           : {}),
+        // remote_state dependency states materialized into /work/deps (spec §15).
+        ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
         // Dispatch-only: the minted env never lands on the persisted run.
         ...(credentials ? { credentials } : {}),
       });
@@ -2689,8 +3012,10 @@ export class OpenTofuDeploymentController {
       // §25 action policy: any delete/replace requires approval before apply.
       // Recorded so the §19 Run projection parks the succeeded plan
       // `waiting_approval`. Destroy plans are always-approval independently
-      // (#planAwaitsApproval), so they need no field.
-      const requiresApproval = layered.action?.requiresApproval === true;
+      // (#planAwaitsApproval), so they need no field. A drift_check is read-only
+      // and can never be applied (Phase 8), so it never carries requiresApproval.
+      const requiresApproval = running.driftCheck !== true &&
+        layered.action?.requiresApproval === true;
       const updated: PlanRun = {
         ...running,
         status: passedPolicy ? "succeeded" : "blocked",
@@ -2914,6 +3239,8 @@ export class OpenTofuDeploymentController {
         ...(envDispatch.sourceArchive
           ? { sourceArchive: envDispatch.sourceArchive }
           : {}),
+        // remote_state dependency states materialized into /work/deps (spec §15).
+        ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
         ...(credentials ? { credentials } : {}),
       });
       const now = this.#now();
@@ -3148,6 +3475,10 @@ export class OpenTofuDeploymentController {
         ...(envDispatch.sourceArchive
           ? { sourceArchive: envDispatch.sourceArchive }
           : {}),
+        // remote_state dependency states materialized into /work/deps (spec §15):
+        // the teardown config still refreshes its `terraform_remote_state` data
+        // sources, so the producer state files must be present.
+        ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
         ...(credentials ? { credentials } : {}),
       });
       const now = this.#now();
@@ -3495,6 +3826,41 @@ function capabilityProvidersFromResolved(
     providers.push({ capability: kind, provider });
   }
   return providers;
+}
+
+/**
+ * Derives the §13 per-alias credential mint entries from an installation's
+ * resolved capabilities. Mirrors {@link capabilityProvidersFromResolved} EXACTLY
+ * (same capability filter, same "resolved to a Connection" gate) so the minted
+ * `TF_VAR_<provider>_<capability>_<arg>` vars line up byte-for-byte with the
+ * rootgen alias variables. The vault still re-validates each connection id (it
+ * never trusts these claims) and contributes no TF_VAR for a provider without an
+ * arg mapping.
+ */
+function capabilityMintEntriesFromResolved(
+  resolved: readonly ResolvedCapability[],
+): readonly CapabilityMintEntry[] {
+  const entries: CapabilityMintEntry[] = [];
+  for (const entry of resolved) {
+    const kind = PROVIDER_CAPABILITY_KINDS[
+      entry.capability as keyof typeof PROVIDER_CAPABILITY_KINDS
+    ];
+    if (!kind) continue;
+    const connection = entry.connection;
+    if (!connection) continue;
+    entries.push({ capability: kind, connectionId: connection.id });
+  }
+  return entries;
+}
+
+/**
+ * Maps a run's operation to the tofu mint phase used by the §13 per-alias mint.
+ * A `destroy` mints at `destroy`; create/update mint at `plan` (the per-alias
+ * mint treats plan/apply/destroy identically — they are all tofu phases — so
+ * this is precise without distinguishing plan vs apply).
+ */
+function applyMintPhase(planRun: PlanRun): MintPhase {
+  return planRun.operation === "destroy" ? "destroy" : "plan";
 }
 
 /**

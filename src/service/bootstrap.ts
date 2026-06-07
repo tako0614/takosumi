@@ -44,8 +44,13 @@ import { InstallationsService } from "./domains/installations/mod.ts";
 import { SpacesService } from "./domains/spaces/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
 import { DependenciesService } from "./domains/dependencies/mod.ts";
+import { OutputSharesService } from "./domains/output-shares/mod.ts";
 import { RunGroupsService } from "./domains/run-groups/mod.ts";
 import { ActivityService } from "./domains/activity/mod.ts";
+import {
+  type BackupArtifactStore,
+  BackupsService,
+} from "./domains/backups/mod.ts";
 import { seedOfficialInstallConfigs } from "./domains/installations/official_seed.ts";
 import type {
   CreateSourceRequest,
@@ -257,6 +262,13 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * in-process serialization (single-isolate safe).
    */
   readonly installationCoordination?: InstallationCoordination;
+  /**
+   * Control-backup seal + object-storage seam (Core Specification §33 / §26
+   * R2_BACKUPS). The host worker injects an implementation backed by R2_BACKUPS
+   * + the at-rest secret-boundary crypto; when omitted the backup routes report
+   * `not_implemented` (the dev/test fallback may inject an in-memory store).
+   */
+  readonly backupArtifactStore?: BackupArtifactStore;
 }
 
 /**
@@ -292,6 +304,11 @@ export interface TakosumiOperations {
    */
   listDependenciesBySpace(spaceId: string): Promise<readonly Dependency[]>;
   /**
+   * OutputShares domain service (Core Specification §18): the cross-Space output
+   * sharing grants over the same shared ledger.
+   */
+  readonly outputShares: OutputSharesService;
+  /**
    * RunGroups domain service (Core Specification §19 / §24): the space_update
    * RunGroup over the same shared ledger + controller.
    */
@@ -301,6 +318,11 @@ export interface TakosumiOperations {
    * audit trail over the same shared ledger.
    */
   readonly activity: ActivityService;
+  /**
+   * Control-backups domain service (Core Specification §33 / §26): exports a
+   * Space's control ledger as a sealed R2_BACKUPS bundle.
+   */
+  readonly backups: BackupsService;
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
   /**
@@ -311,6 +333,14 @@ export interface TakosumiOperations {
   createInstallationPlan(installationId: string): Promise<PlanRunResponse>;
   /** Installation-driven destroy-plan: always lands waiting_approval (spec §23). */
   createInstallationDestroyPlan(
+    installationId: string,
+  ): Promise<PlanRunResponse>;
+  /**
+   * Installation-driven drift check (spec §19 `drift_check`; Phase 8): a
+   * read-only plan that detects state drift. Never parks waiting_approval and can
+   * never be applied; emits `installation.drift_detected` on a non-empty summary.
+   */
+  createInstallationDriftCheck(
     installationId: string,
   ): Promise<PlanRunResponse>;
   getPlanRun(id: string): Promise<PlanRunResponse>;
@@ -482,6 +512,13 @@ export async function createTakosumiService(
     store: sharedOpenTofuStore,
     activity: activityService,
   });
+  // OutputShares domain (Core Specification §18): the cross-Space output sharing
+  // grant. Validates against the producer's latest OutputSnapshot over the SAME
+  // shared ledger; emits Space activity through the same recorder.
+  const outputSharesService = new OutputSharesService({
+    store: sharedOpenTofuStore,
+    activity: activityService,
+  });
   // Seed the official InstallConfig catalog from the built-in template registry
   // (trustLevel "official"). Idempotent upsert keyed by the derived config id,
   // so a restart re-seeds the same rows. Fire-and-forget: a seed failure must
@@ -509,6 +546,17 @@ export async function createTakosumiService(
     store: sharedOpenTofuStore,
     controller: opentofuController,
     activity: activityService,
+  });
+  // Control-backups domain (Core Specification §33 / §26 R2_BACKUPS): exports a
+  // Space's control ledger as a sealed bundle. The seal + object-storage seam is
+  // host-injected (`backupArtifactStore`); when absent the service is disabled
+  // and the routes report not_implemented.
+  const backupsService = new BackupsService({
+    store: sharedOpenTofuStore,
+    activity: activityService,
+    ...(options.backupArtifactStore
+      ? { artifactStore: options.backupArtifactStore }
+      : {}),
   });
   const app = await createApiApp({
     role,
@@ -544,8 +592,10 @@ export async function createTakosumiService(
       installationsService,
       connectionsService,
       dependenciesService,
+      outputSharesService,
       runGroupsService,
       activityService,
+      backupsService,
       ...(deployControlToken ? { getDeployControlToken: () => deployControlToken } : {}),
     },
     readinessRouteProbes: createRoleReadinessProbes({
@@ -580,14 +630,18 @@ export async function createTakosumiService(
     dependencies: dependenciesService,
     listDependenciesBySpace: (spaceId) =>
       dependenciesService.listBySpace(spaceId),
+    outputShares: outputSharesService,
     runGroups: runGroupsService,
     activity: activityService,
+    backups: backupsService,
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
     createInstallationPlan: (installationId) =>
       opentofuController.createInstallationPlan(installationId),
     createInstallationDestroyPlan: (installationId) =>
       opentofuController.createInstallationDestroyPlan(installationId),
+    createInstallationDriftCheck: (installationId) =>
+      opentofuController.createInstallationDriftCheck(installationId),
     getPlanRun: (id) => opentofuController.getPlanRun(id),
     createApplyRun: (request) => opentofuController.createApplyRun(request),
     getApplyRun: (id) => opentofuController.getApplyRun(id),

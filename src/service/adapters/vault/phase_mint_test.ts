@@ -326,3 +326,125 @@ test("capability pool restricts selection: provider outside the pool fails", asy
   expect(err).toBeInstanceOf(ConnectionVaultError);
   expect(String(err)).toContain("no connection registered");
 });
+
+// --- §13 per-alias credential mint (mintForCapabilities) --------------------
+
+async function registerAws(vault: StaticSecretConnectionVault) {
+  return await vault.register({
+    spaceId: "space_1",
+    provider: "aws",
+    authMethod: "static_secret",
+    values: {
+      AWS_ACCESS_KEY_ID: "AKIA_secret_id",
+      AWS_SECRET_ACCESS_KEY: "aws_secret_key_value",
+      AWS_SESSION_TOKEN: "aws_session_token_value",
+    },
+  });
+}
+
+test("mintForCapabilities maps cloudflare env to TF_VAR_<provider>_<capability>_api_token", async () => {
+  const { vault } = makeVault();
+  const conn = await registerProvider(vault);
+  const bundle = await vault.mintForCapabilities("space_1", [
+    { capability: "compute", connectionId: conn.id },
+  ]);
+  expect(bundle.env).toEqual({
+    TF_VAR_cloudflare_compute_api_token: "cf-secret-token",
+  });
+});
+
+test("mintForCapabilities maps the three aws args and supports multiple capabilities", async () => {
+  const { vault } = makeVault();
+  const cf = await registerProvider(vault);
+  const aws = await registerAws(vault);
+  const bundle = await vault.mintForCapabilities("space_1", [
+    { capability: "compute", connectionId: cf.id },
+    { capability: "storage", connectionId: aws.id },
+  ]);
+  expect(bundle.env).toEqual({
+    TF_VAR_cloudflare_compute_api_token: "cf-secret-token",
+    TF_VAR_aws_storage_access_key: "AKIA_secret_id",
+    TF_VAR_aws_storage_secret_key: "aws_secret_key_value",
+    TF_VAR_aws_storage_token: "aws_session_token_value",
+  });
+});
+
+test("mintForCapabilities re-validates ids: a connection from another space is rejected", async () => {
+  const { vault } = makeVault();
+  const conn = await registerProvider(vault); // space_1
+  const err = await vault.mintForCapabilities("space_other", [
+    { capability: "compute", connectionId: conn.id },
+  ]).catch((e) => e);
+  expect(err).toBeInstanceOf(ConnectionVaultError);
+  expect(String(err)).toContain("belongs to another space");
+});
+
+test("mintForCapabilities re-validates ids: an unknown connection fails closed", async () => {
+  const { vault } = makeVault();
+  const err = await vault.mintForCapabilities("space_1", [
+    { capability: "compute", connectionId: "conn_missing" },
+  ]).catch((e) => e);
+  expect(err).toBeInstanceOf(ConnectionVaultError);
+  expect((err as ConnectionVaultError).code).toBe("not_found");
+});
+
+test("mintForCapabilities mints an operator connection from any space", async () => {
+  const { vault } = makeVault();
+  const operatorConn = await vault.register({
+    provider: "cloudflare",
+    authMethod: "static_secret",
+    values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
+  });
+  const bundle = await vault.mintForCapabilities("space_other", [
+    { capability: "dns", connectionId: operatorConn.id },
+  ]);
+  expect(bundle.env).toEqual({
+    TF_VAR_cloudflare_dns_api_token: "operator-cf-token",
+  });
+});
+
+test("mintForCapabilities contributes no TF_VAR for a provider without an arg mapping", async () => {
+  const { vault } = makeVault();
+  const conn = await vault.register({
+    spaceId: "space_1",
+    provider: "kubernetes",
+    authMethod: "static_secret",
+    values: { KUBE_CONFIG_PATH: "/work/.kube/config" },
+  });
+  const bundle = await vault.mintForCapabilities("space_1", [
+    { capability: "compute", connectionId: conn.id },
+  ]);
+  expect(bundle.env).toEqual({});
+});
+
+test("mintForCapabilities rejects a git source connection", async () => {
+  const { vault } = makeVault();
+  const git = await registerHttps(vault);
+  const err = await vault.mintForCapabilities("space_1", [
+    { capability: "source", connectionId: git.id },
+  ]).catch((e) => e);
+  expect(err).toBeInstanceOf(ConnectionVaultError);
+  expect(String(err)).toContain("git source connection");
+});
+
+test("mintForCapabilities is tofu-phase only", async () => {
+  const { vault } = makeVault();
+  const conn = await registerProvider(vault);
+  await expect(
+    vault.mintForCapabilities(
+      "space_1",
+      [{ capability: "compute", connectionId: conn.id }],
+      { phase: "build" },
+    ),
+  ).rejects.toThrow(/tofu-phase only/);
+});
+
+test("mintForCapabilities bundle never serializes its values", async () => {
+  const { vault } = makeVault();
+  const conn = await registerProvider(vault);
+  const bundle = await vault.mintForCapabilities("space_1", [
+    { capability: "compute", connectionId: conn.id },
+  ]);
+  expect(JSON.stringify(bundle)).not.toContain("cf-secret-token");
+  expect(`${bundle}`).not.toContain("cf-secret-token");
+});

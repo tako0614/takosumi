@@ -4,6 +4,9 @@ import { createApiApp } from "./app.ts";
 import { OpenTofuDeploymentController } from "../domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../domains/deploy-control/store.ts";
 import { seedInstallationModel } from "../domains/deploy-control/test_model_fixture.ts";
+import { OutputSharesService } from "../domains/output-shares/mod.ts";
+import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { Space } from "takosumi-contract/spaces";
 
 test("deploy_control_public_routes — OpenTofu endpoints respond with 501 when controller is absent",
   async () => {
@@ -210,4 +213,114 @@ test("deploy_control_public_routes — runner profile list is scoped", async () 
   const payload = await response.json();
   expect(payload.runnerProfiles.map((profile: { id: string }) => profile.id))
     .toEqual(["cloudflare-default"]);
+});
+
+// --- OutputShares scoped-principal permission tests (§18) ---------------------
+
+const SHARE_TS = "2026-06-06T00:00:00.000Z";
+
+/**
+ * Wires the public routes over a store seeded with a producer Installation in
+ * `space_allowed`, a consumer Space `space_consume1`, and a latest
+ * OutputSnapshot projecting `bucket_name`. The bearer `scoped-token` maps to a
+ * principal scoped to `space_allowed` only.
+ */
+async function outputShareApp() {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seedInstallationModel(store, {
+    spaceId: "space_allowed",
+    installationId: "inst_producer1",
+    name: "producer",
+  });
+  const consumer: Space = {
+    id: "space_consume1",
+    handle: "consumer",
+    displayName: "Consumer",
+    type: "personal",
+    ownerUserId: "user_consumer",
+    createdAt: SHARE_TS,
+    updatedAt: SHARE_TS,
+  };
+  await store.putSpace(consumer);
+  const snapshot: OutputSnapshot = {
+    id: "out_scoped01",
+    spaceId: "space_allowed",
+    installationId: "inst_producer1",
+    stateGeneration: 1,
+    rawOutputArtifactKey: "k",
+    publicOutputs: {},
+    spaceOutputs: { bucket_name: "my-bucket" },
+    outputDigest: "sha256:o",
+    createdAt: SHARE_TS,
+  };
+  await store.putOutputSnapshot(snapshot);
+  const app = await createApiApp({
+    registerDeployControlPublicRoutes: true,
+    deployControlPublicRouteOptions: {
+      controller: new OpenTofuDeploymentController({ store, now: () => 1 }),
+      outputSharesService: new OutputSharesService({
+        store,
+        now: () => SHARE_TS,
+        newId: () => "oshare_scoped01",
+      }),
+      authorizeDeployControlBearer: ({ token }) =>
+        token === "scoped-token"
+          ? {
+            actor: "acct_123",
+            spaceIds: ["space_allowed"],
+            operations: ["create"],
+            runnerProfileIds: ["cloudflare-default"],
+          }
+          : undefined,
+    },
+    requestCorrelation: false,
+  });
+  return app;
+}
+
+test("output-shares create — scoped bearer allowed on its fromSpace (§18)", async () => {
+  const app = await outputShareApp();
+  const res = await app.request("/api/output-shares", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer scoped-token",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      fromSpaceId: "space_allowed",
+      toSpaceId: "space_consume1",
+      producerInstallationId: "inst_producer1",
+      outputs: [{ name: "bucket_name" }],
+    }),
+  });
+  expect(res.status).toEqual(201);
+  expect((await res.json()).share.status).toEqual("active");
+});
+
+test("output-shares create — scoped bearer denied on a foreign fromSpace (§18)", async () => {
+  const app = await outputShareApp();
+  const res = await app.request("/api/output-shares", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer scoped-token",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      fromSpaceId: "space_denied",
+      toSpaceId: "space_consume1",
+      producerInstallationId: "inst_producer1",
+      outputs: [{ name: "bucket_name" }],
+    }),
+  });
+  expect(res.status).toEqual(403);
+  expect((await res.json()).error.code).toEqual("permission_denied");
+});
+
+test("output-shares list — scoped bearer denied on a foreign spaceId (§18)", async () => {
+  const app = await outputShareApp();
+  // space_denied01 is a valid id shape the scoped principal is NOT allowed.
+  const res = await app.request("/api/output-shares?spaceId=space_denied01", {
+    headers: { authorization: "Bearer scoped-token" },
+  });
+  expect(res.status).toEqual(403);
 });

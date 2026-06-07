@@ -314,3 +314,250 @@ test("plan diagnostics never carry injected dependency values", async () => {
   const serialized = JSON.stringify(consumerPlan.planRun);
   expect(serialized).not.toContain("shota.example.com");
 });
+
+// ---------------------------------------------------------------------------
+// published_output (spec §18): cross-Space output consumption via an OutputShare.
+// ---------------------------------------------------------------------------
+
+/**
+ * Seeds a producer in `space_producer` + a consumer in `space_consumer`, an
+ * ACTIVE OutputShare from the producer's Space to the consumer's Space covering
+ * `base_domain`, and a `published_output` cross_space Dependency mapping the
+ * SHARED name `base_domain` into the consumer's `base_domain` input.
+ */
+async function seedCrossSpaceGraph(
+  store: OpenTofuDeploymentStore,
+  consumerEnvironment: string,
+): Promise<{ producer: string; consumer: string }> {
+  await seedInstallationModel(store, {
+    spaceId: "space_producer",
+    environment: "production",
+    sourceId: "src_producer",
+    snapshotId: "snap_producer",
+    installConfigId: "cfg_producer",
+    installationId: "inst_producer",
+    name: "producer",
+  });
+  await seedInstallationModel(store, {
+    spaceId: "space_consumer",
+    environment: consumerEnvironment,
+    sourceId: "src_consumer",
+    snapshotId: "snap_consumer",
+    installConfigId: "cfg_consumer",
+    installationId: "inst_consumer",
+    name: "consumer",
+  });
+  const deps = new DependenciesService({
+    store,
+    newId: (prefix) => `${prefix}_edge0001`,
+    now: () => "2026-06-06T00:00:00.000Z",
+  });
+  // Grant first (createDependency for published_output requires an active share).
+  await store.putOutputShare({
+    id: "oshare_1",
+    fromSpaceId: "space_producer",
+    toSpaceId: "space_consumer",
+    producerInstallationId: "inst_producer",
+    outputs: [{ name: "base_domain", sensitive: false }],
+    status: "active",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await deps.createDependency({
+    spaceId: "space_consumer",
+    producerInstallationId: "inst_producer",
+    consumerInstallationId: "inst_consumer",
+    mode: "published_output",
+    visibility: "cross_space",
+    outputs: {
+      base_domain: { from: "base_domain", to: "base_domain", required: true },
+    },
+  });
+  return { producer: "inst_producer", consumer: "inst_consumer" };
+}
+
+test("cross-space published_output injects the shared output and pins a snapshot", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const { consumer } = await seedCrossSpaceGraph(store, "preview");
+  const controller = controllerWith(store, runner);
+
+  // Producer applies (in space_producer) -> gen 1 + OutputSnapshot base_domain.
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+
+  // Consumer plan: the published_output edge injects base_domain across the
+  // Space boundary (authorized by the active share) and pins a snapshot.
+  const consumerPlan = await controller.createInstallationPlan(consumer);
+  expect(consumerPlan.planRun.dependencySnapshotId).toBeDefined();
+  const consumerPlanJob = runner.planJobs.find(
+    (job) => job.planRun.installationId === consumer,
+  );
+  expect(consumerPlanJob?.variables.base_domain).toEqual("shota.example.com");
+
+  // The consumer applies successfully using the shared value.
+  const consumerApply = await controller.createApplyRun({
+    planRunId: consumerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+  });
+  expect(consumerApply.applyRun.status).toEqual("succeeded");
+});
+
+test("revoking the share between plan and apply fails the consumer apply output_share_revoked", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const { consumer } = await seedCrossSpaceGraph(store, "preview");
+  const controller = controllerWith(store, runner);
+
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+
+  // Consumer plan succeeds while the share is active.
+  const consumerPlan = await controller.createInstallationPlan(consumer);
+  expect(consumerPlan.planRun.dependencySnapshotId).toBeDefined();
+
+  // Revoke the share AFTER plan, BEFORE apply.
+  const share = await store.getOutputShare("oshare_1");
+  await store.putOutputShare({
+    ...share!,
+    status: "revoked",
+    revokedAt: "2026-06-06T02:00:00.000Z",
+  });
+
+  // The consumer's apply now fails: the published_output edge re-verifies the
+  // share at apply, and a revoked grant is output_share_revoked.
+  await expect(
+    controller.createApplyRun({
+      planRunId: consumerPlan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+    }),
+  ).rejects.toThrow(/output_share_revoked/);
+});
+
+// ---------------------------------------------------------------------------
+// remote_state (spec §15): producer state materialized via the depStates dispatch.
+// ---------------------------------------------------------------------------
+
+test("remote_state dispatch carries depStates from the producer's latest StateSnapshot", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  // Same-Space producer + consumer with a remote_state edge (empty mapping).
+  await seedInstallationModel(store, {
+    environment: "preview",
+    sourceId: "src_producer",
+    snapshotId: "snap_producer",
+    installConfigId: "cfg_producer",
+    installationId: "inst_producer",
+    name: "producer",
+  });
+  await seedInstallationModel(store, {
+    environment: "preview",
+    sourceId: "src_consumer",
+    snapshotId: "snap_consumer",
+    installConfigId: "cfg_consumer",
+    installationId: "inst_consumer",
+    name: "consumer",
+  });
+  const deps = new DependenciesService({
+    store,
+    newId: (prefix) => `${prefix}_edge0001`,
+    now: () => "2026-06-06T00:00:00.000Z",
+  });
+  await deps.createDependency({
+    spaceId: "space_test",
+    producerInstallationId: "inst_producer",
+    consumerInstallationId: "inst_consumer",
+    mode: "remote_state",
+    visibility: "space",
+    outputs: {},
+  });
+  const controller = controllerWith(store, runner);
+
+  // Producer applies -> records a StateSnapshot (gen 1) the depState points at.
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+  const producerState = await store.getLatestStateSnapshot(
+    "inst_producer",
+    "preview",
+  );
+  expect(producerState?.generation).toEqual(1);
+
+  // Consumer plan: the plan job carries a depState for the producer state.
+  const consumerPlan = await controller.createInstallationPlan("inst_consumer");
+  const planJob = runner.planJobs.find(
+    (job) => job.planRun.installationId === "inst_consumer",
+  );
+  expect(planJob?.depStates).toBeDefined();
+  expect(planJob?.depStates).toHaveLength(1);
+  const dep = planJob!.depStates![0]!;
+  expect(dep.name).toEqual("producer");
+  expect(dep.installationId).toEqual("inst_producer");
+  expect(dep.environment).toEqual("preview");
+  expect(dep.generation).toEqual(1);
+  expect(dep.objectKey).toEqual(producerState!.objectKey);
+  expect(dep.digest).toEqual(producerState!.digest);
+
+  // The consumer apply ALSO carries the depState (materialized before apply).
+  const consumerApply = await controller.createApplyRun({
+    planRunId: consumerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+  });
+  expect(consumerApply.applyRun.status).toEqual("succeeded");
+  const applyJob = runner.applyJobs.find(
+    (job) => job.planRun.installationId === "inst_consumer",
+  );
+  expect(applyJob?.depStates).toHaveLength(1);
+  expect(applyJob!.depStates![0]!.objectKey).toEqual(producerState!.objectKey);
+});
+
+test("remote_state dispatch fails dependency_state_unavailable when the producer never applied", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  await seedInstallationModel(store, {
+    environment: "preview",
+    sourceId: "src_producer",
+    snapshotId: "snap_producer",
+    installConfigId: "cfg_producer",
+    installationId: "inst_producer",
+    name: "producer",
+  });
+  await seedInstallationModel(store, {
+    environment: "preview",
+    sourceId: "src_consumer",
+    snapshotId: "snap_consumer",
+    installConfigId: "cfg_consumer",
+    installationId: "inst_consumer",
+    name: "consumer",
+  });
+  const deps = new DependenciesService({
+    store,
+    newId: (prefix) => `${prefix}_edge0001`,
+    now: () => "2026-06-06T00:00:00.000Z",
+  });
+  await deps.createDependency({
+    spaceId: "space_test",
+    producerInstallationId: "inst_producer",
+    consumerInstallationId: "inst_consumer",
+    mode: "remote_state",
+    visibility: "space",
+    outputs: {},
+  });
+  const controller = controllerWith(store, runner);
+
+  // The producer has NO StateSnapshot (never applied). The consumer plan's
+  // depState resolution at dispatch fails dependency_state_unavailable, which the
+  // plan consumer records as a failed run (no throw to the caller).
+  const consumerPlan = await controller.createInstallationPlan("inst_consumer");
+  expect(consumerPlan.planRun.status).toEqual("failed");
+  expect(JSON.stringify(consumerPlan.planRun)).toContain(
+    "dependency_state_unavailable",
+  );
+});

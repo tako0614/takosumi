@@ -46,9 +46,13 @@ import type {
 } from "takosumi-contract/capability-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
 import type { Dependency, DependencySnapshot } from "takosumi-contract/dependencies";
-import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type {
+  OutputShare,
+  OutputSnapshot,
+} from "takosumi-contract/output-snapshots";
 import type { RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import type { BackupRecord } from "takosumi-contract/backups";
 import type {
   InstallationPatch,
   InstallationPatchGuard,
@@ -931,6 +935,61 @@ export class CloudflareD1OpenTofuDeploymentStore
     );
   }
 
+  // -- OutputShare (§18 / §27 output_shares) -----------------------------------
+
+  async putOutputShare(share: OutputShare): Promise<OutputShare> {
+    await this.#run(
+      `insert into output_shares
+        (id, from_space_id, to_space_id, producer_installation_id, status,
+         record_json, created_at)
+       values (?, ?, ?, ?, ?, ?, ?)
+       on conflict (id) do update set
+        from_space_id = excluded.from_space_id,
+        to_space_id = excluded.to_space_id,
+        producer_installation_id = excluded.producer_installation_id,
+        status = excluded.status,
+        record_json = excluded.record_json,
+        created_at = excluded.created_at`,
+      [
+        share.id,
+        share.fromSpaceId,
+        share.toSpaceId,
+        share.producerInstallationId,
+        share.status,
+        JSON.stringify(share),
+        share.createdAt,
+      ],
+    );
+    return share;
+  }
+
+  async getOutputShare(id: string): Promise<OutputShare | undefined> {
+    return await this.#first<OutputShare>(
+      "select record_json from output_shares where id = ?",
+      [id],
+    );
+  }
+
+  async listOutputSharesFromSpace(
+    fromSpaceId: string,
+  ): Promise<readonly OutputShare[]> {
+    return await this.#many<OutputShare>(
+      `select record_json from output_shares
+       where from_space_id = ? order by created_at asc, id asc`,
+      [fromSpaceId],
+    );
+  }
+
+  async listOutputSharesToSpace(
+    toSpaceId: string,
+  ): Promise<readonly OutputShare[]> {
+    return await this.#many<OutputShare>(
+      `select record_json from output_shares
+       where to_space_id = ? order by created_at asc, id asc`,
+      [toSpaceId],
+    );
+  }
+
   // -- RunGroup (§19 / §24 / §27 run_groups) -----------------------------------
 
   async putRunGroup(group: RunGroup): Promise<RunGroup> {
@@ -1007,6 +1066,33 @@ export class CloudflareD1OpenTofuDeploymentStore
       `select record_json from audit_events
        where space_id = ? order by created_at desc, id desc limit ?`,
       [spaceId, limit],
+    );
+  }
+
+  // -- backups (§33 layer 1 / §26 R2_BACKUPS) ----------------------------------
+  //
+  // One pointer row per sealed control-backup bundle written to R2_BACKUPS. The
+  // bundle bytes live in object storage; only the pointer round trips through
+  // record_json. Listing is newest-first (created_at desc, id desc).
+
+  async putBackupRecord(record: BackupRecord): Promise<BackupRecord> {
+    await this.#run(
+      `insert into backups (id, space_id, record_json, created_at)
+       values (?, ?, ?, ?)
+       on conflict (id) do update set
+        space_id = excluded.space_id,
+        record_json = excluded.record_json,
+        created_at = excluded.created_at`,
+      [record.id, record.spaceId, JSON.stringify(record), record.createdAt],
+    );
+    return record;
+  }
+
+  async listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]> {
+    return await this.#many<BackupRecord>(
+      `select record_json from backups
+       where space_id = ? order by created_at desc, id desc`,
+      [spaceId],
     );
   }
 
@@ -1393,6 +1479,21 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create index if not exists output_snapshots_installation_idx
       on output_snapshots (installation_id, state_generation, created_at)`,
+    `create table if not exists output_shares (
+      id text primary key,
+      from_space_id text not null,
+      to_space_id text not null,
+      producer_installation_id text not null,
+      status text not null,
+      record_json text not null,
+      created_at text not null
+    )`,
+    `create index if not exists output_shares_from_space_idx
+      on output_shares (from_space_id, created_at)`,
+    `create index if not exists output_shares_to_space_idx
+      on output_shares (to_space_id, created_at)`,
+    `create index if not exists output_shares_producer_idx
+      on output_shares (producer_installation_id)`,
     `create table if not exists run_groups (
       id text primary key,
       space_id text not null,
@@ -1415,6 +1516,14 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create index if not exists audit_events_space_idx
       on audit_events (space_id, created_at)`,
+    `create table if not exists backups (
+      id text primary key,
+      space_id text not null,
+      record_json text not null,
+      created_at text not null
+    )`,
+    `create index if not exists backups_space_idx
+      on backups (space_id, created_at)`,
   ];
   for (const sql of statements) {
     await db.prepare(sql).run();

@@ -61,6 +61,10 @@ interface RunWorkspace {
   readonly generatedRootDir: string;
   readonly templateModuleDir: string;
   readonly artifactDir: string;
+  // remote_state dependency states (spec §15): each producer state is written
+  // read-only as <depsDir>/<name>.tfstate before init/plan/apply for the
+  // consumer's `terraform_remote_state` data sources.
+  readonly depsDir: string;
 }
 
 /** Optional baked official-template reference on the dispatch payload. */
@@ -137,6 +141,15 @@ async function handleRunnerRequest(request: Request): Promise<Response> {
       /^\/runs\/([^/]+)\/artifacts\/source-archive$/.exec(url.pathname);
     const sourceArchiveRestoreMatch =
       /^\/runs\/([^/]+)\/source-archive\/restore$/.exec(url.pathname);
+    const depStateRestoreMatch =
+      /^\/runs\/([^/]+)\/deps\/([^/]+)\/restore$/.exec(url.pathname);
+    if (depStateRestoreMatch) {
+      return await handleDepStateRestoreRequest(
+        decodeURIComponent(depStateRestoreMatch[1]!),
+        decodeURIComponent(depStateRestoreMatch[2]!),
+        request,
+      );
+    }
     if (sourceArchiveRestoreMatch) {
       return await handleSourceArchiveRestoreRequest(
         decodeURIComponent(sourceArchiveRestoreMatch[1]!),
@@ -1360,6 +1373,83 @@ async function handleSourceArchiveRestoreRequest(
   }
 }
 
+// remote_state DEPENDENCY STATE RESTORE (spec §15): the DO streams a decrypted
+// producer tfstate to this route. We write the bytes READ-ONLY (0444) as
+// <depsDir>/<name>.tfstate so the consumer's `terraform_remote_state` data
+// sources can read it during init/plan/apply. The dep name is path-jailed to a
+// single safe filename segment (no traversal, no separators) so the write stays
+// inside the deps dir. Read-only blocks any accidental write-back to a producer's
+// state (a remote_state read is one-directional).
+export async function handleDepStateRestoreRequest(
+  runId: string,
+  name: string,
+  request: Request,
+): Promise<Response> {
+  if (request.method !== "PUT") {
+    return Response.json(
+      { error: "method not allowed" },
+      { status: 405, headers: { allow: "PUT" } },
+    );
+  }
+  const workspace = workspaceForRun(runId);
+  try {
+    const safeName = safeDepName(name);
+    const target = join(workspace.depsDir, `${safeName}.tfstate`);
+    // Path-jail: the resolved target MUST stay inside the deps dir.
+    const resolvedTarget = resolve(target);
+    const resolvedDepsDir = resolve(workspace.depsDir);
+    if (
+      resolvedTarget !== join(resolvedDepsDir, `${safeName}.tfstate`) ||
+      !resolvedTarget.startsWith(`${resolvedDepsDir}/`)
+    ) {
+      throw new Error(`dependency state name escapes deps dir: ${name}`);
+    }
+    await mkdir(workspace.depsDir, { recursive: true });
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    // Remove any prior (read-only) file from a re-restore of the same dep name in
+    // this run, then write + chmod 0444. writeFile honors umask on some
+    // platforms, so force the read-only mode after the bytes land.
+    await rm(target, { force: true });
+    await writeFile(target, bytes);
+    await chmod(target, 0o444);
+    return Response.json({
+      runId,
+      artifact: "dep-state-restore",
+      name: safeName,
+      digest: await digestBytes(bytes),
+      sizeBytes: bytes.byteLength,
+    });
+  } catch (error) {
+    return Response.json(
+      {
+        error: "dependency state restore failed",
+        detail: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 },
+    );
+  }
+}
+
+// A remote_state dependency name must be a single safe path segment so it can
+// only ever name <depsDir>/<name>.tfstate. Reject empty / traversal / separator
+// / NUL / drive-letter names (the producer Installation name is `[a-z0-9-]`-ish,
+// but harden against a crafted dispatch).
+function safeDepName(name: string): string {
+  if (
+    name.length === 0 ||
+    name === "." ||
+    name === ".." ||
+    name.includes("/") ||
+    name.includes("\\") ||
+    name.includes("\0") ||
+    isAbsolute(name) ||
+    /^[A-Za-z]:/.test(name)
+  ) {
+    throw new Error(`unsafe dependency state name: ${name}`);
+  }
+  return name;
+}
+
 // Same tar-slip / link-target / zip-bomb hardening as assertSafeTarArchive but
 // for a zstd-compressed tar (the source_sync archive format). Reuses the shared
 // per-entry validators (escape quoting, duplicate normalized paths, file/dir
@@ -1455,6 +1545,11 @@ function workspaceForRun(runId: string): RunWorkspace {
     generatedRootDir: join(root, "generated-root"),
     templateModuleDir: join(root, "generated-root", "template-module"),
     artifactDir: join(root, "artifact"),
+    // The deps dir is a SIBLING of root (not under it) so the producer state
+    // files restored BEFORE the run POST survive the plan/apply workspace prep,
+    // which wipes `root`. The consumer's `terraform_remote_state` data sources
+    // reference these absolute paths; they are written read-only (one-way read).
+    depsDir: join(RUN_ROOT, `${safeRunId(runId)}-deps`),
   };
 }
 
@@ -2187,6 +2282,16 @@ export function commandContextFromRequest(
       if (typeof value === "string") env[envName] = value;
     }
   }
+  // §13 per-alias credential split: the generated root declares sensitive
+  // `var.<provider>_<capability>_<arg>` variables, and tofu reads their values
+  // from `TF_VAR_…` env. These arrive ONLY via dispatched credentials (the Vault
+  // mints them per resolved Connection — never from Bun.env, never from the
+  // runner profile env map) so admit exactly the TF_VAR_-prefixed payload
+  // entries. Like the provider env above, the values are never logged and never
+  // echoed in the run response.
+  for (const [name, value] of Object.entries(payloadCredentials)) {
+    if (name.startsWith("TF_VAR_")) env[name] = value;
+  }
   return {
     env,
     ...(maxRunSeconds ? { timeoutMs: maxRunSeconds * 1000 } : {}),
@@ -2200,16 +2305,23 @@ export function commandContextFromRequest(
 /**
  * Extracts the minted credential env map from the dispatch payload's
  * `credentials` field. Only string values keyed by a valid env-name shape are
- * admitted; everything else is ignored. The provider-allowlist filtering happens
- * in {@link commandContextFromRequest} (only names a required provider allows are
- * ever read out of this map).
+ * admitted; everything else is ignored. Two shapes are accepted:
+ *   - upper-snake provider credential env names (e.g. `CLOUDFLARE_API_TOKEN`);
+ *   - §13 per-alias tofu variables `TF_VAR_<provider>_<capability>_<arg>`, whose
+ *     suffix is the lowercase OpenTofu variable name (e.g.
+ *     `TF_VAR_cloudflare_compute_api_token`).
+ * The provider-allowlist filtering (provider creds) and TF_VAR-prefix admission
+ * happen in {@link commandContextFromRequest}.
  */
 function credentialsFromRequest(request: unknown): Record<string, string> {
   const credentials = recordField(request, "credentials");
   if (!isRecord(credentials)) return {};
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(credentials)) {
-    if (typeof value === "string" && /^[A-Z_][A-Z0-9_]*$/.test(name)) {
+    if (typeof value !== "string") continue;
+    // TF_VAR_<name> carries a lowercase HCL variable suffix; provider credential
+    // env names are upper-snake. Both are valid POSIX env-name shapes.
+    if (/^TF_VAR_[A-Za-z_][A-Za-z0-9_]*$/.test(name) || /^[A-Z_][A-Z0-9_]*$/.test(name)) {
       out[name] = value;
     }
   }
