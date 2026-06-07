@@ -228,3 +228,57 @@ export function requiredEnvGroupsForProvider(
 ): readonly (readonly string[])[] {
   return providerEnvRule(provider)?.requiredGroups ?? [];
 }
+
+// ---------------------------------------------------------------------------
+// Per-alias credential split (core-spec.md §13).
+// ---------------------------------------------------------------------------
+
+/**
+ * One credential arg a provider alias block reads from a generated
+ * `TF_VAR_<provider>_<capability>_<arg>` variable.
+ *   - `envName`: the credential env name the Vault opens from the resolved
+ *     Connection (e.g. `CLOUDFLARE_API_TOKEN`);
+ *   - `arg`: the OpenTofu provider argument the credential maps to (e.g.
+ *     `api_token`), used both as the rootgen variable suffix and as the alias
+ *     argument the generated block assigns from that variable.
+ */
+export interface ProviderCredentialArg {
+  readonly envName: string;
+  readonly arg: string;
+}
+
+/**
+ * Per-provider credential env-name -> OpenTofu provider-argument mapping for the
+ * §13 per-alias credential split. A provider listed here gets, for each resolved
+ * capability, a `TF_VAR_<localProvider>_<capability>_<arg>` variable wired into
+ * its alias block (rootgen) whose value the Vault mints from the resolved
+ * Connection (vault). A provider ABSENT from this table keeps the credential-free
+ * shared-env alias (rootgen) and is never split (vault), preserving the M5
+ * shared-credential behavior for providers without an explicit arg mapping.
+ *
+ * Lives next to {@link PROVIDER_CREDENTIAL_ENV_RULES} so the runner, the vault,
+ * and rootgen agree byte-for-byte on env name <-> provider arg.
+ */
+export const PROVIDER_CREDENTIAL_ARG_MAP: Readonly<
+  Record<string, readonly ProviderCredentialArg[]>
+> = {
+  cloudflare: [{ envName: "CLOUDFLARE_API_TOKEN", arg: "api_token" }],
+  aws: [
+    { envName: "AWS_ACCESS_KEY_ID", arg: "access_key" },
+    { envName: "AWS_SECRET_ACCESS_KEY", arg: "secret_key" },
+    { envName: "AWS_SESSION_TOKEN", arg: "token" },
+  ],
+};
+
+/**
+ * Returns the credential arg mapping for a provider (short name or registry
+ * path). An empty list means the provider has no per-alias split: its alias
+ * stays credential-free and inherits the shared provider env credential.
+ */
+export function providerCredentialArgs(
+  provider: string,
+): readonly ProviderCredentialArg[] {
+  const rule = providerEnvRule(provider);
+  if (!rule) return [];
+  return PROVIDER_CREDENTIAL_ARG_MAP[rule.shortName] ?? [];
+}

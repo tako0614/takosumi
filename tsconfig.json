@@ -68,6 +68,7 @@
       "takosumi-contract/runs": ["./packages/schema/src/runs.ts"],
       "takosumi-contract/deployments": ["./packages/schema/src/deployments.ts"],
       "takosumi-contract/install-link": ["./packages/schema/src/install-link.ts"],
+      "takosumi-contract/backups": ["./packages/schema/src/backups.ts"],
       "takosumi-rootgen": ["./packages/rootgen/src/mod.ts"],
       "takosumi-graph": ["./packages/graph/src/mod.ts"],
       "takosumi-policy": ["./packages/policy/src/mod.ts"],

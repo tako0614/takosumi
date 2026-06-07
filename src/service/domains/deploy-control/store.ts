@@ -42,8 +42,12 @@ import {
   ACTIVITY_MAX_LIMIT,
   type ActivityEvent,
 } from "takosumi-contract/activity";
-import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type {
+  OutputShare,
+  OutputSnapshot,
+} from "takosumi-contract/output-snapshots";
 import type { RunGroup } from "takosumi-contract/runs";
+import type { BackupRecord } from "takosumi-contract/backups";
 import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 
@@ -302,6 +306,20 @@ export interface OpenTofuDeploymentStore {
     installationId: string,
   ): Promise<OutputSnapshot | undefined>;
 
+  // OutputShare records (spec §18 / §27 output_shares). A cross-Space grant from
+  // a producer Installation's projected outputs (in fromSpace) to a consumer
+  // Space (toSpace). The grant carries names + optional aliases only (sensitive
+  // sharing is not supported, invariant 12); resolved output VALUES are never
+  // stored on the share.
+  putOutputShare(share: OutputShare): Promise<OutputShare>;
+  getOutputShare(id: string): Promise<OutputShare | undefined>;
+  /** Shares GRANTED BY a Space (the producer side; spaceId = fromSpaceId). */
+  listOutputSharesFromSpace(
+    fromSpaceId: string,
+  ): Promise<readonly OutputShare[]>;
+  /** Shares GRANTED TO a Space (the consumer side; spaceId = toSpaceId). */
+  listOutputSharesToSpace(toSpaceId: string): Promise<readonly OutputShare[]>;
+
   // RunGroup records (spec §19 / §24 / §27 run_groups). Orders multiple Runs
   // across the dependency DAG (e.g. a Space update after stale propagation).
   putRunGroup(group: RunGroup): Promise<RunGroup>;
@@ -316,6 +334,13 @@ export interface OpenTofuDeploymentStore {
     spaceId: string,
     options?: { readonly limit?: number },
   ): Promise<readonly ActivityEvent[]>;
+
+  // Control-backup ledger pointers (spec §33 layer 1 / §26 R2_BACKUPS). One row
+  // per sealed control-backup bundle written to R2_BACKUPS. The bundle bytes
+  // live in object storage; only the pointer (objectKey / digest / sizeBytes)
+  // enters the ledger. Listing orders newest first (createdAt desc, id desc).
+  putBackupRecord(record: BackupRecord): Promise<BackupRecord>;
+  listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]>;
 }
 
 export class InMemoryOpenTofuDeploymentStore
@@ -339,8 +364,10 @@ export class InMemoryOpenTofuDeploymentStore
   readonly #dependencies = new Map<string, Dependency>();
   readonly #dependencySnapshots = new Map<string, DependencySnapshot>();
   readonly #outputSnapshots = new Map<string, OutputSnapshot>();
+  readonly #outputShares = new Map<string, OutputShare>();
   readonly #runGroups = new Map<string, RunGroup>();
   readonly #activityEvents = new Map<string, ActivityEvent>();
+  readonly #backupRecords = new Map<string, BackupRecord>();
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuDeploymentStore");
@@ -828,6 +855,37 @@ export class InMemoryOpenTofuDeploymentStore
     return Promise.resolve(latest);
   }
 
+  putOutputShare(share: OutputShare): Promise<OutputShare> {
+    this.#outputShares.set(share.id, share);
+    return Promise.resolve(share);
+  }
+
+  getOutputShare(id: string): Promise<OutputShare | undefined> {
+    return Promise.resolve(this.#outputShares.get(id));
+  }
+
+  listOutputSharesFromSpace(
+    fromSpaceId: string,
+  ): Promise<readonly OutputShare[]> {
+    return Promise.resolve(
+      Array.from(this.#outputShares.values())
+        .filter((row) => row.fromSpaceId === fromSpaceId)
+        .sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        ),
+    );
+  }
+
+  listOutputSharesToSpace(toSpaceId: string): Promise<readonly OutputShare[]> {
+    return Promise.resolve(
+      Array.from(this.#outputShares.values())
+        .filter((row) => row.toSpaceId === toSpaceId)
+        .sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+        ),
+    );
+  }
+
   putRunGroup(group: RunGroup): Promise<RunGroup> {
     this.#runGroups.set(group.id, group);
     return Promise.resolve(group);
@@ -865,6 +923,22 @@ export class InMemoryOpenTofuDeploymentStore
       )
       .slice(0, limit);
     return Promise.resolve(rows);
+  }
+
+  putBackupRecord(record: BackupRecord): Promise<BackupRecord> {
+    this.#backupRecords.set(record.id, record);
+    return Promise.resolve(record);
+  }
+
+  listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]> {
+    return Promise.resolve(
+      Array.from(this.#backupRecords.values())
+        .filter((row) => row.spaceId === spaceId)
+        // Newest first: createdAt desc, then id desc as a stable tie-break.
+        .sort((a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)
+        ),
+    );
   }
 }
 

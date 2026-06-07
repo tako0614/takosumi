@@ -36,6 +36,25 @@ interface SourceArchiveRestore {
   readonly digest: string;
 }
 
+/**
+ * Optional dispatch payload field locating a producer Installation's encrypted
+ * state in R2_STATE for a `remote_state` dependency (spec §15). The DO fetches
+ * the ciphertext at `objectKey`, decrypts + verifies the recorded plaintext
+ * `digest` (same StateArtifactCrypto path as its own state restore), and streams
+ * the plaintext to the container which writes it READ-ONLY to
+ * `/work/deps/<name>.tfstate` before init/plan/apply. The container never sees
+ * the passphrase or the ciphertext. Mirrors the contract `DispatchDepState`;
+ * kept local so the DO does not pull a contract import into the worker bundle.
+ */
+interface DepState {
+  readonly name: string;
+  readonly installationId: string;
+  readonly environment: string;
+  readonly generation: number;
+  readonly objectKey: string;
+  readonly digest: string;
+}
+
 export interface ContainerRequestFetcher {
   containerFetch(request: Request, port?: number): Promise<Response>;
 }
@@ -159,11 +178,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     // to the legacy R2_ARTIFACTS state path so older jobs/tests keep working.
     const stateScope = parseStateScope(envelope.request);
     const sourceArchive = parseSourceArchiveRestore(envelope.request);
+    const depStates = parseDepStates(envelope.request);
     const stateKeys = stateScope ? [] : await stateArtifactKeys(envelope.request);
     // M2: restore the snapshotted source tree into the container before any
     // build/plan phase (mirrors the plan-artifact restore protocol).
     if (sourceArchive) {
       await this.#restoreSourceArchive(runId, sourceArchive, url);
+    }
+    // remote_state dependencies (spec §15): fetch + decrypt each producer state
+    // and stream it to the container's dep-state restore route BEFORE init/plan/
+    // apply, so the consumer's `terraform_remote_state` data sources resolve.
+    if (depStates.length > 0) {
+      await this.#restoreDepStates(runId, depStates, url);
     }
     if (envelope.action === "apply" || envelope.action === "destroy") {
       await this.#restorePlanArtifact(runId, envelope.request, url);
@@ -315,6 +341,51 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
     if (!response.ok) {
       throw new Error(`container source archive restore failed: ${response.status}`);
+    }
+  }
+
+  // remote_state dependency restore (spec §15): for each producer state descriptor
+  // fetch the encrypted object from R2_STATE, decrypt + verify its recorded
+  // plaintext digest (tamper check, same path as #restoreStateFromR2State), and
+  // stream the plaintext to the container's dep-state restore route. The DO
+  // path-jails the objectKey to the producer env's state prefix (defense against
+  // a crafted descriptor pointing at another tenant's object) and the container
+  // writes each as /work/deps/<name>.tfstate read-only. The container never sees
+  // the passphrase or the ciphertext.
+  async #restoreDepStates(
+    runId: string,
+    depStates: readonly DepState[],
+    baseUrl: URL,
+  ): Promise<void> {
+    const bucket = this.#r2State();
+    for (const depState of depStates) {
+      // The object key MUST stay inside the producer env's state prefix. A
+      // descriptor pointing elsewhere is a crafted cross-tenant read.
+      assertDepStateObjectKey(depState);
+      const object = await bucket.get(depState.objectKey);
+      if (!object) {
+        throw new Error(
+          `dependency state object not found: ${depState.objectKey}`,
+        );
+      }
+      const ciphertext = new Uint8Array(await object.arrayBuffer());
+      const plaintext = await this.#stateCrypto().open(
+        ciphertext,
+        depState.digest,
+      );
+      const response = await this.#containerFetch(
+        new Request(depStateRestoreUrl(baseUrl, runId, depState.name), {
+          method: "PUT",
+          headers: { "content-type": STATE_ARTIFACT_CONTENT_TYPE },
+          body: plaintext,
+        }),
+      );
+      if (!response.ok) {
+        throw new Error(
+          `container dependency state restore failed for ${depState.name}: ` +
+            `${response.status}`,
+        );
+      }
     }
   }
 
@@ -657,6 +728,19 @@ function sourceArchiveRestoreUrl(baseUrl: URL, runId: string): string {
   return url.toString();
 }
 
+// remote_state dependency restore route: the DO PUTs the decrypted producer
+// state and the runner server writes it read-only to /work/deps/<name>.tfstate.
+// The dep name is path-segment encoded so a single URL path segment carries it
+// (the runner re-validates it is a safe filename).
+function depStateRestoreUrl(baseUrl: URL, runId: string, name: string): string {
+  const url = new URL(baseUrl);
+  url.pathname = `/runs/${encodeURIComponent(runId)}/deps/${
+    encodeURIComponent(name)
+  }/restore`;
+  url.search = "";
+  return url.toString();
+}
+
 function planJsonArtifactUrl(baseUrl: URL, runId: string): string {
   const url = new URL(baseUrl);
   url.pathname = `/runs/${encodeURIComponent(runId)}/artifacts/tfplan-json`;
@@ -771,6 +855,66 @@ function parseSourceArchiveRestore(
   const digest = stringField(archive, "digest");
   if (!objectKey || !digest) return undefined;
   return { objectKey, digest };
+}
+
+// Parse the optional remote_state dependency descriptors off the dispatch
+// request. Each entry must carry a name, objectKey, digest, environment,
+// installationId, and a numeric generation; a malformed entry fails the run
+// closed (a remote_state edge cannot be silently dropped). Returns [] when the
+// dispatch carries no depStates.
+function parseDepStates(requestPayload: unknown): readonly DepState[] {
+  if (!isRecord(requestPayload)) return [];
+  const raw = requestPayload.depStates;
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error("depStates must be an array");
+  }
+  return raw.map((entry) => {
+    if (!isRecord(entry)) throw new Error("depStates entry must be an object");
+    const name = stringField(entry, "name");
+    const installationId = stringField(entry, "installationId");
+    const environment = stringField(entry, "environment");
+    const objectKey = stringField(entry, "objectKey");
+    const digest = stringField(entry, "digest");
+    const generation = entry.generation;
+    if (
+      !name || !installationId || !environment || !objectKey || !digest ||
+      typeof generation !== "number"
+    ) {
+      throw new Error(
+        "depStates entry requires name, installationId, environment, " +
+          "objectKey, digest, and a numeric generation",
+      );
+    }
+    return { name, installationId, environment, generation, objectKey, digest };
+  });
+}
+
+// Re-assert a dependency state objectKey is a traversal-free R2_STATE key inside
+// the producer env's state prefix (defense in depth against a crafted descriptor
+// pointing at another tenant's object). It must match the spec §20 state key
+// layout AND name the descriptor's own installationId + environment.
+function assertDepStateObjectKey(depState: DepState): void {
+  const key = depState.objectKey;
+  if (
+    key.length === 0 ||
+    key.startsWith("/") ||
+    key.includes("..") ||
+    key.includes("\0") ||
+    key.includes("\\") ||
+    !key.startsWith("spaces/") ||
+    !key.endsWith(".tfstate.enc")
+  ) {
+    throw new Error(`unsafe dependency state object key: ${key}`);
+  }
+  const expectedSuffix = `/installations/${
+    safeKeySegment(depState.installationId)
+  }/envs/${safeKeySegment(depState.environment)}/states/`;
+  if (!key.includes(expectedSuffix)) {
+    throw new Error(
+      `dependency state object key escapes producer prefix: ${key}`,
+    );
+  }
 }
 
 function isSourceSyncEnvelope(envelope: {

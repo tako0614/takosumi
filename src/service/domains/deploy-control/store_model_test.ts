@@ -25,9 +25,13 @@ import type {
   Dependency,
   DependencySnapshot,
 } from "takosumi-contract/dependencies";
-import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type {
+  OutputShare,
+  OutputSnapshot,
+} from "takosumi-contract/output-snapshots";
 import type { RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import type { BackupRecord } from "takosumi-contract/backups";
 
 /**
  * Minimal in-memory SQL client that interprets exactly the Space-direct model
@@ -483,6 +487,19 @@ function outputSnapshot(over: Partial<OutputSnapshot> = {}): OutputSnapshot {
   };
 }
 
+function outputShare(over: Partial<OutputShare> = {}): OutputShare {
+  return {
+    id: "oshare_1",
+    fromSpaceId: "space_1",
+    toSpaceId: "space_2",
+    producerInstallationId: "inst_producer",
+    outputs: [{ name: "bucket_name", alias: "bucket", sensitive: false }],
+    status: "active",
+    createdAt: TS,
+    ...over,
+  };
+}
+
 function activityEvent(over: Partial<ActivityEvent> = {}): ActivityEvent {
   return {
     id: "act_1",
@@ -504,6 +521,18 @@ function runGroup(over: Partial<RunGroup> = {}): RunGroup {
     type: "space_update",
     status: "queued",
     graphJson: JSON.stringify({ order: [["inst_1"]], runs: { inst_1: "run_1" } }),
+    createdAt: TS,
+    ...over,
+  };
+}
+
+function backupRecord(over: Partial<BackupRecord> = {}): BackupRecord {
+  return {
+    id: "bkp_1",
+    spaceId: "space_1",
+    objectKey: "spaces/space_1/backups/bkp_1/control.json.gz.enc",
+    digest: "sha256:" + "a".repeat(64),
+    sizeBytes: 2048,
     createdAt: TS,
     ...over,
   };
@@ -887,6 +916,60 @@ test("OutputSnapshot store: put/get + latest by state generation are symmetric",
   }
 });
 
+test("OutputShare store: put/get + list from/to space are symmetric", async () => {
+  for (const [label, store] of bothStores()) {
+    // space_1 grants two shares to space_2; space_3 grants one to space_1.
+    await store.putOutputShare(
+      outputShare({ id: "osh_a", fromSpaceId: "space_1", toSpaceId: "space_2" }),
+    );
+    await store.putOutputShare(
+      outputShare({
+        id: "osh_b",
+        fromSpaceId: "space_1",
+        toSpaceId: "space_2",
+        createdAt: "2026-06-07T00:00:00.000Z",
+      }),
+    );
+    await store.putOutputShare(
+      outputShare({ id: "osh_c", fromSpaceId: "space_3", toSpaceId: "space_1" }),
+    );
+
+    expect((await store.getOutputShare("osh_a"))?.toSpaceId, label).toBe("space_2");
+    expect(await store.getOutputShare("missing"), label).toBeUndefined();
+    // The OutputShareEntry round-trips alias + sensitive:false.
+    expect((await store.getOutputShare("osh_a"))?.outputs, label).toEqual([
+      { name: "bucket_name", alias: "bucket", sensitive: false },
+    ]);
+
+    // From space_1: the two grants it GRANTED, oldest-first.
+    const fromSpace1 = await store.listOutputSharesFromSpace("space_1");
+    expect(fromSpace1.map((s) => s.id), label).toEqual(["osh_a", "osh_b"]);
+
+    // To space_1: the one grant it RECEIVED.
+    const toSpace1 = await store.listOutputSharesToSpace("space_1");
+    expect(toSpace1.map((s) => s.id), label).toEqual(["osh_c"]);
+
+    // To space_2: the two grants it received.
+    const toSpace2 = await store.listOutputSharesToSpace("space_2");
+    expect(toSpace2.map((s) => s.id), label).toEqual(["osh_a", "osh_b"]);
+
+    // Revoke updates the row in place (status + revokedAt).
+    await store.putOutputShare(
+      outputShare({
+        id: "osh_a",
+        fromSpaceId: "space_1",
+        toSpaceId: "space_2",
+        status: "revoked",
+        revokedAt: "2026-06-08T00:00:00.000Z",
+      }),
+    );
+    expect((await store.getOutputShare("osh_a"))?.status, label).toBe("revoked");
+    expect((await store.getOutputShare("osh_a"))?.revokedAt, label).toBe(
+      "2026-06-08T00:00:00.000Z",
+    );
+  }
+});
+
 test("RunGroup store: put/get/list-by-space round-trip", async () => {
   for (const [label, store] of bothStores()) {
     await store.putRunGroup(runGroup({ id: "rg_a" }));
@@ -955,6 +1038,43 @@ test("Activity store: put/list newest-first, space-scoped, limit-clamped", async
     // Limit caps the page (newest two).
     const limited = await store.listActivityEvents("space_1", { limit: 2 });
     expect(limited.map((e) => e.id), label).toEqual(["act_b", "act_c"]);
+  }
+});
+
+test("Backup store: put/list newest-first, space-scoped, round-trips", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putBackupRecord(
+      backupRecord({ id: "bkp_a", createdAt: "2026-06-06T00:00:01.000Z" }),
+    );
+    await store.putBackupRecord(
+      backupRecord({
+        id: "bkp_b",
+        sizeBytes: 4096,
+        createdByRunId: "apply_1",
+        createdAt: "2026-06-06T00:00:03.000Z",
+      }),
+    );
+    await store.putBackupRecord(
+      backupRecord({ id: "bkp_other", spaceId: "space_2" }),
+    );
+
+    // Newest-first within the space (bkp_b @ :03, bkp_a @ :01).
+    const listed = await store.listBackupRecords("space_1");
+    expect(listed.map((b) => b.id), label).toEqual(["bkp_b", "bkp_a"]);
+    // Full pointer (incl. optional createdByRunId + sizeBytes) round-trips.
+    expect(listed[0]!.createdByRunId, label).toBe("apply_1");
+    expect(listed[0]!.sizeBytes, label).toBe(4096);
+    expect(listed[0]!.objectKey, label).toBe(
+      "spaces/space_1/backups/bkp_1/control.json.gz.enc",
+    );
+    expect(listed[1]!.createdByRunId, label).toBeUndefined();
+
+    // Space isolation: space_2 sees only its own pointer.
+    expect((await store.listBackupRecords("space_2")).map((b) => b.id), label)
+      .toEqual(["bkp_other"]);
+    // An empty Space sees nothing.
+    expect((await store.listBackupRecords("space_missing")).length, label)
+      .toBe(0);
   }
 });
 

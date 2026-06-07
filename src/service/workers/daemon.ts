@@ -4,7 +4,6 @@ import type {
 } from "../agents/mod.ts";
 import type { DispatchOutboxOptions } from "./outbox_dispatcher.ts";
 import type { RegistryPackageRef } from "./registry_sync_worker.ts";
-import type { RepairGroupInput } from "./repair_worker.ts";
 import type {
   RevokeDebtCleanupOwnerInput,
   RevokeDebtCleanupResult,
@@ -322,36 +321,6 @@ export function createRegistrySyncWorkerTask(
       await options.worker.syncPackages(refs);
       if (options.syncProviderSupport) {
         await options.worker.syncProviderSupport?.();
-      }
-    },
-  };
-}
-
-export interface RepairWorkerLike {
-  inspectGroup(input: RepairGroupInput): Promise<unknown>;
-}
-
-export interface RepairWorkerDaemonTaskOptions extends WorkerDaemonTaskTiming {
-  readonly worker: RepairWorkerLike;
-  readonly groups:
-    | readonly RepairGroupInput[]
-    | (() => MaybePromise<readonly RepairGroupInput[]>);
-  readonly name?: string;
-}
-
-export function createRepairWorkerTask(
-  options: RepairWorkerDaemonTaskOptions,
-): WorkerDaemonTask {
-  return {
-    ...taskTiming(options),
-    name: options.name ?? "repair",
-    async tick(context) {
-      const groups = typeof options.groups === "function"
-        ? await options.groups()
-        : options.groups;
-      for (const group of groups) {
-        if (context.signal.aborted) return;
-        await options.worker.inspectGroup(group);
       }
     },
   };

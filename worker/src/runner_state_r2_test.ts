@@ -337,6 +337,177 @@ test("state restore fails closed when the stored ciphertext is tampered", async 
   assert.equal(state.body(NEXT_STATE_KEY), undefined);
 });
 
+test("plan with depStates fetches + decrypts the producer state into /work/deps", async () => {
+  const calls: string[] = [];
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  // The PRODUCER state (another Installation) sealed in R2_STATE at gen 3.
+  const producerState = new TextEncoder().encode(
+    '{"version":4,"serial":3,"outputs":{"base_domain":{"value":"x"}}}',
+  );
+  const producerPrefix =
+    "spaces/spc_1/installations/inst_producer/envs/production/states";
+  const producerKey = `${producerPrefix}/00000003.tfstate.enc`;
+  const sealedProducer = await crypto.seal(producerState);
+  await state.put(producerKey, sealedProducer.ciphertext);
+
+  let restoredDep: Uint8Array | undefined;
+  const runner = runnerWithContainer(artifacts, state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      calls.push(`${request.method} ${path}`);
+      if (
+        request.method === "PUT" &&
+        path === "/runs/plan_1/deps/producer/restore"
+      ) {
+        // The DO must hand the container the DECRYPTED producer state.
+        restoredDep = new Uint8Array(await request.arrayBuffer());
+        return Response.json({ ok: true });
+      }
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(new Request("https://runner/runs/plan_1", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action: "plan",
+      runId: "plan_1",
+      request: {
+        // The consumer's own env state scope (gen 1).
+        stateScope: { ...SCOPE, generation: 1 },
+        // One remote_state dependency on the producer Installation.
+        depStates: [
+          {
+            name: "producer",
+            installationId: "inst_producer",
+            environment: "production",
+            generation: 3,
+            objectKey: producerKey,
+            digest: sealedProducer.contentDigest,
+          },
+        ],
+      },
+    }),
+  }));
+
+  assert.equal(response.status, 200);
+  // The dep state is restored BEFORE the run POST.
+  assert.deepEqual(calls, [
+    "PUT /runs/plan_1/deps/producer/restore",
+    "POST /runs/plan_1",
+  ]);
+  // The bytes handed to the container decrypt-match the producer plaintext.
+  assert.ok(restoredDep);
+  assert.deepEqual(restoredDep, producerState);
+});
+
+test("depStates restore fails closed when the producer ciphertext is tampered", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const producerState = new TextEncoder().encode('{"version":4,"serial":3}');
+  const producerKey =
+    "spaces/spc_1/installations/inst_producer/envs/production/states/00000003.tfstate.enc";
+  const sealedProducer = await crypto.seal(producerState);
+  const tampered = new Uint8Array(sealedProducer.ciphertext);
+  tampered[tampered.length - 1] ^= 0x01;
+  await state.put(producerKey, tampered);
+
+  const runner = runnerWithContainer(artifacts, state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      // The dep restore must fail before the run POST reaches the container.
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        return Response.json({ error: "should not run" }, { status: 500 });
+      }
+      return Response.json({ ok: true });
+    },
+  });
+
+  const response = await runner.fetch(new Request("https://runner/runs/plan_1", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action: "plan",
+      runId: "plan_1",
+      request: {
+        stateScope: { ...SCOPE, generation: 1 },
+        depStates: [
+          {
+            name: "producer",
+            installationId: "inst_producer",
+            environment: "production",
+            generation: 3,
+            objectKey: producerKey,
+            digest: sealedProducer.contentDigest,
+          },
+        ],
+      },
+    }),
+  }));
+
+  // Fail closed: the DO surfaces a 500 and never reaches the run POST.
+  assert.equal(response.status, 500);
+});
+
+test("depStates restore rejects an objectKey that escapes the producer prefix", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const producerState = new TextEncoder().encode('{"version":4,"serial":3}');
+  // A key that does NOT match the descriptor's installationId/environment prefix.
+  const crossTenantKey =
+    "spaces/spc_1/installations/inst_other/envs/production/states/00000003.tfstate.enc";
+  const sealedProducer = await crypto.seal(producerState);
+  await state.put(crossTenantKey, sealedProducer.ciphertext);
+
+  const runner = runnerWithContainer(artifacts, state, {
+    containerFetch() {
+      return Promise.resolve(Response.json({ error: "should not run" }, { status: 500 }));
+    },
+  });
+
+  const response = await runner.fetch(new Request("https://runner/runs/plan_1", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action: "plan",
+      runId: "plan_1",
+      request: {
+        stateScope: { ...SCOPE, generation: 1 },
+        depStates: [
+          {
+            name: "producer",
+            installationId: "inst_producer",
+            environment: "production",
+            generation: 3,
+            objectKey: crossTenantKey,
+            digest: sealedProducer.contentDigest,
+          },
+        ],
+      },
+    }),
+  }));
+
+  // The path-jail rejects the mismatched objectKey -> 500, no container call.
+  assert.equal(response.status, 500);
+});
+
 test("legacy apply without stateScope keeps using the R2_ARTIFACTS state path", async () => {
   const calls: string[] = [];
   const artifacts = new FakeR2Bucket();

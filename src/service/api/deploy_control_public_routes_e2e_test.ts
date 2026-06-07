@@ -6,6 +6,8 @@ import type {
 } from "takosumi-contract/deploy-control-api";
 import type { Run } from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
+import type { OutputShare, OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { Space } from "takosumi-contract/spaces";
 import type { OpenTofuRunner } from "../domains/deploy-control/mod.ts";
 import { applyExpectedGuardFromPlanRun } from "../domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../domains/deploy-control/store.ts";
@@ -38,6 +40,8 @@ async function seedInstallationViaRoutes(
 ): Promise<{
   app: { request: (path: string, init?: RequestInit) => Promise<Response> };
   installationId: string;
+  store: InMemoryOpenTofuDeploymentStore;
+  spaceId: string;
 }> {
   const store = new InMemoryOpenTofuDeploymentStore();
   const { app, operations } = await createTakosumiService({
@@ -125,7 +129,7 @@ async function seedInstallationViaRoutes(
   };
   await store.putSourceSnapshot(snapshot);
 
-  return { app, installationId };
+  return { app, installationId, store, spaceId };
 }
 
 test("deployControl e2e exposes OpenTofu plan and apply runs", async () => {
@@ -330,24 +334,145 @@ test("space PATCH updates displayName (§30 MVP)", async () => {
   expect(badRes.status).toEqual(400);
 });
 
-test("output-shares routes are 501 not_implemented (§30 surface, post-MVP)", async () => {
-  const { app } = await seedInstallationViaRoutes(fakeRunner());
-  const post = await app.request("/api/output-shares", {
+/**
+ * Seeds a consumer Space and a latest OutputSnapshot for the producer
+ * Installation directly into the store, so the OutputShare routes can validate a
+ * grant of `bucket_name` from the producer's `fromSpace` to a separate
+ * consumer Space.
+ */
+async function seedOutputShareScenario(): Promise<{
+  app: { request: (path: string, init?: RequestInit) => Promise<Response> };
+  fromSpaceId: string;
+  toSpaceId: string;
+  producerInstallationId: string;
+}> {
+  const { app, store, spaceId, installationId } = await seedInstallationViaRoutes(
+    fakeRunner(),
+  );
+  const toSpaceId = "space_consumer0001";
+  const consumer: Space = {
+    id: toSpaceId,
+    handle: "consumer",
+    displayName: "Consumer",
+    type: "personal",
+    ownerUserId: "user_test00000002",
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  };
+  await store.putSpace(consumer);
+  const snapshot: OutputSnapshot = {
+    id: "out_e2e000001",
+    spaceId,
+    installationId,
+    stateGeneration: 1,
+    rawOutputArtifactKey:
+      `spaces/${spaceId}/installations/${installationId}/runs/r1/outputs.raw.json.enc`,
+    publicOutputs: {},
+    spaceOutputs: { bucket_name: "my-bucket", region: "auto" },
+    outputDigest: "sha256:oute2e",
+    createdAt: new Date(0).toISOString(),
+  };
+  await store.putOutputSnapshot(snapshot);
+  return {
+    app,
+    fromSpaceId: spaceId,
+    toSpaceId,
+    producerInstallationId: installationId,
+  };
+}
+
+test("output-shares create / list / revoke happy path (§18)", async () => {
+  const { app, fromSpaceId, toSpaceId, producerInstallationId } =
+    await seedOutputShareScenario();
+
+  // Create: a grant of bucket_name from the producer's Space to the consumer.
+  const createRes = await app.request("/api/output-shares", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
-    body: "{}",
+    body: JSON.stringify({
+      fromSpaceId,
+      toSpaceId,
+      producerInstallationId,
+      outputs: [{ name: "bucket_name", alias: "bucket" }],
+    }),
   });
-  expect(post.status).toEqual(501);
-  expect((await post.json()).error.code).toEqual("not_implemented");
+  expect(createRes.status).toEqual(201);
+  const created = (await createRes.json()).share as OutputShare;
+  expect(created.status).toEqual("active");
+  expect(created.outputs).toEqual([
+    { name: "bucket_name", alias: "bucket", sensitive: false },
+  ]);
 
-  const list = await app.request("/api/output-shares", { headers: headers() });
-  expect(list.status).toEqual(501);
+  // List from the granting Space surfaces the share.
+  const listFrom = await app.request(
+    `/api/output-shares?spaceId=${fromSpaceId}`,
+    { headers: headers() },
+  );
+  expect(listFrom.status).toEqual(200);
+  expect(((await listFrom.json()).shares as OutputShare[]).map((s) => s.id))
+    .toEqual([created.id]);
 
-  const revoke = await app.request(
-    "/api/output-shares/share_x/revoke",
+  // List from the consumer Space surfaces the same share (received side).
+  const listTo = await app.request(
+    `/api/output-shares?spaceId=${toSpaceId}`,
+    { headers: headers() },
+  );
+  expect(listTo.status).toEqual(200);
+  expect(((await listTo.json()).shares as OutputShare[]).map((s) => s.id))
+    .toEqual([created.id]);
+
+  // Revoke moves it to revoked.
+  const revokeRes = await app.request(
+    `/api/output-shares/${created.id}/revoke`,
     { method: "POST", headers: headers() },
   );
-  expect(revoke.status).toEqual(501);
+  expect(revokeRes.status).toEqual(200);
+  expect(((await revokeRes.json()).share as OutputShare).status).toEqual(
+    "revoked",
+  );
+});
+
+test("output-shares create 409 when a name is absent from the producer's outputs (§18)", async () => {
+  const { app, fromSpaceId, toSpaceId, producerInstallationId } =
+    await seedOutputShareScenario();
+  const res = await app.request("/api/output-shares", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      fromSpaceId,
+      toSpaceId,
+      producerInstallationId,
+      outputs: [{ name: "not_a_real_output" }],
+    }),
+  });
+  // failed_precondition maps to HTTP 409.
+  expect(res.status).toEqual(409);
+  expect((await res.json()).error.code).toEqual("failed_precondition");
+});
+
+test("output-shares create 404 when the consumer Space is missing (§18)", async () => {
+  const { app, fromSpaceId, producerInstallationId } =
+    await seedOutputShareScenario();
+  const res = await app.request("/api/output-shares", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      fromSpaceId,
+      toSpaceId: "space_missing00001",
+      producerInstallationId,
+      outputs: [{ name: "bucket_name" }],
+    }),
+  });
+  expect(res.status).toEqual(404);
+});
+
+test("output-shares revoke 404 for a missing share (§18)", async () => {
+  const { app } = await seedOutputShareScenario();
+  const res = await app.request(
+    "/api/output-shares/oshare_missing00001/revoke",
+    { method: "POST", headers: headers() },
+  );
+  expect(res.status).toEqual(404);
 });
 
 test("installation PATCH and DELETE are 501 (use destroy-plan; §30 MVP)", async () => {
@@ -395,6 +520,41 @@ test("deployControl e2e rejects mismatched plan digest guard", async () => {
     }),
   });
   expect(res.status).toEqual(409);
+});
+
+test("POST /api/installations/:id/drift-check creates a drift_check run that is never waiting_approval and cannot be applied", async () => {
+  // The fake runner reports a delete+create change (the §25 action policy would
+  // normally park a plan waiting_approval). A drift check must NOT park.
+  const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
+
+  const driftRes = await app.request(
+    `/api/installations/${installationId}/drift-check`,
+    { method: "POST", headers: headers() },
+  );
+  expect(driftRes.status).toEqual(201);
+  const drift = await driftRes.json() as PlanRunResponse;
+  expect(drift.planRun.driftCheck).toBe(true);
+  expect(drift.planRun.status).toEqual("succeeded");
+
+  // The §19 Run projects type drift_check and succeeded (NOT waiting_approval).
+  const runRes = await app.request(`/api/runs/${drift.planRun.id}`, {
+    headers: headers(),
+  });
+  expect(runRes.status).toEqual(200);
+  const run = (await runRes.json() as { run: Run }).run;
+  expect(run.type).toEqual("drift_check");
+  expect(run.status).toEqual("succeeded");
+
+  // A drift check can never be applied.
+  const applyRes = await app.request("/v1/apply-runs", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      planRunId: drift.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(drift.planRun),
+    }),
+  });
+  expect(applyRes.status).toEqual(409);
 });
 
 function fakeRunner(): OpenTofuRunner {
