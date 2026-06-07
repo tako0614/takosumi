@@ -37,19 +37,8 @@ binding = "R2_BACKUPS"
 bucket_name = "takosumi-backups"
 
 [[queues.producers]]
-binding = "TAKOS_QUEUE"
-queue = "takosumi-control-plane"
-
-[[queues.producers]]
 binding = "RUN_QUEUE"
 queue = "takosumi-runs"
-
-[[queues.consumers]]
-queue = "takosumi-control-plane"
-max_batch_size = 10
-max_batch_timeout = 5
-max_retries = 3
-dead_letter_queue = "takosumi-control-plane-dlq"
 
 # Async OpenTofu run lifecycle. The create path persists the run `queued` and
 # returns; this consumer mints credentials and drives the container DO. One run

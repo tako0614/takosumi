@@ -1,7 +1,7 @@
 import { Show } from "solid-js";
 
 /**
- * Renders a DeploymentOutput value — a clickable link for http(s) strings,
+ * Renders a InstallationOutput value — a clickable link for http(s) strings,
  * a `<code>` block otherwise.
  * Ported from
  * takosumi dashboard-ui/src/components/apps/installation-detail/OutputValue.tsx.

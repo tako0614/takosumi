@@ -99,19 +99,44 @@ export class SpacesService {
 
   /**
    * Updates the mutable, non-identity fields of a Space (spec §30 `PATCH
-   * /api/spaces/:spaceId`). MVP scope: `displayName` only — the handle, type,
-   * owner, and billing are immutable here. Bumps `updatedAt`.
+   * /api/spaces/:spaceId`). The handle, type, owner, and billing are immutable
+   * here. Bumps `updatedAt`.
    */
   async updateSpace(
     id: string,
-    patch: { readonly displayName: string },
+    patch: {
+      readonly displayName?: string;
+      readonly policy?: Space["policy"];
+    },
   ): Promise<Space> {
     requireNonEmptyString(id, "id");
-    requireNonEmptyString(patch.displayName, "displayName");
+    if (patch.displayName !== undefined) {
+      requireNonEmptyString(patch.displayName, "displayName");
+    }
+    if (
+      patch.policy !== undefined &&
+      (typeof patch.policy !== "object" ||
+        patch.policy === null ||
+        Array.isArray(patch.policy))
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "policy must be an object",
+      );
+    }
+    if (patch.displayName === undefined && patch.policy === undefined) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "displayName or policy is required",
+      );
+    }
     const space = await this.getSpace(id);
     const updated: Space = {
       ...space,
-      displayName: patch.displayName,
+      ...(patch.displayName !== undefined
+        ? { displayName: patch.displayName }
+        : {}),
+      ...(patch.policy !== undefined ? { policy: patch.policy } : {}),
       updatedAt: this.#now().toISOString(),
     };
     return await this.#store.putSpace(updated);

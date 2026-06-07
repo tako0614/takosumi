@@ -3,9 +3,9 @@
  *
  * The official install entry: register a Source from a Git URL, sync it to a
  * snapshot, create an Installation bound to an InstallConfig, then create the
- * first plan Run. The form fields are Git URL / Ref / Path / target Space /
- * Installation name / Environment / Mode (InstallConfig from
- * `GET /v1/control/install-configs`).
+ * first plan Run. The user-facing form fields are Git URL / Ref / Path /
+ * target Space / Installation name. InstallConfig, deployment environment, and
+ * capability binding details stay internal defaults.
  *
  * The flow runs as four ordered steps, each surfaced so a mid-flow failure is
  * recoverable without restarting from scratch:
@@ -18,11 +18,10 @@
  * is not ready yet) is surfaced humanely with a "再同期" retry rather than a raw
  * error code.
  *
- * Deep link: the M9 `/install` external link redirects to
- * `/#/install?git=<url>&ref=<ref>&path=<path>`. This view also lives at the path
- * route `/install`, so it reads the prefill params from BOTH `location.search`
- * (path route) and the hash fragment (`#/install?...`, what M9 mints), since the
- * dashboard router is path-based and never sees the hash query.
+ * Deep link: the `/install` external link redirects to
+ * `/install?git=<url>&ref=<ref>&path=<path>`. The view also accepts the packed
+ * `source=git::<url>//<path>?ref=<ref>` form directly for local previews and
+ * keeps the older hash-query reader as a compatibility fallback.
  */
 import {
   createMemo,
@@ -36,15 +35,20 @@ import { useNavigate } from "@solidjs/router";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
-import { currentSpaceId, setCurrentSpaceId } from "./space-state.ts";
+import { currentSpaceId } from "./space-state.ts";
 import {
+  checkCapsuleCompatibility,
   ControlApiError,
   createInstallation,
   createSource,
   extractRunId,
+  type CapabilityBindings,
+  type CapsuleCompatibilityLevel,
+  type CapsuleCompatibilityResult,
   type InstallConfig,
   listInstallConfigs,
   planInstallation,
+  putDeploymentProfile,
   syncSource,
 } from "../../lib/control-api.ts";
 
@@ -53,9 +57,10 @@ function readPrefill(): { git: string; ref: string; path: string } {
   const out = { git: "", ref: "", path: "" };
   if (typeof location === "undefined") return out;
   const apply = (params: URLSearchParams) => {
-    out.git = params.get("git") ?? out.git;
-    out.ref = params.get("ref") ?? out.ref;
-    out.path = params.get("path") ?? out.path;
+    const packed = parsePackedInstallSource(params.get("source"));
+    out.git = params.get("git") ?? packed?.git ?? out.git;
+    out.ref = params.get("ref") ?? packed?.ref ?? out.ref;
+    out.path = params.get("path") ?? packed?.path ?? out.path;
   };
   // Path-route form: /install?git=...
   apply(new URLSearchParams(location.search));
@@ -67,7 +72,41 @@ function readPrefill(): { git: string; ref: string; path: string } {
   return out;
 }
 
+function parsePackedInstallSource(
+  source: string | null,
+): { git: string; ref: string; path: string } | undefined {
+  const prefix = "git::";
+  if (!source?.startsWith(prefix)) return undefined;
+  const body = source.slice(prefix.length);
+  const queryStart = body.indexOf("?");
+  const beforeQuery = queryStart === -1 ? body : body.slice(0, queryStart);
+  const query = queryStart === -1 ? "" : body.slice(queryStart + 1);
+  const marker = findModulePathMarker(beforeQuery);
+  const git = marker === -1 ? beforeQuery : beforeQuery.slice(0, marker);
+  const path = marker === -1 ? "" : beforeQuery.slice(marker + 2);
+  const params = new URLSearchParams(query);
+  return {
+    git,
+    ref: params.get("ref") ?? "",
+    path,
+  };
+}
+
+function findModulePathMarker(value: string): number {
+  const scheme = value.indexOf("://");
+  const start = scheme === -1 ? 0 : scheme + "://".length;
+  return value.indexOf("//", start);
+}
+
 type StepState = "idle" | "running" | "done" | "error";
+type CapabilityName = "compute" | "dns" | "storage" | "source";
+
+const CAPABILITIES: readonly CapabilityName[] = [
+  "compute",
+  "dns",
+  "storage",
+  "source",
+];
 
 export default function InstallFromGitView() {
   return <Page title="Git から導入">{() => <Inner />}</Page>;
@@ -81,8 +120,10 @@ function Inner() {
   const [ref, setRef] = createSignal(prefill.ref || "main");
   const [path, setPath] = createSignal(prefill.path || ".");
   const [name, setName] = createSignal("");
-  const [environment, setEnvironment] = createSignal("production");
   const [installConfigId, setInstallConfigId] = createSignal("");
+  const [compatibility, setCompatibility] =
+    createSignal<CapsuleCompatibilityResult | null>(null);
+  const [checkingCompatibility, setCheckingCompatibility] = createSignal(false);
 
   // Derive a default Installation name from the repo when not yet typed.
   onMount(() => {
@@ -99,12 +140,18 @@ function Inner() {
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
   const [configs] = createResource(spaceId, listInstallConfigs);
 
-  // Default the mode select to the first config once configs load.
-  const configList = createMemo<readonly InstallConfig[]>(() => configs() ?? []);
+  // Select the first internal OpenTofu Capsule profile once configs load.
+  const configList = createMemo<readonly InstallConfig[]>(
+    () => configs() ?? [],
+  );
   const ensureConfigSelected = () => {
     const list = configList();
     if (!installConfigId() && list.length > 0) setInstallConfigId(list[0]!.id);
     return list;
+  };
+  const selectedInstallConfigId = () => {
+    ensureConfigSelected();
+    return installConfigId();
   };
 
   // Step machine state. We keep the created Source id so a retry resumes from
@@ -124,15 +171,98 @@ function Inner() {
     if (!spaceId()) return "Space を選択してください。";
     if (!gitUrl().trim()) return "Git URL を入力してください。";
     if (!name().trim()) return "Installation 名を入力してください。";
-    if (!environment().trim()) return "Environment を入力してください。";
-    if (!installConfigId()) return "Mode（InstallConfig）を選択してください。";
+    if (!selectedInstallConfigId())
+      return "OpenTofu Capsule profile がまだ利用できません。";
     return null;
+  };
+
+  const deploymentProfileBindings = (): CapabilityBindings => {
+    const out: Record<CapabilityName, CapabilityBindings[CapabilityName]> = {
+      compute: { mode: "default" },
+      dns: { mode: "default" },
+      storage: { mode: "default" },
+      source: { mode: "default" },
+    };
+    return out;
+  };
+
+  const resetCompatibility = () => {
+    setCompatibility(null);
+    setError(null);
+  };
+
+  const compatibilityLabel = (level: CapsuleCompatibilityLevel): string => {
+    switch (level) {
+      case "ready":
+        return "Ready";
+      case "auto_capsulized":
+        return "Auto-capsulized";
+      case "needs_patch":
+        return "Needs patch";
+      case "unsupported":
+        return "Unsupported";
+    }
+  };
+
+  const canContinue = () =>
+    compatibility() !== null && compatibility()?.level !== "unsupported";
+
+  const runCompatibilityCheck = async () => {
+    const validationError = validate();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setCheckingCompatibility(true);
+    setError(null);
+    try {
+      const result = await checkCapsuleCompatibility({
+        spaceId: spaceId()!,
+        gitUrl: gitUrl().trim(),
+        ref: ref().trim() || "main",
+        path: path().trim() || ".",
+        name: name().trim(),
+        installConfigId: selectedInstallConfigId(),
+      });
+      setCompatibility(result);
+    } catch (err) {
+      const apiError = err instanceof ControlApiError ? err : undefined;
+      if (
+        apiError &&
+        (apiError.status === 404 ||
+          apiError.status === 405 ||
+          apiError.status === 501)
+      ) {
+        setCompatibility({
+          level: "ready",
+          summary:
+            "Compatibility API is not available yet. The OpenTofu Capsule will be validated by the existing plan flow.",
+          diagnostics: [
+            {
+              severity: "info",
+              message:
+                "Placeholder compatibility result; Continue/Plan remains available.",
+            },
+          ],
+          installConfigId: selectedInstallConfigId(),
+          source: "placeholder",
+        });
+      } else {
+        setError(apiError?.message ?? String(err));
+      }
+    } finally {
+      setCheckingCompatibility(false);
+    }
   };
 
   const runFlow = async () => {
     const validationError = validate();
     if (validationError) {
       setError(validationError);
+      return;
+    }
+    if (!canContinue()) {
+      setError("Compatibility result を確認してから Continue/Plan してください。");
       return;
     }
     setBusy(true);
@@ -168,10 +298,12 @@ function Inner() {
       const installation = await createInstallation({
         spaceId: space,
         name: name().trim(),
-        environment: environment().trim(),
+        environment: "production",
         sourceId,
-        installConfigId: installConfigId(),
+        installConfigId:
+          compatibility()?.installConfigId ?? selectedInstallConfigId(),
       });
+      await putDeploymentProfile(installation.id, deploymentProfileBindings());
       setStepInstall("done");
 
       // Step 4 — create the first plan Run, then jump to the run summary.
@@ -214,13 +346,15 @@ function Inner() {
   return (
     <AppShell>
       <div class="page-header">
-        <h1>Git から導入</h1>
+        <h1>Install from Git</h1>
         <p class="page-sub">
-          Git URL から Source を登録し、 同期して Installation を作成、
-          最初の Plan を実行します。
+          Git URL から OpenTofu Capsule を確認し、 Compatibility result を見てから
+          Continue/Plan します。
         </p>
         <div class="page-actions">
-          <a href="/installations" class="btn btn-secondary">一覧へ</a>
+          <a href="/installations" class="btn btn-secondary">
+            一覧へ
+          </a>
         </div>
       </div>
 
@@ -235,12 +369,13 @@ function Inner() {
         }
       >
         <section class="detail-section">
-          <h2>Installation を作成</h2>
+          <h2>OpenTofu Capsule</h2>
           <form
             class="install-form"
             onSubmit={(e) => {
               e.preventDefault();
-              void runFlow();
+              if (canContinue()) void runFlow();
+              else void runCompatibilityCheck();
             }}
           >
             <label class="form-field">
@@ -248,7 +383,10 @@ function Inner() {
               <input
                 type="text"
                 value={gitUrl()}
-                onInput={(e) => setGitUrl(e.currentTarget.value)}
+                onInput={(e) => {
+                  setGitUrl(e.currentTarget.value);
+                  resetCompatibility();
+                }}
                 placeholder="https://github.com/owner/repo.git"
                 autocomplete="off"
                 spellcheck={false}
@@ -261,7 +399,10 @@ function Inner() {
                 <input
                   type="text"
                   value={ref()}
-                  onInput={(e) => setRef(e.currentTarget.value)}
+                  onInput={(e) => {
+                    setRef(e.currentTarget.value);
+                    resetCompatibility();
+                  }}
                   placeholder="main"
                   autocomplete="off"
                   spellcheck={false}
@@ -272,7 +413,10 @@ function Inner() {
                 <input
                   type="text"
                   value={path()}
-                  onInput={(e) => setPath(e.currentTarget.value)}
+                  onInput={(e) => {
+                    setPath(e.currentTarget.value);
+                    resetCompatibility();
+                  }}
                   placeholder="."
                   autocomplete="off"
                   spellcheck={false}
@@ -280,64 +424,80 @@ function Inner() {
               </label>
             </div>
 
-            <div class="install-form-row">
-              <label class="form-field">
-                Installation 名
-                <input
-                  type="text"
-                  value={name()}
-                  onInput={(e) => setName(e.currentTarget.value)}
-                  placeholder="talk"
-                  autocomplete="off"
-                  spellcheck={false}
-                />
-              </label>
-              <label class="form-field">
-                Environment
-                <input
-                  type="text"
-                  value={environment()}
-                  onInput={(e) => setEnvironment(e.currentTarget.value)}
-                  placeholder="production"
-                  autocomplete="off"
-                  spellcheck={false}
-                />
-              </label>
-            </div>
-
             <label class="form-field">
-              Mode（InstallConfig）
-              <Show
-                when={configList().length > 0}
-                fallback={
-                  <select disabled>
-                    <option>
-                      {configs.loading
-                        ? "読み込み中..."
-                        : "利用可能な InstallConfig がありません"}
-                    </option>
-                  </select>
-                }
-              >
-                <select
-                  value={installConfigId()}
-                  onChange={(e) => setInstallConfigId(e.currentTarget.value)}
-                >
-                  <For each={ensureConfigSelected()}>
-                    {(config) => (
-                      <option value={config.id}>
-                        {config.name} — {config.installType}（{config.trustLevel}）
-                        {config.spaceId === undefined ? " · 公式" : ""}
-                      </option>
-                    )}
-                  </For>
-                </select>
-              </Show>
+              Installation 名
+              <input
+                type="text"
+                value={name()}
+                onInput={(e) => {
+                  setName(e.currentTarget.value);
+                  resetCompatibility();
+                }}
+                placeholder="talk"
+                autocomplete="off"
+                spellcheck={false}
+              />
             </label>
 
+            <Show when={!configs.loading && configList().length === 0}>
+              <p class="sign-in-error" role="alert">
+                OpenTofu Capsule profile が利用できません。
+              </p>
+            </Show>
+
+            <Show when={compatibility()}>
+              {(result) => (
+                <section class="compatibility-result">
+                  <div class="compatibility-result-head">
+                    <h3>Compatibility result</h3>
+                    <span
+                      class={`status-pill compatibility-${result().level.replaceAll("_", "-")}`}
+                    >
+                      {compatibilityLabel(result().level)}
+                    </span>
+                  </div>
+                  <p>{result().summary}</p>
+                  <Show when={result().source === "placeholder"}>
+                    <p class="muted">
+                      Compatibility API placeholder: the existing plan flow will
+                      perform the authoritative validation.
+                    </p>
+                  </Show>
+                  <Show when={result().diagnostics.length > 0}>
+                    <ul class="compatibility-diagnostics">
+                      <For each={result().diagnostics}>
+                        {(diagnostic) => (
+                          <li class={`compatibility-${diagnostic.severity}`}>
+                            {diagnostic.message}
+                            <Show when={diagnostic.detail}>
+                              {(detail) => (
+                                <span class="muted"> — {detail()}</span>
+                              )}
+                            </Show>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </Show>
+                </section>
+              )}
+            </Show>
+
             <div class="form-actions">
-              <button class="btn btn-primary" type="submit" disabled={busy()}>
-                {busy() ? "実行中..." : "導入して Plan を実行"}
+              <button
+                class="btn btn-secondary"
+                type="button"
+                disabled={checkingCompatibility() || busy()}
+                onClick={() => void runCompatibilityCheck()}
+              >
+                {checkingCompatibility() ? "Checking..." : "Check compatibility"}
+              </button>
+              <button
+                class="btn btn-primary"
+                type="submit"
+                disabled={busy() || !canContinue()}
+              >
+                {busy() ? "Planning..." : "Continue/Plan"}
               </button>
               <Show when={syncRequired() && !busy()}>
                 <button
@@ -355,10 +515,7 @@ function Inner() {
             </Show>
           </form>
 
-          <Show
-            when={stepSource() !== "idle"}
-            fallback={null}
-          >
+          <Show when={stepSource() !== "idle"} fallback={null}>
             <ol class="install-steps">
               <li classList={{ active: stepSource() === "running" }}>
                 <span class="install-step-icon">{stepIcon(stepSource())}</span>
@@ -370,7 +527,7 @@ function Inner() {
               </li>
               <li classList={{ active: stepInstall() === "running" }}>
                 <span class="install-step-icon">{stepIcon(stepInstall())}</span>
-                Installation を作成
+                OpenTofu Capsule Installation を作成
               </li>
               <li classList={{ active: stepPlan() === "running" }}>
                 <span class="install-step-icon">{stepIcon(stepPlan())}</span>

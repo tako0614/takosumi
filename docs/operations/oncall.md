@@ -1,136 +1,113 @@
 # Operations: On-call and SEV Policy
 
-> このページでわかること: Takos operated environments の on-call rotation、SEV
-> 分類、paging path、escalation matrix、staging SEV-1 simulation の実施基準。
+> このページでわかること: Takosumi operated environments の on-call
+> rotation、SEV 分類、paging path、escalation matrix、staging SEV-1
+> simulation の実施基準。
 
-この runbook は Takos product の運用正本です。Takosumi kernel の signal contract
-は `takosumi/docs/reference/observability-stack.md` と
-`takosumi/docs/reference/incident-model.md` を参照し、Takos 側では誰がいつ受け、
-どの順序で判断・連絡・復旧するかを固定します。
+この runbook は Takosumi platform worker の運用正本です。対象は
+`app.takosumi.com` で動く accounts plane、control plane、dashboard SPA、
+Queue、CoordinationObject、OpenTofuRunnerObject、Runner Container、D1/R2
+ledger です。Takos product runtime / bundled app runtime の incident は各
+product docs が所有します。
 
 ## Scope
 
-対象は Takos operated environments の `takos-app` / `takos-git` / `takos-agent`
-/ in-process account plane + deploy control (Takosumi) / default apps です。
-paging provider、担当者、customer comms は operator が所有します。
+対象:
 
-Takos は基本 Web/API surface として運用します。operator/debug 補助は internal
-tooling に閉じ、customer-facing primary UX にはしません。Takosumi CLI は
-manifest deploy engine の explicit manifest path を扱うだけで、Takos product の
-incident command surface にはしません。
+- login / session / OIDC issuer
+- Space / Source / Connection / Installation / Dependency / Run APIs
+- SourceSnapshot / compatibility check / plan / apply / destroy flow
+- runner queue and container execution
+- StateSnapshot / OutputSnapshot / artifact / backup storage
+- Space billing / credit ledger
+- dashboard and Activity views
+
+Takosumi CLI / internal operator scripts are support tooling only and are not
+the incident command surface.
 
 ## Roles
 
-| Role                 | Owner                             | Responsibility                                      |
-| -------------------- | --------------------------------- | --------------------------------------------------- |
-| Primary on-call      | current rotation owner            | alert ack、初動 triage、mitigation owner            |
-| Secondary on-call    | next rotation owner               | primary 不応答時の引き継ぎ、並行調査、rollback 承認 |
-| Incident commander   | primary または指名された operator | SEV 宣言、war room、timeline、decision log          |
-| Communications owner | support / product owner           | customer update、status page、support ticket sweep  |
-| Subject-matter owner | service owner                     | deep dive、fix owner、postmortem action owner       |
+| Role | Owner | Responsibility |
+| --- | --- | --- |
+| Primary on-call | current rotation owner | alert ack, first triage, mitigation owner |
+| Secondary on-call | next rotation owner | backup ack, parallel investigation, rollback approval |
+| Incident commander | primary or assigned operator | SEV declaration, war room, timeline, decision log |
+| Communications owner | support / product owner | customer update, status page, support sweep |
+| Subject-matter owner | service owner | deep dive, fix owner, postmortem action owner |
 
-Primary と secondary は同じ timezone / failure domain に置かないことを目標に
-します。rotation handoff は 週次、handoff window は月曜 10:00 JST、祝日や
-長期不在がある場合は前営業日までに secondary を primary に昇格します。
+Primary and secondary should not share the same timezone / failure domain when
+possible. Active SEV-1 handoff requires synchronous acknowledgement in the
+incident channel.
 
 ## SEV Classification
 
-| SEV   | Customer impact                                                                                               | Examples                                                                                                                 | Ack target      | Update cadence              |
-| ----- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | --------------- | --------------------------- |
-| SEV-1 | production-wide outage、data loss risk、security-critical exposure、deploy / login / repo access の大規模停止 | `takos-app` 全体 5xx、auth unavailable、Git Smart HTTP 全停止、known secret leak、cross-tenant data exposure             | 5 min           | 15 min                      |
-| SEV-2 | single region / major feature degradation、複数 tenant 影響、workaround あり                                  | deploy apply が大半で timeout、runtime-agent queue backlog、billing / profile の write failure、default app の広範囲障害 | 15 min          | 30 min                      |
-| SEV-3 | isolated tenant / non-critical degradation、operational toil、customer-visible but bounded issue              | single tenant deploy failure、docs / dashboard drift、slow background job、minor default app issue                       | 1 business hour | daily or on material change |
+| SEV | Customer impact | Examples | Ack target | Update cadence |
+| --- | --- | --- | --- | --- |
+| SEV-1 | production-wide outage, data loss risk, security-critical exposure, deploy/auth/source access unavailable | platform worker 5xx, OIDC issuer unavailable, cross-Space data exposure, known secret leak, state/artifact corruption | 5 min | 15 min |
+| SEV-2 | major feature degradation, multiple Spaces affected, workaround exists | plan/apply mostly failing, queue backlog, runner container startup failures, billing write failure, compatibility API outage | 15 min | 30 min |
+| SEV-3 | isolated Space / non-critical degradation, operational toil | single Installation run failure, dashboard drift, slow backup job, docs/runbook issue | 1 business hour | daily or on material change |
 
-SEV は下げるより上げる判断を優先します。影響範囲が不明な production alert は
-SEV-2 以上として開始し、customer data exposure の可能性がある場合は 調査完了まで
-SEV-1 として扱います。
+When scope is unclear, start at SEV-2 or higher. Suspected customer data
+exposure is SEV-1 until disproven.
 
 ## Paging Path
 
-1. Alert fires from Takos-managed monitoring: HTTP 5xx / latency SLO、deploy
-   success rate、SLA breach、runtime-agent heartbeat、database / queue health、
-   secret rotation failure。
-2. Paging provider routes to primary on-call. Primary は ack target 内に
-   acknowledge し、incident channel を開く。
-3. Primary が ack しない場合、paging provider は 5 分後に secondary、さらに 10
-   分後に incident commander backup / product owner へ escalate する。
-4. SEV-1 / SEV-2 は incident record を作る。自動検知済み incident がある場合
-   はその incident に attach し、なければ operator-declared incident として
-   作成する。
-5. Communications owner は SEV-1 で 15 分以内、SEV-2 で 30 分以内に customer
-   update の要否を判断する。
+1. Alert fires from Takosumi monitoring: HTTP 5xx / latency, deploy success
+   rate, runner queue age, D1/R2 health, billing ledger drift, secret rotation
+   failure.
+2. Paging provider routes to primary on-call.
+3. Primary acknowledges within target and opens incident channel.
+4. If primary does not ack, page secondary after 5 minutes and incident
+   commander backup / product owner after 10 more minutes.
+5. SEV-1 / SEV-2 gets an incident record and customer communication decision.
 
 ## Escalation Matrix
 
-| Trigger                              | Primary action                         | Escalate to secondary                     | Escalate to service owner        | Escalate to product / legal |
-| ------------------------------------ | -------------------------------------- | ----------------------------------------- | -------------------------------- | --------------------------- |
-| SEV-1 declared                       | immediate page + war room              | immediately                               | immediately for affected service | within 15 min               |
-| SEV-2 declared                       | page primary                           | no ack after 15 min or unclear mitigation | no mitigation path after 30 min  | customer update needed      |
-| Security / secret exposure suspected | page primary + freeze affected path    | immediately                               | security owner immediately       | immediately                 |
-| Data integrity risk                  | stop writes if safe, preserve evidence | immediately                               | storage / app owner immediately  | within 15 min               |
-| Failed deploy rollback               | start rollback SOP                     | rollback blocked after 15 min             | deploy / kernel owner            | if customer impact persists |
-| Runtime-agent backlog                | drain / redistribute work              | no improvement after 30 min               | agent owner                      | if deploy SLA breached      |
+| Trigger | Primary action | Escalate to secondary | Escalate to owner | Escalate to product / legal |
+| --- | --- | --- | --- | --- |
+| SEV-1 declared | immediate page + war room | immediately | immediately for affected area | within 15 min |
+| SEV-2 declared | page primary | no ack after 15 min or unclear mitigation | no mitigation path after 30 min | customer update needed |
+| Security / secret exposure suspected | freeze affected path | immediately | security owner immediately | immediately |
+| State / output integrity risk | stop writes if safe, preserve evidence | immediately | storage / control-plane owner | within 15 min |
+| Failed platform rollback | start rollback SOP | rollback blocked after 15 min | release owner | if customer impact persists |
+| Runner backlog | throttle new runs / drain queue | no improvement after 30 min | runner owner | if deploy SLA breached |
 
 ## Incident Command Procedure
 
 1. Declare SEV and appoint incident commander.
-2. Open war room with `#inc-<date>-<slug>` naming and pin:
-   - SEV level
-   - start time
-   - affected services / regions / tenants
-   - customer-visible impact
-   - current mitigation owner
-3. Freeze non-essential deploys for affected services.
-4. Capture timeline events every material change: alert, ack, mitigation
-   attempt, rollback, customer update, recovery signal.
-5. Prefer reversible mitigation: rollback, traffic shift, feature flag off,
-   queue drain pause, credential disablement, dependency failover.
-6. Resolve only when monitoring is green for two consecutive observation windows
-   and no new customer impact is reported.
-
-## Handoff
-
-Rotation handoff must include:
-
-- open incidents and pending postmortems
-- active deploy freezes / rollback windows
-- degraded SLOs or noisy alerts
-- secret rotation / migration / release promotion tasks in progress
-- known customer escalations and support ticket links
-
-Primary cannot hand off an active SEV-1 without an explicit synchronous handoff
-in the incident channel.
+2. Open war room with `#inc-<date>-<slug>` naming and pin impact, affected
+   surfaces, mitigation owner, next update time.
+3. Freeze non-essential platform deploys and optionally pause new plan/apply
+   dispatch for affected Spaces.
+4. Capture timeline events for alerts, ack, mitigation attempts, rollback,
+   customer updates, recovery signals.
+5. Prefer reversible mitigation: rollback platform worker version, pause queue,
+   throttle applies, disable an integration, rotate/revoke leaked credential.
+6. Resolve only after two observation windows are green and no new customer
+   impact is reported.
 
 ## SEV-1 Staging Simulation
 
-Public managed Takos launch readiness (ROADMAP.md Managed Takos Offering gap
-audit) requires at least one SEV-1 simulation in staging. The simulation is not
-a production outage and must not page customers.
+Hosted Takosumi launch readiness requires at least one SEV-1 simulation in
+staging. The simulation must not page customers.
 
 Required scenario:
 
 1. Pick a staging-only failure injection:
-   - block `takos-app` health route,
-   - force deploy apply failure,
-   - stop one runtime-agent pool,
-   - or inject a database read-only error.
+   - block platform worker health route,
+   - force plan/apply dispatch failure,
+   - stop runner container startup,
+   - or inject a D1 read-only / lock error.
 2. Confirm alert fires and routes to primary on-call.
 3. Primary acknowledges within 5 minutes.
 4. Incident commander opens a staging incident channel and records timeline.
 5. Execute mitigation or rollback and confirm recovery signal.
-6. Write simulation record with:
-   - date / time
-   - injected failure
-   - alert id
-   - ack latency
-   - mitigation action
-   - recovery time
-   - follow-up actions
+6. Write simulation record with date, injected failure, alert id, ack latency,
+   mitigation action, recovery time, and follow-up actions.
 
-Takos-operated environments record the evidence in the operator's private run
-logs (kept outside any repo, in the operator vault or an approved incident
-system). Public docs must not contain secret names, provider account ids,
-customer identifiers, or private incident links.
+Evidence lives in the operator's private run log or approved incident system.
+Public docs must not contain secret names, provider account ids, customer
+identifiers, or private incident links.
 
 ## Postmortem Requirement
 
@@ -138,15 +115,6 @@ SEV-1 always requires a postmortem. SEV-2 requires one when customer impact
 lasts more than 30 minutes, rollback fails, data integrity is involved, or
 manual operator action was the only mitigation.
 
-Postmortem must include:
-
-- customer impact summary
-- exact timeline
-- root cause and contributing factors
-- detection gap
-- mitigation / recovery actions
-- action items with owner and due date
-- whether the SEV classification was correct
-
-Postmortem review happens within 5 business days for SEV-1 and 10 business days
-for qualifying SEV-2.
+Postmortem must include customer impact, exact timeline, root cause,
+contributing factors, detection gap, mitigation / recovery actions, action
+items with owner and due date, and classification review.

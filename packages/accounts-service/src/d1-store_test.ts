@@ -51,14 +51,24 @@ test("D1AccountsStore initializes lazily and persists indexed records", async ()
   });
 
   expect(db.execCount).toEqual(1);
-  expect((await store.findAccount("tsub_test"))?.email).toEqual("renamed@example.test");
-  expect((await store.findAccount("tsub_test"))?.termsVersion).toEqual("terms-2026-05-13");
-  expect((await store.listPasskeyCredentialsForSubject("tsub_test")).map((
-      credential,
-    ) => credential.credentialId)).toEqual(["credential-1"]);
-  expect((await store.findBillingAccountForSubject("tsub_test"))?.billingAccountId).toEqual("billing-1");
-  expect((await store.findBillingAccountByStripeCustomerId("cus_123"))
-      ?.billingAccountId).toEqual("billing-1");
+  expect((await store.findAccount("tsub_test"))?.email).toEqual(
+    "renamed@example.test",
+  );
+  expect((await store.findAccount("tsub_test"))?.termsVersion).toEqual(
+    "terms-2026-05-13",
+  );
+  expect(
+    (await store.listPasskeyCredentialsForSubject("tsub_test")).map(
+      (credential) => credential.credentialId,
+    ),
+  ).toEqual(["credential-1"]);
+  expect(
+    (await store.findBillingAccountForSubject("tsub_test"))?.billingAccountId,
+  ).toEqual("billing-1");
+  expect(
+    (await store.findBillingAccountByStripeCustomerId("cus_123"))
+      ?.billingAccountId,
+  ).toEqual("billing-1");
 });
 
 test("D1AccountsStore consumes one-shot records", async () => {
@@ -73,7 +83,9 @@ test("D1AccountsStore consumes one-shot records", async () => {
     expiresAt: Date.now() + 60_000,
   });
 
-  expect((await store.consumeAuthorizationCode("code-1"))?.nonce).toEqual("nonce-1");
+  expect((await store.consumeAuthorizationCode("code-1"))?.nonce).toEqual(
+    "nonce-1",
+  );
   expect(await store.consumeAuthorizationCode("code-1")).toEqual(undefined);
 
   const jti = {
@@ -100,17 +112,27 @@ test("D1AccountsStore persists PAT metadata and billing usage indexes", async ()
     createdAt: 1000,
     expiresAt: 2000,
   });
-  expect((await store.findPersonalAccessToken("takpat_secret"))?.tokenId).toEqual("pat_1");
-  expect((await store.listPersonalAccessTokensForSubject("tsub_test")).map((
-      token,
-    ) => token.name)).toEqual(["CLI"]);
+  expect(
+    (await store.findPersonalAccessToken("takpat_secret"))?.tokenId,
+  ).toEqual("pat_1");
+  expect(
+    (await store.listPersonalAccessTokensForSubject("tsub_test")).map(
+      (token) => token.name,
+    ),
+  ).toEqual(["CLI"]);
   await store.recordPersonalAccessTokenUsed("pat_1", 1500);
-  expect((await store.findPersonalAccessToken("takpat_secret"))?.lastUsedAt).toEqual(1500);
-  expect((await store.revokePersonalAccessToken({
-      subject: "tsub_test",
-      tokenId: "pat_1",
-      revokedAt: 1600,
-    }))?.revokedAt).toEqual(1600);
+  expect(
+    (await store.findPersonalAccessToken("takpat_secret"))?.lastUsedAt,
+  ).toEqual(1500);
+  expect(
+    (
+      await store.revokePersonalAccessToken({
+        subject: "tsub_test",
+        tokenId: "pat_1",
+        revokedAt: 1600,
+      })
+    )?.revokedAt,
+  ).toEqual(1600);
 
   await store.saveBillingUsageRecord({
     usageReportId: "usage_report_1",
@@ -123,17 +145,21 @@ test("D1AccountsStore persists PAT metadata and billing usage indexes", async ()
     metadata: { run_id: "run_1" },
     reportedAt: 3_000,
   });
-  expect((await store.listBillingUsageRecordsForInstallation("inst_1")).map((
-      record,
-    ) => ({
-      id: record.usageReportId,
-      meter: record.meter,
-      metadata: record.metadata,
-    }))).toEqual([{
+  expect(
+    (await store.listBillingUsageRecordsForInstallation("inst_1")).map(
+      (record) => ({
+        id: record.usageReportId,
+        meter: record.meter,
+        metadata: record.metadata,
+      }),
+    ),
+  ).toEqual([
+    {
       id: "usage_report_1",
       meter: "agent.compute.seconds",
       metadata: { run_id: "run_1" },
-    }]);
+    },
+  ]);
 });
 
 test("D1AccountsStore indexes OIDC clients and installation events", async () => {
@@ -153,8 +179,12 @@ test("D1AccountsStore indexes OIDC clients and installation events", async () =>
     updatedAt: 1000,
   });
 
-  expect((await store.findOidcClient("toc_client"))?.installationId).toEqual("inst_1");
-  expect((await store.findOidcClientForInstallation("inst_1"))?.clientId).toEqual("toc_client");
+  expect((await store.findOidcClient("toc_client"))?.installationId).toEqual(
+    "inst_1",
+  );
+  expect(
+    (await store.findOidcClientForInstallation("inst_1"))?.clientId,
+  ).toEqual("toc_client");
 
   await store.appendInstallationEvent({
     eventId: "evt_1",
@@ -174,9 +204,11 @@ test("D1AccountsStore indexes OIDC clients and installation events", async () =>
     createdAt: 2000,
   });
 
-  expect((await store.listInstallationEvents("inst_1")).map((event) =>
-      event.eventId
-    )).toEqual(["evt_1", "evt_2"]);
+  expect(
+    (await store.listInstallationEvents("inst_1")).map(
+      (event) => event.eventId,
+    ),
+  ).toEqual(["evt_1", "evt_2"]);
 });
 
 test("D1AccountsStore prunes and consumes launch tokens", async () => {
@@ -215,19 +247,27 @@ test("D1AccountsStore prunes and consumes launch tokens", async () => {
     createdAt: 4_000,
   });
 
-  expect(await store.pruneLaunchTokens({ expiredBefore: 2_500, usedBefore: 3_500 })).toEqual({ deleted: 2, expired: 1, used: 1 });
-  expect(await store.consumeLaunchToken({
+  expect(
+    await store.pruneLaunchTokens({ expiredBefore: 2_500, usedBefore: 3_500 }),
+  ).toEqual({ deleted: 2, expired: 1, used: 1 });
+  expect(
+    await store.consumeLaunchToken({
       tokenHash: "sha256:expired",
       installationId: "inst_expired",
       redirectUri: base.redirectUri,
       consumedAt: 4_000,
-    })).toEqual({ ok: false, reason: "not_found" });
-  expect((await store.consumeLaunchToken({
-      tokenHash: "sha256:active",
-      installationId: "inst_active",
-      redirectUri: base.redirectUri,
-      consumedAt: 4_000,
-    })).ok).toEqual(true);
+    }),
+  ).toEqual({ ok: false, reason: "not_found" });
+  expect(
+    (
+      await store.consumeLaunchToken({
+        tokenHash: "sha256:active",
+        installationId: "inst_active",
+        redirectUri: base.redirectUri,
+        consumedAt: 4_000,
+      })
+    ).ok,
+  ).toEqual(true);
 });
 
 test("D1AccountsStore launch token consume is atomic across concurrent races (F7)", async () => {
@@ -321,7 +361,7 @@ test("D1AccountsStore hashes session ids on write, read, and delete (F7)", async
 
   // The stored document key must not contain the raw sessionId.
   const storedKeys = [...db.documents.keys()].filter((key) =>
-    key.startsWith("account_sessions\n")
+    key.startsWith("account_sessions\n"),
   );
   expect(storedKeys.length).toEqual(1);
   const storedDocumentKey = storedKeys[0].slice("account_sessions\n".length);
@@ -357,7 +397,9 @@ test("D1AccountsStore rejects ledger account ownership conflicts (F7)", async ()
     createdAt: 1_000,
     updatedAt: 2_000,
   });
-  expect((await store.findLedgerAccount("acct_shared"))?.billingAccountId).toEqual("bill_1");
+  expect(
+    (await store.findLedgerAccount("acct_shared"))?.billingAccountId,
+  ).toEqual("bill_1");
 
   // A different owner is refused at the store boundary
   // (defense-in-depth).
@@ -372,7 +414,9 @@ test("D1AccountsStore rejects ledger account ownership conflicts (F7)", async ()
     LedgerAccountOwnershipConflictError,
   );
   // The existing owner must remain intact after the rejected write.
-  expect((await store.findLedgerAccount("acct_shared"))?.legalOwnerSubject).toEqual("tsub_alice");
+  expect(
+    (await store.findLedgerAccount("acct_shared"))?.legalOwnerSubject,
+  ).toEqual("tsub_alice");
 });
 
 test("D1AccountsStore resolves a rotated child token to its root via the by-child index", async () => {
@@ -444,12 +488,18 @@ test("D1AccountsStore pruneRefreshChain removes rows past the cutoffs", async ()
 test("D1AccountsStore passkey challenge is single-shot and expiry-aware", async () => {
   const store = new D1AccountsStore(new MemoryD1Database());
   await store.savePasskeyChallenge("key-1", "challenge-1", 10_000);
-  expect(await store.consumePasskeyChallenge("key-1", 5_000)).toEqual("challenge-1");
+  expect(await store.consumePasskeyChallenge("key-1", 5_000)).toEqual(
+    "challenge-1",
+  );
   // Single-shot: the second read is empty (delete-on-read).
-  expect(await store.consumePasskeyChallenge("key-1", 5_000)).toEqual(undefined);
+  expect(await store.consumePasskeyChallenge("key-1", 5_000)).toEqual(
+    undefined,
+  );
   // Expired challenge is not returned.
   await store.savePasskeyChallenge("key-2", "challenge-2", 1_000);
-  expect(await store.consumePasskeyChallenge("key-2", 2_000)).toEqual(undefined);
+  expect(await store.consumePasskeyChallenge("key-2", 2_000)).toEqual(
+    undefined,
+  );
 });
 
 interface DocumentRow {
@@ -495,6 +545,77 @@ class MemoryD1Statement implements D1PreparedStatement {
 
   run(): Promise<D1Result> {
     const query = normalizedQuery(this.query);
+    const canonical = canonicalQuery(this.query);
+    if (
+      canonical.startsWith(
+        "insert into takosumi_accounts_documents (bucket, key, document, updated_at) values (?, ?, ?, ?) on conflict",
+      )
+    ) {
+      const [bucket, key] = this.#stringValues(2);
+      const document = stringBindValue(this.#rawValues()[4]);
+      this.db.documents.set(documentKey(bucket, key), document);
+      this.db.lastChanges = 1;
+      return Promise.resolve({ success: true, meta: { changes: 1 } });
+    }
+    if (
+      canonical.startsWith(
+        "insert into takosumi_accounts_indexes (index_name, index_key, bucket, document_key, sort_key) values (?, ?, ?, ?, ?) on conflict",
+      )
+    ) {
+      const [indexName, indexKey, bucket, key] = this.#stringValues(4);
+      const sortKey = numberValue(this.#values[4]);
+      this.db.indexes.set(indexRowKey(indexName, indexKey, bucket, key), {
+        indexName,
+        indexKey,
+        bucket,
+        documentKey: key,
+        sortKey,
+      });
+      this.db.lastChanges = 1;
+      return Promise.resolve({ success: true, meta: { changes: 1 } });
+    }
+    if (
+      canonical.startsWith(
+        "delete from takosumi_accounts_indexes where (takosumi_accounts_indexes.bucket = ? and takosumi_accounts_indexes.document_key = ?)",
+      )
+    ) {
+      const [bucket, key] = this.#stringValues(2);
+      for (const [indexKey, row] of this.db.indexes) {
+        if (row.bucket === bucket && row.documentKey === key) {
+          this.db.indexes.delete(indexKey);
+        }
+      }
+      this.db.lastChanges = 1;
+      return Promise.resolve({ success: true, meta: { changes: 1 } });
+    }
+    if (
+      canonical.startsWith(
+        "delete from takosumi_accounts_indexes where (takosumi_accounts_indexes.index_name = ? and takosumi_accounts_indexes.index_key = ?)",
+      )
+    ) {
+      const [indexName, indexKey] = this.#stringValues(2);
+      for (const [rowKey, row] of this.db.indexes) {
+        if (row.indexName === indexName && row.indexKey === indexKey) {
+          this.db.indexes.delete(rowKey);
+        }
+      }
+      this.db.lastChanges = 1;
+      return Promise.resolve({ success: true, meta: { changes: 1 } });
+    }
+    if (
+      canonical.startsWith(
+        "delete from takosumi_accounts_documents where (takosumi_accounts_documents.bucket = ? and takosumi_accounts_documents.key = ?)",
+      )
+    ) {
+      const [bucket, key] = this.#stringValues(2);
+      this.db.lastChanges = this.db.documents.delete(documentKey(bucket, key))
+        ? 1
+        : 0;
+      return Promise.resolve({
+        success: true,
+        meta: { changes: this.db.lastChanges },
+      });
+    }
     if (
       query.startsWith("INSERT OR REPLACE INTO takosumi_accounts_documents")
     ) {
@@ -503,9 +624,7 @@ class MemoryD1Statement implements D1PreparedStatement {
       this.db.lastChanges = 1;
       return Promise.resolve({ success: true, meta: { changes: 1 } });
     }
-    if (
-      query.startsWith("INSERT OR IGNORE INTO takosumi_accounts_documents")
-    ) {
+    if (query.startsWith("INSERT OR IGNORE INTO takosumi_accounts_documents")) {
       const [bucket, key, document] = this.#stringValues(3);
       const keyValue = documentKey(bucket, key);
       if (this.db.documents.has(keyValue)) {
@@ -547,10 +666,13 @@ class MemoryD1Statement implements D1PreparedStatement {
     if (query.startsWith("INSERT OR REPLACE INTO takosumi_accounts_indexes")) {
       const [indexName, indexKey, bucket, key] = this.#stringValues(4);
       const sortKey = numberValue(this.#values[4]);
-      this.db.indexes.set(
-        indexRowKey(indexName, indexKey, bucket, key),
-        { indexName, indexKey, bucket, documentKey: key, sortKey },
-      );
+      this.db.indexes.set(indexRowKey(indexName, indexKey, bucket, key), {
+        indexName,
+        indexKey,
+        bucket,
+        documentKey: key,
+        sortKey,
+      });
       this.db.lastChanges = 1;
       return Promise.resolve({ success: true, meta: { changes: 1 } });
     }
@@ -604,9 +726,7 @@ class MemoryD1Statement implements D1PreparedStatement {
     ) {
       const [bucket, key] = this.#stringValues(2);
       const document = this.db.documents.get(documentKey(bucket, key));
-      return Promise.resolve(
-        document ? ({ document } as T) : null,
-      );
+      return Promise.resolve(document ? ({ document } as T) : null);
     }
     if (
       query.startsWith(
@@ -617,9 +737,7 @@ class MemoryD1Statement implements D1PreparedStatement {
       const keyValue = documentKey(bucket, key);
       const document = this.db.documents.get(keyValue);
       this.db.lastChanges = this.db.documents.delete(keyValue) ? 1 : 0;
-      return Promise.resolve(
-        document ? ({ document } as T) : null,
-      );
+      return Promise.resolve(document ? ({ document } as T) : null);
     }
     if (query === "SELECT changes() AS changes") {
       return Promise.resolve({ changes: this.db.lastChanges } as T);
@@ -632,12 +750,13 @@ class MemoryD1Statement implements D1PreparedStatement {
     if (query.startsWith("SELECT d.document FROM takosumi_accounts_indexes")) {
       const [indexName, indexKey] = this.#stringValues(2);
       const rows = [...this.db.indexes.values()]
-        .filter((row) =>
-          row.indexName === indexName && row.indexKey === indexKey
+        .filter(
+          (row) => row.indexName === indexName && row.indexKey === indexKey,
         )
-        .sort((left, right) =>
-          left.sortKey - right.sortKey ||
-          left.documentKey.localeCompare(right.documentKey)
+        .sort(
+          (left, right) =>
+            left.sortKey - right.sortKey ||
+            left.documentKey.localeCompare(right.documentKey),
         )
         .flatMap((row): DocumentRow[] => {
           const document = this.db.documents.get(
@@ -660,6 +779,55 @@ class MemoryD1Statement implements D1PreparedStatement {
       return Promise.resolve({ success: true, results: rows as T[] });
     }
     throw new Error(`unexpected D1 all query: ${this.query}`);
+  }
+
+  raw(): Promise<unknown[][]> {
+    const canonical = canonicalQuery(this.query);
+    if (
+      canonical.startsWith(
+        "select document from takosumi_accounts_documents where (takosumi_accounts_documents.bucket = ? and takosumi_accounts_documents.key = ?)",
+      )
+    ) {
+      const [bucket, key] = this.#stringValues(2);
+      const document = this.db.documents.get(documentKey(bucket, key));
+      return Promise.resolve(document ? [[document]] : []);
+    }
+    if (
+      canonical.startsWith(
+        "select takosumi_accounts_documents.document from takosumi_accounts_indexes inner join takosumi_accounts_documents",
+      )
+    ) {
+      const [indexName, indexKey] = this.#stringValues(2);
+      const rows = [...this.db.indexes.values()]
+        .filter(
+          (row) => row.indexName === indexName && row.indexKey === indexKey,
+        )
+        .sort(
+          (left, right) =>
+            left.sortKey - right.sortKey ||
+            left.documentKey.localeCompare(right.documentKey),
+        )
+        .flatMap((row): unknown[][] => {
+          const document = this.db.documents.get(
+            documentKey(row.bucket, row.documentKey),
+          );
+          return document ? [[document]] : [];
+        });
+      return Promise.resolve(rows);
+    }
+    if (
+      canonical.startsWith(
+        "select document from takosumi_accounts_documents where takosumi_accounts_documents.bucket = ? order by takosumi_accounts_documents.key",
+      )
+    ) {
+      const [bucket] = this.#stringValues(1);
+      const rows = [...this.db.documents.entries()]
+        .filter(([key]) => key.startsWith(`${bucket}\n`))
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([, document]) => [document]);
+      return Promise.resolve(rows);
+    }
+    throw new Error(`unexpected D1 raw query: ${this.query}`);
   }
 
   #stringValues(count: number): string[] {
@@ -700,6 +868,10 @@ function indexRowKey(
 
 function normalizedQuery(query: string): string {
   return query.replace(/\s+/g, " ").trim();
+}
+
+function canonicalQuery(query: string): string {
+  return query.replace(/"/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 function numberValue(value: D1Value): number {

@@ -13,9 +13,12 @@ export default function EndCTA() {
         </p>
         <CodeBlock terminal class="terminal">
           <span class="k">$</span> npm install -g @takosjp/takosumi{"\n"}
-          <span class="k">$</span> takosumi install git:github.com/acme/api \{"\n"}
+          <span class="k">$</span> takosumi install git:github.com/acme/api \
+          {"\n"}
           {"      "}--space prod{"\n"}
-          <span class="c">{"  "}→ Deployment live · operator-owned runtime</span>
+          <span class="c">
+            {"  "}→ Deployment live · operator-owned runtime
+          </span>
         </CodeBlock>
         <div class="cta-row" style="justify-content: center;">
           <a
@@ -27,10 +30,10 @@ export default function EndCTA() {
           </a>
           <a
             class="btn btn-secondary"
-            href="https://accounts.takosumi.com/"
+            href="https://app.takosumi.com/"
             rel="noopener"
           >
-            Cloud で試す
+            App を開く
           </a>
           <a class="btn btn-secondary" href="/docs/" rel="external">
             ドキュメント

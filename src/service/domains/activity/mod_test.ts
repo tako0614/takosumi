@@ -46,6 +46,30 @@ test("record mints id + createdAt and persists", async () => {
   expect(listed.map((e) => e.id)).toEqual(["act_00000001"]);
 });
 
+test("record redacts secret-shaped metadata before persisting", async () => {
+  const { service, store } = makeService();
+  await service.record({
+    spaceId: "space_1",
+    action: "connection.created",
+    targetType: "connection",
+    targetId: "conn_1",
+    metadata: {
+      displayName: "Cloudflare",
+      apiToken: "raw-token",
+      detail: "Authorization: Bearer abc.def password=hunter2",
+      nested: { databaseUrl: "postgres://user:secret@example/db" },
+    },
+  });
+
+  const [event] = await store.listActivityEvents("space_1");
+  expect(event?.metadata).toEqual({
+    displayName: "Cloudflare",
+    apiToken: "[REDACTED]",
+    detail: "Authorization: Bearer [REDACTED] password=[REDACTED]",
+    nested: { databaseUrl: "[REDACTED]" },
+  });
+});
+
 test("list is newest-first, space-scoped, and limit-clamped", async () => {
   const { service } = makeService();
   // Three in space_1 (clock advances each record), one in space_2.

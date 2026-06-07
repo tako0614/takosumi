@@ -27,19 +27,21 @@ export default function ControlGraphView() {
   return <Page title="依存グラフ">{() => <Inner />}</Page>;
 }
 
-function NodeBox(
-  props: { node: GraphNode; producers: ReadonlyMap<string, readonly string[]> },
-) {
+function NodeBox(props: {
+  node: GraphNode;
+  producers: ReadonlyMap<string, readonly string[]>;
+}) {
   const deps = () => props.producers.get(props.node.installationId) ?? [];
   return (
     <div class="graph-node">
       <div class="graph-node-head">
         <span class="graph-node-name">{props.node.name}</span>
-        <span class={`graph-node-status graph-node-status-${props.node.status}`}>
+        <span
+          class={`graph-node-status graph-node-status-${props.node.status}`}
+        >
           {controlInstallationStatusLabel(props.node.status)}
         </span>
       </div>
-      <div class="graph-node-env"><code>{props.node.environment}</code></div>
       <Show when={deps().length > 0}>
         <div class="graph-node-deps muted">
           ↑ depends on {deps().join(", ")}
@@ -65,7 +67,9 @@ function Inner() {
           Installation の依存 DAG。 上の層が producer、 下の層が consumer です。
         </p>
         <div class="page-actions">
-          <a href="/installations" class="btn btn-secondary">一覧へ</a>
+          <a href="/installations" class="btn btn-secondary">
+            一覧へ
+          </a>
         </div>
       </div>
 
@@ -88,7 +92,9 @@ function Inner() {
           </Match>
           <Match when={graph.error}>
             <section class="empty-state error-state">
-              <p>取得に失敗しました — {(graph.error as ControlApiError).message}</p>
+              <p>
+                取得に失敗しました — {(graph.error as ControlApiError).message}
+              </p>
             </section>
           </Match>
           <Match when={layered()}>

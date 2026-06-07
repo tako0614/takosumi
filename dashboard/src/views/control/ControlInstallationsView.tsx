@@ -13,62 +13,29 @@
  * Each row links to the Plan summary flow via a "変更を確認" (plan) action that
  * creates a plan Run and navigates to the run view.
  */
-import {
-  createMemo,
-  createResource,
-  For,
-  Match,
-  Show,
-  Switch,
-} from "solid-js";
+import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
+import StatusPill from "../account/components/StatusPill.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
 import { currentSpaceId } from "./space-state.ts";
 import {
   type ControlApiError,
   extractRunId,
   getSpaceGraph,
-  type Installation,
   listInstallations,
   planInstallation,
   type SpaceGraph,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
-import { controlInstallationStatusLabel } from "../../lib/status-labels.ts";
+import {
+  controlInstallationStatusClass,
+  controlInstallationStatusLabel,
+} from "../../lib/status-labels.ts";
 
 export default function ControlInstallationsView() {
   return <Page title="Installations">{() => <Inner />}</Page>;
-}
-
-/** Status pill mapping the control Installation enum to the shared pill styles. */
-function StatusPill(props: { status: Installation["status"] }) {
-  // Map the control status onto the existing `.status-*` modifier classes so we
-  // reuse the same ready/installing/error colour treatment; `stale` gets the
-  // installing (amber) treatment as "needs attention".
-  const cls = createMemo(() => {
-    switch (props.status) {
-      case "active":
-        return "status-ready";
-      case "installing":
-      case "destroying":
-        return "status-installing";
-      case "stale":
-        return "status-installing";
-      case "error":
-        return "status-error";
-      case "destroyed":
-        return "status-suspended";
-      default:
-        return "";
-    }
-  });
-  return (
-    <span class={`status-pill ${cls()}`}>
-      {controlInstallationStatusLabel(props.status)}
-    </span>
-  );
 }
 
 function Inner() {
@@ -85,7 +52,8 @@ function Inner() {
     if (!g) return map;
     const nameById = new Map(g.nodes.map((n) => [n.installationId, n.name]));
     for (const edge of g.edges) {
-      const producerName = nameById.get(edge.producerInstallationId) ??
+      const producerName =
+        nameById.get(edge.producerInstallationId) ??
         edge.producerInstallationId;
       const list = map.get(edge.consumerInstallationId) ?? [];
       list.push(producerName);
@@ -104,12 +72,14 @@ function Inner() {
     <AppShell>
       <div class="page-header">
         <h1>Installations</h1>
-        <p class="page-sub">
-          Space 配下の Installation（OpenTofu root/state）を確認します。
-        </p>
+        <p class="page-sub">Space 配下の Capsule Installation を確認します。</p>
         <div class="page-actions">
-          <a href="/install" class="btn btn-primary">+ Git から導入</a>
-          <a href="/graph" class="btn btn-secondary">依存グラフ</a>
+          <a href="/install" class="btn btn-primary">
+            + Git から導入
+          </a>
+          <a href="/graph" class="btn btn-secondary">
+            依存グラフ
+          </a>
         </div>
       </div>
 
@@ -158,7 +128,6 @@ function Inner() {
                   <thead>
                     <tr>
                       <th>名前</th>
-                      <th>Environment</th>
                       <th>状態</th>
                       <th>依存</th>
                       <th>世代 / 出力</th>
@@ -172,12 +141,18 @@ function Inner() {
                           <td>
                             <span class="installation-name">{inst.name}</span>
                             <div class="muted installation-type">
-                              {inst.installType} ·{" "}
                               <code class="installation-id">{inst.id}</code>
                             </div>
                           </td>
-                          <td><code>{inst.environment}</code></td>
-                          <td><StatusPill status={inst.status} /></td>
+                          <td>
+                            <StatusPill
+                              class={controlInstallationStatusClass(
+                                inst.status,
+                              )}
+                            >
+                              {controlInstallationStatusLabel(inst.status)}
+                            </StatusPill>
+                          </td>
                           <td>
                             <Show
                               when={(dependsOn().get(inst.id) ?? []).length > 0}
@@ -185,7 +160,11 @@ function Inner() {
                             >
                               <ul class="depends-on-list">
                                 <For each={dependsOn().get(inst.id) ?? []}>
-                                  {(name) => <li><code>{name}</code></li>}
+                                  {(name) => (
+                                    <li>
+                                      <code>{name}</code>
+                                    </li>
+                                  )}
                                 </For>
                               </ul>
                             </Show>
@@ -194,7 +173,10 @@ function Inner() {
                             <span class="muted">gen</span>{" "}
                             {inst.currentStateGeneration}
                             <Show when={inst.currentOutputSnapshotId}>
-                              <span class="output-badge" title="出力スナップショットあり">
+                              <span
+                                class="output-badge"
+                                title="出力スナップショットあり"
+                              >
                                 outputs
                               </span>
                             </Show>
@@ -208,6 +190,12 @@ function Inner() {
                             >
                               変更を確認
                             </button>
+                            <a
+                              class="btn btn-ghost btn-sm"
+                              href={`/installations/${encodeURIComponent(inst.id)}`}
+                            >
+                              詳細
+                            </a>
                           </td>
                         </tr>
                       )}

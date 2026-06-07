@@ -195,7 +195,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       await this.#restorePlanArtifact(runId, envelope.request, url);
     }
     if (stateScope) {
-      await this.#restoreStateFromR2State(runId, stateScope, url);
+      await this.#restoreStateFromR2State(runId, stateScope, url, envelope.action);
     } else if (stateKeys.length > 0) {
       await this.#restoreStateArtifact(runId, stateKeys, url);
     }
@@ -398,14 +398,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     scope: StateScope,
     baseUrl: URL,
+    action: string | undefined,
   ): Promise<void> {
     const bucket = this.#r2State();
-    const current = await readCurrentState(bucket, scope);
+    const current = await readCurrentState(
+      bucket,
+      scope,
+      restoreMaxGeneration(scope, action),
+    );
     if (!current) return;
-    const object = await bucket.get(current.objectKey);
-    if (!object) {
-      throw new Error(`current state object not found: ${current.objectKey}`);
-    }
+    const object = await readCurrentStateObject(bucket, scope, current);
     const ciphertext = new Uint8Array(await object.arrayBuffer());
     const plaintext = await this.#stateCrypto().open(ciphertext, current.digest);
     const response = await this.#containerFetch(
@@ -452,8 +454,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         "takosumi-generation": String(scope.generation),
       },
     });
-    // current.json is written AFTER the state object so a partial failure never
-    // leaves current.json pointing at a missing/half-written object.
+    // current.json is written AFTER the state object. If this write fails after
+    // the object write, the next restore reconciles by finding the highest
+    // sealed generation object with a digest metadata entry and rewrites
+    // current.json before handing plaintext state to the container.
     const current = {
       generation: scope.generation,
       objectKey,
@@ -796,9 +800,10 @@ interface CurrentStatePointer {
 async function readCurrentState(
   bucket: NonNullable<CloudflareWorkerEnv["R2_STATE"]>,
   scope: StateScope,
+  maxGeneration: number,
 ): Promise<CurrentStatePointer | undefined> {
   const object = await bucket.get(currentStateKey(scope));
-  if (!object) return undefined;
+  if (!object) return await recoverCurrentState(bucket, scope, maxGeneration);
   const text = new TextDecoder().decode(new Uint8Array(await object.arrayBuffer()));
   const parsed = JSON.parse(text) as unknown;
   if (!isRecord(parsed)) {
@@ -815,7 +820,80 @@ async function readCurrentState(
   if (!objectKey.startsWith(`${stateScopePrefix(scope)}/`)) {
     throw new Error(`current.json objectKey escapes state prefix: ${objectKey}`);
   }
+  if (!Number.isInteger(generation) || generation > maxGeneration) {
+    throw new Error(`current.json generation is outside restore window: ${generation}`);
+  }
   return { generation, objectKey, digest };
+}
+
+async function readCurrentStateObject(
+  bucket: NonNullable<CloudflareWorkerEnv["R2_STATE"]>,
+  scope: StateScope,
+  current: CurrentStatePointer,
+): Promise<NonNullable<Awaited<ReturnType<typeof bucket.get>>>> {
+  const object = await bucket.get(current.objectKey);
+  if (object) return object;
+  const recovered = await recoverCurrentState(bucket, scope, current.generation);
+  if (!recovered) {
+    throw new Error(`current state object not found: ${current.objectKey}`);
+  }
+  const recoveredObject = await bucket.get(recovered.objectKey);
+  if (!recoveredObject) {
+    throw new Error(`recovered state object not found: ${recovered.objectKey}`);
+  }
+  return recoveredObject;
+}
+
+async function recoverCurrentState(
+  bucket: NonNullable<CloudflareWorkerEnv["R2_STATE"]>,
+  scope: StateScope,
+  maxGeneration: number,
+): Promise<CurrentStatePointer | undefined> {
+  if (maxGeneration < 0) return undefined;
+  const prefix = `${stateScopePrefix(scope)}/`;
+  const objects = await bucket.list({ prefix });
+  let best: CurrentStatePointer | undefined;
+  for (const object of objects.objects) {
+    const generation = generationFromStateObjectKey(prefix, object.key);
+    if (generation === undefined || generation > maxGeneration) continue;
+    const digest = object.customMetadata?.["takosumi-content-digest"] ??
+      object.customMetadata?.["takosumi-digest"];
+    if (!digest) continue;
+    if (!best || generation > best.generation) {
+      best = { generation, objectKey: object.key, digest };
+    }
+  }
+  if (!best) return undefined;
+  await bucket.put(currentStateKey(scope), JSON.stringify(best), {
+    httpMetadata: { contentType: "application/json" },
+    customMetadata: {
+      "takosumi-reconciled": "true",
+      "takosumi-recovered-generation": String(best.generation),
+    },
+  });
+  return best;
+}
+
+function generationFromStateObjectKey(
+  prefix: string,
+  key: string,
+): number | undefined {
+  if (!key.startsWith(prefix) || !key.endsWith(".tfstate.enc")) {
+    return undefined;
+  }
+  const segment = key.slice(prefix.length, -".tfstate.enc".length);
+  if (!/^[0-9]{8}$/.test(segment)) return undefined;
+  return Number(segment);
+}
+
+function restoreMaxGeneration(
+  scope: StateScope,
+  action: string | undefined,
+): number {
+  if (action === "apply" || action === "destroy") {
+    return scope.generation - 1;
+  }
+  return scope.generation;
 }
 
 // The R2 key for the encrypted form of an artifact key (spec keys gain `.enc`).

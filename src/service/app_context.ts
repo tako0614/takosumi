@@ -1,8 +1,8 @@
 import {
-  type SpaceDomainDependencies,
-  type SpaceDomainServices,
-  createSpaceDomainServices,
-} from "./domains/space/mod.ts";
+  type MembershipDomainDependencies,
+  type MembershipDomainServices,
+  createMembershipDomainServices,
+} from "./domains/membership/mod.ts";
 import {
   DefaultRuntimeMaterializer,
   type ProviderObservationStore,
@@ -99,7 +99,7 @@ export interface AppContextOptions {
   readonly uuidFactory?: () => string;
   readonly stores?: Partial<AppStores>;
   readonly adapters?: Partial<AppAdapters>;
-  readonly space?: Partial<SpaceDomainDependencies>;
+  readonly space?: Partial<MembershipDomainDependencies>;
   readonly runtimeConfig?: AppRuntimeConfig;
   readonly loadRuntimeConfig?: boolean;
   readonly runtimeEnv?: Record<string, string | undefined>;
@@ -126,7 +126,7 @@ export interface AppRuntimeConfig {
 }
 
 export interface AppStores {
-  readonly space: SpaceDomainDependencies;
+  readonly space: MembershipDomainDependencies;
   readonly runtime: RuntimeStores;
   readonly resources: ResourceStores;
   readonly registry: RegistryStores;
@@ -223,7 +223,7 @@ export interface EntitlementServices {
 }
 
 export interface ServiceContainer {
-  readonly space: SpaceDomainServices;
+  readonly space: MembershipDomainServices;
   readonly runtime: RuntimeServices;
   readonly entitlements: EntitlementServices;
 }
@@ -458,7 +458,7 @@ export function createServiceContainer(
   const stores = options.stores ?? createInMemoryAppStores(options);
   const dateClock = options.dateClock ?? (() => new Date());
   return {
-    space: createSpaceDomainServices(stores.space),
+    space: createMembershipDomainServices(stores.space),
     runtime: {
       materializer: new DefaultRuntimeMaterializer({ clock: dateClock }),
     },

@@ -149,13 +149,13 @@ function Inner() {
               </section>
 
               <section class="detail-section">
-                <h2>Deployment outputs</h2>
+                <h2>Installation outputs</h2>
                 <Show
-                  when={(a().deploymentOutputs ?? []).length > 0}
+                  when={(a().installationOutputs ?? []).length > 0}
                   fallback={<p class="muted">—</p>}
                 >
                   <dl class="kv-list">
-                    <For each={a().deploymentOutputs ?? []}>
+                    <For each={a().installationOutputs ?? []}>
                       {(output) => (
                         <>
                           <dt>{output.name}</dt>

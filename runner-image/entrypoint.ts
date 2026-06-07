@@ -3,6 +3,7 @@ import {
   cp,
   mkdir,
   readFile,
+  readdir,
   realpath,
   rm,
   stat,
@@ -18,9 +19,13 @@ import {
   providerEnvRule,
 } from "../packages/schema/src/provider-env-rules.ts";
 
-type OpenTofuRunAction = "plan" | "apply" | "destroy";
+type OpenTofuRunAction = "plan" | "apply" | "destroy" | "compatibility_check";
 type OpenTofuOperation = "create" | "update" | "destroy";
 type JsonRecord = Record<string, unknown>;
+
+const CAPSULE_COMPATIBILITY_MAX_FILES = 256;
+const CAPSULE_COMPATIBILITY_MAX_FILE_BYTES = 1024 * 1024;
+const CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 
 type RunRequest = {
   readonly action?: unknown;
@@ -30,23 +35,23 @@ type RunRequest = {
 
 type OpenTofuModuleSource =
   | {
-    readonly kind: "git";
-    readonly url: string;
-    readonly ref?: string;
-    readonly commit?: string;
-    readonly modulePath?: string;
-  }
+      readonly kind: "git";
+      readonly url: string;
+      readonly ref?: string;
+      readonly commit?: string;
+      readonly modulePath?: string;
+    }
   | {
-    readonly kind: "prepared";
-    readonly url: string;
-    readonly digest: string;
-    readonly modulePath?: string;
-  }
+      readonly kind: "prepared";
+      readonly url: string;
+      readonly digest: string;
+      readonly modulePath?: string;
+    }
   | {
-    readonly kind: "local";
-    readonly path: string;
-    readonly modulePath?: string;
-  };
+      readonly kind: "local";
+      readonly path: string;
+      readonly modulePath?: string;
+    };
 
 interface RunWorkspace {
   readonly root: string;
@@ -99,8 +104,8 @@ const port = Number(Bun.env.PORT ?? "8080");
 const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
 const TFVARS_FILENAME = "takosumi.auto.tfvars.json";
 const DEFAULT_PREPARED_SOURCE_MAX_BYTES = 100 * 1024 * 1024;
-const DEFAULT_PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES = 10 *
-  DEFAULT_PREPARED_SOURCE_MAX_BYTES;
+const DEFAULT_PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES =
+  10 * DEFAULT_PREPARED_SOURCE_MAX_BYTES;
 const BASE_COMMAND_ENV_NAMES = [
   "PATH",
   "HOME",
@@ -122,7 +127,22 @@ const ARTIFACT_PATH_TF_VAR = "TF_VAR_artifact_path";
 // Default cap for the produced source archive when the runner profile does not
 // pin `resourceLimits.maxSourceArchiveBytes`. Source repos are small modules.
 const DEFAULT_SOURCE_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024;
-async function handleRunnerRequest(request: Request): Promise<Response> {
+const RUNNER_REDACTED_VALUE = "[redacted]";
+const RUNNER_SECRET_WORD =
+  "(?:secret|token|password|passwd|pwd|credential|credentials|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|auth[_-]?token|bearer[_-]?token|connection[_-]?string|database[_-]?url|dsn)";
+const RUNNER_AUTH_HEADER_PATTERN =
+  /\b(Authorization\s*:\s*(?:Bearer|Basic|Digest|Token)?\s*)[^\s,;]+/gi;
+const RUNNER_AUTH_SCHEME_PATTERN =
+  /\b(Bearer|Basic|Digest|Token)\s+[-._~+/=a-zA-Z0-9]+/g;
+const RUNNER_URL_CREDENTIAL_PATTERN =
+  /\b([a-z][a-z0-9+.\-]*:\/\/[^:/?#\s@]+:)([^@/?#\s]+)@/gi;
+const RUNNER_SECRET_ASSIGNMENT_PATTERN = new RegExp(
+  `\\b((${RUNNER_SECRET_WORD})|(?:[A-Za-z_][A-Za-z0-9_.-]*${RUNNER_SECRET_WORD}[A-Za-z0-9_.-]*))(\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s,&;]+)`,
+  "gi",
+);
+const RUNNER_TF_VAR_ASSIGNMENT_PATTERN =
+  /\b(TF_VAR_[A-Za-z_][A-Za-z0-9_]*\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,&;]+)/g;
+export async function handleRunnerRequest(request: Request): Promise<Response> {
   {
     const url = new URL(request.url);
     if (url.pathname === "/healthz" || url.pathname === "/container/health") {
@@ -132,8 +152,8 @@ async function handleRunnerRequest(request: Request): Promise<Response> {
     const artifactMatch = /^\/runs\/([^/]+)\/artifacts\/tfplan$/.exec(
       url.pathname,
     );
-    const planJsonArtifactMatch = /^\/runs\/([^/]+)\/artifacts\/tfplan-json$/
-      .exec(url.pathname);
+    const planJsonArtifactMatch =
+      /^\/runs\/([^/]+)\/artifacts\/tfplan-json$/.exec(url.pathname);
     const stateArtifactMatch = /^\/runs\/([^/]+)\/artifacts\/tfstate$/.exec(
       url.pathname,
     );
@@ -209,7 +229,7 @@ async function handleRunnerRequest(request: Request): Promise<Response> {
             action: "source_sync",
             status: "failed",
             exitCode: 1,
-            stderr: redactCredentialOutput(
+            stderr: redactRunnerOutput(
               error instanceof Error ? error.message : String(error),
             ),
           },
@@ -227,9 +247,12 @@ async function handleRunnerRequest(request: Request): Promise<Response> {
     }
 
     try {
-      const result = action === "plan"
-        ? await runPlan(runId, body.request)
-        : await runReviewedPlanApply(runId, action, body.request);
+      const result =
+        action === "compatibility_check"
+          ? await runCompatibilityCheck(runId)
+          : action === "plan"
+            ? await runPlan(runId, body.request)
+            : await runReviewedPlanApply(runId, action, body.request);
       return Response.json(result, {
         status: result.exitCode === 0 ? 200 : 500,
       });
@@ -240,7 +263,9 @@ async function handleRunnerRequest(request: Request): Promise<Response> {
           action,
           status: "failed",
           exitCode: 1,
-          stderr: error instanceof Error ? error.message : String(error),
+          stderr: redactRunnerOutput(
+            error instanceof Error ? error.message : String(error),
+          ),
         },
         { status: 500 },
       );
@@ -254,10 +279,52 @@ if (import.meta.main) {
   Bun.serve({ port, fetch: handleRunnerRequest });
 }
 
-async function runPlan(
-  runId: string,
-  request: unknown,
-): Promise<JsonRecord> {
+export function redactRunnerOutput(text: string): string {
+  let redacted = text
+    .replace(
+      RUNNER_URL_CREDENTIAL_PATTERN,
+      (_match, prefix: string) => `${prefix}${RUNNER_REDACTED_VALUE}@`,
+    )
+    .replace(
+      RUNNER_AUTH_HEADER_PATTERN,
+      (_match, prefix: string) => `${prefix}${RUNNER_REDACTED_VALUE}`,
+    )
+    .replace(
+      RUNNER_AUTH_SCHEME_PATTERN,
+      (_match, scheme: string) => `${scheme} ${RUNNER_REDACTED_VALUE}`,
+    )
+    .replace(
+      RUNNER_SECRET_ASSIGNMENT_PATTERN,
+      (_match, key: string, _bareKey: string, sep: string) =>
+        `${key}${sep}${RUNNER_REDACTED_VALUE}`,
+    )
+    .replace(
+      RUNNER_TF_VAR_ASSIGNMENT_PATTERN,
+      (_match, prefix: string) => `${prefix}${RUNNER_REDACTED_VALUE}`,
+    );
+  for (const name of [
+    "GIT_HTTPS_TOKEN",
+    "GIT_SSH_PRIVATE_KEY",
+    ...allKnownCredentialEnvNames(),
+  ]) {
+    redacted = redacted.replaceAll(
+      new RegExp(
+        `\\b(${escapeRegExp(name)}\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s,&;]+)`,
+        "g",
+      ),
+      `$1${RUNNER_REDACTED_VALUE}`,
+    );
+  }
+  return redacted;
+}
+
+const SOURCE_CREDENTIAL_ENV_NAMES = new Set(["GIT_HTTPS_TOKEN"]);
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function runPlan(runId: string, request: unknown): Promise<JsonRecord> {
   const template = parseTemplate(request);
   const generatedRoot = parseGeneratedRoot(request);
   if (template || generatedRoot) {
@@ -282,9 +349,10 @@ async function runRawModulePlan(
     variables,
     commandContext,
   );
-  const sourceCommit = source.kind === "git"
-    ? await gitRevParseHead(workspace.sourceRoot, commandContext)
-    : undefined;
+  const sourceCommit =
+    source.kind === "git"
+      ? await gitRevParseHead(workspace.sourceRoot, commandContext)
+      : undefined;
   return await initPlanAndBuildResponse(runId, workspace, workspace.moduleDir, {
     operation,
     commandContext,
@@ -302,8 +370,10 @@ async function runTemplatePlan(
   template: TemplateRef | undefined,
   generatedRoot: GeneratedRoot | undefined,
 ): Promise<JsonRecord> {
-  if (!template) throw new Error("template is required when generatedRoot is present");
-  if (!generatedRoot) throw new Error("generatedRoot is required when template is present");
+  if (!template)
+    throw new Error("template is required when generatedRoot is present");
+  if (!generatedRoot)
+    throw new Error("generatedRoot is required when template is present");
   const operation = parseOperation(request);
   const build = parseBuild(request);
   const runnerProfile = parseRunnerProfile(request);
@@ -368,15 +438,18 @@ async function initPlanAndBuildResponse(
       options.buildLog,
     );
   }
-  const plan = await runCommand([
-    "tofu",
-    "plan",
-    ...(operation === "destroy" ? ["-destroy"] : []),
-    "-input=false",
-    "-no-color",
-    "-out",
-    workspace.planPath,
-  ], { cwd: moduleDir, context: commandContext });
+  const plan = await runCommand(
+    [
+      "tofu",
+      "plan",
+      ...(operation === "destroy" ? ["-destroy"] : []),
+      "-input=false",
+      "-no-color",
+      "-out",
+      workspace.planPath,
+    ],
+    { cwd: moduleDir, context: commandContext },
+  );
   if (plan.exitCode !== 0) {
     return mergeBuildLog(
       commandFailurePayload(runId, "plan", plan),
@@ -386,7 +459,11 @@ async function initPlanAndBuildResponse(
 
   const planBytes = await readFile(workspace.planPath);
   const planDigest = await digestBytes(planBytes);
-  const planJson = await readOpenTofuPlanJson(moduleDir, workspace, commandContext);
+  const planJson = await readOpenTofuPlanJson(
+    moduleDir,
+    workspace,
+    commandContext,
+  );
   if (planJson) await writePlanJsonArtifact(workspace, planJson);
   const providerLockDigest = await digestFileIfExists(
     join(moduleDir, ".terraform.lock.hcl"),
@@ -411,17 +488,25 @@ async function initPlanAndBuildResponse(
       : {}),
     ...(providerLockDigest ? { providerLockDigest } : {}),
     ...(options.extra ?? {}),
-    stdout: [options.buildLog, init.stdout, plan.stdout].filter(Boolean).join(
-      "\n",
+    stdout: redactRunnerOutput(
+      [options.buildLog, init.stdout, plan.stdout].filter(Boolean).join("\n"),
     ),
-    stderr: [init.stderr, plan.stderr].filter(Boolean).join("\n"),
+    stderr: redactRunnerOutput(
+      [init.stderr, plan.stderr].filter(Boolean).join("\n"),
+    ),
   };
 }
 
-function mergeBuildLog(payload: JsonRecord, buildLog: string | undefined): JsonRecord {
+function mergeBuildLog(
+  payload: JsonRecord,
+  buildLog: string | undefined,
+): JsonRecord {
   if (!buildLog) return payload;
   const existing = typeof payload.stdout === "string" ? payload.stdout : "";
-  return { ...payload, stdout: [buildLog, existing].filter(Boolean).join("\n") };
+  return {
+    ...payload,
+    stdout: [buildLog, existing].filter(Boolean).join("\n"),
+  };
 }
 
 async function runReviewedPlanApply(
@@ -437,10 +522,16 @@ async function runReviewedPlanApply(
   const planArtifact = parsePlanArtifact(request);
   await verifyPlanArtifact(workspaceForRun(runId).planPath, planArtifact);
 
-  const moduleDir = template || generatedRoot
-    ? await restoreTemplateApplyWorkspace(runId, template, generatedRoot)
-    : (await prepareApplyWorkspace(runId, parseSource(request), commandContext))
-      .moduleDir;
+  const moduleDir =
+    template || generatedRoot
+      ? await restoreTemplateApplyWorkspace(runId, template, generatedRoot)
+      : (
+          await prepareApplyWorkspace(
+            runId,
+            parseSource(request),
+            commandContext,
+          )
+        ).moduleDir;
 
   const init = await runCommand(["tofu", "init", "-input=false", "-no-color"], {
     cwd: moduleDir,
@@ -449,24 +540,32 @@ async function runReviewedPlanApply(
   if (init.exitCode !== 0) {
     return commandFailurePayload(runId, action, init);
   }
-  const result = await runCommand([
-    "tofu",
-    "apply",
-    "-input=false",
-    "-no-color",
-    workspaceForRun(runId).planPath,
-  ], { cwd: moduleDir, context: commandContext });
-  const outputs = action === "apply" && result.exitCode === 0
-    ? await readOpenTofuOutputsIn(moduleDir, commandContext)
-    : undefined;
+  const result = await runCommand(
+    [
+      "tofu",
+      "apply",
+      "-input=false",
+      "-no-color",
+      workspaceForRun(runId).planPath,
+    ],
+    { cwd: moduleDir, context: commandContext },
+  );
+  const outputs =
+    action === "apply" && result.exitCode === 0
+      ? await readOpenTofuOutputsIn(moduleDir, commandContext)
+      : undefined;
   return {
     runId,
     action,
     status: result.exitCode === 0 ? "succeeded" : "failed",
     exitCode: result.exitCode,
     ...(outputs ? { outputs } : {}),
-    stdout: [init.stdout, result.stdout].filter(Boolean).join("\n"),
-    stderr: [init.stderr, result.stderr].filter(Boolean).join("\n"),
+    stdout: redactRunnerOutput(
+      [init.stdout, result.stdout].filter(Boolean).join("\n"),
+    ),
+    stderr: redactRunnerOutput(
+      [init.stderr, result.stderr].filter(Boolean).join("\n"),
+    ),
   };
 }
 
@@ -503,16 +602,19 @@ async function runBuildPhase(
   // Hard invariant: the build phase env must carry no provider credential.
   assertBuildEnvHasNoCredentials(buildContext.env);
   await materializeSource(source, workspace.sourceRoot, buildContext);
-  const sourceCommit = source.kind === "git"
-    ? await gitRevParseHead(workspace.sourceRoot, buildContext)
-    : undefined;
+  const sourceCommit =
+    source.kind === "git"
+      ? await gitRevParseHead(workspace.sourceRoot, buildContext)
+      : undefined;
   const logs: string[] = [];
   for (const command of build.commands) {
     const result = await runCommand(["bash", "-lc", command], {
       cwd: workspace.sourceRoot,
       context: buildContext,
     });
-    logs.push(redactBuildOutput(`$ ${command}\n${result.stdout}\n${result.stderr}`));
+    logs.push(
+      redactBuildOutput(`$ ${command}\n${result.stdout}\n${result.stderr}`),
+    );
     if (result.exitCode !== 0) {
       return {
         failure: {
@@ -576,14 +678,7 @@ function redactBuildOutput(text: string): string {
   // Build commands run credential-free, but redact any value that LOOKS like a
   // known credential env assignment as defense-in-depth before it reaches the
   // run record / diagnostics.
-  let redacted = text;
-  for (const name of allKnownCredentialEnvNames()) {
-    redacted = redacted.replaceAll(
-      new RegExp(`(${name}=)[^\\s]+`, "g"),
-      "$1[redacted]",
-    );
-  }
-  return redacted;
+  return redactRunnerOutput(text);
 }
 
 async function preparePlanWorkspace(
@@ -731,7 +826,10 @@ async function handlePlanArtifactRequest(
         },
       });
     } catch {
-      return Response.json({ error: "plan artifact not found" }, { status: 404 });
+      return Response.json(
+        { error: "plan artifact not found" },
+        { status: 404 },
+      );
     }
   }
   if (request.method === "PUT") {
@@ -749,6 +847,67 @@ async function handlePlanArtifactRequest(
     { error: "method not allowed" },
     { status: 405, headers: { allow: "GET, PUT" } },
   );
+}
+
+async function runCompatibilityCheck(runId: string): Promise<JsonRecord> {
+  const workspace = workspaceForRun(runId);
+  await assertDirectory(workspace.sourceRoot, "source root");
+  const files = await readCapsuleCompatibilityFiles(workspace.sourceRoot);
+  return {
+    runId,
+    action: "compatibility_check",
+    status: "succeeded",
+    exitCode: 0,
+    files,
+  };
+}
+
+async function readCapsuleCompatibilityFiles(
+  sourceRoot: string,
+): Promise<readonly { readonly path: string; readonly text: string }[]> {
+  const root = await realpath(sourceRoot);
+  const out: { path: string; text: string }[] = [];
+  let totalBytes = 0;
+
+  async function walk(relativeDir: string): Promise<void> {
+    if (out.length >= CAPSULE_COMPATIBILITY_MAX_FILES) return;
+    const absoluteDir = resolve(root, relativeDir);
+    const entries = await readdir(absoluteDir, { withFileTypes: true });
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (out.length >= CAPSULE_COMPATIBILITY_MAX_FILES) return;
+      if (entry.name === ".git" || entry.name === "node_modules") continue;
+      const relativePath = relativeDir
+        ? `${relativeDir}/${entry.name}`
+        : entry.name;
+      const absolutePath = resolve(root, relativePath);
+      assertPathInsideRoot(root, absolutePath, "compatibility source file");
+      if (entry.isDirectory()) {
+        await walk(relativePath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".tf")) continue;
+      const info = await stat(absolutePath);
+      if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) {
+        throw new Error(
+          `compatibility source file ${relativePath} exceeds ${CAPSULE_COMPATIBILITY_MAX_FILE_BYTES} bytes`,
+        );
+      }
+      totalBytes += info.size;
+      if (totalBytes > CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES) {
+        throw new Error(
+          `compatibility source files exceed ${CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES} bytes`,
+        );
+      }
+      out.push({
+        path: relativePath,
+        text: await readFile(absolutePath, "utf8"),
+      });
+    }
+  }
+
+  await walk("");
+  return out;
 }
 
 // ===========================================================================
@@ -836,7 +995,9 @@ export function assertSourceUrlPolicy(url: string): void {
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error("source url must be a valid https/ssh URL or git@host:path");
+    throw new Error(
+      "source url must be a valid https/ssh URL or git@host:path",
+    );
   }
   if (parsed.protocol !== "https:" && parsed.protocol !== "ssh:") {
     throw new Error(`source url scheme ${parsed.protocol} is forbidden`);
@@ -862,14 +1023,14 @@ export function assertSourceUrlPolicy(url: string): void {
 // that lives under the checkout.
 function normalizeSourceSubtreePath(path: string): string {
   if (path === "" || path === ".") return ".";
-  if (
-    isAbsolute(path) ||
-    path.includes("\0") ||
-    /^[A-Za-z]:[\\/]/.test(path)
-  ) {
-    throw new Error(`source_sync.source.path is not a safe relative path: ${path}`);
+  if (isAbsolute(path) || path.includes("\0") || /^[A-Za-z]:[\\/]/.test(path)) {
+    throw new Error(
+      `source_sync.source.path is not a safe relative path: ${path}`,
+    );
   }
-  const normalized = normalize(path).replaceAll("\\", "/").replace(/^\.\//, "")
+  const normalized = normalize(path)
+    .replaceAll("\\", "/")
+    .replace(/^\.\//, "")
     .replace(/\/+$/, "");
   if (
     normalized.length === 0 ||
@@ -877,7 +1038,9 @@ function normalizeSourceSubtreePath(path: string): string {
     normalized.startsWith("../") ||
     normalized.includes("/../")
   ) {
-    throw new Error(`source_sync.source.path is not a safe relative path: ${path}`);
+    throw new Error(
+      `source_sync.source.path is not a safe relative path: ${path}`,
+    );
   }
   return normalized;
 }
@@ -889,7 +1052,7 @@ export function parseSourceCredentials(request: unknown): SourceCredentials {
   const rawEnv = recordField(credentials, "env");
   if (isRecord(rawEnv)) {
     for (const [name, value] of Object.entries(rawEnv)) {
-      if (typeof value === "string" && /^[A-Z_][A-Z0-9_]*$/.test(name)) {
+      if (typeof value === "string" && SOURCE_CREDENTIAL_ENV_NAMES.has(name)) {
         env[name] = value;
       }
     }
@@ -910,6 +1073,7 @@ export function parseSourceCredentials(request: unknown): SourceCredentials {
         throw new Error("source_sync credential file is malformed");
       }
       assertSafeCredentialFileName(path);
+      assertSafeCredentialFileMode(mode);
       files.push({ path, mode: Math.floor(mode), content });
     }
   }
@@ -950,6 +1114,17 @@ function assertSafeCredentialFileName(name: string): void {
   }
 }
 
+function assertSafeCredentialFileMode(mode: number): void {
+  if (!Number.isInteger(mode) || mode < 0o400 || mode > 0o700) {
+    throw new Error(`source_sync credential file mode is unsafe: ${mode}`);
+  }
+  if ((mode & 0o077) !== 0) {
+    throw new Error(
+      `source_sync credential file mode is group/world-readable: ${mode}`,
+    );
+  }
+}
+
 async function runSourceSync(
   runId: string,
   request: unknown,
@@ -959,14 +1134,14 @@ async function runSourceSync(
   const runnerProfile = parseRunnerProfile(request);
   // archiveObjectKey may sit at the request root or alongside source; accept
   // either so the service lane can place it wherever the run record holds it.
-  const archiveObjectKey = stringField(request, "archiveObjectKey") ??
+  const archiveObjectKey =
+    stringField(request, "archiveObjectKey") ??
     stringField(recordField(request, "source"), "archiveObjectKey");
   if (!archiveObjectKey) throw new Error("archiveObjectKey is required");
   assertSafeArchiveObjectKey(archiveObjectKey);
-  const maxArchiveBytes = positiveIntegerLimitFromProfile(
-    runnerProfile,
-    "maxSourceArchiveBytes",
-  ) ?? DEFAULT_SOURCE_ARCHIVE_MAX_BYTES;
+  const maxArchiveBytes =
+    positiveIntegerLimitFromProfile(runnerProfile, "maxSourceArchiveBytes") ??
+    DEFAULT_SOURCE_ARCHIVE_MAX_BYTES;
 
   const workspace = workspaceForRun(runId);
   await rm(workspace.root, { recursive: true, force: true });
@@ -980,8 +1155,16 @@ async function runSourceSync(
       credentialDir,
     );
     const resolvedCommit = await resolveSourceCommit(source, gitContext);
-    await shallowCloneAtCommit(source, resolvedCommit, workspace.sourceRoot, gitContext);
-    const subtree = await resolveSourceSubtree(workspace.sourceRoot, source.path);
+    await shallowCloneAtCommit(
+      source,
+      resolvedCommit,
+      workspace.sourceRoot,
+      gitContext,
+    );
+    const subtree = await resolveSourceSubtree(
+      workspace.sourceRoot,
+      source.path,
+    );
     const archivePath = sourceArchivePath(workspace);
     await createDeterministicArchive(subtree, archivePath, gitContext);
     const archiveBytes = await readFile(archivePath);
@@ -1143,7 +1326,10 @@ export function parseLsRemoteCommit(
   stdout: string,
   ref: string,
 ): string | undefined {
-  const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
   const rows = lines.flatMap((line) => {
     const [sha, name] = line.split(/\s+/, 2);
     if (!sha || !name || !/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(sha)) return [];
@@ -1223,21 +1409,24 @@ async function createDeterministicArchive(
   archivePath: string,
   git: SourceGitContext,
 ): Promise<void> {
-  await runRequiredCommand([
-    "tar",
-    "--sort=name",
-    "--numeric-owner",
-    "--owner=0",
-    "--group=0",
-    "--mtime=@0",
-    "--exclude=.git",
-    "--format=gnu",
-    "-C",
-    subtree,
-    "-cf",
-    `${archivePath}.tar`,
-    ".",
-  ], { cwd: RUN_ROOT, context: git.context });
+  await runRequiredCommand(
+    [
+      "tar",
+      "--sort=name",
+      "--numeric-owner",
+      "--owner=0",
+      "--group=0",
+      "--mtime=@0",
+      "--exclude=.git",
+      "--format=gnu",
+      "-C",
+      subtree,
+      "-cf",
+      `${archivePath}.tar`,
+      ".",
+    ],
+    { cwd: RUN_ROOT, context: git.context },
+  );
   await runRequiredCommand(
     ["zstd", "-q", "-19", "-f", "-o", archivePath, `${archivePath}.tar`],
     { cwd: RUN_ROOT, context: git.context },
@@ -1258,14 +1447,7 @@ async function shredCredentialDir(credentialDir: string): Promise<void> {
 // can echo the URL or env; this strips known credential env assignments and the
 // literal token value if it is known.
 function redactCredentialOutput(text: string): string {
-  let redacted = text;
-  for (const name of ["GIT_HTTPS_TOKEN", "GIT_SSH_PRIVATE_KEY"]) {
-    redacted = redacted.replaceAll(
-      new RegExp(`(${name}=)[^\\s]+`, "g"),
-      "$1[redacted]",
-    );
-  }
-  return redacted;
+  return redactRunnerOutput(text);
 }
 
 function shellQuote(value: string): string {
@@ -1340,17 +1522,20 @@ async function handleSourceArchiveRestoreRequest(
     await writeFile(archivePath, bytes);
     const context: CommandContext = { env: baseCommandEnv() };
     await assertSafeZstdTarArchive(archivePath, context);
-    await runRequiredCommand([
-      "tar",
-      "-x",
-      "--zstd",
-      "-f",
-      archivePath,
-      "--no-same-owner",
-      "--keep-old-files",
-      "-C",
-      workspace.sourceRoot,
-    ], { cwd: RUN_ROOT, context });
+    await runRequiredCommand(
+      [
+        "tar",
+        "-x",
+        "--zstd",
+        "-f",
+        archivePath,
+        "--no-same-owner",
+        "--keep-old-files",
+        "-C",
+        workspace.sourceRoot,
+      ],
+      { cwd: RUN_ROOT, context },
+    );
     await rm(archivePath, { force: true });
     // Record the source root as the state moduleDir default; a template/raw
     // dispatch overwrites module-info.json before plan, but this keeps the state
@@ -1458,15 +1643,10 @@ export async function assertSafeZstdTarArchive(
   archivePath: string,
   context: CommandContext,
 ): Promise<void> {
-  const verbose = await runCommand([
-    "tar",
-    "-t",
-    "-v",
-    "--quoting-style=escape",
-    "--zstd",
-    "-f",
-    archivePath,
-  ], { cwd: RUN_ROOT, context });
+  const verbose = await runCommand(
+    ["tar", "-t", "-v", "--quoting-style=escape", "--zstd", "-f", archivePath],
+    { cwd: RUN_ROOT, context },
+  );
   if (verbose.exitCode !== 0) {
     throw new Error(
       `source archive metadata list failed: ${verbose.stderr || verbose.stdout}`,
@@ -1487,7 +1667,9 @@ export async function assertSafeZstdTarArchive(
     // skip it from the duplicate set but still validate it is the safe root.
     if (normalizedPath !== "") {
       if (seenPaths.has(normalizedPath)) {
-        throw new Error(`source archive duplicates normalized path: ${entry.path}`);
+        throw new Error(
+          `source archive duplicates normalized path: ${entry.path}`,
+        );
       }
       seenPaths.add(normalizedPath);
     }
@@ -1497,7 +1679,8 @@ export async function assertSafeZstdTarArchive(
       );
     }
     decompressedBytes += entry.size;
-    const decompressedCap = context.sourceArchiveMaxDecompressedBytes ??
+    const decompressedCap =
+      context.sourceArchiveMaxDecompressedBytes ??
       DEFAULT_PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES;
     if (decompressedBytes > decompressedCap) {
       throw new Error(
@@ -1513,14 +1696,12 @@ export async function assertSafeZstdTarArchive(
 // /work/source.
 function normalizeSourceArchiveEntryPath(path: string): string {
   if (path === "." || path === "./") return "";
-  if (
-    path.includes("\0") ||
-    isAbsolute(path) ||
-    /^[A-Za-z]:[\\/]/.test(path)
-  ) {
+  if (path.includes("\0") || isAbsolute(path) || /^[A-Za-z]:[\\/]/.test(path)) {
     throw new Error(`source archive contains unsafe path: ${path}`);
   }
-  const normalized = normalize(path).replaceAll("\\", "/").replace(/^\.\//, "")
+  const normalized = normalize(path)
+    .replaceAll("\\", "/")
+    .replace(/^\.\//, "")
     .replace(/\/+$/, "");
   if (
     normalized === ".." ||
@@ -1569,7 +1750,10 @@ async function handleStateArtifactRequest(
         },
       });
     } catch {
-      return Response.json({ error: "state artifact not found" }, { status: 404 });
+      return Response.json(
+        { error: "state artifact not found" },
+        { status: 404 },
+      );
     }
   }
   if (request.method === "PUT") {
@@ -1601,7 +1785,9 @@ async function writeModuleInfo(
 
 async function readModuleDir(workspace: RunWorkspace): Promise<string> {
   try {
-    const parsed = JSON.parse(await readFile(workspace.moduleInfoPath, "utf8")) as unknown;
+    const parsed = JSON.parse(
+      await readFile(workspace.moduleInfoPath, "utf8"),
+    ) as unknown;
     if (isRecord(parsed) && typeof parsed.moduleDir === "string") {
       return parsed.moduleDir;
     }
@@ -1632,7 +1818,8 @@ async function materializeSource(
     case "git":
       await assertHttpsSourceUrl(source.url, "git source url");
       if (source.ref) assertSafeGitSelector(source.ref, "git source ref");
-      if (source.commit) assertFullGitObjectId(source.commit, "git source commit");
+      if (source.commit)
+        assertFullGitObjectId(source.commit, "git source commit");
       await runRequiredCommand(["git", "clone", source.url, sourceRoot], {
         cwd: RUN_ROOT,
         context,
@@ -1669,17 +1856,20 @@ async function materializeSource(
       await mkdir(sourceRoot, { recursive: true });
       await writeFile(archivePath, bytes);
       await assertSafeTarArchive(archivePath, context);
-      await runRequiredCommand([
-        "tar",
-        "-x",
-        "-z",
-        "-f",
-        archivePath,
-        "--no-same-owner",
-        "--keep-old-files",
-        "-C",
-        sourceRoot,
-      ], { cwd: RUN_ROOT, context });
+      await runRequiredCommand(
+        [
+          "tar",
+          "-x",
+          "-z",
+          "-f",
+          archivePath,
+          "--no-same-owner",
+          "--keep-old-files",
+          "-C",
+          sourceRoot,
+        ],
+        { cwd: RUN_ROOT, context },
+      );
       return;
     }
     case "local":
@@ -1699,18 +1889,13 @@ async function assertSafeTarArchive(
   // extracts the real entry. Escape quoting renders control chars as backslash
   // sequences so a name can never span lines. This matches the hardened shared
   // core (packages/schema/src/reference/prepared-source-core.ts).
-  const verbose = await runCommand([
-    "tar",
-    "-t",
-    "-v",
-    "--quoting-style=escape",
-    "-z",
-    "-f",
-    archivePath,
-  ], {
-    cwd: RUN_ROOT,
-    context,
-  });
+  const verbose = await runCommand(
+    ["tar", "-t", "-v", "--quoting-style=escape", "-z", "-f", archivePath],
+    {
+      cwd: RUN_ROOT,
+      context,
+    },
+  );
   if (verbose.exitCode !== 0) {
     throw new Error(
       `prepared source archive metadata list failed: ${verbose.stderr || verbose.stdout}`,
@@ -1741,7 +1926,8 @@ async function assertSafeTarArchive(
       );
     }
     decompressedBytes += entry.size;
-    const decompressedCap = context.sourceArchiveMaxDecompressedBytes ??
+    const decompressedCap =
+      context.sourceArchiveMaxDecompressedBytes ??
       DEFAULT_PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES;
     if (decompressedBytes > decompressedCap) {
       throw new Error(
@@ -1830,13 +2016,10 @@ async function assertResolvedHostNotBlocked(
   host: string,
   label: string,
 ): Promise<void> {
-  const literal = host.startsWith("[") && host.endsWith("]")
-    ? host.slice(1, -1)
-    : host;
+  const literal =
+    host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
   // IP literals are already fully covered by assertHostLiteralNotBlocked.
-  if (
-    /^(\d{1,3}\.){3}\d{1,3}$/.test(literal) || literal.includes(":")
-  ) {
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(literal) || literal.includes(":")) {
     return;
   }
   const lower = literal.toLowerCase();
@@ -1864,16 +2047,16 @@ async function resolveHostAddresses(host: string): Promise<string[]> {
   for (const type of ["A", "AAAA"]) {
     try {
       const response = await fetch(
-        `https://cloudflare-dns.com/dns-query?name=${
-          encodeURIComponent(host)
-        }&type=${type}`,
+        `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(
+          host,
+        )}&type=${type}`,
         {
           headers: { accept: "application/dns-json" },
           signal: AbortSignal.timeout(5_000),
         },
       );
       if (!response.ok) continue;
-      const body = await response.json() as {
+      const body = (await response.json()) as {
         Answer?: Array<{ type: number; data: string }>;
       };
       for (const answer of body.Answer ?? []) {
@@ -1894,7 +2077,9 @@ async function resolveHostAddresses(host: string): Promise<string[]> {
 
 function assertSafeGitSelector(value: string, label: string): void {
   if (value.startsWith("-") || /[\r\n\0]/.test(value)) {
-    throw new Error(`${label} must not start with '-' or contain control characters`);
+    throw new Error(
+      `${label} must not start with '-' or contain control characters`,
+    );
   }
 }
 
@@ -1905,9 +2090,8 @@ function assertFullGitObjectId(value: string, label: string): void {
 }
 
 function assertHostLiteralNotBlocked(host: string, label: string): void {
-  const literal = host.startsWith("[") && host.endsWith("]")
-    ? host.slice(1, -1)
-    : host;
+  const literal =
+    host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
   const lower = literal.toLowerCase();
   if (lower === "localhost" || lower.endsWith(".localhost")) {
     throw new Error(`${label} is not allowed: ${host}`);
@@ -2000,12 +2184,10 @@ async function readOpenTofuPlanJson(
   workspace: RunWorkspace,
   context: CommandContext,
 ): Promise<string | undefined> {
-  const result = await runCommand([
-    "tofu",
-    "show",
-    "-json",
-    workspace.planPath,
-  ], { cwd: moduleDir, context });
+  const result = await runCommand(
+    ["tofu", "show", "-json", workspace.planPath],
+    { cwd: moduleDir, context },
+  );
   return result.exitCode === 0 && result.stdout.trim().length > 0
     ? result.stdout
     : undefined;
@@ -2042,18 +2224,19 @@ async function runCommand(
   });
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timeoutMs = options.context?.timeoutMs;
-  const exit = timeoutMs && timeoutMs > 0
-    ? Promise.race([
-      subprocess.exited,
-      new Promise<number>((resolve) => {
-        timeout = setTimeout(() => {
-          timedOut = true;
-          subprocess.kill();
-          resolve(124);
-        }, timeoutMs);
-      }),
-    ])
-    : subprocess.exited;
+  const exit =
+    timeoutMs && timeoutMs > 0
+      ? Promise.race([
+          subprocess.exited,
+          new Promise<number>((resolve) => {
+            timeout = setTimeout(() => {
+              timedOut = true;
+              subprocess.kill();
+              resolve(124);
+            }, timeoutMs);
+          }),
+        ])
+      : subprocess.exited;
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(subprocess.stdout).text(),
     new Response(subprocess.stderr).text(),
@@ -2065,8 +2248,8 @@ async function runCommand(
     stdout,
     stderr: timedOut
       ? [stderr, `command timed out after ${timeoutMs}ms: ${command[0]}`]
-        .filter(Boolean)
-        .join("\n")
+          .filter(Boolean)
+          .join("\n")
       : stderr,
   };
 }
@@ -2074,22 +2257,28 @@ async function runCommand(
 function commandFailurePayload(
   runId: string,
   action: OpenTofuRunAction,
-  result: { readonly exitCode: number; readonly stdout: string; readonly stderr: string },
+  result: {
+    readonly exitCode: number;
+    readonly stdout: string;
+    readonly stderr: string;
+  },
 ): JsonRecord {
   return {
     runId,
     action,
     status: "failed",
     exitCode: result.exitCode,
-    stdout: result.stdout,
-    stderr: result.stderr,
+    stdout: redactRunnerOutput(result.stdout),
+    stderr: redactRunnerOutput(result.stderr),
   };
 }
 
 function parseOperation(request: unknown): OpenTofuOperation {
   const planRun = recordField(request, "planRun");
   const operation = planRun ? recordField(planRun, "operation") : undefined;
-  return operation === "destroy" || operation === "update" || operation === "create"
+  return operation === "destroy" ||
+    operation === "update" ||
+    operation === "create"
     ? operation
     : "create";
 }
@@ -2104,7 +2293,9 @@ function parseSource(request: unknown): OpenTofuModuleSource {
     return {
       kind,
       url: requiredStringField(source, "url"),
-      ...(stringField(source, "ref") ? { ref: stringField(source, "ref") } : {}),
+      ...(stringField(source, "ref")
+        ? { ref: stringField(source, "ref") }
+        : {}),
       ...(stringField(source, "commit")
         ? { commit: stringField(source, "commit") }
         : {}),
@@ -2144,7 +2335,9 @@ export function parseTemplate(request: unknown): TemplateRef | undefined {
   return { id, version, localModulePath };
 }
 
-export function parseGeneratedRoot(request: unknown): GeneratedRoot | undefined {
+export function parseGeneratedRoot(
+  request: unknown,
+): GeneratedRoot | undefined {
   const generated = recordField(request, "generatedRoot");
   if (!isRecord(generated)) return undefined;
   const files = recordField(generated, "files");
@@ -2240,7 +2433,9 @@ function parseRunnerProfile(request: unknown): JsonRecord | undefined {
 
 function parseRequiredProviders(request: unknown): readonly string[] {
   const planRun = recordField(request, "planRun");
-  const providers = planRun ? recordField(planRun, "requiredProviders") : undefined;
+  const providers = planRun
+    ? recordField(planRun, "requiredProviders")
+    : undefined;
   return stringArray(providers);
 }
 
@@ -2253,12 +2448,15 @@ export function commandContextFromRequest(
   const credentialRefs = credentialRefsFromRunnerProfile(runnerProfile);
   // Credentials minted by the Vault broker and threaded onto the dispatch
   // payload (Phase 1B). Read these FIRST, filtered through the same
-  // provider-env-rules match the Bun.env path uses, so only env names the
-  // required providers actually allow are admitted. Falls back to Bun.env when a
-  // name is not supplied on the payload (e.g. local/dev runners with ambient
-  // credentials). The payload credential map is NEVER echoed back (see the run
-  // response builders, which return only run metadata + stdout/stderr).
+  // provider-env-rules match the ambient-dev path uses, so only env names the
+  // required providers actually allow are admitted. Hosted/production runner
+  // dispatches must carry minted credentials explicitly; Bun.env fallback is
+  // allowed only when the runner profile opts into local-dev ambient credentials.
+  // The payload credential map is NEVER echoed back (see the run response
+  // builders, which return only run metadata + stdout/stderr).
   const payloadCredentials = credentialsFromRequest(request);
+  const allowAmbientCredentials =
+    allowAmbientCredentialsFromRunnerProfile(runnerProfile);
   const maxRunSeconds = maxRunSecondsFromProfile(runnerProfile);
   const maxSourceArchiveBytes = positiveIntegerLimitFromProfile(
     runnerProfile,
@@ -2278,8 +2476,10 @@ export function commandContextFromRequest(
         env[envName] = fromPayload;
         continue;
       }
-      const value = Bun.env[envName];
-      if (typeof value === "string") env[envName] = value;
+      if (allowAmbientCredentials) {
+        const value = Bun.env[envName];
+        if (typeof value === "string") env[envName] = value;
+      }
     }
   }
   // §13 per-alias credential split: the generated root declares sensitive
@@ -2295,11 +2495,22 @@ export function commandContextFromRequest(
   return {
     env,
     ...(maxRunSeconds ? { timeoutMs: maxRunSeconds * 1000 } : {}),
-    ...(maxSourceArchiveBytes ? { sourceArchiveMaxBytes: maxSourceArchiveBytes } : {}),
+    ...(maxSourceArchiveBytes
+      ? { sourceArchiveMaxBytes: maxSourceArchiveBytes }
+      : {}),
     ...(maxSourceDecompressedBytes
       ? { sourceArchiveMaxDecompressedBytes: maxSourceDecompressedBytes }
       : {}),
   };
+}
+
+function allowAmbientCredentialsFromRunnerProfile(
+  runnerProfile: JsonRecord | undefined,
+): boolean {
+  return (
+    recordField(runnerProfile, "devLocalAllowAmbientCredentials") === true ||
+    recordField(runnerProfile, "allowAmbientCredentials") === true
+  );
 }
 
 /**
@@ -2321,7 +2532,10 @@ function credentialsFromRequest(request: unknown): Record<string, string> {
     if (typeof value !== "string") continue;
     // TF_VAR_<name> carries a lowercase HCL variable suffix; provider credential
     // env names are upper-snake. Both are valid POSIX env-name shapes.
-    if (/^TF_VAR_[A-Za-z_][A-Za-z0-9_]*$/.test(name) || /^[A-Z_][A-Z0-9_]*$/.test(name)) {
+    if (
+      /^TF_VAR_[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
+      /^[A-Z_][A-Z0-9_]*$/.test(name)
+    ) {
       out[name] = value;
     }
   }
@@ -2397,15 +2611,22 @@ function assertRunnerPolicyBeforeInit(
   const source = parseSource(request);
   if (
     source.kind === "local" &&
-    recordField(recordField(runnerProfile, "sourcePolicy"), "allowLocalSource") !== true
+    recordField(
+      recordField(runnerProfile, "sourcePolicy"),
+      "allowLocalSource",
+    ) !== true
   ) {
     throw new Error(
       `runner profile ${stringField(runnerProfile, "id") ?? "<unknown>"} does not allow local source paths`,
     );
   }
   const requiredProviders = parseRequiredProviders(request);
-  const allowedProviders = stringArray(recordField(runnerProfile, "allowedProviders"));
-  const deniedProviders = stringArray(recordField(runnerProfile, "deniedProviders"));
+  const allowedProviders = stringArray(
+    recordField(runnerProfile, "allowedProviders"),
+  );
+  const deniedProviders = stringArray(
+    recordField(runnerProfile, "deniedProviders"),
+  );
   if (allowedProviders.length > 0 && requiredProviders.length === 0) {
     throw new Error(
       `runner profile ${stringField(runnerProfile, "id") ?? "<unknown>"} requires requiredProviders before OpenTofu init`,
@@ -2417,9 +2638,13 @@ function assertRunnerPolicyBeforeInit(
     }
     if (
       allowedProviders.length > 0 &&
-      !allowedProviders.some((allowed) => allowed === "*" || providerMatches(provider, allowed))
+      !allowedProviders.some(
+        (allowed) => allowed === "*" || providerMatches(provider, allowed),
+      )
     ) {
-      throw new Error(`provider ${provider} is not allowed before OpenTofu init`);
+      throw new Error(
+        `provider ${provider} is not allowed before OpenTofu init`,
+      );
     }
   }
   assertCredentialEnvAvailable(requiredProviders, runnerProfile, context.env);
@@ -2430,30 +2655,46 @@ function assertCredentialEnvAvailable(
   runnerProfile: JsonRecord,
   env: Readonly<Record<string, string>>,
 ): void {
-  const requireCredentialRefs = recordField(runnerProfile, "requireCredentialRefs") === true;
+  const requireCredentialRefs =
+    recordField(runnerProfile, "requireCredentialRefs") === true;
   const credentialRefs = credentialRefsFromRunnerProfile(runnerProfile);
   for (const provider of requiredProviders) {
-    const refs = credentialRefs.filter((ref) => providerMatches(provider, ref.provider));
-    const requiredRefs = refs.filter((ref) => ref.required || requireCredentialRefs);
+    const refs = credentialRefs.filter((ref) =>
+      providerMatches(provider, ref.provider),
+    );
+    const requiredRefs = refs.filter(
+      (ref) => ref.required || requireCredentialRefs,
+    );
     if (requiredRefs.length === 0) continue;
     const envNames = credentialEnvNamesForProviderAndRefs(provider, refs);
     if (envNames.length === 0) {
-      throw new Error(`no runner env mapping is configured for provider ${provider}`);
+      throw new Error(
+        `no runner env mapping is configured for provider ${provider}`,
+      );
     }
     const rule = providerEnvRule(provider);
     const requiredGroups = envRequiredGroupsForRefs(rule, refs);
-    const hasRequiredGroup = requiredGroups.length === 0
-      ? envNames.some((envName) => env[envName])
-      : requiredGroups.some((group) => group.every((envName) => env[envName]));
+    const hasRequiredGroup =
+      requiredGroups.length === 0
+        ? envNames.some((envName) => env[envName])
+        : requiredGroups.some((group) =>
+            group.every((envName) => env[envName]),
+          );
     if (!hasRequiredGroup) {
-      throw new Error(`required credential env for provider ${provider} is not available in runner environment`);
+      throw new Error(
+        `required credential env for provider ${provider} is not available in runner environment`,
+      );
     }
   }
 }
 
 function credentialRefsFromRunnerProfile(
   runnerProfile: JsonRecord | undefined,
-): readonly { readonly provider: string; readonly ref: string; readonly required: boolean }[] {
+): readonly {
+  readonly provider: string;
+  readonly ref: string;
+  readonly required: boolean;
+}[] {
   const refs = recordField(runnerProfile, "credentialRefs");
   if (!Array.isArray(refs)) return [];
   return refs.flatMap((value) => {
@@ -2461,7 +2702,9 @@ function credentialRefsFromRunnerProfile(
     const provider = stringField(value, "provider");
     const ref = stringField(value, "ref");
     if (!provider || !ref) return [];
-    return [{ provider, ref, required: recordField(value, "required") === true }];
+    return [
+      { provider, ref, required: recordField(value, "required") === true },
+    ];
   });
 }
 
@@ -2490,7 +2733,8 @@ function envRequiredGroupsForRefs(
 
 function envNamesFromCredentialRef(ref: string): readonly string[] {
   if (!ref.startsWith("env://")) return [];
-  return ref.slice("env://".length)
+  return ref
+    .slice("env://".length)
     .split(",")
     .map((value) => value.trim())
     .filter((value) => /^[A-Z_][A-Z0-9_]*$/.test(value));
@@ -2538,7 +2782,10 @@ function providersFromPlanJson(planJson: string): readonly string[] {
   return Array.from(providers).sort();
 }
 
-function collectProviderFullNames(value: unknown, providers: Set<string>): void {
+function collectProviderFullNames(
+  value: unknown,
+  providers: Set<string>,
+): void {
   if (Array.isArray(value)) {
     for (const item of value) collectProviderFullNames(item, providers);
     return;
@@ -2548,7 +2795,8 @@ function collectProviderFullNames(value: unknown, providers: Set<string>): void 
   if (typeof fullName === "string" && fullName.includes("/")) {
     providers.add(fullName);
   }
-  for (const child of Object.values(value)) collectProviderFullNames(child, providers);
+  for (const child of Object.values(value))
+    collectProviderFullNames(child, providers);
 }
 
 function summaryFromPlanJson(planJson: string): {
@@ -2556,13 +2804,18 @@ function summaryFromPlanJson(planJson: string): {
   readonly change: number;
   readonly destroy: number;
 } {
-  const parsed = JSON.parse(planJson) as { readonly resource_changes?: unknown };
+  const parsed = JSON.parse(planJson) as {
+    readonly resource_changes?: unknown;
+  };
   let add = 0;
   let change = 0;
   let destroy = 0;
   if (Array.isArray(parsed.resource_changes)) {
     for (const changeRecord of parsed.resource_changes) {
-      const actions = recordField(recordField(changeRecord, "change"), "actions");
+      const actions = recordField(
+        recordField(changeRecord, "change"),
+        "actions",
+      );
       if (!Array.isArray(actions)) continue;
       if (actions.includes("create")) add++;
       if (actions.includes("update")) change++;
@@ -2574,33 +2827,100 @@ function summaryFromPlanJson(planJson: string): {
 
 // Trimmed per-resource change list (address/type/actions only) extracted from
 // `tofu show -json tfplan`. Used by the plan-JSON policy on the service side.
-export function resourceChangesFromPlanJson(
-  planJson: string,
-): Array<{ address: string; type: string; actions: string[] }> {
-  const parsed = JSON.parse(planJson) as { readonly resource_changes?: unknown };
-  const out: Array<{ address: string; type: string; actions: string[] }> = [];
+export function resourceChangesFromPlanJson(planJson: string): Array<{
+  address: string;
+  type: string;
+  actions: string[];
+  scope?: {
+    cloudflareAccountId?: string;
+    cloudflareZoneId?: string;
+    awsAccountId?: string;
+    awsRegion?: string;
+  };
+}> {
+  const parsed = JSON.parse(planJson) as {
+    readonly resource_changes?: unknown;
+  };
+  const out: Array<{
+    address: string;
+    type: string;
+    actions: string[];
+    scope?: {
+      cloudflareAccountId?: string;
+      cloudflareZoneId?: string;
+      awsAccountId?: string;
+      awsRegion?: string;
+    };
+  }> = [];
   if (!Array.isArray(parsed.resource_changes)) return out;
   for (const changeRecord of parsed.resource_changes) {
     const address = stringField(changeRecord, "address");
     const type = stringField(changeRecord, "type");
-    const actions = recordField(recordField(changeRecord, "change"), "actions");
+    const change = recordField(changeRecord, "change");
+    const actions = recordField(change, "actions");
     if (!address || !type || !Array.isArray(actions)) continue;
-    out.push({
+    const resourceChange = {
       address,
       type,
-      actions: actions.filter((action): action is string =>
-        typeof action === "string"
+      actions: actions.filter(
+        (action): action is string => typeof action === "string",
       ),
-    });
+      ...scopeProjectionForPlanResource(type, change),
+    };
+    out.push(resourceChange);
   }
   return out;
+}
+
+function scopeProjectionForPlanResource(
+  type: string,
+  change: unknown,
+): {
+  scope?: {
+    cloudflareAccountId?: string;
+    cloudflareZoneId?: string;
+    awsAccountId?: string;
+    awsRegion?: string;
+  };
+} {
+  const after = recordField(change, "after");
+  const before = recordField(change, "before");
+  const source = after ?? before;
+  if (!source) return {};
+  const scope: {
+    cloudflareAccountId?: string;
+    cloudflareZoneId?: string;
+    awsAccountId?: string;
+    awsRegion?: string;
+  } = {};
+  if (type.startsWith("cloudflare_")) {
+    const accountId =
+      stringField(source, "account_id") ?? stringField(source, "accountId");
+    const zoneId =
+      stringField(source, "zone_id") ?? stringField(source, "zoneId");
+    if (accountId) scope.cloudflareAccountId = accountId;
+    if (zoneId) scope.cloudflareZoneId = zoneId;
+  }
+  if (type.startsWith("aws_")) {
+    const accountId =
+      stringField(source, "account_id") ??
+      stringField(source, "accountId") ??
+      stringField(source, "owner_id");
+    const region = stringField(source, "region");
+    if (accountId) scope.awsAccountId = accountId;
+    if (region) scope.awsRegion = region;
+  }
+  return Object.keys(scope).length > 0 ? { scope } : {};
 }
 
 async function gitRevParseHead(
   cwd: string,
   context: CommandContext,
 ): Promise<string | undefined> {
-  const result = await runCommand(["git", "rev-parse", "HEAD"], { cwd, context });
+  const result = await runCommand(["git", "rev-parse", "HEAD"], {
+    cwd,
+    context,
+  });
   return result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
 }
 
@@ -2613,13 +2933,30 @@ async function digestFileIfExists(path: string): Promise<string | undefined> {
   return await digestBytes(await readFile(path));
 }
 
-function resolveModulePath(sourceRoot: string, modulePath: string | undefined): string {
+function resolveModulePath(
+  sourceRoot: string,
+  modulePath: string | undefined,
+): string {
   const moduleDir = resolve(sourceRoot, modulePath ?? ".");
   const normalizedRoot = resolve(sourceRoot);
-  if (moduleDir !== normalizedRoot && !moduleDir.startsWith(`${normalizedRoot}/`)) {
+  if (
+    moduleDir !== normalizedRoot &&
+    !moduleDir.startsWith(`${normalizedRoot}/`)
+  ) {
     throw new Error("source.modulePath must stay inside source root");
   }
   return moduleDir;
+}
+
+function assertPathInsideRoot(root: string, path: string, label: string): void {
+  const normalizedRoot = resolve(root);
+  const normalizedPath = resolve(path);
+  if (
+    normalizedPath !== normalizedRoot &&
+    !normalizedPath.startsWith(`${normalizedRoot}/`)
+  ) {
+    throw new Error(`${label} must stay inside source root`);
+  }
 }
 
 function safeRunId(runId: string): string {
@@ -2633,8 +2970,8 @@ function recordField(value: unknown, key: string): unknown {
 
 function stringArray(value: unknown): readonly string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string =>
-    typeof item === "string" && item.length > 0
+  return value.filter(
+    (item): item is string => typeof item === "string" && item.length > 0,
   );
 }
 
@@ -2679,7 +3016,9 @@ async function assertRealPathInsideSourceRoot(
     realpath(sourceRoot),
   ]);
   if (realTarget !== realRoot && !realTarget.startsWith(`${realRoot}/`)) {
-    throw new Error(`${label} must stay inside source root after symlink resolution`);
+    throw new Error(
+      `${label} must stay inside source root after symlink resolution`,
+    );
   }
 }
 
@@ -2694,7 +3033,12 @@ async function readJsonObject(
 }
 
 function parseAction(value: unknown): OpenTofuRunAction | undefined {
-  if (value === "plan" || value === "apply" || value === "destroy") {
+  if (
+    value === "plan" ||
+    value === "apply" ||
+    value === "destroy" ||
+    value === "compatibility_check"
+  ) {
     return value;
   }
   return undefined;
@@ -2702,9 +3046,7 @@ function parseAction(value: unknown): OpenTofuRunAction | undefined {
 
 async function digestBytes(data: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", data);
-  return `sha256:${
-    Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("")
-  }`;
+  return `sha256:${Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
 }

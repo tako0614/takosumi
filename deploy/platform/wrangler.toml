@@ -108,11 +108,6 @@ image_build_context = "../.."
 instance_type = { vcpu = 2, memory_mib = 6144, disk_mb = 10240 }
 max_instances = 10
 
-# Producer: the deploy-control create path enqueues OpenTofu run dispatches.
-[[queues.producers]]
-binding = "TAKOS_QUEUE"
-queue = "takosumi-control-plane"
-
 [[queues.producers]]
 binding = "RUN_QUEUE"
 queue = "takosumi-runs"
@@ -149,6 +144,14 @@ TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
 TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
 # Operator-curated provider surface (CSV of runner profile ids); aws/gcp enabled later.
 TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default"
+# Production hardening evidence gate. Keep unset/observe-only in local templates;
+# set to "enforce" in the realized operator config only after these evidence refs
+# point at immutable, reviewed operator-private proof files:
+#   TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF / _DIGEST
+#   TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF / _DIGEST
+# The internal `/internal/platform/hardening-gates` route is operator-bearer
+# gated and returns 503 while enforce mode is missing either proof.
+TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 
 # Required secrets (pushed via `wrangler secret put`, NEVER committed):
 #   TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK            stable OIDC signing key (JWK JSON)

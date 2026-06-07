@@ -12,6 +12,8 @@ import type {
   RuntimeBindingRecord,
   SpaceRecord,
 } from "../ledger.ts";
+import { and, asc, eq, sql } from "drizzle-orm";
+import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import {
   assertValidAppBindingRecord,
   assertValidAppGrantRecord,
@@ -20,21 +22,81 @@ import { LedgerAccountOwnershipConflictError } from "../store.ts";
 import {
   appInstallationFromRow,
   type AppInstallationRow,
-  appInstallationSelect,
   installationEventFromRow,
   type InstallationEventRow,
-  json,
   ledgerAccountFromRow,
   type LedgerAccountRow,
+  postgresDrizzle,
   type PostgresQueryClient,
   runFirst,
   runQuery,
-  runRows,
   spaceFromRow,
   type SpaceRow,
-  spaceSelect,
   toDate,
 } from "./internal.ts";
+
+const installation = pgSchema("installation_v1");
+
+const ledgerAccounts = installation.table("ledger_accounts", {
+  accountId: text("account_id").primaryKey(),
+  legalOwnerSubject: text("legal_owner_subject").notNull(),
+  billingAccountId: text("billing_account_id"),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull(),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull(),
+});
+
+const spaces = installation.table("spaces", {
+  spaceId: text("space_id").primaryKey(),
+  accountId: text("account_id").notNull(),
+  kind: text("kind").notNull(),
+  displayName: text("display_name"),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull(),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull(),
+});
+
+const appInstallations = installation.table("app_installations", {
+  installationId: text("installation_id").primaryKey(),
+  accountId: text("account_id").notNull(),
+  spaceId: text("space_id").notNull(),
+  appId: text("app_id").notNull(),
+  sourceGitUrl: text("source_git_url").notNull(),
+  sourceRef: text("source_ref").notNull(),
+  sourceCommit: text("source_commit").notNull(),
+  planDigest: text("plan_digest").notNull(),
+  artifactDigest: text("artifact_digest"),
+  mode: text("mode").notNull(),
+  billingAccountId: text("billing_account_id"),
+  status: text("status").notNull(),
+  createdBySubject: text("created_by_subject").notNull(),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull(),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull(),
+});
+
+const installationEventChainLocks = installation.table(
+  "installation_event_chain_locks",
+  {
+    installationId: text("installation_id").primaryKey(),
+  },
+);
+
+const installationEvents = installation.table("installation_events", {
+  eventId: text("event_id").primaryKey(),
+  installationId: text("installation_id").notNull(),
+  eventType: text("event_type").notNull(),
+  payload: jsonb("payload").notNull(),
+  previousEventHash: text("previous_event_hash"),
+  eventHash: text("event_hash").notNull(),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull(),
+  eventSequence: text("event_sequence"),
+});
+
+const installationSchema = {
+  ledgerAccounts,
+  spaces,
+  appInstallations,
+  installationEventChainLocks,
+  installationEvents,
+};
 
 export async function saveLedgerAccount(
   client: PostgresQueryClient,
@@ -56,26 +118,23 @@ export async function saveLedgerAccount(
   // signal) while the in-memory and D1 stores diverged; it now throws
   // LedgerAccountOwnershipConflictError so all three stores reject an
   // ownership change identically.
-  const written = await runFirst<{ account_id: string }>(
-    client,
-    `INSERT INTO installation_v1.ledger_accounts (
-        account_id, legal_owner_subject, billing_account_id, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (account_id) DO UPDATE SET
-        billing_account_id = EXCLUDED.billing_account_id,
-        updated_at = EXCLUDED.updated_at
-      WHERE installation_v1.ledger_accounts.legal_owner_subject
-        = EXCLUDED.legal_owner_subject
-      RETURNING account_id`,
-    [
-      record.accountId,
-      record.legalOwnerSubject,
-      record.billingAccountId ?? null,
-      toDate(record.createdAt),
-      toDate(record.updatedAt),
-    ],
-  );
-  if (written === undefined) {
+  const values = ledgerAccountValues(record);
+  const written = await postgresDrizzle(client, installationSchema)
+    .insert(ledgerAccounts)
+    .values(values)
+    .onConflictDoUpdate({
+      target: ledgerAccounts.accountId,
+      set: {
+        billingAccountId: values.billingAccountId,
+        updatedAt: values.updatedAt,
+      },
+      where: eq(
+        ledgerAccounts.legalOwnerSubject,
+        sql`excluded.legal_owner_subject`,
+      ),
+    })
+    .returning({ account_id: ledgerAccounts.accountId });
+  if (written[0] === undefined) {
     // 0 rows: the account exists with a different legal_owner_subject.
     const existing = await findLedgerAccount(client, record.accountId);
     throw new LedgerAccountOwnershipConflictError(
@@ -90,13 +149,12 @@ export async function findLedgerAccount(
   client: PostgresQueryClient,
   accountId: string,
 ): Promise<LedgerAccountRecord | undefined> {
-  const row = await runFirst<LedgerAccountRow>(
-    client,
-    `SELECT account_id, legal_owner_subject, billing_account_id, created_at, updated_at
-       FROM installation_v1.ledger_accounts
-       WHERE account_id = $1`,
-    [accountId],
-  );
+  const row = await postgresDrizzle(client, installationSchema)
+    .select(ledgerAccountColumns)
+    .from(ledgerAccounts)
+    .where(eq(ledgerAccounts.accountId, accountId))
+    .limit(1)
+    .then((rows) => rows[0] as LedgerAccountRow | undefined);
   return row ? ledgerAccountFromRow(row) : undefined;
 }
 
@@ -104,36 +162,31 @@ export async function saveSpace(
   client: PostgresQueryClient,
   record: SpaceRecord,
 ): Promise<void> {
-  await runQuery(
-    client,
-    `INSERT INTO installation_v1.spaces (
-        space_id, account_id, kind, display_name, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (space_id) DO UPDATE SET
-        account_id = EXCLUDED.account_id,
-        kind = EXCLUDED.kind,
-        display_name = EXCLUDED.display_name,
-        updated_at = EXCLUDED.updated_at`,
-    [
-      record.spaceId,
-      record.accountId,
-      record.kind,
-      record.displayName ?? null,
-      toDate(record.createdAt),
-      toDate(record.updatedAt),
-    ],
-  );
+  const values = spaceValues(record);
+  await postgresDrizzle(client, installationSchema)
+    .insert(spaces)
+    .values(values)
+    .onConflictDoUpdate({
+      target: spaces.spaceId,
+      set: {
+        accountId: values.accountId,
+        kind: values.kind,
+        displayName: values.displayName,
+        updatedAt: values.updatedAt,
+      },
+    });
 }
 
 export async function findSpace(
   client: PostgresQueryClient,
   spaceId: string,
 ): Promise<SpaceRecord | undefined> {
-  const row = await runFirst<SpaceRow>(
-    client,
-    spaceSelect("space_id = $1"),
-    [spaceId],
-  );
+  const row = await postgresDrizzle(client, installationSchema)
+    .select(spaceColumns)
+    .from(spaces)
+    .where(eq(spaces.spaceId, spaceId))
+    .limit(1)
+    .then((rows) => rows[0] as SpaceRow | undefined);
   return row ? spaceFromRow(row) : undefined;
 }
 
@@ -141,11 +194,11 @@ export async function listSpacesForAccount(
   client: PostgresQueryClient,
   accountId: string,
 ): Promise<readonly SpaceRecord[]> {
-  const rows = await runRows<SpaceRow>(
-    client,
-    spaceSelect("account_id = $1") + " ORDER BY created_at, space_id",
-    [accountId],
-  );
+  const rows = (await postgresDrizzle(client, installationSchema)
+    .select(spaceColumns)
+    .from(spaces)
+    .where(eq(spaces.accountId, accountId))
+    .orderBy(asc(spaces.createdAt), asc(spaces.spaceId))) as SpaceRow[];
   return rows.map(spaceFromRow);
 }
 
@@ -158,58 +211,39 @@ export async function saveAppInstallation(
   // references it. `InstallationRecord.runtimeBindingId` is silently
   // ignored when persisting (in-memory store still tracks it for
   // backward compatibility with the materialize helpers).
-  await runQuery(
-    client,
-    `INSERT INTO installation_v1.app_installations (
-        installation_id, account_id, space_id, app_id, source_git_url,
-        source_ref, source_commit, plan_digest, artifact_digest,
-        mode, billing_account_id, status,
-        created_by_subject, created_at, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
-      )
-      ON CONFLICT (installation_id) DO UPDATE SET
-        account_id = EXCLUDED.account_id,
-        space_id = EXCLUDED.space_id,
-        app_id = EXCLUDED.app_id,
-        source_git_url = EXCLUDED.source_git_url,
-        source_ref = EXCLUDED.source_ref,
-        source_commit = EXCLUDED.source_commit,
-        plan_digest = EXCLUDED.plan_digest,
-        artifact_digest = EXCLUDED.artifact_digest,
-        mode = EXCLUDED.mode,
-        billing_account_id = EXCLUDED.billing_account_id,
-        status = EXCLUDED.status,
-        updated_at = EXCLUDED.updated_at`,
-    [
-      record.installationId,
-      record.accountId,
-      record.spaceId,
-      record.appId,
-      record.sourceGitUrl,
-      record.sourceRef,
-      record.sourceCommit,
-      record.planDigest,
-      record.artifactDigest ?? null,
-      record.mode,
-      record.billingAccountId ?? null,
-      record.status,
-      record.createdBySubject,
-      toDate(record.createdAt),
-      toDate(record.updatedAt),
-    ],
-  );
+  const values = appInstallationValues(record);
+  await postgresDrizzle(client, installationSchema)
+    .insert(appInstallations)
+    .values(values)
+    .onConflictDoUpdate({
+      target: appInstallations.installationId,
+      set: {
+        accountId: values.accountId,
+        spaceId: values.spaceId,
+        appId: values.appId,
+        sourceGitUrl: values.sourceGitUrl,
+        sourceRef: values.sourceRef,
+        sourceCommit: values.sourceCommit,
+        planDigest: values.planDigest,
+        artifactDigest: values.artifactDigest,
+        mode: values.mode,
+        billingAccountId: values.billingAccountId,
+        status: values.status,
+        updatedAt: values.updatedAt,
+      },
+    });
 }
 
 export async function findAppInstallation(
   client: PostgresQueryClient,
   installationId: string,
 ): Promise<InstallationRecord | undefined> {
-  const row = await runFirst<AppInstallationRow>(
-    client,
-    appInstallationSelect("installation_id = $1"),
-    [installationId],
-  );
+  const row = await postgresDrizzle(client, installationSchema)
+    .select(appInstallationColumns)
+    .from(appInstallations)
+    .where(eq(appInstallations.installationId, installationId))
+    .limit(1)
+    .then((rows) => rows[0] as AppInstallationRow | undefined);
   return row ? appInstallationFromRow(row) : undefined;
 }
 
@@ -217,12 +251,14 @@ export async function listAppInstallationsForSpace(
   client: PostgresQueryClient,
   spaceId: string,
 ): Promise<readonly InstallationRecord[]> {
-  const rows = await runRows<AppInstallationRow>(
-    client,
-    appInstallationSelect("space_id = $1") +
-      " ORDER BY created_at, installation_id",
-    [spaceId],
-  );
+  const rows = (await postgresDrizzle(client, installationSchema)
+    .select(appInstallationColumns)
+    .from(appInstallations)
+    .where(eq(appInstallations.spaceId, spaceId))
+    .orderBy(
+      asc(appInstallations.createdAt),
+      asc(appInstallations.installationId),
+    )) as AppInstallationRow[];
   return rows.map(appInstallationFromRow);
 }
 
@@ -230,12 +266,14 @@ export async function listAppInstallationsForBillingAccount(
   client: PostgresQueryClient,
   billingAccountId: string,
 ): Promise<readonly InstallationRecord[]> {
-  const rows = await runRows<AppInstallationRow>(
-    client,
-    appInstallationSelect("billing_account_id = $1") +
-      " ORDER BY created_at, installation_id",
-    [billingAccountId],
-  );
+  const rows = (await postgresDrizzle(client, installationSchema)
+    .select(appInstallationColumns)
+    .from(appInstallations)
+    .where(eq(appInstallations.billingAccountId, billingAccountId))
+    .orderBy(
+      asc(appInstallations.createdAt),
+      asc(appInstallations.installationId),
+    )) as AppInstallationRow[];
   return rows.map(appInstallationFromRow);
 }
 
@@ -370,40 +408,28 @@ export async function appendInstallationEvent(
     // row only exists to serve as a `FOR UPDATE` target. `ON CONFLICT
     // DO NOTHING` keeps the upsert idempotent so we don't need a
     // separate "create lock row on installation create" path.
-    await runQuery(
-      client,
-      `INSERT INTO installation_v1.installation_event_chain_locks (installation_id)
-         VALUES ($1)
-         ON CONFLICT (installation_id) DO NOTHING`,
-      [record.installationId],
-    );
+    await postgresDrizzle(client, installationSchema)
+      .insert(installationEventChainLocks)
+      .values({ installationId: record.installationId })
+      .onConflictDoNothing({
+        target: installationEventChainLocks.installationId,
+      });
     // NOWAIT: surface contention immediately rather than blocking for
     // an unbounded lock timeout. Callers handle the lock-not-available
     // error by refetching the chain tail and retrying with a freshly
     // computed `previousEventHash` / `eventHash`.
+    // Raw SQL is intentionally isolated here because Drizzle has no portable
+    // builder API for Postgres `FOR UPDATE NOWAIT` row locks.
     await runQuery(
       client,
       `SELECT 1 FROM installation_v1.installation_event_chain_locks
          WHERE installation_id = $1 FOR UPDATE NOWAIT`,
       [record.installationId],
     );
-    await runQuery(
-      client,
-      `INSERT INTO installation_v1.installation_events (
-          event_id, installation_id, event_type, payload, previous_event_hash,
-          event_hash, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (event_id) DO NOTHING`,
-      [
-        record.eventId,
-        record.installationId,
-        record.eventType,
-        json(record.payload),
-        record.previousEventHash ?? null,
-        record.eventHash,
-        toDate(record.createdAt),
-      ],
-    );
+    await postgresDrizzle(client, installationSchema)
+      .insert(installationEvents)
+      .values(installationEventValues(record))
+      .onConflictDoNothing({ target: installationEvents.eventId });
     await runQuery(client, "COMMIT");
   } catch (error) {
     try {
@@ -419,14 +445,111 @@ export async function listInstallationEvents(
   client: PostgresQueryClient,
   installationId: string,
 ): Promise<readonly InstallationEventRecord[]> {
-  const rows = await runRows<InstallationEventRow>(
-    client,
-    `SELECT event_id, installation_id, event_type, payload, previous_event_hash,
-         event_hash, created_at
-       FROM installation_v1.installation_events
-       WHERE installation_id = $1
-       ORDER BY event_sequence, event_id`,
-    [installationId],
-  );
+  const rows = (await postgresDrizzle(client, installationSchema)
+    .select(installationEventColumns)
+    .from(installationEvents)
+    .where(eq(installationEvents.installationId, installationId))
+    .orderBy(
+      asc(installationEvents.eventSequence),
+      asc(installationEvents.eventId),
+    )) as InstallationEventRow[];
   return rows.map(installationEventFromRow);
+}
+
+const ledgerAccountColumns = {
+  account_id: ledgerAccounts.accountId,
+  legal_owner_subject: ledgerAccounts.legalOwnerSubject,
+  billing_account_id: ledgerAccounts.billingAccountId,
+  created_at: ledgerAccounts.createdAt,
+  updated_at: ledgerAccounts.updatedAt,
+};
+
+const spaceColumns = {
+  space_id: spaces.spaceId,
+  account_id: spaces.accountId,
+  kind: spaces.kind,
+  display_name: spaces.displayName,
+  created_at: spaces.createdAt,
+  updated_at: spaces.updatedAt,
+};
+
+const appInstallationColumns = {
+  installation_id: appInstallations.installationId,
+  account_id: appInstallations.accountId,
+  space_id: appInstallations.spaceId,
+  app_id: appInstallations.appId,
+  source_git_url: appInstallations.sourceGitUrl,
+  source_ref: appInstallations.sourceRef,
+  source_commit: appInstallations.sourceCommit,
+  plan_digest: appInstallations.planDigest,
+  artifact_digest: appInstallations.artifactDigest,
+  mode: appInstallations.mode,
+  billing_account_id: appInstallations.billingAccountId,
+  status: appInstallations.status,
+  created_by_subject: appInstallations.createdBySubject,
+  created_at: appInstallations.createdAt,
+  updated_at: appInstallations.updatedAt,
+};
+
+const installationEventColumns = {
+  event_id: installationEvents.eventId,
+  installation_id: installationEvents.installationId,
+  event_type: installationEvents.eventType,
+  payload: installationEvents.payload,
+  previous_event_hash: installationEvents.previousEventHash,
+  event_hash: installationEvents.eventHash,
+  created_at: installationEvents.createdAt,
+};
+
+function ledgerAccountValues(record: LedgerAccountRecord) {
+  return {
+    accountId: record.accountId,
+    legalOwnerSubject: record.legalOwnerSubject,
+    billingAccountId: record.billingAccountId ?? null,
+    createdAt: toDate(record.createdAt),
+    updatedAt: toDate(record.updatedAt),
+  };
+}
+
+function spaceValues(record: SpaceRecord) {
+  return {
+    spaceId: record.spaceId,
+    accountId: record.accountId,
+    kind: record.kind,
+    displayName: record.displayName ?? null,
+    createdAt: toDate(record.createdAt),
+    updatedAt: toDate(record.updatedAt),
+  };
+}
+
+function appInstallationValues(record: InstallationRecord) {
+  return {
+    installationId: record.installationId,
+    accountId: record.accountId,
+    spaceId: record.spaceId,
+    appId: record.appId,
+    sourceGitUrl: record.sourceGitUrl,
+    sourceRef: record.sourceRef,
+    sourceCommit: record.sourceCommit,
+    planDigest: record.planDigest,
+    artifactDigest: record.artifactDigest ?? null,
+    mode: record.mode,
+    billingAccountId: record.billingAccountId ?? null,
+    status: record.status,
+    createdBySubject: record.createdBySubject,
+    createdAt: toDate(record.createdAt),
+    updatedAt: toDate(record.updatedAt),
+  };
+}
+
+function installationEventValues(record: InstallationEventRecord) {
+  return {
+    eventId: record.eventId,
+    installationId: record.installationId,
+    eventType: record.eventType,
+    payload: record.payload,
+    previousEventHash: record.previousEventHash ?? null,
+    eventHash: record.eventHash,
+    createdAt: toDate(record.createdAt),
+  };
 }

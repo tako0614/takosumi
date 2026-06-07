@@ -1,4 +1,7 @@
 import type { JsonObject, JsonValue } from "takosumi-contract/reference/compat";
+import { and, eq, lte, sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/pg-proxy";
+import { jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import type {
   SqlClient,
   SqlParameters,
@@ -32,6 +35,7 @@ import type {
 export class SqlTakosumiDeploymentRecordStore
   implements TakosumiDeploymentRecordStore {
   readonly #client: SqlClient;
+  readonly #db: DrizzleSqlBuilder;
   readonly #idFactory: () => string;
   readonly #lockLeaseMs: number;
   readonly #lockHeartbeatMs: number;
@@ -53,6 +57,7 @@ export class SqlTakosumiDeploymentRecordStore
     readonly lockPollMs?: number;
   }) {
     this.#client = input.client;
+    this.#db = createDrizzleSqlBuilder();
     this.#idFactory = input.idFactory ?? (() => crypto.randomUUID());
     this.#lockLeaseMs = positiveInteger(input.lockLeaseMs) ?? 30_000;
     const defaultHeartbeatMs = Math.max(1, Math.floor(this.#lockLeaseMs / 3));
@@ -68,26 +73,29 @@ export class SqlTakosumiDeploymentRecordStore
     input: TakosumiDeploymentUpsertInput,
   ): Promise<TakosumiDeploymentRecord> {
     const id = this.#idFactory();
-    const sourceEvidenceJson = JSON.stringify(input.sourceEvidence);
-    const appliedJson = JSON.stringify(input.appliedResources);
-    const sql = "insert into takosumi_deployment_records " +
-      "(id, tenant_id, name, source_evidence_json, applied_resources_json, status, created_at, updated_at) " +
-      "values ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7::timestamptz, $7::timestamptz) " +
-      "on conflict (tenant_id, name) do update set " +
-      "source_evidence_json = excluded.source_evidence_json, " +
-      "applied_resources_json = excluded.applied_resources_json, " +
-      "status = excluded.status, " +
-      "updated_at = excluded.updated_at " +
-      "returning id, tenant_id, name, source_evidence_json, applied_resources_json, status, created_at, updated_at";
-    const result = await this.#query<TakosumiDeploymentRow>(sql, [
-      id,
-      input.tenantId,
-      input.name,
-      sourceEvidenceJson,
-      appliedJson,
-      input.status,
-      input.now,
-    ]);
+    const result = await this.#drizzleQuery<TakosumiDeploymentRow>(
+      this.#db.insert(takosumiDeploymentRecords).values({
+        id,
+        tenantId: input.tenantId,
+        name: input.name,
+        sourceEvidenceJson: input.sourceEvidence,
+        appliedResourcesJson: input.appliedResources,
+        status: input.status,
+        createdAt: input.now,
+        updatedAt: input.now,
+      }).onConflictDoUpdate({
+        target: [
+          takosumiDeploymentRecords.tenantId,
+          takosumiDeploymentRecords.name,
+        ],
+        set: {
+          sourceEvidenceJson: sql`excluded.source_evidence_json`,
+          appliedResourcesJson: sql`excluded.applied_resources_json`,
+          status: sql`excluded.status`,
+          updatedAt: sql`excluded.updated_at`,
+        },
+      }).returning(),
+    );
     const row = requireRow(result, "upsert");
     return rowToRecord(row);
   }
@@ -96,10 +104,13 @@ export class SqlTakosumiDeploymentRecordStore
     tenantId: string,
     name: string,
   ): Promise<TakosumiDeploymentRecord | undefined> {
-    const result = await this.#query<TakosumiDeploymentRow>(
-      "select id, tenant_id, name, source_evidence_json, applied_resources_json, status, created_at, updated_at " +
-        "from takosumi_deployment_records where tenant_id = $1 and name = $2",
-      [tenantId, name],
+    const result = await this.#drizzleQuery<TakosumiDeploymentRow>(
+      this.#db.select().from(takosumiDeploymentRecords).where(
+        and(
+          eq(takosumiDeploymentRecords.tenantId, tenantId),
+          eq(takosumiDeploymentRecords.name, name),
+        ),
+      ),
     );
     const row = result.rows[0];
     return row ? rowToRecord(row) : undefined;
@@ -108,10 +119,10 @@ export class SqlTakosumiDeploymentRecordStore
   async list(
     tenantId: string,
   ): Promise<readonly TakosumiDeploymentRecord[]> {
-    const result = await this.#query<TakosumiDeploymentRow>(
-      "select id, tenant_id, name, source_evidence_json, applied_resources_json, status, created_at, updated_at " +
-        "from takosumi_deployment_records where tenant_id = $1 order by created_at asc",
-      [tenantId],
+    const result = await this.#drizzleQuery<TakosumiDeploymentRow>(
+      this.#db.select().from(takosumiDeploymentRecords).where(
+        eq(takosumiDeploymentRecords.tenantId, tenantId),
+      ).orderBy(takosumiDeploymentRecords.createdAt),
     );
     return result.rows.map(rowToRecord);
   }
@@ -121,32 +132,42 @@ export class SqlTakosumiDeploymentRecordStore
     name: string,
     now: string,
   ): Promise<TakosumiDeploymentRecord | undefined> {
-    const result = await this.#query<TakosumiDeploymentRow>(
-      "update takosumi_deployment_records set " +
-        "status = 'destroyed', " +
-        "applied_resources_json = '[]'::jsonb, " +
-        "updated_at = $3::timestamptz " +
-        "where tenant_id = $1 and name = $2 " +
-        "returning id, tenant_id, name, source_evidence_json, applied_resources_json, status, created_at, updated_at",
-      [tenantId, name, now],
+    const result = await this.#drizzleQuery<TakosumiDeploymentRow>(
+      this.#db.update(takosumiDeploymentRecords).set({
+        status: "destroyed",
+        appliedResourcesJson: [],
+        updatedAt: now,
+      }).where(
+        and(
+          eq(takosumiDeploymentRecords.tenantId, tenantId),
+          eq(takosumiDeploymentRecords.name, name),
+        ),
+      ).returning(),
     );
     const row = result.rows[0];
     return row ? rowToRecord(row) : undefined;
   }
 
   async remove(tenantId: string, name: string): Promise<boolean> {
-    const result = await this.#query<{ id: string }>(
-      "delete from takosumi_deployment_records where tenant_id = $1 and name = $2 returning id",
-      [tenantId, name],
+    const result = await this.#drizzleQuery<{ id: string }>(
+      this.#db.delete(takosumiDeploymentRecords).where(
+        and(
+          eq(takosumiDeploymentRecords.tenantId, tenantId),
+          eq(takosumiDeploymentRecords.name, name),
+        ),
+      ).returning({ id: takosumiDeploymentRecords.id }),
     );
     return result.rows.length > 0;
   }
 
   async listReferencedArtifactHashes(): Promise<Set<string>> {
-    const result = await this.#query<
+    const result = await this.#drizzleQuery<
       Pick<TakosumiDeploymentRow, "source_evidence_json" | "applied_resources_json">
     >(
-      "select source_evidence_json, applied_resources_json from takosumi_deployment_records",
+      this.#db.select({
+        source_evidence_json: takosumiDeploymentRecords.sourceEvidenceJson,
+        applied_resources_json: takosumiDeploymentRecords.appliedResourcesJson,
+      }).from(takosumiDeploymentRecords),
     );
     const hashes = new Set<string>();
     for (const row of result.rows) {
@@ -187,10 +208,14 @@ export class SqlTakosumiDeploymentRecordStore
     clearInterval(held.renewalTimer);
     this.#heldSqlLocks.delete(key);
     try {
-      await this.#query(
-        "delete from takosumi_deployment_record_locks " +
-          "where tenant_id = $1 and name = $2 and owner_token = $3",
-        [tenantId, name, held.ownerToken],
+      await this.#drizzleQuery(
+        this.#db.delete(takosumiDeploymentRecordLocks).where(
+          and(
+            eq(takosumiDeploymentRecordLocks.tenantId, tenantId),
+            eq(takosumiDeploymentRecordLocks.name, name),
+            eq(takosumiDeploymentRecordLocks.ownerToken, held.ownerToken),
+          ),
+        ),
       );
     } finally {
       this.#releaseLocalLock(key);
@@ -234,17 +259,28 @@ export class SqlTakosumiDeploymentRecordStore
     ownerToken: string,
   ): Promise<void> {
     while (true) {
-      const result = await this.#query<{ owner_token: string }>(
-        "insert into takosumi_deployment_record_locks " +
-          "(tenant_id, name, owner_token, locked_until, created_at, updated_at) " +
-          "values ($1, $2, $3, now() + ($4::integer * interval '1 millisecond'), now(), now()) " +
-          "on conflict (tenant_id, name) do update set " +
-          "owner_token = excluded.owner_token, " +
-          "locked_until = excluded.locked_until, " +
-          "updated_at = now() " +
-          "where takosumi_deployment_record_locks.locked_until <= now() " +
-          "returning owner_token",
-        [tenantId, name, ownerToken, this.#lockLeaseMs],
+      const result = await this.#drizzleQuery<{ owner_token: string }>(
+        this.#db.insert(takosumiDeploymentRecordLocks).values({
+          tenantId,
+          name,
+          ownerToken,
+          lockedUntil: leaseUntil(this.#lockLeaseMs),
+          createdAt: sql`now()`,
+          updatedAt: sql`now()`,
+        }).onConflictDoUpdate({
+          target: [
+            takosumiDeploymentRecordLocks.tenantId,
+            takosumiDeploymentRecordLocks.name,
+          ],
+          set: {
+            ownerToken: sql`excluded.owner_token`,
+            lockedUntil: sql`excluded.locked_until`,
+            updatedAt: sql`now()`,
+          },
+          setWhere: lte(takosumiDeploymentRecordLocks.lockedUntil, sql`now()`),
+        }).returning({
+          owner_token: takosumiDeploymentRecordLocks.ownerToken,
+        }),
       );
       if (result.rows[0]?.owner_token === ownerToken) return;
       await delay(this.#lockPollMs);
@@ -272,24 +308,83 @@ export class SqlTakosumiDeploymentRecordStore
     name: string,
     ownerToken: string,
   ): Promise<void> {
-    const result = await this.#query(
-      "update takosumi_deployment_record_locks set " +
-        "locked_until = now() + ($4::integer * interval '1 millisecond'), " +
-        "updated_at = now() " +
-        "where tenant_id = $1 and name = $2 and owner_token = $3",
-      [tenantId, name, ownerToken, this.#lockLeaseMs],
+    const result = await this.#drizzleQuery(
+      this.#db.update(takosumiDeploymentRecordLocks).set({
+        lockedUntil: leaseUntil(this.#lockLeaseMs),
+        updatedAt: sql`now()`,
+      }).where(
+        and(
+          eq(takosumiDeploymentRecordLocks.tenantId, tenantId),
+          eq(takosumiDeploymentRecordLocks.name, name),
+          eq(takosumiDeploymentRecordLocks.ownerToken, ownerToken),
+        ),
+      ),
     );
     if (result.rowCount === 0) {
       throw new Error("deploy lock lease is no longer held by this process");
     }
   }
 
-  #query<Row extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    parameters?: SqlParameters,
+  #drizzleQuery<Row extends Record<string, unknown> = Record<string, unknown>>(
+    query: DrizzleQuery,
   ): Promise<SqlQueryResult<Row>> {
-    return this.#client.query<Row>(sql, parameters);
+    const { sql: queryText, params } = query.toSQL();
+    return this.#client.query<Row>(queryText, params as SqlParameters);
   }
+}
+
+const takosumiDeploymentRecords = pgTable("takosumi_deployment_records", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull(),
+  name: text("name").notNull(),
+  sourceEvidenceJson: jsonb("source_evidence_json").$type<unknown>().notNull(),
+  appliedResourcesJson: jsonb("applied_resources_json").$type<unknown>()
+    .notNull(),
+  status: text("status").notNull(),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true })
+    .notNull(),
+  updatedAt: timestamp("updated_at", { mode: "string", withTimezone: true })
+    .notNull(),
+}, (table) => [
+  uniqueIndex("takosumi_deployment_records_tenant_name_unique").on(
+    table.tenantId,
+    table.name,
+  ),
+]);
+
+const takosumiDeploymentRecordLocks = pgTable(
+  "takosumi_deployment_record_locks",
+  {
+    tenantId: text("tenant_id").notNull(),
+    name: text("name").notNull(),
+    ownerToken: text("owner_token").notNull(),
+    lockedUntil: timestamp("locked_until", {
+      mode: "string",
+      withTimezone: true,
+    }).notNull(),
+    createdAt: timestamp("created_at", { mode: "string", withTimezone: true })
+      .notNull(),
+    updatedAt: timestamp("updated_at", { mode: "string", withTimezone: true })
+      .notNull(),
+  },
+);
+
+type DrizzleSqlBuilder = ReturnType<typeof createDrizzleSqlBuilder>;
+type DrizzleQuery = {
+  toSQL(): { readonly sql: string; readonly params: readonly unknown[] };
+};
+
+function createDrizzleSqlBuilder() {
+  return drizzle(async () => ({ rows: [] }), {
+    schema: {
+      takosumiDeploymentRecords,
+      takosumiDeploymentRecordLocks,
+    },
+  });
+}
+
+function leaseUntil(leaseMs: number) {
+  return sql`now() + (${leaseMs}::integer * interval '1 millisecond')`;
 }
 
 interface LocalLockEntry {

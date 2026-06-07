@@ -1,107 +1,99 @@
 # Takosumi Core Conformance
 
-> [`core-spec.md`](./core-spec.md) (2026-06-06 全面改訂: Space 直下 Installation DAG モデル) に対する適合状況
-> (conformance / gap) を記録します。 本書は正本 spec ではなく、 spec に対する現状の map です。 spec と矛盾した場合は
-> spec が優先します。
+> [`core-spec.md`](./core-spec.md) (2026-06-07 改訂: Space 直下の OpenTofu Capsule DAG 正本) に対する
+> 適合状況 (conformance / gap) を記録します。本書は正本 spec ではなく、実装と docs の現状 map です。
+> model、schema、API、UI、billing、backup、implementation phases の正本は `core-spec.md` にあります。
 
 ## 状態区分
 
 - **conformant**: 現状の code/test で満たしている。
-- **in-progress**: 当該 milestone で実装中。
-- **pending**: 後続 milestone。 未実装または未強制。
+- **in-progress**: 実装中、または一部 surface のみ実装済み。
+- **pending**: 未実装または未強制。
 
-## 実装 milestone
+## Milestones
 
-旧 spec (lanes モデル: App / Environment / InstallProfile) で実装済みの基盤は、 新 spec の語彙へ migrate して流用する。
-milestone は次のとおり。
+| milestone | 内容                                                                                                                       | 状態        |
+| --------- | -------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| M0        | Space 直下 OpenTofu Capsule DAG の正本 spec                                                                                | conformant  |
+| M1        | Single Worker / queue / Durable Object / runner container / R2 / D1 ledger                                                 | conformant  |
+| M2        | public contract 型 (Space / Source / Connection / Installation / Dependency / Run / Deployment / OutputSnapshot / Billing) | conformant  |
+| M3        | Drizzle ORM backed ledger definitions                                                                                      | conformant  |
+| M4        | operator default connections + CapabilityBinding + per-phase vault mint                                                    | conformant  |
+| M5        | Generated Root / official core-talk-files Capsules / plan-apply ledger                                                     | conformant  |
+| M6        | DependencySnapshot / variable_injection / stale propagation / RunGroup basic                                               | conformant  |
+| M7        | Policy basic + Activity + output projection                                                                                | conformant  |
+| M8        | `/api` surface + external install link + Dashboard MVP                                                                     | in-progress |
+| M9        | Capsule Compatibility / Normalizer / Gate                                                                                  | in-progress |
+| M10       | Billing credit ledger / reservation / usage capture                                                                        | in-progress |
+| M11       | Advanced remote_state / OutputShare / backup / drift                                                                       | in-progress |
 
-| milestone | 内容 | spec § |
-| --- | --- | --- |
-| M0 | spec 全面置換 + conformance reset + ecosystem 語彙更新 | 全体 |
-| M1 | §28 物理再構成 (worker/src + packages + runner-image + opentofu-modules) | §28 / §29 |
-| M2 | 新 contract 型 (Space / Installation / InstallConfig / CapabilityBinding / Dependency / OutputSnapshot / Run / RunGroup) | §4-§21 |
-| M3 | モデル移行: lanes 廃止、 §27 logical schema、 runs 統合、 Installation lease | §5 / §19 / §27 |
-| M4 | Connections 再編: operator defaults + CapabilityBinding 解決 | §8 / §9 |
-| M5 | install types 完成: core / opentofu_module / opentofu_root / app_source | §10 / §13 |
-| M6 | Dependency DAG + DependencySnapshot + variable_injection | §14 / §15 / §17 |
-| M7 | OutputSnapshot + stale propagation + RunGroup basic | §16 / §19 / §24 |
-| M8 | Policy basic + Activity | §25 |
-| M9 | `/api` surface + external install link + Space wire-up | §12 / §30 |
-| M10 | Dashboard (Space / Installations / Graph / Install flow) | §31 |
-| M11 | conformance 更新 + reference docs 追従 + 全体 gate | 全体 |
+## Current Map
 
----
+| 領域                                             | 状態        | 補足                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 正本 spec 採用 (Space 直下 OpenTofu Capsule DAG) | conformant  | `core-spec.md` は Generated Root HCL、credential mint、logical D1 schema、storage layout、billing、backup、API、UI、MVP、実装順序まで含む正本。                                                                                                                                                                                                                                                   |
+| public schema: Capsule                           | in-progress | `CapsuleCompatibilityReport` / `compatibility_check` Run type と API route を追加。SourceSnapshot files が渡された場合は static HCL analyzer が provider/resource/data source/provisioner findings を保存する。Runner-backed archive expansion と full Normalizer は未完了。                                                                                                                      |
+| public schema: InstallConfig                     | in-progress | Canonical docs use `modulePath` / `normalization`. Runtime cleanup remains: remove old internal compatibility aliases and branch points that are no longer public concepts.                                                                                                                                                                                                                       |
+| public schema: Installation status               | conformant  | Canonical status set is `pending` / `active` / `stale` / `error` / `disabled` / `destroyed`. Account-plane AppInstallation has a separate lifecycle.                                                                                                                                                                                                                                              |
+| Drizzle schema: logical D1 model                 | conformant  | Drizzle physical tables cover the logical ledger model in `core-spec.md`; some tables use compact JSON columns.                                                                                                                                                                                                                                                                                   |
+| Billing ledger schema                            | in-progress | BillingSettings (`disabled` / `showback` / `enforce`)、BillingAccount / Subscription / CreditBalance / UsageEvent / CreditReservation 型と Drizzle tables を追加。credit reservation の plan/apply enforcement は未完了。                                                                                                                                                                         |
+| Credential mint audit / security findings schema | in-progress | CredentialMintEvent / SecurityFinding 型と Drizzle tables を追加。Installation-bound provider mint (plan/apply/destroy) は non-secret audit row を永続化。source-phase git mint audit と SecurityFinding persistence は未完了。                                                                                                                                                                   |
+| Source / SourceSnapshot                          | conformant  | Git URL policy / commit pin / R2_SOURCE archive は既存実装を継続。                                                                                                                                                                                                                                                                                                                                |
+| Connection vault + per-phase mint                | conformant  | source -> git credential、build -> none、plan/apply/destroy -> provider credentials。Installation-bound provider mint は audit persistence 済み。                                                                                                                                                                                                                                                 |
+| Generated Root                                   | conformant  | `packages/rootgen` が provider alias / capability binding を反映。Runtime cleanup remains before the code is fully Capsule-only.                                                                                                                                                                                                                                                                  |
+| Capsule Normalizer minimal                       | in-progress | `StaticHclCapsuleCompatibilityAnalyzer` が `.tf` files から required_providers / backend / provider block / module source / output を scan し、Ready / Auto-capsulized / Needs patch / Unsupported を判定する。safe rewrite artifact 生成は未完了。                                                                                                                                               |
+| Capsule Gate minimal                             | in-progress | provider allowlist、resource allowlist、data source allowlist、provisioner policy、provider credential-in-source warning は static analyzer で実装。Runner-backed credential mint 前 enforcement と lockfile gate は未完了。                                                                                                                                                                      |
+| Compatibility API                                | in-progress | Canonical routes are registered: `POST /api/sources/:sourceId/compatibility-check` and `GET /api/compatibility-reports/:reportId`. The service now uses the Capsule analyzer seam; when SourceSnapshot files are unavailable it stores an explicit `capsule_source_files_unavailable` warning instead of pretending full analysis ran. Runner archive expansion is the remaining integration gap. |
+| Plan/Apply guards                                | conformant  | saved plan / plan digest / source snapshot / dependency snapshot / state generation guard は既存実装で強制。                                                                                                                                                                                                                                                                                      |
+| Policy                                           | in-progress | provider/resource/action/scope/quota basic は実装済み。Capsule Gate result と billing reservation layer の統合が未完了。                                                                                                                                                                                                                                                                          |
+| OutputShare / sensitive output                   | conformant  | explicit policy + resolver + value non-exposure。                                                                                                                                                                                                                                                                                                                                                 |
+| Backup / drift                                   | in-progress | artifact_export backup MVP と drift_check がある。provider_snapshot / custom_command は未実装。                                                                                                                                                                                                                                                                                                   |
+| Dashboard                                        | in-progress | Space / Installations / Graph / Install flow / Compatibility result / Plan summary / Billing basic。credit reservation UX は未完了。                                                                                                                                                                                                                                                              |
+| Logical code layout                              | in-progress | `core-spec.md` defines the canonical logical `worker/src/modules/*` layout. Current physical repository still has transitional `src/service/*` domains tracked outside the spec.                                                                                                                                                                                                                  |
+| wrangler shape                                   | in-progress | Spec defines the binding shape; realized operator resource IDs stay outside the public repo.                                                                                                                                                                                                                                                                                                      |
+| Backup / Export model                            | in-progress | Control backup and artifact_export are present. Provider snapshot and custom command modes are not complete.                                                                                                                                                                                                                                                                                      |
 
-## 1. milestone gap table
+## Security Invariant Map
 
-| 領域 | spec § | 状態 | 補足 |
-| --- | --- | --- | --- |
-| 正本 spec 採用 (Space 直下 Installation DAG モデル) | 全体 | conformant | M0 で全面置換。 |
-| 単一 Worker (fetch/queue/scheduled + DO + Container) | §3 / §22 | conformant | 旧 spec M0 から維持。 物理 layout の §28 準拠は M1。 |
-| async queue lifecycle + DLQ | §22 / §23 | conformant | queue + lease + DLQ が稼働 (旧実装からの流用)。 |
-| Container runner OpenTofu + provider mirror | §22 | conformant | runner image に OpenTofu 1.11.8、 filesystem mirror。 |
-| Source / SourceSnapshot | §6 / §7 | conformant | 旧 M1 実装を流用。 URL policy / webhook / polling / source_sync 稼働。 |
-| Connection vault + per-phase mint | §8 / §32 | conformant | SecretBlob seal + phase mint (source→git / build→空 / plan・apply→provider)。 |
-| 暗号化 state + generation guard | §20 / §32 | conformant | R2_STATE + current.json + StateSnapshot 世代管理 (旧 M2 実装を流用)。 |
-| **M1 物理再構成 (§28 layout)** | §28 / §29 | conformant | worker/src (entry/durable) + packages/{schema,rootgen,graph} + runner-image + opentofu-modules を §28 配置に移動、 binding/class 名を §29 に整合。 `src/service/domains/*` の `worker/src/modules/*` への移設は各 milestone でその domain を書き換える際に行う (M3+)。 |
-| M2 新 contract 型 | §4-§21 | conformant | `packages/schema/src/` に Space / Installation / InstallConfig / CapabilityBinding / Dependency / DependencySnapshot / OutputSnapshot / Run / RunGroup / Deployment を additive 定義 (`spaces.ts` / `installations.ts` / `capability-bindings.ts` / `dependencies.ts` / `output-snapshots.ts` / `runs.ts` / `deployments.ts` + `model_shapes_test.ts`)。 旧 lanes 型からの migrate は M3。 |
-| M3 モデル移行 (lanes 廃止 / §27 schema / runs 統合) | §5 / §19 / §27 | conformant | lanes (App/Environment/InstallProfile) 削除、 Space/InstallConfig/Installation (UNIQUE(space_id,name,environment)) store + service + /v1 routes、 単一 runs table (kind 列 + run_json、 SQL/D1)、 installation lease (`installation:{id}:{env}`)、 stateScope/R2 key を §20 に re-key、 D1 を §27 実テーブル化。 create-on-apply legacy path は削除 (Installation-first)。 |
-| M4 operator defaults + CapabilityBinding | §8 / §9 | conformant | Connection.scope (operator/space、 operator は spaceId なし + AAD `__operator__`)、 operator_connection_defaults CRUD (`/v1/operator-connection-defaults`、 unrestricted bearer のみ)、 ConnectionsService.resolveCapabilities (default/connection/manual/disabled + cross-space 拒否)、 vault mint の capability pool (caller 主張を信用せず id を再検証)。 manual values の module input 接続と rootgen capability alias は M5。 |
-| M5 install types (core / app_source 完成) | §10 / §13 | conformant | 公式 modules: core (provider-free 基盤、 4 標準 outputs) / cloudflare-worker-service / cloudflare-r2-storage / cloudflare-static-site / aws-s3-storage。 rootgen `generateInstallationRoot` が installType + 解決済み capability から §13 provider alias を生成 (**per-alias credential 分離は deferred** — 同一 provider の alias は env credential を共有)。 app_source は InstallConfig.build を credential-zero build phase に thread (template.build より優先)。 opentofu_root は snapshot を root として実行 (templateBinding 禁止)。 manual binding values は template 宣言済み input に限り variableMapping を override。 公式 seed: core / talk / files。 |
-| M6 Dependency DAG + variable_injection | §14 / §15 / §17 | conformant | dependencies domain (same-space / variable_injection のみ、 cycle 拒否 = takosumi-graph)、 plan 時 DependencySnapshot (strict=production / pinned)、 値は template inputs / raw variables に injection、 apply は invariant 9 検証 (dependency_snapshot_stale / _tampered)。 remote_state / published_output / cross_space は not_implemented (MVP 外)。 |
-| M7 OutputSnapshot + stale + RunGroup | §16 / §19 / §24 | conformant | apply が OutputSnapshot を記録 (spaceOutputs = 非 sensitive 全 outputs、 publicOutputs = allowlist projection、 raw は DO が暗号化して §26 key に書く)。 outputDigest 変化で downstream を stale 化。 RunGroup basic: space plan-update が topo 順に plan Run を発行、 status は member runs から計算 (orchestration daemon なし)。 |
-| M8 Policy basic + Activity | §25 / §27 | conformant | takosumi-policy package: provider allowlist (layer 4) / resource allowlist (layer 5、 InstallConfig.policy も評価) / action policy (layer 7: delete・replace → approval) を全 run に適用。 承認規則は「destroy / destructive change / template confirmation」のみ (M3 暫定の非-preview 一律承認は撤廃)。 scope boundary (layer 6) / quota (layer 10) は seam のみ (post-MVP)。 Activity: §27 audit_events (3 backends、 v37) + 主要操作の emission + GET /v1/spaces/:id/activity (secret / output 値は metadata に入れない)。 |
-| M9 `/api` surface + install link | §12 / §30 | conformant | §30 の `/api` surface に cutover (alias なし)。 connection 種別 subroutes (aws assume-role は 501)、 runs logs/events (MVP: diagnostics + audit)、 deployments get + rollback-plan、 output-shares は 501 surface。 internal seam (`/v1/plan-runs` / `/v1/apply-runs` / `/v1/runner-profiles` / `/v1/installations/:id` 読み) は accounts plane / CLI 用に /v1 のまま (公開語彙外)。 `/install` link は platform worker (accounts handler) で parse + URL policy 検証 + dashboard へ 302。 personal Space 自動作成は M10 で配線済み (session bootstrap `GET /v1/account/session/me` から fire-and-forget)。 |
-| M10 Dashboard | §31 | conformant | account-plane session-authed `/v1/control/*` pass-through (operations facade 経由、 dashboard は deploy-control bearer を持たない) + SolidJS views: Space selector / Installations (stale badge + depends-on) / Graph (topo layers) / Install from Git (4-step flow、 `/install` deep-link prefill) / Run summary + approve / RunGroup + approve-all / Activity / Connections (scope + operator defaults)。 Space membership 認可は post-MVP (単一 operator 前提、 module header に記載)。 |
-| M11 conformance 更新 + reference docs 追従 + 全体 gate | 全体 | conformant | reference docs を current 状態に refresh: 本 conformance §2 の invariant map file path を M1 後の path に更新 (該当 path の存在を検証)、 invariant 15 (log redaction) を現状どおり精密化 (source/build/dispatch redaction は稼働、 plan/apply stdout 汎用 scrubber は未強制)、 M2 row を conformant 化。 AGENTS.md Workspace tree を current layout (worker/ + packages/{schema,graph,policy,rootgen,…} + runner-image/ + opentofu-modules/ + dashboard/ + src/{service,runtime-agent,shared,cli} + deploy/) に更新し、 残る `src/service/*` → `worker/src/modules/*` consolidation は本書 M1 row で tracking。 RunnerProfile は public 語彙から外し internal execution profile として整理 (substrate/image/limits、 Connection + CapabilityBinding + policy layer に従属)。 gate: `bunx tsc --noEmit` (docs-only)。 |
-| Phase 8 advanced (OutputShare / published_output / remote_state / per-alias credential / control backup / drift_check) | §13 / §15 / §18 / §26 / §33 | conformant | OutputShare (§18: active-on-create [単一 operator 前提、 pending handshake は multi-tenant 後続]、 sensitive 共有は not_implemented) + published_output (cross-space、 plan/apply 両方で share 再検証 = output_share_revoked) + remote_state (same-space、 depStates dispatch → DO が producer state を復号検証して /work/deps/<name>.tfstate に 0444 で materialize) + §13 per-alias credential 分離 (TF_VAR_<provider>_<capability>_<arg> env、 cloudflare/aws の arg map、 値は env のみ・台帳不出) + §33 control backup (R2_BACKUPS、 gzip+seal — spec の .zst は workerd に zstd がないため .gz.enc に divergence、 secret/raw 値は bundle に含めない) + drift_check (§19 run type、 apply 不可・approval 不要、 changes>0 で installation.drift_detected activity、 TAKOSUMI_DRIFT_CHECK_ENABLED gated sweep)。 spec-extension routes: /api/spaces/:id/backups、 /api/installations/:id/drift-check (§30 外、 code comment 記録)。 service-data backup (§33 layer 2) は未実装。 |
+| #   | invariant                                              | 状態        | 補足                                                                                                                                                                            |
+| --- | ------------------------------------------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Public API returns no raw secret                       | conformant  | connection routes / output routes tests。                                                                                                                                       |
+| 2   | User source executes only in Runner Container          | conformant  | source sync / plan/apply dispatch は runner/container 境界。                                                                                                                    |
+| 3   | Provider credentials are root-only                     | in-progress | generated root/provider env 側は実装済み。Capsule gate enforcement は未完了。                                                                                                   |
+| 4   | Provider credentials are ephemeral                     | in-progress | run-scoped mint は実装済み。provider-specific TTL enforcement は継続。                                                                                                          |
+| 5   | Provider credentials are not normal tfvars files       | conformant  | provider env / generated root 側に閉じる。                                                                                                                                      |
+| 6   | Source phase receives Git credential only              | conformant  | vault phase mint。                                                                                                                                                              |
+| 7   | Normalize phase receives no provider credential        | in-progress | static analyzer runs without provider credentials. Runner-backed Normalizer/Gate phase wiring remains to be enforced end-to-end.                                                |
+| 8   | Build phase receives build inputs only                 | conformant  | vault phase mint rejects credential request。                                                                                                                                   |
+| 9   | Plan/apply phase receives provider credentials only    | conformant  | vault phase mint。                                                                                                                                                              |
+| 10  | Capsule Gate runs before provider credential mint      | in-progress | Capsule analyzer exists and API stores findings; queue/runner lifecycle must still enforce Gate success before plan/apply provider credential mint.                             |
+| 11  | Apply uses saved plan                                  | conformant  | async run lifecycle tests。                                                                                                                                                     |
+| 12  | Apply verifies plan digest                             | conformant  | async run lifecycle tests。                                                                                                                                                     |
+| 13  | Apply verifies source snapshot                         | conformant  | apply guard。                                                                                                                                                                   |
+| 14  | Apply verifies compatibility report                    | pending     | static CompatibilityReport 保存済み。plan/apply guard 統合が必要。                                                                                                              |
+| 15  | Apply verifies dependency snapshot                     | conformant  | strict freshness / digest guard。                                                                                                                                               |
+| 16  | Apply verifies state generation                        | conformant  | generation guard。                                                                                                                                                              |
+| 17  | Output publication uses allowlist                      | conformant  | output projection。                                                                                                                                                             |
+| 18  | Sensitive output sharing requires explicit policy      | conformant  | OutputShare sensitive policy。                                                                                                                                                  |
+| 19  | Cross-Space sharing uses OutputShare                   | conformant  | published_output + OutputShare lifecycle。                                                                                                                                      |
+| 20  | State, plan, raw outputs are encrypted artifacts       | conformant  | R2 encrypted artifacts。                                                                                                                                                        |
+| 21  | Logs pass through redaction                            | conformant  | source/build/plan/apply/destroy redaction。                                                                                                                                     |
+| 22  | Destroy uses destroy plan and approval                 | conformant  | destroy_plan -> approval -> destroy_apply。                                                                                                                                     |
+| 23  | Credential mint is audited                             | in-progress | Installation-bound provider mints persist non-secret CredentialMintEvent rows before runner dispatch. source-phase git mint audit / legacy unscoped mint audit remain pending。 |
+| 24  | Provider install uses allowlist/mirror/lockfile policy | in-progress | allowlist/mirror present; lockfile gate pending。                                                                                                                               |
 
-### 意図的な divergence (gap ではない)
+## Implementation Cleanup Before Completion
 
-- Postgres/D1 の物理テーブルは既存規約の `takosumi_` prefix を維持 (D1 は素の §27 名)。 §27 名は logical schema。
-- `Deployment.sourceSnapshotId` / `outputSnapshotId` は §27 では NOT NULL だが、 raw plan path の残存 (M9 で削除) と OutputSnapshot 未実装 (M7) の間 optional。
-- `Run.installationId` / `environment` は §27 では NOT NULL だが、 Source-scoped な `source_sync` 行のため optional。
-- 内部 run 型 (PlanRun/ApplyRun) は internal 実装語彙として残る (public は §19 Run projection のみ)。
-- (解消済み M8) 承認規則は §25 action policy へ移行: destroy / destructive change / template confirmation のみが approval を要求 (M1 で binding 名を §29 に揃える。 realized operator config の追従は
-  `takosumi-private/platform/wrangler.toml` 側の operator 作業)。
+- Drizzle physical tables use compact JSON ledger columns; `core-spec.md` names the logical records.
+- Source-scoped `source_sync` rows still allow optional `installationId` / `environment` even though installation-bound
+  run rows are expected to carry both.
+- Current physical source tree still includes transitional service domains while the canonical logical layout is
+  `worker/src/modules/*`.
 
----
+## Next Work
 
-## 2. security invariant map
-
-各 invariant (§32) を enforcing code / test に map します。 未強制のものは pending と記します。
-(M1 物理再構成は完了済み。 worker/src / packages / runner-image へ移動した path は更新済み。 `src/service/domains/*` は
-まだ consolidation 途中なので §28 の worker/src/modules ではなく現行の src/service path を指す。)
-
-| # | invariant | 状態 | enforcing code / test |
-| --- | --- | --- | --- |
-| 1 | Public API returns no raw secret | conformant | `src/service/api/deploy_control_connection_routes_test.ts`。 |
-| 2 | User source build runs in Container | conformant | runner container (`runner-image/`)。 Worker は build を実行しない。 |
-| 3 | Build phase receives build inputs only | conformant | build mint 常に空。 vault `mintForPhase` + `phase_mint_test.ts`。 |
-| 4 | Source phase receives Git credential only | conformant | source phase mint を git-kind に限定。 `src/service/adapters/vault/mod.ts`。 |
-| 5 | Plan/apply phase receives provider credentials only | conformant | plan/apply/destroy は provider のみ。 vault mint policy で強制。 |
-| 6 | Apply uses saved plan | conformant | reviewed `tfplan` artifact を復元して apply。 `async_run_lifecycle_test.ts`。 |
-| 7 | Apply verifies plan digest | conformant | expected guard 検証。 `async_run_lifecycle_test.ts`。 |
-| 8 | Apply verifies source snapshot | conformant | apply 時の snapshot id / digest 再検証。 |
-| 9 | Apply verifies dependency snapshot | conformant | `#verifyDependencySnapshot` (strict freshness + valuesDigest tamper check)。 `dependency_run_test.ts`。 |
-| 10 | Apply verifies state generation | conformant | generation guard。 `installation_run_test.ts` / `apply_lease_test.ts`。 |
-| 11 | Output publication uses allowlist | conformant | output projection allowlist (`src/service/domains/outputs/projection.ts`)。 OutputSnapshot 化は M7。 |
-| 12 | Sensitive output sharing requires explicit policy | conformant | sensitive flagged 出力は spaceOutputs / publicOutputs のどちらにも入らない (leak test in `installation_run_test.ts`)。 explicit 共有 policy は OutputShare (MVP 外) で導入。 |
-| 13 | Cross-Space sharing uses OutputShare | conformant | published_output + active OutputShare のみ cross-space を許可 (plan/apply 両方で再検証)。 `output-shares/mod_test.ts` / `dependency_run_test.ts`。 |
-| 14 | State, plan, raw outputs are encrypted artifacts | conformant | state/plan/raw outputs すべて暗号化 artifact (raw outputs は DO が §26 key に seal、 `runner_state_r2_test.ts`)。 |
-| 15 | Logs pass through redaction | in-progress | source phase の git credential 出力 (`redactCredentialOutput`) と build phase 出力 (`redactBuildOutput` = 既知の全 provider / git credential env 名、 `runner-image/entrypoint.ts`)、 worker dispatch error の defense-in-depth redaction (`worker/src/handler.ts` `redactedDispatchError`)、 output projection + activity metadata (値なし) は稼働。 **未強制**: plan/apply phase の tofu stdout 全文に対する汎用 scrubber は未導入 (現状は既知 credential env 代入 `NAME=...` の strip のみで、 それ以外の形で echo された provider token は捕捉しない)。 網羅は post-MVP hardening。 |
-| 16 | Destroy uses destroy plan and approval | conformant | destroy 2-phase (destroy_plan → approval → destroy_apply)。 |
-
----
-
-## 3. enforcing artifacts (reference)
-
-- URL policy: `src/service/domains/sources/url-policy.ts` (+ `url-policy_test.ts`)。
-- vault mint / seal: `src/service/adapters/vault/mod.ts` (+ `phase_mint_test.ts`)。
-- async run lifecycle (digest / generation guard / immutable plan artifact):
-  `src/service/domains/deploy-control/async_run_lifecycle_test.ts`。
-- state encryption: `worker/src/state_crypto.ts`。
-- coordination lease: `worker/src/durable/CoordinationObject.ts`。
-- output projection: `src/service/domains/outputs/projection.ts`。
-- generated root: `packages/rootgen/src/mod.ts`。
-- forge 非依存 guard: root `scripts/check-no-legacy-names.mjs`。
+1. Wire SourceSnapshot archive expansion in the Runner Container into `readCapsuleSourceFiles`, then run the static HCL scanner / Normalizer / Gate before provider credential mint.
+2. Thread Capsule Compatibility Report / Gate findings into policy evaluation.
+3. Complete source-phase git mint audit / legacy unscoped mint audit coverage.
+4. Implement billing mode resolution: `disabled` hides billing, `showback` records estimates/usage without blocking, `enforce` gates apply by credit reservation.
+5. Add lockfile gate enforcement for provider supply chain policy.

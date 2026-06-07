@@ -24,6 +24,8 @@
     "db:migrate:dry-run": "bun src/service/scripts/db-migrate.ts --dry-run",
     "db:migrate:down": "bun src/service/scripts/db-migrate-down.ts",
     "db:migrate:rollback": "bun src/service/scripts/db-migrate-down.ts",
+    "db:drizzle:generate:d1": "drizzle-kit generate --config drizzle.config.d1.ts",
+    "db:drizzle:generate:postgres": "drizzle-kit generate --config drizzle.config.postgres.ts",
     "accounts": "bun packages/cli/src/main.ts",
     "docs:build": "cd docs && bun run build",
     "docs:dev": "cd docs && bun run dev",
@@ -34,7 +36,8 @@
   "dependencies": {
     "@cloudflare/containers": "^0.3.6",
     "commander": "^12.1.0",
-    "hono": "^4.12.4",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.9",
     "pg": "^8.11.0",
     "yaml": "^2.8.2"
   },
@@ -42,6 +45,7 @@
     "@types/bun": "^1.2.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",
+    "drizzle-kit": "^0.31.10",
     "typescript": "^5.7.0",
     "wrangler": "^4.61.0"
   }

@@ -25,6 +25,7 @@ import {
   driftSweep,
   type DriftSweepOperations,
 } from "../../worker/src/scheduled/drift.ts";
+import { constantTimeEqualsString } from "../../src/service/shared/constant_time.ts";
 
 export { CoordinationObject, OpenTofuRunnerObject };
 
@@ -65,6 +66,9 @@ const runQueueConsumer = createDeployControlQueueConsumer();
 export default {
   async fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/internal/platform/hardening-gates") {
+      return handleHardeningGatesRequest(request, env);
+    }
     // Source webhook surface (Core Specification §6). This is a NEW top-level
     // prefix the accounts handler does not own; handle it here via the
     // deploy-control service seam BEFORE delegating to the accounts handler.
@@ -87,6 +91,95 @@ export default {
     }
   },
 };
+
+const HARDENING_GATE_REF_PREFIX = "git+";
+const HARDENING_GATE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+
+export interface ProductionHardeningGateResult {
+  readonly ok: boolean;
+  readonly enforced: boolean;
+  readonly checks: {
+    readonly containerSmoke: ProductionHardeningCheck;
+    readonly egressEnforcement: ProductionHardeningCheck;
+  };
+}
+
+export interface ProductionHardeningCheck {
+  readonly ok: boolean;
+  readonly evidenceRef?: string;
+  readonly evidenceDigest?: string;
+  readonly reason?: string;
+}
+
+export function evaluateProductionHardeningGates(
+  env: CloudflareWorkerEnv,
+): ProductionHardeningGateResult {
+  const enforced = env.TAKOSUMI_PRODUCTION_HARDENING_GATE === "enforce";
+  const checks = {
+    containerSmoke: evidenceCheck(
+      env.TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF,
+      env.TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST,
+    ),
+    egressEnforcement: evidenceCheck(
+      env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF,
+      env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST,
+    ),
+  };
+  return {
+    ok: checks.containerSmoke.ok && checks.egressEnforcement.ok,
+    enforced,
+    checks,
+  };
+}
+
+function handleHardeningGatesRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Response {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return Response.json({ error: "method not allowed" }, { status: 405 });
+  }
+  const token = typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
+    ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
+    : undefined;
+  if (!token) return Response.json({ error: "not found" }, { status: 404 });
+  const bearer = bearerFromAuthorization(request.headers.get("authorization") ?? "");
+  if (!bearer || !constantTimeEqualsString(bearer, token)) {
+    return Response.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  const result = evaluateProductionHardeningGates(env);
+  const status = result.enforced && !result.ok ? 503 : 200;
+  if (request.method === "HEAD") return new Response(null, { status });
+  return Response.json(result, { status });
+}
+
+function evidenceCheck(
+  rawRef: unknown,
+  rawDigest: unknown,
+): ProductionHardeningCheck {
+  const evidenceRef = typeof rawRef === "string" ? rawRef.trim() : "";
+  const evidenceDigest = typeof rawDigest === "string" ? rawDigest.trim() : "";
+  if (!evidenceRef) return { ok: false, reason: "missing_evidence_ref" };
+  if (!evidenceRef.startsWith(HARDENING_GATE_REF_PREFIX)) {
+    return {
+      ok: false,
+      evidenceRef,
+      reason: "evidence_ref_must_be_git_ref",
+    };
+  }
+  if (!evidenceDigest) {
+    return { ok: false, evidenceRef, reason: "missing_evidence_digest" };
+  }
+  if (!HARDENING_GATE_DIGEST_PATTERN.test(evidenceDigest)) {
+    return {
+      ok: false,
+      evidenceRef,
+      evidenceDigest,
+      reason: "evidence_digest_must_be_sha256",
+    };
+  }
+  return { ok: true, evidenceRef, evidenceDigest };
+}
 
 const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
 

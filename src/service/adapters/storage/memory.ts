@@ -25,8 +25,8 @@ import {
 } from "./memory/state.ts";
 import {
   MemoryGroupStore,
+  MemoryMembershipSpaceStore,
   MemorySpaceMembershipStore,
-  MemorySpaceStore,
 } from "./memory/space_stores.ts";
 import {
   MemoryProviderObservationStore,
@@ -128,7 +128,7 @@ class MemoryStorageTransaction implements StorageTransaction {
     );
 
     this.space = {
-      spaces: new MemorySpaceStore(state.space.spaces),
+      spaces: new MemoryMembershipSpaceStore(state.space.spaces),
       groups: new MemoryGroupStore(state.space.groups),
       spaceMemberships: new MemorySpaceMembershipStore(
         state.space.spaceMemberships,

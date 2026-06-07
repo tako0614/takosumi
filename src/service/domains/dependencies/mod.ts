@@ -38,7 +38,10 @@ import type {
   DependencyVisibility,
 } from "takosumi-contract/dependencies";
 import { detectCycle, type GraphEdge } from "takosumi-graph";
-import { OpenTofuControllerError, requireNonEmptyString } from "../deploy-control/errors.ts";
+import {
+  OpenTofuControllerError,
+  requireNonEmptyString,
+} from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import {
   type ActivityRecorder,
@@ -82,8 +85,10 @@ export class DependenciesService {
 
   constructor(dependencies: DependenciesServiceDependencies) {
     this.#store = dependencies.store;
-    this.#newId = dependencies.newId ??
-      ((prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`);
+    this.#newId =
+      dependencies.newId ??
+      ((prefix) =>
+        `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`);
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
   }
@@ -102,7 +107,9 @@ export class DependenciesService {
    * Every other combination is rejected. The edge must not create a cycle, and a
    * self-edge is rejected for all modes.
    */
-  async createDependency(request: CreateDependencyRequest): Promise<Dependency> {
+  async createDependency(
+    request: CreateDependencyRequest,
+  ): Promise<Dependency> {
     requireNonEmptyString(request.spaceId, "spaceId");
     requireNonEmptyString(
       request.producerInstallationId,
@@ -263,10 +270,13 @@ export class DependenciesService {
         share.status !== "active" ||
         share.fromSpaceId !== producer.spaceId ||
         share.producerInstallationId !== producer.id
-      ) continue;
+      )
+        continue;
       for (const entry of share.outputs) {
         // The consumer references the SHARED name the grant exposes: the alias
-        // when set, otherwise the producer output name.
+        // when set, otherwise the producer output name. Sensitive entries are
+        // allowed here as grants; the deploy controller later requires a
+        // sensitive output resolver before it can inject a value.
         covered.add(entry.alias ?? entry.name);
       }
     }
@@ -353,7 +363,8 @@ function assertSupportedModeVisibility(
   mode: DependencyMode,
   visibility: DependencyVisibility,
 ): void {
-  const ok = (mode === "variable_injection" && visibility === "space") ||
+  const ok =
+    (mode === "variable_injection" && visibility === "space") ||
     (mode === "remote_state" && visibility === "space") ||
     (mode === "published_output" && visibility === "cross_space");
   if (ok) return;

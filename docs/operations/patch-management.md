@@ -1,153 +1,113 @@
 # Operations: Patch Management
 
-> このページでわかること: Takos operated environments の container base image、
-> OS-level CVE、runtime dependency update、例外処理、週次自動 scan / update
-> path。
+> このページでわかること: Takosumi platform worker、dashboard、runner
+> container、Bun/npm dependencies、operator reference template の patch
+> management 方針。
 
-この runbook は public managed Takos launch readiness (ROADMAP.md Managed Takos
-Offering gap audit) の patch management 正本です。Takos は 基本 Web/API surface
-として運用し、command-line tooling は primary customer UX
-として扱いません。Takosumi CLI / control plane から発生する更新は
-`takosumi` repo で扱い、Takos product shell は
-app / git / agent / deploy template の patch gate を所有します。
+この runbook は **Takosumi operated environment** の patch management 正本です。
+operator が production / staging で deploy するのは単一 Cloudflare Worker
+(Takosumi platform worker) です。Takos product worker や bundled apps の
+patch gate はそれぞれの product docs が所有します。
 
 ## Scope
 
-| Area                             | Owner                  | Automatic path                                  |
-| -------------------------------- | ---------------------- | ----------------------------------------------- |
-| Takos shell submodule pointers   | `takos/`               | `.github/dependabot.yml` `gitsubmodule` updates |
-| GitHub Actions versions          | each owning repo       | Dependabot `github-actions` updates             |
-| Takos worker container base image | `takos/`               | Dependabot `docker` for `/deploy/docker`        |
-| Takos Git container base image    | `takos/containers/git` | Dependabot `docker` for `/containers/git`       |
-| Takos agent container base image  | `takos/containers/agent` | Dependabot `docker` for `/containers/agent`   |
-| Takos agent Rust deps             | `takos/containers/agent` | Dependabot `cargo` for `/containers/agent`    |
-| Bun/npm dependencies              | each Bun package root  | `bun outdated` during patch window              |
-| OS package CVEs                  | owning Dockerfile repo | weekly Trivy filesystem scan + image rebuild    |
+| Area | Owner | Patch path |
+| --- | --- | --- |
+| Platform worker source | `takosumi/worker` / `takosumi/src/service` | Takosumi service checks + platform deploy |
+| Dashboard SPA | `takosumi/dashboard` | dashboard typecheck / build |
+| Runner image | `takosumi/runner-image/Dockerfile` | image rebuild + Cloudflare Container smoke |
+| OpenTofu modules | `takosumi/opentofu-modules` | module tests / fixture plan where available |
+| Bun/npm dependencies | each Takosumi package root | `bun outdated`, `bun update`, checks |
+| Operator realized config | `takosumi-private/platform/wrangler.toml` | private repo review; no secrets committed |
 
-private な deploy credential と環境別 secret rotation は operator vault
-(= operator host の `/root/.takos-secrets/<env>/`) が所有します。本 public policy
-は private run log を境界経由でのみ参照し、secret 名や provider account id は
-載せません。
+private deploy credentials and rotation evidence live outside public repos in
+the operator vault / approved run log. Public docs may mention secret classes
+and commands, but never secret values, provider account ids, or raw object keys.
 
 ## Base Image Rules
 
-- Dockerfile は `latest`、未 tag image、`oven/bun:1` のような major のみの
-  tag を使わないこと。
-- 言語 runtime image は minor / patch tag (例: `oven/bun:1.3.14` や
-  `rust:1.94-bookworm`) を使うこと。
-- `debian:bookworm-slim` のような distro suite tag は、image を週次で rebuild し
-  Trivy scan evidence が green の場合のみ許可。
-- deploy manifest の production image 参照は build / promotion 後に immutable
-  digest ref にすること。
-- Dockerfile の package install は Debian 系で `--no-install-recommends`、
-  Alpine 系で `--no-cache` を使うこと。
+- Runner Dockerfile must not use `latest` or floating major-only tags.
+- Language/runtime images should be pinned to a patch or digest where practical.
+- Distro suite tags are allowed only with scheduled rebuild and vulnerability scan evidence.
+- Production container references in realized config should be digest-pinned after promotion.
+- Package installs must avoid unnecessary packages (`--no-install-recommends` or equivalent).
 
-これらのルールに対する gate:
+## Weekly Patch Window
 
-```bash
-cd takos
-bun run validate:patch-management
-```
+Default window:
 
-`validate:patch-management` は Takos release gate の一部です。
+- Tuesday 13:00-15:00 JST: dependency / image update review and staging deploy
+- Wednesday 13:00-15:00 JST: production promotion if staging is green
 
-## Weekly Automation
+Emergency window:
 
-`.github/workflows/patch-management.yml` は毎週火曜 04:24 UTC と手動 dispatch
-で実行されます。
+- exploited critical CVE
+- suspected secret exposure
+- internet-facing remote code execution path
+- provider-mandated patch or deprecation deadline
 
-実行内容:
+During emergency patch work, unrelated platform worker deploys are frozen.
 
-- `bun run validate:patch-management` による policy validation
-- HIGH / CRITICAL 脆弱性と Dockerfile misconfiguration を対象とした Trivy
-  filesystem scan
+## Required Checks
 
-Dependabot が update PR を作る対象:
-
-- `takos/` の submodule pointer
-- GitHub Actions のバージョン
-- `takos/` / `takos/containers/git` / `takos/containers/agent` の Docker base image
-- `takos/containers/agent` の Rust 依存
-
-Bun/npm package は週次 patch window 中、owning repo で以下を実行します:
+Before staging promotion:
 
 ```bash
-bun outdated
-bun update
-bun run check
-bun run test
-bun run lint
-bun run fmt:check
+cd takosumi
+bunx tsc --noEmit
+bun test
+cd dashboard && bunx tsc --noEmit && bun run build
 ```
 
-該当 Bun package root が全ての task を定義していない場合は、その repo の `AGENTS.md`
-にある最も近い local equivalent を実行します。
+When docs or public contract changed:
 
-## Patch Window
+```bash
+cd takosumi
+bun run docs:build
+cd ..
+bun run check:architecture
+bun run check:architecture:strict
+bun run check:design-docs
+bun run check:legacy-names
+```
 
-default の週次 patch window:
-
-- 火曜 13:00-15:00 JST: staging update PR の review
-- 水曜 13:00-15:00 JST: staging が green なら production promotion
-
-emergency patch window:
-
-- 現実に exploit されている CVE、既知の secret exposure、または internet-facing
-  service の public remote code execution の場合は即時に開く。
-- emergency patch を検証している間は関係ない deploy を freeze する。
+When runner image changed, add a Cloudflare Container smoke in staging using
+the deployed `OpenTofuRunnerObject`, not only local Docker.
 
 ## Severity SLA
 
-| Severity                                 | Target      | Required action                                      |
-| ---------------------------------------- | ----------- | ---------------------------------------------------- |
-| Critical exploited / internet-facing RCE | 24h         | emergency patch, staging proof, production promotion |
-| Critical not known exploited             | 72h         | patch PR, rebuild image, production promotion        |
-| High                                     | 7 days      | normal patch window                                  |
-| Medium                                   | 30 days     | next planned dependency refresh                      |
-| Low                                      | best effort | batch with routine updates                           |
+| Severity | Target | Required action |
+| --- | --- | --- |
+| Critical exploited / internet-facing RCE | 24h | emergency patch, staging proof, production promotion |
+| Critical not known exploited | 72h | patch PR, rebuild affected artifact, production promotion |
+| High | 7 days | normal patch window |
+| Medium | 30 days | next dependency refresh |
+| Low | best effort | batch with routine updates |
 
-runtime に該当パッケージが存在しない、または脆弱な経路に到達不能なため CVE が
-exploit 不可と判断できる場合は、time-boxed な exception を記録します。
-
-## Exception Record
-
-exception には以下を含めます:
-
-- CVE id または advisory id
-- 影響を受ける image / 依存 / package
-- 影響を受ける service
-- 一時的に受容する理由
-- compensating control
-- owner
-- 期限 (expiry date)
-- tracking issue または private run log のリンク
-
-30 日を超える exception は明示的な product owner 承認が必要です。
+If the affected package is not present in the runtime path or is unreachable,
+record a time-boxed exception with owner and expiry.
 
 ## Promotion Checklist
 
-patch PR を promote する前に:
-
-- owning repo で dependency / image update PR が merge 済み
-- 更新された base image で Docker image を rebuild
-- Trivy scan が green、または exception が記録されている
-- service-local test が green
-- `takos` release gate が green
-- staging deploy が 1 observation window healthy
-- rollback image digest が判明している
+- dependency / image update PR is merged
+- affected artifact is rebuilt
+- tests / typecheck / dashboard build are green
+- runner smoke is green when runner changed
+- staging platform worker is healthy for one observation window
+- rollback worker version / commit / image digest is known
+- private deploy log records operator, timestamp, command, and smoke result
 
 ## Evidence
 
 public evidence:
 
-- Dependabot PR のリンク
-- `patch-management` workflow の run
-- `validate:patch-management` の出力
+- PR link
+- CI / local gate summary
 - release gate summary
 
 private evidence:
 
 - provider account id
 - secret rotation log
-- cloud billing account evidence
-- production deploy の operator log
+- production deploy operator log
+- Cloudflare worker version id and runner image digest

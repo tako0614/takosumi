@@ -381,7 +381,7 @@ async function seedOutputShareScenario(): Promise<{
   };
 }
 
-test("output-shares create / list / revoke happy path (§18)", async () => {
+test("output-shares create / approve / list / revoke happy path (§18)", async () => {
   const { app, fromSpaceId, toSpaceId, producerInstallationId } =
     await seedOutputShareScenario();
 
@@ -398,10 +398,19 @@ test("output-shares create / list / revoke happy path (§18)", async () => {
   });
   expect(createRes.status).toEqual(201);
   const created = (await createRes.json()).share as OutputShare;
-  expect(created.status).toEqual("active");
+  expect(created.status).toEqual("pending");
   expect(created.outputs).toEqual([
     { name: "bucket_name", alias: "bucket", sensitive: false },
   ]);
+
+  const approveRes = await app.request(
+    `/api/output-shares/${created.id}/approve`,
+    { method: "POST", headers: headers() },
+  );
+  expect(approveRes.status).toEqual(200);
+  const approved = (await approveRes.json()).share as OutputShare;
+  expect(approved.status).toEqual("active");
+  expect(approved.acceptedAt).toBeDefined();
 
   // List from the granting Space surfaces the share.
   const listFrom = await app.request(
@@ -475,20 +484,62 @@ test("output-shares revoke 404 for a missing share (§18)", async () => {
   expect(res.status).toEqual(404);
 });
 
-test("installation PATCH and DELETE are 501 (use destroy-plan; §30 MVP)", async () => {
+test("installation PATCH safely updates status only (§30)", async () => {
   const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
   const patch = await app.request(`/api/installations/${installationId}`, {
     method: "PATCH",
     headers: headers({ "content-type": "application/json" }),
-    body: "{}",
+    body: JSON.stringify({ status: "stale" }),
   });
-  expect(patch.status).toEqual(501);
+  expect(patch.status).toEqual(200);
+  expect((await patch.json()).installation.status).toEqual("stale");
+
+  const rejectedDestroyState = await app.request(
+    `/api/installations/${installationId}`,
+    {
+      method: "PATCH",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ status: "destroyed" }),
+    },
+  );
+  expect(rejectedDestroyState.status).toEqual(400);
+  expect((await rejectedDestroyState.json()).error.message).toContain(
+    "destroy flow",
+  );
+
+  const rejectedField = await app.request(
+    `/api/installations/${installationId}`,
+    {
+      method: "PATCH",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ installConfigId: "cfg_other" }),
+    },
+  );
+  expect(rejectedField.status).toEqual(400);
+  expect((await rejectedField.json()).error.message).toContain(
+    "unknown_field",
+  );
+});
+
+test("installation DELETE creates a destroy-plan run instead of deleting state (§30 / §23)", async () => {
+  const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
   const del = await app.request(`/api/installations/${installationId}`, {
     method: "DELETE",
     headers: headers(),
   });
-  expect(del.status).toEqual(501);
-  expect((await del.json()).error.message).toContain("destroy-plan");
+  expect(del.status).toEqual(202);
+  const payload = await del.json() as PlanRunResponse;
+  expect(payload.planRun.installationId).toEqual(installationId);
+  expect(payload.planRun.operation).toEqual("destroy");
+  expect(payload.planRun.status).toEqual("succeeded");
+
+  const runRes = await app.request(`/api/runs/${payload.planRun.id}`, {
+    headers: headers(),
+  });
+  expect(runRes.status).toEqual(200);
+  const run = (await runRes.json() as { run: Run }).run;
+  expect(run.type).toEqual("destroy_plan");
+  expect(run.status).toEqual("waiting_approval");
 });
 
 test("deployControl e2e rejects mismatched plan digest guard", async () => {

@@ -14,7 +14,13 @@ export type EntitlementKey = string;
 export type SpaceRole = "owner" | "admin" | "member" | "viewer";
 export type MembershipStatus = "active" | "invited" | "suspended";
 
-export interface Space {
+/**
+ * The membership domain's own space record (a container for groups and
+ * memberships, keyed by {@link SpaceId}). This is intentionally distinct from
+ * the Core-Spec `Space` (owner namespace `@handle`) owned by `domains/spaces`;
+ * the two model different concerns and must not be conflated.
+ */
+export interface MembershipSpace {
   readonly id: SpaceId;
   readonly name: string;
   readonly metadata: Record<string, unknown>;
@@ -50,7 +56,7 @@ export interface EntitlementDecision {
   readonly reason: string;
 }
 
-export interface CreateSpaceCommand {
+export interface CreateMembershipSpaceCommand {
   readonly actor: TakosumiActorContext;
   readonly spaceId?: SpaceId;
   readonly name?: string;
@@ -80,7 +86,7 @@ export interface CheckEntitlementQuery {
   readonly key: EntitlementKey;
 }
 
-export interface ListSpacesQuery {
+export interface ListMembershipSpacesQuery {
   readonly actor: TakosumiActorContext;
 }
 
@@ -89,7 +95,9 @@ export interface ListGroupsQuery {
   readonly spaceId: SpaceId;
 }
 
-export function toInternalSpaceSummary(space: Space): InternalSpaceSummary {
+export function toInternalSpaceSummary(
+  space: MembershipSpace,
+): InternalSpaceSummary {
   return {
     id: space.id,
     name: space.name,

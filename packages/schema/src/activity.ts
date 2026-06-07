@@ -1,9 +1,8 @@
 /**
- * Activity audit ledger contract (Core Specification §27 `audit_events` / §34
- * "Activity").
+ * Activity audit ledger contract.
  *
  * Activity is the Space-scoped audit trail surfaced in the dashboard's Activity
- * view (§31). One {@link ActivityEvent} records a single state-changing action
+ * view. One {@link ActivityEvent} records a single state-changing action
  * inside a Space — an Installation created, a plan / apply / destroy run reaching
  * a milestone, a Dependency added, stale propagation, a RunGroup created — keyed
  * by the Space so the dashboard can list a Space's recent activity.
@@ -14,20 +13,20 @@
  *
  * Security invariant: an ActivityEvent records WHAT happened, not secrets.
  * `metadata` carries identifiers, names, digests, and counts only — never
- * credential material and never resolved output VALUES (spec §9 / §16: secret
- * outputs and credential values are never stored as public ledger values).
+ * credential material and never resolved output VALUES: secret outputs and
+ * credential values are never stored as public ledger values.
  */
 
 export const SPACE_ACTIVITY_PATH = (spaceId: string): string =>
   `/api/spaces/${encodeURIComponent(spaceId)}/activity`;
 
-/** Default page size for an Activity listing when no limit is given (§27). */
+/** Default page size for an Activity listing when no limit is given. */
 export const ACTIVITY_DEFAULT_LIMIT = 100;
 /** Maximum page size accepted on the Activity listing route. */
 export const ACTIVITY_MAX_LIMIT = 500;
 
 /**
- * One Space-scoped audit-trail entry (§27 `audit_events` row).
+ * One Space-scoped audit-trail entry (`audit_events` row).
  *
  *   - `id`         — service-assigned event id.
  *   - `spaceId`    — the owning Space (the listing key).

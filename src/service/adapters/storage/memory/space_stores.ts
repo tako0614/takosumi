@@ -1,29 +1,37 @@
-// In-memory implementations of the space domain stores
+// In-memory implementations of the membership domain stores
 // (spaces / groups / space memberships). Each class implements the
-// matching store contract from `domains/space/stores.ts` and operates
+// matching store contract from `domains/membership/stores.ts` and operates
 // against a Map provided by the surrounding transaction.
 
 import type {
   GroupStore,
+  MembershipSpaceStore,
   SpaceMembershipStore,
-  SpaceStore,
-} from "../../../domains/space/stores.ts";
+} from "../../../domains/membership/stores.ts";
 import type {
   AccountId,
   Group,
   GroupSlug,
-  Space,
+  MembershipSpace,
   SpaceId,
   SpaceMembership,
-} from "../../../domains/space/types.ts";
+} from "../../../domains/membership/types.ts";
 import { conflict, type DomainError } from "../../../shared/errors.ts";
 import { err, ok, type Result } from "../../../shared/result.ts";
-import { immutable, membershipKey } from "./helpers.ts";
+import {
+  filterValues,
+  getFrom,
+  immutable,
+  membershipKey,
+  putValue,
+} from "./helpers.ts";
 
-export class MemorySpaceStore implements SpaceStore {
-  constructor(private readonly spaces: Map<SpaceId, Space>) {}
+export class MemoryMembershipSpaceStore implements MembershipSpaceStore {
+  constructor(private readonly spaces: Map<SpaceId, MembershipSpace>) {}
 
-  create(space: Space): Promise<Result<Space, DomainError>> {
+  create(
+    space: MembershipSpace,
+  ): Promise<Result<MembershipSpace, DomainError>> {
     if (this.spaces.has(space.id)) {
       return Promise.resolve(
         err(conflict("space already exists", { spaceId: space.id })),
@@ -34,12 +42,12 @@ export class MemorySpaceStore implements SpaceStore {
     return Promise.resolve(ok(value));
   }
 
-  get(spaceId: SpaceId): Promise<Space | undefined> {
-    return Promise.resolve(this.spaces.get(spaceId));
+  get(spaceId: SpaceId): Promise<MembershipSpace | undefined> {
+    return getFrom(this.spaces, spaceId);
   }
 
-  list(): Promise<readonly Space[]> {
-    return Promise.resolve([...this.spaces.values()]);
+  list(): Promise<readonly MembershipSpace[]> {
+    return filterValues(this.spaces, () => true);
   }
 }
 
@@ -70,7 +78,7 @@ export class MemoryGroupStore implements GroupStore {
   }
 
   get(groupId: string): Promise<Group | undefined> {
-    return Promise.resolve(this.groups.get(groupId));
+    return getFrom(this.groups, groupId);
   }
 
   findBySlug(spaceId: SpaceId, slug: GroupSlug): Promise<Group | undefined> {
@@ -83,9 +91,7 @@ export class MemoryGroupStore implements GroupStore {
   }
 
   listBySpace(spaceId: SpaceId): Promise<readonly Group[]> {
-    return Promise.resolve(
-      [...this.groups.values()].filter((group) => group.spaceId === spaceId),
-    );
+    return filterValues(this.groups, (group) => group.spaceId === spaceId);
   }
 }
 
@@ -93,28 +99,24 @@ export class MemorySpaceMembershipStore implements SpaceMembershipStore {
   constructor(private readonly memberships: Map<string, SpaceMembership>) {}
 
   upsert(membership: SpaceMembership): Promise<SpaceMembership> {
-    const value = immutable(membership);
-    this.memberships.set(
+    return putValue(
+      this.memberships,
       membershipKey(membership.spaceId, membership.accountId),
-      value,
+      membership,
     );
-    return Promise.resolve(value);
   }
 
   get(
     spaceId: SpaceId,
     accountId: AccountId,
   ): Promise<SpaceMembership | undefined> {
-    return Promise.resolve(
-      this.memberships.get(membershipKey(spaceId, accountId)),
-    );
+    return getFrom(this.memberships, membershipKey(spaceId, accountId));
   }
 
   listBySpace(spaceId: SpaceId): Promise<readonly SpaceMembership[]> {
-    return Promise.resolve(
-      [...this.memberships.values()].filter((membership) =>
-        membership.spaceId === spaceId
-      ),
+    return filterValues(
+      this.memberships,
+      (membership) => membership.spaceId === spaceId,
     );
   }
 }

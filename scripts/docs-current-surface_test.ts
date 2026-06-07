@@ -71,11 +71,12 @@ test("Takosumi docs are rebuilt around current OpenTofu-native surface", async (
     assert.equal(hit, false, `retired docs term: ${term}`);
   }
 
-  // The 2026-06-06 core-spec surface: Space-direct Installation DAG model.
+  // The 2026-06-07 core-spec surface: Space-direct OpenTofu Capsule DAG model.
   assert.match(
     docs,
-    /OpenTofu Installation DAG (?:を管理する OSS control plane|directly under a Space)/,
+    /OpenTofu Capsule DAG (?:を管理する OSS control plane|directly under a Space)/,
   );
+  assert.match(docs, /CapsuleCompatibilityReport/);
   assert.match(docs, /OutputSnapshot/);
   assert.match(docs, /CapabilityBinding/);
   assert.match(docs, /DependencySnapshot/);

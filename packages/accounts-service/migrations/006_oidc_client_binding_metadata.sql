@@ -17,7 +17,7 @@ ALTER TABLE installation_v1.oidc_clients
   ADD COLUMN IF NOT EXISTS issuer_url text;
 
 UPDATE installation_v1.oidc_clients
-  SET issuer_url = 'https://accounts.takosumi.com'
+  SET issuer_url = 'https://app.takosumi.com'
   WHERE issuer_url IS NULL;
 
 ALTER TABLE installation_v1.oidc_clients

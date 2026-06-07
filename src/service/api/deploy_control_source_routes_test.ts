@@ -3,37 +3,52 @@ import { expect, test } from "bun:test";
 import { createApiApp } from "./app.ts";
 import { OpenTofuDeploymentController } from "../domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../domains/deploy-control/store.ts";
-import { SourcesService } from "../domains/sources/mod.ts";
+import {
+  SourcesService,
+  type ReadCapsuleSourceFiles,
+} from "../domains/sources/mod.ts";
+import type { SourceSnapshot } from "takosumi-contract/sources";
 
 function makeApp() {
+  return makeAppWithStore().then(({ app }) => app);
+}
+
+async function makeAppWithStore(
+  options: {
+    readonly readCapsuleSourceFiles?: ReadCapsuleSourceFiles;
+  } = {},
+) {
   const store = new InMemoryOpenTofuDeploymentStore();
   let counter = 0;
   const sourcesService = new SourcesService({
     store,
+    readCapsuleSourceFiles: options.readCapsuleSourceFiles,
     now: () => new Date("2026-06-06T00:00:00.000Z"),
-    newId: (prefix) => `${prefix}_route${(counter += 1).toString().padStart(10, "0")}`,
+    newId: (prefix) =>
+      `${prefix}_route${(counter += 1).toString().padStart(10, "0")}`,
     newHookSecret: () => "whk_route_secret",
   });
   const controller = new OpenTofuDeploymentController({
     store,
     sourcesService,
   });
-  return createApiApp({
+  const app = await createApiApp({
     registerDeployControlPublicRoutes: true,
     deployControlPublicRouteOptions: {
       controller,
       authorizeDeployControlBearer: ({ token }) =>
         token === "scoped-token"
           ? {
-            actor: "acct_1",
-            spaceIds: ["space_1"],
-            operations: "*",
-            runnerProfileIds: "*",
-          }
+              actor: "acct_1",
+              spaceIds: ["space_1"],
+              operations: "*",
+              runnerProfileIds: "*",
+            }
           : undefined,
     },
     requestCorrelation: false,
   });
+  return { app, store };
 }
 
 const HEADERS = {
@@ -141,6 +156,142 @@ test("source register -> sync -> snapshots flow", async () => {
   });
   expect(snaps.status).toBe(200);
   expect((await snaps.json()).snapshots).toEqual([]);
+});
+
+test("source compatibility-check creates and reads a Capsule report", async () => {
+  const { app, store } = await makeAppWithStore();
+  const created = await app.request("/api/sources", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      spaceId: "space_1",
+      name: "r",
+      url: "https://github.com/acme/repo.git",
+    }),
+  });
+  expect(created.status).toBe(201);
+  const { source } = await created.json();
+  const snapshot: SourceSnapshot = {
+    id: "snap_route0000000001",
+    sourceId: source.id,
+    url: source.url,
+    ref: source.defaultRef,
+    resolvedCommit: "abc123",
+    path: source.defaultPath,
+    archiveObjectKey: `spaces/space_1/sources/${source.id}/snapshots/snap_route0000000001/source.tar.zst`,
+    archiveDigest: "sha256:sourcearchive",
+    archiveSizeBytes: 42,
+    fetchedByRunId: "ssr_route0000000001",
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putSourceSnapshot(snapshot);
+
+  const checked = await app.request(
+    `/api/sources/${source.id}/compatibility-check`,
+    {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({ sourceSnapshotId: snapshot.id }),
+    },
+  );
+  expect(checked.status).toBe(201);
+  const checkedBody = await checked.json();
+  expect(checkedBody.report).toMatchObject({
+    sourceId: source.id,
+    sourceSnapshotId: snapshot.id,
+    level: "needs_patch",
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    normalizedObjectKey: snapshot.archiveObjectKey,
+    normalizedDigest: snapshot.archiveDigest,
+  });
+  expect(checkedBody.report.findings).toEqual([
+    expect.objectContaining({
+      severity: "warning",
+      code: "capsule_source_files_unavailable",
+    }),
+  ]);
+  expect(checkedBody.report.compatibility).toBeUndefined();
+  expect(checkedBody.report.normalizedArtifactKey).toBeUndefined();
+
+  const got = await app.request(
+    `/api/compatibility-reports/${checkedBody.report.id}`,
+    { headers: { authorization: "Bearer scoped-token" } },
+  );
+  expect(got.status).toBe(200);
+  expect((await got.json()).report.id).toBe(checkedBody.report.id);
+});
+
+test("source compatibility-check analyzes expanded OpenTofu files when available", async () => {
+  const { app, store } = await makeAppWithStore({
+    readCapsuleSourceFiles: () =>
+      Promise.resolve([
+        {
+          path: "main.tf",
+          text: `
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
+resource "aws_s3_bucket" "attachments" {
+  bucket = "attachments"
+}
+
+output "attachments_bucket" {
+  value = aws_s3_bucket.attachments.bucket
+}
+`,
+        },
+      ]),
+  });
+  const created = await app.request("/api/sources", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      spaceId: "space_1",
+      name: "r",
+      url: "https://github.com/acme/repo.git",
+    }),
+  });
+  expect(created.status).toBe(201);
+  const { source } = await created.json();
+  const snapshot: SourceSnapshot = {
+    id: "snap_route0000000001",
+    sourceId: source.id,
+    url: source.url,
+    ref: source.defaultRef,
+    resolvedCommit: "abc123",
+    path: source.defaultPath,
+    archiveObjectKey: `spaces/space_1/sources/${source.id}/snapshots/snap_route0000000001/source.tar.zst`,
+    archiveDigest: "sha256:sourcearchive",
+    archiveSizeBytes: 42,
+    fetchedByRunId: "ssr_route0000000001",
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putSourceSnapshot(snapshot);
+
+  const checked = await app.request(
+    `/api/sources/${source.id}/compatibility-check`,
+    {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({ sourceSnapshotId: snapshot.id }),
+    },
+  );
+  expect(checked.status).toBe(201);
+  const checkedBody = await checked.json();
+  expect(checkedBody.report).toMatchObject({
+    level: "ready",
+    findings: [],
+    providers: [{ source: "hashicorp/aws", aliases: [], allowed: true }],
+    resources: [{ type: "aws_s3_bucket", count: 1, allowed: true }],
+  });
 });
 
 test("PATCH /api/sources updates fields", async () => {

@@ -4,7 +4,7 @@ import type {
   GroupId,
   SpaceId,
   SpaceMembership,
-} from "../../domains/space/mod.ts";
+} from "../../domains/membership/mod.ts";
 
 export const ALL_CAPABILITIES = [
   "deploy.read",

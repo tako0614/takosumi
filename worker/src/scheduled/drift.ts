@@ -1,6 +1,6 @@
 /**
  * Scheduled drift sweep (Core Specification §28 `scheduled/drift.ts`; §19
- * `drift_check`; Phase 8 — MVP 外 per core-conformance).
+ * `drift_check`; Phase 8 advanced).
  *
  * Every cron tick (when enabled), iterate the ACTIVE Installations across all
  * Spaces and create one read-only `drift_check` per Installation. A drift check

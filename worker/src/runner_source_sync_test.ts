@@ -13,13 +13,18 @@ import {
 // ---------------------------------------------------------------------------
 
 test("assertSourceUrlPolicy allows https, ssh, and git@host:path", () => {
-  expect(() => assertSourceUrlPolicy("https://github.com/octocat/Hello-World.git"))
-    .not.toThrow();
-  expect(() => assertSourceUrlPolicy("https://example.com/team/repo")).not.toThrow();
-  expect(() => assertSourceUrlPolicy("ssh://git@github.com/octocat/Hello-World.git"))
-    .not.toThrow();
-  expect(() => assertSourceUrlPolicy("git@github.com:octocat/Hello-World.git"))
-    .not.toThrow();
+  expect(() =>
+    assertSourceUrlPolicy("https://github.com/octocat/Hello-World.git"),
+  ).not.toThrow();
+  expect(() =>
+    assertSourceUrlPolicy("https://example.com/team/repo"),
+  ).not.toThrow();
+  expect(() =>
+    assertSourceUrlPolicy("ssh://git@github.com/octocat/Hello-World.git"),
+  ).not.toThrow();
+  expect(() =>
+    assertSourceUrlPolicy("git@github.com:octocat/Hello-World.git"),
+  ).not.toThrow();
 });
 
 test("assertSourceUrlPolicy forbids file://, git://, ext::, and paths", () => {
@@ -32,11 +37,16 @@ test("assertSourceUrlPolicy forbids file://, git://, ext::, and paths", () => {
 });
 
 test("assertSourceUrlPolicy forbids embedded credentials", () => {
-  expect(() => assertSourceUrlPolicy("https://user:pass@github.com/x/y.git"))
-    .toThrow();
-  expect(() => assertSourceUrlPolicy("https://token@github.com/x/y.git")).toThrow();
+  expect(() =>
+    assertSourceUrlPolicy("https://user:pass@github.com/x/y.git"),
+  ).toThrow();
+  expect(() =>
+    assertSourceUrlPolicy("https://token@github.com/x/y.git"),
+  ).toThrow();
   // scp-like with a password-style user (user:pass@host:path) is rejected.
-  expect(() => assertSourceUrlPolicy("git:secret@github.com:x/y.git")).toThrow();
+  expect(() =>
+    assertSourceUrlPolicy("git:secret@github.com:x/y.git"),
+  ).toThrow();
 });
 
 test("assertSourceUrlPolicy rejects control characters", () => {
@@ -57,31 +67,43 @@ test("parseSourceSyncSource normalizes the subtree path and defaults to '.'", ()
 
   expect(
     parseSourceSyncSource({
-      source: { url: "https://github.com/x/y.git", ref: "v1.2.3", path: "./infra/" },
+      source: {
+        url: "https://github.com/x/y.git",
+        ref: "v1.2.3",
+        path: "./infra/",
+      },
     }),
-  ).toEqual({ url: "https://github.com/x/y.git", ref: "v1.2.3", path: "infra" });
+  ).toEqual({
+    url: "https://github.com/x/y.git",
+    ref: "v1.2.3",
+    path: "infra",
+  });
 });
 
 test("parseSourceSyncSource rejects traversal paths and dangerous refs", () => {
   expect(() =>
     parseSourceSyncSource({
-      source: { url: "https://github.com/x/y.git", ref: "main", path: "../escape" },
-    })
+      source: {
+        url: "https://github.com/x/y.git",
+        ref: "main",
+        path: "../escape",
+      },
+    }),
   ).toThrow();
   expect(() =>
     parseSourceSyncSource({
       source: { url: "https://github.com/x/y.git", ref: "main", path: "/abs" },
-    })
+    }),
   ).toThrow();
   expect(() =>
     parseSourceSyncSource({
       source: { url: "https://github.com/x/y.git", ref: "-flag-injection" },
-    })
+    }),
   ).toThrow();
   expect(() =>
     parseSourceSyncSource({
       source: { url: "git://github.com/x/y.git", ref: "main" },
-    })
+    }),
   ).toThrow();
 });
 
@@ -116,14 +138,18 @@ test("parseLsRemoteCommit prefers the peeled annotated tag object", () => {
 
 test("parseLsRemoteCommit falls back to a single-line result", () => {
   expect(
-    parseLsRemoteCommit("abcdef0123456789abcdef0123456789abcdef01\tHEAD\n", "HEAD"),
+    parseLsRemoteCommit(
+      "abcdef0123456789abcdef0123456789abcdef01\tHEAD\n",
+      "HEAD",
+    ),
   ).toBe("abcdef0123456789abcdef0123456789abcdef01");
 });
 
 test("parseLsRemoteCommit returns undefined when no commit matches", () => {
   expect(parseLsRemoteCommit("", "main")).toBeUndefined();
-  expect(parseLsRemoteCommit("not-a-sha\trefs/heads/main\n", "main"))
-    .toBeUndefined();
+  expect(
+    parseLsRemoteCommit("not-a-sha\trefs/heads/main\n", "main"),
+  ).toBeUndefined();
 });
 
 // ---------------------------------------------------------------------------
@@ -134,7 +160,7 @@ test("assertSafeArchiveObjectKey accepts the agreed layout and rejects traversal
   expect(() =>
     assertSafeArchiveObjectKey(
       "spaces/spc_1/sources/src_1/snapshots/snap_1/source.tar.zst",
-    )
+    ),
   ).not.toThrow();
   expect(() => assertSafeArchiveObjectKey("/abs/key")).toThrow();
   expect(() => assertSafeArchiveObjectKey("spaces/../etc/passwd")).toThrow();
@@ -143,19 +169,24 @@ test("assertSafeArchiveObjectKey accepts the agreed layout and rejects traversal
 });
 
 // ---------------------------------------------------------------------------
-// credential parsing — env name shape + file path safety.
+// credential parsing — source credential allowlist + file path safety.
 // ---------------------------------------------------------------------------
 
-test("parseSourceCredentials admits only valid env names and safe file paths", () => {
+test("parseSourceCredentials admits only source env names and safe file paths", () => {
   const parsed = parseSourceCredentials({
     credentials: {
       env: {
         GIT_HTTPS_TOKEN: "tok",
+        AWS_SECRET_ACCESS_KEY: "ignored-provider-secret",
         "lower-case": "ignored",
       },
       files: [
         { path: "askpass.sh", mode: 0o500, content: "#!/bin/sh\necho tok" },
-        { path: "known_hosts", mode: 0o600, content: "github.com ssh-ed25519 AAA" },
+        {
+          path: "known_hosts",
+          mode: 0o600,
+          content: "github.com ssh-ed25519 AAA",
+        },
       ],
     },
   });
@@ -170,18 +201,38 @@ test("parseSourceCredentials rejects files with path separators or traversal", (
   expect(() =>
     parseSourceCredentials({
       credentials: { files: [{ path: "../key", mode: 0o600, content: "x" }] },
-    })
+    }),
   ).toThrow();
   expect(() =>
     parseSourceCredentials({
       credentials: { files: [{ path: "sub/key", mode: 0o600, content: "x" }] },
-    })
+    }),
   ).toThrow();
   expect(() =>
     parseSourceCredentials({
       credentials: { files: [{ path: "key", content: "x" }] },
-    })
+    }),
   ).toThrow();
+});
+
+test("parseSourceCredentials rejects unsafe credential file modes", () => {
+  expect(() =>
+    parseSourceCredentials({
+      credentials: { files: [{ path: "key", mode: 0o644, content: "x" }] },
+    }),
+  ).toThrow(/group\/world-readable/);
+  expect(() =>
+    parseSourceCredentials({
+      credentials: { files: [{ path: "key", mode: 0o777, content: "x" }] },
+    }),
+  ).toThrow(/unsafe/);
+  expect(() =>
+    parseSourceCredentials({
+      credentials: {
+        files: [{ path: "key", mode: 0o600 + 0.5, content: "x" }],
+      },
+    }),
+  ).toThrow(/unsafe/);
 });
 
 test("parseSourceCredentials returns empty for an absent credentials field", () => {

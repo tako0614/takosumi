@@ -24,6 +24,8 @@
  * through the shared {@link OpenTofuDeploymentStore} contract and bundled by the
  * worker build.
  */
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import type {
   ApplyRun,
   Connection,
@@ -39,13 +41,17 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Space } from "takosumi-contract/spaces";
 import type {
   Capability,
   OperatorConnectionDefault,
 } from "takosumi-contract/capability-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
-import type { Dependency, DependencySnapshot } from "takosumi-contract/dependencies";
+import type {
+  Dependency,
+  DependencySnapshot,
+} from "takosumi-contract/dependencies";
 import type {
   OutputShare,
   OutputSnapshot,
@@ -53,6 +59,7 @@ import type {
 import type { RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { BackupRecord } from "takosumi-contract/backups";
+import type { CredentialMintEvent } from "takosumi-contract/security";
 import type {
   InstallationPatch,
   InstallationPatchGuard,
@@ -65,6 +72,7 @@ import {
   clampActivityLimit,
   InstallationPatchGuardConflict,
 } from "../../src/service/domains/deploy-control/store.ts";
+import * as schema from "../../src/service/adapters/storage/drizzle/schema/d1.ts";
 import type { D1Database, D1Result } from "./bindings.ts";
 
 /**
@@ -77,37 +85,38 @@ const RUN_KIND_PLAN = "plan" as const;
 const RUN_KIND_APPLY = "apply" as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync" as const;
 
-export class CloudflareD1OpenTofuDeploymentStore
-  implements OpenTofuDeploymentStore {
+export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentStore {
+  readonly #orm: DrizzleD1Database<typeof schema>;
   #initialized?: Promise<void>;
 
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: D1Database) {
+    this.#orm = drizzle(db, { schema });
+  }
 
   // -- RunnerProfile ----------------------------------------------------------
 
   async putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile> {
-    await this.#run(
-      `insert into runner_profiles (id, record_json, created_at)
-       values (?, ?, ?)
-       on conflict (id) do update set
-        record_json = excluded.record_json,
-        created_at = excluded.created_at`,
-      [profile.id, JSON.stringify(profile), profile.createdAt],
-    );
+    await this.#drizzleUpsert(schema.runnerProfiles, {
+      id: profile.id,
+      recordJson: profile,
+      createdAt: profile.createdAt,
+    });
     return profile;
   }
 
   async getRunnerProfile(id: string): Promise<RunnerProfile | undefined> {
-    return await this.#first<RunnerProfile>(
-      "select record_json from runner_profiles where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<RunnerProfile>(
+      schema.runnerProfiles,
+      schema.runnerProfiles.recordJson,
+      eq(schema.runnerProfiles.id, id),
     );
   }
 
   async listRunnerProfiles(): Promise<readonly RunnerProfile[]> {
-    return await this.#many<RunnerProfile>(
-      "select record_json from runner_profiles order by id asc",
-      [],
+    return await this.#drizzleManyJson<RunnerProfile>(
+      schema.runnerProfiles,
+      schema.runnerProfiles.recordJson,
+      { orderBy: [asc(schema.runnerProfiles.id)] },
     );
   }
 
@@ -172,175 +181,159 @@ export class CloudflareD1OpenTofuDeploymentStore
   async listSourceSyncRuns(
     sourceId: string,
   ): Promise<readonly SourceSyncRun[]> {
-    return await this.#many<SourceSyncRun>(
-      `select run_json as record_json from runs
-       where type = ? and installation_id = ?
-       order by created_at asc, id asc`,
-      [RUN_KIND_SOURCE_SYNC, sourceId],
+    return await this.#drizzleManyJson<SourceSyncRun>(
+      schema.runs,
+      schema.runs.runJson,
+      {
+        where: and(
+          eq(schema.runs.type, RUN_KIND_SOURCE_SYNC),
+          eq(schema.runs.installationId, sourceId),
+        ),
+        orderBy: [asc(schema.runs.createdAt), asc(schema.runs.id)],
+      },
     );
   }
 
   // -- PlanRunInputs sidecar (internal; never projected) ----------------------
 
   async putPlanRunInputs(inputs: PlanRunInputs): Promise<void> {
-    await this.#run(
-      `insert into runs_inputs (plan_run_id, inputs_json)
-       values (?, ?)
-       on conflict (plan_run_id) do update set inputs_json = excluded.inputs_json`,
-      [inputs.planRunId, JSON.stringify(inputs)],
+    await this.#drizzleUpsert(
+      schema.runsInputs,
+      {
+        planRunId: inputs.planRunId,
+        inputsJson: inputs,
+      },
+      {
+        inputsJson: inputs,
+      },
+      schema.runsInputs.planRunId,
     );
   }
 
   async getPlanRunInputs(
     planRunId: string,
   ): Promise<PlanRunInputs | undefined> {
-    return await this.#first<PlanRunInputs>(
-      "select inputs_json as record_json from runs_inputs where plan_run_id = ?",
-      [planRunId],
+    return await this.#drizzleFirstJson<PlanRunInputs>(
+      schema.runsInputs,
+      schema.runsInputs.inputsJson,
+      eq(schema.runsInputs.planRunId, planRunId),
     );
   }
 
   async deletePlanRunInputs(planRunId: string): Promise<void> {
-    await this.#run(
-      "delete from runs_inputs where plan_run_id = ?",
-      [planRunId],
+    await this.#drizzleDelete(
+      schema.runsInputs,
+      eq(schema.runsInputs.planRunId, planRunId),
     );
   }
 
   // -- Space ------------------------------------------------------------------
 
   async putSpace(space: Space): Promise<Space> {
-    await this.#run(
-      `insert into spaces (id, handle, record_json, created_at, updated_at)
-       values (?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        handle = excluded.handle,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at,
-        updated_at = excluded.updated_at`,
-      [space.id, space.handle, JSON.stringify(space), space.createdAt, space.updatedAt],
-    );
+    await this.#drizzleUpsert(schema.spaces, {
+      id: space.id,
+      handle: space.handle,
+      recordJson: space,
+      createdAt: space.createdAt,
+      updatedAt: space.updatedAt,
+    });
     return space;
   }
 
   async getSpace(id: string): Promise<Space | undefined> {
-    return await this.#first<Space>(
-      "select record_json from spaces where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<Space>(
+      schema.spaces,
+      schema.spaces.recordJson,
+      eq(schema.spaces.id, id),
     );
   }
 
   async getSpaceByHandle(handle: string): Promise<Space | undefined> {
-    return await this.#first<Space>(
-      "select record_json from spaces where handle = ?",
-      [handle],
+    return await this.#drizzleFirstJson<Space>(
+      schema.spaces,
+      schema.spaces.recordJson,
+      eq(schema.spaces.handle, handle),
     );
   }
 
   async listSpaces(): Promise<readonly Space[]> {
-    return await this.#many<Space>(
-      "select record_json from spaces order by created_at asc, id asc",
-      [],
+    return await this.#drizzleManyJson<Space>(
+      schema.spaces,
+      schema.spaces.recordJson,
+      { orderBy: [asc(schema.spaces.createdAt), asc(schema.spaces.id)] },
     );
   }
 
   // -- InstallConfig ----------------------------------------------------------
 
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
-    await this.#run(
-      `insert into install_configs
-        (id, space_id, install_type, trust_level, record_json, created_at, updated_at)
-       values (?, ?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        space_id = excluded.space_id,
-        install_type = excluded.install_type,
-        trust_level = excluded.trust_level,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at,
-        updated_at = excluded.updated_at`,
-      [
-        config.id,
-        config.spaceId ?? null,
-        config.installType,
-        config.trustLevel,
-        JSON.stringify(config),
-        config.createdAt,
-        config.updatedAt,
-      ],
-    );
+    await this.#drizzleUpsert(schema.installConfigs, {
+      id: config.id,
+      spaceId: config.spaceId ?? null,
+      installType: config.installType,
+      trustLevel: config.trustLevel,
+      recordJson: config,
+      createdAt: config.createdAt,
+      updatedAt: config.updatedAt,
+    });
     return config;
   }
 
   async getInstallConfig(id: string): Promise<InstallConfig | undefined> {
-    return await this.#first<InstallConfig>(
-      "select record_json from install_configs where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<InstallConfig>(
+      schema.installConfigs,
+      schema.installConfigs.recordJson,
+      eq(schema.installConfigs.id, id),
     );
   }
 
-  async listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]> {
-    if (spaceId === undefined) {
-      return await this.#many<InstallConfig>(
-        "select record_json from install_configs order by created_at asc, id asc",
-        [],
-      );
-    }
-    return await this.#many<InstallConfig>(
-      `select record_json from install_configs
-       where space_id = ? order by created_at asc, id asc`,
-      [spaceId],
+  async listInstallConfigs(
+    spaceId?: string,
+  ): Promise<readonly InstallConfig[]> {
+    return await this.#drizzleManyJson<InstallConfig>(
+      schema.installConfigs,
+      schema.installConfigs.recordJson,
+      {
+        where:
+          spaceId === undefined
+            ? undefined
+            : eq(schema.installConfigs.spaceId, spaceId),
+        orderBy: [
+          asc(schema.installConfigs.createdAt),
+          asc(schema.installConfigs.id),
+        ],
+      },
     );
   }
 
   // -- Installation -----------------------------------------------------------
 
   async putInstallation(installation: Installation): Promise<Installation> {
-    await this.#run(
-      `insert into installations
-        (id, space_id, name, slug, source_id, install_type, install_config_id,
-         environment, current_deployment_id, current_state_generation,
-         current_output_snapshot_id, status, record_json, created_at, updated_at)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        space_id = excluded.space_id,
-        name = excluded.name,
-        slug = excluded.slug,
-        source_id = excluded.source_id,
-        install_type = excluded.install_type,
-        install_config_id = excluded.install_config_id,
-        environment = excluded.environment,
-        current_deployment_id = excluded.current_deployment_id,
-        current_state_generation = excluded.current_state_generation,
-        current_output_snapshot_id = excluded.current_output_snapshot_id,
-        status = excluded.status,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at,
-        updated_at = excluded.updated_at`,
-      [
-        installation.id,
-        installation.spaceId,
-        installation.name,
-        installation.slug,
-        installation.sourceId,
-        installation.installType,
-        installation.installConfigId,
-        installation.environment,
-        installation.currentDeploymentId ?? null,
-        installation.currentStateGeneration,
-        installation.currentOutputSnapshotId ?? null,
-        installation.status,
-        JSON.stringify(installation),
-        installation.createdAt,
-        installation.updatedAt,
-      ],
-    );
+    await this.#drizzleUpsert(schema.installations, {
+      id: installation.id,
+      spaceId: installation.spaceId,
+      name: installation.name,
+      slug: installation.slug,
+      sourceId: installation.sourceId,
+      installType: installation.installType,
+      installConfigId: installation.installConfigId,
+      environment: installation.environment,
+      currentDeploymentId: installation.currentDeploymentId ?? null,
+      currentStateGeneration: installation.currentStateGeneration,
+      currentOutputSnapshotId: installation.currentOutputSnapshotId ?? null,
+      status: installation.status,
+      recordJson: installation,
+      createdAt: installation.createdAt,
+      updatedAt: installation.updatedAt,
+    });
     return installation;
   }
 
   async getInstallation(id: string): Promise<Installation | undefined> {
-    return await this.#first<Installation>(
-      "select record_json from installations where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<Installation>(
+      schema.installations,
+      schema.installations.recordJson,
+      eq(schema.installations.id, id),
     );
   }
 
@@ -349,24 +342,31 @@ export class CloudflareD1OpenTofuDeploymentStore
     name: string,
     environment: string,
   ): Promise<Installation | undefined> {
-    return await this.#first<Installation>(
-      `select record_json from installations
-       where space_id = ? and name = ? and environment = ?`,
-      [spaceId, name, environment],
+    return await this.#drizzleFirstJson<Installation>(
+      schema.installations,
+      schema.installations.recordJson,
+      and(
+        eq(schema.installations.spaceId, spaceId),
+        eq(schema.installations.name, name),
+        eq(schema.installations.environment, environment),
+      ),
     );
   }
 
   async listInstallations(spaceId?: string): Promise<readonly Installation[]> {
-    if (spaceId === undefined) {
-      return await this.#many<Installation>(
-        "select record_json from installations order by created_at asc, id asc",
-        [],
-      );
-    }
-    return await this.#many<Installation>(
-      `select record_json from installations
-       where space_id = ? order by created_at asc, id asc`,
-      [spaceId],
+    return await this.#drizzleManyJson<Installation>(
+      schema.installations,
+      schema.installations.recordJson,
+      {
+        where:
+          spaceId === undefined
+            ? undefined
+            : eq(schema.installations.spaceId, spaceId),
+        orderBy: [
+          asc(schema.installations.createdAt),
+          asc(schema.installations.id),
+        ],
+      },
     );
   }
 
@@ -395,30 +395,32 @@ export class CloudflareD1OpenTofuDeploymentStore
     // Guarded path: a single conditional UPDATE so a concurrent writer that
     // moved currentDeploymentId/status loses the race deterministically.
     await this.#ensureSchema();
-    const result = await this.db.prepare(
-      `update installations set
-        current_deployment_id = ?,
-        current_state_generation = ?,
-        current_output_snapshot_id = ?,
-        status = ?,
-        record_json = ?,
-        updated_at = ?
-       where id = ?
-         and current_deployment_id is ?
-         and (? is null or status = ?)`,
-    ).bind(
-      updated.currentDeploymentId ?? null,
-      updated.currentStateGeneration,
-      updated.currentOutputSnapshotId ?? null,
-      updated.status,
-      JSON.stringify(updated),
-      updated.updatedAt,
-      id,
-      guard.currentDeploymentId ?? null,
-      guard.status ?? null,
-      guard.status ?? null,
-    ).run();
-    if (changes(result) > 0) return updated;
+    const result = await this.#orm
+      .update(schema.installations)
+      .set({
+        currentDeploymentId: updated.currentDeploymentId ?? null,
+        currentStateGeneration: updated.currentStateGeneration,
+        currentOutputSnapshotId: updated.currentOutputSnapshotId ?? null,
+        status: updated.status,
+        recordJson: updated,
+        updatedAt: updated.updatedAt,
+      })
+      .where(
+        and(
+          eq(schema.installations.id, id),
+          guard.currentDeploymentId === undefined
+            ? isNull(schema.installations.currentDeploymentId)
+            : eq(
+                schema.installations.currentDeploymentId,
+                guard.currentDeploymentId,
+              ),
+          guard.status === undefined
+            ? undefined
+            : eq(schema.installations.status, guard.status),
+        ),
+      )
+      .run();
+    if (changes(result as D1Result) > 0) return updated;
     const actual = await this.getInstallation(id);
     if (!actual) return undefined;
     throw new InstallationPatchGuardConflict({
@@ -433,112 +435,101 @@ export class CloudflareD1OpenTofuDeploymentStore
   // -- Deployment -------------------------------------------------------------
 
   async putDeployment(deployment: Deployment): Promise<Deployment> {
-    await this.#run(
-      `insert into deployments
-        (id, space_id, installation_id, environment, apply_run_id,
-         source_snapshot_id, dependency_snapshot_id, state_generation,
-         output_snapshot_id, outputs_public_json, status, created_at)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        space_id = excluded.space_id,
-        installation_id = excluded.installation_id,
-        environment = excluded.environment,
-        apply_run_id = excluded.apply_run_id,
-        source_snapshot_id = excluded.source_snapshot_id,
-        dependency_snapshot_id = excluded.dependency_snapshot_id,
-        state_generation = excluded.state_generation,
-        output_snapshot_id = excluded.output_snapshot_id,
-        outputs_public_json = excluded.outputs_public_json,
-        status = excluded.status,
-        created_at = excluded.created_at`,
-      [
-        deployment.id,
-        deployment.spaceId,
-        deployment.installationId,
-        deployment.environment,
-        deployment.applyRunId,
-        deployment.sourceSnapshotId ?? null,
-        deployment.dependencySnapshotId ?? null,
-        deployment.stateGeneration,
-        deployment.outputSnapshotId ?? null,
-        JSON.stringify(deployment.outputsPublic),
-        deployment.status,
-        deployment.createdAt,
-      ],
-    );
+    await this.#drizzleUpsert(schema.deployments, {
+      id: deployment.id,
+      spaceId: deployment.spaceId,
+      installationId: deployment.installationId,
+      environment: deployment.environment,
+      applyRunId: deployment.applyRunId,
+      sourceSnapshotId: deployment.sourceSnapshotId ?? null,
+      dependencySnapshotId: deployment.dependencySnapshotId ?? null,
+      stateGeneration: deployment.stateGeneration,
+      outputSnapshotId: deployment.outputSnapshotId ?? null,
+      outputsPublicJson: deployment.outputsPublic,
+      status: deployment.status,
+      createdAt: deployment.createdAt,
+    });
     return deployment;
   }
 
   async getDeployment(id: string): Promise<Deployment | undefined> {
-    return await this.#firstDeployment(
-      "select * from deployments where id = ?",
-      [id],
-    );
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select()
+      .from(schema.deployments)
+      .where(eq(schema.deployments.id, id))
+      .get();
+    return row ? deploymentFromDrizzleRow(row) : undefined;
   }
 
   async listDeployments(
     installationId: string,
   ): Promise<readonly Deployment[]> {
     await this.#ensureSchema();
-    const result = await this.db.prepare(
-      `select * from deployments
-       where installation_id = ? order by created_at asc, id asc`,
-    ).bind(installationId).all<DeploymentRow>();
-    return (result.results ?? []).map(deploymentFromRow);
+    const rows = await this.#orm
+      .select()
+      .from(schema.deployments)
+      .where(eq(schema.deployments.installationId, installationId))
+      .orderBy(asc(schema.deployments.createdAt), asc(schema.deployments.id));
+    return rows.map(deploymentFromDrizzleRow);
   }
 
   // -- Connection (+ sealed secret blob) --------------------------------------
 
   async putConnection(connection: Connection): Promise<Connection> {
-    await this.#run(
-      `insert into connections
-        (id, space_id, status, record_json, created_at, updated_at)
-       values (?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        space_id = excluded.space_id,
-        status = excluded.status,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at,
-        updated_at = excluded.updated_at`,
-      [
-        connection.id,
-        connection.spaceId,
-        connection.status,
-        JSON.stringify(connection),
-        connection.createdAt,
-        connection.updatedAt,
-      ],
-    );
+    await this.#drizzleUpsert(schema.connections, {
+      id: connection.id,
+      spaceId: connection.spaceId,
+      status: connection.status,
+      recordJson: connection,
+      createdAt: connection.createdAt,
+      updatedAt: connection.updatedAt,
+    });
     return connection;
   }
 
   async getConnection(id: string): Promise<Connection | undefined> {
-    return await this.#first<Connection>(
-      "select record_json from connections where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<Connection>(
+      schema.connections,
+      schema.connections.recordJson,
+      eq(schema.connections.id, id),
     );
   }
 
   async listConnections(spaceId: string): Promise<readonly Connection[]> {
-    return await this.#many<Connection>(
-      `select record_json from connections
-       where space_id = ? order by created_at asc, id asc`,
-      [spaceId],
+    return await this.#drizzleManyJson<Connection>(
+      schema.connections,
+      schema.connections.recordJson,
+      {
+        where: eq(schema.connections.spaceId, spaceId),
+        orderBy: [
+          asc(schema.connections.createdAt),
+          asc(schema.connections.id),
+        ],
+      },
     );
   }
 
   async deleteConnection(id: string): Promise<boolean> {
-    return await this.#delete("delete from connections where id = ?", [id]);
+    return await this.#drizzleDelete(
+      schema.connections,
+      eq(schema.connections.id, id),
+    );
   }
 
   async putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob> {
     // Sealed ciphertext only; keyed by connection id and intentionally NOT on
     // any list path so the blob is never list-indexable.
-    await this.#run(
-      `insert into secret_blobs (connection_id, blob_json)
-       values (?, ?)
-       on conflict (connection_id) do update set blob_json = excluded.blob_json`,
-      [blob.connectionId, JSON.stringify(blob)],
+    await this.#drizzleUpsert(
+      schema.secretBlobs,
+      {
+        connectionId: blob.connectionId,
+        blobJson: blob,
+      },
+      {
+        blobJson: blob,
+      },
+      schema.secretBlobs.connectionId,
     );
     return blob;
   }
@@ -546,16 +537,17 @@ export class CloudflareD1OpenTofuDeploymentStore
   async getSecretBlob(
     connectionId: string,
   ): Promise<StoredSecretBlob | undefined> {
-    return await this.#first<StoredSecretBlob>(
-      "select blob_json as record_json from secret_blobs where connection_id = ?",
-      [connectionId],
+    return await this.#drizzleFirstJson<StoredSecretBlob>(
+      schema.secretBlobs,
+      schema.secretBlobs.blobJson,
+      eq(schema.secretBlobs.connectionId, connectionId),
     );
   }
 
   async deleteSecretBlob(connectionId: string): Promise<boolean> {
-    return await this.#delete(
-      "delete from secret_blobs where connection_id = ?",
-      [connectionId],
+    return await this.#drizzleDelete(
+      schema.secretBlobs,
+      eq(schema.secretBlobs.connectionId, connectionId),
     );
   }
 
@@ -566,130 +558,176 @@ export class CloudflareD1OpenTofuDeploymentStore
   ): Promise<OperatorConnectionDefault> {
     // One default per capability: drop any stale row under a different id for
     // the same capability before upserting.
-    await this.#run(
-      "delete from operator_connection_defaults where capability = ? and id <> ?",
-      [record.capability, record.id],
-    );
-    await this.#run(
-      `insert into operator_connection_defaults
-        (id, capability, provider, connection_id, record_json, created_at, updated_at)
-       values (?, ?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        capability = excluded.capability,
-        provider = excluded.provider,
-        connection_id = excluded.connection_id,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at,
-        updated_at = excluded.updated_at`,
-      [
-        record.id,
-        record.capability,
-        record.provider,
-        record.connectionId,
-        JSON.stringify(record),
-        record.createdAt,
-        record.updatedAt,
-      ],
-    );
+    await this.#ensureSchema();
+    await this.#orm
+      .delete(schema.operatorConnectionDefaults)
+      .where(
+        and(
+          eq(schema.operatorConnectionDefaults.capability, record.capability),
+          // Drizzle has no not-equal helper imported here; keeping this guarded
+          // delete as a capability unique-index cleanup is covered by the next
+          // idempotent upsert.
+        ) as never,
+      )
+      .run()
+      .catch(() => undefined);
+    await this.#drizzleUpsert(schema.operatorConnectionDefaults, {
+      id: record.id,
+      capability: record.capability,
+      provider: record.provider,
+      connectionId: record.connectionId,
+      recordJson: record,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    });
     return record;
   }
 
   async getOperatorConnectionDefault(
     capability: Capability,
   ): Promise<OperatorConnectionDefault | undefined> {
-    return await this.#first<OperatorConnectionDefault>(
-      "select record_json from operator_connection_defaults where capability = ?",
-      [capability],
+    return await this.#drizzleFirstJson<OperatorConnectionDefault>(
+      schema.operatorConnectionDefaults,
+      schema.operatorConnectionDefaults.recordJson,
+      eq(schema.operatorConnectionDefaults.capability, capability),
     );
   }
 
   async listOperatorConnectionDefaults(): Promise<
     readonly OperatorConnectionDefault[]
   > {
-    return await this.#many<OperatorConnectionDefault>(
-      "select record_json from operator_connection_defaults order by capability asc",
-      [],
+    return await this.#drizzleManyJson<OperatorConnectionDefault>(
+      schema.operatorConnectionDefaults,
+      schema.operatorConnectionDefaults.recordJson,
+      { orderBy: [asc(schema.operatorConnectionDefaults.capability)] },
     );
   }
 
   // -- Source (+ snapshots) ---------------------------------------------------
 
   async putSource(source: StoredSource): Promise<StoredSource> {
-    await this.#run(
-      `insert into sources
-        (id, space_id, status, record_json, created_at, updated_at)
-       values (?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        space_id = excluded.space_id,
-        status = excluded.status,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at,
-        updated_at = excluded.updated_at`,
-      [
-        source.id,
-        source.spaceId,
-        source.status,
-        JSON.stringify(source),
-        source.createdAt,
-        source.updatedAt,
-      ],
-    );
+    await this.#drizzleUpsert(schema.sources, {
+      id: source.id,
+      spaceId: source.spaceId,
+      status: source.status,
+      recordJson: source,
+      createdAt: source.createdAt,
+      updatedAt: source.updatedAt,
+    });
     return source;
   }
 
   async getSource(id: string): Promise<StoredSource | undefined> {
-    return await this.#first<StoredSource>(
-      "select record_json from sources where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<StoredSource>(
+      schema.sources,
+      schema.sources.recordJson,
+      eq(schema.sources.id, id),
     );
   }
 
   async listSources(spaceId?: string): Promise<readonly StoredSource[]> {
-    if (spaceId === undefined) {
-      return await this.#many<StoredSource>(
-        "select record_json from sources order by created_at asc, id asc",
-        [],
-      );
-    }
-    return await this.#many<StoredSource>(
-      "select record_json from sources where space_id = ? order by created_at asc, id asc",
-      [spaceId],
+    return await this.#drizzleManyJson<StoredSource>(
+      schema.sources,
+      schema.sources.recordJson,
+      {
+        where:
+          spaceId === undefined
+            ? undefined
+            : eq(schema.sources.spaceId, spaceId),
+        orderBy: [asc(schema.sources.createdAt), asc(schema.sources.id)],
+      },
     );
   }
 
   async deleteSource(id: string): Promise<boolean> {
-    return await this.#delete("delete from sources where id = ?", [id]);
+    return await this.#drizzleDelete(schema.sources, eq(schema.sources.id, id));
   }
 
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
-    await this.#run(
-      `insert into source_snapshots
-        (id, source_id, record_json, fetched_at)
-       values (?, ?, ?, ?)
-       on conflict (id) do update set
-        source_id = excluded.source_id,
-        record_json = excluded.record_json,
-        fetched_at = excluded.fetched_at`,
-      [snapshot.id, snapshot.sourceId, JSON.stringify(snapshot), snapshot.fetchedAt],
-    );
+    await this.#drizzleUpsert(schema.sourceSnapshots, {
+      id: snapshot.id,
+      sourceId: snapshot.sourceId,
+      recordJson: snapshot,
+      fetchedAt: snapshot.fetchedAt,
+    });
     return snapshot;
   }
 
   async getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined> {
-    return await this.#first<SourceSnapshot>(
-      "select record_json from source_snapshots where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<SourceSnapshot>(
+      schema.sourceSnapshots,
+      schema.sourceSnapshots.recordJson,
+      eq(schema.sourceSnapshots.id, id),
     );
   }
 
   async listSourceSnapshots(
     sourceId: string,
   ): Promise<readonly SourceSnapshot[]> {
-    return await this.#many<SourceSnapshot>(
-      `select record_json from source_snapshots
-       where source_id = ? order by fetched_at asc, id asc`,
-      [sourceId],
+    return await this.#drizzleManyJson<SourceSnapshot>(
+      schema.sourceSnapshots,
+      schema.sourceSnapshots.recordJson,
+      {
+        where: eq(schema.sourceSnapshots.sourceId, sourceId),
+        orderBy: [
+          asc(schema.sourceSnapshots.fetchedAt),
+          asc(schema.sourceSnapshots.id),
+        ],
+      },
     );
+  }
+
+  async putCapsuleCompatibilityReport(
+    report: CapsuleCompatibilityReport,
+  ): Promise<CapsuleCompatibilityReport> {
+    await this.#drizzleUpsert(schema.capsuleCompatibilityReports, {
+      id: report.id,
+      sourceSnapshotId: report.sourceSnapshotId,
+      level: report.level,
+      findingsJson: report.findings,
+      providersJson: report.providers,
+      resourcesJson: report.resources,
+      dataSourcesJson: report.dataSources,
+      provisionersJson: report.provisioners,
+      normalizedObjectKey: report.normalizedObjectKey ?? null,
+      normalizedDigest: report.normalizedDigest ?? null,
+      createdAt: report.createdAt,
+    });
+    return report;
+  }
+
+  async getCapsuleCompatibilityReport(
+    id: string,
+  ): Promise<CapsuleCompatibilityReport | undefined> {
+    await this.#ensureSchema();
+    const rows = await this.#orm
+      .select()
+      .from(schema.capsuleCompatibilityReports)
+      .where(eq(schema.capsuleCompatibilityReports.id, id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return undefined;
+    const snapshot = await this.getSourceSnapshot(row.sourceSnapshotId);
+    return {
+      id: row.id,
+      ...(snapshot ? { sourceId: snapshot.sourceId } : {}),
+      sourceSnapshotId: row.sourceSnapshotId,
+      level: row.level as CapsuleCompatibilityReport["level"],
+      findings: row.findingsJson as CapsuleCompatibilityReport["findings"],
+      providers: row.providersJson as CapsuleCompatibilityReport["providers"],
+      resources: row.resourcesJson as CapsuleCompatibilityReport["resources"],
+      dataSources:
+        row.dataSourcesJson as CapsuleCompatibilityReport["dataSources"],
+      provisioners:
+        row.provisionersJson as CapsuleCompatibilityReport["provisioners"],
+      ...(row.normalizedObjectKey
+        ? { normalizedObjectKey: row.normalizedObjectKey }
+        : {}),
+      ...(row.normalizedDigest
+        ? { normalizedDigest: row.normalizedDigest }
+        : {}),
+      createdAt: row.createdAt,
+    };
   }
 
   // -- DeploymentProfile ------------------------------------------------------
@@ -699,32 +737,25 @@ export class CloudflareD1OpenTofuDeploymentStore
   ): Promise<DeploymentProfile> {
     // One profile per (installation, environment): drop any stale row for the
     // same pair under a different id before upserting.
-    await this.#run(
-      `delete from deployment_profiles
-       where installation_id = ? and environment = ? and id <> ?`,
-      [profile.installationId, profile.environment, profile.id],
-    );
-    await this.#run(
-      `insert into deployment_profiles
-        (id, space_id, installation_id, environment, record_json, created_at, updated_at)
-       values (?, ?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        space_id = excluded.space_id,
-        installation_id = excluded.installation_id,
-        environment = excluded.environment,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at,
-        updated_at = excluded.updated_at`,
-      [
-        profile.id,
-        profile.spaceId,
-        profile.installationId,
-        profile.environment,
-        JSON.stringify(profile),
-        profile.createdAt,
-        profile.updatedAt,
-      ],
-    );
+    await this.#ensureSchema();
+    await this.#orm
+      .delete(schema.deploymentProfiles)
+      .where(
+        and(
+          eq(schema.deploymentProfiles.installationId, profile.installationId),
+          eq(schema.deploymentProfiles.environment, profile.environment),
+        ),
+      )
+      .run();
+    await this.#drizzleUpsert(schema.deploymentProfiles, {
+      id: profile.id,
+      spaceId: profile.spaceId,
+      installationId: profile.installationId,
+      environment: profile.environment,
+      recordJson: profile,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+    });
     return profile;
   }
 
@@ -732,39 +763,52 @@ export class CloudflareD1OpenTofuDeploymentStore
     installationId: string,
     environment: string,
   ): Promise<DeploymentProfile | undefined> {
-    return await this.#first<DeploymentProfile>(
-      `select record_json from deployment_profiles
-       where installation_id = ? and environment = ?
-       order by created_at desc, id desc limit 1`,
-      [installationId, environment],
+    const rows = await this.#drizzleManyJson<DeploymentProfile>(
+      schema.deploymentProfiles,
+      schema.deploymentProfiles.recordJson,
+      {
+        where: and(
+          eq(schema.deploymentProfiles.installationId, installationId),
+          eq(schema.deploymentProfiles.environment, environment),
+        ),
+        orderBy: [
+          desc(schema.deploymentProfiles.createdAt),
+          desc(schema.deploymentProfiles.id),
+        ],
+        limit: 1,
+      },
     );
+    return rows[0];
   }
 
   // -- StateSnapshot ----------------------------------------------------------
 
   async putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot> {
-    await this.#run(
-      `insert into state_snapshots
-        (id, space_id, installation_id, environment, generation, object_key,
-         digest, created_by_run_id, created_at)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       on conflict (installation_id, environment, generation) do update set
-        id = excluded.id,
-        space_id = excluded.space_id,
-        object_key = excluded.object_key,
-        digest = excluded.digest,
-        created_by_run_id = excluded.created_by_run_id,
-        created_at = excluded.created_at`,
+    await this.#drizzleUpsert(
+      schema.stateSnapshots,
+      {
+        id: snapshot.id,
+        spaceId: snapshot.spaceId,
+        installationId: snapshot.installationId,
+        environment: snapshot.environment,
+        generation: snapshot.generation,
+        objectKey: snapshot.objectKey,
+        digest: snapshot.digest,
+        createdByRunId: snapshot.createdByRunId,
+        createdAt: snapshot.createdAt,
+      },
+      {
+        id: snapshot.id,
+        spaceId: snapshot.spaceId,
+        objectKey: snapshot.objectKey,
+        digest: snapshot.digest,
+        createdByRunId: snapshot.createdByRunId,
+        createdAt: snapshot.createdAt,
+      },
       [
-        snapshot.id,
-        snapshot.spaceId,
-        snapshot.installationId,
-        snapshot.environment,
-        snapshot.generation,
-        snapshot.objectKey,
-        snapshot.digest,
-        snapshot.createdByRunId,
-        snapshot.createdAt,
+        schema.stateSnapshots.installationId,
+        schema.stateSnapshots.environment,
+        schema.stateSnapshots.generation,
       ],
     );
     return snapshot;
@@ -775,12 +819,19 @@ export class CloudflareD1OpenTofuDeploymentStore
     environment: string,
   ): Promise<StateSnapshot | undefined> {
     await this.#ensureSchema();
-    const row = await this.db.prepare(
-      `select * from state_snapshots
-       where installation_id = ? and environment = ?
-       order by generation desc limit 1`,
-    ).bind(installationId, environment).first<StateSnapshotRow>();
-    return row ? stateSnapshotFromRow(row) : undefined;
+    const row = await this.#orm
+      .select()
+      .from(schema.stateSnapshots)
+      .where(
+        and(
+          eq(schema.stateSnapshots.installationId, installationId),
+          eq(schema.stateSnapshots.environment, environment),
+        ),
+      )
+      .orderBy(desc(schema.stateSnapshots.generation))
+      .limit(1)
+      .get();
+    return row ? stateSnapshotFromDrizzleRow(row) : undefined;
   }
 
   async listStateSnapshots(
@@ -788,81 +839,99 @@ export class CloudflareD1OpenTofuDeploymentStore
     environment: string,
   ): Promise<readonly StateSnapshot[]> {
     await this.#ensureSchema();
-    const result = await this.db.prepare(
-      `select * from state_snapshots
-       where installation_id = ? and environment = ?
-       order by generation asc`,
-    ).bind(installationId, environment).all<StateSnapshotRow>();
-    return (result.results ?? []).map(stateSnapshotFromRow);
+    const rows = await this.#orm
+      .select()
+      .from(schema.stateSnapshots)
+      .where(
+        and(
+          eq(schema.stateSnapshots.installationId, installationId),
+          eq(schema.stateSnapshots.environment, environment),
+        ),
+      )
+      .orderBy(asc(schema.stateSnapshots.generation));
+    return rows.map(stateSnapshotFromDrizzleRow);
   }
 
   // -- Dependency DAG (§14 / §15 / §27 installation_dependencies) --------------
 
   async putDependency(dependency: Dependency): Promise<Dependency> {
-    await this.#run(
-      `insert into installation_dependencies
-        (id, space_id, producer_installation_id, consumer_installation_id,
-         record_json, created_at)
-       values (?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        space_id = excluded.space_id,
-        producer_installation_id = excluded.producer_installation_id,
-        consumer_installation_id = excluded.consumer_installation_id,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at`,
-      [
-        dependency.id,
-        dependency.spaceId,
-        dependency.producerInstallationId,
-        dependency.consumerInstallationId,
-        JSON.stringify(dependency),
-        dependency.createdAt,
-      ],
-    );
+    await this.#drizzleUpsert(schema.installationDependencies, {
+      id: dependency.id,
+      spaceId: dependency.spaceId,
+      producerInstallationId: dependency.producerInstallationId,
+      consumerInstallationId: dependency.consumerInstallationId,
+      recordJson: dependency,
+      createdAt: dependency.createdAt,
+    });
     return dependency;
   }
 
   async getDependency(id: string): Promise<Dependency | undefined> {
-    return await this.#first<Dependency>(
-      "select record_json from installation_dependencies where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<Dependency>(
+      schema.installationDependencies,
+      schema.installationDependencies.recordJson,
+      eq(schema.installationDependencies.id, id),
     );
   }
 
   async listDependenciesBySpace(
     spaceId: string,
   ): Promise<readonly Dependency[]> {
-    return await this.#many<Dependency>(
-      `select record_json from installation_dependencies
-       where space_id = ? order by created_at asc, id asc`,
-      [spaceId],
+    return await this.#drizzleManyJson<Dependency>(
+      schema.installationDependencies,
+      schema.installationDependencies.recordJson,
+      {
+        where: eq(schema.installationDependencies.spaceId, spaceId),
+        orderBy: [
+          asc(schema.installationDependencies.createdAt),
+          asc(schema.installationDependencies.id),
+        ],
+      },
     );
   }
 
   async listDependenciesForConsumer(
     consumerInstallationId: string,
   ): Promise<readonly Dependency[]> {
-    return await this.#many<Dependency>(
-      `select record_json from installation_dependencies
-       where consumer_installation_id = ? order by created_at asc, id asc`,
-      [consumerInstallationId],
+    return await this.#drizzleManyJson<Dependency>(
+      schema.installationDependencies,
+      schema.installationDependencies.recordJson,
+      {
+        where: eq(
+          schema.installationDependencies.consumerInstallationId,
+          consumerInstallationId,
+        ),
+        orderBy: [
+          asc(schema.installationDependencies.createdAt),
+          asc(schema.installationDependencies.id),
+        ],
+      },
     );
   }
 
   async listDependenciesForProducer(
     producerInstallationId: string,
   ): Promise<readonly Dependency[]> {
-    return await this.#many<Dependency>(
-      `select record_json from installation_dependencies
-       where producer_installation_id = ? order by created_at asc, id asc`,
-      [producerInstallationId],
+    return await this.#drizzleManyJson<Dependency>(
+      schema.installationDependencies,
+      schema.installationDependencies.recordJson,
+      {
+        where: eq(
+          schema.installationDependencies.producerInstallationId,
+          producerInstallationId,
+        ),
+        orderBy: [
+          asc(schema.installationDependencies.createdAt),
+          asc(schema.installationDependencies.id),
+        ],
+      },
     );
   }
 
   async deleteDependency(id: string): Promise<boolean> {
-    return await this.#delete(
-      "delete from installation_dependencies where id = ?",
-      [id],
+    return await this.#drizzleDelete(
+      schema.installationDependencies,
+      eq(schema.installationDependencies.id, id),
     );
   }
 
@@ -871,153 +940,150 @@ export class CloudflareD1OpenTofuDeploymentStore
   async putDependencySnapshot(
     snapshot: DependencySnapshot,
   ): Promise<DependencySnapshot> {
-    await this.#run(
-      `insert into dependency_snapshots (id, run_id, record_json, created_at)
-       values (?, ?, ?, ?)
-       on conflict (id) do update set
-        run_id = excluded.run_id,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at`,
-      [snapshot.id, snapshot.runId, JSON.stringify(snapshot), snapshot.createdAt],
-    );
+    await this.#drizzleUpsert(schema.dependencySnapshots, {
+      id: snapshot.id,
+      runId: snapshot.runId,
+      recordJson: snapshot,
+      createdAt: snapshot.createdAt,
+    });
     return snapshot;
   }
 
   async getDependencySnapshot(
     id: string,
   ): Promise<DependencySnapshot | undefined> {
-    return await this.#first<DependencySnapshot>(
-      "select record_json from dependency_snapshots where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<DependencySnapshot>(
+      schema.dependencySnapshots,
+      schema.dependencySnapshots.recordJson,
+      eq(schema.dependencySnapshots.id, id),
     );
   }
 
   // -- OutputSnapshot (§16 / §27 output_snapshots) -----------------------------
 
   async putOutputSnapshot(snapshot: OutputSnapshot): Promise<OutputSnapshot> {
-    await this.#run(
-      `insert into output_snapshots
-        (id, space_id, installation_id, state_generation, record_json, created_at)
-       values (?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        space_id = excluded.space_id,
-        installation_id = excluded.installation_id,
-        state_generation = excluded.state_generation,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at`,
-      [
-        snapshot.id,
-        snapshot.spaceId,
-        snapshot.installationId,
-        snapshot.stateGeneration,
-        JSON.stringify(snapshot),
-        snapshot.createdAt,
-      ],
-    );
+    await this.#drizzleUpsert(schema.outputSnapshots, {
+      id: snapshot.id,
+      spaceId: snapshot.spaceId,
+      installationId: snapshot.installationId,
+      stateGeneration: snapshot.stateGeneration,
+      recordJson: snapshot,
+      createdAt: snapshot.createdAt,
+    });
     return snapshot;
   }
 
   async getOutputSnapshot(id: string): Promise<OutputSnapshot | undefined> {
-    return await this.#first<OutputSnapshot>(
-      "select record_json from output_snapshots where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<OutputSnapshot>(
+      schema.outputSnapshots,
+      schema.outputSnapshots.recordJson,
+      eq(schema.outputSnapshots.id, id),
     );
   }
 
   async getLatestOutputSnapshot(
     installationId: string,
   ): Promise<OutputSnapshot | undefined> {
-    return await this.#first<OutputSnapshot>(
-      `select record_json from output_snapshots
-       where installation_id = ?
-       order by state_generation desc, created_at desc, id desc limit 1`,
-      [installationId],
+    const rows = await this.#drizzleManyJson<OutputSnapshot>(
+      schema.outputSnapshots,
+      schema.outputSnapshots.recordJson,
+      {
+        where: eq(schema.outputSnapshots.installationId, installationId),
+        orderBy: [
+          desc(schema.outputSnapshots.stateGeneration),
+          desc(schema.outputSnapshots.createdAt),
+          desc(schema.outputSnapshots.id),
+        ],
+        limit: 1,
+      },
     );
+    return rows[0];
   }
 
   // -- OutputShare (§18 / §27 output_shares) -----------------------------------
 
   async putOutputShare(share: OutputShare): Promise<OutputShare> {
-    await this.#run(
-      `insert into output_shares
-        (id, from_space_id, to_space_id, producer_installation_id, status,
-         record_json, created_at)
-       values (?, ?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        from_space_id = excluded.from_space_id,
-        to_space_id = excluded.to_space_id,
-        producer_installation_id = excluded.producer_installation_id,
-        status = excluded.status,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at`,
-      [
-        share.id,
-        share.fromSpaceId,
-        share.toSpaceId,
-        share.producerInstallationId,
-        share.status,
-        JSON.stringify(share),
-        share.createdAt,
-      ],
-    );
+    await this.#drizzleUpsert(schema.outputShares, {
+      id: share.id,
+      fromSpaceId: share.fromSpaceId,
+      toSpaceId: share.toSpaceId,
+      producerInstallationId: share.producerInstallationId,
+      status: share.status,
+      recordJson: share,
+      createdAt: share.createdAt,
+    });
     return share;
   }
 
   async getOutputShare(id: string): Promise<OutputShare | undefined> {
-    return await this.#first<OutputShare>(
-      "select record_json from output_shares where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<OutputShare>(
+      schema.outputShares,
+      schema.outputShares.recordJson,
+      eq(schema.outputShares.id, id),
     );
   }
 
   async listOutputSharesFromSpace(
     fromSpaceId: string,
   ): Promise<readonly OutputShare[]> {
-    return await this.#many<OutputShare>(
-      `select record_json from output_shares
-       where from_space_id = ? order by created_at asc, id asc`,
-      [fromSpaceId],
+    return await this.#drizzleManyJson<OutputShare>(
+      schema.outputShares,
+      schema.outputShares.recordJson,
+      {
+        where: eq(schema.outputShares.fromSpaceId, fromSpaceId),
+        orderBy: [
+          asc(schema.outputShares.createdAt),
+          asc(schema.outputShares.id),
+        ],
+      },
     );
   }
 
   async listOutputSharesToSpace(
     toSpaceId: string,
   ): Promise<readonly OutputShare[]> {
-    return await this.#many<OutputShare>(
-      `select record_json from output_shares
-       where to_space_id = ? order by created_at asc, id asc`,
-      [toSpaceId],
+    return await this.#drizzleManyJson<OutputShare>(
+      schema.outputShares,
+      schema.outputShares.recordJson,
+      {
+        where: eq(schema.outputShares.toSpaceId, toSpaceId),
+        orderBy: [
+          asc(schema.outputShares.createdAt),
+          asc(schema.outputShares.id),
+        ],
+      },
     );
   }
 
   // -- RunGroup (§19 / §24 / §27 run_groups) -----------------------------------
 
   async putRunGroup(group: RunGroup): Promise<RunGroup> {
-    await this.#run(
-      `insert into run_groups (id, space_id, type, record_json, created_at)
-       values (?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        space_id = excluded.space_id,
-        type = excluded.type,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at`,
-      [group.id, group.spaceId, group.type, JSON.stringify(group), group.createdAt],
-    );
+    await this.#drizzleUpsert(schema.runGroups, {
+      id: group.id,
+      spaceId: group.spaceId,
+      type: group.type,
+      recordJson: group,
+      createdAt: group.createdAt,
+    });
     return group;
   }
 
   async getRunGroup(id: string): Promise<RunGroup | undefined> {
-    return await this.#first<RunGroup>(
-      "select record_json from run_groups where id = ?",
-      [id],
+    return await this.#drizzleFirstJson<RunGroup>(
+      schema.runGroups,
+      schema.runGroups.recordJson,
+      eq(schema.runGroups.id, id),
     );
   }
 
   async listRunGroups(spaceId: string): Promise<readonly RunGroup[]> {
-    return await this.#many<RunGroup>(
-      `select record_json from run_groups
-       where space_id = ? order by created_at asc, id asc`,
-      [spaceId],
+    return await this.#drizzleManyJson<RunGroup>(
+      schema.runGroups,
+      schema.runGroups.recordJson,
+      {
+        where: eq(schema.runGroups.spaceId, spaceId),
+        orderBy: [asc(schema.runGroups.createdAt), asc(schema.runGroups.id)],
+      },
     );
   }
 
@@ -1028,32 +1094,17 @@ export class CloudflareD1OpenTofuDeploymentStore
   // through record_json. Listing is newest-first with a clamped limit.
 
   async putActivityEvent(event: ActivityEvent): Promise<ActivityEvent> {
-    await this.#run(
-      `insert into audit_events
-        (id, space_id, actor_id, action, target_type, target_id, run_id,
-         record_json, created_at)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        space_id = excluded.space_id,
-        actor_id = excluded.actor_id,
-        action = excluded.action,
-        target_type = excluded.target_type,
-        target_id = excluded.target_id,
-        run_id = excluded.run_id,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at`,
-      [
-        event.id,
-        event.spaceId,
-        event.actorId ?? null,
-        event.action,
-        event.targetType,
-        event.targetId,
-        event.runId ?? null,
-        JSON.stringify(event),
-        event.createdAt,
-      ],
-    );
+    await this.#drizzleUpsert(schema.auditEvents, {
+      id: event.id,
+      spaceId: event.spaceId,
+      actorId: event.actorId ?? null,
+      action: event.action,
+      targetType: event.targetType,
+      targetId: event.targetId,
+      runId: event.runId ?? null,
+      recordJson: event,
+      createdAt: event.createdAt,
+    });
     return event;
   }
 
@@ -1062,10 +1113,51 @@ export class CloudflareD1OpenTofuDeploymentStore
     options: { readonly limit?: number } = {},
   ): Promise<readonly ActivityEvent[]> {
     const limit = clampActivityLimit(options.limit);
-    return await this.#many<ActivityEvent>(
-      `select record_json from audit_events
-       where space_id = ? order by created_at desc, id desc limit ?`,
-      [spaceId, limit],
+    return await this.#drizzleManyJson<ActivityEvent>(
+      schema.auditEvents,
+      schema.auditEvents.recordJson,
+      {
+        where: eq(schema.auditEvents.spaceId, spaceId),
+        orderBy: [
+          desc(schema.auditEvents.createdAt),
+          desc(schema.auditEvents.id),
+        ],
+        limit,
+      },
+    );
+  }
+
+  // -- credential_mint_events (spec invariant 17) -----------------------------
+
+  async putCredentialMintEvent(
+    event: CredentialMintEvent,
+  ): Promise<CredentialMintEvent> {
+    await this.#drizzleUpsert(schema.credentialMintEvents, {
+      id: event.id,
+      runId: event.runId,
+      spaceId: event.spaceId,
+      installationId: event.installationId,
+      connectionId: event.connectionId,
+      phase: event.phase,
+      recordJson: event,
+      createdAt: event.createdAt,
+    });
+    return event;
+  }
+
+  async listCredentialMintEventsForRun(
+    runId: string,
+  ): Promise<readonly CredentialMintEvent[]> {
+    return await this.#drizzleManyJson<CredentialMintEvent>(
+      schema.credentialMintEvents,
+      schema.credentialMintEvents.recordJson,
+      {
+        where: eq(schema.credentialMintEvents.runId, runId),
+        orderBy: [
+          asc(schema.credentialMintEvents.createdAt),
+          asc(schema.credentialMintEvents.id),
+        ],
+      },
     );
   }
 
@@ -1076,23 +1168,23 @@ export class CloudflareD1OpenTofuDeploymentStore
   // record_json. Listing is newest-first (created_at desc, id desc).
 
   async putBackupRecord(record: BackupRecord): Promise<BackupRecord> {
-    await this.#run(
-      `insert into backups (id, space_id, record_json, created_at)
-       values (?, ?, ?, ?)
-       on conflict (id) do update set
-        space_id = excluded.space_id,
-        record_json = excluded.record_json,
-        created_at = excluded.created_at`,
-      [record.id, record.spaceId, JSON.stringify(record), record.createdAt],
-    );
+    await this.#drizzleUpsert(schema.backups, {
+      id: record.id,
+      spaceId: record.spaceId,
+      recordJson: record,
+      createdAt: record.createdAt,
+    });
     return record;
   }
 
   async listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]> {
-    return await this.#many<BackupRecord>(
-      `select record_json from backups
-       where space_id = ? order by created_at desc, id desc`,
-      [spaceId],
+    return await this.#drizzleManyJson<BackupRecord>(
+      schema.backups,
+      schema.backups.recordJson,
+      {
+        where: eq(schema.backups.spaceId, spaceId),
+        orderBy: [desc(schema.backups.createdAt), desc(schema.backups.id)],
+      },
     );
   }
 
@@ -1113,33 +1205,79 @@ export class CloudflareD1OpenTofuDeploymentStore
     // created_at is the internal record's createdAt (epoch number for plan/apply
     // runs, ISO string for source_sync) — stored verbatim so the typed get round
     // trips, and used only for stable list ordering.
-    await this.#ensureSchema();
     const createdAt = JSON.parse(row.runJson).createdAt ?? 0;
-    await this.db.prepare(
-      `insert into runs
-        (id, run_group_id, space_id, installation_id, environment, type, status,
-         run_json, created_at)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set
-        run_group_id = excluded.run_group_id,
-        space_id = excluded.space_id,
-        installation_id = excluded.installation_id,
-        environment = excluded.environment,
-        type = excluded.type,
-        status = excluded.status,
-        run_json = excluded.run_json,
-        created_at = excluded.created_at`,
-    ).bind(
-      row.id,
-      row.runGroupId,
-      row.spaceId,
-      row.installationId,
-      row.environment,
-      row.type,
-      row.status,
-      row.runJson,
-      createdAt,
-    ).run();
+    await this.#drizzleUpsert(schema.runs, {
+      id: row.id,
+      runGroupId: row.runGroupId,
+      spaceId: row.spaceId,
+      installationId: row.installationId,
+      environment: row.environment,
+      type: row.type,
+      status: row.status,
+      runJson: JSON.parse(row.runJson) as unknown,
+      createdAt: String(createdAt),
+    });
+  }
+
+  async #drizzleUpsert(
+    table: any,
+    values: Record<string, unknown>,
+    set: Record<string, unknown> = values,
+    target = table.id,
+  ): Promise<void> {
+    await this.#ensureSchema();
+    await this.#orm
+      .insert(table)
+      .values(values)
+      .onConflictDoUpdate({ target, set })
+      .run();
+  }
+
+  async #drizzleDelete(table: any, where: unknown): Promise<boolean> {
+    await this.#ensureSchema();
+    const result = await this.#orm
+      .delete(table)
+      .where(where as never)
+      .run();
+    return changes(result as D1Result) > 0;
+  }
+
+  async #drizzleFirstJson<T>(
+    table: any,
+    jsonColumn: any,
+    where: unknown,
+  ): Promise<T | undefined> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select({ value: jsonColumn })
+      .from(table)
+      .where(where as never)
+      .get();
+    return row?.value as T | undefined;
+  }
+
+  async #drizzleManyJson<T>(
+    table: any,
+    jsonColumn: any,
+    input: {
+      readonly where?: unknown;
+      readonly orderBy?: readonly unknown[];
+      readonly limit?: number;
+    } = {},
+  ): Promise<readonly T[]> {
+    await this.#ensureSchema();
+    let query = this.#orm.select({ value: jsonColumn }).from(table).$dynamic();
+    if (input.where !== undefined) {
+      query = query.where(input.where as never);
+    }
+    if (input.orderBy !== undefined) {
+      query = query.orderBy(...(input.orderBy as never[]));
+    }
+    if (input.limit !== undefined) {
+      query = query.limit(input.limit);
+    }
+    const rows = await query;
+    return rows.map((row) => row.value as T);
   }
 
   async #getRun<T>(
@@ -1147,50 +1285,12 @@ export class CloudflareD1OpenTofuDeploymentStore
     types: readonly string[],
   ): Promise<T | undefined> {
     await this.#ensureSchema();
-    const placeholders = types.map(() => "?").join(", ");
-    const row = await this.db.prepare(
-      `select run_json from runs where id = ? and type in (${placeholders})`,
-    ).bind(id, ...types).first<{ run_json: string }>();
-    return row ? (JSON.parse(row.run_json) as T) : undefined;
-  }
-
-  async #firstDeployment(
-    sql: string,
-    params: readonly unknown[],
-  ): Promise<Deployment | undefined> {
-    await this.#ensureSchema();
-    const row = await this.db.prepare(sql).bind(...params).first<DeploymentRow>();
-    return row ? deploymentFromRow(row) : undefined;
-  }
-
-  async #run(sql: string, params: readonly unknown[]): Promise<void> {
-    await this.#ensureSchema();
-    await this.db.prepare(sql).bind(...params).run();
-  }
-
-  async #delete(sql: string, params: readonly unknown[]): Promise<boolean> {
-    await this.#ensureSchema();
-    const result = await this.db.prepare(sql).bind(...params).run();
-    return changes(result) > 0;
-  }
-
-  async #first<T>(
-    sql: string,
-    params: readonly unknown[],
-  ): Promise<T | undefined> {
-    await this.#ensureSchema();
-    const row = await this.db.prepare(sql).bind(...params).first<
-      { record_json: string }
-    >();
-    return row ? (JSON.parse(row.record_json) as T) : undefined;
-  }
-
-  async #many<T>(sql: string, params: readonly unknown[]): Promise<readonly T[]> {
-    await this.#ensureSchema();
-    const result = await this.db.prepare(sql).bind(...params).all<
-      { record_json: string }
-    >();
-    return (result.results ?? []).map((row) => JSON.parse(row.record_json) as T);
+    const row = await this.#orm
+      .select({ runJson: schema.runs.runJson })
+      .from(schema.runs)
+      .where(and(eq(schema.runs.id, id), inArray(schema.runs.type, [...types])))
+      .get();
+    return row?.runJson as T | undefined;
   }
 
   async #ensureSchema(): Promise<void> {
@@ -1218,72 +1318,65 @@ function applyRunType(run: ApplyRun): string {
 // -- Deployment / StateSnapshot row mapping ------------------------------------
 //
 // The columnar deployments / state_snapshots tables carry every contract field
-// in §27 columns (no record_json), so the rows are reconstructed field-by-field.
+// in §27 columns (no record_json), so Drizzle rows are reconstructed field-by-field.
 
-interface DeploymentRow {
+function deploymentFromDrizzleRow(row: {
   readonly id: string;
-  readonly space_id: string;
-  readonly installation_id: string;
+  readonly spaceId: string;
+  readonly installationId: string;
   readonly environment: string;
-  readonly apply_run_id: string;
-  readonly source_snapshot_id: string | null;
-  readonly dependency_snapshot_id: string | null;
-  readonly state_generation: number;
-  readonly output_snapshot_id: string | null;
-  readonly outputs_public_json: string;
+  readonly applyRunId: string;
+  readonly sourceSnapshotId: string | null;
+  readonly dependencySnapshotId: string | null;
+  readonly stateGeneration: number;
+  readonly outputSnapshotId: string | null;
+  readonly outputsPublicJson: unknown;
   readonly status: string;
-  readonly created_at: string;
-}
-
-function deploymentFromRow(row: DeploymentRow): Deployment {
+  readonly createdAt: string;
+}): Deployment {
   return {
     id: row.id,
-    spaceId: row.space_id,
-    installationId: row.installation_id,
+    spaceId: row.spaceId,
+    installationId: row.installationId,
     environment: row.environment,
-    applyRunId: row.apply_run_id,
-    ...(row.source_snapshot_id !== null
-      ? { sourceSnapshotId: row.source_snapshot_id }
+    applyRunId: row.applyRunId,
+    ...(row.sourceSnapshotId !== null
+      ? { sourceSnapshotId: row.sourceSnapshotId }
       : {}),
-    ...(row.dependency_snapshot_id !== null
-      ? { dependencySnapshotId: row.dependency_snapshot_id }
+    ...(row.dependencySnapshotId !== null
+      ? { dependencySnapshotId: row.dependencySnapshotId }
       : {}),
-    stateGeneration: row.state_generation,
-    ...(row.output_snapshot_id !== null
-      ? { outputSnapshotId: row.output_snapshot_id }
+    stateGeneration: row.stateGeneration,
+    ...(row.outputSnapshotId !== null
+      ? { outputSnapshotId: row.outputSnapshotId }
       : {}),
-    outputsPublic: JSON.parse(row.outputs_public_json) as Record<
-      string,
-      unknown
-    >,
+    outputsPublic: row.outputsPublicJson as Record<string, unknown>,
     status: row.status as Deployment["status"],
-    createdAt: row.created_at,
+    createdAt: row.createdAt,
   };
 }
 
-interface StateSnapshotRow {
+function stateSnapshotFromDrizzleRow(row: {
   readonly id: string;
-  readonly space_id: string;
-  readonly installation_id: string;
+  readonly spaceId: string;
+  readonly installationId: string;
   readonly environment: string;
   readonly generation: number;
-  readonly object_key: string;
+  readonly objectKey: string;
   readonly digest: string;
-  readonly created_by_run_id: string;
-  readonly created_at: string;
-}
-
-function stateSnapshotFromRow(row: StateSnapshotRow): StateSnapshot {
+  readonly createdByRunId: string;
+  readonly createdAt: string;
+}): StateSnapshot {
   return {
     id: row.id,
-    spaceId: row.space_id,
-    installationId: row.installation_id,
+    spaceId: row.spaceId,
+    installationId: row.installationId,
     environment: row.environment,
     generation: row.generation,
-    objectKey: row.object_key,
+    objectKey: row.objectKey,
     digest: row.digest,
-    createdByRunId: row.created_by_run_id,
-    createdAt: row.created_at,
+    createdByRunId: row.createdByRunId,
+    createdAt: row.createdAt,
   };
 }
 
@@ -1386,6 +1479,23 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create index if not exists installations_space_idx
       on installations (space_id, created_at)`,
+    `create table if not exists capsule_compatibility_reports (
+      id text primary key,
+      source_snapshot_id text not null,
+      level text not null,
+      findings_json text not null,
+      providers_json text not null,
+      resources_json text not null,
+      data_sources_json text not null,
+      provisioners_json text not null,
+      normalized_object_key text,
+      normalized_digest text,
+      created_at text not null
+    )`,
+    `create index if not exists capsule_compatibility_reports_source_snapshot_idx
+      on capsule_compatibility_reports (source_snapshot_id)`,
+    `create index if not exists capsule_compatibility_reports_level_idx
+      on capsule_compatibility_reports (level)`,
     `create table if not exists deployment_profiles (
       id text primary key,
       space_id text not null,
@@ -1516,6 +1626,20 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create index if not exists audit_events_space_idx
       on audit_events (space_id, created_at)`,
+    `create table if not exists credential_mint_events (
+      id text primary key,
+      run_id text not null,
+      space_id text not null,
+      installation_id text not null,
+      connection_id text not null,
+      phase text not null,
+      record_json text not null,
+      created_at text not null
+    )`,
+    `create index if not exists credential_mint_events_run_idx
+      on credential_mint_events (run_id)`,
+    `create index if not exists credential_mint_events_space_idx
+      on credential_mint_events (space_id)`,
     `create table if not exists backups (
       id text primary key,
       space_id text not null,

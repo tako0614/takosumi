@@ -2,12 +2,9 @@
  * status-labels — non-developer Japanese label maps for the dashboard.
  *
  * Single source of truth for turning internal status strings into the
- * user-facing「アプリ」vocabulary. Phase 0 of the PaaS-kernel repositioning:
- * the dashboard speaks App / Environment / Connection / 変更を確認 / 公開, while
- * the internal concepts (PlanRun / ApplyRun, installation status enum) keep
- * their code identifiers. Views import these maps instead of inlining raw
- * status strings so later phases (Connections / Environments screens) reuse
- * the exact same wording.
+ * user-facing「アプリ」vocabulary. The dashboard speaks Installation /
+ * Connection / 変更を確認 / 公開 while Run records keep their code identifiers.
+ * Views import these maps instead of inlining raw status strings.
  *
  * Code identifiers and API field names are intentionally unchanged — only the
  * primary, user-visible label is localized. Run ids and other expert details
@@ -35,7 +32,7 @@ export function installationStatusLabel(status: string | undefined): string {
 }
 
 /**
- * PlanRun status → 変更の確認 vocabulary. Plan is "変更を確認" in the primary
+ * Plan Run status → 変更の確認 vocabulary. Plan is "変更を確認" in the primary
  * flow; while it runs it is「変更を確認中」, once done「変更の確認が完了」.
  * `queued` / `blocked` / `failed` are shared with apply runs.
  */
@@ -62,7 +59,7 @@ export function planRunStatusLabel(status: string | undefined): string {
 }
 
 /**
- * ApplyRun status →「反映」/「公開」vocabulary. Apply is "公開"/"反映" in the
+ * Apply Run status →「反映」/「公開」vocabulary. Apply is "公開"/"反映" in the
  * primary flow; while it runs it is「反映中」, once done「公開済み」.
  * `queued` / `blocked` / `failed` are shared with plan runs.
  */
@@ -139,14 +136,14 @@ export function exportStatusLabel(status: string | undefined): string {
 
 /**
  * Deploy-control Installation status (spec §5):
- * `installing` / `active` / `stale` / `error` / `destroying` / `destroyed`.
+ * `pending` / `active` / `stale` / `error` / `disabled` / `destroyed`.
  */
 const CONTROL_INSTALLATION_STATUS_LABELS: Record<string, string> = {
-  installing: "セットアップ中",
+  pending: "準備中",
   active: "稼働中",
   stale: "再適用が必要",
   error: "エラー",
-  destroying: "削除中",
+  disabled: "無効",
   destroyed: "削除済み",
 };
 
@@ -155,6 +152,27 @@ export function controlInstallationStatusLabel(
 ): string {
   if (!status) return UNKNOWN_LABEL;
   return CONTROL_INSTALLATION_STATUS_LABELS[status] ?? status;
+}
+
+/**
+ * Deploy-control Installation status → `.status-*` pill modifier class. Maps the
+ * enum onto the shared ready/installing/error/suspended colour treatment;
+ * `pending` / `stale` reuse the amber treatment as "needs attention".
+ */
+const CONTROL_INSTALLATION_STATUS_CLASSES: Record<string, string> = {
+  active: "status-ready",
+  pending: "status-installing",
+  disabled: "status-suspended",
+  stale: "status-installing",
+  error: "status-error",
+  destroyed: "status-suspended",
+};
+
+export function controlInstallationStatusClass(
+  status: string | undefined,
+): string {
+  if (!status) return "";
+  return CONTROL_INSTALLATION_STATUS_CLASSES[status] ?? "";
 }
 
 /**
@@ -175,6 +193,25 @@ const CONTROL_RUN_STATUS_LABELS: Record<string, string> = {
 export function controlRunStatusLabel(status: string | undefined): string {
   if (!status) return UNKNOWN_LABEL;
   return CONTROL_RUN_STATUS_LABELS[status] ?? status;
+}
+
+/**
+ * Deploy-control Run status → `.status-*` pill modifier class. Maps the enum
+ * onto the shared ready/installing/error/suspended colour treatment.
+ */
+const CONTROL_RUN_STATUS_CLASSES: Record<string, string> = {
+  succeeded: "status-ready",
+  running: "status-installing",
+  queued: "status-installing",
+  waiting_approval: "status-installing",
+  failed: "status-error",
+  expired: "status-error",
+  cancelled: "status-suspended",
+};
+
+export function controlRunStatusClass(status: string | undefined): string {
+  if (!status) return "";
+  return CONTROL_RUN_STATUS_CLASSES[status] ?? "";
 }
 
 /** Run policy status (spec §25): `pass` / `warn` / `deny`. */

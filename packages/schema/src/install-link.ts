@@ -1,5 +1,5 @@
 /**
- * External install link parser (Core Specification §12 / §30).
+ * External install link parser for the public `/install` Capsule entrypoint.
  *
  * External sites hand Takosumi a Git URL; both forms resolve to
  * `{ url, ref, path }` (a credential-less GitAddress seed):
@@ -16,7 +16,7 @@
 export interface InstallLinkTarget {
   readonly url: string;
   readonly ref: string;
-  /** Module path within the repo. Defaults to `"."`. */
+  /** Capsule path within the repo. Defaults to `"."`. */
   readonly path: string;
 }
 
@@ -59,7 +59,7 @@ export function parseInstallSourceParam(
 
 /**
  * Parses an /install link URL accepting both the packed `source=` form and the
- * simple `git=&ref=&path=` form (spec §12). Returns `undefined` when neither
+ * simple `git=&ref=&path=` form. Returns `undefined` when neither
  * form is present or the packed form is malformed.
  */
 export function parseInstallLink(link: URL): InstallLinkTarget | undefined {

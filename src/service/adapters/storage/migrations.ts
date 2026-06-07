@@ -721,11 +721,27 @@ export const postgresStorageTableDefinitions:
       indexes: [["space_id"]],
     },
     {
+      name: "takosumi_capsule_compatibility_reports",
+      domain: "deploy",
+      columns: [
+        "id",
+        "installation_id",
+        "source_snapshot_id",
+        "status",
+        "compatibility",
+        "report_json",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["installation_id"], ["source_snapshot_id"], ["status"]],
+    },
+    {
       // Cross-Space OutputShare grants (§18). A grant from a producer
       // Installation's projected outputs (in from_space_id) to a consumer
-      // Space (to_space_id). share_json carries names + optional aliases only —
-      // sensitive sharing is not supported (invariant 12) and resolved output
-      // VALUES never land in the share.
+      // Space (to_space_id). share_json carries names + optional aliases +
+      // sensitive flags only. Sensitive sharing requires explicit policy and a
+      // host resolver at use time; resolved output VALUES never land in the
+      // share.
       name: "takosumi_output_shares",
       domain: "deploy",
       columns: [
@@ -752,6 +768,118 @@ export const postgresStorageTableDefinitions:
       columns: ["id", "space_id", "backup_json", "created_at"],
       primaryKey: ["id"],
       indexes: [["space_id"]],
+    },
+    {
+      name: "takosumi_billing_accounts",
+      domain: "deploy",
+      columns: [
+        "id",
+        "owner_type",
+        "owner_id",
+        "provider",
+        "status",
+        "account_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["owner_type", "owner_id"], ["status"]],
+    },
+    {
+      name: "takosumi_space_subscriptions",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "billing_account_id",
+        "plan_id",
+        "status",
+        "subscription_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["space_id"], ["billing_account_id"]],
+    },
+    {
+      name: "takosumi_credit_balances",
+      domain: "deploy",
+      columns: [
+        "space_id",
+        "available_credits",
+        "reserved_credits",
+        "monthly_included_credits",
+        "purchased_credits",
+        "updated_at",
+      ],
+      primaryKey: ["space_id"],
+    },
+    {
+      name: "takosumi_usage_events",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "installation_id",
+        "run_id",
+        "kind",
+        "quantity",
+        "credits",
+        "source",
+        "idempotency_key",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["idempotency_key"]],
+      indexes: [["space_id"], ["run_id"]],
+    },
+    {
+      name: "takosumi_credit_reservations",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "run_id",
+        "estimated_credits",
+        "status",
+        "reservation_json",
+        "created_at",
+        "expires_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["space_id"], ["run_id"], ["status"]],
+    },
+    {
+      name: "takosumi_credential_mint_events",
+      domain: "deploy",
+      columns: [
+        "id",
+        "run_id",
+        "space_id",
+        "installation_id",
+        "connection_id",
+        "phase",
+        "event_json",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["run_id"], ["space_id"]],
+    },
+    {
+      name: "takosumi_security_findings",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "installation_id",
+        "run_id",
+        "severity",
+        "type",
+        "finding_json",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["space_id"], ["run_id"], ["severity"]],
     },
   ]);
 
@@ -1581,7 +1709,7 @@ create table if not exists takosumi_opentofu_installations (
   install_config_id      text   not null,
   current_deployment_id  text,
   status                 text   not null
-    check (status in ('installing','active','stale','error','destroying','destroyed')),
+    check (status in ('pending','active','stale','error','disabled','destroyed')),
   installation_json      jsonb  not null,
   created_at             text   not null,
   updated_at             text   not null,
@@ -1599,7 +1727,10 @@ create table if not exists takosumi_opentofu_deployments (
   installation_id  text    not null,
   environment      text    not null,
   apply_run_id     text    not null,
+  source_snapshot_id text  not null,
+  dependency_snapshot_id text,
   state_generation integer not null,
+  output_snapshot_id text  not null,
   status           text    not null
     check (status in ('active','superseded','rolled_back','destroyed')),
   deployment_json  jsonb   not null,
@@ -1747,7 +1878,7 @@ drop table if exists takosumi_audit_events;`,
       version: 38,
       domain: "deploy",
       description:
-        "Create the cross-Space OutputShare ledger (Core Specification §18 output_shares): a grant from a producer Installation's projected spaceOutputs (in from_space_id) to a consumer Space (to_space_id). share_json carries the public OutputShare — entry names + optional aliases only; sensitive sharing is not supported (invariant 12) and resolved output VALUES never land in the share. Searchable columns (from_space_id / to_space_id / producer_installation_id) drive the per-Space listings. No data migration: additive new table.",
+        "Create the cross-Space OutputShare ledger (Core Specification §18 output_shares): a grant from a producer Installation's projected spaceOutputs (in from_space_id) to a consumer Space (to_space_id). share_json carries the public OutputShare — entry names + optional aliases only; sensitive entries require explicit policy and resolved output VALUES never land in the share. Searchable columns (from_space_id / to_space_id / producer_installation_id) drive the per-Space listings. No data migration: additive new table.",
       sql: `create table if not exists takosumi_output_shares (
   id                       text   primary key,
   from_space_id            text   not null,
@@ -1785,5 +1916,157 @@ create index if not exists takosumi_backups_space_idx
   on takosumi_backups (space_id, created_at desc);`,
       down: `drop index if exists takosumi_backups_space_idx;
 drop table if exists takosumi_backups;`,
+    },
+    {
+      id: "deploy.takosumi_capsule_billing_security_ledgers.create",
+      version: 40,
+      domain: "deploy",
+      description:
+        "Create additive Capsule compatibility, billing, credential mint audit, and security finding ledgers for the OpenTofu Module Capsule DAG model. Billing is mode-selectable by operator/self-host configuration: disabled, showback, or enforce.",
+      sql: `create table if not exists takosumi_capsule_compatibility_reports (
+  id                 text   primary key,
+  source_snapshot_id text   not null,
+  level              text   not null
+    check (level in ('ready','auto_capsulized','needs_patch','unsupported')),
+  findings_json      jsonb  not null,
+  providers_json     jsonb  not null,
+  resources_json     jsonb  not null,
+  data_sources_json  jsonb  not null,
+  provisioners_json  jsonb  not null,
+  normalized_object_key text,
+  normalized_digest  text,
+  created_at         text   not null
+);
+create index if not exists takosumi_capsule_compat_reports_source_snapshot_idx
+  on takosumi_capsule_compatibility_reports (source_snapshot_id);
+create index if not exists takosumi_capsule_compat_reports_level_idx
+  on takosumi_capsule_compatibility_reports (level);
+create table if not exists takosumi_billing_accounts (
+  id           text  primary key,
+  owner_type   text  not null
+    check (owner_type in ('user','space')),
+  owner_id     text  not null,
+  provider     text  not null
+    check (provider in ('stripe','manual','none')),
+  status       text  not null,
+  account_json jsonb not null,
+  created_at   text  not null,
+  updated_at   text  not null
+);
+create index if not exists takosumi_billing_accounts_owner_idx
+  on takosumi_billing_accounts (owner_type, owner_id);
+create index if not exists takosumi_billing_accounts_status_idx
+  on takosumi_billing_accounts (status);
+create table if not exists takosumi_space_subscriptions (
+  id                 text  primary key,
+  space_id           text  not null,
+  billing_account_id text  not null,
+  plan_id            text  not null,
+  status             text  not null,
+  subscription_json  jsonb not null,
+  created_at         text  not null,
+  updated_at         text  not null
+);
+create index if not exists takosumi_space_subscriptions_space_idx
+  on takosumi_space_subscriptions (space_id);
+create index if not exists takosumi_space_subscriptions_billing_account_idx
+  on takosumi_space_subscriptions (billing_account_id);
+create table if not exists takosumi_credit_balances (
+  space_id                 text    primary key,
+  available_credits        integer not null,
+  reserved_credits         integer not null,
+  monthly_included_credits integer not null,
+  purchased_credits        integer not null,
+  updated_at               text    not null
+);
+create table if not exists takosumi_usage_events (
+  id              text             primary key,
+  space_id        text             not null,
+  installation_id text,
+  run_id          text,
+  kind            text             not null,
+  quantity        double precision not null,
+  credits         integer          not null,
+  source          text             not null,
+  idempotency_key text             not null unique,
+  created_at      text             not null
+);
+create index if not exists takosumi_usage_events_space_idx
+  on takosumi_usage_events (space_id);
+create index if not exists takosumi_usage_events_run_idx
+  on takosumi_usage_events (run_id);
+create table if not exists takosumi_credit_reservations (
+  id                text    primary key,
+  space_id          text    not null,
+  run_id            text    not null,
+  estimated_credits integer not null,
+  status            text    not null
+    check (status in ('reserved','captured','released','expired')),
+  reservation_json  jsonb   not null,
+  created_at        text    not null,
+  expires_at        text    not null
+);
+create index if not exists takosumi_credit_reservations_space_idx
+  on takosumi_credit_reservations (space_id);
+create index if not exists takosumi_credit_reservations_run_idx
+  on takosumi_credit_reservations (run_id);
+create index if not exists takosumi_credit_reservations_status_idx
+  on takosumi_credit_reservations (status);
+create table if not exists takosumi_credential_mint_events (
+  id              text  primary key,
+  run_id          text  not null,
+  space_id        text  not null,
+  installation_id text  not null,
+  connection_id   text  not null,
+  phase           text  not null,
+  event_json      jsonb not null,
+  created_at      text  not null
+);
+create index if not exists takosumi_credential_mint_events_run_idx
+  on takosumi_credential_mint_events (run_id);
+create index if not exists takosumi_credential_mint_events_space_idx
+  on takosumi_credential_mint_events (space_id);
+create table if not exists takosumi_security_findings (
+  id              text  primary key,
+  space_id        text  not null,
+  installation_id text,
+  run_id          text,
+  severity        text  not null
+    check (severity in ('info','warning','error','critical')),
+  type            text  not null,
+  finding_json    jsonb not null,
+  created_at      text  not null
+);
+create index if not exists takosumi_security_findings_space_idx
+  on takosumi_security_findings (space_id);
+create index if not exists takosumi_security_findings_run_idx
+  on takosumi_security_findings (run_id);
+create index if not exists takosumi_security_findings_severity_idx
+  on takosumi_security_findings (severity);`,
+      down: `drop index if exists takosumi_security_findings_severity_idx;
+drop index if exists takosumi_security_findings_run_idx;
+drop index if exists takosumi_security_findings_space_idx;
+drop table if exists takosumi_security_findings;
+drop index if exists takosumi_credential_mint_events_space_idx;
+drop index if exists takosumi_credential_mint_events_run_idx;
+drop table if exists takosumi_credential_mint_events;
+drop index if exists takosumi_credit_reservations_status_idx;
+drop index if exists takosumi_credit_reservations_run_idx;
+drop index if exists takosumi_credit_reservations_space_idx;
+drop table if exists takosumi_credit_reservations;
+drop index if exists takosumi_usage_events_run_idx;
+drop index if exists takosumi_usage_events_space_idx;
+drop table if exists takosumi_usage_events;
+drop table if exists takosumi_credit_balances;
+drop index if exists takosumi_space_subscriptions_billing_account_idx;
+drop index if exists takosumi_space_subscriptions_space_idx;
+drop table if exists takosumi_space_subscriptions;
+drop index if exists takosumi_billing_accounts_status_idx;
+drop index if exists takosumi_billing_accounts_owner_idx;
+drop table if exists takosumi_billing_accounts;
+drop index if exists takosumi_capsule_compat_reports_status_idx;
+drop index if exists takosumi_capsule_compat_reports_source_snapshot_idx;
+drop index if exists takosumi_capsule_compat_reports_installation_idx;
+drop table if exists takosumi_capsule_compatibility_reports;`,
     },
   ]);

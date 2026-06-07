@@ -49,6 +49,9 @@ test("Cloudflare Worker dispatches service control-plane routes in-process", asy
     "/v1/installations/ins_abcdef12",
     "/v1/installations/ins_abcdef12/deployments",
     "/v1/installations/ins_abcdef12/deployment-outputs",
+    "/v1/installations/inst_abcdef12",
+    "/v1/installations/inst_abcdef12/deployments",
+    "/v1/installations/inst_abcdef12/deployment-outputs",
   ]) {
     calls.length = 0;
     const response = await worker.fetch(
@@ -139,24 +142,129 @@ test("OpenTofu run queue consumer rethrows for retry on a non-final attempt", as
       }, { attempts: 1 }),
       createEnv(),
     ),
+    (error) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, "opentofu run dispatch failed");
+      assert.equal(error.message.includes("run_queue_1"), false);
+      assert.equal(error.cause, undefined);
+      return true;
+    },
   );
 });
 
-test("OpenTofu run queue consumer acks (no rethrow) on the final attempt", async () => {
+test("OpenTofu run queue consumer acks and continues on the final attempt", async () => {
   // On the final delivery the consumer must not rethrow (that would redeliver
-  // forever); the message is acked and the DLQ consumer is the backstop.
+  // forever); the message is acked after the best-effort failed transition and
+  // the rest of the batch is still processed.
   const worker = createCloudflareWorker();
-  let acked = false;
+  const acked: string[] = [];
   await worker.queue(
-    createQueueBatch({
-      kind: "takosumi.opentofu-run@v1",
-      action: "plan",
-      runId: "run_queue_final",
-      spaceId: "space_test",
-    }, { attempts: 3, onAck: () => (acked = true) }),
+    {
+      queue: "takosumi-runs",
+      messages: [
+        {
+          id: "msg_final",
+          attempts: 3,
+          body: {
+            kind: "takosumi.opentofu-run@v1",
+            action: "plan",
+            runId: "run_queue_final",
+            spaceId: "space_test",
+          },
+          ack: () => acked.push("final"),
+        },
+        {
+          id: "msg_invalid",
+          body: {
+            kind: "takosumi.opentofu-run@v1",
+            action: "bogus",
+            runId: "run_queue_invalid",
+            spaceId: "space_test",
+          },
+          ack: () => acked.push("invalid"),
+        },
+      ],
+    },
     createEnv(),
   );
-  assert.equal(acked, true);
+  assert.deepEqual(acked, ["final", "invalid"]);
+});
+
+test("OpenTofu run queue consumer acks invalid message shapes", async () => {
+  const worker = createCloudflareWorker();
+  const acked: string[] = [];
+  await worker.queue(
+    {
+      queue: "takosumi-runs",
+      messages: [
+        {
+          id: "msg_invalid_action",
+          body: {
+            kind: "takosumi.opentofu-run@v1",
+            action: "bogus",
+            runId: "run_queue_invalid",
+            spaceId: "space_test",
+          },
+          ack: () => acked.push("invalid_action"),
+        },
+        {
+          id: "msg_missing_run",
+          body: {
+            kind: "takosumi.opentofu-run@v1",
+            action: "plan",
+            spaceId: "space_test",
+          },
+          ack: () => acked.push("missing_run"),
+        },
+      ],
+    },
+    createEnv(),
+  );
+  assert.deepEqual(acked, ["invalid_action", "missing_run"]);
+});
+
+test("OpenTofu run queue consumer rejects non-OpenTofu queue batches", async () => {
+  const worker = createCloudflareWorker();
+  let acked = false;
+  await assert.rejects(
+    worker.queue(
+      {
+        queue: "takosumi-control-plane",
+        messages: [
+          {
+            id: "msg_control",
+            body: { job: "control-plane-work" },
+            ack: () => (acked = true),
+          },
+        ],
+      },
+      createEnv(),
+    ),
+    /non-OpenTofu queue delivered/,
+  );
+  assert.equal(acked, false);
+});
+
+test("OpenTofu run queue consumer rejects non-OpenTofu messages", async () => {
+  const worker = createCloudflareWorker();
+  let acked = false;
+  await assert.rejects(
+    worker.queue(
+      {
+        queue: "takosumi-runs",
+        messages: [
+          {
+            id: "msg_other",
+            body: { kind: "takosumi.other-work@v1" },
+            ack: () => (acked = true),
+          },
+        ],
+      },
+      createEnv(),
+    ),
+    /non-OpenTofu message delivered/,
+  );
+  assert.equal(acked, false);
 });
 
 test("OpenTofu run DLQ consumer acks dead letters without rethrowing", async () => {
@@ -225,7 +333,7 @@ test("Cloudflare Worker keeps edge-local routes outside the service app", async 
         env,
       )
     ).status,
-    200,
+    404,
   );
   assert.equal(calls.length, 0);
 
@@ -236,7 +344,7 @@ test("Cloudflare Worker keeps edge-local routes outside the service app", async 
         env,
       )
     ).status,
-    200,
+    404,
   );
   assert.equal(calls.length, 0);
 

@@ -24,22 +24,22 @@ import type {
   RunnerProfile,
   StateSnapshot,
 } from "takosumi-contract/deploy-control-api";
-import type {
-  SqlClient,
-  SqlParameters,
-  SqlQueryResult,
-} from "../../adapters/storage/sql.ts";
-import type {
-  SourceSnapshot,
-  SourceSyncRun,
-} from "takosumi-contract/sources";
+import type { SqlClient } from "../../adapters/storage/sql.ts";
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
+import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
+import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
+import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Space } from "takosumi-contract/spaces";
 import type {
   Capability,
   OperatorConnectionDefault,
 } from "takosumi-contract/capability-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
-import type { Dependency, DependencySnapshot } from "takosumi-contract/dependencies";
+import type {
+  Dependency,
+  DependencySnapshot,
+} from "takosumi-contract/dependencies";
 import type {
   OutputShare,
   OutputSnapshot,
@@ -47,6 +47,7 @@ import type {
 import type { RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { BackupRecord } from "takosumi-contract/backups";
+import type { CredentialMintEvent } from "takosumi-contract/security";
 import type {
   InstallationPatch,
   InstallationPatchGuard,
@@ -67,47 +68,63 @@ const RUN_KIND_SOURCE_SYNC = "source_sync";
 
 export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   readonly #client: SqlClient;
+  readonly #db: PgRemoteDatabase<typeof pgSchema>;
 
   constructor(input: { readonly client: SqlClient }) {
     this.#client = input.client;
+    this.#db = drizzle(
+      async (query, params, method) => {
+        const result = await this.#client.query(query, params);
+        if (method !== "all") return { rows: [...result.rows] };
+        const columns = selectedDriverColumns(query);
+        return {
+          rows: result.rows.map((row) =>
+            columns.map((column) => (row as Record<string, unknown>)[column]),
+          ),
+        };
+      },
+      { schema: pgSchema },
+    );
   }
 
   async putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile> {
-    await this.#query(
-      "insert into takosumi_runner_profiles " +
-        "(id, profile_json, created_at) values ($1, $2::jsonb, $3) " +
-        "on conflict (id) do update set " +
-        "profile_json = excluded.profile_json, created_at = excluded.created_at",
-      [profile.id, JSON.stringify(profile), profile.createdAt],
-    );
+    await this.#pgUpsert(pgSchema.runnerProfiles, {
+      id: profile.id,
+      profileJson: profile,
+      createdAt: profile.createdAt,
+    });
     return profile;
   }
 
   async getRunnerProfile(id: string): Promise<RunnerProfile | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select profile_json as json from takosumi_runner_profiles where id = $1",
-      [id],
+    return await this.#pgFirstJson<RunnerProfile>(
+      pgSchema.runnerProfiles,
+      pgSchema.runnerProfiles.profileJson,
+      eq(pgSchema.runnerProfiles.id, id),
     );
-    return parseRow(result.rows[0]) as RunnerProfile | undefined;
   }
 
   async listRunnerProfiles(): Promise<readonly RunnerProfile[]> {
-    const result = await this.#query<JsonRow>(
-      "select profile_json as json from takosumi_runner_profiles order by id asc",
+    return await this.#pgManyJson<RunnerProfile>(
+      pgSchema.runnerProfiles,
+      pgSchema.runnerProfiles.profileJson,
+      { orderBy: [asc(pgSchema.runnerProfiles.id)] },
     );
-    return result.rows.map((row) => parseRow(row) as RunnerProfile);
   }
 
   // --- runs (single §27 table; rows discriminated by kind) -----------------
 
   async putPlanRun(run: PlanRun): Promise<PlanRun> {
-    await this.#putRun(run.operation === "destroy" ? "destroy_plan" : "plan", {
-      id: run.id,
-      spaceId: run.spaceId,
-      installationId: run.installationId ?? null,
-      createdAt: run.createdAt,
-      json: JSON.stringify(run),
-    });
+    await this.#putRunDrizzle(
+      run.operation === "destroy" ? "destroy_plan" : "plan",
+      {
+        id: run.id,
+        spaceId: run.spaceId,
+        installationId: run.installationId ?? null,
+        createdAt: run.createdAt,
+        json: run,
+      },
+    );
     return run;
   }
 
@@ -116,14 +133,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
-    await this.#putRun(
+    await this.#putRunDrizzle(
       run.operation === "destroy" ? "destroy_apply" : "apply",
       {
         id: run.id,
         spaceId: run.spaceId,
         installationId: run.installationId ?? null,
         createdAt: run.createdAt,
-        json: JSON.stringify(run),
+        json: run,
       },
     );
     return run;
@@ -134,14 +151,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
-    await this.#putRun(RUN_KIND_SOURCE_SYNC, {
+    await this.#putRunDrizzle(RUN_KIND_SOURCE_SYNC, {
       id: run.id,
       spaceId: run.spaceId,
       // SourceSyncRun is Source-scoped; carry the source id in the indexed
       // installation_id slot so listSourceSyncRuns can filter without a JSON scan.
       installationId: run.sourceId,
       createdAt: run.createdAt,
-      json: JSON.stringify(run),
+      json: run,
     });
     return run;
   }
@@ -153,229 +170,220 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async listSourceSyncRuns(
     sourceId: string,
   ): Promise<readonly SourceSyncRun[]> {
-    const result = await this.#query<JsonRow>(
-      "select run_json as json from takosumi_runs " +
-        "where kind = $1 and installation_id = $2 " +
-        "order by created_at asc, id asc",
-      [RUN_KIND_SOURCE_SYNC, sourceId],
-    );
-    return result.rows.map((row) => parseRow(row) as SourceSyncRun);
+    const rows = await this.#db
+      .select({ json: pgSchema.runs.runJson })
+      .from(pgSchema.runs)
+      .where(
+        and(
+          eq(pgSchema.runs.kind, RUN_KIND_SOURCE_SYNC),
+          eq(pgSchema.runs.installationId, sourceId),
+        ),
+      )
+      .orderBy(asc(pgSchema.runs.createdAt), asc(pgSchema.runs.id));
+    return rows.map((row) => parseRow(row) as SourceSyncRun);
   }
 
-  async #putRun(
+  async #putRunDrizzle(
     kind: string,
     fields: {
       readonly id: string;
       readonly spaceId: string;
       readonly installationId: string | null;
       readonly createdAt: number | string;
-      readonly json: string;
+      readonly json: unknown;
     },
   ): Promise<void> {
-    await this.#query(
-      "insert into takosumi_runs " +
-        "(id, kind, space_id, installation_id, created_at, run_json) " +
-        "values ($1, $2, $3, $4, $5, $6::jsonb) " +
-        "on conflict (id) do update set " +
-        "kind = excluded.kind, " +
-        "space_id = excluded.space_id, " +
-        "installation_id = excluded.installation_id, " +
-        "created_at = excluded.created_at, " +
-        "run_json = excluded.run_json",
-      [
-        fields.id,
-        kind,
-        fields.spaceId,
-        fields.installationId,
-        // created_at is TEXT so it can hold both the internal epoch-number runs
-        // and the ISO-string SourceSyncRun without a per-kind column.
-        String(fields.createdAt),
-        fields.json,
-      ],
-    );
+    const values = {
+      id: fields.id,
+      kind,
+      spaceId: fields.spaceId,
+      installationId: fields.installationId,
+      // created_at is TEXT so it can hold both the internal epoch-number runs
+      // and the ISO-string SourceSyncRun without a per-kind column.
+      createdAt: String(fields.createdAt),
+      runJson: fields.json,
+    };
+    await this.#db
+      .insert(pgSchema.runs)
+      .values(values)
+      .onConflictDoUpdate({
+        target: pgSchema.runs.id,
+        set: {
+          kind: values.kind,
+          spaceId: values.spaceId,
+          installationId: values.installationId,
+          createdAt: values.createdAt,
+          runJson: values.runJson,
+        },
+      });
   }
 
   async #getRun<T>(
     id: string,
     kinds: string | readonly string[],
   ): Promise<T | undefined> {
-    const list = typeof kinds === "string" ? [kinds] : kinds;
-    const placeholders = list.map((_, i) => `$${i + 2}`).join(", ");
-    const result = await this.#query<JsonRow>(
-      `select run_json as json from takosumi_runs where id = $1 and kind in (${placeholders})`,
-      [id, ...list],
-    );
-    return parseRow(result.rows[0]) as T | undefined;
+    const list = typeof kinds === "string" ? [kinds] : [...kinds];
+    const rows = await this.#db
+      .select({ json: pgSchema.runs.runJson })
+      .from(pgSchema.runs)
+      .where(and(eq(pgSchema.runs.id, id), inArray(pgSchema.runs.kind, list)))
+      .limit(1);
+    return parseRow(rows[0]) as T | undefined;
   }
 
   // --- plan-run inputs sidecar (never projected into the public ledger) -----
 
   async putPlanRunInputs(inputs: PlanRunInputs): Promise<void> {
-    await this.#query(
-      "insert into takosumi_plan_run_inputs (plan_run_id, inputs_json) " +
-        "values ($1, $2::jsonb) " +
-        "on conflict (plan_run_id) do update set inputs_json = excluded.inputs_json",
-      [inputs.planRunId, JSON.stringify(inputs)],
-    );
+    await this.#db
+      .insert(pgSchema.runsInputs)
+      .values({ planRunId: inputs.planRunId, inputsJson: inputs })
+      .onConflictDoUpdate({
+        target: pgSchema.runsInputs.planRunId,
+        set: { inputsJson: inputs },
+      });
   }
 
   async getPlanRunInputs(
     planRunId: string,
   ): Promise<PlanRunInputs | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select inputs_json as json from takosumi_plan_run_inputs where plan_run_id = $1",
-      [planRunId],
-    );
-    return parseRow(result.rows[0]) as PlanRunInputs | undefined;
+    const rows = await this.#db
+      .select({ json: pgSchema.runsInputs.inputsJson })
+      .from(pgSchema.runsInputs)
+      .where(eq(pgSchema.runsInputs.planRunId, planRunId))
+      .limit(1);
+    return parseRow(rows[0]) as PlanRunInputs | undefined;
   }
 
   async deletePlanRunInputs(planRunId: string): Promise<void> {
-    await this.#query(
-      "delete from takosumi_plan_run_inputs where plan_run_id = $1",
-      [planRunId],
-    );
+    await this.#db
+      .delete(pgSchema.runsInputs)
+      .where(eq(pgSchema.runsInputs.planRunId, planRunId));
   }
 
   // --- spaces (§4) ----------------------------------------------------------
 
   async putSpace(space: Space): Promise<Space> {
-    await this.#query(
-      "insert into takosumi_spaces " +
-        "(id, handle, space_json, created_at, updated_at) " +
-        "values ($1, $2, $3::jsonb, $4, $5) " +
-        "on conflict (id) do update set " +
-        "handle = excluded.handle, " +
-        "space_json = excluded.space_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        space.id,
-        space.handle,
-        JSON.stringify(space),
-        space.createdAt,
-        space.updatedAt,
-      ],
-    );
+    await this.#db
+      .insert(pgSchema.spaces)
+      .values({
+        id: space.id,
+        handle: space.handle,
+        spaceJson: space,
+        createdAt: space.createdAt,
+        updatedAt: space.updatedAt,
+      })
+      .onConflictDoUpdate({
+        target: pgSchema.spaces.id,
+        set: {
+          handle: space.handle,
+          spaceJson: space,
+          createdAt: space.createdAt,
+          updatedAt: space.updatedAt,
+        },
+      });
     return space;
   }
 
   async getSpace(id: string): Promise<Space | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select space_json as json from takosumi_spaces where id = $1",
-      [id],
-    );
-    return parseRow(result.rows[0]) as Space | undefined;
+    const rows = await this.#db
+      .select({ json: pgSchema.spaces.spaceJson })
+      .from(pgSchema.spaces)
+      .where(eq(pgSchema.spaces.id, id))
+      .limit(1);
+    return parseRow(rows[0]) as Space | undefined;
   }
 
   async getSpaceByHandle(handle: string): Promise<Space | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select space_json as json from takosumi_spaces where handle = $1",
-      [handle],
-    );
-    return parseRow(result.rows[0]) as Space | undefined;
+    const rows = await this.#db
+      .select({ json: pgSchema.spaces.spaceJson })
+      .from(pgSchema.spaces)
+      .where(eq(pgSchema.spaces.handle, handle))
+      .limit(1);
+    return parseRow(rows[0]) as Space | undefined;
   }
 
   async listSpaces(): Promise<readonly Space[]> {
-    const result = await this.#query<JsonRow>(
-      "select space_json as json from takosumi_spaces " +
-        "order by created_at asc, id asc",
-    );
-    return result.rows.map((row) => parseRow(row) as Space);
+    const rows = await this.#db
+      .select({ json: pgSchema.spaces.spaceJson })
+      .from(pgSchema.spaces)
+      .orderBy(asc(pgSchema.spaces.createdAt), asc(pgSchema.spaces.id));
+    return rows.map((row) => parseRow(row) as Space);
   }
 
   // --- install_configs (§11) ------------------------------------------------
 
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
-    await this.#query(
-      "insert into takosumi_install_configs " +
-        "(id, space_id, install_type, trust_level, config_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4, $5::jsonb, $6, $7) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "install_type = excluded.install_type, " +
-        "trust_level = excluded.trust_level, " +
-        "config_json = excluded.config_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        config.id,
-        config.spaceId ?? null,
-        config.installType,
-        config.trustLevel,
-        JSON.stringify(config),
-        config.createdAt,
-        config.updatedAt,
-      ],
-    );
+    await this.#pgUpsert(pgSchema.installConfigs, {
+      id: config.id,
+      spaceId: config.spaceId ?? null,
+      installType: config.installType,
+      trustLevel: config.trustLevel,
+      configJson: config,
+      createdAt: config.createdAt,
+      updatedAt: config.updatedAt,
+    });
     return config;
   }
 
   async getInstallConfig(id: string): Promise<InstallConfig | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select config_json as json from takosumi_install_configs where id = $1",
-      [id],
+    return await this.#pgFirstJson<InstallConfig>(
+      pgSchema.installConfigs,
+      pgSchema.installConfigs.configJson,
+      eq(pgSchema.installConfigs.id, id),
     );
-    return parseRow(result.rows[0]) as InstallConfig | undefined;
   }
 
   async listInstallConfigs(
     spaceId?: string,
   ): Promise<readonly InstallConfig[]> {
-    const result = spaceId === undefined
-      ? await this.#query<JsonRow>(
-        "select config_json as json from takosumi_install_configs " +
-          "order by created_at asc, id asc",
-      )
-      : await this.#query<JsonRow>(
-        "select config_json as json from takosumi_install_configs " +
-          "where space_id = $1 order by created_at asc, id asc",
-        [spaceId],
-      );
-    return result.rows.map((row) => parseRow(row) as InstallConfig);
+    return await this.#pgManyJson<InstallConfig>(
+      pgSchema.installConfigs,
+      pgSchema.installConfigs.configJson,
+      {
+        where:
+          spaceId === undefined
+            ? undefined
+            : eq(pgSchema.installConfigs.spaceId, spaceId),
+        orderBy: [
+          asc(pgSchema.installConfigs.createdAt),
+          asc(pgSchema.installConfigs.id),
+        ],
+      },
+    );
   }
 
   // --- installations (§5 / §27, UNIQUE(space_id, name, environment)) --------
 
   async putInstallation(installation: Installation): Promise<Installation> {
-    await this.#query(
-      "insert into takosumi_opentofu_installations " +
-        "(id, space_id, name, environment, source_id, install_config_id, " +
-        "current_deployment_id, status, installation_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "name = excluded.name, " +
-        "environment = excluded.environment, " +
-        "source_id = excluded.source_id, " +
-        "install_config_id = excluded.install_config_id, " +
-        "current_deployment_id = excluded.current_deployment_id, " +
-        "status = excluded.status, " +
-        "installation_json = excluded.installation_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        installation.id,
-        installation.spaceId,
-        installation.name,
-        installation.environment,
-        installation.sourceId,
-        installation.installConfigId,
-        installation.currentDeploymentId ?? null,
-        installation.status,
-        JSON.stringify(installation),
-        installation.createdAt,
-        installation.updatedAt,
-      ],
-    );
+    const values = installationValues(installation);
+    await this.#db
+      .insert(pgSchema.installations)
+      .values(values)
+      .onConflictDoUpdate({
+        target: pgSchema.installations.id,
+        set: {
+          spaceId: values.spaceId,
+          name: values.name,
+          environment: values.environment,
+          sourceId: values.sourceId,
+          installConfigId: values.installConfigId,
+          currentDeploymentId: values.currentDeploymentId,
+          status: values.status,
+          installationJson: values.installationJson,
+          createdAt: values.createdAt,
+          updatedAt: values.updatedAt,
+        },
+      });
     return installation;
   }
 
   async getInstallation(id: string): Promise<Installation | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select installation_json as json from takosumi_opentofu_installations where id = $1",
-      [id],
-    );
-    return parseRow(result.rows[0]) as Installation | undefined;
+    const rows = await this.#db
+      .select({ json: pgSchema.installations.installationJson })
+      .from(pgSchema.installations)
+      .where(eq(pgSchema.installations.id, id))
+      .limit(1);
+    return parseRow(rows[0]) as Installation | undefined;
   }
 
   async getInstallationByName(
@@ -383,26 +391,34 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     name: string,
     environment: string,
   ): Promise<Installation | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select installation_json as json from takosumi_opentofu_installations " +
-        "where space_id = $1 and name = $2 and environment = $3",
-      [spaceId, name, environment],
-    );
-    return parseRow(result.rows[0]) as Installation | undefined;
+    const rows = await this.#db
+      .select({ json: pgSchema.installations.installationJson })
+      .from(pgSchema.installations)
+      .where(
+        and(
+          eq(pgSchema.installations.spaceId, spaceId),
+          eq(pgSchema.installations.name, name),
+          eq(pgSchema.installations.environment, environment),
+        ),
+      )
+      .limit(1);
+    return parseRow(rows[0]) as Installation | undefined;
   }
 
   async listInstallations(spaceId?: string): Promise<readonly Installation[]> {
-    const result = spaceId === undefined
-      ? await this.#query<JsonRow>(
-        "select installation_json as json from takosumi_opentofu_installations " +
-          "order by created_at asc, id asc",
-      )
-      : await this.#query<JsonRow>(
-        "select installation_json as json from takosumi_opentofu_installations " +
-          "where space_id = $1 order by created_at asc, id asc",
-        [spaceId],
-      );
-    return result.rows.map((row) => parseRow(row) as Installation);
+    const query = this.#db
+      .select({ json: pgSchema.installations.installationJson })
+      .from(pgSchema.installations)
+      .$dynamic();
+    const rows = await (
+      spaceId === undefined
+        ? query
+        : query.where(eq(pgSchema.installations.spaceId, spaceId))
+    ).orderBy(
+      asc(pgSchema.installations.createdAt),
+      asc(pgSchema.installations.id),
+    );
+    return rows.map((row) => parseRow(row) as Installation);
   }
 
   async patchInstallation(
@@ -430,36 +446,39 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     // Guarded path: fence on current_deployment_id (and optionally status) in the
     // UPDATE predicate so a concurrent writer cannot win the race between read and
     // write. `is not distinct from` matches NULL == NULL for the unset cursor.
-    const result = await this.#query<JsonRow>(
-      "update takosumi_opentofu_installations set " +
-        "space_id = $2, " +
-        "name = $3, " +
-        "environment = $4, " +
-        "source_id = $5, " +
-        "install_config_id = $6, " +
-        "current_deployment_id = $7, " +
-        "status = $8, " +
-        "installation_json = $9::jsonb, " +
-        "updated_at = $10 " +
-        "where id = $1 and current_deployment_id is not distinct from $11 " +
-        "and ($12::text is null or status = $12) " +
-        "returning installation_json as json",
-      [
-        updated.id,
-        updated.spaceId,
-        updated.name,
-        updated.environment,
-        updated.sourceId,
-        updated.installConfigId,
-        updated.currentDeploymentId ?? null,
-        updated.status,
-        JSON.stringify(updated),
-        updated.updatedAt,
-        guard.currentDeploymentId ?? null,
-        guard.status ?? null,
-      ],
-    );
-    const patched = parseRow(result.rows[0]) as Installation | undefined;
+    const values = installationValues(updated);
+    const guardedCurrentDeployment =
+      guard.currentDeploymentId === undefined ||
+      guard.currentDeploymentId === null
+        ? isNull(pgSchema.installations.currentDeploymentId)
+        : eq(
+            pgSchema.installations.currentDeploymentId,
+            guard.currentDeploymentId,
+          );
+    const rows = await this.#db
+      .update(pgSchema.installations)
+      .set({
+        spaceId: values.spaceId,
+        name: values.name,
+        environment: values.environment,
+        sourceId: values.sourceId,
+        installConfigId: values.installConfigId,
+        currentDeploymentId: values.currentDeploymentId,
+        status: values.status,
+        installationJson: values.installationJson,
+        updatedAt: values.updatedAt,
+      })
+      .where(
+        and(
+          eq(pgSchema.installations.id, updated.id),
+          guardedCurrentDeployment,
+          guard.status === undefined
+            ? sql`true`
+            : eq(pgSchema.installations.status, guard.status),
+        ),
+      )
+      .returning({ json: pgSchema.installations.installationJson });
+    const patched = parseRow(rows[0]) as Installation | undefined;
     if (patched) return patched;
     const actual = await this.getInstallation(id);
     if (!actual) return undefined;
@@ -475,120 +494,116 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   // --- deployments (§21, new shape) -----------------------------------------
 
   async putDeployment(deployment: Deployment): Promise<Deployment> {
-    await this.#query(
-      "insert into takosumi_opentofu_deployments " +
-        "(id, space_id, installation_id, environment, apply_run_id, " +
-        "state_generation, status, deployment_json, created_at) " +
-        "values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "installation_id = excluded.installation_id, " +
-        "environment = excluded.environment, " +
-        "apply_run_id = excluded.apply_run_id, " +
-        "state_generation = excluded.state_generation, " +
-        "status = excluded.status, " +
-        "deployment_json = excluded.deployment_json, " +
-        "created_at = excluded.created_at",
-      [
-        deployment.id,
-        deployment.spaceId,
-        deployment.installationId,
-        deployment.environment,
-        deployment.applyRunId,
-        deployment.stateGeneration,
-        deployment.status,
-        JSON.stringify(deployment),
-        deployment.createdAt,
-      ],
-    );
+    await this.#pgUpsert(pgSchema.deployments, {
+      id: deployment.id,
+      spaceId: deployment.spaceId,
+      installationId: deployment.installationId,
+      environment: deployment.environment,
+      applyRunId: deployment.applyRunId,
+      sourceSnapshotId: deployment.sourceSnapshotId,
+      dependencySnapshotId: deployment.dependencySnapshotId ?? null,
+      stateGeneration: deployment.stateGeneration,
+      outputSnapshotId: deployment.outputSnapshotId,
+      status: deployment.status,
+      deploymentJson: deployment,
+      createdAt: deployment.createdAt,
+    });
     return deployment;
   }
 
   async getDeployment(id: string): Promise<Deployment | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select deployment_json as json from takosumi_opentofu_deployments where id = $1",
-      [id],
+    return await this.#pgFirstJson<Deployment>(
+      pgSchema.deployments,
+      pgSchema.deployments.deploymentJson,
+      eq(pgSchema.deployments.id, id),
     );
-    return parseRow(result.rows[0]) as Deployment | undefined;
   }
 
   async listDeployments(
     installationId: string,
   ): Promise<readonly Deployment[]> {
-    const result = await this.#query<JsonRow>(
-      "select deployment_json as json from takosumi_opentofu_deployments " +
-        "where installation_id = $1 order by created_at asc, id asc",
-      [installationId],
+    return await this.#pgManyJson<Deployment>(
+      pgSchema.deployments,
+      pgSchema.deployments.deploymentJson,
+      {
+        where: eq(pgSchema.deployments.installationId, installationId),
+        orderBy: [
+          asc(pgSchema.deployments.createdAt),
+          asc(pgSchema.deployments.id),
+        ],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as Deployment);
   }
 
   // --- connections + sealed secret blobs ------------------------------------
 
   async putConnection(connection: Connection): Promise<Connection> {
-    await this.#query(
-      "insert into takosumi_connections " +
-        "(id, space_id, provider, status, connection_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4, $5::jsonb, $6, $7) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "provider = excluded.provider, " +
-        "status = excluded.status, " +
-        "connection_json = excluded.connection_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        connection.id,
-        connection.spaceId,
-        connection.provider,
-        connection.status,
-        JSON.stringify(connection),
-        connection.createdAt,
-        connection.updatedAt,
-      ],
-    );
+    await this.#pgUpsert(pgSchema.connections, {
+      id: connection.id,
+      spaceId: connection.spaceId,
+      provider: connection.provider,
+      status: connection.status,
+      connectionJson: connection,
+      createdAt: connection.createdAt,
+      updatedAt: connection.updatedAt,
+    });
     return connection;
   }
 
   async getConnection(id: string): Promise<Connection | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select connection_json as json from takosumi_connections where id = $1",
-      [id],
+    return await this.#pgFirstJson<Connection>(
+      pgSchema.connections,
+      pgSchema.connections.connectionJson,
+      eq(pgSchema.connections.id, id),
     );
-    return parseRow(result.rows[0]) as Connection | undefined;
   }
 
   async listConnections(spaceId: string): Promise<readonly Connection[]> {
-    const result = await this.#query<JsonRow>(
-      "select connection_json as json from takosumi_connections " +
-        "where space_id = $1 order by created_at asc, id asc",
-      [spaceId],
+    return await this.#pgManyJson<Connection>(
+      pgSchema.connections,
+      pgSchema.connections.connectionJson,
+      {
+        where: eq(pgSchema.connections.spaceId, spaceId),
+        orderBy: [
+          asc(pgSchema.connections.createdAt),
+          asc(pgSchema.connections.id),
+        ],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as Connection);
   }
 
   async listOperatorConnections(): Promise<readonly Connection[]> {
-    const result = await this.#query<JsonRow>(
-      "select connection_json as json from takosumi_connections " +
-        "where space_id is null order by created_at asc, id asc",
+    return await this.#pgManyJson<Connection>(
+      pgSchema.connections,
+      pgSchema.connections.connectionJson,
+      {
+        where: isNull(pgSchema.connections.spaceId),
+        orderBy: [
+          asc(pgSchema.connections.createdAt),
+          asc(pgSchema.connections.id),
+        ],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as Connection);
   }
 
   async deleteConnection(id: string): Promise<boolean> {
-    const result = await this.#query(
-      "delete from takosumi_connections where id = $1",
-      [id],
+    return await this.#pgDelete(
+      pgSchema.connections,
+      eq(pgSchema.connections.id, id),
     );
-    return result.rowCount > 0;
   }
 
   async putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob> {
-    await this.#query(
-      "insert into takosumi_connection_secret_blobs (connection_id, blob_json) " +
-        "values ($1, $2::jsonb) " +
-        "on conflict (connection_id) do update set blob_json = excluded.blob_json",
-      [blob.connectionId, JSON.stringify(blob)],
+    await this.#pgUpsert(
+      pgSchema.secretBlobs,
+      {
+        connectionId: blob.connectionId,
+        blobJson: blob,
+      },
+      {
+        blobJson: blob,
+      },
+      pgSchema.secretBlobs.connectionId,
     );
     return blob;
   }
@@ -596,19 +611,18 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async getSecretBlob(
     connectionId: string,
   ): Promise<StoredSecretBlob | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select blob_json as json from takosumi_connection_secret_blobs where connection_id = $1",
-      [connectionId],
+    return await this.#pgFirstJson<StoredSecretBlob>(
+      pgSchema.secretBlobs,
+      pgSchema.secretBlobs.blobJson,
+      eq(pgSchema.secretBlobs.connectionId, connectionId),
     );
-    return parseRow(result.rows[0]) as StoredSecretBlob | undefined;
   }
 
   async deleteSecretBlob(connectionId: string): Promise<boolean> {
-    const result = await this.#query(
-      "delete from takosumi_connection_secret_blobs where connection_id = $1",
-      [connectionId],
+    return await this.#pgDelete(
+      pgSchema.secretBlobs,
+      eq(pgSchema.secretBlobs.connectionId, connectionId),
     );
-    return result.rowCount > 0;
   }
 
   // --- operator_connection_defaults (§9) ------------------------------------
@@ -618,147 +632,176 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   ): Promise<OperatorConnectionDefault> {
     // One default per capability: drop any stale row for the same capability under
     // a different id before upserting (the capability is the natural upsert key).
-    await this.#query(
-      "delete from takosumi_operator_connection_defaults " +
-        "where capability = $1 and id <> $2",
-      [record.capability, record.id],
-    );
-    await this.#query(
-      "insert into takosumi_operator_connection_defaults " +
-        "(id, capability, provider, connection_id, default_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4, $5::jsonb, $6, $7) " +
-        "on conflict (id) do update set " +
-        "capability = excluded.capability, " +
-        "provider = excluded.provider, " +
-        "connection_id = excluded.connection_id, " +
-        "default_json = excluded.default_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        record.id,
-        record.capability,
-        record.provider,
-        record.connectionId,
-        JSON.stringify(record),
-        record.createdAt,
-        record.updatedAt,
-      ],
-    );
+    await this.#db
+      .delete(pgSchema.operatorConnectionDefaults)
+      .where(
+        and(
+          eq(pgSchema.operatorConnectionDefaults.capability, record.capability),
+          ne(pgSchema.operatorConnectionDefaults.id, record.id),
+        ),
+      );
+    await this.#pgUpsert(pgSchema.operatorConnectionDefaults, {
+      id: record.id,
+      capability: record.capability,
+      provider: record.provider,
+      connectionId: record.connectionId,
+      defaultJson: record,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    });
     return record;
   }
 
   async getOperatorConnectionDefault(
     capability: Capability,
   ): Promise<OperatorConnectionDefault | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select default_json as json from takosumi_operator_connection_defaults " +
-        "where capability = $1 limit 1",
-      [capability],
+    return await this.#pgFirstJson<OperatorConnectionDefault>(
+      pgSchema.operatorConnectionDefaults,
+      pgSchema.operatorConnectionDefaults.defaultJson,
+      eq(pgSchema.operatorConnectionDefaults.capability, capability),
     );
-    return parseRow(result.rows[0]) as OperatorConnectionDefault | undefined;
   }
 
   async listOperatorConnectionDefaults(): Promise<
     readonly OperatorConnectionDefault[]
   > {
-    const result = await this.#query<JsonRow>(
-      "select default_json as json from takosumi_operator_connection_defaults " +
-        "order by capability asc",
-    );
-    return result.rows.map((row) =>
-      parseRow(row) as OperatorConnectionDefault
+    return await this.#pgManyJson<OperatorConnectionDefault>(
+      pgSchema.operatorConnectionDefaults,
+      pgSchema.operatorConnectionDefaults.defaultJson,
+      { orderBy: [asc(pgSchema.operatorConnectionDefaults.capability)] },
     );
   }
 
   // --- sources (public + internal hook-secret hash / lastSeenCommit) --------
 
   async putSource(source: StoredSource): Promise<StoredSource> {
-    await this.#query(
-      "insert into takosumi_sources " +
-        "(id, space_id, status, source_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4::jsonb, $5, $6) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "status = excluded.status, " +
-        "source_json = excluded.source_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        source.id,
-        source.spaceId,
-        source.status,
-        JSON.stringify(source),
-        source.createdAt,
-        source.updatedAt,
-      ],
-    );
+    await this.#pgUpsert(pgSchema.sources, {
+      id: source.id,
+      spaceId: source.spaceId,
+      status: source.status,
+      sourceJson: source,
+      createdAt: source.createdAt,
+      updatedAt: source.updatedAt,
+    });
     return source;
   }
 
   async getSource(id: string): Promise<StoredSource | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select source_json as json from takosumi_sources where id = $1",
-      [id],
+    return await this.#pgFirstJson<StoredSource>(
+      pgSchema.sources,
+      pgSchema.sources.sourceJson,
+      eq(pgSchema.sources.id, id),
     );
-    return parseRow(result.rows[0]) as StoredSource | undefined;
   }
 
   async listSources(spaceId?: string): Promise<readonly StoredSource[]> {
-    const result = spaceId === undefined
-      ? await this.#query<JsonRow>(
-        "select source_json as json from takosumi_sources order by created_at asc, id asc",
-      )
-      : await this.#query<JsonRow>(
-        "select source_json as json from takosumi_sources where space_id = $1 order by created_at asc, id asc",
-        [spaceId],
-      );
-    return result.rows.map((row) => parseRow(row) as StoredSource);
+    return await this.#pgManyJson<StoredSource>(
+      pgSchema.sources,
+      pgSchema.sources.sourceJson,
+      {
+        where:
+          spaceId === undefined
+            ? undefined
+            : eq(pgSchema.sources.spaceId, spaceId),
+        orderBy: [asc(pgSchema.sources.createdAt), asc(pgSchema.sources.id)],
+      },
+    );
   }
 
   async deleteSource(id: string): Promise<boolean> {
-    const result = await this.#query(
-      "delete from takosumi_sources where id = $1",
-      [id],
-    );
-    return result.rowCount > 0;
+    return await this.#pgDelete(pgSchema.sources, eq(pgSchema.sources.id, id));
   }
 
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
-    await this.#query(
-      "insert into takosumi_source_snapshots " +
-        "(id, source_id, snapshot_json, fetched_at) " +
-        "values ($1, $2, $3::jsonb, $4) " +
-        "on conflict (id) do update set " +
-        "source_id = excluded.source_id, " +
-        "snapshot_json = excluded.snapshot_json, " +
-        "fetched_at = excluded.fetched_at",
-      [
-        snapshot.id,
-        snapshot.sourceId,
-        JSON.stringify(snapshot),
-        snapshot.fetchedAt,
-      ],
-    );
+    await this.#pgUpsert(pgSchema.sourceSnapshots, {
+      id: snapshot.id,
+      sourceId: snapshot.sourceId,
+      snapshotJson: snapshot,
+      fetchedAt: snapshot.fetchedAt,
+    });
     return snapshot;
   }
 
   async getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select snapshot_json as json from takosumi_source_snapshots where id = $1",
-      [id],
+    return await this.#pgFirstJson<SourceSnapshot>(
+      pgSchema.sourceSnapshots,
+      pgSchema.sourceSnapshots.snapshotJson,
+      eq(pgSchema.sourceSnapshots.id, id),
     );
-    return parseRow(result.rows[0]) as SourceSnapshot | undefined;
   }
 
   async listSourceSnapshots(
     sourceId: string,
   ): Promise<readonly SourceSnapshot[]> {
-    const result = await this.#query<JsonRow>(
-      "select snapshot_json as json from takosumi_source_snapshots " +
-        "where source_id = $1 order by fetched_at asc, id asc",
-      [sourceId],
+    return await this.#pgManyJson<SourceSnapshot>(
+      pgSchema.sourceSnapshots,
+      pgSchema.sourceSnapshots.snapshotJson,
+      {
+        where: eq(pgSchema.sourceSnapshots.sourceId, sourceId),
+        orderBy: [
+          asc(pgSchema.sourceSnapshots.fetchedAt),
+          asc(pgSchema.sourceSnapshots.id),
+        ],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as SourceSnapshot);
+  }
+
+  async putCapsuleCompatibilityReport(
+    report: CapsuleCompatibilityReport,
+  ): Promise<CapsuleCompatibilityReport> {
+    await this.#pgUpsert(pgSchema.capsuleCompatibilityReports, {
+      id: report.id,
+      sourceSnapshotId: report.sourceSnapshotId,
+      level: report.level,
+      findingsJson: report.findings,
+      providersJson: report.providers,
+      resourcesJson: report.resources,
+      dataSourcesJson: report.dataSources,
+      provisionersJson: report.provisioners,
+      normalizedObjectKey: report.normalizedObjectKey ?? null,
+      normalizedDigest: report.normalizedDigest ?? null,
+      createdAt: report.createdAt,
+    });
+    return report;
+  }
+
+  async getCapsuleCompatibilityReport(
+    id: string,
+  ): Promise<CapsuleCompatibilityReport | undefined> {
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.capsuleCompatibilityReports)
+      .where(eq(pgSchema.capsuleCompatibilityReports.id, id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      sourceSnapshotId: row.sourceSnapshotId,
+      level: row.level as CapsuleCompatibilityReport["level"],
+      findings: parseJson(
+        row.findingsJson,
+      ) as CapsuleCompatibilityReport["findings"],
+      providers: parseJson(
+        row.providersJson,
+      ) as CapsuleCompatibilityReport["providers"],
+      resources: parseJson(
+        row.resourcesJson,
+      ) as CapsuleCompatibilityReport["resources"],
+      dataSources: parseJson(
+        row.dataSourcesJson,
+      ) as CapsuleCompatibilityReport["dataSources"],
+      provisioners: parseJson(
+        row.provisionersJson,
+      ) as CapsuleCompatibilityReport["provisioners"],
+      ...(row.normalizedObjectKey
+        ? { normalizedObjectKey: row.normalizedObjectKey }
+        : {}),
+      ...(row.normalizedDigest
+        ? { normalizedDigest: row.normalizedDigest }
+        : {}),
+      createdAt: row.createdAt,
+    };
   }
 
   // --- deployment_profiles (§9, keyed (installation_id, environment)) -------
@@ -768,32 +811,27 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   ): Promise<DeploymentProfile> {
     // One profile per (installation, environment): delete any stale row for the
     // same pair under a different id before upserting.
-    await this.#query(
-      "delete from takosumi_deployment_profiles " +
-        "where installation_id = $1 and environment = $2 and id <> $3",
-      [profile.installationId, profile.environment, profile.id],
-    );
-    await this.#query(
-      "insert into takosumi_deployment_profiles " +
-        "(id, space_id, installation_id, environment, profile_json, created_at, updated_at) " +
-        "values ($1, $2, $3, $4, $5::jsonb, $6, $7) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "installation_id = excluded.installation_id, " +
-        "environment = excluded.environment, " +
-        "profile_json = excluded.profile_json, " +
-        "created_at = excluded.created_at, " +
-        "updated_at = excluded.updated_at",
-      [
-        profile.id,
-        profile.spaceId,
-        profile.installationId,
-        profile.environment,
-        JSON.stringify(profile),
-        profile.createdAt,
-        profile.updatedAt,
-      ],
-    );
+    await this.#db
+      .delete(pgSchema.deploymentProfiles)
+      .where(
+        and(
+          eq(
+            pgSchema.deploymentProfiles.installationId,
+            profile.installationId,
+          ),
+          eq(pgSchema.deploymentProfiles.environment, profile.environment),
+          ne(pgSchema.deploymentProfiles.id, profile.id),
+        ),
+      );
+    await this.#pgUpsert(pgSchema.deploymentProfiles, {
+      id: profile.id,
+      spaceId: profile.spaceId,
+      installationId: profile.installationId,
+      environment: profile.environment,
+      profileJson: profile,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+    });
     return profile;
   }
 
@@ -801,35 +839,48 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     installationId: string,
     environment: string,
   ): Promise<DeploymentProfile | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select profile_json as json from takosumi_deployment_profiles " +
-        "where installation_id = $1 and environment = $2 " +
-        "order by created_at desc, id desc limit 1",
-      [installationId, environment],
+    const rows = await this.#pgManyJson<DeploymentProfile>(
+      pgSchema.deploymentProfiles,
+      pgSchema.deploymentProfiles.profileJson,
+      {
+        where: and(
+          eq(pgSchema.deploymentProfiles.installationId, installationId),
+          eq(pgSchema.deploymentProfiles.environment, environment),
+        ),
+        orderBy: [
+          desc(pgSchema.deploymentProfiles.createdAt),
+          desc(pgSchema.deploymentProfiles.id),
+        ],
+        limit: 1,
+      },
     );
-    return parseRow(result.rows[0]) as DeploymentProfile | undefined;
+    return rows[0];
   }
 
   // --- state_snapshots (§20, keyed (installation_id, environment, generation)) -
 
   async putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot> {
-    await this.#query(
-      "insert into takosumi_state_snapshots " +
-        "(id, space_id, installation_id, environment, generation, snapshot_json, created_at) " +
-        "values ($1, $2, $3, $4, $5, $6::jsonb, $7) " +
-        "on conflict (installation_id, environment, generation) do update set " +
-        "id = excluded.id, " +
-        "space_id = excluded.space_id, " +
-        "snapshot_json = excluded.snapshot_json, " +
-        "created_at = excluded.created_at",
+    await this.#pgUpsert(
+      pgSchema.stateSnapshots,
+      {
+        id: snapshot.id,
+        spaceId: snapshot.spaceId,
+        installationId: snapshot.installationId,
+        environment: snapshot.environment,
+        generation: snapshot.generation,
+        snapshotJson: snapshot,
+        createdAt: snapshot.createdAt,
+      },
+      {
+        id: snapshot.id,
+        spaceId: snapshot.spaceId,
+        snapshotJson: snapshot,
+        createdAt: snapshot.createdAt,
+      },
       [
-        snapshot.id,
-        snapshot.spaceId,
-        snapshot.installationId,
-        snapshot.environment,
-        snapshot.generation,
-        JSON.stringify(snapshot),
-        snapshot.createdAt,
+        pgSchema.stateSnapshots.installationId,
+        pgSchema.stateSnapshots.environment,
+        pgSchema.stateSnapshots.generation,
       ],
     );
     return snapshot;
@@ -839,100 +890,119 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     installationId: string,
     environment: string,
   ): Promise<StateSnapshot | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select snapshot_json as json from takosumi_state_snapshots " +
-        "where installation_id = $1 and environment = $2 " +
-        "order by generation desc limit 1",
-      [installationId, environment],
+    const rows = await this.#pgManyJson<StateSnapshot>(
+      pgSchema.stateSnapshots,
+      pgSchema.stateSnapshots.snapshotJson,
+      {
+        where: and(
+          eq(pgSchema.stateSnapshots.installationId, installationId),
+          eq(pgSchema.stateSnapshots.environment, environment),
+        ),
+        orderBy: [desc(pgSchema.stateSnapshots.generation)],
+        limit: 1,
+      },
     );
-    return parseRow(result.rows[0]) as StateSnapshot | undefined;
+    return rows[0];
   }
 
   async listStateSnapshots(
     installationId: string,
     environment: string,
   ): Promise<readonly StateSnapshot[]> {
-    const result = await this.#query<JsonRow>(
-      "select snapshot_json as json from takosumi_state_snapshots " +
-        "where installation_id = $1 and environment = $2 order by generation asc",
-      [installationId, environment],
+    return await this.#pgManyJson<StateSnapshot>(
+      pgSchema.stateSnapshots,
+      pgSchema.stateSnapshots.snapshotJson,
+      {
+        where: and(
+          eq(pgSchema.stateSnapshots.installationId, installationId),
+          eq(pgSchema.stateSnapshots.environment, environment),
+        ),
+        orderBy: [asc(pgSchema.stateSnapshots.generation)],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as StateSnapshot);
   }
 
   // --- installation_dependencies (§14 / §15) --------------------------------
 
   async putDependency(dependency: Dependency): Promise<Dependency> {
-    await this.#query(
-      "insert into takosumi_installation_dependencies " +
-        "(id, space_id, producer_installation_id, consumer_installation_id, " +
-        "dependency_json, created_at) " +
-        "values ($1, $2, $3, $4, $5::jsonb, $6) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "producer_installation_id = excluded.producer_installation_id, " +
-        "consumer_installation_id = excluded.consumer_installation_id, " +
-        "dependency_json = excluded.dependency_json, " +
-        "created_at = excluded.created_at",
-      [
-        dependency.id,
-        dependency.spaceId,
-        dependency.producerInstallationId,
-        dependency.consumerInstallationId,
-        JSON.stringify(dependency),
-        dependency.createdAt,
-      ],
-    );
+    await this.#pgUpsert(pgSchema.installationDependencies, {
+      id: dependency.id,
+      spaceId: dependency.spaceId,
+      producerInstallationId: dependency.producerInstallationId,
+      consumerInstallationId: dependency.consumerInstallationId,
+      dependencyJson: dependency,
+      createdAt: dependency.createdAt,
+    });
     return dependency;
   }
 
   async getDependency(id: string): Promise<Dependency | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select dependency_json as json from takosumi_installation_dependencies where id = $1",
-      [id],
+    return await this.#pgFirstJson<Dependency>(
+      pgSchema.installationDependencies,
+      pgSchema.installationDependencies.dependencyJson,
+      eq(pgSchema.installationDependencies.id, id),
     );
-    return parseRow(result.rows[0]) as Dependency | undefined;
   }
 
   async listDependenciesBySpace(
     spaceId: string,
   ): Promise<readonly Dependency[]> {
-    const result = await this.#query<JsonRow>(
-      "select dependency_json as json from takosumi_installation_dependencies " +
-        "where space_id = $1 order by created_at asc, id asc",
-      [spaceId],
+    return await this.#pgManyJson<Dependency>(
+      pgSchema.installationDependencies,
+      pgSchema.installationDependencies.dependencyJson,
+      {
+        where: eq(pgSchema.installationDependencies.spaceId, spaceId),
+        orderBy: [
+          asc(pgSchema.installationDependencies.createdAt),
+          asc(pgSchema.installationDependencies.id),
+        ],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as Dependency);
   }
 
   async listDependenciesForConsumer(
     consumerInstallationId: string,
   ): Promise<readonly Dependency[]> {
-    const result = await this.#query<JsonRow>(
-      "select dependency_json as json from takosumi_installation_dependencies " +
-        "where consumer_installation_id = $1 order by created_at asc, id asc",
-      [consumerInstallationId],
+    return await this.#pgManyJson<Dependency>(
+      pgSchema.installationDependencies,
+      pgSchema.installationDependencies.dependencyJson,
+      {
+        where: eq(
+          pgSchema.installationDependencies.consumerInstallationId,
+          consumerInstallationId,
+        ),
+        orderBy: [
+          asc(pgSchema.installationDependencies.createdAt),
+          asc(pgSchema.installationDependencies.id),
+        ],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as Dependency);
   }
 
   async listDependenciesForProducer(
     producerInstallationId: string,
   ): Promise<readonly Dependency[]> {
-    const result = await this.#query<JsonRow>(
-      "select dependency_json as json from takosumi_installation_dependencies " +
-        "where producer_installation_id = $1 order by created_at asc, id asc",
-      [producerInstallationId],
+    return await this.#pgManyJson<Dependency>(
+      pgSchema.installationDependencies,
+      pgSchema.installationDependencies.dependencyJson,
+      {
+        where: eq(
+          pgSchema.installationDependencies.producerInstallationId,
+          producerInstallationId,
+        ),
+        orderBy: [
+          asc(pgSchema.installationDependencies.createdAt),
+          asc(pgSchema.installationDependencies.id),
+        ],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as Dependency);
   }
 
   async deleteDependency(id: string): Promise<boolean> {
-    const result = await this.#query(
-      "delete from takosumi_installation_dependencies where id = $1",
-      [id],
+    return await this.#pgDelete(
+      pgSchema.installationDependencies,
+      eq(pgSchema.installationDependencies.id, id),
     );
-    return result.rowCount > 0;
   }
 
   // --- dependency_snapshots (§17) -------------------------------------------
@@ -940,164 +1010,154 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putDependencySnapshot(
     snapshot: DependencySnapshot,
   ): Promise<DependencySnapshot> {
-    await this.#query(
-      "insert into takosumi_dependency_snapshots " +
-        "(id, run_id, snapshot_json, created_at) " +
-        "values ($1, $2, $3::jsonb, $4) " +
-        "on conflict (id) do update set " +
-        "run_id = excluded.run_id, " +
-        "snapshot_json = excluded.snapshot_json, " +
-        "created_at = excluded.created_at",
-      [snapshot.id, snapshot.runId, JSON.stringify(snapshot), snapshot.createdAt],
-    );
+    await this.#pgUpsert(pgSchema.dependencySnapshots, {
+      id: snapshot.id,
+      runId: snapshot.runId,
+      snapshotJson: snapshot,
+      createdAt: snapshot.createdAt,
+    });
     return snapshot;
   }
 
   async getDependencySnapshot(
     id: string,
   ): Promise<DependencySnapshot | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select snapshot_json as json from takosumi_dependency_snapshots where id = $1",
-      [id],
+    return await this.#pgFirstJson<DependencySnapshot>(
+      pgSchema.dependencySnapshots,
+      pgSchema.dependencySnapshots.snapshotJson,
+      eq(pgSchema.dependencySnapshots.id, id),
     );
-    return parseRow(result.rows[0]) as DependencySnapshot | undefined;
   }
 
   // --- output_snapshots (§16) -----------------------------------------------
 
   async putOutputSnapshot(snapshot: OutputSnapshot): Promise<OutputSnapshot> {
-    await this.#query(
-      "insert into takosumi_output_snapshots " +
-        "(id, space_id, installation_id, state_generation, snapshot_json, created_at) " +
-        "values ($1, $2, $3, $4, $5::jsonb, $6) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "installation_id = excluded.installation_id, " +
-        "state_generation = excluded.state_generation, " +
-        "snapshot_json = excluded.snapshot_json, " +
-        "created_at = excluded.created_at",
-      [
-        snapshot.id,
-        snapshot.spaceId,
-        snapshot.installationId,
-        snapshot.stateGeneration,
-        JSON.stringify(snapshot),
-        snapshot.createdAt,
-      ],
-    );
+    await this.#pgUpsert(pgSchema.outputSnapshots, {
+      id: snapshot.id,
+      spaceId: snapshot.spaceId,
+      installationId: snapshot.installationId,
+      stateGeneration: snapshot.stateGeneration,
+      snapshotJson: snapshot,
+      createdAt: snapshot.createdAt,
+    });
     return snapshot;
   }
 
   async getOutputSnapshot(id: string): Promise<OutputSnapshot | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select snapshot_json as json from takosumi_output_snapshots where id = $1",
-      [id],
+    return await this.#pgFirstJson<OutputSnapshot>(
+      pgSchema.outputSnapshots,
+      pgSchema.outputSnapshots.snapshotJson,
+      eq(pgSchema.outputSnapshots.id, id),
     );
-    return parseRow(result.rows[0]) as OutputSnapshot | undefined;
   }
 
   async getLatestOutputSnapshot(
     installationId: string,
   ): Promise<OutputSnapshot | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select snapshot_json as json from takosumi_output_snapshots " +
-        "where installation_id = $1 " +
-        "order by state_generation desc, created_at desc, id desc limit 1",
-      [installationId],
+    const rows = await this.#pgManyJson<OutputSnapshot>(
+      pgSchema.outputSnapshots,
+      pgSchema.outputSnapshots.snapshotJson,
+      {
+        where: eq(pgSchema.outputSnapshots.installationId, installationId),
+        orderBy: [
+          desc(pgSchema.outputSnapshots.stateGeneration),
+          desc(pgSchema.outputSnapshots.createdAt),
+          desc(pgSchema.outputSnapshots.id),
+        ],
+        limit: 1,
+      },
     );
-    return parseRow(result.rows[0]) as OutputSnapshot | undefined;
+    return rows[0];
   }
 
   // --- output_shares (§18) --------------------------------------------------
 
   async putOutputShare(share: OutputShare): Promise<OutputShare> {
-    await this.#query(
-      "insert into takosumi_output_shares " +
-        "(id, from_space_id, to_space_id, producer_installation_id, status, " +
-        "share_json, created_at) " +
-        "values ($1, $2, $3, $4, $5, $6::jsonb, $7) " +
-        "on conflict (id) do update set " +
-        "from_space_id = excluded.from_space_id, " +
-        "to_space_id = excluded.to_space_id, " +
-        "producer_installation_id = excluded.producer_installation_id, " +
-        "status = excluded.status, " +
-        "share_json = excluded.share_json, " +
-        "created_at = excluded.created_at",
-      [
-        share.id,
-        share.fromSpaceId,
-        share.toSpaceId,
-        share.producerInstallationId,
-        share.status,
-        JSON.stringify(share),
-        share.createdAt,
-      ],
-    );
+    await this.#pgUpsert(pgSchema.outputShares, {
+      id: share.id,
+      fromSpaceId: share.fromSpaceId,
+      toSpaceId: share.toSpaceId,
+      producerInstallationId: share.producerInstallationId,
+      status: share.status,
+      shareJson: share,
+      createdAt: share.createdAt,
+    });
     return share;
   }
 
   async getOutputShare(id: string): Promise<OutputShare | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select share_json as json from takosumi_output_shares where id = $1",
-      [id],
+    return await this.#pgFirstJson<OutputShare>(
+      pgSchema.outputShares,
+      pgSchema.outputShares.shareJson,
+      eq(pgSchema.outputShares.id, id),
     );
-    return parseRow(result.rows[0]) as OutputShare | undefined;
   }
 
   async listOutputSharesFromSpace(
     fromSpaceId: string,
   ): Promise<readonly OutputShare[]> {
-    const result = await this.#query<JsonRow>(
-      "select share_json as json from takosumi_output_shares " +
-        "where from_space_id = $1 order by created_at asc, id asc",
-      [fromSpaceId],
+    return await this.#pgManyJson<OutputShare>(
+      pgSchema.outputShares,
+      pgSchema.outputShares.shareJson,
+      {
+        where: eq(pgSchema.outputShares.fromSpaceId, fromSpaceId),
+        orderBy: [
+          asc(pgSchema.outputShares.createdAt),
+          asc(pgSchema.outputShares.id),
+        ],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as OutputShare);
   }
 
   async listOutputSharesToSpace(
     toSpaceId: string,
   ): Promise<readonly OutputShare[]> {
-    const result = await this.#query<JsonRow>(
-      "select share_json as json from takosumi_output_shares " +
-        "where to_space_id = $1 order by created_at asc, id asc",
-      [toSpaceId],
+    return await this.#pgManyJson<OutputShare>(
+      pgSchema.outputShares,
+      pgSchema.outputShares.shareJson,
+      {
+        where: eq(pgSchema.outputShares.toSpaceId, toSpaceId),
+        orderBy: [
+          asc(pgSchema.outputShares.createdAt),
+          asc(pgSchema.outputShares.id),
+        ],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as OutputShare);
   }
 
   // --- run_groups (§19 / §24) -----------------------------------------------
 
   async putRunGroup(group: RunGroup): Promise<RunGroup> {
-    await this.#query(
-      "insert into takosumi_run_groups " +
-        "(id, space_id, type, group_json, created_at) " +
-        "values ($1, $2, $3, $4::jsonb, $5) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "type = excluded.type, " +
-        "group_json = excluded.group_json, " +
-        "created_at = excluded.created_at",
-      [group.id, group.spaceId, group.type, JSON.stringify(group), group.createdAt],
-    );
+    await this.#pgUpsert(pgSchema.runGroups, {
+      id: group.id,
+      spaceId: group.spaceId,
+      type: group.type,
+      groupJson: group,
+      createdAt: group.createdAt,
+    });
     return group;
   }
 
   async getRunGroup(id: string): Promise<RunGroup | undefined> {
-    const result = await this.#query<JsonRow>(
-      "select group_json as json from takosumi_run_groups where id = $1",
-      [id],
+    return await this.#pgFirstJson<RunGroup>(
+      pgSchema.runGroups,
+      pgSchema.runGroups.groupJson,
+      eq(pgSchema.runGroups.id, id),
     );
-    return parseRow(result.rows[0]) as RunGroup | undefined;
   }
 
   async listRunGroups(spaceId: string): Promise<readonly RunGroup[]> {
-    const result = await this.#query<JsonRow>(
-      "select group_json as json from takosumi_run_groups " +
-        "where space_id = $1 order by created_at asc, id asc",
-      [spaceId],
+    return await this.#pgManyJson<RunGroup>(
+      pgSchema.runGroups,
+      pgSchema.runGroups.groupJson,
+      {
+        where: eq(pgSchema.runGroups.spaceId, spaceId),
+        orderBy: [
+          asc(pgSchema.runGroups.createdAt),
+          asc(pgSchema.runGroups.id),
+        ],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as RunGroup);
   }
 
   // --- audit_events (§27 / §34 Activity) ------------------------------------
@@ -1108,32 +1168,17 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   // desc) with a clamped limit.
 
   async putActivityEvent(event: ActivityEvent): Promise<ActivityEvent> {
-    await this.#query(
-      "insert into takosumi_audit_events " +
-        "(id, space_id, actor_id, action, target_type, target_id, run_id, " +
-        "event_json, created_at) " +
-        "values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "actor_id = excluded.actor_id, " +
-        "action = excluded.action, " +
-        "target_type = excluded.target_type, " +
-        "target_id = excluded.target_id, " +
-        "run_id = excluded.run_id, " +
-        "event_json = excluded.event_json, " +
-        "created_at = excluded.created_at",
-      [
-        event.id,
-        event.spaceId,
-        event.actorId ?? null,
-        event.action,
-        event.targetType,
-        event.targetId,
-        event.runId ?? null,
-        JSON.stringify(event),
-        event.createdAt,
-      ],
-    );
+    await this.#pgUpsert(pgSchema.auditEvents, {
+      id: event.id,
+      spaceId: event.spaceId,
+      actorId: event.actorId ?? null,
+      action: event.action,
+      targetType: event.targetType,
+      targetId: event.targetId,
+      runId: event.runId ?? null,
+      eventJson: event,
+      createdAt: event.createdAt,
+    });
     return event;
   }
 
@@ -1142,16 +1187,55 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     options: { readonly limit?: number } = {},
   ): Promise<readonly ActivityEvent[]> {
     const limit = clampActivityLimit(options.limit);
-    const result = await this.#query<JsonRow>(
-      "select event_json as json from takosumi_audit_events " +
-        "where space_id = $1 order by created_at desc, id desc limit $2",
-      [spaceId, limit],
+    return await this.#pgManyJson<ActivityEvent>(
+      pgSchema.auditEvents,
+      pgSchema.auditEvents.eventJson,
+      {
+        where: eq(pgSchema.auditEvents.spaceId, spaceId),
+        orderBy: [
+          desc(pgSchema.auditEvents.createdAt),
+          desc(pgSchema.auditEvents.id),
+        ],
+        limit,
+      },
     );
-    // The SQL `limit` is honored by the DB; slice defensively so the row cap
-    // also holds for any client that does not apply the limit clause.
-    return result.rows
-      .slice(0, limit)
-      .map((row) => parseRow(row) as ActivityEvent);
+  }
+
+  // --- credential_mint_events (spec invariant 17) ---------------------------
+  //
+  // Non-secret mint audit rows. The JSON payload carries metadata only:
+  // run/space/installation/connection/phase/capability labels.
+
+  async putCredentialMintEvent(
+    event: CredentialMintEvent,
+  ): Promise<CredentialMintEvent> {
+    await this.#pgUpsert(pgSchema.credentialMintEvents, {
+      id: event.id,
+      runId: event.runId,
+      spaceId: event.spaceId,
+      installationId: event.installationId,
+      connectionId: event.connectionId,
+      phase: event.phase,
+      eventJson: event,
+      createdAt: event.createdAt,
+    });
+    return event;
+  }
+
+  async listCredentialMintEventsForRun(
+    runId: string,
+  ): Promise<readonly CredentialMintEvent[]> {
+    return await this.#pgManyJson<CredentialMintEvent>(
+      pgSchema.credentialMintEvents,
+      pgSchema.credentialMintEvents.eventJson,
+      {
+        where: eq(pgSchema.credentialMintEvents.runId, runId),
+        orderBy: [
+          asc(pgSchema.credentialMintEvents.createdAt),
+          asc(pgSchema.credentialMintEvents.id),
+        ],
+      },
+    );
   }
 
   // --- backups (§33 layer 1 / §26 R2_BACKUPS) -------------------------------
@@ -1161,33 +1245,80 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   // Listing is newest-first (created_at desc, id desc).
 
   async putBackupRecord(record: BackupRecord): Promise<BackupRecord> {
-    await this.#query(
-      "insert into takosumi_backups " +
-        "(id, space_id, backup_json, created_at) " +
-        "values ($1, $2, $3::jsonb, $4) " +
-        "on conflict (id) do update set " +
-        "space_id = excluded.space_id, " +
-        "backup_json = excluded.backup_json, " +
-        "created_at = excluded.created_at",
-      [record.id, record.spaceId, JSON.stringify(record), record.createdAt],
-    );
+    await this.#pgUpsert(pgSchema.backups, {
+      id: record.id,
+      spaceId: record.spaceId,
+      backupJson: record,
+      createdAt: record.createdAt,
+    });
     return record;
   }
 
   async listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]> {
-    const result = await this.#query<JsonRow>(
-      "select backup_json as json from takosumi_backups " +
-        "where space_id = $1 order by created_at desc, id desc",
-      [spaceId],
+    return await this.#pgManyJson<BackupRecord>(
+      pgSchema.backups,
+      pgSchema.backups.backupJson,
+      {
+        where: eq(pgSchema.backups.spaceId, spaceId),
+        orderBy: [desc(pgSchema.backups.createdAt), desc(pgSchema.backups.id)],
+      },
     );
-    return result.rows.map((row) => parseRow(row) as BackupRecord);
   }
 
-  #query<Row extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    parameters?: SqlParameters,
-  ): Promise<SqlQueryResult<Row>> {
-    return this.#client.query<Row>(sql, parameters);
+  async #pgUpsert(
+    table: any,
+    values: Record<string, unknown>,
+    set: Record<string, unknown> = values,
+    target = table.id,
+  ): Promise<void> {
+    await this.#db
+      .insert(table)
+      .values(values)
+      .onConflictDoUpdate({ target, set });
+  }
+
+  async #pgDelete(table: any, where: unknown): Promise<boolean> {
+    const rows = await this.#db
+      .delete(table)
+      .where(where as never)
+      .returning({ id: table.id });
+    return rows.length > 0;
+  }
+
+  async #pgFirstJson<T>(
+    table: any,
+    jsonColumn: any,
+    where: unknown,
+  ): Promise<T | undefined> {
+    const rows = await this.#db
+      .select({ json: jsonColumn })
+      .from(table)
+      .where(where as never)
+      .limit(1);
+    return parseRow(rows[0]) as T | undefined;
+  }
+
+  async #pgManyJson<T>(
+    table: any,
+    jsonColumn: any,
+    input: {
+      readonly where?: unknown;
+      readonly orderBy?: readonly unknown[];
+      readonly limit?: number;
+    } = {},
+  ): Promise<readonly T[]> {
+    let query = this.#db.select({ json: jsonColumn }).from(table).$dynamic();
+    if (input.where !== undefined) {
+      query = query.where(input.where as never);
+    }
+    if (input.orderBy !== undefined) {
+      query = query.orderBy(...(input.orderBy as never[]));
+    }
+    if (input.limit !== undefined) {
+      query = query.limit(input.limit);
+    }
+    const rows = await query;
+    return rows.map((row) => parseRow(row) as T);
   }
 }
 
@@ -1206,4 +1337,34 @@ function parseJson(value: unknown): unknown {
     return JSON.parse(value);
   }
   return value;
+}
+
+function installationValues(installation: Installation) {
+  return {
+    id: installation.id,
+    spaceId: installation.spaceId,
+    name: installation.name,
+    environment: installation.environment,
+    sourceId: installation.sourceId,
+    installConfigId: installation.installConfigId,
+    currentDeploymentId: installation.currentDeploymentId ?? null,
+    status: installation.status,
+    installationJson: installation,
+    createdAt: installation.createdAt,
+    updatedAt: installation.updatedAt,
+  };
+}
+
+function selectedDriverColumns(query: string): readonly string[] {
+  const lower = query.toLowerCase();
+  const select = lower.match(/^select\s+([\s\S]+?)\s+from\s/);
+  const returning = lower.match(/\sreturning\s+([\s\S]+)$/);
+  const list = select?.[1] ?? returning?.[1];
+  if (!list) return [];
+  return list.split(",").map((part) => {
+    const alias = /\s+as\s+"?([a-z_][a-z0-9_]*)"?\s*$/.exec(part);
+    if (alias) return alias[1];
+    const identifiers = [...part.matchAll(/"?([a-z_][a-z0-9_]*)"?/g)];
+    return identifiers.at(-1)?.[1] ?? part.trim().replaceAll('"', "");
+  });
 }

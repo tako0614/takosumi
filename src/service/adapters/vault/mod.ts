@@ -219,10 +219,7 @@ export class PhaseMintBundle {
   readonly #files: readonly MintedFileInternal[];
   readonly warnings: readonly string[];
 
-  constructor(
-    response: MintResponse,
-    warnings: readonly string[] = [],
-  ) {
+  constructor(response: MintResponse, warnings: readonly string[] = []) {
     this.#env = Object.freeze({ ...response.env });
     this.#files = Object.freeze(
       (response.files ?? []).map((f) => Object.freeze({ ...f })),
@@ -266,6 +263,22 @@ interface MintedFileInternal {
   readonly content: string;
 }
 
+interface AssumeAwsRoleInput {
+  readonly accessKeyId: string;
+  readonly secretAccessKey: string;
+  readonly sessionToken?: string;
+  readonly roleArn: string;
+  readonly externalId?: string;
+  readonly region: string;
+  readonly sessionName: string;
+}
+
+interface AssumedAwsCredentials {
+  readonly accessKeyId: string;
+  readonly secretAccessKey: string;
+  readonly sessionToken: string;
+}
+
 /** Injected fetch seam so `test()` is unit-testable without real network. */
 export type VaultFetch = (
   input: string,
@@ -290,8 +303,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   constructor(deps: StaticSecretConnectionVaultDependencies) {
     this.#store = deps.store;
     this.#crypto = deps.crypto;
-    this.#fetch = deps.fetch ??
-      ((input, init) => fetch(input, init));
+    this.#fetch = deps.fetch ?? ((input, init) => fetch(input, init));
     this.#now = deps.now ?? (() => new Date());
     this.#newId = deps.newId ?? defaultConnectionId;
   }
@@ -322,7 +334,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     const values = input.values;
     if (
-      values === null || typeof values !== "object" || Array.isArray(values)
+      values === null ||
+      typeof values !== "object" ||
+      Array.isArray(values)
     ) {
       throw new ConnectionVaultError(
         "invalid_argument",
@@ -360,7 +374,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
 
     const id = this.#newId();
-    const cloudPartition = cloudFamilyForProvider(input.provider) as CloudPartition;
+    const cloudPartition = cloudFamilyForProvider(
+      input.provider,
+    ) as CloudPartition;
     const sealed = await this.#crypto.seal(
       JSON.stringify(values),
       cloudPartition,
@@ -418,16 +434,19 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   ): Promise<Connection> {
     const values = input.values;
     if (
-      values === null || typeof values !== "object" || Array.isArray(values)
+      values === null ||
+      typeof values !== "object" ||
+      Array.isArray(values)
     ) {
       throw new ConnectionVaultError(
         "invalid_argument",
         "values must be an object of { envName: value }",
       );
     }
-    const expectedEnv = kind === "source_git_https_token"
-      ? GIT_HTTPS_TOKEN_ENV
-      : GIT_SSH_PRIVATE_KEY_ENV;
+    const expectedEnv =
+      kind === "source_git_https_token"
+        ? GIT_HTTPS_TOKEN_ENV
+        : GIT_SSH_PRIVATE_KEY_ENV;
     const envNames = Object.keys(values);
     if (envNames.length !== 1 || envNames[0] !== expectedEnv) {
       throw new ConnectionVaultError(
@@ -435,7 +454,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `${kind} requires exactly one value: ${expectedEnv}`,
       );
     }
-    if (typeof values[expectedEnv] !== "string" || values[expectedEnv].length === 0) {
+    if (
+      typeof values[expectedEnv] !== "string" ||
+      values[expectedEnv].length === 0
+    ) {
       throw new ConnectionVaultError(
         "invalid_argument",
         `value for ${expectedEnv} must be a non-empty string`,
@@ -503,14 +525,18 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const family = cloudFamilyForProvider(connection.provider);
     if (family !== "cloudflare") {
       // Phase 1 only verifies cloudflare end-to-end; others stay pending.
-      return { status: "pending", detail: `verification not implemented for provider ${connection.provider}` };
+      return {
+        status: "pending",
+        detail: `verification not implemented for provider ${connection.provider}`,
+      };
     }
     const values = await this.#openValues(connection);
     const token = values.CLOUDFLARE_API_TOKEN ?? values.CF_API_TOKEN;
     if (!token) {
       return {
         status: "pending",
-        detail: "no cloudflare api token to verify (CLOUDFLARE_API_TOKEN / CF_API_TOKEN)",
+        detail:
+          "no cloudflare api token to verify (CLOUDFLARE_API_TOKEN / CF_API_TOKEN)",
       };
     }
     const verified = await this.#verifyCloudflareToken(token);
@@ -540,9 +566,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     options?: { readonly connectionIds?: readonly string[] },
   ): Promise<CredentialBundle> {
     requireNonEmpty(spaceId, "spaceId");
-    const connections = options?.connectionIds !== undefined
-      ? await this.#capabilityPool(spaceId, options.connectionIds)
-      : await this.#store.listConnections(spaceId);
+    const connections =
+      options?.connectionIds !== undefined
+        ? await this.#capabilityPool(spaceId, options.connectionIds)
+        : await this.#store.listConnections(spaceId);
     const env: Record<string, string> = {};
     const warnings: string[] = [];
     for (const provider of providers) {
@@ -566,7 +593,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           `connection ${match.id} for provider ${provider} is pending (not verified)`,
         );
       }
-      const values = await this.#openValues(match);
+      const values = await this.#mintProviderValues(match);
       for (const [name, value] of Object.entries(values)) {
         env[name] = value;
       }
@@ -590,7 +617,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     // Phase rule: per-alias provider credentials are tofu-phase only. A source /
     // build phase must never request provider credentials (invariants 3-5).
     const phase = options?.phase;
-    if (phase !== undefined && phase !== "plan" && phase !== "apply" && phase !== "destroy") {
+    if (
+      phase !== undefined &&
+      phase !== "plan" &&
+      phase !== "apply" &&
+      phase !== "destroy"
+    ) {
       throw new ConnectionVaultError(
         "failed_precondition",
         `mintForCapabilities is tofu-phase only; ${phase} phase must not request provider credentials`,
@@ -633,7 +665,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           `connection ${connection.id} for capability ${entry.capability} is pending (not verified)`,
         );
       }
-      const values = await this.#openValues(connection);
+      const values = await this.#mintProviderValues(connection);
       const localProvider = providerLocalName(connection.provider);
       for (const { envName, arg } of argMap) {
         const value = values[envName];
@@ -745,8 +777,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   /**
    * Mints a git source credential for the source phase. Verifies the connection
    * is a git kind in the right space, opens the sealed value, and returns the
-   * runner-facing env + files: an askpass script (HTTPS) or the ssh key file plus
-   * GIT_SSH_COMMAND with the pinned known_hosts (SSH; StrictHostKeyChecking=yes).
+   * runner-facing files: an askpass script (HTTPS) or the ssh key file plus
+   * pinned known_hosts (SSH; StrictHostKeyChecking=yes is constructed by the
+   * runner after materializing files into its per-run credential directory).
    */
   async #mintSourceGit(
     spaceId: string,
@@ -772,9 +805,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const values = await this.#openValues(connection);
-    const warnings = connection.status === "pending"
-      ? [`connection ${connection.id} is pending (not verified)`]
-      : [];
+    const warnings =
+      connection.status === "pending"
+        ? [`connection ${connection.id} is pending (not verified)`]
+        : [];
 
     if (connection.kind === "source_git_https_token") {
       const token = values[GIT_HTTPS_TOKEN_ENV];
@@ -786,19 +820,21 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       }
       const username = connection.scopeHints?.username ?? "x-access-token";
       const askpass = gitAskpassScript(username, token);
-      return new PhaseMintBundle({
-        env: {
-          GIT_ASKPASS: "/work/.git-credentials/askpass.sh",
-          GIT_TERMINAL_PROMPT: "0",
-        },
-        files: [
-          {
-            path: "/work/.git-credentials/askpass.sh",
-            mode: 0o700,
-            content: askpass,
+      return new PhaseMintBundle(
+        {
+          env: {
+            GIT_TERMINAL_PROMPT: "0",
           },
-        ],
-      }, warnings);
+          files: [
+            {
+              path: "askpass.sh",
+              mode: 0o700,
+              content: askpass,
+            },
+          ],
+        },
+        warnings,
+      );
     }
 
     // source_git_ssh_key
@@ -820,29 +856,24 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const knownHostsContent = knownHosts.endsWith("\n")
       ? knownHosts
       : `${knownHosts}\n`;
-    return new PhaseMintBundle({
-      env: {
-        // StrictHostKeyChecking=yes always; the pinned known_hosts is the only
-        // trusted source. StrictHostKeyChecking=no is forbidden by the spec.
-        GIT_SSH_COMMAND:
-          "ssh -i /work/.git-credentials/id_source " +
-          "-o IdentitiesOnly=yes " +
-          "-o StrictHostKeyChecking=yes " +
-          "-o UserKnownHostsFile=/work/.git-credentials/known_hosts",
+    return new PhaseMintBundle(
+      {
+        env: {},
+        files: [
+          {
+            path: "id_source",
+            mode: 0o600,
+            content: keyContent,
+          },
+          {
+            path: "known_hosts",
+            mode: 0o600,
+            content: knownHostsContent,
+          },
+        ],
       },
-      files: [
-        {
-          path: "/work/.git-credentials/id_source",
-          mode: 0o600,
-          content: keyContent,
-        },
-        {
-          path: "/work/.git-credentials/known_hosts",
-          mode: 0o600,
-          content: knownHostsContent,
-        },
-      ],
-    }, warnings);
+      warnings,
+    );
   }
 
   async #requireConnection(id: string): Promise<Connection> {
@@ -853,9 +884,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     return connection;
   }
 
-  async #openValues(
-    connection: Connection,
-  ): Promise<Record<string, string>> {
+  async #openValues(connection: Connection): Promise<Record<string, string>> {
     const blob = await this.#store.getSecretBlob(connection.id);
     if (!blob) {
       throw new ConnectionVaultError(
@@ -875,6 +904,138 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     return values;
   }
 
+  async #mintProviderValues(
+    connection: Connection,
+  ): Promise<Record<string, string>> {
+    const values = await this.#openValues(connection);
+    if (
+      !isAwsProvider(connection.provider) ||
+      !connection.scopeHints?.awsRoleArn
+    ) {
+      return values;
+    }
+    if (values.AWS_WEB_IDENTITY_TOKEN_FILE && values.AWS_ROLE_ARN) {
+      // Web-identity token files are runner-local files. The vault cannot safely
+      // materialize them from sealed provider env today, so pass through the
+      // explicit file-based contract when an operator has arranged the file in
+      // the runner environment.
+      return {
+        ...values,
+        AWS_ROLE_ARN: values.AWS_ROLE_ARN || connection.scopeHints.awsRoleArn,
+      };
+    }
+    const accessKeyId = values.AWS_ACCESS_KEY_ID;
+    const secretAccessKey = values.AWS_SECRET_ACCESS_KEY;
+    if (!accessKeyId || !secretAccessKey) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `aws assume-role connection ${connection.id} requires AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY as source credentials`,
+      );
+    }
+    const region =
+      connection.scopeHints.awsRegion ??
+      values.AWS_REGION ??
+      values.AWS_DEFAULT_REGION ??
+      "us-east-1";
+    const assumed = await this.#assumeAwsRole({
+      accessKeyId,
+      secretAccessKey,
+      sessionToken: values.AWS_SESSION_TOKEN,
+      roleArn: connection.scopeHints.awsRoleArn,
+      externalId: connection.scopeHints.awsExternalId,
+      region,
+      sessionName: awsRoleSessionName(connection.id),
+    });
+    return {
+      AWS_ACCESS_KEY_ID: assumed.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: assumed.secretAccessKey,
+      AWS_SESSION_TOKEN: assumed.sessionToken,
+      AWS_REGION: region,
+      AWS_DEFAULT_REGION: values.AWS_DEFAULT_REGION ?? region,
+    };
+  }
+
+  async #assumeAwsRole(
+    input: AssumeAwsRoleInput,
+  ): Promise<AssumedAwsCredentials> {
+    const payload = formEncode({
+      Action: "AssumeRole",
+      Version: "2011-06-15",
+      RoleArn: input.roleArn,
+      RoleSessionName: input.sessionName,
+      DurationSeconds: "3600",
+      ...(input.externalId ? { ExternalId: input.externalId } : {}),
+    });
+    const host = `sts.${input.region}.amazonaws.com`;
+    const url = `https://${host}/`;
+    const now = this.#now();
+    const amzDate = toAmzDate(now);
+    const dateStamp = amzDate.slice(0, 8);
+    const headers: Record<string, string> = {
+      "content-type": "application/x-www-form-urlencoded; charset=utf-8",
+      host,
+      "x-amz-date": amzDate,
+      ...(input.sessionToken
+        ? { "x-amz-security-token": input.sessionToken }
+        : {}),
+    };
+    const authorization = await awsSigV4Authorization({
+      method: "POST",
+      path: "/",
+      query: "",
+      headers,
+      payload,
+      accessKeyId: input.accessKeyId,
+      secretAccessKey: input.secretAccessKey,
+      dateStamp,
+      region: input.region,
+      service: "sts",
+    });
+    let response: Response;
+    try {
+      response = await this.#fetch(url, {
+        method: "POST",
+        headers: {
+          ...headers,
+          authorization,
+        },
+        body: payload,
+      });
+    } catch (error) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `aws sts AssumeRole request failed: ${errorMessage(error)}`,
+      );
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `aws sts AssumeRole returned http ${response.status}: ${awsXmlTag(text, "Code") ?? "unknown_error"}`,
+      );
+    }
+    const credentials = {
+      accessKeyId: awsXmlTag(text, "AccessKeyId"),
+      secretAccessKey: awsXmlTag(text, "SecretAccessKey"),
+      sessionToken: awsXmlTag(text, "SessionToken"),
+    };
+    if (
+      !credentials.accessKeyId ||
+      !credentials.secretAccessKey ||
+      !credentials.sessionToken
+    ) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        "aws sts AssumeRole response did not include complete credentials",
+      );
+    }
+    return {
+      accessKeyId: credentials.accessKeyId,
+      secretAccessKey: credentials.secretAccessKey,
+      sessionToken: credentials.sessionToken,
+    };
+  }
+
   async #verifyCloudflareToken(
     token: string,
   ): Promise<{ readonly ok: boolean; readonly detail?: string }> {
@@ -891,10 +1052,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         },
       );
     } catch (error) {
-      return { ok: false, detail: `token verify request failed: ${errorMessage(error)}` };
+      return {
+        ok: false,
+        detail: `token verify request failed: ${errorMessage(error)}`,
+      };
     }
     if (!response.ok) {
-      return { ok: false, detail: `token verify returned http ${response.status}` };
+      return {
+        ok: false,
+        detail: `token verify returned http ${response.status}`,
+      };
     }
     let body: unknown;
     try {
@@ -903,7 +1070,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       return { ok: false, detail: "token verify returned non-JSON body" };
     }
     if (isCloudflareVerifyOk(body)) return { ok: true };
-    return { ok: false, detail: "token verify reported the token is not active" };
+    return {
+      ok: false,
+      detail: "token verify reported the token is not active",
+    };
   }
 }
 
@@ -948,6 +1118,10 @@ function providerMatches(left: string, right: string): boolean {
   return lrule !== undefined && lrule === rrule;
 }
 
+function isAwsProvider(provider: string): boolean {
+  return providerEnvRule(provider)?.shortName === "aws";
+}
+
 function isCloudflareVerifyOk(body: unknown): boolean {
   if (body === null || typeof body !== "object") return false;
   const record = body as { success?: unknown; result?: unknown };
@@ -966,6 +1140,9 @@ function normalizeScope(
     zoneId?: string;
     username?: string;
     knownHostsEntry?: string;
+    awsRoleArn?: string;
+    awsExternalId?: string;
+    awsRegion?: string;
   } = {};
   if (typeof scope.accountId === "string" && scope.accountId.length > 0) {
     out.accountId = scope.accountId;
@@ -982,6 +1159,18 @@ function normalizeScope(
   ) {
     out.knownHostsEntry = scope.knownHostsEntry;
   }
+  if (typeof scope.awsRoleArn === "string" && scope.awsRoleArn.length > 0) {
+    out.awsRoleArn = scope.awsRoleArn;
+  }
+  if (
+    typeof scope.awsExternalId === "string" &&
+    scope.awsExternalId.length > 0
+  ) {
+    out.awsExternalId = scope.awsExternalId;
+  }
+  if (typeof scope.awsRegion === "string" && scope.awsRegion.length > 0) {
+    out.awsRegion = scope.awsRegion;
+  }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -991,7 +1180,10 @@ function isSourceGitKind(
   return kind === "source_git_https_token" || kind === "source_git_ssh_key";
 }
 
-function requireNonEmpty(value: unknown, field: string): asserts value is string {
+function requireNonEmpty(
+  value: unknown,
+  field: string,
+): asserts value is string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new ConnectionVaultError(
       "invalid_argument",
@@ -1002,6 +1194,154 @@ function requireNonEmpty(value: unknown, field: string): asserts value is string
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function awsRoleSessionName(connectionId: string): string {
+  const suffix = connectionId.replace(/[^A-Za-z0-9+=,.@-]/g, "-").slice(0, 32);
+  return `takosumi-${suffix}`.slice(0, 64);
+}
+
+function toAmzDate(date: Date): string {
+  return date
+    .toISOString()
+    .replace(/[:-]/g, "")
+    .replace(/\.\d{3}Z$/, "Z");
+}
+
+function formEncode(values: Readonly<Record<string, string>>): string {
+  return Object.entries(values)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(
+      ([key, value]) =>
+        `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+    )
+    .join("&");
+}
+
+async function awsSigV4Authorization(input: {
+  readonly method: string;
+  readonly path: string;
+  readonly query: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly payload: string;
+  readonly accessKeyId: string;
+  readonly secretAccessKey: string;
+  readonly dateStamp: string;
+  readonly region: string;
+  readonly service: string;
+}): Promise<string> {
+  const canonicalHeaderEntries = Object.entries(input.headers)
+    .map(
+      ([name, value]) =>
+        [name.toLowerCase(), value.trim().replace(/\s+/g, " ")] as const,
+    )
+    .sort(([a], [b]) => a.localeCompare(b));
+  const signedHeaders = canonicalHeaderEntries.map(([name]) => name).join(";");
+  const canonicalHeaders = canonicalHeaderEntries
+    .map(([name, value]) => `${name}:${value}\n`)
+    .join("");
+  const payloadHash = await sha256Hex(input.payload);
+  const canonicalRequest = [
+    input.method,
+    input.path,
+    input.query,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+  const amzDate = input.headers["x-amz-date"] ?? input.headers["X-Amz-Date"];
+  if (!amzDate) {
+    throw new ConnectionVaultError(
+      "failed_precondition",
+      "aws sts signing requires x-amz-date",
+    );
+  }
+  const credentialScope = `${input.dateStamp}/${input.region}/${input.service}/aws4_request`;
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    credentialScope,
+    await sha256Hex(canonicalRequest),
+  ].join("\n");
+  const signingKey = await awsSigV4SigningKey(
+    input.secretAccessKey,
+    input.dateStamp,
+    input.region,
+    input.service,
+  );
+  const signature = bytesToHex(await hmacSha256(signingKey, stringToSign));
+  return [
+    `AWS4-HMAC-SHA256 Credential=${input.accessKeyId}/${credentialScope}`,
+    `SignedHeaders=${signedHeaders}`,
+    `Signature=${signature}`,
+  ].join(", ");
+}
+
+async function awsSigV4SigningKey(
+  secretAccessKey: string,
+  dateStamp: string,
+  region: string,
+  service: string,
+): Promise<Uint8Array> {
+  const kDate = await hmacSha256(utf8(`AWS4${secretAccessKey}`), dateStamp);
+  const kRegion = await hmacSha256(kDate, region);
+  const kService = await hmacSha256(kRegion, service);
+  return await hmacSha256(kService, "aws4_request");
+}
+
+async function hmacSha256(
+  keyBytes: Uint8Array,
+  data: string,
+): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    arrayBufferFromBytes(keyBytes),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, arrayBufferFromBytes(utf8(data))),
+  );
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    arrayBufferFromBytes(utf8(value)),
+  );
+  return bytesToHex(new Uint8Array(digest));
+}
+
+function utf8(value: string): Uint8Array {
+  return new TextEncoder().encode(value);
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  const copy = new Uint8Array(buffer);
+  copy.set(bytes);
+  return buffer;
+}
+
+function awsXmlTag(xml: string, tag: string): string | undefined {
+  const match = new RegExp(`<${tag}>([^<]+)</${tag}>`).exec(xml);
+  return match ? decodeXmlEntities(match[1]) : undefined;
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 /**

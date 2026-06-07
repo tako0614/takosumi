@@ -40,9 +40,11 @@ export class ControlApiError extends Error {
 
   /** True when the backend rejected because the Source has no synced snapshot. */
   get isSourceSyncRequired(): boolean {
-    return this.status === 409 &&
+    return (
+      this.status === 409 &&
       (this.code === "source_sync_required" ||
-        this.code === "failed_precondition");
+        this.code === "failed_precondition")
+    );
   }
 }
 
@@ -101,9 +103,7 @@ async function controlFetch<T>(
   return data as T;
 }
 
-function query(
-  params: Record<string, string | number | undefined>,
-): string {
+function query(params: Record<string, string | number | undefined>): string {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined) continue;
@@ -121,6 +121,16 @@ const BASE = "/v1/control";
 
 export type SpaceType = "personal" | "organization";
 
+export interface PolicyConfig {
+  readonly allowedProviders?: readonly string[];
+  readonly allowedResourceTypes?: readonly string[];
+  readonly destructiveChanges?: {
+    readonly requireExplicitConfirmation: boolean;
+  };
+  readonly scopeBoundary?: Readonly<Record<string, unknown>>;
+  readonly quota?: Readonly<Record<string, number>>;
+}
+
 export interface Space {
   readonly id: string;
   readonly handle: string;
@@ -128,6 +138,7 @@ export interface Space {
   readonly type: SpaceType;
   readonly ownerUserId: string;
   readonly billingAccountId?: string;
+  readonly policy?: PolicyConfig;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -141,11 +152,11 @@ export type InstallType =
 export type TrustLevel = "official" | "trusted" | "space" | "raw";
 
 export type InstallationStatus =
-  | "installing"
+  | "pending"
   | "active"
   | "stale"
   | "error"
-  | "destroying"
+  | "disabled"
   | "destroyed";
 
 export interface Installation {
@@ -161,6 +172,42 @@ export interface Installation {
   readonly currentStateGeneration: number;
   readonly currentOutputSnapshotId?: string;
   readonly status: InstallationStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export type Capability =
+  | "source"
+  | "compute"
+  | "dns"
+  | "storage"
+  | "database"
+  | "secrets";
+
+export type CapabilityBindingMode =
+  | "default"
+  | "connection"
+  | "manual"
+  | "disabled";
+
+export interface CapabilityBinding {
+  readonly mode: CapabilityBindingMode;
+  readonly connectionId?: string;
+  readonly provider?: string;
+  readonly region?: string;
+  readonly values?: Readonly<Record<string, unknown>>;
+}
+
+export type CapabilityBindings = Readonly<
+  Partial<Record<Capability, CapabilityBinding>>
+>;
+
+export interface DeploymentProfile {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly installationId: string;
+  readonly environment: string;
+  readonly bindings: CapabilityBindings;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -223,6 +270,7 @@ export interface GraphEdge {
 
 export type RunType =
   | "source_sync"
+  | "compatibility_check"
   | "plan"
   | "apply"
   | "destroy_plan"
@@ -315,6 +363,24 @@ export interface Source {
   readonly updatedAt: string;
 }
 
+export interface OutputShareEntry {
+  readonly name: string;
+  readonly alias?: string;
+  readonly sensitive: boolean;
+}
+
+export interface OutputShare {
+  readonly id: string;
+  readonly fromSpaceId: string;
+  readonly toSpaceId: string;
+  readonly producerInstallationId: string;
+  readonly outputs: readonly OutputShareEntry[];
+  readonly status: "pending" | "active" | "revoked";
+  readonly createdAt: string;
+  readonly acceptedAt?: string;
+  readonly revokedAt?: string;
+}
+
 export interface ActivityEvent {
   readonly id: string;
   readonly spaceId: string;
@@ -354,6 +420,26 @@ export interface OperatorConnectionDefault {
   readonly updatedAt: string;
 }
 
+export type CapsuleCompatibilityLevel =
+  | "ready"
+  | "auto_capsulized"
+  | "needs_patch"
+  | "unsupported";
+
+export interface CapsuleCompatibilityDiagnostic {
+  readonly severity: "info" | "warning" | "error";
+  readonly message: string;
+  readonly detail?: string;
+}
+
+export interface CapsuleCompatibilityResult {
+  readonly level: CapsuleCompatibilityLevel;
+  readonly summary: string;
+  readonly diagnostics: readonly CapsuleCompatibilityDiagnostic[];
+  readonly installConfigId?: string;
+  readonly source?: "api" | "placeholder";
+}
+
 // ===========================================================================
 // Typed methods (one per route the dashboard calls)
 // ===========================================================================
@@ -380,6 +466,27 @@ export async function createSpace(input: {
       type: input.type ?? "personal",
     },
   });
+  return body.space;
+}
+
+export async function getSpace(spaceId: string): Promise<Space> {
+  const body = await controlFetch<{ space: Space }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}`,
+  );
+  return body.space;
+}
+
+export async function updateSpace(
+  spaceId: string,
+  input: {
+    readonly displayName?: string;
+    readonly policy?: PolicyConfig;
+  },
+): Promise<Space> {
+  const body = await controlFetch<{ space: Space }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}`,
+    { method: "PATCH", body: input },
+  );
   return body.space;
 }
 
@@ -423,15 +530,79 @@ export async function createInstallation(input: {
   return body.installation;
 }
 
+export async function getDeploymentProfile(
+  installationId: string,
+): Promise<DeploymentProfile | null> {
+  const body = await controlFetch<{
+    deploymentProfile: DeploymentProfile | null;
+  }>(
+    `${BASE}/installations/${encodeURIComponent(installationId)}/deployment-profile`,
+  );
+  return body.deploymentProfile;
+}
+
+export async function putDeploymentProfile(
+  installationId: string,
+  bindings: CapabilityBindings,
+): Promise<DeploymentProfile> {
+  const body = await controlFetch<{ deploymentProfile: DeploymentProfile }>(
+    `${BASE}/installations/${encodeURIComponent(installationId)}/deployment-profile`,
+    { method: "PUT", body: { bindings } },
+  );
+  return body.deploymentProfile;
+}
+
 // --- InstallConfigs --------------------------------------------------------
 
 export async function listInstallConfigs(
   spaceId?: string,
 ): Promise<readonly InstallConfig[]> {
-  const body = await controlFetch<{ installConfigs?: readonly InstallConfig[] }>(
-    `${BASE}/install-configs${query({ spaceId })}`,
-  );
+  const body = await controlFetch<{
+    installConfigs?: readonly InstallConfig[];
+  }>(`${BASE}/install-configs${query({ spaceId })}`);
   return body.installConfigs ?? [];
+}
+
+// --- OpenTofu Capsule compatibility ---------------------------------------
+
+export async function checkCapsuleCompatibility(input: {
+  readonly spaceId: string;
+  readonly gitUrl: string;
+  readonly ref: string;
+  readonly path: string;
+  readonly name: string;
+  readonly installConfigId?: string;
+}): Promise<CapsuleCompatibilityResult> {
+  const body = await controlFetch<
+    | CapsuleCompatibilityResult
+    | {
+        compatibility?: CapsuleCompatibilityResult;
+        result?: CapsuleCompatibilityResult;
+      }
+  >(`${BASE}/capsules/compatibility`, {
+    method: "POST",
+    body: {
+      spaceId: input.spaceId,
+      gitUrl: input.gitUrl,
+      ref: input.ref,
+      path: input.path,
+      name: input.name,
+      ...(input.installConfigId
+        ? { installConfigId: input.installConfigId }
+        : {}),
+    },
+  });
+  if ("level" in body) return body;
+  return (
+    body.compatibility ??
+    body.result ?? {
+      level: "ready",
+      summary:
+        "Compatibility response was empty. The OpenTofu Capsule will be validated by the existing plan flow.",
+      diagnostics: [],
+      source: "placeholder",
+    }
+  );
 }
 
 // --- Graph -----------------------------------------------------------------
@@ -489,9 +660,7 @@ export async function listActivity(
 
 // --- Sources ---------------------------------------------------------------
 
-export async function listSources(
-  spaceId: string,
-): Promise<readonly Source[]> {
+export async function listSources(spaceId: string): Promise<readonly Source[]> {
   const body = await controlFetch<{ sources?: readonly Source[] }>(
     `${BASE}/sources${query({ spaceId })}`,
   );
@@ -509,6 +678,7 @@ export async function createSource(input: {
   readonly url: string;
   readonly defaultRef?: string;
   readonly defaultPath?: string;
+  readonly authConnectionId?: string;
 }): Promise<CreateSourceResult> {
   return await controlFetch<CreateSourceResult>(`${BASE}/sources`, {
     method: "POST",
@@ -518,6 +688,9 @@ export async function createSource(input: {
       url: input.url,
       ...(input.defaultRef ? { defaultRef: input.defaultRef } : {}),
       ...(input.defaultPath ? { defaultPath: input.defaultPath } : {}),
+      ...(input.authConnectionId
+        ? { authConnectionId: input.authConnectionId }
+        : {}),
     },
   });
 }
@@ -532,7 +705,7 @@ export async function syncSource(sourceId: string): Promise<unknown> {
 
 // --- Runs ------------------------------------------------------------------
 
-/** Create a plan Run for an Installation. Returns the opaque PlanRun envelope. */
+/** Create a plan run for an Installation. Returns the opaque Run envelope. */
 export async function planInstallation(
   installationId: string,
 ): Promise<unknown> {
@@ -610,13 +783,64 @@ export async function listConnections(
   return body.connections ?? [];
 }
 
-export async function listOperatorConnectionDefaults(): Promise<
-  readonly OperatorConnectionDefault[]
-> {
-  const body = await controlFetch<
-    { operatorConnectionDefaults?: readonly OperatorConnectionDefault[] }
-  >(`${BASE}/operator-connection-defaults`);
+export async function listOperatorConnectionDefaults(
+  spaceId: string,
+): Promise<readonly OperatorConnectionDefault[]> {
+  const body = await controlFetch<{
+    operatorConnectionDefaults?: readonly OperatorConnectionDefault[];
+  }>(`${BASE}/operator-connection-defaults${query({ spaceId })}`);
   return body.operatorConnectionDefaults ?? [];
+}
+
+// --- OutputShares ----------------------------------------------------------
+
+export async function listOutputShares(
+  spaceId: string,
+): Promise<readonly OutputShare[]> {
+  const body = await controlFetch<{ shares?: readonly OutputShare[] }>(
+    `${BASE}/output-shares${query({ spaceId })}`,
+  );
+  return body.shares ?? [];
+}
+
+export async function createOutputShare(input: {
+  readonly fromSpaceId: string;
+  readonly toSpaceId: string;
+  readonly producerInstallationId: string;
+  readonly outputs: readonly {
+    readonly name: string;
+    readonly alias?: string;
+    readonly sensitive?: boolean;
+  }[];
+  readonly sensitivePolicy?: {
+    readonly allow: boolean;
+    readonly reason?: string;
+  };
+}): Promise<OutputShare> {
+  const body = await controlFetch<{ share: OutputShare }>(
+    `${BASE}/output-shares`,
+    {
+      method: "POST",
+      body: input,
+    },
+  );
+  return body.share;
+}
+
+export async function approveOutputShare(id: string): Promise<OutputShare> {
+  const body = await controlFetch<{ share: OutputShare }>(
+    `${BASE}/output-shares/${encodeURIComponent(id)}/approve`,
+    { method: "POST" },
+  );
+  return body.share;
+}
+
+export async function revokeOutputShare(id: string): Promise<OutputShare> {
+  const body = await controlFetch<{ share: OutputShare }>(
+    `${BASE}/output-shares/${encodeURIComponent(id)}/revoke`,
+    { method: "POST" },
+  );
+  return body.share;
 }
 
 // ===========================================================================
@@ -627,9 +851,9 @@ export async function listOperatorConnectionDefaults(): Promise<
 export function extractRunId(envelope: unknown): string | undefined {
   if (typeof envelope !== "object" || envelope === null) return undefined;
   const obj = envelope as Record<string, unknown>;
-  // PlanRunResponse: { planRun: { id } }; source sync: { run: { id } }; or a
+  // Plan response: { planRun: { id } }; source sync: { run: { id } }; or a
   // bare { id }.
-  for (const wrap of ["planRun", "run"] as const) {
+  for (const wrap of ["planPreview", "run"] as const) {
     const nested = obj[wrap];
     if (nested && typeof nested === "object") {
       const id = (nested as Record<string, unknown>).id;
