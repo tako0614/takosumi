@@ -8,7 +8,7 @@ import { OutputSharesService } from "../domains/output-shares/mod.ts";
 import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import type { Space } from "takosumi-contract/spaces";
 
-test("deploy_control_public_routes — OpenTofu endpoints respond with 501 when controller is absent",
+test("deploy_control_public_routes — public /api endpoints respond with 501 when controller is absent",
   async () => {
     const app = await createApiApp({
       registerDeployControlPublicRoutes: true,
@@ -19,14 +19,14 @@ test("deploy_control_public_routes — OpenTofu endpoints respond with 501 when 
     });
 
     const endpoints = [
-      ["GET", "/v1/runner-profiles", undefined],
-      ["POST", "/v1/plan-runs", {}],
-      ["GET", "/v1/plan-runs/plan_abcdef12", undefined],
-      ["POST", "/v1/apply-runs", {}],
-      ["GET", "/v1/apply-runs/apply_abcdef12", undefined],
-      ["GET", "/v1/installations/ins_abcdef12", undefined],
-      ["GET", "/v1/installations/ins_abcdef12/deployments", undefined],
-      ["GET", "/v1/installations/ins_abcdef12/deployment-outputs", undefined],
+      ["GET", "/api/spaces", undefined],
+      ["POST", "/api/spaces", {}],
+      ["GET", "/api/sources", undefined],
+      ["POST", "/api/sources", {}],
+      ["GET", "/api/installations/ins_abcdef12", undefined],
+      ["POST", "/api/installations/ins_abcdef12/plan", {}],
+      ["GET", "/api/runs/plan_abcdef12", undefined],
+      ["POST", "/api/runs/plan_abcdef12/approve", {}],
     ] as const;
 
     for (const [method, path, body] of endpoints) {
@@ -54,7 +54,7 @@ test("deploy_control_public_routes — disabled without TAKOSUMI_DEPLOY_CONTROL_
       requestCorrelation: false,
     });
 
-    const response = await app.request("/v1/plan-runs", {
+    const response = await app.request("/api/spaces", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
@@ -73,7 +73,7 @@ test("deploy_control_public_routes — rejects invalid bearer", async () => {
     requestCorrelation: false,
   });
 
-  const response = await app.request("/v1/plan-runs", {
+  const response = await app.request("/api/spaces", {
     method: "POST",
     headers: {
       "authorization": "Bearer wrong-token",
@@ -294,7 +294,7 @@ test("output-shares create — scoped bearer allowed on its fromSpace (§18)", a
     }),
   });
   expect(res.status).toEqual(201);
-  expect((await res.json()).share.status).toEqual("active");
+  expect((await res.json()).share.status).toEqual("pending");
 });
 
 test("output-shares create — scoped bearer denied on a foreign fromSpace (§18)", async () => {

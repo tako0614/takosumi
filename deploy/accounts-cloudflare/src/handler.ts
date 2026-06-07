@@ -91,6 +91,11 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF?: string;
   readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF?: string;
   readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY?: string;
+  readonly TAKOSUMI_PRODUCTION_HARDENING_GATE?: string;
+  readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL?: string;
   readonly TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN?: string;
   // Shared deploy-control bearer for the in-process transport; must match the
@@ -200,9 +205,9 @@ export function createCloudflareWorker(
       // External install link (Core Specification §12 / §30). Parses the
       // `?source=git::…` packed form or the simple `?git=&ref=&path=` form,
       // validates the resolved Git URL against the canonical Source URL policy,
-      // and 302-redirects to the dashboard SPA install flow with the validated
-      // params re-encoded. Handled BEFORE the SPA fallback so `/install` is not
-      // shadowed by index.html.
+      // and 302-redirects once to the dashboard SPA install flow with the
+      // validated params re-encoded. The normalized URL carries an internal
+      // marker so the second fetch falls through to ASSETS instead of looping.
       const installLink = maybeHandleInstallLink(request, url);
       if (installLink) return installLink;
       // Non-API paths = the dashboard SPA, served from this Worker's static
@@ -937,17 +942,22 @@ export function createR2InstallationExportWorker(options: {
  * Parses both link forms via the contract `parseInstallLink`, validates the
  * resolved Git URL against the canonical Source URL policy
  * ({@link evaluateSourceUrl} — https/ssh only, no embedded credentials, no
- * `file://`), and on success 302-redirects to the dashboard SPA install flow
- * `/#/install?git=<url>&ref=<ref>&path=<path>` with the validated params
- * re-encoded. A malformed link or a policy-rejected URL returns 400 JSON.
- * Returns `undefined` for any path other than `/install` so the caller falls
- * through to the rest of the worker surface.
+ * `file://`), and on success 302-redirects once to the dashboard SPA install
+ * flow `/install?git=<url>&ref=<ref>&path=<path>&takosumiInstall=1` with the
+ * validated params re-encoded. The marker is internal and makes the normalized
+ * dashboard URL fall through to ASSETS on the next request. A malformed link or
+ * a policy-rejected URL returns 400 JSON. Returns `undefined` for any path other
+ * than `/install`, for plain `/install`, and for already-normalized dashboard
+ * URLs so the caller falls through to the rest of the worker surface.
  */
 function maybeHandleInstallLink(
   request: Request,
   url: URL,
 ): Response | undefined {
   if (url.pathname !== "/install") return undefined;
+  if (url.search.length === 0 || url.searchParams.get("takosumiInstall") === "1") {
+    return undefined;
+  }
   if (request.method !== "GET" && request.method !== "HEAD") {
     return new Response("method not allowed", {
       status: 405,
@@ -981,8 +991,9 @@ function maybeHandleInstallLink(
   if (target.path.length > 0 && target.path !== ".") {
     params.set("path", target.path);
   }
-  // Redirect into the SPA hash route so the dashboard owns the install flow UI.
-  const location = `/#/install?${params.toString()}`;
+  params.set("takosumiInstall", "1");
+  // Redirect into the SPA path route so the dashboard owns the install flow UI.
+  const location = `/install?${params.toString()}`;
   return new Response(null, { status: 302, headers: { location } });
 }
 

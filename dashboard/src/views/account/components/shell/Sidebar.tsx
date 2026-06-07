@@ -7,6 +7,9 @@ import {
   KeyRound,
   LayoutGrid,
   Network,
+  Settings,
+  Share2,
+  GitBranch,
   UserCircle2,
 } from "lucide-solid";
 import Wordmark from "../brand/Wordmark.tsx";
@@ -14,10 +17,13 @@ import Wordmark from "../brand/Wordmark.tsx";
 const ITEMS = [
   { href: "/home", label: "ホーム", icon: Home },
   { href: "/installations", label: "Installations", icon: LayoutGrid },
+  { href: "/sources", label: "Sources", icon: GitBranch },
   { href: "/graph", label: "依存グラフ", icon: Network },
+  { href: "/output-shares", label: "Output shares", icon: Share2 },
   { href: "/connections", label: "接続", icon: KeyRound },
   { href: "/activity", label: "アクティビティ", icon: Activity },
   { href: "/account", label: "アカウント", icon: UserCircle2 },
+  { href: "/account/settings", label: "Settings", icon: Settings },
   { href: "/account/billing", label: "Billing", icon: CreditCard },
   { href: "/notifications", label: "通知", icon: Bell },
 ];

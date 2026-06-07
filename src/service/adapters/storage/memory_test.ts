@@ -1,8 +1,8 @@
 import { test } from "bun:test";
 import { MemoryStorageDriver } from "./memory.ts";
-import type { Space } from "../../domains/space/types.ts";
+import type { MembershipSpace } from "../../domains/membership/types.ts";
 
-const space: Space = {
+const space: MembershipSpace = {
   id: "space_rollback",
   name: "Rollback space",
   metadata: {},
@@ -52,7 +52,7 @@ test("MemoryStorageDriver serializes concurrent transactions", async () => {
   });
   await firstInside.promise;
 
-  const secondSpace: Space = {
+  const secondSpace: MembershipSpace = {
     ...space,
     id: "space_concurrent",
     name: "Concurrent space",

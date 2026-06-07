@@ -4,7 +4,7 @@
  * After a producer apply records an OutputSnapshot whose projected outputs
  * CHANGED versus the producer's previous snapshot, every transitive downstream
  * consumer in the Space that is currently `active` is marked `stale`. An
- * unchanged output marks nothing; a not-yet-applied (`installing`) consumer is
+ * unchanged output marks nothing; a not-yet-applied (`pending`) consumer is
  * left untouched (stale is only meaningful for an already-deployed consumer).
  */
 
@@ -149,7 +149,7 @@ test("a changed producer output marks an active consumer stale", async () => {
     .toEqual("active");
 });
 
-test("a not-yet-applied (installing) consumer is left untouched by a producer change", async () => {
+test("a not-yet-applied (pending) consumer is left untouched by a producer change", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   await seedInstallationModel(store, {
     environment: "preview",
@@ -159,7 +159,7 @@ test("a not-yet-applied (installing) consumer is left untouched by a producer ch
     installationId: "inst_p",
     name: "p",
   });
-  // The consumer is seeded `installing` (fixture default) and never applied.
+  // The consumer is seeded `pending` (fixture default) and never applied.
   await seedInstallationModel(store, {
     environment: "preview",
     sourceId: "src_c",
@@ -201,5 +201,5 @@ test("a not-yet-applied (installing) consumer is left untouched by a producer ch
   });
   // The consumer never reached `active`, so it is not flagged stale.
   expect((await changed.getInstallation("inst_c")).installation.status)
-    .toEqual("installing");
+    .toEqual("pending");
 });

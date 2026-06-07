@@ -34,11 +34,25 @@ test("payload credentials take precedence over Bun.env", () => {
   }
 });
 
-test("falls back to Bun.env when the payload omits the credential", () => {
+test("does not fall back to Bun.env by default when the payload omits the credential", () => {
   const prev = Bun.env.CLOUDFLARE_API_TOKEN;
   Bun.env.CLOUDFLARE_API_TOKEN = "ambient-env-token";
   try {
     const context = commandContextFromRequest(REQUEST, CLOUDFLARE_PROFILE);
+    expect(context.env.CLOUDFLARE_API_TOKEN).toBeUndefined();
+  } finally {
+    restoreEnv("CLOUDFLARE_API_TOKEN", prev);
+  }
+});
+
+test("falls back to Bun.env only for an explicit local-dev runner profile", () => {
+  const prev = Bun.env.CLOUDFLARE_API_TOKEN;
+  Bun.env.CLOUDFLARE_API_TOKEN = "ambient-env-token";
+  try {
+    const context = commandContextFromRequest(REQUEST, {
+      ...CLOUDFLARE_PROFILE,
+      devLocalAllowAmbientCredentials: true,
+    });
     expect(context.env.CLOUDFLARE_API_TOKEN).toEqual("ambient-env-token");
   } finally {
     restoreEnv("CLOUDFLARE_API_TOKEN", prev);

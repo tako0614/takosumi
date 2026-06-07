@@ -3,6 +3,7 @@
 // monolithic `postgres-store.ts`.
 
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
 import type {
   AppBindingRecord,
   AppGrantRecord,
@@ -38,6 +39,26 @@ export interface PostgresQueryClient {
     sql: string,
     args?: readonly unknown[],
   ): Promise<PostgresQueryResult<T>>;
+}
+
+export function postgresDrizzle<TSchema extends Record<string, unknown>>(
+  client: PostgresQueryClient,
+  schema: TSchema,
+): PgRemoteDatabase<TSchema> {
+  return drizzle(
+    async (query, params, method) => {
+      const result = await client.queryObject<Record<string, unknown>>(
+        query,
+        params,
+      );
+      if (method !== "all") return { rows: [...result.rows] };
+      const columns = selectedDriverColumns(query);
+      return {
+        rows: result.rows.map((row) => columns.map((column) => row[column])),
+      };
+    },
+    { schema },
+  );
 }
 
 export async function runQuery<T = Record<string, unknown>>(
@@ -168,7 +189,7 @@ export interface AuthorizationCodeRow {
   redirect_uri: string;
   scope: string;
   subject: string;
- takosumi_subject: TakosumiSubject | null;
+  takosumi_subject: TakosumiSubject | null;
   installation_id: string | null;
   app_id: string | null;
   space_id: string | null;
@@ -183,7 +204,7 @@ export interface TokenRow {
   client_id: string;
   scope: string;
   subject: string;
- takosumi_subject: TakosumiSubject | null;
+  takosumi_subject: TakosumiSubject | null;
   installation_id: string | null;
   app_id: string | null;
   space_id: string | null;
@@ -376,25 +397,29 @@ export function billingAccountFromRow(
     stripeSubscriptionId: optional(row.stripe_subscription_id),
     stripePriceId: optional(row.stripe_price_id),
     planCode: optional(row.plan_code),
-    currentPeriodEndUnix: row.current_period_end_unix === null
-      ? undefined
-      : Number(row.current_period_end_unix),
+    currentPeriodEndUnix:
+      row.current_period_end_unix === null
+        ? undefined
+        : Number(row.current_period_end_unix),
     lastInvoiceId: optional(row.last_invoice_id),
     dunningStartedAt: optionalMillis(row.dunning_started_at),
-    nextPaymentAttemptUnix: row.next_payment_attempt_unix === null
-      ? undefined
-      : Number(row.next_payment_attempt_unix),
-    dunningAttemptCount: row.dunning_attempt_count === null
-      ? undefined
-      : Number(row.dunning_attempt_count),
+    nextPaymentAttemptUnix:
+      row.next_payment_attempt_unix === null
+        ? undefined
+        : Number(row.next_payment_attempt_unix),
+    dunningAttemptCount:
+      row.dunning_attempt_count === null
+        ? undefined
+        : Number(row.dunning_attempt_count),
     dunningAction: optional(row.dunning_action),
     dunningExhaustedAt: optionalMillis(row.dunning_exhausted_at),
     lastCreditEventId: optional(row.last_credit_event_id),
     lastCreditKind: optional(row.last_credit_kind),
     lastCreditId: optional(row.last_credit_id),
-    lastCreditAmount: row.last_credit_amount === null
-      ? undefined
-      : Number(row.last_credit_amount),
+    lastCreditAmount:
+      row.last_credit_amount === null
+        ? undefined
+        : Number(row.last_credit_amount),
     lastCreditCurrency: optional(row.last_credit_currency),
     lastPlanTransitionEventId: optional(row.last_plan_transition_event_id),
     lastPlanFromCode: optional(row.last_plan_from_code),
@@ -432,9 +457,8 @@ export function billingUsageFromRow(row: BillingUsageRow): BillingUsageRecord {
     meter: row.meter,
     quantity: Number(row.quantity),
     unit: row.unit,
-    periodStart: row.period_start === null
-      ? undefined
-      : millis(row.period_start),
+    periodStart:
+      row.period_start === null ? undefined : millis(row.period_start),
     periodEnd: row.period_end === null ? undefined : millis(row.period_end),
     idempotencyKey: optional(row.idempotency_key),
     requestDigest: row.request_digest,
@@ -452,7 +476,7 @@ export function authorizationCodeFromRow(
     redirectUri: row.redirect_uri,
     scope: row.scope,
     subject: row.subject,
-   takosumiSubject: optional(row.takosumi_subject),
+    takosumiSubject: optional(row.takosumi_subject),
     installationId: optional(row.installation_id),
     appId: optional(row.app_id),
     spaceId: optional(row.space_id),
@@ -469,7 +493,7 @@ export function tokenFromRow(row: TokenRow): TokenRecord {
     clientId: row.client_id,
     scope: row.scope,
     subject: row.subject,
-   takosumiSubject: optional(row.takosumi_subject),
+    takosumiSubject: optional(row.takosumi_subject),
     installationId: optional(row.installation_id),
     appId: optional(row.app_id),
     spaceId: optional(row.space_id),
@@ -490,9 +514,8 @@ export function personalAccessTokenFromRow(
     createdAt: millis(row.created_at),
     expiresAt: row.expires_at === null ? undefined : millis(row.expires_at),
     revokedAt: row.revoked_at === null ? undefined : millis(row.revoked_at),
-    lastUsedAt: row.last_used_at === null
-      ? undefined
-      : millis(row.last_used_at),
+    lastUsedAt:
+      row.last_used_at === null ? undefined : millis(row.last_used_at),
   };
 }
 
@@ -635,74 +658,9 @@ export function installationEventFromRow(
   };
 }
 
-export function billingAccountSelect(where: string): string {
-  return `SELECT billing_account_id, subject, provider, stripe_customer_id,
-      stripe_subscription_id, stripe_price_id, plan_code, current_period_end_unix,
-      last_invoice_id, dunning_started_at, next_payment_attempt_unix,
-      dunning_attempt_count, dunning_action, dunning_exhausted_at,
-      last_credit_event_id, last_credit_kind, last_credit_id,
-      last_credit_amount, last_credit_currency, last_plan_transition_event_id,
-      last_plan_from_code, last_plan_to_code, last_plan_transitioned_at,
-      last_tax_event_id, tax_policy_ref, tax_jurisdiction,
-      tax_automatic_status, status, version, created_at, updated_at
-    FROM accounts_v1.billing_accounts
-    WHERE ${where}`;
-}
-
-export function oidcClientSelect(where: string): string {
-  return `SELECT client_id, installation_id, service_id, issuer_url,
-      redirect_uris, allowed_scopes, subject_mode, token_endpoint_auth_method,
-      client_secret_hash, created_at, updated_at
-    FROM installation_v1.oidc_clients
-    WHERE ${where}`;
-}
-
-export function spaceSelect(where: string): string {
-  return `SELECT space_id, account_id, kind, display_name, created_at, updated_at
-    FROM installation_v1.spaces
-    WHERE ${where}`;
-}
-
-export function appInstallationSelect(where: string): string {
-  // Wave 6 dropped the `runtime_binding_id` column from
-  // `installation_v1.app_installations`. The removed schema kept the
-  // column; the production migration removed it. Selecting against the
-  // dropped column raised "column does not exist" at install time
-  // (production-blocking SQL drift). We no longer SELECT it; consumers
-  // observe `runtimeBindingId` as `undefined`.
-  return `SELECT installation_id, account_id, space_id, app_id, source_git_url,
-      source_ref, source_commit, plan_digest, artifact_digest,
-      mode, billing_account_id, status,
-      created_by_subject, created_at, updated_at
-    FROM installation_v1.app_installations
-    WHERE ${where}`;
-}
-
 // `appGrantSelect()` removed: Wave 6 dropped `installation_v1.app_grants`
 // and Phase I converted all readers to no-op shims. The query builder
 // became unreachable dead code (Phase K audit K5).
-
-export function personalAccessTokenSelect(where: string): string {
-  return `SELECT token_id, token_prefix, subject, name, scopes, created_at,
-      expires_at, revoked_at, last_used_at
-    FROM accounts_v1.personal_access_tokens
-    WHERE ${where}`;
-}
-
-export function billingUsageSelect(where: string): string {
-  return `SELECT usage_report_id, installation_id, billing_account_id, meter,
-      quantity, unit, period_start, period_end, idempotency_key, request_digest,
-      metadata, reported_by_subject, reported_at
-    FROM accounts_v1.billing_usage_records
-    WHERE ${where}`;
-}
-
-export function launchTokenSelect(where: string): string {
-  return `SELECT token_hash, jti, installation_id, account_id, space_id, app_id,
-      subject, redirect_uri, scopes, expires_at, created_at, used_at
-    FROM installation_v1.launch_tokens
-    WHERE ${where}`;
-}
 
 export function toDate(ms: number): Date {
   return new Date(ms);
@@ -728,13 +686,27 @@ export function json(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function selectedDriverColumns(query: string): readonly string[] {
+  const lower = query.toLowerCase();
+  const select = lower.match(/^select\s+([\s\S]+?)\s+from\s/);
+  const returning = lower.match(/\sreturning\s+([\s\S]+)$/);
+  const list = select?.[1] ?? returning?.[1];
+  if (!list) return [];
+  return list.split(",").map((part) => {
+    const alias = /\s+as\s+"?([a-z_][a-z0-9_]*)"?\s*$/.exec(part);
+    if (alias) return alias[1];
+    const identifiers = [...part.matchAll(/"?([a-z_][a-z0-9_]*)"?/g)];
+    return identifiers.at(-1)?.[1] ?? part.trim().replaceAll('"', "");
+  });
+}
+
 function parseJson(value: unknown): unknown {
   return typeof value === "string" ? JSON.parse(value) : value;
 }
 
 export function objectJson<T = Record<string, unknown>>(value: unknown): T {
   const parsed = parseJson(value);
-  return isRecord(parsed) ? parsed as T : {} as T;
+  return isRecord(parsed) ? (parsed as T) : ({} as T);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

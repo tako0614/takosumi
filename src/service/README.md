@@ -1,9 +1,10 @@
 # @takosjp/takosumi
 
-Reference service for the OpenTofu-native Takosumi Deploy Control API. It records Installation, PlanRun, ApplyRun,
-Deployment, DeploymentOutput, RunnerProfile policy, logs, and audit events.
+Reference service for the OpenTofu-native Takosumi control plane. It records Space, Source, Connection, Installation,
+Dependency, Run, RunGroup, StateSnapshot, OutputSnapshot, Deployment, policy decisions, logs, and audit events.
 
-The service does not hold provider credential values. OpenTofu execution runs through operator-selected runner profiles.
+The service does not hold provider credential values. OpenTofu execution runs through the internal runner/profile
+machinery selected by the operator and resolved from Connection + CapabilityBinding + policy.
 
 ## Install
 
@@ -12,18 +13,25 @@ npm install @takosjp/takosumi
 takosumi server
 ```
 
-## Public deploy control endpoints
+## Public control-plane endpoints
 
-- `GET /v1/runner-profiles` — list operator-adopted RunnerProfiles
-- `POST /v1/plan-runs` — create an OpenTofu plan run
-- `GET /v1/plan-runs/{id}` — read a PlanRun
-- `POST /v1/apply-runs` — apply a reviewed PlanRun
-- `GET /v1/apply-runs/{id}` — read an ApplyRun
-- `GET /v1/installations/{id}` — read Installation state
-- `GET /v1/installations/{id}/deployments` — read Deployment and DeploymentOutput history
-- `GET /v1/installations/{id}/deployment-outputs` — read current non-sensitive DeploymentOutput records
+The public surface is the §30 `/api` model: Spaces, Sources, Connections, Installations, Dependencies, Runs, RunGroups,
+Deployments, OutputShares, and Activity.
 
-Destroy is planned with `POST /v1/plan-runs` using `operation: "destroy"` and executed through `POST /v1/apply-runs`.
+- `POST /api/spaces` / `GET /api/spaces`
+- `POST /api/sources` / `POST /api/sources/{id}/sync`
+- `POST /api/connections/*` / `GET /api/connections`
+- `POST /api/spaces/{spaceId}/installations`
+- `POST /api/installations/{id}/plan`
+- `POST /api/runs/{id}/approve`
+- `POST /api/installations/{id}/destroy-plan`
+- `GET /api/installations/{id}/deployments`
+- `GET /api/deployments/{id}`
+- `GET /api/spaces/{spaceId}/activity`
+
+The legacy `/v1/plan-runs`, `/v1/apply-runs`, `/v1/runner-profiles`, and `/v1/installations/*` ledger routes are an
+internal compatibility seam for the accounts plane / CLI. They are not surfaced through `/capabilities` or
+`/openapi.json`.
 
 ## Operator / internal extensions
 
@@ -58,8 +66,15 @@ const { app } = await createTakosumiService({
 const server = Bun.serve({ port: 8788, fetch: app.fetch });
 ```
 
-`createTakosumiService` builds the Hono app, wires adapter ports, mounts route modules for the configured process role, and
-passes RunnerProfile and store configuration to the deploy control pipeline.
+`createTakosumiService` builds the Hono app, wires adapter ports, mounts route modules for the configured process role,
+and passes internal runner/profile and store configuration to the deploy control pipeline.
+
+## Storage implementation note
+
+Drizzle schema scaffolding now exists for the deploy-control D1 and Postgres tables, but the active stores and migration
+runner are still the existing raw SQL implementations. Generated Drizzle SQL is not an operator migration source yet.
+Before any store is switched to Drizzle, the Drizzle schemas must be kept as exact physical mappings of the live D1 and
+Postgres tables and any generated SQL must be folded into the checksumed `StorageMigrationRunner` catalog.
 
 ## See also
 

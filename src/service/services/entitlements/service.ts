@@ -1,4 +1,4 @@
-import type { SpaceMembershipStore } from "../../domains/space/mod.ts";
+import type { SpaceMembershipStore } from "../../domains/membership/mod.ts";
 import { permissionDenied } from "../../shared/errors.ts";
 import { ALL_CAPABILITIES } from "./types.ts";
 import type {

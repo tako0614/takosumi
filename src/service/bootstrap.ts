@@ -11,7 +11,10 @@ import {
   createAppContext,
 } from "./app_context.ts";
 import { loadRuntimeConfigFromEnv } from "./config/mod.ts";
-import { isTakosumiProcessRole, type TakosumiProcessRole } from "./process/mod.ts";
+import {
+  isTakosumiProcessRole,
+  type TakosumiProcessRole,
+} from "./process/mod.ts";
 import type { WorkerDaemonHandle } from "./workers/daemon.ts";
 import type { SqlClient } from "./adapters/storage/sql.ts";
 import type { RevokeDebtStore } from "./domains/deploy-records/revoke_debt_store.ts";
@@ -26,9 +29,7 @@ import {
 import { createRoleReadinessProbes } from "./bootstrap/readiness.ts";
 import { InMemoryRevokeDebtStore } from "./domains/deploy-records/revoke_debt_store.ts";
 import { SqlRevokeDebtStore } from "./domains/deploy-records/revoke_debt_store_sql.ts";
-import {
-  InMemoryTakosumiDeploymentRecordStore,
-} from "./domains/deploy-records/deployment_record_store.ts";
+import { InMemoryTakosumiDeploymentRecordStore } from "./domains/deploy-records/deployment_record_store.ts";
 import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy-records/deployment_record_store_sql.ts";
 import {
   type EnqueueRun,
@@ -45,6 +46,7 @@ import { SpacesService } from "./domains/spaces/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
 import { DependenciesService } from "./domains/dependencies/mod.ts";
 import { OutputSharesService } from "./domains/output-shares/mod.ts";
+import type { SensitiveOutputResolver } from "./domains/output-shares/mod.ts";
 import { RunGroupsService } from "./domains/run-groups/mod.ts";
 import { ActivityService } from "./domains/activity/mod.ts";
 import {
@@ -80,9 +82,7 @@ import {
   InMemoryOpenTofuDeploymentStore,
   type OpenTofuDeploymentStore,
 } from "./domains/deploy-control/store.ts";
-import {
-  SqlOpenTofuDeploymentStore,
-} from "./domains/deploy-control/store_sql.ts";
+import { SqlOpenTofuDeploymentStore } from "./domains/deploy-control/store_sql.ts";
 import { log } from "./shared/log.ts";
 import type { OperatorImplementation } from "takosumi-contract/reference/implementation";
 import type { Run } from "takosumi-contract/runs";
@@ -133,7 +133,8 @@ function resolveOpenTofuStore(input: {
   readonly opentofuDeploymentStore?: OpenTofuDeploymentStore;
   readonly sqlClient?: SqlClient;
 }): ResolvedOpenTofuStore {
-  const store = input.opentofuDeploymentStore ??
+  const store =
+    input.opentofuDeploymentStore ??
     (input.sqlClient
       ? new SqlOpenTofuDeploymentStore({ client: input.sqlClient })
       : undefined);
@@ -165,8 +166,8 @@ function assertDurableDeployControlStoreOrWarn(input: {
   readonly allowUnsafeProductionDefaults?: boolean;
 }): void {
   if (input.durable) return;
-  const strict = input.environment === "production" ||
-    input.environment === "staging";
+  const strict =
+    input.environment === "production" || input.environment === "staging";
   if (!input.deployControlTokenPresent) {
     // Routes are not exposed; an in-memory ledger cannot lose anything the
     // operator is serving. Stay quiet.
@@ -185,7 +186,8 @@ function assertDurableDeployControlStoreOrWarn(input: {
   // unknowingly running an ephemeral ledger notices.
   log.warn("service.deployControl.in_memory_ledger", {
     environment: input.environment ?? "unknown",
-    hint: "OpenTofu run, Installation, and Deployment records will NOT " +
+    hint:
+      "OpenTofu run, Installation, and Deployment records will NOT " +
       "persist across restart or isolate recycle. Inject " +
       "opentofuDeploymentStore (or a sqlClient) for production/staging.",
   });
@@ -269,6 +271,12 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * `not_implemented` (the dev/test fallback may inject an in-memory store).
    */
   readonly backupArtifactStore?: BackupArtifactStore;
+  /**
+   * Host-injected resolver for sensitive OutputShare values. Required for
+   * sensitive cross-Space published_output injection; when omitted the service
+   * fails closed for sensitive grants.
+   */
+  readonly sensitiveOutputResolver?: SensitiveOutputResolver;
 }
 
 /**
@@ -371,13 +379,11 @@ export interface TakosumiOperations {
    * each dispatched run message (plan/apply); it loads the run, applies the
    * idempotency guard, mints credentials, and drives the container dispatch.
    */
-  dispatchQueuedRun(
-    dispatch: {
-      action: "plan" | "apply" | "source_sync";
-      runId: string;
-      spaceId: string;
-    },
-  ): Promise<void>;
+  dispatchQueuedRun(dispatch: {
+    action: "plan" | "apply" | "source_sync";
+    runId: string;
+    spaceId: string;
+  }): Promise<void>;
   // --- Sources (Core Specification §6) ---
   createSource(request: CreateSourceRequest): Promise<CreateSourceResponse>;
   listSources(spaceId: string): Promise<ListSourcesResponse>;
@@ -416,16 +422,19 @@ export async function createTakosumiService(
   options: CreateTakosumiServiceOptions = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = options.runtimeEnv ?? currentRuntime().env.toObject();
-  const runtimeConfig = options.runtimeConfig ??
-    await loadRuntimeConfigFromEnv({ env: runtimeEnv });
+  const runtimeConfig =
+    options.runtimeConfig ??
+    (await loadRuntimeConfigFromEnv({ env: runtimeEnv }));
   const role = options.role ?? processRoleFromRuntimeConfig(runtimeConfig);
   registerDefaultArtifactKinds();
-  const context = options.context ?? await createAppContext({
-    ...options,
-    runtimeEnv,
-    runtimeConfig,
-    implementations: options.implementations ?? [],
-  });
+  const context =
+    options.context ??
+    (await createAppContext({
+      ...options,
+      runtimeEnv,
+      runtimeConfig,
+      implementations: options.implementations ?? [],
+    }));
   const deployToken = runtimeEnv.TAKOSUMI_DEPLOY_TOKEN;
   const deployControlToken = runtimeEnv.TAKOSUMI_DEPLOY_CONTROL_TOKEN;
   const fetchToken = runtimeEnv.TAKOSUMI_ARTIFACT_FETCH_TOKEN;
@@ -452,13 +461,13 @@ export async function createTakosumiService(
   const workerDaemonState = createWorkerDaemonState();
   const workerDaemon = shouldStartWorkerDaemon(role, options)
     ? createRoleWorkerDaemon({
-      role,
-      context,
-      runtimeEnv,
-      deploymentRecordStore: recordStore,
-      revokeDebtStore,
-      onTick: workerDaemonState.onTick,
-    }).start()
+        role,
+        context,
+        runtimeEnv,
+        deploymentRecordStore: recordStore,
+        revokeDebtStore,
+        onTick: workerDaemonState.onTick,
+      }).start()
     : undefined;
   // Durable OpenTofu run ledger. SQL-backed when a SqlClient is configured
   // (and not explicitly overridden); the in-memory fallback is only safe for
@@ -481,8 +490,8 @@ export async function createTakosumiService(
   // service share the SAME ledger (when no durable store is injected the
   // controller would otherwise build its own private in-memory store, leaving
   // the SourcesService backed by a different instance).
-  const sharedOpenTofuStore = opentofuStore.store ??
-    new InMemoryOpenTofuDeploymentStore();
+  const sharedOpenTofuStore =
+    opentofuStore.store ?? new InMemoryOpenTofuDeploymentStore();
   // Activity domain (Core Specification §27 / §34): the Space-scoped audit
   // trail. Constructed first so the controller + Installation / Dependency /
   // RunGroup services can emit through it (fire-and-forget; a failed audit write
@@ -495,6 +504,15 @@ export async function createTakosumiService(
     store: sharedOpenTofuStore,
     ...(options.enqueueSourceSync
       ? { enqueueSourceSync: options.enqueueSourceSync }
+      : {}),
+    ...(options.opentofuRunner?.readCapsuleSourceFiles
+      ? {
+          readCapsuleSourceFiles: (snapshot) =>
+            options.opentofuRunner!.readCapsuleSourceFiles!({
+              runId: `compatibility_${snapshot.id}`,
+              sourceSnapshot: snapshot,
+            }),
+        }
       : {}),
   });
   // Spaces + Installations domains (Core Specification §4 / §5 / §11): Space /
@@ -518,6 +536,9 @@ export async function createTakosumiService(
   const outputSharesService = new OutputSharesService({
     store: sharedOpenTofuStore,
     activity: activityService,
+    ...(options.sensitiveOutputResolver
+      ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
+      : {}),
   });
   // Seed the official InstallConfig catalog from the built-in template registry
   // (trustLevel "official"). Idempotent upsert keyed by the derived config id,
@@ -530,12 +551,17 @@ export async function createTakosumiService(
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
     ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),
     sourcesService,
-    ...(options.runnerProfiles ? { runnerProfiles: options.runnerProfiles } : {}),
+    ...(options.runnerProfiles
+      ? { runnerProfiles: options.runnerProfiles }
+      : {}),
     ...(options.defaultRunnerProfileId
       ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
       : {}),
     ...(options.installationCoordination
       ? { installationCoordination: options.installationCoordination }
+      : {}),
+    ...(options.sensitiveOutputResolver
+      ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
       : {}),
   });
   // RunGroups domain (Core Specification §19 / §24): the space_update RunGroup
@@ -564,28 +590,30 @@ export async function createTakosumiService(
     registerRuntimeAgentRoutes: role === "takosumi-runtime-agent",
     registerReadinessRoutes: true,
     registerOpenApiRoute: role === "takosumi-api",
-    registerArtifactRoutes: role === "takosumi-api" &&
+    registerArtifactRoutes:
+      role === "takosumi-api" &&
       Boolean(deployToken) &&
       Boolean(context.adapters?.objectStorage),
-    registerMetricsRoutes: role === "takosumi-api" &&
-      Boolean(metricsScrapeToken),
+    registerMetricsRoutes:
+      role === "takosumi-api" && Boolean(metricsScrapeToken),
     metricsRouteOptions: metricsScrapeToken
       ? {
-        observability: context.adapters.observability,
-        getScrapeToken: () => metricsScrapeToken,
-      }
+          observability: context.adapters.observability,
+          getScrapeToken: () => metricsScrapeToken,
+        }
       : undefined,
-    artifactRouteOptions: deployToken && context.adapters?.objectStorage
-      ? {
-        getDeployToken: () => deployToken,
-        objectStorage: context.adapters.objectStorage,
-        recordStore,
-        ...(fetchToken ? { getArtifactFetchToken: () => fetchToken } : {}),
-        ...(artifactMaxBytes !== undefined
-          ? { maxBytes: artifactMaxBytes }
-          : {}),
-      }
-      : undefined,
+    artifactRouteOptions:
+      deployToken && context.adapters?.objectStorage
+        ? {
+            getDeployToken: () => deployToken,
+            objectStorage: context.adapters.objectStorage,
+            recordStore,
+            ...(fetchToken ? { getArtifactFetchToken: () => fetchToken } : {}),
+            ...(artifactMaxBytes !== undefined
+              ? { maxBytes: artifactMaxBytes }
+              : {}),
+          }
+        : undefined,
     deployControlPublicRouteOptions: {
       controller: opentofuController,
       spacesService,
@@ -596,7 +624,9 @@ export async function createTakosumiService(
       runGroupsService,
       activityService,
       backupsService,
-      ...(deployControlToken ? { getDeployControlToken: () => deployControlToken } : {}),
+      ...(deployControlToken
+        ? { getDeployControlToken: () => deployControlToken }
+        : {}),
     },
     readinessRouteProbes: createRoleReadinessProbes({
       role,
@@ -612,9 +642,9 @@ export async function createTakosumiService(
     }),
     requestCorrelation: {
       logger: shouldEmitHttpRequestLogs(runtimeConfig.environment, runtimeEnv)
-        ? createConsoleApiRequestLogger(parseApiLogLevel(
-          runtimeEnv.TAKOSUMI_LOG_LEVEL,
-        ))
+        ? createConsoleApiRequestLogger(
+            parseApiLogLevel(runtimeEnv.TAKOSUMI_LOG_LEVEL),
+          )
         : undefined,
       minLevel: parseApiLogLevel(runtimeEnv.TAKOSUMI_LOG_LEVEL),
       traceSink: context.adapters.observability,
@@ -722,4 +752,3 @@ function parsePositiveIntegerEnv(
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
-

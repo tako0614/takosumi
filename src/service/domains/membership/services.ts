@@ -18,29 +18,29 @@ import { type Clock, type IsoTimestamp, nowIso } from "../../shared/time.ts";
 import {
   type GroupStore,
   InMemoryGroupStore,
+  InMemoryMembershipSpaceStore,
   InMemorySpaceMembershipStore,
-  InMemorySpaceStore,
-  requireSpace,
+  type MembershipSpaceStore,
+  requireMembershipSpace,
   type SpaceMembershipStore,
-  type SpaceStore,
 } from "./stores.ts";
 import type {
   CheckEntitlementQuery,
   SpaceRole,
   CreateGroupCommand,
-  CreateSpaceCommand,
+  CreateMembershipSpaceCommand,
   EntitlementDecision,
   Group,
   ListGroupsQuery,
-  ListSpacesQuery,
-  Space,
+  ListMembershipSpacesQuery,
+  MembershipSpace,
   SpaceMembership,
   UpsertSpaceMembershipCommand,
 } from "./types.ts";
 import { toInternalSpaceSummary } from "./types.ts";
 
-export interface SpaceDomainDependencies {
-  readonly spaces: SpaceStore;
+export interface MembershipDomainDependencies {
+  readonly spaces: MembershipSpaceStore;
   readonly groups: GroupStore;
   readonly memberships: SpaceMembershipStore;
   readonly outbox: OutboxStore;
@@ -48,26 +48,26 @@ export interface SpaceDomainDependencies {
   readonly idGenerator?: IdGenerator;
 }
 
-export interface SpaceDomainServices {
-  readonly spaces: SpaceCommandService;
-  readonly spaceQueries: SpaceQueryService;
+export interface MembershipDomainServices {
+  readonly spaces: MembershipSpaceCommandService;
+  readonly spaceQueries: MembershipSpaceQueryService;
   readonly groups: GroupCommandService;
   readonly groupQueries: GroupQueryService;
   readonly memberships: MembershipRoleEntitlementService;
   readonly outbox: OutboxStore;
 }
 
-export class SpaceCommandService {
-  constructor(private readonly dependencies: SpaceDomainDependencies) {}
+export class MembershipSpaceCommandService {
+  constructor(private readonly dependencies: MembershipDomainDependencies) {}
 
   async createSpace(
-    command: CreateSpaceCommand,
-  ): Promise<Result<Space, DomainError>> {
+    command: CreateMembershipSpaceCommand,
+  ): Promise<Result<MembershipSpace, DomainError>> {
     const name = normalizeName(command.name ?? "Untitled space");
     if (!name.ok) return name;
 
     const now = currentTime(this.dependencies.clock);
-    const space: Space = {
+    const space: MembershipSpace = {
       id: command.spaceId ?? createId("space", this.dependencies.idGenerator),
       name: name.value,
       metadata: command.metadata ?? {},
@@ -116,20 +116,22 @@ export class SpaceCommandService {
   }
 }
 
-export class SpaceQueryService {
+export class MembershipSpaceQueryService {
   constructor(
-    private readonly spaces: SpaceStore,
+    private readonly spaces: MembershipSpaceStore,
     private readonly memberships: SpaceMembershipStore,
   ) {}
 
-  async listSpaces(query: ListSpacesQuery): Promise<readonly Space[]> {
+  async listSpaces(
+    query: ListMembershipSpacesQuery,
+  ): Promise<readonly MembershipSpace[]> {
     // SECURITY (cross-tenant disclosure): the internal spaces endpoint forwards a
     // user-derived actor and the trusting gateway assumes this list is already
     // membership-filtered. Return ONLY spaces the actor's account is an active
     // member of, never the full deployment-wide inventory.
     const all = await this.spaces.list();
     const accountId = query.actor.actorAccountId;
-    const visible: Space[] = [];
+    const visible: MembershipSpace[] = [];
     for (const space of all) {
       if (await isActiveMember(this.memberships, space.id, accountId)) {
         visible.push(space);
@@ -139,24 +141,27 @@ export class SpaceQueryService {
   }
 
   async listInternalSpaceSummaries(
-    query: ListSpacesQuery,
+    query: ListMembershipSpacesQuery,
   ): Promise<readonly InternalSpaceSummary[]> {
     const spaces = await this.listSpaces(query);
     return spaces.map(toInternalSpaceSummary);
   }
 
-  async getSpace(spaceId: string): Promise<Space | undefined> {
+  async getSpace(spaceId: string): Promise<MembershipSpace | undefined> {
     return await this.spaces.get(spaceId);
   }
 }
 
 export class GroupCommandService {
-  constructor(private readonly dependencies: SpaceDomainDependencies) {}
+  constructor(private readonly dependencies: MembershipDomainDependencies) {}
 
   async createGroup(
     command: CreateGroupCommand,
   ): Promise<Result<Group, DomainError>> {
-    const space = await requireSpace(this.dependencies.spaces, command.spaceId);
+    const space = await requireMembershipSpace(
+      this.dependencies.spaces,
+      command.spaceId,
+    );
     if (!space.ok) return space;
 
     const slug = normalizeSlug(command.slug);
@@ -257,12 +262,15 @@ export class GroupQueryService {
 }
 
 export class MembershipRoleEntitlementService {
-  constructor(private readonly dependencies: SpaceDomainDependencies) {}
+  constructor(private readonly dependencies: MembershipDomainDependencies) {}
 
   async upsertSpaceMembership(
     command: UpsertSpaceMembershipCommand,
   ): Promise<Result<SpaceMembership, DomainError>> {
-    const space = await requireSpace(this.dependencies.spaces, command.spaceId);
+    const space = await requireMembershipSpace(
+      this.dependencies.spaces,
+      command.spaceId,
+    );
     if (!space.ok) return space;
 
     const allowed = await canManageSpace(
@@ -344,12 +352,12 @@ export class MembershipRoleEntitlementService {
   }
 }
 
-export function createInMemorySpaceDomainDependencies(
-  overrides: Partial<SpaceDomainDependencies> = {},
-): SpaceDomainDependencies {
+export function createInMemoryMembershipDomainDependencies(
+  overrides: Partial<MembershipDomainDependencies> = {},
+): MembershipDomainDependencies {
   const outbox = overrides.outbox ?? new InMemoryOutboxStore();
   return {
-    spaces: overrides.spaces ?? new InMemorySpaceStore(),
+    spaces: overrides.spaces ?? new InMemoryMembershipSpaceStore(),
     groups: overrides.groups ?? new InMemoryGroupStore(),
     memberships: overrides.memberships ?? new InMemorySpaceMembershipStore(),
     outbox,
@@ -358,12 +366,13 @@ export function createInMemorySpaceDomainDependencies(
   };
 }
 
-export function createSpaceDomainServices(
-  dependencies: SpaceDomainDependencies = createInMemorySpaceDomainDependencies(),
-): SpaceDomainServices {
+export function createMembershipDomainServices(
+  dependencies: MembershipDomainDependencies =
+    createInMemoryMembershipDomainDependencies(),
+): MembershipDomainServices {
   return {
-    spaces: new SpaceCommandService(dependencies),
-    spaceQueries: new SpaceQueryService(
+    spaces: new MembershipSpaceCommandService(dependencies),
+    spaceQueries: new MembershipSpaceQueryService(
       dependencies.spaces,
       dependencies.memberships,
     ),

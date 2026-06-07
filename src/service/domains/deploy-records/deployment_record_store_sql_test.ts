@@ -49,47 +49,56 @@ class FakeTakosumiSqlClient implements SqlClient {
   ): Promise<SqlQueryResult<Row>> {
     const params = (parameters ?? []) as readonly unknown[];
     const trimmed = sql.trim().toLowerCase();
+    const normalized = trimmed.replaceAll('"', "");
     const cast = <T>(value: T): SqlQueryResult<Row> =>
       value as unknown as SqlQueryResult<Row>;
-    if (trimmed.startsWith("insert into takosumi_deployment_records")) {
+    if (normalized.startsWith("insert into takosumi_deployment_records")) {
       return Promise.resolve(cast(this.#handleUpsert(params)));
     }
     if (
-      trimmed.startsWith("update takosumi_deployment_records") &&
-      trimmed.includes("status = 'destroyed'")
+      normalized.startsWith("update takosumi_deployment_records") &&
+      normalized.includes("status")
     ) {
       return Promise.resolve(cast(this.#handleMarkDestroyed(params)));
     }
-    if (trimmed.startsWith("delete from takosumi_deployment_records")) {
+    if (normalized.startsWith("delete from takosumi_deployment_records")) {
       return Promise.resolve(cast(this.#handleDelete(params)));
     }
-    if (trimmed.startsWith("insert into takosumi_deployment_record_locks")) {
+    if (normalized.startsWith("insert into takosumi_deployment_record_locks")) {
       return Promise.resolve(cast(this.#handleLockAcquire(params)));
     }
-    if (trimmed.startsWith("update takosumi_deployment_record_locks")) {
+    if (normalized.startsWith("update takosumi_deployment_record_locks")) {
       return Promise.resolve(cast(this.#handleLockRenew(params)));
     }
-    if (trimmed.startsWith("delete from takosumi_deployment_record_locks")) {
+    if (normalized.startsWith("delete from takosumi_deployment_record_locks")) {
       return Promise.resolve(cast(this.#handleLockRelease(params)));
     }
     if (
-      trimmed.startsWith(
+      normalized.startsWith(
         "select id, tenant_id, name, source_evidence_json, applied_resources_json, status, created_at, updated_at " +
           "from takosumi_deployment_records where tenant_id = $1 and name = $2",
+      ) ||
+      normalized.startsWith(
+        "select id, tenant_id, name, source_evidence_json, applied_resources_json, status, created_at, updated_at " +
+          "from takosumi_deployment_records where (takosumi_deployment_records.tenant_id = $1 and takosumi_deployment_records.name = $2)",
       )
     ) {
       return Promise.resolve(cast(this.#handleGet(params)));
     }
     if (
-      trimmed.startsWith(
+      normalized.startsWith(
         "select id, tenant_id, name, source_evidence_json, applied_resources_json, status, created_at, updated_at " +
           "from takosumi_deployment_records where tenant_id = $1 order by",
+      ) ||
+      normalized.startsWith(
+        "select id, tenant_id, name, source_evidence_json, applied_resources_json, status, created_at, updated_at " +
+          "from takosumi_deployment_records where takosumi_deployment_records.tenant_id = $1 order by",
       )
     ) {
       return Promise.resolve(cast(this.#handleList(params)));
     }
     if (
-      trimmed.startsWith(
+      normalized.startsWith(
         "select source_evidence_json, applied_resources_json from takosumi_deployment_records",
       )
     ) {
@@ -130,7 +139,9 @@ class FakeTakosumiSqlClient implements SqlClient {
   #handleMarkDestroyed(
     params: readonly unknown[],
   ): SqlQueryResult<TakosumiDeploymentFakeRow> {
-    const [tenantId, name, now] = params as [string, string, string];
+    const [tenantId, name, now] = params.length === 3
+      ? params as [string, string, string]
+      : [params[3], params[4], params[2]] as [string, string, string];
     const row = this.rows.find(
       (entry) => entry.tenant_id === tenantId && entry.name === name,
     );
@@ -223,12 +234,15 @@ class FakeTakosumiSqlClient implements SqlClient {
   }
 
   #handleLockRenew(params: readonly unknown[]): SqlQueryResult {
-    const [tenantId, name, ownerToken, leaseMs] = params as [
-      string,
-      string,
-      string,
-      number,
-    ];
+    const [tenantId, name, ownerToken, leaseMs] = params.length === 4 &&
+        typeof params[0] === "number"
+      ? [params[1], params[2], params[3], params[0]] as [
+        string,
+        string,
+        string,
+        number,
+      ]
+      : params as [string, string, string, number];
     const existing = this.locks.find(
       (row) =>
         row.tenant_id === tenantId &&

@@ -63,6 +63,16 @@ const AccountSessionsView = lazy(() =>
     default: m.AccountSessionsView,
   }))
 );
+const AccountSettingsView = lazy(() =>
+  import("./views/account/AccountHubView.tsx").then((m) => ({
+    default: m.AccountSettingsView,
+  }))
+);
+const AccountBillingView = lazy(() =>
+  import("./views/account/AccountHubView.tsx").then((m) => ({
+    default: m.AccountBillingView,
+  }))
+);
 const InstallationsListView = lazy(() =>
   import("./views/installations/InstallationsListView.tsx")
 );
@@ -81,8 +91,17 @@ const ConnectionsView = lazy(() =>
 const ControlInstallationsView = lazy(() =>
   import("./views/control/ControlInstallationsView.tsx")
 );
+const ControlInstallationDetailView = lazy(() =>
+  import("./views/control/ControlInstallationDetailView.tsx")
+);
 const ControlGraphView = lazy(() =>
   import("./views/control/ControlGraphView.tsx")
+);
+const ControlSourcesView = lazy(() =>
+  import("./views/control/ControlSourcesView.tsx")
+);
+const ControlOutputSharesView = lazy(() =>
+  import("./views/control/ControlOutputSharesView.tsx")
 );
 const InstallFromGitView = lazy(() =>
   import("./views/control/InstallFromGitView.tsx")
@@ -113,13 +132,18 @@ function App() {
       <Route path="/account" component={AccountHubView} />
       <Route path="/account/profile" component={AccountProfileView} />
       <Route path="/account/sessions" component={AccountSessionsView} />
+      <Route path="/account/settings" component={AccountSettingsView} />
+      <Route path="/account/billing" component={AccountBillingView} />
 
       {/* Control-plane surface (spec §31). `/install` and `/installations` map
           to the control views; the legacy account-plane install-by-URL wizard
           and installation detail/danger screens stay reachable under /apps/*. */}
       <Route path="/install" component={InstallFromGitView} />
       <Route path="/installations" component={ControlInstallationsView} />
+      <Route path="/installations/:id" component={ControlInstallationDetailView} />
+      <Route path="/sources" component={ControlSourcesView} />
       <Route path="/graph" component={ControlGraphView} />
+      <Route path="/output-shares" component={ControlOutputSharesView} />
       <Route path="/runs/:id" component={ControlRunView} />
       <Route path="/run-groups/:id" component={ControlRunGroupView} />
       <Route path="/activity" component={ControlActivityView} />

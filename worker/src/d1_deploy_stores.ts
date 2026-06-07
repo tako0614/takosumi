@@ -1,4 +1,7 @@
 import type { JsonValue } from "takosumi-contract/reference/compat";
+import { and, asc, eq, lte, or } from "drizzle-orm";
+import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import {
   ageRevokeDebtIfDue,
   clearRevokeDebt,
@@ -22,6 +25,50 @@ import type {
   TakosumiDeploymentUpsertInput,
 } from "../../src/service/domains/deploy-records/deployment_record_store.ts";
 import type { D1Database } from "./bindings.ts";
+
+const cfRecords = sqliteTable(
+  "takosumi_cf_records",
+  {
+    namespace: text("namespace").notNull(),
+    key: text("key").notNull(),
+    tenantId: text("tenant_id").notNull(),
+    name: text("name").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    recordJson: text("record_json", { mode: "json" })
+      .$type<unknown>()
+      .notNull(),
+  },
+  (table) => [
+    index("takosumi_cf_records_tenant_idx").on(
+      table.namespace,
+      table.tenantId,
+      table.createdAt,
+      table.key,
+    ),
+    index("takosumi_cf_records_tenant_name_idx").on(
+      table.namespace,
+      table.tenantId,
+      table.name,
+      table.createdAt,
+      table.key,
+    ),
+  ],
+);
+
+const cfLocks = sqliteTable(
+  "takosumi_cf_locks",
+  {
+    namespace: text("namespace").notNull(),
+    key: text("key").notNull(),
+    ownerToken: text("owner_token").notNull(),
+    lockedUntil: integer("locked_until").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [index("takosumi_cf_locks_expiry_idx").on(table.lockedUntil)],
+);
+
+const d1DeploySchema = { cfRecords, cfLocks };
 
 const DEPLOYMENT_NAMESPACE = "takosumi-deployment";
 const REVOKE_DEBT_NAMESPACE = "takosumi-revoke-debt";
@@ -134,9 +181,10 @@ class D1TakosumiDeploymentRecordStore implements TakosumiDeploymentRecordStore {
   }
 
   async listReferencedArtifactHashes(): Promise<Set<string>> {
-    const rows = await this.records.listNamespace<TakosumiDeploymentRecord>(
-      DEPLOYMENT_NAMESPACE,
-    );
+    const rows =
+      await this.records.listNamespace<TakosumiDeploymentRecord>(
+        DEPLOYMENT_NAMESPACE,
+      );
     const hashes = new Set<string>();
     for (const row of rows) {
       collectArtifactHashes(row.sourceEvidence as JsonValue, hashes);
@@ -192,30 +240,36 @@ class D1RevokeDebtStore implements RevokeDebtStore {
       updatedAt: input.now,
       record,
     });
-    return await this.records.get<RevokeDebtRecord>(
-      REVOKE_DEBT_NAMESPACE,
-      sourceKey,
-    ) ?? freezeClone(record);
+    return (
+      (await this.records.get<RevokeDebtRecord>(
+        REVOKE_DEBT_NAMESPACE,
+        sourceKey,
+      )) ?? freezeClone(record)
+    );
   }
 
   async listByOwnerSpace(
     ownerSpaceId: string,
   ): Promise<readonly RevokeDebtRecord[]> {
-    return (await this.records.listByTenant<RevokeDebtRecord>(
-      REVOKE_DEBT_NAMESPACE,
-      ownerSpaceId,
-    )).sort(compareRevokeDebtRecords);
+    return (
+      await this.records.listByTenant<RevokeDebtRecord>(
+        REVOKE_DEBT_NAMESPACE,
+        ownerSpaceId,
+      )
+    ).sort(compareRevokeDebtRecords);
   }
 
   async listByDeployment(
     ownerSpaceId: string,
     deploymentName: string,
   ): Promise<readonly RevokeDebtRecord[]> {
-    return (await this.records.listByTenantAndName<RevokeDebtRecord>(
-      REVOKE_DEBT_NAMESPACE,
-      ownerSpaceId,
-      deploymentName,
-    )).sort(compareRevokeDebtRecords);
+    return (
+      await this.records.listByTenantAndName<RevokeDebtRecord>(
+        REVOKE_DEBT_NAMESPACE,
+        ownerSpaceId,
+        deploymentName,
+      )
+    ).sort(compareRevokeDebtRecords);
   }
 
   async listDueOpenDebts(
@@ -323,85 +377,84 @@ class D1RevokeDebtStore implements RevokeDebtStore {
 }
 
 class D1RecordTable {
+  readonly #orm: DrizzleD1Database<typeof d1DeploySchema>;
   #initialized?: Promise<void>;
 
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: D1Database) {
+    this.#orm = drizzle(db, { schema: d1DeploySchema });
+  }
 
   async get<T>(namespace: string, key: string): Promise<T | undefined> {
     await this.#ensureSchema();
-    const row = await this.db.prepare(
-      `select record_json from takosumi_cf_records
-       where namespace = ? and key = ?`,
-    ).bind(namespace, key).first<{ record_json: string }>();
-    return row ? JSON.parse(row.record_json) as T : undefined;
+    const row = await this.#orm
+      .select({ recordJson: cfRecords.recordJson })
+      .from(cfRecords)
+      .where(and(eq(cfRecords.namespace, namespace), eq(cfRecords.key, key)))
+      .get();
+    return row?.recordJson as T | undefined;
   }
 
   async put(input: RecordPutInput): Promise<void> {
     await this.#ensureSchema();
-    await this.db.prepare(
-      `insert into takosumi_cf_records
-        (namespace, key, tenant_id, name, created_at, updated_at, record_json)
-       values (?, ?, ?, ?, ?, ?, ?)
-       on conflict (namespace, key) do update set
-        tenant_id = excluded.tenant_id,
-        name = excluded.name,
-        updated_at = excluded.updated_at,
-        record_json = excluded.record_json`,
-    ).bind(
-      input.namespace,
-      input.key,
-      input.tenantId,
-      input.name,
-      input.createdAt,
-      input.updatedAt,
-      JSON.stringify(input.record),
-    ).run();
+    await this.#orm
+      .insert(cfRecords)
+      .values(recordValues(input))
+      .onConflictDoUpdate({
+        target: [cfRecords.namespace, cfRecords.key],
+        set: {
+          tenantId: input.tenantId,
+          name: input.name,
+          updatedAt: input.updatedAt,
+          recordJson: input.record,
+        },
+      })
+      .run();
   }
 
   async putIfAbsent(input: RecordPutInput): Promise<boolean> {
     await this.#ensureSchema();
-    const result = await this.db.prepare(
-      `insert or ignore into takosumi_cf_records
-        (namespace, key, tenant_id, name, created_at, updated_at, record_json)
-       values (?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(
-      input.namespace,
-      input.key,
-      input.tenantId,
-      input.name,
-      input.createdAt,
-      input.updatedAt,
-      JSON.stringify(input.record),
-    ).run();
+    const result = await this.#orm
+      .insert(cfRecords)
+      .values(recordValues(input))
+      .onConflictDoNothing({
+        target: [cfRecords.namespace, cfRecords.key],
+      })
+      .run();
     return changes(result) > 0;
   }
 
   async delete(namespace: string, key: string): Promise<boolean> {
     await this.#ensureSchema();
-    const result = await this.db.prepare(
-      "delete from takosumi_cf_records where namespace = ? and key = ?",
-    ).bind(namespace, key).run();
+    const result = await this.#orm
+      .delete(cfRecords)
+      .where(and(eq(cfRecords.namespace, namespace), eq(cfRecords.key, key)))
+      .run();
     return changes(result) > 0;
   }
 
   async listNamespace<T>(namespace: string): Promise<T[]> {
     await this.#ensureSchema();
-    const result = await this.db.prepare(
-      `select record_json from takosumi_cf_records
-       where namespace = ?
-       order by created_at asc, key asc`,
-    ).bind(namespace).all<{ record_json: string }>();
-    return rows(result).map((row) => JSON.parse(row.record_json) as T);
+    const rows = await this.#orm
+      .select({ recordJson: cfRecords.recordJson })
+      .from(cfRecords)
+      .where(eq(cfRecords.namespace, namespace))
+      .orderBy(asc(cfRecords.createdAt), asc(cfRecords.key));
+    return rows.map((row) => row.recordJson as T);
   }
 
   async listByTenant<T>(namespace: string, tenantId: string): Promise<T[]> {
     await this.#ensureSchema();
-    const result = await this.db.prepare(
-      `select record_json from takosumi_cf_records
-       where namespace = ? and tenant_id = ?
-       order by created_at asc, key asc`,
-    ).bind(namespace, tenantId).all<{ record_json: string }>();
-    return rows(result).map((row) => JSON.parse(row.record_json) as T);
+    const rows = await this.#orm
+      .select({ recordJson: cfRecords.recordJson })
+      .from(cfRecords)
+      .where(
+        and(
+          eq(cfRecords.namespace, namespace),
+          eq(cfRecords.tenantId, tenantId),
+        ),
+      )
+      .orderBy(asc(cfRecords.createdAt), asc(cfRecords.key));
+    return rows.map((row) => row.recordJson as T);
   }
 
   async listByTenantAndName<T>(
@@ -410,12 +463,18 @@ class D1RecordTable {
     name: string,
   ): Promise<T[]> {
     await this.#ensureSchema();
-    const result = await this.db.prepare(
-      `select record_json from takosumi_cf_records
-       where namespace = ? and tenant_id = ? and name = ?
-       order by created_at asc, key asc`,
-    ).bind(namespace, tenantId, name).all<{ record_json: string }>();
-    return rows(result).map((row) => JSON.parse(row.record_json) as T);
+    const rows = await this.#orm
+      .select({ recordJson: cfRecords.recordJson })
+      .from(cfRecords)
+      .where(
+        and(
+          eq(cfRecords.namespace, namespace),
+          eq(cfRecords.tenantId, tenantId),
+          eq(cfRecords.name, name),
+        ),
+      )
+      .orderBy(asc(cfRecords.createdAt), asc(cfRecords.key));
+    return rows.map((row) => row.recordJson as T);
   }
 
   async acquireLease(input: {
@@ -426,25 +485,28 @@ class D1RecordTable {
     readonly now: number;
   }): Promise<boolean> {
     await this.#ensureSchema();
-    const result = await this.db.prepare(
-      `insert into takosumi_cf_locks
-        (namespace, key, owner_token, locked_until, updated_at)
-       values (?, ?, ?, ?, ?)
-       on conflict (namespace, key) do update set
-        owner_token = excluded.owner_token,
-        locked_until = excluded.locked_until,
-        updated_at = excluded.updated_at
-       where takosumi_cf_locks.locked_until <= ?
-          or takosumi_cf_locks.owner_token = ?`,
-    ).bind(
-      input.namespace,
-      input.key,
-      input.ownerToken,
-      input.lockedUntil,
-      new Date(input.now).toISOString(),
-      input.now,
-      input.ownerToken,
-    ).run();
+    const result = await this.#orm
+      .insert(cfLocks)
+      .values({
+        namespace: input.namespace,
+        key: input.key,
+        ownerToken: input.ownerToken,
+        lockedUntil: input.lockedUntil,
+        updatedAt: new Date(input.now).toISOString(),
+      })
+      .onConflictDoUpdate({
+        target: [cfLocks.namespace, cfLocks.key],
+        set: {
+          ownerToken: input.ownerToken,
+          lockedUntil: input.lockedUntil,
+          updatedAt: new Date(input.now).toISOString(),
+        },
+        where: or(
+          lte(cfLocks.lockedUntil, input.now),
+          eq(cfLocks.ownerToken, input.ownerToken),
+        ),
+      })
+      .run();
     return changes(result) > 0;
   }
 
@@ -454,16 +516,34 @@ class D1RecordTable {
     readonly ownerToken: string;
   }): Promise<void> {
     await this.#ensureSchema();
-    await this.db.prepare(
-      `delete from takosumi_cf_locks
-       where namespace = ? and key = ? and owner_token = ?`,
-    ).bind(input.namespace, input.key, input.ownerToken).run();
+    await this.#orm
+      .delete(cfLocks)
+      .where(
+        and(
+          eq(cfLocks.namespace, input.namespace),
+          eq(cfLocks.key, input.key),
+          eq(cfLocks.ownerToken, input.ownerToken),
+        ),
+      )
+      .run();
   }
 
   async #ensureSchema(): Promise<void> {
     this.#initialized ??= ensureD1RecordSchema(this.db);
     await this.#initialized;
   }
+}
+
+function recordValues(input: RecordPutInput) {
+  return {
+    namespace: input.namespace,
+    key: input.key,
+    tenantId: input.tenantId,
+    name: input.name,
+    createdAt: input.createdAt,
+    updatedAt: input.updatedAt,
+    recordJson: input.record,
+  };
 }
 
 class D1LeaseTable {
@@ -516,8 +596,9 @@ interface RecordPutInput {
 }
 
 async function ensureD1RecordSchema(db: D1Database): Promise<void> {
-  await db.prepare(
-    `create table if not exists takosumi_cf_records (
+  await db
+    .prepare(
+      `create table if not exists takosumi_cf_records (
       namespace text not null,
       key text not null,
       tenant_id text not null,
@@ -527,17 +608,23 @@ async function ensureD1RecordSchema(db: D1Database): Promise<void> {
       record_json text not null,
       primary key (namespace, key)
     )`,
-  ).run();
-  await db.prepare(
-    `create index if not exists takosumi_cf_records_tenant_idx
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists takosumi_cf_records_tenant_idx
       on takosumi_cf_records (namespace, tenant_id, created_at, key)`,
-  ).run();
-  await db.prepare(
-    `create index if not exists takosumi_cf_records_tenant_name_idx
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists takosumi_cf_records_tenant_name_idx
       on takosumi_cf_records (namespace, tenant_id, name, created_at, key)`,
-  ).run();
-  await db.prepare(
-    `create table if not exists takosumi_cf_locks (
+    )
+    .run();
+  await db
+    .prepare(
+      `create table if not exists takosumi_cf_locks (
       namespace text not null,
       key text not null,
       owner_token text not null,
@@ -545,15 +632,14 @@ async function ensureD1RecordSchema(db: D1Database): Promise<void> {
       updated_at text not null,
       primary key (namespace, key)
     )`,
-  ).run();
-  await db.prepare(
-    `create index if not exists takosumi_cf_locks_expiry_idx
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists takosumi_cf_locks_expiry_idx
       on takosumi_cf_locks (locked_until)`,
-  ).run();
-}
-
-function rows<T>(result: { readonly results?: readonly T[] }): T[] {
-  return [...(result.results ?? [])];
+    )
+    .run();
 }
 
 function changes(result: { readonly meta?: { readonly changes?: number } }) {

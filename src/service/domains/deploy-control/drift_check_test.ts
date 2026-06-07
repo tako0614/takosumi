@@ -1,6 +1,6 @@
 /**
  * Installation drift-check tests (Core Specification §19 `drift_check`; Phase 8
- * — MVP 外 per core-conformance).
+ * advanced).
  *
  * A drift check is a plan-kind internal run flagged `driftCheck` that:
  *   - projects to the §19 `drift_check` run type;
@@ -186,7 +186,7 @@ test("drift check with an all-zero summary emits nothing (no drift)", async () =
 
 test("listActiveInstallations returns only active installations, bounded", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
-  // Seed three installations: two active, one installing.
+  // Seed three installations: two active, one pending.
   await seedInstallationModel(store, {
     installationId: "inst_a",
     sourceId: "src_a",
@@ -205,7 +205,7 @@ test("listActiveInstallations returns only active installations, bounded", async
     installConfigId: "cfg_c",
     name: "c",
   });
-  // Promote a + b to active; c stays installing.
+  // Promote a + b to active; c stays pending.
   await store.patchInstallation("inst_a", { status: "active" });
   await store.patchInstallation("inst_b", { status: "active" });
 

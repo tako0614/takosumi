@@ -28,9 +28,9 @@
 
 import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import {
-  createSpaceDomainServices,
-  createInMemorySpaceDomainDependencies,
-} from "../domains/space/mod.ts";
+  createMembershipDomainServices,
+  createInMemoryMembershipDomainDependencies,
+} from "../domains/membership/mod.ts";
 import {
   type ConformanceTier,
   InMemoryPackageDescriptorStore,
@@ -289,8 +289,8 @@ function buildPlan(args: CliArgs): BootstrapPlan {
 }
 
 async function executePlan(plan: BootstrapPlan): Promise<BootstrapOutcome> {
-  const coreDeps = createInMemorySpaceDomainDependencies();
-  const coreServices = createSpaceDomainServices(coreDeps);
+  const coreDeps = createInMemoryMembershipDomainDependencies();
+  const coreServices = createMembershipDomainServices(coreDeps);
   const descriptors = new InMemoryPackageDescriptorStore();
   const resolutions = new InMemoryPackageResolutionStore();
   const trustRecords = new InMemoryTrustRecordStore();

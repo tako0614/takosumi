@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   type SpaceRole,
   InMemorySpaceMembershipStore,
-} from "../../domains/space/mod.ts";
+} from "../../domains/membership/mod.ts";
 import { DomainError } from "../../shared/errors.ts";
 import {
   ALL_CAPABILITIES,

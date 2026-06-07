@@ -11,7 +11,7 @@ const JSON_LD = JSON.stringify({
   applicationCategory: "DeveloperApplication",
   operatingSystem: "Cross-platform",
   description:
-    "OpenTofu-native deploy control plane: plain OpenTofu module repos become Installations, and every plan / apply / destroy is recorded as PlanRun / ApplyRun / Deployment / DeploymentOutput with policy decisions and an audit trail.",
+    "OpenTofu-native deploy control plane: plain OpenTofu module repos become Capsule Installations, and every plan / apply / destroy is recorded as Run / Deployment / OutputSnapshot with policy decisions and an audit trail.",
   license: "https://www.gnu.org/licenses/agpl-3.0.html",
   sameAs: ["https://github.com/tako0614/takosumi"],
 });

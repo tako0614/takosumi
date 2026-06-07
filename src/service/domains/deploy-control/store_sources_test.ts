@@ -6,9 +6,12 @@ import { expect, test } from "bun:test";
 
 import {
   InMemoryOpenTofuDeploymentStore,
-  type OpenTofuDeploymentStore,
   type StoredSource,
 } from "./store.ts";
+import {
+  CloudflareD1DrizzleSourceStore,
+  type D1SourceStoreSlice,
+} from "../../../../worker/src/d1_drizzle_source_store.ts";
 import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "./sqlite_fake_d1.ts";
 import type {
@@ -67,9 +70,10 @@ function syncRun(overrides: Partial<SourceSyncRun> = {}): SourceSyncRun {
   };
 }
 
-const STORES: ReadonlyArray<[string, () => OpenTofuDeploymentStore]> = [
+const STORES: ReadonlyArray<[string, () => D1SourceStoreSlice]> = [
   ["in-memory", () => new InMemoryOpenTofuDeploymentStore()],
   ["d1", () => new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1())],
+  ["d1-drizzle", () => new CloudflareD1DrizzleSourceStore(new SqliteFakeD1())],
 ];
 
 for (const [name, make] of STORES) {

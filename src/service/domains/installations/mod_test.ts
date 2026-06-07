@@ -88,7 +88,7 @@ async function seedAll(store: OpenTofuDeploymentStore): Promise<void> {
   await seedConfig(store);
 }
 
-test("createInstallation persists with derived slug, generation 0, status installing", async () => {
+test("createInstallation persists with derived slug, generation 0, status pending", async () => {
   const { store, service } = build();
   await seedAll(store);
   const installation = await service.createInstallation({
@@ -102,7 +102,7 @@ test("createInstallation persists with derived slug, generation 0, status instal
   expect(installation.slug).toBe("shop");
   expect(installation.installType).toBe("opentofu_module");
   expect(installation.currentStateGeneration).toBe(0);
-  expect(installation.status).toBe("installing");
+  expect(installation.status).toBe("pending");
   expect(installation.createdAt).toBe("2026-06-06T00:00:00.000Z");
   expect((await store.getInstallation(installation.id))?.name).toBe("shop");
 });

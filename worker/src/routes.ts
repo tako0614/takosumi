@@ -22,7 +22,7 @@ export function isServiceControlPlanePath(pathname: string): boolean {
     normalized.startsWith("/v1/plan-runs/") ||
     normalized === "/v1/apply-runs" ||
     normalized.startsWith("/v1/apply-runs/") ||
-    /^\/v1\/installations\/ins_[0-9A-Za-z]+(?:$|\/(?:deployments|deployment-outputs)$)/.test(
+    /^\/v1\/installations\/(?:ins|inst)_[0-9A-Za-z]+(?:$|\/(?:deployments|deployment-outputs)$)/.test(
       normalized,
     )
   );

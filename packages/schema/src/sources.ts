@@ -1,11 +1,11 @@
 /**
- * Source domain contract (Core Specification §6 / §7 / §8).
+ * Source domain contract.
  *
  * A Source is a Space-scoped registration of a Git repository that Takosumi can
  * resolve to an immutable archive snapshot. Takosumi core is GitHub-agnostic: it
  * knows only a {@link GitAddress} (`{ url, ref, path, credentialId }`) and never
  * a forge-specific manifest. There is no custom manifest in user repos; every
- * service-side concern is DB config on the Source / Connection records.
+ * service-side concern is DB config on the Source / Connection / InstallConfig records.
  *
  * Resolution never happens from the trusted Worker: registration validates shape
  * + URL policy and stores the Source `active`; the actual `git ls-remote` /
@@ -20,7 +20,7 @@
 /**
  * GitHub-agnostic Git coordinate. The only repository identity Takosumi core
  * understands. `credentialId` references a `source_git_*` Connection (none for a
- * public repo). `path` is the module path within the repo (defaults to `"."`).
+ * public repo). `path` is the Capsule path within the repo (defaults to `"."`).
  */
 export interface GitAddress {
   readonly url: string;
@@ -32,9 +32,10 @@ export interface GitAddress {
 export type SourceStatus = "active" | "disabled" | "error";
 
 /**
- * Public Source record (spec §6.1). NEVER carries the hook secret or any
- * credential value. `defaultRef` / `defaultPath` seed the {@link GitAddress} used
- * when an Environment does not override them.
+ * Public Source record. NEVER carries the hook secret or any
+ * credential value. `defaultRef` / `defaultPath` seed the {@link GitAddress}
+ * used by source-sync and Installation planning when the request does not
+ * override them.
  */
 export interface Source {
   readonly id: string;
@@ -42,7 +43,7 @@ export interface Source {
   readonly name: string;
   readonly url: string;
   readonly defaultRef: string;
-  /** Module path within the repo. Defaults to `"."`. */
+  /** Capsule path within the repo. Defaults to `"."`. */
   readonly defaultPath: string;
   /** References a `source_git_*` Connection. Absent for a public repo. */
   readonly authConnectionId?: string;
@@ -52,7 +53,7 @@ export interface Source {
 }
 
 /**
- * Immutable archive snapshot of a Source at a resolved commit (spec §6.2).
+ * Immutable archive snapshot of a Source at a resolved commit.
  * Produced by a `source_sync` run in the Runner Container; the worker only
  * records the result. The archive bytes live in R2_SOURCE under
  * `spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst`.
@@ -105,14 +106,10 @@ export interface SourceSyncRun {
   readonly error?: string;
 }
 
-export type SourceSyncRunStatus =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "failed";
+export type SourceSyncRunStatus = "queued" | "running" | "succeeded" | "failed";
 
 // ---------------------------------------------------------------------------
-// Source connection kinds (spec §8 git credential kinds)
+// Source connection kinds for Git credentials.
 // ---------------------------------------------------------------------------
 
 /**
@@ -137,7 +134,7 @@ export const GIT_HTTPS_TOKEN_ENV = "GIT_HTTPS_TOKEN" as const;
 export const GIT_SSH_PRIVATE_KEY_ENV = "GIT_SSH_PRIVATE_KEY" as const;
 
 // ---------------------------------------------------------------------------
-// Per-phase credential mint (spec §8.3 / §8.4)
+// Per-phase credential mint.
 // ---------------------------------------------------------------------------
 
 /**
@@ -179,7 +176,7 @@ export interface MintResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Public API paths (spec §30 — `/api`, no version prefix).
+// Public API paths (`/api`, no version prefix).
 // ---------------------------------------------------------------------------
 
 export const SOURCES_PATH = "/api/sources" as const;
@@ -189,6 +186,10 @@ export const SOURCE_SYNC_PATH = (id: string): string =>
   `/api/sources/${encodeURIComponent(id)}/sync`;
 export const SOURCE_SNAPSHOTS_PATH = (id: string): string =>
   `/api/sources/${encodeURIComponent(id)}/snapshots`;
+export const SOURCE_COMPATIBILITY_CHECK_PATH = (id: string): string =>
+  `/api/sources/${encodeURIComponent(id)}/compatibility-check`;
+export const COMPATIBILITY_REPORT_PATH = (id: string): string =>
+  `/api/compatibility-reports/${encodeURIComponent(id)}`;
 
 /** Webhook route on the PLATFORM worker surface (not the deploy-control /api). */
 export const SOURCE_HOOK_PATH = (id: string): string =>

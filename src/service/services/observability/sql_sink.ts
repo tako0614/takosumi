@@ -6,8 +6,8 @@ import type { AuditEvent } from "../../domains/audit/types.ts";
 import type {
   SqlClient,
   SqlParameters,
+  SqlQueryResult,
   SqlTransaction,
-  SqlValue,
 } from "../../adapters/storage/sql.ts";
 import {
   AUDIT_CHAIN_GENESIS_HASH,
@@ -28,6 +28,14 @@ import type {
   AuditReplicationSink,
 } from "../audit-replication/sink.ts";
 import type { ResolvedAuditRetention } from "../audit-replication/policy.ts";
+import { and, asc, desc, eq, isNotNull, lt } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/pg-proxy";
+import {
+  boolean,
+  integer,
+  pgTable,
+  text,
+} from "drizzle-orm/pg-core";
 
 /**
  * Options for the SQL-backed audit sink.
@@ -89,6 +97,7 @@ interface AuditEventRow extends Record<string, unknown> {
  */
 export class SqlObservabilitySink implements ObservabilitySink {
   readonly #client: SqlClient;
+  readonly #db: DrizzleSqlBuilder;
   readonly #clock: () => Date;
   readonly #auditRetentionDays: number | undefined;
   readonly #retentionPolicy: ResolvedAuditRetention | undefined;
@@ -101,6 +110,7 @@ export class SqlObservabilitySink implements ObservabilitySink {
 
   constructor(options: SqlObservabilitySinkOptions) {
     this.#client = options.client;
+    this.#db = createDrizzleSqlBuilder();
     this.#clock = options.clock ?? (() => new Date());
     const directDays = options.auditRetentionDays !== undefined &&
         Number.isFinite(options.auditRetentionDays) &&
@@ -117,14 +127,16 @@ export class SqlObservabilitySink implements ObservabilitySink {
 
   async appendAudit(event: AuditEvent): Promise<ChainedAuditEvent> {
     const record = await this.#runInTransaction(async (sql) => {
-      const previous = await readChainTail(sql);
+      const previous = await readChainTail(this.#db, sql);
       const next = await chainAuditEvent(event, previous);
-      const params = renderInsertParams(next);
       try {
-        await sql.query(insertSql, params);
+        await drizzleQuery(
+          sql,
+          this.#db.insert(auditChainEvents).values(renderInsertValues(next)),
+        );
       } catch (error) {
         if (isUniqueViolation(error)) {
-          const existing = await readByIdInternal(sql, event.id);
+          const existing = await readByIdInternal(this.#db, sql, event.id);
           if (existing) return existing;
         }
         throw error;
@@ -149,12 +161,13 @@ export class SqlObservabilitySink implements ObservabilitySink {
   }
 
   async listAudit(): Promise<readonly ChainedAuditEvent[]> {
-    const result = await this.#client.query<AuditEventRow>(
-      `select id, event_class, type, severity, actor_json, space_id, group_id,
-              target_type, target_id, payload_json, occurred_at, request_id,
-              correlation_id, sequence, previous_hash, current_hash, archived
-         from audit_events
-         order by sequence asc nulls last, occurred_at asc, id asc`,
+    const result = await drizzleQuery<AuditEventRow>(
+      this.#client,
+      this.#db.select().from(auditChainEvents).orderBy(
+        asc(auditChainEvents.sequence),
+        asc(auditChainEvents.occurredAt),
+        asc(auditChainEvents.id),
+      ),
     );
     return result.rows.map(rowToChained);
   }
@@ -219,10 +232,14 @@ export class SqlObservabilitySink implements ObservabilitySink {
     if (archiveCandidates.length > 0) {
       await replicateRetentionRecords(this.#replication, archiveCandidates);
     }
-    const archived = await this.#client.query(
-      `update audit_events set archived = true
-        where archived = false and occurred_at < :cutoff`,
-      { cutoff: archiveCutoff },
+    const archived = await drizzleQuery(
+      this.#client,
+      this.#db.update(auditChainEvents).set({ archived: true }).where(
+        and(
+          eq(auditChainEvents.archived, false),
+          lt(auditChainEvents.occurredAt, archiveCutoff),
+        ),
+      ),
     );
 
     let deleted = 0;
@@ -244,10 +261,14 @@ export class SqlObservabilitySink implements ObservabilitySink {
       if (deleteCandidates.length > 0) {
         await replicateRetentionRecords(this.#replication, deleteCandidates);
       }
-      const deletion = await this.#client.query(
-        `delete from audit_events
-          where archived = true and occurred_at < :cutoff`,
-        { cutoff: deleteCutoff },
+      const deletion = await drizzleQuery(
+        this.#client,
+        this.#db.delete(auditChainEvents).where(
+          and(
+            eq(auditChainEvents.archived, true),
+            lt(auditChainEvents.occurredAt, deleteCutoff),
+          ),
+        ),
       );
       deleted = deletion.rowCount;
     }
@@ -294,48 +315,34 @@ async function replicateRetentionRecords(
   }
 }
 
-const insertSql = `insert into audit_events (
-  id, event_class, type, severity, actor_json, space_id, group_id,
-  target_type, target_id, payload_json, occurred_at, request_id,
-  correlation_id, sequence, previous_hash, current_hash, archived
-) values (
-  :id, :eventClass, :type, :severity, :actorJson, :spaceId, :groupId,
-  :targetType, :targetId, :payloadJson, :occurredAt, :requestId,
-  :correlationId, :sequence, :previousHash, :currentHash, :archived
-)`;
-
 async function readChainTail(
+  db: DrizzleSqlBuilder,
   sql: SqlClient,
 ): Promise<ChainedAuditEvent | undefined> {
-  const result = await sql.query<AuditEventRow>(
-    `select id, event_class, type, severity, actor_json, space_id, group_id,
-            target_type, target_id, payload_json, occurred_at, request_id,
-            correlation_id, sequence, previous_hash, current_hash, archived
-       from audit_events
-       where sequence is not null
-       order by sequence desc
-       limit 1`,
+  const result = await drizzleQuery<AuditEventRow>(
+    sql,
+    db.select().from(auditChainEvents).where(
+      isNotNull(auditChainEvents.sequence),
+    ).orderBy(desc(auditChainEvents.sequence)).limit(1),
   );
   const row = result.rows[0];
   return row ? rowToChained(row) : undefined;
 }
 
 async function readByIdInternal(
+  db: DrizzleSqlBuilder,
   sql: SqlClient,
   id: string,
 ): Promise<ChainedAuditEvent | undefined> {
-  const result = await sql.query<AuditEventRow>(
-    `select id, event_class, type, severity, actor_json, space_id, group_id,
-            target_type, target_id, payload_json, occurred_at, request_id,
-            correlation_id, sequence, previous_hash, current_hash, archived
-       from audit_events where id = :id`,
-    { id },
+  const result = await drizzleQuery<AuditEventRow>(
+    sql,
+    db.select().from(auditChainEvents).where(eq(auditChainEvents.id, id)),
   );
   const row = result.rows[0];
   return row ? rowToChained(row) : undefined;
 }
 
-function renderInsertParams(record: ChainedAuditEvent): SqlParameters {
+function renderInsertValues(record: ChainedAuditEvent) {
   const event = record.event;
   return {
     id: event.id,
@@ -357,10 +364,10 @@ function renderInsertParams(record: ChainedAuditEvent): SqlParameters {
     previousHash: record.previousHash,
     currentHash: record.hash,
     archived: false,
-  } satisfies Record<string, SqlValue | undefined>;
+  };
 }
 
-function jsonOrNull(value: JsonObject | undefined): SqlValue {
+function jsonOrNull(value: JsonObject | undefined): string | null {
   if (value === undefined) return null;
   // SqlClient drivers should accept stringified JSON; the postgres driver
   // additionally supports object literals. We pass through the canonical
@@ -469,4 +476,45 @@ function isUniqueViolation(error: unknown): boolean {
   const message = (error as { message?: unknown }).message;
   return typeof message === "string" &&
     /(duplicate|unique|UNIQUE)/i.test(message);
+}
+
+const auditChainEvents = pgTable("audit_events", {
+  id: text("id").primaryKey(),
+  eventClass: text("event_class").notNull(),
+  type: text("type").notNull(),
+  severity: text("severity").notNull(),
+  actorJson: text("actor_json"),
+  spaceId: text("space_id"),
+  groupId: text("group_id"),
+  targetType: text("target_type").notNull(),
+  targetId: text("target_id"),
+  payloadJson: text("payload_json"),
+  occurredAt: text("occurred_at").notNull(),
+  requestId: text("request_id"),
+  correlationId: text("correlation_id"),
+  sequence: integer("sequence").notNull(),
+  previousHash: text("previous_hash").notNull(),
+  currentHash: text("current_hash").notNull(),
+  archived: boolean("archived").notNull(),
+});
+
+type DrizzleSqlBuilder = ReturnType<typeof createDrizzleSqlBuilder>;
+type DrizzleQuery = {
+  toSQL(): { readonly sql: string; readonly params: readonly unknown[] };
+};
+
+function createDrizzleSqlBuilder() {
+  return drizzle(async () => ({ rows: [] }), {
+    schema: { auditChainEvents },
+  });
+}
+
+function drizzleQuery<
+  Row extends Record<string, unknown> = Record<string, unknown>,
+>(
+  client: SqlClient,
+  query: DrizzleQuery,
+): Promise<SqlQueryResult<Row>> {
+  const { sql, params } = query.toSQL();
+  return client.query<Row>(sql, params as SqlParameters);
 }

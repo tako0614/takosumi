@@ -8,7 +8,7 @@
  * `createAppStores` with that driver, then builds services.
  */
 
-import { createInMemorySpaceDomainDependencies } from "./domains/space/mod.ts";
+import { createInMemoryMembershipDomainDependencies } from "./domains/membership/mod.ts";
 import {
   InMemoryProviderObservationStore,
   InMemoryRuntimeDesiredStateStore,
@@ -51,7 +51,7 @@ export function createAppStores(
   }
   const registryStores = createRegistryStores(options.stores?.registry);
   return {
-    space: createInMemorySpaceDomainDependencies({
+    space: createInMemoryMembershipDomainDependencies({
       ...options.space,
       clock: options.space?.clock ?? options.clock,
       idGenerator: options.space?.idGenerator ?? options.idGenerator,
@@ -111,7 +111,7 @@ function createStorageBackedAppStores(
       storageBackedStore(driver, (tx) => tx.registry.bundledRegistry),
   };
   return {
-    space: createInMemorySpaceDomainDependencies({
+    space: createInMemoryMembershipDomainDependencies({
       ...options.space,
       clock: options.space?.clock ?? options.clock,
       idGenerator: options.space?.idGenerator ?? options.idGenerator,

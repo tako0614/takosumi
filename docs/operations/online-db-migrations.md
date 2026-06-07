@@ -1,138 +1,140 @@
 # Operations: Online DB Migrations
 
-> このページでわかること: Takos app DB の zero-downtime migration framework、
-> expand / backfill / contract 手順、rollback procedure、release gate。
+> このページでわかること: Takosumi platform worker の D1 / SQL control
+> ledger を zero-downtime に migration するための expand / backfill /
+> contract 手順、rollback 方針、release gate。
 
-Takos app-local profile / chat / memory / product API metadata は `takos/app`
-が所有します。Takosumi Accounts が account / auth / billing / OIDC issuer /
-Installation ledger を所有し、Takos app は OIDC consumer としてそれらを consume
-します。DB migration は customer-facing command surface ではありません。Operator
-が Takos app migration を実行する場合も、正本は `takos/app` の migration gate
-とこの runbook です。
+この runbook は **Takosumi operated environment** の DB migration 正本です。
+対象は platform worker が所有する accounts plane と control-plane ledger
+(Space / Source / Connection / Installation / Dependency / Run / Deployment /
+StateSnapshot / OutputSnapshot / Billing / Activity) です。Takos product の
+app-local DB migration は Takos product docs の領域であり、この runbook では
+扱いません。
+
+## Scope
+
+| Store | Contains | Migration owner |
+| --- | --- | --- |
+| Accounts D1 / SQL | users, sessions, account / billing / OIDC issuer records | Takosumi accounts plane |
+| Control-plane D1 / SQL | Space, Source, Connection, Installation, Dependency, Run, StateSnapshot, OutputSnapshot, Deployment, Artifact, Billing, Audit | Takosumi control plane |
+| R2 object manifests | source archives, artifacts, state snapshots, backups | schema change only when DB metadata shape changes |
+
+Migration は customer-facing command surface ではありません。operator は
+platform worker deploy と同じ change window で migration を扱い、production /
+staging の database id や backup id は private run log にだけ記録します。
 
 ## Gate
 
 実行:
 
 ```bash
-cd takos
-bun run validate:migration-safety
+cd takosumi
+bunx tsc --noEmit
+bun test src/service/adapters/storage/migrations_test.ts
+bun test src/service/adapters/storage/drizzle/schema/schema_mirror_test.ts
 ```
 
-これは内部的に以下に委譲します:
+変更が API contract / dashboard に影響する場合は追加で:
 
 ```bash
-cd takos/app
-bun run validate:migration-safety
+cd takosumi
+bun test src/service/api/route_inventory_test.ts
+cd dashboard && bunx tsc --noEmit && bun run build
 ```
 
-app 側 validator は `0001` から `0062` までの migration を baseline として扱い
-ます。`0063` 以降の新規 migration には safety class marker を必ず含めます:
+## Safety Classes
 
-```sql
--- takos-migration-safety: expand
-```
+新規 migration は次のいずれかに分類します。
 
-Allowed classes:
+| Class | Use | Production rule |
+| --- | --- | --- |
+| `expand` | additive table / column / index | deploy before code requires the new shape |
+| `backfill` | idempotent data copy / repair | chunked, observable, resumable |
+| `contract` | remove old shape after all code stops using it | explicit approval and restore plan |
+| `emergency` | incident-only repair | incident commander approval |
 
-| Class       | Use                                               | Production rule                     |
-| ----------- | ------------------------------------------------- | ----------------------------------- |
-| `expand`    | additive schema change                            | deploy before code reads/writes it  |
-| `backfill`  | idempotent data copy / repair                     | chunked, observable, resumable      |
-| `contract`  | remove old schema after traffic no longer uses it | explicit approval and rollback note |
-| `emergency` | incident-only repair                              | incident commander approval         |
+expand と contract を同じ release に混ぜないこと。Run / StateSnapshot /
+OutputSnapshot / audit ledger は replay ではなく正本 record なので、destructive
+DDL は原則 `contract` window まで延期します。
 
 ## Zero-downtime Pattern
 
-expand / migrate / contract の順で進めます:
-
-1. Expand: nullable / default 付き column、additive table、additive index
-   を追加する。
-2. dual-write、または旧 schema と新 schema の両方を read できる code を deploy
-   する。
-3. backfill は bounded chunk で行う。冪等で resumable であること。
-4. backfill evidence が green になってから read を新 schema に切り替える。
-5. dual-write を 1 observation window 維持する。
-6. Contract: rollback で旧 schema が不要になってから削除する。
-
-expand と contract を 1 つの migration に混ぜないこと。
+1. Expand: nullable / default 付き column、additive table、additive index を追加する。
+2. service code を旧 shape / 新 shape の両方に互換にする。
+3. backfill は bounded chunk で実行し、idempotency key または cursor を持たせる。
+4. dashboard / API / queue consumer が新旧両方を読める observation window を置く。
+5. read path を新 shape に切り替える。
+6. Contract: backup / restore drill evidence と rollback note が揃ってから旧 shape を削除する。
 
 ## Dangerous DDL
 
-app validator が marker 無しの migration に対して block する DDL:
+以下は marker なしで実行してはいけません。
 
 - `DROP TABLE`
 - `DROP COLUMN`
 - `ALTER TABLE ... RENAME TO`
 - `ALTER TABLE ... RENAME COLUMN`
 - `ALTER TABLE ... ALTER COLUMN ... SET NOT NULL`
-- `CREATE UNIQUE INDEX` without `IF NOT EXISTS`
+- unique constraint / index の追加
 
-dangerous DDL は `contract` または `emergency` に加えて以下の両方が必要:
-
-```sql
--- takos-migration-approval: <issue-or-runbook-link>
--- takos-migration-rollback: <forward-repair-or-restore-plan>
-```
+dangerous DDL は migration comment、issue / incident link、forward repair か
+restore plan を必ず持たせます。場当たり的な逆 SQL を rollback plan として
+扱わないこと。
 
 ## Rollback Procedure
 
-`expand` および `backfill` の場合:
+`expand` / `backfill`:
 
 1. rollout を停止し、expanded schema は維持する。
-2. application code を、両方の shape に互換な直前 version まで戻す。
-3. 次の patch window までは additive column / table を残す。
-4. backfill が不正データを生んだ場合は forward repair migration を実行するか、
-   影響行を backup から復元する。
+2. code を新旧両 shape に互換な直前 version へ戻す。
+3. backfill が誤データを作った場合は forward repair を実行する。
+4. cleanup は次の patch window まで延期する。
 
-`contract` の場合:
+`contract`:
 
 1. 旧 code path がどこにも deploy されていないことを確認する。
 2. backup と restore drill evidence の存在を確認する。
-3. まず staging で contract migration を実行する。
-4. contract 後に rollback が必要な場合は backup から復元するか、文書化された
-   forward repair を実行する。場当たり的な逆 SQL に依存しないこと。
+3. staging で同じ contract migration を実行済みであることを確認する。
+4. contract 後の rollback は restore か forward repair に限定する。
 
-`emergency` の場合:
+`emergency`:
 
 1. incident commander が migration を承認する。
 2. 変更前の evidence を保全する。
-3. incident 緩和に必要な最小限の repair のみ実行する。
-4. emergency fix を通常の expand / backfill / contract 状態に変換するための
-   follow-up task を起票する。
+3. incident 緩和に必要な最小限だけ実行する。
+4. 通常 migration に畳み込む follow-up を起票する。
 
 ## Production Checklist
 
 production 前:
 
-- `bun run validate:migration-safety` が green
-- migration に正しい safety class marker が付いている
-- backfill が bounded batch size と冪等性を持つ
-- code が current production schema と後方互換
+- targeted tests と typecheck が green
+- migration が safety class を持つ
 - staging で同じ migration を実行済み
 - backup restore path が判明している
-- rollback image / commit が判明している
+- platform worker rollback version / commit が判明している
+- queue consumer / scheduled handler を freeze する必要があるか判断済み
 
 production 後:
 
-- app / API の health、OIDC consumer session smoke、app-local profile / API
-  smoke を検証する。billing / account ledger smoke は Takosumi Accounts の
-  migration / restore runbook の領域。
-- migration ledger に該当 row が存在することを検証する。
-- runtime、row 数、skip した重複 DDL を記録する。
-- observation window が終わるまで expanded schema を維持する。
+- `https://app.takosumi.com/healthz` が green
+- OIDC discovery / JWKS が serve される
+- `GET /api/spaces` が認証なしで 401 を返す
+- known staging / production Space の Installation list が読める
+- compatibility check / plan read path が smoke できる
+- migration runtime、row 数、skip した duplicate DDL を private evidence に記録する
 
 ## Evidence
 
 public evidence:
 
-- `validate:migration-safety` の出力
-- pull request リンク
+- test / typecheck summary
+- pull request link
 - release gate summary
 
 private evidence:
 
-- production migration の run log
+- production migration run log
 - backup snapshot id
-- restore drill のリンク
-- provider account / D1 database id
+- database id / account id
+- restore drill link

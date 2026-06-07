@@ -44,9 +44,35 @@ function seedSession(
   };
 }
 
+function seedLedgerSpace(
+  store: InMemoryAccountsStore,
+  input: { subject: string; accountId: string; spaceId: string },
+): void {
+  const now = Date.now();
+  store.saveLedgerAccount({
+    accountId: input.accountId,
+    legalOwnerSubject: input.subject,
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveSpace({
+    spaceId: input.spaceId,
+    accountId: input.accountId,
+    kind: "personal",
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
 /** A spy-able fake facade. Records the last call args for assertions. */
+type ControlPlaneOperationsOverride = Partial<
+  Omit<ControlPlaneOperations, "spaces">
+> & {
+  readonly spaces?: Partial<ControlPlaneOperations["spaces"]>;
+};
+
 function fakeOperations(
-  overrides: Partial<ControlPlaneOperations> = {},
+  overrides: ControlPlaneOperationsOverride = {},
 ): ControlPlaneOperations & { calls: Record<string, unknown[]> } {
   const calls: Record<string, unknown[]> = {};
   const record = (name: string, ...args: unknown[]) => {
@@ -89,6 +115,10 @@ function fakeOperations(
         record("createSpace", req);
         return { ...space("space_new"), handle: req.handle, type: req.type };
       },
+      updateSpace: async (id, patch) => {
+        record("updateSpace", id, patch);
+        return { ...space(id), ...patch, updatedAt: "2026-01-02T00:00:00Z" };
+      },
     },
     installations: {
       getInstallation: async (id) => {
@@ -106,6 +136,29 @@ function fakeOperations(
       listInstallConfigs: async (spaceId) => {
         record("listInstallConfigs", spaceId);
         return [];
+      },
+      putDeploymentProfile: async (profile) => {
+        record("putDeploymentProfile", profile);
+        return profile;
+      },
+      getDeploymentProfileByInstallation: async (
+        installationId,
+        environment,
+      ) => {
+        record(
+          "getDeploymentProfileByInstallation",
+          installationId,
+          environment,
+        );
+        return {
+          id: "dpf_1",
+          spaceId: "space_a",
+          installationId,
+          environment,
+          bindings: { compute: { mode: "default" } },
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        };
       },
     },
     dependencies: {
@@ -142,16 +195,18 @@ function fakeOperations(
     },
     listDependenciesBySpace: async (spaceId) => {
       record("listDependenciesBySpace", spaceId);
-      return [{
-        id: "dep_1",
-        spaceId,
-        producerInstallationId: "inst_1",
-        consumerInstallationId: "inst_2",
-        mode: "variable_injection",
-        outputs: { db_url: { from: "url", to: "db_url", required: true } },
-        visibility: "space",
-        createdAt: "2026-01-01T00:00:00Z",
-      }];
+      return [
+        {
+          id: "dep_1",
+          spaceId,
+          producerInstallationId: "inst_1",
+          consumerInstallationId: "inst_2",
+          mode: "variable_injection",
+          outputs: { db_url: { from: "url", to: "db_url", required: true } },
+          visibility: "space",
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+      ];
     },
     runGroups: {
       createSpaceUpdate: async (spaceId) => {
@@ -179,6 +234,75 @@ function fakeOperations(
         return [];
       },
     },
+    outputShares: {
+      createShare: async (req) => {
+        record("createOutputShare", req);
+        return {
+          id: "oshare_1",
+          fromSpaceId: req.fromSpaceId,
+          toSpaceId: req.toSpaceId,
+          producerInstallationId: req.producerInstallationId,
+          outputs: req.outputs.map((output) => ({
+            name: output.name,
+            ...(output.alias ? { alias: output.alias } : {}),
+            sensitive: output.sensitive === true,
+          })),
+          status: "active",
+          createdAt: "2026-01-01T00:00:00Z",
+        };
+      },
+      listForSpace: async (spaceId) => {
+        record("listOutputShares", spaceId);
+        return [
+          {
+            id: "oshare_1",
+            fromSpaceId: spaceId,
+            toSpaceId: "space_b",
+            producerInstallationId: "inst_1",
+            outputs: [{ name: "domain", sensitive: false }],
+            status: "active",
+            createdAt: "2026-01-01T00:00:00Z",
+          },
+        ];
+      },
+      getShare: async (id) => {
+        record("getOutputShare", id);
+        return {
+          id,
+          fromSpaceId: "space_a",
+          toSpaceId: "space_b",
+          producerInstallationId: "inst_1",
+          outputs: [{ name: "domain", sensitive: false }],
+          status: "active",
+          createdAt: "2026-01-01T00:00:00Z",
+        };
+      },
+      approveShare: async (id) => {
+        record("approveOutputShare", id);
+        return {
+          id,
+          fromSpaceId: "space_a",
+          toSpaceId: "space_b",
+          producerInstallationId: "inst_1",
+          outputs: [{ name: "domain", sensitive: false }],
+          status: "active",
+          createdAt: "2026-01-01T00:00:00Z",
+        };
+      },
+      revokeShare: async (id) => {
+        record("revokeOutputShare", id);
+        return {
+          id,
+          fromSpaceId: "space_a",
+          toSpaceId: "space_b",
+          producerInstallationId: "inst_1",
+          outputs: [{ name: "domain", sensitive: false }],
+          status: "revoked",
+          createdAt: "2026-01-01T00:00:00Z",
+          revokedAt: "2026-01-01T00:01:00Z",
+        };
+      },
+    },
     listConnections: async (spaceId) => {
       record("listConnections", spaceId);
       return { connections: [] };
@@ -199,7 +323,9 @@ function fakeOperations(
         status: "active",
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
-      } as unknown as Awaited<ReturnType<ControlPlaneOperations["getConnection"]>>;
+      } as unknown as Awaited<
+        ReturnType<ControlPlaneOperations["getConnection"]>
+      >;
     },
     createInstallationPlan: async (installationId) => {
       record("createInstallationPlan", installationId);
@@ -215,9 +341,11 @@ function fakeOperations(
     },
     getRun: async (id) => {
       record("getRun", id);
-      return { id, spaceId: "space_a", status: "succeeded" } as unknown as Awaited<
-        ReturnType<ControlPlaneOperations["getRun"]>
-      >;
+      return {
+        id,
+        spaceId: "space_a",
+        status: "succeeded",
+      } as unknown as Awaited<ReturnType<ControlPlaneOperations["getRun"]>>;
     },
     approveRun: async (id, input) => {
       record("approveRun", id, input);
@@ -231,9 +359,26 @@ function fakeOperations(
     },
     createSource: async (req) => {
       record("createSource", req);
-      return { source: { id: "src_new" }, hookSecret: "hk_x" } as unknown as Awaited<
+      return {
+        source: { id: "src_new" },
+        hookSecret: "hk_x",
+      } as unknown as Awaited<
         ReturnType<ControlPlaneOperations["createSource"]>
       >;
+    },
+    getSource: async (id) => {
+      record("getSource", id);
+      return {
+        id,
+        spaceId: "space_a",
+        name: "repo",
+        url: "https://example.test/r.git",
+        defaultRef: "main",
+        defaultPath: ".",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      };
     },
     listSources: async (spaceId) => {
       record("listSources", spaceId);
@@ -250,7 +395,9 @@ function fakeOperations(
       return { runnerProfiles: [] };
     },
   };
-  return Object.assign({ calls }, base, overrides) as ControlPlaneOperations & {
+  return Object.assign({ calls }, base, overrides, {
+    spaces: { ...base.spaces, ...overrides.spaces },
+  }) as ControlPlaneOperations & {
     calls: Record<string, unknown[]>;
   };
 }
@@ -297,6 +444,7 @@ test("anonymous control requests are 401 across the family", async () => {
     ["GET", "/v1/control/spaces/space_a/activity"],
     ["POST", "/v1/control/spaces/space_a/plan-update"],
     ["GET", "/v1/control/installations/inst_1"],
+    ["GET", "/v1/control/installations/inst_1/deployment-profile"],
     ["POST", "/v1/control/installations/inst_1/plan"],
     ["GET", "/v1/control/install-configs"],
     ["GET", "/v1/control/runs/plan_1"],
@@ -324,7 +472,9 @@ test("anonymous control requests are 401 across the family", async () => {
 test("control routes 503 when no operations facade is wired", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  const { request: req, url } = request("GET", "/v1/control/spaces", { cookie });
+  const { request: req, url } = request("GET", "/v1/control/spaces", {
+    cookie,
+  });
   const response = await handleControlRoute({ request: req, url, store });
   expect(response?.status).toEqual(503);
 });
@@ -335,12 +485,526 @@ test("GET /v1/control/spaces returns spaces for a session", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const { request: req, url } = request("GET", "/v1/control/spaces", { cookie });
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const { request: req, url } = request("GET", "/v1/control/spaces", {
+    cookie,
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(200);
-  const body = await response!.json() as { spaces: unknown[] };
+  const body = (await response!.json()) as { spaces: unknown[] };
   expect(body.spaces.length).toEqual(1);
   expect(operations.calls.listSpaces).toBeDefined();
+});
+
+test("GET /v1/control/spaces filters out spaces the session cannot access", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const visible = {
+    id: "space_a",
+    handle: "mine",
+    displayName: "Mine",
+    type: "personal" as const,
+    ownerUserId: "tsub_ctrl",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const hidden = {
+    ...visible,
+    id: "space_b",
+    handle: "other",
+    displayName: "Other",
+    ownerUserId: "tsub_other",
+  };
+  const operations = fakeOperations({
+    spaces: {
+      listSpaces: async () => [visible, hidden],
+      getSpace: async (id) => (id === "space_b" ? hidden : visible),
+      createSpace: async (req) => ({
+        ...visible,
+        id: "space_new",
+        handle: req.handle,
+        displayName: req.displayName,
+        type: req.type,
+        ownerUserId: req.ownerUserId,
+      }),
+    },
+  });
+  const { request: req, url } = request("GET", "/v1/control/spaces", {
+    cookie,
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { spaces: Array<{ id: string }> };
+  expect(body.spaces.map((space) => space.id)).toEqual(["space_a"]);
+});
+
+test("PATCH /v1/control/spaces/:id updates display name and policy after Space access", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request("PATCH", "/v1/control/spaces/space_a", {
+    cookie,
+    body: {
+      displayName: "Shota Lab",
+      policy: {
+        allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+        quota: { "resources.total": 10 },
+      },
+    },
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { space: { displayName: string } };
+  expect(body.space.displayName).toEqual("Shota Lab");
+  expect(operations.calls.updateSpace).toEqual([
+    "space_a",
+    {
+      displayName: "Shota Lab",
+      policy: {
+        allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+        quota: { "resources.total": 10 },
+      },
+    },
+  ]);
+});
+
+test("PATCH /v1/control/spaces/:id rejects policy that is not a JSON object", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request("PATCH", "/v1/control/spaces/space_a", {
+    cookie,
+    body: { policy: [] },
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(400);
+  expect(operations.calls.updateSpace).toBeUndefined();
+});
+
+test("space-scoped control route rejects a non-member session before dispatch", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      listSpaces: async () => [],
+      getSpace: async (id) => ({
+        id,
+        handle: "other",
+        displayName: "Other",
+        type: "personal" as const,
+        ownerUserId: "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      createSpace: async (req) => ({
+        id: "space_new",
+        handle: req.handle,
+        displayName: req.displayName,
+        type: req.type,
+        ownerUserId: req.ownerUserId,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_b/installations",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.listInstallations).toBeUndefined();
+});
+
+test("PATCH /v1/control/spaces/:id rejects a non-member session before dispatch", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      getSpace: async (id) => ({
+        id,
+        handle: "other",
+        displayName: "Other",
+        type: "personal" as const,
+        ownerUserId: "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+  });
+  const { request: req, url } = request("PATCH", "/v1/control/spaces/space_b", {
+    cookie,
+    body: { displayName: "Nope" },
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.updateSpace).toBeUndefined();
+});
+
+test("installation-scoped control route rejects when its Space is inaccessible", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      listSpaces: async () => [],
+      getSpace: async (id) => ({
+        id,
+        handle: "other",
+        displayName: "Other",
+        type: "personal" as const,
+        ownerUserId: "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      createSpace: async (req) => ({
+        id: "space_new",
+        handle: req.handle,
+        displayName: req.displayName,
+        type: req.type,
+        ownerUserId: req.ownerUserId,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+    installations: {
+      getInstallation: async (id) => ({
+        id,
+        spaceId: "space_b",
+        name: "app",
+        slug: "app",
+        sourceId: "src_x",
+        installType: "opentofu_module" as const,
+        installConfigId: "cfg_x",
+        environment: "prod",
+        currentStateGeneration: 0,
+        status: "ready" as const,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      listInstallations: async () => [],
+      createInstallation: async () => {
+        throw new Error("unexpected");
+      },
+      listInstallConfigs: async () => [],
+      putDeploymentProfile: async (profile) => profile,
+      getDeploymentProfileByInstallation: async () => undefined,
+    },
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/installations/inst_other/plan",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.createInstallationPlan).toBeUndefined();
+});
+
+test("POST /v1/control/spaces/:id/installations rejects a Source from another inaccessible Space", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      listSpaces: async () => [],
+      getSpace: async (id) => ({
+        id,
+        handle: id === "space_a" ? "mine" : "other",
+        displayName: id === "space_a" ? "Mine" : "Other",
+        type: "personal" as const,
+        ownerUserId: id === "space_a" ? "tsub_ctrl" : "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      createSpace: async (req) => ({
+        id: "space_new",
+        handle: req.handle,
+        displayName: req.displayName,
+        type: req.type,
+        ownerUserId: req.ownerUserId,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+    getSource: async (id) => ({
+      id,
+      spaceId: "space_b",
+      name: "foreign",
+      url: "https://example.test/foreign.git",
+      defaultRef: "main",
+      defaultPath: ".",
+      status: "active",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    }),
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/installations",
+    {
+      cookie,
+      body: {
+        name: "app",
+        environment: "prod",
+        sourceId: "src_foreign",
+        installConfigId: "cfg_x",
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.createInstallation).toBeUndefined();
+});
+
+test("POST /v1/control/sources rejects an authConnectionId from another inaccessible Space", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      listSpaces: async () => [],
+      getSpace: async (id) => ({
+        id,
+        handle: id === "space_a" ? "mine" : "other",
+        displayName: id === "space_a" ? "Mine" : "Other",
+        type: "personal" as const,
+        ownerUserId: id === "space_a" ? "tsub_ctrl" : "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      createSpace: async (req) => ({
+        id: "space_new",
+        handle: req.handle,
+        displayName: req.displayName,
+        type: req.type,
+        ownerUserId: req.ownerUserId,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+    getConnection: async (connectionId) => ({
+      id: connectionId,
+      spaceId: "space_b",
+      provider: "git",
+      kind: "source_git_https_token",
+      authMethod: "static_secret",
+      scope: "space",
+      status: "active",
+      envNames: [],
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    }),
+  });
+  const { request: req, url } = request("POST", "/v1/control/sources", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      name: "repo",
+      url: "https://example.test/repo.git",
+      authConnectionId: "conn_foreign",
+    },
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.createSource).toBeUndefined();
+});
+
+test("POST /v1/control/output-shares rejects a producer from another inaccessible Space", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      listSpaces: async () => [],
+      getSpace: async (id) => ({
+        id,
+        handle: id === "space_a" ? "mine" : "other",
+        displayName: id === "space_a" ? "Mine" : "Other",
+        type: "personal" as const,
+        ownerUserId: id === "space_a" ? "tsub_ctrl" : "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      createSpace: async (req) => ({
+        id: "space_new",
+        handle: req.handle,
+        displayName: req.displayName,
+        type: req.type,
+        ownerUserId: req.ownerUserId,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+    installations: {
+      getInstallation: async (id) => ({
+        id,
+        spaceId: "space_b",
+        name: "foreign",
+        slug: "foreign",
+        sourceId: "src_foreign",
+        installType: "opentofu_module" as const,
+        installConfigId: "cfg_foreign",
+        environment: "prod",
+        currentStateGeneration: 0,
+        status: "ready" as const,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      listInstallations: async () => [],
+      createInstallation: async () => {
+        throw new Error("unexpected");
+      },
+      listInstallConfigs: async () => [],
+      putDeploymentProfile: async (profile) => profile,
+      getDeploymentProfileByInstallation: async () => undefined,
+    },
+  });
+  const { request: req, url } = request("POST", "/v1/control/output-shares", {
+    cookie,
+    body: {
+      fromSpaceId: "space_a",
+      toSpaceId: "space_b",
+      producerInstallationId: "inst_foreign",
+      outputs: [{ name: "domain" }],
+    },
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.createOutputShare).toBeUndefined();
+});
+
+test("GET /v1/control/operator-connection-defaults rejects an inaccessible Space before dispatch", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      listSpaces: async () => [],
+      getSpace: async (id) => ({
+        id,
+        handle: "other",
+        displayName: "Other",
+        type: "personal" as const,
+        ownerUserId: "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      createSpace: async (req) => ({
+        id: "space_new",
+        handle: req.handle,
+        displayName: req.displayName,
+        type: req.type,
+        ownerUserId: req.ownerUserId,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/operator-connection-defaults?spaceId=space_b",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.listOperatorConnectionDefaults).toBeUndefined();
+});
+
+test("accounts-ledger Space owner can access a Space even when ownerUserId is not the session subject", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store);
+  seedLedgerSpace(store, {
+    subject,
+    accountId: "acct_ctrl",
+    spaceId: "space_ledger",
+  });
+  const operations = fakeOperations({
+    spaces: {
+      listSpaces: async () => [],
+      getSpace: async (id) => ({
+        id,
+        handle: "ledger",
+        displayName: "Ledger",
+        type: "personal" as const,
+        ownerUserId: "tsub_imported_owner",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      createSpace: async (req) => ({
+        id: "space_new",
+        handle: req.handle,
+        displayName: req.displayName,
+        type: req.type,
+        ownerUserId: req.ownerUserId,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_ledger/installations",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  expect(operations.calls.listInstallations?.[0]).toEqual("space_ledger");
 });
 
 test("POST /v1/control/spaces uses the session subject as ownerUserId", async () => {
@@ -351,7 +1015,12 @@ test("POST /v1/control/spaces uses the session subject as ownerUserId", async ()
     cookie,
     body: { handle: "myspace", displayName: "My Space", type: "personal" },
   });
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(201);
   const createCall = operations.calls.createSpace?.[0] as {
     ownerUserId: string;
@@ -370,9 +1039,14 @@ test("GET /v1/control/spaces/:id/installations lists installations", async () =>
     "/v1/control/spaces/space_a/installations",
     { cookie },
   );
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(200);
-  const body = await response!.json() as { installations: unknown[] };
+  const body = (await response!.json()) as { installations: unknown[] };
   expect(body.installations.length).toEqual(1);
   expect(operations.calls.listInstallations?.[0]).toEqual("space_a");
 });
@@ -394,7 +1068,12 @@ test("POST /v1/control/spaces/:id/installations creates an installation", async 
       },
     },
   );
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(201);
   const createCall = operations.calls.createInstallation?.[0] as {
     spaceId: string;
@@ -411,11 +1090,20 @@ test("GET /v1/control/spaces/:id/graph projects nodes + edges", async () => {
     "/v1/control/spaces/space_a/graph",
     { cookie },
   );
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(200);
-  const body = await response!.json() as {
+  const body = (await response!.json()) as {
     nodes: Array<{ installationId: string; name: string; status: string }>;
-    edges: Array<{ id: string; producerInstallationId: string; outputs: unknown }>;
+    edges: Array<{
+      id: string;
+      producerInstallationId: string;
+      outputs: unknown;
+    }>;
   };
   expect(body.nodes[0]?.installationId).toEqual("inst_1");
   expect(body.nodes[0]?.name).toEqual("app");
@@ -432,9 +1120,79 @@ test("GET /v1/control/installations/:id reads one installation", async () => {
     "/v1/control/installations/inst_1",
     { cookie },
   );
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(200);
   expect(operations.calls.getInstallation?.[0]).toEqual("inst_1");
+});
+
+test("GET /v1/control/installations/:id/deployment-profile reads bindings", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/installations/inst_1/deployment-profile",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    deploymentProfile: { bindings: { compute: { mode: string } } };
+  };
+  expect(body.deploymentProfile.bindings.compute.mode).toEqual("default");
+  expect(operations.calls.getDeploymentProfileByInstallation).toEqual([
+    "inst_1",
+    "prod",
+  ]);
+});
+
+test("PUT /v1/control/installations/:id/deployment-profile saves bindings", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "PUT",
+    "/v1/control/installations/inst_1/deployment-profile",
+    {
+      cookie,
+      body: {
+        bindings: {
+          compute: { mode: "connection", connectionId: "conn_cf" },
+          dns: { mode: "default" },
+          storage: { mode: "manual", values: { bucket: "manual-bucket" } },
+          source: { mode: "disabled" },
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const saved = operations.calls.putDeploymentProfile?.[0] as {
+    bindings: {
+      compute: { mode: string; connectionId?: string };
+      storage: { mode: string; values?: Record<string, unknown> };
+    };
+  };
+  expect(saved.bindings.compute).toEqual({
+    mode: "connection",
+    connectionId: "conn_cf",
+  });
+  expect(saved.bindings.storage.values?.bucket).toEqual("manual-bucket");
 });
 
 test("POST /v1/control/installations/:id/plan returns 201", async () => {
@@ -446,7 +1204,12 @@ test("POST /v1/control/installations/:id/plan returns 201", async () => {
     "/v1/control/installations/inst_1/plan",
     { cookie },
   );
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(201);
   expect(operations.calls.createInstallationPlan?.[0]).toEqual("inst_1");
 });
@@ -460,7 +1223,12 @@ test("POST /v1/control/installations/:id/destroy-plan returns 201", async () => 
     "/v1/control/installations/inst_1/destroy-plan",
     { cookie },
   );
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(201);
   expect(operations.calls.createInstallationDestroyPlan?.[0]).toEqual("inst_1");
 });
@@ -480,7 +1248,12 @@ test("POST /v1/control/installations/:id/dependencies derives spaceId from the c
       },
     },
   );
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(201);
   const dep = operations.calls.createDependency?.[0] as {
     consumerInstallationId: string;
@@ -503,7 +1276,12 @@ test("DELETE /v1/control/dependencies/:id returns 204", async () => {
     "/v1/control/dependencies/dep_1",
     { cookie },
   );
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(204);
   expect(operations.calls.deleteDependency?.[0]).toEqual("dep_1");
 });
@@ -517,9 +1295,14 @@ test("GET /v1/control/install-configs merges official + scoped", async () => {
     "/v1/control/install-configs?spaceId=space_a",
     { cookie },
   );
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(200);
-  const body = await response!.json() as { installConfigs: unknown[] };
+  const body = (await response!.json()) as { installConfigs: unknown[] };
   expect(Array.isArray(body.installConfigs)).toEqual(true);
 });
 
@@ -537,7 +1320,9 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   });
   expect(missingResp?.status).toEqual(400);
 
-  const list = request("GET", "/v1/control/sources?spaceId=space_a", { cookie });
+  const list = request("GET", "/v1/control/sources?spaceId=space_a", {
+    cookie,
+  });
   const listResp = await handleControlRoute({
     request: list.request,
     url: list.url,
@@ -549,7 +1334,12 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
 
   const create = request("POST", "/v1/control/sources", {
     cookie,
-    body: { spaceId: "space_a", name: "repo", url: "https://example.test/r.git" },
+    body: {
+      spaceId: "space_a",
+      name: "repo",
+      url: "https://example.test/r.git",
+      authConnectionId: "conn_git",
+    },
   });
   const createResp = await handleControlRoute({
     request: create.request,
@@ -558,6 +1348,10 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
     operations,
   });
   expect(createResp?.status).toEqual(201);
+  expect(
+    (operations.calls.createSource?.[0] as { authConnectionId?: string })
+      .authConnectionId,
+  ).toEqual("conn_git");
 
   const sync = request("POST", "/v1/control/sources/src_x/sync", { cookie });
   const syncResp = await handleControlRoute({
@@ -570,7 +1364,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   expect(operations.calls.createSourceSync?.[0]).toEqual("src_x");
 });
 
-test("Runs: GET run, approve (subject fallback), logs", async () => {
+test("Runs: GET run, approve (session subject actor), logs", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie, subject } = seedSession(store);
   const operations = fakeOperations();
@@ -584,7 +1378,10 @@ test("Runs: GET run, approve (subject fallback), logs", async () => {
   });
   expect(getResp?.status).toEqual(200);
 
-  const approve = request("POST", "/v1/control/runs/plan_1/approve", { cookie });
+  const approve = request("POST", "/v1/control/runs/plan_1/approve", {
+    cookie,
+    body: { approvedBy: "spoofed_actor", reason: "reviewed plan" },
+  });
   const approveResp = await handleControlRoute({
     request: approve.request,
     url: approve.url,
@@ -592,8 +1389,14 @@ test("Runs: GET run, approve (subject fallback), logs", async () => {
     operations,
   });
   expect(approveResp?.status).toEqual(200);
-  const approveCall = operations.calls.approveRun?.[1] as { approvedBy: string };
-  expect(approveCall.approvedBy).toEqual(subject);
+  const approveCall = operations.calls.approveRun?.[1] as {
+    approvedBy: string;
+    reason?: string;
+  };
+  expect(approveCall).toEqual({
+    approvedBy: subject,
+    reason: "reviewed plan",
+  });
 
   const logs = request("GET", "/v1/control/runs/plan_1/logs", { cookie });
   const logsResp = await handleControlRoute({
@@ -643,7 +1446,7 @@ test("RunGroups: plan-update, get, approve", async () => {
   expect(approveResp?.status).toEqual(200);
 });
 
-test("Connections: requires spaceId; operator-connection-defaults returns 200", async () => {
+test("Connections: requires spaceId; operator-connection-defaults is Space-gated", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -669,9 +1472,26 @@ test("Connections: requires spaceId; operator-connection-defaults returns 200", 
   expect(scopedResp?.status).toEqual(200);
   expect(operations.calls.listConnections?.[0]).toEqual("space_a");
 
-  const defaults = request("GET", "/v1/control/operator-connection-defaults", {
-    cookie,
+  const defaultsMissing = request(
+    "GET",
+    "/v1/control/operator-connection-defaults",
+    {
+      cookie,
+    },
+  );
+  const defaultsMissingResp = await handleControlRoute({
+    request: defaultsMissing.request,
+    url: defaultsMissing.url,
+    store,
+    operations,
   });
+  expect(defaultsMissingResp?.status).toEqual(400);
+
+  const defaults = request(
+    "GET",
+    "/v1/control/operator-connection-defaults?spaceId=space_a",
+    { cookie },
+  );
   const defaultsResp = await handleControlRoute({
     request: defaults.request,
     url: defaults.url,
@@ -679,6 +1499,100 @@ test("Connections: requires spaceId; operator-connection-defaults returns 200", 
     operations,
   });
   expect(defaultsResp?.status).toEqual(200);
+  expect(operations.calls.listOperatorConnectionDefaults).toBeDefined();
+});
+
+test("OutputShares: list, create, approve, and revoke are Space-gated", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store);
+  seedLedgerSpace(store, {
+    subject,
+    accountId: "acct_to",
+    spaceId: "space_b",
+  });
+  const operations = fakeOperations();
+
+  const list = request("GET", "/v1/control/output-shares?spaceId=space_a", {
+    cookie,
+  });
+  const listResp = await handleControlRoute({
+    request: list.request,
+    url: list.url,
+    store,
+    operations,
+  });
+  expect(listResp?.status).toEqual(200);
+  expect(operations.calls.listOutputShares?.[0]).toEqual("space_a");
+
+  const create = request("POST", "/v1/control/output-shares", {
+    cookie,
+    body: {
+      fromSpaceId: "space_a",
+      toSpaceId: "space_b",
+      producerInstallationId: "inst_1",
+      outputs: [{ name: "domain", alias: "base_domain", sensitive: true }],
+      sensitivePolicy: { allow: true, reason: "approved by both spaces" },
+    },
+  });
+  const createResp = await handleControlRoute({
+    request: create.request,
+    url: create.url,
+    store,
+    operations,
+  });
+  expect(createResp?.status).toEqual(201);
+  expect(
+    (
+      operations.calls.createOutputShare?.[0] as {
+        outputs: Array<{ alias?: string; sensitive?: boolean }>;
+        sensitivePolicy?: { allow: boolean; reason?: string };
+      }
+    ).outputs[0]?.alias,
+  ).toEqual("base_domain");
+  expect(
+    (
+      operations.calls.createOutputShare?.[0] as {
+        outputs: Array<{ alias?: string; sensitive?: boolean }>;
+        sensitivePolicy?: { allow: boolean; reason?: string };
+      }
+    ).outputs[0]?.sensitive,
+  ).toBe(true);
+  expect(
+    (
+      operations.calls.createOutputShare?.[0] as {
+        outputs: Array<{ alias?: string; sensitive?: boolean }>;
+        sensitivePolicy?: { allow: boolean; reason?: string };
+      }
+    ).sensitivePolicy,
+  ).toEqual({ allow: true, reason: "approved by both spaces" });
+
+  const approve = request(
+    "POST",
+    "/v1/control/output-shares/oshare_1/approve",
+    {
+      cookie,
+    },
+  );
+  const approveResp = await handleControlRoute({
+    request: approve.request,
+    url: approve.url,
+    store,
+    operations,
+  });
+  expect(approveResp?.status).toEqual(200);
+  expect(operations.calls.approveOutputShare?.[0]).toEqual("oshare_1");
+
+  const revoke = request("POST", "/v1/control/output-shares/oshare_1/revoke", {
+    cookie,
+  });
+  const revokeResp = await handleControlRoute({
+    request: revoke.request,
+    url: revoke.url,
+    store,
+    operations,
+  });
+  expect(revokeResp?.status).toEqual(200);
+  expect(operations.calls.revokeOutputShare?.[0]).toEqual("oshare_1");
 });
 
 test("controller errors map to their HTTP status (not_found -> 404)", async () => {
@@ -694,6 +1608,8 @@ test("controller errors map to their HTTP status (not_found -> 404)", async () =
         throw new Error("unused");
       },
       listInstallConfigs: async () => [],
+      putDeploymentProfile: async (profile) => profile,
+      getDeploymentProfileByInstallation: async () => undefined,
     },
   });
   const { request: req, url } = request(
@@ -701,9 +1617,14 @@ test("controller errors map to their HTTP status (not_found -> 404)", async () =
     "/v1/control/installations/inst_missing",
     { cookie },
   );
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(404);
-  const body = await response!.json() as { error: string };
+  const body = (await response!.json()) as { error: string };
   expect(body.error).toEqual("not_found");
 });
 
@@ -712,20 +1633,31 @@ test("unknown control subpath is 404 after the session gate", async () => {
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request("GET", "/v1/control/nope", { cookie });
-  const response = await handleControlRoute({ request: req, url, store, operations });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
   expect(response?.status).toEqual(404);
 });
 
 // --- personalSpaceHandle derivation ---------------------------------------
 
 test("personalSpaceHandle prefers displayName, then email, then fallback", () => {
-  expect(personalSpaceHandle({ subject: "tsub_x", displayName: "Shota Tomiyama" }))
-    .toEqual("shota-tomiyama");
-  expect(personalSpaceHandle({ subject: "tsub_x", email: "alice.dev@example.com" }))
-    .toEqual("alice-dev");
+  expect(
+    personalSpaceHandle({ subject: "tsub_x", displayName: "Shota Tomiyama" }),
+  ).toEqual("shota-tomiyama");
+  expect(
+    personalSpaceHandle({ subject: "tsub_x", email: "alice.dev@example.com" }),
+  ).toEqual("alice-dev");
   // Unusable displayName ("!") falls through to email.
   expect(
-    personalSpaceHandle({ subject: "tsub_x", displayName: "!", email: "bob@x.io" }),
+    personalSpaceHandle({
+      subject: "tsub_x",
+      displayName: "!",
+      email: "bob@x.io",
+    }),
   ).toEqual("bob");
   // No usable candidate -> u-<short subject>.
   const fallback = personalSpaceHandle({ subject: "tsub_AbCdEf123" });
@@ -768,7 +1700,9 @@ test("maybeEnsurePersonalSpaceForSession swallows a handle-collision error", asy
         throw new Error("unused");
       },
       createSpace: async () => {
-        throw Object.assign(new Error("taken"), { code: "failed_precondition" });
+        throw Object.assign(new Error("taken"), {
+          code: "failed_precondition",
+        });
       },
     },
   });

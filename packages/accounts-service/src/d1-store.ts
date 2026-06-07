@@ -1,4 +1,12 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import { and, asc, eq } from "drizzle-orm";
+import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
+import {
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+} from "drizzle-orm/sqlite-core";
 import type {
   AppBindingRecord,
   AppGrantRecord,
@@ -48,6 +56,7 @@ export interface D1PreparedStatement {
   run(): Promise<D1Result>;
   first<T = unknown>(column?: string): Promise<T | null>;
   all<T = unknown>(): Promise<D1Result<T>>;
+  raw?(): Promise<unknown[][]>;
 }
 
 export interface D1Result<T = unknown> {
@@ -89,6 +98,197 @@ interface D1IndexEntry {
 
 interface D1DocumentRow {
   readonly document: string;
+}
+
+const d1AccountsDocuments = sqliteTable(
+  "takosumi_accounts_documents",
+  {
+    bucket: text("bucket").notNull(),
+    key: text("key").notNull(),
+    document: text("document").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.bucket, table.key] })],
+);
+
+const d1AccountsIndexes = sqliteTable(
+  "takosumi_accounts_indexes",
+  {
+    indexName: text("index_name").notNull(),
+    indexKey: text("index_key").notNull(),
+    bucket: text("bucket").notNull(),
+    documentKey: text("document_key").notNull(),
+    sortKey: integer("sort_key").notNull().default(0),
+  },
+  (table) => [
+    primaryKey({
+      columns: [
+        table.indexName,
+        table.indexKey,
+        table.bucket,
+        table.documentKey,
+      ],
+    }),
+  ],
+);
+
+const d1AccountsSchema = {
+  d1AccountsDocuments,
+  d1AccountsIndexes,
+};
+
+type D1AccountsDrizzleDatabase = DrizzleD1Database<typeof d1AccountsSchema>;
+
+class D1AccountsDocumentIndexStore {
+  readonly #db: D1AccountsDrizzleDatabase;
+
+  constructor(binding: D1Database) {
+    this.#db = drizzle(binding as never, { schema: d1AccountsSchema });
+  }
+
+  async put<T>(
+    bucket: string,
+    key: string,
+    record: T,
+    indexes: readonly D1IndexEntry[],
+  ): Promise<void> {
+    const document = JSON.stringify(record);
+    const now = Date.now();
+    await this.#db
+      .insert(d1AccountsDocuments)
+      .values({ bucket, key, document, updatedAt: now })
+      .onConflictDoUpdate({
+        target: [d1AccountsDocuments.bucket, d1AccountsDocuments.key],
+        set: { document, updatedAt: now },
+      })
+      .run();
+    await this.deleteDocumentIndexEntries(bucket, key);
+    await this.insertIndexEntries(bucket, key, indexes);
+  }
+
+  async refreshIndexEntries(
+    bucket: string,
+    key: string,
+    indexes: readonly D1IndexEntry[],
+  ): Promise<void> {
+    await this.deleteDocumentIndexEntries(bucket, key);
+    await this.insertIndexEntries(bucket, key, indexes);
+  }
+
+  async get<T>(bucket: string, key: string): Promise<T | undefined> {
+    const row = await this.#db
+      .select({ document: d1AccountsDocuments.document })
+      .from(d1AccountsDocuments)
+      .where(
+        and(
+          eq(d1AccountsDocuments.bucket, bucket),
+          eq(d1AccountsDocuments.key, key),
+        ),
+      )
+      .get();
+    return row ? (JSON.parse(row.document) as T) : undefined;
+  }
+
+  async delete(bucket: string, key: string): Promise<void> {
+    await this.deleteDocumentIndexEntries(bucket, key);
+    await this.#db
+      .delete(d1AccountsDocuments)
+      .where(
+        and(
+          eq(d1AccountsDocuments.bucket, bucket),
+          eq(d1AccountsDocuments.key, key),
+        ),
+      )
+      .run();
+  }
+
+  async deleteIndexEntries(indexName: string, indexKey: string): Promise<void> {
+    await this.#db
+      .delete(d1AccountsIndexes)
+      .where(
+        and(
+          eq(d1AccountsIndexes.indexName, indexName),
+          eq(d1AccountsIndexes.indexKey, indexKey),
+        ),
+      )
+      .run();
+  }
+
+  async listByIndex<T>(indexName: string, indexKey: string): Promise<T[]> {
+    const rows = await this.#db
+      .select({ document: d1AccountsDocuments.document })
+      .from(d1AccountsIndexes)
+      .innerJoin(
+        d1AccountsDocuments,
+        and(
+          eq(d1AccountsDocuments.bucket, d1AccountsIndexes.bucket),
+          eq(d1AccountsDocuments.key, d1AccountsIndexes.documentKey),
+        ),
+      )
+      .where(
+        and(
+          eq(d1AccountsIndexes.indexName, indexName),
+          eq(d1AccountsIndexes.indexKey, indexKey),
+        ),
+      )
+      .orderBy(
+        asc(d1AccountsIndexes.sortKey),
+        asc(d1AccountsIndexes.documentKey),
+      );
+    return rows.map((row) => JSON.parse(row.document) as T);
+  }
+
+  async listBucket<T>(bucket: string): Promise<T[]> {
+    const rows = await this.#db
+      .select({ document: d1AccountsDocuments.document })
+      .from(d1AccountsDocuments)
+      .where(eq(d1AccountsDocuments.bucket, bucket))
+      .orderBy(asc(d1AccountsDocuments.key));
+    return rows.map((row) => JSON.parse(row.document) as T);
+  }
+
+  private async deleteDocumentIndexEntries(
+    bucket: string,
+    key: string,
+  ): Promise<void> {
+    await this.#db
+      .delete(d1AccountsIndexes)
+      .where(
+        and(
+          eq(d1AccountsIndexes.bucket, bucket),
+          eq(d1AccountsIndexes.documentKey, key),
+        ),
+      )
+      .run();
+  }
+
+  private async insertIndexEntries(
+    bucket: string,
+    key: string,
+    indexes: readonly D1IndexEntry[],
+  ): Promise<void> {
+    for (const index of indexes) {
+      await this.#db
+        .insert(d1AccountsIndexes)
+        .values({
+          indexName: index.name,
+          indexKey: index.key,
+          bucket,
+          documentKey: key,
+          sortKey: index.sortKey ?? 0,
+        })
+        .onConflictDoUpdate({
+          target: [
+            d1AccountsIndexes.indexName,
+            d1AccountsIndexes.indexKey,
+            d1AccountsIndexes.bucket,
+            d1AccountsIndexes.documentKey,
+          ],
+          set: { sortKey: index.sortKey ?? 0 },
+        })
+        .run();
+    }
+  }
 }
 
 // F30: persistent refresh-chain document shapes. The D1 store keeps
@@ -134,17 +334,19 @@ interface PasskeyChallengeDocument {
 
 export class D1AccountsStore implements AccountsStore {
   readonly #db: D1Database;
+  readonly #documents: D1AccountsDocumentIndexStore;
   #initialized?: Promise<void>;
 
   constructor(db: D1Database) {
     this.#db = db;
+    this.#documents = new D1AccountsDocumentIndexStore(db);
   }
 
   async initialize(): Promise<void> {
     if (!this.#initialized) {
-      this.#initialized = this.#db.exec(D1_ACCOUNTS_STORE_INIT_SQL).then(
-        () => {},
-      );
+      this.#initialized = this.#db
+        .exec(D1_ACCOUNTS_STORE_INIT_SQL)
+        .then(() => {});
     }
     await this.#initialized;
   }
@@ -156,8 +358,8 @@ export class D1AccountsStore implements AccountsStore {
       ...record,
       termsVersion: record.termsVersion ?? existing?.termsVersion,
       termsAcceptedAt: record.termsAcceptedAt ?? existing?.termsAcceptedAt,
-      termsAcceptedSource: record.termsAcceptedSource ??
-        existing?.termsAcceptedSource,
+      termsAcceptedSource:
+        record.termsAcceptedSource ?? existing?.termsAcceptedSource,
     });
   }
 
@@ -184,11 +386,13 @@ export class D1AccountsStore implements AccountsStore {
   }
 
   savePasskeyCredential(record: PasskeyCredentialRecord): Promise<void> {
-    return this.#put("passkey_credentials", record.credentialId, record, [{
-      name: "passkeys_by_subject",
-      key: record.subject,
-      sortKey: record.createdAt,
-    }]);
+    return this.#put("passkey_credentials", record.credentialId, record, [
+      {
+        name: "passkeys_by_subject",
+        key: record.subject,
+        sortKey: record.createdAt,
+      },
+    ]);
   }
 
   findPasskeyCredential(
@@ -290,10 +494,7 @@ export class D1AccountsStore implements AccountsStore {
       JSON.stringify(next),
     );
     if (!swapped) return false;
-    await this.#deleteIndexEntries(
-      "billing_accounts_by_subject",
-      next.subject,
-    );
+    await this.#deleteIndexEntries("billing_accounts_by_subject", next.subject);
     if (next.stripeCustomerId) {
       await this.#deleteIndexEntries(
         "billing_accounts_by_stripe_customer",
@@ -317,19 +518,23 @@ export class D1AccountsStore implements AccountsStore {
   async findBillingAccountForSubject(
     subject: TakosumiSubject,
   ): Promise<BillingAccountRecord | undefined> {
-    return (await this.#listByIndex<BillingAccountRecord>(
-      "billing_accounts_by_subject",
-      subject,
-    ))[0];
+    return (
+      await this.#listByIndex<BillingAccountRecord>(
+        "billing_accounts_by_subject",
+        subject,
+      )
+    )[0];
   }
 
   async findBillingAccountByStripeCustomerId(
     stripeCustomerId: string,
   ): Promise<BillingAccountRecord | undefined> {
-    return (await this.#listByIndex<BillingAccountRecord>(
-      "billing_accounts_by_stripe_customer",
-      stripeCustomerId,
-    ))[0];
+    return (
+      await this.#listByIndex<BillingAccountRecord>(
+        "billing_accounts_by_stripe_customer",
+        stripeCustomerId,
+      )
+    )[0];
   }
 
   saveBillingWebhookEvent(record: BillingWebhookEventRecord): Promise<void> {
@@ -373,11 +578,13 @@ export class D1AccountsStore implements AccountsStore {
     // before let the racy route-layer check-then-act mis-attribute a usage
     // report to another installation. Enforce the invariant at the storage
     // layer regardless of the route check.
-    const indexes: readonly D1IndexEntry[] = [{
-      name: "billing_usage_by_installation",
-      key: record.installationId,
-      sortKey: record.reportedAt,
-    }];
+    const indexes: readonly D1IndexEntry[] = [
+      {
+        name: "billing_usage_by_installation",
+        key: record.installationId,
+        sortKey: record.reportedAt,
+      },
+    ];
     // G6 atomic claim: only the first writer for this usageReportId wins the
     // insert (and its index rows are written by the same primitive).
     const claimed = await this.#putIfAbsentWithIndexes(
@@ -431,17 +638,14 @@ export class D1AccountsStore implements AccountsStore {
     record: AuthorizationCodeRecord,
   ): Promise<void> {
     return hashSecret(code).then((hash) =>
-      this.#put("authorization_codes", hash, record)
+      this.#put("authorization_codes", hash, record),
     );
   }
 
   async consumeAuthorizationCode(
     code: string,
   ): Promise<AuthorizationCodeRecord | undefined> {
-    return await this.#take(
-      "authorization_codes",
-      await hashSecret(code),
-    );
+    return await this.#take("authorization_codes", await hashSecret(code));
   }
 
   async saveAccessToken(token: string, record: TokenRecord): Promise<void> {
@@ -470,11 +674,13 @@ export class D1AccountsStore implements AccountsStore {
     token: string,
     record: PersonalAccessTokenRecord,
   ): Promise<void> {
-    await this.#put("personal_access_tokens", record.tokenId, record, [{
-      name: "personal_access_tokens_by_subject",
-      key: record.subject,
-      sortKey: record.createdAt,
-    }]);
+    await this.#put("personal_access_tokens", record.tokenId, record, [
+      {
+        name: "personal_access_tokens_by_subject",
+        key: record.subject,
+        sortKey: record.createdAt,
+      },
+    ]);
     await this.#put("personal_access_token_secrets", await hashSecret(token), {
       tokenId: record.tokenId,
     });
@@ -509,11 +715,13 @@ export class D1AccountsStore implements AccountsStore {
     );
     if (!record || record.subject !== input.subject) return undefined;
     const updated = { ...record, revokedAt: input.revokedAt };
-    await this.#put("personal_access_tokens", updated.tokenId, updated, [{
-      name: "personal_access_tokens_by_subject",
-      key: updated.subject,
-      sortKey: updated.createdAt,
-    }]);
+    await this.#put("personal_access_tokens", updated.tokenId, updated, [
+      {
+        name: "personal_access_tokens_by_subject",
+        key: updated.subject,
+        sortKey: updated.createdAt,
+      },
+    ]);
     return updated;
   }
 
@@ -530,11 +738,13 @@ export class D1AccountsStore implements AccountsStore {
       "personal_access_tokens",
       tokenId,
       { ...record, lastUsedAt },
-      [{
-        name: "personal_access_tokens_by_subject",
-        key: record.subject,
-        sortKey: record.createdAt,
-      }],
+      [
+        {
+          name: "personal_access_tokens_by_subject",
+          key: record.subject,
+          sortKey: record.createdAt,
+        },
+      ],
     );
   }
 
@@ -554,10 +764,7 @@ export class D1AccountsStore implements AccountsStore {
       record.installationId,
     );
     for (const token of existing) {
-      if (
-        token.usedAt === undefined &&
-        token.expiresAt > record.createdAt
-      ) {
+      if (token.usedAt === undefined && token.expiresAt > record.createdAt) {
         await this.#put(
           "launch_tokens",
           token.tokenHash,
@@ -662,26 +869,28 @@ export class D1AccountsStore implements AccountsStore {
       "oidc_clients_by_installation",
       record.installationId,
     );
-    await this.#put("oidc_clients", record.clientId, record, [{
-      name: "oidc_clients_by_installation",
-      key: record.installationId,
-      sortKey: record.createdAt,
-    }]);
+    await this.#put("oidc_clients", record.clientId, record, [
+      {
+        name: "oidc_clients_by_installation",
+        key: record.installationId,
+        sortKey: record.createdAt,
+      },
+    ]);
   }
 
-  findOidcClient(
-    clientId: string,
-  ): Promise<OidcClientRecord | undefined> {
+  findOidcClient(clientId: string): Promise<OidcClientRecord | undefined> {
     return this.#get("oidc_clients", clientId);
   }
 
   async findOidcClientForInstallation(
     installationId: string,
   ): Promise<OidcClientRecord | undefined> {
-    return (await this.#listByIndex<OidcClientRecord>(
-      "oidc_clients_by_installation",
-      installationId,
-    ))[0];
+    return (
+      await this.#listByIndex<OidcClientRecord>(
+        "oidc_clients_by_installation",
+        installationId,
+      )
+    )[0];
   }
 
   // F30 fix: persistent OIDC refresh-chain state. Mirrors the Postgres
@@ -739,9 +948,7 @@ export class D1AccountsStore implements AccountsStore {
     return link?.childHash;
   }
 
-  async revokeRefreshChain(
-    rootToken: string,
-  ): Promise<readonly string[]> {
+  async revokeRefreshChain(rootToken: string): Promise<readonly string[]> {
     const presentedHash = await hashSecret(rootToken);
     const rootHash = await this.#resolveRefreshChainRootHash(presentedHash);
     await this.#put<RevokedRefreshRootDocument>(
@@ -818,9 +1025,8 @@ export class D1AccountsStore implements AccountsStore {
     // both reference distributions is what makes the no-offline_access case
     // representable on Postgres (NULL is forbidden in its PRIMARY KEY); the
     // two stores must not diverge on this.
-    const refreshRootHash = refreshTokenRoot === undefined
-      ? ""
-      : await hashSecret(refreshTokenRoot);
+    const refreshRootHash =
+      refreshTokenRoot === undefined ? "" : await hashSecret(refreshTokenRoot);
     // Composite key: code|access|refreshRoot so multiple links can
     // coexist for one code (one auth code may produce one access +
     // refresh pair, but the table is keyed on the tuple for symmetry
@@ -946,40 +1152,36 @@ export class D1AccountsStore implements AccountsStore {
       input.chainBefore,
     );
     // refresh_chain_access_tokens are keyed by `${rootHash}\n${accessHash}`.
-    const chainAccessTokens = await this.#pruneBucketBefore<
-      RefreshChainAccessTokenDocument
-    >(
-      "refresh_chain_access_tokens",
-      (doc) => `${doc.rootHash}\n${doc.accessTokenHash}`,
-      (doc) => doc.createdAt,
-      input.chainBefore,
-    );
-    const revokedRoots = await this.#pruneBucketBefore<
-      RevokedRefreshRootDocument
-    >(
-      "revoked_refresh_roots",
-      (doc) => doc.rootHash,
-      (doc) => doc.revokedAt,
-      input.chainBefore,
-    );
-    const consumedCodes = await this.#pruneBucketBefore<
-      ConsumedAuthCodeDocument
-    >(
-      "consumed_authorization_codes",
-      (doc) => doc.codeHash,
-      (doc) => doc.consumedAt,
-      input.consumedCodeBefore,
-    );
+    const chainAccessTokens =
+      await this.#pruneBucketBefore<RefreshChainAccessTokenDocument>(
+        "refresh_chain_access_tokens",
+        (doc) => `${doc.rootHash}\n${doc.accessTokenHash}`,
+        (doc) => doc.createdAt,
+        input.chainBefore,
+      );
+    const revokedRoots =
+      await this.#pruneBucketBefore<RevokedRefreshRootDocument>(
+        "revoked_refresh_roots",
+        (doc) => doc.rootHash,
+        (doc) => doc.revokedAt,
+        input.chainBefore,
+      );
+    const consumedCodes =
+      await this.#pruneBucketBefore<ConsumedAuthCodeDocument>(
+        "consumed_authorization_codes",
+        (doc) => doc.codeHash,
+        (doc) => doc.consumedAt,
+        input.consumedCodeBefore,
+      );
     // auth_code_token_links are keyed by `${code}\n${access}\n${refreshRoot}`.
-    const authCodeTokenLinks = await this.#pruneBucketBefore<
-      AuthCodeTokenLinkDocument
-    >(
-      "auth_code_token_links",
-      (doc) =>
-        `${doc.codeHash}\n${doc.accessTokenHash}\n${doc.refreshRootHash}`,
-      (doc) => doc.createdAt,
-      input.consumedCodeBefore,
-    );
+    const authCodeTokenLinks =
+      await this.#pruneBucketBefore<AuthCodeTokenLinkDocument>(
+        "auth_code_token_links",
+        (doc) =>
+          `${doc.codeHash}\n${doc.accessTokenHash}\n${doc.refreshRootHash}`,
+        (doc) => doc.createdAt,
+        input.consumedCodeBefore,
+      );
     return {
       chainLinks,
       chainAccessTokens,
@@ -1010,11 +1212,10 @@ export class D1AccountsStore implements AccountsStore {
     challenge: string,
     expiresAt: number,
   ): Promise<void> {
-    await this.#put<PasskeyChallengeDocument>(
-      "passkey_challenges",
-      key,
-      { challenge, expiresAt },
-    );
+    await this.#put<PasskeyChallengeDocument>("passkey_challenges", key, {
+      challenge,
+      expiresAt,
+    });
   }
 
   async consumePasskeyChallenge(
@@ -1046,10 +1247,7 @@ export class D1AccountsStore implements AccountsStore {
       "ledger_accounts",
       record.accountId,
     );
-    if (
-      existing &&
-      existing.legalOwnerSubject !== record.legalOwnerSubject
-    ) {
+    if (existing && existing.legalOwnerSubject !== record.legalOwnerSubject) {
       throw new LedgerAccountOwnershipConflictError(
         record.accountId,
         existing.legalOwnerSubject,
@@ -1066,11 +1264,13 @@ export class D1AccountsStore implements AccountsStore {
   }
 
   saveSpace(record: SpaceRecord): Promise<void> {
-    return this.#put("spaces", record.spaceId, record, [{
-      name: "spaces_by_account",
-      key: record.accountId,
-      sortKey: record.createdAt,
-    }]);
+    return this.#put("spaces", record.spaceId, record, [
+      {
+        name: "spaces_by_account",
+        key: record.accountId,
+        sortKey: record.createdAt,
+      },
+    ]);
   }
 
   findSpace(spaceId: string): Promise<SpaceRecord | undefined> {
@@ -1082,11 +1282,13 @@ export class D1AccountsStore implements AccountsStore {
   }
 
   saveAppInstallation(record: InstallationRecord): Promise<void> {
-    const indexes: D1IndexEntry[] = [{
-      name: "installations_by_space",
-      key: record.spaceId,
-      sortKey: record.createdAt,
-    }];
+    const indexes: D1IndexEntry[] = [
+      {
+        name: "installations_by_space",
+        key: record.spaceId,
+        sortKey: record.createdAt,
+      },
+    ];
     if (record.billingAccountId) {
       indexes.push({
         name: "installations_by_billing_account",
@@ -1191,17 +1393,18 @@ export class D1AccountsStore implements AccountsStore {
     // per position can win. The loser gets inserted === false and we throw;
     // appendLedgerEvent's retry loop then re-reads the advanced tail and
     // re-appends. (Postgres achieves the same via FOR UPDATE NOWAIT.)
-    const chainKey =
-      `${record.installationId}::${record.previousEventHash ?? "<genesis>"}`;
+    const chainKey = `${record.installationId}::${record.previousEventHash ?? "<genesis>"}`;
     const inserted = await this.#putIfAbsentWithIndexes(
       "installation_events",
       chainKey,
       record,
-      [{
-        name: "installation_events_by_installation",
-        key: record.installationId,
-        sortKey: record.createdAt,
-      }],
+      [
+        {
+          name: "installation_events_by_installation",
+          key: record.installationId,
+          sortKey: record.createdAt,
+        },
+      ],
     );
     if (!inserted) {
       throw new Error(
@@ -1228,37 +1431,26 @@ export class D1AccountsStore implements AccountsStore {
     indexes: readonly D1IndexEntry[] = [],
   ): Promise<void> {
     await this.initialize();
-    const now = Date.now();
-    await this.#db.prepare(
-      "INSERT OR REPLACE INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, ?)",
-    ).bind(bucket, key, JSON.stringify(record), now).run();
-    await this.#db.prepare(
-      "DELETE FROM takosumi_accounts_indexes WHERE bucket = ? AND document_key = ?",
-    ).bind(bucket, key).run();
-    for (const index of indexes) {
-      await this.#db.prepare(
-        "INSERT OR REPLACE INTO takosumi_accounts_indexes (index_name, index_key, bucket, document_key, sort_key) VALUES (?, ?, ?, ?, ?)",
-      ).bind(
-        index.name,
-        index.key,
-        bucket,
-        key,
-        index.sortKey ?? 0,
-      ).run();
-    }
+    await this.#documents.put(bucket, key, record, indexes);
   }
 
+  // Raw D1 helper kept intentionally: Drizzle's D1 insert result shape is
+  // driver-specific, while these account flows need SQLite `INSERT OR IGNORE`
+  // plus an exact affected-row count to preserve atomic claim semantics.
   async #putIfAbsent<T>(
     bucket: string,
     key: string,
     record: T,
   ): Promise<boolean> {
     await this.initialize();
-    const result = await this.#db.prepare(
-      "INSERT OR IGNORE INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, ?)",
-    ).bind(bucket, key, JSON.stringify(record), Date.now()).run();
-    const changes = d1ChangeCount(result) ??
-      await this.#selectLastChangeCount();
+    const result = await this.#db
+      .prepare(
+        "INSERT OR IGNORE INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .bind(bucket, key, JSON.stringify(record), Date.now())
+      .run();
+    const changes =
+      d1ChangeCount(result) ?? (await this.#selectLastChangeCount());
     return changes > 0;
   }
 
@@ -1277,23 +1469,16 @@ export class D1AccountsStore implements AccountsStore {
     indexes: readonly D1IndexEntry[] = [],
   ): Promise<boolean> {
     await this.initialize();
-    const result = await this.#db.prepare(
-      "INSERT OR IGNORE INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, ?)",
-    ).bind(bucket, key, JSON.stringify(record), Date.now()).run();
-    const changes = d1ChangeCount(result) ??
-      await this.#selectLastChangeCount();
+    const result = await this.#db
+      .prepare(
+        "INSERT OR IGNORE INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .bind(bucket, key, JSON.stringify(record), Date.now())
+      .run();
+    const changes =
+      d1ChangeCount(result) ?? (await this.#selectLastChangeCount());
     if (changes <= 0) return false;
-    for (const index of indexes) {
-      await this.#db.prepare(
-        "INSERT OR REPLACE INTO takosumi_accounts_indexes (index_name, index_key, bucket, document_key, sort_key) VALUES (?, ?, ?, ?, ?)",
-      ).bind(
-        index.name,
-        index.key,
-        bucket,
-        key,
-        index.sortKey ?? 0,
-      ).run();
-    }
+    await this.#documents.refreshIndexEntries(bucket, key, indexes);
     return true;
   }
 
@@ -1311,11 +1496,14 @@ export class D1AccountsStore implements AccountsStore {
     nextDocument: string,
   ): Promise<boolean> {
     await this.initialize();
-    const result = await this.#db.prepare(
-      "UPDATE takosumi_accounts_documents SET document = ?, updated_at = ? WHERE bucket = ? AND key = ? AND document = ?",
-    ).bind(nextDocument, Date.now(), bucket, key, expectedDocument).run();
-    const changes = d1ChangeCount(result) ??
-      await this.#selectLastChangeCount();
+    const result = await this.#db
+      .prepare(
+        "UPDATE takosumi_accounts_documents SET document = ?, updated_at = ? WHERE bucket = ? AND key = ? AND document = ?",
+      )
+      .bind(nextDocument, Date.now(), bucket, key, expectedDocument)
+      .run();
+    const changes =
+      d1ChangeCount(result) ?? (await this.#selectLastChangeCount());
     return changes > 0;
   }
 
@@ -1330,49 +1518,37 @@ export class D1AccountsStore implements AccountsStore {
     indexes: readonly D1IndexEntry[],
   ): Promise<void> {
     await this.initialize();
-    await this.#db.prepare(
-      "DELETE FROM takosumi_accounts_indexes WHERE bucket = ? AND document_key = ?",
-    ).bind(bucket, key).run();
-    for (const index of indexes) {
-      await this.#db.prepare(
-        "INSERT OR REPLACE INTO takosumi_accounts_indexes (index_name, index_key, bucket, document_key, sort_key) VALUES (?, ?, ?, ?, ?)",
-      ).bind(
-        index.name,
-        index.key,
-        bucket,
-        key,
-        index.sortKey ?? 0,
-      ).run();
-    }
+    await this.#documents.refreshIndexEntries(bucket, key, indexes);
   }
 
   async #get<T>(bucket: string, key: string): Promise<T | undefined> {
     await this.initialize();
-    const row = await this.#db.prepare(
-      "SELECT document FROM takosumi_accounts_documents WHERE bucket = ? AND key = ?",
-    ).bind(bucket, key).first<D1DocumentRow>();
-    return row ? JSON.parse(row.document) as T : undefined;
+    return await this.#documents.get<T>(bucket, key);
   }
 
   async #delete(bucket: string, key: string): Promise<void> {
     await this.initialize();
-    await this.#db.prepare(
-      "DELETE FROM takosumi_accounts_indexes WHERE bucket = ? AND document_key = ?",
-    ).bind(bucket, key).run();
-    await this.#db.prepare(
-      "DELETE FROM takosumi_accounts_documents WHERE bucket = ? AND key = ?",
-    ).bind(bucket, key).run();
+    await this.#documents.delete(bucket, key);
   }
 
+  // Raw D1 helper kept intentionally: D1 needs single-shot delete-and-return
+  // behavior for authorization codes and passkey challenges. Keeping the
+  // RETURNING statement visible prevents accidental read-then-delete rewrites.
   async #take<T>(bucket: string, key: string): Promise<T | undefined> {
     await this.initialize();
-    const row = await this.#db.prepare(
-      "DELETE FROM takosumi_accounts_documents WHERE bucket = ? AND key = ? RETURNING document",
-    ).bind(bucket, key).first<D1DocumentRow>();
+    const row = await this.#db
+      .prepare(
+        "DELETE FROM takosumi_accounts_documents WHERE bucket = ? AND key = ? RETURNING document",
+      )
+      .bind(bucket, key)
+      .first<D1DocumentRow>();
     if (!row) return undefined;
-    await this.#db.prepare(
-      "DELETE FROM takosumi_accounts_indexes WHERE bucket = ? AND document_key = ?",
-    ).bind(bucket, key).run();
+    await this.#db
+      .prepare(
+        "DELETE FROM takosumi_accounts_indexes WHERE bucket = ? AND document_key = ?",
+      )
+      .bind(bucket, key)
+      .run();
     return JSON.parse(row.document) as T;
   }
 
@@ -1381,39 +1557,23 @@ export class D1AccountsStore implements AccountsStore {
     indexKey: string,
   ): Promise<void> {
     await this.initialize();
-    await this.#db.prepare(
-      "DELETE FROM takosumi_accounts_indexes WHERE index_name = ? AND index_key = ?",
-    ).bind(indexName, indexKey).run();
+    await this.#documents.deleteIndexEntries(indexName, indexKey);
   }
 
-  async #listByIndex<T>(
-    indexName: string,
-    indexKey: string,
-  ): Promise<T[]> {
+  async #listByIndex<T>(indexName: string, indexKey: string): Promise<T[]> {
     await this.initialize();
-    const result = await this.#db.prepare(
-      `SELECT d.document
-         FROM takosumi_accounts_indexes i
-         JOIN takosumi_accounts_documents d
-           ON d.bucket = i.bucket AND d.key = i.document_key
-        WHERE i.index_name = ? AND i.index_key = ?
-        ORDER BY i.sort_key ASC, i.document_key ASC`,
-    ).bind(indexName, indexKey).all<D1DocumentRow>();
-    return (result.results ?? []).map((row) => JSON.parse(row.document) as T);
+    return await this.#documents.listByIndex<T>(indexName, indexKey);
   }
 
   async #listBucket<T>(bucket: string): Promise<T[]> {
     await this.initialize();
-    const result = await this.#db.prepare(
-      "SELECT document FROM takosumi_accounts_documents WHERE bucket = ? ORDER BY key ASC",
-    ).bind(bucket).all<D1DocumentRow>();
-    return (result.results ?? []).map((row) => JSON.parse(row.document) as T);
+    return await this.#documents.listBucket<T>(bucket);
   }
 
   async #selectLastChangeCount(): Promise<number> {
-    const row = await this.#db.prepare(
-      "SELECT changes() AS changes",
-    ).first<{ changes: number }>();
+    const row = await this.#db
+      .prepare("SELECT changes() AS changes")
+      .first<{ changes: number }>();
     return Number(row?.changes ?? 0);
   }
 }
@@ -1423,31 +1583,33 @@ function upstreamIdentityKey(input: {
   upstreamIssuer: string;
   upstreamSubject: string;
 }): string {
-  return [
-    input.providerId,
-    input.upstreamIssuer,
-    input.upstreamSubject,
-  ].join("\n");
+  return [input.providerId, input.upstreamIssuer, input.upstreamSubject].join(
+    "\n",
+  );
 }
 
 function launchTokenIndexes(
   record: LaunchTokenRecord,
 ): readonly D1IndexEntry[] {
-  return [{
-    name: "launch_tokens_by_installation",
-    key: record.installationId,
-    sortKey: record.createdAt,
-  }];
+  return [
+    {
+      name: "launch_tokens_by_installation",
+      key: record.installationId,
+      sortKey: record.createdAt,
+    },
+  ];
 }
 
 function billingAccountIndexes(
   record: BillingAccountRecord,
 ): readonly D1IndexEntry[] {
-  const indexes: D1IndexEntry[] = [{
-    name: "billing_accounts_by_subject",
-    key: record.subject,
-    sortKey: record.createdAt,
-  }];
+  const indexes: D1IndexEntry[] = [
+    {
+      name: "billing_accounts_by_subject",
+      key: record.subject,
+      sortKey: record.createdAt,
+    },
+  ];
   if (record.stripeCustomerId) {
     indexes.push({
       name: "billing_accounts_by_stripe_customer",

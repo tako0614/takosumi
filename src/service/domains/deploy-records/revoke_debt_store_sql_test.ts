@@ -48,53 +48,70 @@ class FakeSqlClient implements SqlClient {
     parameters?: SqlParameters,
   ): Promise<SqlQueryResult<Row>> {
     const trimmed = sql.trim().toLowerCase();
+    const normalized = trimmed.replaceAll('"', "");
     const params = (parameters ?? []) as readonly unknown[];
     const cast = <T>(value: T): SqlQueryResult<Row> =>
       value as unknown as SqlQueryResult<Row>;
-    if (trimmed.startsWith("insert into takosumi_revoke_debts")) {
+    if (normalized.startsWith("insert into takosumi_revoke_debts")) {
       return Promise.resolve(cast(this.#insert(params)));
     }
     if (
-      trimmed.startsWith("select distinct owner_space_id") &&
-      trimmed.includes("from takosumi_revoke_debts")
+      normalized.startsWith("select distinct owner_space_id") &&
+      normalized.includes("from takosumi_revoke_debts")
     ) {
       return Promise.resolve(cast(this.#listOpenOwnerSpaces()));
     }
     if (
-      trimmed.includes("from takosumi_revoke_debts") &&
-      trimmed.includes("where source_key = $1")
+      normalized.includes("from takosumi_revoke_debts") &&
+      (normalized.includes("where source_key = $1") ||
+        normalized.includes("where takosumi_revoke_debts.source_key = $1"))
     ) {
       return Promise.resolve(cast(this.#getBySourceKey(params)));
     }
     if (
-      trimmed.includes("from takosumi_revoke_debts") &&
-      trimmed.includes("where owner_space_id = $1 and id = $2")
+      normalized.includes("from takosumi_revoke_debts") &&
+      (normalized.includes("where owner_space_id = $1 and id = $2") ||
+        normalized.includes(
+          "where (takosumi_revoke_debts.owner_space_id = $1 and takosumi_revoke_debts.id = $2)",
+        ))
     ) {
       return Promise.resolve(cast(this.#getById(params)));
     }
-    if (trimmed.startsWith("update takosumi_revoke_debts")) {
+    if (normalized.startsWith("update takosumi_revoke_debts")) {
       const hook = this.onBeforeNextUpdate;
       this.onBeforeNextUpdate = undefined;
       hook?.();
       return Promise.resolve(cast(this.#update(params)));
     }
     if (
-      trimmed.includes("from takosumi_revoke_debts") &&
-      trimmed.includes(
+      normalized.includes("from takosumi_revoke_debts") &&
+      (normalized.includes(
         "where owner_space_id = $1 and deployment_name = $2",
-      )
+      ) ||
+        normalized.includes(
+          "where (takosumi_revoke_debts.owner_space_id = $1 and takosumi_revoke_debts.deployment_name = $2)",
+        ))
     ) {
       return Promise.resolve(cast(this.#listDeployment(params)));
     }
     if (
-      trimmed.includes("from takosumi_revoke_debts") &&
-      trimmed.includes("next_retry_at is not null")
+      normalized.includes("from takosumi_revoke_debts") &&
+      normalized.includes("next_retry_at is not null")
     ) {
       return Promise.resolve(cast(this.#listDueOpen(params)));
     }
     if (
-      trimmed.includes("from takosumi_revoke_debts") &&
-      trimmed.includes("where owner_space_id = $1")
+      normalized.includes("from takosumi_revoke_debts") &&
+      normalized.includes(
+        "where (takosumi_revoke_debts.owner_space_id = $1 and takosumi_revoke_debts.status = $2)",
+      )
+    ) {
+      return Promise.resolve(cast(this.#listOwnerStatus(params)));
+    }
+    if (
+      normalized.includes("from takosumi_revoke_debts") &&
+      (normalized.includes("where owner_space_id = $1") ||
+        normalized.includes("where takosumi_revoke_debts.owner_space_id = $1"))
     ) {
       return Promise.resolve(cast(this.#listOwner(params)));
     }
@@ -109,6 +126,7 @@ class FakeSqlClient implements SqlClient {
       sourceExportSnapshotId,
       externalParticipantId,
       reason,
+      status,
       ownerSpaceId,
       originatingSpaceId,
       deploymentName,
@@ -118,9 +136,15 @@ class FakeSqlClient implements SqlClient {
       resourceName,
       providerId,
       retryPolicyJson,
+      retryAttempts,
+      lastRetryAt,
       nextRetryAt,
+      lastRetryErrorJson,
       detailJson,
       createdAt,
+      statusUpdatedAt,
+      agedAt,
+      clearedAt,
     ] = params as [
       string,
       string,
@@ -130,6 +154,7 @@ class FakeSqlClient implements SqlClient {
       string,
       string,
       string,
+      string,
       string | undefined,
       string | undefined,
       string | undefined,
@@ -137,9 +162,14 @@ class FakeSqlClient implements SqlClient {
       string | undefined,
       string | undefined,
       string,
+      number,
+      string | null,
       string,
       string | null,
       string,
+      string,
+      string | null,
+      string | null,
     ];
     const existing = this.rows.find((row) => row.source_key === sourceKey);
     if (existing) return { rows: [], rowCount: 0 };
@@ -150,7 +180,7 @@ class FakeSqlClient implements SqlClient {
       source_export_snapshot_id: sourceExportSnapshotId ?? null,
       external_participant_id: externalParticipantId ?? null,
       reason,
-      status: "open",
+      status,
       owner_space_id: ownerSpaceId,
       originating_space_id: originatingSpaceId,
       deployment_name: deploymentName ?? null,
@@ -160,15 +190,15 @@ class FakeSqlClient implements SqlClient {
       resource_name: resourceName ?? null,
       provider_id: providerId ?? null,
       retry_policy_json: retryPolicyJson,
-      retry_attempts: 0,
-      last_retry_at: null,
+      retry_attempts: retryAttempts,
+      last_retry_at: lastRetryAt,
       next_retry_at: nextRetryAt,
-      last_retry_error_json: null,
+      last_retry_error_json: lastRetryErrorJson,
       detail_json: detailJson ?? null,
       created_at: createdAt,
-      status_updated_at: createdAt,
-      aged_at: null,
-      cleared_at: null,
+      status_updated_at: statusUpdatedAt,
+      aged_at: agedAt,
+      cleared_at: clearedAt,
     };
     this.rows.push(row);
     return { rows: [{ ...row }], rowCount: 1 };
@@ -194,8 +224,6 @@ class FakeSqlClient implements SqlClient {
 
   #update(params: readonly unknown[]): SqlQueryResult<FakeRow> {
     const [
-      ownerSpaceId,
-      id,
       status,
       retryAttempts,
       lastRetryAt,
@@ -204,11 +232,11 @@ class FakeSqlClient implements SqlClient {
       statusUpdatedAt,
       agedAt,
       clearedAt,
+      ownerSpaceId,
+      id,
       expectedStatus,
       expectedRetryAttempts,
     ] = params as [
-      string,
-      string,
       string,
       number,
       string | null,
@@ -217,6 +245,8 @@ class FakeSqlClient implements SqlClient {
       string,
       string | null,
       string | null,
+      string,
+      string,
       string,
       number,
     ];
@@ -273,6 +303,14 @@ class FakeSqlClient implements SqlClient {
   #listOwner(params: readonly unknown[]): SqlQueryResult<FakeRow> {
     const [ownerSpaceId] = params as [string];
     const rows = this.rows.filter((row) => row.owner_space_id === ownerSpaceId);
+    return { rows: rows.map((row) => ({ ...row })), rowCount: rows.length };
+  }
+
+  #listOwnerStatus(params: readonly unknown[]): SqlQueryResult<FakeRow> {
+    const [ownerSpaceId, status] = params as [string, string];
+    const rows = this.rows.filter((row) =>
+      row.owner_space_id === ownerSpaceId && row.status === status
+    );
     return { rows: rows.map((row) => ({ ...row })), rowCount: rows.length };
   }
 

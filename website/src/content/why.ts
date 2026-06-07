@@ -17,6 +17,6 @@ export const PILLARS: readonly Pillar[] = [
   {
     title: "lock-in しない、引っ越せる、終わらない",
     body:
-      "operator が実行先を差し替えても、Installation / PlanRun / ApplyRun の入口は変わらない。cloud、VM、cluster のどれかに閉じ込めない。",
+      "operator が実行先を差し替えても、Installation / Run の入口は変わらない。cloud、VM、cluster のどれかに閉じ込めない。",
   },
 ];

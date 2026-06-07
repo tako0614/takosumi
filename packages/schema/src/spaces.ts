@@ -1,5 +1,5 @@
 /**
- * Space contract (Core Specification §4 / §27 `spaces`).
+ * Space owner-namespace contract.
  *
  * A Space is the owner namespace directly under which Installations live —
  * close to a GitHub user/org (`@shota`, `@company`). It holds members, sources,
@@ -10,6 +10,8 @@
  * workspace) are DIFFERENT concepts; never conflate them.
  */
 
+import type { PolicyConfig } from "./installations.ts";
+
 export type SpaceType = "personal" | "organization";
 
 export interface Space {
@@ -19,8 +21,14 @@ export interface Space {
   readonly displayName: string;
   readonly type: SpaceType;
   readonly ownerUserId: string;
-  /** Optional billing attachment (spec §4: billing is optional). */
+  /** Optional billing attachment. Billing can be disabled, showback, or enforced. */
   readonly billingAccountId?: string;
+  /**
+   * Optional Space-wide policy defaults / ceilings. The
+   * deploy-control plane composes this with the target InstallConfig policy at
+   * plan-completion time; per-run ledgers store only the resulting decision.
+   */
+  readonly policy?: PolicyConfig;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -31,7 +39,7 @@ export interface InstallationFullName {
   readonly installationName: string;
 }
 
-/** Formats `@space/name` (spec §5). */
+/** Formats `@space/name`. */
 export function formatInstallationFullName(name: InstallationFullName): string {
   return `@${name.spaceHandle}/${name.installationName}`;
 }

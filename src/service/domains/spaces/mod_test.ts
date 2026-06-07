@@ -134,6 +134,29 @@ test("getSpace returns the record and throws not_found when missing", async () =
   });
 });
 
+test("updateSpace persists displayName and Space policy", async () => {
+  const { service } = build();
+  const space = await service.createSpace({
+    handle: "shota",
+    displayName: "Shota",
+    type: "personal",
+    ownerUserId: "user_1",
+  });
+  const updated = await service.updateSpace(space.id, {
+    displayName: "Shota Lab",
+    policy: {
+      allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+      quota: { "resources.total": 10 },
+    },
+  });
+  expect(updated.displayName).toBe("Shota Lab");
+  expect(updated.policy).toEqual({
+    allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    quota: { "resources.total": 10 },
+  });
+  expect(updated.updatedAt).toBe("2026-06-06T00:00:00.000Z");
+});
+
 test("ensurePersonalSpace creates once and is idempotent by handle", async () => {
   const { service } = build();
   const first = await service.ensurePersonalSpace("user_1", "shota");

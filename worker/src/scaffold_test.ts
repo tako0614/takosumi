@@ -4,6 +4,7 @@ import { test } from "bun:test";
 
 const repoRoot = new URL("../../", import.meta.url);
 const cloudflareRoot = new URL("deploy/cloudflare/", repoRoot);
+const platformRoot = new URL("deploy/platform/", repoRoot);
 const runnerImageRoot = new URL("runner-image/", repoRoot);
 const workerSrcRoot = new URL("./", import.meta.url);
 
@@ -23,6 +24,8 @@ test("Cloudflare scaffold wires D1/R2 and the OpenTofu runner container", async 
   assert.match(wrangler, /name = "COORDINATION"/);
   assert.match(wrangler, /binding = "RUN_QUEUE"/);
   assert.match(wrangler, /queue = "takosumi-runs"/);
+  assert.doesNotMatch(wrangler, /binding = "TAKOS_QUEUE"/);
+  assert.doesNotMatch(wrangler, /takosumi-control-plane/);
   assert.match(wrangler, /name = "RUNNER"/);
   assert.match(wrangler, /class_name = "OpenTofuRunnerObject"/);
   assert.match(wrangler, /\[\[containers\]\]/);
@@ -32,6 +35,17 @@ test("Cloudflare scaffold wires D1/R2 and the OpenTofu runner container", async 
   assert.match(wrangler, /new_sqlite_classes = \["OpenTofuRunnerObject"\]/);
 });
 
+test("platform scaffold exposes production hardening evidence gates", async () => {
+  const wrangler = await readText(new URL("wrangler.toml", platformRoot));
+  const worker = await readText(new URL("worker.ts", platformRoot));
+
+  assert.match(wrangler, /TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"/);
+  assert.match(wrangler, /TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF/);
+  assert.match(wrangler, /TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF/);
+  assert.match(worker, /\/internal\/platform\/hardening-gates/);
+  assert.match(worker, /evaluateProductionHardeningGates/);
+});
+
 test("Cloudflare scaffold docs describe PlanRun and ApplyRun routing", async () => {
   const readme = await readText(new URL("README.md", cloudflareRoot));
 
@@ -39,18 +53,24 @@ test("Cloudflare scaffold docs describe PlanRun and ApplyRun routing", async () 
   assert.match(readme, /apply/);
   assert.match(readme, /destroy/);
   assert.match(readme, /Cloudflare Containers/);
+  assert.match(readme, /\/internal\/platform\/hardening-gates/);
+  assert.match(readme, /real Cloudflare Container smoke proof/);
+  assert.match(readme, /egress enforcement proof/);
   assert.match(readme, /OpenTofu/);
   assert.match(readme, /\/v1\/plan-runs/);
   assert.match(readme, /\/v1\/apply-runs/);
-  assert.match(readme, /operation: "destroy"/);
+  assert.match(readme, /destroy_plan/);
+  assert.match(readme, /destroy_apply/);
   assert.match(readme, /\/api\/internal\/v1\/\*/);
   assert.match(readme, /D1/);
   assert.match(readme, /R2/);
-  assert.match(readme, /object-storage/);
+  assert.match(readme, /r2_object_storage/);
   assert.match(readme, /opentofu-plan-runs/);
   assert.match(readme, /does not depend on a still-warm runner-local file/);
   assert.doesNotMatch(readme, /five public deploy control endpoints/);
   assert.doesNotMatch(readme, /\/v1\/installations\/dry-run/);
+  assert.doesNotMatch(readme, /\/storage\/healthz checks/);
+  assert.doesNotMatch(readme, /\/queue\/test verifies/);
 });
 
 test("OpenTofu runner image stays isolated from the Worker browser bundle", async () => {
@@ -115,6 +135,8 @@ test("OpenTofu runner DO routes M2 state through R2_STATE with at-rest encryptio
   assert.match(container, /\.tfstate\.enc/);
   assert.match(container, /current\.json/);
   assert.match(container, /padStart\(8, "0"\)/);
+  assert.match(container, /recoverCurrentState/);
+  assert.match(container, /takosumi-reconciled/);
   // When no stateScope is present the legacy R2_ARTIFACTS path is used.
   assert.match(container, /parseStateScope/);
   assert.match(container, /stateArtifactKeys/);

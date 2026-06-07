@@ -30,7 +30,7 @@ export interface Installation {
   readonly mode?: TakosumiAppInstallationMode;
   readonly status?: TakosumiAppInstallationStatus;
   readonly launchUrl?: string;
-  readonly deploymentOutputs?: readonly DeploymentOutput[];
+  readonly installationOutputs?: readonly InstallationOutput[];
   /** Present on the detail envelope (GET /v1/installations/:id), not on list. */
   readonly oidcClient?: OidcClientConfig;
   readonly createdBySubject?: string;
@@ -38,7 +38,7 @@ export interface Installation {
   readonly updatedAt?: string;
 }
 
-export interface DeploymentOutput {
+export interface InstallationOutput {
   readonly name: string;
   readonly kind: string;
   readonly value: unknown;
@@ -129,8 +129,8 @@ interface WireInstallation {
   readonly mode?: Installation["mode"];
   readonly status?: Installation["status"];
   readonly launch_url?: string | null;
-  readonly deployment_outputs?: readonly WireDeploymentOutput[];
-  readonly deploymentOutputs?: readonly WireDeploymentOutput[];
+  readonly deployment_outputs?: readonly WireInstallationOutput[];
+  readonly installationOutputs?: readonly WireInstallationOutput[];
   readonly launch?: {
     readonly url?: string | null;
   } | null;
@@ -139,7 +139,7 @@ interface WireInstallation {
   readonly updated_at?: string;
 }
 
-interface WireDeploymentOutput {
+interface WireInstallationOutput {
   readonly name?: string;
   readonly kind?: string;
   readonly value?: unknown;
@@ -190,8 +190,8 @@ function deserializeInstallation(
     mode: r.mode,
     status: r.status,
     launchUrl: r.launch_url ?? r.launch?.url ?? undefined,
-    deploymentOutputs: deserializeDeploymentOutputs(
-      r.deployment_outputs ?? r.deploymentOutputs,
+    installationOutputs: deserializeInstallationOutputs(
+      r.deployment_outputs ?? r.installationOutputs,
     ),
     createdBySubject: r.created_by_subject,
     createdAt: r.created_at,
@@ -199,9 +199,9 @@ function deserializeInstallation(
   };
 }
 
-function deserializeDeploymentOutputs(
-  raw: readonly WireDeploymentOutput[] | undefined,
-): readonly DeploymentOutput[] {
+function deserializeInstallationOutputs(
+  raw: readonly WireInstallationOutput[] | undefined,
+): readonly InstallationOutput[] {
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((output) => {
     if (
@@ -211,13 +211,15 @@ function deserializeDeploymentOutputs(
     ) {
       return [];
     }
-    return [{
-      name: output.name,
-      kind: output.kind,
-      value: output.value,
-      sensitive: false,
-      ...(output.labels ? { labels: output.labels } : {}),
-    }];
+    return [
+      {
+        name: output.name,
+        kind: output.kind,
+        value: output.value,
+        sensitive: false,
+        ...(output.labels ? { labels: output.labels } : {}),
+      },
+    ];
   });
 }
 
@@ -349,19 +351,19 @@ export async function rotateInstallationServiceToken(
   };
 }
 
-export interface InstallationPlanRunInput {
+export interface InstallationPlanInput {
   readonly gitUrl: string;
   readonly ref: string;
   readonly spaceId: string;
 }
 
-/** Deploy Control PlanRun shape is provider-controlled; treat as opaque JSON for display. */
-export type InstallationPlanRunResponse = Record<string, unknown>;
+/** Deploy Control plan response is provider-controlled; treat it as opaque JSON for display. */
+export type InstallationPlanResponse = Record<string, unknown>;
 
 export async function planInstallation(
-  input: InstallationPlanRunInput,
-): Promise<InstallationPlanRunResponse> {
-  return await apiFetch<InstallationPlanRunResponse>(
+  input: InstallationPlanInput,
+): Promise<InstallationPlanResponse> {
+  return await apiFetch<InstallationPlanResponse>(
     paths.INSTALLATION_PLAN_RUNS,
     {
       method: "POST",
@@ -418,9 +420,8 @@ export async function materializeInstallation(
   id: string,
   input: MaterializeInput,
 ): Promise<Installation> {
-  const region = input.region && input.region.length > 0
-    ? input.region
-    : "default";
+  const region =
+    input.region && input.region.length > 0 ? input.region : "default";
   const mode = "dedicated";
   const plan: Record<string, unknown> = {};
   const cutover: Record<string, unknown> = {};

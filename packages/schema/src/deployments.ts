@@ -1,11 +1,9 @@
 /**
- * Deployment + StateSnapshot contract (Core Specification §20 / §21 / §27
- * `deployments` / `state_snapshots`).
+ * Deployment + StateSnapshot contract (`deployments` / `state_snapshots`).
  *
- * NOTE (model migration): these are the Space-direct shapes of the 2026-06-06
- * spec. The legacy shapes in deploy-control-api.ts (App/Environment keyed)
- * remain until the lanes model is deleted; import these via the
- * `takosumi-contract/deployments` subpath until index.ts flips over.
+ * These are the OpenTofu Capsule DAG shapes: a successful apply records one
+ * Deployment, one StateSnapshot generation, and the OutputSnapshot produced by
+ * `tofu output -json`.
  */
 
 export type DeploymentStatus =
@@ -15,12 +13,7 @@ export type DeploymentStatus =
   | "destroyed";
 
 /**
- * Successful apply record (spec §21). Immutable once written.
- *
- * `sourceSnapshotId` and `outputSnapshotId` are spec-required (§27 NOT NULL);
- * they are optional here only while the raw plan path (no snapshot pin) and
- * the OutputSnapshot milestone (M7) are pending — tracked as divergences in
- * core-conformance.md.
+ * Successful apply record. Immutable once written.
  */
 export interface Deployment {
   readonly id: string;
@@ -28,17 +21,17 @@ export interface Deployment {
   readonly installationId: string;
   readonly environment: string;
   readonly applyRunId: string;
-  readonly sourceSnapshotId?: string;
+  readonly sourceSnapshotId: string;
   readonly dependencySnapshotId?: string;
   readonly stateGeneration: number;
-  readonly outputSnapshotId?: string;
+  readonly outputSnapshotId: string;
   readonly outputsPublic: Readonly<Record<string, unknown>>;
   readonly status: DeploymentStatus;
   readonly createdAt: string;
 }
 
 /**
- * One tfstate generation (spec §20). The encrypted object lives in R2_STATE
+ * One tfstate generation. The encrypted object lives in R2_STATE
  * under `spaces/{spaceId}/installations/{installationId}/envs/{environment}/
  * states/{generation(8 digits)}.tfstate.enc` with an atomic `current.json`.
  * UNIQUE(installation_id, environment, generation) is the generation guard.

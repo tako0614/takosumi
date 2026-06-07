@@ -10,8 +10,8 @@ export interface UseCase {
 export const USE_CASES: readonly UseCase[] = [
   { role: "Web サービス / API", poweredBy: "OpenTofu module → Installation" },
   { role: "Database / state", poweredBy: "provider + state backend" },
-  { role: "Object store / files", poweredBy: "provider → DeploymentOutput" },
-  { role: "Worker / cron", poweredBy: "OpenTofu module → ApplyRun" },
+  { role: "Object store / files", poweredBy: "provider -> OutputSnapshot" },
+  { role: "Worker / cron", poweredBy: "OpenTofu module -> Run(apply)" },
   { role: "静的サイト / docs", poweredBy: "OpenTofu module → Deployment" },
   { role: "AI agent runtime", poweredBy: "OpenTofu module" },
   { role: "あなたの module", poweredBy: "Git URL を渡すだけ" },

@@ -5,8 +5,7 @@
 > (source / build / plan / apply / destroy) を起点に、 原因切り分け → 暫定復旧 →
 > 恒久対策の順に確認する。
 
-正本 model は [`../core-spec.md`](../core-spec.md) (§19 Run / §22 Runner
-architecture / §32 Security invariants)。 Run の確認は dashboard の Activity か
+正本 model は [`../core-spec.md`](../core-spec.md)。 Run の確認は dashboard の Activity か
 `GET /api/runs/:runId` / `GET /api/runs/:runId/logs` を使う。
 
 ## 早見表
@@ -40,7 +39,7 @@ architecture / §32 Security invariants)。 Run の確認は dashboard の Activ
 ## エスカレーション
 
 - state / secret 関連の異常 (生成不一致、 復号失敗) は
-  [secret-rotation.md](secret-rotation.md) と
+  [secret-rotation-policy.md](secret-rotation-policy.md) と
   [disaster-recovery.md](disaster-recovery.md) に従う。
 - platform worker 全体の障害は [incident-response.md](incident-response.md)。
 
@@ -49,4 +48,4 @@ architecture / §32 Security invariants)。 Run の確認は dashboard の Activ
 - [Core Specification](../core-spec.md)
 - [Incident Response](incident-response.md)
 - [Rollback SOP](rollback-sop.md)
-- [Secret Rotation](secret-rotation.md)
+- [Secret Rotation Policy](secret-rotation-policy.md)

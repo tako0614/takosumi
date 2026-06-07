@@ -12,7 +12,7 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly R2_SOURCE?: R2Bucket;
   /** OpenTofu state bucket (`takosumi-state`). Used from M2. */
   readonly R2_STATE?: R2Bucket;
-  /** Backup/export bucket (`takosumi-backups`, core-spec.md §26). Post-MVP. */
+  /** Backup/export bucket (`takosumi-backups`, core-spec.md §26 / §33). */
   readonly R2_BACKUPS?: R2Bucket;
   readonly TAKOS_QUEUE?: Queue<unknown>;
   readonly RUN_QUEUE?: Queue<OpenTofuRunQueueMessage>;
@@ -32,13 +32,19 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * `"cloudflare-default"`.
    */
   readonly TAKOSUMI_ENABLED_RUNNER_PROFILES?: string;
+  readonly TAKOSUMI_PRODUCTION_HARDENING_GATE?: string;
+  readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST?: string;
 }
 
 export type OpenTofuRunAction =
   | "plan"
   | "apply"
   | "destroy"
-  | "source_sync";
+  | "source_sync"
+  | "compatibility_check";
 
 /**
  * Run-dispatch message on `RUN_QUEUE`. The producer (the

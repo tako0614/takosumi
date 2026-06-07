@@ -37,6 +37,7 @@ function makeApp(options: { fetch?: typeof fetch } = {}) {
 const CF_PATH = "/api/connections/cloudflare/token";
 const HTTPS_PATH = "/api/connections/source/https-token";
 const SSH_PATH = "/api/connections/source/ssh-key";
+const AWS_PATH = "/api/connections/aws/assume-role";
 
 const HEADERS = {
   authorization: "Bearer scoped-token",
@@ -161,15 +162,61 @@ test("POST /api/connections/source/ssh-key with knownHosts returns 201", async (
   expect(JSON.parse(text).connection.kind).toBe("source_git_ssh_key");
 });
 
-test("POST /api/connections/aws/assume-role returns 501 not_implemented", async () => {
+test("POST /api/connections/aws/assume-role requires a role ARN hint (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/api/connections/aws/assume-role", {
+  const response = await app.request(AWS_PATH, {
     method: "POST",
     headers: HEADERS,
-    body: JSON.stringify({ spaceId: "space_1", values: {} }),
+    body: JSON.stringify({
+      spaceId: "space_1",
+      values: {
+        AWS_ACCESS_KEY_ID: "akid",
+        AWS_SECRET_ACCESS_KEY: "aws-secret",
+      },
+    }),
   });
-  expect(response.status).toBe(501);
-  expect((await response.json()).error.code).toBe("not_implemented");
+  expect(response.status).toBe(400);
+  const payload = await response.json();
+  expect(payload.error.code).toBe("invalid_argument");
+  expect(payload.error.message).toContain("awsRoleArn");
+});
+
+test("POST /api/connections/aws/assume-role returns 201 and never echoes values", async () => {
+  const app = await makeApp();
+  const response = await app.request(AWS_PATH, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      spaceId: "space_1",
+      displayName: "prod aws",
+      scopeHints: {
+        awsRoleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
+        awsExternalId: "space_1",
+        awsRegion: "us-east-1",
+      },
+      values: {
+        AWS_ACCESS_KEY_ID: "akid",
+        AWS_SECRET_ACCESS_KEY: "aws-secret",
+      },
+    }),
+  });
+  expect(response.status).toBe(201);
+  const text = await response.text();
+  expect(text).not.toContain("aws-secret");
+  const payload = JSON.parse(text);
+  expect(payload.connection.provider).toBe("aws");
+  expect(payload.connection.kind).toBe("provider");
+  expect(payload.connection.authMethod).toBe("static_secret");
+  expect(payload.connection.scopeHints.awsRoleArn).toBe(
+    "arn:aws:iam::123456789012:role/takosumi-prod",
+  );
+  expect(payload.connection.envNames).toEqual([
+    "AWS_ACCESS_KEY_ID",
+    "AWS_REGION",
+    "AWS_ROLE_ARN",
+    "AWS_SECRET_ACCESS_KEY",
+  ]);
+  expect(payload.connection.values).toBeUndefined();
 });
 
 test("GET /api/connections lists connections without secret values", async () => {

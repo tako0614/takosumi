@@ -15,18 +15,17 @@ import type {
   ProviderSupportReport,
   TrustRecord,
 } from "../../../domains/registry/types.ts";
-import { immutable, packageKey } from "./helpers.ts";
+import { filterValues, getFrom, packageKey, putValue } from "./helpers.ts";
 
 export class MemoryPackageDescriptorStore implements PackageDescriptorStore {
   constructor(private readonly descriptors: Map<string, PackageDescriptor>) {}
 
   put(descriptor: PackageDescriptor): Promise<PackageDescriptor> {
-    const value = immutable(descriptor);
-    this.descriptors.set(
+    return putValue(
+      this.descriptors,
       packageKey(descriptor.kind, descriptor.ref, descriptor.digest),
-      value,
+      descriptor,
     );
-    return Promise.resolve(value);
   }
 
   get(
@@ -34,17 +33,16 @@ export class MemoryPackageDescriptorStore implements PackageDescriptorStore {
     ref: string,
     digest: string,
   ): Promise<PackageDescriptor | undefined> {
-    return Promise.resolve(this.descriptors.get(packageKey(kind, ref, digest)));
+    return getFrom(this.descriptors, packageKey(kind, ref, digest));
   }
 
   listByRef(
     kind: PackageKind,
     ref: string,
   ): Promise<readonly PackageDescriptor[]> {
-    return Promise.resolve(
-      [...this.descriptors.values()].filter((descriptor) =>
-        descriptor.kind === kind && descriptor.ref === ref
-      ),
+    return filterValues(
+      this.descriptors,
+      (descriptor) => descriptor.kind === kind && descriptor.ref === ref,
     );
   }
 }
@@ -53,12 +51,11 @@ export class MemoryPackageResolutionStore implements PackageResolutionStore {
   constructor(private readonly resolutions: Map<string, PackageResolution>) {}
 
   record(resolution: PackageResolution): Promise<PackageResolution> {
-    const value = immutable(resolution);
-    this.resolutions.set(
+    return putValue(
+      this.resolutions,
       packageKey(resolution.kind, resolution.ref, resolution.digest),
-      value,
+      resolution,
     );
-    return Promise.resolve(value);
   }
 
   get(
@@ -66,17 +63,16 @@ export class MemoryPackageResolutionStore implements PackageResolutionStore {
     ref: string,
     digest: string,
   ): Promise<PackageResolution | undefined> {
-    return Promise.resolve(this.resolutions.get(packageKey(kind, ref, digest)));
+    return getFrom(this.resolutions, packageKey(kind, ref, digest));
   }
 
   listByRef(
     kind: PackageKind,
     ref: string,
   ): Promise<readonly PackageResolution[]> {
-    return Promise.resolve(
-      [...this.resolutions.values()].filter((resolution) =>
-        resolution.kind === kind && resolution.ref === ref
-      ),
+    return filterValues(
+      this.resolutions,
+      (resolution) => resolution.kind === kind && resolution.ref === ref,
     );
   }
 }
@@ -85,13 +81,11 @@ export class MemoryTrustRecordStore implements TrustRecordStore {
   constructor(private readonly records: Map<string, TrustRecord>) {}
 
   put(record: TrustRecord): Promise<TrustRecord> {
-    const value = immutable(record);
-    this.records.set(record.id, value);
-    return Promise.resolve(value);
+    return putValue(this.records, record.id, record);
   }
 
   get(id: string): Promise<TrustRecord | undefined> {
-    return Promise.resolve(this.records.get(id));
+    return getFrom(this.records, id);
   }
 
   findForPackage(

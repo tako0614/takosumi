@@ -13,7 +13,7 @@ const NAV_LINKS: readonly NavLink[] = [
   { href: "#ecosystem", label: "Ecosystem" },
   { href: "#showcase", label: "How" },
   { href: "/docs/", label: "Docs", rel: "external" },
-  { href: "https://accounts.takosumi.com/", label: "Cloud", rel: "noopener" },
+  { href: "https://app.takosumi.com/", label: "Cloud", rel: "noopener" },
 ];
 
 export default function Nav() {
@@ -31,7 +31,9 @@ export default function Nav() {
 
   return (
     <header class="nav" classList={{ "is-scrolled": scrolled() }}>
-      <a class="skip-link" href="#main">本文へスキップ</a>
+      <a class="skip-link" href="#main">
+        本文へスキップ
+      </a>
       <div class="nav-inner container">
         <Wordmark variant="geometric" />
         <nav class="nav-links" aria-label="Primary">
@@ -56,7 +58,7 @@ export default function Nav() {
           </a>
           <a
             class="btn btn-primary nav-cta"
-            href="https://accounts.takosumi.com/signup"
+            href="https://app.takosumi.com/signup"
             rel="noopener"
           >
             新規登録

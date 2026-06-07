@@ -680,6 +680,220 @@ test("runner profile policy blocks required providers without credential refs", 
   expect(planRun.policy.reasons.join("\n")).toContain("credential reference");
 });
 
+test("InstallConfig provider allowlist blocks after RunnerProfile admits provider", async () => {
+  const profile: RunnerProfile = {
+    id: "aws-admitting",
+    name: "AWS admitting",
+    substrate: "cloudflare-containers",
+    stateBackend: {
+      kind: "operator-managed",
+      ref: "state://aws-admitting",
+    },
+    allowedProviders: ["registry.opentofu.org/hashicorp/aws"],
+    createdAt: 1,
+  };
+  const { store, request } = await seedUpdatableInstallation({
+    requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
+    runnerProfileId: profile.id,
+  });
+  const seeded = await store.getInstallation(request.installationId!);
+  const installConfig = await store.getInstallConfig(seeded!.installConfigId);
+  await store.putInstallConfig({
+    ...installConfig!,
+    policy: {
+      ...installConfig!.policy,
+      allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    },
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    now: sequenceNow(37),
+    newId: deterministicIds(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: testPlanArtifact("install-config-provider"),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
+        }),
+      apply: () => Promise.resolve({}),
+    },
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createPlanRun(request);
+
+  expect(planRun.status).toEqual("blocked");
+  expect(planRun.policy.reasons.join("\n")).toContain(
+    "registry.opentofu.org/hashicorp/aws is not allowed by policy",
+  );
+});
+
+test("plan policy blocks strict Cloudflare scope when plan metadata is missing", async () => {
+  const { store, request } = await seedUpdatableInstallation({
+    store: new InMemoryOpenTofuDeploymentStore(),
+  });
+  const seeded = await store.getInstallation(request.installationId!);
+  const installConfig = await store.getInstallConfig(seeded!.installConfigId);
+  await store.putInstallConfig({
+    ...installConfig!,
+    policy: {
+      ...installConfig!.policy,
+      allowedResourceTypes: ["cloudflare_r2_bucket"],
+      scopeBoundary: {
+        mode: "strict",
+        cloudflare: { accountIds: ["acct_allowed"] },
+      },
+    },
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    now: sequenceNow(41),
+    newId: deterministicIds(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: testPlanArtifact("strict-scope"),
+          providerLockDigest: LOCK_DIGEST,
+          planResourceChanges: [
+            {
+              address: "cloudflare_r2_bucket.files",
+              type: "cloudflare_r2_bucket",
+              actions: ["create"],
+            },
+          ],
+        }),
+      apply: () => Promise.resolve({}),
+    },
+  });
+
+  const { planRun } = await controller.createPlanRun(request);
+
+  expect(planRun.status).toEqual("blocked");
+  expect(planRun.policy.status).toEqual("blocked");
+  expect(planRun.policy.reasons.join("\n")).toContain(
+    "missing Cloudflare account metadata",
+  );
+});
+
+test("plan policy admits matching scope metadata and blocks quota overflow", async () => {
+  const { store, request } = await seedUpdatableInstallation();
+  const seeded = await store.getInstallation(request.installationId!);
+  const installConfig = await store.getInstallConfig(seeded!.installConfigId);
+  await store.putInstallConfig({
+    ...installConfig!,
+    policy: {
+      ...installConfig!.policy,
+      allowedResourceTypes: ["cloudflare_r2_bucket"],
+      scopeBoundary: {
+        mode: "strict",
+        cloudflare: { accountIds: ["acct_allowed"] },
+      },
+      quota: { "resources.total": 1 },
+    },
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    now: sequenceNow(42),
+    newId: deterministicIds(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: testPlanArtifact("quota"),
+          providerLockDigest: LOCK_DIGEST,
+          planResourceChanges: [
+            {
+              address: "cloudflare_r2_bucket.files_a",
+              type: "cloudflare_r2_bucket",
+              actions: ["create"],
+              scope: { cloudflareAccountId: "acct_allowed" },
+            },
+            {
+              address: "cloudflare_r2_bucket.files_b",
+              type: "cloudflare_r2_bucket",
+              actions: ["create"],
+              scope: { cloudflareAccountId: "acct_allowed" },
+            },
+          ],
+        }),
+      apply: () => Promise.resolve({}),
+    },
+  });
+
+  const { planRun } = await controller.createPlanRun(request);
+
+  expect(planRun.status).toEqual("blocked");
+  expect(planRun.policy.reasons.join("\n")).not.toContain("out of scope");
+  expect(planRun.policy.reasons.join("\n")).toContain(
+    "resources.total count 2 exceeds 1",
+  );
+});
+
+test("plan policy composes Space policy ceiling with InstallConfig policy", async () => {
+  const { store, request } = await seedUpdatableInstallation();
+  const space = await store.getSpace(request.spaceId);
+  await store.putSpace({
+    ...space!,
+    policy: {
+      allowedResourceTypes: ["cloudflare_r2_bucket"],
+      quota: { "resources.total": 1 },
+    },
+  });
+  const seeded = await store.getInstallation(request.installationId!);
+  const installConfig = await store.getInstallConfig(seeded!.installConfigId);
+  await store.putInstallConfig({
+    ...installConfig!,
+    policy: {
+      ...installConfig!.policy,
+      allowedResourceTypes: [
+        "cloudflare_r2_bucket",
+        "cloudflare_workers_script",
+      ],
+      quota: { "resources.total": 5 },
+    },
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    now: sequenceNow(43),
+    newId: deterministicIds(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: testPlanArtifact("space-policy"),
+          providerLockDigest: LOCK_DIGEST,
+          planResourceChanges: [
+            {
+              address: "cloudflare_r2_bucket.files",
+              type: "cloudflare_r2_bucket",
+              actions: ["create"],
+            },
+            {
+              address: "cloudflare_workers_script.app",
+              type: "cloudflare_workers_script",
+              actions: ["create"],
+            },
+          ],
+        }),
+      apply: () => Promise.resolve({}),
+    },
+  });
+
+  const { planRun } = await controller.createPlanRun(request);
+
+  expect(planRun.status).toEqual("blocked");
+  expect(planRun.policy.reasons.join("\n")).toContain(
+    "cloudflare_workers_script is not allowed",
+  );
+  expect(planRun.policy.reasons.join("\n")).toContain(
+    "resources.total count 2 exceeds 1",
+  );
+});
+
 test("default Cloudflare runner keeps Workers for Platforms separate from OpenTofu secrets", () => {
   const cloudflare = createDefaultRunnerProfiles(123).find((profile) =>
     profile.id === "cloudflare-default"

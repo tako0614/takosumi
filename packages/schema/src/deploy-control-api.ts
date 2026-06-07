@@ -11,11 +11,11 @@ import type { Installation } from "./installations.ts";
 import type { Deployment } from "./deployments.ts";
 
 // ---------------------------------------------------------------------------
-// INTERNAL deploy-control seam paths (spec §30 binding: NOT part of the public
+// INTERNAL deploy-control seam paths (NOT part of the public
 // `/api` vocabulary). These `/v1/*` routes are the in-process fetch seam the
 // accounts plane + CLI consume (PlanRun / ApplyRun / RunnerProfile ledgers and
 // the Installation read + its deployments / deployment-outputs reads). They are
-// deliberately kept at `/v1` after the §30 `/api` cutover; do NOT move them and
+// deliberately kept at `/v1` after the public `/api` cutover; do NOT move them and
 // do NOT add `/v1` aliases for the moved public routes.
 // ---------------------------------------------------------------------------
 
@@ -41,10 +41,7 @@ export interface GitOpenTofuModuleSource {
   readonly url: string;
   readonly ref?: string;
   readonly commit?: string;
-  /**
-   * Path to the OpenTofu root module inside the repository. Omitted means repo
-   * root.
-   */
+  /** Compatibility alias for the Capsule path inside the repository. */
   readonly modulePath?: string;
 }
 
@@ -71,10 +68,7 @@ export type OpenTofuModuleSource =
 
 export type OpenTofuOperation = "create" | "update" | "destroy";
 
-export type RunnerSubstrate =
-  | "cloudflare-containers"
-  | "local"
-  | "external";
+export type RunnerSubstrate = "cloudflare-containers" | "local" | "external";
 
 export interface RunnerStateLockPolicy {
   readonly kind: "native" | "operator" | "none" | string;
@@ -104,7 +98,11 @@ export interface RunnerResourceLimits {
 }
 
 export interface RunnerNetworkPolicy {
-  readonly mode: "default-deny" | "egress-allowlist" | "operator-managed" | string;
+  readonly mode:
+    | "default-deny"
+    | "egress-allowlist"
+    | "operator-managed"
+    | string;
   readonly allowedHosts?: readonly string[];
   readonly allowedHostPatterns?: readonly string[];
 }
@@ -133,11 +131,7 @@ export interface CloudflareOutboundWorkerPolicy {
 }
 
 export interface CloudflareUserWorkerBindingPolicy {
-  readonly mode:
-    | "none"
-    | "tenant-scoped-only"
-    | "operator-managed"
-    | string;
+  readonly mode: "none" | "tenant-scoped-only" | "operator-managed" | string;
   readonly allowedBindingKinds?: readonly string[];
 }
 
@@ -252,7 +246,7 @@ export interface PlanRun {
    */
   readonly templateBinding?: PlanRunTemplateBinding;
   /**
-   * Set once the plan completes and the §25 layer-7 action policy evaluated the
+   * Set once the plan completes and action policy evaluated the
    * runner's `planResourceChanges`: `true` when any change is a delete or a
    * replace (`actions` containing `"delete"`), which requires an explicit
    * approval before apply. Independent of `templateBinding.requiresConfirmation`
@@ -272,46 +266,47 @@ export interface PlanRun {
   /**
    * Resolved SourceSnapshot this plan was created against. Set for runs created
    * through the Installation plan/destroy-plan path. The apply consumer
-   * revalidates the ApplyRun's plan still references this snapshot (spec
-   * invariant 8) and threads the snapshot's archive into the dispatch.
+   * revalidates the ApplyRun's plan still references this snapshot and threads
+   * the snapshot's archive into the dispatch.
    */
   readonly sourceSnapshotId?: string;
   /**
-   * Installation context this plan was created against (spec §5: one
-   * Installation = one OpenTofu root/state, with `environment` as a column).
+   * Installation context this plan was created against (one Installation =
+   * Capsule + generated root + tfstate + outputs, with `environment` as a
+   * column).
    * Used by the queue consumer to attach the `stateScope` / `sourceArchive`
    * dispatch fields and by the unified Run projection. Never carries secret
    * material.
    */
   readonly installationContext?: PlanRunInstallationContext;
   /**
-   * Pinned DependencySnapshot id (spec §17) for an installation-driven plan whose
+   * Pinned DependencySnapshot id for an installation-driven plan whose
    * consumer Installation declares Dependencies. Set at plan creation by the
    * installation plan path; the apply consumer re-reads the snapshot to verify
    * the producer state generations / pinned values before applying (invariant 9)
    * and the successful Deployment carries it forward. Absent for plans whose
    * consumer has no dependencies (or for the raw `/v1/plan-runs` path). Projected
-   * onto the §19 Run `dependencySnapshotId`.
+   * onto the public Run `dependencySnapshotId`.
    */
   readonly dependencySnapshotId?: string;
   /**
-   * RunGroup this plan belongs to (spec §19 / §24). Set when the plan was
+   * RunGroup this plan belongs to. Set when the plan was
    * created as a member of a Space-update RunGroup (`POST /api/spaces/:id/
-   * plan-update`); the apply that follows carries it onto the §19 Run so the
+   * plan-update`); the apply that follows carries it onto the public Run so the
    * group status can be computed from its member runs. Absent for standalone
-   * plans. Projected onto the §19 Run `runGroupId`.
+   * plans. Projected onto the public Run `runGroupId`.
    */
   readonly runGroupId?: string;
   /**
-   * Set when this plan is a §19 `drift_check`: an internal read-only plan that
+   * Set when this plan is a `drift_check`: an internal read-only plan that
    * detects whether the live state has drifted from the recorded configuration.
    * A drift-check plan NEVER parks `waiting_approval` and can NEVER be applied
    * (`createApplyRun` rejects it with `failed_precondition`); on completion with
    * a non-empty change summary the controller emits an
    * `installation.drift_detected` Activity event (counts only — no installation
-   * status change; the spec has no `drifted` status). The §19 Run projection
+   * status change; the public model has no `drifted` status). The Run projection
    * maps a drift-check PlanRun to `type: "drift_check"`. Absent for every other
-   * plan. (Spec §19 run type / Phase 8 — MVP 外 per core-conformance.)
+   * plan.
    */
   readonly driftCheck?: true;
 }
@@ -320,8 +315,8 @@ export interface PlanRun {
  * Installation context recorded on a PlanRun. Locates the run's Installation +
  * environment within its Space so the queue consumer can build the
  * `stateScope` dispatch field (`{ spaceId, installationId, environment,
- * generation }`) the DO consumes to persist encrypted state at the spec §20
- * R2_STATE keys.
+ * generation }`) the DO consumes to persist encrypted state at the R2_STATE
+ * keys.
  */
 export interface PlanRunInstallationContext {
   readonly spaceId: string;
@@ -418,8 +413,8 @@ export interface ApplyExpectedGuard {
   readonly providerLockDigest?: string;
 }
 
-// Installation / InstallConfig (spec §5 / §11) live in ./installations.ts and
-// Deployment / StateSnapshot (spec §20 / §21) in ./deployments.ts; both are
+// Installation / InstallConfig live in ./installations.ts and
+// Deployment / StateSnapshot in ./deployments.ts; both are
 // re-exported below so existing imports through this module keep resolving.
 export type {
   DeploymentProfile,
@@ -604,7 +599,7 @@ export interface DispatchBuildSpec {
 /**
  * Installation-scoped state location threaded onto the run dispatch payload.
  * The OpenTofu runner DO consumes `request.stateScope` to persist OpenTofu state
- * encrypted to R2_STATE at the spec §20 keys
+ * encrypted to the canonical R2_STATE keys
  * (`spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/
  * {NNNNNNNN}.tfstate.enc` + `current.json`). The controller owns the generation
  * arithmetic: a plan dispatch carries the CURRENT generation (restore base); an
@@ -633,7 +628,7 @@ export interface DispatchSourceArchive {
 
 /**
  * Remote-state dependency descriptor threaded onto a plan/apply run dispatch
- * (spec §15 `remote_state`). For each `remote_state` Dependency edge the
+ * using the `remote_state` Dependency mode. For each `remote_state` edge the
  * controller resolves the producer Installation's LATEST StateSnapshot and emits
  * one entry; the OpenTofu runner DO fetches + decrypts the producer state (the
  * same StateArtifactCrypto path as its own state restore), verifies the recorded
@@ -659,7 +654,7 @@ export interface DispatchDepState {
   readonly digest: string;
 }
 
-// StateSnapshot (spec §20) lives in ./deployments.ts and is re-exported below.
+// StateSnapshot lives in ./deployments.ts and is re-exported below.
 
 /**
  * One resource change line projected from `tofu show -json tfplan`
@@ -670,6 +665,16 @@ export interface PlanResourceChange {
   readonly address: string;
   readonly type: string;
   readonly actions: readonly string[];
+  /**
+   * Sanitized non-secret provider scope metadata extracted from plan JSON when
+   * available. Raw resource values are never persisted on the run.
+   */
+  readonly scope?: {
+    readonly cloudflareAccountId?: string;
+    readonly cloudflareZoneId?: string;
+    readonly awsAccountId?: string;
+    readonly awsRegion?: string;
+  };
 }
 
 export interface PlanRunResponse {
@@ -715,32 +720,34 @@ export interface ListDeploymentOutputsResponse {
 // Takosumi. The secret values are NEVER part of the public Connection type:
 // they are write-only on the `POST /api/connections/...` creation subroutes and
 // are sealed into a separate secret blob by the in-process Vault broker. Phase 1
-// supports the
-// `static_secret` authMethod for the `cloudflare` provider end-to-end; the
-// type unions anticipate `aws_assume_role` / `github_app_installation` later.
+// supports sealed static provider credentials end-to-end. The AWS assume-role
+// route registers an AWS provider Connection with assume-role metadata in
+// `scopeHints`; when static AWS source credentials are sealed on that
+// Connection, the Vault vends short-lived STS credentials for tofu phases. The
+// type union keeps future non-static methods visible for exhaustive consumers.
 // ---------------------------------------------------------------------------
 
-// Public §30 Connections surface (`/api`, no version prefix). Connection
+// Public Connections surface (`/api`, no version prefix). Connection
 // creation is split into kind-specific subroutes (thin validated wrappers over
 // the generic createConnection); the base path is the operator/space listing.
 export const CONNECTIONS_PATH = "/api/connections" as const;
-/** §30 source HTTPS-token Connection creation subroute. */
+/** Source HTTPS-token Connection creation subroute. */
 export const CONNECTIONS_SOURCE_HTTPS_TOKEN_PATH =
   "/api/connections/source/https-token" as const;
-/** §30 source SSH-key Connection creation subroute (knownHosts required). */
+/** Source SSH-key Connection creation subroute (knownHosts required). */
 export const CONNECTIONS_SOURCE_SSH_KEY_PATH =
   "/api/connections/source/ssh-key" as const;
-/** §30 Cloudflare API-token Connection creation subroute. */
+/** Cloudflare API-token Connection creation subroute. */
 export const CONNECTIONS_CLOUDFLARE_TOKEN_PATH =
   "/api/connections/cloudflare/token" as const;
-/** §30 AWS assume-role Connection creation subroute (501 not_implemented). */
+/** AWS assume-role Connection creation subroute. */
 export const CONNECTIONS_AWS_ASSUME_ROLE_PATH =
   "/api/connections/aws/assume-role" as const;
 export const CONNECTION_PATH = (id: string): string =>
   `/api/connections/${encodeURIComponent(id)}`;
 export const CONNECTION_TEST_PATH = (id: string): string =>
   `/api/connections/${encodeURIComponent(id)}/test`;
-/** §30 Connection revoke subroute (replaces the former DELETE handler). */
+/** Connection revoke subroute (replaces the former DELETE handler). */
 export const CONNECTION_REVOKE_PATH = (id: string): string =>
   `/api/connections/${encodeURIComponent(id)}/revoke`;
 
@@ -749,15 +756,12 @@ export const CONNECTION_REVOKE_PATH = (id: string): string =>
  * members are reserved so consumers can switch exhaustively ahead of their
  * implementation (Phase 1B+).
  */
-export type ConnectionAuthMethod =
-  | "static_secret"
-  | "aws_assume_role"
-  | "github_app_installation";
+export type ConnectionAuthMethod = "static_secret" | "aws_assume_role";
 
 /**
- * Connection scope (spec §8): `operator` connections are instance-wide (the
+ * Connection scope: `operator` connections are instance-wide (the
  * operator's own resources when self-hosting; the service's when hosted) and
- * back the operator default connections (§9); `space` connections belong to
+ * back the operator default connections; `space` connections belong to
  * one Space and override per capability.
  */
 export type ConnectionScopeKind = "operator" | "space";
@@ -782,6 +786,16 @@ export interface ConnectionScopeHints {
    * `StrictHostKeyChecking=yes` (StrictHostKeyChecking=no is forbidden).
    */
   readonly knownHostsEntry?: string;
+  /**
+   * AWS IAM role ARN associated with an `aws` provider Connection created via
+   * `/api/connections/aws/assume-role`. Non-secret; the vault still seals any
+   * supplied AWS env values separately and never echoes `values`.
+   */
+  readonly awsRoleArn?: string;
+  /** Optional AWS external id label for the role trust policy. Non-secret. */
+  readonly awsExternalId?: string;
+  /** Optional default AWS region hint for generated provider/runtime wiring. */
+  readonly awsRegion?: string;
 }
 
 /**
@@ -792,7 +806,7 @@ export interface ConnectionScopeHints {
  */
 export interface Connection {
   readonly id: string;
-  /** Owning Space. Absent for an `operator`-scoped connection (spec §27). */
+  /** Owning Space. Absent for an `operator`-scoped connection. */
   readonly spaceId?: string;
   /** `cloudflare` short name or a full registry path. */
   readonly provider: string;
@@ -900,7 +914,10 @@ export const DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE = {
   resource_exhausted: 413,
   not_implemented: 501,
   internal_error: 500,
-} as const satisfies Record<DeployControlErrorCode, DeployControlErrorHttpStatus>;
+} as const satisfies Record<
+  DeployControlErrorCode,
+  DeployControlErrorHttpStatus
+>;
 
 export interface DeployControlErrorEnvelope {
   readonly error: {

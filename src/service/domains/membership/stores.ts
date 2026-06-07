@@ -5,15 +5,15 @@ import type {
   AccountId,
   Group,
   GroupSlug,
-  Space,
+  MembershipSpace,
   SpaceId,
   SpaceMembership,
 } from "./types.ts";
 
-export interface SpaceStore {
-  create(space: Space): Promise<Result<Space, DomainError>>;
-  get(spaceId: SpaceId): Promise<Space | undefined>;
-  list(): Promise<readonly Space[]>;
+export interface MembershipSpaceStore {
+  create(space: MembershipSpace): Promise<Result<MembershipSpace, DomainError>>;
+  get(spaceId: SpaceId): Promise<MembershipSpace | undefined>;
+  list(): Promise<readonly MembershipSpace[]>;
 }
 
 export interface GroupStore {
@@ -32,10 +32,12 @@ export interface SpaceMembershipStore {
   listBySpace(spaceId: SpaceId): Promise<readonly SpaceMembership[]>;
 }
 
-export class InMemorySpaceStore implements SpaceStore {
-  readonly #spaces = new Map<SpaceId, Space>();
+export class InMemoryMembershipSpaceStore implements MembershipSpaceStore {
+  readonly #spaces = new Map<SpaceId, MembershipSpace>();
 
-  create(space: Space): Promise<Result<Space, DomainError>> {
+  create(
+    space: MembershipSpace,
+  ): Promise<Result<MembershipSpace, DomainError>> {
     if (this.#spaces.has(space.id)) {
       return Promise.resolve(
         err(conflict("space already exists", { spaceId: space.id })),
@@ -45,11 +47,11 @@ export class InMemorySpaceStore implements SpaceStore {
     return Promise.resolve(ok(space));
   }
 
-  get(spaceId: SpaceId): Promise<Space | undefined> {
+  get(spaceId: SpaceId): Promise<MembershipSpace | undefined> {
     return Promise.resolve(this.#spaces.get(spaceId));
   }
 
-  list(): Promise<readonly Space[]> {
+  list(): Promise<readonly MembershipSpace[]> {
     return Promise.resolve([...this.#spaces.values()]);
   }
 }
@@ -126,10 +128,10 @@ export class InMemorySpaceMembershipStore implements SpaceMembershipStore {
   }
 }
 
-export async function requireSpace(
-  store: SpaceStore,
+export async function requireMembershipSpace(
+  store: MembershipSpaceStore,
   spaceId: SpaceId,
-): Promise<Result<Space, DomainError>> {
+): Promise<Result<MembershipSpace, DomainError>> {
   const space = await store.get(spaceId);
   if (!space) return err(notFound("space not found", { spaceId }));
   return ok(space);

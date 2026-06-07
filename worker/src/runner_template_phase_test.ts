@@ -151,14 +151,21 @@ test("parseBuild requires bun runtime, commands, and a safe artifactPath", () =>
   ).toThrow();
 });
 
-test("resourceChangesFromPlanJson trims to address/type/actions", () => {
+test("resourceChangesFromPlanJson trims values and keeps sanitized scope metadata", () => {
   const planJson = JSON.stringify({
     resource_changes: [
       {
         address: "cloudflare_r2_bucket.this",
         type: "cloudflare_r2_bucket",
         name: "this",
-        change: { actions: ["create"], before: null, after: {} },
+        change: {
+          actions: ["create"],
+          before: null,
+          after: {
+            account_id: "acct_allowed",
+            secret_text: "must-not-leak",
+          },
+        },
       },
       {
         address: "random_id.suffix",
@@ -178,6 +185,7 @@ test("resourceChangesFromPlanJson trims to address/type/actions", () => {
       address: "cloudflare_r2_bucket.this",
       type: "cloudflare_r2_bucket",
       actions: ["create"],
+      scope: { cloudflareAccountId: "acct_allowed" },
     },
     { address: "random_id.suffix", type: "random_id", actions: ["delete", "create"] },
     { address: "random_pet.name", type: "random_pet", actions: ["no-op"] },

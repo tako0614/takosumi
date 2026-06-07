@@ -140,7 +140,7 @@ test("model e2e: create Installation -> list -> 409 on duplicate name+environmen
   expect(installation.spaceId).toBe(spaceId);
   expect(installation.name).toBe("web");
   expect(installation.environment).toBe("production");
-  expect(installation.status).toBe("installing");
+  expect(installation.status).toBe("pending");
   const installationId = installation.id as string;
 
   const listRes = await app.request(`/api/spaces/${spaceId}/installations`, {

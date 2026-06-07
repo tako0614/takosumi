@@ -1,30 +1,33 @@
 # takosumi/deploy — operator deployment profiles
 
-Takosumi ships the OpenTofu-native Deploy Control contract, service entry, CLI,
-and reference operator deployment profiles. The public service surface is
-centered on RunnerProfile, PlanRun, ApplyRun, Installation, Deployment, and
-DeploymentOutput.
+Takosumi ships the OpenTofu-native deploy-control contract, service entry, CLI,
+dashboard/account-plane entry points, and reference operator deployment profiles.
+The public service surface is centered on Space, Source, Connection,
+Installation, Dependency, Run, RunGroup, Deployment, OutputSnapshot, and
+Activity.
 
-The directories under `deploy/` are therefore **reference examples and provider
-runbooks**, not part of the published framework surface and not the canonical operator
-distribution. The canonical reference **composer** that embeds the service app, extends it
-(dashboard / billing / install UI), and serves the one composed app from a single cloud
-URL is `takosumi/deploy/` (`cloudflare/`, `node-postgres/`). New operators should
-clone and adapt `takosumi/deploy/` rather than these examples.
+The directories under `deploy/` are therefore **build-target templates and
+substrate runbooks**, not a separate public product surface. The canonical
+operator target is the single Takosumi platform worker in `deploy/platform/`,
+served from `app.takosumi.com`, which composes the accounts plane, the
+in-process `/api` control plane, the dashboard SPA, and the OpenTofu runner
+container. `deploy/cloudflare/` remains a reference control-plane/runner
+scaffold and internal compatibility seam, not the public `/v1` API model.
 
 ## What lives here
 
 | Directory          | Role                                                                                                                                                                                                                   |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cloudflare/`      | Worker-first service scaffold example: builds the service in-process with `createTakosumiService`, D1 persistence, optional R2 object store. Referenced by the Takos distribution profile and the local-substrate worker runner. |
-| `accounts-cloudflare/` | Account-plane Cloudflare Worker reference distribution (OIDC issuer / billing / dashboard / deploy facade).                                                                                                          |
+| `platform/`        | Operator Takosumi platform worker template: accounts plane + in-process control plane + dashboard SPA + OpenTofu runner container.                                                                                     |
+| `cloudflare/`      | Control-plane/runner scaffold used by platform composition, the Takos distribution profile, and local-substrate worker runner.                                                                                         |
+| `accounts-cloudflare/` | Account-plane handler entry point (OIDC issuer / billing / dashboard / deploy facade), mounted in-process by the platform worker or a self-hosted Takos worker.                                                        |
 | `node-postgres/`   | Bun + Postgres reference composer (`buildComposedServer`) consumed by `local-substrate/`'s cloud profile.                                                                                                               |
 | `local-substrate/` | Local Pebble + CoreDNS + Caddy dev substrate for production-equivalent hostname access.                                                                                                                                |
 | `observability/`   | Reference observability wiring.                                                                                                                                                                                        |
 
 ## Why these stay here
 
-These examples are intentionally **not relocated** into `takosumi/deploy/`:
+These examples are intentionally kept stable:
 
 - The Takos product distribution profile (`takos/deploy/distributions/cloudflare.json`)
   pins the exact artifact refs `../takosumi/deploy/cloudflare` and
@@ -33,5 +36,6 @@ These examples are intentionally **not relocated** into `takosumi/deploy/`:
   worker runner and compose wiring, and composes the account plane through
   `deploy/node-postgres/src/server.ts`.
 
-Moving them would break those cross-submodule references. They remain reference examples;
-production composition and serving belong to `takosumi/deploy/`.
+Moving them would break those cross-submodule references. They remain reference
+scaffolds; production composition and serving belong to `deploy/platform/` plus
+operator-private realized config.

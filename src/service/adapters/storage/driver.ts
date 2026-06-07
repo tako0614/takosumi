@@ -1,9 +1,9 @@
 import type { AuditStore } from "../../domains/audit/store.ts";
 import type {
   GroupStore,
+  MembershipSpaceStore,
   SpaceMembershipStore,
-  SpaceStore,
-} from "../../domains/space/stores.ts";
+} from "../../domains/membership/stores.ts";
 import type {
   BindingSetRevisionStore,
   MigrationLedgerStore,
@@ -45,7 +45,7 @@ export interface StorageTransaction {
 }
 
 export interface SpaceStorageStores {
-  readonly spaces: SpaceStore;
+  readonly spaces: MembershipSpaceStore;
   readonly groups: GroupStore;
   readonly spaceMemberships: SpaceMembershipStore;
 }

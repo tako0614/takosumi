@@ -85,6 +85,34 @@ test("createTakosumiLogger normalizes Error values into fields", () => {
   assert.equal(typeof parsed.error.stack, "string");
 });
 
+test("createTakosumiLogger redacts secret-looking fields and error text", () => {
+  const stderr: string[] = [];
+  const log = createTakosumiLogger({
+    format: "json",
+    stdout: () => {},
+    stderr: (line) => stderr.push(line),
+  });
+
+  const err = new Error(
+    "provider failed with Authorization: Bearer abc.def and password=hunter2",
+  );
+  log.error("takosumi.service.provider.failed", {
+    apiKey: "raw-api-key",
+    databaseUrl: "postgres://user:secret@example/db",
+    nested: { authToken: "raw-token" },
+    error: err,
+  });
+
+  const parsed = JSON.parse(stderr[0]);
+  assert.equal(parsed.apiKey, "[REDACTED]");
+  assert.equal(parsed.databaseUrl, "[REDACTED]");
+  assert.equal(parsed.nested.authToken, "[REDACTED]");
+  assert.equal(
+    parsed.error.message,
+    "provider failed with Authorization: Bearer [REDACTED] and password=[REDACTED]",
+  );
+});
+
 test("createTakosumiLogger format defaults to pretty for local env", () => {
   const stdout: string[] = [];
   const log = createTakosumiLogger({

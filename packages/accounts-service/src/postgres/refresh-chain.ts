@@ -13,15 +13,100 @@
 // The returned arrays carry token-hash identifiers and are intended
 // for diagnostics / test assertions only.
 
+import { eq, lte, or } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/pg-proxy";
+import { pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import {
   hashSecret,
   type PostgresQueryClient,
-  runFirst,
   runQuery,
-  runRows,
   toDate,
 } from "./internal.ts";
 import type { RefreshChainPruneResult } from "../store.ts";
+
+type DrizzleQuery = {
+  toSQL(): { readonly sql: string; readonly params: readonly unknown[] };
+};
+
+const accountsV1 = pgSchema("accounts_v1");
+
+const refreshChainLinks = accountsV1.table("refresh_chain_links", {
+  parentTokenHash: text("parent_token_hash").primaryKey(),
+  childTokenHash: text("child_token_hash").notNull(),
+  rootTokenHash: text("root_token_hash").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+});
+
+const revokedRefreshRoots = accountsV1.table("revoked_refresh_roots", {
+  rootTokenHash: text("root_token_hash").primaryKey(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }).notNull(),
+});
+
+const consumedAuthorizationCodes = accountsV1.table(
+  "consumed_authorization_codes",
+  {
+    codeHash: text("code_hash").primaryKey(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }).notNull(),
+  },
+);
+
+const authCodeTokenLinks = accountsV1.table("auth_code_token_links", {
+  codeHash: text("code_hash").notNull(),
+  accessTokenHash: text("access_token_hash").notNull(),
+  refreshRootHash: text("refresh_root_hash").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+});
+
+const refreshChainAccessTokens = accountsV1.table(
+  "refresh_chain_access_tokens",
+  {
+    rootTokenHash: text("root_token_hash").notNull(),
+    accessTokenHash: text("access_token_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+);
+
+const oauthAccessTokens = accountsV1.table("oauth_access_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+});
+
+const oauthRefreshTokens = accountsV1.table("oauth_refresh_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+});
+
+const db = drizzle(async () => ({ rows: [] }), {
+  schema: {
+    refreshChainLinks,
+    revokedRefreshRoots,
+    consumedAuthorizationCodes,
+    authCodeTokenLinks,
+    refreshChainAccessTokens,
+    oauthAccessTokens,
+    oauthRefreshTokens,
+  },
+});
+
+async function runDrizzle<T = Record<string, unknown>>(
+  client: PostgresQueryClient,
+  query: DrizzleQuery,
+) {
+  const built = query.toSQL();
+  return await runQuery<T>(client, built.sql, built.params);
+}
+
+async function runDrizzleRows<T>(
+  client: PostgresQueryClient,
+  query: DrizzleQuery,
+): Promise<T[]> {
+  return (await runDrizzle<T>(client, query)).rows;
+}
+
+async function runDrizzleFirst<T>(
+  client: PostgresQueryClient,
+  query: DrizzleQuery,
+): Promise<T | undefined> {
+  return (await runDrizzleRows<T>(client, query))[0];
+}
 
 export async function addRefreshChainLink(
   client: PostgresQueryClient,
@@ -33,31 +118,29 @@ export async function addRefreshChainLink(
   // Resolve the root: if the parent token is itself a descendant of an
   // earlier root, copy that root into the child link so traversal stays
   // O(1) per lookup.
-  const existing = await runFirst<{ root_token_hash: string }>(
+  const existing = await runDrizzleFirst<{ root_token_hash: string }>(
     client,
-    `SELECT root_token_hash
-       FROM accounts_v1.refresh_chain_links
-       WHERE child_token_hash = $1`,
-    [parentHash],
+    db
+      .select({ root_token_hash: refreshChainLinks.rootTokenHash })
+      .from(refreshChainLinks)
+      .where(eq(refreshChainLinks.childTokenHash, parentHash)),
   );
   const rootHash = existing?.root_token_hash ?? parentHash;
-  // G6 fix: this is the ATOMIC rotation claim. `parent_token_hash` is the
-  // PRIMARY KEY, so `ON CONFLICT DO NOTHING RETURNING` inserts at most one
-  // link per parent and returns a row ONLY when this statement performed
-  // the insert. A missing row means a link already existed — the parent
-  // token was already rotated (e.g. a concurrent presentation of the same
-  // valid refresh token), so the caller must treat it as reuse rather than
-  // minting a second child family. The previous `DO UPDATE` overwrote the
-  // child link, which let two concurrent rotations both "succeed" and
-  // double-spend the parent.
-  const inserted = await runFirst<{ parent_token_hash: string }>(
+  // This is the ATOMIC rotation claim. `parent_token_hash` is the PRIMARY KEY,
+  // so `ON CONFLICT DO NOTHING RETURNING` inserts at most one link per parent
+  // and returns a row ONLY when this statement performed the insert.
+  const inserted = await runDrizzleFirst<{ parent_token_hash: string }>(
     client,
-    `INSERT INTO accounts_v1.refresh_chain_links (
-        parent_token_hash, child_token_hash, root_token_hash, created_at
-      ) VALUES ($1, $2, $3, $4)
-      ON CONFLICT (parent_token_hash) DO NOTHING
-      RETURNING parent_token_hash`,
-    [parentHash, childHash, rootHash, toDate(Date.now())],
+    db
+      .insert(refreshChainLinks)
+      .values({
+        parentTokenHash: parentHash,
+        childTokenHash: childHash,
+        rootTokenHash: rootHash,
+        createdAt: toDate(Date.now()),
+      })
+      .onConflictDoNothing({ target: refreshChainLinks.parentTokenHash })
+      .returning({ parent_token_hash: refreshChainLinks.parentTokenHash }),
   );
   return inserted !== undefined;
 }
@@ -67,12 +150,12 @@ export async function getRefreshChainChild(
   token: string,
 ): Promise<string | undefined> {
   const hash = await hashSecret(token);
-  const row = await runFirst<{ child_token_hash: string }>(
+  const row = await runDrizzleFirst<{ child_token_hash: string }>(
     client,
-    `SELECT child_token_hash
-       FROM accounts_v1.refresh_chain_links
-       WHERE parent_token_hash = $1`,
-    [hash],
+    db
+      .select({ child_token_hash: refreshChainLinks.childTokenHash })
+      .from(refreshChainLinks)
+      .where(eq(refreshChainLinks.parentTokenHash, hash)),
   );
   // Return the child hash. The caller uses this as a presence signal
   // only — it does NOT present the hash back to the token endpoint.
@@ -83,13 +166,18 @@ async function resolveRootHash(
   client: PostgresQueryClient,
   presentedHash: string,
 ): Promise<string> {
-  const rootRow = await runFirst<{ root_token_hash: string }>(
+  const rootRow = await runDrizzleFirst<{ root_token_hash: string }>(
     client,
-    `SELECT root_token_hash
-       FROM accounts_v1.refresh_chain_links
-       WHERE parent_token_hash = $1 OR child_token_hash = $1
-       LIMIT 1`,
-    [presentedHash],
+    db
+      .select({ root_token_hash: refreshChainLinks.rootTokenHash })
+      .from(refreshChainLinks)
+      .where(
+        or(
+          eq(refreshChainLinks.parentTokenHash, presentedHash),
+          eq(refreshChainLinks.childTokenHash, presentedHash),
+        ),
+      )
+      .limit(1),
   );
   return rootRow?.root_token_hash ?? presentedHash;
 }
@@ -98,15 +186,18 @@ async function chainRefreshHashes(
   client: PostgresQueryClient,
   rootHash: string,
 ): Promise<readonly string[]> {
-  const rows = await runRows<{
+  const rows = await runDrizzleRows<{
     parent_token_hash: string;
     child_token_hash: string;
   }>(
     client,
-    `SELECT parent_token_hash, child_token_hash
-       FROM accounts_v1.refresh_chain_links
-       WHERE root_token_hash = $1`,
-    [rootHash],
+    db
+      .select({
+        parent_token_hash: refreshChainLinks.parentTokenHash,
+        child_token_hash: refreshChainLinks.childTokenHash,
+      })
+      .from(refreshChainLinks)
+      .where(eq(refreshChainLinks.rootTokenHash, rootHash)),
   );
   const hashes = new Set<string>();
   hashes.add(rootHash);
@@ -123,26 +214,15 @@ export async function revokeRefreshChain(
 ): Promise<readonly string[]> {
   const presentedHash = await hashSecret(rootToken);
   const rootHash = await resolveRootHash(client, presentedHash);
-  await runQuery(
-    client,
-    `INSERT INTO accounts_v1.revoked_refresh_roots (root_token_hash, revoked_at)
-        VALUES ($1, $2)
-        ON CONFLICT (root_token_hash) DO NOTHING`,
-    [rootHash, toDate(Date.now())],
-  );
+  await markRefreshRootRevoked(client, rootHash);
   const hashes = await chainRefreshHashes(client, rootHash);
   const all = new Set(hashes);
   all.add(presentedHash);
   for (const hash of all) {
-    await runQuery(
-      client,
-      `DELETE FROM accounts_v1.oauth_refresh_tokens WHERE token_hash = $1`,
-      [hash],
-    );
+    await deleteRefreshTokenHash(client, hash);
   }
   // Cascade-delete every access token minted by any rotation in the
-  // chain. Symmetric to the in-process behavior of the
-  // implementation.
+  // chain. Symmetric to the in-process behavior of the implementation.
   await cascadeRevokeChainAccessTokens(client, rootHash);
   return [...all];
 }
@@ -151,19 +231,15 @@ async function cascadeRevokeChainAccessTokens(
   client: PostgresQueryClient,
   rootHash: string,
 ): Promise<void> {
-  const rows = await runRows<{ access_token_hash: string }>(
+  const rows = await runDrizzleRows<{ access_token_hash: string }>(
     client,
-    `SELECT access_token_hash
-       FROM accounts_v1.refresh_chain_access_tokens
-       WHERE root_token_hash = $1`,
-    [rootHash],
+    db
+      .select({ access_token_hash: refreshChainAccessTokens.accessTokenHash })
+      .from(refreshChainAccessTokens)
+      .where(eq(refreshChainAccessTokens.rootTokenHash, rootHash)),
   );
   for (const row of rows) {
-    await runQuery(
-      client,
-      `DELETE FROM accounts_v1.oauth_access_tokens WHERE token_hash = $1`,
-      [row.access_token_hash],
-    );
+    await deleteAccessTokenHash(client, row.access_token_hash);
   }
 }
 
@@ -175,13 +251,21 @@ export async function linkAccessTokenToRefreshChain(
   const presentedHash = await hashSecret(refreshTokenRoot);
   const rootHash = await resolveRootHash(client, presentedHash);
   const accessHash = await hashSecret(accessToken);
-  await runQuery(
+  await runDrizzle(
     client,
-    `INSERT INTO accounts_v1.refresh_chain_access_tokens (
-        root_token_hash, access_token_hash, created_at
-      ) VALUES ($1, $2, $3)
-      ON CONFLICT (root_token_hash, access_token_hash) DO NOTHING`,
-    [rootHash, accessHash, toDate(Date.now())],
+    db
+      .insert(refreshChainAccessTokens)
+      .values({
+        rootTokenHash: rootHash,
+        accessTokenHash: accessHash,
+        createdAt: toDate(Date.now()),
+      })
+      .onConflictDoNothing({
+        target: [
+          refreshChainAccessTokens.rootTokenHash,
+          refreshChainAccessTokens.accessTokenHash,
+        ],
+      }),
   );
 }
 
@@ -191,12 +275,12 @@ export async function isRefreshRootRevoked(
 ): Promise<boolean> {
   const presentedHash = await hashSecret(token);
   const rootHash = await resolveRootHash(client, presentedHash);
-  const revoked = await runFirst<{ root_token_hash: string }>(
+  const revoked = await runDrizzleFirst<{ root_token_hash: string }>(
     client,
-    `SELECT root_token_hash
-       FROM accounts_v1.revoked_refresh_roots
-       WHERE root_token_hash = $1`,
-    [rootHash],
+    db
+      .select({ root_token_hash: revokedRefreshRoots.rootTokenHash })
+      .from(revokedRefreshRoots)
+      .where(eq(revokedRefreshRoots.rootTokenHash, rootHash)),
   );
   return revoked !== undefined;
 }
@@ -206,12 +290,12 @@ export async function markAuthorizationCodeConsumed(
   code: string,
 ): Promise<void> {
   const codeHash = await hashSecret(code);
-  await runQuery(
+  await runDrizzle(
     client,
-    `INSERT INTO accounts_v1.consumed_authorization_codes (code_hash, consumed_at)
-        VALUES ($1, $2)
-        ON CONFLICT (code_hash) DO NOTHING`,
-    [codeHash, toDate(Date.now())],
+    db
+      .insert(consumedAuthorizationCodes)
+      .values({ codeHash, consumedAt: toDate(Date.now()) })
+      .onConflictDoNothing({ target: consumedAuthorizationCodes.codeHash }),
   );
 }
 
@@ -220,12 +304,12 @@ export async function isAuthorizationCodeConsumed(
   code: string,
 ): Promise<boolean> {
   const codeHash = await hashSecret(code);
-  const row = await runFirst<{ code_hash: string }>(
+  const row = await runDrizzleFirst<{ code_hash: string }>(
     client,
-    `SELECT code_hash
-       FROM accounts_v1.consumed_authorization_codes
-       WHERE code_hash = $1`,
-    [codeHash],
+    db
+      .select({ code_hash: consumedAuthorizationCodes.codeHash })
+      .from(consumedAuthorizationCodes)
+      .where(eq(consumedAuthorizationCodes.codeHash, codeHash)),
   );
   return row !== undefined;
 }
@@ -240,21 +324,27 @@ export async function linkAccessTokenToAuthCode(
   const accessHash = await hashSecret(accessToken);
   // Absent refresh root is stored as the empty-string sentinel '', NOT NULL.
   // refresh_root_hash is part of the PRIMARY KEY (migration 021) and Postgres
-  // forbids NULL in any PK column, so the no-offline_access case (no
-  // refresh-token root) must use the same '' sentinel the D1 store uses
-  // (`${refreshRootHash ?? ""}`). Keeping both reference distributions on one
-  // sentinel scheme is required so the no-offline_access exchange is
-  // representable on Postgres at all.
-  const refreshRootHash = refreshTokenRoot === undefined
-    ? ""
-    : await hashSecret(refreshTokenRoot);
-  await runQuery(
+  // forbids NULL in any PK column, so the no-offline_access case must use the
+  // same '' sentinel the D1 store uses.
+  const refreshRootHash =
+    refreshTokenRoot === undefined ? "" : await hashSecret(refreshTokenRoot);
+  await runDrizzle(
     client,
-    `INSERT INTO accounts_v1.auth_code_token_links (
-        code_hash, access_token_hash, refresh_root_hash, created_at
-      ) VALUES ($1, $2, $3, $4)
-      ON CONFLICT (code_hash, access_token_hash, refresh_root_hash) DO NOTHING`,
-    [codeHash, accessHash, refreshRootHash, toDate(Date.now())],
+    db
+      .insert(authCodeTokenLinks)
+      .values({
+        codeHash,
+        accessTokenHash: accessHash,
+        refreshRootHash,
+        createdAt: toDate(Date.now()),
+      })
+      .onConflictDoNothing({
+        target: [
+          authCodeTokenLinks.codeHash,
+          authCodeTokenLinks.accessTokenHash,
+          authCodeTokenLinks.refreshRootHash,
+        ],
+      }),
   );
 }
 
@@ -263,15 +353,18 @@ export async function revokeTokensIssuedFromCode(
   code: string,
 ): Promise<{ access: readonly string[]; refresh: readonly string[] }> {
   const codeHash = await hashSecret(code);
-  const rows = await runRows<{
+  const rows = await runDrizzleRows<{
     access_token_hash: string;
     refresh_root_hash: string;
   }>(
     client,
-    `SELECT access_token_hash, refresh_root_hash
-       FROM accounts_v1.auth_code_token_links
-       WHERE code_hash = $1`,
-    [codeHash],
+    db
+      .select({
+        access_token_hash: authCodeTokenLinks.accessTokenHash,
+        refresh_root_hash: authCodeTokenLinks.refreshRootHash,
+      })
+      .from(authCodeTokenLinks)
+      .where(eq(authCodeTokenLinks.codeHash, codeHash)),
   );
   const accessHashes = new Set<string>();
   const refreshRootHashes = new Set<string>();
@@ -283,21 +376,9 @@ export async function revokeTokensIssuedFromCode(
       refreshRootHashes.add(row.refresh_root_hash);
     }
   }
-  // Delete the access tokens by hash directly. The refresh root tokens
-  // are NOT deleted here — the caller (route layer) walks each root and
-  // calls `revokeRefreshChain` against the raw token. But the link rows
-  // store hashes; the route layer can call the convenience helper
-  // `revokeRefreshChainByRootHash` which already operates on hashes.
   for (const hash of accessHashes) {
-    await runQuery(
-      client,
-      `DELETE FROM accounts_v1.oauth_access_tokens WHERE token_hash = $1`,
-      [hash],
-    );
+    await deleteAccessTokenHash(client, hash);
   }
-  // For each linked refresh root hash, also cascade-revoke the chain
-  // and the access tokens it issued so the caller does not need to do
-  // it. Since we already have the hash, we use the hash-keyed variant.
   for (const rootHash of refreshRootHashes) {
     await revokeRefreshChainByRootHash(client, rootHash);
   }
@@ -317,87 +398,106 @@ async function revokeRefreshChainByRootHash(
   client: PostgresQueryClient,
   rootHash: string,
 ): Promise<void> {
-  await runQuery(
-    client,
-    `INSERT INTO accounts_v1.revoked_refresh_roots (root_token_hash, revoked_at)
-        VALUES ($1, $2)
-        ON CONFLICT (root_token_hash) DO NOTHING`,
-    [rootHash, toDate(Date.now())],
-  );
+  await markRefreshRootRevoked(client, rootHash);
   const hashes = await chainRefreshHashes(client, rootHash);
   for (const hash of hashes) {
-    await runQuery(
-      client,
-      `DELETE FROM accounts_v1.oauth_refresh_tokens WHERE token_hash = $1`,
-      [hash],
-    );
+    await deleteRefreshTokenHash(client, hash);
   }
   await cascadeRevokeChainAccessTokens(client, rootHash);
 }
 
+async function markRefreshRootRevoked(
+  client: PostgresQueryClient,
+  rootHash: string,
+): Promise<void> {
+  await runDrizzle(
+    client,
+    db
+      .insert(revokedRefreshRoots)
+      .values({ rootTokenHash: rootHash, revokedAt: toDate(Date.now()) })
+      .onConflictDoNothing({ target: revokedRefreshRoots.rootTokenHash }),
+  );
+}
+
+async function deleteAccessTokenHash(
+  client: PostgresQueryClient,
+  hash: string,
+): Promise<void> {
+  await runDrizzle(
+    client,
+    db.delete(oauthAccessTokens).where(eq(oauthAccessTokens.tokenHash, hash)),
+  );
+}
+
+async function deleteRefreshTokenHash(
+  client: PostgresQueryClient,
+  hash: string,
+): Promise<void> {
+  await runDrizzle(
+    client,
+    db.delete(oauthRefreshTokens).where(eq(oauthRefreshTokens.tokenHash, hash)),
+  );
+}
+
 async function deleteCountBefore(
   client: PostgresQueryClient,
-  table: string,
-  timeColumn: string,
-  before: number,
+  query: DrizzleQuery,
 ): Promise<number> {
-  // DELETE ... RETURNING 1 so we can count rows removed without relying on a
-  // driver-specific rowCount. `table` / `timeColumn` are internal literals
-  // (never caller-supplied), so there is no injection surface.
-  const rows = await runRows<{ one: number }>(
-    client,
-    `DELETE FROM ${table} WHERE ${timeColumn} <= $1 RETURNING 1 AS one`,
-    [toDate(before)],
-  );
-  return rows.length;
+  return (await runDrizzleRows<{ one: number }>(client, query)).length;
 }
 
 /**
  * Retention cleanup for the refresh-chain / authorization-code tracking
  * tables. Deletes rows older than the supplied cutoffs. This is retention
  * only: token/code reuse detection is unaffected because rows are removed
- * only after their token/code lifetime has elapsed. See the operator cleanup
- * task documented in migrations/019_refresh_chain.sql.
+ * only after their token/code lifetime has elapsed.
  */
 export async function pruneRefreshChain(
   client: PostgresQueryClient,
   input: { chainBefore: number; consumedCodeBefore: number },
 ): Promise<RefreshChainPruneResult> {
+  const chainBefore = toDate(input.chainBefore);
+  const consumedCodeBefore = toDate(input.consumedCodeBefore);
   const chainLinks = await deleteCountBefore(
     client,
-    "accounts_v1.refresh_chain_links",
-    "created_at",
-    input.chainBefore,
+    db
+      .delete(refreshChainLinks)
+      .where(lte(refreshChainLinks.createdAt, chainBefore))
+      .returning({ one: refreshChainLinks.parentTokenHash }),
   );
   const chainAccessTokens = await deleteCountBefore(
     client,
-    "accounts_v1.refresh_chain_access_tokens",
-    "created_at",
-    input.chainBefore,
+    db
+      .delete(refreshChainAccessTokens)
+      .where(lte(refreshChainAccessTokens.createdAt, chainBefore))
+      .returning({ one: refreshChainAccessTokens.rootTokenHash }),
   );
   const revokedRoots = await deleteCountBefore(
     client,
-    "accounts_v1.revoked_refresh_roots",
-    "revoked_at",
-    input.chainBefore,
+    db
+      .delete(revokedRefreshRoots)
+      .where(lte(revokedRefreshRoots.revokedAt, chainBefore))
+      .returning({ one: revokedRefreshRoots.rootTokenHash }),
   );
   const consumedCodes = await deleteCountBefore(
     client,
-    "accounts_v1.consumed_authorization_codes",
-    "consumed_at",
-    input.consumedCodeBefore,
+    db
+      .delete(consumedAuthorizationCodes)
+      .where(lte(consumedAuthorizationCodes.consumedAt, consumedCodeBefore))
+      .returning({ one: consumedAuthorizationCodes.codeHash }),
   );
-  const authCodeTokenLinks = await deleteCountBefore(
+  const authCodeTokenLinksDeleted = await deleteCountBefore(
     client,
-    "accounts_v1.auth_code_token_links",
-    "created_at",
-    input.consumedCodeBefore,
+    db
+      .delete(authCodeTokenLinks)
+      .where(lte(authCodeTokenLinks.createdAt, consumedCodeBefore))
+      .returning({ one: authCodeTokenLinks.codeHash }),
   );
   return {
     chainLinks,
     chainAccessTokens,
     revokedRoots,
     consumedCodes,
-    authCodeTokenLinks,
+    authCodeTokenLinks: authCodeTokenLinksDeleted,
   };
 }

@@ -23,7 +23,7 @@ const TABS: readonly Tab[] = [
         {"      "}--space prod{"\n"}
         <span class="c">{"  "}✓ Installation created</span>
         {"\n"}
-        <span class="c">{"  "}✓ PlanRun plan_8f2a…  reviewed</span>
+        <span class="c">{"  "}✓ Run plan_8f2a…  reviewed</span>
       </>
     ),
     output: () => (
@@ -39,21 +39,21 @@ const TABS: readonly Tab[] = [
   {
     key: "apply",
     label: "2. reviewed plan を apply",
-    subtitle: "PlanRun → ApplyRun → Deployment",
+    subtitle: "Run(plan) → Run(apply) → Deployment",
     source: () => (
       <>
         <span class="c"># planDigest を pin して apply</span>
         {"\n"}
         <span class="k">$</span> takosumi deploy ins_api \{"\n"}
         {"      "}--expected-plan-digest sha256:…{"\n"}
-        <span class="c">{"  "}✓ ApplyRun apply_3c1d…  applied</span>
+        <span class="c">{"  "}✓ Run apply_3c1d…  applied</span>
       </>
     ),
     output: () => (
       <>
         <span class="c">→ Deployment live</span>
         {"\n"}
-        <span class="c">→ DeploymentOutput recorded (non-secret)</span>
+        <span class="c">→ OutputSnapshot recorded (non-secret projection)</span>
         {"\n"}
         <span class="c">→ policy decision と audit event も台帳に。</span>
       </>
@@ -62,10 +62,10 @@ const TABS: readonly Tab[] = [
   {
     key: "runner",
     label: "3. 実行先を切り替える",
-    subtitle: "RunnerProfile で portable",
+    subtitle: "Connection と policy で portable",
     source: () => (
       <>
-        <span class="c"># operator が RunnerProfile を差し替えて再 deploy</span>
+        <span class="c"># operator が Connection / 実行境界を選んで再 deploy</span>
         {"\n"}
         <span class="k">$</span> takosumi deploy ins_api{"\n"}
         <span class="c">{"  "}↳ runner: cloudflare-container</span>
@@ -77,7 +77,7 @@ const TABS: readonly Tab[] = [
     ),
     output: () => (
       <>
-        <span class="c">同じ OpenTofu module を、違う RunnerProfile で。</span>
+        <span class="c">同じ OpenTofu module を、違う実行境界で。</span>
         {"\n"}
         <span class="c">cloud に出しても、VM や cluster に戻しても、</span>
         {"\n"}
@@ -111,7 +111,7 @@ export default function Showcase() {
         <h2>install → plan / apply → どこへでも。</h2>
         <p class="lede">
           Git の OpenTofu module を install → reviewed plan を apply →
-          RunnerProfile で実行先を選ぶ。3 step。Takos も、この仕組みで動いています。
+          Connection と policy で実行先を選ぶ。3 step。Takos も、この仕組みで動いています。
         </p>
         <div class="showcase">
           <div

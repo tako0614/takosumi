@@ -113,7 +113,7 @@ export async function seedInstallationModel(
     installConfigId: installConfig.id,
     environment,
     currentStateGeneration: 0,
-    status: "installing",
+    status: "pending",
     createdAt: now,
     updatedAt: now,
   };

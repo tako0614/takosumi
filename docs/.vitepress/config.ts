@@ -28,9 +28,10 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
     {
       text: "Reference",
       items: [
+        { text: "Core specification", link: "/core-spec" },
+        { text: "Conformance", link: "/core-conformance" },
         { text: "Model", link: "/reference/model" },
         { text: "Deploy Control API", link: "/reference/deploy-control-api" },
-        { text: "Runner profiles", link: "/reference/runner-profiles" },
         { text: "Operator", link: "/reference/operator" },
         { text: "CLI", link: "/reference/cli" },
       ],
@@ -50,12 +51,13 @@ const enSidebar: DefaultTheme.SidebarMulti = {
     {
       text: "Reference",
       items: [
+        { text: "Core specification", link: "/core-spec" },
+        { text: "Conformance", link: "/core-conformance" },
         { text: "Model", link: "/en/reference/model" },
         {
           text: "Deploy Control API",
           link: "/en/reference/deploy-control-api",
         },
-        { text: "Runner profiles", link: "/en/reference/runner-profiles" },
         { text: "Operator", link: "/en/reference/operator" },
         { text: "CLI", link: "/en/reference/cli" },
       ],

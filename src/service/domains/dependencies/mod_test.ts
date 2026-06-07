@@ -390,6 +390,17 @@ test("a published_output edge with no active share is rejected failed_preconditi
   ).rejects.toThrow(/output_share_required/);
 });
 
+test("a published_output edge with only a pending share is rejected output_share_required", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seedCrossSpacePair(store);
+  await seedShare(store, { status: "pending" });
+  const deps = service(store);
+
+  await expect(
+    deps.createDependency(publishedRequest("base_domain")),
+  ).rejects.toThrow(/output_share_required/);
+});
+
 test("a published_output edge with a revoked share is rejected output_share_required", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   await seedCrossSpacePair(store);
@@ -399,6 +410,27 @@ test("a published_output edge with a revoked share is rejected output_share_requ
   await expect(
     svc.createDependency(publishedRequest("base_domain")),
   ).rejects.toThrow(/output_share_required/);
+});
+
+test("a published_output edge can be covered by a sensitive share entry", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seedCrossSpacePair(store);
+  await seedShare(store, {
+    outputs: [{ name: "admin_token", sensitive: true }],
+  });
+  const deps = service(store);
+
+  const dependency = await deps.createDependency({
+    ...publishedRequest("admin_token"),
+    outputs: {
+      admin_token: {
+        from: "admin_token",
+        to: "admin_token",
+        required: true,
+      },
+    },
+  });
+  expect(dependency.outputs.admin_token.from).toEqual("admin_token");
 });
 
 test("a published_output edge within one Space is rejected failed_precondition", async () => {

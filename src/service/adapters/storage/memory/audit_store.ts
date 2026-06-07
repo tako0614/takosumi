@@ -9,7 +9,7 @@ import type {
   AuditEventId,
   AuditEventQuery,
 } from "../../../domains/audit/types.ts";
-import { immutable, matchesAuditQuery } from "./helpers.ts";
+import { getFrom, immutable, matchesAuditQuery } from "./helpers.ts";
 
 export class MemoryAuditStore implements AuditStore {
   constructor(
@@ -27,7 +27,7 @@ export class MemoryAuditStore implements AuditStore {
   }
 
   get(id: AuditEventId): Promise<AuditEvent | undefined> {
-    return Promise.resolve(this.events.get(id));
+    return getFrom(this.events, id);
   }
 
   list(query: AuditEventQuery = {}): Promise<readonly AuditEvent[]> {

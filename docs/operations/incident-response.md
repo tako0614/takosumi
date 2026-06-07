@@ -1,6 +1,6 @@
 # Operations: Incident Response Runbook
 
-> このページでわかること: Takos operated environments で incident を宣言し、 war
+> このページでわかること: Takosumi operated environments で incident を宣言し、 war
 > room を立て、mitigation / customer comms / RCA / postmortem を進める
 > 標準手順。
 
@@ -73,8 +73,8 @@ War room の最初の 10 分で決めること:
 | monitoring   | customer impact は止まったが再発監視中          | 2 observation windows green                        |
 | resolved     | impact が解消し、follow-up owner が割り当て済み | postmortem / action tracking へ移行                |
 
-State transition は timeline に残します。Kernel incident API が使える環境では
-同じ state を incident record に反映します。
+State transition は timeline に残します。Takosumi incident tracking が使える
+環境では同じ state を incident record に反映します。
 
 ## First 15 Minutes
 
@@ -89,7 +89,7 @@ State transition は timeline に残します。Kernel incident API が使える
 5. 現在の signal を収集する:
    - HTTP 5xx / latency
    - deploy success / rollback metric
-   - runtime-agent heartbeat / queue backlog
+   - runner container health / queue backlog
    - database / queue / object storage の状態
    - 直近の deploy、config / secret rotation
 6. 最もリスクの低い mitigation を選び、実行前に judgement を channel に書く。
@@ -102,7 +102,7 @@ reversible なアクションを以下の順で優先する:
 2. 既知の healthy deployment へ rollback
 3. 不調な runtime / region から traffic を逃がす
 4. feature flag や integration を無効化する
-5. 影響を受けた runtime-agent pool を drain / restart する
+5. 影響を受けた runner queue / container pool を drain / restart する
 6. 漏洩疑いの credential を rotate / revoke する
 7. forward fix を適用する
 

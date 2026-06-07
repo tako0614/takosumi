@@ -8,7 +8,9 @@ import {
   composePolicyVerdict,
   evaluateActionPolicy,
   evaluateProviderAllowlist,
+  evaluateQuotaPolicy,
   evaluateResourceAllowlist,
+  evaluateScopeBoundary,
   type PlanResourceChange,
   providerMatches,
   TAKOSUMI_POLICY_PACKAGE,
@@ -189,6 +191,106 @@ test("action policy de-duplicates destructive reasons by type", () => {
   ]);
   expect(result.requiresApproval).toBe(true);
   expect(result.reasons).toHaveLength(1);
+});
+
+// --- §25 layer 6: scope boundary -------------------------------------------
+
+test("scope boundary admits resources with matching Cloudflare metadata", () => {
+  const result = evaluateScopeBoundary([
+    {
+      address: "cloudflare_r2_bucket.files",
+      type: "cloudflare_r2_bucket",
+      actions: ["create"],
+      scope: { cloudflareAccountId: "acct_allowed" },
+    },
+  ], {
+    mode: "strict",
+    cloudflare: { accountIds: ["acct_allowed"] },
+  });
+  expect(result.outOfScope).toEqual([]);
+  expect(result.reasons).toEqual([]);
+});
+
+test("strict scope boundary fails closed when configured metadata is missing", () => {
+  const result = evaluateScopeBoundary([
+    {
+      address: "cloudflare_r2_bucket.files",
+      type: "cloudflare_r2_bucket",
+      actions: ["create"],
+    },
+  ], {
+    mode: "strict",
+    cloudflare: { accountIds: ["acct_allowed"] },
+  });
+  expect(result.outOfScope).toEqual([
+    "cloudflare_r2_bucket.files missing Cloudflare account metadata",
+  ]);
+  expect(result.reasons.join("\n")).toMatch(/out of scope/);
+});
+
+test("permissive scope boundary validates available metadata but skips missing metadata", () => {
+  const missing = evaluateScopeBoundary([
+    {
+      address: "cloudflare_r2_bucket.files",
+      type: "cloudflare_r2_bucket",
+      actions: ["create"],
+    },
+  ], {
+    cloudflare: { accountIds: ["acct_allowed"] },
+  });
+  expect(missing.outOfScope).toEqual([]);
+
+  const observed = evaluateScopeBoundary([
+    {
+      address: "cloudflare_r2_bucket.files",
+      type: "cloudflare_r2_bucket",
+      actions: ["create"],
+      scope: { cloudflareAccountId: "acct_other" },
+    },
+  ], {
+    cloudflare: { accountIds: ["acct_allowed"] },
+  });
+  expect(observed.outOfScope).toEqual([
+    "cloudflare_r2_bucket.files Cloudflare account acct_other",
+  ]);
+});
+
+test("scope boundary ignores read-only resources", () => {
+  const result = evaluateScopeBoundary([
+    {
+      address: "aws_s3_bucket.files",
+      type: "aws_s3_bucket",
+      actions: ["read"],
+      scope: { awsRegion: "us-east-1" },
+    },
+  ], {
+    mode: "strict",
+    aws: { regions: ["us-west-2"] },
+  });
+  expect(result.outOfScope).toEqual([]);
+});
+
+// --- §25 layer 10: quota ----------------------------------------------------
+
+test("quota policy enforces total and per-resource mutating counts", () => {
+  const result = evaluateQuotaPolicy([
+    { address: "a", type: "cloudflare_r2_bucket", actions: ["create"] },
+    { address: "b", type: "cloudflare_r2_bucket", actions: ["update"] },
+    { address: "c", type: "random_id", actions: ["no-op"] },
+  ], {
+    "resources.total": 1,
+    cloudflare_r2_bucket: 1,
+  });
+  expect(result.exceeded).toEqual([
+    "cloudflare_r2_bucket count 2 exceeds 1",
+    "resources.total count 2 exceeds 1",
+  ]);
+  expect(result.reasons.join("\n")).toMatch(/quota/);
+});
+
+test("quota policy treats invalid limits as deny reasons", () => {
+  const result = evaluateQuotaPolicy([], { resources: -1 });
+  expect(result.exceeded).toEqual(["resources limit is invalid"]);
 });
 
 // --- composition -----------------------------------------------------------
