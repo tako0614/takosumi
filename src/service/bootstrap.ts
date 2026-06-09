@@ -1,5 +1,7 @@
 import type { Hono as HonoApp } from "hono";
 import { createApiApp } from "./api/mod.ts";
+import type { SourceArchiveWriter } from "./api/deploy_control_shared.ts";
+import { createConnectionOAuthHelpersFromEnv } from "./api/connection_oauth_helpers.ts";
 import {
   createConsoleApiRequestLogger,
   parseApiLogLevel,
@@ -34,7 +36,10 @@ import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy-records/deplo
 import {
   type EnqueueRun,
   OpenTofuDeploymentController,
+  type ReconcileInvoiceUsageInput,
+  type RecordManagedResourceUsageInput,
   type OpenTofuRunner,
+  type RecordMeteredUsageInput,
 } from "./domains/deploy-control/mod.ts";
 import type { InstallationCoordination } from "./domains/deploy-control/installation_lease.ts";
 import {
@@ -47,11 +52,14 @@ import { ConnectionsService } from "./domains/connections/mod.ts";
 import { DependenciesService } from "./domains/dependencies/mod.ts";
 import { OutputSharesService } from "./domains/output-shares/mod.ts";
 import type { SensitiveOutputResolver } from "./domains/output-shares/mod.ts";
+import type { ConnectionVault } from "./adapters/vault/mod.ts";
 import { RunGroupsService } from "./domains/run-groups/mod.ts";
 import { ActivityService } from "./domains/activity/mod.ts";
 import {
   type BackupArtifactStore,
+  type BackupObjectReader,
   BackupsService,
+  type ServiceDataBackupRunner,
 } from "./domains/backups/mod.ts";
 import { seedOfficialInstallConfigs } from "./domains/installations/official_seed.ts";
 import type {
@@ -65,6 +73,10 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type {
+  CapsuleCompatibilityReportResponse,
+  CreateSourceCompatibilityCheckRequest,
+} from "takosumi-contract/capsules";
+import type {
   ApplyRunResponse,
   Connection,
   CreateApplyRunRequest,
@@ -76,7 +88,7 @@ import type {
   ListRunnerProfilesResponse,
   PlanRunResponse,
   RunnerProfile,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import type { RunLogsResponse } from "takosumi-contract/runs";
 import {
   InMemoryOpenTofuDeploymentStore,
@@ -87,6 +99,14 @@ import { log } from "./shared/log.ts";
 import type { OperatorImplementation } from "takosumi-contract/reference/implementation";
 import type { Run } from "takosumi-contract/runs";
 import type { Dependency } from "takosumi-contract/dependencies";
+import type {
+  BillingSettings,
+  CreditBalance,
+  CreditReservation,
+  InvoiceUsageReconciliation,
+  UsageEvent,
+} from "takosumi-contract/billing";
+import type { ListProviderTemplatesResponse } from "takosumi-contract/providers";
 
 function resolveTakosumiDeploymentRecordStore(input: {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
@@ -241,6 +261,19 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly opentofuRunner?: OpenTofuRunner;
   /**
+   * Runner used only for non-managed provider env set executions.
+   * Hosted/reference Workers inject the same Cloudflare Container runner object
+   * but route it through this separate seam so user-supplied provider profiles
+   * cannot accidentally run on the default managed-provider path.
+   */
+  readonly userEnvSetProviderRunner?: OpenTofuRunner;
+  /**
+   * Connection Vault used to mint run-scoped provider credentials for
+   * plan/apply/destroy. Hosts that execute provider-using runs must inject this;
+   * the controller fails closed without it.
+   */
+  readonly opentofuConnectionVault?: ConnectionVault;
+  /**
    * Out-of-process run dispatch seam. The Workers adapter injects a producer
    * that enqueues onto `RUN_QUEUE`; when omitted the controller
    * defaults to an inline dispatcher that runs the consumer synchronously
@@ -254,6 +287,12 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * external consumer.
    */
   readonly enqueueSourceSync?: EnqueueSourceSync;
+  /**
+   * Raw R2_SOURCE writer for `takosumi deploy` upload archives (Phase: deploy).
+   * The Workers adapter injects `env.R2_SOURCE.put`; when omitted the upload +
+   * deploy routes report not_implemented.
+   */
+  readonly writeSourceArchive?: SourceArchiveWriter;
   readonly runnerProfiles?: readonly RunnerProfile[];
   readonly defaultRunnerProfileId?: string;
   /**
@@ -271,12 +310,26 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * `not_implemented` (the dev/test fallback may inject an in-memory store).
    */
   readonly backupArtifactStore?: BackupArtifactStore;
+  readonly backupStateObjectReader?: BackupObjectReader;
+  /**
+   * Optional service-data backup producer. Hosts wire this to an isolated
+   * backup Run / Runner Container path for `provider_snapshot` /
+   * `custom_command`; the control backup service records only the returned
+   * artifact pointer.
+   */
+  readonly serviceDataBackupRunner?: ServiceDataBackupRunner;
   /**
    * Host-injected resolver for sensitive OutputShare values. Required for
    * sensitive cross-Space published_output injection; when omitted the service
    * fails closed for sensitive grants.
    */
   readonly sensitiveOutputResolver?: SensitiveOutputResolver;
+  /**
+   * Internal compatibility seam for accounts-plane / CLI in-process callers.
+   * Internet-facing platform hosts must leave this false so legacy `/v1/*`
+   * PlanRun / ApplyRun / RunnerProfile routes cannot be exposed by env drift.
+   */
+  readonly mountInternalLedgerRoutes?: boolean;
 }
 
 /**
@@ -317,8 +370,8 @@ export interface TakosumiOperations {
    */
   readonly outputShares: OutputSharesService;
   /**
-   * RunGroups domain service (Core Specification §19 / §24): the space_update
-   * RunGroup over the same shared ledger + controller.
+   * RunGroups domain service (Core Specification §19 / §24): space_update and
+   * space_drift_check RunGroups over the same shared ledger + controller.
    */
   readonly runGroups: RunGroupsService;
   /**
@@ -326,6 +379,50 @@ export interface TakosumiOperations {
    * audit trail over the same shared ledger.
    */
   readonly activity: ActivityService;
+  /** Space billing + credit ledger facade (Core Specification §28). */
+  getSpaceBilling(spaceId: string): Promise<{
+    readonly billing: {
+      readonly settings: BillingSettings;
+      readonly balance?: CreditBalance;
+    };
+  }>;
+  listSpaceUsage(spaceId: string): Promise<{
+    readonly usageEvents: readonly UsageEvent[];
+  }>;
+  recordMeteredUsage(
+    spaceId: string,
+    input: RecordMeteredUsageInput,
+  ): Promise<{ readonly usageEvent: UsageEvent }>;
+  recordManagedResourceUsage(
+    spaceId: string,
+    input: RecordManagedResourceUsageInput,
+  ): Promise<{ readonly usageEvents: readonly UsageEvent[] }>;
+  reconcileInvoiceUsage(
+    spaceId: string,
+    input: ReconcileInvoiceUsageInput,
+  ): Promise<InvoiceUsageReconciliation>;
+  listSpaceCreditReservations(spaceId: string): Promise<{
+    readonly creditReservations: readonly CreditReservation[];
+  }>;
+  topUpSpaceCredits(
+    spaceId: string,
+    input: { readonly credits: number },
+  ): Promise<{ readonly balance: CreditBalance }>;
+  changeSpaceSubscription(
+    spaceId: string,
+    input: { readonly billingSettings: BillingSettings },
+  ): Promise<{ readonly billing: { readonly settings: BillingSettings } }>;
+  reconcileStripeSpaceSubscription(
+    spaceId: string,
+    input: {
+      readonly stripeCustomerId: string;
+      readonly stripeSubscriptionId: string;
+      readonly stripePriceId?: string;
+      readonly planCode: string;
+      readonly status: string;
+      readonly currentPeriodEndUnix?: number;
+    },
+  ): Promise<unknown>;
   /**
    * Control-backups domain service (Core Specification §33 / §26): exports a
    * Space's control ledger as a sealed R2_BACKUPS bundle.
@@ -393,6 +490,11 @@ export interface TakosumiOperations {
     sourceId: string,
     options?: { readonly dedupe?: boolean },
   ): Promise<CreateSourceSyncResponse>;
+  createSourceCompatibilityCheck(
+    sourceId: string,
+    request?: CreateSourceCompatibilityCheckRequest,
+  ): Promise<CapsuleCompatibilityReportResponse>;
+  listProviderTemplates(): Promise<ListProviderTemplatesResponse>;
   listSourceSnapshots(sourceId: string): Promise<ListSourceSnapshotsResponse>;
   getSourceSyncRun(id: string): Promise<SourceSyncRun>;
   /**
@@ -514,6 +616,7 @@ export async function createTakosumiService(
             }),
         }
       : {}),
+    normalizedArtifactStorage: context.adapters.objectStorage,
   });
   // Spaces + Installations domains (Core Specification §4 / §5 / §11): Space /
   // Installation / InstallConfig / DeploymentProfile over the SAME shared
@@ -540,15 +643,21 @@ export async function createTakosumiService(
       ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
       : {}),
   });
-  // Seed the official InstallConfig catalog from the built-in template registry
+  // Seed built-in shared InstallConfigs from the first-party module registry
   // (trustLevel "official"). Idempotent upsert keyed by the derived config id,
   // so a restart re-seeds the same rows. Fire-and-forget: a seed failure must
-  // not block boot, and install read paths tolerate an empty catalog.
+  // not block boot, and install read paths tolerate an empty seed set.
   void seedOfficialInstallConfigsOrWarn(sharedOpenTofuStore);
   const opentofuController = new OpenTofuDeploymentController({
     store: sharedOpenTofuStore,
     activity: activityService,
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
+    ...(options.userEnvSetProviderRunner
+      ? { userEnvSetProviderRunner: options.userEnvSetProviderRunner }
+      : {}),
+    ...(options.opentofuConnectionVault
+      ? { vault: options.opentofuConnectionVault }
+      : {}),
     ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),
     sourcesService,
     ...(options.runnerProfiles
@@ -564,10 +673,10 @@ export async function createTakosumiService(
       ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
       : {}),
   });
-  // RunGroups domain (Core Specification §19 / §24): the space_update RunGroup
-  // re-plans stale Installations through the controller and computes group
-  // status from member runs at read time. Constructed after the controller it
-  // drives.
+  // RunGroups domain (Core Specification §19 / §24): space_update re-plans
+  // stale Installations and space_drift_check groups read-only drift checks.
+  // Status is computed from member runs at read time. Constructed after the
+  // controller it drives.
   const runGroupsService = new RunGroupsService({
     store: sharedOpenTofuStore,
     controller: opentofuController,
@@ -583,7 +692,15 @@ export async function createTakosumiService(
     ...(options.backupArtifactStore
       ? { artifactStore: options.backupArtifactStore }
       : {}),
+    ...(options.backupStateObjectReader
+      ? { stateObjectReader: options.backupStateObjectReader }
+      : {}),
+    ...(options.serviceDataBackupRunner
+      ? { serviceDataRunner: options.serviceDataBackupRunner }
+      : {}),
   });
+  const connectionOAuthHelpers =
+    createConnectionOAuthHelpersFromEnv(runtimeEnv);
   const app = await createApiApp({
     role,
     context,
@@ -616,6 +733,10 @@ export async function createTakosumiService(
         : undefined,
     deployControlPublicRouteOptions: {
       controller: opentofuController,
+      ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
+      ...(options.mountInternalLedgerRoutes === true
+        ? { mountInternalLedgerRoutes: true }
+        : {}),
       spacesService,
       installationsService,
       connectionsService,
@@ -624,6 +745,9 @@ export async function createTakosumiService(
       runGroupsService,
       activityService,
       backupsService,
+      ...(options.writeSourceArchive
+        ? { writeSourceArchive: options.writeSourceArchive }
+        : {}),
       ...(deployControlToken
         ? { getDeployControlToken: () => deployControlToken }
         : {}),
@@ -663,6 +787,22 @@ export async function createTakosumiService(
     outputShares: outputSharesService,
     runGroups: runGroupsService,
     activity: activityService,
+    getSpaceBilling: (spaceId) => opentofuController.getSpaceBilling(spaceId),
+    listSpaceUsage: (spaceId) => opentofuController.listSpaceUsage(spaceId),
+    recordMeteredUsage: (spaceId, input) =>
+      opentofuController.recordMeteredUsage(spaceId, input),
+    recordManagedResourceUsage: (spaceId, input) =>
+      opentofuController.recordManagedResourceUsage(spaceId, input),
+    reconcileInvoiceUsage: (spaceId, input) =>
+      opentofuController.reconcileInvoiceUsage(spaceId, input),
+    listSpaceCreditReservations: (spaceId) =>
+      opentofuController.listSpaceCreditReservations(spaceId),
+    topUpSpaceCredits: (spaceId, input) =>
+      opentofuController.topUpSpaceCredits(spaceId, input),
+    changeSpaceSubscription: (spaceId, input) =>
+      opentofuController.changeSpaceSubscription(spaceId, input),
+    reconcileStripeSpaceSubscription: (spaceId, input) =>
+      opentofuController.reconcileStripeSpaceSubscription(spaceId, input),
     backups: backupsService,
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
@@ -696,6 +836,9 @@ export async function createTakosumiService(
     patchSource: (id, patch) => opentofuController.patchSource(id, patch),
     createSourceSync: (sourceId, opts) =>
       opentofuController.createSourceSync(sourceId, opts ?? {}),
+    createSourceCompatibilityCheck: (sourceId, request) =>
+      opentofuController.createSourceCompatibilityCheck(sourceId, request),
+    listProviderTemplates: () => opentofuController.listProviderTemplates(),
     listSourceSnapshots: (sourceId) =>
       opentofuController.listSourceSnapshots(sourceId),
     getSourceSyncRun: (id) => opentofuController.getSourceSyncRun(id),
@@ -706,8 +849,8 @@ export async function createTakosumiService(
 }
 
 /**
- * Seeds the official InstallConfig catalog into the shared ledger. The config id
- * is derived from the template id so the upsert is idempotent across restarts.
+ * Seeds built-in shared InstallConfigs into the shared ledger. The config id is
+ * derived from the template id so the upsert is idempotent across restarts.
  * Logs and swallows a seed failure so it never blocks service boot.
  */
 async function seedOfficialInstallConfigsOrWarn(

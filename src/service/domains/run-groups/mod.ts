@@ -1,12 +1,14 @@
 /**
  * RunGroups domain service (Core Specification §19 / §24 — "RunGroup basic").
  *
- * A RunGroup orders multiple Runs across the Space's dependency DAG. The one
- * RunGroup type implemented here is `space_update`: after stale propagation
- * marks downstream consumers `stale` (§24), a Space update re-plans every stale
- * Installation (plus the transitive downstream of any member, so a re-plan
- * cascade is captured even if a member is not yet flagged) in producer-before-
- * consumer topological order.
+ * A RunGroup orders multiple Runs across the Space's dependency DAG. The
+ * implemented group types are:
+ *   - `space_update`: after stale propagation marks downstream consumers
+ *     `stale` (§24), re-plan every stale Installation plus its downstream in
+ *     producer-before-consumer topological order.
+ *   - `space_drift_check`: create one read-only `drift_check` Run per active
+ *     Installation in a Space, grouped under one ledger row for scheduled and
+ *     operator-initiated sweep observability.
  *
  * There is NO orchestration daemon. The per-installation write lease already
  * serializes applies, so this service only:
@@ -22,13 +24,12 @@
  * per-run apply flow (manual approve + createApplyRun), not by this service.
  */
 
-import type {
-  Run,
-  RunGroup,
-  RunGroupStatus,
-} from "takosumi-contract/runs";
+import type { Run, RunGroup, RunGroupStatus } from "takosumi-contract/runs";
 import { topologicalLayers } from "takosumi-graph";
-import { OpenTofuControllerError, requireNonEmptyString } from "../deploy-control/errors.ts";
+import {
+  OpenTofuControllerError,
+  requireNonEmptyString,
+} from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentController } from "../deploy-control/mod.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import {
@@ -66,6 +67,10 @@ export interface RunGroupsServiceDependencies {
   readonly activity?: ActivityRecorder;
 }
 
+export interface CreateSpaceDriftCheckOptions {
+  readonly limit?: number;
+}
+
 export class RunGroupsService {
   readonly #store: OpenTofuDeploymentStore;
   readonly #controller: OpenTofuDeploymentController;
@@ -77,8 +82,10 @@ export class RunGroupsService {
   constructor(dependencies: RunGroupsServiceDependencies) {
     this.#store = dependencies.store;
     this.#controller = dependencies.controller;
-    this.#newId = dependencies.newId ??
-      ((prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`);
+    this.#newId =
+      dependencies.newId ??
+      ((prefix) =>
+        `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`);
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#actor = dependencies.actor;
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
@@ -182,6 +189,85 @@ export class RunGroupsService {
   }
 
   /**
+   * Creates a `space_drift_check` RunGroup for one Space. Unlike
+   * `space_update`, drift checks are read-only and independent, but recording
+   * them as a RunGroup gives scheduled sweeps a single Space-scoped ledger row
+   * and lets the dashboard read the member `drift_check` Runs through the same
+   * §19 Run projection. Only `active` Installations are checked; an empty active
+   * set is a typed `failed_precondition` (`nothing_to_drift_check`).
+   */
+  async createSpaceDriftCheck(
+    spaceId: string,
+    options: CreateSpaceDriftCheckOptions = {},
+  ): Promise<RunGroupWithRuns> {
+    requireNonEmptyString(spaceId, "spaceId");
+    const limit = normalizePositiveLimit(options.limit);
+    const installations = (await this.#store.listInstallations(spaceId))
+      .filter((installation) => installation.status === "active")
+      .slice(0, limit);
+    if (installations.length === 0) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `nothing_to_drift_check: space ${spaceId} has no active installations to drift-check`,
+      );
+    }
+
+    const installationIds = installations.map(
+      (installation) => installation.id,
+    );
+    const dependencyEdges = (await this.#store.listDependenciesBySpace(spaceId))
+      .map((edge) => ({
+        from: edge.producerInstallationId,
+        to: edge.consumerInstallationId,
+      }))
+      .filter(
+        (edge) =>
+          installationIds.includes(edge.from) &&
+          installationIds.includes(edge.to),
+      );
+    const layers = topologicalLayers(installationIds, dependencyEdges);
+    const runs: Record<string, string> = {};
+    const memberRuns: Run[] = [];
+    const runGroupId = this.#newId("rg");
+
+    for (const layer of layers) {
+      for (const installationId of layer) {
+        const response = await this.#controller.createInstallationDriftCheck(
+          installationId,
+          this.#actor ? { actor: this.#actor } : {},
+          { runGroupId },
+        );
+        runs[installationId] = response.planRun.id;
+        memberRuns.push(await this.#controller.getRun(response.planRun.id));
+      }
+    }
+
+    const graph: SpaceUpdateGraph = { order: layers, runs };
+    const runGroup: RunGroup = {
+      id: runGroupId,
+      spaceId,
+      type: "space_drift_check",
+      status: computeGroupStatus(memberRuns),
+      graphJson: JSON.stringify(graph),
+      createdAt: this.#now(),
+    };
+    await this.#store.putRunGroup(runGroup);
+    await this.#activity.record({
+      spaceId,
+      ...(this.#actor ? { actorId: this.#actor } : {}),
+      action: "run_group.created",
+      targetType: "run_group",
+      targetId: runGroup.id,
+      metadata: {
+        type: runGroup.type,
+        memberInstallationIds: installationIds,
+        runIds: Object.values(runs),
+      },
+    });
+    return { runGroup, runs: memberRuns };
+  }
+
+  /**
    * Reads a RunGroup with its member Runs and the COMPUTED status (spec §19).
    * The member run ids come from the recorded graphJson; each is read through
    * the controller's unified `getRun` so the status reflects the live member
@@ -239,6 +325,12 @@ export class RunGroupsService {
     }
     return runs;
   }
+}
+
+function normalizePositiveLimit(limit: number | undefined): number {
+  if (limit === undefined) return Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(limit) || limit <= 0) return 0;
+  return Math.floor(limit);
 }
 
 /**
@@ -325,9 +417,13 @@ function parseSpaceUpdateGraph(graphJson: string): SpaceUpdateGraph {
   if (!parsed || typeof parsed !== "object") return { order: [], runs: {} };
   const record = parsed as Record<string, unknown>;
   const order = Array.isArray(record.order)
-    ? (record.order as unknown[]).filter(Array.isArray).map((layer) =>
-      (layer as unknown[]).filter((id): id is string => typeof id === "string")
-    )
+    ? (record.order as unknown[])
+        .filter(Array.isArray)
+        .map((layer) =>
+          (layer as unknown[]).filter(
+            (id): id is string => typeof id === "string",
+          ),
+        )
     : [];
   const runs: Record<string, string> = {};
   if (record.runs && typeof record.runs === "object") {

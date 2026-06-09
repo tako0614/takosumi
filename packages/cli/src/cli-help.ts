@@ -1,32 +1,340 @@
+import process from "node:process";
+
 const managedOfferingReadinessKind =
   "takosumi.managed-offering-readiness@v1";
 const managedOfferingProductionTopologyKind =
   "takosumi.production-topology@v1";
 
+export function isJapaneseCli(): boolean {
+  const explicit = process.env.TAKOSUMI_LANG ?? process.env.TAKOSUMI_LOCALE;
+  if (explicit) return explicit.toLowerCase().startsWith("ja");
+  const locale = process.env.LC_ALL ?? process.env.LC_MESSAGES ??
+    process.env.LANG ?? "";
+  return locale.toLowerCase().startsWith("ja");
+}
+
 export function helpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi",
+      "",
+      "Deploy (ローカル Capsule を自分の Space へ):",
+      "  deploy [dir]            ローカル OpenTofu Capsule を upload→plan→apply",
+      "  plan   [dir]            upload→plan のみ (apply しない)",
+      "  status <run-id>         Run の状態を表示",
+      "  logs   <run-id>         Run のログを表示",
+      "",
+      "Operator:",
+      "  run connections         Takosumi 提供 provider default を管理",
+      "  run secrets             Worker secret の確認と適用",
+      "",
+      "deploy の例:",
+      "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com",
+      "  export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>",
+      "  takosumi deploy ./my-capsule --space @me --name my-app --var region=apac",
+      "",
+      "内部/開発用コマンドは help には表示しません。",
+      "日本語表示は TAKOSUMI_LANG=ja または LANG=ja_* で有効になります。",
+    ].join("\n");
+  }
   return [
     "takosumi",
     "",
+    "Deploy (a local Capsule into your Space):",
+    "  deploy [dir]            upload a local OpenTofu Capsule, then plan/apply",
+    "  plan   [dir]            upload + plan only (no apply)",
+    "  status <run-id>         show a Run's status",
+    "  logs   <run-id>         show a Run's logs",
+    "",
+    "Operator:",
+    "  run connections         Manage Takosumi-provided provider defaults",
+    "  run secrets             Check and apply Worker secrets",
+    "",
+    "Deploy example:",
+    "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com",
+    "  export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>",
+    "  takosumi deploy ./my-capsule --space @me --name my-app --var region=apac",
+    "",
+    "Internal/development commands are intentionally hidden from this help.",
+  ].join("\n");
+}
+
+export function platformSecretsHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi secrets <command>",
+      "",
+      "コマンド:",
+      "  status",
+      "  apply",
+      "",
+      "operator vault の状態を確認し、生成可能 secret を作成して Worker に push します。",
+      "表示するのは secret 名と件数だけで、値は表示しません。",
+      "provider credential は Takosumi 提供 default なら `takosumi run connections ...`、",
+      "user-owned credential は dashboard/API flow で扱います。",
+    ].join("\n");
+  }
+  return [
+    "takosumi secrets <command>",
+    "",
     "Commands:",
-    "  accounts seed            Print a Takosumi Accounts seed plan",
-    "  accounts serve           Run the dev/test Takosumi Accounts OIDC service",
-    "  accounts migrate         Apply Takosumi Accounts Postgres migrations",
-    "  accounts migrate-d1      Apply Takosumi Accounts D1 (Cloudflare) migrations",
-    "  accounts launch-tokens cleanup  Prune expired or used launch token DB records",
-    "  accounts tokens          Manage Takosumi Accounts personal access tokens",
-    "  installations list       List AppInstallation ledger records",
-    "  installations inspect    Inspect one AppInstallation ledger record",
-    "  installations uninstall  Uninstall an AppInstallation and revoke active permission scopes",
-    "  installations status     Update an AppInstallation status",
-    "  installations materialize  Request shared-cell to dedicated materialization",
-    "  installations export      Request a pending export bundle operation",
-    "  launch-readiness template  Print a managed offering launch evidence template",
-    "  launch-readiness validate  Validate managed offering launch evidence",
-    "  launch-readiness public-summary  Emit a public-safe launch evidence summary",
-    "  launch-readiness public-summary validate  Validate a public summary JSON artifact",
-    "  launch-readiness production-topology template  Print a topology evidence template",
-    "  launch-readiness production-topology preflight  Validate topology evidence shape",
-    "  launch-readiness production-topology merge  Merge staging and production topology evidence",
+    "  status",
+    "  apply",
+    "",
+    "Checks the operator vault, creates generatable secrets, and pushes Worker",
+    "secrets. It only prints secret names and counts, never values. Operator",
+    "provider credentials use `takosumi run connections ...`; user-owned",
+    "credentials are dashboard/API flows, not CLI flows.",
+  ].join("\n");
+}
+
+export function platformSecretsStatusHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi secrets status",
+      "",
+      "オプション:",
+      "  --config <wrangler.toml>",
+      "  --secrets-dir <path>",
+      "  --json",
+      "",
+      "環境変数:",
+      "  TAKOSUMI_WRANGLER_CONFIG",
+      "  TAKOSUMI_SECRETS",
+    ].join("\n");
+  }
+  return [
+    "takosumi secrets status",
+    "",
+    "Options:",
+    "  --config <wrangler.toml>",
+    "  --secrets-dir <path>",
+    "  --json",
+    "",
+    "Environment:",
+    "  TAKOSUMI_WRANGLER_CONFIG",
+    "  TAKOSUMI_SECRETS",
+  ].join("\n");
+}
+
+export function platformSecretsApplyHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi secrets apply",
+      "",
+      "local vault を正本として Worker secret に push します。",
+      "生成可能 secret は不足時に作成します。既存 protected key は上書きしません。",
+      "",
+      "オプション:",
+      "  --config <wrangler.toml>",
+      "  --secrets-dir <path>",
+      "  --regenerate <secret-name|rotate-safe>",
+      "  --dry-run",
+      "  --json",
+    ].join("\n");
+  }
+  return [
+    "takosumi secrets apply",
+    "",
+    "Pushes Worker secrets from the local operator vault. Missing generatable",
+    "secrets are created. Existing protected keys are never overwritten.",
+    "",
+    "Options:",
+    "  --config <wrangler.toml>",
+    "  --secrets-dir <path>",
+    "  --regenerate <secret-name|rotate-safe>",
+    "  --dry-run",
+    "  --json",
+  ].join("\n");
+}
+
+export function connectionsHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi connections <command>",
+      "",
+      "コマンド:",
+      "  list",
+      "  set-cloudflare-token",
+      "  test <connection-id>",
+      "  revoke <connection-id>",
+      "  defaults list",
+      "  defaults set <provider> <connection-id>",
+      "",
+      "`--url` に Takosumi platform origin、`--token` に deploy-control bearer を渡します。",
+      "credential 値は file からだけ読み、CLI には表示しません。",
+      "この CLI は operator-only です。Takosumi 提供 default と platform secret だけを扱います。",
+      "Space/user-owned provider env set は dashboard/API flow で作成します。",
+    ].join("\n");
+  }
+  return [
+    "takosumi connections <command>",
+    "",
+    "Commands:",
+    "  list",
+    "  set-cloudflare-token",
+    "  test <connection-id>",
+    "  revoke <connection-id>",
+    "  defaults list",
+    "  defaults set <provider> <connection-id>",
+    "",
+    "Use --url with the Takosumi platform origin and --token with the",
+    "deploy-control bearer. Credential values are accepted only through files",
+    "and are never printed by the CLI. This CLI is operator-only: it manages",
+    "Takosumi-provided defaults and platform secrets. Space/user-owned provider",
+    "env sets are created through dashboard/API flows.",
+  ].join("\n");
+}
+
+export function connectionsListHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi connections list",
+      "",
+      "オプション:",
+      "  --url <deploy-control-url>",
+      "  --token <deploy-control-bearer>",
+      "  --json",
+      "",
+      "環境変数:",
+      "  TAKOSUMI_DEPLOY_CONTROL_URL",
+      "  TAKOSUMI_DEPLOY_CONTROL_TOKEN",
+    ].join("\n");
+  }
+  return [
+    "takosumi connections list",
+    "",
+    "Options:",
+    "  --url <deploy-control-url>",
+    "  --token <deploy-control-bearer>",
+    "  --json",
+    "",
+    "Environment:",
+    "  TAKOSUMI_DEPLOY_CONTROL_URL",
+    "  TAKOSUMI_DEPLOY_CONTROL_TOKEN",
+  ].join("\n");
+}
+
+export function connectionsCreateCloudflareHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi connections set-cloudflare-token",
+      "",
+      "オプション:",
+      "  --api-token-file <path>  Cloudflare API token を含む file",
+      "  --values-file <path>     JSON object。例: {\"CLOUDFLARE_API_TOKEN\":\"...\"}",
+      "  --display-name <name>",
+      "  --account-id <id>",
+      "  --zone-id <id>",
+      "  --expires-at <iso8601>",
+      "  --default <provider,...>  operator default も同時に設定。例: cloudflare",
+      "  --url <deploy-control-url>",
+      "  --token <deploy-control-bearer>",
+      "  --json",
+    ].join("\n");
+  }
+  return [
+    "takosumi connections set-cloudflare-token",
+    "",
+    "Options:",
+    "  --api-token-file <path>  file containing the Cloudflare API token",
+    "  --values-file <path>     JSON object, e.g. {\"CLOUDFLARE_API_TOKEN\":\"...\"}",
+    "  --display-name <name>",
+    "  --account-id <id>",
+    "  --zone-id <id>",
+    "  --expires-at <iso8601>",
+  "  --default <provider,...>  also set operator defaults, e.g. cloudflare",
+    "  --url <deploy-control-url>",
+    "  --token <deploy-control-bearer>",
+    "  --json",
+  ].join("\n");
+}
+
+export function connectionsTestHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi connections test <connection-id>",
+      "",
+      "オプション:",
+      "  --url <deploy-control-url>",
+      "  --token <deploy-control-bearer>",
+      "  --json",
+    ].join("\n");
+  }
+  return [
+    "takosumi connections test <connection-id>",
+    "",
+    "Options:",
+    "  --url <deploy-control-url>",
+    "  --token <deploy-control-bearer>",
+    "  --json",
+  ].join("\n");
+}
+
+export function connectionsRevokeHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi connections revoke <connection-id>",
+      "",
+      "オプション:",
+      "  --url <deploy-control-url>",
+      "  --token <deploy-control-bearer>",
+      "  --json",
+    ].join("\n");
+  }
+  return [
+    "takosumi connections revoke <connection-id>",
+    "",
+    "Options:",
+    "  --url <deploy-control-url>",
+    "  --token <deploy-control-bearer>",
+    "  --json",
+  ].join("\n");
+}
+
+export function connectionsDefaultsHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi connections defaults <command>",
+      "",
+      "コマンド:",
+      "  list",
+      "  set <provider> <connection-id>",
+    ].join("\n");
+  }
+  return [
+    "takosumi connections defaults <command>",
+    "",
+    "Commands:",
+    "  list",
+    "  set <provider> <connection-id>",
+  ].join("\n");
+}
+
+export function connectionsDefaultsSetHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi connections defaults set <provider> <connection-id>",
+      "",
+      "Provider:",
+      "  cloudflare のような短縮名、または OpenTofu provider source",
+      "",
+      "オプション:",
+      "  --url <deploy-control-url>",
+      "  --token <deploy-control-bearer>",
+      "  --json",
+    ].join("\n");
+  }
+  return [
+    "takosumi connections defaults set <provider> <connection-id>",
+    "",
+    "Provider:",
+    "  short name such as cloudflare or an OpenTofu provider source",
+    "",
+    "Options:",
+    "  --url <deploy-control-url>",
+    "  --token <deploy-control-bearer>",
+    "  --json",
   ].join("\n");
 }
 
@@ -264,7 +572,7 @@ export function accountsServeHelpText(): string {
     "Environment:",
     "  TAKOSUMI_ACCOUNTS_DATABASE_URL",
     "  TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL",
-    "  TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN",
+    "  TAKOSUMI_DEPLOY_CONTROL_TOKEN",
     "  TAKOSUMI_ACCOUNTS_USE_EDGE_MATERIALS",
     "  TAKOSUMI_ACCOUNTS_SHARED_CELL_SLOTS",
     "  TAKOSUMI_ACCOUNTS_SHARED_CELL_SCALE_OUT_POLICY",

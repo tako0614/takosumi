@@ -20,10 +20,20 @@ import Page from "./components/auth/Page.tsx";
 import { clearSession, type SessionRecord } from "./lib/session.ts";
 import { rpc, ApiError } from "./lib/api.ts";
 import {
+  changeSpaceSubscription,
+  getSpaceBilling,
+  listSpaceCreditReservations,
+  listSpaceUsage,
   listSpaces,
+  topUpSpaceCredits,
   updateSpace,
+  type BillingMode,
+  type BillingProvider,
+  type BillingSettings,
+  type CreditReservation,
   type PolicyConfig,
   type Space,
+  type UsageEvent,
 } from "../../lib/control-api.ts";
 import { currentSpaceId, setCurrentSpaceId } from "../control/space-state.ts";
 
@@ -322,33 +332,120 @@ export function AccountBillingView() {
 function BillingInner(props: { readonly session: SessionRecord }) {
   const [spaces] = createResource(listSpaces);
   const [priceId, setPriceId] = createSignal("");
-  const [mode, setMode] = createSignal<"subscription" | "payment">(
+  const [checkoutMode, setCheckoutMode] = createSignal<
+    "subscription" | "payment"
+  >(
     "subscription",
   );
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
+  const [checkoutBusy, setCheckoutBusy] = createSignal(false);
+  const [checkoutError, setCheckoutError] = createSignal<string | null>(null);
   const [checkoutUrl, setCheckoutUrl] = createSignal<string | null>(null);
+  const [portalBusy, setPortalBusy] = createSignal(false);
+  const [portalError, setPortalError] = createSignal<string | null>(null);
+  const [portalUrl, setPortalUrl] = createSignal<string | null>(null);
+  const [billingMode, setBillingMode] =
+    createSignal<BillingMode>("disabled");
+  const [billingProvider, setBillingProvider] =
+    createSignal<BillingProvider>("none");
+  const [billingBusy, setBillingBusy] = createSignal(false);
+  const [billingError, setBillingError] = createSignal<string | null>(null);
+  const [billingMessage, setBillingMessage] = createSignal<string | null>(null);
+  const [topUpCredits, setTopUpCredits] = createSignal("100");
+  const [topUpBusy, setTopUpBusy] = createSignal(false);
   const selectedSpace = createMemo(
     () =>
       (spaces() ?? []).find((space) => space.id === currentSpaceId()) ??
       (spaces() ?? [])[0],
   );
+  const selectedSpaceId = createMemo(() => selectedSpace()?.id);
+  const [billing, { refetch: refetchBilling }] = createResource(
+    selectedSpaceId,
+    getSpaceBilling,
+  );
+  const [usage, { refetch: refetchUsage }] = createResource(
+    selectedSpaceId,
+    listSpaceUsage,
+  );
+  const [reservations, { refetch: refetchReservations }] = createResource(
+    selectedSpaceId,
+    listSpaceCreditReservations,
+  );
+
+  createEffect(() => {
+    const settings = billing()?.settings ?? selectedSpace()?.billingSettings;
+    if (!settings) return;
+    setBillingMode(settings.mode);
+    setBillingProvider(settings.provider);
+  });
+
+  const currentSettings = createMemo(
+    () => billing()?.settings ?? selectedSpace()?.billingSettings,
+  );
+  const currentBalance = createMemo(() => billing()?.balance);
+
+  const saveBillingSettings = async (event: Event) => {
+    event.preventDefault();
+    const space = selectedSpace();
+    if (!space) return;
+    const settings = buildBillingSettings(billingMode(), billingProvider());
+    if (!settings) {
+      setBillingError("enforce は stripe または manual provider が必要です。");
+      return;
+    }
+    setBillingBusy(true);
+    setBillingError(null);
+    setBillingMessage(null);
+    try {
+      await changeSpaceSubscription(space.id, settings);
+      await refetchBilling();
+      setBillingMessage("Billing settings を保存しました。");
+    } catch (err) {
+      setBillingError(errorMessage(err));
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
+  const submitTopUp = async (event: Event) => {
+    event.preventDefault();
+    const space = selectedSpace();
+    if (!space) return;
+    const credits = Number(topUpCredits());
+    if (!Number.isSafeInteger(credits) || credits <= 0) {
+      setBillingError("credits は正の整数で入力してください。");
+      return;
+    }
+    setTopUpBusy(true);
+    setBillingError(null);
+    setBillingMessage(null);
+    try {
+      await topUpSpaceCredits(space.id, credits);
+      await refetchBilling();
+      await refetchUsage();
+      await refetchReservations();
+      setBillingMessage(`${credits} credits を追加しました。`);
+    } catch (err) {
+      setBillingError(errorMessage(err));
+    } finally {
+      setTopUpBusy(false);
+    }
+  };
 
   const startCheckout = async (event: Event) => {
     event.preventDefault();
     const price = priceId().trim();
     if (!price) {
-      setError("Stripe price ID を入力してください。");
+      setCheckoutError("Stripe price ID を入力してください。");
       return;
     }
-    setBusy(true);
-    setError(null);
+    setCheckoutBusy(true);
+    setCheckoutError(null);
     setCheckoutUrl(null);
     try {
       const result = await rpc.billing.checkout({
         subject: props.session.subject,
         priceId: price,
-        mode: mode(),
+        mode: checkoutMode(),
         customerEmail: props.session.email,
         metadata: {
           source: "takosumi_dashboard",
@@ -364,13 +461,35 @@ function BillingInner(props: { readonly session: SessionRecord }) {
         setCheckoutUrl(result.url);
         location.assign(result.url);
       } else {
-        setError("Checkout URL が返りませんでした。");
+        setCheckoutError("Checkout URL が返りませんでした。");
       }
     } catch (err) {
       const api = err as ApiError;
-      setError(api.message ?? String(err));
+      setCheckoutError(api.message ?? String(err));
     } finally {
-      setBusy(false);
+      setCheckoutBusy(false);
+    }
+  };
+
+  const openBillingPortal = async () => {
+    setPortalBusy(true);
+    setPortalError(null);
+    setPortalUrl(null);
+    try {
+      const result = await rpc.billing.portal({
+        subject: props.session.subject,
+      });
+      if (result.url) {
+        setPortalUrl(result.url);
+        location.assign(result.url);
+      } else {
+        setPortalError("Customer Portal URL が返りませんでした。");
+      }
+    } catch (err) {
+      const api = err as ApiError;
+      setPortalError(api.message ?? String(err));
+    } finally {
+      setPortalBusy(false);
     }
   };
 
@@ -409,7 +528,13 @@ function BillingInner(props: { readonly session: SessionRecord }) {
             </Show>
           </dd>
           <dt>Billing mode</dt>
-          <dd>disabled / showback / enforce</dd>
+          <dd>
+            <code>{currentSettings()?.mode ?? "disabled"}</code>
+          </dd>
+          <dt>Billing provider</dt>
+          <dd>
+            <code>{currentSettings()?.provider ?? "none"}</code>
+          </dd>
           <dt>Billing account</dt>
           <dd>
             <Show
@@ -419,10 +544,166 @@ function BillingInner(props: { readonly session: SessionRecord }) {
               {(id) => <code>{id()}</code>}
             </Show>
           </dd>
+          <dt>Available credits</dt>
+          <dd>{currentBalance()?.availableCredits ?? 0}</dd>
+          <dt>Reserved credits</dt>
+          <dd>{currentBalance()?.reservedCredits ?? 0}</dd>
         </dl>
       </section>
 
       <section class="detail-section">
+        <h2>Space billing settings</h2>
+        <form class="billing-settings-form" onSubmit={saveBillingSettings}>
+          <label class="form-field">
+            Mode
+            <select
+              value={billingMode()}
+              onChange={(e) => {
+                const next = e.currentTarget.value as BillingMode;
+                setBillingMode(next);
+                if (next === "disabled") setBillingProvider("none");
+                if (next === "enforce" && billingProvider() === "none") {
+                  setBillingProvider("manual");
+                }
+              }}
+            >
+              <option value="disabled">disabled</option>
+              <option value="showback">showback</option>
+              <option value="enforce">enforce</option>
+            </select>
+          </label>
+          <label class="form-field">
+            Provider
+            <select
+              value={billingProvider()}
+              disabled={billingMode() === "disabled"}
+              onChange={(e) =>
+                setBillingProvider(e.currentTarget.value as BillingProvider)
+              }
+            >
+              <option value="none">none</option>
+              <option value="manual">manual</option>
+              <option value="stripe">stripe</option>
+            </select>
+          </label>
+          <button
+            class="btn btn-primary"
+            type="submit"
+            disabled={billingBusy()}
+          >
+            <Save size={16} />
+            {billingBusy() ? "保存中..." : "保存"}
+          </button>
+        </form>
+        <form class="billing-settings-form" onSubmit={submitTopUp}>
+          <label class="form-field">
+            Top-up credits
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={topUpCredits()}
+              onInput={(e) => setTopUpCredits(e.currentTarget.value)}
+            />
+          </label>
+          <button class="btn" type="submit" disabled={topUpBusy()}>
+            {topUpBusy() ? "追加中..." : "Credits を追加"}
+          </button>
+        </form>
+        <Show when={billingError()}>
+          {(m) => (
+            <p class="sign-in-error" role="alert">
+              {m()}
+            </p>
+          )}
+        </Show>
+        <Show when={billingMessage()}>
+          {(m) => <p class="success-note">{m()}</p>}
+        </Show>
+      </section>
+
+      <section class="detail-section">
+        <h2>Credit reservations</h2>
+        <Show
+          when={(reservations() ?? []).length > 0}
+          fallback={<p class="muted">credit reservation はまだありません。</p>}
+        >
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Credits</th>
+                <th>Mode</th>
+                <th>Run</th>
+                <th>Expires</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={reservations() ?? []}>
+                {(reservation) => (
+                  <BillingReservationRow reservation={reservation} />
+                )}
+              </For>
+            </tbody>
+          </table>
+        </Show>
+      </section>
+
+      <section class="detail-section">
+        <h2>Usage</h2>
+        <Show
+          when={(usage() ?? []).length > 0}
+          fallback={<p class="muted">usage event はまだありません。</p>}
+        >
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Kind</th>
+                <th>Quantity</th>
+                <th>Credits</th>
+                <th>Run</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={usage() ?? []}>
+                {(event) => <BillingUsageRow event={event} />}
+              </For>
+            </tbody>
+          </table>
+        </Show>
+      </section>
+
+      <section class="detail-section">
+        <h2>Hosted billing</h2>
+        <div class="billing-settings-form">
+          <button
+            class="btn"
+            type="button"
+            disabled={portalBusy()}
+            onClick={openBillingPortal}
+          >
+            <ExternalLink size={16} />
+            {portalBusy() ? "Portal 作成中..." : "Customer Portal を開く"}
+          </button>
+        </div>
+        <Show when={portalError()}>
+          {(m) => (
+            <p class="sign-in-error" role="alert">
+              {m()}
+            </p>
+          )}
+        </Show>
+        <Show when={portalUrl()}>
+          {(url) => (
+            <p class="muted">
+              Redirecting to{" "}
+              <a href={url()} rel="noreferrer">
+                Stripe Customer Portal <ExternalLink size={14} />
+              </a>
+            </p>
+          )}
+        </Show>
         <h2>Hosted checkout</h2>
         <form class="billing-checkout-form" onSubmit={startCheckout}>
           <label class="form-field">
@@ -439,9 +720,9 @@ function BillingInner(props: { readonly session: SessionRecord }) {
           <label class="form-field">
             Mode
             <select
-              value={mode()}
+              value={checkoutMode()}
               onChange={(e) =>
-                setMode(
+                setCheckoutMode(
                   e.currentTarget.value === "payment"
                     ? "payment"
                     : "subscription",
@@ -452,11 +733,15 @@ function BillingInner(props: { readonly session: SessionRecord }) {
               <option value="payment">payment</option>
             </select>
           </label>
-          <button class="btn btn-primary" type="submit" disabled={busy()}>
-            {busy() ? "Checkout 作成中..." : "Checkout を開始"}
+          <button
+            class="btn btn-primary"
+            type="submit"
+            disabled={checkoutBusy()}
+          >
+            {checkoutBusy() ? "Checkout 作成中..." : "Checkout を開始"}
           </button>
         </form>
-        <Show when={error()}>
+        <Show when={checkoutError()}>
           {(m) => (
             <p class="sign-in-error" role="alert">
               {m()}
@@ -476,6 +761,71 @@ function BillingInner(props: { readonly session: SessionRecord }) {
       </section>
     </AppShell>
   );
+}
+
+function buildBillingSettings(
+  mode: BillingMode,
+  provider: BillingProvider,
+): BillingSettings | null {
+  if (mode === "disabled") {
+    return { mode: "disabled", provider: "none", reservationRequired: false };
+  }
+  if (mode === "showback") {
+    return { mode: "showback", provider, reservationRequired: false };
+  }
+  if (provider === "none") return null;
+  return { mode: "enforce", provider, reservationRequired: true };
+}
+
+function BillingUsageRow(props: { readonly event: UsageEvent }) {
+  return (
+    <tr>
+      <td>
+        <code>{props.event.kind}</code>
+      </td>
+      <td>{props.event.quantity}</td>
+      <td>{props.event.credits}</td>
+      <td>
+        <Show
+          when={props.event.runId}
+          fallback={<span class="muted">—</span>}
+        >
+          {(runId) => <code>{runId()}</code>}
+        </Show>
+      </td>
+      <td>{formatDateTime(props.event.createdAt)}</td>
+    </tr>
+  );
+}
+
+function BillingReservationRow(props: {
+  readonly reservation: CreditReservation;
+}) {
+  return (
+    <tr>
+      <td>
+        <code>{props.reservation.status}</code>
+      </td>
+      <td>{props.reservation.estimatedCredits}</td>
+      <td>{props.reservation.mode}</td>
+      <td>
+        <code>{props.reservation.runId}</code>
+      </td>
+      <td>{formatDateTime(props.reservation.expiresAt)}</td>
+    </tr>
+  );
+}
+
+function formatDateTime(value: string | undefined): string {
+  if (!value) return "—";
+  const time = Date.parse(value);
+  if (Number.isNaN(time)) return value;
+  return new Date(time).toLocaleString("ja-JP");
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
 }
 
 /** /account/profile — current sign-in detail (read-only). */

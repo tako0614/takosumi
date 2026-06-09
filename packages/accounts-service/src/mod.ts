@@ -4,6 +4,7 @@ import {
   type JsonWebKeySet,
   normalizeIssuer,
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
+  TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_CONNECTIONS_PATH,
   TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH,
@@ -18,6 +19,7 @@ import {
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_REVOKE_PATH,
   TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH,
+  TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH,
   TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH,
   TAKOSUMI_ACCOUNTS_TOKEN_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
@@ -37,6 +39,7 @@ export {
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH,
+  TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH,
   TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
@@ -89,8 +92,11 @@ import {
   handleRevokePersonalAccessToken,
 } from "./pat-routes.ts";
 import {
+  handleStripeBillingPortalRequest,
   handleStripeCheckoutRequest,
   handleStripeWebhookRequest,
+  type StripeSpaceBillingReconciler,
+  type StripeSpaceCreditReconciler,
 } from "./billing-routes.ts";
 import {
   handleAuthorize,
@@ -116,6 +122,7 @@ import {
 import { handleUseTakosStart } from "./use-takos-routes.ts";
 import { handleConsumeLaunchToken } from "./installation-routes-internal.ts";
 import {
+  handleAuthProvidersRequest,
   handleUpstreamAuthorizeRequest,
   handleUpstreamCallbackRequest,
   upstreamOAuthNotConfigured,
@@ -185,9 +192,7 @@ export type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
 } from "./control-routes.ts";
-export {
-  createOpenManagedOfferingAccessPolicy,
-} from "./managed-offering-policy.ts";
+export { createOpenManagedOfferingAccessPolicy } from "./managed-offering-policy.ts";
 export type {
   ManagedOfferingAccessPolicy,
   ManagedOfferingReadinessReportForOpenAccess,
@@ -265,6 +270,8 @@ export interface AccountsHandlerOptions {
    * respond 503 after the session gate.
    */
   controlPlaneOperations?: ControlPlaneOperations;
+  billingReconciler?: StripeSpaceBillingReconciler;
+  billingCreditReconciler?: StripeSpaceCreditReconciler;
   bindingMaterializer?: AppBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
@@ -301,6 +308,8 @@ export interface EphemeralAccountsHandlerOptions {
   launchTokens?: EphemeralLaunchTokenOptions;
   deployControl?: DeployControlProxyOptions;
   controlPlaneOperations?: ControlPlaneOperations;
+  billingReconciler?: StripeSpaceBillingReconciler;
+  billingCreditReconciler?: StripeSpaceCreditReconciler;
   bindingMaterializer?: AppBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
@@ -490,8 +499,7 @@ export interface AppInstallationImportDataManifest {
   readonly files: readonly AppInstallationImportDataManifestFile[];
 }
 
-export interface AppInstallationImportDataEntry
-  extends AppInstallationImportDataManifestFile {
+export interface AppInstallationImportDataEntry extends AppInstallationImportDataManifestFile {
   readonly content: Uint8Array;
 }
 
@@ -588,10 +596,10 @@ export async function createEphemeralAccountsHandler(
     ["sign", "verify"],
   );
   const keyId = options.keyId ?? `takosumi-dev-${crypto.randomUUID()}`;
-  const publicJwk = await crypto.subtle.exportKey(
+  const publicJwk = (await crypto.subtle.exportKey(
     "jwk",
     keyPair.publicKey,
-  ) as AccountsJsonWebKey;
+  )) as AccountsJsonWebKey;
   return createAccountsHandler({
     issuer,
     clients: options.clients,
@@ -618,12 +626,14 @@ export async function createEphemeralAccountsHandler(
       }`,
     },
     jwks: {
-      keys: [{
-        ...publicJwk,
-        kid: keyId,
-        use: "sig",
-        alg: "ES256",
-      }],
+      keys: [
+        {
+          ...publicJwk,
+          kid: keyId,
+          use: "sig",
+          alg: "ES256",
+        },
+      ],
     },
     oidcFlow: {
       subject: options.subject ?? "tsub_dev_seed",
@@ -693,11 +703,14 @@ export function createAccountsHandler(
       if (authBlocked) return authBlocked;
       const body = await readJsonObject(request);
       if (!isWorkloadPlatformServiceResolveContext(body)) {
-        return json({
-          error: "invalid_request",
-          error_description:
-            "request body must contain installationId plus sourceRef or kind",
-        }, 400);
+        return json(
+          {
+            error: "invalid_request",
+            error_description:
+              "request body must contain installationId plus sourceRef or kind",
+          },
+          400,
+        );
       }
       const material = await resolveTakosumiWorkloadPlatformService({
         store,
@@ -821,6 +834,17 @@ export function createAccountsHandler(
       });
     }
 
+    if (url.pathname === TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      // Deliberately not gated on `options.upstreamOAuth`: this route reports
+      // which sign-in methods are configured (so the sign-in screen can disable
+      // the rest) and must answer even when nothing is configured.
+      return handleAuthProvidersRequest({
+        upstreamOAuth: options.upstreamOAuth,
+        passkeys: options.passkeys,
+      });
+    }
+
     if (url.pathname === TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH) {
       if (request.method !== "GET") return methodNotAllowed("GET");
       if (!options.upstreamOAuth) return upstreamOAuthNotConfigured();
@@ -909,6 +933,29 @@ export function createAccountsHandler(
       });
     }
 
+    if (url.pathname === TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH) {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      const limited = checkoutLimiter.consume(request);
+      if (limited) return limited;
+      const blocked = managedOfferingAccessBlocked(
+        options.managedOfferingAccess,
+      );
+      if (blocked) return blocked;
+      const session = await requireAccountSession({
+        request: request.clone(),
+        store,
+      });
+      if (!session.ok) return session.response;
+      if (!options.stripeBilling) return billingNotConfigured();
+      return await handleStripeBillingPortalRequest({
+        request,
+        store,
+        stripe: options.stripeBilling,
+        sessionSubject: session.subject,
+        billingRedirectAllowlist: options.billingRedirectAllowlist,
+      });
+    }
+
     if (url.pathname === TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
       // Stripe webhooks are server-to-server (Stripe -> us) and are
@@ -923,6 +970,8 @@ export function createAccountsHandler(
         request,
         store,
         stripe: options.stripeBilling,
+        billingReconciler: options.billingReconciler,
+        billingCreditReconciler: options.billingCreditReconciler,
       });
     }
 
@@ -934,10 +983,14 @@ export function createAccountsHandler(
       });
       if (authBlocked) return authBlocked;
       if (!options.deployControl) {
-        return json({
-          error: "feature_unavailable",
-          error_description: "Installation PlanRun is temporarily unavailable.",
-        }, 503);
+        return json(
+          {
+            error: "feature_unavailable",
+            error_description:
+              "Installation PlanRun is temporarily unavailable.",
+          },
+          503,
+        );
       }
       return await handleInstallationPlanRunProxy({
         request,
@@ -1044,7 +1097,10 @@ export function createAccountsHandler(
       );
       if (accountAccess) {
         const authBlocked = await (
-          installationRouteAllowsWorkloadControl(installationRoute, request.method)
+          installationRouteAllowsWorkloadControl(
+            installationRoute,
+            request.method,
+          )
             ? requireAppInstallationAccountOrWorkloadControlAccess
             : requireAppInstallationAccountAccess
         )({
@@ -1056,7 +1112,8 @@ export function createAccountsHandler(
         if (authBlocked) return authBlocked;
       }
       if (
-        installationRoute.kind === "installation" && request.method === "GET"
+        installationRoute.kind === "installation" &&
+        request.method === "GET"
       ) {
         return await handleGetAppInstallation({
           installationId: installationRoute.installationId,
@@ -1100,7 +1157,8 @@ export function createAccountsHandler(
         });
       }
       if (
-        installationRoute.kind === "deployment" && request.method === "POST"
+        installationRoute.kind === "deployment" &&
+        request.method === "POST"
       ) {
         return await handleUpdateAppInstallationRevision({
           installationId: installationRoute.installationId,
@@ -1120,7 +1178,8 @@ export function createAccountsHandler(
         });
       }
       if (
-        installationRoute.kind === "materialize" && request.method === "POST"
+        installationRoute.kind === "materialize" &&
+        request.method === "POST"
       ) {
         return await handleRequestAppInstallationMaterialize({
           installationId: installationRoute.installationId,
@@ -1246,10 +1305,13 @@ export function createAccountsHandler(
 }
 
 function connectionsNotConfigured(): Response {
-  return json({
-    error: "feature_unavailable",
-    error_description: "Connections are temporarily unavailable.",
-  }, 503);
+  return json(
+    {
+      error: "feature_unavailable",
+      error_description: "Connections are temporarily unavailable.",
+    },
+    503,
+  );
 }
 
 /**
@@ -1279,17 +1341,23 @@ async function handleConnectionsCollection(input: {
     // logged.
     const body = await readJsonObject(request);
     if (!body) {
-      return json({
-        error: "invalid_request",
-        error_description: "request body is required",
-      }, 400);
+      return json(
+        {
+          error: "invalid_request",
+          error_description: "request body is required",
+        },
+        400,
+      );
     }
     const spaceId = stringValue(body.spaceId) ?? stringValue(body.space_id);
     if (!spaceId) {
-      return json({
-        error: "invalid_request",
-        error_description: "spaceId is required",
-      }, 400);
+      return json(
+        {
+          error: "invalid_request",
+          error_description: "spaceId is required",
+        },
+        400,
+      );
     }
     // The bearer auth helper reads only headers/cookies (not the body), so the
     // already-consumed request is fine to authorize against.
@@ -1305,13 +1373,17 @@ async function handleConnectionsCollection(input: {
     return responseFromConnectionsResult(result);
   }
   if (request.method === "GET") {
-    const spaceId = stringValue(url.searchParams.get("spaceId") ?? undefined) ??
+    const spaceId =
+      stringValue(url.searchParams.get("spaceId") ?? undefined) ??
       stringValue(url.searchParams.get("space_id") ?? undefined);
     if (!spaceId) {
-      return json({
-        error: "invalid_request",
-        error_description: "spaceId query parameter is required",
-      }, 400);
+      return json(
+        {
+          error: "invalid_request",
+          error_description: "spaceId query parameter is required",
+        },
+        400,
+      );
     }
     const authBlocked = await requireConnectionSpaceAccess({
       request,
@@ -1357,7 +1429,11 @@ async function handleConnectionItem(input: {
   // BEFORE dialing deploy-control, so an unauthenticated request can never even
   // trigger the connection-resolution read. The per-space ownership check runs
   // once we know the Connection's spaceId.
-  const bearer = await requireAccountsBearer({ request, store, scope: "write" });
+  const bearer = await requireAccountsBearer({
+    request,
+    store,
+    scope: "write",
+  });
   if (!bearer.ok) return bearer.response;
   // Resolve the Connection's spaceId for the ownership check. The Connection
   // projection carries no secret values, so this read is safe to perform here.
@@ -1478,15 +1554,17 @@ export interface AccountsServerHandle {
 export function startAccountsServer(
   options: AccountsServerOptions = {},
 ): AccountsServerHandle {
-  const bunGlobal = (globalThis as {
-    Bun?: {
-      serve: (options: {
-        hostname?: string;
-        port?: number;
-        fetch: (request: Request) => Promise<Response> | Response;
-      }) => { stop(closeActive?: boolean): void };
-    };
-  }).Bun;
+  const bunGlobal = (
+    globalThis as {
+      Bun?: {
+        serve: (options: {
+          hostname?: string;
+          port?: number;
+          fetch: (request: Request) => Promise<Response> | Response;
+        }) => { stop(closeActive?: boolean): void };
+      };
+    }
+  ).Bun;
   if (!bunGlobal?.serve) {
     throw new TypeError(
       "startAccountsServer requires Bun; use createAccountsHandler with a runtime-specific server on Node / Workers",
@@ -1539,9 +1617,7 @@ const RATE_LIMIT_MAX_TRACKED_CLIENTS = 4096;
  *
  * @param maxPerMinute Maximum requests per client IP in any 60 s window.
  */
-function createInMemoryRateLimiter(
-  maxPerMinute: number,
-): InMemoryRateLimiter {
+function createInMemoryRateLimiter(maxPerMinute: number): InMemoryRateLimiter {
   const windows = new Map<string, number[]>();
   return {
     consume(request: Request): Response | undefined {
@@ -1564,8 +1640,7 @@ function createInMemoryRateLimiter(
         return json(
           {
             error: "rate_limited",
-            error_description:
-              `rate limit exceeded (${maxPerMinute}/min per source)`,
+            error_description: `rate limit exceeded (${maxPerMinute}/min per source)`,
           },
           429,
           { "retry-after": `${retryAfterSeconds}` },
@@ -1594,8 +1669,8 @@ function evictIfNeeded(windows: Map<string, number[]>): void {
  * available. The intent is "per-source bucket", not "trust this string".
  */
 function clientIpFromRequest(request: Request): string {
-  const forwarded = request.headers.get("cf-connecting-ip") ??
-    request.headers.get("x-real-ip");
+  const forwarded =
+    request.headers.get("cf-connecting-ip") ?? request.headers.get("x-real-ip");
   if (forwarded) return forwarded.trim();
   const xForwardedFor = request.headers.get("x-forwarded-for");
   if (xForwardedFor) {
@@ -1610,31 +1685,43 @@ function clientIpFromRequest(request: Request): string {
 }
 
 function reservedOidcEndpoint(): Response {
-  return json({
-    error: "feature_unavailable",
-    error_description: "Sign-in is temporarily unavailable.",
-  }, 503);
+  return json(
+    {
+      error: "feature_unavailable",
+      error_description: "Sign-in is temporarily unavailable.",
+    },
+    503,
+  );
 }
 
 function billingNotConfigured(): Response {
-  return json({
-    error: "feature_unavailable",
-    error_description: "Billing is temporarily unavailable.",
-  }, 503);
+  return json(
+    {
+      error: "feature_unavailable",
+      error_description: "Billing is temporarily unavailable.",
+    },
+    503,
+  );
 }
 
 function passkeysNotConfigured(): Response {
-  return json({
-    error: "feature_unavailable",
-    error_description: "Passkeys are temporarily unavailable.",
-  }, 503);
+  return json(
+    {
+      error: "feature_unavailable",
+      error_description: "Passkeys are temporarily unavailable.",
+    },
+    503,
+  );
 }
 
 function launchTokensNotConfigured(): Response {
-  return json({
-    error: "feature_unavailable",
-    error_description: "App launch is temporarily unavailable.",
-  }, 503);
+  return json(
+    {
+      error: "feature_unavailable",
+      error_description: "App launch is temporarily unavailable.",
+    },
+    503,
+  );
 }
 
 function requireWorkloadPlatformServiceResolverAccess(input: {

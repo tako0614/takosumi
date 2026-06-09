@@ -58,7 +58,7 @@ async function createSource(
 /**
  * Seeds a deterministic space-scoped InstallConfig through the in-process
  * operations facade so the Installation-create tests do not depend on the
- * fire-and-forget official catalog seed having drained.
+ * fire-and-forget built-in InstallConfig seed having drained.
  */
 async function seedInstallConfig(
   operations: {
@@ -207,6 +207,7 @@ test("model e2e: GET /api/installations/{id} returns the new shape", async () =>
   expect(body.installation.id).toBe(installationId);
   expect(body.installation.spaceId).toBe(spaceId);
   expect(body.installation.currentStateGeneration).toBe(0);
+  expect(body.installation.installType).toBeUndefined();
 });
 
 test("model e2e: install-configs lists the space's seeded config", async () => {
@@ -219,8 +220,15 @@ test("model e2e: install-configs lists the space's seeded config", async () => {
     { headers: headers() },
   );
   expect(res.status).toBe(200);
-  const configs = (await res.json()).installConfigs as Array<{ id: string }>;
+  const configs = (await res.json()).installConfigs as Array<{
+    id: string;
+    installType?: string;
+    templateBinding?: unknown;
+  }>;
   expect(configs.some((cfg) => cfg.id === installConfigId)).toBe(true);
+  const config = configs.find((cfg) => cfg.id === installConfigId);
+  expect(config?.installType).toBeUndefined();
+  expect(config?.templateBinding).toBeUndefined();
 });
 
 test("model e2e: plan without a SourceSnapshot is a 409 source_sync_required", async () => {

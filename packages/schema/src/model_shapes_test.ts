@@ -7,17 +7,21 @@
 import { expect, test } from "bun:test";
 
 import type {
-  CapabilityBinding,
   OperatorConnectionDefault,
-} from "./capability-bindings.ts";
+  ProviderBinding,
+} from "./provider-bindings.ts";
 import type {
   BillingAccount,
+  BillingPlan,
   BillingSettings,
   CreditReservation,
+  InvoiceUsageReconciliation,
+  ManagedResourceUsageMeter,
   UsageEvent,
 } from "./billing.ts";
 import type { CapsuleCompatibilityReport } from "./capsules.ts";
 import type { Dependency, DependencySnapshot } from "./dependencies.ts";
+import type { Connection } from "./internal-deploy-control-api.ts";
 import type { Deployment, StateSnapshot } from "./deployments.ts";
 import type { InstallConfig, Installation } from "./installations.ts";
 import type { OutputShare, OutputSnapshot } from "./output-snapshots.ts";
@@ -43,13 +47,28 @@ test("Space shape", () => {
   ).toBe("@shota/talk");
 });
 
+test("BillingPlan shape", () => {
+  const plan: BillingPlan = {
+    id: "pro",
+    name: "Pro",
+    monthlyBasePrice: 2000,
+    includedCredits: 1000,
+    limits: {
+      maxEstimatedCreditsPerRun: 100,
+      quota: { resources: 20 },
+    },
+    createdAt: "2026-06-07T00:00:00Z",
+    updatedAt: "2026-06-07T00:00:00Z",
+  };
+  expect(plan.limits.quota?.resources).toBe(20);
+});
+
 test("Installation + InstallConfig shape", () => {
   const config: InstallConfig = {
     id: "cfg_talk",
     name: "talk",
     installType: "opentofu_module",
     trustLevel: "official",
-    capsulePath: "deploy",
     normalization: {
       allowBackendRewrite: true,
       allowProviderLift: true,
@@ -64,6 +83,13 @@ test("Installation + InstallConfig shape", () => {
       allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
       allowedResourceTypes: ["cloudflare_workers_script"],
       destructiveChanges: { requireExplicitConfirmation: true },
+      providerLockfile: { requireDigest: true },
+      providerInstallation: { requireMirror: true },
+      providerCredentials: {
+        requireTemporary: true,
+        requireTtlEnforced: true,
+        requireRootOnly: true,
+      },
     },
     createdAt: "2026-06-06T00:00:00Z",
     updatedAt: "2026-06-06T00:00:00Z",
@@ -112,30 +138,57 @@ test("Capsule compatibility report shape", () => {
     dataSources: [],
     provisioners: [],
     normalizedObjectKey:
-      "spaces/space_1/installations/inst_talk/runs/run_1/normalized-module.tar.zst",
+      "spaces/space_1/sources/src_talk/snapshots/snap_1/normalized-module.json",
     normalizedDigest: "sha256:normalized",
     createdAt: "2026-06-07T00:00:00Z",
   };
   expect(report.level).toBe("auto_capsulized");
 });
 
-test("CapabilityBinding modes", () => {
-  const bindings: readonly CapabilityBinding[] = [
-    { mode: "default" },
-    { mode: "connection", connectionId: "conn_space_dns" },
-    { mode: "manual", values: { type: "CNAME", name: "talk.example.com" } },
-    { mode: "disabled" },
+test("ProviderBinding modes", () => {
+  const bindings: readonly ProviderBinding[] = [
+    { provider: "cloudflare", alias: "main", mode: "default" },
+    {
+      provider: "cloudflare",
+      alias: "zone",
+      mode: "connection",
+      connectionId: "conn_space_cf",
+    },
+    {
+      provider: "hashicorp/aws",
+      alias: "archive",
+      mode: "manual",
+      values: { bucket: "manual-bucket" },
+    },
+    { provider: "hashicorp/postgresql", alias: "db", mode: "disabled" },
   ];
   expect(bindings).toHaveLength(4);
   const operatorDefault: OperatorConnectionDefault = {
-    id: "ocd_compute",
-    capability: "compute",
+    id: "ocd_cloudflare",
     provider: "cloudflare",
     connectionId: "conn_operator_cloudflare",
     createdAt: "2026-06-06T00:00:00Z",
     updatedAt: "2026-06-06T00:00:00Z",
   };
-  expect(operatorDefault.capability).toBe("compute");
+  expect(operatorDefault.provider).toBe("cloudflare");
+});
+
+test("Connection expiry shape", () => {
+  const connection: Connection = {
+    id: "conn_1",
+    spaceId: "space_1",
+    provider: "cloudflare",
+    kind: "cloudflare_api_token",
+    scope: "space",
+    authMethod: "static_secret",
+    status: "expired",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt: "2026-06-07T00:00:00Z",
+    updatedAt: "2026-06-08T00:00:00Z",
+    expiresAt: "2026-06-08T00:00:00Z",
+  };
+  expect(connection.status).toBe("expired");
+  expect(connection.expiresAt).toBe("2026-06-08T00:00:00Z");
 });
 
 test("Dependency + DependencySnapshot shape", () => {
@@ -170,6 +223,10 @@ test("Dependency + DependencySnapshot shape", () => {
         dependencyId: dependency.id,
         producerInstallationId: dependency.producerInstallationId,
         producerStateGeneration: 3,
+        producerStateSnapshotId: "state_3",
+        producerStateObjectKey:
+          "spaces/space_1/installations/inst_core/envs/production/states/00000003.tfstate.enc",
+        producerStateDigest: "sha256:state",
         producerOutputSnapshotId: "out_3",
         producerOutputDigest: "sha256:abc",
         valuesDigest: "sha256:def",
@@ -238,6 +295,12 @@ test("single Run table covers all run kinds", () => {
   };
   expect(run.type).toBe("plan");
   expect(group.type).toBe("space_update");
+  const driftGroup: RunGroup = {
+    ...group,
+    id: "rg_drift",
+    type: "space_drift_check",
+  };
+  expect(driftGroup.type).toBe("space_drift_check");
 });
 
 test("compatibility_check Run kind is part of the unified ledger", () => {
@@ -322,6 +385,31 @@ test("Billing and security ledger shapes", () => {
     idempotencyKey: "run_1:runner",
     createdAt: "2026-06-07T00:00:00Z",
   };
+  const managedMeter: ManagedResourceUsageMeter = {
+    installationId: "inst_talk",
+    kind: "managed_storage_gb_hour",
+    quantity: 12.5,
+    credits: 3,
+    meterId: "r2:inst_talk",
+  };
+  const invoiceReconciliation: InvoiceUsageReconciliation = {
+    invoiceId: "in_123",
+    periodStart: "2026-06-07T00:00:00Z",
+    periodEnd: "2026-06-08T00:00:00Z",
+    meteredCredits: 3,
+    invoicedCredits: 4,
+    adjustmentCredits: 1,
+    usageEvent: {
+      id: "usage_reconcile",
+      spaceId: "space_1",
+      kind: "operation",
+      quantity: 1,
+      credits: 1,
+      source: "billing_reconciliation",
+      idempotencyKey: "invoice-reconciliation:space_1:in_123",
+      createdAt: "2026-06-08T00:00:00Z",
+    },
+  };
   const mint: CredentialMintEvent = {
     id: "mint_1",
     runId: "run_1",
@@ -329,7 +417,7 @@ test("Billing and security ledger shapes", () => {
     installationId: "inst_talk",
     connectionId: "conn_1",
     phase: "plan",
-    capabilities: ["compute"],
+    capabilities: ["cloudflare"],
     createdAt: "2026-06-07T00:00:00Z",
   };
   const finding: SecurityFinding = {
@@ -347,6 +435,8 @@ test("Billing and security ledger shapes", () => {
   expect(settings.mode).toBe("showback");
   expect(reservation.estimatedCredits).toBe(32);
   expect(usage.kind).toBe("runner_minute");
-  expect(mint.capabilities).toEqual(["compute"]);
+  expect(managedMeter.kind).toBe("managed_storage_gb_hour");
+  expect(invoiceReconciliation.adjustmentCredits).toBe(1);
+  expect(mint.capabilities).toEqual(["cloudflare"]);
   expect(finding.severity).toBe("warning");
 });

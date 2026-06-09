@@ -1,12 +1,7 @@
 /**
- * §4 Space CRUD routes plus the §9 operator-connection-default routes (mounted
- * consecutively in the original). Owns its handlers and its slice of the
- * {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS} descriptor inventory.
- *
- * NOTE: the §30 descriptor inventory enumerates the Space routes; it does NOT
- * list the operator-connection-default routes (they are mounted only when a
- * controller is present and are not part of the controller-absent 501 fallback),
- * so those two routes have no descriptor entry here.
+ * §4 Space CRUD routes plus the §9 operator-connection-default routes. Owns
+ * its handlers and its slice of the {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS}
+ * descriptor inventory.
  */
 
 import type {
@@ -86,6 +81,29 @@ export const DEPLOY_CONTROL_SPACE_ENDPOINTS: readonly DeployControlEndpoint[] = 
       okSchema: "SpaceResponse",
     },
     notImplementedMessage: "spaces not wired",
+  },
+  {
+    method: "PUT",
+    path: TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE,
+    summary:
+      "Sets one instance-wide operator default Connection for a provider.",
+    auth: "deploy-control-token",
+    operationId: "putOperatorConnectionDefault",
+    openapi: {
+      requestSchema: "PutOperatorConnectionDefaultRequest",
+      okSchema: "OperatorConnectionDefaultResponse",
+    },
+    notImplementedMessage: "connections not wired",
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE,
+    summary:
+      "Lists instance-wide operator default Connections by provider.",
+    auth: "deploy-control-token",
+    operationId: "listOperatorConnectionDefaults",
+    openapi: { okSchema: "ListOperatorConnectionDefaultsResponse" },
+    notImplementedMessage: "connections not wired",
   },
 ];
 
@@ -203,8 +221,6 @@ export function mountDeployControlSpaceRoutes(
   );
 
   // --- Operator default connections (Core Specification §9) ------------------
-  // Not part of the §30 descriptor inventory; mounted only with a controller and
-  // absent from the controller-absent 501 fallback.
 
   app.put(
     TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE,

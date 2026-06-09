@@ -1,94 +1,122 @@
 # CLI
 
-Takosumi の CLI は npm publish されません。 clone した source に対して in-repo で動く operator 向け CLI です。
-正本は `packages/cli/src` と `src/cli` で、 本 doc が矛盾した場合は code が優先します。
+Takosumi CLI の主役は **`takosumi deploy`** です。`wrangler deploy` と同じく、ローカルの OpenTofu Capsule
+ディレクトリをそのまま自分の Space にデプロイします。dashboard が原理的にできない「ローカル作業ディレクトリを
+読む」を担うのが CLI の存在理由で、git Source への push は不要です（git 連携は任意の add-on）。
 
-CLI は 2 つの用途に分かれます。
+```bash
+export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
-- **in-repo operator CLI** (`src/cli`): service を起動し、 migration / scaffold を流す。 `server` / `migrate` / `init` / `version` / `completions`。
-- **accounts / installations CLI** (`packages/cli`): operator distribution の account/session 経路を使う薄い client。
-  `accounts ...` / `installations ...` / `launch-readiness ...`。
+takosumi deploy ./my-capsule --space @me --name my-app --var region=apac
+takosumi plan   ./my-capsule --space @me --name my-app   # upload + plan のみ
+takosumi status <run-id>
+takosumi logs   <run-id>
+```
 
-OpenTofu configuration を解釈する正本ではありません。 install / plan / apply の正本 flow は dashboard と [`/api`](./deploy-control-api.md) です。
+CLI は重い処理（Capsule Gate / plan / apply）を実行しません。ローカルを tar(zstd) で固めて control plane に
+upload し、`/api/deploy` に「Installation を解決/作成して upload snapshot を plan せよ」と依頼するだけです。
+実行は runner container 内で、credential は vault が phase ごとに mint します。CLI は credential を一切扱いません。
 
-## In-repo operator CLI
+## Deploy のしくみ
+
+1. `takosumi deploy <dir>` がローカル Capsule を `tar --zstd` で固める
+2. `POST /api/spaces/:id/uploads` に binary で送り、R2_SOURCE に保存して **upload origin の SourceSnapshot** を記録
+3. `POST /api/deploy` が `@space/name` の Installation を解決/作成し（無ければ既定 InstallConfig を合成）、その
+   upload snapshot を pin した plan Run を起こす
+4. CLI が Run を poll し、状態を表示する
+
+git Source は「繋ぐと push で自動ビルドしてくれる任意機能」であり、Installation の前提ではありません。
+
+## Operator
+
+operator が `app.takosumi.com` を運用するための薄い helper も同じ bin に同居します。
+
+```bash
+takosumi run connections
+takosumi run secrets
+```
+
+内部/開発用の accounts / installations / launch-readiness / migration helper は repo 内に残りますが、通常の運用手順や
+root help には出しません。public API / dashboard / Run ledger が正本で、CLI は OpenTofu configuration を解釈しません。
+
+## 日本語表示
+
+```bash
+TAKOSUMI_LANG=ja takosumi run connections --help
+TAKOSUMI_LANG=ja takosumi run secrets --help
+```
+
+`TAKOSUMI_LANG=ja` または `LANG=ja_JP.UTF-8` のような日本語 locale で help が日本語になります。
+
+## 登録
+
+operator machine では wrapper または symlink を PATH に置きます。
+
+```bash
+ln -sf /root/dev/takos/takosumi/packages/cli/src/main.ts /usr/local/bin/takosumi
+chmod +x /root/dev/takos/takosumi/packages/cli/src/main.ts
+```
+
+clone 直後のローカル確認だけ、同じ code path を直接叩けます。
 
 ```bash
 cd takosumi
-bun install
-bun src/cli/main.ts --help
+bun run cli -- run connections --help
 ```
 
-### server
+## Connections
 
-local の Takosumi service HTTP server を起動します。
+Takosumi 提供 provider default を登録・確認する operator-only CLI です。credential 値は file からだけ読み、出力しません。
+Space/user-owned provider env set は dashboard/API flow で作成し、CLI では作りません。
 
 ```bash
-export TAKOSUMI_DEV_MODE=1
-export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
-bun src/cli/main.ts server --port 8788
+export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<operator-deploy-control-bearer>
+
+takosumi run connections set-cloudflare-token \
+  --api-token-file /operator/vault/cloudflare-api-token \
+  --default cloudflare
+
+takosumi run connections list
+takosumi run connections defaults list
+takosumi run connections defaults set cloudflare conn_...
+takosumi run connections test conn_...
+takosumi run connections revoke conn_...
 ```
 
-`--detach` は process を fork しません。 systemd / docker compose / nohup の supervisor template を表示します。
-Production では `TAKOSUMI_DEV_MODE` を使わず、 persistent storage・managed auth・secret store・runner substrate を
-operator config で注入します (詳細は [Operator](./operator.md))。
+## Secrets
 
-### migrate / init
+Takosumi platform Worker 自体の secret を operator vault から確認・適用します。provider credential は
+Takosumi 提供 default なら `connections`、user-owned credential は dashboard/API flow です。
+
+`apply` は不足している生成可能 secret を作ってから push します。既存の signing key、secret-store passphrase、
+pairwise secret、provider credential は上書きしません。個別に再生成できるのは safe rotation 対象だけです。
 
 ```bash
-bun src/cli/main.ts migrate          # apply schema migrations
-bun src/cli/main.ts init [output]    # scaffold local starter files
+takosumi run secrets status
+takosumi run secrets apply
+takosumi run secrets apply --regenerate TAKOSUMI_DEPLOY_CONTROL_TOKEN
 ```
 
-`init` は user repo に Takosumi 独自 manifest を要求しません (core は no-in-repo-manifest)。Capsule install の正本入力は
-Git URL / ref / modulePath と service-side InstallConfig です。
-
-## Accounts / installations CLI
-
-operator distribution の account/session 経路を使う client です。この経路は public control-plane surface ではありません。
-外部統合と Capsule install / plan / apply は [`/api`](./deploy-control-api.md) と dashboard flow を正本にします。
-endpoint と bearer は operator が選びます。
+`takosumi-private/` が `takos/` または `takosumi/` の隣にある通常の operator checkout では、CLI が
+`takosumi-private/platform/wrangler.toml` と `takosumi-private/.secrets/production` を自動検出します。
+別の場所を使う場合だけ指定します。
 
 ```bash
-export TAKOSUMI_ACCOUNTS_URL=https://app.takosumi.com
-export TAKOSUMI_ACCOUNTS_TOKEN=<accounts-session-or-pat-bearer>
-bun packages/cli/src/main.ts --help
+export TAKOSUMI_WRANGLER_CONFIG=/operator/takosumi-private/platform/wrangler.toml
+export TAKOSUMI_SECRETS=/operator/takosumi-private/.secrets/production
 ```
 
-`--accountsUrl` / `--token` で env を上書きできます。 implicit な takosumi default はありません。
-
-### installations
-
-Installation ledger を読む / 状態を変える操作です。
-
-```bash
-bun packages/cli/src/main.ts installations list --space space_personal
-bun packages/cli/src/main.ts installations inspect ins_01ABCDEF
-bun packages/cli/src/main.ts installations uninstall ins_01ABCDEF --reason "..."
-bun packages/cli/src/main.ts installations status ins_01ABCDEF --status active
-```
-
-`--space` を省くと `TAKOS_SPACE_ID` を読みます。 plan / apply は dashboard または
-[`/api`](./deploy-control-api.md) の Run surface で行います。
-
-### accounts / launch-readiness
-
-```bash
-bun packages/cli/src/main.ts accounts tokens list --token <accounts-session-bearer>
-bun packages/cli/src/main.ts accounts migrate --database-url postgres://...
-bun packages/cli/src/main.ts launch-readiness validate --file evidence.json
-```
-
-`accounts` は OIDC / billing / personal access token / migration、 `launch-readiness` は managed offering の launch
-evidence を扱います。 各 subcommand の option は `--help` で確認できます。
+`status` / `apply` は secret 値を表示しません。remote-only secret の削除は自動では行わず、operator が
+`status` で確認してから明示的に `wrangler secret delete` で行います。
 
 ## Environment
 
-| Variable                                  | Surface      | 用途                                                                |
-| ----------------------------------------- | ------------ | ------------------------------------------------------------------- |
-| `TAKOSUMI_DEV_MODE`                       | in-repo CLI  | dev 用の in-memory storage / relaxed auth (production では使わない) |
-| `TAKOSUMI_DEPLOY_CONTROL_TOKEN`           | in-repo CLI  | control-plane bearer                                                |
-| `TAKOSUMI_DATABASE_URL`                   | in-repo CLI  | Postgres substrate                                                  |
-| `TAKOSUMI_ACCOUNTS_URL`                   | accounts CLI | accounts plane endpoint (`--accountsUrl` で上書き)                  |
-| `TAKOSUMI_ACCOUNTS_TOKEN` / `TAKOS_TOKEN` | accounts CLI | accounts session / PAT bearer (`--token` で上書き)                  |
-| `TAKOS_SPACE_ID`                          | accounts CLI | default Space (`--space` で上書き)                                  |
+| Variable                        | 用途                                                       |
+| ------------------------------- | ---------------------------------------------------------- |
+| `TAKOSUMI_DEPLOY_CONTROL_URL`   | deploy-control endpoint                                    |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | operator bearer                                            |
+| `TAKOSUMI_WRANGLER_CONFIG`      | realized wrangler config                                   |
+| `TAKOSUMI_SECRETS`              | local operator vault directory                             |
+| `TAKOSUMI_LANG`                 | `ja` で日本語 help                                         |

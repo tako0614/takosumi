@@ -349,7 +349,7 @@ export async function buildDeployControlProxyOptions(
   const url = optionalStringOption(options, "deployControlUrl") ??
     await optionalEnvString("TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL");
   const token = optionalStringOption(options, "deployControlToken") ??
-    await optionalEnvString("TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN");
+    await optionalEnvString("TAKOSUMI_DEPLOY_CONTROL_TOKEN");
   if (!url && !token) return undefined;
   if (!url) {
     throw new TypeError(

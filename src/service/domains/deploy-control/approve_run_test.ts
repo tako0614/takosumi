@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import { OpenTofuDeploymentController } from "./mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
-import type { PlanRun } from "takosumi-contract/deploy-control-api";
+import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

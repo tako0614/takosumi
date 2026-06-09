@@ -19,7 +19,7 @@ The current package is the single npm stream `@takosjp/takosumi`.
 - OpenTofu execution, provider credentials, state backend, resource limits,
   network policy, account plane, billing mode, OIDC, dashboard, and deploy
   facade wiring are operator responsibilities expressed through Connection /
-  CapabilityBinding / policy and operator distribution configuration.
+  ProviderBinding / policy and operator distribution configuration.
 - Runner profiles, backend adapters, and runtime-agent implementation code are
   operator-selected implementation details, not source authoring vocabulary.
 - Build and npm publication tasks are Bun-first.

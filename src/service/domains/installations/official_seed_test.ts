@@ -11,7 +11,8 @@ import { InMemoryOpenTofuDeploymentStore } from "../deploy-control/store.ts";
 
 const NOW = () => new Date("2026-06-06T00:00:00.000Z");
 
-// The three named first-party installs (spec §10) bind these templates.
+// The named official InstallConfig aliases bind these templates. `talk` and
+// `files` are friendly alias names, not physical first-party module ids.
 const NAMED = [
   { name: "core", templateId: "core", installType: "core" },
   {
@@ -26,7 +27,7 @@ const NAMED = [
   },
 ] as const;
 
-test("officialInstallConfigs seeds the named installs + a generic config per other template", () => {
+test("officialInstallConfigs seeds named aliases + a generic config per other template", () => {
   const configs = officialInstallConfigs({ now: NOW });
   const templates = defaultTemplateRegistry.list();
   // One config per template: 3 named (over 3 distinct templates) + generic for
@@ -40,7 +41,7 @@ test("officialInstallConfigs seeds the named installs + a generic config per oth
   }
 });
 
-test("the named first-party installs carry friendly names, ids, and §10 install types", () => {
+test("the named official aliases carry friendly names, ids, and §10 install types", () => {
   const configs = officialInstallConfigs({ now: NOW });
   for (const named of NAMED) {
     const config = configs.find((c) => c.name === named.name);
@@ -116,7 +117,7 @@ test("seedOfficialInstallConfigs persists every official config (idempotent)", a
   // Re-seeding is an idempotent upsert by the derived id, not a duplicate.
   await seedOfficialInstallConfigs(store, { now: NOW });
   expect((await store.listInstallConfigs()).length).toBe(expected.length);
-  // The named first-party installs are reachable by their friendly id.
+  // The named official aliases are reachable by their friendly id.
   for (const named of NAMED) {
     const fetched = await store.getInstallConfig(installConfigIdForName(named.name));
     expect(fetched?.installType).toBe(named.installType);

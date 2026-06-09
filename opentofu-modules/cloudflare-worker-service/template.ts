@@ -1,5 +1,5 @@
 /**
- * Official template: cloudflare-worker-service.
+ * First-party Capsule module: cloudflare-worker-service.
  *
  * Deploys a module-syntax Cloudflare Worker (Hono or any bundled module) from a
  * build artifact. Authored as TypeScript catalog data; the `module/` directory
@@ -7,7 +7,7 @@
  * with `module/main.tf`.
  */
 
-import type { TemplateDefinition } from "takosumi-contract/deploy-control-api";
+import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 
 export const cloudflareWorkerServiceTemplate: TemplateDefinition = {
   id: "cloudflare-worker-service",

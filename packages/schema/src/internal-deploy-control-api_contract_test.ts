@@ -10,8 +10,8 @@ import {
   PLAN_RUN_PATH,
   PLAN_RUNS_PATH,
   RUNNER_PROFILES_PATH,
-} from "./deploy-control-api.ts";
-import { DEPLOY_CONTROL_API_CONTRACT_FIXTURES } from "./deploy-control-api_contract.ts";
+} from "./internal-deploy-control-api.ts";
+import { DEPLOY_CONTROL_API_CONTRACT_FIXTURES } from "./internal-deploy-control-api_contract.ts";
 
 test("Deploy Control API v1 exposes the OpenTofu deploy-control endpoint templates", () => {
   expect([

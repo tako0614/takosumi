@@ -10,6 +10,11 @@ export interface StripeCheckoutResult {
   readonly sessionId?: string;
 }
 
+export interface StripePortalResult {
+  readonly url?: string;
+  readonly sessionId?: string;
+}
+
 export async function startStripeCheckout(input: {
   readonly subject: string;
   readonly priceId: string;
@@ -37,6 +42,28 @@ export async function startStripeCheckout(input: {
       cancelUrl,
       ...(input.customerEmail ? { customerEmail: input.customerEmail } : {}),
       ...(input.metadata ? { metadata: input.metadata } : {}),
+    },
+  });
+  return {
+    url: body.url,
+    sessionId: body.sessionId ?? body.session_id,
+  };
+}
+
+export async function startStripePortal(input: {
+  readonly subject: string;
+  readonly returnUrl?: string;
+}): Promise<StripePortalResult> {
+  const returnUrl =
+    input.returnUrl ??
+    new URL("/account/billing?portal=return", location.origin).toString();
+  const body = await apiFetch<
+    StripePortalResult & { readonly session_id?: string }
+  >(paths.STRIPE_PORTAL, {
+    method: "POST",
+    body: {
+      subject: input.subject,
+      returnUrl,
     },
   });
   return {

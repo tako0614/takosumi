@@ -1,4 +1,4 @@
-# aws-s3-storage (official template module)
+# aws-s3-storage (first-party Capsule module)
 
 Creates a single AWS S3 bucket from `bucketName` + `region`.
 

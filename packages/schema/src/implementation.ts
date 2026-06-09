@@ -27,7 +27,7 @@ import type {
   Deployment,
   Installation,
   OpenTofuModuleSource,
-} from "./deploy-control-api.ts";
+} from "./internal-deploy-control-api.ts";
 import {
   isOfficialMaterialKindName,
   validateOfficialMaterial,

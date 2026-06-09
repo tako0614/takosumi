@@ -38,7 +38,7 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 | tenant          |    1 | `tenant.isolation` (cross-subject installation read must fail)                                            |
 | docs            |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                               |
 | passkey         |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                                |
-| deploy control API   |    1 | `deploy-control.api.e2e` (runner profiles, PlanRun, ApplyRun, Installation, Deployments)                 |
+| deploy control API   |    1 | `deploy-control.api.e2e` (Installation, Run, Deployment, OutputSnapshot ledger path)                     |
 | workers         |    1 | `workers.cli-smoke` (Accounts + service Worker on workerd with D1/R2/Queue/DO)                             |
 | route-registrar |    1 | `registrar.alive` (service → Caddy admin sync via internal network)                                        |
 | object store    |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                                    |
@@ -80,7 +80,7 @@ sudo bash scripts/configure-dns.sh
 bash scripts/smoke.sh
 bash scripts/prove-no-public-leak.sh
 curl https://hello.takosumi.test/
-curl https://accounts.takosumi.test/.well-known/openid-configuration
+curl https://app.takosumi.test/.well-known/openid-configuration
 curl https://service-worker.takosumi.test/healthz  # postgres profile mirror
 curl https://service.takosumi.test/healthz         # workers profile
 ```
@@ -158,7 +158,7 @@ sudo bash deploy/local-substrate/scripts/ca-install.sh
 実行後の手動確認 checklist:
 
 - [ ] Chromium / Chrome を完全終了 (タスクトレイ含む) → 再起動 → `https://takosumi.test/` で privacy error が出ないこと
-- [ ] 同じく `https://accounts.takosumi.test/` が緑鍵で開くこと
+- [ ] 同じく `https://app.takosumi.test/` が緑鍵で開くこと
 - [ ] Firefox (snap か deb どちらでも) を再起動 → 同様に確認
 - [ ] `scripts/up.sh` で Pebble を再起動した場合は root が rotation されているので、 `sudo bash scripts/ca-install.sh` を再実行 + ブラウザ再起動
 

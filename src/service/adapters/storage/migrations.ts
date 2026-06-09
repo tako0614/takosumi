@@ -39,8 +39,8 @@ export interface StorageMigrationStatement {
   readonly down?: string;
 }
 
-export const postgresStorageTableDefinitions:
-  readonly StorageTableDefinition[] = Object.freeze([
+export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] =
+  Object.freeze([
     {
       name: "spaces",
       domain: "space",
@@ -107,10 +107,11 @@ export const postgresStorageTableDefinitions:
         "updated_at",
       ],
       primaryKey: ["id"],
-      indexes: [["space_id"], ["group_id"], [
-        "provider",
-        "provider_resource_id",
-      ]],
+      indexes: [
+        ["space_id"],
+        ["group_id"],
+        ["provider", "provider_resource_id"],
+      ],
     },
     {
       name: "resource_bindings",
@@ -126,9 +127,12 @@ export const postgresStorageTableDefinitions:
         "updated_at",
       ],
       primaryKey: ["id"],
-      indexes: [["space_id"], ["group_id"], ["group_id", "claim_address"], [
-        "instance_id",
-      ]],
+      indexes: [
+        ["space_id"],
+        ["group_id"],
+        ["group_id", "claim_address"],
+        ["instance_id"],
+      ],
     },
     {
       name: "resource_binding_set_revisions",
@@ -281,25 +285,14 @@ export const postgresStorageTableDefinitions:
     {
       name: "runtime_observed_states",
       domain: "runtime",
-      columns: [
-        "id",
-        "space_id",
-        "group_id",
-        "snapshot_json",
-        "observed_at",
-      ],
+      columns: ["id", "space_id", "group_id", "snapshot_json", "observed_at"],
       primaryKey: ["id"],
       indexes: [["space_id", "group_id"], ["observed_at"]],
     },
     {
       name: "runtime_provider_observations",
       domain: "runtime",
-      columns: [
-        "id",
-        "materialization_id",
-        "observation_json",
-        "observed_at",
-      ],
+      columns: ["id", "materialization_id", "observation_json", "observed_at"],
       primaryKey: ["id"],
       indexes: [["materialization_id"], ["observed_at"]],
     },
@@ -384,9 +377,7 @@ export const postgresStorageTableDefinitions:
         ["space_id"],
         ["group_id"],
         ["target_type", "target_id"],
-        [
-          "type",
-        ],
+        ["type"],
         ["occurred_at"],
         ["sequence"],
       ],
@@ -409,24 +400,14 @@ export const postgresStorageTableDefinitions:
     {
       name: "service_trust_records",
       domain: "service-endpoints",
-      columns: [
-        "id",
-        "endpoint_id",
-        "trust_record_json",
-        "updated_at",
-      ],
+      columns: ["id", "endpoint_id", "trust_record_json", "updated_at"],
       primaryKey: ["id"],
       indexes: [["endpoint_id"]],
     },
     {
       name: "service_grants",
       domain: "service-endpoints",
-      columns: [
-        "id",
-        "trust_record_id",
-        "subject",
-        "grant_json",
-      ],
+      columns: ["id", "trust_record_id", "subject", "grant_json"],
       primaryKey: ["id"],
       indexes: [["trust_record_id"], ["subject"]],
     },
@@ -548,23 +529,24 @@ export const postgresStorageTableDefinitions:
         "id",
         "kind",
         "space_id",
+        "source_id",
         "installation_id",
         "created_at",
         "run_json",
       ],
       primaryKey: ["id"],
-      indexes: [["kind"], ["space_id"], ["installation_id"], ["created_at"]],
+      indexes: [
+        ["kind"],
+        ["space_id"],
+        ["source_id"],
+        ["installation_id"],
+        ["created_at"],
+      ],
     },
     {
       name: "takosumi_spaces",
       domain: "deploy",
-      columns: [
-        "id",
-        "handle",
-        "space_json",
-        "created_at",
-        "updated_at",
-      ],
+      columns: ["id", "handle", "space_json", "created_at", "updated_at"],
       primaryKey: ["id"],
       uniqueConstraints: [["handle"]],
     },
@@ -588,7 +570,6 @@ export const postgresStorageTableDefinitions:
       domain: "deploy",
       columns: [
         "id",
-        "capability",
         "provider",
         "connection_id",
         "default_json",
@@ -597,6 +578,52 @@ export const postgresStorageTableDefinitions:
       ],
       primaryKey: ["id"],
       uniqueConstraints: [["capability"]],
+    },
+    {
+      name: "takosumi_provider_templates_entries",
+      domain: "deploy",
+      columns: [
+        "id",
+        "provider_source",
+        "primary_credential_source",
+        "default_eligible",
+        "entry_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["provider_source"]],
+      indexes: [["primary_credential_source"], ["default_eligible"]],
+    },
+    {
+      name: "takosumi_provider_env_sets",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "provider_source",
+        "status",
+        "pack_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["space_id"], ["provider_source"], ["status"]],
+    },
+    {
+      name: "takosumi_provider_env_sets",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "provider_pack_id",
+        "provider_source",
+        "selected_version",
+        "pin_json",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["space_id"], ["provider_pack_id"], ["provider_source"]],
     },
     {
       name: "takosumi_opentofu_installations",
@@ -633,9 +660,12 @@ export const postgresStorageTableDefinitions:
         "created_at",
       ],
       primaryKey: ["id"],
-      indexes: [["installation_id"], ["space_id"], ["apply_run_id"], [
-        "created_at",
-      ]],
+      indexes: [
+        ["installation_id"],
+        ["space_id"],
+        ["apply_run_id"],
+        ["created_at"],
+      ],
     },
     {
       name: "takosumi_deployment_profiles",
@@ -683,9 +713,11 @@ export const postgresStorageTableDefinitions:
         "created_at",
       ],
       primaryKey: ["id"],
-      indexes: [["space_id"], ["producer_installation_id"], [
-        "consumer_installation_id",
-      ]],
+      indexes: [
+        ["space_id"],
+        ["producer_installation_id"],
+        ["consumer_installation_id"],
+      ],
     },
     {
       // Plan-time pin of one run's dependency inputs (§17).
@@ -754,9 +786,11 @@ export const postgresStorageTableDefinitions:
         "created_at",
       ],
       primaryKey: ["id"],
-      indexes: [["from_space_id"], ["to_space_id"], [
-        "producer_installation_id",
-      ]],
+      indexes: [
+        ["from_space_id"],
+        ["to_space_id"],
+        ["producer_installation_id"],
+      ],
     },
     {
       // Control-backup ledger pointers (§33 layer 1 / §26 R2_BACKUPS). One row
@@ -765,9 +799,17 @@ export const postgresStorageTableDefinitions:
       // sizeBytes) round trips through backup_json — never secret material.
       name: "takosumi_backups",
       domain: "deploy",
-      columns: ["id", "space_id", "backup_json", "created_at"],
+      columns: [
+        "id",
+        "space_id",
+        "installation_id",
+        "environment",
+        "created_by_run_id",
+        "backup_json",
+        "created_at",
+      ],
       primaryKey: ["id"],
-      indexes: [["space_id"]],
+      indexes: [["space_id"], ["installation_id"]],
     },
     {
       name: "takosumi_billing_accounts",
@@ -842,6 +884,7 @@ export const postgresStorageTableDefinitions:
         "run_id",
         "estimated_credits",
         "status",
+        "mode",
         "reservation_json",
         "created_at",
         "expires_at",
@@ -883,15 +926,14 @@ export const postgresStorageTableDefinitions:
     },
   ]);
 
-export const postgresStorageMigrationStatements:
-  readonly StorageMigrationStatement[] = Object.freeze([
+export const postgresStorageMigrationStatements: readonly StorageMigrationStatement[] =
+  Object.freeze([
     {
       id: "storage_migrations.create",
       version: 1,
       domain: "system",
       description: "Create storage migration ledger.",
-      sql:
-        "create table if not exists storage_migrations (id text primary key, version integer not null, applied_at timestamptz not null default now())",
+      sql: "create table if not exists storage_migrations (id text primary key, version integer not null, applied_at timestamptz not null default now())",
       // The system ledger itself is intentionally forward-only: dropping it
       // erases the ability to track which down migrations have been applied.
       // Operators wanting a true factory-reset must drop the database.
@@ -901,8 +943,7 @@ export const postgresStorageMigrationStatements:
       version: 2,
       domain: "core",
       description: "Create Takosumi spaces, groups, and memberships tables.",
-      sql:
-        `create table if not exists spaces (id text primary key, name text not null, metadata_json jsonb not null, created_by_account_id text not null, created_at timestamptz not null, updated_at timestamptz not null);
+      sql: `create table if not exists spaces (id text primary key, name text not null, metadata_json jsonb not null, created_by_account_id text not null, created_at timestamptz not null, updated_at timestamptz not null);
 create table if not exists space_groups (id text primary key, space_id text not null references spaces(id), slug text not null, display_name text not null, metadata_json jsonb not null, created_by_account_id text not null, created_at timestamptz not null, updated_at timestamptz not null, unique (space_id, slug));
 create table if not exists space_memberships (id text primary key, space_id text not null references spaces(id), account_id text not null, roles_json jsonb not null, status text not null, created_at timestamptz not null, updated_at timestamptz not null, unique (space_id, account_id));`,
       down: `drop table if exists space_memberships;
@@ -915,8 +956,7 @@ drop table if exists spaces;`,
       domain: "resources",
       description:
         "Create resource instance, binding, binding-set revision, and migration ledger tables.",
-      sql:
-        `create table if not exists resource_instances (id text primary key, space_id text not null, group_id text, contract text not null, origin text not null, sharing_mode text not null, provider text, provider_resource_id text, provider_materialization_id text, lifecycle_json jsonb not null, schema_owner_json jsonb, properties_json jsonb, created_at timestamptz not null, updated_at timestamptz not null);
+      sql: `create table if not exists resource_instances (id text primary key, space_id text not null, group_id text, contract text not null, origin text not null, sharing_mode text not null, provider text, provider_resource_id text, provider_materialization_id text, lifecycle_json jsonb not null, schema_owner_json jsonb, properties_json jsonb, created_at timestamptz not null, updated_at timestamptz not null);
 create table if not exists resource_bindings (id text primary key, space_id text not null, group_id text not null, claim_address text not null, instance_id text not null references resource_instances(id), role text not null, created_at timestamptz not null, updated_at timestamptz not null);
 create table if not exists resource_binding_set_revisions (id text primary key, space_id text not null, group_id text not null, binding_value_resolutions_json jsonb not null default '[]'::jsonb, created_at timestamptz not null);
 create table if not exists resource_migration_ledger (id text primary key, space_id text not null, resource_instance_id text not null references resource_instances(id), migration_ref text not null, from_version text, to_version text, status text not null, checkpoints_json jsonb not null, started_at timestamptz not null, completed_at timestamptz, metadata_json jsonb);`,
@@ -931,8 +971,7 @@ drop table if exists resource_instances;`,
       domain: "registry",
       description:
         "Create package registry descriptor, resolution, and trust tables.",
-      sql:
-        `create table if not exists registry_package_descriptors (kind text not null, ref text not null, digest text not null, publisher text not null, version text, body_json jsonb not null, published_at timestamptz not null, primary key (kind, ref, digest));
+      sql: `create table if not exists registry_package_descriptors (kind text not null, ref text not null, digest text not null, publisher text not null, version text, body_json jsonb not null, published_at timestamptz not null, primary key (kind, ref, digest));
 create table if not exists registry_package_resolutions (kind text not null, ref text not null, digest text not null, registry text not null, trust_record_id text, resolved_at timestamptz not null, primary key (kind, ref, digest));
 create table if not exists registry_trust_records (id text primary key, package_ref text not null, package_digest text not null, package_kind text not null, trust_level text not null, status text not null, conformance_tier text not null, verified_by text not null, verified_at timestamptz not null, revoked_at timestamptz, reason text);`,
       down: `drop table if exists registry_trust_records;
@@ -944,18 +983,15 @@ drop table if exists registry_package_descriptors;`,
       version: 6,
       domain: "audit",
       description: "Create immutable audit event table.",
-      sql:
-        "create table if not exists audit_events (id text primary key, event_class text not null, type text not null, severity text not null, actor_json jsonb, space_id text, group_id text, target_type text not null, target_id text, payload_json jsonb not null, occurred_at timestamptz not null, request_id text, correlation_id text)",
+      sql: "create table if not exists audit_events (id text primary key, event_class text not null, type text not null, severity text not null, actor_json jsonb, space_id text, group_id text, target_type text not null, target_id text, payload_json jsonb not null, occurred_at timestamptz not null, request_id text, correlation_id text)",
       down: "drop table if exists audit_events;",
     },
     {
       id: "resources.bindings.claim_index.create",
       version: 8,
       domain: "resources",
-      description:
-        "Index resource bindings by group and claim address.",
-      sql:
-        `create index if not exists resource_bindings_group_claim_address_idx on resource_bindings (group_id, claim_address);`,
+      description: "Index resource bindings by group and claim address.",
+      sql: `create index if not exists resource_bindings_group_claim_address_idx on resource_bindings (group_id, claim_address);`,
       down: `drop index if exists resource_bindings_group_claim_address_idx;`,
     },
     {
@@ -1202,8 +1238,7 @@ drop table if exists takosumi_deployment_records;`,
 );
 create index if not exists takosumi_deployment_record_locks_locked_until_idx
   on takosumi_deployment_record_locks (locked_until);`,
-      down:
-        `drop index if exists takosumi_deployment_record_locks_locked_until_idx;
+      down: `drop index if exists takosumi_deployment_record_locks_locked_until_idx;
 drop table if exists takosumi_deployment_record_locks;`,
     },
     {
@@ -1331,10 +1366,8 @@ drop table if exists registry_catalog_publisher_keys;`,
       id: "deploy.opentofu_run_ledger.create",
       version: 29,
       domain: "deploy",
-      description:
-        "Create the OpenTofu-native PlanRun and ApplyRun ledger.",
-      sql:
-        `create table if not exists takosumi_runner_profiles (
+      description: "Create the OpenTofu-native PlanRun and ApplyRun ledger.",
+      sql: `create table if not exists takosumi_runner_profiles (
   id           text   primary key,
   profile_json jsonb  not null,
   created_at   bigint not null
@@ -1434,8 +1467,7 @@ create index if not exists takosumi_opentofu_deployments_apply_idx
   on takosumi_opentofu_deployments (apply_run_id);
 create index if not exists takosumi_opentofu_deployments_created_at_idx
   on takosumi_opentofu_deployments (created_at);`,
-      down:
-        `drop index if exists takosumi_opentofu_deployments_created_at_idx;
+      down: `drop index if exists takosumi_opentofu_deployments_created_at_idx;
 drop index if exists takosumi_opentofu_deployments_apply_idx;
 drop index if exists takosumi_opentofu_deployments_plan_idx;
 drop index if exists takosumi_opentofu_deployments_installation_idx;
@@ -1468,7 +1500,7 @@ drop table if exists takosumi_runner_profiles;`,
         "Create the Connection (provider credential registration) ledger and its sealed secret-blob sidecar. The blob column stores ciphertext only; plaintext credential values never land in the database.",
       sql: `create table if not exists takosumi_connections (
   id              text   primary key,
-  space_id        text   not null,
+  space_id        text,
   provider        text   not null,
   status          text   not null
     check (status in ('pending','verified','revoked')),
@@ -1481,9 +1513,21 @@ create index if not exists takosumi_connections_space_idx
 create index if not exists takosumi_connections_status_idx
   on takosumi_connections (status);
 create table if not exists takosumi_connection_secret_blobs (
-  connection_id text  primary key,
+  id            text  primary key,
+  connection_id text  not null,
+  space_id      text,
+  kind          text  not null,
+  ciphertext    text  not null,
+  encrypted_dek text  not null,
+  nonce         text  not null,
+  aad           text  not null,
+  key_version   int   not null,
+  created_at    text  not null,
+  rotated_at    text,
   blob_json     jsonb not null
-);`,
+);
+create unique index if not exists takosumi_connection_secret_blobs_connection_idx
+  on takosumi_connection_secret_blobs (connection_id);`,
       down: `drop table if exists takosumi_connection_secret_blobs;
 drop index if exists takosumi_connections_status_idx;
 drop index if exists takosumi_connections_space_idx;
@@ -1556,7 +1600,7 @@ drop table if exists takosumi_sources;`,
       version: 33,
       domain: "deploy",
       description:
-        "Create the App / Environment / InstallProfile / DeploymentProfile lane ledger (Core Specification §6.3-§6.7). An App binds a Source to one install type; an Environment is one execution lane; an InstallProfile is service-side install config (seeded from the official template catalog); a DeploymentProfile carries the per-Environment Connection binding (no secret values).",
+        "Create the historical lane ledger. App / Environment / InstallProfile / DeploymentProfile are compatibility table names; the current public model is Space / Source / Installation / InstallConfig plus provider bindings, with no secret values in binding rows.",
       sql: `create table if not exists takosumi_apps (
   id                 text   primary key,
   space_id           text   not null,
@@ -1655,7 +1699,7 @@ drop table if exists takosumi_opentofu_installations;
 create table if not exists takosumi_runs (
   id              text   primary key,
   kind            text   not null
-    check (kind in ('plan','destroy_plan','apply','destroy_apply','source_sync')),
+    check (kind in ('source_sync','compatibility_check','plan','apply','destroy_plan','destroy_apply','drift_check','backup','restore')),
   space_id        text   not null,
   installation_id text,
   created_at      text   not null,
@@ -1693,8 +1737,7 @@ create index if not exists takosumi_install_configs_install_type_idx
   on takosumi_install_configs (install_type);
 create table if not exists takosumi_operator_connection_defaults (
   id            text   primary key,
-  capability    text   not null unique,
-  provider      text   not null,
+  provider      text   not null unique,
   connection_id text   not null,
   default_json  jsonb  not null,
   created_at    text   not null,
@@ -1905,16 +1948,21 @@ drop table if exists takosumi_output_shares;`,
       version: 39,
       domain: "deploy",
       description:
-        "Create the control-backup ledger (Core Specification §33 layer 1 / §26 R2_BACKUPS): one pointer row per sealed control-backup bundle written to the R2_BACKUPS bucket. backup_json carries the public BackupRecord pointer (objectKey / digest / sizeBytes / optional createdByRunId) — the bundle bytes (gzip-compressed, sealed JSON export of the Space's control ledger) live in object storage, never the DB, and the bundle never contains secret material. The space_id column drives the newest-first per-Space listing. No data migration: additive new table.",
+        "Create the control-backup ledger (Core Specification §33 layer 1 / §26 R2_BACKUPS): one pointer row per sealed control-backup bundle written to the R2_BACKUPS bucket. backup_json carries the public BackupRecord pointer (objectKey / digest / sizeBytes / optional createdByRunId) — the bundle bytes (zstd-compressed, sealed JSON export of the Space's control ledger) live in object storage, never the DB, and the bundle never contains secret material. The space_id column drives the newest-first per-Space listing. No data migration: additive new table.",
       sql: `create table if not exists takosumi_backups (
-  id          text   primary key,
-  space_id    text   not null,
-  backup_json jsonb  not null,
-  created_at  text   not null
+  id                text   primary key,
+  space_id          text   not null,
+  installation_id   text,
+  environment       text,
+  backup_json       jsonb  not null,
+  created_at        text   not null
 );
 create index if not exists takosumi_backups_space_idx
-  on takosumi_backups (space_id, created_at desc);`,
-      down: `drop index if exists takosumi_backups_space_idx;
+  on takosumi_backups (space_id, created_at desc);
+create index if not exists takosumi_backups_installation_idx
+  on takosumi_backups (installation_id);`,
+      down: `drop index if exists takosumi_backups_installation_idx;
+drop index if exists takosumi_backups_space_idx;
 drop table if exists takosumi_backups;`,
     },
     {
@@ -1925,6 +1973,8 @@ drop table if exists takosumi_backups;`,
         "Create additive Capsule compatibility, billing, credential mint audit, and security finding ledgers for the OpenTofu Module Capsule DAG model. Billing is mode-selectable by operator/self-host configuration: disabled, showback, or enforce.",
       sql: `create table if not exists takosumi_capsule_compatibility_reports (
   id                 text   primary key,
+  source_id          text,
+  installation_id    text,
   source_snapshot_id text   not null,
   level              text   not null
     check (level in ('ready','auto_capsulized','needs_patch','unsupported')),
@@ -1939,6 +1989,10 @@ drop table if exists takosumi_backups;`,
 );
 create index if not exists takosumi_capsule_compat_reports_source_snapshot_idx
   on takosumi_capsule_compatibility_reports (source_snapshot_id);
+create index if not exists takosumi_capsule_compat_reports_source_idx
+  on takosumi_capsule_compatibility_reports (source_id);
+create index if not exists takosumi_capsule_compat_reports_installation_idx
+  on takosumi_capsule_compatibility_reports (installation_id);
 create index if not exists takosumi_capsule_compat_reports_level_idx
   on takosumi_capsule_compatibility_reports (level);
 create table if not exists takosumi_billing_accounts (
@@ -1957,6 +2011,16 @@ create index if not exists takosumi_billing_accounts_owner_idx
   on takosumi_billing_accounts (owner_type, owner_id);
 create index if not exists takosumi_billing_accounts_status_idx
   on takosumi_billing_accounts (status);
+create table if not exists takosumi_plans (
+  id                 text    primary key,
+  name               text    not null,
+  monthly_base_price integer not null,
+  included_credits   integer not null,
+  limits_json        jsonb   not null,
+  plan_json          jsonb   not null,
+  created_at         text    not null,
+  updated_at         text    not null
+);
 create table if not exists takosumi_space_subscriptions (
   id                 text  primary key,
   space_id           text  not null,
@@ -2016,7 +2080,8 @@ create table if not exists takosumi_credential_mint_events (
   id              text  primary key,
   run_id          text  not null,
   space_id        text  not null,
-  installation_id text  not null,
+  installation_id text,
+  source_id       text,
   connection_id   text  not null,
   phase           text  not null,
   event_json      jsonb not null,
@@ -2026,6 +2091,8 @@ create index if not exists takosumi_credential_mint_events_run_idx
   on takosumi_credential_mint_events (run_id);
 create index if not exists takosumi_credential_mint_events_space_idx
   on takosumi_credential_mint_events (space_id);
+create index if not exists takosumi_credential_mint_events_source_idx
+  on takosumi_credential_mint_events (source_id);
 create table if not exists takosumi_security_findings (
   id              text  primary key,
   space_id        text  not null,
@@ -2048,6 +2115,7 @@ drop index if exists takosumi_security_findings_run_idx;
 drop index if exists takosumi_security_findings_space_idx;
 drop table if exists takosumi_security_findings;
 drop index if exists takosumi_credential_mint_events_space_idx;
+drop index if exists takosumi_credential_mint_events_source_idx;
 drop index if exists takosumi_credential_mint_events_run_idx;
 drop table if exists takosumi_credential_mint_events;
 drop index if exists takosumi_credit_reservations_status_idx;
@@ -2061,12 +2129,154 @@ drop table if exists takosumi_credit_balances;
 drop index if exists takosumi_space_subscriptions_billing_account_idx;
 drop index if exists takosumi_space_subscriptions_space_idx;
 drop table if exists takosumi_space_subscriptions;
+drop table if exists takosumi_plans;
 drop index if exists takosumi_billing_accounts_status_idx;
 drop index if exists takosumi_billing_accounts_owner_idx;
 drop table if exists takosumi_billing_accounts;
-drop index if exists takosumi_capsule_compat_reports_status_idx;
+drop index if exists takosumi_capsule_compat_reports_level_idx;
+drop index if exists takosumi_capsule_compat_reports_source_idx;
 drop index if exists takosumi_capsule_compat_reports_source_snapshot_idx;
 drop index if exists takosumi_capsule_compat_reports_installation_idx;
 drop table if exists takosumi_capsule_compatibility_reports;`,
+    },
+    {
+      id: "deploy.takosumi_connections.space_id_nullable",
+      version: 41,
+      domain: "deploy",
+      description:
+        "Allow operator-scoped Connections by making takosumi_connections.space_id nullable. Space-scoped Connections keep a space_id; operator defaults point at operator-scoped rows.",
+      sql: `alter table takosumi_connections alter column space_id drop not null;`,
+      down: `alter table takosumi_connections alter column space_id set not null;`,
+    },
+    {
+      id: "deploy.takosumi_d1_schema_projection_columns.create",
+      version: 42,
+      domain: "deploy",
+      description:
+        "Materialize spec-visible ledger columns that had previously lived only in JSON: runs.source_id for Source-scoped source_sync rows, credit_reservations.mode for billing reservation mode queries, and backup scope columns for backup Run ledger pointers. Backfills existing source_sync source_id from run_json/source-id fallback and keeps all columns additive.",
+      sql: `alter table takosumi_runs
+  add column if not exists source_id text;
+create index if not exists takosumi_runs_source_idx
+  on takosumi_runs (source_id);
+update takosumi_runs
+  set source_id = coalesce(run_json->>'sourceId', installation_id),
+      installation_id = null
+  where kind = 'source_sync'
+    and source_id is null;
+
+alter table takosumi_credit_reservations
+  add column if not exists mode text not null default 'disabled'
+    check (mode in ('disabled','showback','enforce'));
+update takosumi_credit_reservations
+  set mode = coalesce(reservation_json->>'mode', mode);
+alter table takosumi_credit_reservations
+  alter column mode drop default;
+
+alter table takosumi_backups
+  add column if not exists created_by_run_id text;
+alter table takosumi_backups
+  add column if not exists installation_id text;
+alter table takosumi_backups
+  add column if not exists environment text;
+create index if not exists takosumi_backups_installation_idx
+  on takosumi_backups (installation_id);
+update takosumi_backups
+  set created_by_run_id = coalesce(created_by_run_id, backup_json->>'createdByRunId'),
+      installation_id = coalesce(installation_id, backup_json->>'installationId'),
+      environment = coalesce(environment, backup_json->>'environment');`,
+      down: `drop index if exists takosumi_backups_installation_idx;
+alter table takosumi_backups
+  drop column if exists environment;
+alter table takosumi_backups
+  drop column if exists installation_id;
+alter table takosumi_backups
+  drop column if exists created_by_run_id;
+alter table takosumi_credit_reservations
+  drop column if exists mode;
+drop index if exists takosumi_runs_source_idx;
+alter table takosumi_runs
+  drop column if exists source_id;`,
+    },
+    {
+      id: "deploy.takosumi_provider_templates.create",
+      version: 43,
+      domain: "deploy",
+      description:
+        "Create Provider Template / Provider Env Set / ProviderEnvSet ledgers for the OpenTofu Capsule DAG provider model. Provider Template entries are instance-wide; Provider Env Sets and ProviderEnvSets are Space-scoped and carry JSON records plus searchable support/status/source columns.",
+      sql: `create table if not exists takosumi_provider_templates_entries (
+  id               text    primary key,
+  provider_source  text    not null unique,
+  primary_credential_source     text    not null
+    check (primary_credential_source in ('takosumi_managed','user_env_set','user_env_set','user_env_set')),
+  default_eligible integer not null,
+  entry_json       jsonb   not null,
+  created_at       text    not null,
+  updated_at       text    not null
+);
+create index if not exists takosumi_provider_templates_entries_primary_credential_source_idx
+  on takosumi_provider_templates_entries (primary_credential_source);
+create index if not exists takosumi_provider_templates_entries_default_eligible_idx
+  on takosumi_provider_templates_entries (default_eligible);
+
+create table if not exists takosumi_provider_env_sets (
+  id              text  primary key,
+  space_id        text  not null,
+  provider_source text  not null,
+  status          text  not null
+    check (status in ('draft','active','disabled','quarantined')),
+  pack_json       jsonb not null,
+  created_at      text  not null,
+  updated_at      text  not null
+);
+create index if not exists takosumi_provider_env_sets_space_idx
+  on takosumi_provider_env_sets (space_id);
+create index if not exists takosumi_provider_env_sets_provider_source_idx
+  on takosumi_provider_env_sets (provider_source);
+create index if not exists takosumi_provider_env_sets_status_idx
+  on takosumi_provider_env_sets (status);
+
+create table if not exists takosumi_provider_env_sets (
+  id               text  primary key,
+  space_id         text  not null,
+  provider_pack_id text  not null,
+  provider_source  text  not null,
+  selected_version text  not null,
+  pin_json         jsonb not null,
+  created_at       text  not null
+);
+create index if not exists takosumi_provider_env_sets_space_idx
+  on takosumi_provider_env_sets (space_id);
+create index if not exists takosumi_provider_env_sets_pack_idx
+  on takosumi_provider_env_sets (provider_pack_id);
+create index if not exists takosumi_provider_env_sets_provider_source_idx
+  on takosumi_provider_env_sets (provider_source);`,
+      down: `drop index if exists takosumi_provider_env_sets_provider_source_idx;
+drop index if exists takosumi_provider_env_sets_pack_idx;
+drop index if exists takosumi_provider_env_sets_space_idx;
+drop table if exists takosumi_provider_env_sets;
+drop index if exists takosumi_provider_env_sets_status_idx;
+drop index if exists takosumi_provider_env_sets_provider_source_idx;
+drop index if exists takosumi_provider_env_sets_space_idx;
+drop table if exists takosumi_provider_env_sets;
+drop index if exists takosumi_provider_templates_entries_default_eligible_idx;
+drop index if exists takosumi_provider_templates_entries_primary_credential_source_idx;
+drop table if exists takosumi_provider_templates_entries;`,
+    },
+    {
+      id: "deploy.takosumi_runs_kind_constraint.expand",
+      version: 44,
+      domain: "deploy",
+      description:
+        "Keep the single Run ledger discriminator constraint aligned with the public RunType contract, including Source-scoped compatibility_check rows and operator backup/drift/restore rows.",
+      sql: `alter table takosumi_runs
+  drop constraint if exists takosumi_runs_kind_check;
+alter table takosumi_runs
+  add constraint takosumi_runs_kind_check
+  check (kind in ('source_sync','compatibility_check','plan','apply','destroy_plan','destroy_apply','drift_check','backup','restore'));`,
+      down: `alter table takosumi_runs
+  drop constraint if exists takosumi_runs_kind_check;
+alter table takosumi_runs
+  add constraint takosumi_runs_kind_check
+  check (kind in ('plan','destroy_plan','apply','destroy_apply','source_sync'));`,
     },
   ]);

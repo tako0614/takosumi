@@ -11,16 +11,27 @@ import {
 import type {
   PlanResourceChange,
   TestConnectionResponse,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
-import { seedInstallationModel } from "./test_model_fixture.ts";
+import {
+  CredentialBundle,
+  PhaseMintBundle,
+  type ProviderBindingMintEntry,
+} from "../../adapters/vault/mod.ts";
+import {
+  FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
+  FIXTURE_CLOUDFLARE_PROVIDER,
+  seedInstallationModel,
+} from "./test_model_fixture.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const LOCK_DIGEST =
+  "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
-// Templates are baked into the runner image; the dispatch source is irrelevant
-// to the OpenTofu surface (user source is a build input only). A trivial git
-// source keeps validateSource happy.
+// Official catalog modules are dispatched as generatedRoot.moduleFiles; the
+// user source is irrelevant to the OpenTofu surface (build input only). A
+// trivial git source keeps validateSource happy.
 const SOURCE = {
   kind: "git",
   url: "https://github.com/example/app.git",
@@ -51,6 +62,9 @@ function recordingRunner(options?: {
           digest: PLAN_DIGEST,
           contentType: "application/vnd.opentofu.plan",
         },
+        providerLockDigest: LOCK_DIGEST,
+        requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
         ...(options?.planResourceChanges
           ? { planResourceChanges: options.planResourceChanges }
           : {}),
@@ -71,13 +85,57 @@ function recordingRunner(options?: {
 
 // A minimal Vault so the controller mints (and the dispatch carries) credentials.
 function fakeVault() {
+  const sharedEvidence = [
+    {
+      provider: FIXTURE_CLOUDFLARE_PROVIDER,
+      connectionId: "conn_template",
+      delivery: "provider_env" as const,
+      rootOnly: false,
+      temporary: true,
+      ttlEnforced: true,
+      phase: "plan" as const,
+    },
+  ];
   return {
     register: () => Promise.reject(new Error("not used")),
     test: () =>
       Promise.resolve({ status: "verified" } satisfies TestConnectionResponse),
     revoke: () => Promise.resolve(true),
     mint: () =>
-      Promise.resolve({ env: { CLOUDFLARE_API_TOKEN: "tok-secret" } }),
+      Promise.resolve(
+        new CredentialBundle(
+          { CLOUDFLARE_API_TOKEN: "tok-secret" },
+          [],
+          sharedEvidence,
+        ),
+      ),
+    mintForPhase: () =>
+      Promise.resolve(new PhaseMintBundle({ env: {} }, [], [])),
+    mintForProviderBindings: (
+      _spaceId: string,
+      entries: readonly ProviderBindingMintEntry[],
+      options?: { readonly phase?: "plan" | "apply" | "destroy" },
+    ) =>
+      Promise.resolve(
+        new CredentialBundle(
+          Object.fromEntries(
+            entries.map((entry) => {
+              const alias = entry.alias ? `_${entry.alias}` : "";
+              return [`TF_VAR_cloudflare${alias}_api_token`, "tok-secret"];
+            }),
+          ),
+          [],
+          entries.map((entry) => ({
+            provider: FIXTURE_CLOUDFLARE_PROVIDER,
+            connectionId: entry.connectionId,
+            delivery: "generated_root_variable" as const,
+            rootOnly: true,
+            temporary: true,
+            ttlEnforced: true,
+            phase: options?.phase ?? "plan",
+          })),
+        ),
+      ),
   };
 }
 
@@ -108,20 +166,54 @@ async function seededTemplateController(
 }> {
   const store = new InMemoryOpenTofuDeploymentStore();
   // Raw template-driven createPlanRun never sets installationContext, so the
-  // environment never gates approval here; the prior deployment attached below
-  // is what unlocks the apply guard.
+  // controller backfills Installation context from the Installation row. The
+  // prior deployment attached below is what unlocks the apply guard.
   await seedInstallationModel(store, { installationId: INSTALLATION_ID });
+  await store.putConnection({
+    id: "conn_template",
+    scope: "space",
+    spaceId: "space_test",
+    provider: "cloudflare",
+    kind: "cloudflare_api_token",
+    displayName: "Template Cloudflare",
+    status: "verified",
+    scopeJson: {},
+    secretRef: "sec_template",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
   // Attach a prior current Deployment so the apply guard has a concrete cursor.
   const installation = await store.getInstallation(INSTALLATION_ID);
   await store.putInstallation({
     ...installation!,
     currentDeploymentId: SEED_DEPLOYMENT_ID,
   });
+  await store.putDeploymentProfile({
+    id: "profile_template",
+    spaceId: installation!.spaceId,
+    installationId: installation!.id,
+    environment: installation!.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        mode: "connection",
+        connectionId: "conn_template",
+      },
+      {
+        provider: "cloudflare",
+        alias: "zone",
+        mode: "connection",
+        connectionId: "conn_template",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
   const controller = new OpenTofuDeploymentController({ ...deps, store });
   return { controller, store, installationId: INSTALLATION_ID };
 }
 
-test("template plan dispatch carries template ref, generated root, and build; never credentials in build", async () => {
+test("template plan dispatch carries generated root module files and build; never credentials in build", async () => {
   const runner = recordingRunner({
     planResourceChanges: [
       {
@@ -136,7 +228,7 @@ test("template plan dispatch carries template ref, generated root, and build; ne
       },
     ],
   });
-  const { controller, installationId } = await seededTemplateController({
+  const { controller, store, installationId } = await seededTemplateController({
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner,
@@ -153,10 +245,12 @@ test("template plan dispatch carries template ref, generated root, and build; ne
   });
 
   expect(planRun.status).toEqual("succeeded");
-  expect(planRun.templateBinding?.templateId).toEqual(
+  expect("templateBinding" in planRun).toBe(false);
+  const persistedPlan = await store.getPlanRun(planRun.id);
+  expect(persistedPlan?.templateBinding?.templateId).toEqual(
     "cloudflare-worker-service",
   );
-  expect(planRun.templateBinding?.requiresConfirmation).toEqual(false);
+  expect(persistedPlan?.templateBinding?.requiresConfirmation).toEqual(false);
   // requiredProviders derived + canonicalized from the template policy.
   expect(planRun.requiredProviders).toEqual([
     "registry.opentofu.org/cloudflare/cloudflare",
@@ -164,11 +258,14 @@ test("template plan dispatch carries template ref, generated root, and build; ne
 
   expect(runner.planJobs).toHaveLength(1);
   const planJob = runner.planJobs[0]!;
-  expect(planJob.template).toEqual({
-    id: "cloudflare-worker-service",
-    version: "1.0.0",
-    localModulePath: "/app/templates/cloudflare-worker-service/module",
-  });
+  expect(planJob.template).toBeUndefined();
+  expect(planJob.generatedRoot?.moduleFiles?.[0]?.path).toEqual("main.tf");
+  expect(planJob.generatedRoot?.moduleFiles?.[0]?.text).toContain(
+    'resource "cloudflare_workers_script" "this"',
+  );
+  const sidecar = await store.getPlanRunInputs(planRun.id);
+  expect(sidecar?.template).toBeUndefined();
+  expect(sidecar?.generatedRoot?.moduleFiles?.[0]?.path).toEqual("main.tf");
   expect(Object.keys(planJob.generatedRoot!.files).sort()).toEqual([
     "main.tf",
     "outputs.tf",
@@ -182,8 +279,12 @@ test("template plan dispatch carries template ref, generated root, and build; ne
     commands: ["bun install --frozen-lockfile", "bun run build"],
     artifactPath: "dist/index.js",
   });
-  // Credentials are minted for the tofu phase and attached to the dispatch only.
-  expect(planJob.credentials).toEqual({ CLOUDFLARE_API_TOKEN: "tok-secret" });
+  // Credentials are minted for the tofu phase and attached to the dispatch only
+  // as generated-root variables, never as shared provider env.
+  expect(planJob.credentials).toMatchObject({
+    TF_VAR_cloudflare_main_api_token: "tok-secret",
+  });
+  expect(planJob.credentials).not.toHaveProperty("CLOUDFLARE_API_TOKEN");
 });
 
 test("template plan is blocked when the plan introduces a disallowed resource type", async () => {
@@ -202,10 +303,11 @@ test("template plan is blocked when the plan introduces a disallowed resource ty
       },
     ],
   });
-  const { controller, installationId } = await seededTemplateController({
+  const { controller, store, installationId } = await seededTemplateController({
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner,
+    vault: fakeVault() as never,
   });
 
   const { planRun } = await controller.createPlanRun({
@@ -245,6 +347,7 @@ test("template plan enforces InstallConfig scope boundary and quota", async () =
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner,
+    vault: fakeVault() as never,
   });
   const installation = await store.getInstallation(installationId);
   const installConfig = await store.getInstallConfig(
@@ -288,10 +391,11 @@ test("destructive template plan requires confirmDestructive at apply", async () 
       },
     ],
   });
-  const { controller, installationId } = await seededTemplateController({
+  const { controller, store, installationId } = await seededTemplateController({
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner,
+    vault: fakeVault() as never,
   });
 
   const { planRun } = await controller.createPlanRun({
@@ -303,7 +407,10 @@ test("destructive template plan requires confirmDestructive at apply", async () 
     inputs: { bucketName: "b", accountId: "a" },
   });
   expect(planRun.status).toEqual("succeeded");
-  expect(planRun.templateBinding?.requiresConfirmation).toEqual(true);
+  expect("templateBinding" in planRun).toBe(false);
+  expect(
+    (await store.getPlanRun(planRun.id))?.templateBinding?.requiresConfirmation,
+  ).toEqual(true);
 
   // Apply without confirmation is rejected.
   await expect(
@@ -320,9 +427,12 @@ test("destructive template plan requires confirmDestructive at apply", async () 
     confirmDestructive: true,
   });
   expect(applied.applyRun.status).toEqual("succeeded");
-  // Apply dispatch also carries the template + generated root.
+  // Apply dispatch also carries the generated root + bundled module files.
   expect(runner.applyJobs).toHaveLength(1);
-  expect(runner.applyJobs[0]!.template?.id).toEqual("cloudflare-r2-storage");
+  expect(runner.applyJobs[0]!.template).toBeUndefined();
+  expect(runner.applyJobs[0]!.generatedRoot?.moduleFiles?.[0]?.path).toEqual(
+    "main.tf",
+  );
   expect(runner.applyJobs[0]!.generatedRoot?.files["main.tf"]).toContain(
     'source = "./template-module"',
   );
@@ -352,6 +462,7 @@ test("output allowlist projects only template public outputs after the sensitive
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner,
+    vault: fakeVault() as never,
   });
 
   const { planRun } = await controller.createPlanRun({

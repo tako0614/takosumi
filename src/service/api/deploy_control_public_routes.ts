@@ -1,44 +1,17 @@
 /**
  * Public OpenTofu deployment-control-plane HTTP surface (Space-direct
- * Installation model). Spec §30: the public vocabulary is mounted under `/api`
- * with NO version prefix.
+ * Installation model). The public vocabulary is mounted under `/api` with no
+ * version prefix. The canonical route list is the composed
+ * `DEPLOY_CONTROL_PUBLIC_ENDPOINTS` descriptor inventory below plus
+ * `docs/reference/deploy-control-api.md`; keep new routes in their owning
+ * `deploy_control_*_routes.ts` slice instead of maintaining a hand-written list
+ * in this header.
  *
- *   POST  /api/spaces ; GET /api/spaces ; GET /api/spaces/{spaceId}
- *   PATCH /api/spaces/{spaceId}                        (displayName only — MVP)
- *   POST  /api/sources ; GET /api/sources ; GET /api/sources/{id}
- *   POST  /api/sources/{id}/sync ; POST /hooks/sources/{id}
- *   POST  /api/connections/source/https-token
- *   POST  /api/connections/source/ssh-key
- *   POST  /api/connections/cloudflare/token
- *   POST  /api/connections/aws/assume-role
- *   GET   /api/connections
- *   POST  /api/connections/{id}/test ; POST /api/connections/{id}/revoke
- *   POST  /api/spaces/{spaceId}/installations
- *   GET   /api/spaces/{spaceId}/installations
- *   GET   /api/installations/{id}
- *   PATCH /api/installations/{id}                 (safe status patch only)
- *   DELETE /api/installations/{id}                (creates destroy-plan Run)
- *   GET   /api/install-configs
- *   POST  /api/installations/{id}/dependencies
- *   GET   /api/installations/{id}/dependencies
- *   DELETE /api/dependencies/{dependencyId}
- *   POST/GET /api/output-shares ; POST /api/output-shares/{shareId}/approve
- *   POST /api/output-shares/{shareId}/revoke
- *   POST  /api/installations/{id}/plan ; /destroy-plan
- *   GET   /api/runs/{id} ; /logs ; /events
- *   POST  /api/runs/{id}/approve ; /cancel
- *   POST  /api/spaces/{spaceId}/plan-update
- *   GET   /api/run-groups/{id} ; POST /api/run-groups/{id}/approve
- *   GET   /api/installations/{id}/deployments
- *   GET   /api/deployments/{id}
- *   POST  /api/deployments/{id}/rollback-plan
- *   GET   /api/spaces/{spaceId}/activity
- *   GET/PUT /api/operator-connection-defaults
- *
- * The PlanRun / ApplyRun / RunnerProfile ledger routes and the Installation
- * read (+ deployments / deployment-outputs) used by the accounts plane + CLI
- * stay on the INTERNAL `/v1/*` seam (see `deploy-control-api.ts`); they are NOT
- * part of the §30 public vocabulary.
+ * The PlanRun / ApplyRun / operator execution boundary ledger routes and the
+ * Installation read (+ deployments / deployment-outputs) used by the accounts
+ * plane + CLI stay on the internal `/v1/*` seam (see
+ * `deploy-control-api.ts`); they are not part of the public `/api`
+ * vocabulary and mount only when `mountInternalLedgerRoutes` is explicitly set.
  *
  * The handlers, their descriptor slices, and their 501 fallbacks are split into
  * per-resource-group sibling modules (`deploy_control_*_routes.ts`). This module
@@ -66,9 +39,14 @@ import {
   mountDeployControlConnectionRoutes,
 } from "./deploy_control_connection_routes.ts";
 import {
+  DEPLOY_CONTROL_PROVIDER_ENDPOINTS,
+  mountDeployControlProviderRoutes,
+} from "./deploy_control_provider_routes.ts";
+import {
   DEPLOY_CONTROL_SOURCE_ENDPOINTS,
   mountDeployControlSourceRoutes,
 } from "./deploy_control_source_routes.ts";
+import { mountDeployControlDeployRoutes } from "./deploy_control_deploy_routes.ts";
 import {
   DEPLOY_CONTROL_SPACE_ENDPOINTS,
   mountDeployControlSpaceRoutes,
@@ -97,6 +75,10 @@ import {
   DEPLOY_CONTROL_ACTIVITY_ENDPOINTS,
   mountDeployControlActivityRoutes,
 } from "./deploy_control_activity_routes.ts";
+import {
+  DEPLOY_CONTROL_BILLING_ENDPOINTS,
+  mountDeployControlBillingRoutes,
+} from "./deploy_control_billing_routes.ts";
 
 // Re-export the shared dependency / principal types + the body-limit constant so
 // existing importers (`app.ts`, the route-family table) keep their import paths.
@@ -124,6 +106,7 @@ export * from "./deploy_control_route_paths.ts";
  */
 const DEPLOY_CONTROL_PUBLIC_ENDPOINTS_RICH: readonly DeployControlEndpoint[] = [
   ...DEPLOY_CONTROL_CONNECTION_ENDPOINTS,
+  ...DEPLOY_CONTROL_PROVIDER_ENDPOINTS,
   ...DEPLOY_CONTROL_SOURCE_ENDPOINTS,
   ...DEPLOY_CONTROL_SPACE_ENDPOINTS,
   ...DEPLOY_CONTROL_INSTALLATION_ENDPOINTS,
@@ -132,6 +115,7 @@ const DEPLOY_CONTROL_PUBLIC_ENDPOINTS_RICH: readonly DeployControlEndpoint[] = [
   ...DEPLOY_CONTROL_OUTPUT_SHARE_ENDPOINTS,
   ...DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS,
   ...DEPLOY_CONTROL_ACTIVITY_ENDPOINTS,
+  ...DEPLOY_CONTROL_BILLING_ENDPOINTS,
 ];
 
 export const DEPLOY_CONTROL_PUBLIC_ENDPOINTS: readonly ApiEndpoint[] =
@@ -155,12 +139,15 @@ export function mountDeployControlPublicRoutes(
     deployControlBodyLimit: createDeployControlBodyLimit(),
   };
 
-  // Mount order mirrors the original single-file enumeration. The ledger routes
-  // are an internal compatibility seam and are deliberately not part of the
-  // public descriptor inventory above.
-  mountDeployControlLedgerRoutes(ctx);
+  // The ledger routes are an internal compatibility seam and are deliberately
+  // not part of the public descriptor inventory above.
+  if (dependencies.mountInternalLedgerRoutes === true) {
+    mountDeployControlLedgerRoutes(ctx);
+  }
   mountDeployControlConnectionRoutes(ctx);
+  mountDeployControlProviderRoutes(ctx);
   mountDeployControlSourceRoutes(ctx);
+  mountDeployControlDeployRoutes(ctx);
   mountDeployControlSpaceRoutes(ctx);
   mountDeployControlInstallationRoutes(ctx);
   mountDeployControlRunRoutes(ctx);
@@ -168,15 +155,14 @@ export function mountDeployControlPublicRoutes(
   mountDeployControlOutputShareRoutes(ctx);
   mountDeployControlRunGroupRoutes(ctx);
   mountDeployControlActivityRoutes(ctx);
+  mountDeployControlBillingRoutes(ctx);
 }
 
 /**
- * Controller-absent fallback: every §30 descriptor route answers 501
+ * Controller-absent fallback: every public descriptor route answers 501
  * `not_implemented` after a successful auth. Driven by iterating
- * {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS_RICH} so it can no longer drift from the
- * descriptor inventory. The operator-connection-default routes are intentionally
- * NOT in this fallback (matching the original): they are mounted only when a
- * controller is present.
+ * {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS_RICH} so it can no longer drift from
+ * the descriptor inventory.
  */
 function mountNotImplementedRoutes(
   app: Hono,

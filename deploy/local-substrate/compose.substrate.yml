@@ -177,10 +177,10 @@ services:
 
   # ---- Takosumi cloud control plane (postgres profile) ----
   #
-  # The ONE composed app this profile serves at accounts.takosumi.test: account
+  # The ONE composed app this profile serves at app.takosumi.test: account
   # plane (OIDC issuer, billing, dashboard, install UI) + the embedded Takosumi
   # service (wrappers/cloud.ts -> buildComposedServer). Mirrors production's one
-  # accounts.takosumi.com; replaces the old separate accounts + service services.
+  # app.takosumi.com; replaces the old separate accounts + service services.
   # Holds NO docker.sock — execution is dispatched to `agent`. Imports straddle
   # /workspace (takosumi) and /takosumi (the dev-seam @takosjp/takosumi
   # target), run under the takosumi config.
@@ -387,7 +387,7 @@ services:
         aliases:
           - oauth-mock
 
-  # ---- takosumi dashboard SPA (mirrors accounts.takosumi.com root) ----
+  # ---- takosumi dashboard SPA (mirrors app.takosumi.com root) ----
   takosumi-dashboard-build:
     profiles: ["postgres", "workers"]
     image: node:22-slim
@@ -409,7 +409,7 @@ services:
     volumes:
       - ../../../takosumi/packages/dashboard-ui:/dashboard
 
-  # ---- takosumi Worker (mirrors accounts.takosumi.com on Cloudflare Workers) ----
+  # ---- takosumi Worker (mirrors app.takosumi.com on Cloudflare Workers) ----
   takosumi-worker-build:
     profiles: ["postgres", "workers"]
     image: oven/bun:1

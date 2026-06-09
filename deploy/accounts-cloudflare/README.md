@@ -1,19 +1,25 @@
 # Takosumi Accounts — in-process source module
 
-This directory is **not a standalone deployable Worker anymore**. The account plane
-(OIDC issuer / dashboard API / Installation ledger / billing) runs **in-process**
-inside the unified Takos worker at the origin root of `app.takosumi.com`. The
-former standalone `accounts.takosumi.com` Worker scaffold (its `wrangler.toml`,
-`src/worker.ts` entrypoint, and the `render-config` / `validate-rendered-config` /
-`probe` / `ensure-dns` / `spa-api-split-e2e` deploy scripts) has been removed.
+This directory is **not a standalone deployable Worker anymore**. It is the
+Cloudflare reference entry point for the account-plane handler
+(OIDC issuer / dashboard API / Installation ledger / billing), consumed
+in-process by two build targets:
 
-Takos references this module through the `@takosjp/takosumi-accounts-worker`
-tsconfig alias, which points at `src/handler.ts`. The mount lives in
-`takos/src/worker/server/routes/accounts/mount.ts`
-(`createCloudflareWorker()` → `handleAccountsPlaneRequest`). The merged
-`wrangler.toml`, D1/R2 bindings, secrets, custom-domain route, and deploy
-commands all live with the unified Takos worker (`takos/deploy/cloudflare/`),
-not here.
+- the operator Takosumi platform worker in `takosumi/deploy/platform/`, served at
+  `app.takosumi.com`;
+- the self-hosted Takos product worker template in `takos/deploy/cloudflare/`,
+  served at the self-hoster's own origin.
+
+The former standalone account-plane Worker scaffold (its `wrangler.toml`,
+`src/worker.ts` entrypoint, and the `render-config` /
+`validate-rendered-config` / `probe` / `ensure-dns` / `spa-api-split-e2e` deploy
+scripts) has been removed. Real operator deploy configuration and secrets live
+outside this repo in the operator environment.
+
+Both host workers reference this module through the
+`@takosjp/takosumi-accounts-worker` tsconfig alias, which points at
+`src/handler.ts`. The host worker supplies the actual mount, bindings, secrets,
+custom-domain route, and deploy command.
 
 ## Files
 

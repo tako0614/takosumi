@@ -16,7 +16,7 @@ import type {
   PlanRunResponse,
   RunnerProfile,
   StateSnapshot,
-} from "./deploy-control-api.ts";
+} from "./internal-deploy-control-api.ts";
 
 const runnerProfile = {
   id: "cloudflare-default",
@@ -130,7 +130,7 @@ const planRun = {
   planArtifact: {
     kind: "object-storage",
     ref:
-      "r2://takos-artifacts/opentofu-plan-runs/plan_0123456789abcdef/tfplan",
+      "r2://takos-artifacts/spaces/space_0123456789abcdef/installations/inst_0123456789abcdef/runs/plan_0123456789abcdef/plan.bin.enc",
     digest:
       "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     contentType: "application/vnd.opentofu.plan",

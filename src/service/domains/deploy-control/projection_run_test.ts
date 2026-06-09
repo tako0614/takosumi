@@ -5,10 +5,7 @@ import {
   projectPlanRun,
   projectSourceSyncRun,
 } from "./projection_run.ts";
-import type {
-  ApplyRun,
-  PlanRun,
-} from "takosumi-contract/deploy-control-api";
+import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { SourceSyncRun } from "takosumi-contract/sources";
 import type { RunStatus } from "takosumi-contract/runs";
 
@@ -84,9 +81,12 @@ for (const [internal, awaiting, expected] of PLAN_STATUS_TABLE) {
 }
 
 test("projectPlanRun maps a destroy plan to destroy_plan", () => {
-  const run = projectPlanRun(planRun({ operation: "destroy", status: "succeeded" }), {
-    awaitingApproval: true,
-  });
+  const run = projectPlanRun(
+    planRun({ operation: "destroy", status: "succeeded" }),
+    {
+      awaitingApproval: true,
+    },
+  );
   expect(run.type).toBe("destroy_plan");
   expect(run.status).toBe("waiting_approval");
 });
@@ -95,8 +95,13 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
   const run = projectPlanRun(
     planRun({
       planDigest: "sha256:plan",
-      planArtifact: { kind: "object-storage", ref: "key/plan.bin", digest: "d" },
+      planArtifact: {
+        kind: "object-storage",
+        ref: "key/plan.bin",
+        digest: "d",
+      },
       baseStateGeneration: 3,
+      compatibilityReportId: "caprep_1",
     }),
     {
       sourceSnapshotId: "snap_1",
@@ -108,6 +113,7 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
   expect(run.baseStateGeneration).toBe(3);
   expect(run.planDigest).toBe("sha256:plan");
   expect(run.planArtifactKey).toBe("key/plan.bin");
+  expect(run.compatibilityReportId).toBe("caprep_1");
   expect(run.policyStatus).toBe("pass");
   expect(run.installationId).toBe("inst_1");
   expect(run.environment).toBe("production");

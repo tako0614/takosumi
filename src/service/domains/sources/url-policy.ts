@@ -18,6 +18,11 @@
  * happens in the untrusted runner during a `source_sync` run).
  */
 
+import {
+  assertHostNotBlocked,
+  BlockedHostError,
+} from "takosumi-contract/reference/host-blocklist";
+
 export type SourceUrlScheme = "https" | "ssh" | "scp";
 
 export interface SourceUrlPolicyOk {
@@ -37,6 +42,7 @@ export type SourceUrlPolicyReason =
   | "absolute_path"
   | "relative_path"
   | "missing_host"
+  | "blocked_host"
   | "malformed";
 
 export interface SourceUrlPolicyDenied {
@@ -99,7 +105,7 @@ export function evaluateSourceUrl(raw: string): SourceUrlPolicyResult {
       return { ok: false, reason: "embedded_credentials" };
     }
     if (host.length === 0) return { ok: false, reason: "missing_host" };
-    return { ok: true, scheme: "scp", host: host.toLowerCase() };
+    return okHost("scp", host);
   }
 
   // A bare word / dotted path with no scheme and no scp form is relative.
@@ -132,7 +138,30 @@ function evaluateUrlForm(
   if (url.hostname.length === 0) {
     return { ok: false, reason: "missing_host" };
   }
-  return { ok: true, scheme, host: url.hostname.toLowerCase() };
+  return okHost(scheme, url.hostname);
+}
+
+function okHost(
+  scheme: SourceUrlScheme,
+  host: string,
+): SourceUrlPolicyResult {
+  const normalized = host.toLowerCase();
+  if (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized === "metadata.google.internal"
+  ) {
+    return { ok: false, reason: "blocked_host" };
+  }
+  try {
+    assertHostNotBlocked(normalized, "source URL host");
+  } catch (error) {
+    if (error instanceof BlockedHostError) {
+      return { ok: false, reason: "blocked_host" };
+    }
+    throw error;
+  }
+  return { ok: true, scheme, host: normalized };
 }
 
 /** Convenience boolean wrapper. */

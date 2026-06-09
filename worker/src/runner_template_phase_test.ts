@@ -3,7 +3,6 @@ import {
   buildPhaseEnv,
   parseBuild,
   parseGeneratedRoot,
-  parseTemplate,
   resourceChangesFromPlanJson,
 } from "../../runner-image/entrypoint.ts";
 import { PROVIDER_CREDENTIAL_ENV_RULES } from "takosumi-contract/provider-env-rules";
@@ -62,47 +61,22 @@ test("buildPhaseEnv preserves the baked tofu CLI config pointer", () => {
   }
 });
 
-test("parseTemplate accepts a baked image path and rejects traversal/escape", () => {
-  expect(parseTemplate({})).toBeUndefined();
-  const ok = parseTemplate({
-    template: {
-      id: "cloudflare-r2-storage",
-      version: "1.0.0",
-      localModulePath: "/app/templates/cloudflare-r2-storage/module",
-    },
-  });
-  expect(ok).toEqual({
-    id: "cloudflare-r2-storage",
-    version: "1.0.0",
-    localModulePath: "/app/templates/cloudflare-r2-storage/module",
-  });
-  expect(() =>
-    parseTemplate({
-      template: { id: "x", version: "1", localModulePath: "/etc/passwd" },
-    })
-  ).toThrow();
-  expect(() =>
-    parseTemplate({
-      template: {
-        id: "x",
-        version: "1",
-        localModulePath: "/app/templates/../../etc",
-      },
-    })
-  ).toThrow();
-  expect(() =>
-    parseTemplate({
-      template: { id: "x", version: "1", localModulePath: "relative/path" },
-    })
-  ).toThrow();
-});
-
 test("parseGeneratedRoot validates filenames and content", () => {
   expect(parseGeneratedRoot({})).toBeUndefined();
   const ok = parseGeneratedRoot({
     generatedRoot: { files: { "main.tf": "terraform {}" } },
   });
   expect(ok).toEqual({ files: { "main.tf": "terraform {}" } });
+  const withModuleFiles = parseGeneratedRoot({
+    generatedRoot: {
+      files: { "main.tf": "module \"app\" {}" },
+      moduleFiles: [{ path: "modules/app/main.tf", text: "output \"x\" {}" }],
+    },
+  });
+  expect(withModuleFiles).toEqual({
+    files: { "main.tf": "module \"app\" {}" },
+    moduleFiles: [{ path: "modules/app/main.tf", text: "output \"x\" {}" }],
+  });
   expect(() =>
     parseGeneratedRoot({ generatedRoot: { files: { "../escape.tf": "x" } } })
   ).toThrow();
@@ -114,6 +88,14 @@ test("parseGeneratedRoot validates filenames and content", () => {
   ).toThrow();
   expect(() =>
     parseGeneratedRoot({ generatedRoot: { files: { "main.tf": 5 } } })
+  ).toThrow();
+  expect(() =>
+    parseGeneratedRoot({
+      generatedRoot: {
+        files: { "main.tf": "terraform {}" },
+        moduleFiles: [{ path: "../escape.tf", text: "x" }],
+      },
+    })
   ).toThrow();
 });
 

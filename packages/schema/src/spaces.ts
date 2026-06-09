@@ -11,6 +11,7 @@
  */
 
 import type { PolicyConfig } from "./installations.ts";
+import type { BillingSettings } from "./billing.ts";
 
 export type SpaceType = "personal" | "organization";
 
@@ -23,6 +24,7 @@ export interface Space {
   readonly ownerUserId: string;
   /** Optional billing attachment. Billing can be disabled, showback, or enforced. */
   readonly billingAccountId?: string;
+  readonly billingSettings?: BillingSettings;
   /**
    * Optional Space-wide policy defaults / ceilings. The
    * deploy-control plane composes this with the target InstallConfig policy at

@@ -2,7 +2,7 @@ import type {
   DeploymentOutput,
   OpenTofuOutputEnvelope,
   OpenTofuOutputValue,
-} from "@takosjp/takosumi/contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 
 export interface OpenTofuOutputRecord {
   readonly sensitive?: boolean;

@@ -1,5 +1,9 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import { createStripeCheckoutSession, handleStripeWebhook } from "./billing.ts";
+import {
+  createStripeBillingPortalSession,
+  createStripeCheckoutSession,
+  handleStripeWebhook,
+} from "./billing.ts";
 import type { AccountsStore } from "./store.ts";
 import type { StripeBillingOptions } from "./mod.ts";
 import {
@@ -7,7 +11,7 @@ import {
   json,
   readJsonObject,
   stringValue,
- takosumiSubjectValue,
+  takosumiSubjectValue,
 } from "./http-helpers.ts";
 import { readEnvVar } from "./read-env.ts";
 
@@ -34,45 +38,61 @@ export async function handleStripeCheckoutRequest(input: {
 
   const subject = takosumiSubjectValue(body.subject);
   const priceId = stringValue(body.priceId);
-  const mode = body.mode === "payment" || body.mode === "subscription"
-    ? body.mode
-    : undefined;
+  const mode =
+    body.mode === "payment" || body.mode === "subscription"
+      ? body.mode
+      : undefined;
   const successUrl = stringValue(body.successUrl);
   const cancelUrl = stringValue(body.cancelUrl);
   if (!subject || !priceId || !mode || !successUrl || !cancelUrl) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "subject, priceId, mode, successUrl, and cancelUrl are required",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description:
+          "subject, priceId, mode, successUrl, and cancelUrl are required",
+      },
+      400,
+    );
   }
   if (subject !== input.sessionSubject) {
-    return json({
-      error: "subject_mismatch",
-      error_description:
-        "checkout body subject does not match the authenticated session",
-    }, 403);
+    return json(
+      {
+        error: "subject_mismatch",
+        error_description:
+          "checkout body subject does not match the authenticated session",
+      },
+      403,
+    );
   }
   const allowlist = resolveBillingRedirectAllowlist(
     input.billingRedirectAllowlist,
   );
   if (!allowlist || allowlist.length === 0) {
-    return json({
-      error: "feature_unavailable",
-      error_description: "Billing redirect allowlist is not configured.",
-    }, 503);
+    return json(
+      {
+        error: "feature_unavailable",
+        error_description: "Billing redirect allowlist is not configured.",
+      },
+      503,
+    );
   }
   if (!isAllowedBillingRedirect(successUrl, allowlist)) {
-    return json({
-      error: "invalid_redirect_uri",
-      error_description: "successUrl origin is not in the billing allowlist",
-    }, 400);
+    return json(
+      {
+        error: "invalid_redirect_uri",
+        error_description: "successUrl origin is not in the billing allowlist",
+      },
+      400,
+    );
   }
   if (!isAllowedBillingRedirect(cancelUrl, allowlist)) {
-    return json({
-      error: "invalid_redirect_uri",
-      error_description: "cancelUrl origin is not in the billing allowlist",
-    }, 400);
+    return json(
+      {
+        error: "invalid_redirect_uri",
+        error_description: "cancelUrl origin is not in the billing allowlist",
+      },
+      400,
+    );
   }
 
   const account = await input.store.findAccount(subject);
@@ -81,9 +101,8 @@ export async function handleStripeCheckoutRequest(input: {
   if (body.metadata !== undefined && !metadata) {
     return json({ error: "invalid_request" }, 400);
   }
-  const existingBilling = await input.store.findBillingAccountForSubject(
-    subject,
-  );
+  const existingBilling =
+    await input.store.findBillingAccountForSubject(subject);
 
   try {
     const result = await createStripeCheckoutSession({
@@ -109,12 +128,109 @@ export async function handleStripeCheckoutRequest(input: {
     // safe description and keep the stable error code.
     console.error(
       "billing_checkout_failed",
-      error instanceof Error ? error.stack ?? error.message : String(error),
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
     );
+    return json(
+      {
+        error: "checkout_failed",
+        error_description: "billing checkout failed",
+      },
+      502,
+    );
+  }
+}
+
+export async function handleStripeBillingPortalRequest(input: {
+  request: Request;
+  store: AccountsStore;
+  stripe: StripeBillingOptions;
+  sessionSubject: TakosumiSubject;
+  billingRedirectAllowlist?: readonly string[];
+}): Promise<Response> {
+  const body = await readJsonObject(input.request);
+  if (!body) return json({ error: "invalid_request" }, 400);
+
+  const subject = takosumiSubjectValue(body.subject);
+  const returnUrl = stringValue(body.returnUrl);
+  if (!subject || !returnUrl) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "subject and returnUrl are required",
+      },
+      400,
+    );
+  }
+  if (subject !== input.sessionSubject) {
+    return json(
+      {
+        error: "subject_mismatch",
+        error_description:
+          "portal body subject does not match the authenticated session",
+      },
+      403,
+    );
+  }
+
+  const allowlist = resolveBillingRedirectAllowlist(
+    input.billingRedirectAllowlist,
+  );
+  if (!allowlist || allowlist.length === 0) {
+    return json(
+      {
+        error: "feature_unavailable",
+        error_description: "Billing redirect allowlist is not configured.",
+      },
+      503,
+    );
+  }
+  if (!isAllowedBillingRedirect(returnUrl, allowlist)) {
+    return json(
+      {
+        error: "invalid_redirect_uri",
+        error_description: "returnUrl origin is not in the billing allowlist",
+      },
+      400,
+    );
+  }
+
+  const existingBilling =
+    await input.store.findBillingAccountForSubject(subject);
+  if (!existingBilling?.stripeCustomerId) {
+    return json(
+      {
+        error: "billing_account_not_linked",
+        error_description:
+          "Stripe Customer Portal requires an existing Stripe customer.",
+      },
+      409,
+    );
+  }
+
+  try {
+    const result = await createStripeBillingPortalSession({
+      secretKey: input.stripe.secretKey,
+      stripeCustomerId: existingBilling.stripeCustomerId,
+      returnUrl,
+      fetch: input.stripe.fetch,
+      stripeApiBase: input.stripe.stripeApiBase,
+    });
     return json({
-      error: "checkout_failed",
-      error_description: "billing checkout failed",
-    }, 502);
+      session_id: result.sessionId,
+      url: result.url,
+    });
+  } catch (error) {
+    console.error(
+      "billing_portal_failed",
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
+    );
+    return json(
+      {
+        error: "portal_failed",
+        error_description: "billing portal failed",
+      },
+      502,
+    );
   }
 }
 
@@ -173,14 +289,17 @@ export async function handleStripeWebhookRequest(input: {
   request: Request;
   store: AccountsStore;
   stripe: StripeBillingOptions;
+  billingReconciler?: StripeSpaceBillingReconciler;
+  billingCreditReconciler?: StripeSpaceCreditReconciler;
 }): Promise<Response> {
   const signature = input.request.headers.get("stripe-signature");
   if (!signature) return json({ error: "missing_signature" }, 400);
+  const payload = await input.request.text();
 
   try {
     const result = await handleStripeWebhook({
       store: input.store,
-      payload: await input.request.text(),
+      payload,
       signature,
       secret: input.stripe.webhookSecret,
       toleranceSeconds: input.stripe.webhookToleranceSeconds,
@@ -190,6 +309,36 @@ export async function handleStripeWebhookRequest(input: {
       fetch: input.stripe.fetch,
       stripeApiBase: input.stripe.stripeApiBase,
     });
+    if (!result.duplicate && result.applyResult?.applied) {
+      const reconciliation = stripeSpaceBillingReconciliationInput(
+        payload,
+        result.applyResult.billingAccount,
+      );
+      if (reconciliation) {
+        await input.billingReconciler?.(reconciliation.spaceId, {
+          stripeCustomerId: reconciliation.stripeCustomerId,
+          stripeSubscriptionId: reconciliation.stripeSubscriptionId,
+          stripePriceId: reconciliation.stripePriceId,
+          planCode: reconciliation.planCode,
+          status: reconciliation.status,
+          currentPeriodEndUnix: reconciliation.currentPeriodEndUnix,
+        });
+      }
+      const creditReconciliation =
+        stripeSpaceCreditReconciliationInput(payload);
+      if (creditReconciliation) {
+        await input.billingCreditReconciler?.(creditReconciliation.spaceId, {
+          credits: creditReconciliation.credits,
+          stripeEventId: creditReconciliation.stripeEventId,
+          ...(creditReconciliation.stripeCheckoutSessionId
+            ? {
+                stripeCheckoutSessionId:
+                  creditReconciliation.stripeCheckoutSessionId,
+              }
+            : {}),
+        });
+      }
+    }
     return json({
       received: result.received,
       duplicate: result.duplicate,
@@ -199,6 +348,134 @@ export async function handleStripeWebhookRequest(input: {
     });
   } catch {
     return json({ error: "invalid_signature" }, 400);
+  }
+}
+
+export type StripeSpaceBillingReconciler = (
+  spaceId: string,
+  input: {
+    readonly stripeCustomerId: string;
+    readonly stripeSubscriptionId: string;
+    readonly stripePriceId?: string;
+    readonly planCode: string;
+    readonly status: string;
+    readonly currentPeriodEndUnix?: number;
+  },
+) => unknown | Promise<unknown>;
+
+export type StripeSpaceCreditReconciler = (
+  spaceId: string,
+  input: {
+    readonly credits: number;
+    readonly stripeEventId: string;
+    readonly stripeCheckoutSessionId?: string;
+  },
+) => unknown | Promise<unknown>;
+
+function stripeSpaceBillingReconciliationInput(
+  payload: string,
+  account: {
+    readonly stripeCustomerId?: string;
+    readonly stripeSubscriptionId?: string;
+    readonly stripePriceId?: string;
+    readonly planCode?: string;
+    readonly status: string;
+    readonly currentPeriodEndUnix?: number;
+  },
+):
+  | {
+      readonly spaceId: string;
+      readonly stripeCustomerId: string;
+      readonly stripeSubscriptionId: string;
+      readonly stripePriceId?: string;
+      readonly planCode: string;
+      readonly status: string;
+      readonly currentPeriodEndUnix?: number;
+    }
+  | undefined {
+  const event = safeJsonRecord(payload);
+  const object =
+    isRecord(event?.data) && isRecord(event.data.object)
+      ? event.data.object
+      : undefined;
+  const metadata = isRecord(object?.metadata) ? object.metadata : undefined;
+  const spaceId = stringValue(metadata?.space_id ?? metadata?.spaceId);
+  const stripeCustomerId = account.stripeCustomerId;
+  const stripeSubscriptionId = account.stripeSubscriptionId;
+  const planCode =
+    account.planCode ?? stringValue(metadata?.plan_code ?? metadata?.planCode);
+  if (!spaceId || !stripeCustomerId || !stripeSubscriptionId || !planCode) {
+    return undefined;
+  }
+  return {
+    spaceId,
+    stripeCustomerId,
+    stripeSubscriptionId,
+    ...(account.stripePriceId ? { stripePriceId: account.stripePriceId } : {}),
+    planCode,
+    status: account.status,
+    ...(account.currentPeriodEndUnix !== undefined
+      ? { currentPeriodEndUnix: account.currentPeriodEndUnix }
+      : {}),
+  };
+}
+
+function stripeSpaceCreditReconciliationInput(payload: string):
+  | {
+      readonly spaceId: string;
+      readonly credits: number;
+      readonly stripeEventId: string;
+      readonly stripeCheckoutSessionId?: string;
+    }
+  | undefined {
+  const event = safeJsonRecord(payload);
+  const object =
+    isRecord(event?.data) && isRecord(event.data.object)
+      ? event.data.object
+      : undefined;
+  const metadata = isRecord(object?.metadata) ? object.metadata : undefined;
+  const spaceId = stringValue(metadata?.space_id ?? metadata?.spaceId);
+  const credits = positiveIntegerValue(
+    metadata?.credits ?? metadata?.takosumi_credits,
+  );
+  const stripeEventId = stringValue(event?.id);
+  const stripeCheckoutSessionId = stringValue(object?.id);
+  const mode = stringValue(object?.mode);
+  const paymentStatus = stringValue(object?.payment_status);
+  if (
+    !spaceId ||
+    !credits ||
+    !stripeEventId ||
+    mode !== "payment" ||
+    paymentStatus !== "paid"
+  ) {
+    return undefined;
+  }
+  return {
+    spaceId,
+    credits,
+    stripeEventId,
+    ...(stripeCheckoutSessionId ? { stripeCheckoutSessionId } : {}),
+  };
+}
+
+function positiveIntegerValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function safeJsonRecord(payload: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
   }
 }
 

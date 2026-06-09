@@ -14,12 +14,12 @@ sudo bash scripts/ca-install.sh         # trust Pebble issuance root
 sudo bash scripts/configure-dns.sh      # *.takosumi.test → 127.0.0.1
 ```
 
-After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warning). After `configure-dns.sh` the host resolves `accounts.takosumi.test`, `service.takosumi.test`, `accounts.takosumi.test`, etc. via CoreDNS.
+After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warning). After `configure-dns.sh` the host resolves `app.takosumi.test`, `service.takosumi.test`, `app.takosumi.test`, etc. via CoreDNS.
 
 ## Smoke flow A — accounts OIDC discovery
 
-1. Navigate: `https://accounts.takosumi.test/.well-known/openid-configuration`
-2. Expect: 200 with valid OIDC config JSON, `issuer` = `https://accounts.takosumi.test`
+1. Navigate: `https://app.takosumi.test/.well-known/openid-configuration`
+2. Expect: 200 with valid OIDC config JSON, `issuer` = `https://app.takosumi.test`
 3. Verify cert chain: chrome:lock → certificate → root = `Pebble Root CA`
 
 ## Smoke flow B — service admin probe
@@ -40,10 +40,10 @@ After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warni
 
 ## Smoke flow D — Takosumi upstream OAuth
 
-1. Navigate: `https://accounts.takosumi.test/sign-in`
+1. Navigate: `https://app.takosumi.test/sign-in`
 2. Expect: redirect to `https://oauth-mock.test/{google|github}/authorize?...` when a provider is selected.
 3. Complete the local mock backend flow.
-4. Expect: redirect back to `https://accounts.takosumi.test/sign-in/callback?code=...`
+4. Expect: redirect back to `https://app.takosumi.test/sign-in/callback?code=...`
 5. Expect: the dashboard session is established.
 
 ## Smoke flow E — deploy control API

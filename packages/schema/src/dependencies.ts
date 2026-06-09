@@ -9,15 +9,18 @@
  * Modes:
  *   - `variable_injection` (standard): Takosumi reads the producer
  *     OutputSnapshot and generates the consumer's `.auto.tfvars.json`.
- *   - `remote_state`: same-Space only; the producer state is materialized
- *     read-only at `/work/deps/<name>.tfstate` for `terraform_remote_state`.
+ *   - `remote_state`: same-Space only; the plan-pinned producer StateSnapshot
+ *     is materialized read-only at `/work/deps/<name>.tfstate` for
+ *     `terraform_remote_state`.
  *   - `published_output`: cross-Space via an OutputShare, then injected as
  *     variables.
  */
 
 import type { OutputValueType } from "./installations.ts";
 
-export const INSTALLATION_DEPENDENCIES_PATH = (installationId: string): string =>
+export const INSTALLATION_DEPENDENCIES_PATH = (
+  installationId: string,
+): string =>
   `/api/installations/${encodeURIComponent(installationId)}/dependencies`;
 export const DEPENDENCY_PATH = (dependencyId: string): string =>
   `/api/dependencies/${encodeURIComponent(dependencyId)}`;
@@ -57,6 +60,14 @@ export interface DependencySnapshotEntry {
   readonly dependencyId: string;
   readonly producerInstallationId: string;
   readonly producerStateGeneration: number;
+  /**
+   * Pinned StateSnapshot for `remote_state` edges. Variable-injection and
+   * published-output edges may omit these because they pin output values instead
+   * of state bytes.
+   */
+  readonly producerStateSnapshotId?: string;
+  readonly producerStateObjectKey?: string;
+  readonly producerStateDigest?: string;
   readonly producerOutputSnapshotId: string;
   readonly producerOutputDigest: string;
   readonly valuesDigest: string;

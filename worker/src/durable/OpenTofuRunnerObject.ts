@@ -94,7 +94,12 @@ type ContainerRuntimeModule = {
 
 async function loadContainerRuntime(): Promise<typeof LocalContainerRuntime> {
   try {
-    const runtime = (await import("@cloudflare/containers")) as ContainerRuntimeModule;
+    // The real `@cloudflare/containers` Container has a workerd-typed
+    // constructor (`ctx: DurableObject`) that does not structurally overlap the
+    // local stub's host-context shape, so route the cast through `unknown` (the
+    // module is only consumed through the narrow `ContainerRuntimeModule` view).
+    const runtime =
+      (await import("@cloudflare/containers")) as unknown as ContainerRuntimeModule;
     return runtime.Container ?? LocalContainerRuntime;
   } catch {
     return LocalContainerRuntime;
@@ -102,8 +107,8 @@ async function loadContainerRuntime(): Promise<typeof LocalContainerRuntime> {
 }
 
 const OpenTofuRunnerContainerBase = await loadContainerRuntime();
-const containerRuntimeAvailable = OpenTofuRunnerContainerBase !==
-  LocalContainerRuntime;
+const containerRuntimeAvailable =
+  OpenTofuRunnerContainerBase !== LocalContainerRuntime;
 
 export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<CloudflareWorkerEnv> {
   defaultPort = 8080;
@@ -124,7 +129,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       return Response.json(
         {
           error: "OpenTofu runner container runtime is unavailable",
-          detail: "Cloudflare Containers runtime is unavailable in this environment",
+          detail:
+            "Cloudflare Containers runtime is unavailable in this environment",
         },
         { status: 501 },
       );
@@ -157,9 +163,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
   }
 
-  async #fetchWithDurablePlanArtifacts(
-    request: Request,
-  ): Promise<Response> {
+  async #fetchWithDurablePlanArtifacts(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
     if (!match || request.method !== "POST") {
@@ -179,7 +183,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const stateScope = parseStateScope(envelope.request);
     const sourceArchive = parseSourceArchiveRestore(envelope.request);
     const depStates = parseDepStates(envelope.request);
-    const stateKeys = stateScope ? [] : await stateArtifactKeys(envelope.request);
+    const stateKeys = stateScope
+      ? []
+      : await stateArtifactKeys(envelope.request);
     // M2: restore the snapshotted source tree into the container before any
     // build/plan phase (mirrors the plan-artifact restore protocol).
     if (sourceArchive) {
@@ -195,7 +201,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       await this.#restorePlanArtifact(runId, envelope.request, url);
     }
     if (stateScope) {
-      await this.#restoreStateFromR2State(runId, stateScope, url, envelope.action);
+      await this.#restoreStateFromR2State(
+        runId,
+        stateScope,
+        url,
+        envelope.action,
+      );
     } else if (stateKeys.length > 0) {
       await this.#restoreStateArtifact(runId, stateKeys, url);
     }
@@ -226,7 +237,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (envelope.action !== "plan" || !runnerResponse.ok) {
       return runnerResponse;
     }
-    return await this.#persistPlanArtifact(runId, runnerResponse, url);
+    return await this.#persistPlanArtifact(
+      runId,
+      runnerResponse,
+      url,
+      stateScope,
+    );
   }
 
   #stateCrypto(): StateArtifactCrypto {
@@ -236,7 +252,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return this.#stateCryptoInstance;
   }
 
-  #r2State(): CloudflareWorkerEnv["R2_STATE"] {
+  #r2State(): NonNullable<CloudflareWorkerEnv["R2_STATE"]> {
     const bucket = this.env.R2_STATE;
     if (!bucket) {
       throw new Error("R2_STATE binding is not configured for state objects");
@@ -271,7 +287,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     assertSafeSourceArchiveKey(archiveObjectKey);
     const bucket = this.env.R2_SOURCE;
     if (!bucket) {
-      throw new Error("R2_SOURCE binding is not configured for source archives");
+      throw new Error(
+        "R2_SOURCE binding is not configured for source archives",
+      );
     }
     const archiveResponse = await this.#containerFetch(
       new Request(sourceArchiveUrl(url, runId), { method: "GET" }),
@@ -294,17 +312,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         "takosumi-digest": digest,
       },
     });
-    return jsonResponse({
-      ...payload,
-      sourceArchive: {
-        kind: "object-storage",
-        archiveObjectKey,
-        digest,
-        contentType: SOURCE_ARCHIVE_CONTENT_TYPE,
-        sizeBytes: stored.size,
-        createdAt: Date.now(),
+    return jsonResponse(
+      {
+        ...payload,
+        sourceArchive: {
+          kind: "object-storage",
+          archiveObjectKey,
+          digest,
+          contentType: SOURCE_ARCHIVE_CONTENT_TYPE,
+          sizeBytes: stored.size,
+          createdAt: Date.now(),
+        },
       },
-    }, runnerResponse.status);
+      runnerResponse.status,
+    );
   }
 
   // M2: fetch the snapshotted source archive from R2_SOURCE, verify its digest,
@@ -319,7 +340,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     assertSafeSourceArchiveKey(sourceArchive.objectKey);
     const bucket = this.env.R2_SOURCE;
     if (!bucket) {
-      throw new Error("R2_SOURCE binding is not configured for source archives");
+      throw new Error(
+        "R2_SOURCE binding is not configured for source archives",
+      );
     }
     const object = await bucket.get(sourceArchive.objectKey);
     if (!object) {
@@ -340,7 +363,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }),
     );
     if (!response.ok) {
-      throw new Error(`container source archive restore failed: ${response.status}`);
+      throw new Error(
+        `container source archive restore failed: ${response.status}`,
+      );
     }
   }
 
@@ -377,7 +402,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         new Request(depStateRestoreUrl(baseUrl, runId, depState.name), {
           method: "PUT",
           headers: { "content-type": STATE_ARTIFACT_CONTENT_TYPE },
-          body: plaintext,
+          body: toArrayBuffer(plaintext),
         }),
       );
       if (!response.ok) {
@@ -409,16 +434,21 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!current) return;
     const object = await readCurrentStateObject(bucket, scope, current);
     const ciphertext = new Uint8Array(await object.arrayBuffer());
-    const plaintext = await this.#stateCrypto().open(ciphertext, current.digest);
+    const plaintext = await this.#stateCrypto().open(
+      ciphertext,
+      current.digest,
+    );
     const response = await this.#containerFetch(
       new Request(stateArtifactUrl(baseUrl, runId), {
         method: "PUT",
         headers: { "content-type": STATE_ARTIFACT_CONTENT_TYPE },
-        body: plaintext,
+        body: toArrayBuffer(plaintext),
       }),
     );
     if (!response.ok) {
-      throw new Error(`container state artifact restore failed: ${response.status}`);
+      throw new Error(
+        `container state artifact restore failed: ${response.status}`,
+      );
     }
   }
 
@@ -439,7 +469,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
     if (stateResponse.status === 404) return runnerResponse;
     if (!stateResponse.ok) {
-      throw new Error(`container state artifact fetch failed: ${stateResponse.status}`);
+      throw new Error(
+        `container state artifact fetch failed: ${stateResponse.status}`,
+      );
     }
     const plaintext = new Uint8Array(await stateResponse.arrayBuffer());
     const sealed = await this.#stateCrypto().seal(plaintext);
@@ -471,19 +503,23 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     // M7: an apply persists the raw `tofu output -json` envelope encrypted at
     // rest to R2_ARTIFACTS (spec §26) and echoes `rawOutputsKey` so the
     // controller records it on the OutputSnapshot. A destroy has no outputs.
-    const rawOutputsKey = action === "apply"
-      ? await this.#persistRawOutputs(runId, scope, payload)
-      : undefined;
-    return jsonResponse({
-      ...payload,
-      state: {
-        generation: scope.generation,
-        objectKey,
-        digest: sealed.contentDigest,
-        ciphertextLength: sealed.ciphertextLength,
+    const rawOutputsKey =
+      action === "apply"
+        ? await this.#persistRawOutputs(runId, scope, payload)
+        : undefined;
+    return jsonResponse(
+      {
+        ...payload,
+        state: {
+          generation: scope.generation,
+          objectKey,
+          digest: sealed.contentDigest,
+          ciphertextLength: sealed.ciphertextLength,
+        },
+        ...(rawOutputsKey ? { rawOutputsKey } : {}),
       },
-      ...(rawOutputsKey ? { rawOutputsKey } : {}),
-    }, runnerResponse.status);
+      runnerResponse.status,
+    );
   }
 
   // M7: seal the raw `tofu output -json` envelope (the runner's `outputs` field,
@@ -515,6 +551,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     runnerResponse: Response,
     baseUrl: URL,
+    stateScope: StateScope | undefined,
   ): Promise<Response> {
     const payload = await readJsonObject(runnerResponse);
     const artifact = recordField(payload, "planArtifact");
@@ -536,7 +573,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       throw new Error(`container plan artifact digest mismatch: ${digest}`);
     }
     const bucket = this.#planArtifactBucket();
-    const key = planArtifactKey(runId);
+    const key = planArtifactKey(runId, stateScope);
     // At-rest encryption (spec invariant #13): the plan binary is sealed with
     // the same AES-GCM primitive as state. The object key gains `.enc`; the
     // object-storage ref the consumer restores from still names the plaintext
@@ -556,35 +593,45 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
     // Plan JSON sits beside the binary; encrypt it too when the runner produced
     // it (the runner exposes it on the /artifacts/tfplan-json route).
-    await this.#persistPlanJsonArtifact(runId, baseUrl);
-    return jsonResponse({
-      ...payload,
-      planArtifact: {
-        kind: "object-storage",
-        ref: planArtifactRef(bucket, key),
-        digest,
-        contentType: PLAN_ARTIFACT_CONTENT_TYPE,
-        sizeBytes: stored.size,
-        createdAt: Date.now(),
+    await this.#persistPlanJsonArtifact(runId, baseUrl, stateScope);
+    return jsonResponse(
+      {
+        ...payload,
+        planArtifact: {
+          kind: "object-storage",
+          ref: planArtifactRef(bucket, key),
+          digest,
+          contentType: PLAN_ARTIFACT_CONTENT_TYPE,
+          sizeBytes: stored.size,
+          createdAt: Date.now(),
+        },
       },
-    }, runnerResponse.status);
+      runnerResponse.status,
+    );
   }
 
   // Pull the `tofu show -json tfplan` JSON from the container (when present) and
-  // persist it encrypted alongside the plan binary under `<runId>/tfplan.json.enc`.
-  async #persistPlanJsonArtifact(runId: string, baseUrl: URL): Promise<void> {
+  // persist it encrypted alongside the plan binary under the run-scoped
+  // `plan.json.zst.enc` key when stateScope is available.
+  async #persistPlanJsonArtifact(
+    runId: string,
+    baseUrl: URL,
+    stateScope: StateScope | undefined,
+  ): Promise<void> {
     const response = await this.#containerFetch(
       new Request(planJsonArtifactUrl(baseUrl, runId), { method: "GET" }),
     );
     if (response.status === 404) return;
     if (!response.ok) {
-      throw new Error(`container plan-json artifact fetch failed: ${response.status}`);
+      throw new Error(
+        `container plan-json artifact fetch failed: ${response.status}`,
+      );
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
     const digest = await digestBytes(bytes);
-    const sealed = await this.#stateCrypto().seal(bytes);
+    const sealed = await this.#stateCrypto().seal(zstdCompressRaw(bytes));
     await this.env.R2_ARTIFACTS.put(
-      encryptedKey(planJsonArtifactKey(runId)),
+      encryptedKey(planJsonArtifactKey(runId, stateScope)),
       sealed.ciphertext,
       {
         httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
@@ -609,19 +656,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       this.#planArtifactBucket(),
     );
     const expectedDigest = requiredStringField(artifact, "digest");
-    // The plan binary is stored encrypted at `<key>.enc` (M2). Prefer the
-    // encrypted object; fall back to a legacy plaintext object so plans persisted
-    // before M2 still restore. Either way verify the PLAINTEXT digest.
+    // The plan binary is stored encrypted at `<key>.enc`; plaintext plan
+    // objects are not a valid restore source.
     const bytes = await this.#readPlanArtifactPlaintext(key, expectedDigest);
     const response = await this.#containerFetch(
       new Request(artifactUrl(baseUrl, runId), {
         method: "PUT",
         headers: { "content-type": PLAN_ARTIFACT_CONTENT_TYPE },
-        body: bytes,
+        body: toArrayBuffer(bytes),
       }),
     );
     if (!response.ok) {
-      throw new Error(`container plan artifact restore failed: ${response.status}`);
+      throw new Error(
+        `container plan artifact restore failed: ${response.status}`,
+      );
     }
   }
 
@@ -630,20 +678,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     expectedDigest: string,
   ): Promise<Uint8Array> {
     const encrypted = await this.env.R2_ARTIFACTS.get(encryptedKey(key));
-    if (encrypted) {
-      const ciphertext = new Uint8Array(await encrypted.arrayBuffer());
-      return await this.#stateCrypto().open(ciphertext, expectedDigest);
-    }
-    const object = await this.env.R2_ARTIFACTS.get(key);
-    if (!object) {
+    if (!encrypted) {
       throw new Error(`plan artifact object not found: ${key}`);
     }
-    const bytes = new Uint8Array(await object.arrayBuffer());
-    const digest = await digestBytes(bytes);
-    if (digest !== expectedDigest) {
-      throw new Error(`stored plan artifact digest mismatch: ${digest}`);
-    }
-    return bytes;
+    const ciphertext = new Uint8Array(await encrypted.arrayBuffer());
+    return await this.#stateCrypto().open(ciphertext, expectedDigest);
   }
 
   async #restoreStateArtifact(
@@ -652,18 +691,24 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     baseUrl: URL,
   ): Promise<void> {
     for (const key of keys) {
-      const object = await this.env.R2_ARTIFACTS.get(key);
+      const object = await this.env.R2_ARTIFACTS.get(encryptedKey(key));
       if (!object) continue;
-      const bytes = new Uint8Array(await object.arrayBuffer());
+      const ciphertext = new Uint8Array(await object.arrayBuffer());
+      const bytes = await this.#stateCrypto().open(
+        ciphertext,
+        object.customMetadata?.["takosumi-content-digest"],
+      );
       const response = await this.#containerFetch(
         new Request(stateArtifactUrl(baseUrl, runId), {
           method: "PUT",
           headers: { "content-type": STATE_ARTIFACT_CONTENT_TYPE },
-          body: bytes,
+          body: toArrayBuffer(bytes),
         }),
       );
       if (!response.ok) {
-        throw new Error(`container state artifact restore failed: ${response.status}`);
+        throw new Error(
+          `container state artifact restore failed: ${response.status}`,
+        );
       }
       return;
     }
@@ -679,16 +724,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
     if (response.status === 404) return;
     if (!response.ok) {
-      throw new Error(`container state artifact fetch failed: ${response.status}`);
+      throw new Error(
+        `container state artifact fetch failed: ${response.status}`,
+      );
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
-    const digest = await digestBytes(bytes);
+    const sealed = await this.#stateCrypto().seal(bytes);
     for (const key of keys) {
-      await this.env.R2_ARTIFACTS.put(key, bytes, {
-        httpMetadata: { contentType: STATE_ARTIFACT_CONTENT_TYPE },
+      await this.env.R2_ARTIFACTS.put(encryptedKey(key), sealed.ciphertext, {
+        httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
         customMetadata: {
           "takosumi-run-id": runId,
-          "takosumi-digest": digest,
+          "takosumi-content-digest": sealed.contentDigest,
+          "takosumi-ciphertext-length": String(sealed.ciphertextLength),
         },
       });
     }
@@ -738,9 +786,9 @@ function sourceArchiveRestoreUrl(baseUrl: URL, runId: string): string {
 // (the runner re-validates it is a safe filename).
 function depStateRestoreUrl(baseUrl: URL, runId: string, name: string): string {
   const url = new URL(baseUrl);
-  url.pathname = `/runs/${encodeURIComponent(runId)}/deps/${
-    encodeURIComponent(name)
-  }/restore`;
+  url.pathname = `/runs/${encodeURIComponent(runId)}/deps/${encodeURIComponent(
+    name,
+  )}/restore`;
   url.search = "";
   return url.toString();
 }
@@ -761,9 +809,9 @@ function planJsonArtifactUrl(baseUrl: URL, runId: string): string {
 // ===========================================================================
 
 function stateScopePrefix(scope: StateScope): string {
-  return `spaces/${safeKeySegment(scope.spaceId)}/installations/${
-    safeKeySegment(scope.installationId)
-  }/envs/${safeKeySegment(scope.environment)}/states`;
+  return `spaces/${safeKeySegment(scope.spaceId)}/installations/${safeKeySegment(
+    scope.installationId,
+  )}/envs/${safeKeySegment(scope.environment)}/states`;
 }
 
 function stateObjectKey(scope: StateScope): string {
@@ -779,14 +827,16 @@ function currentStateKey(scope: StateScope): string {
 // Kept in lockstep with the controller's `rawOutputArtifactKey` formatter so the
 // recorded OutputSnapshot pointer matches the object the DO wrote.
 function rawOutputsKey(scope: StateScope, runId: string): string {
-  return `spaces/${safeKeySegment(scope.spaceId)}/installations/${
-    safeKeySegment(scope.installationId)
-  }/runs/${safeKeySegment(runId)}/outputs.raw.json.enc`;
+  return `spaces/${safeKeySegment(scope.spaceId)}/installations/${safeKeySegment(
+    scope.installationId,
+  )}/runs/${safeKeySegment(runId)}/outputs.raw.json.enc`;
 }
 
 function formatGeneration(generation: number): string {
   if (!Number.isInteger(generation) || generation < 0) {
-    throw new Error(`state generation must be a non-negative integer: ${generation}`);
+    throw new Error(
+      `state generation must be a non-negative integer: ${generation}`,
+    );
   }
   return String(generation).padStart(8, "0");
 }
@@ -804,7 +854,9 @@ async function readCurrentState(
 ): Promise<CurrentStatePointer | undefined> {
   const object = await bucket.get(currentStateKey(scope));
   if (!object) return await recoverCurrentState(bucket, scope, maxGeneration);
-  const text = new TextDecoder().decode(new Uint8Array(await object.arrayBuffer()));
+  const text = new TextDecoder().decode(
+    new Uint8Array(await object.arrayBuffer()),
+  );
   const parsed = JSON.parse(text) as unknown;
   if (!isRecord(parsed)) {
     throw new Error("current.json is not a JSON object");
@@ -818,10 +870,14 @@ async function readCurrentState(
   // The pointer must stay inside this env's state prefix (defense in depth
   // against a crafted current.json pointing at another tenant's object).
   if (!objectKey.startsWith(`${stateScopePrefix(scope)}/`)) {
-    throw new Error(`current.json objectKey escapes state prefix: ${objectKey}`);
+    throw new Error(
+      `current.json objectKey escapes state prefix: ${objectKey}`,
+    );
   }
   if (!Number.isInteger(generation) || generation > maxGeneration) {
-    throw new Error(`current.json generation is outside restore window: ${generation}`);
+    throw new Error(
+      `current.json generation is outside restore window: ${generation}`,
+    );
   }
   return { generation, objectKey, digest };
 }
@@ -833,7 +889,11 @@ async function readCurrentStateObject(
 ): Promise<NonNullable<Awaited<ReturnType<typeof bucket.get>>>> {
   const object = await bucket.get(current.objectKey);
   if (object) return object;
-  const recovered = await recoverCurrentState(bucket, scope, current.generation);
+  const recovered = await recoverCurrentState(
+    bucket,
+    scope,
+    current.generation,
+  );
   if (!recovered) {
     throw new Error(`current state object not found: ${current.objectKey}`);
   }
@@ -856,7 +916,8 @@ async function recoverCurrentState(
   for (const object of objects.objects) {
     const generation = generationFromStateObjectKey(prefix, object.key);
     if (generation === undefined || generation > maxGeneration) continue;
-    const digest = object.customMetadata?.["takosumi-content-digest"] ??
+    const digest =
+      object.customMetadata?.["takosumi-content-digest"] ??
       object.customMetadata?.["takosumi-digest"];
     if (!digest) continue;
     if (!best || generation > best.generation) {
@@ -909,7 +970,9 @@ function parseStateScope(requestPayload: unknown): StateScope | undefined {
   const environment = stringField(scope, "environment");
   const generation = scope.generation;
   if (
-    !spaceId || !installationId || !environment ||
+    !spaceId ||
+    !installationId ||
+    !environment ||
     typeof generation !== "number"
   ) {
     throw new Error(
@@ -928,7 +991,8 @@ function parseSourceArchiveRestore(
   // or, on a source_sync response, an { archiveObjectKey, digest } persisted
   // descriptor. Accept objectKey or archiveObjectKey so plan/apply dispatch can
   // reuse the snapshot record verbatim.
-  const objectKey = stringField(archive, "objectKey") ??
+  const objectKey =
+    stringField(archive, "objectKey") ??
     stringField(archive, "archiveObjectKey");
   const digest = stringField(archive, "digest");
   if (!objectKey || !digest) return undefined;
@@ -956,7 +1020,11 @@ function parseDepStates(requestPayload: unknown): readonly DepState[] {
     const digest = stringField(entry, "digest");
     const generation = entry.generation;
     if (
-      !name || !installationId || !environment || !objectKey || !digest ||
+      !name ||
+      !installationId ||
+      !environment ||
+      !objectKey ||
+      !digest ||
       typeof generation !== "number"
     ) {
       throw new Error(
@@ -985,9 +1053,9 @@ function assertDepStateObjectKey(depState: DepState): void {
   ) {
     throw new Error(`unsafe dependency state object key: ${key}`);
   }
-  const expectedSuffix = `/installations/${
-    safeKeySegment(depState.installationId)
-  }/envs/${safeKeySegment(depState.environment)}/states/`;
+  const expectedSuffix = `/installations/${safeKeySegment(
+    depState.installationId,
+  )}/envs/${safeKeySegment(depState.environment)}/states/`;
   if (!key.includes(expectedSuffix)) {
     throw new Error(
       `dependency state object key escapes producer prefix: ${key}`,
@@ -1020,14 +1088,25 @@ function assertSafeSourceArchiveKey(key: string): void {
   }
 }
 
-function planArtifactKey(runId: string): string {
+function planArtifactKey(runId: string, scope?: StateScope): string {
+  if (scope) {
+    return `spaces/${safeKeySegment(scope.spaceId)}/installations/${safeKeySegment(
+      scope.installationId,
+    )}/runs/${safeKeySegment(runId)}/plan.bin`;
+  }
   return `opentofu-plan-runs/${runId.replace(/[^a-zA-Z0-9._-]+/g, "_")}/tfplan`;
 }
 
-function planJsonArtifactKey(runId: string): string {
-  return `opentofu-plan-runs/${
-    runId.replace(/[^a-zA-Z0-9._-]+/g, "_")
-  }/tfplan.json`;
+function planJsonArtifactKey(runId: string, scope?: StateScope): string {
+  if (scope) {
+    return `spaces/${safeKeySegment(scope.spaceId)}/installations/${safeKeySegment(
+      scope.installationId,
+    )}/runs/${safeKeySegment(runId)}/plan.json.zst`;
+  }
+  return `opentofu-plan-runs/${runId.replace(
+    /[^a-zA-Z0-9._-]+/g,
+    "_",
+  )}/tfplan.json`;
 }
 
 function planArtifactRef(bucket: string, key: string): string {
@@ -1040,20 +1119,82 @@ function planArtifactKeyFromRef(ref: string, bucket: string): string {
     throw new Error(`unsupported plan artifact ref: ${ref}`);
   }
   const key = ref.slice(prefix.length);
-  if (!key.startsWith("opentofu-plan-runs/") || key.includes("..")) {
+  const canonical =
+    /^spaces\/[^/]+\/installations\/[^/]+\/runs\/[^/]+\/plan\.bin$/.test(key);
+  if (
+    (!canonical && !key.startsWith("opentofu-plan-runs/")) ||
+    key.includes("..")
+  ) {
     throw new Error(`unsafe plan artifact key: ${key}`);
   }
   return key;
 }
 
-async function stateArtifactKeys(requestPayload: unknown): Promise<readonly string[]> {
+function zstdCompressRaw(input: Uint8Array): Uint8Array {
+  if (input.byteLength > 0xffffffff) {
+    throw new Error("plan JSON exceeds the portable zstd encoder limit");
+  }
+  const chunks: Uint8Array[] = [
+    new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]),
+    new Uint8Array([0xa0]),
+    uint32le(input.byteLength),
+  ];
+  const maxBlockSize = 128 * 1024;
+  for (
+    let offset = 0;
+    offset < input.byteLength || offset === 0;
+    offset += maxBlockSize
+  ) {
+    const end = Math.min(offset + maxBlockSize, input.byteLength);
+    const block = input.slice(offset, end);
+    const last = end >= input.byteLength ? 1 : 0;
+    chunks.push(uint24le((block.byteLength << 3) | last));
+    chunks.push(block);
+    if (input.byteLength === 0) break;
+  }
+  return concatBytes(chunks);
+}
+
+function uint32le(value: number): Uint8Array {
+  return new Uint8Array([
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 24) & 0xff,
+  ]);
+}
+
+function uint24le(value: number): Uint8Array {
+  return new Uint8Array([
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+  ]);
+}
+
+function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+async function stateArtifactKeys(
+  requestPayload: unknown,
+): Promise<readonly string[]> {
   const planRun = recordField(requestPayload, "planRun");
   if (!planRun) return [];
   const backendKey = await stateBackendKey(requestPayload);
   const keys: string[] = [];
   const installationId = stringField(planRun, "installationId");
   if (installationId) {
-    keys.push(`${backendKey}/installations/${safeKeySegment(installationId)}/terraform.tfstate`);
+    keys.push(
+      `${backendKey}/installations/${safeKeySegment(installationId)}/terraform.tfstate`,
+    );
   }
   const source = recordField(planRun, "source");
   const sourceKey = await sourceStateKey({
@@ -1072,7 +1213,8 @@ async function sourceStateKey(input: {
   readonly runnerProfileId: string | undefined;
   readonly source: Record<string, unknown> | undefined;
 }): Promise<string | undefined> {
-  if (!input.spaceId || !input.runnerProfileId || !input.source) return undefined;
+  if (!input.spaceId || !input.runnerProfileId || !input.source)
+    return undefined;
   const sourceIdentity = {
     spaceId: input.spaceId,
     runnerProfileId: input.runnerProfileId,
@@ -1089,7 +1231,7 @@ async function stateBackendKey(requestPayload: unknown): Promise<string> {
   const runnerProfile = recordField(requestPayload, "runnerProfile");
   const stateBackend = recordField(runnerProfile, "stateBackend");
   const ref = stateBackend
-    ? stringField(stateBackend, "ref") ?? stringField(stateBackend, "kind")
+    ? (stringField(stateBackend, "ref") ?? stringField(stateBackend, "kind"))
     : undefined;
   if (!ref) {
     const planRun = recordField(requestPayload, "planRun");
@@ -1118,9 +1260,11 @@ function parseRunEnvelope(bodyText: string): {
   };
 }
 
-async function readJsonObject(response: Response): Promise<Record<string, unknown>> {
+async function readJsonObject(
+  response: Response,
+): Promise<Record<string, unknown>> {
   const text = await response.text();
-  const value = text.length > 0 ? JSON.parse(text) as unknown : {};
+  const value = text.length > 0 ? (JSON.parse(text) as unknown) : {};
   if (isRecord(value)) return value;
   throw new Error("OpenTofu runner response must be a JSON object");
 }
@@ -1129,7 +1273,10 @@ function jsonResponse(payload: unknown, status: number): Response {
   return Response.json(payload, { status });
 }
 
-function recordField(value: unknown, key: string): Record<string, unknown> | undefined {
+function recordField(
+  value: unknown,
+  key: string,
+): Record<string, unknown> | undefined {
   if (!isRecord(value)) return undefined;
   const field = value[key];
   return isRecord(field) ? field : undefined;
@@ -1143,7 +1290,10 @@ function stringField(
   return typeof field === "string" && field.length > 0 ? field : undefined;
 }
 
-function requiredStringField(value: Record<string, unknown>, key: string): string {
+function requiredStringField(
+  value: Record<string, unknown>,
+  key: string,
+): string {
   const field = stringField(value, key);
   if (!field) throw new Error(`${key} is required`);
   return field;
@@ -1154,12 +1304,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function digestBytes(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return `sha256:${
-    Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("")
-  }`;
+  const digest = await crypto.subtle.digest("SHA-256", toArrayBuffer(bytes));
+  return `sha256:${Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+// Copy a (possibly `SharedArrayBuffer`-backed) view into a fresh `ArrayBuffer`
+// so it satisfies the DOM `BufferSource` / `BodyInit` typings under TS 5.7+
+// typed-array generics. Mirrors `worker/src/state_crypto.ts#toArrayBuffer`.
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
 }
 
 async function digestText(text: string): Promise<string> {

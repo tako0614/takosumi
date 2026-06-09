@@ -2,17 +2,22 @@
 //
 // This single worker hosts the accounts plane (bare-origin OIDC issuer +
 // dashboard SPA) and the OpenTofu-native deploy-control plane in one process.
-// The accounts handler owns every public route and serves the dashboard SPA from
-// its built-in ASSETS fallback (non-API GET/HEAD). The deploy-control plane has
-// NO public route: it is reached only through the in-process `deployControlFetch`
-// seam injected below, exactly as the unified Takos worker reaches it. The two
-// Durable Object classes (coordination leases/alarms + the OpenTofu Container
-// runner) are re-exported so the wrangler bindings/migrations can name them.
+// The accounts handler owns the public HTTP surface and serves the dashboard SPA
+// from its built-in ASSETS fallback (non-API GET/HEAD). Public `/api` control
+// routes are still the canonical Takosumi Space / Source / Connection /
+// Installation / Dependency / SourceSnapshot / DependencySnapshot /
+// StateSnapshot / Run / RunGroup / Deployment / OutputSnapshot / Backup surface, but this platform worker reaches the
+// deploy-control implementation in-process through the `deployControlFetch` /
+// operations seam injected below. There is no separate control-plane worker.
+// The two Durable Object classes (coordination leases/alarms + the OpenTofu
+// Container runner) are re-exported so the wrangler bindings/migrations can
+// name them.
 
 import {
   type CloudflareWorkerEnv,
   createCloudflareWorker,
 } from "../accounts-cloudflare/src/handler.ts";
+import type { ControlPlaneOperations } from "@takosjp/takosumi-accounts-service";
 import {
   type CloudflareWorkerEnv as DeployControlEnv,
   createDeployControlQueueConsumer,
@@ -34,12 +39,19 @@ export { CoordinationObject, OpenTofuRunnerObject };
 // `operations` facade directly (no Bearer handshake, no JSON round-trip); the
 // HTTP `fetch` dispatch into the embedded service's Hono app is kept as a
 // transport fallback. The synthetic base host is never dialed.
+//
+// Keyed by the live env object. Callers reach this seam either with the
+// accounts-handler env (the public fetch surface) or directly with the
+// deploy-control env (the scheduled/webhook seams); both are the SAME runtime
+// object on the platform worker, so the key type is their common object shape.
+type PlatformEnv = CloudflareWorkerEnv | DeployControlEnv;
+
 const seams = new WeakMap<
-  CloudflareWorkerEnv,
+  object,
   ReturnType<typeof createInProcessDeployControlSeam>
 >();
 
-function deployControlSeam(env: CloudflareWorkerEnv) {
+function deployControlSeam(env: PlatformEnv) {
   let seam = seams.get(env);
   if (!seam) {
     seam = createInProcessDeployControlSeam(env as unknown as DeployControlEnv);
@@ -48,13 +60,29 @@ function deployControlSeam(env: CloudflareWorkerEnv) {
   return seam;
 }
 
+// Adapt the in-process `TakosumiOperations` facade to the dashboard's
+// `ControlPlaneOperations` shape. The two are identical EXCEPT `getSource`:
+// `TakosumiOperations.getSource` resolves the `{ source }` envelope
+// (`SourceResponse`) while the control routes consume a bare `Source` (they read
+// `source.spaceId` for the access check). Unwrap `.source` here so the routes do
+// not silently observe `undefined` for the space binding.
+async function controlPlaneOperationsFor(
+  env: PlatformEnv,
+): Promise<ControlPlaneOperations> {
+  const operations = await deployControlSeam(env).operations();
+  return {
+    ...operations,
+    getSource: async (id) => (await operations.getSource(id)).source,
+  };
+}
+
 const accountsWorker = createCloudflareWorker({
   deployControlFetch: (env) => deployControlSeam(env).fetch,
   deployControlOperations: (env) => deployControlSeam(env).operations(),
   // The session-authed `/v1/control/*` dashboard surface (M10) reads the SAME
-  // in-process operations facade the deploy-control proxy uses; `TakosumiOperations`
-  // structurally satisfies `ControlPlaneOperations`.
-  controlPlaneOperations: (env) => deployControlSeam(env).operations(),
+  // in-process operations facade the deploy-control proxy uses, adapted to the
+  // `ControlPlaneOperations` shape (see `controlPlaneOperationsFor`).
+  controlPlaneOperations: (env) => controlPlaneOperationsFor(env),
 });
 
 // The platform worker owns the public fetch surface (accounts handler) AND runs
@@ -83,7 +111,8 @@ export default {
   // Scheduled cron tick. Always runs source polling (Core Specification §6: scan
   // active autoSync sources and enqueue a deduped source_sync). When the
   // `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO runs the
-  // §28 drift sweep (create a read-only drift_check per ACTIVE Installation).
+  // §28 drift sweep (one space_drift_check RunGroup per Space with active
+  // Installations).
   async scheduled(_event: unknown, env: CloudflareWorkerEnv): Promise<void> {
     await runScheduledSourcePoll(env as unknown as DeployControlEnv);
     if (driftCheckEnabled(env)) {
@@ -93,6 +122,7 @@ export default {
 };
 
 const HARDENING_GATE_REF_PREFIX = "git+";
+const HARDENING_GATE_COMMIT_PIN_PATTERN = /@[0-9a-f]{40,64}#/i;
 const HARDENING_GATE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 
 export interface ProductionHardeningGateResult {
@@ -101,6 +131,8 @@ export interface ProductionHardeningGateResult {
   readonly checks: {
     readonly containerSmoke: ProductionHardeningCheck;
     readonly egressEnforcement: ProductionHardeningCheck;
+    readonly providerTemplates: ProductionHardeningCheck;
+    readonly secretBoundary: ProductionHardeningCheck;
   };
 }
 
@@ -124,9 +156,21 @@ export function evaluateProductionHardeningGates(
       env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF,
       env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST,
     ),
+    providerTemplates: evidenceCheck(
+      env.TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF,
+      env.TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST,
+    ),
+    secretBoundary: evidenceCheck(
+      env.TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF,
+      env.TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST,
+    ),
   };
   return {
-    ok: checks.containerSmoke.ok && checks.egressEnforcement.ok,
+    ok:
+      checks.containerSmoke.ok &&
+      checks.egressEnforcement.ok &&
+      checks.providerTemplates.ok &&
+      checks.secretBoundary.ok,
     enforced,
     checks,
   };
@@ -139,11 +183,14 @@ function handleHardeningGatesRequest(
   if (request.method !== "GET" && request.method !== "HEAD") {
     return Response.json({ error: "method not allowed" }, { status: 405 });
   }
-  const token = typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
-    ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
-    : undefined;
+  const token =
+    typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
+      ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
+      : undefined;
   if (!token) return Response.json({ error: "not found" }, { status: 404 });
-  const bearer = bearerFromAuthorization(request.headers.get("authorization") ?? "");
+  const bearer = bearerFromAuthorization(
+    request.headers.get("authorization") ?? "",
+  );
   if (!bearer || !constantTimeEqualsString(bearer, token)) {
     return Response.json({ error: "unauthenticated" }, { status: 401 });
   }
@@ -165,6 +212,13 @@ function evidenceCheck(
       ok: false,
       evidenceRef,
       reason: "evidence_ref_must_be_git_ref",
+    };
+  }
+  if (!HARDENING_GATE_COMMIT_PIN_PATTERN.test(evidenceRef)) {
+    return {
+      ok: false,
+      evidenceRef,
+      reason: "evidence_ref_must_be_commit_pinned",
     };
   }
   if (!evidenceDigest) {
@@ -200,7 +254,9 @@ export interface SourceWebhookOperations {
 
 export interface SourcePollOperations extends SourceWebhookOperations {
   readonly controller: {
-    listAutoSyncSources(limit: number): Promise<readonly { readonly id: string }[]>;
+    listAutoSyncSources(
+      limit: number,
+    ): Promise<readonly { readonly id: string }[]>;
   };
 }
 
@@ -302,14 +358,13 @@ export function driftCheckEnabled(env: CloudflareWorkerEnv): boolean {
 
 async function runScheduledDriftSweep(env: DeployControlEnv): Promise<void> {
   const operations = await deployControlSeam(env).operations();
-  // The in-process operations facade structurally satisfies DriftSweepOperations
-  // (it exposes listActiveInstallations via its controller and
-  // createInstallationDriftCheck directly). Adapt the two methods the sweep needs.
+  // Adapt the two methods the sweep needs: active Installation listing from the
+  // controller and grouped drift checks through the RunGroups service.
   const driftOps: DriftSweepOperations = {
     listActiveInstallations: (limit) =>
       operations.controller.listActiveInstallations(limit),
-    createInstallationDriftCheck: (installationId) =>
-      operations.createInstallationDriftCheck(installationId),
+    createSpaceDriftCheck: (spaceId, options) =>
+      operations.runGroups.createSpaceDriftCheck(spaceId, options),
   };
   await driftSweep(driftOps, { limit: SCHEDULED_DRIFT_SWEEP_LIMIT });
 }

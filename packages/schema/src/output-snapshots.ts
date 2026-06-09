@@ -27,6 +27,23 @@ export interface OutputSnapshot {
 
 export type OutputShareStatus = "pending" | "active" | "revoked";
 
+/**
+ * One shared output on an {@link OutputShare} grant.
+ *
+ * SECURITY INVARIANT (names-only at rest): an entry carries the producer output
+ * `name`, an optional consumer-side `alias`, an optional `type` hint, and the
+ * `sensitive` flag — and DELIBERATELY no `value` field. The producer's resolved
+ * output value (sensitive or not) is NEVER copied onto a grant: the share record
+ * is the authorization, not the payload. The value stays in the producer's
+ * encrypted raw-output artifact (`OutputSnapshot.rawOutputArtifactKey`) and is
+ * re-resolved (and re-checked against the active grant) only at plan-time
+ * `published_output` injection. Because the persisted `output_shares` row is
+ * structurally names-only, it needs no separate at-rest encryption — there is no
+ * cleartext secret on the grant to seal. (At-rest sealing of the resolved
+ * sensitive value that DOES get inlined into a consumer's pinned inputs belongs
+ * to the `dependency_snapshots` / `DependencySnapshotEntry.values` path, not
+ * here.)
+ */
 export interface OutputShareEntry {
   readonly name: string;
   readonly alias?: string;
@@ -34,7 +51,14 @@ export interface OutputShareEntry {
   readonly sensitive: boolean;
 }
 
-/** Cross-Space output sharing grant. */
+/**
+ * Cross-Space output sharing grant.
+ *
+ * Carries grant identity, the producer Installation, the shared {@link
+ * OutputShareEntry} list (names / aliases / flags only — see the entry's
+ * security invariant), and the pending -> active -> revoked lifecycle. No output
+ * VALUE is ever stored on the grant.
+ */
 export interface OutputShare {
   readonly id: string;
   readonly fromSpaceId: string;

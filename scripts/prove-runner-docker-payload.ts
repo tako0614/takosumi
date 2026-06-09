@@ -2,8 +2,8 @@
  * Emits the two `takosumi.opentofu-run@v1` dispatch envelopes (plan, then apply)
  * that the production OpenTofuRunnerObject DO sends to the runner container's
  * `POST /runs/{runId}` route, using the REAL rootgen generator + the REAL `core`
- * template catalog entry. No cloud credentials are involved: `core` is a pure
- * value-plumbing module (no providers).
+ * first-party Capsule definition. No cloud credentials are involved: `core` is
+ * a pure value-plumbing module (no providers).
  *
  * The DO's `parseRunEnvelope` reads only `{ action, request }` off the body; the
  * runner's `handleRunnerRequest` reads `body.action` and `body.request`. We emit
@@ -18,20 +18,10 @@
  */
 
 import { generateInstallationRoot } from "takosumi-rootgen";
+import { firstPartyModuleFilesByTemplateId } from "../opentofu-modules/module-files.ts";
 import { coreTemplate } from "../opentofu-modules/core/template.ts";
 
 const ENVELOPE_KIND = "takosumi.opentofu-run@v1";
-
-// The baked official-template reference the runner copies to
-// /work/generated-root/template-module. `localModulePath` must live under
-// /app/templates (asserted by the runner's parseTemplate); the core module is
-// baked at /app/templates/core/module by the Dockerfile (COPY opentofu-modules/
-// -> ./templates/).
-const TEMPLATE_REF = {
-  id: coreTemplate.id,
-  version: coreTemplate.version,
-  localModulePath: "/app/templates/core/module",
-} as const;
 
 // Real, validated template inputs. base_domain is required (see core template.ts
 // / module/main.tf); display_name is optional.
@@ -49,6 +39,13 @@ function generatedRootFiles(): Record<string, string> {
   return generated.files as Record<string, string>;
 }
 
+function generatedRoot(): unknown {
+  return {
+    files: generatedRootFiles(),
+    moduleFiles: firstPartyModuleFilesByTemplateId.core,
+  };
+}
+
 function planEnvelope(runId: string): unknown {
   return {
     kind: ENVELOPE_KIND,
@@ -56,8 +53,7 @@ function planEnvelope(runId: string): unknown {
     runId,
     requestedAt: new Date().toISOString(),
     request: {
-      template: TEMPLATE_REF,
-      generatedRoot: { files: generatedRootFiles() },
+      generatedRoot: generatedRoot(),
       planRun: { operation: "create" },
     },
   };
@@ -70,8 +66,7 @@ function applyEnvelope(runId: string, planDigest: string): unknown {
     runId,
     requestedAt: new Date().toISOString(),
     request: {
-      template: TEMPLATE_REF,
-      generatedRoot: { files: generatedRootFiles() },
+      generatedRoot: generatedRoot(),
       // For a runner-local plan artifact the apply only needs the plan digest:
       // the runner verifies the still-warm /work/<runId>/tfplan against this
       // digest and runs `tofu apply tfplan` against the restored generated root.

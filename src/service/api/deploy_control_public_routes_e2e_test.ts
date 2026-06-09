@@ -2,19 +2,29 @@ import { expect, test } from "bun:test";
 import type {
   ApplyRunResponse,
   InstallConfig,
+  ListProviderTemplatesResponse,
   PlanRunResponse,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
+import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Run } from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
-import type { OutputShare, OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type {
+  OutputShare,
+  OutputSnapshot,
+} from "takosumi-contract/output-snapshots";
 import type { Space } from "takosumi-contract/spaces";
 import type { OpenTofuRunner } from "../domains/deploy-control/mod.ts";
 import { applyExpectedGuardFromPlanRun } from "../domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../domains/deploy-control/store.ts";
+import { fakeProviderVault } from "../domains/deploy-control/test_model_fixture.ts";
+import { StaticSecretConnectionVault } from "../adapters/vault/mod.ts";
+import { MultiCloudSecretBoundaryCrypto } from "../adapters/secret-store/memory.ts";
 import { createTakosumiService } from "../bootstrap.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const LOCK_DIGEST =
+  "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 const ARCHIVE_DIGEST =
   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -23,6 +33,106 @@ const TOKEN = "deploy-control-token";
 function headers(extra: Record<string, string> = {}): Record<string, string> {
   return { authorization: `Bearer ${TOKEN}`, ...extra };
 }
+
+async function readInternalPlanRun(
+  app: { request: (path: string, init?: RequestInit) => Promise<Response> },
+  runId: string,
+): Promise<PlanRunResponse> {
+  const response = await app.request(`/v1/plan-runs/${runId}`, {
+    headers: headers(),
+  });
+  expect(response.status).toEqual(200);
+  return (await response.json()) as PlanRunResponse;
+}
+
+test("provider templates and provider env set routes round-trip (§7 / §8)", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  let connectionCounter = 0;
+  const vault = new StaticSecretConnectionVault({
+    store,
+    crypto: new MultiCloudSecretBoundaryCrypto({
+      globalPassphrase: "provider-env-set-e2e-passphrase-0123456789",
+    }),
+    now: () => new Date("2026-06-09T00:00:00.000Z"),
+    newId: () =>
+      `conn_envset${(connectionCounter += 1).toString().padStart(10, "0")}`,
+  });
+  const { app } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: {
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
+    },
+    mountInternalLedgerRoutes: true,
+    opentofuDeploymentStore: store,
+    opentofuConnectionVault: vault,
+    startWorkerDaemon: false,
+  });
+
+  const spaceRes = await app.request("/api/spaces", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      handle: "providers",
+      displayName: "providers",
+      type: "personal",
+      ownerUserId: "user_test00000001",
+    }),
+  });
+  expect(spaceRes.status).toBe(201);
+  const spaceId = (await spaceRes.json()).space.id as string;
+
+  const providersRes = await app.request("/api/providers", {
+    headers: headers(),
+  });
+  expect(providersRes.status).toBe(200);
+  const providersBody = (await providersRes.json()) as ListProviderTemplatesResponse;
+  expect(
+    providersBody.providers.map((provider) => provider.id).sort(),
+  ).toEqual(["aws", "cloudflare", "gcp", "github", "kubernetes"]);
+  expect(providersBody.providers).toContainEqual(
+    expect.objectContaining({
+      id: "cloudflare",
+      credentialSources: ["takosumi_managed", "user_env_set"],
+      takosumiManagedAvailable: true,
+      recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
+    }),
+  );
+  for (const id of ["aws", "gcp", "github", "kubernetes"]) {
+    expect(providersBody.providers).toContainEqual(
+      expect.objectContaining({
+        id,
+        credentialSources: ["user_env_set"],
+        takosumiManagedAvailable: false,
+      }),
+    );
+  }
+
+  const createEnvSetRes = await app.request(
+    `/api/connections/provider-env-set`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        spaceId,
+        provider: "registry.opentofu.org/vercel/vercel",
+        displayName: "Vercel",
+        values: {
+          VERCEL_API_TOKEN: "vercel_secret",
+        },
+      }),
+    },
+  );
+  expect(createEnvSetRes.status).toBe(201);
+  const envSetBody = await createEnvSetRes.json();
+  expect(envSetBody.connection).toMatchObject({
+    provider: "registry.opentofu.org/vercel/vercel",
+    kind: "provider_env_set",
+    scope: "space",
+    envNames: ["VERCEL_API_TOKEN"],
+  });
+  expect(JSON.stringify(envSetBody)).not.toContain("vercel_secret");
+});
 
 /**
  * Stands up a service over a known in-memory store, then walks the new
@@ -50,8 +160,10 @@ async function seedInstallationViaRoutes(
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
     },
+    mountInternalLedgerRoutes: true,
     opentofuDeploymentStore: store,
     opentofuRunner: runner,
+    opentofuConnectionVault: fakeProviderVault() as never,
     startWorkerDaemon: false,
   });
 
@@ -81,7 +193,7 @@ async function seedInstallationViaRoutes(
   const sourceId = (await sourceRes.json()).source.id as string;
 
   // Seed a deterministic InstallConfig through the in-process operations facade
-  // (the fire-and-forget official catalog seed may not have drained yet).
+  // (the fire-and-forget built-in InstallConfig seed may not have drained yet).
   const nowIso = new Date(0).toISOString();
   const config: InstallConfig = {
     id: "cfg_test00000001",
@@ -90,7 +202,9 @@ async function seedInstallationViaRoutes(
     installType: "opentofu_module",
     trustLevel: "space",
     variableMapping: {},
-    outputAllowlist: {},
+    outputAllowlist: {
+      launch_url: { from: "launch_url", type: "url" },
+    },
     policy: {},
     createdAt: nowIso,
     updatedAt: nowIso,
@@ -120,14 +234,30 @@ async function seedInstallationViaRoutes(
     ref: "main",
     resolvedCommit: "a".repeat(40),
     path: ".",
-    archiveObjectKey:
-      `spaces/${spaceId}/sources/${sourceId}/snapshots/snap_e2e000001/source.tar.zst`,
+    archiveObjectKey: `spaces/${spaceId}/sources/${sourceId}/snapshots/snap_e2e000001/source.tar.zst`,
     archiveDigest: ARCHIVE_DIGEST,
     archiveSizeBytes: 1024,
     fetchedByRunId: "ssr_e2e000001",
     fetchedAt: nowIso,
   };
   await store.putSourceSnapshot(snapshot);
+  const compatibilityReport: CapsuleCompatibilityReport = {
+    id: "caprep_e2e000001",
+    sourceSnapshotId: snapshot.id,
+    level: "ready",
+    findings: [],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: nowIso,
+  };
+  await store.putCapsuleCompatibilityReport(compatibilityReport);
+  await store.patchInstallation(installationId, {
+    compatibilityReportId: compatibilityReport.id,
+    compatibilityStatus: compatibilityReport.level,
+    updatedAt: nowIso,
+  });
 
   return { app, installationId, store, spaceId };
 }
@@ -142,25 +272,27 @@ test("deployControl e2e exposes OpenTofu plan and apply runs", async () => {
     { method: "POST", headers: headers() },
   );
   expect(planRes.status).toEqual(201);
-  const plan = await planRes.json() as PlanRunResponse;
+  const planRun = ((await planRes.json()) as { run: Run }).run;
+  expect(planRun.status).toEqual("waiting_approval");
+  expect(planRun.planDigest).toEqual(PLAN_DIGEST);
+  const plan = await readInternalPlanRun(app, planRun.id);
   expect(plan.planRun.status).toEqual("succeeded");
-  expect(plan.planRun.planDigest).toEqual(PLAN_DIGEST);
   expect(plan.planRun.planArtifact?.digest).toEqual(PLAN_DIGEST);
 
   // The plan introduces a delete/replace change, so the §25 action policy flags
   // it requiresApproval and the §19 Run projects waiting_approval; approve
   // before the apply.
-  const runRes = await app.request(`/api/runs/${plan.planRun.id}`, {
+  const runRes = await app.request(`/api/runs/${planRun.id}`, {
     headers: headers(),
   });
   expect(runRes.status).toEqual(200);
-  expect((await runRes.json() as { run: Run }).run.status).toEqual(
+  expect(((await runRes.json()) as { run: Run }).run.status).toEqual(
     "waiting_approval",
   );
-  const approveRes = await app.request(
-    `/api/runs/${plan.planRun.id}/approve`,
-    { method: "POST", headers: headers({ "content-type": "application/json" }) },
-  );
+  const approveRes = await app.request(`/api/runs/${planRun.id}/approve`, {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+  });
   expect(approveRes.status).toEqual(200);
 
   const applyRes = await app.request("/v1/apply-runs", {
@@ -172,7 +304,7 @@ test("deployControl e2e exposes OpenTofu plan and apply runs", async () => {
     }),
   });
   expect(applyRes.status).toEqual(201);
-  const apply = await applyRes.json() as ApplyRunResponse;
+  const apply = (await applyRes.json()) as ApplyRunResponse;
   expect(apply.applyRun.status).toEqual("succeeded");
   // New Installation status after a successful apply is "active" (§5 / §27).
   expect(apply.installation?.status).toEqual("active");
@@ -205,9 +337,10 @@ test("run logs/events expose diagnostics + audit trail (§30)", async () => {
     `/api/installations/${installationId}/plan`,
     { method: "POST", headers: headers() },
   );
-  const plan = await planRes.json() as PlanRunResponse;
+  const planRun = ((await planRes.json()) as { run: Run }).run;
+  const plan = await readInternalPlanRun(app, planRun.id);
 
-  const logsRes = await app.request(`/api/runs/${plan.planRun.id}/logs`, {
+  const logsRes = await app.request(`/api/runs/${planRun.id}/logs`, {
     headers: headers(),
   });
   expect(logsRes.status).toEqual(200);
@@ -217,7 +350,7 @@ test("run logs/events expose diagnostics + audit trail (§30)", async () => {
   // The plan recorded at least a plan.requested / plan.completed audit event.
   expect(logs.auditEvents.length).toBeGreaterThan(0);
 
-  const eventsRes = await app.request(`/api/runs/${plan.planRun.id}/events`, {
+  const eventsRes = await app.request(`/api/runs/${planRun.id}/events`, {
     headers: headers(),
   });
   expect(eventsRes.status).toEqual(200);
@@ -244,8 +377,9 @@ test("deployment get + rollback-plan happy path; missing deployment is 404 (§30
     `/api/installations/${installationId}/plan`,
     { method: "POST", headers: headers() },
   );
-  const plan = await planRes.json() as PlanRunResponse;
-  await app.request(`/api/runs/${plan.planRun.id}/approve`, {
+  const planRun = ((await planRes.json()) as { run: Run }).run;
+  const plan = await readInternalPlanRun(app, planRun.id);
+  await app.request(`/api/runs/${planRun.id}/approve`, {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
   });
@@ -257,7 +391,7 @@ test("deployment get + rollback-plan happy path; missing deployment is 404 (§30
       expected: applyExpectedGuardFromPlanRun(plan.planRun),
     }),
   });
-  const apply = await applyRes.json() as ApplyRunResponse;
+  const apply = (await applyRes.json()) as ApplyRunResponse;
   const deploymentId = apply.deployment?.id as string;
   expect(deploymentId).toBeTruthy();
 
@@ -291,9 +425,9 @@ test("deployment get + rollback-plan happy path; missing deployment is 404 (§30
     { method: "POST", headers: headers() },
   );
   expect(rollbackRes.status).toEqual(201);
-  const rollback = await rollbackRes.json() as PlanRunResponse;
-  expect(rollback.planRun.id).not.toEqual(plan.planRun.id);
-  expect(rollback.planRun.sourceSnapshotId).toEqual(
+  const rollbackRun = ((await rollbackRes.json()) as { run: Run }).run;
+  expect(rollbackRun.id).not.toEqual(plan.planRun.id);
+  expect(rollbackRun.sourceSnapshotId).toEqual(
     apply.deployment?.sourceSnapshotId,
   );
 
@@ -346,9 +480,8 @@ async function seedOutputShareScenario(): Promise<{
   toSpaceId: string;
   producerInstallationId: string;
 }> {
-  const { app, store, spaceId, installationId } = await seedInstallationViaRoutes(
-    fakeRunner(),
-  );
+  const { app, store, spaceId, installationId } =
+    await seedInstallationViaRoutes(fakeRunner());
   const toSpaceId = "space_consumer0001";
   const consumer: Space = {
     id: toSpaceId,
@@ -365,8 +498,7 @@ async function seedOutputShareScenario(): Promise<{
     spaceId,
     installationId,
     stateGeneration: 1,
-    rawOutputArtifactKey:
-      `spaces/${spaceId}/installations/${installationId}/runs/r1/outputs.raw.json.enc`,
+    rawOutputArtifactKey: `spaces/${spaceId}/installations/${installationId}/runs/r1/outputs.raw.json.enc`,
     publicOutputs: {},
     spaceOutputs: { bucket_name: "my-bucket", region: "auto" },
     outputDigest: "sha256:oute2e",
@@ -418,17 +550,18 @@ test("output-shares create / approve / list / revoke happy path (§18)", async (
     { headers: headers() },
   );
   expect(listFrom.status).toEqual(200);
-  expect(((await listFrom.json()).shares as OutputShare[]).map((s) => s.id))
-    .toEqual([created.id]);
+  expect(
+    ((await listFrom.json()).shares as OutputShare[]).map((s) => s.id),
+  ).toEqual([created.id]);
 
   // List from the consumer Space surfaces the same share (received side).
-  const listTo = await app.request(
-    `/api/output-shares?spaceId=${toSpaceId}`,
-    { headers: headers() },
-  );
+  const listTo = await app.request(`/api/output-shares?spaceId=${toSpaceId}`, {
+    headers: headers(),
+  });
   expect(listTo.status).toEqual(200);
-  expect(((await listTo.json()).shares as OutputShare[]).map((s) => s.id))
-    .toEqual([created.id]);
+  expect(
+    ((await listTo.json()).shares as OutputShare[]).map((s) => s.id),
+  ).toEqual([created.id]);
 
   // Revoke moves it to revoked.
   const revokeRes = await app.request(
@@ -516,9 +649,7 @@ test("installation PATCH safely updates status only (§30)", async () => {
     },
   );
   expect(rejectedField.status).toEqual(400);
-  expect((await rejectedField.json()).error.message).toContain(
-    "unknown_field",
-  );
+  expect((await rejectedField.json()).error.message).toContain("unknown_field");
 });
 
 test("installation DELETE creates a destroy-plan run instead of deleting state (§30 / §23)", async () => {
@@ -528,16 +659,16 @@ test("installation DELETE creates a destroy-plan run instead of deleting state (
     headers: headers(),
   });
   expect(del.status).toEqual(202);
-  const payload = await del.json() as PlanRunResponse;
-  expect(payload.planRun.installationId).toEqual(installationId);
-  expect(payload.planRun.operation).toEqual("destroy");
-  expect(payload.planRun.status).toEqual("succeeded");
+  const payload = ((await del.json()) as { run: Run }).run;
+  expect(payload.installationId).toEqual(installationId);
+  expect(payload.type).toEqual("destroy_plan");
+  expect(payload.status).toEqual("waiting_approval");
 
-  const runRes = await app.request(`/api/runs/${payload.planRun.id}`, {
+  const runRes = await app.request(`/api/runs/${payload.id}`, {
     headers: headers(),
   });
   expect(runRes.status).toEqual(200);
-  const run = (await runRes.json() as { run: Run }).run;
+  const run = ((await runRes.json()) as { run: Run }).run;
   expect(run.type).toEqual("destroy_plan");
   expect(run.status).toEqual("waiting_approval");
 });
@@ -550,13 +681,14 @@ test("deployControl e2e rejects mismatched plan digest guard", async () => {
     { method: "POST", headers: headers() },
   );
   expect(planRes.status).toEqual(201);
-  const plan = await planRes.json() as PlanRunResponse;
+  const planRun = ((await planRes.json()) as { run: Run }).run;
+  const plan = await readInternalPlanRun(app, planRun.id);
 
   // Approve so the apply is gated only by the plan-digest guard under test.
-  const approveRes = await app.request(
-    `/api/runs/${plan.planRun.id}/approve`,
-    { method: "POST", headers: headers({ "content-type": "application/json" }) },
-  );
+  const approveRes = await app.request(`/api/runs/${planRun.id}/approve`, {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+  });
   expect(approveRes.status).toEqual(200);
 
   const res = await app.request("/v1/apply-runs", {
@@ -583,16 +715,17 @@ test("POST /api/installations/:id/drift-check creates a drift_check run that is 
     { method: "POST", headers: headers() },
   );
   expect(driftRes.status).toEqual(201);
-  const drift = await driftRes.json() as PlanRunResponse;
+  const driftRun = ((await driftRes.json()) as { run: Run }).run;
+  const drift = await readInternalPlanRun(app, driftRun.id);
   expect(drift.planRun.driftCheck).toBe(true);
   expect(drift.planRun.status).toEqual("succeeded");
 
   // The §19 Run projects type drift_check and succeeded (NOT waiting_approval).
-  const runRes = await app.request(`/api/runs/${drift.planRun.id}`, {
+  const runRes = await app.request(`/api/runs/${driftRun.id}`, {
     headers: headers(),
   });
   expect(runRes.status).toEqual(200);
-  const run = (await runRes.json() as { run: Run }).run;
+  const run = ((await runRes.json()) as { run: Run }).run;
   expect(run.type).toEqual("drift_check");
   expect(run.status).toEqual("succeeded");
 
@@ -618,6 +751,19 @@ function fakeRunner(): OpenTofuRunner {
           ref: "runner-local://plan_e2e/tfplan",
           digest: PLAN_DIGEST,
         },
+        providerLockDigest: LOCK_DIGEST,
+        requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+        providerInstallation: [
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            mirrored: true,
+            installationMethod: "filesystem_mirror",
+            attested: true,
+            attestationMethod: "forced_filesystem_mirror_init",
+            mirrorPath:
+              "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+          },
+        ],
         // A replace (delete+create) change so the §25 action policy flags the
         // plan requiresApproval (parks waiting_approval), exercising the
         // approve -> apply roundtrip below. Approval is no longer gated by the

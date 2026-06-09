@@ -1,4 +1,4 @@
-# cloudflare-r2-storage (official template module)
+# cloudflare-r2-storage (first-party Capsule module)
 
 Creates a single Cloudflare R2 bucket from `bucketName` + `accountId`.
 

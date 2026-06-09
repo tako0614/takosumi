@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { assert, assertEquals, assertRejects } from "../../../test/assert.ts";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
 import { main } from "./main.ts";
@@ -10,6 +10,7 @@ import {
   type D1ExecuteCommand,
 } from "./cli-accounts-db.ts";
 import { integerOption, parseOptions } from "./cli-options.ts";
+import { runPlatformSecrets } from "./cli-platform-secrets-commands.ts";
 
 const textEncoder = new TextEncoder();
 
@@ -6662,4 +6663,459 @@ test("integerOption throws TypeError on an invalid value", () => {
 test("integerOption returns the fallback when the flag is absent", () => {
   expect(integerOption({}, "port", 8787)).toEqual(8787);
   expect(integerOption({ port: "443" }, "port", 8787)).toEqual(443);
+});
+
+test("connections set-cloudflare-token reads token file and never prints the secret", async () => {
+  const tokenFile = await makeTempFile();
+  await writeTextFile(tokenFile, "cf_live_secret\n");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const requests: Array<{ request: Request; body: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    const body = await request.clone().text();
+    requests.push({ request, body });
+    if (request.url.endsWith("/api/operator-connection-defaults")) {
+      const payload = JSON.parse(body);
+      return Response.json({
+        operatorConnectionDefault: {
+          id: `ocd_${payload.provider}`,
+          provider: payload.provider,
+          connectionId: payload.connectionId,
+          createdAt: "2026-06-09T00:00:00.000Z",
+          updatedAt: "2026-06-09T00:00:00.000Z",
+        },
+      });
+    }
+    return Response.json({
+      connection: {
+        id: "conn_cf",
+        scope: "operator",
+        provider: "cloudflare",
+        kind: "cloudflare_api_token",
+        authMethod: "static_secret",
+        status: "pending",
+        envNames: ["CLOUDFLARE_API_TOKEN"],
+        createdAt: "2026-06-09T00:00:00.000Z",
+        updatedAt: "2026-06-09T00:00:00.000Z",
+      },
+    }, { status: 201 });
+  }) as typeof fetch;
+
+  try {
+    const code = await main([
+      "connections",
+      "set-cloudflare-token",
+      "--url",
+      "https://app.takosumi.test",
+      "--token",
+      "operator-bearer",
+      "--api-token-file",
+      tokenFile,
+      "--account-id",
+      "acct_1",
+      "--default",
+      "cloudflare",
+    ], {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    });
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.request.url).toEqual(
+      "https://app.takosumi.test/api/connections/cloudflare/token",
+    );
+    expect(requests[0]?.request.headers.get("authorization")).toEqual(
+      "Bearer operator-bearer",
+    );
+    const createBody = JSON.parse(requests[0]!.body);
+    expect(createBody).toMatchObject({
+      provider: "cloudflare",
+      kind: "cloudflare_api_token",
+      scope: "operator",
+      scopeHints: { accountId: "acct_1" },
+      values: { CLOUDFLARE_API_TOKEN: "cf_live_secret" },
+    });
+    expect(requests.slice(1).map((entry) => JSON.parse(entry.body))).toEqual([
+      { provider: "cloudflare", connectionId: "conn_cf" },
+    ]);
+    const output = stdout.concat(stderr).join("\n");
+    expect(output).not.toContain("cf_live_secret");
+    expect(output).toContain("Connection conn_cf created");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await removePath(tokenFile);
+  }
+});
+
+test("root help shows only the stable operator CLI surface", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const code = await main(["run", "--help"], {
+    stdout: (line) => stdout.push(line),
+    stderr: (line) => stderr.push(line),
+  });
+
+  expect(code).toEqual(0);
+  expect(stderr).toEqual([]);
+  expect(stdout.join("\n")).toContain("run connections");
+  expect(stdout.join("\n")).toContain("run secrets");
+  expect(stdout.join("\n")).not.toContain("accounts seed");
+});
+
+test("operator CLI help supports Japanese output", async () => {
+  const previous = envGet("TAKOSUMI_LANG");
+  envSet("TAKOSUMI_LANG", "ja");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  try {
+    const code = await main(["run", "--help"], {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    });
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    expect(stdout.join("\n")).toContain("deploy");
+    expect(stdout.join("\n")).toContain("run connections");
+    expect(stdout.join("\n")).not.toContain("accounts seed");
+  } finally {
+    if (previous === undefined) {
+      envDelete("TAKOSUMI_LANG");
+    } else {
+      envSet("TAKOSUMI_LANG", previous);
+    }
+  }
+});
+
+test("connections CLI does not expose user-owned provider env set creation", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() => {
+    throw new Error("fetch must not be called");
+  }) as typeof fetch;
+
+  try {
+    const code = await main([
+      "connections",
+      "create-env-set",
+      "--url",
+      "https://app.takosumi.test",
+      "--token",
+      "operator-bearer",
+    ], {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    });
+
+    expect(code).toEqual(2);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain("set-cloudflare-token");
+    expect(stderr.join("\n")).toContain(
+      "Unknown connections command: create-env-set",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("connections set-cloudflare-token rejects Space-owned connection flags", async () => {
+  const tokenFile = await makeTempFile();
+  await writeTextFile(tokenFile, "cf_live_secret\n");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() => {
+    throw new Error("fetch must not be called");
+  }) as typeof fetch;
+
+  try {
+    const code = await main([
+      "connections",
+      "set-cloudflare-token",
+      "--url",
+      "https://app.takosumi.test",
+      "--token",
+      "operator-bearer",
+      "--space",
+      "space_1",
+      "--api-token-file",
+      tokenFile,
+    ], {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    });
+
+    expect(code).toEqual(2);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain(
+      "operator CLI does not create Space-owned Connections",
+    );
+    expect(stderr.join("\n")).not.toContain("cf_live_secret");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await removePath(tokenFile);
+  }
+});
+
+test("connections defaults set calls the operator defaults endpoint", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const requests: Array<{ request: Request; body: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push({ request, body: await request.clone().text() });
+    return Response.json({
+      operatorConnectionDefault: {
+        id: "ocd_cloudflare",
+        provider: "cloudflare",
+        connectionId: "conn_cf",
+        createdAt: "2026-06-09T00:00:00.000Z",
+        updatedAt: "2026-06-09T00:00:00.000Z",
+      },
+    });
+  }) as typeof fetch;
+
+  try {
+    const code = await main([
+      "connections",
+      "defaults",
+      "set",
+      "cloudflare",
+      "conn_cf",
+      "--url",
+      "https://app.takosumi.test",
+      "--token",
+      "operator-bearer",
+    ], {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    });
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    expect(requests[0]?.request.url).toEqual(
+      "https://app.takosumi.test/api/operator-connection-defaults",
+    );
+    expect(JSON.parse(requests[0]!.body)).toEqual({
+      provider: "cloudflare",
+      connectionId: "conn_cf",
+    });
+    expect(stdout.join("\n")).toContain("Operator default cloudflare -> conn_cf");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("platform-secrets status compares local vault with remote names", async () => {
+  const dir = await makeTempDir();
+  await writeTextFile(pathJoin(dir, "TAKOSUMI_DEPLOY_CONTROL_TOKEN"), "secret-one");
+  await writeTextFile(pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"), "secret-two");
+  await writeTextFile(pathJoin(dir, ".gitignore"), "*");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const commands: string[][] = [];
+
+  try {
+    const code = await runPlatformSecrets([
+      "status",
+      "--config",
+      "/operator/wrangler.toml",
+      "--secrets-dir",
+      dir,
+    ], {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    }, async (args) => {
+      commands.push([...args]);
+      return {
+        code: 0,
+        stdout: JSON.stringify([
+          { name: "TAKOSUMI_DEPLOY_CONTROL_TOKEN", type: "secret_text" },
+          { name: "REMOTE_ONLY_SECRET", type: "secret_text" },
+        ]),
+        stderr: "",
+      };
+    });
+
+    expect(code).toEqual(1);
+    expect(stderr).toEqual([]);
+    expect(commands).toEqual([[
+      "bunx",
+      "wrangler",
+      "secret",
+      "list",
+      "--config",
+      "/operator/wrangler.toml",
+    ]]);
+    const output = stdout.join("\n");
+    expect(output).toContain("Local secrets: 2");
+    expect(output).toContain("Remote secrets: 2");
+    expect(output).toContain("Generated present: TAKOSUMI_DEPLOY_CONTROL_TOKEN");
+    expect(output).toContain("Protected present: TAKOSUMI_SECRET_STORE_PASSPHRASE");
+    expect(output).toContain("Missing generated: TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET");
+    expect(output).toContain("Remote only: REMOTE_ONLY_SECRET");
+    expect(output).not.toContain("secret-one");
+    expect(output).not.toContain("secret-two");
+  } finally {
+    await removePath(dir, { recursive: true });
+  }
+});
+
+test("platform-secrets status infers sibling takosumi-private defaults", async () => {
+  const root = await makeTempDir();
+  const appDir = pathJoin(root, "takosumi");
+  const privateDir = pathJoin(root, "takosumi-private");
+  const secretsDir = pathJoin(privateDir, ".secrets", "production");
+  await Bun.$`mkdir -p ${appDir} ${pathJoin(privateDir, "platform")} ${secretsDir}`.quiet();
+  await writeTextFile(pathJoin(privateDir, "platform", "wrangler.toml"), "name = \"takosumi\"\n");
+  await writeTextFile(pathJoin(secretsDir, "TAKOSUMI_DEPLOY_CONTROL_TOKEN"), "secret-one");
+  const previousCwd = process.cwd();
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const commands: string[][] = [];
+
+  try {
+    process.chdir(appDir);
+    const code = await runPlatformSecrets(["status"], {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    }, async (args) => {
+      commands.push([...args]);
+      return { code: 0, stdout: "[]", stderr: "" };
+    });
+
+    expect(code).toEqual(1);
+    expect(stderr).toEqual([]);
+    expect(commands).toEqual([[
+      "bunx",
+      "wrangler",
+      "secret",
+      "list",
+      "--config",
+      pathJoin(privateDir, "platform", "wrangler.toml"),
+    ]]);
+    expect(stdout.join("\n")).toContain("Generated present: TAKOSUMI_DEPLOY_CONTROL_TOKEN");
+  } finally {
+    process.chdir(previousCwd);
+    await removePath(root, { recursive: true });
+  }
+});
+
+test("platform-secrets apply generates missing safe secrets and pushes value files", async () => {
+  const dir = await makeTempDir();
+  await writeTextFile(pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"), "protected-key");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const commands: string[][] = [];
+  const stdinByName = new Map<string, string | undefined>();
+
+  try {
+    const code = await runPlatformSecrets([
+      "apply",
+      "--config",
+      "/operator/wrangler.toml",
+      "--secrets-dir",
+      dir,
+    ], {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    }, async (args, input) => {
+      commands.push([...args]);
+      stdinByName.set(args[4] ?? "", input);
+      return { code: 0, stdout: "ok", stderr: "" };
+    });
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    const pushedNames = commands.map((command) => command[4]).sort();
+    expect(pushedNames).toEqual([
+      "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
+      "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
+      "TAKOSUMI_DEPLOY_CONTROL_TOKEN",
+      "TAKOSUMI_SECRET_STORE_PASSPHRASE",
+    ]);
+    for (const command of commands) {
+      expect(command.slice(0, 4)).toEqual(["bunx", "wrangler", "secret", "put"]);
+      expect(command.slice(5, 7)).toEqual([
+        "--config",
+        "/operator/wrangler.toml",
+      ]);
+      expect(command).not.toContain("--value-file");
+      expect(command).not.toContain(pathJoin(dir, command[4]!));
+    }
+    const generated = await readFile(
+      pathJoin(dir, "TAKOSUMI_DEPLOY_CONTROL_TOKEN"),
+      "utf8",
+    );
+    expect(stdinByName.get("TAKOSUMI_SECRET_STORE_PASSPHRASE")).toEqual("protected-key");
+    expect(stdinByName.get("TAKOSUMI_DEPLOY_CONTROL_TOKEN")).toEqual(generated);
+    expect(generated.trim().length).toBeGreaterThan(40);
+    expect((await stat(pathJoin(dir, "TAKOSUMI_DEPLOY_CONTROL_TOKEN"))).mode & 0o777)
+      .toEqual(0o600);
+    const output = stdout.concat(stderr).join("\n");
+    expect(output).toContain("Generated: TAKOSUMI_DEPLOY_CONTROL_TOKEN");
+    expect(output).toContain("Pushed 4 platform secret(s)");
+    expect(output).not.toContain("protected-key");
+    expect(output).not.toContain(generated.trim());
+  } finally {
+    await removePath(dir, { recursive: true });
+  }
+});
+
+test("platform-secrets apply rejects protected key regeneration", async () => {
+  const dir = await makeTempDir();
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const commands: string[][] = [];
+
+  try {
+    const code = await runPlatformSecrets([
+      "apply",
+      "--config",
+      "/operator/wrangler.toml",
+      "--secrets-dir",
+      dir,
+      "--regenerate",
+      "TAKOSUMI_SECRET_STORE_PASSPHRASE",
+    ], {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    }, async (args) => {
+      commands.push([...args]);
+      return { code: 0, stdout: "ok", stderr: "" };
+    });
+
+    expect(code).toEqual(2);
+    expect(stdout).toEqual([]);
+    expect(commands).toEqual([]);
+    expect(stderr.join("\n")).toContain(
+      "TAKOSUMI_SECRET_STORE_PASSPHRASE is protected_key",
+    );
+  } finally {
+    await removePath(dir, { recursive: true });
+  }
+});
+
+test("platform-secrets legacy low-level commands are hidden and rejected", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const code = await runPlatformSecrets(["sync"], {
+    stdout: (line) => stdout.push(line),
+    stderr: (line) => stderr.push(line),
+  }, async () => {
+    throw new Error("wrangler must not be called");
+  });
+
+  expect(code).toEqual(2);
+  expect(stdout).toEqual([]);
+  expect(stderr.join("\n")).toContain("Unknown platform-secrets command: sync");
+  expect(stderr.join("\n")).toContain("status");
+  expect(stderr.join("\n")).toContain("apply");
+  expect(stderr.join("\n")).not.toContain("put <secret-name>");
 });

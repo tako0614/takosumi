@@ -4,7 +4,7 @@ import { runLiveOpenTofuPlanApplyProof } from "./prove-live-opentofu-plan-apply.
 const hasTofu = await commandExists("tofu");
 
 test.skipIf(!hasTofu)(
-  "live local proof executes tofu plan/apply and records DeploymentOutput",
+  "live local proof executes tofu plan/apply and records OutputSnapshot projection",
   async () => {
     const proof = await runLiveOpenTofuPlanApplyProof({
       now: () => "2026-06-02T00:00:00.000Z",

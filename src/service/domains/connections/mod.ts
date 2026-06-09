@@ -1,19 +1,16 @@
 /**
- * Connections domain: operator default connections + capability binding
- * resolution (core-spec.md §8 / §9).
+ * Connections domain: Takosumi-provided defaults + provider binding
+ * resolution.
  *
- * An Installation binds each capability (source / compute / dns / storage /
- * database / secrets) through its DeploymentProfile:
+ * An Installation binds each required OpenTofu provider through its internal
+ * provider-binding record:
  *
  *   - `default`    -> the instance-wide operator default connection
  *   - `connection` -> an explicit Connection (space-scoped to the
  *                     installation's Space, or operator-scoped)
  *   - `manual`     -> operator/user-provided values (no connection; the values
  *                     become module inputs, never credentials)
- *   - `disabled`   -> the capability is unavailable
- *
- * An UNBOUND capability resolves as `default` (spec §9: the operator defaults
- * are the baseline; bindings are per-capability overrides).
+ *   - `disabled`   -> the provider is unavailable
  *
  * Resolution is pure lookup — the vault still decides per-phase what a
  * resolved connection may mint (invariants 3-5), and never trusts the caller.
@@ -22,28 +19,19 @@ import type {
   Connection,
   InstallConfig,
   Installation,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import type {
-  Capability,
-  CapabilityBinding,
+  ProviderBinding,
   OperatorConnectionDefault,
-} from "takosumi-contract/capability-bindings";
+} from "takosumi-contract/provider-bindings";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 
-export const CAPABILITIES: readonly Capability[] = [
-  "source",
-  "compute",
-  "dns",
-  "storage",
-  "database",
-  "secrets",
-] as const;
-
-/** One capability's resolution outcome. */
-export interface ResolvedCapability {
-  readonly capability: Capability;
-  readonly mode: CapabilityBinding["mode"];
+/** One provider binding's resolution outcome. */
+export interface ResolvedProviderBinding {
+  readonly provider: string;
+  readonly alias?: string;
+  readonly mode: ProviderBinding["mode"];
   /** Present for `connection` mode and for `default` with an operator default. */
   readonly connection?: Connection;
   /** Present for `manual` mode. */
@@ -57,7 +45,7 @@ export interface ConnectionsServiceDependencies {
 }
 
 export interface PutOperatorConnectionDefaultRequest {
-  readonly capability: Capability;
+  readonly provider?: string;
   readonly connectionId: string;
 }
 
@@ -74,19 +62,13 @@ export class ConnectionsService {
   }
 
   /**
-   * Sets the instance-wide default connection for one capability (spec §9).
+   * Sets the instance-wide Takosumi-provided default connection for one provider.
    * The connection must exist and be operator-scoped: a space connection is
    * one Space's credential and must never become an instance-wide default.
    */
   async putOperatorConnectionDefault(
     request: PutOperatorConnectionDefaultRequest,
   ): Promise<OperatorConnectionDefault> {
-    if (!CAPABILITIES.includes(request.capability)) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        `unknown capability ${String(request.capability)}`,
-      );
-    }
     const connection = await this.#store.getConnection(request.connectionId);
     if (!connection) {
       throw new OpenTofuControllerError(
@@ -104,8 +86,7 @@ export class ConnectionsService {
     const now = this.#now();
     return await this.#store.putOperatorConnectionDefault({
       id: this.#newId("ocd"),
-      capability: request.capability,
-      provider: connection.provider,
+      provider: request.provider ?? connection.provider,
       connectionId: connection.id,
       createdAt: now,
       updatedAt: now,
@@ -119,49 +100,54 @@ export class ConnectionsService {
   }
 
   /**
-   * Resolves every capability for an Installation (spec §9). Unbound
-   * capabilities resolve as `default`. `default` with no operator default for
-   * the capability resolves to mode `default` with NO connection — whether
-   * that is an error depends on what the run actually needs (the install-type
-   * wiring decides; conformance M5).
+   * Resolves provider bindings for an Installation. Unbound providers are not
+   * synthesized here; plan creation derives provider needs from templates and
+   * OpenTofu metadata.
    */
-  async resolveCapabilities(
+  async resolveProviderBindings(
     installation: Installation,
-  ): Promise<readonly ResolvedCapability[]> {
+  ): Promise<readonly ResolvedProviderBinding[]> {
     const profile = await this.#store.getDeploymentProfileByInstallation(
       installation.id,
       installation.environment,
     );
-    const resolved: ResolvedCapability[] = [];
-    for (const capability of CAPABILITIES) {
-      const binding = profile?.bindings[capability] ?? { mode: "default" };
-      resolved.push(await this.#resolveBinding(installation, capability, binding));
-    }
-    return resolved;
+    return await Promise.all(
+      (profile?.bindings ?? []).map((binding) =>
+        this.#resolveBinding(installation, binding)
+      ),
+    );
   }
 
   async #resolveBinding(
     installation: Installation,
-    capability: Capability,
-    binding: CapabilityBinding,
-  ): Promise<ResolvedCapability> {
+    binding: ProviderBinding,
+  ): Promise<ResolvedProviderBinding> {
     switch (binding.mode) {
       case "disabled":
-        return { capability, mode: "disabled" };
+        return {
+          provider: binding.provider,
+          ...(binding.alias ? { alias: binding.alias } : {}),
+          mode: "disabled",
+        };
       case "manual":
-        return { capability, mode: "manual", values: binding.values ?? {} };
+        return {
+          provider: binding.provider,
+          ...(binding.alias ? { alias: binding.alias } : {}),
+          mode: "manual",
+          values: binding.values ?? {},
+        };
       case "connection": {
         if (!binding.connectionId) {
           throw new OpenTofuControllerError(
             "failed_precondition",
-            `capability ${capability} binds mode "connection" without a connectionId`,
+            `provider ${binding.provider} binds mode "connection" without a connectionId`,
           );
         }
         const connection = await this.#store.getConnection(binding.connectionId);
         if (!connection) {
           throw new OpenTofuControllerError(
             "not_found",
-            `connection ${binding.connectionId} (capability ${capability}) not found`,
+            `connection ${binding.connectionId} (provider ${binding.provider}) not found`,
           );
         }
         // A space connection must belong to the installation's Space; an
@@ -175,31 +161,47 @@ export class ConnectionsService {
             `connection ${binding.connectionId} belongs to another space`,
           );
         }
-        return { capability, mode: "connection", connection };
+        return {
+          provider: binding.provider,
+          ...(binding.alias ? { alias: binding.alias } : {}),
+          mode: "connection",
+          connection,
+        };
       }
       case "default": {
         const fallback = await this.#store.getOperatorConnectionDefault(
-          capability,
+          binding.provider,
         );
-        if (!fallback) return { capability, mode: "default" };
+        if (!fallback) {
+          return {
+            provider: binding.provider,
+            ...(binding.alias ? { alias: binding.alias } : {}),
+            mode: "default",
+          };
+        }
         const connection = await this.#store.getConnection(fallback.connectionId);
         return {
-          capability,
+          provider: binding.provider,
+          ...(binding.alias ? { alias: binding.alias } : {}),
           mode: "default",
           ...(connection ? { connection } : {}),
         };
       }
     }
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `unknown provider binding mode ${(binding as { mode?: string }).mode}`,
+    );
   }
 }
 
 /**
  * Collects the connection ids a run's credential mint may draw from: the
- * resolved `connection` / `default` capabilities. `manual` contributes module
+ * resolved `connection` / `default` provider bindings. `manual` contributes module
  * values (not credentials) and `disabled` contributes nothing.
  */
 export function mintableConnectionIds(
-  resolved: readonly ResolvedCapability[],
+  resolved: readonly ResolvedProviderBinding[],
 ): readonly string[] {
   const ids = new Set<string>();
   for (const entry of resolved) {
@@ -216,4 +218,4 @@ export function createConnectionsService(
 
 // Re-exported so route/service composition can validate InstallConfig usage
 // alongside capability resolution without importing the store types directly.
-export type { Capability, CapabilityBinding, InstallConfig };
+export type { ProviderBinding, InstallConfig };

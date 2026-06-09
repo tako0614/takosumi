@@ -16,9 +16,9 @@ import type {
   InstallConfig,
   Installation,
   StateSnapshot,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import type { Space } from "takosumi-contract/spaces";
-import type { OperatorConnectionDefault } from "takosumi-contract/capability-bindings";
+import type { OperatorConnectionDefault } from "takosumi-contract/provider-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
 import type { SourceSyncRun } from "takosumi-contract/sources";
 import type {
@@ -29,10 +29,15 @@ import type {
   OutputShare,
   OutputSnapshot,
 } from "takosumi-contract/output-snapshots";
-import type { RunGroup } from "takosumi-contract/runs";
+import type { ArtifactRecord, RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { BackupRecord } from "takosumi-contract/backups";
-import type { CredentialMintEvent } from "takosumi-contract/security";
+import type {
+  CredentialMintEvent,
+  SecurityFinding,
+} from "takosumi-contract/security";
+import type { ProviderTemplate } from "takosumi-contract/providers";
+import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 
 /**
  * Minimal in-memory SQL client that interprets exactly the Space-direct model
@@ -92,10 +97,35 @@ class ModelSqlClient implements SqlClient {
     lower: string,
     params: readonly unknown[],
   ): { rows: Record<string, unknown>[]; rowCount: number } {
-    // Only the guarded installation patch emits an UPDATE. Support both the
-    // former handwritten-SQL parameter order and Drizzle's generated order by
-    // reading predicate parameter indexes from the WHERE clause.
     const table = this.#table(tableName(lower));
+    if (tableName(lower) === "takosumi_credit_balances") {
+      const where = whereColumns(lower);
+      const spaceWhere = where.find((c) => c.column === "space_id");
+      const availableWhere = where.find(
+        (c) => c.column === "available_credits",
+      );
+      const spaceId = String(params[spaceWhere?.indexes[0] ?? 3]);
+      const minAvailable = Number(params[availableWhere?.indexes[0] ?? 4]);
+      const credits = Number(params[0]);
+      const updatedAt = String(params[2]);
+      const row = table.get(spaceId);
+      if (!row) return { rows: [], rowCount: 0 };
+      const available = Number(rowCol(row, "available_credits") ?? 0);
+      if (available < minAvailable) return { rows: [], rowCount: 0 };
+      const reserved = Number(rowCol(row, "reserved_credits") ?? 0);
+      const columns = {
+        ...row.columns,
+        available_credits: String(available - credits),
+        reserved_credits: String(reserved + credits),
+        updated_at: updatedAt,
+      };
+      const next = { id: row.id, json: row.json, columns };
+      table.set(spaceId, next);
+      return { rows: [selectedResultRow(next, lower)], rowCount: 1 };
+    }
+    // Only the guarded installation patch emits an UPDATE otherwise. Support
+    // both the former handwritten-SQL parameter order and Drizzle's generated
+    // order by reading predicate parameter indexes from the WHERE clause.
     const where = whereColumns(lower);
     const idWhere = where.find((c) => c.column === "id");
     const id = String(params[idWhere?.indexes[0] ?? 0]);
@@ -192,7 +222,7 @@ class ModelSqlClient implements SqlClient {
           );
     const ordered = applyOrder(lower, matched);
     const limited = applyLimit(lower, params, ordered);
-    return limited.map((row) => jsonResultRow(row.json, lower));
+    return limited.map((row) => selectedResultRow(row, lower));
   }
 
   #table(name: string): Map<string, StoredRow> {
@@ -370,6 +400,30 @@ function jsonResultRow(json: unknown, lower: string): Record<string, unknown> {
   return row;
 }
 
+function selectedResultRow(
+  row: StoredRow,
+  lower: string,
+): Record<string, unknown> {
+  const selected = selectedColumns(lower);
+  if (tableName(lower) === "takosumi_capsule_compatibility_reports") {
+    const out: Record<string, unknown> = {};
+    for (const column of selected) {
+      out[column] = rowCol(row, column);
+    }
+    return out;
+  }
+  if (
+    selected.some((column) => column.endsWith("_json") || column === "json")
+  ) {
+    return jsonResultRow(row.json, lower);
+  }
+  const out: Record<string, unknown> = {};
+  for (const column of selected) {
+    out[column] = rowCol(row, column);
+  }
+  return out;
+}
+
 function selectedColumns(lower: string): readonly string[] {
   const select = lower.match(/^select\s+([\s\S]+?)\s+from\s/);
   const returning = lower.match(/\sreturning\s+([\s\S]+)$/);
@@ -417,7 +471,6 @@ function operatorDefault(
 ): OperatorConnectionDefault {
   return {
     id: "ocd_1",
-    capability: "compute",
     provider: "cloudflare",
     connectionId: "conn_1",
     createdAt: TS,
@@ -469,7 +522,7 @@ function deploymentProfile(
     spaceId: "space_1",
     installationId: "inst_1",
     environment: "production",
-    bindings: { compute: { mode: "default" } },
+    bindings: [{ provider: "cloudflare", alias: "main", mode: "default" }],
     createdAt: TS,
     updatedAt: TS,
     ...over,
@@ -602,7 +655,22 @@ function credentialMintEvent(
     installationId: "inst_1",
     connectionId: "conn_1",
     phase: "plan",
-    capabilities: ["compute"],
+    capabilities: ["cloudflare"],
+    createdAt: TS,
+    ...over,
+  };
+}
+
+function securityFinding(over: Partial<SecurityFinding> = {}): SecurityFinding {
+  return {
+    id: "sec_1",
+    spaceId: "space_1",
+    installationId: "inst_1",
+    runId: "run_1",
+    severity: "warning",
+    type: "capsule_gate",
+    message: "backend block was overridden",
+    metadata: { code: "backend_overridden" },
     createdAt: TS,
     ...over,
   };
@@ -627,9 +695,23 @@ function backupRecord(over: Partial<BackupRecord> = {}): BackupRecord {
   return {
     id: "bkp_1",
     spaceId: "space_1",
-    objectKey: "spaces/space_1/backups/bkp_1/control.json.gz.enc",
+    objectKey: "spaces/space_1/backups/bkp_1/control.json.zst.enc",
     digest: "sha256:" + "a".repeat(64),
     sizeBytes: 2048,
+    createdAt: TS,
+    ...over,
+  };
+}
+
+function artifactRecord(over: Partial<ArtifactRecord> = {}): ArtifactRecord {
+  return {
+    id: "artifact_1",
+    runId: "run_1",
+    kind: "plan_json",
+    objectKey:
+      "spaces/space_1/installations/inst_1/runs/run_1/plan.json.zst.enc",
+    digest: "sha256:" + "b".repeat(64),
+    sizeBytes: 1024,
     createdAt: TS,
     ...over,
   };
@@ -666,9 +748,9 @@ test("Space store: put/get/get-by-handle/list are symmetric", async () => {
   }
 });
 
-test("InstallConfig store: put/get/list-by-space + official catalog", async () => {
+test("InstallConfig store: put/get/list-by-space + built-in shared configs", async () => {
   for (const [label, store] of bothStores()) {
-    // Space-authored config + an official catalog config (no spaceId).
+    // Space-authored config + a built-in shared config (no spaceId).
     await store.putInstallConfig(
       installConfig({ id: "cfg_a", spaceId: "space_1" }),
     );
@@ -688,38 +770,88 @@ test("InstallConfig store: put/get/list-by-space + official catalog", async () =
   }
 });
 
-test("OperatorConnectionDefault store: one default per capability", async () => {
+test("OperatorConnectionDefault store: one default per provider", async () => {
   for (const [label, store] of bothStores()) {
     await store.putOperatorConnectionDefault(
       operatorDefault({
         id: "ocd_a",
-        capability: "compute",
         provider: "cloudflare",
       }),
     );
-    // A second default for the SAME capability replaces the first.
+    // A second default for the same provider replaces the first.
     await store.putOperatorConnectionDefault(
-      operatorDefault({ id: "ocd_b", capability: "compute", provider: "fly" }),
+      operatorDefault({ id: "ocd_b", provider: "cloudflare" }),
     );
     await store.putOperatorConnectionDefault(
       operatorDefault({
-        id: "ocd_dns",
-        capability: "dns",
-        provider: "cloudflare",
+        id: "ocd_aws",
+        provider: "hashicorp/aws",
       }),
     );
 
-    const compute = await store.getOperatorConnectionDefault("compute");
-    expect(compute?.id, label).toBe("ocd_b");
-    expect(compute?.provider, label).toBe("fly");
+    const cloudflare = await store.getOperatorConnectionDefault("cloudflare");
+    expect(cloudflare?.id, label).toBe("ocd_b");
+    expect(cloudflare?.provider, label).toBe("cloudflare");
     expect(
-      await store.getOperatorConnectionDefault("storage"),
+      await store.getOperatorConnectionDefault("hashicorp/google"),
       label,
     ).toBeUndefined();
     expect(
-      (await store.listOperatorConnectionDefaults()).map((d) => d.capability),
+      (await store.listOperatorConnectionDefaults()).map((d) => d.provider),
       label,
-    ).toEqual(["compute", "dns"]);
+    ).toEqual(["cloudflare", "hashicorp/aws"]);
+  }
+});
+
+test("Provider Template store: entries are symmetric", async () => {
+  for (const [label, store] of bothStores()) {
+    const entry: ProviderTemplate = {
+      id: "cloudflare",
+      providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+      displayName: "Cloudflare",
+      recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
+      helpers: ["cloudflare_api_token"],
+      credentialSources: ["takosumi_managed", "user_env_set"],
+      takosumiManagedAvailable: true,
+      allowedResources: ["cloudflare_workers_script"],
+      allowedDataSources: [],
+      policyPackId: "cloudflare-default",
+      createdAt: "2026-06-08T00:00:00.000Z",
+      updatedAt: "2026-06-08T00:00:00.000Z",
+    };
+    await store.putProviderTemplate(entry);
+    expect(await store.getProviderTemplate(entry.id), label).toEqual(entry);
+    expect(await store.listProviderTemplates(), label).toContainEqual(entry);
+  }
+});
+
+test("CapsuleCompatibilityReport store preserves owner fields", async () => {
+  for (const [label, store] of bothStores()) {
+    const report: CapsuleCompatibilityReport = {
+      id: "caprep_owner",
+      sourceId: "src_1",
+      installationId: "inst_1",
+      sourceSnapshotId: "snap_1",
+      level: "ready",
+      findings: [],
+      providers: [],
+      resources: [],
+      dataSources: [],
+      provisioners: [],
+      normalizedObjectKey:
+        "spaces/space_1/installations/inst_1/runs/run_1/normalized-module.tar.zst",
+      normalizedDigest:
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      createdAt: "2026-06-08T00:00:00.000Z",
+    };
+    await store.putCapsuleCompatibilityReport(report);
+    expect(await store.getCapsuleCompatibilityReport(report.id), label)
+      .toMatchObject({
+        id: report.id,
+        sourceId: report.sourceId,
+        installationId: report.installationId,
+        sourceSnapshotId: report.sourceSnapshotId,
+      });
   }
 });
 
@@ -856,7 +988,14 @@ test("DeploymentProfile store: upsert keyed (installation, environment)", async 
     await store.putDeploymentProfile(
       deploymentProfile({
         id: "dpf_b",
-        bindings: { dns: { mode: "connection", connectionId: "conn_dns" } },
+        bindings: [
+          {
+            provider: "cloudflare",
+            alias: "zone",
+            mode: "connection",
+            connectionId: "conn_zone",
+          },
+        ],
       }),
     );
     // A different environment for the same installation coexists.
@@ -869,8 +1008,8 @@ test("DeploymentProfile store: upsert keyed (installation, environment)", async 
       "production",
     );
     expect(prod?.id, label).toBe("dpf_b");
-    expect(prod?.bindings.dns?.connectionId, label).toBe("conn_dns");
-    expect(prod?.bindings.compute, label).toBeUndefined();
+    expect(prod?.bindings[0]?.connectionId, label).toBe("conn_zone");
+    expect(prod?.bindings[0]?.alias, label).toBe("zone");
 
     const staging = await store.getDeploymentProfileByInstallation(
       "inst_1",
@@ -922,12 +1061,26 @@ test("StateSnapshot store: put/latest/list keyed (installation, environment, gen
   }
 });
 
-test("runs table: plan/apply/source_sync rows verify kind", async () => {
+test("runs table: plan/apply/source_sync/compatibility_check/backup/restore rows verify kind", async () => {
   for (const [label, store] of bothStores()) {
     const plan = makePlanRun("run_plan_1");
+    const drift = makePlanRun("run_drift_1", { driftCheck: true });
     const apply = makeApplyRun("run_apply_1", "run_plan_1");
     await store.putPlanRun(plan);
+    await store.putPlanRun(drift);
     await store.putApplyRun(apply);
+    await store.putBackupRun({
+      id: "backup_1",
+      spaceId: "space_1",
+      installationId: "inst_1",
+      environment: "production",
+      type: "backup",
+      status: "succeeded",
+      createdBy: "system",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      startedAt: "2026-06-07T00:00:00.000Z",
+      finishedAt: "2026-06-07T00:00:00.000Z",
+    });
     await store.putSourceSyncRun(
       sourceSyncRun({ id: "ssr_a", sourceId: "src_1" }),
     );
@@ -941,9 +1094,37 @@ test("runs table: plan/apply/source_sync rows verify kind", async () => {
     await store.putSourceSyncRun(
       sourceSyncRun({ id: "ssr_c", sourceId: "src_2" }),
     );
+    await store.putCompatibilityCheckRun({
+      id: "ccr_1",
+      spaceId: "space_1",
+      sourceId: "src_1",
+      type: "compatibility_check",
+      status: "succeeded",
+      sourceSnapshotId: "snap_1",
+      compatibilityReportId: "caprep_1",
+      createdBy: "system",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      startedAt: "2026-06-07T00:00:00.000Z",
+      finishedAt: "2026-06-07T00:00:00.000Z",
+    });
+    await store.putRestoreRun({
+      id: "restore_1",
+      spaceId: "space_1",
+      installationId: "inst_1",
+      environment: "production",
+      type: "restore",
+      status: "succeeded",
+      createdBy: "system",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      startedAt: "2026-06-07T00:00:00.000Z",
+      finishedAt: "2026-06-07T00:00:00.000Z",
+    });
 
     expect((await store.getPlanRun("run_plan_1"))?.id, label).toBe(
       "run_plan_1",
+    );
+    expect((await store.getPlanRun("run_drift_1"))?.driftCheck, label).toBe(
+      true,
     );
     expect((await store.getApplyRun("run_apply_1"))?.planRunId, label).toBe(
       "run_plan_1",
@@ -951,11 +1132,28 @@ test("runs table: plan/apply/source_sync rows verify kind", async () => {
     expect((await store.getSourceSyncRun("ssr_a"))?.sourceId, label).toBe(
       "src_1",
     );
+    expect((await store.getBackupRun("backup_1"))?.type, label).toBe("backup");
+    expect((await store.getBackupRun("backup_1"))?.installationId, label).toBe(
+      "inst_1",
+    );
+    expect(
+      (await store.getCompatibilityCheckRun("ccr_1"))?.compatibilityReportId,
+      label,
+    ).toBe("caprep_1");
 
     // Kind is verified: a plan id is not an apply, and vice versa.
     expect(await store.getApplyRun("run_plan_1"), label).toBeUndefined();
     expect(await store.getPlanRun("run_apply_1"), label).toBeUndefined();
     expect(await store.getSourceSyncRun("run_plan_1"), label).toBeUndefined();
+    expect(
+      await store.getCompatibilityCheckRun("run_plan_1"),
+      label,
+    ).toBeUndefined();
+    expect(await store.getBackupRun("run_plan_1"), label).toBeUndefined();
+    expect(await store.getRestoreRun("restore_1"), label).toEqual(
+      expect.objectContaining({ type: "restore", installationId: "inst_1" }),
+    );
+    expect(await store.getRestoreRun("run_plan_1"), label).toBeUndefined();
 
     const forSource = await store.listSourceSyncRuns("src_1");
     expect(
@@ -967,6 +1165,52 @@ test("runs table: plan/apply/source_sync rows verify kind", async () => {
     await store.putPlanRun(makePlanRun("run_plan_grp", { runGroupId: "rg_x" }));
     expect((await store.getPlanRun("run_plan_grp"))?.runGroupId, label).toBe(
       "rg_x",
+    );
+  }
+});
+
+test("Artifact ledger store: put/list by run keeps R2 pointer metadata ordered", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putArtifactRecord(
+      artifactRecord({
+        id: "artifact_b",
+        runId: "run_1",
+        kind: "plan_json",
+        createdAt: "2026-06-06T00:00:02.000Z",
+      }),
+    );
+    await store.putArtifactRecord(
+      artifactRecord({
+        id: "artifact_a",
+        runId: "run_1",
+        kind: "plan_bin",
+        objectKey:
+          "spaces/space_1/installations/inst_1/runs/run_1/plan.bin.enc",
+        createdAt: "2026-06-06T00:00:01.000Z",
+      }),
+    );
+    await store.putArtifactRecord(
+      artifactRecord({ id: "artifact_other", runId: "run_2" }),
+    );
+
+    const listed = await store.listArtifactRecordsForRun("run_1");
+    expect(
+      listed.map((artifact) => artifact.id),
+      label,
+    ).toEqual(["artifact_a", "artifact_b"]);
+    expect(listed[0]!.objectKey, label).toBe(
+      "spaces/space_1/installations/inst_1/runs/run_1/plan.bin.enc",
+    );
+    expect(listed[0]!.digest, label).toBe("sha256:" + "b".repeat(64));
+    expect(listed[0]!.sizeBytes, label).toBe(1024);
+    expect(
+      (await store.listArtifactRecordsForRun("run_2")).map(
+        (artifact) => artifact.id,
+      ),
+      label,
+    ).toEqual(["artifact_other"]);
+    expect(await store.listArtifactRecordsForRun("run_missing"), label).toEqual(
+      [],
     );
   }
 });
@@ -1262,7 +1506,7 @@ test("Credential mint audit store: put/list by run without values", async () => 
         id: "credmint_apply",
         runId: "apply_1",
         phase: "apply",
-        capabilities: ["compute", "dns"],
+        capabilities: ["cloudflare", "aws"],
         createdAt: "2026-06-06T00:00:02.000Z",
       }),
     );
@@ -1281,10 +1525,260 @@ test("Credential mint audit store: put/list by run without values", async () => 
     expect(
       (await store.listCredentialMintEventsForRun("apply_1"))[0]!.capabilities,
       label,
-    ).toEqual(["compute", "dns"]);
-    expect(await store.listCredentialMintEventsForRun("missing"), label).toEqual(
-      [],
+    ).toEqual(["cloudflare", "aws"]);
+    expect(
+      await store.listCredentialMintEventsForRun("missing"),
+      label,
+    ).toEqual([]);
+  }
+});
+
+test("SecurityFinding store: put/list newest-first, space-scoped, run-filtered", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putSecurityFinding(
+      securityFinding({ id: "sec_a", createdAt: "2026-06-06T00:00:01.000Z" }),
     );
+    await store.putSecurityFinding(
+      securityFinding({
+        id: "sec_b",
+        runId: "run_2",
+        severity: "error",
+        metadata: { code: "resource_denied" },
+        createdAt: "2026-06-06T00:00:03.000Z",
+      }),
+    );
+    await store.putSecurityFinding(
+      securityFinding({
+        id: "sec_c",
+        runId: "run_1",
+        createdAt: "2026-06-06T00:00:02.000Z",
+      }),
+    );
+    await store.putSecurityFinding(
+      securityFinding({ id: "sec_other", spaceId: "space_2" }),
+    );
+
+    expect(
+      (await store.listSecurityFindings("space_1")).map(
+        (finding) => finding.id,
+      ),
+      label,
+    ).toEqual(["sec_b", "sec_c", "sec_a"]);
+    expect(
+      (await store.listSecurityFindings("space_1", { runId: "run_1" })).map(
+        (finding) => finding.id,
+      ),
+      label,
+    ).toEqual(["sec_c", "sec_a"]);
+    expect(
+      (await store.listSecurityFindings("space_1", { limit: 2 })).map(
+        (finding) => finding.id,
+      ),
+      label,
+    ).toEqual(["sec_b", "sec_c"]);
+    expect(
+      (await store.listSecurityFindings("space_2")).map(
+        (finding) => finding.id,
+      ),
+      label,
+    ).toEqual(["sec_other"]);
+  }
+});
+
+test("Billing ledger store: balance, reservation, and usage round-trip", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putBillingPlan({
+      id: "pro",
+      name: "Pro",
+      monthlyBasePrice: 2000,
+      includedCredits: 100,
+      limits: {
+        maxEstimatedCreditsPerRun: 10,
+        quota: { resources: 20 },
+      },
+      createdAt: "2026-06-07T00:00:00.000Z",
+      updatedAt: "2026-06-07T00:00:00.000Z",
+    });
+    expect(await store.getBillingPlan("pro"), label).toEqual({
+      id: "pro",
+      name: "Pro",
+      monthlyBasePrice: 2000,
+      includedCredits: 100,
+      limits: {
+        maxEstimatedCreditsPerRun: 10,
+        quota: { resources: 20 },
+      },
+      createdAt: "2026-06-07T00:00:00.000Z",
+      updatedAt: "2026-06-07T00:00:00.000Z",
+    });
+
+    await store.putBillingAccount({
+      id: "bill_space_1",
+      ownerType: "space",
+      ownerId: "space_1",
+      provider: "stripe",
+      stripeCustomerId: "cus_1",
+      status: "active",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      updatedAt: "2026-06-07T00:00:00.000Z",
+    });
+    expect(await store.getBillingAccount("bill_space_1"), label).toMatchObject({
+      id: "bill_space_1",
+      ownerType: "space",
+      ownerId: "space_1",
+      stripeCustomerId: "cus_1",
+      status: "active",
+    });
+    expect(
+      await store.getBillingAccountForOwner("space", "space_1"),
+      label,
+    ).toMatchObject({
+      id: "bill_space_1",
+      provider: "stripe",
+    });
+    await store.putSpaceSubscription({
+      id: "sub_1",
+      spaceId: "space_1",
+      billingAccountId: "bill_space_1",
+      planId: "pro",
+      status: "active",
+      currentPeriodStart: "2026-06-01T00:00:00.000Z",
+      currentPeriodEnd: "2026-07-01T00:00:00.000Z",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      updatedAt: "2026-06-07T00:00:00.000Z",
+    });
+    expect(await store.getSpaceSubscription("space_1"), label).toMatchObject({
+      id: "sub_1",
+      spaceId: "space_1",
+      billingAccountId: "bill_space_1",
+      planId: "pro",
+      status: "active",
+    });
+
+    await store.putCreditBalance({
+      spaceId: "space_1",
+      availableCredits: 42,
+      reservedCredits: 3,
+      monthlyIncludedCredits: 10,
+      purchasedCredits: 35,
+      updatedAt: "2026-06-07T00:00:00.000Z",
+    });
+    expect(await store.getCreditBalance("space_1"), label).toEqual({
+      spaceId: "space_1",
+      availableCredits: 42,
+      reservedCredits: 3,
+      monthlyIncludedCredits: 10,
+      purchasedCredits: 35,
+      updatedAt: "2026-06-07T00:00:00.000Z",
+    });
+    expect(
+      await store.reserveCredits("space_1", {
+        credits: 5,
+        updatedAt: "2026-06-07T00:00:00.500Z",
+      }),
+      label,
+    ).toMatchObject({
+      spaceId: "space_1",
+      availableCredits: 37,
+      reservedCredits: 8,
+      updatedAt: "2026-06-07T00:00:00.500Z",
+    });
+    expect(
+      await store.reserveCredits("space_1", {
+        credits: 99,
+        updatedAt: "2026-06-07T00:00:00.750Z",
+      }),
+      label,
+    ).toBeUndefined();
+
+    await store.putCreditReservation({
+      id: "creditres_1",
+      spaceId: "space_1",
+      runId: "plan_1",
+      estimatedCredits: 5,
+      status: "reserved",
+      mode: "enforce",
+      createdAt: "2026-06-07T00:00:01.000Z",
+      expiresAt: "2026-06-08T00:00:01.000Z",
+    });
+    await store.putCreditReservation({
+      id: "creditres_2",
+      spaceId: "space_1",
+      runId: "plan_2",
+      estimatedCredits: 8,
+      status: "captured",
+      mode: "showback",
+      createdAt: "2026-06-07T00:00:02.000Z",
+      expiresAt: "2026-06-08T00:00:02.000Z",
+    });
+    await store.putCreditReservation({
+      id: "creditres_other",
+      spaceId: "space_2",
+      runId: "plan_other",
+      estimatedCredits: 100,
+      status: "reserved",
+      mode: "enforce",
+      createdAt: "2026-06-07T00:00:03.000Z",
+      expiresAt: "2026-06-08T00:00:03.000Z",
+    });
+    expect(await store.getCreditReservationForRun("plan_1"), label).toEqual({
+      id: "creditres_1",
+      spaceId: "space_1",
+      runId: "plan_1",
+      estimatedCredits: 5,
+      status: "reserved",
+      mode: "enforce",
+      createdAt: "2026-06-07T00:00:01.000Z",
+      expiresAt: "2026-06-08T00:00:01.000Z",
+    });
+    expect(
+      (await store.listCreditReservations("space_1")).map((r) => r.id),
+      label,
+    ).toEqual(["creditres_2", "creditres_1"]);
+    expect(
+      (await store.listCreditReservations("space_1", { limit: 1 })).map(
+        (r) => r.id,
+      ),
+      label,
+    ).toEqual(["creditres_2"]);
+
+    await store.putUsageEvent({
+      id: "usage_1",
+      spaceId: "space_1",
+      installationId: "inst_1",
+      runId: "apply_1",
+      kind: "operation",
+      quantity: 1,
+      credits: 5,
+      source: "runner",
+      idempotencyKey: "apply_1:operation",
+      createdAt: "2026-06-07T00:00:02.000Z",
+    });
+    await store.putUsageEvent({
+      id: "usage_duplicate",
+      spaceId: "space_1",
+      runId: "apply_1",
+      kind: "operation",
+      quantity: 1,
+      credits: 999,
+      source: "runner",
+      idempotencyKey: "apply_1:operation",
+      createdAt: "2026-06-07T00:00:03.000Z",
+    });
+    expect(await store.listUsageEvents("space_1"), label).toEqual([
+      {
+        id: "usage_1",
+        spaceId: "space_1",
+        installationId: "inst_1",
+        runId: "apply_1",
+        kind: "operation",
+        quantity: 1,
+        credits: 5,
+        source: "runner",
+        idempotencyKey: "apply_1:operation",
+        createdAt: "2026-06-07T00:00:02.000Z",
+      },
+    ]);
   }
 });
 
@@ -1315,7 +1809,7 @@ test("Backup store: put/list newest-first, space-scoped, round-trips", async () 
     expect(listed[0]!.createdByRunId, label).toBe("apply_1");
     expect(listed[0]!.sizeBytes, label).toBe(4096);
     expect(listed[0]!.objectKey, label).toBe(
-      "spaces/space_1/backups/bkp_1/control.json.gz.enc",
+      "spaces/space_1/backups/bkp_1/control.json.zst.enc",
     );
     expect(listed[1]!.createdByRunId, label).toBeUndefined();
 
@@ -1333,12 +1827,16 @@ test("Backup store: put/list newest-first, space-scoped, round-trips", async () 
 
 // --- internal run-record fixtures (epoch-number timestamps) -----------------
 
-function makePlanRun(id: string, over: { readonly runGroupId?: string } = {}) {
+function makePlanRun(
+  id: string,
+  over: { readonly runGroupId?: string; readonly driftCheck?: boolean } = {},
+) {
   return {
     id,
     spaceId: "space_1",
     installationId: "inst_1",
     ...(over.runGroupId ? { runGroupId: over.runGroupId } : {}),
+    ...(over.driftCheck ? { driftCheck: true } : {}),
     source: { kind: "git" as const, url: "https://example.com/repo.git" },
     sourceDigest: "sha256:src",
     operation: "apply" as const,

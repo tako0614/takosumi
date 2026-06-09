@@ -1,5 +1,5 @@
 /**
- * Official template: cloudflare-static-site.
+ * First-party Capsule module: cloudflare-static-site.
  *
  * Provisions a Cloudflare Pages project that serves a static site. Authored as
  * TypeScript catalog data (the service cannot read the filesystem in Workers).
@@ -8,7 +8,7 @@
  * this object in sync with `module/main.tf`.
  */
 
-import type { TemplateDefinition } from "takosumi-contract/deploy-control-api";
+import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 
 export const cloudflareStaticSiteTemplate: TemplateDefinition = {
   id: "cloudflare-static-site",

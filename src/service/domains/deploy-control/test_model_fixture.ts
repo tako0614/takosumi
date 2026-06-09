@@ -3,13 +3,20 @@
  * §5 / §11). Seeds the minimal ledger rows an installation-driven run needs:
  * Space -> StoredSource -> SourceSnapshot -> InstallConfig -> Installation.
  *
- * Tests that previously planned from a raw module source now create the
+ * Tests that previously planned directly from a source module now create the
  * Installation first (the create-on-apply legacy path is removed) and call
  * `controller.createInstallationPlan(installationId)`.
  */
-import type { InstallConfig, Installation } from "takosumi-contract/deploy-control-api";
+import type {
+  InstallConfig,
+  Installation,
+} from "@takosumi/internal/deploy-control-api";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { Space } from "takosumi-contract/spaces";
+import {
+  CredentialBundle,
+  PhaseMintBundle,
+} from "../../adapters/vault/mod.ts";
 import type { OpenTofuDeploymentStore, StoredSource } from "./store.ts";
 
 export interface SeededModel {
@@ -38,6 +45,86 @@ export interface SeedModelOptions {
 
 export const FIXTURE_ARCHIVE_DIGEST =
   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+export const FIXTURE_CLOUDFLARE_PROVIDER =
+  "registry.opentofu.org/cloudflare/cloudflare";
+export const FIXTURE_AWS_PROVIDER = "registry.opentofu.org/hashicorp/aws";
+export const FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE = {
+  provider: FIXTURE_CLOUDFLARE_PROVIDER,
+  mirrored: true,
+  installationMethod: "filesystem_mirror",
+  attested: true,
+  attestationMethod: "forced_filesystem_mirror_init",
+  mirrorPath:
+    "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+} as const;
+export const FIXTURE_AWS_MIRROR_EVIDENCE = {
+  provider: FIXTURE_AWS_PROVIDER,
+  mirrored: true,
+  installationMethod: "filesystem_mirror",
+  attested: true,
+  attestationMethod: "forced_filesystem_mirror_init",
+  mirrorPath:
+    "/opt/opentofu/provider-mirror/registry.opentofu.org/hashicorp/aws",
+} as const;
+
+export function fakeProviderVault(
+  options: {
+    readonly token?: string;
+    readonly connectionId?: string;
+    readonly provider?: string;
+  } = {},
+) {
+  const provider = options.provider ?? FIXTURE_CLOUDFLARE_PROVIDER;
+  const connectionId = options.connectionId ?? "conn_fixture";
+  const token = options.token ?? "fixture-provider-token";
+  const sharedEvidence = {
+    provider,
+    connectionId,
+    delivery: "provider_env" as const,
+    rootOnly: false,
+    temporary: true,
+    ttlEnforced: true,
+    phase: "plan" as const,
+  };
+  const rootEvidence = {
+    provider,
+    connectionId,
+    delivery: "generated_root_variable" as const,
+    rootOnly: true,
+    temporary: true,
+    ttlEnforced: true,
+    phase: "plan" as const,
+  };
+  return {
+    register: () => Promise.reject(new Error("not used")),
+    test: () => Promise.resolve({ status: "verified" }),
+    revoke: () => Promise.resolve(true),
+    mint: () =>
+      Promise.resolve(
+        new CredentialBundle(
+          { CLOUDFLARE_API_TOKEN: token },
+          [],
+          [sharedEvidence],
+        ),
+      ),
+    mintForPhase: () =>
+      Promise.resolve(
+        new PhaseMintBundle(
+          { env: { CLOUDFLARE_API_TOKEN: token } },
+          [],
+          [sharedEvidence],
+        ),
+      ),
+    mintForProviderBindings: () =>
+      Promise.resolve(
+        new CredentialBundle(
+          { TF_VAR_cloudflare_main_api_token: token },
+          [],
+          [rootEvidence],
+        ),
+      ),
+  };
+}
 
 /** Seeds Space + Source + Snapshot + InstallConfig + Installation. */
 export async function seedInstallationModel(
@@ -75,13 +162,14 @@ export async function seedInstallationModel(
   await store.putSource(source);
   const snapshot: SourceSnapshot = {
     id: options.snapshotId ?? "snap_fixture",
+    origin: "git",
+    spaceId,
     sourceId,
     url: source.url,
     ref: source.defaultRef,
     resolvedCommit: "abcdef0123456789abcdef0123456789abcdef01",
     path: ".",
-    archiveObjectKey:
-      `spaces/${spaceId}/sources/${sourceId}/snapshots/snap_fixture/source.tar.zst`,
+    archiveObjectKey: `spaces/${spaceId}/sources/${sourceId}/snapshots/snap_fixture/source.tar.zst`,
     archiveDigest: FIXTURE_ARCHIVE_DIGEST,
     archiveSizeBytes: 1024,
     fetchedByRunId: "run_fixture_sync",
@@ -96,7 +184,9 @@ export async function seedInstallationModel(
     installType: "opentofu_module",
     trustLevel: "official",
     variableMapping: {},
-    outputAllowlist: {},
+    outputAllowlist: {
+      launch_url: { from: "launch_url", type: "url" },
+    },
     policy: {},
     createdAt: now,
     updatedAt: now,

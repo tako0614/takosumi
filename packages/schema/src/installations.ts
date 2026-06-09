@@ -9,14 +9,19 @@
  *
  * A SourceSnapshot is normalized as an OpenTofu Capsule before plan /
  * apply. InstallConfig is the service-side DB record describing Capsule
- * execution policy (trust, normalizer policy, variable mapping, output
+ * execution policy (trust, normalization policy, variable mapping, output
  * allowlist, policy). User repos carry NO Takosumi manifest.
  */
 
-import type { CapabilityBindings } from "./capability-bindings.ts";
+import type { ProviderBindings } from "./provider-bindings.ts";
 import type { CapsuleCompatibilityLevel } from "./capsules.ts";
 
-/** Compatibility install type. `core` is the Space base Capsule emitting shared outputs. */
+/**
+ * Internal compatibility discriminator. `core` is the Space base Capsule
+ * emitting shared outputs. `opentofu_root` is retained only so old direct-root
+ * ledger rows can be read; new InstallConfigs are rejected at the domain-service
+ * boundary.
+ */
 export type InstallType =
   | "core"
   | "opentofu_module"
@@ -65,8 +70,42 @@ export interface InstallBuildConfig {
 export interface PolicyConfig {
   readonly allowedProviders?: readonly string[];
   readonly allowedResourceTypes?: readonly string[];
+  readonly allowedDataSourceTypes?: readonly string[];
+  readonly allowedProvisionerTypes?: readonly string[];
   readonly destructiveChanges?: {
     readonly requireExplicitConfirmation: boolean;
+  };
+  readonly providerLockfile?: {
+    /**
+     * Require the runner to return a digest for the reviewed provider lockfile
+     * after `tofu init`. Used by the §25 provider mirror / lockfile layer.
+     */
+    readonly requireDigest: boolean;
+  };
+  readonly providerInstallation?: {
+    /**
+     * Require actual-install attestation that every required provider was
+     * installed from the runner's configured filesystem mirror. This blocks
+     * accidental registry/network fallback when an Installation policy expects
+     * offline provider installation.
+     */
+    readonly requireMirror: boolean;
+  };
+  readonly providerCredentials?: {
+    /**
+     * Require provider credential mint evidence to show provider-specific
+     * temporary credentials. Static provider secrets remain a compatibility
+     * path unless this policy is enabled.
+     */
+    readonly requireTemporary?: boolean;
+    /**
+     * Require the mint evidence to include provider-enforced expiry / TTL.
+     */
+    readonly requireTtlEnforced?: boolean;
+    /**
+     * Require credentials to be delivered only through generated-root variables.
+     */
+    readonly requireRootOnly?: boolean;
   };
   readonly scopeBoundary?: {
     /**
@@ -104,42 +143,29 @@ export interface NormalizationConfig {
   readonly allowAliasInjection: boolean;
 }
 
-/** Compatibility alias for older code while runtime field names are migrated. */
-export type NormalizerPolicy = NormalizationConfig;
-
 /**
  * Service-side install configuration. `spaceId` is absent for
- * official catalog configs shared across Spaces.
+ * built-in first-party configs shared across Spaces.
  */
 export interface InstallConfig {
   readonly id: string;
   readonly spaceId?: string;
   readonly name: string;
-  /**
-   * Compatibility field for the pre-Capsule implementation. New Capsule-native
-   * code should treat every install as a generated-root Capsule and use
-   * `capsulePath` + `normalizerPolicy`; this remains until runtime branching is
-   * fully retired.
-   */
   readonly installType: InstallType;
   readonly trustLevel: TrustLevel;
   /** Path inside the SourceSnapshot that contains the OpenTofu Capsule. */
-  readonly capsulePath?: string;
-  readonly normalization?: NormalizationConfig;
-  /** Compatibility alias. Prefer normalization. */
-  readonly normalizerPolicy?: NormalizerPolicy;
-  /** Compatibility alias for older template/rootgen paths. Prefer capsulePath. */
   readonly modulePath?: string;
+  readonly normalization?: NormalizationConfig;
   readonly build?: InstallBuildConfig;
   readonly variableMapping: Readonly<Record<string, unknown>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly policy: PolicyConfig;
   readonly backup?: BackupConfig;
   /**
-   * Internal seam: binds an official catalog config to its template (the
-   * rootgen module baked into the runner image). Absent for space-authored
-   * configs. Retained as a compatibility seam while explicit install-type
-   * branching is retired.
+   * Internal seam: binds a built-in first-party config to its bundled module.
+   * New runs normalize the bundled module into generatedRoot.moduleFiles, the
+   * same dispatch shape used by Git-sourced OpenTofu Capsules. Absent for
+   * space-authored configs.
    */
   readonly templateBinding?: {
     readonly templateId: string;
@@ -148,6 +174,12 @@ export interface InstallConfig {
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+
+/** Public InstallConfig projection returned by `/api` and dashboard session routes. */
+export type PublicInstallConfig = Omit<
+  InstallConfig,
+  "installType" | "templateBinding"
+>;
 
 /**
  * Installation ledger record.
@@ -160,7 +192,14 @@ export interface Installation {
   readonly spaceId: string;
   readonly name: string;
   readonly slug: string;
-  readonly sourceId: string;
+  /**
+   * Registered git {@link Source} this Installation tracks. Absent for
+   * upload-origin Installations created by `takosumi deploy`, which deploy a
+   * `SourceSnapshot(origin=upload)` directly with no Source. A git Source is an
+   * optional attachment (the `wrangler deploy` vs Workers-Builds relationship),
+   * not a precondition for an Installation to exist.
+   */
+  readonly sourceId?: string;
   readonly installType: InstallType;
   readonly installConfigId: string;
   readonly environment: string;
@@ -174,15 +213,21 @@ export interface Installation {
   readonly updatedAt: string;
 }
 
+/** Public Installation projection returned by `/api` and dashboard session routes. */
+export type PublicInstallation = Omit<Installation, "installType">;
+
 /**
- * Per-Installation capability binding record (`deployment_profiles`).
+ * Internal per-Installation provider-binding record.
+ *
+ * The physical table is still named `deployment_profiles` for compatibility;
+ * the public model is Connection + ProviderBinding resolution.
  */
 export interface DeploymentProfile {
   readonly id: string;
   readonly spaceId: string;
   readonly installationId: string;
   readonly environment: string;
-  readonly bindings: CapabilityBindings;
+  readonly bindings: ProviderBindings;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

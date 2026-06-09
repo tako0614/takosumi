@@ -155,7 +155,9 @@ function fakeOperations(
           spaceId: "space_a",
           installationId,
           environment,
-          bindings: { compute: { mode: "default" } },
+          bindings: [
+            { provider: "cloudflare", alias: "main", mode: "default" },
+          ],
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
         };
@@ -227,6 +229,105 @@ function fakeOperations(
         record("activityList", spaceId, limit);
         return [];
       },
+    },
+    backups: {
+      createBackup: async (input) => {
+        record("createBackup", input);
+        return {
+          id: "bkp_1",
+          spaceId: input.spaceId,
+          objectKey: `spaces/${input.spaceId}/backups/bkp_1/control.json.zst.enc`,
+          digest:
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          sizeBytes: 128,
+          createdAt: "2026-01-01T00:00:00Z",
+        };
+      },
+      listBackups: async (spaceId) => {
+        record("listBackups", spaceId);
+        return [
+          {
+            id: "bkp_1",
+            spaceId,
+            objectKey: `spaces/${spaceId}/backups/bkp_1/control.json.zst.enc`,
+            digest:
+              "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            sizeBytes: 128,
+            createdAt: "2026-01-01T00:00:00Z",
+          },
+        ];
+      },
+    },
+    getSpaceBilling: async (spaceId) => {
+      record("getSpaceBilling", spaceId);
+      return {
+        billing: {
+          settings: { mode: "showback", provider: "manual" },
+          balance: {
+            spaceId,
+            availableCredits: 120,
+            reservedCredits: 8,
+            monthlyIncludedCredits: 100,
+            purchasedCredits: 20,
+            updatedAt: "2026-01-01T00:00:00Z",
+          },
+        },
+      };
+    },
+    listSpaceUsage: async (spaceId) => {
+      record("listSpaceUsage", spaceId);
+      return {
+        usageEvents: [
+          {
+            id: "use_1",
+            spaceId,
+            kind: "runner_minute",
+            quantity: 2,
+            credits: 3,
+            source: "runner",
+            idempotencyKey: "idem_1",
+            createdAt: "2026-01-01T00:00:00Z",
+          },
+        ],
+      };
+    },
+    listSpaceCreditReservations: async (spaceId) => {
+      record("listSpaceCreditReservations", spaceId);
+      return {
+        creditReservations: [
+          {
+            id: "cres_1",
+            spaceId,
+            runId: "plan_1",
+            estimatedCredits: 28,
+            status: "reserved",
+            mode: "enforce",
+            createdAt: "2026-01-01T00:00:00Z",
+            expiresAt: "2026-01-01T01:00:00Z",
+          },
+        ],
+      };
+    },
+    topUpSpaceCredits: async (spaceId, input) => {
+      record("topUpSpaceCredits", spaceId, input);
+      return {
+        balance: {
+          spaceId,
+          availableCredits: input.credits,
+          reservedCredits: 0,
+          monthlyIncludedCredits: 0,
+          purchasedCredits: input.credits,
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      };
+    },
+    changeSpaceSubscription: async (spaceId, input) => {
+      record("changeSpaceSubscription", spaceId, input);
+      return { billing: { settings: input.billingSettings } };
+    },
+    reconcileStripeSpaceSubscription: async (spaceId, input) => {
+      record("reconcileStripeSpaceSubscription", spaceId, input);
+      return {};
     },
     connections: {
       listOperatorConnectionDefaults: async () => {
@@ -317,7 +418,7 @@ function fakeOperations(
         id: connectionId,
         spaceId: "space_a",
         provider: "cloudflare",
-        kind: "provider",
+        kind: "cloudflare_api_token",
         authMethod: "static_secret",
         scope: "space",
         status: "active",
@@ -390,6 +491,65 @@ function fakeOperations(
       record("createSourceSync", sourceId, options);
       return { run: { id: "ssr_1" } };
     },
+    listSourceSnapshots: async (sourceId) => {
+      record("listSourceSnapshots", sourceId);
+      return {
+        snapshots: [
+          {
+            id: "snap_1",
+            sourceId,
+            url: "https://example.test/r.git",
+            ref: "main",
+            resolvedCommit: "a".repeat(40),
+            path: ".",
+            archiveObjectKey:
+              "spaces/space_a/sources/src_x/snapshots/snap_1/source.tar.zst",
+            archiveDigest: `sha256:${"b".repeat(64)}`,
+            archiveSizeBytes: 123,
+            fetchedByRunId: "ssr_1",
+            fetchedAt: "2026-01-01T00:00:00Z",
+          },
+        ],
+      };
+    },
+    createSourceCompatibilityCheck: async (sourceId, request) => {
+      record("createSourceCompatibilityCheck", sourceId, request);
+      return {
+        report: {
+          id: "caprep_1",
+          sourceId,
+          sourceSnapshotId: request?.sourceSnapshotId ?? "snap_1",
+          level: "ready",
+          findings: [],
+          providers: [],
+          resources: [],
+          dataSources: [],
+          provisioners: [],
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+      };
+    },
+    listProviderTemplates: async () => {
+      record("listProviderTemplates");
+      return {
+        providers: [
+          {
+            id: "cloudflare",
+            providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+            displayName: "Cloudflare",
+            recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
+            helpers: ["cloudflare_api_token"],
+            credentialSources: ["takosumi_managed", "user_env_set"],
+            takosumiManagedAvailable: true,
+            allowedResources: ["cloudflare_workers_script"],
+            allowedDataSources: [],
+            policyPackId: "policy_cloudflare",
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+          },
+        ],
+      };
+    },
     listRunnerProfiles: async () => {
       record("listRunnerProfiles");
       return { runnerProfiles: [] };
@@ -442,11 +602,21 @@ test("anonymous control requests are 401 across the family", async () => {
     ["GET", "/v1/control/spaces/space_a/installations"],
     ["GET", "/v1/control/spaces/space_a/graph"],
     ["GET", "/v1/control/spaces/space_a/activity"],
+    ["GET", "/v1/control/spaces/space_a/backups"],
+    ["POST", "/v1/control/spaces/space_a/backups"],
+    ["GET", "/v1/control/spaces/space_a/billing"],
+    ["GET", "/v1/control/spaces/space_a/usage"],
+    ["GET", "/v1/control/spaces/space_a/credit-reservations"],
+    ["POST", "/v1/control/spaces/space_a/credits/top-up"],
+    ["POST", "/v1/control/spaces/space_a/subscription/change"],
     ["POST", "/v1/control/spaces/space_a/plan-update"],
     ["GET", "/v1/control/installations/inst_1"],
     ["GET", "/v1/control/installations/inst_1/deployment-profile"],
     ["POST", "/v1/control/installations/inst_1/plan"],
+    ["POST", "/v1/control/installations/inst_1/backups"],
     ["GET", "/v1/control/install-configs"],
+    ["GET", "/v1/control/providers"],
+    ["POST", "/v1/control/sources/src_x/compatibility-check"],
     ["GET", "/v1/control/runs/plan_1"],
     ["GET", "/v1/control/run-groups/rg_1"],
     ["GET", "/v1/control/connections?spaceId=space_a"],
@@ -498,6 +668,175 @@ test("GET /v1/control/spaces returns spaces for a session", async () => {
   const body = (await response!.json()) as { spaces: unknown[] };
   expect(body.spaces.length).toEqual(1);
   expect(operations.calls.listSpaces).toBeDefined();
+});
+
+test("GET /v1/control/spaces/:id/billing returns billing settings and balance", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_a/billing",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    billing: {
+      settings: { mode: string };
+      balance: { availableCredits: number; reservedCredits: number };
+    };
+  };
+  expect(body.billing.settings.mode).toEqual("showback");
+  expect(body.billing.balance.availableCredits).toEqual(120);
+  expect(body.billing.balance.reservedCredits).toEqual(8);
+  expect(operations.calls.getSpaceBilling).toEqual(["space_a"]);
+});
+
+test("GET /v1/control/spaces/:id/usage returns usage events", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_a/usage",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { usageEvents: unknown[] };
+  expect(body.usageEvents.length).toEqual(1);
+  expect(operations.calls.listSpaceUsage).toEqual(["space_a"]);
+});
+
+test("GET /v1/control/spaces/:id/credit-reservations returns reservation history", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_a/credit-reservations",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { creditReservations: unknown[] };
+  expect(body.creditReservations.length).toEqual(1);
+  expect(operations.calls.listSpaceCreditReservations).toEqual(["space_a"]);
+});
+
+test("GET /v1/control/spaces/:id/backups lists Space backups", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_a/backups",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { backups: unknown[] };
+  expect(body.backups.length).toEqual(1);
+  expect(operations.calls.listBackups).toEqual(["space_a"]);
+});
+
+test("POST /v1/control/spaces/:id/backups creates a Space backup", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/backups",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const body = (await response!.json()) as { backup: { spaceId: string } };
+  expect(body.backup.spaceId).toEqual("space_a");
+  expect(operations.calls.createBackup).toEqual([{ spaceId: "space_a" }]);
+});
+
+test("POST /v1/control/spaces/:id/credits/top-up forwards credit amount", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/credits/top-up",
+    { cookie, body: { credits: 50 } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    balance: { availableCredits: number };
+  };
+  expect(body.balance.availableCredits).toEqual(50);
+  expect(operations.calls.topUpSpaceCredits).toEqual([
+    "space_a",
+    { credits: 50 },
+  ]);
+});
+
+test("POST /v1/control/spaces/:id/subscription/change forwards billing settings", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const billingSettings = {
+    mode: "enforce",
+    provider: "manual",
+    reservationRequired: true,
+  };
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/subscription/change",
+    { cookie, body: { billingSettings } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    billing: { settings: typeof billingSettings };
+  };
+  expect(body.billing.settings).toEqual(billingSettings);
+  expect(operations.calls.changeSpaceSubscription).toEqual([
+    "space_a",
+    { billingSettings },
+  ]);
 });
 
 test("GET /v1/control/spaces filters out spaces the session cannot access", async () => {
@@ -1048,6 +1387,8 @@ test("GET /v1/control/spaces/:id/installations lists installations", async () =>
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { installations: unknown[] };
   expect(body.installations.length).toEqual(1);
+  expect((body.installations[0] as { installType?: string }).installType)
+    .toBeUndefined();
   expect(operations.calls.listInstallations?.[0]).toEqual("space_a");
 });
 
@@ -1075,6 +1416,10 @@ test("POST /v1/control/spaces/:id/installations creates an installation", async 
     operations,
   });
   expect(response?.status).toEqual(201);
+  const body = (await response!.json()) as {
+    installation: { installType?: string };
+  };
+  expect(body.installation.installType).toBeUndefined();
   const createCall = operations.calls.createInstallation?.[0] as {
     spaceId: string;
   };
@@ -1127,7 +1472,33 @@ test("GET /v1/control/installations/:id reads one installation", async () => {
     operations,
   });
   expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    installation: { installType?: string };
+  };
+  expect(body.installation.installType).toBeUndefined();
   expect(operations.calls.getInstallation?.[0]).toEqual("inst_1");
+});
+
+test("POST /v1/control/installations/:id/backups creates a backup for the Installation Space", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/installations/inst_1/backups",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const body = (await response!.json()) as { backup: { spaceId: string } };
+  expect(body.backup.spaceId).toEqual("space_a");
+  expect(operations.calls.getInstallation?.[0]).toEqual("inst_1");
+  expect(operations.calls.createBackup).toEqual([{ spaceId: "space_a" }]);
 });
 
 test("GET /v1/control/installations/:id/deployment-profile reads bindings", async () => {
@@ -1147,9 +1518,9 @@ test("GET /v1/control/installations/:id/deployment-profile reads bindings", asyn
   });
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as {
-    deploymentProfile: { bindings: { compute: { mode: string } } };
+    deploymentProfile: { bindings: readonly { mode: string }[] };
   };
-  expect(body.deploymentProfile.bindings.compute.mode).toEqual("default");
+  expect(body.deploymentProfile.bindings[0]?.mode).toEqual("default");
   expect(operations.calls.getDeploymentProfileByInstallation).toEqual([
     "inst_1",
     "prod",
@@ -1166,12 +1537,20 @@ test("PUT /v1/control/installations/:id/deployment-profile saves bindings", asyn
     {
       cookie,
       body: {
-        bindings: {
-          compute: { mode: "connection", connectionId: "conn_cf" },
-          dns: { mode: "default" },
-          storage: { mode: "manual", values: { bucket: "manual-bucket" } },
-          source: { mode: "disabled" },
-        },
+        bindings: [
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            alias: "main",
+            mode: "connection",
+            connectionId: "conn_cf",
+          },
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            alias: "archive",
+            mode: "manual",
+            values: { bucket: "manual-bucket" },
+          },
+        ],
       },
     },
   );
@@ -1183,16 +1562,21 @@ test("PUT /v1/control/installations/:id/deployment-profile saves bindings", asyn
   });
   expect(response?.status).toEqual(200);
   const saved = operations.calls.putDeploymentProfile?.[0] as {
-    bindings: {
-      compute: { mode: string; connectionId?: string };
-      storage: { mode: string; values?: Record<string, unknown> };
-    };
+    bindings: readonly {
+      provider: string;
+      alias?: string;
+      mode: string;
+      connectionId?: string;
+      values?: Record<string, unknown>;
+    }[];
   };
-  expect(saved.bindings.compute).toEqual({
+  expect(saved.bindings[0]).toEqual({
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    alias: "main",
     mode: "connection",
     connectionId: "conn_cf",
   });
-  expect(saved.bindings.storage.values?.bucket).toEqual("manual-bucket");
+  expect(saved.bindings[1]?.values?.bucket).toEqual("manual-bucket");
 });
 
 test("POST /v1/control/installations/:id/plan returns 201", async () => {
@@ -1302,8 +1686,15 @@ test("GET /v1/control/install-configs merges official + scoped", async () => {
     operations,
   });
   expect(response?.status).toEqual(200);
-  const body = (await response!.json()) as { installConfigs: unknown[] };
+  const body = (await response!.json()) as {
+    installConfigs: Array<{
+      installType?: string;
+      templateBinding?: unknown;
+    }>;
+  };
   expect(Array.isArray(body.installConfigs)).toEqual(true);
+  expect(body.installConfigs[0]?.installType).toBeUndefined();
+  expect(body.installConfigs[0]?.templateBinding).toBeUndefined();
 });
 
 test("Sources: GET requires spaceId, POST + sync return 201", async () => {
@@ -1362,6 +1753,55 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   });
   expect(syncResp?.status).toEqual(201);
   expect(operations.calls.createSourceSync?.[0]).toEqual("src_x");
+
+  const snapshots = request("GET", "/v1/control/sources/src_x/snapshots", {
+    cookie,
+  });
+  const snapshotsResp = await handleControlRoute({
+    request: snapshots.request,
+    url: snapshots.url,
+    store,
+    operations,
+  });
+  expect(snapshotsResp?.status).toEqual(200);
+  expect(operations.calls.listSourceSnapshots?.[0]).toEqual("src_x");
+
+  const compatibility = request(
+    "POST",
+    "/v1/control/sources/src_x/compatibility-check",
+    {
+      cookie,
+      body: { sourceSnapshotId: "snap_1" },
+    },
+  );
+  const compatibilityResp = await handleControlRoute({
+    request: compatibility.request,
+    url: compatibility.url,
+    store,
+    operations,
+  });
+  expect(compatibilityResp?.status).toEqual(201);
+  expect(operations.calls.createSourceCompatibilityCheck?.[0]).toEqual("src_x");
+  expect(operations.calls.createSourceCompatibilityCheck?.[1]).toEqual({
+    sourceSnapshotId: "snap_1",
+  });
+});
+
+test("Providers: templates are public to session", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const providers = request("GET", "/v1/control/providers", { cookie });
+  const providersResp = await handleControlRoute({
+    request: providers.request,
+    url: providers.url,
+    store,
+    operations,
+  });
+  expect(providersResp?.status).toEqual(200);
+  expect(operations.calls.listProviderTemplates).toEqual([]);
+
 });
 
 test("Runs: GET run, approve (session subject actor), logs", async () => {

@@ -1,4 +1,10 @@
 import type {
+  ServiceDataArtifactPointer,
+  ServiceDataBackupRunner,
+  ServiceDataBackupRunnerInput,
+  ServiceDataBackupRunnerResult,
+} from "../../src/service/domains/backups/mod.ts";
+import type {
   OpenTofuApplyJob,
   OpenTofuApplyResult,
   OpenTofuCapsuleSourceFile,
@@ -23,7 +29,8 @@ import { redactString } from "../../src/service/services/observability/redaction
  * runner DO and parses the DO's JSON result back into the controller's result
  * shape. Credential values and run bodies are never logged.
  */
-export class CloudflareContainerOpenTofuRunner implements OpenTofuRunner {
+export class CloudflareContainerOpenTofuRunner
+  implements OpenTofuRunner, ServiceDataBackupRunner {
   constructor(private readonly env: CloudflareWorkerEnv) {}
 
   async plan(job: OpenTofuPlanJob): Promise<OpenTofuPlanResult> {
@@ -58,6 +65,12 @@ export class CloudflareContainerOpenTofuRunner implements OpenTofuRunner {
       ...(stringFromRecord(result, "providerLockDigest")
         ? {
             providerLockDigest: stringFromRecord(result, "providerLockDigest"),
+          }
+        : {}),
+      ...(providerInstallationFromContainerResult(result)
+        ? {
+            providerInstallation:
+              providerInstallationFromContainerResult(result),
           }
         : {}),
       ...(recordFromRecord(result, "summary")
@@ -98,6 +111,12 @@ export class CloudflareContainerOpenTofuRunner implements OpenTofuRunner {
       ...(stringFromRecord(result, "rawOutputsKey")
         ? { rawOutputsKey: stringFromRecord(result, "rawOutputsKey") }
         : {}),
+      ...(providerInstallationFromContainerResult(result)
+        ? {
+            providerInstallation:
+              providerInstallationFromContainerResult(result),
+          }
+        : {}),
       diagnostics: diagnosticsFromContainerResult(result),
     };
   }
@@ -108,7 +127,15 @@ export class CloudflareContainerOpenTofuRunner implements OpenTofuRunner {
       runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
     );
-    return { diagnostics: diagnosticsFromContainerResult(result) };
+    return {
+      ...(providerInstallationFromContainerResult(result)
+        ? {
+            providerInstallation:
+              providerInstallationFromContainerResult(result),
+          }
+        : {}),
+      diagnostics: diagnosticsFromContainerResult(result),
+    };
   }
 
   async sourceSync(
@@ -179,6 +206,56 @@ export class CloudflareContainerOpenTofuRunner implements OpenTofuRunner {
     });
   }
 
+  async run(
+    input: ServiceDataBackupRunnerInput,
+  ): Promise<ServiceDataBackupRunnerResult> {
+    const runId = `backup_${crypto.randomUUID().replaceAll("-", "")}`;
+    if (input.mode === "custom_command" && !input.sourceSnapshot) {
+      return {
+        status: "missing",
+        runId,
+        reason:
+          "custom_command backup requires a SourceSnapshot archive to restore into the runner",
+      };
+    }
+    const result = await this.#runContainer("backup", runId, {
+      backup: {
+        mode: input.mode,
+        outputPath: input.outputPath,
+        ...(input.provider ? { provider: input.provider } : {}),
+        ...(input.command ? { command: input.command } : {}),
+      },
+      ...(input.sourceSnapshot
+        ? {
+            sourceArchive: {
+              objectKey: input.sourceSnapshot.archiveObjectKey,
+              digest: input.sourceSnapshot.archiveDigest,
+            },
+          }
+        : {}),
+    });
+    const status = stringFromRecord(result, "status");
+    if (status === "succeeded" || status === "exported") {
+      const artifact = artifactPointerFromContainerResult(result);
+      if (artifact) {
+        return { status: "exported", runId, artifact };
+      }
+      return {
+        status: "missing",
+        runId,
+        reason: "backup runner did not return an artifact pointer",
+      };
+    }
+    const reason = stringFromRecord(result, "reason") ??
+      stringFromRecord(result, "stderr") ??
+      "backup runner did not export service-data pointer";
+    return {
+      status: status === "unsupported" ? "unsupported" : "missing",
+      runId,
+      reason: redactRunnerDiagnosticText(reason),
+    };
+  }
+
   async #runContainer(
     action: OpenTofuRunQueueMessage["action"],
     runId: string,
@@ -212,6 +289,35 @@ export class CloudflareContainerOpenTofuRunner implements OpenTofuRunner {
     }
     return payload;
   }
+}
+
+function artifactPointerFromContainerResult(
+  result: Record<string, unknown>,
+): ServiceDataArtifactPointer | undefined {
+  const artifact = recordFromRecord(result, "artifact");
+  if (!artifact) return undefined;
+  const ref = stringFromRecord(artifact, "ref");
+  if (!ref) return undefined;
+  const pointer: ServiceDataArtifactPointer = { ref };
+  const digest = stringFromRecord(artifact, "digest");
+  if (digest) (pointer as { digest?: string }).digest = digest;
+  if (
+    typeof artifact.sizeBytes === "number" &&
+    Number.isInteger(artifact.sizeBytes) &&
+    artifact.sizeBytes >= 0
+  ) {
+    (pointer as { sizeBytes?: number }).sizeBytes = artifact.sizeBytes;
+  }
+  const contentType = stringFromRecord(artifact, "contentType");
+  if (contentType) {
+    (pointer as { contentType?: string }).contentType = contentType;
+  }
+  const metadata = recordFromRecord(artifact, "metadata");
+  if (metadata) {
+    (pointer as { metadata?: Readonly<Record<string, unknown>> }).metadata =
+      metadata;
+  }
+  return pointer;
 }
 
 async function readResponseJsonObject(
@@ -287,7 +393,62 @@ function runnerRunIdFromPlanArtifact(
   const r2Plan = /^r2:\/\/[^/]+\/opentofu-plan-runs\/([^/]+)\/tfplan$/.exec(
     artifact.ref,
   );
-  return r2Plan?.[1];
+  if (r2Plan?.[1]) return r2Plan[1];
+  const canonicalPlan =
+    /^r2:\/\/[^/]+\/spaces\/[^/]+\/installations\/[^/]+\/runs\/([^/]+)\/plan\.bin$/.exec(
+      artifact.ref,
+    );
+  return canonicalPlan?.[1];
+}
+
+function providerInstallationFromContainerResult(
+  result: Record<string, unknown>,
+): OpenTofuPlanResult["providerInstallation"] | undefined {
+  const value = result.providerInstallation;
+  if (!Array.isArray(value)) return undefined;
+  const rows = value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const provider = stringFromRecord(entry, "provider");
+    const rawMethod = stringFromRecord(entry, "installationMethod");
+    if (
+      !provider ||
+      (rawMethod !== "filesystem_mirror" &&
+        rawMethod !== "direct" &&
+        rawMethod !== "unknown")
+    ) {
+      return [];
+    }
+    // `rawMethod` is `string | undefined` so TS does not narrow it to the
+    // literal union through the negative guard above; re-bind it as the
+    // already-validated literal so the row matches `ProviderInstallationEvidence`.
+    const installationMethod: "filesystem_mirror" | "direct" | "unknown" =
+      rawMethod;
+    return [
+      {
+        provider,
+        mirrored: entry.mirrored === true,
+        installationMethod,
+        ...(stringFromRecord(entry, "mirrorPath")
+          ? { mirrorPath: stringFromRecord(entry, "mirrorPath") }
+          : {}),
+        ...(entry.attested === true ? { attested: true } : {}),
+        ...(stringFromRecord(entry, "attestationMethod") ===
+        "forced_filesystem_mirror_init"
+          ? { attestationMethod: "forced_filesystem_mirror_init" as const }
+          : {}),
+        ...(stringFromRecord(entry, "cliConfigDigest")
+          ? { cliConfigDigest: stringFromRecord(entry, "cliConfigDigest") }
+          : {}),
+        ...(stringFromRecord(entry, "installedPath")
+          ? { installedPath: stringFromRecord(entry, "installedPath") }
+          : {}),
+        ...(stringFromRecord(entry, "installedDigest")
+          ? { installedDigest: stringFromRecord(entry, "installedDigest") }
+          : {}),
+      },
+    ];
+  });
+  return rows.length > 0 ? rows : undefined;
 }
 
 function stringArrayFromRecord(

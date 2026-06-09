@@ -1,11 +1,17 @@
 import { expect, test } from "bun:test";
 
 import {
+  applyExpectedGuardFromPlanRun,
   OpenTofuControllerError,
   OpenTofuDeploymentController,
 } from "./mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
-import { seedInstallationModel } from "./test_model_fixture.ts";
+import {
+  FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
+  FIXTURE_CLOUDFLARE_PROVIDER,
+  fakeProviderVault,
+  seedInstallationModel,
+} from "./test_model_fixture.ts";
 
 const SOURCE = {
   kind: "git",
@@ -15,6 +21,8 @@ const SOURCE = {
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const LOCK_DIGEST =
+  "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
 function deterministicIds(): (prefix: string) => string {
   let next = 1;
@@ -36,6 +44,9 @@ function succeedingRunner() {
           ref: "runner-local://plan/tfplan",
           digest: PLAN_DIGEST,
         },
+        providerLockDigest: LOCK_DIGEST,
+        requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       }),
     apply: () => Promise.resolve({}),
   };
@@ -96,6 +107,7 @@ test("getRun projects a succeeded plan + its apply run", async () => {
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner: succeedingRunner(),
+    vault: fakeProviderVault() as never,
   });
   const request = await seedUpdatableInstallation(store, {
     installationId: "inst_applied",
@@ -106,11 +118,39 @@ test("getRun projects a succeeded plan + its apply run", async () => {
 
   const { applyRun } = await controller.createApplyRun({
     planRunId: planRun.id,
-    expected: applyExpectedFrom(planRun),
+    expected: applyExpectedGuardFromPlanRun(planRun),
   });
   const applyView = await controller.getRun(applyRun.id);
   expect(applyView.type).toBe("apply");
   expect(applyView.status).toBe("succeeded");
+});
+
+test("getRun returns a source-scoped compatibility_check run", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putCompatibilityCheckRun({
+    id: "ccr_1",
+    spaceId: "space_1",
+    sourceId: "src_1",
+    type: "compatibility_check",
+    status: "succeeded",
+    sourceSnapshotId: "snap_1",
+    compatibilityReportId: "caprep_1",
+    createdBy: "system",
+    createdAt: "2026-06-07T00:00:00.000Z",
+    startedAt: "2026-06-07T00:00:00.000Z",
+    finishedAt: "2026-06-07T00:00:01.000Z",
+  });
+  const controller = new OpenTofuDeploymentController({ store });
+
+  expect(await controller.getRun("ccr_1")).toMatchObject({
+    id: "ccr_1",
+    spaceId: "space_1",
+    sourceId: "src_1",
+    type: "compatibility_check",
+    status: "succeeded",
+    sourceSnapshotId: "snap_1",
+    compatibilityReportId: "caprep_1",
+  });
 });
 
 test("getRun throws not_found for an unknown id", async () => {
@@ -139,31 +179,3 @@ test("cancelRun cancels a queued plan run and is rejected once running/terminal"
     code: "failed_precondition",
   });
 });
-
-// Reconstruct the expected guard the apply needs from the reviewed plan.
-function applyExpectedFrom(planRun: {
-  readonly id: string;
-  readonly installationId?: string;
-  readonly installationCurrentDeploymentId?: string | null;
-  readonly runnerProfileId: string;
-  readonly sourceDigest: string;
-  readonly variablesDigest: string;
-  readonly policyDecisionDigest: string;
-  readonly planDigest?: string;
-}) {
-  return {
-    planRunId: planRun.id,
-    ...(planRun.installationId
-      ? { installationId: planRun.installationId }
-      : {}),
-    ...(planRun.installationId
-      ? { currentDeploymentId: planRun.installationCurrentDeploymentId ?? null }
-      : {}),
-    runnerProfileId: planRun.runnerProfileId,
-    sourceDigest: planRun.sourceDigest,
-    variablesDigest: planRun.variablesDigest,
-    policyDecisionDigest: planRun.policyDecisionDigest,
-    planDigest: planRun.planDigest!,
-    planArtifactDigest: PLAN_DIGEST,
-  };
-}

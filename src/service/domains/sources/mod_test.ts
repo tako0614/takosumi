@@ -2,31 +2,47 @@ import { expect, test } from "bun:test";
 
 import {
   SourcesService,
+  normalizedModuleObjectKey,
   sourceArchiveObjectKey,
 } from "./mod.ts";
 import {
   InMemoryOpenTofuDeploymentStore,
   type StoredSource,
 } from "../deploy-control/store.ts";
-import type { Connection } from "takosumi-contract/deploy-control-api";
+import type { Connection } from "@takosumi/internal/deploy-control-api";
+import { MemoryObjectStorage } from "../../adapters/object-storage/mod.ts";
+import type { SourceSnapshot } from "takosumi-contract/sources";
 
-function makeService(overrides: {
-  enqueueSourceSync?: (d: {
-    action: "source_sync";
-    runId: string;
-    spaceId: string;
-    sourceId: string;
-  }) => Promise<void>;
-} = {}) {
+function makeService(
+  overrides: {
+    enqueueSourceSync?: (d: {
+      action: "source_sync";
+      runId: string;
+      spaceId: string;
+      sourceId: string;
+    }) => Promise<void>;
+    readCapsuleSourceFiles?: (
+      snapshot: SourceSnapshot,
+    ) => Promise<readonly { readonly path: string; readonly text: string }[]>;
+    normalizedArtifactStorage?: MemoryObjectStorage;
+  } = {},
+) {
   const store = new InMemoryOpenTofuDeploymentStore();
   let counter = 0;
   const service = new SourcesService({
     store,
     now: () => new Date("2026-06-06T00:00:00.000Z"),
-    newId: (prefix) => `${prefix}_test${(counter += 1).toString().padStart(8, "0")}`,
+    newId: (prefix) =>
+      `${prefix}_test${(counter += 1).toString().padStart(8, "0")}`,
     newHookSecret: () => "whk_fixed_secret_value",
     ...(overrides.enqueueSourceSync
       ? { enqueueSourceSync: overrides.enqueueSourceSync }
+      : {}),
+    ...(overrides.readCapsuleSourceFiles
+      ? { readCapsuleSourceFiles: overrides.readCapsuleSourceFiles }
+      : {}),
+    ...(overrides.normalizedArtifactStorage
+      ? { normalizedArtifactStorage: overrides.normalizedArtifactStorage }
       : {}),
   });
   return { store, service };
@@ -83,6 +99,28 @@ test("createSource rejects a forbidden URL", async () => {
       url: "file:///etc/passwd",
     }),
   ).rejects.toThrow(/not allowed/);
+});
+
+test("createSource rejects blocked source hosts before source_sync", async () => {
+  const blocked = [
+    "https://127.0.0.1/repo.git",
+    "https://10.0.0.10/repo.git",
+    "https://169.254.169.254/latest/meta-data",
+    "https://[::1]/repo.git",
+    "https://[fc00::1]/repo.git",
+    "https://localhost/repo.git",
+    "ssh://git@metadata.google.internal/repo.git",
+  ];
+  for (const url of blocked) {
+    const { service } = makeService();
+    await expect(
+      service.createSource({
+        spaceId: "space_1",
+        name: "blocked",
+        url,
+      }),
+    ).rejects.toThrow(/blocked_host/);
+  }
 });
 
 test("createSource rejects an authConnectionId that is not in the space", async () => {
@@ -204,7 +242,11 @@ test("listAutoSyncSources returns only active autoSync sources, capped", async (
   const { store, service } = makeService();
   // Seed three sources: one active+autoSync, one active without autoSync, one
   // disabled+autoSync.
-  const seed = async (id: string, status: StoredSource["status"], autoSync: boolean) => {
+  const seed = async (
+    id: string,
+    status: StoredSource["status"],
+    autoSync: boolean,
+  ) => {
     await store.putSource({
       id,
       spaceId: "space_1",
@@ -225,4 +267,430 @@ test("listAutoSyncSources returns only active autoSync sources, capped", async (
   const scanned = await service.listAutoSyncSources(50);
   expect(scanned.map((s) => s.id)).toEqual(["src_a"]);
   expect((await service.listAutoSyncSources(0)).length).toBe(0);
+});
+
+test("createCompatibilityCheck stores normalized auto-capsulized artifact", async () => {
+  const objectStorage = new MemoryObjectStorage({
+    clock: () => new Date("2026-06-06T00:00:01.000Z"),
+  });
+  const { store, service } = makeService({
+    normalizedArtifactStorage: objectStorage,
+    readCapsuleSourceFiles: async () => [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  backend "s3" {}
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+provider "cloudflare" {
+  alias = "zone"
+}
+
+output "public_url" {
+  value = "https://example.com"
+}
+`,
+      },
+    ],
+  });
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "capsule",
+    url: "https://github.com/acme/capsule.git",
+  });
+  const { run } = await service.createSync(source.id);
+  await store.putSourceSnapshot({
+    id: run.snapshotId!,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveObjectKey: run.archiveObjectKey,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  const { report, run: compatibilityResponseRun } =
+    await service.createCompatibilityCheck(source.id, {
+    sourceSnapshotId: run.snapshotId,
+  });
+
+  expect(report.level).toBe("auto_capsulized");
+  expect(report.normalizedObjectKey).toBe(
+    normalizedModuleObjectKey({
+      ...run,
+      id: run.snapshotId!,
+      sourceId: source.id,
+      resolvedCommit: "abc123",
+      archiveDigest: "sha256:source",
+      archiveSizeBytes: 100,
+      fetchedByRunId: run.id,
+      fetchedAt: "2026-06-06T00:00:00.000Z",
+    } as SourceSnapshot),
+  );
+  expect(report.normalizedDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+  const stored = await objectStorage.getObject({
+    bucket: "takosumi-artifacts",
+    key: report.normalizedObjectKey!,
+    expectedDigest: report.normalizedDigest as `sha256:${string}`,
+  });
+  expect(stored).toBeDefined();
+  const body = new TextDecoder().decode(stored!.body);
+  expect(body).toContain('"kind": "takosumi.normalized-capsule@v1"');
+  expect(body).not.toContain('backend "s3"');
+  expect(body).not.toContain('provider "cloudflare"');
+  const compatibilityRun = await store.getCompatibilityCheckRun("ccr_test00000004");
+  expect(compatibilityRun).toMatchObject({
+    id: "ccr_test00000004",
+    spaceId: "space_1",
+    sourceId: source.id,
+    type: "compatibility_check",
+    status: "succeeded",
+    sourceSnapshotId: run.snapshotId,
+    compatibilityReportId: report.id,
+    createdBy: "system",
+  });
+  expect(compatibilityResponseRun).toEqual(compatibilityRun);
+});
+
+test("createCompatibilityCheck applies Installation policy to Gate severity", async () => {
+  const { store, service } = makeService({
+    readCapsuleSourceFiles: async () => [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    custom = {
+      source = "custom/provider"
+    }
+  }
+}
+
+resource "custom_resource" "ok" {}
+
+data "external" "ok" {
+  program = ["echo", "{}"]
+}
+
+resource "null_resource" "setup" {
+  provisioner "local-exec" {
+    command = "true"
+  }
+}
+
+output "public_url" {
+  value = "https://example.com"
+}
+`,
+      },
+    ],
+  });
+  await store.putSpace({
+    id: "space_1",
+    handle: "space",
+    displayName: "Space",
+    type: "personal",
+    ownerUserId: "user_1",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "policy-capsule",
+    url: "https://github.com/acme/policy-capsule.git",
+  });
+  const { run } = await service.createSync(source.id);
+  await store.putSourceSnapshot({
+    id: run.snapshotId!,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveObjectKey: run.archiveObjectKey,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putInstallConfig({
+    id: "cfg_policy",
+    name: "policy",
+    trustLevel: "space",
+    normalization: {
+      allowBackendRewrite: true,
+      allowProviderLift: true,
+      allowAliasInjection: true,
+    },
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {
+      allowedProviders: ["registry.opentofu.org/custom/provider"],
+      allowedResourceTypes: ["custom_resource", "null_resource"],
+      allowedDataSourceTypes: ["external"],
+      allowedProvisionerTypes: ["local-exec"],
+    },
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putInstallation({
+    id: "inst_policy",
+    spaceId: "space_1",
+    name: "policy",
+    slug: "policy",
+    sourceId: source.id,
+    installConfigId: "cfg_policy",
+    environment: "preview",
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  const { report } = await service.createCompatibilityCheck(source.id, {
+    sourceSnapshotId: run.snapshotId,
+    installationId: "inst_policy",
+  });
+
+  expect(report.level).toBe("ready");
+  expect(report.findings).toEqual([]);
+  expect(report.providers[0]).toMatchObject({ allowed: true });
+  expect(report.resources.every((resource) => resource.allowed)).toBe(true);
+  expect(report.dataSources).toEqual([{ type: "external", allowed: true }]);
+  expect(report.provisioners).toEqual([{ type: "local-exec", allowed: true }]);
+});
+
+test("createCompatibilityCheck rejects an installation from another space", async () => {
+  const { store, service } = makeService();
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "capsule",
+    url: "https://github.com/acme/capsule.git",
+  });
+  const { run } = await service.createSync(source.id);
+  await store.putSourceSnapshot({
+    id: run.snapshotId!,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveObjectKey: run.archiveObjectKey,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putInstallation({
+    id: "inst_foreign",
+    spaceId: "space_2",
+    name: "foreign",
+    slug: "foreign",
+    sourceId: source.id,
+    installConfigId: "cfg_foreign",
+    environment: "preview",
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  await expect(
+    service.createCompatibilityCheck(source.id, {
+      sourceSnapshotId: run.snapshotId,
+      installationId: "inst_foreign",
+    }),
+  ).rejects.toThrow(/not in source space/);
+});
+
+test("createCompatibilityCheck rejects an installation for another source", async () => {
+  const { store, service } = makeService();
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "capsule",
+    url: "https://github.com/acme/capsule.git",
+  });
+  const { source: otherSource } = await service.createSource({
+    spaceId: "space_1",
+    name: "other",
+    url: "https://github.com/acme/other.git",
+  });
+  const { run } = await service.createSync(source.id);
+  await store.putSourceSnapshot({
+    id: run.snapshotId!,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveObjectKey: run.archiveObjectKey,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putInstallation({
+    id: "inst_other_source",
+    spaceId: "space_1",
+    name: "other",
+    slug: "other",
+    sourceId: otherSource.id,
+    installConfigId: "cfg_other_source",
+    environment: "preview",
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  await expect(
+    service.createCompatibilityCheck(source.id, {
+      sourceSnapshotId: run.snapshotId,
+      installationId: "inst_other_source",
+    }),
+  ).rejects.toThrow(/does not use source/);
+});
+
+test("createCompatibilityCheck enriches provider credential sources from provider templates", async () => {
+  const { store, service } = makeService({
+    readCapsuleSourceFiles: async () => [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+    vercel = {
+      source = "vercel/vercel"
+    }
+    draft = {
+      source = "draft/provider"
+    }
+  }
+}
+
+resource "aws_s3_bucket" "attachments" {
+  bucket = "attachments"
+}
+
+output "public_url" {
+  value = "https://example.com"
+}
+`,
+      },
+    ],
+  });
+  await store.putProviderTemplate({
+    id: "aws",
+    providerSource: "registry.opentofu.org/hashicorp/aws",
+    displayName: "AWS",
+    capabilities: ["storage"],
+    aliases: ["storage"],
+    recommendedEnvNames: [
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_REGION",
+    ],
+    helpers: ["aws_assume_role", "generic_env"],
+    credentialSources: ["user_env_set"],
+    takosumiManagedAvailable: false,
+    allowedResources: ["aws_s3_bucket"],
+    allowedDataSources: [],
+    policyPackId: "aws-basic",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "providers",
+    url: "https://github.com/acme/providers.git",
+  });
+  const { run } = await service.createSync(source.id);
+  await store.putSourceSnapshot({
+    id: run.snapshotId!,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveObjectKey: run.archiveObjectKey,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  const { report } = await service.createCompatibilityCheck(source.id, {
+    sourceSnapshotId: run.snapshotId,
+  });
+
+  const credentialSourcesBySource = new Map(
+    report.providers.map((provider) => [
+      provider.source,
+      provider.credentialSources,
+    ]),
+  );
+  expect(credentialSourcesBySource.get("hashicorp/aws")).toEqual([
+    "user_env_set",
+  ]);
+  expect(credentialSourcesBySource.get("vercel/vercel")).toBeUndefined();
+  expect(credentialSourcesBySource.get("draft/provider")).toBeUndefined();
+});
+
+test("createCompatibilityCheck records a failed source-scoped Run when analysis fails", async () => {
+  const { store, service } = makeService({
+    readCapsuleSourceFiles: async () => {
+      throw new Error("runner unavailable");
+    },
+  });
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "capsule",
+    url: "https://github.com/acme/capsule.git",
+  });
+  const { run } = await service.createSync(source.id);
+  await store.putSourceSnapshot({
+    id: run.snapshotId!,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveObjectKey: run.archiveObjectKey,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  await expect(
+    service.createCompatibilityCheck(source.id, {
+      sourceSnapshotId: run.snapshotId,
+    }),
+  ).rejects.toThrow("runner unavailable");
+
+  const compatibilityRun = await store.getCompatibilityCheckRun("ccr_test00000004");
+  expect(compatibilityRun).toMatchObject({
+    id: "ccr_test00000004",
+    spaceId: "space_1",
+    sourceId: source.id,
+    type: "compatibility_check",
+    status: "failed",
+    sourceSnapshotId: run.snapshotId,
+    errorCode: "compatibility_check_failed",
+    createdBy: "system",
+  });
+  expect(compatibilityRun?.compatibilityReportId).toBeUndefined();
 });

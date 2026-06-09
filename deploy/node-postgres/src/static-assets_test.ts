@@ -17,7 +17,7 @@ async function buildFixture(): Promise<string> {
 }
 
 function get(path: string): Request {
-  return new Request(`https://accounts.takosumi.test${path}`);
+  return new Request(`https://app.takosumi.test${path}`);
 }
 
 describe("createStaticAssetResponder", () => {
@@ -89,7 +89,7 @@ describe("createStaticAssetResponder", () => {
     try {
       const serve = createStaticAssetResponder(dir);
       const res = await serve(
-        new Request(`https://accounts.takosumi.test/`, { method: "POST" }),
+        new Request(`https://app.takosumi.test/`, { method: "POST" }),
       );
       expect(res).toBeUndefined();
     } finally {

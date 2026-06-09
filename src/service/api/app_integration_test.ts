@@ -6,6 +6,7 @@ import { InMemoryRuntimeAgentRegistry } from "../agents/mod.ts";
 import { createInMemoryAppContext } from "../app_context.ts";
 import { createApiApp } from "./app.ts";
 import { TAKOSUMI_RUNTIME_AGENT_PATHS } from "./runtime_agent_routes.ts";
+import { OpenTofuDeploymentController } from "../domains/deploy-control/mod.ts";
 
 test("createApiApp exposes /openapi.json when enabled", async () => {
   const app = await createApiApp({
@@ -26,25 +27,29 @@ test("createApiApp does not mount retired public deployment routes", async () =>
     registerDeployControlPublicRoutes: true,
     registerOpenApiRoute: true,
     deployControlPublicRouteOptions: {
+      controller: new OpenTofuDeploymentController(),
       getDeployControlToken: () => "deploy-control-token",
     },
   });
 
-  for (
-    const path of [
-      "/api/public/v1/capabilities",
-      "/api/public/v1/deployments",
-      "/v1/deployments",
-    ]
-  ) {
-    const response = await app.request(path, { method: "POST" });
+  for (const [method, path] of [
+    ["POST", "/api/public/v1/capabilities"],
+    ["POST", "/api/public/v1/deployments"],
+    ["POST", "/v1/deployments"],
+    ["POST", "/v1/plan-runs"],
+    ["POST", "/v1/apply-runs"],
+    ["GET", "/v1/runner-profiles"],
+    ["GET", "/v1/installations/inst_abcdef12/deployment-outputs"],
+    ["GET", "/status/summary"],
+  ] as const) {
+    const response = await app.request(path, { method });
     assert.equal(response.status, 404, path);
   }
 
   const capabilities = await (await app.request("/capabilities")).json();
-  const endpointPaths = capabilities.endpoints.map((
-    endpoint: { path: string },
-  ) => endpoint.path);
+  const endpointPaths = capabilities.endpoints.map(
+    (endpoint: { path: string }) => endpoint.path,
+  );
   assert.equal(endpointPaths.includes("/v1/plan-runs"), false);
   assert.equal(endpointPaths.includes("/v1/apply-runs"), false);
   assert.equal(endpointPaths.includes("/v1/runner-profiles"), false);
@@ -75,13 +80,151 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   assert.equal(openapi.paths["/api/public/v1/deployments"], undefined);
   assert.equal(openapi.paths["/v1/deployments"], undefined);
   assert.equal(openapi.paths["/v1/artifacts/kinds"], undefined);
+  assert.equal(openapi.paths["/status/summary"], undefined);
+  assert.equal(
+    openapi.paths["/api/operator-connection-defaults"]?.get?.operationId,
+    "listOperatorConnectionDefaults",
+  );
+  assert.equal(
+    openapi.paths["/api/operator-connection-defaults"]?.put?.operationId,
+    "putOperatorConnectionDefault",
+  );
   assert.equal(openapi.components.schemas.StatusSummaryResponse, undefined);
   assert.equal(
-    openapi.components.schemas.ErrorResponse.properties.error.required
-      .includes("requestId"),
+    openapi.components.schemas.ErrorResponse.properties.error.required.includes(
+      "requestId",
+    ),
     true,
   );
   assert.equal(openapi.components.schemas.RunnerProfile, undefined);
+  assert.equal(
+    openapi.components.schemas.Installation.properties.installType,
+    undefined,
+  );
+  assert.equal(
+    openapi.components.schemas.InstallConfig.properties.installType,
+    undefined,
+  );
+  assert.equal(
+    openapi.components.schemas.InstallConfig.properties.templateBinding,
+    undefined,
+  );
+  assert.equal(openapi.components.schemas.PlanRun, undefined);
+  assert.equal(openapi.components.schemas.ApplyRun, undefined);
+  assert.equal(openapi.components.schemas.DeploymentOutput, undefined);
+  assert.equal(
+    openapi.components.schemas.OutputSnapshot.properties.publicOutputs.type,
+    "object",
+  );
+  assert.equal(
+    openapi.components.schemas.OutputSnapshot.properties.spaceOutputs.type,
+    "object",
+  );
+  assert.deepEqual(
+    openapi.components.schemas.Dependency.required,
+    [
+      "id",
+      "spaceId",
+      "producerInstallationId",
+      "consumerInstallationId",
+      "mode",
+      "outputs",
+      "visibility",
+      "createdAt",
+    ],
+  );
+  assert.equal(
+    openapi.components.schemas.DependencyResponse.properties.dependency.$ref,
+    "#/components/schemas/Dependency",
+  );
+  assert.equal(
+    openapi.components.schemas.ListActivityResponse.properties.events.items.$ref,
+    "#/components/schemas/ActivityEvent",
+  );
+  assert.equal(
+    openapi.components.schemas.CreateBackupResponse.properties.backup.$ref,
+    "#/components/schemas/BackupRecord",
+  );
+  assert.equal(
+    openapi.components.schemas.ListBackupsResponse.properties.backups.items.$ref,
+    "#/components/schemas/BackupRecord",
+  );
+  assert.deepEqual(
+    openapi.components.schemas.CreateInstallationRequest.required,
+    ["name", "environment", "sourceId", "installConfigId"],
+  );
+  assert.deepEqual(
+    openapi.components.schemas.PatchInstallationRequest.required,
+    ["status"],
+  );
+  assert.deepEqual(
+    openapi.components.schemas.PatchInstallationRequest.properties.status.enum,
+    ["active", "stale", "error"],
+  );
+  assert.deepEqual(
+    openapi.components.schemas.CreateSpaceRequest.required,
+    ["handle", "displayName", "type", "ownerUserId"],
+  );
+  assert.equal(
+    openapi.components.schemas.SpaceResponse.properties.space.$ref,
+    "#/components/schemas/Space",
+  );
+  assert.equal(
+    openapi.components.schemas.ListSpacesResponse.properties.spaces.items.$ref,
+    "#/components/schemas/Space",
+  );
+  assert.equal(
+    openapi.components.schemas.DeploymentResponse.properties.deployment.$ref,
+    "#/components/schemas/Deployment",
+  );
+  assert.equal(
+    openapi.components.schemas.CreateOutputShareRequest.properties.outputs.items
+      .$ref,
+    "#/components/schemas/CreateOutputShareEntry",
+  );
+  assert.equal(
+    openapi.components.schemas.OutputShareResponse.properties.share.$ref,
+    "#/components/schemas/OutputShare",
+  );
+  assert.equal(
+    openapi.components.schemas.ListOutputSharesResponse.properties.shares.items
+      .$ref,
+    "#/components/schemas/OutputShare",
+  );
+  assert.equal(
+    openapi.components.schemas.CapabilitiesResponse.properties.endpoints.items
+      .$ref,
+    "#/components/schemas/ApiEndpointDescription",
+  );
+  assert.equal(
+    openapi.components.schemas.OperatorConnectionDefaultResponse.properties
+      .operatorConnectionDefault.$ref,
+    "#/components/schemas/OperatorConnectionDefault",
+  );
+  assert.equal(
+    openapi.components.schemas.ListOperatorConnectionDefaultsResponse.properties
+      .operatorConnectionDefaults.items.$ref,
+    "#/components/schemas/OperatorConnectionDefault",
+  );
+  for (const schemaName of [
+    "CreateSpaceRequest",
+    "SpaceResponse",
+    "ListSpacesResponse",
+    "OperatorConnectionDefaultResponse",
+    "ListOperatorConnectionDefaultsResponse",
+    "DeploymentResponse",
+    "PatchInstallationRequest",
+    "CreateOutputShareRequest",
+    "OutputShareResponse",
+    "ListOutputSharesResponse",
+    "CapabilitiesResponse",
+  ] as const) {
+    assert.notEqual(
+      openapi.components.schemas[schemaName].additionalProperties,
+      true,
+      `${schemaName} must not regress to the generic jsonObject placeholder`,
+    );
+  }
 });
 
 test("createApiApp mounts runtime-agent routes fail-closed when enabled", async () => {

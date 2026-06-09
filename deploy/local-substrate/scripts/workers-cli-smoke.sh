@@ -53,7 +53,7 @@ raise SystemExit(0 if d.get('provider') == 'cloudflare-worker' else 1)
 SERVICE_HOST="$(resolve_service_worker_host)"
 
 # 1. Accounts workerd-edge sentinel
-HEALTH=$(curl -sk --cacert "$CA" https://accounts.takosumi.test/healthz)
+HEALTH=$(curl -sk --cacert "$CA" https://app.takosumi.test/healthz)
 echo "$HEALTH" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
@@ -112,7 +112,7 @@ PROFILE_COUNT=$(echo "$RUNNER_PROFILES" | python3 -c "import json,sys;print(len(
 [[ "$PROFILE_COUNT" -gt 0 ]] || { echo "FAIL: /v1/runner-profiles returned no profiles: $RUNNER_PROFILES" >&2; exit 1; }
 
 # 4. OIDC discovery shape
-DISC=$(curl -sk --cacert "$CA" https://accounts.takosumi.test/.well-known/openid-configuration)
+DISC=$(curl -sk --cacert "$CA" https://app.takosumi.test/.well-known/openid-configuration)
 ISSUER=$(echo "$DISC" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('issuer',''))")
 [[ -n "$ISSUER" ]] || { echo "FAIL: /.well-known/openid-configuration missing issuer" >&2; exit 1; }
 
@@ -123,7 +123,7 @@ EXPORT_ROUTE_STATUS=""
 EXPORT_ROUTE_BODY="/tmp/accounts-export-route-smoke.json"
 probe_export_route() {
 	EXPORT_ROUTE_STATUS=$(curl -sk --cacert "$CA" -o "$EXPORT_ROUTE_BODY" -w "%{http_code}" \
-		"https://accounts.takosumi.test/__takosumi/exports/missing-object.json?expires=4102444800000&sig=bad")
+		"https://app.takosumi.test/__takosumi/exports/missing-object.json?expires=4102444800000&sig=bad")
 	[[ "$EXPORT_ROUTE_STATUS" == "403" ]] || return 1
 	python3 - "$EXPORT_ROUTE_BODY" <<'PY'
 import json, sys

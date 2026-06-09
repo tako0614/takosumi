@@ -21,9 +21,11 @@ import StatusPill from "../account/components/StatusPill.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
 import { currentSpaceId } from "./space-state.ts";
 import {
+  type ActivityEvent,
   type ControlApiError,
   extractRunId,
   getSpaceGraph,
+  listActivity,
   listInstallations,
   planInstallation,
   type SpaceGraph,
@@ -44,6 +46,7 @@ function Inner() {
 
   const [installations] = createResource(spaceId, listInstallations);
   const [graph] = createResource(spaceId, getSpaceGraph);
+  const [activity] = createResource(spaceId, (id) => listActivity(id, 100));
 
   // Build: consumerInstallationId -> [producer node names], from the graph edges.
   const dependsOn = createMemo(() => {
@@ -58,6 +61,21 @@ function Inner() {
       const list = map.get(edge.consumerInstallationId) ?? [];
       list.push(producerName);
       map.set(edge.consumerInstallationId, list);
+    }
+    return map;
+  });
+  const staleReasons = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const event of activity() ?? []) {
+      if (
+        event.action !== "installation.stale" ||
+        event.targetType !== "installation" ||
+        map.has(event.targetId)
+      ) {
+        continue;
+      }
+      const reason = staleReasonFromActivity(event);
+      if (reason) map.set(event.targetId, reason);
     }
     return map;
   });
@@ -152,6 +170,16 @@ function Inner() {
                             >
                               {controlInstallationStatusLabel(inst.status)}
                             </StatusPill>
+                            <Show
+                              when={inst.status === "stale" &&
+                                staleReasons().get(inst.id)}
+                            >
+                              {(reason) => (
+                                <div class="muted installation-stale-reason">
+                                  Reason: {reason()}
+                                </div>
+                              )}
+                            </Show>
                           </td>
                           <td>
                             <Show
@@ -209,4 +237,24 @@ function Inner() {
       </Show>
     </AppShell>
   );
+}
+
+function staleReasonFromActivity(event: ActivityEvent): string | undefined {
+  const reasons = event.metadata.reasons;
+  if (Array.isArray(reasons)) {
+    const text = reasons
+      .filter((entry): entry is string => typeof entry === "string")
+      .join(", ");
+    if (text) return text;
+  }
+  const changed = event.metadata.changedOutputs;
+  const producer = event.metadata.producerInstallationName;
+  if (Array.isArray(changed) && typeof producer === "string") {
+    const text = changed
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((name) => `${producer}.${name} changed`)
+      .join(", ");
+    if (text) return text;
+  }
+  return undefined;
 }

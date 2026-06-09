@@ -18,13 +18,12 @@ import type {
   Deployment,
   DispatchBuildSpec,
   DispatchGeneratedRoot,
-  DispatchTemplateRef,
   InstallConfig,
   Installation,
   PlanRun,
   RunnerProfile,
   StateSnapshot,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type {
   Source,
@@ -32,11 +31,11 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { Space } from "takosumi-contract/spaces";
+import type { OperatorConnectionDefault } from "takosumi-contract/provider-bindings";
 import type {
-  Capability,
-  OperatorConnectionDefault,
-} from "takosumi-contract/capability-bindings";
-import type { DeploymentProfile } from "takosumi-contract/installations";
+  DeploymentProfile,
+  OutputAllowlistEntry,
+} from "takosumi-contract/installations";
 import type {
   Dependency,
   DependencySnapshot,
@@ -50,9 +49,21 @@ import type {
   OutputShare,
   OutputSnapshot,
 } from "takosumi-contract/output-snapshots";
-import type { RunGroup } from "takosumi-contract/runs";
+import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import type { BackupRecord } from "takosumi-contract/backups";
-import type { CredentialMintEvent } from "takosumi-contract/security";
+import type {
+  BillingAccount,
+  BillingPlan,
+  CreditBalance,
+  CreditReservation,
+  SpaceSubscription,
+  UsageEvent,
+} from "takosumi-contract/billing";
+import type {
+  CredentialMintEvent,
+  SecurityFinding,
+} from "takosumi-contract/security";
+import type { ProviderTemplate } from "takosumi-contract/providers";
 import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 import { log } from "../../shared/log.ts";
@@ -68,15 +79,14 @@ export interface PlanRunInputs {
   readonly planRunId: string;
   readonly variables: Readonly<Record<string, JsonValue>>;
   /**
-   * Template dispatch data. Present for template-backed PlanRuns: the resolved
-   * template reference (baked-in module path), the Takosumi-generated root
-   * module, and the optional build phase. The queue consumer re-reads this
-   * sidecar and threads it onto the runner dispatch payload (`request.template` /
-   * `request.generatedRoot` / `request.build`). Never projected into the public
-   * ledger.
+   * Generated-root dispatch data. New Capsule sidecars carry `generatedRoot`
+   * for both built-in first-party modules and generic Capsules; bundled modules
+   * are embedded as `generatedRoot.moduleFiles`. The queue consumer re-reads
+   * this sidecar and threads it onto the runner dispatch payload. Never
+   * projected into the public ledger.
    */
-  readonly template?: DispatchTemplateRef;
   readonly generatedRoot?: DispatchGeneratedRoot;
+  readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly build?: DispatchBuildSpec;
 }
 
@@ -86,20 +96,31 @@ export interface PlanRunInputs {
  * encrypted as ONE blob via the secret-boundary crypto. The store only ever
  * sees ciphertext; it never decrypts.
  */
+export type StoredSecretBlobKind =
+  | "source_https_token"
+  | "source_ssh_private_key"
+  | "cloudflare_oauth_refresh_token"
+  | "cloudflare_api_token"
+  | "aws_external_id"
+  | "gcp_oauth_refresh_token"
+  | "static_secret";
+
 export interface StoredSecretBlob {
+  readonly id: string;
   readonly connectionId: string;
-  /** Base64 of the sealed bytes (the crypto prepends the IV to the ciphertext). */
+  readonly spaceId?: string;
+  readonly kind: StoredSecretBlobKind;
+  /** Base64 of the sealed bytes (the crypto prepends the nonce to the ciphertext). */
   readonly ciphertext: string;
-  /** Base64 of the IV (also embedded in `ciphertext`); kept for blob clarity. */
-  readonly iv: string;
-  /** Secret-boundary crypto key/version label (the cloud partition + scheme). */
-  readonly keyVersion: string;
-  /** Additional-authenticated-data fields bound into the seal (cloud family). */
-  readonly aad: {
-    readonly cloudPartition: string;
-    readonly spaceId: string;
-    readonly provider: string;
-  };
+  /** Wrapped/encrypted DEK label for the current secret-boundary crypto scheme. */
+  readonly encryptedDek: string;
+  /** Base64 of the nonce (also embedded in `ciphertext`); kept for blob clarity. */
+  readonly nonce: string;
+  /** JSON-encoded additional-authenticated-data fields bound into the seal. */
+  readonly aad: string;
+  readonly keyVersion: number;
+  readonly createdAt: string;
+  readonly rotatedAt?: string;
 }
 
 /**
@@ -158,6 +179,8 @@ export type InstallationPatch = Partial<
     | "currentDeploymentId"
     | "currentStateGeneration"
     | "currentOutputSnapshotId"
+    | "compatibilityReportId"
+    | "compatibilityStatus"
     | "status"
     | "updatedAt"
   >
@@ -187,6 +210,18 @@ export interface OpenTofuDeploymentStore {
   putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun>;
   getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined>;
   listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]>;
+  putCompatibilityCheckRun(run: Run): Promise<Run>;
+  getCompatibilityCheckRun(id: string): Promise<Run | undefined>;
+  putBackupRun(run: Run): Promise<Run>;
+  getBackupRun(id: string): Promise<Run | undefined>;
+  putRestoreRun(run: Run): Promise<Run>;
+  getRestoreRun(id: string): Promise<Run | undefined>;
+
+  // Artifact ledger rows (spec §30 artifacts). Artifact bytes live in object
+  // storage; these rows keep non-secret run-scoped pointers for audit and
+  // backup/export manifests.
+  putArtifactRecord(record: ArtifactRecord): Promise<ArtifactRecord>;
+  listArtifactRecordsForRun(runId: string): Promise<readonly ArtifactRecord[]>;
 
   // Space records (spec §4). The owner namespace Installations live under.
   putSpace(space: Space): Promise<Space>;
@@ -194,7 +229,7 @@ export interface OpenTofuDeploymentStore {
   getSpaceByHandle(handle: string): Promise<Space | undefined>;
   listSpaces(): Promise<readonly Space[]>;
 
-  // InstallConfig records (spec §11). `spaceId` absent = official catalog config.
+  // InstallConfig records (spec §11). `spaceId` absent = built-in shared config.
   putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
   getInstallConfig(id: string): Promise<InstallConfig | undefined>;
   listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]>;
@@ -241,11 +276,15 @@ export interface OpenTofuDeploymentStore {
     record: OperatorConnectionDefault,
   ): Promise<OperatorConnectionDefault>;
   getOperatorConnectionDefault(
-    capability: Capability,
+    provider: string,
   ): Promise<OperatorConnectionDefault | undefined>;
   listOperatorConnectionDefaults(): Promise<
     readonly OperatorConnectionDefault[]
   >;
+
+  putProviderTemplate(entry: ProviderTemplate): Promise<ProviderTemplate>;
+  getProviderTemplate(id: string): Promise<ProviderTemplate | undefined>;
+  listProviderTemplates(): Promise<readonly ProviderTemplate[]>;
 
   // Source records (public fields + internal hook-secret hash / lastSeenCommit /
   // autoSync). The hook secret plaintext is NEVER stored.
@@ -267,8 +306,9 @@ export interface OpenTofuDeploymentStore {
     id: string,
   ): Promise<CapsuleCompatibilityReport | undefined>;
 
-  // DeploymentProfile records (spec §9 / §27 deployment_profiles). One per
-  // (installation, environment); the upsert key is that pair.
+  // Internal Installation provider-binding records. DeploymentProfile is a
+  // compatibility store type, not a public Takosumi concept; one row per
+  // (installation, environment), with that pair as the upsert key.
   putDeploymentProfile(profile: DeploymentProfile): Promise<DeploymentProfile>;
   getDeploymentProfileByInstallation(
     installationId: string,
@@ -319,6 +359,9 @@ export interface OpenTofuDeploymentStore {
   getLatestOutputSnapshot(
     installationId: string,
   ): Promise<OutputSnapshot | undefined>;
+  listOutputSnapshots(
+    installationId: string,
+  ): Promise<readonly OutputSnapshot[]>;
 
   // OutputShare records (spec §18 / §27 output_shares). A cross-Space grant from
   // a producer Installation's projected outputs (in fromSpace) to a consumer
@@ -358,6 +401,47 @@ export interface OpenTofuDeploymentStore {
     runId: string,
   ): Promise<readonly CredentialMintEvent[]>;
 
+  // Security findings (§26 / §30). Values are non-secret security metadata
+  // emitted by Capsule Gate, plan policy, and later scanners.
+  putSecurityFinding(finding: SecurityFinding): Promise<SecurityFinding>;
+  listSecurityFindings(
+    spaceId: string,
+    options?: { readonly runId?: string; readonly limit?: number },
+  ): Promise<readonly SecurityFinding[]>;
+
+  // Billing credit ledger (§28). Plan creates reservations in showback/enforce;
+  // apply confirms/captures them before provider credential mint.
+  putBillingPlan(plan: BillingPlan): Promise<BillingPlan>;
+  getBillingPlan(id: string): Promise<BillingPlan | undefined>;
+  putBillingAccount(account: BillingAccount): Promise<BillingAccount>;
+  getBillingAccount(id: string): Promise<BillingAccount | undefined>;
+  getBillingAccountForOwner(
+    ownerType: BillingAccount["ownerType"],
+    ownerId: string,
+  ): Promise<BillingAccount | undefined>;
+  putSpaceSubscription(
+    subscription: SpaceSubscription,
+  ): Promise<SpaceSubscription>;
+  getSpaceSubscription(spaceId: string): Promise<SpaceSubscription | undefined>;
+  putCreditBalance(balance: CreditBalance): Promise<CreditBalance>;
+  getCreditBalance(spaceId: string): Promise<CreditBalance | undefined>;
+  reserveCredits(
+    spaceId: string,
+    input: { readonly credits: number; readonly updatedAt: string },
+  ): Promise<CreditBalance | undefined>;
+  putCreditReservation(
+    reservation: CreditReservation,
+  ): Promise<CreditReservation>;
+  getCreditReservationForRun(
+    runId: string,
+  ): Promise<CreditReservation | undefined>;
+  listCreditReservations(
+    spaceId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly CreditReservation[]>;
+  putUsageEvent(event: UsageEvent): Promise<UsageEvent>;
+  listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]>;
+
   // Control-backup ledger pointers (spec §33 layer 1 / §26 R2_BACKUPS). One row
   // per sealed control-backup bundle written to R2_BACKUPS. The bundle bytes
   // live in object storage; only the pointer (objectKey / digest / sizeBytes)
@@ -372,6 +456,8 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   readonly #planRunInputs = new Map<string, PlanRunInputs>();
   readonly #applyRuns = new Map<string, ApplyRun>();
   readonly #sourceSyncRuns = new Map<string, SourceSyncRun>();
+  readonly #backupRuns = new Map<string, Run>();
+  readonly #restoreRuns = new Map<string, Run>();
   readonly #spaces = new Map<string, Space>();
   readonly #installConfigs = new Map<string, InstallConfig>();
   readonly #installations = new Map<string, Installation>();
@@ -379,6 +465,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   readonly #connections = new Map<string, Connection>();
   readonly #secretBlobs = new Map<string, StoredSecretBlob>();
   readonly #operatorDefaults = new Map<string, OperatorConnectionDefault>();
+  readonly #providerTemplates = new Map<string, ProviderTemplate>();
   readonly #sources = new Map<string, StoredSource>();
   readonly #sourceSnapshots = new Map<string, SourceSnapshot>();
   readonly #capsuleCompatibilityReports = new Map<
@@ -392,9 +479,18 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   readonly #outputSnapshots = new Map<string, OutputSnapshot>();
   readonly #outputShares = new Map<string, OutputShare>();
   readonly #runGroups = new Map<string, RunGroup>();
+  readonly #compatibilityCheckRuns = new Map<string, Run>();
   readonly #activityEvents = new Map<string, ActivityEvent>();
   readonly #credentialMintEvents = new Map<string, CredentialMintEvent>();
+  readonly #securityFindings = new Map<string, SecurityFinding>();
+  readonly #billingPlans = new Map<string, BillingPlan>();
+  readonly #billingAccounts = new Map<string, BillingAccount>();
+  readonly #spaceSubscriptions = new Map<string, SpaceSubscription>();
+  readonly #creditBalances = new Map<string, CreditBalance>();
+  readonly #creditReservations = new Map<string, CreditReservation>();
+  readonly #usageEvents = new Map<string, UsageEvent>();
   readonly #backupRecords = new Map<string, BackupRecord>();
+  readonly #artifactRecords = new Map<string, ArtifactRecord>();
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuDeploymentStore");
@@ -462,6 +558,62 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(
       Array.from(this.#sourceSyncRuns.values())
         .filter((row) => row.sourceId === sourceId)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
+    );
+  }
+
+  putCompatibilityCheckRun(run: Run): Promise<Run> {
+    if (run.type !== "compatibility_check") {
+      return Promise.reject(
+        new Error(
+          "putCompatibilityCheckRun only accepts compatibility_check runs",
+        ),
+      );
+    }
+    this.#compatibilityCheckRuns.set(run.id, run);
+    return Promise.resolve(run);
+  }
+
+  getCompatibilityCheckRun(id: string): Promise<Run | undefined> {
+    return Promise.resolve(this.#compatibilityCheckRuns.get(id));
+  }
+
+  putBackupRun(run: Run): Promise<Run> {
+    if (run.type !== "backup") {
+      return Promise.reject(new Error("putBackupRun only accepts backup runs"));
+    }
+    this.#backupRuns.set(run.id, run);
+    return Promise.resolve(run);
+  }
+
+  getBackupRun(id: string): Promise<Run | undefined> {
+    return Promise.resolve(this.#backupRuns.get(id));
+  }
+
+  putRestoreRun(run: Run): Promise<Run> {
+    if (run.type !== "restore") {
+      return Promise.reject(new Error("putRestoreRun only accepts restore runs"));
+    }
+    this.#restoreRuns.set(run.id, run);
+    return Promise.resolve(run);
+  }
+
+  getRestoreRun(id: string): Promise<Run | undefined> {
+    return Promise.resolve(this.#restoreRuns.get(id));
+  }
+
+  putArtifactRecord(record: ArtifactRecord): Promise<ArtifactRecord> {
+    this.#artifactRecords.set(record.id, record);
+    return Promise.resolve(record);
+  }
+
+  listArtifactRecordsForRun(runId: string): Promise<readonly ArtifactRecord[]> {
+    return Promise.resolve(
+      Array.from(this.#artifactRecords.values())
+        .filter((row) => row.runId === runId)
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -668,9 +820,9 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   putOperatorConnectionDefault(
     record: OperatorConnectionDefault,
   ): Promise<OperatorConnectionDefault> {
-    // One default per capability: the capability is the natural upsert key.
+    // One default per provider: the provider source is the natural upsert key.
     for (const [key, existing] of this.#operatorDefaults) {
-      if (existing.capability === record.capability && key !== record.id) {
+      if (existing.provider === record.provider && key !== record.id) {
         this.#operatorDefaults.delete(key);
       }
     }
@@ -679,11 +831,11 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   getOperatorConnectionDefault(
-    capability: Capability,
+    provider: string,
   ): Promise<OperatorConnectionDefault | undefined> {
     return Promise.resolve(
       Array.from(this.#operatorDefaults.values()).find(
-        (row) => row.capability === capability,
+        (row) => row.provider === provider,
       ),
     );
   }
@@ -693,7 +845,27 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   > {
     return Promise.resolve(
       Array.from(this.#operatorDefaults.values()).sort((a, b) =>
-        a.capability.localeCompare(b.capability),
+        a.provider.localeCompare(b.provider),
+      ),
+    );
+  }
+
+  putProviderTemplate(entry: ProviderTemplate): Promise<ProviderTemplate> {
+    this.#providerTemplates.set(entry.id, entry);
+    return Promise.resolve(entry);
+  }
+
+  getProviderTemplate(
+    id: string,
+  ): Promise<ProviderTemplate | undefined> {
+    return Promise.resolve(this.#providerTemplates.get(id));
+  }
+
+  listProviderTemplates(): Promise<readonly ProviderTemplate[]> {
+    return Promise.resolve(
+      Array.from(this.#providerTemplates.values()).sort(
+        (a, b) =>
+          a.displayName.localeCompare(b.displayName) || a.id.localeCompare(b.id),
       ),
     );
   }
@@ -913,6 +1085,19 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(latest);
   }
 
+  listOutputSnapshots(installationId: string): Promise<readonly OutputSnapshot[]> {
+    return Promise.resolve(
+      Array.from(this.#outputSnapshots.values())
+        .filter((row) => row.installationId === installationId)
+        .sort(
+          (a, b) =>
+            a.stateGeneration - b.stateGeneration ||
+            a.createdAt.localeCompare(b.createdAt) ||
+            a.id.localeCompare(b.id),
+        ),
+    );
+  }
+
   putOutputShare(share: OutputShare): Promise<OutputShare> {
     this.#outputShares.set(share.id, share);
     return Promise.resolve(share);
@@ -1000,6 +1185,158 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(
       Array.from(this.#credentialMintEvents.values())
         .filter((row) => row.runId === runId)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
+    );
+  }
+
+  putSecurityFinding(finding: SecurityFinding): Promise<SecurityFinding> {
+    this.#securityFindings.set(finding.id, finding);
+    return Promise.resolve(finding);
+  }
+
+  listSecurityFindings(
+    spaceId: string,
+    options: { readonly runId?: string; readonly limit?: number } = {},
+  ): Promise<readonly SecurityFinding[]> {
+    const limit = clampActivityLimit(options.limit);
+    return Promise.resolve(
+      Array.from(this.#securityFindings.values())
+        .filter((row) => row.spaceId === spaceId)
+        .filter((row) =>
+          options.runId === undefined ? true : row.runId === options.runId,
+        )
+        .sort(
+          (a, b) =>
+            b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+        )
+        .slice(0, limit),
+    );
+  }
+
+  putCreditBalance(balance: CreditBalance): Promise<CreditBalance> {
+    this.#creditBalances.set(balance.spaceId, balance);
+    return Promise.resolve(balance);
+  }
+
+  putBillingPlan(plan: BillingPlan): Promise<BillingPlan> {
+    this.#billingPlans.set(plan.id, plan);
+    return Promise.resolve(plan);
+  }
+
+  getBillingPlan(id: string): Promise<BillingPlan | undefined> {
+    return Promise.resolve(this.#billingPlans.get(id));
+  }
+
+  putBillingAccount(account: BillingAccount): Promise<BillingAccount> {
+    this.#billingAccounts.set(account.id, account);
+    return Promise.resolve(account);
+  }
+
+  getBillingAccount(id: string): Promise<BillingAccount | undefined> {
+    return Promise.resolve(this.#billingAccounts.get(id));
+  }
+
+  getBillingAccountForOwner(
+    ownerType: BillingAccount["ownerType"],
+    ownerId: string,
+  ): Promise<BillingAccount | undefined> {
+    const account = Array.from(this.#billingAccounts.values()).find(
+      (row) => row.ownerType === ownerType && row.ownerId === ownerId,
+    );
+    return Promise.resolve(account);
+  }
+
+  putSpaceSubscription(
+    subscription: SpaceSubscription,
+  ): Promise<SpaceSubscription> {
+    this.#spaceSubscriptions.set(subscription.id, subscription);
+    return Promise.resolve(subscription);
+  }
+
+  getSpaceSubscription(
+    spaceId: string,
+  ): Promise<SpaceSubscription | undefined> {
+    const subscriptions = Array.from(this.#spaceSubscriptions.values())
+      .filter((row) => row.spaceId === spaceId)
+      .sort(
+        (a, b) =>
+          b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id),
+      );
+    return Promise.resolve(subscriptions[0]);
+  }
+
+  getCreditBalance(spaceId: string): Promise<CreditBalance | undefined> {
+    return Promise.resolve(this.#creditBalances.get(spaceId));
+  }
+
+  reserveCredits(
+    spaceId: string,
+    input: { readonly credits: number; readonly updatedAt: string },
+  ): Promise<CreditBalance | undefined> {
+    const balance = this.#creditBalances.get(spaceId);
+    if (!balance || balance.availableCredits < input.credits) {
+      return Promise.resolve(undefined);
+    }
+    const next = {
+      ...balance,
+      availableCredits: balance.availableCredits - input.credits,
+      reservedCredits: balance.reservedCredits + input.credits,
+      updatedAt: input.updatedAt,
+    };
+    this.#creditBalances.set(spaceId, next);
+    return Promise.resolve(next);
+  }
+
+  putCreditReservation(
+    reservation: CreditReservation,
+  ): Promise<CreditReservation> {
+    this.#creditReservations.set(reservation.id, reservation);
+    return Promise.resolve(reservation);
+  }
+
+  getCreditReservationForRun(
+    runId: string,
+  ): Promise<CreditReservation | undefined> {
+    const reservations = Array.from(this.#creditReservations.values())
+      .filter((row) => row.runId === runId)
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      );
+    return Promise.resolve(reservations[0]);
+  }
+
+  listCreditReservations(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly CreditReservation[]> {
+    const limit = options.limit ?? 100;
+    const reservations = Array.from(this.#creditReservations.values())
+      .filter((row) => row.spaceId === spaceId)
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      )
+      .slice(0, limit);
+    return Promise.resolve(reservations);
+  }
+
+  putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
+    const existing = Array.from(this.#usageEvents.values()).find(
+      (row) => row.idempotencyKey === event.idempotencyKey,
+    );
+    if (existing) return Promise.resolve(existing);
+    this.#usageEvents.set(event.id, event);
+    return Promise.resolve(event);
+  }
+
+  listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]> {
+    return Promise.resolve(
+      Array.from(this.#usageEvents.values())
+        .filter((row) => row.spaceId === spaceId)
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),

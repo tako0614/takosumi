@@ -9,6 +9,7 @@ import type {
   PatchSourceRequest,
 } from "takosumi-contract/sources";
 import type { CreateSourceCompatibilityCheckRequest } from "takosumi-contract/capsules";
+import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import {
   authorizeDeployControl,
   defineRoute,
@@ -97,7 +98,7 @@ export const DEPLOY_CONTROL_SOURCE_ENDPOINTS: readonly DeployControlEndpoint[] =
         okStatus: "201",
         okSchema: "CapsuleCompatibilityReportResponse",
       },
-      notImplementedMessage: "Capsule compatibility check not implemented",
+      notImplementedMessage: "capsule compatibility service not wired",
     },
     {
       method: "GET",
@@ -109,7 +110,7 @@ export const DEPLOY_CONTROL_SOURCE_ENDPOINTS: readonly DeployControlEndpoint[] =
         pathParams: ["reportId"],
         okSchema: "CapsuleCompatibilityReportResponse",
       },
-      notImplementedMessage: "Capsule compatibility reports not implemented",
+      notImplementedMessage: "capsule compatibility service not wired",
     },
     {
       method: "POST",
@@ -237,10 +238,30 @@ export function mountDeployControlSourceRoutes(
       },
       handler: async ({ c, principal, id }) => {
         const response = await controller.getCompatibilityReport(id);
+        let spaceId: string | undefined;
         if (response.report.sourceId) {
           const existing = await controller.getSource(response.report.sourceId);
-          ensureSpacePermission(principal, existing.source.spaceId);
+          spaceId = existing.source.spaceId;
+        } else if (response.report.installationId) {
+          const existing = await controller.getInstallation(
+            response.report.installationId,
+          );
+          spaceId = existing.installation.spaceId;
+        } else if (response.report.sourceSnapshotId) {
+          const snapshot = await controller.getSourceSnapshot(
+            response.report.sourceSnapshotId,
+          );
+          // The snapshot carries its owning Space directly (origin-agnostic),
+          // so upload-origin snapshots resolve without a git Source.
+          spaceId = snapshot.spaceId;
         }
+        if (!spaceId) {
+          throw new OpenTofuControllerError(
+            "not_found",
+            `compatibility report ${id} has no resolvable owner`,
+          );
+        }
+        ensureSpacePermission(principal, spaceId);
         return c.json(response, 200);
       },
     }),

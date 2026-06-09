@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { TemplatePolicySpec } from "takosumi-contract/deploy-control-api";
+import type { TemplatePolicySpec } from "@takosumi/internal/deploy-control-api";
 import { evaluateTemplatePlanPolicy } from "./template_policy.ts";
 
 const POLICY: TemplatePolicySpec = {

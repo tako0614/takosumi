@@ -9,7 +9,13 @@
 import type {
   CreateInstallationRequest,
 } from "../domains/installations/mod.ts";
-import type { InstallationStatus } from "takosumi-contract/installations";
+import type {
+  InstallConfig,
+  Installation,
+  InstallationStatus,
+  PublicInstallConfig,
+  PublicInstallation,
+} from "takosumi-contract/installations";
 import {
   defineRoute,
   type DeployControlEndpoint,
@@ -25,6 +31,7 @@ import {
   TAKOSUMI_API_INSTALLATION_ROUTE,
   TAKOSUMI_DEPLOYMENT_ROLLBACK_PLAN_ROUTE,
   TAKOSUMI_DEPLOYMENT_ROUTE,
+  TAKOSUMI_INSTALL_CONFIG_ROUTE,
   TAKOSUMI_INSTALL_CONFIGS_ROUTE,
   TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE,
   TAKOSUMI_INSTALLATION_DRIFT_CHECK_ROUTE,
@@ -37,6 +44,10 @@ const DEPLOYMENT_ID_PARAM = {
   param: "deploymentId",
   pattern: DEPLOYMENT_ID_PATTERN,
 } as const;
+const INSTALL_CONFIG_ID_PARAM = {
+  param: "installConfigId",
+  pattern: /^cfg_[0-9a-zA-Z]{3,64}$/,
+} as const;
 const INSTALLATION_ID_PARAM = { id: "installationId" } as const;
 
 interface PatchInstallationRequest {
@@ -45,6 +56,20 @@ interface PatchInstallationRequest {
 
 const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<InstallationStatus> =
   new Set(["active", "stale", "error"]);
+
+function publicInstallation(installation: Installation): PublicInstallation {
+  const { installType: _installType, ...publicRecord } = installation;
+  return publicRecord;
+}
+
+function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
+  const {
+    installType: _installType,
+    templateBinding: _templateBinding,
+    ...publicRecord
+  } = config;
+  return publicRecord;
+}
 
 export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS:
   readonly DeployControlEndpoint[] = [
@@ -111,7 +136,7 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS:
       openapi: {
         pathParams: ["installationId"],
         okStatus: "202",
-        okSchema: "PlanRunResponse",
+        okSchema: "RunResponse",
       },
       notImplementedMessage: "installations not wired",
     },
@@ -147,7 +172,7 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS:
       openapi: {
         pathParams: ["deploymentId"],
         okStatus: "201",
-        okSchema: "PlanRunResponse",
+        okSchema: "RunResponse",
       },
       notImplementedMessage: "deployment rollback not wired",
     },
@@ -155,10 +180,23 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS:
       method: "GET",
       path: TAKOSUMI_INSTALL_CONFIGS_ROUTE,
       summary:
-        "Lists InstallConfigs (official catalog, plus the Space's own configs when spaceId is given).",
+        "Lists built-in shared InstallConfigs plus the Space's own configs when spaceId is given.",
       auth: "deploy-control-token",
       operationId: "listInstallConfigs",
       openapi: { query: ["spaceId"], okSchema: "ListInstallConfigsResponse" },
+      notImplementedMessage: "installations not wired",
+    },
+    {
+      method: "GET",
+      path: TAKOSUMI_INSTALL_CONFIG_ROUTE,
+      summary:
+        "Reads a public InstallConfig projection (built-in shared config or a Space-owned config).",
+      auth: "deploy-control-token",
+      operationId: "getInstallConfig",
+      openapi: {
+        pathParams: ["installConfigId"],
+        okSchema: "InstallConfigResponse",
+      },
       notImplementedMessage: "installations not wired",
     },
     {
@@ -171,7 +209,7 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS:
       openapi: {
         pathParams: ["installationId"],
         okStatus: "201",
-        okSchema: "PlanRunResponse",
+        okSchema: "RunResponse",
       },
       notImplementedMessage: "installations not wired",
     },
@@ -185,7 +223,7 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS:
       openapi: {
         pathParams: ["installationId"],
         okStatus: "201",
-        okSchema: "PlanRunResponse",
+        okSchema: "RunResponse",
       },
       notImplementedMessage: "installations not wired",
     },
@@ -193,13 +231,13 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS:
       method: "POST",
       path: TAKOSUMI_INSTALLATION_DRIFT_CHECK_ROUTE,
       summary:
-        "Creates an Installation-driven drift-check run (read-only §19 drift_check; never applyable; spec extension over §30).",
+        "Creates an Installation-driven drift-check run (read-only drift_check; never applyable).",
       auth: "deploy-control-token",
       operationId: "createInstallationDriftCheck",
       openapi: {
         pathParams: ["installationId"],
         okStatus: "201",
-        okSchema: "PlanRunResponse",
+        okSchema: "RunResponse",
       },
       notImplementedMessage: "installations not wired",
     },
@@ -232,7 +270,7 @@ export function mountDeployControlInstallationRoutes(
           ...body,
           spaceId: id,
         });
-        return c.json({ installation }, 201);
+        return c.json({ installation: publicInstallation(installation) }, 201);
       },
     }),
   );
@@ -245,8 +283,9 @@ export function mountDeployControlInstallationRoutes(
       param: SPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
+        const records = await installations!.listInstallations(id);
         return c.json(
-          { installations: await installations!.listInstallations(id) },
+          { installations: records.map(publicInstallation) },
           200,
         );
       },
@@ -307,7 +346,7 @@ export function mountDeployControlInstallationRoutes(
           id,
           body.status,
         );
-        return c.json({ installation }, 200);
+        return c.json({ installation: publicInstallation(installation) }, 200);
       },
     }),
   );
@@ -323,7 +362,7 @@ export function mountDeployControlInstallationRoutes(
         const response = await controller.createInstallationDestroyPlan(id, {
           actor: principal.actor,
         });
-        return c.json(response, 202);
+        return c.json({ run: await controller.getRun(response.planRun.id) }, 202);
       },
     }),
   );
@@ -367,7 +406,7 @@ export function mountDeployControlInstallationRoutes(
         const response = await controller.createDeploymentRollbackPlan(id, {
           actor: principal.actor,
         });
-        return c.json(response, 201);
+        return c.json({ run: await controller.getRun(response.planRun.id) }, 201);
       },
     }),
   );
@@ -392,15 +431,18 @@ export function mountDeployControlInstallationRoutes(
           }
           ensureSpacePermission(principal, spaceId);
         }
-        // Without a spaceId only the official catalog (spaceId-less configs) is
-        // returned; with one, the official catalog plus that Space's own configs.
+        // Without a spaceId only built-in shared configs (spaceId-less configs)
+        // are returned; with one, built-ins plus that Space's own configs.
         const official = (await installations!.listInstallConfigs()).filter(
           (config) => config.spaceId === undefined,
         );
         const scoped = spaceId === undefined
           ? []
           : await installations!.listInstallConfigs(spaceId);
-        return c.json({ installConfigs: [...official, ...scoped] }, 200);
+        return c.json(
+          { installConfigs: [...official, ...scoped].map(publicInstallConfig) },
+          200,
+        );
       },
     }),
   );
@@ -418,7 +460,23 @@ export function mountDeployControlInstallationRoutes(
         const response = await controller.createInstallationPlan(id, {
           actor: principal.actor,
         });
-        return c.json(response, 201);
+        return c.json({ run: await controller.getRun(response.planRun.id) }, 201);
+      },
+    }),
+  );
+
+  app.get(
+    TAKOSUMI_INSTALL_CONFIG_ROUTE,
+    defineRoute({
+      ctx,
+      requireService: requireInstallations,
+      param: INSTALL_CONFIG_ID_PARAM,
+      handler: async ({ c, principal, id }) => {
+        const config = await installations!.getInstallConfig(id);
+        if (config.spaceId !== undefined) {
+          ensureSpacePermission(principal, config.spaceId);
+        }
+        return c.json({ installConfig: publicInstallConfig(config) }, 200);
       },
     }),
   );
@@ -434,13 +492,13 @@ export function mountDeployControlInstallationRoutes(
         const response = await controller.createInstallationDestroyPlan(id, {
           actor: principal.actor,
         });
-        return c.json(response, 201);
+        return c.json({ run: await controller.getRun(response.planRun.id) }, 201);
       },
     }),
   );
 
-  // Drift check (§19 drift_check; Phase 8). Spec extension: §30 does not list it,
-  // but §19 defines the run type. Space-permission gated like plan/destroy-plan.
+  // Drift check is a canonical read-only Run type. It is Space-permission gated
+  // like plan/destroy-plan, but never produces an applyable saved plan.
   app.post(
     TAKOSUMI_INSTALLATION_DRIFT_CHECK_ROUTE,
     defineRoute({
@@ -452,7 +510,7 @@ export function mountDeployControlInstallationRoutes(
         const response = await controller.createInstallationDriftCheck(id, {
           actor: principal.actor,
         });
-        return c.json(response, 201);
+        return c.json({ run: await controller.getRun(response.planRun.id) }, 201);
       },
     }),
   );

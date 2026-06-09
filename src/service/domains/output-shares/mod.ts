@@ -18,8 +18,10 @@
  *     the producer's LATEST OutputSnapshot.spaceOutputs (`failed_precondition`
  *     otherwise — you cannot grant an output the producer has not projected);
  *   - sensitive entries require an explicit policy acknowledgement on the
- *     request. Even then, the share records names only; value injection remains
- *     limited to non-sensitive projected outputs.
+ *     request plus a host-injected resolver that proves the producer's encrypted
+ *     raw output artifact contains that name with `sensitive: true`. The share
+ *     record and Activity still store names/flags only; the sensitive value is
+ *     resolved only at plan-time `published_output` injection.
  *
  * Status lifecycle: a created share starts `pending`, the receiving Space calls
  * approve/accept to move it to `active`, and `revoke` moves a pending or active
@@ -182,9 +184,9 @@ export class OutputSharesService {
 
     // Every non-sensitive shared name must exist in the producer's LATEST
     // projected spaceOutputs: you cannot grant an ordinary output the producer
-    // has not produced. Sensitive entries are policy acknowledgements only; raw
-    // values are never stored in OutputSnapshot.spaceOutputs and are never
-    // injected through published_output.
+    // has not produced. Sensitive entries are not stored in spaceOutputs; they
+    // require explicit policy plus a host resolver that re-checks the encrypted
+    // raw output artifact before plan-time published_output injection.
     const latest = await this.#store.getLatestOutputSnapshot(
       request.producerInstallationId,
     );

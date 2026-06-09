@@ -95,6 +95,19 @@ export interface StripeCheckoutSessionResult {
   url: string;
 }
 
+export interface CreateStripeBillingPortalSessionInput {
+  secretKey: string;
+  stripeCustomerId: string;
+  returnUrl: string;
+  fetch?: typeof fetch;
+  stripeApiBase?: string;
+}
+
+export interface StripeBillingPortalSessionResult {
+  sessionId: string;
+  url: string;
+}
+
 export interface HandleStripeWebhookInput {
   store: AccountsStore;
   payload: string;
@@ -165,6 +178,50 @@ export async function createStripeCheckoutSession(
   ) {
     throw new TypeError(
       "Stripe checkout session response is missing id or url",
+    );
+  }
+  return {
+    sessionId: data.id,
+    url: data.url,
+  };
+}
+
+export async function createStripeBillingPortalSession(
+  input: CreateStripeBillingPortalSessionInput,
+): Promise<StripeBillingPortalSessionResult> {
+  const params = new URLSearchParams();
+  params.set("customer", input.stripeCustomerId);
+  params.set("return_url", input.returnUrl);
+  const response = await (input.fetch ?? fetch)(
+    `${input.stripeApiBase ?? STRIPE_API_BASE}/billing_portal/sessions`,
+    {
+      method: "POST",
+      headers: stripeRequestHeaders(input.secretKey),
+      body: params,
+    },
+  );
+  if (!response.ok) {
+    const summary = await summarizeStripeErrorResponse(response);
+    console.error(
+      "stripe_api_error",
+      JSON.stringify({
+        endpoint: "billing_portal/sessions",
+        status: response.status,
+        requestId: summary.requestId,
+        errorCode: summary.errorCode,
+        errorType: summary.errorType,
+      }),
+    );
+    throw new Error("stripe_api_error");
+  }
+
+  const data: unknown = await response.json();
+  if (
+    !isRecord(data) || typeof data.id !== "string" ||
+    typeof data.url !== "string"
+  ) {
+    throw new TypeError(
+      "Stripe billing portal session response is missing id or url",
     );
   }
   return {

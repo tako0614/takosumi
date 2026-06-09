@@ -12,7 +12,7 @@ export const PILLARS: readonly Pillar[] = [
   {
     title: "cloud でも VM でも同じ形",
     body:
-      "Cloudflare、AWS、GCP、Kubernetes、Docker Compose、systemd を operator-owned adapter model で扱う。Source と Deployment ledger は同じまま。",
+      "Hosted は Cloudflare managed default から始め、AWS / GCP / Kubernetes は Space Connection、その他は Provider Env Set や self-host operator policy で扱う。Source と Deployment ledger は同じまま。",
   },
   {
     title: "lock-in しない、引っ越せる、終わらない",

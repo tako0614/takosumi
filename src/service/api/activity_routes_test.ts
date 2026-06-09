@@ -9,6 +9,7 @@
  */
 
 import { expect, test } from "bun:test";
+import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { InstallConfig } from "takosumi-contract/installations";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { ActivityEvent } from "takosumi-contract/activity";
@@ -16,11 +17,17 @@ import type { OpenTofuRunner } from "../domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../domains/deploy-control/store.ts";
 import type { OpenTofuDeploymentStore } from "../domains/deploy-control/store.ts";
 import { createTakosumiService } from "../bootstrap.ts";
+import {
+  FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
+  FIXTURE_CLOUDFLARE_PROVIDER,
+} from "../domains/deploy-control/test_model_fixture.ts";
 
 const ARCHIVE_DIGEST =
   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const LOCK_DIGEST =
+  "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 const TOKEN = "deploy-control-token";
 
 function headers(extra: Record<string, string> = {}): Record<string, string> {
@@ -37,6 +44,9 @@ function runner(): OpenTofuRunner {
           ref: "runner-local://plan/tfplan",
           digest: PLAN_DIGEST,
         },
+        providerLockDigest: LOCK_DIGEST,
+        requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       }),
     apply: () => Promise.resolve({ outputs: {} as never }),
     destroy: () => Promise.resolve({}),
@@ -140,6 +150,23 @@ async function createInstallation(
     fetchedAt: nowIso,
   };
   await store.putSourceSnapshot(snapshot);
+  const compatibilityReport: CapsuleCompatibilityReport = {
+    id: `caprep_${name}00001`,
+    sourceSnapshotId: snapshot.id,
+    level: "ready",
+    findings: [],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: nowIso,
+  };
+  await store.putCapsuleCompatibilityReport(compatibilityReport);
+  await store.patchInstallation(installationId, {
+    compatibilityReportId: compatibilityReport.id,
+    compatibilityStatus: compatibilityReport.level,
+    updatedAt: nowIso,
+  });
   return installationId;
 }
 

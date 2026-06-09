@@ -19,11 +19,12 @@ const TABS: readonly Tab[] = [
       <>
         <span class="c"># Git の OpenTofu module を Installation に</span>
         {"\n"}
-        <span class="k">$</span> takosumi install git:github.com/acme/api \{"\n"}
-        {"      "}--space prod{"\n"}
+        <span class="k">GET</span>{" "}
+        /install?git=https://git.example.com/acme/api.git&ref=main{"\n"}
+        <span class="k">POST</span> /api/spaces/sp_prod/installations{"\n"}
         <span class="c">{"  "}✓ Installation created</span>
         {"\n"}
-        <span class="c">{"  "}✓ Run plan_8f2a…  reviewed</span>
+        <span class="c">{"  "}✓ Run run_8f2a…  waiting approval</span>
       </>
     ),
     output: () => (
@@ -44,8 +45,8 @@ const TABS: readonly Tab[] = [
       <>
         <span class="c"># planDigest を pin して apply</span>
         {"\n"}
-        <span class="k">$</span> takosumi deploy ins_api \{"\n"}
-        {"      "}--expected-plan-digest sha256:…{"\n"}
+        <span class="k">POST</span> /api/runs/run_8f2a/approve{"\n"}
+        <span class="k">GET</span> /api/runs/run_apply_3c1d{"\n"}
         <span class="c">{"  "}✓ Run apply_3c1d…  applied</span>
       </>
     ),
@@ -65,14 +66,16 @@ const TABS: readonly Tab[] = [
     subtitle: "Connection と policy で portable",
     source: () => (
       <>
-        <span class="c"># operator が Connection / 実行境界を選んで再 deploy</span>
+        <span class="c"># Connection / policy で実行境界を選ぶ</span>
         {"\n"}
-        <span class="k">$</span> takosumi deploy ins_api{"\n"}
-        <span class="c">{"  "}↳ runner: cloudflare-container</span>
+        <span class="k">PATCH</span> /api/installations/ins_api/deployment-profile{"\n"}
+        <span class="c">{"  "}↳ cloudflare.main: default</span>
+        {"\n"}
+        <span class="c">{"  "}↳ aws.archive: Space AWS role</span>
         {"\n"}
         {"\n"}
-        <span class="k">$</span> takosumi deploy ins_api{"\n"}
-        <span class="c">{"  "}↳ runner: docker-compose (operator VM)</span>
+        <span class="k">POST</span> /api/installations/ins_api/plan{"\n"}
+        <span class="c">{"  "}↳ ProviderBinding と policy から実行境界を解決</span>
       </>
     ),
     output: () => (

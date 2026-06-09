@@ -21,10 +21,12 @@ The cloud worker's managed-offering policy (`takosumi/worker/src/handler.ts::par
 | ----------------------------------------------------- | --------------------------------------------------------- |
 | `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS`           | `open` / `closed` access status users see at sign-in time |
 | `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST` | sha256 of the evidence file the operator reviewed         |
-| `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF`     | `git+<repo>#<path>` pointer to the evidence file          |
-| `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF`     | `git+<repo>#<path>` pointer to the approval record        |
+| `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF`     | commit-pinned `git+<repo>@<sha>#<path>` pointer to the evidence file |
+| `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF`     | commit-pinned `git+<repo>@<sha>#<path>` pointer to the approval record |
+| `TAKOSUMI_PRODUCTION_HARDENING_GATE`                  | `enforce` when the managed offering is open               |
+| `TAKOSUMI_*_EVIDENCE_REF` / `TAKOSUMI_*_EVIDENCE_DIGEST` | commit-pinned local fixture refs for container, egress, provider templates, and secret-boundary smoke checks |
 
-In production all four must be set to non-fixture values pulled from the operator's launch checklist. In local-substrate we want the same code path to be exercised end-to-end (so the gate logic itself is smoke-tested), but the evidence and approval refs can point at local fixture files because the local worker is never user-reachable (`prove-no-public-leak.sh` keeps it on the docker network only).
+In production these must be set to non-fixture values pulled from the operator's launch checklist and validated by the production-hardening evidence workflow. In local-substrate we want the same code path to be exercised end-to-end (so the gate logic itself is smoke-tested), but the refs can point at local fixture files because the local worker is never user-reachable (`prove-no-public-leak.sh` keeps it on the docker network only).
 
 ## How to regenerate the digest
 
@@ -32,8 +34,9 @@ In production all four must be set to non-fixture values pulled from the operato
 cd takosumi/deploy/local-substrate
 sha256sum docs/launch-readiness/p0-local-evidence.md
 # → <hash>  docs/launch-readiness/p0-local-evidence.md
-# Then update TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST in
-# env/takosumi-accounts-worker.env with `sha256:<hash>`.
+# Then update TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST and the
+# local hardening *_EVIDENCE_DIGEST values in env/takosumi-accounts-worker.env
+# with `sha256:<hash>`.
 ```
 
 The substrate's `scripts/up.sh` does NOT auto-recompute this digest — that's intentional, because the whole point of pinning a digest is that the operator chose it deliberately at the moment they reviewed the file. If you change this file you must also update the env file by hand; otherwise the worker's managed-offering gate will refuse with `readiness_digest_mismatch`.

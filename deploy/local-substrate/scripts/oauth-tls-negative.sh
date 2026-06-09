@@ -25,7 +25,7 @@ trap 'rm -f "$JAR"' EXIT
 # 1. /v1/auth/upstream/authorize?provider=tls-fail → 302 to mock /tls-fail/authorize
 #    (use a cookie jar so the worker's state-binding cookie sticks for step 3).
 LOC1=$(curl -sk --cacert "$CA" -c "$JAR" -b "$JAR" -o /dev/null -w "%{redirect_url}" \
-	"https://accounts.takosumi.test/v1/auth/upstream/authorize?provider=tls-fail&state=$STATE")
+	"https://app.takosumi.test/v1/auth/upstream/authorize?provider=tls-fail&state=$STATE")
 [[ -n "$LOC1" ]] || { echo "FAIL: worker /authorize did not 302 for tls-fail provider" >&2; exit 1; }
 
 # 2. Follow mock /tls-fail/authorize → 302 with code (this part still works)
@@ -36,7 +36,7 @@ CODE=$(echo "$LOC2" | sed -nE 's/.*[?&]code=([^&]*).*/\1/p')
 # 3. Worker /callback hits /tls-fail/token → 503 → worker should return 502
 #    upstream_oauth_failed. State cookie matches because we reused the jar.
 RESP=$(curl -sk --cacert "$CA" -c "$JAR" -b "$JAR" -w "\n%{http_code}" \
-	"https://accounts.takosumi.test/v1/auth/upstream/callback?provider=tls-fail&code=$CODE&state=$STATE")
+	"https://app.takosumi.test/v1/auth/upstream/callback?provider=tls-fail&code=$CODE&state=$STATE")
 STATUS=$(echo "$RESP" | tail -n1)
 BODY=$(echo "$RESP" | head -n -1)
 

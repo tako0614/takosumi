@@ -1,23 +1,28 @@
 # Operations: Online DB Migrations
 
-> このページでわかること: Takosumi platform worker の D1 / SQL control
+> このページでわかること: Takosumi platform worker の hosted D1 control
 > ledger を zero-downtime に migration するための expand / backfill /
 > contract 手順、rollback 方針、release gate。
 
 この runbook は **Takosumi operated environment** の DB migration 正本です。
 対象は platform worker が所有する accounts plane と control-plane ledger
-(Space / Source / Connection / Installation / Dependency / Run / Deployment /
-StateSnapshot / OutputSnapshot / Billing / Activity) です。Takos product の
+(Space / Source / Connection / Provider Template / Provider Env Set /
+provider env set policy / OpenTofu Capsule / CapsuleCompatibilityReport / Installation / InstallConfig / DeploymentProfile /
+ProviderBinding / Dependency / SourceSnapshot / DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment /
+OutputSnapshot / Backup / UsageEvent / CreditReservation / Billing / Activity) です。Takos product の
 app-local DB migration は Takos product docs の領域であり、この runbook では
 扱いません。
 
 ## Scope
 
-| Store | Contains | Migration owner |
-| --- | --- | --- |
-| Accounts D1 / SQL | users, sessions, account / billing / OIDC issuer records | Takosumi accounts plane |
-| Control-plane D1 / SQL | Space, Source, Connection, Installation, Dependency, Run, StateSnapshot, OutputSnapshot, Deployment, Artifact, Billing, Audit | Takosumi control plane |
-| R2 object manifests | source archives, artifacts, state snapshots, backups | schema change only when DB metadata shape changes |
+| Store               | Contains                                                                                                                                                                                                                                                                                 | Migration owner                                   |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Accounts D1         | users, sessions, account / billing / OIDC issuer records                                                                                                                                                                                                                                 | Takosumi accounts plane                           |
+| Control-plane D1    | Space, Source, Connection, Provider Template rows, Provider Env Set connections/policy, capsule_compatibility_reports, Installation, DeploymentProfile, Dependency, Run, RunGroup, StateSnapshot, OutputSnapshot, Deployment, Artifact, UsageEvent, CreditReservation, Billing, Audit | Takosumi control plane                            |
+| R2 object manifests | source archives, artifacts, state snapshots, backups                                                                                                                                                                                                                                     | schema change only when D1 metadata shape changes |
+
+realized config では accounts と control-plane を別 D1 binding にしてもよいが、
+正本 model は single Takosumi platform worker が所有する ledger です。
 
 Migration は customer-facing command surface ではありません。operator は
 platform worker deploy と同じ change window で migration を扱い、production /
@@ -46,12 +51,12 @@ cd dashboard && bunx tsc --noEmit && bun run build
 
 新規 migration は次のいずれかに分類します。
 
-| Class | Use | Production rule |
-| --- | --- | --- |
-| `expand` | additive table / column / index | deploy before code requires the new shape |
-| `backfill` | idempotent data copy / repair | chunked, observable, resumable |
-| `contract` | remove old shape after all code stops using it | explicit approval and restore plan |
-| `emergency` | incident-only repair | incident commander approval |
+| Class       | Use                                            | Production rule                           |
+| ----------- | ---------------------------------------------- | ----------------------------------------- |
+| `expand`    | additive table / column / index                | deploy before code requires the new shape |
+| `backfill`  | idempotent data copy / repair                  | chunked, observable, resumable            |
+| `contract`  | remove old shape after all code stops using it | explicit approval and restore plan        |
+| `emergency` | incident-only repair                           | incident commander approval               |
 
 expand と contract を同じ release に混ぜないこと。Run / StateSnapshot /
 OutputSnapshot / audit ledger は replay ではなく正本 record なので、destructive
