@@ -109,6 +109,7 @@ export async function buildComposedApp(
     // whatever the caller supplies.
     implementations: input.implementations ?? [],
     runtimeEnv,
+    mountInternalLedgerRoutes: true,
     ...(input.sqlClient ? { sqlClient: input.sqlClient } : {}),
   });
 

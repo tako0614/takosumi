@@ -1,7 +1,7 @@
 /**
  * Service-internal re-exports for the canonical `OperatorImplementation` contract.
  *
- * The contract itself lives in `@takosjp/takosumi/contract/reference/implementation`. This
+ * The contract itself lives in `takosumi-contract/reference/implementation`. This
  * shim keeps existing service imports stable and adds the service-internal
  * `OperatorImplementationRegistry` interface used by `DeployControlPipeline`.
  */

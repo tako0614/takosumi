@@ -8,12 +8,29 @@
 import { apiFetch, qs } from "./http.ts";
 import * as paths from "./paths.ts";
 import type { SessionRecord } from "./session.ts";
+import type { TakosumiAccountsAuthProvidersResponse } from "@takosjp/takosumi-accounts-contract";
 
 const STATE_KEY = "tg_oauth_state";
 const RETURN_KEY = "tg_oauth_return";
 const PROVIDER_KEY = "tg_oauth_provider";
 
 type Provider = "google" | "github" | "passkey";
+
+/**
+ * Read which sign-in methods the operator configured on this worker. Public +
+ * unauthenticated (the sign-in screen runs before any session exists), so it
+ * goes through {@link apiFetch} with `auth: false`. The body carries provider
+ * ids + enabled flags only — never any credential — so the panel can disable
+ * buttons that would otherwise hit a 503 on click.
+ */
+export async function listAuthProviders(): Promise<
+  TakosumiAccountsAuthProvidersResponse
+> {
+  return await apiFetch<TakosumiAccountsAuthProvidersResponse>(
+    paths.AUTH_PROVIDERS,
+    { method: "GET", auth: false },
+  );
+}
 
 function randomState(): string {
   const buf = new Uint8Array(16);

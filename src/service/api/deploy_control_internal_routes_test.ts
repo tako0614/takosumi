@@ -8,11 +8,12 @@ import { OutputSharesService } from "../domains/output-shares/mod.ts";
 import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import type { Space } from "takosumi-contract/spaces";
 
-test("deploy_control_public_routes — public /api endpoints respond with 501 when controller is absent",
+test("deploy_control_internal_routes — public /api endpoints respond with 501 when controller is absent",
   async () => {
     const app = await createApiApp({
       registerDeployControlPublicRoutes: true,
       deployControlPublicRouteOptions: {
+      mountInternalLedgerRoutes: true,
         getDeployControlToken: () => "deploy-control-token",
       },
       requestCorrelation: false,
@@ -27,6 +28,14 @@ test("deploy_control_public_routes — public /api endpoints respond with 501 wh
       ["POST", "/api/installations/ins_abcdef12/plan", {}],
       ["GET", "/api/runs/plan_abcdef12", undefined],
       ["POST", "/api/runs/plan_abcdef12/approve", {}],
+      ["GET", "/api/spaces/space_abcdef12/billing", undefined],
+      ["GET", "/api/spaces/space_abcdef12/usage", undefined],
+      ["POST", "/api/spaces/space_abcdef12/credits/top-up", { credits: 1 }],
+      [
+        "POST",
+        "/api/spaces/space_abcdef12/subscription/change",
+        { billingSettings: { mode: "disabled", provider: "none" } },
+      ],
     ] as const;
 
     for (const [method, path, body] of endpoints) {
@@ -47,7 +56,7 @@ test("deploy_control_public_routes — public /api endpoints respond with 501 wh
   },
 );
 
-test("deploy_control_public_routes — disabled without TAKOSUMI_DEPLOY_CONTROL_TOKEN",
+test("deploy_control_internal_routes — disabled without TAKOSUMI_DEPLOY_CONTROL_TOKEN",
   async () => {
     const app = await createApiApp({
       registerDeployControlPublicRoutes: true,
@@ -64,10 +73,11 @@ test("deploy_control_public_routes — disabled without TAKOSUMI_DEPLOY_CONTROL_
   },
 );
 
-test("deploy_control_public_routes — rejects invalid bearer", async () => {
+test("deploy_control_internal_routes — rejects invalid bearer", async () => {
   const app = await createApiApp({
     registerDeployControlPublicRoutes: true,
     deployControlPublicRouteOptions: {
+      mountInternalLedgerRoutes: true,
       getDeployControlToken: () => "deploy-control-token",
     },
     requestCorrelation: false,
@@ -85,7 +95,7 @@ test("deploy_control_public_routes — rejects invalid bearer", async () => {
   expect((await response.json()).error.code).toEqual("unauthenticated");
 });
 
-test("deploy_control_public_routes — scoped bearer enforces space and records actor", async () => {
+test("deploy_control_internal_routes — scoped bearer enforces space and records actor", async () => {
   // Installation-first model (spec §5): a raw POST /v1/plan-runs targets an
   // existing Installation. Seed one in the allowed space so the controller has a
   // valid plan target; the denied case is rejected by the route's space-scope
@@ -98,6 +108,7 @@ test("deploy_control_public_routes — scoped bearer enforces space and records 
   const app = await createApiApp({
     registerDeployControlPublicRoutes: true,
     deployControlPublicRouteOptions: {
+      mountInternalLedgerRoutes: true,
       controller: new OpenTofuDeploymentController({
         store,
         now: () => 1,
@@ -154,10 +165,41 @@ test("deploy_control_public_routes — scoped bearer enforces space and records 
   expect(payload.planRun.auditEvents[0].actor).toEqual("acct_123");
 });
 
-test("deploy_control_public_routes — scoped bearer defaults to deny when scopes are omitted", async () => {
+test("retired provider env set compatibility routes are not mounted", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
   const app = await createApiApp({
     registerDeployControlPublicRoutes: true,
     deployControlPublicRouteOptions: {
+      mountInternalLedgerRoutes: true,
+      controller: new OpenTofuDeploymentController({ store }),
+      authorizeDeployControlBearer: ({ token }) =>
+        token === "scoped-token"
+          ? {
+            actor: "acct_123",
+            spaceIds: ["space_allowed"],
+            operations: "*",
+            runnerProfileIds: "*",
+          }
+          : undefined,
+    },
+    requestCorrelation: false,
+  });
+
+  const response = await app.request(
+    "/api/retired-provider-env-set-compat/cpp_foreign0001/verify",
+    {
+      method: "POST",
+      headers: { authorization: "Bearer scoped-token" },
+    },
+  );
+  expect(response.status).toBe(404);
+});
+
+test("deploy_control_internal_routes — scoped bearer defaults to deny when scopes are omitted", async () => {
+  const app = await createApiApp({
+    registerDeployControlPublicRoutes: true,
+    deployControlPublicRouteOptions: {
+      mountInternalLedgerRoutes: true,
       controller: new OpenTofuDeploymentController({
         now: () => 1,
         newId: () => "plan_abcdef12",
@@ -185,10 +227,11 @@ test("deploy_control_public_routes — scoped bearer defaults to deny when scope
   expect((await response.json()).error.code).toEqual("permission_denied");
 });
 
-test("deploy_control_public_routes — runner profile list is scoped", async () => {
+test("deploy_control_internal_routes — runner profile list is scoped", async () => {
   const app = await createApiApp({
     registerDeployControlPublicRoutes: true,
     deployControlPublicRouteOptions: {
+      mountInternalLedgerRoutes: true,
       controller: new OpenTofuDeploymentController({
         now: () => 1,
       }),
@@ -257,6 +300,7 @@ async function outputShareApp() {
   const app = await createApiApp({
     registerDeployControlPublicRoutes: true,
     deployControlPublicRouteOptions: {
+      mountInternalLedgerRoutes: true,
       controller: new OpenTofuDeploymentController({ store, now: () => 1 }),
       outputSharesService: new OutputSharesService({
         store,

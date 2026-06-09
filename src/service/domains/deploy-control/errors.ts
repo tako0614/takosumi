@@ -6,7 +6,7 @@
  * cyclic dependency between those sibling files and `mod.ts`.
  */
 
-import type { DeployControlErrorCode } from "takosumi-contract/deploy-control-api";
+import type { DeployControlErrorCode } from "@takosumi/internal/deploy-control-api";
 import { ConnectionVaultError } from "../../adapters/vault/mod.ts";
 
 // Re-exported from the shared guard home so deploy-control consumers can keep

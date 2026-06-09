@@ -22,17 +22,20 @@ RUN curl -fsSL \
 # ---------------------------------------------------------------------------
 # Provider mirror (baked, offline plan/apply).
 #
-# Pre-mirror the provider set the official templates need into a filesystem
+# Pre-mirror the provider set the bundled first-party modules need into a filesystem
 # mirror so `tofu init` resolves providers from disk with NO network round-trip
 # to registry.opentofu.org. The baked tofu.rc (TF_CLI_CONFIG_FILE) wires a
 # plugin_cache_dir + a provider_installation block whose filesystem_mirror is
 # authoritative for the mirrored providers and `direct { exclude=[...] }`
 # forbids reaching the network for exactly those providers.
 #
-# Mirror list is intentionally MINIMAL (cloudflare + random + tls). aws/google
-# mirrors are large and come later; until then those providers fall through to
-# `direct` (network) install, which is fine for raw-module installs but the
-# official Cloudflare templates only need this set.
+# Mirror list covers the providers the bundled first-party modules require:
+# cloudflare + random + tls for the Cloudflare modules, and aws for the
+# `aws-s3-storage` Capsule (without it that Capsule fail-closes under offline
+# init because tofu.rc excludes aws from `direct`). The aws provider binary is
+# large, so this layer is the dominant build-time/image-size cost. google is
+# still omitted for size; it falls through to `direct` (network) install unless
+# a strict mirror policy blocks the run.
 # ---------------------------------------------------------------------------
 ENV OPENTOFU_PROVIDER_MIRROR=/opt/opentofu/provider-mirror
 ENV OPENTOFU_PROVIDER_CACHE=/opt/opentofu/provider-cache
@@ -57,12 +60,13 @@ RUN set -eux; \
     rm -rf /opt/opentofu/mirror-build; \
     ls -R "${OPENTOFU_PROVIDER_MIRROR}" | head -40
 
-# Official template modules baked from the repo-root catalog (templates/<id>/
-# module + template.ts metadata; the .ts files are inert in the image). The
-# `template.localModulePath` points at a directory under here (e.g.
+# Bundled first-party Capsule modules baked from the repo-root module set
+# (templates/<id>/module + template.ts metadata; the .ts files are inert in the
+# image). The `template.localModulePath` points at a directory under here (e.g.
 # /app/templates/cloudflare-r2-storage/module); the runner copies it to
-# /work/generated-root/template-module at plan/apply time. Raw-module installs
-# never touch this directory.
+# /work/generated-root/template-module at plan/apply time. Template-less Capsule
+# runs copy their SourceSnapshot/normalized module into the same generated-root
+# child-module slot.
 WORKDIR /app
 COPY opentofu-modules/ ./templates/
 
@@ -72,6 +76,8 @@ COPY opentofu-modules/ ./templates/
 # entrypoint.ts -> ../packages/schema/src/provider-env-rules.ts relative layout. No
 # other repo source (or the Worker browser bundle) is copied into the image.
 COPY packages/schema/src/provider-env-rules.ts ./packages/schema/src/provider-env-rules.ts
+COPY packages/schema/src/reference/ip-classification.ts ./packages/schema/src/reference/ip-classification.ts
+COPY packages/schema/src/reference/host-blocklist.ts ./packages/schema/src/reference/host-blocklist.ts
 COPY runner-image/entrypoint.ts ./runner-image/entrypoint.ts
 
 ENV PORT=8080

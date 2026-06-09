@@ -164,7 +164,10 @@ function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
         ...(diagnostic.key ? { key: diagnostic.key } : {}),
         message: diagnostic.message,
       })),
-      docs: ["docs/reference/operator.md", "docs/reference/runner-profiles.md"],
+      docs: [
+        "docs/reference/operator.md",
+        "docs/reference/internal-execution-profiles.md",
+      ],
     });
     runtime.exit(1);
   }
@@ -173,7 +176,7 @@ function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
       message: error.message,
       hint: "Refusing to start takosumi with plaintext secret storage. " +
         "See docs/reference/operator.md and " +
-        "docs/reference/runner-profiles.md for required " +
+        "docs/reference/internal-execution-profiles.md for required " +
         "encryption-key configuration.",
     });
     runtime.exit(1);
@@ -508,7 +511,7 @@ function assertSecretEncryptionConfigured(
         message: error.message,
         hint: "Refusing to start takosumi with plaintext secret storage. " +
           "See docs/reference/operator.md and " +
-          "docs/reference/runner-profiles.md for required " +
+          "docs/reference/internal-execution-profiles.md for required " +
           "encryption-key configuration.",
       });
       runtime.exit(1);

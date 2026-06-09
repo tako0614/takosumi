@@ -1,0 +1,133 @@
+import { expect, test } from "bun:test";
+
+import { createConnectionOAuthHelpersFromEnv } from "./connection_oauth_helpers.ts";
+
+const PRINCIPAL = {
+  actor: "acct_1",
+  spaceIds: ["space_1"],
+  operations: "*",
+  runnerProfileIds: "*",
+} as const;
+
+test("Cloudflare OAuth helper signs state and returns a provider env-set request", async () => {
+  let tokenRequest:
+    | {
+        readonly url: string;
+        readonly body: string;
+      }
+    | undefined;
+  const helpers = createConnectionOAuthHelpersFromEnv(
+    {
+      TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET: "state-secret",
+      TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID: "cf-client",
+      TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+      TAKOSUMI_CLOUDFLARE_OAUTH_REDIRECT_URI:
+        "https://app.example.test/api/connections/cloudflare/oauth/callback",
+      TAKOSUMI_CLOUDFLARE_OAUTH_AUTHORIZATION_URL:
+        "https://dash.cloudflare.test/oauth2/auth",
+      TAKOSUMI_CLOUDFLARE_OAUTH_TOKEN_URL:
+        "https://api.cloudflare.test/oauth2/token",
+      TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES: "account:read zone:read",
+    },
+    (async (input, init) => {
+      tokenRequest = {
+        url: String(input),
+        body: String(init?.body ?? ""),
+      };
+      return Response.json({ access_token: "cf-access-token" });
+    }) as typeof fetch,
+  );
+
+  const started = await helpers?.cloudflare?.start({
+    provider: "cloudflare",
+    request: new Request("https://app.example.test/start"),
+    principal: PRINCIPAL,
+    body: {
+      spaceId: "space_1",
+      displayName: "Cloudflare OAuth",
+      scopeHints: { accountId: "acct_cf" },
+    },
+  });
+  expect(started).toBeDefined();
+  const authUrl = new URL(started!.authorizationUrl);
+  expect(authUrl.origin + authUrl.pathname).toBe(
+    "https://dash.cloudflare.test/oauth2/auth",
+  );
+  expect(authUrl.searchParams.get("client_id")).toBe("cf-client");
+  expect(authUrl.searchParams.get("scope")).toBe("account:read zone:read");
+
+  const request = await helpers!.cloudflare!.complete({
+    provider: "cloudflare",
+    request: new Request("https://app.example.test/callback"),
+    principal: PRINCIPAL,
+    code: "cf-code",
+    state: started!.state,
+    query: { code: "cf-code", state: started!.state },
+  });
+  expect(tokenRequest?.url).toBe("https://api.cloudflare.test/oauth2/token");
+  expect(tokenRequest?.body).toContain("code=cf-code");
+  expect(request).toEqual({
+    spaceId: "space_1",
+    provider: "cloudflare",
+    kind: "provider_env_set",
+    authMethod: "static_secret",
+    displayName: "Cloudflare OAuth",
+    scopeHints: { accountId: "acct_cf" },
+    values: { CLOUDFLARE_API_TOKEN: "cf-access-token" },
+  });
+});
+
+test("GCP OAuth helper creates authorized_user GOOGLE_CREDENTIALS", async () => {
+  const helpers = createConnectionOAuthHelpersFromEnv(
+    {
+      TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET: "state-secret",
+      TAKOSUMI_GCP_OAUTH_CLIENT_ID: "gcp-client",
+      TAKOSUMI_GCP_OAUTH_CLIENT_SECRET: "gcp-secret",
+      TAKOSUMI_GCP_OAUTH_REDIRECT_URI:
+        "https://app.example.test/api/connections/gcp/oauth/callback",
+    },
+    (async () =>
+      Response.json({ refresh_token: "gcp-refresh" })) as typeof fetch,
+  );
+
+  const started = await helpers?.gcp?.start({
+    provider: "gcp",
+    request: new Request("https://app.example.test/start"),
+    principal: PRINCIPAL,
+    body: { spaceId: "space_1", displayName: "GCP OAuth" },
+  });
+  expect(started).toBeDefined();
+  const authUrl = new URL(started!.authorizationUrl);
+  expect(authUrl.origin + authUrl.pathname).toBe(
+    "https://accounts.google.com/o/oauth2/v2/auth",
+  );
+  expect(authUrl.searchParams.get("access_type")).toBe("offline");
+  expect(authUrl.searchParams.get("prompt")).toBe("consent");
+
+  const request = await helpers!.gcp!.complete({
+    provider: "gcp",
+    request: new Request("https://app.example.test/callback"),
+    principal: PRINCIPAL,
+    code: "gcp-code",
+    state: started!.state,
+    query: { code: "gcp-code", state: started!.state },
+  });
+  expect(request.provider).toBe("google");
+  expect(request.kind).toBe("provider_env_set");
+  const credentials = JSON.parse(request.values.GOOGLE_CREDENTIALS);
+  expect(credentials).toEqual({
+    type: "authorized_user",
+    client_id: "gcp-client",
+    client_secret: "gcp-secret",
+    refresh_token: "gcp-refresh",
+  });
+});
+
+test("OAuth helpers are absent until state secret and provider config exist", () => {
+  expect(createConnectionOAuthHelpersFromEnv({})).toBeUndefined();
+  expect(
+    createConnectionOAuthHelpersFromEnv({
+      TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET: "state-secret",
+    }),
+  ).toBeUndefined();
+});

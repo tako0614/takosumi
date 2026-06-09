@@ -28,11 +28,18 @@ import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import { DependenciesService } from "../dependencies/mod.ts";
 import type { SensitiveOutputResolver } from "../output-shares/mod.ts";
-import { seedInstallationModel } from "./test_model_fixture.ts";
+import { CredentialBundle } from "../../adapters/vault/mod.ts";
+import {
+  FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
+  FIXTURE_CLOUDFLARE_PROVIDER,
+  seedInstallationModel,
+} from "./test_model_fixture.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const LOCK_DIGEST =
+  "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
 function deterministicIds(): (prefix: string) => string {
   let next = 1;
@@ -70,6 +77,9 @@ function recordingRunner(): RecordingRunner {
           digest: PLAN_DIGEST,
           contentType: "application/vnd.opentofu.plan",
         },
+        providerLockDigest: LOCK_DIGEST,
+        requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
         // A delete/replace change so the §25 action policy flags the plan
         // requiresApproval -> a production plan parks waiting_approval, keeping
         // the `approveRun` calls in the strict-staleness test valid. Approval is
@@ -135,12 +145,59 @@ function controllerWith(
   return new OpenTofuDeploymentController({
     store,
     runner,
+    vault: fakeProviderVault() as never,
     now: sequenceNow(1),
     newId: deterministicIds(),
     ...(options.sensitiveOutputResolver
       ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
       : {}),
   });
+}
+
+function fakeProviderVault() {
+  const sharedEvidence = {
+    provider: FIXTURE_CLOUDFLARE_PROVIDER,
+    connectionId: "conn_cf",
+    delivery: "provider_env" as const,
+    rootOnly: false,
+    temporary: true,
+    ttlEnforced: true,
+    phase: "plan" as const,
+  };
+  const rootEvidence = {
+    provider: FIXTURE_CLOUDFLARE_PROVIDER,
+    connectionId: "conn_cf",
+    delivery: "generated_root_variable" as const,
+    rootOnly: true,
+    temporary: true,
+    ttlEnforced: true,
+    phase: "plan" as const,
+  };
+  return {
+    register: () => Promise.reject(new Error("not used")),
+    test: () => Promise.resolve({ status: "verified" }),
+    revoke: () => Promise.resolve(true),
+    mint: () =>
+      Promise.resolve(
+        new CredentialBundle(
+          {
+            CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+          },
+          [],
+          [sharedEvidence],
+        ),
+      ),
+    mintForProviderBindings: () =>
+      Promise.resolve(
+        new CredentialBundle(
+          {
+            TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+          },
+          [],
+          [rootEvidence],
+        ),
+      ),
+  };
 }
 
 /**
@@ -159,6 +216,11 @@ async function seedGraph(
     installConfigId: "cfg_producer",
     installationId: "inst_producer",
     name: "producer",
+    installConfig: {
+      outputAllowlist: {
+        base_domain: { from: "base_domain", type: "hostname", required: true },
+      },
+    },
   });
   await seedInstallationModel(store, {
     environment,
@@ -198,7 +260,8 @@ test("consumer plan injects the producer output and pins a DependencySnapshot", 
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
   });
-  const producer = (await controller.getInstallation("inst_producer")).installation;
+  const producer = (await controller.getInstallation("inst_producer"))
+    .installation;
   expect(producer.currentStateGeneration).toEqual(1);
   expect(producer.currentOutputSnapshotId).toBeDefined();
 
@@ -221,7 +284,9 @@ test("consumer plan injects the producer output and pins a DependencySnapshot", 
   const entry = snapshot!.dependencies[0]!;
   expect(entry.producerInstallationId).toEqual("inst_producer");
   expect(entry.producerStateGeneration).toEqual(1);
-  expect(entry.producerOutputSnapshotId).toEqual(producer.currentOutputSnapshotId);
+  expect(entry.producerOutputSnapshotId).toEqual(
+    producer.currentOutputSnapshotId,
+  );
   expect(entry.values).toEqual({ base_domain: "shota.example.com" });
   expect(entry.valuesDigest).toEqual(
     await stableJsonDigest({ base_domain: "shota.example.com" }),
@@ -229,7 +294,9 @@ test("consumer plan injects the producer output and pins a DependencySnapshot", 
 
   // The §19 Run projects the dependencySnapshotId.
   const run = await controller.getRun(consumerPlan.planRun.id);
-  expect(run.dependencySnapshotId).toEqual(consumerPlan.planRun.dependencySnapshotId);
+  expect(run.dependencySnapshotId).toEqual(
+    consumerPlan.planRun.dependencySnapshotId,
+  );
 });
 
 test("strict consumer apply fails dependency_snapshot_stale after the producer moves", async () => {
@@ -256,7 +323,8 @@ test("strict consumer apply fails dependency_snapshot_stale after the producer m
   expect(snapshot?.mode).toEqual("strict");
 
   // Producer re-applies -> gen 2 (its state generation moves under the snapshot).
-  const producerPlan2 = await controller.createInstallationPlan("inst_producer");
+  const producerPlan2 =
+    await controller.createInstallationPlan("inst_producer");
   await controller.approveRun(producerPlan2.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan2.planRun.id,
@@ -269,12 +337,14 @@ test("strict consumer apply fails dependency_snapshot_stale after the producer m
 
   // The consumer's strict apply now fails dependency_snapshot_stale.
   await controller.approveRun(consumerPlan.planRun.id);
-  await expect(
-    controller.createApplyRun({
-      planRunId: consumerPlan.planRun.id,
-      expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
-    }),
-  ).rejects.toThrow(/dependency_snapshot_stale/);
+  const staleApply = await controller.createApplyRun({
+    planRunId: consumerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+  });
+  expect(staleApply.applyRun.status).toBe("failed");
+  expect(staleApply.applyRun.diagnostics?.[0]?.message).toContain(
+    "dependency_snapshot_stale",
+  );
 });
 
 test("pinned consumer apply succeeds despite the producer moving", async () => {
@@ -298,7 +368,8 @@ test("pinned consumer apply succeeds despite the producer moving", async () => {
   expect(snapshot?.mode).toEqual("pinned");
 
   // Producer re-applies -> gen 2.
-  const producerPlan2 = await controller.createInstallationPlan("inst_producer");
+  const producerPlan2 =
+    await controller.createInstallationPlan("inst_producer");
   await controller.createApplyRun({
     planRunId: producerPlan2.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan2.planRun),
@@ -370,6 +441,11 @@ async function seedCrossSpaceGraph(
     installConfigId: "cfg_producer",
     installationId: "inst_producer",
     name: "producer",
+    installConfig: {
+      outputAllowlist: {
+        base_domain: { from: "base_domain", type: "hostname", required: true },
+      },
+    },
   });
   await seedInstallationModel(store, {
     spaceId: "space_consumer",
@@ -464,12 +540,14 @@ test("revoking the share between plan and apply fails the consumer apply output_
 
   // The consumer's apply now fails: the published_output edge re-verifies the
   // share at apply, and a revoked grant is output_share_revoked.
-  await expect(
-    controller.createApplyRun({
-      planRunId: consumerPlan.planRun.id,
-      expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
-    }),
-  ).rejects.toThrow(/output_share_revoked/);
+  const revokedApply = await controller.createApplyRun({
+    planRunId: consumerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+  });
+  expect(revokedApply.applyRun.status).toBe("failed");
+  expect(revokedApply.applyRun.diagnostics?.[0]?.message).toContain(
+    "output_share_revoked",
+  );
 });
 
 test("pending share does not authorize cross-space published_output planning", async () => {
@@ -496,6 +574,8 @@ test("sensitive published_output injects only through explicit share resolver an
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = sensitiveOutputRunner();
   const { consumer } = await seedCrossSpaceGraph(store, "preview");
+  const producerConfig = await store.getInstallConfig("cfg_producer");
+  await store.putInstallConfig({ ...producerConfig!, outputAllowlist: {} });
   const share = await store.getOutputShare("oshare_1");
   await store.putOutputShare({
     ...share!,
@@ -521,7 +601,8 @@ test("sensitive published_output injects only through explicit share resolver an
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
   });
-  const producer = (await controller.getInstallation("inst_producer")).installation;
+  const producer = (await controller.getInstallation("inst_producer"))
+    .installation;
   const outputSnapshot = await store.getOutputSnapshot(
     producer.currentOutputSnapshotId!,
   );
@@ -533,15 +614,20 @@ test("sensitive published_output injects only through explicit share resolver an
     (job) => job.planRun.installationId === consumer,
   );
   expect(consumerPlanJob?.variables.admin_token).toEqual("super-secret-token");
-  expect(JSON.stringify(consumerPlan.planRun)).not.toContain("super-secret-token");
-  expect(JSON.stringify(await store.listActivityEvents("space_consumer"))).not
-    .toContain("super-secret-token");
+  expect(JSON.stringify(consumerPlan.planRun)).not.toContain(
+    "super-secret-token",
+  );
+  expect(
+    JSON.stringify(await store.listActivityEvents("space_consumer")),
+  ).not.toContain("super-secret-token");
 });
 
 test("sensitive published_output fails closed when controller has no resolver", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = sensitiveOutputRunner();
   const { consumer } = await seedCrossSpaceGraph(store, "preview");
+  const producerConfig = await store.getInstallConfig("cfg_producer");
+  await store.putInstallConfig({ ...producerConfig!, outputAllowlist: {} });
   const share = await store.getOutputShare("oshare_1");
   await store.putOutputShare({
     ...share!,
@@ -575,7 +661,7 @@ test("sensitive published_output fails closed when controller has no resolver", 
 // remote_state (spec §15): producer state materialized via the depStates dispatch.
 // ---------------------------------------------------------------------------
 
-test("remote_state dispatch carries depStates from the producer's latest StateSnapshot", async () => {
+test("remote_state dispatch carries depStates from the producer's pinned StateSnapshot", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   // Same-Space producer + consumer with a remote_state edge (empty mapping).
@@ -636,6 +722,29 @@ test("remote_state dispatch carries depStates from the producer's latest StateSn
   expect(dep.generation).toEqual(1);
   expect(dep.objectKey).toEqual(producerState!.objectKey);
   expect(dep.digest).toEqual(producerState!.digest);
+  const pinned = await store.getDependencySnapshot(
+    consumerPlan.planRun.dependencySnapshotId!,
+  );
+  const pinnedEntry = pinned!.dependencies[0]!;
+  expect(pinnedEntry.producerStateGeneration).toEqual(1);
+  expect(pinnedEntry.producerStateSnapshotId).toEqual(producerState!.id);
+  expect(pinnedEntry.producerStateObjectKey).toEqual(producerState!.objectKey);
+  expect(pinnedEntry.producerStateDigest).toEqual(producerState!.digest);
+
+  // The producer can advance after the consumer plan in preview/pinned mode, but
+  // the consumer apply still restores the producer state bytes pinned above.
+  const producerPlan2 =
+    await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan2.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan2.planRun),
+  });
+  const producerState2 = await store.getLatestStateSnapshot(
+    "inst_producer",
+    "preview",
+  );
+  expect(producerState2?.generation).toEqual(2);
+  expect(producerState2?.objectKey).not.toEqual(producerState!.objectKey);
 
   // The consumer apply ALSO carries the depState (materialized before apply).
   const consumerApply = await controller.createApplyRun({
@@ -648,6 +757,7 @@ test("remote_state dispatch carries depStates from the producer's latest StateSn
   );
   expect(applyJob?.depStates).toHaveLength(1);
   expect(applyJob!.depStates![0]!.objectKey).toEqual(producerState!.objectKey);
+  expect(applyJob!.depStates![0]!.generation).toEqual(1);
 });
 
 test("remote_state dispatch fails dependency_state_unavailable when the producer never applied", async () => {
@@ -684,12 +794,74 @@ test("remote_state dispatch fails dependency_state_unavailable when the producer
   });
   const controller = controllerWith(store, runner);
 
-  // The producer has NO StateSnapshot (never applied). The consumer plan's
-  // depState resolution at dispatch fails dependency_state_unavailable, which the
-  // plan consumer records as a failed run (no throw to the caller).
+  // The producer has NO StateSnapshot (never applied). remote_state pinning now
+  // fails before the PlanRun is queued, so no reviewed plan can exist without
+  // pinned producer state bytes.
+  await expect(
+    controller.createInstallationPlan("inst_consumer"),
+  ).rejects.toThrow(/dependency_state_unavailable/);
+});
+
+test("remote_state apply fails when the pinned StateSnapshot object is tampered", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  await seedInstallationModel(store, {
+    environment: "preview",
+    sourceId: "src_producer",
+    snapshotId: "snap_producer",
+    installConfigId: "cfg_producer",
+    installationId: "inst_producer",
+    name: "producer",
+  });
+  await seedInstallationModel(store, {
+    environment: "preview",
+    sourceId: "src_consumer",
+    snapshotId: "snap_consumer",
+    installConfigId: "cfg_consumer",
+    installationId: "inst_consumer",
+    name: "consumer",
+  });
+  const deps = new DependenciesService({
+    store,
+    newId: (prefix) => `${prefix}_edge0001`,
+    now: () => "2026-06-06T00:00:00.000Z",
+  });
+  await deps.createDependency({
+    spaceId: "space_test",
+    producerInstallationId: "inst_producer",
+    consumerInstallationId: "inst_consumer",
+    mode: "remote_state",
+    visibility: "space",
+    outputs: {},
+  });
+  const controller = controllerWith(store, runner);
+
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
   const consumerPlan = await controller.createInstallationPlan("inst_consumer");
-  expect(consumerPlan.planRun.status).toEqual("failed");
-  expect(JSON.stringify(consumerPlan.planRun)).toContain(
-    "dependency_state_unavailable",
+  const snapshot = await store.getDependencySnapshot(
+    consumerPlan.planRun.dependencySnapshotId!,
+  );
+  await store.putDependencySnapshot({
+    ...snapshot!,
+    dependencies: [
+      {
+        ...snapshot!.dependencies[0]!,
+        producerStateObjectKey:
+          "spaces/space_test/installations/inst_producer/envs/preview/states/tampered.tfstate.enc",
+      },
+    ],
+  });
+
+  const tamperedApply = await controller.createApplyRun({
+    planRunId: consumerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+  });
+  expect(tamperedApply.applyRun.status).toBe("failed");
+  expect(tamperedApply.applyRun.diagnostics?.[0]?.message).toContain(
+    "dependency_snapshot_tampered",
   );
 });

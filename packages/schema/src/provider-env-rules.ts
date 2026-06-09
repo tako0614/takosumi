@@ -193,8 +193,9 @@ export function providerEnvRule(
 ): ProviderCredentialEnvRule | undefined {
   const trimmed = provider.trim();
   if (trimmed.length === 0) return undefined;
+  const normalized = trimmed === "gcp" ? "google" : trimmed;
   return PROVIDER_CREDENTIAL_ENV_RULES.find(
-    (rule) => rule.shortName === trimmed || rule.match.test(trimmed),
+    (rule) => rule.shortName === normalized || rule.match.test(normalized),
   );
 }
 
@@ -254,7 +255,7 @@ export function requiredEnvGroupsForProvider(
 
 /**
  * One credential arg a provider alias block reads from a generated
- * `TF_VAR_<provider>_<capability>_<arg>` variable.
+ * `TF_VAR_<provider>_<alias>_<arg>` variable.
  *   - `envName`: the credential env name the Vault opens from the resolved
  *     Connection (e.g. `CLOUDFLARE_API_TOKEN`);
  *   - `arg`: the OpenTofu provider argument the credential maps to (e.g.
@@ -269,11 +270,12 @@ export interface ProviderCredentialArg {
 /**
  * Per-provider credential env-name -> OpenTofu provider-argument mapping for the
  * per-alias credential split. A provider listed here gets, for each resolved
- * capability, a `TF_VAR_<localProvider>_<capability>_<arg>` variable wired into
+ * provider alias, a `TF_VAR_<localProvider>_<alias>_<arg>` variable wired into
  * its alias block (rootgen) whose value the Vault mints from the resolved
  * Connection (vault). A provider ABSENT from this table keeps the credential-free
  * shared-env alias (rootgen) and is never split (vault), preserving the M5
- * shared-credential behavior for providers without an explicit arg mapping.
+ * credential-free behavior for providers without an explicit root-only arg
+ * mapping.
  *
  * Lives next to {@link PROVIDER_CREDENTIAL_ENV_RULES} so the runner, the vault,
  * and rootgen agree byte-for-byte on env name <-> provider arg.
@@ -292,7 +294,8 @@ export const PROVIDER_CREDENTIAL_ARG_MAP: Readonly<
 /**
  * Returns the credential arg mapping for a provider (short name or registry
  * path). An empty list means the provider has no per-alias split: its alias
- * stays credential-free and inherits the shared provider env credential.
+ * stays credential-free and cannot receive provider credentials through the
+ * root-only path.
  */
 export function providerCredentialArgs(
   provider: string,

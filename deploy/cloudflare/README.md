@@ -2,8 +2,8 @@
 
 This directory is the Cloudflare deployment scaffold for the Takosumi control-plane and OpenTofu runner boundary. It is
 used by the platform worker composition and local-substrate profiles, but it is not a standalone public API product.
-The public control-plane model is the `/api` Space / Source / Connection / Installation / Dependency / Run / RunGroup /
-Deployment / OutputSnapshot / Activity surface. Cloudflare Containers host the OpenTofu runner that executes queued
+The public control-plane model is the `/api` Space / Source / Connection / Installation / Dependency / SourceSnapshot /
+DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment / OutputSnapshot / Backup / Activity surface. Cloudflare Containers host the OpenTofu runner that executes queued
 `plan`, `apply`, and `destroy` runs.
 
 ## Files
@@ -31,7 +31,7 @@ compatibility seams for accounts-plane and CLI adapters. They are not the public
 operator-facing capability or OpenAPI inventories.
 
 Destroy is represented publicly as `destroy_plan` and `destroy_apply` Runs. Internally, the compatibility seam may still
-materialize reviewed plan artifacts through older PlanRun/ApplyRun records. The runner adapter calls the `RUNNER`
+materialize reviewed plan artifacts through older plan/apply run records. The runner adapter calls the `RUNNER`
 Durable Object, whose Cloudflare Container materializes source snapshots, writes variables as
 `takosumi.auto.tfvars.json`, and runs OpenTofu. Plan creates a reviewed `tfplan` artifact and records its digest. Apply
 restores that reviewed artifact from R2, verifies the digest, recreates the source workspace if needed, and executes
@@ -43,7 +43,7 @@ Internal/service paths are also forwarded to the embedded service app:
 
 - `/api/internal/v1/*` for operator/internal APIs.
 - `/api/internal/v1/runtime/agents/*` for private compatibility fleet ledgers when an operator distribution enables them.
-- `/health`, `/capabilities`, `/readyz`, `/livez`, `/status/summary`, `/openapi.json`, and `/metrics`.
+- `/health`, `/capabilities`, `/readyz`, `/livez`, `/openapi.json`, and `/metrics`.
 
 The Worker-local routes remain at the edge:
 
@@ -51,7 +51,7 @@ The Worker-local routes remain at the edge:
 - `/coordination/*` routes to `CoordinationObject`.
 
 The only container binding here is the OpenTofu runner. Public API wording should stay aligned with `/api`; any
-RunnerProfile / PlanRun / ApplyRun references describe internal execution compatibility only.
+internal execution profile / plan-run / apply-run references describe internal execution compatibility only.
 
 ## Workers for Platforms Boundary
 
@@ -64,7 +64,7 @@ Workers for Platforms is the tenant / user Worker dispatch runtime, not the Open
 
 Do not bind operator provider credentials, Deploy Control bearer tokens, state backend credentials, or storage admin credentials into user Workers. User Workers may receive tenant-scoped bindings only. If a tenant workload needs a secret-like value, materialize a tenant-scoped short-lived token or a tenant-owned binding rather than an operator secret.
 
-The current scaffold records the intended WfP boundary in RunnerProfile through `cloudflareWorkersForPlatforms` and `secretExposurePolicy`. The dispatch namespace, outbound Worker script, outbound binding configuration, and isolation proof are operator-live evidence items. Treat `enforceNetworkPolicy: true` as satisfied only when the operator can show that the dispatch namespace has an outbound Worker configured and that the outbound Worker enforces the declared allowlist. The platform worker exposes an operator-bearer-gated `/internal/platform/hardening-gates` hook so production automation can require pinned evidence refs and SHA-256 digests for both the real Cloudflare Container smoke and egress enforcement proof before opening the managed offering.
+The current scaffold records the intended WfP boundary in internal execution policy through `cloudflareWorkersForPlatforms` and `secretExposurePolicy`. The dispatch namespace, outbound Worker script, outbound binding configuration, and isolation proof are operator-live evidence items. Treat `enforceNetworkPolicy: true` as satisfied only when the operator can show that the dispatch namespace has an outbound Worker configured and that the outbound Worker enforces the declared allowlist. The platform worker exposes an operator-bearer-gated `/internal/platform/hardening-gates` hook so production automation can require pinned evidence refs and SHA-256 digests for the real Cloudflare Container smoke, egress enforcement proof, Provider Template proof, and secret-boundary proof before opening the managed offering.
 
 ## Persistence
 
@@ -73,9 +73,9 @@ D1 is used in two places:
 - `CloudflareD1SnapshotStorageDriver` persists the service storage snapshot.
 - `createCloudflareD1DeployStores` persists deployment records, deployment record locks, and revoke-debt records.
 
-R2 is used for reviewed OpenTofu plan artifacts, operator-managed OpenTofu state sidecar objects, and operator-internal object extensions. Plan artifacts live under `opentofu-plan-runs/`; state sidecar objects live under `opentofu-state/backends/<stateBackendRefDigest>/`. Set `R2_ARTIFACTS_BUCKET_NAME` to the actual bucket name so `planArtifact.ref` uses the same `r2://<bucket>/...` identity the operator configured. The Worker stores Takosumi digests in R2 custom metadata and verifies plan digests before apply or read. Run records and audit metadata remain in D1.
+R2 is used for reviewed OpenTofu plan artifacts, operator-managed OpenTofu state objects, and operator-internal object extensions. Canonical plan artifacts live under `spaces/{spaceId}/installations/{installationId}/runs/{runId}/plan.bin.enc` with the inspected plan JSON stored as `spaces/{spaceId}/installations/{installationId}/runs/{runId}/plan.json.zst.enc`. State snapshots live in the separate `R2_STATE` bucket under `spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/{generation}.tfstate.enc`. Older `opentofu-plan-runs/` objects are accepted only as an internal compatibility fallback for legacy plan records. Set `R2_ARTIFACTS_BUCKET_NAME` to the actual bucket name so `planArtifact.ref` uses the same `r2://<bucket>/...` identity the operator configured. The Worker stores Takosumi digests in R2 custom metadata and verifies plan digests before apply or read. Run records and audit metadata remain in D1.
 
-The OpenTofu runner scaffold expects its working directory at `TOFU_WORK_DIR` (default `/workspace`). Source materialization, prepared-source wire/decompressed archive caps from RunnerProfile `resourceLimits`, unsafe tar entry rejection, reviewed plan artifact promotion/restore, R2 state sidecar restore/persist, provider env minimization, and command timeout enforcement are implemented here. Stricter substrate-level egress enforcement remains operator integration work.
+The OpenTofu runner scaffold expects its working directory at `TOFU_WORK_DIR` (default `/workspace`). Source materialization, prepared-source wire/decompressed archive caps from internal execution `resourceLimits`, unsafe tar entry rejection, reviewed plan artifact promotion/restore, R2 state sidecar restore/persist, provider env minimization, and command timeout enforcement are implemented here. Stricter substrate-level egress enforcement remains operator integration work.
 
 ## Operator Steps
 

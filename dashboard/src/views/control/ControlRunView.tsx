@@ -150,19 +150,25 @@ function connectionNamesFromLogs(
         if (typeof item === "string") names.add(item);
         else if (item && typeof item === "object") {
           const record = item as Record<string, unknown>;
-          const label = record.capability
-            ? `${record.capability}: ${record.mode ?? record.connectionId ?? "default"}`
+          const providerLabel =
+            typeof record.provider === "string" && record.provider.length > 0
+              ? typeof record.alias === "string" && record.alias.length > 0
+                ? `${record.provider}.${record.alias}`
+                : record.provider
+              : undefined;
+          const label = providerLabel
+            ? `${providerLabel}: ${record.mode ?? record.connectionId ?? "default"}`
             : (record.connectionId ?? record.id);
           if (typeof label === "string") names.add(label);
         }
       }
     } else if (connections && typeof connections === "object") {
-      for (const [capability, value] of Object.entries(connections)) {
-        if (typeof value === "string") names.add(`${capability}: ${value}`);
+      for (const [provider, value] of Object.entries(connections)) {
+        if (typeof value === "string") names.add(`${provider}: ${value}`);
         else if (value && typeof value === "object") {
           const record = value as Record<string, unknown>;
           names.add(
-            `${capability}: ${record.mode ?? record.connectionId ?? "default"}`,
+            `${provider}: ${record.mode ?? record.connectionId ?? "default"}`,
           );
         }
       }

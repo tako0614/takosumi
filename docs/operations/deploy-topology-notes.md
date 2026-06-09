@@ -25,17 +25,18 @@ callbacks. They are not public API and are not a split service boundary.
 ## OpenTofu Capsule Boundary
 
 Takosumi installs Git URLs as OpenTofu Capsules under a Space. User repos stay
-plain Git repos containing OpenTofu module-compatible configuration; no in-repo
-Takosumi manifest is required. The D1 control ledger is the source of truth for
-Space / Source / Connection / Installation / Dependency / Run / Deployment /
-StateSnapshot / OutputSnapshot / Billing / Activity. R2 paths are storage layout
-only.
+plain Git repos containing OpenTofu module-compatible configuration. The repo
+does not need a Takosumi-specific manifest. The D1 control ledger is the source of truth for
+Space / Source / Connection / Provider Template / Provider Env Set /
+provider env set policy / OpenTofu Capsule / Compatibility Report / Installation / InstallConfig / DeploymentProfile /
+ProviderBinding / Dependency / SourceSnapshot / DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment /
+OutputSnapshot / Backup / UsageEvent / Billing / Activity. R2 paths are storage layout only.
 
 ## Bindings
 
 The platform worker owns these binding classes:
 
-- D1 / SQL ledger for accounts and control-plane records
+- Hosted D1 ledgers for accounts and control-plane records
 - R2 source / artifact / state / backup buckets
 - `RUN_QUEUE`
 - `COORDINATION`

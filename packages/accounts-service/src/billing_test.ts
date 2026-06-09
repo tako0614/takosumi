@@ -3,6 +3,7 @@ import { assertEquals, assertRejects } from "../../../test/assert.ts";
 import {
   aggregateBillingUsage,
   applyStripeBillingEvent,
+  createStripeBillingPortalSession,
   createStripeCheckoutSession,
   handleStripeWebhook,
   normalizeStripeBillingEvent,
@@ -115,6 +116,41 @@ test("createStripeCheckoutSession posts Takosumi subject metadata", async () => 
   expect(params.get("automatic_tax[enabled]")).toEqual("true");
   expect(params.get("tax_id_collection[enabled]")).toEqual("true");
   expect(params.get("customer_email")).toEqual("user@example.test");
+});
+
+test("createStripeBillingPortalSession posts customer and return URL", async () => {
+  let requestBody = "";
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    expect(request.url).toEqual(
+      "https://api.stripe.test/v1/billing_portal/sessions",
+    );
+    expect(request.method).toEqual("POST");
+    expect(request.headers.get("authorization")).toEqual("Bearer sk_test");
+    requestBody = await request.text();
+    return Response.json({
+      id: "bps_1",
+      url: "https://billing.stripe.test/session/bps_1",
+    });
+  };
+
+  const result = await createStripeBillingPortalSession({
+    secretKey: "sk_test",
+    stripeCustomerId: "cus_1",
+    returnUrl: "https://accounts.example.test/account/billing",
+    stripeApiBase: "https://api.stripe.test/v1",
+    fetch: fetchImpl,
+  });
+  const params = new URLSearchParams(requestBody);
+
+  expect(result).toEqual({
+    sessionId: "bps_1",
+    url: "https://billing.stripe.test/session/bps_1",
+  });
+  expect(params.get("customer")).toEqual("cus_1");
+  expect(params.get("return_url")).toEqual(
+    "https://accounts.example.test/account/billing",
+  );
 });
 
 test("aggregateBillingUsage rollups are deterministic by account meter and unit", () => {

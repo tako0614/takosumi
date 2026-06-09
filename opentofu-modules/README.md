@@ -1,18 +1,18 @@
-# Official template catalog
+# First-party Capsule modules
 
-Takosumi's official templates are the supported OpenTofu surface for installs.
-A user repo is a **build input only**; the official template module (baked into
-the runner image) is what `tofu` actually plans/applies, wired by a
-Takosumi-generated root module.
+These are Takosumi's first-party OpenTofu Capsule modules. A user repo may be
+the module source itself, or it may be a **build input** for an app-source
+InstallConfig; in both cases Takosumi plans/applies a Takosumi-generated root
+module that calls a child module.
 
 ## Why TypeScript catalog data (not YAML)
 
 The deploy-control service runs in Cloudflare Workers and **cannot read the
 filesystem**, so the catalog is authored as TypeScript data:
 
-- `templates/<id>/template.ts` exports a typed `TemplateDefinition`
-  (from `takosumi-contract/deploy-control-api`).
-- `templates/<id>/module/` is the human-readable OpenTofu module (the
+- `<id>/template.ts` exports a typed `TemplateDefinition`
+  (from `@takosumi/internal/deploy-control-api`).
+- `<id>/module/` is the human-readable OpenTofu module (the
   `*.tf` + README). It is baked into the runner image at
   `source.localModulePath` (e.g. `/app/templates/<id>/module`).
 
@@ -26,7 +26,7 @@ The `template.ts` object and `module/main.tf` must be kept in sync by hand:
 the TS object declares the inputs/outputs/policy the rootgen and plan-JSON
 policy enforce; `main.tf` is the actual module those inputs flow into.
 
-## Catalog
+## Modules
 
 | id | build | providers | outputs.public |
 | --- | --- | --- | --- |
@@ -36,11 +36,12 @@ policy enforce; `main.tf` is the actual module those inputs flow into.
 | `cloudflare-static-site` | — | `cloudflare/cloudflare` | `project_name`, `url` |
 | `aws-s3-storage` | — | `hashicorp/aws` | `bucket_name`, `bucket_arn`, `region` |
 
-## Adding a template
+## Adding a first-party Capsule module
 
-1. Add `templates/<id>/module/*.tf` (+ README) as a plain OpenTofu module that
-   reads its inputs as `variable` blocks and authenticates via provider env.
-2. Add `templates/<id>/template.ts` exporting a `TemplateDefinition`. Set
+1. Add `<id>/module/*.tf` (+ README) as a plain OpenTofu child module that
+   reads its inputs as `variable` blocks and delegates provider configuration to
+   the generated root.
+2. Add `<id>/template.ts` exporting a `TemplateDefinition`. Set
    `source.localModulePath` to the in-image path the runner bakes.
 3. Register it in `src/service/domains/templates/registry.ts`.
-4. Add golden rootgen + policy fixtures under the templates/rootgen tests.
+4. Add golden rootgen + policy fixtures.

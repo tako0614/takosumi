@@ -17,7 +17,8 @@ import type {
   RunnerStateBackend,
   RunnerStateLockEvidence,
   TemplateDefinition,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
+import type { OutputAllowlistEntry } from "takosumi-contract/installations";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import { redactString } from "../../services/observability/redaction.ts";
 
@@ -64,23 +65,103 @@ export function projectTemplatePublicOutputs(
     if (!isPublishableDeploymentOutputValue(publicName, kind, entry.value)) {
       continue;
     }
-    result.push({ name: publicName, kind, value: entry.value, sensitive: false });
+    result.push({
+      name: publicName,
+      kind,
+      value: entry.value,
+      sensitive: false,
+    });
+  }
+  return result;
+}
+
+export function projectOutputAllowlistPublicOutputs(
+  outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>,
+  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
+): readonly DeploymentOutput[] {
+  const projected = projectOutputAllowlistSpaceOutputs(
+    outputAllowlist,
+    outputs,
+  );
+  const result: DeploymentOutput[] = [];
+  for (const [publicName, spec] of Object.entries(outputAllowlist)) {
+    if (!(publicName in projected)) continue;
+    const kind = templateOutputKind(spec.type);
+    const value = projected[publicName]!;
+    if (!isPublishableDeploymentOutputValue(publicName, kind, value)) {
+      if (spec.required) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `required output ${spec.from} cannot be published as ${publicName}`,
+        );
+      }
+      continue;
+    }
+    result.push({ name: publicName, kind, value, sensitive: false });
+  }
+  return result;
+}
+
+export function projectOutputAllowlistSpaceOutputs(
+  outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>,
+  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
+): Readonly<Record<string, JsonValue>> {
+  const byName = outputs ? outputValuesByName(outputs) : new Map();
+  const result: Record<string, JsonValue> = {};
+  for (const [projectedName, spec] of Object.entries(outputAllowlist)) {
+    const entry = byName.get(spec.from);
+    if (!entry) {
+      if (spec.required) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `required output ${spec.from} is missing for projection ${projectedName}`,
+        );
+      }
+      continue;
+    }
+    if (entry.sensitive) {
+      if (spec.required) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `required output ${spec.from} is sensitive and cannot be projected as ${projectedName}`,
+        );
+      }
+      continue;
+    }
+    if (!outputValueMatchesType(entry.value, spec.type)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `output ${spec.from} does not match declared projection type ${spec.type}`,
+      );
+    }
+    result[projectedName] = entry.value;
   }
   return result;
 }
 
 function outputValuesByName(
   outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[],
-): ReadonlyMap<string, { readonly value: JsonValue; readonly sensitive: boolean }> {
+): ReadonlyMap<
+  string,
+  { readonly value: JsonValue; readonly sensitive: boolean }
+> {
   const map = new Map<string, { value: JsonValue; sensitive: boolean }>();
   if (Array.isArray(outputs as unknown)) {
     for (const output of outputs as readonly DeploymentOutput[]) {
-      map.set(output.name, { value: output.value, sensitive: output.sensitive });
+      map.set(output.name, {
+        value: output.value,
+        sensitive: output.sensitive,
+      });
     }
     return map;
   }
-  for (const [name, output] of Object.entries(outputs as OpenTofuOutputEnvelope)) {
-    map.set(name, { value: output.value, sensitive: output.sensitive === true });
+  for (const [name, output] of Object.entries(
+    outputs as OpenTofuOutputEnvelope,
+  )) {
+    map.set(name, {
+      value: output.value,
+      sensitive: output.sensitive === true,
+    });
   }
   return map;
 }
@@ -95,17 +176,42 @@ function templateOutputKind(type: string): DeploymentOutput["kind"] {
   return typeof type === "string" && type.length > 0 ? type : "string";
 }
 
+function outputValueMatchesType(
+  value: JsonValue,
+  type: OutputAllowlistEntry["type"],
+): boolean {
+  switch (type) {
+    case "string":
+      return typeof value === "string";
+    case "url":
+      if (typeof value !== "string") return false;
+      try {
+        const parsed = new URL(value);
+        return parsed.protocol === "https:" || parsed.protocol === "http:";
+      } catch {
+        return false;
+      }
+    case "hostname":
+      return (
+        typeof value === "string" &&
+        /^[a-z0-9.-]+$/i.test(value) &&
+        !value.includes("..")
+      );
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "json":
+      return true;
+  }
+}
+
 /**
- * Space-scoped output projection for an OutputSnapshot (spec §16). Returns EVERY
- * non-sensitive output from the runner envelope as `name -> value`. A
- * sensitive-flagged output (envelope `sensitive: true`, or a {@link
- * DeploymentOutput} carrying `sensitive: true` — which the public type forbids,
- * but is guarded here defensively) NEVER enters the projection (invariants
- * 11/12). Unlike {@link deploymentOutputsFromOpenTofu} this is NOT restricted to
- * the well-known launch_url/etc. kinds: a Space dependency consumer reads any
- * non-sensitive producer output. Name/value secret-shape heuristics that gate
- * the PUBLIC projection are intentionally not applied here — spaceOutputs is the
- * same-Space surface, not the public display surface.
+ * Legacy compatibility projection for callers that still need a non-sensitive
+ * raw-output map. Installation OutputSnapshot recording uses
+ * `projectOutputAllowlistSpaceOutputs` instead so both `spaceOutputs` and
+ * `publicOutputs` pass through InstallConfig.outputAllowlist and type
+ * validation.
  */
 export function spaceOutputsFromOpenTofu(
   outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
@@ -119,7 +225,9 @@ export function spaceOutputsFromOpenTofu(
     }
     return result;
   }
-  for (const [name, output] of Object.entries(outputs as OpenTofuOutputEnvelope)) {
+  for (const [name, output] of Object.entries(
+    outputs as OpenTofuOutputEnvelope,
+  )) {
     if (output.sensitive === true) continue;
     result[name] = output.value;
   }
@@ -131,9 +239,14 @@ export function normalizeDeploymentOutputs(
 ): readonly DeploymentOutput[] {
   if (!outputs) return [];
   if (Array.isArray(outputs as unknown)) {
-    return (outputs as readonly DeploymentOutput[]).filter((output) =>
-      output.sensitive === false &&
-      isPublishableDeploymentOutputValue(output.name, output.kind, output.value)
+    return (outputs as readonly DeploymentOutput[]).filter(
+      (output) =>
+        output.sensitive === false &&
+        isPublishableDeploymentOutputValue(
+          output.name,
+          output.kind,
+          output.value,
+        ),
     );
   }
   return deploymentOutputsFromOpenTofu(outputs as OpenTofuOutputEnvelope);
@@ -173,12 +286,16 @@ export function normalizePlanSummary(
   const normalized: PlanRunSummary = {
     ...(typeof summary.add === "number" ? { add: summary.add } : {}),
     ...(typeof summary.change === "number" ? { change: summary.change } : {}),
-    ...(typeof summary.destroy === "number" ? { destroy: summary.destroy } : {}),
+    ...(typeof summary.destroy === "number"
+      ? { destroy: summary.destroy }
+      : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function outputKindFromName(name: string): DeploymentOutput["kind"] | undefined {
+function outputKindFromName(
+  name: string,
+): DeploymentOutput["kind"] | undefined {
   const normalized = name.replace(/^takosumi_/, "");
   switch (normalized) {
     case "launch_url":

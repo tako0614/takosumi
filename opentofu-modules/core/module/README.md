@@ -1,4 +1,4 @@
-# core (official base-installation module)
+# core (first-party base-installation module)
 
 The base Installation under a Space (spec §5/§10). For the MVP this is a pure
 value-plumbing module: it takes a single `base_domain` and exposes the canonical

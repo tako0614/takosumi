@@ -200,11 +200,11 @@ check "phase0.hello" "hello.takosumi.test" "/" "200"
 
 echo
 echo "==> Phase 1 — substrate"
-check "phase1.cloud.oidc-discovery" "accounts.takosumi.test" "/.well-known/openid-configuration" "200"
-check "phase1.cloud.health" "accounts.takosumi.test" "/healthz" "200"
+check "phase1.cloud.oidc-discovery" "app.takosumi.test" "/.well-known/openid-configuration" "200"
+check "phase1.cloud.health" "app.takosumi.test" "/healthz" "200"
 
 echo
-echo "==> Production mirror — takosumi.com / accounts.takosumi.com under .test"
+echo "==> Production mirror — takosumi.com / app.takosumi.com under .test"
 check "prod-mirror.landing.index" "takosumi.test" "/" "200"
 check "prod-mirror.landing.favicon" "takosumi.test" "/brand/favicon.svg" "200"
 check "prod-mirror.landing.geometric" "takosumi.test" "/brand/geometric.svg" "200"
@@ -221,12 +221,12 @@ else
 	echo "    FAIL [docs.link-check] see scripts/docs-link-check.sh"
 fi
 
-check_json "prod-mirror.cloud.oidc-discovery" "accounts.takosumi.test" "/.well-known/openid-configuration" "authorization_endpoint"
-check "prod-mirror.cloud.dashboard-index" "accounts.takosumi.test" "/" "200"
-check "prod-mirror.cloud.dashboard-signin" "accounts.takosumi.test" "/sign-in" "200"
-check "prod-mirror.cloud.dashboard-deeplink" "accounts.takosumi.test" "/apps/abc" "200"
-check "prod-mirror.cloud.takos-start-entry" "accounts.takosumi.test" "/takos/start?takos_url=https%3A%2F%2Ftakos.test" "200"
-check "prod-mirror.cloud.use-takos-start-validation" "accounts.takosumi.test" "/start?takos_url=https%3A%2F%2Ftakos.test" "400"
+check_json "prod-mirror.cloud.oidc-discovery" "app.takosumi.test" "/.well-known/openid-configuration" "authorization_endpoint"
+check "prod-mirror.cloud.dashboard-index" "app.takosumi.test" "/" "200"
+check "prod-mirror.cloud.dashboard-signin" "app.takosumi.test" "/sign-in" "200"
+check "prod-mirror.cloud.dashboard-deeplink" "app.takosumi.test" "/apps/abc" "200"
+check "prod-mirror.cloud.takos-start-entry" "app.takosumi.test" "/takos/start?takos_url=https%3A%2F%2Ftakos.test" "200"
+check "prod-mirror.cloud.use-takos-start-validation" "app.takosumi.test" "/start?takos_url=https%3A%2F%2Ftakos.test" "400"
 
 echo
 echo "==> OAuth flow — upstream mock (accounts.google.com / github.com)"

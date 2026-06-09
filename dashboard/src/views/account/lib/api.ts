@@ -60,8 +60,10 @@ export const rpc = {
   },
   billing: {
     checkout: billing.startStripeCheckout,
+    portal: billing.startStripePortal,
   },
   auth: {
+    listProviders: auth.listAuthProviders,
     startUpstreamOAuth: auth.startUpstreamOAuth,
     completeUpstreamOAuth: auth.completeUpstreamOAuth,
     recallOAuthProvider: auth.recallOAuthProvider,
@@ -107,5 +109,5 @@ export type {
   CreateTokenResult,
   PersonalAccessToken,
 } from "./tokens.ts";
-export type { StripeCheckoutResult } from "./billing.ts";
+export type { StripeCheckoutResult, StripePortalResult } from "./billing.ts";
 export type { CallbackResult, PasskeyRegisterOptions } from "./auth.ts";

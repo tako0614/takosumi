@@ -1,5 +1,5 @@
 /**
- * Hand-rolled validation for official template definitions and their inputs.
+ * Hand-rolled validation for first-party Capsule module definitions and inputs.
  *
  * The repo avoids heavy deps (no zod here), matching the deploy-control domain's
  * hand-rolled guard style. Two surfaces are validated:
@@ -13,7 +13,7 @@ import type { JsonValue } from "takosumi-contract";
 import type {
   TemplateDefinition,
   TemplateInputSpec,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 
 /** Literal input values accepted by rootgen (HCL scalars). */

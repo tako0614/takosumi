@@ -4,12 +4,13 @@
  * M5 completes the §10 install types on the installation-driven plan path:
  *   - `core` / `opentofu_module` / `app_source` template-bound configs drive the
  *     §13 `generateInstallationRoot` generated root (installType-aware, with
- *     per-capability provider aliases derived from the resolved capabilities);
+ *     provider aliases derived from the resolved provider bindings);
  *   - `app_source` threads the InstallConfig.build onto the dispatch (the build
  *     runs in the Container with ZERO credentials — invariant 3);
- *   - manual-mode capability values merge into the template inputs, overriding
+ *   - manual-mode provider values merge into the template inputs, overriding
  *     the InstallConfig variableMapping (§13 decision);
- *   - `opentofu_root` rejects a templateBinding (the SourceSnapshot IS the root).
+ *   - legacy `opentofu_root` rows remain readable but fail closed at plan time;
+ *     Takosumi v1 requires a generated-root Capsule install type.
  *
  * A recording runner captures the dispatch payload so the generated root files,
  * build spec, provider aliases, and output projection are asserted directly.
@@ -26,19 +27,29 @@ import {
   applyExpectedGuardFromPlanRun,
   OpenTofuDeploymentController,
 } from "./mod.ts";
+import { projectPlanRun } from "./projection_run.ts";
 import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import type {
   Connection,
   InstallConfig,
-} from "takosumi-contract/deploy-control-api";
-import type { CapabilityBindings } from "takosumi-contract/capability-bindings";
-import { seedInstallationModel } from "./test_model_fixture.ts";
-import { StaticSecretConnectionVault } from "../../adapters/vault/mod.ts";
+} from "@takosumi/internal/deploy-control-api";
+import type { ProviderBindings } from "takosumi-contract/provider-bindings";
+import {
+  FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
+  FIXTURE_CLOUDFLARE_PROVIDER,
+  seedInstallationModel,
+} from "./test_model_fixture.ts";
+import {
+  CredentialBundle,
+  StaticSecretConnectionVault,
+} from "../../adapters/vault/mod.ts";
 import { MultiCloudSecretBoundaryCrypto } from "../../adapters/secret-store/memory.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const LOCK_DIGEST =
+  "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 const STATE_DIGEST =
   "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
@@ -78,6 +89,9 @@ function recordingRunner(
           digest: PLAN_DIGEST,
           contentType: "application/vnd.opentofu.plan",
         },
+        providerLockDigest: LOCK_DIGEST,
+        requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
         // No resource changes recorded so the template policy leaves confirmation
         // unrequired (these installs target an approval-free `preview` env).
         planResourceChanges: [],
@@ -97,7 +111,7 @@ function recordingRunner(
   };
 }
 
-/** A space-scoped provider Connection so a capability resolves to a provider. */
+/** A space-scoped provider Connection so a provider binding resolves. */
 function connection(
   id: string,
   provider: string,
@@ -116,16 +130,30 @@ function connection(
   };
 }
 
+async function markConnectionVerified(
+  store: InMemoryOpenTofuDeploymentStore,
+  conn: Connection,
+): Promise<Connection> {
+  const verified: Connection = {
+    ...conn,
+    status: "verified",
+    verifiedAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putConnection(verified);
+  return verified;
+}
+
 interface InstallTypeFixtureOptions {
   readonly installConfig: Partial<InstallConfig>;
-  readonly bindings?: CapabilityBindings;
+  readonly bindings?: ProviderBindings;
   readonly connections?: readonly Connection[];
   readonly outputs?: Record<string, { sensitive?: boolean; value: unknown }>;
 }
 
 /**
  * Seeds the Space-direct Installation model with a template-bound InstallConfig
- * and optional capability bindings + connections, returning a wired controller.
+ * and optional provider bindings + connections, returning a wired controller.
  * Defaults to the approval-free `preview` environment.
  */
 async function installTypeFixture(options: InstallTypeFixtureOptions): Promise<{
@@ -156,10 +184,57 @@ async function installTypeFixture(options: InstallTypeFixtureOptions): Promise<{
   const controller = new OpenTofuDeploymentController({
     store,
     runner,
+    vault: fakeProviderVault() as never,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
   return { store, runner, controller };
+}
+
+function fakeProviderVault() {
+  const sharedEvidence = {
+    provider: FIXTURE_CLOUDFLARE_PROVIDER,
+    connectionId: "conn_cf",
+    delivery: "provider_env" as const,
+    rootOnly: false,
+    temporary: true,
+    ttlEnforced: true,
+    phase: "plan" as const,
+  };
+  const rootEvidence = {
+    provider: FIXTURE_CLOUDFLARE_PROVIDER,
+    connectionId: "conn_cf",
+    delivery: "generated_root_variable" as const,
+    rootOnly: true,
+    temporary: true,
+    ttlEnforced: true,
+    phase: "plan" as const,
+  };
+  return {
+    register: () => Promise.reject(new Error("not used")),
+    test: () => Promise.resolve({ status: "verified" }),
+    revoke: () => Promise.resolve(true),
+    mint: () =>
+      Promise.resolve(
+        new CredentialBundle(
+          {
+            CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+          },
+          [],
+          [sharedEvidence],
+        ),
+      ),
+    mintForProviderBindings: () =>
+      Promise.resolve(
+        new CredentialBundle(
+          {
+            TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+          },
+          [],
+          [rootEvidence],
+        ),
+      ),
+  };
 }
 
 test("core install plan generates a provider-free root and apply projects the 4 core outputs", async () => {
@@ -189,16 +264,19 @@ test("core install plan generates a provider-free root and apply projects the 4 
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
   expect(planRun.status).toEqual("succeeded");
-  expect(planRun.templateBinding?.templateId).toEqual("core");
+  expect("templateBinding" in planRun).toBe(false);
+  expect(
+    (await store.getPlanRun(planRun.id))?.templateBinding?.templateId,
+  ).toEqual("core");
 
   // The generated root is installType-aware but carries NO provider alias blocks
-  // (core declares no providers, and no capability resolved to a provider).
+  // (core declares no providers, and no provider binding resolved).
   const planJob = runner.planJobs[0]!;
-  expect(planJob.template).toEqual({
-    id: "core",
-    version: "1.0.0",
-    localModulePath: "/app/templates/core/module",
-  });
+  expect(planJob.template).toBeUndefined();
+  expect(planJob.generatedRoot?.moduleFiles?.[0]?.path).toEqual("main.tf");
+  expect(planJob.generatedRoot?.moduleFiles?.[0]?.text).toContain(
+    'output "member_issuer"',
+  );
   const mainTf = planJob.generatedRoot!.files["main.tf"]!;
   expect(mainTf).toContain('source = "./template-module"');
   expect(mainTf).toContain('base_domain = "example.com"');
@@ -212,6 +290,7 @@ test("core install plan generates a provider-free root and apply projects the 4 
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
+  expect(JSON.stringify(applyRun.diagnostics ?? [])).toEqual("[]");
   expect(applyRun.status).toEqual("succeeded");
   expect((applyRun.outputs ?? []).map((o) => o.name).sort()).toEqual([
     "base_domain",
@@ -228,7 +307,7 @@ test("core install plan generates a provider-free root and apply projects the 4 
   expect(latest?.generation).toEqual(1);
 });
 
-test("opentofu_module install emits per-capability provider aliases from resolved capabilities", async () => {
+test("opentofu_module install emits provider aliases from resolved provider bindings", async () => {
   const { runner, controller } = await installTypeFixture({
     installConfig: {
       installType: "opentofu_module",
@@ -240,9 +319,14 @@ test("opentofu_module install emits per-capability provider aliases from resolve
       policy: {},
     },
     connections: [connection("conn_cf", "cloudflare")],
-    bindings: {
-      compute: { mode: "connection", connectionId: "conn_cf" },
-    },
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        mode: "connection",
+        connectionId: "conn_cf",
+      },
+    ],
     outputs: {
       worker_name: { sensitive: false, value: "my-worker" },
       url: { sensitive: false, value: "https://my-worker.workers.dev" },
@@ -253,20 +337,62 @@ test("opentofu_module install emits per-capability provider aliases from resolve
   expect(planRun.status).toEqual("succeeded");
 
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
-  // The compute capability resolved to the cloudflare connection -> an aliased
-  // provider block wired from a sensitive per-alias credential var + a providers
-  // map on the module (§13).
-  expect(mainTf).toContain("provider \"cloudflare\" {");
-  expect(mainTf).toContain('alias = "compute"');
+  // The cloudflare binding resolved to the connection -> an aliased provider
+  // block wired from a sensitive per-alias credential var + a providers map on
+  // the module (§13).
+  expect(mainTf).toContain('provider "cloudflare" {');
+  expect(mainTf).toContain('alias = "main"');
   expect(mainTf).toContain("providers = {");
-  expect(mainTf).toContain("cloudflare.compute = cloudflare.compute");
+  expect(mainTf).toContain("cloudflare.main = cloudflare.main");
   // Per-alias credential split (§13): a sensitive credential var is declared and
   // wired into the alias; the deferred wording is gone.
-  expect(mainTf).toContain('variable "cloudflare_compute_api_token" {');
-  expect(mainTf).toContain("  api_token = var.cloudflare_compute_api_token");
+  expect(mainTf).toContain('variable "cloudflare_main_api_token" {');
+  expect(mainTf).toContain("  api_token = var.cloudflare_main_api_token");
   expect(mainTf).not.toContain("DEFERRED");
   // The template input is still wired.
   expect(mainTf).toContain('appName = "my-worker"');
+});
+
+test("provider-using installation fails closed when the connection vault is absent", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const conn = connection("conn_cf", "cloudflare");
+  await store.putConnection(conn);
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "my-worker", accountId: "acct_123" },
+      policy: {},
+    },
+  });
+  await store.putDeploymentProfile({
+    id: "profile_no_vault",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [{ provider: "cloudflare", alias: "main", mode: "connection", connectionId: conn.id }],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const runner = recordingRunner({});
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toEqual("failed");
+  expect(JSON.stringify(planRun.diagnostics)).toContain(
+    "credential_mint_failed: connection vault is not configured",
+  );
+  expect(runner.planJobs).toHaveLength(0);
 });
 
 test("app_source install threads InstallConfig.build onto the dispatch (build precedence over template build)", async () => {
@@ -286,9 +412,7 @@ test("app_source install threads InstallConfig.build onto the dispatch (build pr
       policy: {},
     },
     connections: [connection("conn_cf", "cloudflare")],
-    bindings: {
-      compute: { mode: "connection", connectionId: "conn_cf" },
-    },
+    bindings: [{ provider: "cloudflare", alias: "main", mode: "connection", connectionId: "conn_cf" }],
     outputs: {
       worker_name: { sensitive: false, value: "my-app" },
       url: { sensitive: false, value: "https://my-app.workers.dev" },
@@ -305,9 +429,14 @@ test("app_source install threads InstallConfig.build onto the dispatch (build pr
     commands: ["bun install", "bun run bundle"],
     artifactPath: "build/worker.js",
   });
-  // The build phase NEVER carries provider credentials (invariant 3): the
-  // credential bundle is a separate dispatch field (absent here — no vault).
-  expect(runner.planJobs[0]!.credentials).toBeUndefined();
+  // The build phase NEVER carries provider credentials: the provider bundle is
+  // a separate plan-phase dispatch field, not part of DispatchBuildSpec.
+  expect(JSON.stringify(runner.planJobs[0]!.build)).not.toContain(
+    "fixture-provider-token",
+  );
+  expect(runner.planJobs[0]!.credentials).toEqual({
+    TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+  });
 });
 
 test("app_source with build disabled falls back to the template build", async () => {
@@ -338,7 +467,7 @@ test("app_source with build disabled falls back to the template build", async ()
   });
 });
 
-test("manual-mode capability values override the InstallConfig variableMapping", async () => {
+test("manual-mode provider values override the InstallConfig variableMapping", async () => {
   const { runner, controller } = await installTypeFixture({
     installConfig: {
       installType: "opentofu_module",
@@ -350,13 +479,14 @@ test("manual-mode capability values override the InstallConfig variableMapping",
       variableMapping: { appName: "from-mapping", accountId: "acct_mapping" },
       policy: {},
     },
-    bindings: {
-      // A manual capability supplies override values (not a provider).
-      compute: {
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
         mode: "manual",
-        values: { accountId: "acct_override", unknown_key: "ignored" },
+        values: { accountId: "acct_override" },
       },
-    },
+    ],
     outputs: {
       worker_name: { sensitive: false, value: "from-mapping" },
       url: { sensitive: false, value: "https://x.workers.dev" },
@@ -367,21 +497,43 @@ test("manual-mode capability values override the InstallConfig variableMapping",
   expect(planRun.status).toEqual("succeeded");
 
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
-  // Manual value wins on the accountId collision; the unknown manual key is
-  // ignored (not a declared template input).
+  // Manual value wins on the accountId collision.
   expect(mainTf).toContain('accountId = "acct_override"');
   expect(mainTf).not.toContain("acct_mapping");
-  expect(mainTf).not.toContain("unknown_key");
   // The non-overridden mapping value survives.
   expect(mainTf).toContain('appName = "from-mapping"');
 });
 
-test("opentofu_root install config rejects a templateBinding", async () => {
+test("manual-mode provider values reject keys outside the template input contract", async () => {
+  const { controller } = await installTypeFixture({
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "from-mapping", accountId: "acct_mapping" },
+      policy: {},
+    },
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        mode: "manual",
+        values: { unknown_key: "rejected" },
+      },
+    ],
+  });
+
+  await expect(
+    controller.createInstallationPlan("inst_fixture"),
+  ).rejects.toThrow(/manual provider value 'unknown_key'/);
+});
+
+test("legacy opentofu_root install config fails closed even when it carries a templateBinding", async () => {
   const { controller } = await installTypeFixture({
     installConfig: {
       installType: "opentofu_root",
-      // opentofu_root must NOT carry a templateBinding: the SourceSnapshot is the
-      // root configuration directly.
       templateBinding: { templateId: "core", templateVersion: "1.0.0" },
       policy: {},
     },
@@ -389,27 +541,63 @@ test("opentofu_root install config rejects a templateBinding", async () => {
 
   await expect(
     controller.createInstallationPlan("inst_fixture"),
-  ).rejects.toThrow(/opentofu_root .* templateBinding/);
+  ).rejects.toThrow(/legacy opentofu_root/);
 });
 
-test("apply dispatch carries TF_VAR_<provider>_<capability>_<arg> per-alias creds and never leaks values into run records (§13)", async () => {
-  const SECRET_TOKEN = "cf-secret-per-alias-token";
+test("apply dispatch carries TF_VAR_<provider>_<alias>_<arg> per-alias creds and never leaks values into run records (§13)", async () => {
+  const BOOTSTRAP_TOKEN = "cf-bootstrap-per-alias-token";
+  const RUN_TOKEN = "cf-run-scoped-per-alias-token";
   const store = new InMemoryOpenTofuDeploymentStore();
+  let cloudflareTokenCreateCalls = 0;
   const vault = new StaticSecretConnectionVault({
     store,
     crypto: new MultiCloudSecretBoundaryCrypto({
       globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
     }),
     now: () => new Date("2026-06-06T00:00:00.000Z"),
+    fetch: (async (input: string, init?: RequestInit) => {
+      expect(input).toBe("https://api.cloudflare.com/client/v4/user/tokens");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${BOOTSTRAP_TOKEN}`,
+      );
+      cloudflareTokenCreateCalls += 1;
+      return new Response(
+        JSON.stringify({
+          success: true,
+          result: {
+            value: `${RUN_TOKEN}-${cloudflareTokenCreateCalls}`,
+            expires_on: "2026-06-06T01:00:00.000Z",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as never,
   });
   // Register the cloudflare connection THROUGH the vault so its sealed blob
   // exists; bind compute to it so resolveCapabilities -> per-alias mint resolves.
-  const conn = await vault.register({
-    spaceId: "space_test",
-    provider: "cloudflare",
-    authMethod: "static_secret",
-    values: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN },
-  });
+  const conn = await markConnectionVerified(
+    store,
+    await vault.register({
+      spaceId: "space_test",
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      scopeHints: {
+        cloudflareTokenVending: {
+          ttlSeconds: 3600,
+          policies: [
+            {
+              effect: "allow",
+              permission_groups: [{ id: "perm_workers_write" }],
+              resources: {
+                "com.cloudflare.api.account.acct_123": "*",
+              },
+            },
+          ],
+        },
+      },
+      values: { CLOUDFLARE_API_TOKEN: BOOTSTRAP_TOKEN },
+    }),
+  );
   const seeded = await seedInstallationModel(store, {
     environment: "preview",
     installConfig: {
@@ -427,7 +615,7 @@ test("apply dispatch carries TF_VAR_<provider>_<capability>_<arg> per-alias cred
     spaceId: seeded.installation.spaceId,
     installationId: seeded.installation.id,
     environment: seeded.installation.environment,
-    bindings: { compute: { mode: "connection", connectionId: conn.id } },
+    bindings: [{ provider: "cloudflare", alias: "main", mode: "connection", connectionId: conn.id }],
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
@@ -446,11 +634,13 @@ test("apply dispatch carries TF_VAR_<provider>_<capability>_<arg> per-alias cred
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
   expect(planRun.status).toEqual("succeeded");
 
-  // The plan dispatch already carries the per-alias TF_VAR credential, merged on
-  // top of the shared provider env (CLOUDFLARE_API_TOKEN for compatibility).
+  // The plan dispatch carries only the per-alias TF_VAR credential for
+  // providers rootgen can express as generated-root variables.
   const planCreds = runner.planJobs[0]!.credentials!;
-  expect(planCreds.TF_VAR_cloudflare_compute_api_token).toEqual(SECRET_TOKEN);
-  expect(planCreds.CLOUDFLARE_API_TOKEN).toEqual(SECRET_TOKEN);
+  expect(planCreds.TF_VAR_cloudflare_main_api_token).toEqual(
+    `${RUN_TOKEN}-1`,
+  );
+  expect(planCreds.CLOUDFLARE_API_TOKEN).toBeUndefined();
   const planMintEvents = await store.listCredentialMintEventsForRun(planRun.id);
   expect(planMintEvents).toHaveLength(1);
   expect(planMintEvents[0]).toMatchObject({
@@ -459,8 +649,21 @@ test("apply dispatch carries TF_VAR_<provider>_<capability>_<arg> per-alias cred
     installationId: "inst_fixture",
     connectionId: conn.id,
     phase: "plan",
-    capabilities: ["compute"],
+    capabilities: ["cloudflare"],
   });
+  expect(planMintEvents[0]!.providerCredentialEvidence).toEqual([
+    {
+      connectionId: conn.id,
+      provider: "cloudflare",
+      delivery: "generated_root_variable",
+      rootOnly: true,
+      temporary: true,
+      ttlEnforced: true,
+      expiresAt: "2026-06-06T01:00:00.000Z",
+      ttlSeconds: 3600,
+      issuer: "cloudflare_api_token_vending",
+    },
+  ]);
 
   const { applyRun } = await controller.createApplyRun({
     planRunId: planRun.id,
@@ -470,50 +673,450 @@ test("apply dispatch carries TF_VAR_<provider>_<capability>_<arg> per-alias cred
 
   // The apply dispatch ALSO carries the per-alias TF_VAR (re-resolved at mint).
   const applyCreds = runner.applyJobs[0]!.credentials!;
-  expect(applyCreds.TF_VAR_cloudflare_compute_api_token).toEqual(SECRET_TOKEN);
-  expect(await store.listCredentialMintEventsForRun(planRun.id)).toHaveLength(1);
-  const applyMintEvents = await store.listCredentialMintEventsForRun(applyRun.id);
+  expect(applyCreds.TF_VAR_cloudflare_main_api_token).toEqual(
+    `${RUN_TOKEN}-2`,
+  );
+  expect(await store.listCredentialMintEventsForRun(planRun.id)).toHaveLength(
+    1,
+  );
+  const applyMintEvents = await store.listCredentialMintEventsForRun(
+    applyRun.id,
+  );
   expect(applyMintEvents).toHaveLength(1);
   expect(applyMintEvents[0]).toMatchObject({
     runId: applyRun.id,
     phase: "apply",
     connectionId: conn.id,
-    capabilities: ["compute"],
+    capabilities: ["cloudflare"],
   });
+  expect(applyMintEvents[0]!.providerCredentialEvidence).toEqual([
+    {
+      connectionId: conn.id,
+      provider: "cloudflare",
+      delivery: "generated_root_variable",
+      rootOnly: true,
+      temporary: true,
+      ttlEnforced: true,
+      expiresAt: "2026-06-06T01:00:00.000Z",
+      ttlSeconds: 3600,
+      issuer: "cloudflare_api_token_vending",
+    },
+  ]);
 
   // The secret value must NEVER reach any persisted run record (plan / apply /
   // deployment / state). Credentials live only on the dispatch payload.
   const persistedPlan = await store.getPlanRun(planRun.id);
   const persistedApply = await store.getApplyRun(applyRun.id);
-  expect(JSON.stringify(persistedPlan)).not.toContain(SECRET_TOKEN);
-  expect(JSON.stringify(persistedApply)).not.toContain(SECRET_TOKEN);
+  expect(JSON.stringify(persistedPlan)).not.toContain(BOOTSTRAP_TOKEN);
+  expect(JSON.stringify(persistedApply)).not.toContain(BOOTSTRAP_TOKEN);
+  expect(JSON.stringify(persistedPlan)).not.toContain(RUN_TOKEN);
+  expect(JSON.stringify(persistedApply)).not.toContain(RUN_TOKEN);
   const installation = (await store.getInstallation("inst_fixture"))!;
   const deployment = installation.currentDeploymentId
     ? await store.getDeployment(installation.currentDeploymentId)
     : undefined;
-  expect(JSON.stringify(deployment)).not.toContain(SECRET_TOKEN);
+  expect(JSON.stringify(deployment)).not.toContain(BOOTSTRAP_TOKEN);
+  expect(JSON.stringify(deployment)).not.toContain(RUN_TOKEN);
   const latest = await store.getLatestStateSnapshot("inst_fixture", "preview");
-  expect(JSON.stringify(latest)).not.toContain(SECRET_TOKEN);
+  expect(JSON.stringify(latest)).not.toContain(BOOTSTRAP_TOKEN);
+  expect(JSON.stringify(latest)).not.toContain(RUN_TOKEN);
+  expect(JSON.stringify(planMintEvents)).not.toContain(BOOTSTRAP_TOKEN);
+  expect(JSON.stringify(applyMintEvents)).not.toContain(BOOTSTRAP_TOKEN);
+  expect(JSON.stringify(planMintEvents)).not.toContain(RUN_TOKEN);
+  expect(JSON.stringify(applyMintEvents)).not.toContain(RUN_TOKEN);
 });
 
-test("opentofu_root install uses the raw-module path (snapshot as root, no generated root)", async () => {
+test("provider credential policy can fail closed on static non-ttl provider secrets", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const vault = new StaticSecretConnectionVault({
+    store,
+    crypto: new MultiCloudSecretBoundaryCrypto({
+      globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
+    }),
+    now: () => new Date("2026-06-06T00:00:00.000Z"),
+  });
+  const conn = await markConnectionVerified(
+    store,
+    await vault.register({
+      spaceId: "space_test",
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "cf-static-token" },
+    }),
+  );
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "my-worker", accountId: "acct_123" },
+      policy: {
+        providerCredentials: {
+          requireTemporary: true,
+          requireTtlEnforced: true,
+          requireRootOnly: true,
+        },
+      },
+    },
+  });
+  await store.putDeploymentProfile({
+    id: "profile_credential_policy",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [{ provider: "cloudflare", alias: "main", mode: "connection", connectionId: conn.id }],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const runner = recordingRunner({});
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    vault,
+    now: sequenceNow(100),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toEqual("failed");
+  expect(JSON.stringify(planRun.diagnostics)).toContain(
+    "credential_policy_failed",
+  );
+  expect(JSON.stringify(planRun.diagnostics)).toContain(
+    "requires temporary credentials",
+  );
+  expect(runner.planJobs).toHaveLength(0);
+  const mintEvents = await store.listCredentialMintEventsForRun(planRun.id);
+  expect(mintEvents).toHaveLength(1);
+  expect(mintEvents[0]!.providerCredentialEvidence).toEqual([
+    {
+      connectionId: conn.id,
+      provider: "cloudflare",
+      delivery: "generated_root_variable",
+      rootOnly: true,
+      temporary: false,
+      ttlEnforced: false,
+      issuer: "static_secret",
+    },
+  ]);
+});
+
+test("provider credential policy fails closed when required provider mint returns no evidence", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putConnection(connection("conn_cf", "cloudflare"));
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "my-worker", accountId: "acct_123" },
+      policy: {
+        providerCredentials: {
+          requireRootOnly: true,
+        },
+      },
+    },
+  });
+  await store.putDeploymentProfile({
+    id: "profile_missing_credential_evidence",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        mode: "connection",
+        connectionId: "conn_cf",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const runner = recordingRunner({});
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    vault: {
+      register: () => Promise.reject(new Error("not used")),
+      test: () => Promise.resolve({ status: "verified" }),
+      revoke: () => Promise.resolve(true),
+      mint: () => Promise.resolve(new CredentialBundle({})),
+      mintForProviderBindings: () => Promise.resolve(new CredentialBundle({})),
+    } as never,
+    now: sequenceNow(100),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toBe("failed");
+  expect(JSON.stringify(planRun.diagnostics)).toContain(
+    "credential_policy_failed",
+  );
+  expect(JSON.stringify(planRun.diagnostics)).toContain(
+    "requires mint evidence",
+  );
+  expect(runner.planJobs).toHaveLength(0);
+  const mintEvents = await store.listCredentialMintEventsForRun(planRun.id);
+  expect(mintEvents).toHaveLength(1);
+  expect(mintEvents[0]!.providerCredentialEvidence ?? []).toEqual([]);
+});
+
+test("provider credential policy fails closed when provider mint evidence is partial", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putConnection(connection("conn_main", "cloudflare"));
+  await store.putConnection(connection("conn_zone", "cloudflare"));
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "my-worker", accountId: "acct_123" },
+      policy: {
+        providerCredentials: {
+          requireRootOnly: true,
+        },
+      },
+    },
+  });
+  await store.putDeploymentProfile({
+    id: "profile_partial_credential_evidence",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        mode: "connection",
+        connectionId: "conn_main",
+      },
+      {
+        provider: "cloudflare",
+        alias: "zone",
+        mode: "connection",
+        connectionId: "conn_zone",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const runner = recordingRunner({});
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    vault: {
+      register: () => Promise.reject(new Error("not used")),
+      test: () => Promise.resolve({ status: "verified" }),
+      revoke: () => Promise.resolve(true),
+      mint: () => Promise.resolve(new CredentialBundle({})),
+      mintForProviderBindings: () =>
+        Promise.resolve(
+          new CredentialBundle(
+            { TF_VAR_cloudflare_main_api_token: "fixture-provider-token" },
+            [],
+            [
+              {
+                connectionId: "conn_main",
+                provider: "cloudflare",
+                delivery: "generated_root_variable",
+                rootOnly: true,
+                temporary: false,
+                ttlEnforced: false,
+                issuer: "static_secret",
+              },
+            ],
+          ),
+        ),
+    } as never,
+    now: sequenceNow(100),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toBe("failed");
+  expect(JSON.stringify(planRun.diagnostics)).toContain(
+    "credential_policy_failed",
+  );
+  expect(JSON.stringify(planRun.diagnostics)).toContain(
+    "requires mint evidence",
+  );
+  expect(runner.planJobs).toHaveLength(0);
+  const mintEvents = await store.listCredentialMintEventsForRun(planRun.id);
+  expect(mintEvents).toHaveLength(2);
+  expect(
+    mintEvents.flatMap((event) => event.providerCredentialEvidence ?? []),
+  ).toHaveLength(1);
+});
+
+test("provider credential policy fails closed when provider mint evidence names the wrong provider", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putConnection(connection("conn_cf", "cloudflare"));
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "my-worker", accountId: "acct_123" },
+      policy: {
+        providerCredentials: {
+          requireRootOnly: true,
+        },
+      },
+    },
+  });
+  await store.putDeploymentProfile({
+    id: "profile_wrong_provider_credential_evidence",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        mode: "connection",
+        connectionId: "conn_cf",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const runner = recordingRunner({});
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    vault: {
+      register: () => Promise.reject(new Error("not used")),
+      test: () => Promise.resolve({ status: "verified" }),
+      revoke: () => Promise.resolve(true),
+      mint: () => Promise.resolve(new CredentialBundle({})),
+      mintForProviderBindings: () =>
+        Promise.resolve(
+          new CredentialBundle(
+            { TF_VAR_cloudflare_main_api_token: "fixture-provider-token" },
+            [],
+            [
+              {
+                connectionId: "conn_cf",
+                provider: "aws",
+                delivery: "generated_root_variable",
+                rootOnly: true,
+                temporary: false,
+                ttlEnforced: false,
+                issuer: "static_secret",
+              },
+            ],
+          ),
+        ),
+    } as never,
+    now: sequenceNow(100),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toBe("failed");
+  expect(JSON.stringify(planRun.diagnostics)).toContain(
+    "credential_policy_failed",
+  );
+  expect(JSON.stringify(planRun.diagnostics)).toContain("cloudflare");
+  expect(runner.planJobs).toHaveLength(0);
+});
+
+test("disabled provider binding does not fall back to space-wide provider credentials", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const vault = new StaticSecretConnectionVault({
+    store,
+    crypto: new MultiCloudSecretBoundaryCrypto({
+      globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
+    }),
+    now: () => new Date("2026-06-06T00:00:00.000Z"),
+  });
+  await vault.register({
+    spaceId: "space_test",
+    provider: "cloudflare",
+    authMethod: "static_secret",
+    values: { CLOUDFLARE_API_TOKEN: "space-wide-token" },
+  });
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "my-worker", accountId: "acct_123" },
+      policy: {},
+    },
+  });
+  await store.putDeploymentProfile({
+    id: "profile_disabled",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [{ provider: "cloudflare", alias: "main", mode: "disabled" }],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const runner = recordingRunner({});
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    vault,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toBe("failed");
+  expect(
+    projectPlanRun(planRun, {
+      installationId: seeded.installation.id,
+      environment: seeded.installation.environment,
+    }).errorCode,
+  ).toBe("credential_mint_failed");
+  expect(runner.planJobs).toHaveLength(0);
+  const failedPlan = await store.getPlanRun(planRun.id);
+  expect(failedPlan?.status).toBe("failed");
+  expect(
+    failedPlan
+      ? projectPlanRun(failedPlan, {
+          installationId: seeded.installation.id,
+          environment: seeded.installation.environment,
+        }).errorCode
+      : undefined,
+  ).toBe("credential_mint_failed");
+  expect(JSON.stringify(failedPlan)).not.toContain("space-wide-token");
+});
+
+test("legacy opentofu_root install fails closed before generated-root dispatch", async () => {
   const { runner, controller } = await installTypeFixture({
     installConfig: {
       installType: "opentofu_root",
-      // No templateBinding: the snapshot is the OpenTofu root configuration.
       policy: {},
     },
     outputs: { launch_url: { sensitive: false, value: "https://x.example" } },
   });
 
-  const { planRun } = await controller.createInstallationPlan("inst_fixture");
-  expect(planRun.status).toEqual("succeeded");
-  // Raw-module path: no template binding, no generated root, no build.
-  expect(planRun.templateBinding).toBeUndefined();
-  const planJob = runner.planJobs[0]!;
-  expect(planJob.template).toBeUndefined();
-  expect(planJob.generatedRoot).toBeUndefined();
-  expect(planJob.build).toBeUndefined();
-  // The dispatch source is the resolved snapshot (pinned to the commit).
-  expect(planJob.planRun.source.kind).toEqual("git");
+  await expect(
+    controller.createInstallationPlan("inst_fixture"),
+  ).rejects.toThrow(/legacy opentofu_root/);
+  expect(runner.planJobs).toHaveLength(0);
 });

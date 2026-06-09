@@ -18,6 +18,7 @@ import type {
   PatchSourceRequest,
   Source,
   SourceResponse,
+  SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type {
@@ -70,6 +71,21 @@ export class SourceManagement {
     sourceId: string,
   ): Promise<ListSourceSnapshotsResponse> {
     return await this.#require().listSnapshots(sourceId);
+  }
+
+  async getSourceSnapshot(id: string): Promise<SourceSnapshot> {
+    return await this.#require().getSourceSnapshot(id);
+  }
+
+  async recordUploadSnapshot(input: {
+    readonly spaceId: string;
+    readonly archiveObjectKey: string;
+    readonly archiveDigest: string;
+    readonly archiveSizeBytes: number;
+    readonly path?: string;
+    readonly snapshotId?: string;
+  }): Promise<SourceSnapshot> {
+    return await this.#require().recordUploadSnapshot(input);
   }
 
   async createSourceCompatibilityCheck(

@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import type { TemplateDefinition } from "takosumi-contract/deploy-control-api";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 import {
   assertValidTemplate,
   defaultTemplateRegistry,
@@ -7,7 +9,7 @@ import {
   validateTemplateInputs,
 } from "./mod.ts";
 
-test("built-in registry resolves the official catalog templates by id+version", () => {
+test("built-in registry resolves first-party modules by id+version", () => {
   const r2 = defaultTemplateRegistry.require("cloudflare-r2-storage", "1.0.0");
   expect(r2.source.localModulePath).toEqual(
     "/app/templates/cloudflare-r2-storage/module",
@@ -20,7 +22,7 @@ test("built-in registry resolves the official catalog templates by id+version", 
   expect(worker.build?.commands).toContain("bun run build");
 });
 
-test("built-in registry resolves the core base-installation template", () => {
+test("built-in registry resolves the core base-installation module", () => {
   const core = defaultTemplateRegistry.require("core", "1.0.0");
   expect(core.source.localModulePath).toEqual("/app/templates/core/module");
   // core is a pure value-plumbing module: zero providers, zero resource types.
@@ -28,18 +30,57 @@ test("built-in registry resolves the core base-installation template", () => {
   expect(core.policy.allowedResourceTypes).toEqual([]);
 });
 
+test("built-in registry resolves bundled module files for every first-party module", () => {
+  for (const template of defaultTemplateRegistry.list()) {
+    const files = defaultTemplateRegistry.requireModuleFiles(
+      template.id,
+      template.version,
+    );
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some((file) => file.path === "main.tf")).toBe(true);
+    for (const file of files) {
+      expect(file.path.startsWith("/")).toBe(false);
+      expect(file.path.includes("..")).toBe(false);
+      expect(file.text.length).toBeGreaterThan(0);
+    }
+  }
+});
+
+test("bundled module files match the first-party module sources", async () => {
+  for (const template of defaultTemplateRegistry.list()) {
+    const files = defaultTemplateRegistry.requireModuleFiles(
+      template.id,
+      template.version,
+    );
+    const main = files.find((file) => file.path === "main.tf");
+    expect(main).toBeDefined();
+    const source = await readFile(
+      join(
+        import.meta.dir,
+        "../../../../opentofu-modules",
+        template.id,
+        "module/main.tf",
+      ),
+      "utf8",
+    );
+    expect(main?.text).toEqual(source);
+  }
+});
+
 test("registry require throws not_found for an unknown id or version", () => {
   expect(() => defaultTemplateRegistry.require("nope", "1.0.0")).toThrow(
-    /not in the official catalog/,
+    /not a built-in Capsule module/,
   );
   expect(() =>
     defaultTemplateRegistry.require("cloudflare-r2-storage", "9.9.9")
-  ).toThrow(/not in the official catalog/);
+  ).toThrow(/not a built-in Capsule module/);
 });
 
 test("registry rejects a catalog with a duplicate id+version", () => {
   const t = defaultTemplateRegistry.require("cloudflare-r2-storage", "1.0.0");
-  expect(() => new TemplateRegistry([t, t])).toThrow(/duplicate template/);
+  expect(() => new TemplateRegistry([t, t])).toThrow(
+    /duplicate first-party Capsule module/,
+  );
 });
 
 test("assertValidTemplate rejects traversal in the in-image module path", () => {

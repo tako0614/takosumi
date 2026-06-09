@@ -9,9 +9,7 @@ import {
 } from "./mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
 import { SourcesService } from "../sources/mod.ts";
-import {
-  StaticSecretConnectionVault,
-} from "../../adapters/vault/mod.ts";
+import { StaticSecretConnectionVault } from "../../adapters/vault/mod.ts";
 import { MultiCloudSecretBoundaryCrypto } from "../../adapters/secret-store/memory.ts";
 
 class StubRunner {
@@ -98,10 +96,11 @@ test("source_sync consumer (public repo) records a snapshot and lastSeenCommit",
 
   const stored = await store.getSource(source.id);
   expect(stored?.lastSeenCommit).toBe("abc123def456");
+  expect(await store.listCredentialMintEventsForRun(run.id)).toEqual([]);
 });
 
 test("source_sync consumer mints ONLY source-phase git creds for a private repo", async () => {
-  const { sourcesService, vault, runner, controller } = build();
+  const { store, sourcesService, vault, runner, controller } = build();
   const conn = await vault.register({
     spaceId: "space_1",
     provider: "source_git_https_token",
@@ -109,6 +108,12 @@ test("source_sync consumer mints ONLY source-phase git creds for a private repo"
     authMethod: "static_secret",
     scope: { username: "git-bot" },
     values: { GIT_HTTPS_TOKEN: "ghp_super_secret" },
+  });
+  await store.putConnection({
+    ...conn,
+    status: "verified",
+    verifiedAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
   });
   const { source } = await sourcesService.createSource({
     spaceId: "space_1",
@@ -126,10 +131,23 @@ test("source_sync consumer mints ONLY source-phase git creds for a private repo"
   expect(runner.calls).toHaveLength(1);
   const creds = runner.calls[0].credentials;
   expect(creds).toBeDefined();
-  expect(creds?.env.GIT_ASKPASS).toBe("/work/.git-credentials/askpass.sh");
+  expect(creds?.env.GIT_TERMINAL_PROMPT).toBe("0");
   // The askpass file content carries the secret token (dispatch-path only).
   const askpass = creds?.files?.find((f) => f.path.endsWith("askpass.sh"));
   expect(askpass?.content).toContain("ghp_super_secret");
+
+  const mintEvents = await store.listCredentialMintEventsForRun(run.id);
+  expect(mintEvents).toHaveLength(1);
+  expect(mintEvents[0]).toMatchObject({
+    runId: run.id,
+    spaceId: "space_1",
+    sourceId: source.id,
+    connectionId: conn.id,
+    phase: "source",
+    capabilities: ["source"],
+  });
+  expect(mintEvents[0]?.installationId).toBeUndefined();
+  expect(JSON.stringify(mintEvents)).not.toContain("ghp_super_secret");
 });
 
 test("source_sync consumer records the run failed when the runner errors", async () => {

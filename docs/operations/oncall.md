@@ -15,7 +15,10 @@ product docs が所有します。
 対象:
 
 - login / session / OIDC issuer
-- Space / Source / Connection / Installation / Dependency / Run APIs
+- Space / Source / Connection / Installation / Dependency / SourceSnapshot /
+  DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment / OutputSnapshot / Backup APIs
+- Provider Templates / Provider Env Set APIs and policy gates
+- Connection drivers and custom runner policy
 - SourceSnapshot / compatibility check / plan / apply / destroy flow
 - runner queue and container execution
 - StateSnapshot / OutputSnapshot / artifact / backup storage
@@ -27,13 +30,13 @@ the incident command surface.
 
 ## Roles
 
-| Role | Owner | Responsibility |
-| --- | --- | --- |
-| Primary on-call | current rotation owner | alert ack, first triage, mitigation owner |
-| Secondary on-call | next rotation owner | backup ack, parallel investigation, rollback approval |
-| Incident commander | primary or assigned operator | SEV declaration, war room, timeline, decision log |
-| Communications owner | support / product owner | customer update, status page, support sweep |
-| Subject-matter owner | service owner | deep dive, fix owner, postmortem action owner |
+| Role                 | Owner                        | Responsibility                                        |
+| -------------------- | ---------------------------- | ----------------------------------------------------- |
+| Primary on-call      | current rotation owner       | alert ack, first triage, mitigation owner             |
+| Secondary on-call    | next rotation owner          | backup ack, parallel investigation, rollback approval |
+| Incident commander   | primary or assigned operator | SEV declaration, war room, timeline, decision log     |
+| Communications owner | support / product owner      | customer update, status page, support sweep           |
+| Subject-matter owner | service owner                | deep dive, fix owner, postmortem action owner         |
 
 Primary and secondary should not share the same timezone / failure domain when
 possible. Active SEV-1 handoff requires synchronous acknowledgement in the
@@ -41,11 +44,11 @@ incident channel.
 
 ## SEV Classification
 
-| SEV | Customer impact | Examples | Ack target | Update cadence |
-| --- | --- | --- | --- | --- |
-| SEV-1 | production-wide outage, data loss risk, security-critical exposure, deploy/auth/source access unavailable | platform worker 5xx, OIDC issuer unavailable, cross-Space data exposure, known secret leak, state/artifact corruption | 5 min | 15 min |
-| SEV-2 | major feature degradation, multiple Spaces affected, workaround exists | plan/apply mostly failing, queue backlog, runner container startup failures, billing write failure, compatibility API outage | 15 min | 30 min |
-| SEV-3 | isolated Space / non-critical degradation, operational toil | single Installation run failure, dashboard drift, slow backup job, docs/runbook issue | 1 business hour | daily or on material change |
+| SEV   | Customer impact                                                                                           | Examples                                                                                                                                                                                                                                       | Ack target      | Update cadence              |
+| ----- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | --------------------------- |
+| SEV-1 | production-wide outage, data loss risk, security-critical exposure, deploy/auth/source access unavailable | platform worker 5xx, OIDC issuer unavailable, cross-Space data exposure, known secret leak, state/artifact corruption                                                                                                                          | 5 min           | 15 min                      |
+| SEV-2 | major feature degradation, multiple Spaces affected, workaround exists                                    | plan/apply mostly failing, queue backlog, runner container startup failures, billing write failure, compatibility API outage, user env set provider template outage, user env set provider mint failure, provider env set egress policy regression | 15 min          | 30 min                      |
+| SEV-3 | isolated Space / non-critical degradation, operational toil                                               | single Installation run failure, dashboard drift, slow backup job, docs/runbook issue                                                                                                                                                          | 1 business hour | daily or on material change |
 
 When scope is unclear, start at SEV-2 or higher. Suspected customer data
 exposure is SEV-1 until disproven.
@@ -63,14 +66,14 @@ exposure is SEV-1 until disproven.
 
 ## Escalation Matrix
 
-| Trigger | Primary action | Escalate to secondary | Escalate to owner | Escalate to product / legal |
-| --- | --- | --- | --- | --- |
-| SEV-1 declared | immediate page + war room | immediately | immediately for affected area | within 15 min |
-| SEV-2 declared | page primary | no ack after 15 min or unclear mitigation | no mitigation path after 30 min | customer update needed |
-| Security / secret exposure suspected | freeze affected path | immediately | security owner immediately | immediately |
-| State / output integrity risk | stop writes if safe, preserve evidence | immediately | storage / control-plane owner | within 15 min |
-| Failed platform rollback | start rollback SOP | rollback blocked after 15 min | release owner | if customer impact persists |
-| Runner backlog | throttle new runs / drain queue | no improvement after 30 min | runner owner | if deploy SLA breached |
+| Trigger                              | Primary action                         | Escalate to secondary                     | Escalate to owner               | Escalate to product / legal |
+| ------------------------------------ | -------------------------------------- | ----------------------------------------- | ------------------------------- | --------------------------- |
+| SEV-1 declared                       | immediate page + war room              | immediately                               | immediately for affected area   | within 15 min               |
+| SEV-2 declared                       | page primary                           | no ack after 15 min or unclear mitigation | no mitigation path after 30 min | customer update needed      |
+| Security / secret exposure suspected | freeze affected path                   | immediately                               | security owner immediately      | immediately                 |
+| State / output integrity risk        | stop writes if safe, preserve evidence | immediately                               | storage / control-plane owner   | within 15 min               |
+| Failed platform rollback             | start rollback SOP                     | rollback blocked after 15 min             | release owner                   | if customer impact persists |
+| Runner backlog                       | throttle new runs / drain queue        | no improvement after 30 min               | runner owner                    | if deploy SLA breached      |
 
 ## Incident Command Procedure
 

@@ -271,7 +271,10 @@ test("patchInstallationStatus updates status + timestamp", async () => {
     sourceId: "src_1",
     installConfigId: "cfg_1",
   });
-  const updated = await service.patchInstallationStatus(installation.id, "active");
+  const updated = await service.patchInstallationStatus(
+    installation.id,
+    "active",
+  );
   expect(updated.status).toBe("active");
 });
 
@@ -291,6 +294,26 @@ test("putInstallConfig validates a referenced space exists", async () => {
       updatedAt: "2026-06-06T00:00:00.000Z",
     }),
   ).rejects.toMatchObject({ code: "invalid_argument" });
+});
+
+test("putInstallConfig rejects legacy opentofu_root configs for new writes", async () => {
+  const { service } = build();
+  await expect(
+    service.putInstallConfig({
+      id: "cfg_root",
+      name: "legacy root",
+      installType: "opentofu_root",
+      trustLevel: "raw",
+      variableMapping: {},
+      outputAllowlist: {},
+      policy: {},
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    }),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    message: expect.stringContaining("legacy direct-root"),
+  });
 });
 
 test("getInstallConfig / listInstallConfigs passthroughs work", async () => {
@@ -318,7 +341,7 @@ test("putDeploymentProfile validates the installation + matching space", async (
     spaceId: "space_1",
     installationId: installation.id,
     environment: "production",
-    bindings: {},
+    bindings: [],
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
@@ -346,7 +369,7 @@ test("putDeploymentProfile rejects a spaceId mismatching the installation", asyn
       spaceId: "space_other",
       installationId: installation.id,
       environment: "production",
-      bindings: {},
+      bindings: [],
       createdAt: "2026-06-06T00:00:00.000Z",
       updatedAt: "2026-06-06T00:00:00.000Z",
     }),

@@ -121,6 +121,59 @@ test("Cloudflare Accounts Worker rejects a policy-violating /install source url 
   assert.equal((await response.json()).error, "invalid_install_source_url");
 });
 
+test("Cloudflare Accounts Worker keeps external /install links https-only", async () => {
+  const worker = createCloudflareWorker();
+  for (const raw of [
+    "ssh://git@github.com/acme/repo.git",
+    "git@github.com:acme/repo.git",
+  ]) {
+    const response = await worker.fetch(
+      new Request(
+        `https://accounts.example/install?git=${encodeURIComponent(raw)}`,
+      ),
+      createEnv(new InitOnlyD1Database()),
+    );
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.error, "invalid_install_source_url");
+    assert.equal(
+      body.error_description,
+      "source url rejected by policy: install_link_requires_https",
+    );
+  }
+});
+
+test("Cloudflare Accounts Worker rejects local/private external /install hosts", async () => {
+  const worker = createCloudflareWorker();
+  for (const raw of [
+    "https://127.0.0.1/acme/repo.git",
+    "https://10.0.0.5/acme/repo.git",
+    "https://192.168.1.10/acme/repo.git",
+    "https://169.254.169.254/latest/meta-data",
+    "https://[::1]/acme/repo.git",
+    "https://[fc00::1]/acme/repo.git",
+    "https://[fe80::1]/acme/repo.git",
+    "https://[::ffff:169.254.169.254]/acme/repo.git",
+    "https://[64:ff9b::a9fe:a9fe]/acme/repo.git",
+    "https://metadata.google.internal/acme/repo.git",
+    "https://localhost/acme/repo.git",
+  ]) {
+    const response = await worker.fetch(
+      new Request(
+        `https://accounts.example/install?git=${encodeURIComponent(raw)}`,
+      ),
+      createEnv(new InitOnlyD1Database()),
+    );
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.error, "invalid_install_source_url");
+    assert.equal(
+      body.error_description,
+      "source url rejected by policy: blocked_host",
+    );
+  }
+});
+
 test("Cloudflare Accounts Worker handles account-plane routes directly", async () => {
   const d1 = new InitOnlyD1Database();
   const worker = createCloudflareWorker();
@@ -555,6 +608,7 @@ function createEnv(
 // takosumi/deploy/local-substrate/compose.substrate.yml.
 const LOCAL_READINESS_ENV: Partial<CloudflareWorkerEnv> = {
   TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS: "open",
+  TAKOSUMI_PRODUCTION_HARDENING_GATE: "enforce",
   TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST:
     "sha256:e35f7540857c615ddd26a779ca95674237c649bbb99712e7e795e3bdc9ce3357",
   TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF:
@@ -563,6 +617,22 @@ const LOCAL_READINESS_ENV: Partial<CloudflareWorkerEnv> = {
     "git+https://github.com/tako0614/takos-private.git#docs/launch-readiness/p0-approval.md",
   TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY:
     "Local substrate p0 staged rehearsal — evidence retained with rehearsal log; no production traffic served.",
+  TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/container-smoke.md",
+  TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST:
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/egress.md",
+  TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST:
+    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-catalog.md",
+  TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST:
+    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/secret-boundary.md",
+  TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST:
+    "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 };
 
 test("managed-offering 'open' allowed on a production issuer with final audit env", async () => {
@@ -580,16 +650,93 @@ test("managed-offering 'open' allowed on a production issuer with final audit en
   assert.equal(response.status, 200);
 });
 
+test("managed-offering 'open' refuses missing production hardening evidence", async () => {
+  const d1 = new InitOnlyD1Database();
+  const worker = createCloudflareWorker();
+  const env = createEnv(d1, {
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+    ...LOCAL_READINESS_ENV,
+  });
+  delete (env as Partial<CloudflareWorkerEnv>)
+    .TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST;
+
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.com/.well-known/openid-configuration"),
+    env,
+  );
+  assert.equal(response.status, 500);
+  const body = (await response.json()) as {
+    error?: string;
+    error_description?: string;
+  };
+  assert.equal(body.error, "worker_configuration_error");
+  assert.match(
+    body.error_description ?? "",
+    /Open managed offering access requires TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST/,
+  );
+});
+
+test("managed-offering 'open' requires enforced production hardening gate", async () => {
+  const d1 = new InitOnlyD1Database();
+  const worker = createCloudflareWorker();
+  const env = createEnv(d1, {
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+    ...LOCAL_READINESS_ENV,
+    TAKOSUMI_PRODUCTION_HARDENING_GATE: "observe",
+  });
+
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.com/.well-known/openid-configuration"),
+    env,
+  );
+  assert.equal(response.status, 500);
+  const body = (await response.json()) as {
+    error?: string;
+    error_description?: string;
+  };
+  assert.equal(body.error, "worker_configuration_error");
+  assert.match(
+    body.error_description ?? "",
+    /Open managed offering access requires TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce/,
+  );
+});
+
+test("managed-offering 'open' refuses mutable production hardening refs", async () => {
+  const d1 = new InitOnlyD1Database();
+  const worker = createCloudflareWorker();
+  const env = createEnv(d1, {
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+    ...LOCAL_READINESS_ENV,
+    TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF:
+      "git+https://github.com/tako0614/takosumi-private.git#evidence/provider-catalog.md",
+  });
+
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.com/.well-known/openid-configuration"),
+    env,
+  );
+  assert.equal(response.status, 500);
+  const body = (await response.json()) as {
+    error?: string;
+    error_description?: string;
+  };
+  assert.equal(body.error, "worker_configuration_error");
+  assert.match(
+    body.error_description ?? "",
+    /TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF must be commit-pinned git\+ ref/,
+  );
+});
+
 test("managed-offering 'open' allowed on a .test issuer (local-substrate)", async () => {
   const d1 = new InitOnlyD1Database();
   const worker = createCloudflareWorker();
   const env = createEnv(d1, {
-    TAKOSUMI_ACCOUNTS_ISSUER: "https://accounts.takosumi.test",
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.test",
     ...LOCAL_READINESS_ENV,
   });
   const response = await worker.fetch(
     new Request(
-      "https://accounts.takosumi.test/.well-known/openid-configuration",
+      "https://app.takosumi.test/.well-known/openid-configuration",
     ),
     env,
   );
@@ -601,7 +748,7 @@ test("Cloudflare Accounts Worker seeds local-substrate account session and space
   const worker = createCloudflareWorker();
   registerSessionHashSaltConfig({ allowDevFallback: true });
   const env = createEnv(d1, {
-    TAKOSUMI_ACCOUNTS_ISSUER: "https://accounts.takosumi.test",
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.test",
     LOCAL_SUBSTRATE_TEST_BED: "1",
     TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID: "sess_local_substrate",
     TAKOSUMI_ACCOUNTS_LOCAL_DEV_ACCOUNT_ID: "acct_local",
@@ -610,7 +757,7 @@ test("Cloudflare Accounts Worker seeds local-substrate account session and space
 
   const response = await worker.fetch(
     new Request(
-      "https://accounts.takosumi.test/v1/installations?space_id=space_local",
+      "https://app.takosumi.test/v1/installations?space_id=space_local",
       {
         headers: { authorization: "Bearer sess_local_substrate" },
       },
@@ -649,7 +796,7 @@ test("managed-offering 'open' refuses an invalid issuer URL", async () => {
 });
 
 for (const issuer of [
-  "https://accounts.takosumi.test",
+  "https://app.takosumi.test",
   "https://accounts.local",
   "https://app.localhost",
   "http://localhost:8080",

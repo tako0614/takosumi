@@ -6,6 +6,8 @@
  * child module from a Takosumi generated root.
  */
 
+import type { Run } from "./runs.ts";
+
 export type CapsuleCompatibilityLevel =
   | "ready"
   | "auto_capsulized"
@@ -29,6 +31,7 @@ export interface CapsuleProviderRequirement {
   readonly versionConstraint?: string;
   readonly aliases: readonly string[];
   readonly allowed: boolean;
+  readonly credentialSources?: readonly ("takosumi_managed" | "user_env_set")[];
 }
 
 export interface CapsuleResourceSummary {
@@ -79,4 +82,5 @@ export interface CreateSourceCompatibilityCheckRequest {
 
 export interface CapsuleCompatibilityReportResponse {
   readonly report: CapsuleCompatibilityReport;
+  readonly run?: Run;
 }

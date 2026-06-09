@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import process from "node:process";
 import { helpText } from "./cli-help.ts";
 import {
@@ -8,6 +9,7 @@ import {
   runAccountsServe,
   runAccountsTokens,
 } from "./cli-accounts-commands.ts";
+import { runConnections } from "./cli-connections-commands.ts";
 import {
   runInstallationsExport,
   runInstallationsInspect,
@@ -24,6 +26,12 @@ import {
   runLaunchReadinessTemplate,
   runLaunchReadinessValidate,
 } from "./cli-launch-readiness-commands.ts";
+import { runPlatformSecrets } from "./cli-platform-secrets-commands.ts";
+import {
+  runDeploy,
+  runDeployLogs,
+  runDeployStatus,
+} from "./cli-deploy-commands.ts";
 import type { CliIo } from "./cli-io.ts";
 
 export type { CliIo };
@@ -51,6 +59,35 @@ export async function main(
     return 0;
   }
 
+  if (args[0] === "run") {
+    return await main(args.slice(1), io);
+  }
+
+  // `takosumi deploy` — the wrangler-deploy-style local-directory deploy and its
+  // read companions. These are the primary user-facing surface.
+  if (
+    args[0] === "deploy" ||
+    args[0] === "plan" ||
+    args[0] === "logs" ||
+    args[0] === "status"
+  ) {
+    try {
+      switch (args[0]) {
+        case "deploy":
+          return await runDeploy(args.slice(1), io, { planOnly: false });
+        case "plan":
+          return await runDeploy(args.slice(1), io, { planOnly: true });
+        case "logs":
+          return await runDeployLogs(args.slice(1), io);
+        case "status":
+          return await runDeployStatus(args.slice(1), io);
+      }
+    } catch (error) {
+      io.stderr(error instanceof Error ? error.message : String(error));
+      return 1;
+    }
+  }
+
   const [domain, command, ...rest] = args;
   if (domain === "accounts" && command === "seed") {
     return runAccountsSeed(rest, io);
@@ -72,6 +109,12 @@ export async function main(
     rest[0] === "cleanup"
   ) {
     return await runAccountsLaunchTokensCleanup(rest.slice(1), io);
+  }
+  if (domain === "connections") {
+    return await runConnections([command, ...rest].filter(Boolean), io);
+  }
+  if (domain === "secrets" || domain === "platform-secrets") {
+    return await runPlatformSecrets([command, ...rest].filter(Boolean), io);
   }
   if (domain === "installations" && command === "list") {
     return await runInstallationsList(rest, io);

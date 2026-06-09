@@ -18,11 +18,11 @@ export const APPS: readonly Chip[] = [
 ];
 
 export const PROVIDERS: readonly Chip[] = [
-  { label: "Cloudflare", hint: "Workers / D1 / R2" },
-  { label: "AWS", hint: "Fargate / S3 / RDS" },
-  { label: "GCP", hint: "Cloud Run / GCS" },
-  { label: "Kubernetes", hint: "any cluster" },
-  { label: "Single-host", hint: "docker / systemd" },
+  { label: "Cloudflare", hint: "managed default" },
+  { label: "AWS", hint: "Space Connection" },
+  { label: "GCP", hint: "Space Connection" },
+  { label: "Kubernetes", hint: "Space Connection" },
+  { label: "Custom Provider", hint: "Space / self-host" },
 ];
 
 export const SUBSTRATE = {

@@ -30,13 +30,16 @@ import { InMemoryObservabilitySink } from "../../src/service/services/observabil
 import type { EnqueueRun } from "../../src/service/domains/deploy-control/mod.ts";
 import type { EnqueueSourceSync } from "../../src/service/domains/sources/mod.ts";
 import type { InstallationCoordination } from "../../src/service/domains/deploy-control/installation_lease.ts";
-import type { RunnerProfile } from "takosumi-contract/deploy-control-api";
+import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import type { CloudflareWorkerEnv, Queue } from "./bindings.ts";
 import { createCloudflareD1DeployStores } from "./d1_deploy_stores.ts";
 import { createCloudflareD1OpenTofuDeploymentStore } from "./d1_opentofu_store.ts";
 import { CloudflareD1SnapshotStorageDriver } from "./d1_storage.ts";
 import { CloudflareR2ObjectStorage } from "./r2_object_storage.ts";
-import { backupArtifactStoreFromEnv } from "./backup_artifact_store.ts";
+import {
+  backupArtifactStoreFromEnv,
+  backupObjectReaderFromR2,
+} from "./backup_artifact_store.ts";
 import { sensitiveOutputResolverFromEnv } from "./sensitive_output_resolver.ts";
 import { CloudflareContainerOpenTofuRunner } from "./container_runner.ts";
 
@@ -56,9 +59,11 @@ export async function createWorkerServiceApp(
   const enqueueRun = openTofuRunEnqueuer(env);
   const enqueueSourceSync = openTofuSourceSyncEnqueuer(env);
   const installationCoordination = durableObjectInstallationCoordination(env);
+  const opentofuRunner = new CloudflareContainerOpenTofuRunner(env);
   // Control backups (spec §33 / §26): seal the bundle with the at-rest crypto
   // and write to R2_BACKUPS. Absent binding -> backups stay disabled (501).
   const backupArtifactStore = backupArtifactStoreFromEnv(env.R2_BACKUPS, runtimeEnv);
+  const backupStateObjectReader = backupObjectReaderFromR2(env.R2_STATE);
   const sensitiveOutputResolver = sensitiveOutputResolverFromEnv(
     env.R2_ARTIFACTS,
     runtimeEnv,
@@ -73,13 +78,23 @@ export async function createWorkerServiceApp(
     opentofuDeploymentStore: createCloudflareD1OpenTofuDeploymentStore(
       env.TAKOS_D1,
     ),
-    opentofuRunner: new CloudflareContainerOpenTofuRunner(env),
+    opentofuRunner,
+    userEnvSetProviderRunner: opentofuRunner,
     // Async run lifecycle: when the run queue is bound, the create path persists
     // the run `queued` and returns immediately; the `queue()` consumer in this
     // same worker drives execution. Without the binding, the controller's
     // default inline dispatcher preserves synchronous create-executes-run.
     ...(enqueueRun ? { enqueueRun } : {}),
     ...(enqueueSourceSync ? { enqueueSourceSync } : {}),
+    // `takosumi deploy` upload archives are written to R2_SOURCE at the SAME raw
+    // key the OpenTofu runner restores from (no logical-bucket prefix).
+    ...(env.R2_SOURCE
+      ? {
+          writeSourceArchive: async (key: string, bytes: Uint8Array) => {
+            await env.R2_SOURCE!.put(key, bytes);
+          },
+        }
+      : {}),
     // Environment lease (spec §10.2): front the shared CoordinationObject so the
     // apply consumer serializes write runs per environment across isolates.
     ...(installationCoordination ? { installationCoordination } : {}),
@@ -87,6 +102,8 @@ export async function createWorkerServiceApp(
       ? { runnerProfiles: options.runnerProfiles }
       : {}),
     ...(backupArtifactStore ? { backupArtifactStore } : {}),
+    ...(backupStateObjectReader ? { backupStateObjectReader } : {}),
+    ...(backupArtifactStore ? { serviceDataBackupRunner: opentofuRunner } : {}),
     ...(sensitiveOutputResolver ? { sensitiveOutputResolver } : {}),
   });
 }

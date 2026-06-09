@@ -11,7 +11,7 @@ import {
 } from "./store.ts";
 import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "./sqlite_fake_d1.ts";
-import type { Connection } from "takosumi-contract/deploy-control-api";
+import type { Connection } from "@takosumi/internal/deploy-control-api";
 import type { ActivityEvent } from "takosumi-contract/activity";
 
 // -- Fixtures ------------------------------------------------------------------
@@ -33,15 +33,20 @@ function connection(overrides: Partial<Connection> = {}): Connection {
 
 function secretBlob(connectionId: string): StoredSecretBlob {
   return {
+    id: `secret_${connectionId}`,
     connectionId,
+    spaceId: "space_1",
+    kind: "cloudflare_api_token",
     ciphertext: "Y2lwaGVydGV4dA==",
-    iv: "aXZpdml2aXZpdg==",
-    keyVersion: "secret-boundary-aes-gcm/v1/cloudflare",
-    aad: {
+    encryptedDek: "secret-boundary-aes-gcm/v1/cloudflare",
+    nonce: "aXZpdml2aXZpdg==",
+    keyVersion: 1,
+    aad: JSON.stringify({
       cloudPartition: "cloudflare",
       spaceId: "space_1",
       provider: "cloudflare",
-    },
+    }),
+    createdAt: "2026-06-04T00:00:00.000Z",
   };
 }
 

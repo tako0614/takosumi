@@ -49,7 +49,7 @@ export const options = {
 
 const PLAN_RUNS_URL =
   "https://service-worker.takosumi.test/v1/plan-runs";
-const OIDC_URL = "https://accounts.takosumi.test/.well-known/openid-configuration";
+const OIDC_URL = "https://app.takosumi.test/.well-known/openid-configuration";
 const DEPLOY_CONTROL_TOKEN = __ENV.TAKOSUMI_DEPLOY_CONTROL_TOKEN ||
   "local-substrate-deploy-control-token";
 

@@ -2,7 +2,7 @@
  * Boots the redesigned local-substrate `cloud` control plane: the single
  * composed app this distribution serves (account-plane + embedded service +
  * dashboard / OIDC / billing / install UI), mirroring production's one
- * `accounts.takosumi.com`.
+ * `app.takosumi.com`.
  *
  * It reuses the published reference composer's `buildComposedServer`
  * (node-postgres profile: Postgres store + accounts handler + healthz/export

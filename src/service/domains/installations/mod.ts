@@ -9,8 +9,8 @@
  * column on the Installation (UNIQUE(space_id, name, environment)).
  *
  * This service owns Installation creation + lookup and InstallConfig /
- * DeploymentProfile passthroughs with validation. No secret material flows
- * through it; DeploymentProfile bindings reference Connection ids only.
+ * ProviderBinding record passthroughs with validation. No secret material flows
+ * through it; bindings reference Connection ids only.
  */
 
 import type {
@@ -40,7 +40,11 @@ export interface CreateInstallationRequest {
   readonly spaceId: string;
   readonly name: string;
   readonly environment: string;
-  readonly sourceId: string;
+  /**
+   * Registered git Source. Omit for an upload-origin Installation created by
+   * `takosumi deploy`, which deploys an upload SourceSnapshot directly.
+   */
+  readonly sourceId?: string;
   readonly installConfigId: string;
 }
 
@@ -73,7 +77,6 @@ export class InstallationsService {
     requireNonEmptyString(request.spaceId, "spaceId");
     requireNonEmptyString(request.name, "name");
     requireNonEmptyString(request.environment, "environment");
-    requireNonEmptyString(request.sourceId, "sourceId");
     requireNonEmptyString(request.installConfigId, "installConfigId");
     if (!INSTALLATION_NAME_PATTERN.test(request.name)) {
       throw new OpenTofuControllerError(
@@ -88,12 +91,17 @@ export class InstallationsService {
         `spaceId ${request.spaceId} does not exist`,
       );
     }
-    const source = await this.#store.getSource(request.sourceId);
-    if (!source || source.spaceId !== request.spaceId) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        `sourceId ${request.sourceId} does not exist in space ${request.spaceId}`,
-      );
+    // A git Source is optional: upload-origin Installations (takosumi deploy)
+    // have none. When supplied it must resolve in the same Space.
+    if (request.sourceId !== undefined) {
+      requireNonEmptyString(request.sourceId, "sourceId");
+      const source = await this.#store.getSource(request.sourceId);
+      if (!source || source.spaceId !== request.spaceId) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          `sourceId ${request.sourceId} does not exist in space ${request.spaceId}`,
+        );
+      }
     }
     const config = await this.#store.getInstallConfig(request.installConfigId);
     if (!config) {
@@ -103,7 +111,7 @@ export class InstallationsService {
       );
     }
     // A space-scoped InstallConfig may only be used by its owning Space; an
-    // official catalog config (no spaceId) is usable by any Space.
+    // Built-in shared config (no spaceId) is usable by any Space.
     if (config.spaceId !== undefined && config.spaceId !== request.spaceId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
@@ -129,7 +137,7 @@ export class InstallationsService {
       // The name is already a slug; the column is kept distinct so a future
       // display name can diverge from the URL segment.
       slug: request.name,
-      sourceId: request.sourceId,
+      ...(request.sourceId ? { sourceId: request.sourceId } : {}),
       installType: config.installType,
       installConfigId: request.installConfigId,
       environment: request.environment,
@@ -150,7 +158,8 @@ export class InstallationsService {
         name: created.name,
         environment: created.environment,
         installType: created.installType,
-        sourceId: created.sourceId,
+        ...(created.sourceId ? { sourceId: created.sourceId } : {}),
+        origin: created.sourceId ? "git" : "upload",
       },
     });
     return created;
@@ -194,6 +203,12 @@ export class InstallationsService {
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
     requireNonEmptyString(config.id, "id");
     requireNonEmptyString(config.name, "name");
+    if (config.installType === "opentofu_root") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "opentofu_root is a legacy direct-root compatibility type; new InstallConfigs must use an OpenTofu Capsule install type",
+      );
+    }
     if (config.spaceId !== undefined) {
       const space = await this.#store.getSpace(config.spaceId);
       if (!space) {
@@ -224,7 +239,7 @@ export class InstallationsService {
     return await this.#store.listInstallConfigs(spaceId);
   }
 
-  // --- DeploymentProfile (§9) -----------------------------------------------
+  // --- Internal ProviderBinding record --------------------------------------
 
   async putDeploymentProfile(
     profile: DeploymentProfile,

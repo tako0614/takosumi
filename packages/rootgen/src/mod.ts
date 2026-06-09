@@ -1,12 +1,13 @@
 /**
  * Root-module generation (rootgen).
  *
- * Given an official template and its validated literal inputs, generate the
- * Takosumi OpenTofu root module that wires the template module + inputs and
- * re-exports its public outputs. The output is `{ files }` per the dispatch
- * contract: the runner writes these into `/work/generated-root` and copies the
- * template module to `/work/generated-root/template-module`, then runs `tofu`
- * in `/work/generated-root` (the generated root references `./template-module`).
+ * Given an InstallConfig-backed Capsule definition and its validated literal
+ * inputs, generate the Takosumi OpenTofu root module that wires the child
+ * module + inputs and re-exports its public outputs. The output is `{ files }`
+ * per the dispatch contract: the runner writes these into
+ * `/work/generated-root`, materializes the child module at
+ * `/work/generated-root/template-module`, then runs `tofu` in
+ * `/work/generated-root` (the generated root references `./template-module`).
  *
  * Generated files:
  *   - versions.tf : `terraform { required_providers { ... } }` from
@@ -18,23 +19,23 @@
  * Inputs are emitted as literal HCL values (string/number/bool); strings are
  * escaped so a value can never break out of its quotes or inject HCL.
  *
- * `generateInstallationRoot` is the installType-aware §13 entry point. It emits
- * the same three files plus, when the InstallConfig declares per-capability
- * providers, provider alias blocks + a `providers = { ... }` module map; and for
- * `app_source` it threads a generated `artifact_path` variable. Per-alias
- * credential split (§13): a capability whose provider has an arg mapping (see
- * `PROVIDER_CREDENTIAL_ARG_MAP`) gets one `variable "<provider>_<capability>_<arg>"
- * { sensitive = true }` per credential arg, and its alias block sets that
- * provider argument from the variable (cloudflare: `api_token`; aws: access/secret
- * key + session token). The Vault mints the matching `TF_VAR_<provider>_<capability>_<arg>`
- * env per resolved Connection. A provider WITHOUT an arg mapping keeps the
- * credential-free alias and inherits its shared provider env credential.
+ * `generateInstallationRoot` is the installType-aware entry point. It emits the
+ * same three files plus, when the Installation declares provider bindings,
+ * provider blocks + a `providers = { ... }` module map; and for `app_source` it
+ * threads a generated `artifact_path` variable. Per-binding credential split:
+ * a provider with an arg mapping gets one `variable "<provider>_<alias>_<arg>"`
+ * { sensitive = true, ephemeral = true }` per credential arg, and its provider
+ * block sets that provider argument from the variable. The Vault mints the
+ * matching `TF_VAR_<provider>_<alias>_<arg>` env per resolved Connection. A
+ * provider WITHOUT an arg mapping keeps a credential-free block.
  */
 
 import type {
   DispatchGeneratedRoot,
   TemplateDefinition,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
+import type { JsonValue } from "takosumi-contract";
+import type { OutputAllowlistEntry } from "takosumi-contract/installations";
 import { providerCredentialArgs } from "takosumi-contract/provider-env-rules";
 import type { TemplateInputValue } from "../../../src/service/domains/templates/mod.ts";
 import { OpenTofuControllerError } from "../../../src/service/domains/deploy-control/errors.ts";
@@ -43,8 +44,8 @@ const TEMPLATE_MODULE_SOURCE = "./template-module";
 
 /**
  * Default provider version pins keyed by the trailing `<namespace>/<type>` of a
- * provider rule. Pinned to the v5-era cloudflare provider that the official
- * cloudflare templates were authored against. Unknown providers get no version
+ * provider rule. Pinned to the v5-era cloudflare provider used by the
+ * first-party cloudflare modules. Unknown providers get no version
  * constraint (still listed in required_providers by source).
  */
 const PROVIDER_SOURCE_BY_RULE: Readonly<Record<string, string>> = {
@@ -65,23 +66,20 @@ export interface GeneratedRootModule extends DispatchGeneratedRoot {
 
 /**
  * §13 install types that drive a Takosumi-generated root module. `opentofu_root`
- * is intentionally absent: there the SourceSnapshot IS the root configuration,
- * so no root is generated (the raw-module plan path is used directly).
+ * is intentionally absent: it is a legacy direct-root ledger compatibility value,
+ * and Takosumi v1 plan creation fails closed before dispatch for those rows.
  */
-export type GeneratedRootInstallType = "core" | "opentofu_module" | "app_source";
+export type GeneratedRootInstallType =
+  | "core"
+  | "opentofu_module"
+  | "app_source";
 
-/** A capability mapped to the provider that satisfies it (§13). */
-export type CapabilityKind =
-  | "compute"
-  | "dns"
-  | "storage"
-  | "database"
-  | "secrets";
-
-export interface CapabilityProvider {
-  readonly capability: CapabilityKind;
+/** One OpenTofu provider binding emitted into the generated root. */
+export interface RootProviderBinding {
   /** Provider rule, short (`cloudflare`) or registry form (`cloudflare/cloudflare`). */
   readonly provider: string;
+  /** Optional OpenTofu provider alias required by the child module. */
+  readonly alias?: string;
 }
 
 export interface GenerateInstallationRootInput {
@@ -89,12 +87,19 @@ export interface GenerateInstallationRootInput {
   readonly inputs: Readonly<Record<string, TemplateInputValue>>;
   readonly installType: GeneratedRootInstallType;
   /**
-   * Per-capability provider mapping. When non-empty, the generated root emits a
-   * provider alias block per capability and a `providers = { ... }` map on the
-   * module block (§13). When empty/omitted the root is structurally identical to
+   * Provider binding mapping. When non-empty, the generated root emits a
+   * provider block per binding and a `providers = { ... }` map on the module
+   * block. When empty/omitted the root is structurally identical to
    * {@link generateRootModule}.
    */
-  readonly capabilityProviders?: ReadonlyArray<CapabilityProvider>;
+  readonly providerBindings?: ReadonlyArray<RootProviderBinding>;
+}
+
+export interface GenerateGenericCapsuleRootInput {
+  readonly requiredProviders: readonly string[];
+  readonly inputs: Readonly<Record<string, JsonValue>>;
+  readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
+  readonly providerBindings?: ReadonlyArray<RootProviderBinding>;
 }
 
 /** Module input name an `app_source` template reads the built artifact path from. */
@@ -125,14 +130,14 @@ export function generateRootModule(
  *   template declares that input. The build phase produces the artifact in the
  *   Container with ZERO credentials (invariant 3); the deploy module consumes it.
  *
- * When `capabilityProviders` is non-empty, per-capability provider alias blocks
- * and a `providers = { ... }` map are emitted per §13.
+ * When `providerBindings` is non-empty, provider blocks and a
+ * `providers = { ... }` map are emitted.
  */
 export function generateInstallationRoot(
   input: GenerateInstallationRootInput,
 ): GeneratedRootModule {
   const { template, inputs, installType } = input;
-  const capabilityProviders = input.capabilityProviders ?? [];
+  const providerBindings = input.providerBindings ?? [];
   const wantsArtifact =
     installType === "app_source" && ARTIFACT_PATH_INPUT in template.inputs;
   return {
@@ -141,7 +146,7 @@ export function generateInstallationRoot(
       "main.tf": renderInstallationMainTf(
         template,
         inputs,
-        capabilityProviders,
+        providerBindings,
         wantsArtifact,
       ),
       "outputs.tf": renderOutputsTf(template),
@@ -149,10 +154,38 @@ export function generateInstallationRoot(
   };
 }
 
+/**
+ * Generic OpenTofu Capsule wrapper (§7): Takosumi owns the root module even
+ * when the InstallConfig is not backed by a built-in first-party module. The runner
+ * copies the normalized/user module to `./template-module`; this root wires
+ * literal variable/dependency inputs, provider bindings, and
+ * output allowlist passthroughs.
+ */
+export function generateGenericCapsuleRoot(
+  input: GenerateGenericCapsuleRootInput,
+): GeneratedRootModule {
+  const providerBindings = input.providerBindings ?? [];
+  return {
+    files: {
+      "versions.tf": renderProviderVersionsTf(input.requiredProviders),
+      "main.tf": renderGenericMainTf(
+        input.inputs,
+        providerBindings,
+      ),
+      "outputs.tf": renderGenericOutputsTf(input.outputAllowlist),
+    },
+  };
+}
+
 function renderVersionsTf(template: TemplateDefinition): string {
-  const entries = template.policy.allowedProviders.map((rule) => {
+  return renderProviderVersionsTf(template.policy.allowedProviders);
+}
+
+function renderProviderVersionsTf(providers: readonly string[]): string {
+  const entries = providers.map((rule) => {
     const localName = providerLocalName(rule);
-    const source = PROVIDER_SOURCE_BY_RULE[rule] ?? normalizeProviderSource(rule);
+    const source =
+      PROVIDER_SOURCE_BY_RULE[rule] ?? normalizeProviderSource(rule);
     const version = PROVIDER_VERSION_BY_RULE[rule];
     const lines = [
       `    ${localName} = {`,
@@ -190,88 +223,40 @@ function renderMainTf(
 }
 
 /**
- * Comment header for a capability-aliased generated root (§13). Per-alias
- * credential split is now emitted: a capability whose provider has an arg mapping
- * gets one sensitive `var.<provider>_<capability>_<arg>` per credential arg wired
- * into its alias block (the Vault mints the matching `TF_VAR_…` env per resolved
- * Connection); a provider without an arg mapping keeps a credential-free alias and
- * inherits its shared provider env credential.
+ * Comment header for a provider-bound generated root. Per-binding credential
+ * split is emitted as `var.<provider>_<alias>_<arg>` when an alias is present,
+ * otherwise `var.<provider>_<arg>`.
  */
-const CAPABILITY_SPLIT_COMMENT = [
-  "# Generated by Takosumi rootgen (§13).",
-  "# Per-alias credential split: a provider with a credential arg mapping wires",
-  "# each alias from a sensitive var.<provider>_<capability>_<arg> (the Vault",
-  "# mints the matching TF_VAR_<provider>_<capability>_<arg> per resolved",
-  "# Connection); a provider without an arg mapping keeps a credential-free alias",
-  "# inheriting its shared provider env credential.",
+const PROVIDER_BINDINGS_COMMENT = [
+  "# Generated by Takosumi rootgen.",
+  "# Provider credentials are root-only: the generated root wires provider",
+  "# blocks from sensitive variables minted by the Vault. Child modules",
+  "# receive only provider configurations.",
 ].join("\n");
 
 /**
- * The §13 per-alias credential variable name for one provider arg:
- * `<localProvider>_<capability>_<arg>` (e.g. `cloudflare_compute_api_token`).
+ * The per-binding credential variable name for one provider arg:
+ * `<localProvider>_<alias>_<arg>` or `<localProvider>_<arg>`.
  * Used as the rootgen `variable` name and as the `TF_VAR_…` env name the Vault
  * mints; the two MUST stay byte-identical.
  */
 function aliasCredentialVarName(
   localProvider: string,
-  capability: string,
+  alias: string | undefined,
   arg: string,
 ): string {
-  return `${localProvider}_${capability}_${arg}`;
+  return alias ? `${localProvider}_${alias}_${arg}` : `${localProvider}_${arg}`;
 }
 
 function renderInstallationMainTf(
   template: TemplateDefinition,
   inputs: Readonly<Record<string, TemplateInputValue>>,
-  capabilityProviders: ReadonlyArray<CapabilityProvider>,
+  providerBindings: ReadonlyArray<RootProviderBinding>,
   wantsArtifact: boolean,
 ): string {
   const sections: string[] = [];
 
-  // Provider alias blocks (§13). A provider WITH a credential arg mapping wires
-  // its alias from sensitive per-alias variables; a provider WITHOUT one keeps a
-  // credential-free alias inheriting the shared provider env credential.
-  if (capabilityProviders.length > 0) {
-    sections.push(CAPABILITY_SPLIT_COMMENT);
-    // Sensitive credential variables come first (declared before the alias blocks
-    // that consume them), in capability/arg order for deterministic golden output.
-    for (const cp of capabilityProviders) {
-      const localProvider = providerLocalName(cp.provider);
-      for (const credArg of providerCredentialArgs(cp.provider)) {
-        const varName = aliasCredentialVarName(
-          localProvider,
-          cp.capability,
-          credArg.arg,
-        );
-        sections.push(
-          [
-            `variable ${hclString(varName)} {`,
-            "  type      = string",
-            "  sensitive = true",
-            "}",
-          ].join("\n"),
-        );
-      }
-    }
-    for (const cp of capabilityProviders) {
-      const localProvider = providerLocalName(cp.provider);
-      const credArgs = providerCredentialArgs(cp.provider);
-      const aliasLines = [
-        `provider ${hclString(localProvider)} {`,
-        `  alias = ${hclString(cp.capability)}`,
-      ];
-      for (const credArg of credArgs) {
-        const varName = aliasCredentialVarName(
-          localProvider,
-          cp.capability,
-          credArg.arg,
-        );
-        aliasLines.push(`  ${credArg.arg} = var.${varName}`);
-      }
-      aliasLines.push("}");
-      sections.push(aliasLines.join("\n"));
-    }
-  }
+  appendProviderSections(sections, providerBindings);
 
   // Generated artifact_path variable for app_source installs.
   if (wantsArtifact) {
@@ -289,15 +274,7 @@ function renderInstallationMainTf(
     `  source = ${hclString(TEMPLATE_MODULE_SOURCE)}`,
   ];
 
-  // providers = { <provider>.<capability> = <provider>.<capability>, ... } map.
-  if (capabilityProviders.length > 0) {
-    moduleLines.push("", "  providers = {");
-    for (const cp of capabilityProviders) {
-      const ref = `${providerLocalName(cp.provider)}.${cp.capability}`;
-      moduleLines.push(`    ${ref} = ${ref}`);
-    }
-    moduleLines.push("  }", "");
-  }
+  appendProviderMap(moduleLines, providerBindings);
 
   // Emit inputs in the template's declared order for deterministic golden output.
   for (const name of Object.keys(template.inputs)) {
@@ -315,6 +292,56 @@ function renderInstallationMainTf(
   return `${sections.join("\n\n")}`;
 }
 
+function appendProviderSections(
+  sections: string[],
+  providerBindings: ReadonlyArray<RootProviderBinding>,
+): void {
+  // Provider blocks. A provider WITH a credential arg mapping wires sensitive
+  // root variables; a provider WITHOUT one keeps a credential-free block.
+  if (providerBindings.length > 0) {
+    sections.push(PROVIDER_BINDINGS_COMMENT);
+    // Sensitive credential variables come first (declared before the alias blocks
+    // that consume them), in binding/arg order for deterministic golden output.
+    for (const binding of providerBindings) {
+      const localProvider = providerLocalName(binding.provider);
+      for (const credArg of providerCredentialArgs(binding.provider)) {
+        const varName = aliasCredentialVarName(
+          localProvider,
+          binding.alias,
+          credArg.arg,
+        );
+        sections.push(
+          [
+            `variable ${hclString(varName)} {`,
+            "  type      = string",
+            "  sensitive = true",
+            "  ephemeral = true",
+            "}",
+          ].join("\n"),
+        );
+      }
+    }
+    for (const binding of providerBindings) {
+      const localProvider = providerLocalName(binding.provider);
+      const credArgs = providerCredentialArgs(binding.provider);
+      const aliasLines = [`provider ${hclString(localProvider)} {`];
+      if (binding.alias) {
+        aliasLines.push(`  alias = ${hclString(binding.alias)}`);
+      }
+      for (const credArg of credArgs) {
+        const varName = aliasCredentialVarName(
+          localProvider,
+          binding.alias,
+          credArg.arg,
+        );
+        aliasLines.push(`  ${credArg.arg} = var.${varName}`);
+      }
+      aliasLines.push("}");
+      sections.push(aliasLines.join("\n"));
+    }
+  }
+}
+
 function renderOutputsTf(template: TemplateDefinition): string {
   const blocks = Object.entries(template.outputs.public).map(([name, spec]) => {
     return [
@@ -324,6 +351,76 @@ function renderOutputsTf(template: TemplateDefinition): string {
     ].join("\n");
   });
   return blocks.length > 0 ? `${blocks.join("\n\n")}\n` : "";
+}
+
+function renderGenericMainTf(
+  inputs: Readonly<Record<string, JsonValue>>,
+  providerBindings: ReadonlyArray<RootProviderBinding>,
+): string {
+  const sections: string[] = [];
+  appendProviderSections(sections, providerBindings);
+
+  const moduleLines = [
+    'module "app" {',
+    `  source = ${hclString(TEMPLATE_MODULE_SOURCE)}`,
+  ];
+  appendProviderMap(moduleLines, providerBindings);
+  for (const name of Object.keys(inputs).sort()) {
+    assertIdentifier(name, "rootgen: input name");
+    moduleLines.push(`  ${name} = ${hclJsonLiteral(inputs[name]!)}`);
+  }
+  moduleLines.push("}", "");
+  sections.push(moduleLines.join("\n"));
+  return sections.join("\n\n");
+}
+
+function appendProviderMap(
+  moduleLines: string[],
+  providerBindings: ReadonlyArray<RootProviderBinding>,
+): void {
+  const refs: string[] = [];
+  for (const binding of providerBindings) {
+    const localProvider = providerLocalName(binding.provider);
+    refs.push(
+      binding.alias ? `${localProvider}.${binding.alias}` : localProvider,
+    );
+  }
+  if (refs.length === 0) return;
+  moduleLines.push("", "  providers = {");
+  for (const ref of refs) {
+    moduleLines.push(`    ${ref} = ${ref}`);
+  }
+  moduleLines.push("  }", "");
+}
+
+function renderGenericOutputsTf(
+  outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>,
+): string {
+  const blocks = Object.entries(outputAllowlist).map(([name, spec]) => {
+    assertIdentifier(name, "rootgen: output name");
+    assertOutputPath(spec.from);
+    return [
+      `output ${hclString(name)} {`,
+      `  value = module.app.${spec.from}`,
+      "}",
+    ].join("\n");
+  });
+  return blocks.length > 0 ? `${blocks.join("\n\n")}\n` : "";
+}
+
+function assertIdentifier(value: string, label: string): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${label} must be a valid OpenTofu identifier`,
+    );
+  }
+}
+
+function assertOutputPath(value: string): void {
+  for (const part of value.split(".")) {
+    assertIdentifier(part, "rootgen: output allowlist path");
+  }
 }
 
 /**
@@ -349,7 +446,8 @@ function providerLocalName(rule: string): string {
  */
 function normalizeProviderSource(rule: string): string {
   const parts = rule.split("/").filter((p) => p.length > 0);
-  if (parts.length >= 2) return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+  if (parts.length >= 2)
+    return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
   return rule;
 }
 
@@ -371,6 +469,31 @@ function hclLiteral(value: TemplateInputValue): string {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "rootgen: unsupported input literal",
+      );
+  }
+}
+
+function hclJsonLiteral(value: JsonValue): string {
+  switch (typeof value) {
+    case "string":
+      return hclString(value);
+    case "number":
+      if (!Number.isFinite(value)) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          "rootgen: number input must be finite",
+        );
+      }
+      return String(value);
+    case "boolean":
+      return value ? "true" : "false";
+    case "object":
+      if (value === null) return "null";
+      return `jsondecode(${hclString(JSON.stringify(value))})`;
+    default:
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "rootgen: unsupported JSON input literal",
       );
   }
 }

@@ -6,7 +6,7 @@ import {
   createDefaultRunnerProfiles,
   resolveEnabledRunnerProfiles,
 } from "../../src/service/domains/deploy-control/mod.ts";
-import type { RunnerProfile } from "takosumi-contract/deploy-control-api";
+import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import type { CloudflareWorkerEnv } from "./bindings.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
 

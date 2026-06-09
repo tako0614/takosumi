@@ -174,7 +174,7 @@ function createApp(
   probes: Parameters<typeof registerReadinessRoutes>[1]["probes"],
 ): HonoApp {
   const app: HonoApp = new Hono();
-  registerReadinessRoutes(app, { probes });
+  registerReadinessRoutes(app, { probes, includeStatusSummary: true });
   return app;
 }
 

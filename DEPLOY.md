@@ -7,13 +7,14 @@ This runbook covers the public Takosumi website/docs property and the managed ac
 | `takosumi.com` | Cloudflare Pages | `takosumi-website` | `website/` merged build |
 
 The account plane (OIDC issuer / dashboard API / Installation ledger / billing) no
-longer ships as a separate `accounts.takosumi.com` Worker. It runs **in-process**
-inside the unified Takos worker at the origin root of `app.takosumi.com`. The
+longer ships as a separate account-plane Worker. It runs **in-process** inside
+the host worker: the operator Takosumi platform worker at `app.takosumi.com`, or
+the self-hosted Takos product worker at the self-hoster's own origin. The
 account-plane source lives at `deploy/accounts-cloudflare/src/{handler,routes}.ts`
-(aliased into Takos as `@takosjp/takosumi-accounts-worker`); its `wrangler.toml`,
-D1/R2 bindings, secrets, and deploy commands live with the unified Takos worker in
-`takos/deploy/cloudflare/`, not in this repo. See
-`takos/src/worker/server/routes/accounts/mount.ts`.
+(aliased as `@takosjp/takosumi-accounts-worker`); the host worker owns the
+actual `wrangler.toml`, bindings, secrets, routes, and deploy command.
+For the operator platform worker that host is `takosumi/deploy/platform/`; for
+self-hosted Takos that host is the `takos/deploy/cloudflare/` template.
 
 ## Prerequisites
 
@@ -73,11 +74,12 @@ curl https://takosumi.com/contexts/v1.jsonld | jq '.["@context"]["@vocab"]'
 
 The account plane (managed dashboard, OIDC, billing, deploy facade, account-facing
 Installation projection) is part of the Takosumi distribution, not a separate public
-core layer. It no longer deploys as a standalone `accounts.takosumi.com` Worker — it
-runs in-process inside the unified Takos worker at the origin root of
-`app.takosumi.com`. D1/R2 provisioning, secrets (`TAKOSUMI_ACCOUNTS_*`), the
-`wrangler.toml`, and deploy commands live with the unified Takos worker in
-`takos/deploy/cloudflare/`; the account-plane source is in
+core layer. It no longer deploys as a standalone account-plane Worker: it runs
+in-process inside the host worker. D1/R2 provisioning, secrets
+(`TAKOSUMI_ACCOUNTS_*`), the
+`wrangler.toml`, and deploy commands live with the host worker
+(`takosumi/deploy/platform/` for operator Takosumi, `takos/deploy/cloudflare/`
+for self-hosted Takos); the account-plane source is in
 `deploy/accounts-cloudflare/src/{handler,routes}.ts` (D1 schema-migration gate
 documented in `deploy/accounts-cloudflare/README.md`).
 

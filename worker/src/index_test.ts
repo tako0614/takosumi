@@ -36,7 +36,6 @@ test("Cloudflare Worker dispatches service control-plane routes in-process", asy
     "/openapi.json",
     "/livez",
     "/readyz",
-    "/status/summary",
     "/metrics",
     // A non-runtime-agent `/api/internal/v1/*` path must dispatch to the
     // service app (the runtime-agent app only owns `/api/internal/v1/runtime/*`).

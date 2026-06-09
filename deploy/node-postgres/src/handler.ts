@@ -170,6 +170,7 @@ function parseManagedOfferingAccess(
     env,
     "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST",
   );
+  requireProductionHardeningEvidence(env);
   return createOpenManagedOfferingAccessPolicy({
     ...(optional(env, "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF")
       ? {
@@ -199,6 +200,52 @@ function parseManagedOfferingAccess(
     ready: true,
     evidenceDigest,
   });
+}
+
+function requireProductionHardeningEvidence(
+  env: Record<string, string | undefined>,
+): void {
+  if (optional(env, "TAKOSUMI_PRODUCTION_HARDENING_GATE") !== "enforce") {
+    throw new TypeError(
+      "Open managed offering access requires TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce",
+    );
+  }
+  const commitPinnedGitRefPattern = /^git\+.+@[0-9a-f]{40,64}#.+/i;
+  for (const [refName, digestName] of [
+    [
+      "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF",
+      "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF",
+      "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF",
+      "TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF",
+      "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST",
+    ],
+  ] as const) {
+    const ref = optional(env, refName);
+    if (!ref) {
+      throw new TypeError(`Open managed offering access requires ${refName}`);
+    }
+    if (!commitPinnedGitRefPattern.test(ref)) {
+      throw new TypeError(`${refName} must be commit-pinned git+ ref`);
+    }
+    const digest = optional(env, digestName);
+    if (!digest) {
+      throw new TypeError(
+        `Open managed offering access requires ${digestName}`,
+      );
+    }
+    if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {
+      throw new TypeError(`${digestName} must be sha256:<64hex>`);
+    }
+  }
 }
 
 function parseWorkloadPlatformServices(

@@ -13,7 +13,7 @@
 import type {
   PolicyDecision,
   RunnerProfile,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import { evaluateProviderAllowlist, providerMatches } from "takosumi-policy";
 
 export function evaluatePolicy(input: {

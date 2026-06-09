@@ -17,7 +17,7 @@ import type {
   CreateConnectionRequest,
   ListConnectionsResponse,
   TestConnectionResponse,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import type {
   ConnectionVault,
   CredentialBundle,

@@ -357,17 +357,22 @@ type Provider = "passkey" | "google" | "github";
 interface ProviderInfo {
   id: Provider;
   label: string;
+  /** Sub-text shown when the provider is enabled (e.g. the protocol). */
   sub: string;
-  enabled: boolean;
+  /** Sub-text shown when the operator has not configured this provider. */
+  disabledSub: string;
   icon: () => JSX.Element;
 }
 
+// Static presentation descriptors. Whether each method is actually enabled is
+// resolved at runtime from `GET /v1/auth/providers` (operator config), so we
+// never render an enabled button whose backend would answer 503.
 const PROVIDERS: ProviderInfo[] = [
   {
     id: "passkey",
     label: "Passkey で続ける",
-    sub: "このアカウントではまだ利用できません",
-    enabled: false,
+    sub: "WebAuthn",
+    disabledSub: "このアカウントではまだ利用できません",
     icon: () => (
       <svg
         width="20"
@@ -389,7 +394,7 @@ const PROVIDERS: ProviderInfo[] = [
     id: "google",
     label: "Google で続ける",
     sub: "OAuth 2.0",
-    enabled: true,
+    disabledSub: "オペレーターが未設定です",
     icon: () => (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
         <path d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.8h5.4c-.2 1.3-1 2.4-2 3.1v2.6h3.3c2-1.8 3-4.5 3-7.5z" />
@@ -403,7 +408,7 @@ const PROVIDERS: ProviderInfo[] = [
     id: "github",
     label: "GitHub で続ける",
     sub: "OAuth 2.0",
-    enabled: true,
+    disabledSub: "オペレーターが未設定です",
     icon: () => (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
         <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.32-1.28-1.67-1.28-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.47.11-3.06 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.77.11 3.06.74.81 1.18 1.84 1.18 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.07.78 2.15v3.18c0 .31.21.68.8.56C20.21 21.38 23.5 17.07 23.5 12 23.5 5.65 18.35.5 12 .5z" />
@@ -415,12 +420,41 @@ const PROVIDERS: ProviderInfo[] = [
 /**
  * Account-plane sign-in panel. Navigation-based upstream OAuth (Google/GitHub);
  * passkey is a placeholder. See the reconcile CAVEAT above before wiring routes.
+ *
+ * Which providers are clickable is resolved at runtime from
+ * `GET /v1/auth/providers` (operator config). Until that resolves — and for any
+ * provider the operator never configured — the button renders disabled with an
+ * "operator not configured" hint, so a user never clicks a method whose backend
+ * would answer 503 (audit S4).
  */
 export function SignInPanel() {
   const [error, setError] = createSignal<string | null>(null);
+  // Start all-disabled and flip on by config: failing closed means we never
+  // briefly render an enabled button that the backend would 503.
+  const [enabled, setEnabled] = createSignal<Record<string, boolean>>({});
+
+  onMount(() => {
+    void rpc.auth
+      .listProviders()
+      .then((res) => {
+        const map: Record<string, boolean> = {};
+        for (const provider of res.providers) {
+          map[provider.id] = provider.enabled;
+        }
+        setEnabled(map);
+      })
+      .catch(() => {
+        // Leave every method disabled if availability can't be read; the user
+        // sees the "operator not configured" hint rather than a button that
+        // would 503 on click.
+      });
+  });
+
+  const isEnabled = (p: Provider): boolean => enabled()[p] === true;
 
   const select = (p: Provider) => {
     setError(null);
+    if (!isEnabled(p)) return;
     if (p === "passkey") {
       setError("Passkey sign-in は、このアカウントではまだ利用できません。");
       return;
@@ -438,13 +472,15 @@ export function SignInPanel() {
             type="button"
             class="sign-in-btn"
             data-provider={p.id}
-            disabled={!p.enabled}
+            disabled={!isEnabled(p.id)}
             onClick={() => select(p.id)}
           >
             <span class="sign-in-icon">{p.icon()}</span>
             <span class="sign-in-text">
               <span class="sign-in-label">{p.label}</span>
-              <span class="sign-in-sub-text">{p.sub}</span>
+              <span class="sign-in-sub-text">
+                {isEnabled(p.id) ? p.sub : p.disabledSub}
+              </span>
             </span>
             <svg
               class="sign-in-arrow"

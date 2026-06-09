@@ -11,17 +11,12 @@ records over `Installation`s, with successful applies captured as
 own resource graph and provider API behavior. Operators may keep private adapter
 hosts, runner profiles, PlanRun/ApplyRun compatibility ledgers, or workflow
 engines, but those hosts are implementation details subordinate to Connection,
-CapabilityBinding, and policy. They must not introduce public Takosumi source
+ProviderBinding, and policy. They must not introduce public Takosumi source
 metadata, DataAsset, kind, provider-adapter, or runtime-handler requirements.
 
-The public package surface is:
-
-- `@takosjp/takosumi`
-- `@takosjp/takosumi/contract`
-- `@takosjp/takosumi/contract/deploy-control-api`
-- `@takosjp/takosumi/deploy-control`
-- `@takosjp/takosumi/cli`
-- `@takosjp/takosumi/server`
+The public service surface is the hosted Worker `/api` contract and the focused
+`takosumi-contract/*` source-module aliases inside this repository. Root
+`@takosjp/takosumi` package subpaths are not a published runtime-agent API.
 
 New code should use the `/api` deploy-control surface and the OpenTofu runner
 boundary instead of importing this directory.

@@ -15,7 +15,10 @@ const TS = "2026-06-06T00:00:00.000Z";
 
 async function makeApp(options: { readonly withArtifactStore?: boolean } = {}) {
   const store = new InMemoryOpenTofuDeploymentStore();
-  await seedInstallationModel(store, { spaceId: "space_aaaaaaaa" });
+  await seedInstallationModel(store, {
+    spaceId: "space_aaaaaaaa",
+    installationId: "inst_aaaaaaaa",
+  });
   let counter = 0;
   const sourcesService = new SourcesService({ store });
   const controller = new OpenTofuDeploymentController({ store, sourcesService });
@@ -92,13 +95,73 @@ test("POST /api/spaces/:spaceId/backups creates a backup (201)", async () => {
   const body = await response.json();
   expect(body.backup.spaceId).toBe("space_aaaaaaaa");
   expect(body.backup.objectKey).toBe(
-    "spaces/space_aaaaaaaa/backups/bkp_0001/control.json.gz.enc",
+    "spaces/space_aaaaaaaa/backups/bkp_0001/control.json.zst.enc",
   );
+  expect(body.backup.createdByRunId).toBe("backup_0002");
   expect(body.backup.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
 
   // The pointer is persisted in the ledger.
   const listed = await store.listBackupRecords("space_aaaaaaaa");
   expect(listed.map((b) => b.id)).toEqual([body.backup.id]);
+
+  const runResponse = await app.request(`/api/runs/${body.backup.createdByRunId}`, {
+    headers: HEADERS,
+  });
+  expect(runResponse.status).toBe(200);
+  const runBody = await runResponse.json();
+  expect(runBody.run.type).toBe("backup");
+  expect(runBody.run.status).toBe("succeeded");
+  expect(runBody.run.spaceId).toBe("space_aaaaaaaa");
+});
+
+test("POST /api/installations/:installationId/backups creates a Space backup (201)", async () => {
+  const { app } = await makeApp();
+  const response = await app.request("/api/installations/inst_aaaaaaaa/backups", {
+    method: "POST",
+    headers: HEADERS,
+  });
+  expect(response.status).toBe(201);
+  const body = await response.json();
+  expect(body.backup.spaceId).toBe("space_aaaaaaaa");
+  expect(body.backup.objectKey).toBe(
+    "spaces/space_aaaaaaaa/backups/bkp_0001/control.json.zst.enc",
+  );
+  expect(body.backup.createdByRunId).toBe("backup_0002");
+
+  const runResponse = await app.request(`/api/runs/${body.backup.createdByRunId}`, {
+    headers: HEADERS,
+  });
+  expect(runResponse.status).toBe(200);
+  const runBody = await runResponse.json();
+  expect(runBody.run.type).toBe("backup");
+  expect(runBody.run.installationId).toBe("inst_aaaaaaaa");
+  expect(runBody.run.environment).toBe("production");
+});
+
+test("POST /api/installations/:installationId/backups enforces the Installation Space scope (403)", async () => {
+  const { app, store } = await makeApp();
+  await seedInstallationModel(store, {
+    spaceId: "space_bbbbbbbb",
+    sourceId: "src_bbbbbbbb",
+    snapshotId: "snap_bbbbbbbb",
+    installConfigId: "cfg_bbbbbbbb",
+    installationId: "inst_bbbbbbbb",
+    name: "other",
+  });
+  const response = await app.request("/api/installations/inst_bbbbbbbb/backups", {
+    method: "POST",
+    headers: HEADERS,
+  });
+  expect(response.status).toBe(403);
+});
+
+test("POST /api/installations/:installationId/backups rejects a malformed installationId (400)", async () => {
+  const { app } = await makeApp();
+  const response = await app.request("/api/installations/not-an-installation/backups", {
+    method: "POST",
+    headers: HEADERS,
+  });
+  expect(response.status).toBe(400);
 });
 
 test("GET /api/spaces/:spaceId/backups lists backups newest-first (200)", async () => {
@@ -151,6 +214,14 @@ test("backup routes return 501 when the backups service is unwired", async () =>
     headers: HEADERS,
   });
   expect(post.status).toBe(501);
+  const installationPost = await app.request(
+    "/api/installations/inst_aaaaaaaa/backups",
+    {
+      method: "POST",
+      headers: HEADERS,
+    },
+  );
+  expect(installationPost.status).toBe(501);
   const get = await app.request("/api/spaces/space_aaaaaaaa/backups", {
     headers: HEADERS,
   });

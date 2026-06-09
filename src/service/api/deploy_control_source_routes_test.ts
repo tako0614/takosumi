@@ -7,6 +7,7 @@ import {
   SourcesService,
   type ReadCapsuleSourceFiles,
 } from "../domains/sources/mod.ts";
+import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 
 function makeApp() {
@@ -207,6 +208,17 @@ test("source compatibility-check creates and reads a Capsule report", async () =
     normalizedObjectKey: snapshot.archiveObjectKey,
     normalizedDigest: snapshot.archiveDigest,
   });
+  const compatibilityRunId = checkedBody.run.id;
+  expect(compatibilityRunId).toMatch(/^ccr_/);
+  expect(checkedBody.run).toMatchObject({
+    id: compatibilityRunId,
+    spaceId: "space_1",
+    sourceId: source.id,
+    type: "compatibility_check",
+    status: "succeeded",
+    sourceSnapshotId: snapshot.id,
+    compatibilityReportId: checkedBody.report.id,
+  });
   expect(checkedBody.report.findings).toEqual([
     expect.objectContaining({
       severity: "warning",
@@ -222,6 +234,97 @@ test("source compatibility-check creates and reads a Capsule report", async () =
   );
   expect(got.status).toBe(200);
   expect((await got.json()).report.id).toBe(checkedBody.report.id);
+
+  const run = await app.request(`/api/runs/${compatibilityRunId}`, {
+    headers: { authorization: "Bearer scoped-token" },
+  });
+  expect(run.status).toBe(200);
+  const runBody = await run.json();
+  expect(runBody.run).toMatchObject({
+    id: compatibilityRunId,
+    type: "compatibility_check",
+    compatibilityReportId: checkedBody.report.id,
+  });
+
+  const logs = await app.request(`/api/runs/${compatibilityRunId}/logs`, {
+    headers: { authorization: "Bearer scoped-token" },
+  });
+  expect(logs.status).toBe(200);
+  expect(await logs.json()).toEqual({ diagnostics: [], auditEvents: [] });
+
+  const events = await app.request(`/api/runs/${compatibilityRunId}/events`, {
+    headers: { authorization: "Bearer scoped-token" },
+  });
+  expect(events.status).toBe(200);
+  expect(await events.json()).toEqual({ auditEvents: [] });
+
+  const approve = await app.request(
+    `/api/runs/${compatibilityRunId}/approve`,
+    {
+      method: "POST",
+      headers: { authorization: "Bearer scoped-token" },
+    },
+  );
+  expect(approve.status).toBe(409);
+  expect((await approve.json()).error.code).toBe("failed_precondition");
+
+  const cancel = await app.request(`/api/runs/${compatibilityRunId}/cancel`, {
+    method: "POST",
+    headers: { authorization: "Bearer scoped-token" },
+  });
+  expect(cancel.status).toBe(409);
+  expect((await cancel.json()).error.code).toBe("failed_precondition");
+});
+
+test("GET /api/compatibility-reports resolves owner from sourceSnapshot and enforces space scope", async () => {
+  const { app, store } = await makeAppWithStore();
+  await store.putSource({
+    id: "src_denied00000001",
+    spaceId: "space_2",
+    name: "denied",
+    url: "https://github.com/acme/denied.git",
+    defaultRef: "main",
+    defaultPath: ".",
+    status: "active",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+    hookSecretHash: "sha256:hook",
+    autoSync: false,
+  });
+  const snapshot: SourceSnapshot = {
+    id: "snap_denied00000001",
+    origin: "git",
+    spaceId: "space_2",
+    sourceId: "src_denied00000001",
+    url: "https://github.com/acme/denied.git",
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveObjectKey:
+      "spaces/space_2/sources/src_denied00000001/snapshots/snap_denied00000001/source.tar.zst",
+    archiveDigest: "sha256:sourcearchive",
+    archiveSizeBytes: 42,
+    fetchedByRunId: "ssr_denied00000001",
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putSourceSnapshot(snapshot);
+  const report: CapsuleCompatibilityReport = {
+    id: "caprep_denied00000001",
+    sourceSnapshotId: snapshot.id,
+    level: "ready",
+    findings: [],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putCapsuleCompatibilityReport(report);
+
+  const got = await app.request(`/api/compatibility-reports/${report.id}`, {
+    headers: { authorization: "Bearer scoped-token" },
+  });
+  expect(got.status).toBe(403);
 });
 
 test("source compatibility-check analyzes expanded OpenTofu files when available", async () => {

@@ -908,6 +908,15 @@
   font-weight: 600;
   font-family: var(--tg-font-mono);
 }
+.backups-table code {
+  word-break: break-all;
+}
+.backup-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  margin-top: var(--tg-s-4);
+}
 
 .btn-icon-danger {
   display: inline-flex;
@@ -1490,6 +1499,58 @@
   overflow-wrap: anywhere;
 }
 
+/* ----- Providers ----- */
+.provider-backend-note {
+  margin-bottom: var(--tg-s-5);
+}
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--tg-s-4);
+}
+.provider-card {
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-elev);
+}
+.provider-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--tg-s-3);
+}
+.provider-card h3 {
+  margin: 0 0 var(--tg-s-1);
+  font-size: var(--tg-fs-lg);
+}
+.provider-card-head code {
+  overflow-wrap: anywhere;
+}
+.provider-meta {
+  display: grid;
+  gap: var(--tg-s-3);
+  margin: var(--tg-s-4) 0 0;
+}
+.provider-meta div {
+  display: grid;
+  gap: var(--tg-s-1);
+}
+.provider-meta dt {
+  font-size: var(--tg-fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--tg-fg-subtle);
+}
+.provider-meta dd {
+  margin: 0;
+}
+.inline-code-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+}
+
 /* ----- Dependency graph (layered DAG) ----- */
 .graph-board {
   display: flex;
@@ -1655,15 +1716,6 @@
   background: color-mix(in srgb, var(--tg-status-error) 14%, transparent);
   color: var(--tg-status-error);
   border-color: color-mix(in srgb, var(--tg-status-error) 30%, transparent);
-}
-.capability-bindings {
-  padding: var(--tg-s-4);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-}
-.capability-bindings legend {
-  padding: 0 var(--tg-s-2);
-  font-weight: 700;
 }
 .capability-note {
   margin: 0 0 var(--tg-s-4);
@@ -1844,6 +1896,7 @@
 
 /* ----- Settings / Billing ----- */
 .settings-space-picker,
+.billing-settings-form,
 .billing-checkout-form {
   max-width: 520px;
 }
@@ -1873,6 +1926,12 @@
   display: flex;
   flex-direction: column;
   gap: var(--tg-s-4);
+}
+.billing-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-4);
+  margin-top: var(--tg-s-4);
 }
 
 /* ----- Activity ----- */

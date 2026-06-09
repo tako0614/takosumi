@@ -36,56 +36,58 @@ test("defaults to cloudflare-default when env value is empty or whitespace", () 
 test("includes multiple listed profiles in env order and excludes the rest", () => {
   const enabled = resolveEnabledRunnerProfiles(
     SEEDS,
-    "cloudflare-default,aws-default,gcp-default",
+    "cloudflare-default,aws-template,gcp-template",
   );
   expect(idsOf(enabled)).toEqual([
     "cloudflare-default",
-    "aws-default",
-    "gcp-default",
+    "aws-template",
+    "gcp-template",
   ]);
   // Unlisted seeds are excluded entirely.
-  expect(idsOf(enabled)).not.toContain("azure-default");
-  expect(idsOf(enabled)).not.toContain("docker-local");
+  expect(idsOf(enabled)).not.toContain("azure-template");
+  expect(idsOf(enabled)).not.toContain("docker-custom-example");
 });
 
 test("trims whitespace and collapses duplicate ids (first wins)", () => {
   const enabled = resolveEnabledRunnerProfiles(
     SEEDS,
-    " aws-default , cloudflare-default , aws-default ",
+    " aws-template , cloudflare-default , aws-template ",
   );
-  expect(idsOf(enabled)).toEqual(["aws-default", "cloudflare-default"]);
+  expect(idsOf(enabled)).toEqual(["aws-template", "cloudflare-default"]);
 });
 
 test("merges takosumi.com/profile-enabled=true into every enabled profile", () => {
   const enabled = resolveEnabledRunnerProfiles(
     SEEDS,
-    "cloudflare-default,aws-default",
+    "cloudflare-default,aws-template",
   );
   const byId = new Map(enabled.map((profile) => [profile.id, profile]));
   // cloudflare-default carries no template-state label but still gets enabled.
-  expect(byId.get("cloudflare-default")?.labels?.["takosumi.com/profile-enabled"])
-    .toEqual("true");
-  // aws-default is a template seed; its template-state label is preserved and the
+  expect(
+    byId.get("cloudflare-default")?.labels?.["takosumi.com/profile-enabled"],
+  ).toEqual("true");
+  // aws-template is a template seed; its template-state label is preserved and the
   // enabled label is merged on so the policy gate lets it pass.
-  expect(byId.get("aws-default")?.labels?.["takosumi.com/profile-state"]).toEqual(
-    "template",
-  );
-  expect(byId.get("aws-default")?.labels?.["takosumi.com/profile-enabled"])
-    .toEqual("true");
+  expect(
+    byId.get("aws-template")?.labels?.["takosumi.com/profile-state"],
+  ).toEqual("template");
+  expect(
+    byId.get("aws-template")?.labels?.["takosumi.com/profile-enabled"],
+  ).toEqual("true");
 });
 
 test("does not mutate the input seed profiles", () => {
-  const before = SEEDS.find((profile) => profile.id === "aws-default")!;
-  resolveEnabledRunnerProfiles(SEEDS, "aws-default");
+  const before = SEEDS.find((profile) => profile.id === "aws-template")!;
+  resolveEnabledRunnerProfiles(SEEDS, "aws-template");
   expect(before.labels?.["takosumi.com/profile-enabled"]).toEqual(undefined);
 });
 
 test("skips unknown ids without throwing and keeps known ones", () => {
   const enabled = resolveEnabledRunnerProfiles(
     SEEDS,
-    "cloudflare-default,does-not-exist,aws-default",
+    "cloudflare-default,does-not-exist,aws-template",
   );
-  expect(idsOf(enabled)).toEqual(["cloudflare-default", "aws-default"]);
+  expect(idsOf(enabled)).toEqual(["cloudflare-default", "aws-template"]);
 });
 
 test("returns an empty surface when every listed id is unknown", () => {
@@ -94,7 +96,9 @@ test("returns an empty surface when every listed id is unknown", () => {
 });
 
 test("parseEnabledRunnerProfileIds normalizes CSV input", () => {
-  expect(parseEnabledRunnerProfileIds(undefined)).toEqual(["cloudflare-default"]);
+  expect(parseEnabledRunnerProfileIds(undefined)).toEqual([
+    "cloudflare-default",
+  ]);
   expect(parseEnabledRunnerProfileIds("")).toEqual(["cloudflare-default"]);
   expect(parseEnabledRunnerProfileIds("a, b ,a,,c")).toEqual(["a", "b", "c"]);
 });

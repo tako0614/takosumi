@@ -19,7 +19,7 @@ import type {
   ApplyRun,
   OpenTofuOperation,
   PlanRun,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import type { SourceSyncRun } from "takosumi-contract/sources";
 import type { Run, RunStatus, RunType } from "takosumi-contract/runs";
 
@@ -104,9 +104,7 @@ function syncUnifiedStatus(status: SourceSyncRun["status"]): RunStatus {
   }
 }
 
-function policyStatusFor(
-  status: "passed" | "blocked",
-): "pass" | "deny" {
+function policyStatusFor(status: "passed" | "blocked"): "pass" | "deny" {
   return status === "passed" ? "pass" : "deny";
 }
 
@@ -135,12 +133,12 @@ export function projectPlanRun(
 ): Run {
   // A drift-check plan projects to the §19 `drift_check` run type regardless of
   // its underlying operation (it is created as an `update`-kind internal plan).
-  const type: RunType = planRun.driftCheck === true
-    ? "drift_check"
-    : runTypeForOperation(planRun.operation, "plan");
-  const errorCode = planRun.status === "failed"
-    ? errorCodeFromPlan(planRun)
-    : undefined;
+  const type: RunType =
+    planRun.driftCheck === true
+      ? "drift_check"
+      : runTypeForOperation(planRun.operation, "plan");
+  const errorCode =
+    planRun.status === "failed" ? errorCodeFromPlan(planRun) : undefined;
   return {
     id: planRun.id,
     ...(planRun.runGroupId ? { runGroupId: planRun.runGroupId } : {}),
@@ -150,12 +148,18 @@ export function projectPlanRun(
       : {}),
     ...(options.environment ? { environment: options.environment } : {}),
     type,
-    status: planUnifiedStatus(planRun.status, options.awaitingApproval ?? false),
+    status: planUnifiedStatus(
+      planRun.status,
+      options.awaitingApproval ?? false,
+    ),
     ...(options.sourceSnapshotId
       ? { sourceSnapshotId: options.sourceSnapshotId }
       : {}),
     ...(planRun.dependencySnapshotId
       ? { dependencySnapshotId: planRun.dependencySnapshotId }
+      : {}),
+    ...(planRun.compatibilityReportId
+      ? { compatibilityReportId: planRun.compatibilityReportId }
       : {}),
     ...(planRun.baseStateGeneration !== undefined
       ? { baseStateGeneration: planRun.baseStateGeneration }
@@ -169,7 +173,9 @@ export function projectPlanRun(
     createdBy: DEFAULT_CREATED_BY,
     createdAt: new Date(planRun.createdAt).toISOString(),
     ...(iso(planRun.startedAt) ? { startedAt: iso(planRun.startedAt)! } : {}),
-    ...(iso(planRun.finishedAt) ? { finishedAt: iso(planRun.finishedAt)! } : {}),
+    ...(iso(planRun.finishedAt)
+      ? { finishedAt: iso(planRun.finishedAt)! }
+      : {}),
   };
 }
 
@@ -189,9 +195,8 @@ export function projectApplyRun(
   options: ProjectApplyRunOptions = {},
 ): Run {
   const type: RunType = runTypeForOperation(applyRun.operation, "apply");
-  const errorCode = applyRun.status === "failed"
-    ? errorCodeFromApply(applyRun)
-    : undefined;
+  const errorCode =
+    applyRun.status === "failed" ? errorCodeFromApply(applyRun) : undefined;
   return {
     id: applyRun.id,
     ...(options.runGroupId ? { runGroupId: options.runGroupId } : {}),
@@ -215,7 +220,9 @@ export function projectApplyRun(
     createdBy: DEFAULT_CREATED_BY,
     createdAt: new Date(applyRun.createdAt).toISOString(),
     ...(iso(applyRun.startedAt) ? { startedAt: iso(applyRun.startedAt)! } : {}),
-    ...(iso(applyRun.finishedAt) ? { finishedAt: iso(applyRun.finishedAt)! } : {}),
+    ...(iso(applyRun.finishedAt)
+      ? { finishedAt: iso(applyRun.finishedAt)! }
+      : {}),
   };
 }
 
@@ -238,14 +245,16 @@ export function projectSourceSyncRun(run: SourceSyncRun): Run {
 }
 
 function errorCodeFromPlan(planRun: PlanRun): string {
-  const message = planRun.diagnostics?.find((d) => d.severity === "error")
-    ?.message;
+  const message = planRun.diagnostics?.find(
+    (d) => d.severity === "error",
+  )?.message;
   return message ? compactErrorCode(message) : "plan_failed";
 }
 
 function errorCodeFromApply(applyRun: ApplyRun): string {
-  const message = applyRun.diagnostics?.find((d) => d.severity === "error")
-    ?.message;
+  const message = applyRun.diagnostics?.find(
+    (d) => d.severity === "error",
+  )?.message;
   return message ? compactErrorCode(message) : "apply_failed";
 }
 

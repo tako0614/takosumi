@@ -84,11 +84,11 @@ services:
         aliases:
           - caddy
           - hello.takosumi.test
-          - accounts.takosumi.test
+          - app.takosumi.test
           - service.takosumi.test
           - service-worker.takosumi.test
           - takosumi.test
-          - accounts.takosumi.test
+          - app.takosumi.test
           - takos.app.takosumi.test
           - oauth-mock.test
           - mailpit.takosumi.test

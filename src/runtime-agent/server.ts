@@ -1,7 +1,7 @@
 /**
  * Runtime-agent HTTP server.
  *
- * Implements the lifecycle protocol from `@takosjp/takosumi/contract` and
+ * Implements the lifecycle protocol from the `takosumi-contract` source module and
  * dispatches to per-provider handlers. Operators run this on the host that
  * has the cloud credentials (`AWS_ACCESS_KEY_ID`, etc.) or the OS access
  * (docker daemon, systemd) for local adapter resources.

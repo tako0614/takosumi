@@ -1,0 +1,20 @@
+{
+  // Worker build-target typecheck for the operator GA artifact.
+  //
+  // The base `tsconfig.json` deliberately EXCLUDES `worker/src` and
+  // `deploy/platform` from `tsc --noEmit` because those sources target the
+  // workerd runtime and are validated by the bundle build
+  // (`check:cloudflare-worker-build`). That left their type surface unchecked.
+  // This config closes that gap: it reuses the base compiler options (paths,
+  // strict, lib, types) and turns `tsc` on `worker/src` + `deploy/platform`.
+  //
+  // It does NOT pull `@cloudflare/workers-types` (the worker models the
+  // Cloudflare bindings it needs as local interfaces in `worker/src/bindings.ts`
+  // and the bundle build runs `--target browser`). Cloudflare-vs-DOM artifacts
+  // (e.g. `Uint8Array<ArrayBufferLike>` not matching `BodyInit`/`BufferSource`)
+  // are resolved at the call sites with the repo's existing `toArrayBuffer`
+  // pattern, not by widening the global lib.
+  "extends": "./tsconfig.json",
+  "include": ["worker/src", "deploy/platform"],
+  "exclude": ["**/*_test.ts"]
+}

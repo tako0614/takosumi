@@ -18,7 +18,7 @@
  * Boots the takosumi Accounts Worker (the bundle produced by
  * `bun build` from takosumi/worker/src/index.ts)
  * inside Miniflare with local D1 and R2 bindings. Mirrors the
- * accounts.takosumi.com production setup, just substituting Cloudflare D1/R2
+ * app.takosumi.com production setup, just substituting Cloudflare D1/R2
  * with miniflare's emulated stores under /data.
  */
 import { Miniflare } from "miniflare";
@@ -52,11 +52,11 @@ const bindings = Object.fromEntries(
 );
 bindings.LOCAL_SUBSTRATE_TEST_BED = "1";
 // Sensible defaults if the operator forgot to set the basics.
-bindings.TAKOSUMI_ACCOUNTS_ISSUER ??= "https://accounts.takosumi.test";
+bindings.TAKOSUMI_ACCOUNTS_ISSUER ??= "https://app.takosumi.test";
 bindings.TAKOSUMI_ACCOUNTS_SUBJECT ??= "tsub_takosumi_accounts_local";
 bindings.TAKOSUMI_ACCOUNTS_CLIENT_ID ??= "takosumi-local";
 bindings.TAKOSUMI_ACCOUNTS_REDIRECT_URIS ??=
-  "https://accounts.takosumi.test/sign-in/callback";
+  "https://app.takosumi.test/sign-in/callback";
 bindings.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS ??= "closed";
 bindings.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET ??=
   "local-substrate-export-download-secret-v1";

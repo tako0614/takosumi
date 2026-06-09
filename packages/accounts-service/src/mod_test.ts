@@ -52,9 +52,7 @@ type TestAccountsHandlerOptions = Parameters<
   typeof createRawAccountsHandler
 >[0];
 
-function createAccountsHandler(
-  options: TestAccountsHandlerOptions = {},
-) {
+function createAccountsHandler(options: TestAccountsHandlerOptions = {}) {
   const store = options.store ?? new InMemoryAccountsStore();
   const handler = createRawAccountsHandler({
     issuer: testIssuer,
@@ -135,7 +133,8 @@ async function appInstallationAuthSubjectForTest(
     return testSubjectValue(body?.createdBySubject);
   }
   if (
-    url.pathname === "/v1/installations/import" && request.method === "POST"
+    url.pathname === "/v1/installations/import" &&
+    request.method === "POST"
   ) {
     const body = await jsonRecordForTest(request.clone());
     return testSubjectValue(body?.createdBySubject ?? body?.subject);
@@ -179,10 +178,12 @@ function testInstallationRouteNeedsAccountBearer(
   ) {
     return true;
   }
-  return method === "GET" &&
+  return (
+    method === "GET" &&
     (kind === "events" ||
       kind === "export-operation" ||
-      kind === "export-download");
+      kind === "export-download")
+  );
 }
 
 /**
@@ -213,15 +214,12 @@ async function seedGenericAccountSession(
   subject: TakosumiSubject,
 ): Promise<string> {
   const now = Date.now();
-  if (!await store.findAccount(subject)) {
+  if (!(await store.findAccount(subject))) {
     await store.saveAccount({ subject, createdAt: now, updatedAt: now });
   }
-  const sessionId = `sess_test_${subject}_${
-    crypto.randomUUID().replaceAll(
-      "-",
-      "",
-    )
-  }`;
+  const sessionId = `sess_test_${subject}_${crypto
+    .randomUUID()
+    .replaceAll("-", "")}`;
   await store.saveAccountSession({
     sessionId,
     subject,
@@ -237,7 +235,7 @@ async function jsonRecordForTest(
   try {
     const value = await request.json();
     return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? value as Record<string, unknown>
+      ? (value as Record<string, unknown>)
       : undefined;
   } catch {
     return undefined;
@@ -246,7 +244,7 @@ async function jsonRecordForTest(
 
 function testSubjectValue(value: unknown): TakosumiSubject | undefined {
   return typeof value === "string" && value.startsWith("tsub_")
-    ? value as TakosumiSubject
+    ? (value as TakosumiSubject)
     : undefined;
 }
 
@@ -293,10 +291,10 @@ async function testRevisionPermissionDigest(input: {
     installationId: input.installationId,
     appId: input.appId,
     source: {
-      gitUrl: input.sourceGitUrl.trim().replace(/\/+$/, "").replace(
-        /\.git$/,
-        "",
-      ),
+      gitUrl: input.sourceGitUrl
+        .trim()
+        .replace(/\/+$/, "")
+        .replace(/\.git$/, ""),
       ref: input.sourceRef,
       commit: input.sourceCommit,
       planDigest: input.planDigest,
@@ -316,11 +314,9 @@ async function testSha256HexDigest(value: unknown): Promise<string> {
     "SHA-256",
     textEncoder.encode(canonicalJson(value)),
   );
-  return `sha256:${
-    [...new Uint8Array(digest)].map((byte) =>
-      byte.toString(16).padStart(2, "0")
-    ).join("")
-  }`;
+  return `sha256:${[...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
 function compareCanonicalJson(
@@ -334,11 +330,10 @@ function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (typeof value === "object" && value !== null) {
     const record = value as Record<string, unknown>;
-    return `{${
-      Object.keys(record).sort().map((key) =>
-        `${JSON.stringify(key)}:${canonicalJson(record[key])}`
-      ).join(",")
-    }}`;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value ?? null);
 }
@@ -362,15 +357,17 @@ test("accounts handler serves JWKS", async () => {
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     jwks: {
-      keys: [{
-        kty: "EC",
-        crv: "P-256",
-        kid: "test-key",
-        use: "sig",
-        alg: "ES256",
-        x: "x",
-        y: "y",
-      }],
+      keys: [
+        {
+          kty: "EC",
+          crv: "P-256",
+          kid: "test-key",
+          use: "sig",
+          alg: "ES256",
+          x: "x",
+          y: "y",
+        },
+      ],
     },
   });
   const response = await handler(
@@ -407,50 +404,54 @@ test("accounts handler proxies installation PlanRun to deployControl", async () 
         const request = new Request(input, init);
         proxiedRequests.push(request);
         if (new URL(request.url).pathname === "/v1/plan-runs/plan_core_apply") {
-          return Promise.resolve(Response.json({
-            planRun: {
-              id: "plan_core_apply",
-              spaceId: "space_core",
-              source: {
-                kind: "git",
-                url: "https://github.com/example/hello",
-                ref: "main",
+          return Promise.resolve(
+            Response.json({
+              planRun: {
+                id: "plan_core_apply",
+                spaceId: "space_core",
+                source: {
+                  kind: "git",
+                  url: "https://github.com/example/hello",
+                  ref: "main",
+                },
+                operation: "create",
+                runnerProfileId: "cloudflare-default",
+                sourceDigest: "sha256:source-core-apply",
+                variablesDigest: "sha256:variables-core-apply",
+                policyDecisionDigest: "sha256:policy-core-apply",
+                planDigest: "sha256:abc",
+                planArtifact: {
+                  kind: "runner-local",
+                  ref: "runner-local://plan_core_apply/tfplan",
+                  digest: "sha256:abc",
+                },
+                sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+                status: "succeeded",
+                requiredProviders: [],
+                policy: { status: "passed", reasons: [], checkedAt: 1 },
+                createdAt: 1,
+                updatedAt: 1,
+                finishedAt: 1,
               },
-              operation: "create",
-              runnerProfileId: "cloudflare-default",
-              sourceDigest: "sha256:source-core-apply",
-              variablesDigest: "sha256:variables-core-apply",
-              policyDecisionDigest: "sha256:policy-core-apply",
-              planDigest: "sha256:abc",
-              planArtifact: {
-                kind: "runner-local",
-                ref: "runner-local://plan_core_apply/tfplan",
-                digest: "sha256:abc",
-              },
-              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-              status: "succeeded",
-              requiredProviders: [],
-              policy: { status: "passed", reasons: [], checkedAt: 1 },
-              createdAt: 1,
-              updatedAt: 1,
-              finishedAt: 1,
-            },
-          }));
+            }),
+          );
         }
-        return Promise.resolve(Response.json({
-          source: {
-            kind: "git",
-            url: "https://github.com/example/hello",
-            ref: "v1.2.3",
-            commit: "0123456789abcdef0123456789abcdef01234567",
-          },
-          planDigest: "sha256:abc",
-          changes: [],
-          expected: {
-            sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+        return Promise.resolve(
+          Response.json({
+            source: {
+              kind: "git",
+              url: "https://github.com/example/hello",
+              ref: "v1.2.3",
+              commit: "0123456789abcdef0123456789abcdef01234567",
+            },
             planDigest: "sha256:abc",
-          },
-        }));
+            changes: [],
+            expected: {
+              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+              planDigest: "sha256:abc",
+            },
+          }),
+        );
       },
     },
   });
@@ -476,8 +477,12 @@ test("accounts handler proxies installation PlanRun to deployControl", async () 
   expect(response.status).toEqual(200);
   expect((await response.json()).planDigest).toEqual("sha256:abc");
   expect(proxiedRequests.length).toEqual(1);
-  expect(proxiedRequests[0].url).toEqual("http://takosumi.internal:8788/v1/plan-runs");
-  expect(proxiedRequests[0].headers.get("authorization")).toEqual("Bearer deploy-control-secret");
+  expect(proxiedRequests[0].url).toEqual(
+    "http://takosumi.internal:8788/v1/plan-runs",
+  );
+  expect(proxiedRequests[0].headers.get("authorization")).toEqual(
+    "Bearer deploy-control-secret",
+  );
   expect(await proxiedRequests[0].json()).toEqual({
     spaceId: "space_1",
     source: {
@@ -503,69 +508,76 @@ test("accounts handler applies installation through space deployControl when con
         const request = new Request(input, init);
         proxiedRequests.push(request);
         if (new URL(request.url).pathname === "/v1/plan-runs/plan_core_apply") {
-          return Promise.resolve(Response.json({
-            planRun: {
-              id: "plan_core_apply",
-              spaceId: "space_core",
-              source: {
-                kind: "git",
-                url: "https://github.com/example/hello",
-                ref: "main",
-              },
-              operation: "create",
-              runnerProfileId: "cloudflare-default",
-              sourceDigest: "sha256:source-core-apply",
-              variablesDigest: "sha256:variables-core-apply",
-              policyDecisionDigest: "sha256:policy-core-apply",
-              planDigest: "sha256:abc",
-              planArtifact: {
-                kind: "runner-local",
-                ref: "runner-local://plan_core_apply/tfplan",
-                digest: "sha256:abc",
-              },
-              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-              status: "succeeded",
-              requiredProviders: [],
-              policy: { status: "passed", reasons: [], checkedAt: 1 },
-              createdAt: 1,
-              updatedAt: 1,
-              finishedAt: 1,
-            },
-          }));
-        }
-        return Promise.resolve(Response.json({
-          installation: {
-            id: "inst_core_apply",
-            spaceId: "space_core",
-            appId: "example.hello",
-            currentDeploymentId: "dep_core_apply",
-            status: "ready",
-            createdAt: 1,
-          },
-          deployment: {
-            id: "dep_core_apply",
-            installationId: "inst_core_apply",
-            source: {
-              kind: "git",
-              url: "https://github.com/example/hello",
-              ref: "main",
-              commit: "0123456789abcdef0123456789abcdef01234567",
-            },
-            planDigest: "sha256:abc",
-            status: "succeeded",
-            outputs: {
-              components: {
-                public: {
-                  url: "https://hello.example.test",
-                  host: "hello.example.test",
-                  scheme: "https",
-                  listener: "public",
+          return Promise.resolve(
+            Response.json({
+              planRun: {
+                id: "plan_core_apply",
+                spaceId: "space_core",
+                source: {
+                  kind: "git",
+                  url: "https://github.com/example/hello",
+                  ref: "main",
                 },
+                operation: "create",
+                runnerProfileId: "cloudflare-default",
+                sourceDigest: "sha256:source-core-apply",
+                variablesDigest: "sha256:variables-core-apply",
+                policyDecisionDigest: "sha256:policy-core-apply",
+                planDigest: "sha256:abc",
+                planArtifact: {
+                  kind: "runner-local",
+                  ref: "runner-local://plan_core_apply/tfplan",
+                  digest: "sha256:abc",
+                },
+                sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+                status: "succeeded",
+                requiredProviders: [],
+                policy: { status: "passed", reasons: [], checkedAt: 1 },
+                createdAt: 1,
+                updatedAt: 1,
+                finishedAt: 1,
+              },
+            }),
+          );
+        }
+        return Promise.resolve(
+          Response.json(
+            {
+              installation: {
+                id: "inst_core_apply",
+                spaceId: "space_core",
+                appId: "example.hello",
+                currentDeploymentId: "dep_core_apply",
+                status: "ready",
+                createdAt: 1,
+              },
+              deployment: {
+                id: "dep_core_apply",
+                installationId: "inst_core_apply",
+                source: {
+                  kind: "git",
+                  url: "https://github.com/example/hello",
+                  ref: "main",
+                  commit: "0123456789abcdef0123456789abcdef01234567",
+                },
+                planDigest: "sha256:abc",
+                status: "succeeded",
+                outputs: {
+                  components: {
+                    public: {
+                      url: "https://hello.example.test",
+                      host: "hello.example.test",
+                      scheme: "https",
+                      listener: "public",
+                    },
+                  },
+                },
+                createdAt: 1,
               },
             },
-            createdAt: 1,
-          },
-        }, { status: 201 }));
+            { status: 201 },
+          ),
+        );
       },
     },
   });
@@ -600,7 +612,9 @@ test("accounts handler applies installation through space deployControl when con
   );
 
   expect(response.status).toEqual(202);
-  expect(response.headers.get("location")).toEqual("/v1/installations/inst_core_apply");
+  expect(response.headers.get("location")).toEqual(
+    "/v1/installations/inst_core_apply",
+  );
   const body = await response.json();
   expect(body.installation.id).toEqual("inst_core_apply");
   expect(body.installation.status).toEqual("ready");
@@ -608,7 +622,9 @@ test("accounts handler applies installation through space deployControl when con
   expect(body.installation.launch_url).toEqual("https://hello.example.test");
   expect(body.installation.launch.url).toEqual("https://hello.example.test");
   expect(body.launch.url).toEqual("https://hello.example.test");
-  expect(store.findAppInstallation("inst_core_apply")?.sourceCommit).toEqual("0123456789abcdef0123456789abcdef01234567");
+  expect(store.findAppInstallation("inst_core_apply")?.sourceCommit).toEqual(
+    "0123456789abcdef0123456789abcdef01234567",
+  );
   const ownerSession = seedAccountSession(
     store,
     "tsub_core_apply",
@@ -622,18 +638,27 @@ test("accounts handler applies installation through space deployControl when con
   );
   expect(detailResponse.status).toEqual(200);
   const detail = await detailResponse.json();
-  expect(detail.installation.launch.activationEvidenceId).toEqual("dep_core_apply");
-  expect(store.listInstallationEvents("inst_core_apply").map((event) =>
-      event.eventType
-    )).toEqual([
-      "installation.created",
-      "installation.activated-http-domain",
-    ]);
+  expect(detail.installation.launch.activationEvidenceId).toEqual(
+    "dep_core_apply",
+  );
+  expect(
+    store
+      .listInstallationEvents("inst_core_apply")
+      .map((event) => event.eventType),
+  ).toEqual(["installation.created", "installation.activated-http-domain"]);
   expect(proxiedRequests.length).toEqual(2);
-  expect(proxiedRequests[0].url).toEqual("http://takosumi.internal:8788/v1/plan-runs/plan_core_apply");
-  expect(proxiedRequests[0].headers.get("authorization")).toEqual("Bearer deploy-control-secret");
-  expect(proxiedRequests[1].url).toEqual("http://takosumi.internal:8788/v1/apply-runs");
-  expect((await proxiedRequests[1].json()).planRunId).toEqual("plan_core_apply");
+  expect(proxiedRequests[0].url).toEqual(
+    "http://takosumi.internal:8788/v1/plan-runs/plan_core_apply",
+  );
+  expect(proxiedRequests[0].headers.get("authorization")).toEqual(
+    "Bearer deploy-control-secret",
+  );
+  expect(proxiedRequests[1].url).toEqual(
+    "http://takosumi.internal:8788/v1/apply-runs",
+  );
+  expect((await proxiedRequests[1].json()).planRunId).toEqual(
+    "plan_core_apply",
+  );
 });
 
 test("accounts handler validates installation facade request before space deployControl apply", async () => {
@@ -694,61 +719,68 @@ test("accounts handler applies local source through space deployControl with loc
         const request = new Request(input, init);
         proxiedRequests.push(request);
         if (new URL(request.url).pathname === "/v1/plan-runs/plan_core_local") {
-          return Promise.resolve(Response.json({
-            planRun: {
-              id: "plan_core_local",
-              spaceId: "space_core",
-              source: {
-                kind: "local",
-                path: "/workspace/example-local",
-              },
-              operation: "create",
-              runnerProfileId: "cloudflare-default",
-              sourceDigest: "sha256:source-core-local",
-              variablesDigest: "sha256:variables-core-local",
-              policyDecisionDigest: "sha256:policy-core-local",
-              planDigest:
-                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              planArtifact: {
-                kind: "runner-local",
-                ref: "runner-local://plan_core_local/tfplan",
-                digest:
+          return Promise.resolve(
+            Response.json({
+              planRun: {
+                id: "plan_core_local",
+                spaceId: "space_core",
+                source: {
+                  kind: "local",
+                  path: "/workspace/example-local",
+                },
+                operation: "create",
+                runnerProfileId: "cloudflare-default",
+                sourceDigest: "sha256:source-core-local",
+                variablesDigest: "sha256:variables-core-local",
+                policyDecisionDigest: "sha256:policy-core-local",
+                planDigest:
                   "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                planArtifact: {
+                  kind: "runner-local",
+                  ref: "runner-local://plan_core_local/tfplan",
+                  digest:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                },
+                sourceCommit: "working-tree",
+                status: "succeeded",
+                requiredProviders: [],
+                policy: { status: "passed", reasons: [], checkedAt: 1 },
+                createdAt: 1,
+                updatedAt: 1,
+                finishedAt: 1,
               },
-              sourceCommit: "working-tree",
-              status: "succeeded",
-              requiredProviders: [],
-              policy: { status: "passed", reasons: [], checkedAt: 1 },
-              createdAt: 1,
-              updatedAt: 1,
-              finishedAt: 1,
-            },
-          }));
+            }),
+          );
         }
-        return Promise.resolve(Response.json({
-          installation: {
-            id: "inst_core_local",
-            spaceId: "space_core",
-            appId: "example.local",
-            currentDeploymentId: "dep_core_local",
-            status: "ready",
-            createdAt: 1,
-          },
-          deployment: {
-            id: "dep_core_local",
-            installationId: "inst_core_local",
-            source: {
-              kind: "local",
-              url: "/workspace/example-local",
+        return Promise.resolve(
+          Response.json(
+            {
+              installation: {
+                id: "inst_core_local",
+                spaceId: "space_core",
+                appId: "example.local",
+                currentDeploymentId: "dep_core_local",
+                status: "ready",
+                createdAt: 1,
+              },
+              deployment: {
+                id: "dep_core_local",
+                installationId: "inst_core_local",
+                source: {
+                  kind: "local",
+                  url: "/workspace/example-local",
+                },
+                sourceCommit: "working-tree",
+                planDigest:
+                  "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                status: "succeeded",
+                outputs: {},
+                createdAt: 1,
+              },
             },
-            sourceCommit: "working-tree",
-            planDigest:
-              "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            status: "succeeded",
-            outputs: {},
-            createdAt: 1,
-          },
-        }, { status: 201 }));
+            { status: 201 },
+          ),
+        );
       },
     },
   });
@@ -792,12 +824,22 @@ test("accounts handler applies local source through space deployControl with loc
   const body = await response.json();
   expect(body.installation.id).toEqual("inst_core_local");
   expect(body.installation.status).toEqual("ready");
-  expect(store.findAppInstallation("inst_core_local")?.sourceRef).toEqual("local");
-  expect(store.findAppInstallation("inst_core_local")?.sourceCommit).toEqual("working-tree");
+  expect(store.findAppInstallation("inst_core_local")?.sourceRef).toEqual(
+    "local",
+  );
+  expect(store.findAppInstallation("inst_core_local")?.sourceCommit).toEqual(
+    "working-tree",
+  );
   expect(proxiedRequests.length).toEqual(2);
-  expect(proxiedRequests[0].url).toEqual("http://takosumi.internal:8788/v1/plan-runs/plan_core_local");
-  expect(proxiedRequests[1].url).toEqual("http://takosumi.internal:8788/v1/apply-runs");
-  expect((await proxiedRequests[1].json()).planRunId).toEqual("plan_core_local");
+  expect(proxiedRequests[0].url).toEqual(
+    "http://takosumi.internal:8788/v1/plan-runs/plan_core_local",
+  );
+  expect(proxiedRequests[1].url).toEqual(
+    "http://takosumi.internal:8788/v1/apply-runs",
+  );
+  expect((await proxiedRequests[1].json()).planRunId).toEqual(
+    "plan_core_local",
+  );
 });
 
 test("raw accounts handler requires account bearer for installation PlanRun", async () => {
@@ -835,50 +877,54 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
         if (
           new URL(request.url).pathname === "/v1/plan-runs/plan_dashboard_apply"
         ) {
-          return Promise.resolve(Response.json({
-            planRun: {
-              id: "plan_dashboard_apply",
-              spaceId: "space_dashboard",
-              source: {
-                kind: "git",
-                url: "https://github.com/takos/takos",
-                ref: "v1.2.3",
+          return Promise.resolve(
+            Response.json({
+              planRun: {
+                id: "plan_dashboard_apply",
+                spaceId: "space_dashboard",
+                source: {
+                  kind: "git",
+                  url: "https://github.com/takos/takos",
+                  ref: "v1.2.3",
+                },
+                operation: "create",
+                runnerProfileId: "cloudflare-default",
+                sourceDigest: "sha256:source-dashboard-apply",
+                variablesDigest: "sha256:variables-dashboard-apply",
+                policyDecisionDigest: "sha256:policy-dashboard-apply",
+                planDigest: "sha256:app",
+                planArtifact: {
+                  kind: "runner-local",
+                  ref: "runner-local://plan_dashboard_apply/tfplan",
+                  digest: "sha256:app",
+                },
+                sourceCommit: "abc123",
+                status: "succeeded",
+                requiredProviders: [],
+                policy: { status: "passed", reasons: [], checkedAt: 1 },
+                createdAt: 1,
+                updatedAt: 1,
+                finishedAt: 1,
               },
-              operation: "create",
-              runnerProfileId: "cloudflare-default",
-              sourceDigest: "sha256:source-dashboard-apply",
-              variablesDigest: "sha256:variables-dashboard-apply",
-              policyDecisionDigest: "sha256:policy-dashboard-apply",
-              planDigest: "sha256:app",
-              planArtifact: {
-                kind: "runner-local",
-                ref: "runner-local://plan_dashboard_apply/tfplan",
-                digest: "sha256:app",
-              },
-              sourceCommit: "abc123",
-              status: "succeeded",
-              requiredProviders: [],
-              policy: { status: "passed", reasons: [], checkedAt: 1 },
-              createdAt: 1,
-              updatedAt: 1,
-              finishedAt: 1,
-            },
-          }));
+            }),
+          );
         }
-        return Promise.resolve(Response.json({
-          source: {
-            kind: "git",
-            url: "https://github.com/example/hello",
-            ref: "main",
-            commit: "0123456789abcdef0123456789abcdef01234567",
-          },
-          planDigest: "sha256:abc",
-          changes: [],
-          expected: {
-            sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+        return Promise.resolve(
+          Response.json({
+            source: {
+              kind: "git",
+              url: "https://github.com/example/hello",
+              ref: "main",
+              commit: "0123456789abcdef0123456789abcdef01234567",
+            },
             planDigest: "sha256:abc",
-          },
-        }));
+            changes: [],
+            expected: {
+              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+              planDigest: "sha256:abc",
+            },
+          }),
+        );
       },
     },
   });
@@ -1024,33 +1070,32 @@ test("accounts handler blocks open managed offering policy without evidence meta
   );
 
   expect(response.status).toEqual(503);
-  expect((await response.json()).error).toEqual("launch_readiness_not_complete");
+  expect((await response.json()).error).toEqual(
+    "launch_readiness_not_complete",
+  );
   expect(store.findAccount("tsub_owner")).toEqual(undefined);
 });
 
 test("accounts handler rejects weak open managed offering policy metadata", async () => {
-  for (
-    const managedOfferingAccess of [
-      {
-        ...testManagedOfferingOpenAccess,
-        evidenceRef: "evidence://todo",
-      },
-      {
-        ...testManagedOfferingOpenAccess,
-        approvalRef: testManagedOfferingOpenAccess.evidenceRef,
-      },
-      {
-        ...testManagedOfferingOpenAccess,
-        publicSummary:
-          "P0 evidence and staged launch rehearsal passed for user@example.test.",
-      },
-      {
-        ...testManagedOfferingOpenAccess,
-        publicSummary:
-          "P0 evidence passed but launch scope is omitted entirely.",
-      },
-    ]
-  ) {
+  for (const managedOfferingAccess of [
+    {
+      ...testManagedOfferingOpenAccess,
+      evidenceRef: "evidence://todo",
+    },
+    {
+      ...testManagedOfferingOpenAccess,
+      approvalRef: testManagedOfferingOpenAccess.evidenceRef,
+    },
+    {
+      ...testManagedOfferingOpenAccess,
+      publicSummary:
+        "P0 evidence and staged launch rehearsal passed for user@example.test.",
+    },
+    {
+      ...testManagedOfferingOpenAccess,
+      publicSummary: "P0 evidence passed but launch scope is omitted entirely.",
+    },
+  ]) {
     const store = new InMemoryAccountsStore();
     const handler = createAccountsHandler({
       store,
@@ -1076,7 +1121,9 @@ test("accounts handler rejects weak open managed offering policy metadata", asyn
     );
 
     expect(response.status).toEqual(503);
-    expect((await response.json()).error).toEqual("launch_readiness_not_complete");
+    expect((await response.json()).error).toEqual(
+      "launch_readiness_not_complete",
+    );
     expect(store.findAccount("tsub_owner")).toEqual(undefined);
   }
 });
@@ -1086,16 +1133,14 @@ test("raw accounts handler defaults managed offering access to closed", async ()
 
   // The managed-takos offering surfaces (hosted /start signup and Stripe
   // checkout) default to the launch-gated 503 when no policy is supplied.
-  for (
-    const request of [
-      new Request(`${testIssuer}/start`),
-      new Request(`${testIssuer}/v1/billing/stripe/checkout`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      }),
-    ]
-  ) {
+  for (const request of [
+    new Request(`${testIssuer}/start`),
+    new Request(`${testIssuer}/v1/billing/stripe/checkout`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }),
+  ]) {
     const response = await handler(request);
     expect(response.status).toEqual(503);
     const body = await response.json();
@@ -1135,66 +1180,64 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
     managedOfferingAccess: { status: "closed" },
   });
 
-  for (
-    const [label, request] of [
-      [
-        "oidc discovery",
-        new Request(`${testIssuer}/.well-known/openid-configuration`),
-      ],
-      ["jwks", new Request(`${testIssuer}/oauth/jwks`)],
-      ["userinfo", new Request(`${testIssuer}/oauth/userinfo`)],
-      ["revoke", new Request(`${testIssuer}/oauth/revoke`, { method: "POST" })],
-      [
-        "introspect",
-        new Request(`${testIssuer}/oauth/introspect`, { method: "POST" }),
-      ],
-      [
-        "token revoke",
-        new Request(`${testIssuer}/v1/account/tokens/tok_1/revoke`, {
+  for (const [label, request] of [
+    [
+      "oidc discovery",
+      new Request(`${testIssuer}/.well-known/openid-configuration`),
+    ],
+    ["jwks", new Request(`${testIssuer}/oauth/jwks`)],
+    ["userinfo", new Request(`${testIssuer}/oauth/userinfo`)],
+    ["revoke", new Request(`${testIssuer}/oauth/revoke`, { method: "POST" })],
+    [
+      "introspect",
+      new Request(`${testIssuer}/oauth/introspect`, { method: "POST" }),
+    ],
+    [
+      "token revoke",
+      new Request(`${testIssuer}/v1/account/tokens/tok_1/revoke`, {
+        method: "POST",
+      }),
+    ],
+    [
+      "uninstall",
+      new Request(`${testIssuer}/v1/installations/inst_1`, {
+        method: "DELETE",
+      }),
+    ],
+    [
+      "failed status completion",
+      new Request(`${testIssuer}/v1/installations/inst_1/status`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "failed" }),
+      }),
+    ],
+    [
+      "exported status completion",
+      new Request(`${testIssuer}/v1/installations/inst_1/status`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "exported" }),
+      }),
+    ],
+    [
+      "billing usage report",
+      new Request(
+        `${testIssuer}/v1/installations/inst_1/billing/usage-reports`,
+        {
           method: "POST",
-        }),
-      ],
-      [
-        "uninstall",
-        new Request(`${testIssuer}/v1/installations/inst_1`, {
-          method: "DELETE",
-        }),
-      ],
-      [
-        "failed status completion",
-        new Request(`${testIssuer}/v1/installations/inst_1/status`, {
-          method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ status: "failed" }),
-        }),
-      ],
-      [
-        "exported status completion",
-        new Request(`${testIssuer}/v1/installations/inst_1/status`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ status: "exported" }),
-        }),
-      ],
-      [
-        "billing usage report",
-        new Request(
-          `${testIssuer}/v1/installations/inst_1/billing/usage-reports`,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({}),
-          },
-        ),
-      ],
-      [
-        "stripe webhook",
-        new Request(`${testIssuer}/v1/billing/stripe/webhook`, {
-          method: "POST",
-        }),
-      ],
-    ] as const
-  ) {
+          body: JSON.stringify({}),
+        },
+      ),
+    ],
+    [
+      "stripe webhook",
+      new Request(`${testIssuer}/v1/billing/stripe/webhook`, {
+        method: "POST",
+      }),
+    ],
+  ] as const) {
     const response = await handler(request);
     const body = await response.text();
     expect(body.includes("launch_readiness_not_complete")).toEqual(false);
@@ -1220,25 +1263,29 @@ test("accounts reference operator distribution exposes Accounts, OIDC, and billi
     issuer: "https://accounts.example.test",
     store,
     jwks: {
-      keys: [{
-        kty: "EC",
-        crv: "P-256",
-        kid: "operator-key",
-        use: "sig",
-        alg: "ES256",
-        x: "x",
-        y: "y",
-      }],
+      keys: [
+        {
+          kty: "EC",
+          crv: "P-256",
+          kid: "operator-key",
+          use: "sig",
+          alg: "ES256",
+          x: "x",
+          y: "y",
+        },
+      ],
     },
     stripeBilling: {
       secretKey: "sk_test_operator",
       webhookSecret: "whsec_operator",
       fetch: (input, init) => {
         stripeRequests.push(new Request(input, init));
-        return Promise.resolve(Response.json({
-          id: "cs_test_operator",
-          url: "https://checkout.stripe.test/cs_operator",
-        }));
+        return Promise.resolve(
+          Response.json({
+            id: "cs_test_operator",
+            url: "https://checkout.stripe.test/cs_operator",
+          }),
+        );
       },
       stripeApiBase: "https://api.stripe.test/v1",
     },
@@ -1315,7 +1362,9 @@ test("accounts handler rejects installation PlanRun when deployControl is not co
   expect(response.status).toEqual(503);
   const body = await response.json();
   expect(body.error).toEqual("feature_unavailable");
-  expect(body.error_description).toEqual("Installation PlanRun is temporarily unavailable.");
+  expect(body.error_description).toEqual(
+    "Installation PlanRun is temporarily unavailable.",
+  );
 });
 
 test("reserved OIDC endpoints return public-safe unavailable response", async () => {
@@ -1340,10 +1389,12 @@ test("ephemeral accounts handler completes authorization code flow", async () =>
     managedOfferingAccess: testManagedOfferingOpenAccess,
     subject: "tsub_e2e",
     keyId: "test-key",
-    clients: [{
-      clientId: "takos-test",
-      redirectUris: ["http://localhost:3000/callback"],
-    }],
+    clients: [
+      {
+        clientId: "takos-test",
+        redirectUris: ["http://localhost:3000/callback"],
+      },
+    ],
   });
   const pkceVerifier = "takosumi-pkce-verifier-authz-code-flow";
   const pkceChallenge = await s256Challenge(pkceVerifier);
@@ -1364,7 +1415,9 @@ test("ephemeral accounts handler completes authorization code flow", async () =>
   const authorizeResponse = await handler(new Request(authorizeUrl));
   expect(authorizeResponse.status).toEqual(302);
   const redirect = new URL(authorizeResponse.headers.get("location") ?? "");
-  expect(redirect.origin + redirect.pathname).toEqual("http://localhost:3000/callback");
+  expect(redirect.origin + redirect.pathname).toEqual(
+    "http://localhost:3000/callback",
+  );
   expect(redirect.searchParams.get("state")).toEqual("state-1");
   const code = redirect.searchParams.get("code");
 
@@ -1415,10 +1468,12 @@ test("ephemeral accounts handler rejects unregistered redirect URIs", async () =
     issuer: "https://accounts.example.test",
     allowEphemeralKeyOnHttpsIssuer: true,
     managedOfferingAccess: testManagedOfferingOpenAccess,
-    clients: [{
-      clientId: "takos-test",
-      redirectUris: ["http://localhost:3000/callback"],
-    }],
+    clients: [
+      {
+        clientId: "takos-test",
+        redirectUris: ["http://localhost:3000/callback"],
+      },
+    ],
   });
 
   const authorizeUrl = new URL("https://accounts.example.test/oauth/authorize");
@@ -1444,7 +1499,9 @@ test("accounts handler rejects UserInfo without a bearer token", async () => {
     new Request("https://accounts.example.test/oauth/userinfo"),
   );
   expect(response.status).toEqual(401);
-  expect(response.headers.get("www-authenticate")).toEqual('Bearer error="invalid_token"');
+  expect(response.headers.get("www-authenticate")).toEqual(
+    'Bearer error="invalid_token"',
+  );
 });
 
 test("ephemeral accounts handler issues and accepts refresh tokens", async () => {
@@ -1452,10 +1509,12 @@ test("ephemeral accounts handler issues and accepts refresh tokens", async () =>
     issuer: "https://accounts.example.test",
     allowEphemeralKeyOnHttpsIssuer: true,
     managedOfferingAccess: testManagedOfferingOpenAccess,
-    clients: [{
-      clientId: "takos-test",
-      redirectUris: ["http://localhost:3000/callback"],
-    }],
+    clients: [
+      {
+        clientId: "takos-test",
+        redirectUris: ["http://localhost:3000/callback"],
+      },
+    ],
   });
   const pkceVerifier = "takosumi-pkce-verifier-refresh-flow";
   const pkceChallenge = await s256Challenge(pkceVerifier);
@@ -1560,10 +1619,12 @@ test("ephemeral accounts handler treats concurrent refresh rotation as reuse (G6
     issuer: "https://accounts.example.test",
     allowEphemeralKeyOnHttpsIssuer: true,
     managedOfferingAccess: testManagedOfferingOpenAccess,
-    clients: [{
-      clientId: "takos-test",
-      redirectUris: ["http://localhost:3000/callback"],
-    }],
+    clients: [
+      {
+        clientId: "takos-test",
+        redirectUris: ["http://localhost:3000/callback"],
+      },
+    ],
   });
   const pkceVerifier = "takosumi-pkce-verifier-concurrent-rotation";
   const pkceChallenge = await s256Challenge(pkceVerifier);
@@ -1779,10 +1840,12 @@ test("ephemeral accounts handler verifies PKCE S256 challenges", async () => {
     issuer: "https://accounts.example.test",
     allowEphemeralKeyOnHttpsIssuer: true,
     managedOfferingAccess: testManagedOfferingOpenAccess,
-    clients: [{
-      clientId: "takos-test",
-      redirectUris: ["http://localhost:3000/callback"],
-    }],
+    clients: [
+      {
+        clientId: "takos-test",
+        redirectUris: ["http://localhost:3000/callback"],
+      },
+    ],
   });
   const verifier = "takosumi-pkce-verifier";
   const challenge = await s256Challenge(verifier);
@@ -1853,11 +1916,14 @@ test("accounts handler redirects to configured upstream OAuth providers", async 
   const handler = createAccountsHandler({
     upstreamOAuth: {
       subjectSecret: "subject-secret",
-      providers: [{
-        providerId: "github",
-        clientId: "github-client",
-        redirectUri: "https://accounts.example.test/v1/auth/upstream/callback",
-      }],
+      providers: [
+        {
+          providerId: "github",
+          clientId: "github-client",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+        },
+      ],
     },
   });
 
@@ -1869,10 +1935,14 @@ test("accounts handler redirects to configured upstream OAuth providers", async 
 
   expect(response.status).toEqual(302);
   const redirect = new URL(response.headers.get("location") ?? "");
-  expect(redirect.origin + redirect.pathname).toEqual("https://github.com/login/oauth/authorize");
+  expect(redirect.origin + redirect.pathname).toEqual(
+    "https://github.com/login/oauth/authorize",
+  );
   expect(redirect.searchParams.get("client_id")).toEqual("github-client");
   expect(redirect.searchParams.get("state")).toEqual("state-1");
-  expect(redirect.searchParams.get("redirect_uri")).toEqual("https://accounts.example.test/v1/auth/upstream/callback");
+  expect(redirect.searchParams.get("redirect_uri")).toEqual(
+    "https://accounts.example.test/v1/auth/upstream/callback",
+  );
 });
 
 test("accounts handler redirects to configured custom upstream OIDC providers", async () => {
@@ -1889,12 +1959,15 @@ test("accounts handler redirects to configured custom upstream OIDC providers", 
   const handler = createAccountsHandler({
     upstreamOAuth: {
       subjectSecret: "subject-secret",
-      providers: [{
-        providerId: "keycloak",
-        clientId: "keycloak-client",
-        redirectUri: "https://accounts.example.test/v1/auth/upstream/callback",
-        provider,
-      }],
+      providers: [
+        {
+          providerId: "keycloak",
+          clientId: "keycloak-client",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+          provider,
+        },
+      ],
     },
   });
 
@@ -1906,7 +1979,9 @@ test("accounts handler redirects to configured custom upstream OIDC providers", 
 
   expect(response.status).toEqual(302);
   const redirect = new URL(response.headers.get("location") ?? "");
-  expect(redirect.origin + redirect.pathname).toEqual("https://idp.example.test/realms/takos/protocol/openid-connect/auth");
+  expect(redirect.origin + redirect.pathname).toEqual(
+    "https://idp.example.test/realms/takos/protocol/openid-connect/auth",
+  );
   expect(redirect.searchParams.get("client_id")).toEqual("keycloak-client");
   expect(redirect.searchParams.get("state")).toEqual("state-oidc");
 });
@@ -1915,11 +1990,14 @@ test("accounts handler rejects custom upstream provider ids without provider obj
   const handler = createAccountsHandler({
     upstreamOAuth: {
       subjectSecret: "subject-secret",
-      providers: [{
-        providerId: "keycloak",
-        clientId: "keycloak-client",
-        redirectUri: "https://accounts.example.test/v1/auth/upstream/callback",
-      }],
+      providers: [
+        {
+          providerId: "keycloak",
+          clientId: "keycloak-client",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+        },
+      ],
     },
   });
 
@@ -1948,7 +2026,9 @@ test("accounts handler exchanges upstream OAuth codes into sessions", async () =
       return Response.json({ access_token: "github-token" });
     }
     if (request.url === "https://api.github.com/user") {
-      expect(request.headers.get("authorization")).toEqual("Bearer github-token");
+      expect(request.headers.get("authorization")).toEqual(
+        "Bearer github-token",
+      );
       return Response.json({
         id: 12345,
         login: "octo",
@@ -1963,12 +2043,15 @@ test("accounts handler exchanges upstream OAuth codes into sessions", async () =
       subjectSecret: "subject-secret",
       sessionTtlMs: 60_000,
       fetch: fetchImpl,
-      providers: [{
-        providerId: "github",
-        clientId: "github-client",
-        clientSecret: "github-secret",
-        redirectUri: "https://accounts.example.test/v1/auth/upstream/callback",
-      }],
+      providers: [
+        {
+          providerId: "github",
+          clientId: "github-client",
+          clientSecret: "github-secret",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+        },
+      ],
     },
   });
 
@@ -2000,7 +2083,9 @@ test("accounts handler exchanges upstream OAuth codes into sessions", async () =
   expect(store.findAccount(body.subject)?.email).toEqual("octo@example.test");
   const sessionCookie = extractSessionCookieForTest(response);
   expect(typeof sessionCookie).toEqual("string");
-  expect(store.findAccountSession(sessionCookie!)?.subject).toEqual(body.subject);
+  expect(store.findAccountSession(sessionCookie!)?.subject).toEqual(
+    body.subject,
+  );
 });
 
 function extractSessionCookieForTest(response: Response): string | null {
@@ -2033,12 +2118,15 @@ test("accounts handler rejects upstream OAuth callback state mismatches", async 
         upstreamFetchCalled = true;
         return Promise.resolve(Response.json({ access_token: "github-token" }));
       },
-      providers: [{
-        providerId: "github",
-        clientId: "github-client",
-        clientSecret: "github-secret",
-        redirectUri: "https://accounts.example.test/v1/auth/upstream/callback",
-      }],
+      providers: [
+        {
+          providerId: "github",
+          clientId: "github-client",
+          clientSecret: "github-secret",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+        },
+      ],
     },
   });
   const authorizeResponse = await handler(
@@ -2093,12 +2181,15 @@ test("accounts handler does not launch-gate upstream OAuth authorize and callbac
         upstreamFetchCalled = true;
         return Promise.resolve(Response.json({ unexpected: true }));
       },
-      providers: [{
-        providerId: "github",
-        clientId: "github-client",
-        clientSecret: "github-secret",
-        redirectUri: "https://accounts.example.test/v1/auth/upstream/callback",
-      }],
+      providers: [
+        {
+          providerId: "github",
+          clientId: "github-client",
+          clientSecret: "github-secret",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+        },
+      ],
     },
   });
 
@@ -2140,7 +2231,7 @@ test("accounts handler exchanges custom upstream OIDC codes into sessions", asyn
     requests.push(request);
     if (
       request.url ===
-        "https://idp.example.test/realms/takos/protocol/openid-connect/token"
+      "https://idp.example.test/realms/takos/protocol/openid-connect/token"
     ) {
       const body = new URLSearchParams(await request.text());
       expect(body.get("code")).toEqual("code-oidc");
@@ -2150,9 +2241,11 @@ test("accounts handler exchanges custom upstream OIDC codes into sessions", asyn
     }
     if (
       request.url ===
-        "https://idp.example.test/realms/takos/protocol/openid-connect/userinfo"
+      "https://idp.example.test/realms/takos/protocol/openid-connect/userinfo"
     ) {
-      expect(request.headers.get("authorization")).toEqual("Bearer keycloak-token");
+      expect(request.headers.get("authorization")).toEqual(
+        "Bearer keycloak-token",
+      );
       return Response.json({
         sub: "keycloak-user",
         email: "keycloak@example.test",
@@ -2166,13 +2259,16 @@ test("accounts handler exchanges custom upstream OIDC codes into sessions", asyn
     upstreamOAuth: {
       subjectSecret: "subject-secret",
       fetch: fetchImpl,
-      providers: [{
-        providerId: "keycloak",
-        clientId: "keycloak-client",
-        clientSecret: "keycloak-secret",
-        redirectUri: "https://accounts.example.test/v1/auth/upstream/callback",
-        provider,
-      }],
+      providers: [
+        {
+          providerId: "keycloak",
+          clientId: "keycloak-client",
+          clientSecret: "keycloak-secret",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+          provider,
+        },
+      ],
     },
   });
 
@@ -2196,7 +2292,9 @@ test("accounts handler exchanges custom upstream OIDC codes into sessions", asyn
   expect(requests.length).toEqual(2);
   expect(String(body.subject).startsWith("tsub_")).toEqual(true);
   expect(body.provider_id).toEqual("keycloak");
-  expect(store.findAccount(body.subject)?.email).toEqual("keycloak@example.test");
+  expect(store.findAccount(body.subject)?.email).toEqual(
+    "keycloak@example.test",
+  );
 });
 
 test("accounts handler registers passkey credentials and authenticates assertions", async () => {
@@ -2289,7 +2387,9 @@ test("accounts handler registers passkey credentials and authenticates assertion
     ),
   );
   expect(registrationResponse.status).toEqual(200);
-  expect(store.findPasskeyCredential("credential-1")?.subject).toEqual("tsub_account");
+  expect(store.findPasskeyCredential("credential-1")?.subject).toEqual(
+    "tsub_account",
+  );
 
   // Agent 6 item 2: server mints the authenticate challenge too.
   const authenticationOptionsResponse = await handler(
@@ -2304,10 +2404,12 @@ test("accounts handler registers passkey credentials and authenticates assertion
   expect(authenticationOptionsResponse.status).toEqual(200);
   const authenticationOptions = await authenticationOptionsResponse.json();
   expect(typeof authenticationOptions.challenge).toEqual("string");
-  expect(authenticationOptions.allowCredentials).toEqual([{
-    id: "credential-1",
-    type: "public-key",
-  }]);
+  expect(authenticationOptions.allowCredentials).toEqual([
+    {
+      id: "credential-1",
+      type: "public-key",
+    },
+  ]);
   const serverAuthChallenge = authenticationOptions.challenge as string;
 
   // Re-sign with the server's challenge using the same key the
@@ -2347,7 +2449,9 @@ test("accounts handler registers passkey credentials and authenticates assertion
     authenticationResponse,
   );
   expect(typeof passkeySessionCookie).toEqual("string");
-  expect(store.findAccountSession(passkeySessionCookie!)?.subject).toEqual("tsub_account");
+  expect(store.findAccountSession(passkeySessionCookie!)?.subject).toEqual(
+    "tsub_account",
+  );
   expect(store.findPasskeyCredential("credential-1")?.signCount).toEqual(1);
 });
 
@@ -2584,6 +2688,117 @@ test("accounts handler starts Stripe checkout sessions", async () => {
   expect(params.get("metadata[purchase_kind]")).toEqual("plus_subscription");
 });
 
+test("accounts handler starts Stripe Customer Portal sessions for linked customers", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_account",
+    email: "user@example.test",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  store.saveBillingAccount({
+    billingAccountId: "bill_1",
+    subject: "tsub_account",
+    provider: "stripe",
+    stripeCustomerId: "cus_1",
+    stripeSubscriptionId: "sub_1",
+    status: "active",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  const accountSession = seedAccountSession(store, "tsub_account");
+
+  let requestBody = "";
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    expect(request.url).toEqual(
+      "https://api.stripe.test/v1/billing_portal/sessions",
+    );
+    requestBody = await request.text();
+    return Response.json({
+      id: "bps_1",
+      url: "https://billing.stripe.test/session/bps_1",
+    });
+  };
+  const handler = createAccountsHandler({
+    store,
+    stripeBilling: {
+      secretKey: "sk_test",
+      webhookSecret: "whsec_test",
+      stripeApiBase: "https://api.stripe.test/v1",
+      fetch: fetchImpl,
+    },
+    billingRedirectAllowlist: ["https://accounts.example.test"],
+  });
+
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/portal", {
+      method: "POST",
+      headers: accountSessionHeaders(accountSession),
+      body: JSON.stringify({
+        subject: "tsub_account",
+        returnUrl: "https://accounts.example.test/account/billing",
+      }),
+    }),
+  );
+
+  expect(response.status).toEqual(200);
+  expect(await response.json()).toEqual({
+    session_id: "bps_1",
+    url: "https://billing.stripe.test/session/bps_1",
+  });
+  const params = new URLSearchParams(requestBody);
+  expect(params.get("customer")).toEqual("cus_1");
+  expect(params.get("return_url")).toEqual(
+    "https://accounts.example.test/account/billing",
+  );
+});
+
+test("accounts handler rejects Stripe Customer Portal without a linked customer", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_account",
+    email: "user@example.test",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  const accountSession = seedAccountSession(store, "tsub_account");
+
+  let portalCalled = false;
+  const handler = createAccountsHandler({
+    store,
+    stripeBilling: {
+      secretKey: "sk_test",
+      webhookSecret: "whsec_test",
+      stripeApiBase: "https://api.stripe.test/v1",
+      fetch: () => {
+        portalCalled = true;
+        return Promise.resolve(Response.json({ unexpected: true }));
+      },
+    },
+    billingRedirectAllowlist: ["https://accounts.example.test"],
+  });
+
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/portal", {
+      method: "POST",
+      headers: accountSessionHeaders(accountSession),
+      body: JSON.stringify({
+        subject: "tsub_account",
+        returnUrl: "https://accounts.example.test/account/billing",
+      }),
+    }),
+  );
+
+  expect(response.status).toEqual(409);
+  expect(portalCalled).toEqual(false);
+  expect(await response.json()).toEqual({
+    error: "billing_account_not_linked",
+    error_description:
+      "Stripe Customer Portal requires an existing Stripe customer.",
+  });
+});
+
 test("accounts handler blocks Stripe checkout when managed offering access is closed", async () => {
   const store = new InMemoryAccountsStore();
   store.saveAccount({
@@ -2682,8 +2897,171 @@ test("accounts handler receives Stripe webhooks into billing state", async () =>
   const body = await response.json();
   expect(body.received).toEqual(true);
   expect(body.status).toEqual("processed");
-  expect(store.findBillingAccountForSubject("tsub_account")?.stripeCustomerId).toEqual("cus_1");
-  expect(store.findBillingWebhookEvent("evt_checkout")?.status).toEqual("processed");
+  expect(
+    store.findBillingAccountForSubject("tsub_account")?.stripeCustomerId,
+  ).toEqual("cus_1");
+  expect(store.findBillingWebhookEvent("evt_checkout")?.status).toEqual(
+    "processed",
+  );
+});
+
+test("accounts handler reconciles Stripe Space subscription webhooks once", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_account",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  const reconciliations: Array<{
+    readonly spaceId: string;
+    readonly input: {
+      readonly stripeCustomerId: string;
+      readonly stripeSubscriptionId: string;
+      readonly planCode: string;
+      readonly status: string;
+    };
+  }> = [];
+  const handler = createAccountsHandler({
+    store,
+    stripeBilling: {
+      secretKey: "sk_test",
+      webhookSecret: "whsec_test",
+      webhookToleranceSeconds: 1_000,
+    },
+    billingReconciler: (spaceId, input) => {
+      reconciliations.push({ spaceId, input });
+    },
+  });
+  const payload = JSON.stringify({
+    id: "evt_checkout_space",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        customer: "cus_space",
+        subscription: "sub_space",
+        payment_status: "paid",
+        metadata: {
+          takosumi_subject: "tsub_account",
+          space_id: "space_paid",
+          plan_code: "pro",
+        },
+      },
+    },
+  });
+  const signature = await stripeSignatureHeader({
+    payload,
+    secret: "whsec_test",
+    timestamp: Math.floor(Date.now() / 1000),
+  });
+
+  const first = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/webhook", {
+      method: "POST",
+      headers: { "stripe-signature": signature },
+      body: payload,
+    }),
+  );
+  const second = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/webhook", {
+      method: "POST",
+      headers: { "stripe-signature": signature },
+      body: payload,
+    }),
+  );
+
+  expect(first.status).toEqual(200);
+  expect(second.status).toEqual(200);
+  expect((await second.json()).duplicate).toEqual(true);
+  expect(reconciliations).toEqual([
+    {
+      spaceId: "space_paid",
+      input: {
+        stripeCustomerId: "cus_space",
+        stripeSubscriptionId: "sub_space",
+        planCode: "pro",
+        status: "active",
+      },
+    },
+  ]);
+});
+
+test("accounts handler captures Stripe Space credit purchase webhooks once", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_account",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  const captures: Array<{
+    readonly spaceId: string;
+    readonly input: {
+      readonly credits: number;
+      readonly stripeEventId: string;
+      readonly stripeCheckoutSessionId?: string;
+    };
+  }> = [];
+  const handler = createAccountsHandler({
+    store,
+    stripeBilling: {
+      secretKey: "sk_test",
+      webhookSecret: "whsec_test",
+      webhookToleranceSeconds: 1_000,
+    },
+    billingCreditReconciler: (spaceId, input) => {
+      captures.push({ spaceId, input });
+    },
+  });
+  const payload = JSON.stringify({
+    id: "evt_credit_space",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: "cs_credit_space",
+        mode: "payment",
+        customer: "cus_credit",
+        payment_status: "paid",
+        metadata: {
+          takosumi_subject: "tsub_account",
+          space_id: "space_credit",
+          credits: "42",
+        },
+      },
+    },
+  });
+  const signature = await stripeSignatureHeader({
+    payload,
+    secret: "whsec_test",
+    timestamp: Math.floor(Date.now() / 1000),
+  });
+
+  const first = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/webhook", {
+      method: "POST",
+      headers: { "stripe-signature": signature },
+      body: payload,
+    }),
+  );
+  const second = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/webhook", {
+      method: "POST",
+      headers: { "stripe-signature": signature },
+      body: payload,
+    }),
+  );
+
+  expect(first.status).toEqual(200);
+  expect(second.status).toEqual(200);
+  expect((await second.json()).duplicate).toEqual(true);
+  expect(captures).toEqual([
+    {
+      spaceId: "space_credit",
+      input: {
+        credits: 42,
+        stripeEventId: "evt_credit_space",
+        stripeCheckoutSessionId: "cs_credit_space",
+      },
+    },
+  ]);
 });
 
 test("accounts handler manages AppInstallation lifecycle records", async () => {
@@ -2717,32 +3095,39 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
           targetType: "shared-cell",
           targetId: "tokyo-cell-01",
         },
-        useEdges: [{
-          useEdgeId: "bind_auth",
-          name: "auth",
-          kind: "identity.oidc@v1",
-          configRef: "config://inst_1/auth",
-          secretRefs: ["secret://inst_1/auth/client-secret"],
-        }, {
-          useEdgeId: "bind_bootstrap",
-          name: "bootstrap",
-          kind: "install-launch-token@v1",
-          configRef: "config://inst_1/bootstrap",
-          secretRefs: [],
-        }],
-        oidcClients: [{
-          namespacePath: "identity.primary.oidc",
-          issuerUrl: "https://accounts.example.test",
-          redirectUris: ["http://localhost:8787/auth/oidc/callback"],
-          allowedScopes: ["openid", "profile"],
-          subjectMode: "pairwise",
-          tokenEndpointAuthMethod: "client_secret_post",
-        }],
-        permissionScopes: [{
-          permissionScopeId: "grant_deploy",
-          capability: "deploy.intent.write",
-          scope: { pathPrefix: "deployments/" },
-        }],
+        useEdges: [
+          {
+            useEdgeId: "bind_auth",
+            name: "auth",
+            kind: "identity.oidc@v1",
+            configRef: "config://inst_1/auth",
+            secretRefs: ["secret://inst_1/auth/client-secret"],
+          },
+          {
+            useEdgeId: "bind_bootstrap",
+            name: "bootstrap",
+            kind: "install-launch-token@v1",
+            configRef: "config://inst_1/bootstrap",
+            secretRefs: [],
+          },
+        ],
+        oidcClients: [
+          {
+            namespacePath: "identity.primary.oidc",
+            issuerUrl: "https://accounts.example.test",
+            redirectUris: ["http://localhost:8787/auth/oidc/callback"],
+            allowedScopes: ["openid", "profile"],
+            subjectMode: "pairwise",
+            tokenEndpointAuthMethod: "client_secret_post",
+          },
+        ],
+        permissionScopes: [
+          {
+            permissionScopeId: "grant_deploy",
+            capability: "deploy.intent.write",
+            scope: { pathPrefix: "deployments/" },
+          },
+        ],
         confirm: {
           permissionDigest,
           costAck: false,
@@ -2753,7 +3138,9 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
     }),
   );
   expect(createResponse.status).toEqual(202);
-  expect(createResponse.headers.get("location")).toEqual("/v1/installations/inst_1");
+  expect(createResponse.headers.get("location")).toEqual(
+    "/v1/installations/inst_1",
+  );
   const created = await createResponse.json();
   expect(created.installation.status).toEqual("installing");
   expect(created.oidc_client.namespacePath).toEqual("identity.primary.oidc");
@@ -2764,21 +3151,30 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
   // underlying in-memory ledger still tracks them so existing
   // materialize / launch token logic continues to function; we assert
   // ledger state directly instead of envelope fields.
-  expect(store.findLedgerAccount("acct_1")?.legalOwnerSubject).toEqual("tsub_owner");
+  expect(store.findLedgerAccount("acct_1")?.legalOwnerSubject).toEqual(
+    "tsub_owner",
+  );
   expect(store.listAppBindingsForInstallation("inst_1").length).toEqual(2);
-  expect(store.findOidcClientForInstallation("inst_1")?.issuerUrl).toEqual("https://accounts.example.test");
-  const storedAuthBinding = store.listAppBindingsForInstallation("inst_1")
+  expect(store.findOidcClientForInstallation("inst_1")?.issuerUrl).toEqual(
+    "https://accounts.example.test",
+  );
+  const storedAuthBinding = store
+    .listAppBindingsForInstallation("inst_1")
     .find((binding) => binding.name === "auth");
-  expect(storedAuthBinding?.configRef ?? "").toContain("takosumi-accounts://installations/inst_1/use-edges/auth/oidc-client/");
+  expect(storedAuthBinding?.configRef ?? "").toContain(
+    "takosumi-accounts://installations/inst_1/use-edges/auth/oidc-client/",
+  );
   expect(storedAuthBinding?.secretRefs).toEqual([
     "takosumi-accounts://installations/inst_1/use-edges/auth/secrets/client-secret",
   ]);
-  expect(store.listInstallationEvents("inst_1").map((event) => event.eventType)).toEqual([
-      "installation.created",
-      "installation.approved",
-      "oidc_client.registered",
-      "use_edge.materialized",
-    ]);
+  expect(
+    store.listInstallationEvents("inst_1").map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "installation.approved",
+    "oidc_client.registered",
+    "use_edge.materialized",
+  ]);
   const ownerSession = seedAccountSession(store, "tsub_owner");
 
   const updateResponse = await handler(
@@ -2805,9 +3201,11 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
   // `inspected.permission_scopes` were removed from the envelope.
   // The underlying ledger still has them; we assert via the in-memory
   // store.
-  expect(store.findRuntimeBinding(
+  expect(
+    store.findRuntimeBinding(
       store.findAppInstallation("inst_1")?.runtimeBindingId ?? "",
-    )?.targetId).toEqual("tokyo-cell-01");
+    )?.targetId,
+  ).toEqual("tokyo-cell-01");
   expect(store.listAppGrantsForInstallation("inst_1").length).toEqual(1);
 
   const eventsResponse = await handler(
@@ -2816,13 +3214,15 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
   expect(eventsResponse.status).toEqual(200);
   const eventsBody = await eventsResponse.json();
   expect(eventsBody.hash_chain_valid).toEqual(true);
-  expect(eventsBody.events.map((event: { type: string }) => event.type)).toEqual([
-      "installation.created",
-      "installation.approved",
-      "oidc_client.registered",
-      "use_edge.materialized",
-      "installation.status_changed",
-    ]);
+  expect(
+    eventsBody.events.map((event: { type: string }) => event.type),
+  ).toEqual([
+    "installation.created",
+    "installation.approved",
+    "oidc_client.registered",
+    "use_edge.materialized",
+    "installation.status_changed",
+  ]);
 });
 
 test("accounts handler validates install approval confirmation", async () => {
@@ -2849,12 +3249,14 @@ test("accounts handler validates install approval confirmation", async () => {
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
-        useEdges: [{
-          name: "database",
-          kind: "database.postgres@v1",
-          configRef: "config://inst_confirm_cost/database",
-          secretRefs: [],
-        }],
+        useEdges: [
+          {
+            name: "database",
+            kind: "database.postgres@v1",
+            configRef: "config://inst_confirm_cost/database",
+            secretRefs: [],
+          },
+        ],
         permissionScopes: [{ capability: "logs.read.own", scope: {} }],
         confirm: {
           permissionDigest,
@@ -2882,12 +3284,14 @@ test("accounts handler validates install approval confirmation", async () => {
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
-        useEdges: [{
-          name: "database",
-          kind: "database.postgres@v1",
-          configRef: "config://inst_confirm_mismatch/database",
-          secretRefs: [],
-        }],
+        useEdges: [
+          {
+            name: "database",
+            kind: "database.postgres@v1",
+            configRef: "config://inst_confirm_mismatch/database",
+            secretRefs: [],
+          },
+        ],
         permissionScopes: [{ capability: "logs.read.own", scope: {} }],
         confirm: {
           permissionDigest:
@@ -2898,7 +3302,9 @@ test("accounts handler validates install approval confirmation", async () => {
     }),
   );
   expect(mismatchResponse.status).toEqual(409);
-  expect((await mismatchResponse.json()).error).toEqual("approval_digest_mismatch");
+  expect((await mismatchResponse.json()).error).toEqual(
+    "approval_digest_mismatch",
+  );
 });
 
 test("accounts handler requires account-session ownership for installation reads", async () => {
@@ -3090,7 +3496,9 @@ test("raw accounts handler requires account bearer for installation writes", asy
     ),
   );
   expect(writePatStatus.status).toEqual(200);
-  expect(typeof store.findPersonalAccessToken("takpat_write_auth")?.lastUsedAt).toEqual("number");
+  expect(
+    typeof store.findPersonalAccessToken("takpat_write_auth")?.lastUsedAt,
+  ).toEqual("number");
 
   const crossStatus = await handler(
     new Request(
@@ -3144,10 +3552,12 @@ test("accounts handler rejects removed serviceId aliases in install OIDC client 
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
-        oidcClients: [{
-          serviceId: "identity.primary.oidc",
-          redirectUris: ["http://localhost:8787/auth/oidc/callback"],
-        }],
+        oidcClients: [
+          {
+            serviceId: "identity.primary.oidc",
+            redirectUris: ["http://localhost:8787/auth/oidc/callback"],
+          },
+        ],
       }),
     }),
   );
@@ -3155,8 +3565,12 @@ test("accounts handler rejects removed serviceId aliases in install OIDC client 
 
   expect(response.status).toEqual(400);
   expect(body.error).toEqual("invalid_oidc_clients");
-  expect(body.error_description).toEqual("oidcClients entries use servicePath; serviceId/service_id are not accepted");
-  expect(store.findAppInstallation("inst_oidc_alias_create")).toEqual(undefined);
+  expect(body.error_description).toEqual(
+    "oidcClients entries use servicePath; serviceId/service_id are not accepted",
+  );
+  expect(store.findAppInstallation("inst_oidc_alias_create")).toEqual(
+    undefined,
+  );
 });
 
 test("accounts handler accepts billing usage reports with active AppGrant scope", async () => {
@@ -3202,7 +3616,7 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
   store.saveAccessToken("access-usage", {
     clientId: "client_usage",
     subject: "pairwise_subject",
-   takosumiSubject: "tsub_owner",
+    takosumiSubject: "tsub_owner",
     installationId: "inst_usage",
     appId: "example.app",
     spaceId: "space_1",
@@ -3236,10 +3650,14 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
   expect(body.usage_report.id).toEqual("usage_report_123");
   expect(body.usage_report.billing_account_id).toEqual("bill_usage");
   expect(body.usage_report.status).toEqual("accepted");
-  expect(store.listBillingUsageRecordsForInstallation("inst_usage").map((record) =>
-      record.meter
-    )).toEqual(["agent.compute.seconds"]);
-  expect(store.listInstallationEvents("inst_usage").map((event) => event.eventType)).toEqual(["billing.usage_reported"]);
+  expect(
+    store
+      .listBillingUsageRecordsForInstallation("inst_usage")
+      .map((record) => record.meter),
+  ).toEqual(["agent.compute.seconds"]);
+  expect(
+    store.listInstallationEvents("inst_usage").map((event) => event.eventType),
+  ).toEqual(["billing.usage_reported"]);
 
   const duplicate = await handler(
     new Request(
@@ -3265,8 +3683,12 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
   const duplicateBody = await duplicate.json();
   expect(duplicateBody.duplicate).toEqual(true);
   expect(duplicateBody.usage_report.id).toEqual("usage_report_123");
-  expect(store.listBillingUsageRecordsForInstallation("inst_usage").length).toEqual(1);
-  expect(store.listInstallationEvents("inst_usage").map((event) => event.eventType)).toEqual(["billing.usage_reported"]);
+  expect(
+    store.listBillingUsageRecordsForInstallation("inst_usage").length,
+  ).toEqual(1);
+  expect(
+    store.listInstallationEvents("inst_usage").map((event) => event.eventType),
+  ).toEqual(["billing.usage_reported"]);
 
   const conflictingIdempotency = await handler(
     new Request(
@@ -3287,7 +3709,9 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
   );
 
   expect(conflictingIdempotency.status).toEqual(409);
-  expect((await conflictingIdempotency.json()).error).toEqual("idempotency_key_conflict");
+  expect((await conflictingIdempotency.json()).error).toEqual(
+    "idempotency_key_conflict",
+  );
 
   store.saveBillingAccount({
     billingAccountId: "bill_usage_2",
@@ -3323,7 +3747,7 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
   store.saveAccessToken("access-usage-2", {
     clientId: "client_usage_2",
     subject: "pairwise_subject_2",
-   takosumiSubject: "tsub_owner",
+    takosumiSubject: "tsub_owner",
     installationId: "inst_usage_2",
     appId: "example.app",
     spaceId: "space_1",
@@ -3349,7 +3773,9 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
   );
 
   expect(crossInstallationReportId.status).toEqual(409);
-  expect((await crossInstallationReportId.json()).error).toEqual("usage_report_id_conflict");
+  expect((await crossInstallationReportId.json()).error).toEqual(
+    "usage_report_id_conflict",
+  );
 });
 
 test("accounts handler no longer gates installation access tokens on AppGrant revocation (AC1)", async () => {
@@ -3398,7 +3824,7 @@ test("accounts handler no longer gates installation access tokens on AppGrant re
   store.saveAccessToken("access-usage", {
     clientId: "client_usage",
     subject: "pairwise_subject",
-   takosumiSubject: "tsub_owner",
+    takosumiSubject: "tsub_owner",
     installationId: "inst_usage",
     appId: "example.app",
     spaceId: "space_1",
@@ -3426,9 +3852,9 @@ test("accounts handler no longer gates installation access tokens on AppGrant re
   expect(response.status).toEqual(202);
   expect((await response.json()).usage_report.id).toEqual("usage_report_123");
   expect(
-    store.listBillingUsageRecordsForInstallation("inst_usage").map((record) =>
-      record.meter
-    ),
+    store
+      .listBillingUsageRecordsForInstallation("inst_usage")
+      .map((record) => record.meter),
   ).toEqual(["agent.compute.seconds"]);
 });
 
@@ -3460,9 +3886,11 @@ test("accounts handler exposes workload services and rotates event ingest tokens
     }),
   );
   expect(catalog.status).toEqual(200);
-  expect((await catalog.json()).services.map((service: { id: string }) =>
-    service.id
-  )).toContain(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT);
+  expect(
+    (await catalog.json()).services.map(
+      (service: { id: string }) => service.id,
+    ),
+  ).toContain(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT);
 
   const servicesBefore = await handler(
     new Request(
@@ -3472,9 +3900,10 @@ test("accounts handler exposes workload services and rotates event ingest tokens
   );
   expect(servicesBefore.status).toEqual(200);
   const servicesBeforeBody = await servicesBefore.json();
-  const eventsBefore = servicesBeforeBody.services.find((
-    service: { id: string },
-  ) => service.id === TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT);
+  const eventsBefore = servicesBeforeBody.services.find(
+    (service: { id: string }) =>
+      service.id === TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
+  );
   expect(eventsBefore.status).toEqual("not_configured");
   expect(eventsBefore.secret_ref).toEqual(undefined);
   expect(eventsBefore.rotate_token_url).toContain(
@@ -3483,12 +3912,10 @@ test("accounts handler exposes workload services and rotates event ingest tokens
 
   const rotate = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationServiceRotateTokenPath(
-          "inst_services",
-          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
-        )
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationServiceRotateTokenPath(
+        "inst_services",
+        TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
+      )}`,
       {
         method: "POST",
         headers: accountSessionHeaders(sessionId),
@@ -3517,9 +3944,9 @@ test("accounts handler exposes workload services and rotates event ingest tokens
 
   const ingest = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationEventsIngestPath("inst_services")
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationEventsIngestPath(
+        "inst_services",
+      )}`,
       {
         method: "POST",
         headers: { authorization: `Bearer ${rotated.token}` },
@@ -3537,12 +3964,10 @@ test("accounts handler exposes workload services and rotates event ingest tokens
 
   const secondRotate = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationServiceRotateTokenPath(
-          "inst_services",
-          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
-        )
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationServiceRotateTokenPath(
+        "inst_services",
+        TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
+      )}`,
       {
         method: "POST",
         headers: accountSessionHeaders(sessionId),
@@ -3556,9 +3981,9 @@ test("accounts handler exposes workload services and rotates event ingest tokens
 
   const staleIngest = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationEventsIngestPath("inst_services")
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationEventsIngestPath(
+        "inst_services",
+      )}`,
       {
         method: "POST",
         headers: { authorization: `Bearer ${rotated.token}` },
@@ -3575,7 +4000,11 @@ test("accounts handler accepts rotated billing service tokens without AppGrant s
   const handler = createAccountsHandler({ store });
   const now = Date.now();
   seedOwnedSpace(store, "tsub_owner", "acct_1", "space_1");
-  const sessionId = seedAccountSession(store, "tsub_owner", "sess_billing_service");
+  const sessionId = seedAccountSession(
+    store,
+    "tsub_owner",
+    "sess_billing_service",
+  );
   store.saveBillingAccount({
     billingAccountId: "bill_service",
     subject: "tsub_owner",
@@ -3603,12 +4032,10 @@ test("accounts handler accepts rotated billing service tokens without AppGrant s
 
   const rotate = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationServiceRotateTokenPath(
-          "inst_billing_service",
-          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
-        )
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationServiceRotateTokenPath(
+        "inst_billing_service",
+        TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
+      )}`,
       {
         method: "POST",
         headers: accountSessionHeaders(sessionId),
@@ -3621,15 +4048,15 @@ test("accounts handler accepts rotated billing service tokens without AppGrant s
   expect(rotated.service.id).toEqual(
     TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
   );
-  expect(store.listAppGrantsForInstallation("inst_billing_service")).toEqual([]);
+  expect(store.listAppGrantsForInstallation("inst_billing_service")).toEqual(
+    [],
+  );
 
   const usage = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationBillingUsageReportsPath(
-          "inst_billing_service",
-        )
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationBillingUsageReportsPath(
+        "inst_billing_service",
+      )}`,
       {
         method: "POST",
         headers: { authorization: `Bearer ${rotated.token}` },
@@ -3647,17 +4074,16 @@ test("accounts handler accepts rotated billing service tokens without AppGrant s
   const usageBody = await usage.json();
   expect(usageBody.usage_report.id).toEqual("usage_service_1");
   expect(usageBody.usage_report.billing_account_id).toEqual("bill_service");
-  expect(store.listBillingUsageRecordsForInstallation("inst_billing_service")
-    .length).toEqual(1);
+  expect(
+    store.listBillingUsageRecordsForInstallation("inst_billing_service").length,
+  ).toEqual(1);
 
   const secondRotate = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationServiceRotateTokenPath(
-          "inst_billing_service",
-          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
-        )
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationServiceRotateTokenPath(
+        "inst_billing_service",
+        TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
+      )}`,
       {
         method: "POST",
         headers: accountSessionHeaders(sessionId),
@@ -3668,11 +4094,9 @@ test("accounts handler accepts rotated billing service tokens without AppGrant s
   expect(secondRotate.status).toEqual(200);
   const staleUsage = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationBillingUsageReportsPath(
-          "inst_billing_service",
-        )
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationBillingUsageReportsPath(
+        "inst_billing_service",
+      )}`,
       {
         method: "POST",
         headers: { authorization: `Bearer ${rotated.token}` },
@@ -3753,12 +4177,10 @@ test("accounts handler accepts same-space workload control tokens for scoped ope
 
   const rotate = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationServiceRotateTokenPath(
-          "inst_control",
-          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOSUMI_CONTROL_SPACE,
-        )
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationServiceRotateTokenPath(
+        "inst_control",
+        TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOSUMI_CONTROL_SPACE,
+      )}`,
       {
         method: "POST",
         headers: accountSessionHeaders(sessionId),
@@ -3776,9 +4198,11 @@ test("accounts handler accepts same-space workload control tokens for scoped ope
     }),
   );
   expect(list.status).toEqual(200);
-  expect((await list.json()).installations.map((
-    installation: { id: string },
-  ) => installation.id)).toEqual(["inst_control", "inst_control_target"]);
+  expect(
+    (await list.json()).installations.map(
+      (installation: { id: string }) => installation.id,
+    ),
+  ).toEqual(["inst_control", "inst_control_target"]);
 
   const detail = await handler(
     new Request(
@@ -3791,9 +4215,9 @@ test("accounts handler accepts same-space workload control tokens for scoped ope
 
   const events = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationEventsPath("inst_control_target")
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationEventsPath(
+        "inst_control_target",
+      )}`,
       { headers: controlHeaders },
     ),
   );
@@ -3802,11 +4226,9 @@ test("accounts handler accepts same-space workload control tokens for scoped ope
 
   const deploymentPlan = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationDeploymentPlanRunsPath(
-          "inst_control_target",
-        )
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationDeploymentPlanRunsPath(
+        "inst_control_target",
+      )}`,
       {
         method: "POST",
         headers: controlHeaders,
@@ -3828,11 +4250,9 @@ test("accounts handler accepts same-space workload control tokens for scoped ope
 
   const usage = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationBillingUsageReportsPath(
-          "inst_control_target",
-        )
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationBillingUsageReportsPath(
+        "inst_control_target",
+      )}`,
       {
         method: "POST",
         headers: controlHeaders,
@@ -3850,9 +4270,9 @@ test("accounts handler accepts same-space workload control tokens for scoped ope
 
   const crossSpace = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationPath("inst_control_other_space")
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationPath(
+        "inst_control_other_space",
+      )}`,
       { headers: controlHeaders },
     ),
   );
@@ -3861,12 +4281,10 @@ test("accounts handler accepts same-space workload control tokens for scoped ope
 
   const secondRotate = await handler(
     new Request(
-      `${testIssuer}${
-        takosumiAccountsInstallationServiceRotateTokenPath(
-          "inst_control",
-          TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOSUMI_CONTROL_SPACE,
-        )
-      }`,
+      `${testIssuer}${takosumiAccountsInstallationServiceRotateTokenPath(
+        "inst_control",
+        TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOSUMI_CONTROL_SPACE,
+      )}`,
       {
         method: "POST",
         headers: accountSessionHeaders(sessionId),
@@ -3923,14 +4341,17 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
   // the envelope. The internal `runtime_target_id` field on
   // `installation` is still surfaced (it carries the account-plane ledger
   // reference for callers that need it during the transition).
-  expect(created.installation.runtime_target_id).toEqual("rtb_inst_shared_auto_shared_cell");
-  expect(store.findRuntimeBinding("rtb_inst_shared_auto_shared_cell")?.targetId).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_shared_auto");
-  expect(store.listInstallationEvents("inst_shared_auto").map((event) =>
-      event.eventType
-    )).toEqual([
-      "installation.created",
-      "runtime_target.assigned",
-    ]);
+  expect(created.installation.runtime_target_id).toEqual(
+    "rtb_inst_shared_auto_shared_cell",
+  );
+  expect(
+    store.findRuntimeBinding("rtb_inst_shared_auto_shared_cell")?.targetId,
+  ).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_shared_auto");
+  expect(
+    store
+      .listInstallationEvents("inst_shared_auto")
+      .map((event) => event.eventType),
+  ).toEqual(["installation.created", "runtime_target.assigned"]);
 
   const exhausted = await handler(
     new Request("https://accounts.example.test/v1/installations", {
@@ -3953,7 +4374,9 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
     }),
   );
   expect(exhausted.status).toEqual(503);
-  expect((await exhausted.json()).error).toEqual("shared_cell_capacity_unavailable");
+  expect((await exhausted.json()).error).toEqual(
+    "shared_cell_capacity_unavailable",
+  );
 });
 
 test("accounts handler records AppInstallation deployment and rollback revisions", async () => {
@@ -3991,16 +4414,20 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   );
   expect(readyResponse.status).toEqual(200);
 
-  const deploymentBindings = [{
-    name: "bootstrap",
-    kind: "install-launch-token@v1",
-    configRef: "config://inst_revision/bootstrap",
-    secretRefs: [],
-  }];
-  const deploymentGrants = [{
-    capability: "logs.read.own",
-    scope: { type: "single-installation" },
-  }];
+  const deploymentBindings = [
+    {
+      name: "bootstrap",
+      kind: "install-launch-token@v1",
+      configRef: "config://inst_revision/bootstrap",
+      secretRefs: [],
+    },
+  ];
+  const deploymentGrants = [
+    {
+      capability: "logs.read.own",
+      scope: { type: "single-installation" },
+    },
+  ];
   const deploymentPermissionDigest = await testRevisionPermissionDigest({
     operation: "deployment",
     installationId: "inst_revision",
@@ -4035,10 +4462,14 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   expect(deploymentPlanRunResponse.status).toEqual(200);
   const deploymentPlanRun = await deploymentPlanRunResponse.json();
   expect(deploymentPlanRun.operation).toEqual("deployment");
-  expect(deploymentPlanRun.expected.permissionDigest).toEqual(deploymentPermissionDigest);
+  expect(deploymentPlanRun.expected.permissionDigest).toEqual(
+    deploymentPermissionDigest,
+  );
   expect(deploymentPlanRun.expected.costAckRequired).toEqual(false);
   expect(deploymentPlanRun.requestedUseEdges[0].name).toEqual("bootstrap");
-  expect(deploymentPlanRun.requestedPermissionScopes[0].capability).toEqual("logs.read.own");
+  expect(deploymentPlanRun.requestedPermissionScopes[0].capability).toEqual(
+    "logs.read.own",
+  );
   const deploymentResponse = await handler(
     new Request(
       "https://accounts.example.test/v1/installations/inst_revision/deployments",
@@ -4069,8 +4500,12 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   expect(deployed.event.payload.previous.source.ref).toEqual("v1.2.3");
   expect(deployed.event.payload.next.source.ref).toEqual("v1.2.4");
   expect(deployed.event.payload.requestedUseEdges[0].name).toEqual("bootstrap");
-  expect(deployed.event.payload.requestedPermissionScopes[0].capability).toEqual("logs.read.own");
-  expect(store.findAppInstallation("inst_revision")?.sourceCommit).toEqual("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  expect(
+    deployed.event.payload.requestedPermissionScopes[0].capability,
+  ).toEqual("logs.read.own");
+  expect(store.findAppInstallation("inst_revision")?.sourceCommit).toEqual(
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  );
 
   const rollbackPermissionDigest = await testRevisionPermissionDigest({
     operation: "rollback",
@@ -4117,7 +4552,9 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   expect(eventsResponse.status).toEqual(200);
   const eventsBody = await eventsResponse.json();
   expect(eventsBody.hash_chain_valid).toEqual(true);
-  expect(eventsBody.events.map((event: { type: string }) => event.type)).toEqual([
+  expect(
+    eventsBody.events.map((event: { type: string }) => event.type),
+  ).toEqual([
     "installation.created",
     "installation.status_changed",
     "installation.deployed",
@@ -4164,80 +4601,81 @@ test("accounts handler brokers deployment and rollback through space deployContr
         >;
         upstreamCalls.push({
           path,
-          authorization: new Headers(requestInit?.headers).get(
-            "authorization",
-          ),
+          authorization: new Headers(requestInit?.headers).get("authorization"),
           body,
         });
         if (path === "/v1/installations/inst_core_revision") {
-          return Promise.resolve(Response.json({
-            installation: {
-              id: "inst_core_revision",
-              spaceId: "space_1",
-              appId: "takos.chat",
-              source: {
-                kind: "git",
-                url: "https://github.com/takos/takos.git",
-                ref: "v1.2.3",
-                commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          return Promise.resolve(
+            Response.json({
+              installation: {
+                id: "inst_core_revision",
+                spaceId: "space_1",
+                appId: "takos.chat",
+                source: {
+                  kind: "git",
+                  url: "https://github.com/takos/takos.git",
+                  ref: "v1.2.3",
+                  commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                },
+                runnerProfileId: "cloudflare-default",
+                currentDeploymentId: "dep_old",
+                status: "ready",
+                createdAt: now,
+                updatedAt: now,
               },
-              runnerProfileId: "cloudflare-default",
-              currentDeploymentId: "dep_old",
-              status: "ready",
-              createdAt: now,
-              updatedAt: now,
-            },
-          }));
+            }),
+          );
         }
         if (path === "/v1/plan-runs") {
-          const source = typeof body.source === "object" && body.source !== null &&
-              !Array.isArray(body.source)
-            ? body.source
-            : {
-              kind: "git",
-              url: "https://github.com/takos/takos.git",
-              ref: "v1.2.4",
-            };
+          const source =
+            typeof body.source === "object" &&
+            body.source !== null &&
+            !Array.isArray(body.source)
+              ? body.source
+              : {
+                  kind: "git",
+                  url: "https://github.com/takos/takos.git",
+                  ref: "v1.2.4",
+                };
           const ref = typeof source.ref === "string" ? source.ref : "v1.2.4";
-          const commit = ref === "v1.2.3"
-            ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-          const digest = ref === "v1.2.3"
-            ? "sha256:app-v123"
-            : "sha256:app-v124";
-          return Promise.resolve(Response.json({
-            planRun: {
-              id: `plan_${ref.replace(/[^0-9a-z]/gi, "")}`,
-              spaceId: "space_1",
-              installationId: "inst_core_revision",
-              installationCurrentDeploymentId: "dep_old",
-              source,
-              operation: "update",
-              runnerProfileId: "cloudflare-default",
-              sourceDigest:
-                `sha256:source-${ref.replace(/[^0-9a-z]/gi, "")}`,
-              variablesDigest:
-                `sha256:variables-${ref.replace(/[^0-9a-z]/gi, "")}`,
-              policyDecisionDigest:
-                `sha256:policy-${ref.replace(/[^0-9a-z]/gi, "")}`,
-              variables: {},
-              requiredProviders: [],
-              status: "succeeded",
-              policy: { status: "passed", reasons: [], checkedAt: now },
-              planDigest: digest,
-              planArtifact: {
-                kind: "runner-local",
-                ref: `runner-local://plan_${ref.replace(/[^0-9a-z]/gi, "")}/tfplan`,
-                digest,
+          const commit =
+            ref === "v1.2.3"
+              ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+          const digest =
+            ref === "v1.2.3" ? "sha256:app-v123" : "sha256:app-v124";
+          return Promise.resolve(
+            Response.json({
+              planRun: {
+                id: `plan_${ref.replace(/[^0-9a-z]/gi, "")}`,
+                spaceId: "space_1",
+                installationId: "inst_core_revision",
+                installationCurrentDeploymentId: "dep_old",
+                source,
+                operation: "update",
+                runnerProfileId: "cloudflare-default",
+                sourceDigest: `sha256:source-${ref.replace(/[^0-9a-z]/gi, "")}`,
+                variablesDigest: `sha256:variables-${ref.replace(/[^0-9a-z]/gi, "")}`,
+                policyDecisionDigest: `sha256:policy-${ref.replace(/[^0-9a-z]/gi, "")}`,
+                variables: {},
+                requiredProviders: [],
+                status: "succeeded",
+                policy: { status: "passed", reasons: [], checkedAt: now },
+                planDigest: digest,
+                planArtifact: {
+                  kind: "runner-local",
+                  ref: `runner-local://plan_${ref.replace(/[^0-9a-z]/gi, "")}/tfplan`,
+                  digest,
+                },
+                sourceCommit: commit,
+                providerLockDigest: `sha256:lock-${ref}`,
+                createdAt: now,
+                updatedAt: now,
+                finishedAt: now,
               },
-              sourceCommit: commit,
-              providerLockDigest: `sha256:lock-${ref}`,
-              createdAt: now,
-              updatedAt: now,
-              finishedAt: now,
-            },
-            currentDeploymentId: "dep_old",
-          }));
+              currentDeploymentId: "dep_old",
+            }),
+          );
         }
         if (path.startsWith("/v1/plan-runs/")) {
           const planRunId = decodeURIComponent(path.split("/").pop() ?? "");
@@ -4247,125 +4685,144 @@ test("accounts handler brokers deployment and rollback through space deployContr
             ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
           const digest = rollbackPlan ? "sha256:app-v123" : "sha256:app-v124";
-          return Promise.resolve(Response.json({
-            planRun: {
-              id: planRunId,
-              spaceId: "space_1",
-              installationId: "inst_core_revision",
-              installationCurrentDeploymentId: rollbackPlan ? "dep_new" : "dep_old",
-              source: {
-                kind: "git",
-                url: "https://github.com/takos/takos.git",
-                ref,
+          return Promise.resolve(
+            Response.json({
+              planRun: {
+                id: planRunId,
+                spaceId: "space_1",
+                installationId: "inst_core_revision",
+                installationCurrentDeploymentId: rollbackPlan
+                  ? "dep_new"
+                  : "dep_old",
+                source: {
+                  kind: "git",
+                  url: "https://github.com/takos/takos.git",
+                  ref,
+                },
+                operation: "update",
+                runnerProfileId: "cloudflare-default",
+                sourceDigest: `sha256:source-${planRunId}`,
+                variablesDigest: `sha256:variables-${planRunId}`,
+                policyDecisionDigest: `sha256:policy-${planRunId}`,
+                requiredProviders: [],
+                status: "succeeded",
+                policy: { status: "passed", reasons: [], checkedAt: now },
+                planDigest: digest,
+                planArtifact: {
+                  kind: "runner-local",
+                  ref: `runner-local://${planRunId}/tfplan`,
+                  digest,
+                },
+                sourceCommit: commit,
+                providerLockDigest: `sha256:lock-${ref}`,
+                createdAt: now,
+                updatedAt: now,
+                finishedAt: now,
               },
-              operation: "update",
-              runnerProfileId: "cloudflare-default",
-              sourceDigest: `sha256:source-${planRunId}`,
-              variablesDigest: `sha256:variables-${planRunId}`,
-              policyDecisionDigest: `sha256:policy-${planRunId}`,
-              requiredProviders: [],
-              status: "succeeded",
-              policy: { status: "passed", reasons: [], checkedAt: now },
-              planDigest: digest,
-              planArtifact: {
-                kind: "runner-local",
-                ref: `runner-local://${planRunId}/tfplan`,
-                digest,
-              },
-              sourceCommit: commit,
-              providerLockDigest: `sha256:lock-${ref}`,
-              createdAt: now,
-              updatedAt: now,
-              finishedAt: now,
-            },
-          }));
+            }),
+          );
         }
         if (path === "/v1/apply-runs") {
-          const planRunId = typeof body.planRunId === "string"
-            ? body.planRunId
-            : "";
+          const planRunId =
+            typeof body.planRunId === "string" ? body.planRunId : "";
           const rollbackApply = planRunId.includes("v123");
           const source = rollbackApply
             ? {
-              kind: "git",
-              url: "https://github.com/takos/takos.git",
-              ref: "v1.2.3",
-            }
+                kind: "git",
+                url: "https://github.com/takos/takos.git",
+                ref: "v1.2.3",
+              }
             : {
-              kind: "git",
-              url: "https://github.com/takos/takos.git",
-              ref: "v1.2.4",
-            };
+                kind: "git",
+                url: "https://github.com/takos/takos.git",
+                ref: "v1.2.4",
+              };
           const deploymentId = rollbackApply ? "dep_old" : "dep_new";
           const commit = rollbackApply
             ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
           const digest = rollbackApply ? "sha256:app-v123" : "sha256:app-v124";
-          return Promise.resolve(Response.json({
-            applyRun: {
-              id: rollbackApply ? "apply_rollback" : "apply_new",
-              planRunId,
-              spaceId: "space_1",
-              installationId: "inst_core_revision",
-              deploymentId,
-              operation: "update",
-              runnerProfileId: "cloudflare-default",
-              status: "succeeded",
-              createdAt: now + 1,
-              updatedAt: now + 1,
-              finishedAt: now + 1,
-            },
-            installation: {
-              id: "inst_core_revision",
-              spaceId: "space_1",
-              appId: "takos.chat",
-              currentDeploymentId: deploymentId,
-              status: "ready",
-              createdAt: now,
-              updatedAt: now + 1,
-            },
-            deployment: {
-              id: deploymentId,
-              installationId: "inst_core_revision",
-              source,
-              planDigest: digest,
-              sourceCommit: commit,
-              status: "succeeded",
-              outputs: rollbackApply ? [] : [{
-                name: "takosumi_launch_url",
-                kind: "launch_url",
-                value: "https://takos-new.example.test",
-                sensitive: false,
-              }],
-              createdAt: now + 1,
-            },
-          }, { status: 201 }));
+          return Promise.resolve(
+            Response.json(
+              {
+                applyRun: {
+                  id: rollbackApply ? "apply_rollback" : "apply_new",
+                  planRunId,
+                  spaceId: "space_1",
+                  installationId: "inst_core_revision",
+                  deploymentId,
+                  operation: "update",
+                  runnerProfileId: "cloudflare-default",
+                  status: "succeeded",
+                  createdAt: now + 1,
+                  updatedAt: now + 1,
+                  finishedAt: now + 1,
+                },
+                installation: {
+                  id: "inst_core_revision",
+                  spaceId: "space_1",
+                  appId: "takos.chat",
+                  currentDeploymentId: deploymentId,
+                  status: "ready",
+                  createdAt: now,
+                  updatedAt: now + 1,
+                },
+                deployment: {
+                  id: deploymentId,
+                  installationId: "inst_core_revision",
+                  source,
+                  planDigest: digest,
+                  sourceCommit: commit,
+                  status: "succeeded",
+                  outputs: rollbackApply
+                    ? []
+                    : [
+                        {
+                          name: "takosumi_launch_url",
+                          kind: "launch_url",
+                          value: "https://takos-new.example.test",
+                          sensitive: false,
+                        },
+                      ],
+                  createdAt: now + 1,
+                },
+              },
+              { status: 201 },
+            ),
+          );
         }
         if (path === "/v1/installations/inst_core_revision/deployments") {
-          return Promise.resolve(Response.json({
-            deployments: [{
-              id: "dep_old",
-              installationId: "inst_core_revision",
-              planRunId: "plan_v123",
-              applyRunId: "apply_old",
-              source: {
-                kind: "git",
-                url: "https://github.com/takos/takos.git",
-                ref: "v1.2.3",
-              },
-              planDigest: "sha256:app-v123",
-              sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              runnerProfileId: "cloudflare-default",
-              status: "succeeded",
-              outputs: {},
-              createdAt: now,
-            }],
-          }));
+          return Promise.resolve(
+            Response.json({
+              deployments: [
+                {
+                  id: "dep_old",
+                  installationId: "inst_core_revision",
+                  planRunId: "plan_v123",
+                  applyRunId: "apply_old",
+                  source: {
+                    kind: "git",
+                    url: "https://github.com/takos/takos.git",
+                    ref: "v1.2.3",
+                  },
+                  planDigest: "sha256:app-v123",
+                  sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  runnerProfileId: "cloudflare-default",
+                  status: "succeeded",
+                  outputs: {},
+                  createdAt: now,
+                },
+              ],
+            }),
+          );
         }
         return Promise.resolve(
-          Response.json({ error: "unexpected_upstream_path" }, {
-            status: 500,
-          }),
+          Response.json(
+            { error: "unexpected_upstream_path" },
+            {
+              status: 500,
+            },
+          ),
         );
       },
     },
@@ -4389,7 +4846,9 @@ test("accounts handler brokers deployment and rollback through space deployContr
   expect(planRunResponse.status).toEqual(200);
   const planRun = await planRunResponse.json();
   expect(planRun.expected.currentDeploymentId).toEqual("dep_old");
-  expect(planRun.expected.sourceCommit).toEqual("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  expect(planRun.expected.sourceCommit).toEqual(
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  );
   expect(typeof planRun.expected.permissionDigest).toEqual("string");
 
   const deployResponse = await handler(
@@ -4428,7 +4887,9 @@ test("accounts handler brokers deployment and rollback through space deployContr
   const deployed = await deployResponse.json();
   expect(deployed.installation.source.ref).toEqual("v1.2.4");
   expect(deployed.event.payload.coreDeployment.id).toEqual("dep_new");
-  expect(deployed.installation.launch_url).toEqual("https://takos-new.example.test");
+  expect(deployed.installation.launch_url).toEqual(
+    "https://takos-new.example.test",
+  );
 
   const rollbackResponse = await handler(
     new Request(
@@ -4460,7 +4921,9 @@ test("accounts handler brokers deployment and rollback through space deployContr
   const rolledBack = await rollbackResponse.json();
   expect(rolledBack.installation.source.ref).toEqual("v1.2.3");
   expect(rolledBack.installation.launch_url).toEqual(null);
-  expect(rolledBack.event.payload.coreDeployment.rollback.targetDeploymentId).toEqual("dep_old");
+  expect(
+    rolledBack.event.payload.coreDeployment.rollback.targetDeploymentId,
+  ).toEqual("dep_old");
   expect(upstreamCalls.map((call) => call.path)).toEqual([
     "/v1/installations/inst_core_revision",
     "/v1/plan-runs",
@@ -4471,14 +4934,14 @@ test("accounts handler brokers deployment and rollback through space deployContr
     "/v1/apply-runs",
   ]);
   expect(upstreamCalls.map((call) => call.authorization)).toEqual([
-      "Bearer deploy-control-secret",
-      "Bearer deploy-control-secret",
-      "Bearer deploy-control-secret",
-      "Bearer deploy-control-secret",
-      "Bearer deploy-control-secret",
-      "Bearer deploy-control-secret",
-      "Bearer deploy-control-secret",
-    ]);
+    "Bearer deploy-control-secret",
+    "Bearer deploy-control-secret",
+    "Bearer deploy-control-secret",
+    "Bearer deploy-control-secret",
+    "Bearer deploy-control-secret",
+    "Bearer deploy-control-secret",
+    "Bearer deploy-control-secret",
+  ]);
   expect(upstreamCalls[2].body).toEqual({});
   expect(upstreamCalls[3].body.planRunId).toEqual("plan_v124");
   expect(upstreamCalls[5].body).toEqual({});
@@ -4576,14 +5039,18 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
     ),
   );
   expect(digestMismatch.status).toEqual(409);
-  expect((await digestMismatch.json()).error).toEqual("approval_digest_mismatch");
+  expect((await digestMismatch.json()).error).toEqual(
+    "approval_digest_mismatch",
+  );
 
-  const meteredBindings = [{
-    name: "database",
-    kind: "database.postgres@v1",
-    configRef: "config://inst_revision_guard/database",
-    secretRefs: ["secret://inst_revision_guard/database/password"],
-  }];
+  const meteredBindings = [
+    {
+      name: "database",
+      kind: "database.postgres@v1",
+      configRef: "config://inst_revision_guard/database",
+      secretRefs: ["secret://inst_revision_guard/database/password"],
+    },
+  ];
   const meteredDigest = await testRevisionPermissionDigest({
     operation: "deployment",
     installationId: "inst_revision_guard",
@@ -4784,7 +5251,9 @@ test("accounts handler keeps generic installation mutations un-launch-gated but 
   for (const request of gatedRequests) {
     const response = await handler(request);
     expect(response.status).toEqual(503);
-    expect((await response.json()).error).toEqual("launch_readiness_not_complete");
+    expect((await response.json()).error).toEqual(
+      "launch_readiness_not_complete",
+    );
   }
 });
 
@@ -4858,15 +5327,15 @@ test("accounts handler completes AppInstallation ready suspended exported lifecy
     }),
   );
   expect(createResponse.status).toEqual(202);
-  expect((await createResponse.json()).installation.status).toEqual("installing");
+  expect((await createResponse.json()).installation.status).toEqual(
+    "installing",
+  );
 
-  for (
-    const [status, reason] of [
-      ["ready", "healthcheck passed"],
-      ["suspended", "operator pause"],
-      ["exported", "self-hosted export complete"],
-    ] as const
-  ) {
+  for (const [status, reason] of [
+    ["ready", "healthcheck passed"],
+    ["suspended", "operator pause"],
+    ["exported", "self-hosted export complete"],
+  ] as const) {
     const response = await handler(
       new Request(
         "https://accounts.example.test/v1/installations/inst_lifecycle/status",
@@ -4899,7 +5368,9 @@ test("accounts handler completes AppInstallation ready suspended exported lifecy
     ),
   );
   expect(inspectResponse.status).toEqual(200);
-  expect((await inspectResponse.json()).installation.status).toEqual("exported");
+  expect((await inspectResponse.json()).installation.status).toEqual(
+    "exported",
+  );
 
   const eventsResponse = await handler(
     new Request(
@@ -4910,12 +5381,12 @@ test("accounts handler completes AppInstallation ready suspended exported lifecy
   const events = await eventsResponse.json();
   expect(events.hash_chain_valid).toEqual(true);
   expect(events.events.map((event: { type: string }) => event.type)).toEqual([
-      "installation.created",
-      "installation.status_changed",
-      "installation.status_changed",
-      "installation.status_changed",
-      "installation.exported",
-    ]);
+    "installation.created",
+    "installation.status_changed",
+    "installation.status_changed",
+    "installation.status_changed",
+    "installation.exported",
+  ]);
 });
 
 test("accounts handler records uninstall for already terminal installations", async () => {
@@ -4987,38 +5458,42 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
           targetId:
             "shared-cell://tokyo-cell-01/namespaces/inst_materialize_request",
         },
-        useEdges: [{
-          useEdgeId: "bind_materialize_auth",
-          name: "auth",
-          kind: "identity.oidc@v1",
-          configRef:
-            "takosumi-deploy-control://installable-app/example.materialize/use-edges/auth",
-          secretRefs: [],
-        }, {
-          useEdgeId: "bind_materialize_database",
-          name: "database",
-          kind: "database.postgres@v1",
-          configRef:
-            "takosumi-deploy-control://installable-app/example.materialize/use-edges/database",
-          secretRefs: ["secret://inst_materialize_request/database/password"],
-        }, {
-          useEdgeId: "bind_materialize_domain",
-          name: "domain",
-          kind: "domain.http@v1",
-          configRef:
-            "takosumi-deploy-control://installable-app/example.materialize/use-edges/domain",
-          secretRefs: [],
-        }],
-        oidcClients: [{
-          useEdge: "auth",
-          namespacePath: "identity.primary.oidc",
-          issuerUrl: "https://accounts.example.test",
-          redirectUris: [
-            "https://example.takosumi.app/auth/oidc/callback",
-          ],
-          allowedScopes: ["openid", "profile"],
-          subjectMode: "pairwise",
-        }],
+        useEdges: [
+          {
+            useEdgeId: "bind_materialize_auth",
+            name: "auth",
+            kind: "identity.oidc@v1",
+            configRef:
+              "takosumi-deploy-control://installable-app/example.materialize/use-edges/auth",
+            secretRefs: [],
+          },
+          {
+            useEdgeId: "bind_materialize_database",
+            name: "database",
+            kind: "database.postgres@v1",
+            configRef:
+              "takosumi-deploy-control://installable-app/example.materialize/use-edges/database",
+            secretRefs: ["secret://inst_materialize_request/database/password"],
+          },
+          {
+            useEdgeId: "bind_materialize_domain",
+            name: "domain",
+            kind: "domain.http@v1",
+            configRef:
+              "takosumi-deploy-control://installable-app/example.materialize/use-edges/domain",
+            secretRefs: [],
+          },
+        ],
+        oidcClients: [
+          {
+            useEdge: "auth",
+            namespacePath: "identity.primary.oidc",
+            issuerUrl: "https://accounts.example.test",
+            redirectUris: ["https://example.takosumi.app/auth/oidc/callback"],
+            allowedScopes: ["openid", "profile"],
+            subjectMode: "pairwise",
+          },
+        ],
       }),
     }),
   );
@@ -5053,7 +5528,9 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     ),
   );
   expect(missingPermissionDigestResponse.status).toEqual(400);
-  expect((await missingPermissionDigestResponse.json()).error).toEqual("invalid_confirm");
+  expect((await missingPermissionDigestResponse.json()).error).toEqual(
+    "invalid_confirm",
+  );
 
   const mismatchedPermissionDigestResponse = await handler(
     new Request(
@@ -5074,7 +5551,9 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     ),
   );
   expect(mismatchedPermissionDigestResponse.status).toEqual(409);
-  expect((await mismatchedPermissionDigestResponse.json()).error).toEqual("approval_digest_mismatch");
+  expect((await mismatchedPermissionDigestResponse.json()).error).toEqual(
+    "approval_digest_mismatch",
+  );
 
   const materializePlan = {
     compute: "small",
@@ -5113,11 +5592,21 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
   expect(accepted.fromMode).toEqual("shared-cell");
   expect(accepted.toMode).toEqual("dedicated");
   expect(typeof accepted.preserveDigest).toEqual("string");
-  expect(accepted.preserve.dataNamespace).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_materialize_request");
-  expect(accepted.preserve.oidcClient.issuerUrl).toEqual("https://accounts.example.test");
-  expect(accepted.preserve.oidcClient.redirectUris).toEqual(["https://example.takosumi.app/auth/oidc/callback"]);
-  expect(accepted.preserve.useEdges.map((useEdge: { name: string }) => useEdge.name)).toEqual(["auth", "database", "domain"]);
-  expect(accepted.preserve.useEdges[0].configRef).toContain("takosumi-accounts://installations/inst_materialize_request/use-edges/auth/oidc-client/");
+  expect(accepted.preserve.dataNamespace).toEqual(
+    "shared-cell://tokyo-cell-01/namespaces/inst_materialize_request",
+  );
+  expect(accepted.preserve.oidcClient.issuerUrl).toEqual(
+    "https://accounts.example.test",
+  );
+  expect(accepted.preserve.oidcClient.redirectUris).toEqual([
+    "https://example.takosumi.app/auth/oidc/callback",
+  ]);
+  expect(
+    accepted.preserve.useEdges.map((useEdge: { name: string }) => useEdge.name),
+  ).toEqual(["auth", "database", "domain"]);
+  expect(accepted.preserve.useEdges[0].configRef).toContain(
+    "takosumi-accounts://installations/inst_materialize_request/use-edges/auth/oidc-client/",
+  );
   expect(accepted.trackingUrl).toContain("installation.materialize-requested");
 
   const repeatedResponse = await handler(
@@ -5140,7 +5629,9 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     ),
   );
   expect(repeatedResponse.status).toEqual(202);
-  expect((await repeatedResponse.json()).operationId).toEqual(accepted.operationId);
+  expect((await repeatedResponse.json()).operationId).toEqual(
+    accepted.operationId,
+  );
 
   const bodyMismatchResponse = await handler(
     new Request(
@@ -5163,7 +5654,9 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     ),
   );
   expect(bodyMismatchResponse.status).toEqual(409);
-  expect((await bodyMismatchResponse.json()).error).toEqual("idempotency_key_conflict");
+  expect((await bodyMismatchResponse.json()).error).toEqual(
+    "idempotency_key_conflict",
+  );
 
   const conflictingResponse = await handler(
     new Request(
@@ -5186,15 +5679,19 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     ),
   );
   expect(conflictingResponse.status).toEqual(409);
-  expect(store.listInstallationEvents("inst_materialize_request").map((event) =>
-      event.eventType
-    )).toEqual([
-      "installation.created",
-      "oidc_client.registered",
-      "use_edge.materialized",
-      "installation.materialize-requested",
-    ]);
-  expect(store.findAppInstallation("inst_materialize_request")?.mode).toEqual("shared-cell");
+  expect(
+    store
+      .listInstallationEvents("inst_materialize_request")
+      .map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "oidc_client.registered",
+    "use_edge.materialized",
+    "installation.materialize-requested",
+  ]);
+  expect(store.findAppInstallation("inst_materialize_request")?.mode).toEqual(
+    "shared-cell",
+  );
 
   const filteredEventsResponse = await handler(
     new Request(
@@ -5204,8 +5701,12 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
   expect(filteredEventsResponse.status).toEqual(200);
   const filteredEvents = await filteredEventsResponse.json();
   expect(filteredEvents.hash_chain_valid).toEqual(true);
-  expect(filteredEvents.events.map((event: { type: string }) => event.type)).toEqual(["installation.materialize-requested"]);
-  expect(filteredEvents.events[0].payload.preserveDigest).toEqual(accepted.preserveDigest);
+  expect(
+    filteredEvents.events.map((event: { type: string }) => event.type),
+  ).toEqual(["installation.materialize-requested"]);
+  expect(filteredEvents.events[0].payload.preserveDigest).toEqual(
+    accepted.preserveDigest,
+  );
 
   const mismatchedCompleteResponse = await handler(
     new Request(
@@ -5227,7 +5728,9 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     ),
   );
   expect(mismatchedCompleteResponse.status).toEqual(409);
-  expect((await mismatchedCompleteResponse.json()).error).toEqual("preservation_mismatch");
+  expect((await mismatchedCompleteResponse.json()).error).toEqual(
+    "preservation_mismatch",
+  );
 
   const completeResponse = await handler(
     new Request(
@@ -5253,8 +5756,12 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
   const complete = await completeResponse.json();
   expect(complete.installation.mode).toEqual("dedicated");
   expect(complete.event.type).toEqual("installation.materialize-succeeded");
-  expect(complete.event.payload.preserveDigest).toEqual(accepted.preserveDigest);
-  expect(store.findRuntimeBinding("rtb_materialize_dedicated")?.targetId).toEqual("tokyo-dedicated-01");
+  expect(complete.event.payload.preserveDigest).toEqual(
+    accepted.preserveDigest,
+  );
+  expect(
+    store.findRuntimeBinding("rtb_materialize_dedicated")?.targetId,
+  ).toEqual("tokyo-dedicated-01");
 
   const repeatedCompleteResponse = await handler(
     new Request(
@@ -5337,15 +5844,19 @@ test("accounts handler records AppInstallation materialize operation failures", 
     ),
   );
   expect(failedResponse.status).toEqual(200);
-  expect((await failedResponse.json()).event.type).toEqual("installation.materialize-failed");
-  expect(store.listInstallationEvents("inst_materialize_failure").map((event) =>
-      event.eventType
-    )).toEqual([
-      "installation.created",
-      "installation.materialize-requested",
-      "installation.status_changed",
-      "installation.materialize-failed",
-    ]);
+  expect((await failedResponse.json()).event.type).toEqual(
+    "installation.materialize-failed",
+  );
+  expect(
+    store
+      .listInstallationEvents("inst_materialize_failure")
+      .map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "installation.materialize-requested",
+    "installation.status_changed",
+    "installation.materialize-failed",
+  ]);
 });
 
 test("accounts handler runs configured materialize worker and swaps runtime binding", async () => {
@@ -5360,17 +5871,18 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
     store,
     materializeWorker: (input) => {
       const preserveBindings = Array.isArray(input.preserve.useEdges)
-        ? input.preserve.useEdges as readonly Record<string, unknown>[]
+        ? (input.preserve.useEdges as readonly Record<string, unknown>[])
         : [];
-      const preserveOidc = typeof input.preserve.oidcClient === "object" &&
-          input.preserve.oidcClient !== null
-        ? input.preserve.oidcClient as { readonly issuerUrl?: unknown }
-        : undefined;
-      const preserveRuntime = typeof input.preserve.runtimeTarget ===
-            "object" &&
-          input.preserve.runtimeTarget !== null
-        ? input.preserve.runtimeTarget as { readonly targetId?: unknown }
-        : undefined;
+      const preserveOidc =
+        typeof input.preserve.oidcClient === "object" &&
+        input.preserve.oidcClient !== null
+          ? (input.preserve.oidcClient as { readonly issuerUrl?: unknown })
+          : undefined;
+      const preserveRuntime =
+        typeof input.preserve.runtimeTarget === "object" &&
+        input.preserve.runtimeTarget !== null
+          ? (input.preserve.runtimeTarget as { readonly targetId?: unknown })
+          : undefined;
       captured.operationId = input.operationId;
       captured.dataNamespace = input.preserve.dataNamespace;
       captured.bindingNames = preserveBindings.map((binding) => binding.name);
@@ -5384,26 +5896,28 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
           targetId: "dedicated://tokyo/inst_materialize_worker",
         },
         continuity: {
-          sourceDataNamespace: typeof input.preserve.dataNamespace === "string"
-            ? input.preserve.dataNamespace
-            : null,
+          sourceDataNamespace:
+            typeof input.preserve.dataNamespace === "string"
+              ? input.preserve.dataNamespace
+              : null,
           oidcClient: preserveOidc
-            ? { ...preserveOidc } as Record<string, unknown>
+            ? ({ ...preserveOidc } as Record<string, unknown>)
             : null,
           preservedUseEdges: preserveBindings.map((binding) => ({
             name: String(binding.name ?? ""),
             kind: String(binding.kind ?? "") as AppBindingKind,
             configRef: String(binding.configRef ?? ""),
             secretRefs: Array.isArray(binding.secretRefs)
-              ? binding.secretRefs.filter((entry): entry is string =>
-                typeof entry === "string"
-              )
+              ? binding.secretRefs.filter(
+                  (entry): entry is string => typeof entry === "string",
+                )
               : [],
           })),
           cutover: {
-            fromTargetId: typeof preserveRuntime?.targetId === "string"
-              ? preserveRuntime.targetId
-              : null,
+            fromTargetId:
+              typeof preserveRuntime?.targetId === "string"
+                ? preserveRuntime.targetId
+                : null,
             toTargetId: "dedicated://tokyo/inst_materialize_worker",
             ready: true,
             strategy: "blue-green",
@@ -5437,31 +5951,36 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
           targetId:
             "shared-cell://tokyo-cell-01/namespaces/inst_materialize_worker",
         },
-        useEdges: [{
-          useEdgeId: "bind_materialize_worker_auth",
-          name: "auth",
-          kind: "identity.oidc@v1",
-          configRef:
-            "takosumi-deploy-control://installable-app/example.materialize-worker/use-edges/auth",
-          secretRefs: [],
-        }, {
-          useEdgeId: "bind_materialize_worker_domain",
-          name: "domain",
-          kind: "domain.http@v1",
-          configRef:
-            "takosumi-deploy-control://installable-app/example.materialize-worker/use-edges/domain",
-          secretRefs: [],
-        }],
-        oidcClients: [{
-          useEdge: "auth",
-          namespacePath: "identity.primary.oidc",
-          issuerUrl: "https://accounts.example.test",
-          redirectUris: [
-            "https://materialize-worker.example.test/auth/oidc/callback",
-          ],
-          allowedScopes: ["openid", "profile"],
-          subjectMode: "pairwise",
-        }],
+        useEdges: [
+          {
+            useEdgeId: "bind_materialize_worker_auth",
+            name: "auth",
+            kind: "identity.oidc@v1",
+            configRef:
+              "takosumi-deploy-control://installable-app/example.materialize-worker/use-edges/auth",
+            secretRefs: [],
+          },
+          {
+            useEdgeId: "bind_materialize_worker_domain",
+            name: "domain",
+            kind: "domain.http@v1",
+            configRef:
+              "takosumi-deploy-control://installable-app/example.materialize-worker/use-edges/domain",
+            secretRefs: [],
+          },
+        ],
+        oidcClients: [
+          {
+            useEdge: "auth",
+            namespacePath: "identity.primary.oidc",
+            issuerUrl: "https://accounts.example.test",
+            redirectUris: [
+              "https://materialize-worker.example.test/auth/oidc/callback",
+            ],
+            allowedScopes: ["openid", "profile"],
+            subjectMode: "pairwise",
+          },
+        ],
       }),
     }),
   );
@@ -5495,15 +6014,23 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
   expect(body.status).toEqual("ready");
   expect(body.installation.mode).toEqual("dedicated");
   expect(body.installation.status).toEqual("ready");
-  expect(body.runtime_target.target_id).toEqual("dedicated://tokyo/inst_materialize_worker");
+  expect(body.runtime_target.target_id).toEqual(
+    "dedicated://tokyo/inst_materialize_worker",
+  );
   expect(body.event.type).toEqual("installation.materialize-succeeded");
   expect(body.event.payload.preserveDigest).toEqual(body.preserveDigest);
   expect(captured.operationId).toEqual(body.operationId);
-  expect(captured.dataNamespace).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_materialize_worker");
+  expect(captured.dataNamespace).toEqual(
+    "shared-cell://tokyo-cell-01/namespaces/inst_materialize_worker",
+  );
   expect(captured.oidcIssuer).toEqual("https://accounts.example.test");
   expect(captured.bindingNames).toEqual(["auth", "domain"]);
-  expect(store.findAppInstallation("inst_materialize_worker")?.runtimeBindingId).toEqual("rtb_materialize_worker_dedicated");
-  expect(store.findRuntimeBinding("rtb_materialize_worker_dedicated")?.targetType).toEqual("dedicated");
+  expect(
+    store.findAppInstallation("inst_materialize_worker")?.runtimeBindingId,
+  ).toEqual("rtb_materialize_worker_dedicated");
+  expect(
+    store.findRuntimeBinding("rtb_materialize_worker_dedicated")?.targetType,
+  ).toEqual("dedicated");
 });
 
 test("accounts handler rejects materialize worker continuity mismatch before cutover", async () => {
@@ -5585,9 +6112,15 @@ test("accounts handler rejects materialize worker continuity mismatch before cut
   expect(response.status).toEqual(202);
   const body = await response.json();
   expect(body.status).toEqual("failed");
-  expect(body.error).toEqual("materialize worker continuity sourceDataNamespace mismatch");
-  expect(store.findAppInstallation("inst_materialize_mismatch")?.mode).toEqual("shared-cell");
-  expect(store.findAppInstallation("inst_materialize_mismatch")?.runtimeBindingId).toEqual("rtb_materialize_mismatch_shared");
+  expect(body.error).toEqual(
+    "materialize worker continuity sourceDataNamespace mismatch",
+  );
+  expect(store.findAppInstallation("inst_materialize_mismatch")?.mode).toEqual(
+    "shared-cell",
+  );
+  expect(
+    store.findAppInstallation("inst_materialize_mismatch")?.runtimeBindingId,
+  ).toEqual("rtb_materialize_mismatch_shared");
 });
 
 test("accounts handler keeps shared-cell runtime ready when materialize worker fails", async () => {
@@ -5656,10 +6189,16 @@ test("accounts handler keeps shared-cell runtime ready when materialize worker f
   expect(body.status).toEqual("failed");
   expect(body.error).toEqual("copy failed");
   expect(body.event.type).toEqual("installation.materialize-failed");
-  expect(store.findAppInstallation("inst_materialize_worker_failure")?.mode).toEqual("shared-cell");
-  expect(store.findAppInstallation("inst_materialize_worker_failure")?.status).toEqual("ready");
-  expect(store.findAppInstallation("inst_materialize_worker_failure")
-      ?.runtimeBindingId).toEqual("rtb_materialize_worker_failure_shared");
+  expect(
+    store.findAppInstallation("inst_materialize_worker_failure")?.mode,
+  ).toEqual("shared-cell");
+  expect(
+    store.findAppInstallation("inst_materialize_worker_failure")?.status,
+  ).toEqual("ready");
+  expect(
+    store.findAppInstallation("inst_materialize_worker_failure")
+      ?.runtimeBindingId,
+  ).toEqual("rtb_materialize_worker_failure_shared");
 });
 
 test("accounts handler rejects operation completion without request event", async () => {
@@ -5702,7 +6241,9 @@ test("accounts handler rejects operation completion without request event", asyn
   );
   expect(exportedResponse.status).toEqual(409);
   expect((await exportedResponse.json()).error).toEqual("operation_not_found");
-  expect(store.findAppInstallation("inst_missing_operation")?.status).toEqual("ready");
+  expect(store.findAppInstallation("inst_missing_operation")?.status).toEqual(
+    "ready",
+  );
 
   const failedResponse = await handler(
     new Request(
@@ -5719,7 +6260,9 @@ test("accounts handler rejects operation completion without request event", asyn
   );
   expect(failedResponse.status).toEqual(409);
   expect((await failedResponse.json()).error).toEqual("operation_not_found");
-  expect(store.findAppInstallation("inst_missing_operation")?.status).toEqual("ready");
+  expect(store.findAppInstallation("inst_missing_operation")?.status).toEqual(
+    "ready",
+  );
 });
 
 test("accounts handler accepts AppInstallation export requests and exposes pending operation", async () => {
@@ -5777,7 +6320,9 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
   expect(accepted.operationId).toContain("op_");
   expect(accepted.status).toEqual("preparing");
   expect(accepted.downloadUrl).toEqual(null);
-  expect(acceptedResponse.headers.get("location") ?? "").toContain(`/v1/installations/inst_export_request/exports/${accepted.operationId}`);
+  expect(acceptedResponse.headers.get("location") ?? "").toContain(
+    `/v1/installations/inst_export_request/exports/${accepted.operationId}`,
+  );
 
   const operationResponse = await handler(
     new Request(
@@ -5785,7 +6330,9 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
     ),
   );
   expect(operationResponse.status).toEqual(200);
-  expect((await operationResponse.json()).operationId).toEqual(accepted.operationId);
+  expect((await operationResponse.json()).operationId).toEqual(
+    accepted.operationId,
+  );
 
   const pendingDownloadResponse = await handler(
     new Request(
@@ -5793,7 +6340,9 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
     ),
   );
   expect(pendingDownloadResponse.status).toEqual(409);
-  expect((await pendingDownloadResponse.json()).error).toEqual("export_not_ready");
+  expect((await pendingDownloadResponse.json()).error).toEqual(
+    "export_not_ready",
+  );
 
   const repeatedResponse = await handler(
     new Request(
@@ -5817,7 +6366,9 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
     ),
   );
   expect(repeatedResponse.status).toEqual(202);
-  expect((await repeatedResponse.json()).operationId).toEqual(accepted.operationId);
+  expect((await repeatedResponse.json()).operationId).toEqual(
+    accepted.operationId,
+  );
 
   const bodyMismatchResponse = await handler(
     new Request(
@@ -5834,7 +6385,9 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
     ),
   );
   expect(bodyMismatchResponse.status).toEqual(409);
-  expect((await bodyMismatchResponse.json()).error).toEqual("idempotency_key_conflict");
+  expect((await bodyMismatchResponse.json()).error).toEqual(
+    "idempotency_key_conflict",
+  );
 
   const exportedResponse = await handler(
     new Request(
@@ -5852,7 +6405,9 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
     ),
   );
   expect(exportedResponse.status).toEqual(200);
-  expect((await exportedResponse.json()).event.type).toEqual("installation.exported");
+  expect((await exportedResponse.json()).event.type).toEqual(
+    "installation.exported",
+  );
 
   const completedOperationResponse = await handler(
     new Request(
@@ -5862,7 +6417,9 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
   expect(completedOperationResponse.status).toEqual(200);
   const completedOperation = await completedOperationResponse.json();
   expect(completedOperation.status).toEqual("exported");
-  expect(completedOperation.downloadUrl).toEqual("https://downloads.example.test/export.tar.zst");
+  expect(completedOperation.downloadUrl).toEqual(
+    "https://downloads.example.test/export.tar.zst",
+  );
 
   const downloadResponse = await handler(
     new Request(
@@ -5874,7 +6431,9 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
   // preserved as the origin, but `tk_sig` / `tk_exp` are appended.
   expect(downloadResponse.status).toEqual(302);
   const downloadLocation = downloadResponse.headers.get("location") ?? "";
-  expect(downloadLocation).toContain("https://downloads.example.test/export.tar.zst");
+  expect(downloadLocation).toContain(
+    "https://downloads.example.test/export.tar.zst",
+  );
   expect(downloadLocation).toContain("tk_sig=");
   expect(downloadLocation).toContain("tk_exp=");
 
@@ -5891,16 +6450,20 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
     ),
   );
   expect(repeatedExportedResponse.status).toEqual(409);
-  expect((await repeatedExportedResponse.json()).error).toEqual("operation_already_closed");
+  expect((await repeatedExportedResponse.json()).error).toEqual(
+    "operation_already_closed",
+  );
 
-  expect(store.listInstallationEvents("inst_export_request").map((event) =>
-      event.eventType
-    )).toEqual([
-      "installation.created",
-      "installation.export-requested",
-      "installation.status_changed",
-      "installation.exported",
-    ]);
+  expect(
+    store
+      .listInstallationEvents("inst_export_request")
+      .map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "installation.export-requested",
+    "installation.status_changed",
+    "installation.exported",
+  ]);
 });
 
 test("accounts handler runs configured export worker and closes operation", async () => {
@@ -5922,16 +6485,15 @@ test("accounts handler runs configured export worker and closes operation", asyn
       captured.requestIncludeData = input.request.includeData;
       captured.bundleKind = input.bundle.kind;
       captured.sourceCommit = input.bundle.source.commit;
-      captured.useEdgeNames = input.bundle.useEdges.map((useEdge) =>
-        useEdge.name
+      captured.useEdgeNames = input.bundle.useEdges.map(
+        (useEdge) => useEdge.name,
       );
-      captured.permissionScopeIds = input.bundle.permissionScopes.map((scope) =>
-        scope.permissionScopeId
+      captured.permissionScopeIds = input.bundle.permissionScopes.map(
+        (scope) => scope.permissionScopeId,
       );
       captured.eventTypes = input.bundle.events.map((event) => event.type);
       return {
-        downloadUrl:
-          `https://downloads.example.test/${input.operationId}/takos-export.tar.zst`,
+        downloadUrl: `https://downloads.example.test/${input.operationId}/takos-export.tar.zst`,
         downloadExpiresAt: "2999-05-10T00:00:00.000Z",
       };
     },
@@ -5960,21 +6522,25 @@ test("accounts handler runs configured export worker and closes operation", asyn
           targetType: "dedicated",
           targetId: "dedicated-worker-1",
         },
-        useEdges: [{
-          useEdgeId: "bind_export_auth",
-          name: "auth",
-          kind: "identity.oidc@v1",
-          configRef: "config://export/auth",
-          secretRefs: ["secret://export/auth"],
-        }],
-        oidcClients: [{
-          namespacePath: "identity.primary.oidc",
-          issuerUrl: "https://accounts.example.test",
-          redirectUris: ["https://app.example.test/auth/callback"],
-          allowedScopes: ["openid", "profile"],
-          subjectMode: "pairwise",
-          tokenEndpointAuthMethod: "client_secret_post",
-        }],
+        useEdges: [
+          {
+            useEdgeId: "bind_export_auth",
+            name: "auth",
+            kind: "identity.oidc@v1",
+            configRef: "config://export/auth",
+            secretRefs: ["secret://export/auth"],
+          },
+        ],
+        oidcClients: [
+          {
+            namespacePath: "identity.primary.oidc",
+            issuerUrl: "https://accounts.example.test",
+            redirectUris: ["https://app.example.test/auth/callback"],
+            allowedScopes: ["openid", "profile"],
+            subjectMode: "pairwise",
+            tokenEndpointAuthMethod: "client_secret_post",
+          },
+        ],
       }),
     }),
   );
@@ -6003,8 +6569,12 @@ test("accounts handler runs configured export worker and closes operation", asyn
   expect(exported.event.type).toEqual("installation.exported");
   expect(captured.operationId).toEqual(exported.operationId);
   expect(captured.requestIncludeData).toEqual(false);
-  expect(captured.bundleKind).toEqual("takosumi.accounts.installation-export-bundle@v1");
-  expect(captured.sourceCommit).toEqual("0123456789abcdef0123456789abcdef01234567");
+  expect(captured.bundleKind).toEqual(
+    "takosumi.accounts.installation-export-bundle@v1",
+  );
+  expect(captured.sourceCommit).toEqual(
+    "0123456789abcdef0123456789abcdef01234567",
+  );
   expect(captured.useEdgeNames).toEqual(["auth"]);
   expect(captured.permissionScopeIds).toEqual([]);
   expect(captured.eventTypes).toEqual([
@@ -6013,7 +6583,9 @@ test("accounts handler runs configured export worker and closes operation", asyn
     "use_edge.materialized",
     "installation.export-requested",
   ]);
-  expect(store.findAppInstallation("inst_export_worker")?.status).toEqual("exported");
+  expect(store.findAppInstallation("inst_export_worker")?.status).toEqual(
+    "exported",
+  );
 
   const operationResponse = await handler(
     new Request(
@@ -6106,7 +6678,9 @@ test("accounts handler records configured export worker failures", async () => {
   expect(body.status).toEqual("failed");
   expect(body.error).toEqual("archive upload failed");
   expect(body.event.type).toEqual("installation.export-failed");
-  expect(store.findAppInstallation("inst_export_worker_failure")?.status).toEqual("failed");
+  expect(
+    store.findAppInstallation("inst_export_worker_failure")?.status,
+  ).toEqual("failed");
 
   const operationResponse = await handler(
     new Request(
@@ -6171,33 +6745,38 @@ test("accounts handler imports export bundle with target OIDC issuer", async () 
       createdAt: 1778284800000,
       updatedAt: 1778284800000,
     },
-    bindings: [{
-      bindingId: "bind_auth",
-      installationId: "inst_source",
-      name: "auth",
-      kind: "identity.oidc@v1",
-      configRef:
-        "https://accounts.source.test/v1/installations/inst_source/use-edges/auth/oidc-client/toc_source",
-      secretRefs: [
-        "https://accounts.source.test/v1/installations/inst_source/use-edges/auth/secrets/client-secret",
-      ],
-      createdAt: 1778284800000,
-      updatedAt: 1778284800000,
-    }],
-    grants: [{
-      grantId: "grant_threads",
-      installationId: "inst_source",
-      capability: "threads:read",
-      scope: {},
-      grantedAt: 1778284800000,
-    }, {
-      grantId: "grant_logs",
-      installationId: "inst_source",
-      capability: "logs.read.own",
-      scope: {},
-      grantedAt: 1778284800000,
-      revokedAt: 1778284860000,
-    }],
+    bindings: [
+      {
+        bindingId: "bind_auth",
+        installationId: "inst_source",
+        name: "auth",
+        kind: "identity.oidc@v1",
+        configRef:
+          "https://accounts.source.test/v1/installations/inst_source/use-edges/auth/oidc-client/toc_source",
+        secretRefs: [
+          "https://accounts.source.test/v1/installations/inst_source/use-edges/auth/secrets/client-secret",
+        ],
+        createdAt: 1778284800000,
+        updatedAt: 1778284800000,
+      },
+    ],
+    grants: [
+      {
+        grantId: "grant_threads",
+        installationId: "inst_source",
+        capability: "threads:read",
+        scope: {},
+        grantedAt: 1778284800000,
+      },
+      {
+        grantId: "grant_logs",
+        installationId: "inst_source",
+        capability: "logs.read.own",
+        scope: {},
+        grantedAt: 1778284800000,
+        revokedAt: 1778284860000,
+      },
+    ],
   });
 
   const response = await handler(
@@ -6219,23 +6798,35 @@ test("accounts handler imports export bundle with target OIDC issuer", async () 
   expect(body.installation.mode).toEqual("self-hosted");
   expect(body.installation.status).toEqual("installing");
   expect(body.oidc_client.issuer_url).toEqual("https://accounts.target.test");
-  expect(body.import_plan.source_issuer).toEqual("https://accounts.source.test");
-  expect(body.import_plan.target_issuer).toEqual("https://accounts.target.test");
+  expect(body.import_plan.source_issuer).toEqual(
+    "https://accounts.source.test",
+  );
+  expect(body.import_plan.target_issuer).toEqual(
+    "https://accounts.target.test",
+  );
   // Wave 6 (Phase E SQL drift fix): `permission_scopes` / `use_edges`
   // were removed from the envelope. Inspect the in-memory ledger
   // directly.
-  expect(store.listAppGrantsForInstallation("inst_target").map((g) => g.grantId)).toEqual(["grant_threads"]);
+  expect(
+    store.listAppGrantsForInstallation("inst_target").map((g) => g.grantId),
+  ).toEqual(["grant_threads"]);
   const targetAuthBinding = store
     .listAppBindingsForInstallation("inst_target")
     .find((b) => b.name === "auth");
-  expect(targetAuthBinding?.configRef ?? "").toContain("takosumi-accounts://installations/inst_target/use-edges/auth/oidc-client/");
-  expect(JSON.stringify(body.installation).includes("https://accounts.source.test")).toEqual(false);
-  expect(store.listInstallationEvents("inst_target").map((event) => event.eventType)).toEqual([
-      "installation.created",
-      "oidc_client.registered",
-      "use_edge.materialized",
-      "installation.import-planned",
-    ]);
+  expect(targetAuthBinding?.configRef ?? "").toContain(
+    "takosumi-accounts://installations/inst_target/use-edges/auth/oidc-client/",
+  );
+  expect(
+    JSON.stringify(body.installation).includes("https://accounts.source.test"),
+  ).toEqual(false);
+  expect(
+    store.listInstallationEvents("inst_target").map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "oidc_client.registered",
+    "use_edge.materialized",
+    "installation.import-planned",
+  ]);
   expect(restoredData.length).toEqual(0);
 
   const dataResponse = await handler(
@@ -6252,22 +6843,26 @@ test("accounts handler imports export bundle with target OIDC issuer", async () 
           manifest: {
             kind: "takosumi.accounts.installation-export-data-manifest@v1",
             version: "v1",
-            files: [{
+            files: [
+              {
+                path: "takos-export/data/postgres/dump.sql",
+                mediaType: "application/sql",
+                byteLength: 10,
+                contentDigest:
+                  "sha256:4a45092ccf992ea92250053a80b931b787924ba61648f420555511b84f10ab6c",
+              },
+            ],
+          },
+          entries: [
+            {
               path: "takos-export/data/postgres/dump.sql",
               mediaType: "application/sql",
               byteLength: 10,
               contentDigest:
                 "sha256:4a45092ccf992ea92250053a80b931b787924ba61648f420555511b84f10ab6c",
-            }],
-          },
-          entries: [{
-            path: "takos-export/data/postgres/dump.sql",
-            mediaType: "application/sql",
-            byteLength: 10,
-            contentDigest:
-              "sha256:4a45092ccf992ea92250053a80b931b787924ba61648f420555511b84f10ab6c",
-            contentBase64: btoa("select 1;\n"),
-          }],
+              contentBase64: btoa("select 1;\n"),
+            },
+          ],
         },
       }),
     }),
@@ -6280,21 +6875,25 @@ test("accounts handler imports export bundle with target OIDC issuer", async () 
     entries: ["takos-export/data/postgres/dump.sql"],
     evidence: { provider: "test-restorer" },
   });
-  expect(restoredData).toEqual([{
-    installationId: "inst_target_data",
-    manifestKind: "takosumi.accounts.installation-export-data-manifest@v1",
-    path: "takos-export/data/postgres/dump.sql",
-    text: "select 1;\n",
-  }]);
-  expect(store.listInstallationEvents("inst_target_data").map((event) =>
-      event.eventType
-    )).toEqual([
-      "installation.created",
-      "oidc_client.registered",
-      "use_edge.materialized",
-      "installation.import-planned",
-      "installation.import-data-restored",
-    ]);
+  expect(restoredData).toEqual([
+    {
+      installationId: "inst_target_data",
+      manifestKind: "takosumi.accounts.installation-export-data-manifest@v1",
+      path: "takos-export/data/postgres/dump.sql",
+      text: "select 1;\n",
+    },
+  ]);
+  expect(
+    store
+      .listInstallationEvents("inst_target_data")
+      .map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "oidc_client.registered",
+    "use_edge.materialized",
+    "installation.import-planned",
+    "installation.import-data-restored",
+  ]);
 });
 
 test("accounts handler moves AppInstallation through materialize export import lifecycle", async () => {
@@ -6305,20 +6904,21 @@ test("accounts handler moves AppInstallation through materialize export import l
     store: sourceStore,
     materializeWorker: (input) => {
       const preserveBindings = Array.isArray(input.preserve.useEdges)
-        ? input.preserve.useEdges.filter((binding): binding is Record<
-          string,
-          unknown
-        > => typeof binding === "object" && binding !== null)
+        ? input.preserve.useEdges.filter(
+            (binding): binding is Record<string, unknown> =>
+              typeof binding === "object" && binding !== null,
+          )
         : [];
-      const preserveOidc = typeof input.preserve.oidcClient === "object" &&
-          input.preserve.oidcClient !== null
-        ? input.preserve.oidcClient as Record<string, unknown>
-        : null;
-      const preserveRuntime = typeof input.preserve.runtimeTarget ===
-            "object" &&
-          input.preserve.runtimeTarget !== null
-        ? input.preserve.runtimeTarget as { readonly targetId?: unknown }
-        : undefined;
+      const preserveOidc =
+        typeof input.preserve.oidcClient === "object" &&
+        input.preserve.oidcClient !== null
+          ? (input.preserve.oidcClient as Record<string, unknown>)
+          : null;
+      const preserveRuntime =
+        typeof input.preserve.runtimeTarget === "object" &&
+        input.preserve.runtimeTarget !== null
+          ? (input.preserve.runtimeTarget as { readonly targetId?: unknown })
+          : undefined;
       const targetId = "dedicated://tokyo/inst_lifecycle";
       return {
         preserveDigest: input.preserveDigest,
@@ -6329,24 +6929,26 @@ test("accounts handler moves AppInstallation through materialize export import l
           targetId,
         },
         continuity: {
-          sourceDataNamespace: typeof input.preserve.dataNamespace === "string"
-            ? input.preserve.dataNamespace
-            : null,
+          sourceDataNamespace:
+            typeof input.preserve.dataNamespace === "string"
+              ? input.preserve.dataNamespace
+              : null,
           oidcClient: preserveOidc ? { ...preserveOidc } : null,
           preservedUseEdges: preserveBindings.map((binding) => ({
             name: String(binding.name ?? ""),
             kind: String(binding.kind ?? "") as AppBindingKind,
             configRef: String(binding.configRef ?? ""),
             secretRefs: Array.isArray(binding.secretRefs)
-              ? binding.secretRefs.filter((entry): entry is string =>
-                typeof entry === "string"
-              )
+              ? binding.secretRefs.filter(
+                  (entry): entry is string => typeof entry === "string",
+                )
               : [],
           })),
           cutover: {
-            fromTargetId: typeof preserveRuntime?.targetId === "string"
-              ? preserveRuntime.targetId
-              : null,
+            fromTargetId:
+              typeof preserveRuntime?.targetId === "string"
+                ? preserveRuntime.targetId
+                : null,
             toTargetId: targetId,
             ready: true,
             strategy: "blue-green",
@@ -6357,8 +6959,7 @@ test("accounts handler moves AppInstallation through materialize export import l
     exportWorker: (input) => {
       exportedBundle = input.bundle;
       return {
-        downloadUrl:
-          `https://downloads.source.test/${input.operationId}/takos-export.tar.zst`,
+        downloadUrl: `https://downloads.source.test/${input.operationId}/takos-export.tar.zst`,
         downloadExpiresAt: "2999-05-10T00:00:00.000Z",
       };
     },
@@ -6387,23 +6988,27 @@ test("accounts handler moves AppInstallation through materialize export import l
           targetType: "shared-cell",
           targetId: "shared-cell://tokyo-cell-01/namespaces/inst_lifecycle",
         },
-        useEdges: [{
-          useEdgeId: "bind_lifecycle_auth",
-          name: "auth",
-          kind: "identity.oidc@v1",
-          configRef:
-            "takosumi-deploy-control://installable-app/takos.chat/use-edges/auth",
-          secretRefs: [],
-        }],
-        oidcClients: [{
-          useEdge: "auth",
-          namespacePath: "identity.primary.oidc",
-          issuerUrl: "https://accounts.source.test",
-          redirectUris: ["https://takos.example.test/auth/oidc/callback"],
-          allowedScopes: ["openid", "profile"],
-          subjectMode: "pairwise",
-          tokenEndpointAuthMethod: "client_secret_post",
-        }],
+        useEdges: [
+          {
+            useEdgeId: "bind_lifecycle_auth",
+            name: "auth",
+            kind: "identity.oidc@v1",
+            configRef:
+              "takosumi-deploy-control://installable-app/takos.chat/use-edges/auth",
+            secretRefs: [],
+          },
+        ],
+        oidcClients: [
+          {
+            useEdge: "auth",
+            namespacePath: "identity.primary.oidc",
+            issuerUrl: "https://accounts.source.test",
+            redirectUris: ["https://takos.example.test/auth/oidc/callback"],
+            allowedScopes: ["openid", "profile"],
+            subjectMode: "pairwise",
+            tokenEndpointAuthMethod: "client_secret_post",
+          },
+        ],
       }),
     }),
   );
@@ -6442,12 +7047,18 @@ test("accounts handler moves AppInstallation through materialize export import l
   // the envelope. The materialize route still emits the runtime binding
   // in its private `runtime_target` field (= not part of envelope), so
   // this test asserts via the in-memory ledger.
-  const lifecycleRtb = sourceStore
-    .findAppInstallation("inst_lifecycle")?.runtimeBindingId;
-  expect(sourceStore.findRuntimeBinding(lifecycleRtb ?? "")?.targetType).toEqual("dedicated");
-  expect(sourceStore.findRuntimeBinding(lifecycleRtb ?? "")?.targetId).toEqual("dedicated://tokyo/inst_lifecycle");
+  const lifecycleRtb =
+    sourceStore.findAppInstallation("inst_lifecycle")?.runtimeBindingId;
+  expect(
+    sourceStore.findRuntimeBinding(lifecycleRtb ?? "")?.targetType,
+  ).toEqual("dedicated");
+  expect(sourceStore.findRuntimeBinding(lifecycleRtb ?? "")?.targetId).toEqual(
+    "dedicated://tokyo/inst_lifecycle",
+  );
   expect(materialized.event.type).toEqual("installation.materialize-succeeded");
-  expect(sourceStore.findAppInstallation("inst_lifecycle")?.mode).toEqual("dedicated");
+  expect(sourceStore.findAppInstallation("inst_lifecycle")?.mode).toEqual(
+    "dedicated",
+  );
 
   const exportResponse = await sourceHandler(
     new Request(
@@ -6474,17 +7085,23 @@ test("accounts handler moves AppInstallation through materialize export import l
   }
   expect(exportedBundle.installation.mode).toEqual("dedicated");
   expect(exportedBundle.runtimeTarget?.targetType).toEqual("dedicated");
-  expect(exportedBundle.oidcClient?.issuerUrl).toEqual("https://accounts.source.test");
-  expect(exportedBundle.permissionScopes.map((scope) => scope.permissionScopeId)).toEqual([]);
+  expect(exportedBundle.oidcClient?.issuerUrl).toEqual(
+    "https://accounts.source.test",
+  );
+  expect(
+    exportedBundle.permissionScopes.map((scope) => scope.permissionScopeId),
+  ).toEqual([]);
   expect(exportedBundle.events.map((event) => event.type)).toEqual([
-      "installation.created",
-      "oidc_client.registered",
-      "use_edge.materialized",
-      "installation.materialize-requested",
-      "installation.materialize-succeeded",
-      "installation.export-requested",
-    ]);
-  expect(sourceStore.findAppInstallation("inst_lifecycle")?.status).toEqual("exported");
+    "installation.created",
+    "oidc_client.registered",
+    "use_edge.materialized",
+    "installation.materialize-requested",
+    "installation.materialize-succeeded",
+    "installation.export-requested",
+  ]);
+  expect(sourceStore.findAppInstallation("inst_lifecycle")?.status).toEqual(
+    "exported",
+  );
 
   const targetStore = new InMemoryAccountsStore();
   const targetHandler = createAccountsHandler({
@@ -6510,29 +7127,45 @@ test("accounts handler moves AppInstallation through materialize export import l
   expect(imported.installation.mode).toEqual("self-hosted");
   expect(imported.installation.status).toEqual("installing");
   expect(imported.oidc_client.namespacePath).toEqual("identity.primary.oidc");
-  expect(imported.oidc_client.issuer_url).toEqual("https://accounts.target.test");
-  expect(imported.import_plan.source_issuer).toEqual("https://accounts.source.test");
-  expect(imported.import_plan.target_issuer).toEqual("https://accounts.target.test");
+  expect(imported.oidc_client.issuer_url).toEqual(
+    "https://accounts.target.test",
+  );
+  expect(imported.import_plan.source_issuer).toEqual(
+    "https://accounts.source.test",
+  );
+  expect(imported.import_plan.target_issuer).toEqual(
+    "https://accounts.target.test",
+  );
   // Wave 6 (Phase E SQL drift fix): `permission_scopes` / `use_edges`
   // were removed from the envelope. Assert via the in-memory ledger.
-  expect(targetStore.listAppGrantsForInstallation("inst_lifecycle_imported").length).toEqual(0);
+  expect(
+    targetStore.listAppGrantsForInstallation("inst_lifecycle_imported").length,
+  ).toEqual(0);
   const importedAuthBinding = targetStore
     .listAppBindingsForInstallation("inst_lifecycle_imported")
     .find((b) => b.name === "auth");
-  expect(importedAuthBinding?.configRef ?? "").toContain("takosumi-accounts://installations/inst_lifecycle_imported/use-edges/auth/oidc-client/");
-  expect(targetStore.findOidcClientForInstallation("inst_lifecycle_imported")
-      ?.issuerUrl).toEqual("https://accounts.target.test");
-  expect(JSON.stringify(imported.installation).includes(
+  expect(importedAuthBinding?.configRef ?? "").toContain(
+    "takosumi-accounts://installations/inst_lifecycle_imported/use-edges/auth/oidc-client/",
+  );
+  expect(
+    targetStore.findOidcClientForInstallation("inst_lifecycle_imported")
+      ?.issuerUrl,
+  ).toEqual("https://accounts.target.test");
+  expect(
+    JSON.stringify(imported.installation).includes(
       "https://accounts.source.test",
-    )).toEqual(false);
-  expect(targetStore.listInstallationEvents("inst_lifecycle_imported").map((
-      event,
-    ) => event.eventType)).toEqual([
-      "installation.created",
-      "oidc_client.registered",
-      "use_edge.materialized",
-      "installation.import-planned",
-    ]);
+    ),
+  ).toEqual(false);
+  expect(
+    targetStore
+      .listInstallationEvents("inst_lifecycle_imported")
+      .map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "oidc_client.registered",
+    "use_edge.materialized",
+    "installation.import-planned",
+  ]);
 });
 
 test("accounts handler records AppInstallation export operation failures", async () => {
@@ -6593,7 +7226,9 @@ test("accounts handler records AppInstallation export operation failures", async
     ),
   );
   expect(failedResponse.status).toEqual(200);
-  expect((await failedResponse.json()).event.type).toEqual("installation.export-failed");
+  expect((await failedResponse.json()).event.type).toEqual(
+    "installation.export-failed",
+  );
 
   const operationResponse = await handler(
     new Request(
@@ -6632,14 +7267,16 @@ test("accounts handler materializes launch token binding config", async () => {
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
-        useEdges: [{
-          useEdgeId: "bind_bootstrap",
-          name: "bootstrap",
-          kind: "install-launch-token@v1",
-          configRef:
-            "takosumi-deploy-control://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
-          secretRefs: [],
-        }],
+        useEdges: [
+          {
+            useEdgeId: "bind_bootstrap",
+            name: "bootstrap",
+            kind: "install-launch-token@v1",
+            configRef:
+              "takosumi-deploy-control://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
+            secretRefs: [],
+          },
+        ],
       }),
     }),
   );
@@ -6652,14 +7289,18 @@ test("accounts handler materializes launch token binding config", async () => {
   const launchBinding = store
     .listAppBindingsForInstallation("inst_launch_binding")
     .find((b) => b.name === "bootstrap");
-  expect(launchBinding?.configRef).toEqual([
+  expect(launchBinding?.configRef).toEqual(
+    [
       "takosumi-accounts://installations/inst_launch_binding",
       "use-edges/bootstrap/launch-token",
-    ].join("/"));
+    ].join("/"),
+  );
   expect(launchBinding?.secretRefs).toEqual([]);
-  expect(store.listInstallationEvents("inst_launch_binding").map((event) =>
-      event.eventType
-    )).toEqual(["installation.created", "use_edge.materialized"]);
+  expect(
+    store
+      .listInstallationEvents("inst_launch_binding")
+      .map((event) => event.eventType),
+  ).toEqual(["installation.created", "use_edge.materialized"]);
 });
 
 test("accounts handler connects shared-cell runtime binding to launch token bootstrap", async () => {
@@ -6693,13 +7334,15 @@ test("accounts handler connects shared-cell runtime binding to launch token boot
         mode: "shared-cell",
         status: "ready",
         createdBySubject: "tsub_owner",
-        useEdges: [{
-          name: "bootstrap",
-          kind: "install-launch-token@v1",
-          configRef:
-            "takosumi-deploy-control://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
-          secretRefs: [],
-        }],
+        useEdges: [
+          {
+            name: "bootstrap",
+            kind: "install-launch-token@v1",
+            configRef:
+              "takosumi-deploy-control://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
+            secretRefs: [],
+          },
+        ],
       }),
     }),
   );
@@ -6709,21 +7352,27 @@ test("accounts handler connects shared-cell runtime binding to launch token boot
   void created;
   // Wave 6 (Phase E SQL drift fix): `runtime_target` / `use_edges`
   // were removed from the envelope; assert via the in-memory ledger.
-  expect(store.findRuntimeBinding("rtb_inst_shared_launch_shared_cell")?.targetId).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_shared_launch");
+  expect(
+    store.findRuntimeBinding("rtb_inst_shared_launch_shared_cell")?.targetId,
+  ).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_shared_launch");
   const sharedLaunchBinding = store
     .listAppBindingsForInstallation("inst_shared_launch")
     .find((b) => b.name === "bootstrap");
-  expect(sharedLaunchBinding?.configRef).toEqual([
+  expect(sharedLaunchBinding?.configRef).toEqual(
+    [
       "takosumi-accounts://installations/inst_shared_launch",
       "use-edges/bootstrap/launch-token",
-    ].join("/"));
-  expect(store.listInstallationEvents("inst_shared_launch").map((event) =>
-      event.eventType
-    )).toEqual([
-      "installation.created",
-      "runtime_target.assigned",
-      "use_edge.materialized",
-    ]);
+    ].join("/"),
+  );
+  expect(
+    store
+      .listInstallationEvents("inst_shared_launch")
+      .map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "runtime_target.assigned",
+    "use_edge.materialized",
+  ]);
 });
 
 test("accounts handler Use Takos start creates product launch without Git install apply", async () => {
@@ -6770,7 +7419,9 @@ test("accounts handler Use Takos start creates product launch without Git instal
   const location = response.headers.get("location") ?? "";
   expect(location).toContain("https://takos.example.test/_takosumi/launch");
   const launchUrl = new URL(location);
-  expect(launchUrl.searchParams.get("return_to")).toEqual("/spaces/space_1/threads");
+  expect(launchUrl.searchParams.get("return_to")).toEqual(
+    "/spaces/space_1/threads",
+  );
   const token = launchUrl.searchParams.get("launch_token");
   expect(typeof token).toEqual("string");
   const account = store.findAccount("tsub_owner");
@@ -6778,23 +7429,33 @@ test("accounts handler Use Takos start creates product launch without Git instal
   expect(account?.termsVersion).toEqual("terms-2026-05-13");
   expect(account?.termsAcceptedSource).toEqual("use-takos-start");
   expect(typeof account?.termsAcceptedAt).toEqual("number");
-  expect(store.findLedgerAccount("acct_1")?.legalOwnerSubject).toEqual("tsub_owner");
+  expect(store.findLedgerAccount("acct_1")?.legalOwnerSubject).toEqual(
+    "tsub_owner",
+  );
   expect(store.findSpace("space_1")?.accountId).toEqual("acct_1");
   const installation = store.findAppInstallation("inst_takos_start");
   expect(installation?.appId).toEqual("takos.chat");
   expect(installation?.sourceGitUrl).toEqual("takos-product://managed/takos");
   expect(installation?.mode).toEqual("shared-cell");
   expect(installation?.status).toEqual("ready");
-  expect(store.findRuntimeBinding("rtb_inst_takos_start_shared_cell")?.targetId).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_takos_start");
-  expect(store.listAppBindingsForInstallation("inst_takos_start")[0]?.configRef).toEqual("takosumi-accounts://installations/inst_takos_start/use-edges/bootstrap/launch-token");
-  expect(store.listInstallationEvents("inst_takos_start").map((event) =>
-      event.eventType
-    )).toEqual([
-      "installation.created",
-      "runtime_target.assigned",
-      "use_edge.materialized",
-      "installation.launch_token_issued",
-    ]);
+  expect(
+    store.findRuntimeBinding("rtb_inst_takos_start_shared_cell")?.targetId,
+  ).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_takos_start");
+  expect(
+    store.listAppBindingsForInstallation("inst_takos_start")[0]?.configRef,
+  ).toEqual(
+    "takosumi-accounts://installations/inst_takos_start/use-edges/bootstrap/launch-token",
+  );
+  expect(
+    store
+      .listInstallationEvents("inst_takos_start")
+      .map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "runtime_target.assigned",
+    "use_edge.materialized",
+    "installation.launch_token_issued",
+  ]);
 });
 
 test("accounts handler blocks Use Takos start when managed offering access is closed", async () => {
@@ -6831,7 +7492,9 @@ test("accounts handler blocks Use Takos start when managed offering access is cl
   );
 
   expect(response.status).toEqual(503);
-  expect((await response.json()).error).toEqual("launch_readiness_not_complete");
+  expect((await response.json()).error).toEqual(
+    "launch_readiness_not_complete",
+  );
 
   expect(store.findAccount("tsub_owner")).toEqual(undefined);
   expect(store.findAppInstallation("inst_takos_start")).toEqual(undefined);
@@ -6895,7 +7558,9 @@ test("accounts handler Use Takos start validates redirect and existing installat
     ),
   );
   expect(notAcceptedTerms.status).toEqual(400);
-  expect((await notAcceptedTerms.json()).error).toEqual("terms_acceptance_required");
+  expect((await notAcceptedTerms.json()).error).toEqual(
+    "terms_acceptance_required",
+  );
 
   const missingRuntime = await handler(
     new Request(
@@ -6955,7 +7620,9 @@ test("accounts handler Use Takos start validates redirect and existing installat
     ),
   );
   expect(conflict.status).toEqual(409);
-  expect((await conflict.json()).error).toEqual("use_takos_installation_mismatch");
+  expect((await conflict.json()).error).toEqual(
+    "use_takos_installation_mismatch",
+  );
 });
 
 test("accounts handler isolates shared-cell namespaces and launch tokens", async () => {
@@ -6989,13 +7656,15 @@ test("accounts handler isolates shared-cell namespaces and launch tokens", async
           mode: "shared-cell",
           status: "ready",
           createdBySubject: "tsub_owner",
-          useEdges: [{
-            name: "bootstrap",
-            kind: "install-launch-token@v1",
-            configRef:
-              "takosumi-deploy-control://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
-            secretRefs: [],
-          }],
+          useEdges: [
+            {
+              name: "bootstrap",
+              kind: "install-launch-token@v1",
+              configRef:
+                "takosumi-deploy-control://installable-app/takos.chat/use-edges/bootstrap/sha256:pending",
+              secretRefs: [],
+            },
+          ],
         }),
       }),
     );
@@ -7003,27 +7672,35 @@ test("accounts handler isolates shared-cell namespaces and launch tokens", async
     return await response.json();
   }
 
-  void await createSharedInstall("inst_shared_a");
-  void await createSharedInstall("inst_shared_b");
+  void (await createSharedInstall("inst_shared_a"));
+  void (await createSharedInstall("inst_shared_b"));
   // Wave 6 (Phase E SQL drift fix): `runtime_target` was removed from
   // the envelope; assert via the in-memory ledger.
-  const sharedABinding = store
-    .findAppInstallation("inst_shared_a")?.runtimeBindingId;
-  const sharedBBinding = store
-    .findAppInstallation("inst_shared_b")?.runtimeBindingId;
-  expect(store.findRuntimeBinding(sharedABinding ?? "")?.targetId).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_shared_a");
-  expect(store.findRuntimeBinding(sharedBBinding ?? "")?.targetId).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_shared_b");
-  expect(pool.availableSlots()).toEqual([{
-    cellId: "tokyo-cell-01",
-    capacity: 0,
-  }]);
-  expect(store.listInstallationEvents("inst_shared_b").map((event) =>
-      event.eventType
-    )).toEqual([
-      "installation.created",
-      "runtime_target.assigned",
-      "use_edge.materialized",
-    ]);
+  const sharedABinding =
+    store.findAppInstallation("inst_shared_a")?.runtimeBindingId;
+  const sharedBBinding =
+    store.findAppInstallation("inst_shared_b")?.runtimeBindingId;
+  expect(store.findRuntimeBinding(sharedABinding ?? "")?.targetId).toEqual(
+    "shared-cell://tokyo-cell-01/namespaces/inst_shared_a",
+  );
+  expect(store.findRuntimeBinding(sharedBBinding ?? "")?.targetId).toEqual(
+    "shared-cell://tokyo-cell-01/namespaces/inst_shared_b",
+  );
+  expect(pool.availableSlots()).toEqual([
+    {
+      cellId: "tokyo-cell-01",
+      capacity: 0,
+    },
+  ]);
+  expect(
+    store
+      .listInstallationEvents("inst_shared_b")
+      .map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "runtime_target.assigned",
+    "use_edge.materialized",
+  ]);
 });
 
 test("accounts handler isolates per-installation data oidc grants and billing", async () => {
@@ -7054,26 +7731,24 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
     issuer: "https://accounts.example.test",
     store,
     sharedCellRuntime: (input) => pool.allocate(input),
-    bindingMaterializer: (
-      { installation, binding },
-    ): AppBindingMaterializationResult | undefined => {
+    bindingMaterializer: ({
+      installation,
+      binding,
+    }): AppBindingMaterializationResult | undefined => {
       if (binding.kind === "database.postgres@v1") {
         return {
-          configRef:
-            `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/postgres/main`,
+          configRef: `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/postgres/main`,
           secretRefs: [
             `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/secrets/password`,
           ],
           env: {
-            DATABASE_URL:
-              `postgres://takos:secret@db.example.test/${installation.installationId}`,
+            DATABASE_URL: `postgres://takos:secret@db.example.test/${installation.installationId}`,
           },
         };
       }
       if (binding.kind === "object-store.s3-compatible@v1") {
         return {
-          configRef:
-            `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/object-store/main`,
+          configRef: `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/object-store/main`,
           secretRefs: [
             `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/secrets/access-key`,
           ],
@@ -7123,39 +7798,44 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
           mode: "shared-cell",
           status: "ready",
           createdBySubject: "tsub_owner",
-          useEdges: [{
-            name: "auth",
-            kind: "identity.oidc@v1",
-            configRef:
-              `takosumi-deploy-control://installable-app/takos.chat/use-edges/auth/${input.installationId}`,
-            secretRefs: [],
-          }, {
-            name: "database",
-            kind: "database.postgres@v1",
-            configRef:
-              `takosumi-deploy-control://installable-app/takos.chat/use-edges/database/${input.installationId}`,
-            secretRefs: [],
-          }, {
-            name: "blob",
-            kind: "object-store.s3-compatible@v1",
-            configRef:
-              `takosumi-deploy-control://installable-app/takos.chat/use-edges/blob/${input.installationId}`,
-            secretRefs: [],
-          }],
-          oidcClients: [{
-            useEdge: "auth",
-            namespacePath: "identity.primary.oidc",
-            redirectUris: [
-              `https://${input.installationId}.example.test/auth/oidc/callback`,
-            ],
-            allowedScopes: ["openid", "profile"],
-            subjectMode: "pairwise",
-          }],
-          permissionScopes: [{
-            permissionScopeId: input.permissionScopeId,
-            capability: "files:read",
-            scope: { installationId: input.installationId },
-          }],
+          useEdges: [
+            {
+              name: "auth",
+              kind: "identity.oidc@v1",
+              configRef: `takosumi-deploy-control://installable-app/takos.chat/use-edges/auth/${input.installationId}`,
+              secretRefs: [],
+            },
+            {
+              name: "database",
+              kind: "database.postgres@v1",
+              configRef: `takosumi-deploy-control://installable-app/takos.chat/use-edges/database/${input.installationId}`,
+              secretRefs: [],
+            },
+            {
+              name: "blob",
+              kind: "object-store.s3-compatible@v1",
+              configRef: `takosumi-deploy-control://installable-app/takos.chat/use-edges/blob/${input.installationId}`,
+              secretRefs: [],
+            },
+          ],
+          oidcClients: [
+            {
+              useEdge: "auth",
+              namespacePath: "identity.primary.oidc",
+              redirectUris: [
+                `https://${input.installationId}.example.test/auth/oidc/callback`,
+              ],
+              allowedScopes: ["openid", "profile"],
+              subjectMode: "pairwise",
+            },
+          ],
+          permissionScopes: [
+            {
+              permissionScopeId: input.permissionScopeId,
+              capability: "files:read",
+              scope: { installationId: input.installationId },
+            },
+          ],
         }),
       }),
     );
@@ -7176,24 +7856,38 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
 
   expect(first.installation.billing_account_id).toEqual("billing_inst_a");
   expect(second.installation.billing_account_id).toEqual("billing_inst_b");
-  expect(store.findAppInstallation("inst_iso_a")?.billingAccountId).toEqual("billing_inst_a");
-  expect(store.findAppInstallation("inst_iso_b")?.billingAccountId).toEqual("billing_inst_b");
-  expect(store.findBillingAccount("billing_inst_a")?.stripeCustomerId).toEqual("cus_inst_a");
-  expect(store.findBillingAccount("billing_inst_b")?.stripeCustomerId).toEqual("cus_inst_b");
-  expect(store.findBillingAccountByStripeCustomerId("cus_inst_a")
-      ?.billingAccountId).toEqual("billing_inst_a");
-  expect(store.findBillingAccountByStripeCustomerId("cus_inst_b")
-      ?.billingAccountId).toEqual("billing_inst_b");
+  expect(store.findAppInstallation("inst_iso_a")?.billingAccountId).toEqual(
+    "billing_inst_a",
+  );
+  expect(store.findAppInstallation("inst_iso_b")?.billingAccountId).toEqual(
+    "billing_inst_b",
+  );
+  expect(store.findBillingAccount("billing_inst_a")?.stripeCustomerId).toEqual(
+    "cus_inst_a",
+  );
+  expect(store.findBillingAccount("billing_inst_b")?.stripeCustomerId).toEqual(
+    "cus_inst_b",
+  );
+  expect(
+    store.findBillingAccountByStripeCustomerId("cus_inst_a")?.billingAccountId,
+  ).toEqual("billing_inst_a");
+  expect(
+    store.findBillingAccountByStripeCustomerId("cus_inst_b")?.billingAccountId,
+  ).toEqual("billing_inst_b");
   // Wave 6 (Phase E SQL drift fix): `runtime_target` / `use_edges` /
   // `permission_scopes` were removed from the envelope. Per-isolation
   // assertions move to the in-memory ledger.
-  const isoARtb = store
-    .findAppInstallation("inst_iso_a")?.runtimeBindingId;
-  const isoBRtb = store
-    .findAppInstallation("inst_iso_b")?.runtimeBindingId;
-  expect(store.findRuntimeBinding(isoARtb ?? "")?.targetId).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_iso_a");
-  expect(store.findRuntimeBinding(isoBRtb ?? "")?.targetId).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_iso_b");
-  expect(first.oidc_client.client_id === second.oidc_client.client_id).toEqual(false);
+  const isoARtb = store.findAppInstallation("inst_iso_a")?.runtimeBindingId;
+  const isoBRtb = store.findAppInstallation("inst_iso_b")?.runtimeBindingId;
+  expect(store.findRuntimeBinding(isoARtb ?? "")?.targetId).toEqual(
+    "shared-cell://tokyo-cell-01/namespaces/inst_iso_a",
+  );
+  expect(store.findRuntimeBinding(isoBRtb ?? "")?.targetId).toEqual(
+    "shared-cell://tokyo-cell-01/namespaces/inst_iso_b",
+  );
+  expect(first.oidc_client.client_id === second.oidc_client.client_id).toEqual(
+    false,
+  );
   expect(first.oidc_client.redirect_uris).toEqual([
     "https://inst_iso_a.example.test/auth/oidc/callback",
   ]);
@@ -7206,16 +7900,24 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
   const isoBDbBinding = store
     .listAppBindingsForInstallation("inst_iso_b")
     .find((b) => b.name === "database");
-  expect(isoADbBinding?.configRef).toEqual("takosumi-accounts://installations/inst_iso_a/use-edges/database/postgres/main");
-  expect(isoBDbBinding?.configRef).toEqual("takosumi-accounts://installations/inst_iso_b/use-edges/database/postgres/main");
+  expect(isoADbBinding?.configRef).toEqual(
+    "takosumi-accounts://installations/inst_iso_a/use-edges/database/postgres/main",
+  );
+  expect(isoBDbBinding?.configRef).toEqual(
+    "takosumi-accounts://installations/inst_iso_b/use-edges/database/postgres/main",
+  );
   const isoABlobBinding = store
     .listAppBindingsForInstallation("inst_iso_a")
     .find((b) => b.name === "blob");
   const isoBBlobBinding = store
     .listAppBindingsForInstallation("inst_iso_b")
     .find((b) => b.name === "blob");
-  expect(isoABlobBinding?.configRef).toEqual("takosumi-accounts://installations/inst_iso_a/use-edges/blob/object-store/main");
-  expect(isoBBlobBinding?.configRef).toEqual("takosumi-accounts://installations/inst_iso_b/use-edges/blob/object-store/main");
+  expect(isoABlobBinding?.configRef).toEqual(
+    "takosumi-accounts://installations/inst_iso_a/use-edges/blob/object-store/main",
+  );
+  expect(isoBBlobBinding?.configRef).toEqual(
+    "takosumi-accounts://installations/inst_iso_b/use-edges/blob/object-store/main",
+  );
   expect(first.use_edge_env.BLOB_BUCKET).toEqual("inst_iso_a-objects");
   expect(second.use_edge_env.BLOB_BUCKET).toEqual("inst_iso_b-objects");
   const isoAGrant = store
@@ -7225,13 +7927,19 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
   expect(isoAGrant?.capability).toEqual("files:read");
   expect(isoAGrant?.scope).toEqual({ installationId: "inst_iso_a" });
   expect(isoAGrant?.revokedAt).toEqual(undefined);
-  expect(store.listAppGrantsForInstallation("inst_iso_b")[0]?.installationId).toEqual("inst_iso_b");
-  expect(store.listAppGrantsForInstallation("inst_iso_a").map((grant) =>
-      grant.grantId
-    )).toEqual(["grant_inst_a_files"]);
-  expect(store.listAppGrantsForInstallation("inst_iso_b").map((grant) =>
-      grant.grantId
-    )).toEqual(["grant_inst_b_files"]);
+  expect(
+    store.listAppGrantsForInstallation("inst_iso_b")[0]?.installationId,
+  ).toEqual("inst_iso_b");
+  expect(
+    store
+      .listAppGrantsForInstallation("inst_iso_a")
+      .map((grant) => grant.grantId),
+  ).toEqual(["grant_inst_a_files"]);
+  expect(
+    store
+      .listAppGrantsForInstallation("inst_iso_b")
+      .map((grant) => grant.grantId),
+  ).toEqual(["grant_inst_b_files"]);
 });
 
 test("accounts handler materializes configured provider bindings", async () => {
@@ -7240,14 +7948,15 @@ test("accounts handler materializes configured provider bindings", async () => {
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
-    bindingMaterializer: (
-      { installation, binding, declaration },
-    ): AppBindingMaterializationResult | undefined => {
+    bindingMaterializer: ({
+      installation,
+      binding,
+      declaration,
+    }): AppBindingMaterializationResult | undefined => {
       seenDeclarations.push({ name: binding.name, declaration });
       if (binding.kind === "database.postgres@v1") {
         return {
-          configRef:
-            `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/postgres/db-main`,
+          configRef: `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/postgres/db-main`,
           secretRefs: [
             `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/secrets/password`,
           ],
@@ -7259,8 +7968,7 @@ test("accounts handler materializes configured provider bindings", async () => {
       }
       if (binding.kind === "object-store.s3-compatible@v1") {
         return {
-          configRef:
-            `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/object-store/blob-main`,
+          configRef: `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/object-store/blob-main`,
           secretRefs: [
             `takosumi-accounts://installations/${installation.installationId}/use-edges/${binding.name}/secrets/secret-key`,
           ],
@@ -7291,27 +7999,30 @@ test("accounts handler materializes configured provider bindings", async () => {
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
-        useEdges: [{
-          name: "db",
-          kind: "database.postgres@v1",
-          configRef:
-            "takosumi-deploy-control://installable-app/takos.chat/use-edges/db/sha256:pending",
-          declaration: {
-            type: "database.postgres@v1",
-            required: true,
-            plan: "small",
+        useEdges: [
+          {
+            name: "db",
+            kind: "database.postgres@v1",
+            configRef:
+              "takosumi-deploy-control://installable-app/takos.chat/use-edges/db/sha256:pending",
+            declaration: {
+              type: "database.postgres@v1",
+              required: true,
+              plan: "small",
+            },
           },
-        }, {
-          name: "blob",
-          kind: "object-store.s3-compatible@v1",
-          configRef:
-            "takosumi-deploy-control://installable-app/takos.chat/use-edges/blob/sha256:pending",
-          declaration: {
-            type: "object-store.s3-compatible@v1",
-            required: true,
-            plan: "standard",
+          {
+            name: "blob",
+            kind: "object-store.s3-compatible@v1",
+            configRef:
+              "takosumi-deploy-control://installable-app/takos.chat/use-edges/blob/sha256:pending",
+            declaration: {
+              type: "object-store.s3-compatible@v1",
+              required: true,
+              plan: "standard",
+            },
           },
-        }],
+        ],
       }),
     }),
   );
@@ -7328,19 +8039,23 @@ test("accounts handler materializes configured provider bindings", async () => {
   });
   // Wave 6 (Phase E SQL drift fix): `use_edges` was removed from the
   // envelope; assert via the in-memory ledger.
-  expect(store
+  expect(
+    store
       .listAppBindingsForInstallation("inst_materialized")
-      .map((b) => b.configRef)).toEqual([
-      "takosumi-accounts://installations/inst_materialized/use-edges/db/postgres/db-main",
-      "takosumi-accounts://installations/inst_materialized/use-edges/blob/object-store/blob-main",
-    ]);
-  expect(store.listInstallationEvents("inst_materialized").map((event) =>
-      event.eventType
-    )).toEqual([
-      "installation.created",
-      "use_edge.materialized",
-      "use_edge.materialized",
-    ]);
+      .map((b) => b.configRef),
+  ).toEqual([
+    "takosumi-accounts://installations/inst_materialized/use-edges/db/postgres/db-main",
+    "takosumi-accounts://installations/inst_materialized/use-edges/blob/object-store/blob-main",
+  ]);
+  expect(
+    store
+      .listInstallationEvents("inst_materialized")
+      .map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "use_edge.materialized",
+    "use_edge.materialized",
+  ]);
   expect(seenDeclarations.map((entry) => entry.declaration)).toEqual([
     { type: "database.postgres@v1", required: true, plan: "small" },
     { type: "object-store.s3-compatible@v1", required: true, plan: "standard" },
@@ -7365,12 +8080,14 @@ test("accounts handler rejects AppBinding records outside the catalog contract",
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
-        useEdges: [{
-          name: "bootstrap",
-          kind: "install-launch-token@v1",
-          configRef: "config://inst_bad/bootstrap",
-          secretRefs: ["secret://inst_bad/bootstrap/private-key"],
-        }],
+        useEdges: [
+          {
+            name: "bootstrap",
+            kind: "install-launch-token@v1",
+            configRef: "config://inst_bad/bootstrap",
+            secretRefs: ["secret://inst_bad/bootstrap/private-key"],
+          },
+        ],
       }),
     }),
   );
@@ -7397,11 +8114,13 @@ test("accounts handler rejects AppGrant records outside the catalog contract", a
         },
         mode: "shared-cell",
         createdBySubject: "tsub_owner",
-        permissionScopes: [{
-          permissionScopeId: "grant_unsafe",
-          capability: "unsafe.scope",
-          scope: {},
-        }],
+        permissionScopes: [
+          {
+            permissionScopeId: "grant_unsafe",
+            capability: "unsafe.scope",
+            scope: {},
+          },
+        ],
       }),
     }),
   );
@@ -7419,10 +8138,16 @@ test("accounts handler emits baseline browser security headers", async () => {
   expect(response.status).toEqual(200);
   expect(response.headers.get("x-content-type-options")).toEqual("nosniff");
   expect(response.headers.get("x-frame-options")).toEqual("DENY");
-  expect(response.headers.get("referrer-policy")).toEqual("strict-origin-when-cross-origin");
+  expect(response.headers.get("referrer-policy")).toEqual(
+    "strict-origin-when-cross-origin",
+  );
   // HTTPS issuer in test fixtures => HSTS is emitted.
-  expect(response.headers.get("strict-transport-security") ?? "").toContain("max-age=31536000");
-  expect(response.headers.get("strict-transport-security") ?? "").toContain("includeSubDomains");
+  expect(response.headers.get("strict-transport-security") ?? "").toContain(
+    "max-age=31536000",
+  );
+  expect(response.headers.get("strict-transport-security") ?? "").toContain(
+    "includeSubDomains",
+  );
 });
 
 test("accounts handler omits HSTS for non-HTTPS issuers", async () => {
@@ -7430,9 +8155,7 @@ test("accounts handler omits HSTS for non-HTTPS issuers", async () => {
     issuer: "http://localhost:8787",
     managedOfferingAccess: testManagedOfferingOpenAccess,
   });
-  const response = await handler(
-    new Request("http://localhost:8787/healthz"),
-  );
+  const response = await handler(new Request("http://localhost:8787/healthz"));
 
   expect(response.status).toEqual(200);
   expect(response.headers.get("strict-transport-security")).toEqual(null);
@@ -7487,9 +8210,9 @@ test("accounts handler paginates AppInstallation list via cursor and limit", asy
 
   const secondPage = await handler(
     new Request(
-      `https://accounts.example.test/v1/installations?space_id=space_page&limit=2&cursor=${
-        encodeURIComponent(firstBody.next_cursor)
-      }`,
+      `https://accounts.example.test/v1/installations?space_id=space_page&limit=2&cursor=${encodeURIComponent(
+        firstBody.next_cursor,
+      )}`,
       { headers: accountSessionHeaders(session) },
     ),
   );
@@ -7612,9 +8335,9 @@ test("accounts handler rate-limits OIDC authorize bursts per IP", async () => {
   for (let i = 0; i < 62; i += 1) {
     const response = await handler(
       new Request(
-        `${issuer}/oauth/authorize?response_type=code&client_id=rate-limit-client&redirect_uri=${
-          encodeURIComponent("https://app.example.test/callback")
-        }&code_challenge=AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQ&code_challenge_method=S256&scope=openid&state=rl-${i}`,
+        `${issuer}/oauth/authorize?response_type=code&client_id=rate-limit-client&redirect_uri=${encodeURIComponent(
+          "https://app.example.test/callback",
+        )}&code_challenge=AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQ&code_challenge_method=S256&scope=openid&state=rl-${i}`,
         {
           headers: { "cf-connecting-ip": "203.0.113.5" },
         },
@@ -7665,10 +8388,10 @@ async function s256Challenge(verifier: string): Promise<string> {
   for (const byte of new Uint8Array(digest)) {
     binary += String.fromCharCode(byte);
   }
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(
-    /=+$/,
-    "",
-  );
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
 }
 
 async function stripeSignatureHeader(input: {
@@ -7691,7 +8414,9 @@ async function stripeSignatureHeader(input: {
         textEncoder.encode(`${input.timestamp}.${input.payload}`),
       ),
     ),
-  ].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  ]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
   return `t=${input.timestamp},v1=${signature}`;
 }
 
@@ -7728,11 +8453,13 @@ async function createSignedAssertionWithKey(
     "jwk",
     input.keyPair.publicKey,
   );
-  const clientDataJSON = textEncoder.encode(JSON.stringify({
-    type: "webauthn.get",
-    challenge: input.challenge,
-    origin: input.origin,
-  }));
+  const clientDataJSON = textEncoder.encode(
+    JSON.stringify({
+      type: "webauthn.get",
+      challenge: input.challenge,
+      origin: input.origin,
+    }),
+  );
   const authenticatorData = await createAuthenticatorData({
     rpId: input.rpId,
     flags: 0x01,
@@ -7795,11 +8522,13 @@ function createRegistrationClientDataJSON(input: {
   challenge: string;
   origin: string;
 }): Uint8Array {
-  return textEncoder.encode(JSON.stringify({
-    type: "webauthn.create",
-    challenge: input.challenge,
-    origin: input.origin,
-  }));
+  return textEncoder.encode(
+    JSON.stringify({
+      type: "webauthn.create",
+      challenge: input.challenge,
+      origin: input.origin,
+    }),
+  );
 }
 
 // Build a minimal CBOR `none`-attestation attestationObject:
@@ -7841,10 +8570,10 @@ async function createNoneAttestationObject(input: {
 function base64UrlEncodeBytes(value: Uint8Array): string {
   let binary = "";
   for (const byte of value) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(
-    /=+$/,
-    "",
-  );
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
 }
 
 function base64UrlDecodeText(value: string): string {
@@ -7852,10 +8581,10 @@ function base64UrlDecodeText(value: string): string {
 }
 
 function base64UrlDecodeBytes(value: string): Uint8Array<ArrayBuffer> {
-  const padded = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(
-    Math.ceil(value.length / 4) * 4,
-    "=",
-  );
+  const padded = value
+    .replaceAll("-", "+")
+    .replaceAll("_", "/")
+    .padEnd(Math.ceil(value.length / 4) * 4, "=");
   const binary = atob(padded);
   const output = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
@@ -7912,17 +8641,22 @@ test("accounts handler proxies Connection create to deployControl with space own
       fetch: (input, init) => {
         const request = new Request(input, init);
         proxiedRequests.push(request);
-        return Promise.resolve(Response.json({
-          id: "conn_new",
-          spaceId: "space_conn_1",
-          provider: "cloudflare",
-          owner: "customer",
-          authMethod: "static_secret",
-          status: "pending",
-          envNames: ["CLOUDFLARE_API_TOKEN"],
-          createdAt: "2026-06-05T00:00:00.000Z",
-          updatedAt: "2026-06-05T00:00:00.000Z",
-        }, { status: 201 }));
+        return Promise.resolve(
+          Response.json(
+            {
+              id: "conn_new",
+              spaceId: "space_conn_1",
+              provider: "cloudflare",
+              owner: "customer",
+              authMethod: "static_secret",
+              status: "pending",
+              envNames: ["CLOUDFLARE_API_TOKEN"],
+              createdAt: "2026-06-05T00:00:00.000Z",
+              updatedAt: "2026-06-05T00:00:00.000Z",
+            },
+            { status: 201 },
+          ),
+        );
       },
     },
   });
@@ -8016,7 +8750,9 @@ test("accounts handler proxies Connection list with the spaceId query", async ()
       fetch: (input, init) => {
         const request = new Request(input, init);
         proxiedRequests.push(request);
-        return Promise.resolve(Response.json({ connections: [] }, { status: 200 }));
+        return Promise.resolve(
+          Response.json({ connections: [] }, { status: 200 }),
+        );
       },
     },
   });
@@ -8052,17 +8788,22 @@ test("accounts handler resolves Connection spaceId before forwarding delete", as
         proxiedPaths.push(`${request.method} ${path}`);
         if (request.method === "GET") {
           // The ownership-resolution read of the Connection projection.
-          return Promise.resolve(Response.json({
-            id: "conn_del",
-            spaceId: "space_conn_1",
-            provider: "cloudflare",
-            owner: "customer",
-            authMethod: "static_secret",
-            status: "verified",
-            envNames: ["CLOUDFLARE_API_TOKEN"],
-            createdAt: "2026-06-05T00:00:00.000Z",
-            updatedAt: "2026-06-05T00:00:00.000Z",
-          }, { status: 200 }));
+          return Promise.resolve(
+            Response.json(
+              {
+                id: "conn_del",
+                spaceId: "space_conn_1",
+                provider: "cloudflare",
+                owner: "customer",
+                authMethod: "static_secret",
+                status: "verified",
+                envNames: ["CLOUDFLARE_API_TOKEN"],
+                createdAt: "2026-06-05T00:00:00.000Z",
+                updatedAt: "2026-06-05T00:00:00.000Z",
+              },
+              { status: 200 },
+            ),
+          );
         }
         return Promise.resolve(new Response(null, { status: 204 }));
       },

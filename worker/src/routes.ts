@@ -7,7 +7,6 @@ const SERVICE_CONTROL_PLANE_EXACT_PATHS = new Set([
   "/openapi.json",
   "/livez",
   "/readyz",
-  "/status/summary",
   "/metrics",
 ]);
 

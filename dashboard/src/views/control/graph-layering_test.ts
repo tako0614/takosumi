@@ -96,6 +96,10 @@ describe("layerGraph", () => {
 });
 
 describe("extractRunId", () => {
+  test("reads a plan envelope ({ planRun: { id } })", () => {
+    expect(extractRunId({ planRun: { id: "run_plan" } })).toEqual("run_plan");
+  });
+
   test("reads a source-sync envelope ({ run: { id } })", () => {
     expect(extractRunId({ run: { id: "ssr_1" } })).toEqual("ssr_1");
   });

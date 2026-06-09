@@ -10,7 +10,7 @@
  *
  * Static / dynamic partition strategy (no Caddy @id required):
  *
- *   - Static routes (owned by Caddyfile): hosts like accounts.takosumi.test and
+ *   - Static routes (owned by Caddyfile): hosts like app.takosumi.test and
  *     service.takosumi.test — these do not use the dynamic app suffix.
  *   - Dynamic routes (owned by us): any route whose first matcher's host
  *     ends in `.app.takosumi.test`.

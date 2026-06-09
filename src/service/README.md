@@ -1,16 +1,17 @@
-# @takosjp/takosumi
+# Takosumi Service
 
 Reference service for the OpenTofu-native Takosumi control plane. It records Space, Source, Connection, Installation,
 Dependency, Run, RunGroup, StateSnapshot, OutputSnapshot, Deployment, policy decisions, logs, and audit events.
 
 The service does not hold provider credential values. OpenTofu execution runs through the internal runner/profile
-machinery selected by the operator and resolved from Connection + CapabilityBinding + policy.
+machinery selected by the operator and resolved from Connection + ProviderBinding + policy.
 
-## Install
+## Run From Source
 
 ```bash
-npm install @takosjp/takosumi
-takosumi server
+cd takosumi
+bun install
+bun src/cli/main.ts server --port 8788
 ```
 
 ## Public control-plane endpoints
@@ -78,5 +79,5 @@ Postgres tables and any generated SQL must be folded into the checksumed `Storag
 
 ## See also
 
-- `@takosjp/takosumi/cli` — operator CLI
-- `@takosjp/takosumi/contract` — Deploy Control API wire types
+- `docs/reference/cli.md` — operator CLI
+- `docs/reference/deploy-control-api.md` — public `/api` surface

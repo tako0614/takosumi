@@ -17,10 +17,18 @@ import {
 import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import { DependenciesService } from "../dependencies/mod.ts";
-import { seedInstallationModel } from "./test_model_fixture.ts";
+import {
+  FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
+  FIXTURE_CLOUDFLARE_PROVIDER,
+  fakeProviderVault,
+  seedInstallationModel,
+} from "./test_model_fixture.ts";
+import type { ActivityRecorder, RecordActivityInput } from "../activity/mod.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const LOCK_DIGEST =
+  "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
 function ids(): (prefix: string) => string {
   let n = 1;
@@ -45,13 +53,17 @@ function runnerEmitting(
           digest: PLAN_DIGEST,
           contentType: "application/vnd.opentofu.plan",
         },
+        providerLockDigest: LOCK_DIGEST,
+        requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       }),
     apply: (job) =>
       Promise.resolve({
         outputs: {
           base_domain: {
             sensitive: false,
-            value: valueByInstallation.get(job.planRun.installationId ?? "") ??
+            value:
+              valueByInstallation.get(job.planRun.installationId ?? "") ??
               "x.example.com",
           },
         } as never,
@@ -59,6 +71,22 @@ function runnerEmitting(
           "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
       }),
     destroy: () => Promise.resolve({}),
+  };
+}
+
+function recordingActivity(): {
+  readonly recorder: ActivityRecorder;
+  readonly events: RecordActivityInput[];
+} {
+  const events: RecordActivityInput[] = [];
+  return {
+    events,
+    recorder: {
+      record: (event) => {
+        events.push(event);
+        return Promise.resolve(undefined);
+      },
+    },
   };
 }
 
@@ -96,6 +124,11 @@ test("a changed producer output marks an active consumer stale", async () => {
     installConfigId: "cfg_p",
     installationId: "inst_p",
     name: "p",
+    installConfig: {
+      outputAllowlist: {
+        base_domain: { from: "base_domain", type: "hostname", required: true },
+      },
+    },
   });
   await seedInstallationModel(store, {
     environment: "preview",
@@ -106,10 +139,18 @@ test("a changed producer output marks an active consumer stale", async () => {
     name: "c",
   });
   await edge(store, "inst_p", "inst_c");
+  const { recorder, events } = recordingActivity();
 
   const controller = new OpenTofuDeploymentController({
     store,
-    runner: runnerEmitting(new Map([["inst_p", "v1"], ["inst_c", "c1"]])),
+    runner: runnerEmitting(
+      new Map([
+        ["inst_p", "v1"],
+        ["inst_c", "c1"],
+      ]),
+    ),
+    vault: fakeProviderVault() as never,
+    activity: recorder,
     now: nowSeq(1),
     newId: ids(),
   });
@@ -124,13 +165,21 @@ test("a changed producer output marks an active consumer stale", async () => {
   };
   await applyOf("inst_p");
   await applyOf("inst_c");
-  expect((await controller.getInstallation("inst_c")).installation.status)
-    .toEqual("active");
+  expect(
+    (await controller.getInstallation("inst_c")).installation.status,
+  ).toEqual("active");
 
   // Producer re-applies with a CHANGED output -> consumer goes stale.
   const changed = new OpenTofuDeploymentController({
     store,
-    runner: runnerEmitting(new Map([["inst_p", "v2"], ["inst_c", "c1"]])),
+    runner: runnerEmitting(
+      new Map([
+        ["inst_p", "v2"],
+        ["inst_c", "c1"],
+      ]),
+    ),
+    vault: fakeProviderVault() as never,
+    activity: recorder,
     now: nowSeq(1000),
     newId: (() => {
       let n = 1;
@@ -142,11 +191,25 @@ test("a changed producer output marks an active consumer stale", async () => {
     planRunId: replan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(replan.planRun),
   });
-  expect((await changed.getInstallation("inst_c")).installation.status)
-    .toEqual("stale");
+  expect((await changed.getInstallation("inst_c")).installation.status).toEqual(
+    "stale",
+  );
+  const staleEvent = events.find(
+    (event) =>
+      event.action === "installation.stale" && event.targetId === "inst_c",
+  );
+  expect(staleEvent?.metadata).toMatchObject({
+    producerInstallationId: "inst_p",
+    producerInstallationName: "p",
+    changedOutputs: ["base_domain"],
+    directChangedOutputs: ["base_domain"],
+    reasons: ["p.base_domain changed"],
+  });
+  expect(JSON.stringify(staleEvent?.metadata)).not.toContain("v2");
   // The producer itself stays active.
-  expect((await changed.getInstallation("inst_p")).installation.status)
-    .toEqual("active");
+  expect((await changed.getInstallation("inst_p")).installation.status).toEqual(
+    "active",
+  );
 });
 
 test("a not-yet-applied (pending) consumer is left untouched by a producer change", async () => {
@@ -158,6 +221,11 @@ test("a not-yet-applied (pending) consumer is left untouched by a producer chang
     installConfigId: "cfg_p",
     installationId: "inst_p",
     name: "p",
+    installConfig: {
+      outputAllowlist: {
+        base_domain: { from: "base_domain", type: "hostname", required: true },
+      },
+    },
   });
   // The consumer is seeded `pending` (fixture default) and never applied.
   await seedInstallationModel(store, {
@@ -173,6 +241,7 @@ test("a not-yet-applied (pending) consumer is left untouched by a producer chang
   const controller = new OpenTofuDeploymentController({
     store,
     runner: runnerEmitting(new Map([["inst_p", "v1"]])),
+    vault: fakeProviderVault() as never,
     now: nowSeq(1),
     newId: ids(),
   });
@@ -188,6 +257,7 @@ test("a not-yet-applied (pending) consumer is left untouched by a producer chang
   const changed = new OpenTofuDeploymentController({
     store,
     runner: runnerEmitting(new Map([["inst_p", "v2"]])),
+    vault: fakeProviderVault() as never,
     now: nowSeq(1000),
     newId: (() => {
       let n = 1;
@@ -200,6 +270,7 @@ test("a not-yet-applied (pending) consumer is left untouched by a producer chang
     expected: applyExpectedGuardFromPlanRun(replan.planRun),
   });
   // The consumer never reached `active`, so it is not flagged stale.
-  expect((await changed.getInstallation("inst_c")).installation.status)
-    .toEqual("pending");
+  expect((await changed.getInstallation("inst_c")).installation.status).toEqual(
+    "pending",
+  );
 });

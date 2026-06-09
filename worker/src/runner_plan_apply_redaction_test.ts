@@ -9,6 +9,7 @@ test("runner redacts plan stdout and stderr on success", async () => {
   await withFakeTofu(fixture.binDir, async () => {
     const response = await handleRunnerRequest(
       runRequest("plan_redaction_success", "plan", {
+        generatedRoot: minimalGeneratedRoot(),
         planRun: {
           source: { kind: "local", path: fixture.sourceDir },
           operation: "create",
@@ -36,6 +37,7 @@ test("runner redacts apply stdout and stderr on success", async () => {
   await withFakeTofu(fixture.binDir, async () => {
     const plan = await handleRunnerRequest(
       runRequest("apply_redaction_success", "plan", {
+        generatedRoot: minimalGeneratedRoot(),
         planRun: {
           source: { kind: "local", path: fixture.sourceDir },
           operation: "create",
@@ -49,6 +51,7 @@ test("runner redacts apply stdout and stderr on success", async () => {
 
     const response = await handleRunnerRequest(
       runRequest("apply_redaction_success", "apply", {
+        generatedRoot: minimalGeneratedRoot(),
         planRun: {
           source: { kind: "local", path: fixture.sourceDir },
           operation: "create",
@@ -77,6 +80,7 @@ test("runner redacts plan/apply failure payloads", async () => {
   await withFakeTofu(planFailure.binDir, async () => {
     const failedPlan = await handleRunnerRequest(
       runRequest("plan_redaction_failure", "plan", {
+        generatedRoot: minimalGeneratedRoot(),
         planRun: {
           source: { kind: "local", path: planFailure.sourceDir },
           operation: "create",
@@ -95,6 +99,7 @@ test("runner redacts plan/apply failure payloads", async () => {
   await withFakeTofu(applyFailure.binDir, async () => {
     const plan = await handleRunnerRequest(
       runRequest("apply_redaction_failure", "plan", {
+        generatedRoot: minimalGeneratedRoot(),
         planRun: {
           source: { kind: "local", path: applyFailure.sourceDir },
           operation: "create",
@@ -107,6 +112,7 @@ test("runner redacts plan/apply failure payloads", async () => {
     };
     const failedApply = await handleRunnerRequest(
       runRequest("apply_redaction_failure", "apply", {
+        generatedRoot: minimalGeneratedRoot(),
         planRun: {
           source: { kind: "local", path: applyFailure.sourceDir },
           operation: "create",
@@ -133,6 +139,15 @@ function runRequest(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ action, runId, request }),
   });
+}
+
+function minimalGeneratedRoot(): { readonly files: Record<string, string> } {
+  return {
+    files: {
+      "main.tf":
+        'terraform {}\nmodule "service" { source = "./template-module" }\n',
+    },
+  };
 }
 
 async function createFakeTofuFixture(fail?: "plan" | "apply"): Promise<{
@@ -172,7 +187,7 @@ fail="${fail ?? ""}"
 cmd="\${1:-}"
 case "$cmd" in
   init)
-    echo "init TF_VAR_cloudflare_compute_api_token=init-tf-var-secret"
+    echo "init TF_VAR_cloudflare_main_api_token=init-tf-var-secret"
     echo "Authorization: Bearer init-auth-secret" >&2
     exit 0
     ;;
@@ -185,7 +200,7 @@ case "$cmd" in
       fi
       shift || true
     done
-    echo "plan TF_VAR_cloudflare_compute_api_token=plan-tf-var-secret token=plan-token-secret CLOUDFLARE_API_TOKEN=plan-cf-secret AWS_SECRET_ACCESS_KEY=plan-aws-secret DATABASE_URL=postgres://user:plan-db-pass@db.example/takos"
+    echo "plan TF_VAR_cloudflare_main_api_token=plan-tf-var-secret token=plan-token-secret CLOUDFLARE_API_TOKEN=plan-cf-secret AWS_SECRET_ACCESS_KEY=plan-aws-secret DATABASE_URL=postgres://user:plan-db-pass@db.example/takos"
     echo "password=plan-password-secret Authorization: Bearer plan-auth-secret" >&2
     if [ "$fail" = "plan" ]; then
       exit 2
@@ -198,7 +213,7 @@ case "$cmd" in
     exit 0
     ;;
   apply)
-    echo "apply TF_VAR_cloudflare_compute_api_token=apply-tf-var-secret token=apply-token-secret CLOUDFLARE_API_TOKEN=apply-cf-secret AWS_SECRET_ACCESS_KEY=apply-aws-secret DATABASE_URL=postgres://user:apply-db-pass@db.example/takos"
+    echo "apply TF_VAR_cloudflare_main_api_token=apply-tf-var-secret token=apply-token-secret CLOUDFLARE_API_TOKEN=apply-cf-secret AWS_SECRET_ACCESS_KEY=apply-aws-secret DATABASE_URL=postgres://user:apply-db-pass@db.example/takos"
     echo "password=apply-password-secret Authorization: Bearer apply-auth-secret" >&2
     if [ "$fail" = "apply" ]; then
       exit 3

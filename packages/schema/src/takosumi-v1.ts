@@ -1,9 +1,11 @@
 /**
  * Takosumi reference helper module.
  *
- * Public deploy-control DTOs live in `deploy-control-api.ts`. This module keeps
- * shared helper primitives used by the service implementation: ObjectAddress,
- * condition reasons, binding resolution helpers, and output projection helpers.
+ * Internal deploy-control compatibility DTOs live in
+ * `internal-deploy-control-api.ts`.
+ * This module keeps shared helper primitives used by the service implementation:
+ * ObjectAddress, condition reasons, binding resolution helpers, and output
+ * projection helpers.
  */
 
 import type { Digest, IsoTimestamp, JsonObject } from "./types.ts";

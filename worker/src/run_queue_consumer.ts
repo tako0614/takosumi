@@ -88,7 +88,37 @@ async function dispatchOpenTofuRun(
     await dispatchToController(env, "apply", run.runId, run.spaceId);
     return;
   }
-  await dispatchToController(env, run.action, run.runId, run.spaceId);
+  if (run.action === "backup" || run.action === "compatibility_check") {
+    throw new Error(`${run.action} is not a queued controller action`);
+  }
+  switch (run.action) {
+    case "plan":
+    case "apply":
+    case "source_sync":
+      await dispatchToController(env, run.action, run.runId, run.spaceId);
+      return;
+    default:
+      // Fail-closed against any action the controller does not implement. The
+      // `restore` Run type is schema-reserved (packages/schema runs.ts) but has
+      // no producer, no queue action, and no handler, so it never reaches here
+      // through the parser. This exhaustive default keeps the consumer
+      // fail-closed if a future change ever wires a destructive (e.g. state
+      // overwrite) action onto the queue before its handler exists. The unknown
+      // action is treated as a poison message: the caller marks the run failed
+      // on the final attempt instead of dispatching an unimplemented action.
+      throw new Error(`unsupported OpenTofu run action: ${assertNeverAction(run.action)}`);
+  }
+}
+
+/**
+ * Compile-time exhaustiveness guard for {@link OpenTofuRunAction}. The `destroy`
+ * / `backup` / `compatibility_check` actions are handled before this point, so
+ * the only reachable values are the dispatchable trio. If a new action is added
+ * to `OpenTofuRunAction` without a dispatch branch, this stops compiling. At
+ * runtime it returns the offending value for the fail-closed error message.
+ */
+function assertNeverAction(action: never): string {
+  return String(action);
 }
 
 async function dispatchToController(
@@ -133,7 +163,13 @@ async function markRunFailedIfNotTerminal(
 ): Promise<void> {
   // source_sync runs own their own terminal recording in the source consumer;
   // the DLQ backstop only covers plan/apply runs.
-  if (run.action === "source_sync") return;
+  if (
+    run.action === "source_sync" ||
+    run.action === "backup" ||
+    run.action === "compatibility_check"
+  ) {
+    return;
+  }
   const action = run.action === "plan" ? "plan" : "apply";
   await controller.markRunFailed(action, run.runId, reason);
 }
@@ -155,12 +191,19 @@ function isOpenTofuRunQueue(queue: string): boolean {
   );
 }
 
-type OpenTofuRunParseResult =
+export type OpenTofuRunParseResult =
   | { readonly kind: "ok"; readonly message: OpenTofuRunQueueMessage }
   | { readonly kind: "invalid" }
   | { readonly kind: "not_opentofu" };
 
-function safeParseOpenTofuRunQueueMessage(
+/**
+ * Exported for tests: classify a raw queue body as a dispatchable OpenTofu run
+ * message, a poison/invalid message, or another subsystem's payload. A body
+ * carrying an action outside {@link OpenTofuRunAction} (for example the
+ * schema-reserved-but-unimplemented `restore` Run type) is `invalid`, so it is
+ * acked and dropped rather than dispatched.
+ */
+export function safeParseOpenTofuRunQueueMessage(
   value: unknown,
 ): OpenTofuRunParseResult {
   try {
@@ -182,7 +225,8 @@ function parseOpenTofuRunQueueMessage(
   const action = record.action;
   if (
     action !== "plan" && action !== "apply" && action !== "destroy" &&
-    action !== "source_sync"
+    action !== "source_sync" && action !== "compatibility_check" &&
+    action !== "backup"
   ) {
     throw new Error("OpenTofu run queue message action is invalid");
   }

@@ -50,9 +50,9 @@ def cleanup_subject(subject: str | None, credential_id: str | None) -> None:
 # Mutable holder so atexit can read the final subject/credential
 _state: dict[str, str | None] = {"subject": None, "credential_id": None}
 atexit.register(lambda: cleanup_subject(_state["subject"], _state["credential_id"]))
-RP_ID = "accounts.takosumi.test"
-ORIGIN = "https://accounts.takosumi.test"
-BASE = "https://accounts.takosumi.test"
+RP_ID = "app.takosumi.test"
+ORIGIN = "https://app.takosumi.test"
+BASE = "https://app.takosumi.test"
 
 if not CA_PATH.exists():
     sys.exit(f"Pebble CA not found at {CA_PATH} — run scripts/up.sh first")

@@ -1,4 +1,4 @@
-# cloudflare-worker-service (official template module)
+# cloudflare-worker-service (first-party Capsule module)
 
 Deploys a Hono (or any module-syntax) Cloudflare Worker service from a built
 artifact.

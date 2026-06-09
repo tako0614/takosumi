@@ -75,7 +75,11 @@ When `EXPORT_DOWNLOAD_BASE_URL` points at this server, the `accounts` service ha
 
 - Run `bun packages/cli/src/main.ts accounts migrate` against Postgres before first start, or use the docker-compose `migrations` init container which does it for you. See `cli-accounts-db.ts` for the migration entry point.
 - Secrets (`POSTGRES_PASSWORD`, OAuth client secrets) belong in your operator secret store, not in the compose file. Use Docker secrets, Kubernetes Secrets, or a `.env` file outside version control.
-- Managed offering access defaults to `closed`. Set `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS=open` plus the readiness digest after launch readiness evidence is in place.
+- Managed offering access defaults to `closed`. Set `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS=open` only after launch
+  readiness evidence and production hardening evidence are in place. The node-postgres distribution mirrors the
+  Cloudflare worker gate: open access requires the readiness digest, evidence/approval refs, reviewed public summary,
+  `TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce`, and the container / egress / provider-catalog / secret-boundary
+  evidence refs and digests.
 - The Caddyfile expects `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME` to resolve to the host running the stack. Caddy will obtain a Let's Encrypt cert automatically on port 80/443. The Caddyfile pins TLS to 1.2 / 1.3, emits structured JSON logs, and sets a default-deny `Content-Security-Policy` (`default-src 'self'; frame-ancestors 'none'`); override this header with the exact source allowlist your dashboard payload needs rather than removing it.
 
 ## Container hardening defaults

@@ -15,7 +15,12 @@ import * as paths from "./paths.ts";
 
 export type ConnectionAuthMethod = "static_secret";
 export type ConnectionOwner = "service" | "customer";
-export type ConnectionStatus = "pending" | "verified" | "revoked";
+export type ConnectionStatus =
+  | "pending"
+  | "verified"
+  | "revoked"
+  | "expired"
+  | "error";
 
 export interface ConnectionScope {
   readonly accountId?: string;
@@ -40,10 +45,11 @@ export interface Connection {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly verifiedAt?: string;
+  readonly expiresAt?: string;
 }
 
 export interface ConnectionTestResult {
-  readonly status: "verified" | "pending";
+  readonly status: "verified" | "pending" | "expired";
   readonly detail?: string;
 }
 

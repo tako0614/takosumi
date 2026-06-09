@@ -43,9 +43,26 @@ export interface SpaceSubscription {
   readonly spaceId: string;
   readonly billingAccountId: string;
   readonly planId: string;
-  readonly status: string;
+  readonly status: "active" | "trialing" | "past_due" | "cancelled";
   readonly currentPeriodStart: string;
   readonly currentPeriodEnd: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface BillingPlanLimits {
+  /** Maximum credits one reviewed plan may reserve/capture. */
+  readonly maxEstimatedCreditsPerRun?: number;
+  /** Additional resource-count quotas enforced from `tofu show -json` changes. */
+  readonly quota?: Readonly<Record<string, number>>;
+}
+
+export interface BillingPlan {
+  readonly id: string;
+  readonly name: string;
+  readonly monthlyBasePrice: number;
+  readonly includedCredits: number;
+  readonly limits: BillingPlanLimits;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -79,6 +96,12 @@ export type UsageEventKind =
   | "egress_gb"
   | "operation";
 
+export type UsageEventSource =
+  | "runner"
+  | "resource_meter"
+  | "billing_reconciliation"
+  | "manual_adjustment";
+
 export interface UsageEvent {
   readonly id: string;
   readonly spaceId: string;
@@ -87,7 +110,32 @@ export interface UsageEvent {
   readonly kind: UsageEventKind;
   readonly quantity: number;
   readonly credits: number;
-  readonly source: string;
+  readonly source: UsageEventSource;
   readonly idempotencyKey: string;
   readonly createdAt: string;
+}
+
+export interface ManagedResourceUsageMeter {
+  readonly installationId?: string;
+  readonly kind: Extract<
+    UsageEventKind,
+    | "managed_compute"
+    | "managed_storage_gb_hour"
+    | "artifact_storage_gb_hour"
+    | "backup_storage_gb_hour"
+    | "egress_gb"
+  >;
+  readonly quantity: number;
+  readonly credits: number;
+  readonly meterId: string;
+}
+
+export interface InvoiceUsageReconciliation {
+  readonly invoiceId: string;
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  readonly meteredCredits: number;
+  readonly invoicedCredits: number;
+  readonly adjustmentCredits: number;
+  readonly usageEvent: UsageEvent;
 }

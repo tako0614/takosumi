@@ -6,7 +6,7 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * the deterministic source archive produced by a `source_sync` run here, under
    * the agreed key layout
    * `spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst`.
-   * Separate from `R2_ARTIFACTS` (plan/state) so source bytes have their own
+   * Separate from `R2_ARTIFACTS` (plan/run artifacts) so source bytes have their own
    * lifecycle. The binding is wired by the service lane; this type is additive.
    */
   readonly R2_SOURCE?: R2Bucket;
@@ -26,7 +26,7 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
   /**
    * Operator-curated provider surface: CSV of runner profile ids the operator
-   * enables (e.g. `"cloudflare-default,aws-default"`). Only listed ids appear in
+   * enables (e.g. `"cloudflare-default,aws-template"`). Only listed ids appear in
    * `/v1/runner-profiles` and policy evaluation, each with
    * `takosumi.com/profile-enabled=true`. Unset/empty defaults to
    * `"cloudflare-default"`.
@@ -37,6 +37,10 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF?: string;
   readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST?: string;
 }
 
 export type OpenTofuRunAction =
@@ -44,7 +48,8 @@ export type OpenTofuRunAction =
   | "apply"
   | "destroy"
   | "source_sync"
-  | "compatibility_check";
+  | "compatibility_check"
+  | "backup";
 
 /**
  * Run-dispatch message on `RUN_QUEUE`. The producer (the

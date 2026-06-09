@@ -13,15 +13,17 @@
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { ApiEndpoint, ApiEndpointMethod } from "./route_families.ts";
-import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "takosumi-contract/deploy-control-api";
+import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
 import type {
+  ConnectionScopeHints,
+  CreateConnectionRequest,
   DeployControlErrorCode,
   DeployControlErrorEnvelope,
   DeployControlErrorHttpStatus,
   ListRunnerProfilesResponse,
   OpenTofuOperation,
-} from "takosumi-contract/deploy-control-api";
-import type { CreatePlanRunRequest } from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
+import type { CreatePlanRunRequest } from "@takosumi/internal/deploy-control-api";
 import type { SpacesService } from "../domains/spaces/mod.ts";
 import type { InstallationsService } from "../domains/installations/mod.ts";
 import type { ConnectionsService } from "../domains/connections/mod.ts";
@@ -119,12 +121,15 @@ const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 export const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
 export const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
 export const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
-export const RUN_ID_PATTERN = /^(plan|apply|ssr)_[0-9a-zA-Z]{8,64}$/;
+export const RUN_ID_PATTERN =
+  /^(?:(?:plan|apply|ssr|ccr)_[0-9a-zA-Z]{8,64}|backup_[0-9a-zA-Z]{4,64})$/;
 export const DEPENDENCY_ID_PATTERN = /^dep_[0-9a-zA-Z]{8,64}$/;
 export const OUTPUT_SHARE_ID_PATTERN = /^oshare_[0-9a-zA-Z]{8,64}$/;
 export const RUN_GROUP_ID_PATTERN = /^rg_[0-9a-zA-Z]{8,64}$/;
 export const DEPLOYMENT_ID_PATTERN = /^dep(loy)?_[0-9a-zA-Z]{8,64}$/;
 export const COMPATIBILITY_REPORT_ID_PATTERN = /^caprep_[0-9a-zA-Z]{8,64}$/;
+export const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9_-]{1,63}$/;
+export const CUSTOM_PROVIDER_PACK_ID_PATTERN = /^cpp_[0-9a-zA-Z]{8,64}$/;
 
 export const ALLOWED_KEYS: Record<
   DeployControlRouteName,
@@ -156,6 +161,24 @@ export const ALLOWED_KEYS: Record<
     "displayName",
     "scope",
     "scopeHints",
+    "expiresAt",
+    "values",
+  ]),
+  connectionOAuthStart: new Set([
+    "spaceId",
+    "displayName",
+    "scope",
+    "scopeHints",
+    "expiresAt",
+    "redirectUri",
+    "successRedirectUri",
+  ]),
+  connectionGcpImpersonation: new Set([
+    "spaceId",
+    "displayName",
+    "scope",
+    "scopeHints",
+    "expiresAt",
     "values",
   ]),
   sourceCreate: new Set([
@@ -174,7 +197,7 @@ export const ALLOWED_KEYS: Record<
     "status",
   ]),
   sourceCompatibilityCheck: new Set(["sourceSnapshotId", "installationId"]),
-  operatorConnectionDefault: new Set(["capability", "connectionId"]),
+  operatorConnectionDefault: new Set(["provider", "connectionId"]),
   spaceCreate: new Set([
     "handle",
     "displayName",
@@ -204,12 +227,25 @@ export const ALLOWED_KEYS: Record<
     "outputs",
     "sensitivePolicy",
   ]),
+  creditsTopUp: new Set(["credits"]),
+  subscriptionChange: new Set(["billingSettings"]),
+  deploy: new Set([
+    "spaceId",
+    "name",
+    "environment",
+    "snapshotId",
+    "vars",
+    "planOnly",
+    "autoApprove",
+  ]),
 };
 
 export type DeployControlRouteName =
   | "planRunCreate"
   | "applyRunCreate"
   | "connectionCreate"
+  | "connectionOAuthStart"
+  | "connectionGcpImpersonation"
   | "sourceCreate"
   | "sourcePatch"
   | "sourceCompatibilityCheck"
@@ -220,7 +256,10 @@ export type DeployControlRouteName =
   | "operatorConnectionDefault"
   | "runApprove"
   | "dependencyCreate"
-  | "outputShareCreate";
+  | "outputShareCreate"
+  | "creditsTopUp"
+  | "subscriptionChange"
+  | "deploy";
 
 export interface DeployControlPublicRouteDependencies {
   /**
@@ -246,6 +285,20 @@ export interface DeployControlPublicRouteDependencies {
    */
   readonly controller?: OpenTofuDeploymentController;
   /**
+   * Optional provider OAuth helpers. These are helper flows for creating
+   * write-only provider env-set Connections; they are not a third credential
+   * source. When a helper is absent, its route still authenticates first and
+   * returns `501 not_implemented`.
+   */
+  readonly connectionOAuthHelpers?: ConnectionOAuthHelpers;
+  /**
+   * Internal compatibility seam for legacy `/v1/*` ledger routes consumed by
+   * in-process accounts / CLI code. Public platform API hosts leave this off so
+   * PlanRun / ApplyRun / RunnerProfile / DeploymentOutput DTOs are not
+   * externally callable.
+   */
+  readonly mountInternalLedgerRoutes?: boolean;
+  /**
    * Spaces domain service (Core Specification §4). When unset, the Space routes
    * return 501 after successful auth.
    */
@@ -255,7 +308,7 @@ export interface DeployControlPublicRouteDependencies {
    * Installation / InstallConfig routes return 501 after successful auth.
    */
   readonly installationsService?: InstallationsService;
-  /** Operator default connections + capability resolution (spec §9). */
+  /** Operator default connections + provider binding resolution (spec §9). */
   readonly connectionsService?: ConnectionsService;
   /**
    * Dependencies domain service (Core Specification §14 / §15). When unset, the
@@ -285,6 +338,69 @@ export interface DeployControlPublicRouteDependencies {
    * store + crypto seam.
    */
   readonly backupsService?: BackupsService;
+  /**
+   * Raw writer for upload source archives into R2_SOURCE. `takosumi deploy`
+   * POSTs a tar archive of the local Capsule; the upload route streams it here
+   * at the SAME raw key the OpenTofu runner restores from (no logical-bucket
+   * prefix). When unset, the upload + deploy routes return 501. Runtime-neutral
+   * by design: the worker wires `env.R2_SOURCE.put`.
+   */
+  readonly writeSourceArchive?: SourceArchiveWriter;
+}
+
+/**
+ * Writes upload Capsule archive bytes to R2_SOURCE at the exact `key` the runner
+ * restores from. Resolves once the bytes are durably stored.
+ */
+export type SourceArchiveWriter = (
+  key: string,
+  bytes: Uint8Array,
+) => Promise<void>;
+
+export interface ConnectionOAuthHelpers {
+  readonly cloudflare?: ConnectionOAuthHelper;
+  readonly gcp?: ConnectionOAuthHelper;
+}
+
+export interface ConnectionOAuthStartBody {
+  readonly spaceId?: string;
+  readonly displayName?: string;
+  readonly scope?: "operator" | "space";
+  readonly scopeHints?: ConnectionScopeHints;
+  readonly expiresAt?: string;
+  readonly redirectUri?: string;
+  readonly successRedirectUri?: string;
+}
+
+export interface ConnectionOAuthStartResponse {
+  readonly authorizationUrl: string;
+  readonly state: string;
+  readonly expiresAt?: string;
+}
+
+export interface ConnectionOAuthStartInput {
+  readonly provider: "cloudflare" | "gcp";
+  readonly request: Request;
+  readonly principal: DeployControlPrincipal;
+  readonly body: ConnectionOAuthStartBody;
+}
+
+export interface ConnectionOAuthCallbackInput {
+  readonly provider: "cloudflare" | "gcp";
+  readonly request: Request;
+  readonly principal: DeployControlPrincipal;
+  readonly code: string;
+  readonly state: string;
+  readonly query: Readonly<Record<string, string>>;
+}
+
+export interface ConnectionOAuthHelper {
+  start(
+    input: ConnectionOAuthStartInput,
+  ): Promise<ConnectionOAuthStartResponse>;
+  complete(
+    input: ConnectionOAuthCallbackInput,
+  ): Promise<CreateConnectionRequest>;
 }
 
 export interface DeployControlBearerAuthorizationInput {
@@ -522,11 +638,18 @@ export function ensureSpacePermission(
   principal: DeployControlPrincipal,
   spaceId: string,
 ): void {
-  if (scopeAllows(principal.spaceIds, spaceId)) return;
+  if (spacePermissionAllows(principal, spaceId)) return;
   throw new OpenTofuControllerError(
     "permission_denied",
     `deploy control principal ${principal.actor} cannot access space ${spaceId}`,
   );
+}
+
+export function spacePermissionAllows(
+  principal: DeployControlPrincipal,
+  spaceId: string,
+): boolean {
+  return scopeAllows(principal.spaceIds, spaceId);
 }
 
 /**
