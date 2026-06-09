@@ -5,9 +5,7 @@
  * {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS} descriptor inventory.
  */
 
-import {
-  OpenTofuControllerError,
-} from "../domains/deploy-control/mod.ts";
+import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import {
   defineRoute,
   type DeployControlEndpoint,
@@ -19,6 +17,7 @@ import {
 import {
   TAKOSUMI_RUN_GROUP_APPROVE_ROUTE,
   TAKOSUMI_RUN_GROUP_ROUTE,
+  TAKOSUMI_SPACE_DRIFT_CHECK_ROUTE,
   TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE,
 } from "./deploy_control_route_paths.ts";
 
@@ -27,8 +26,8 @@ const RUN_GROUP_ID_PARAM = {
   pattern: RUN_GROUP_ID_PATTERN,
 } as const;
 
-export const DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS:
-  readonly DeployControlEndpoint[] = [
+export const DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS: readonly DeployControlEndpoint[] =
+  [
     {
       method: "POST",
       path: TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE,
@@ -36,6 +35,20 @@ export const DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS:
         "Creates a space_update RunGroup: re-plans every stale Installation (+ downstream) in topological order.",
       auth: "deploy-control-token",
       operationId: "createSpacePlanUpdate",
+      openapi: {
+        pathParams: ["spaceId"],
+        okStatus: "201",
+        okSchema: "RunGroupResponse",
+      },
+      notImplementedMessage: "run groups not wired",
+    },
+    {
+      method: "POST",
+      path: TAKOSUMI_SPACE_DRIFT_CHECK_ROUTE,
+      summary:
+        "Creates a space_drift_check RunGroup: creates one read-only drift_check Run per active Installation in the Space.",
+      auth: "deploy-control-token",
+      operationId: "createSpaceDriftCheck",
       openapi: {
         pathParams: ["spaceId"],
         okStatus: "201",
@@ -69,9 +82,7 @@ export function mountDeployControlRunGroupRoutes(
 ): void {
   const { app, dependencies } = ctx;
   const runGroupsService = dependencies.runGroupsService;
-  const requireRunGroups = (
-    deps: typeof dependencies,
-  ): string | undefined =>
+  const requireRunGroups = (deps: typeof dependencies): string | undefined =>
     deps.runGroupsService ? undefined : "run groups not wired";
 
   app.post(
@@ -83,6 +94,20 @@ export function mountDeployControlRunGroupRoutes(
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         const result = await runGroupsService!.createSpaceUpdate(id);
+        return c.json(result, 201);
+      },
+    }),
+  );
+
+  app.post(
+    TAKOSUMI_SPACE_DRIFT_CHECK_ROUTE,
+    defineRoute({
+      ctx,
+      requireService: requireRunGroups,
+      param: { param: "spaceId", pattern: SPACE_ID_PATTERN },
+      handler: async ({ c, principal, id }) => {
+        ensureSpacePermission(principal, id);
+        const result = await runGroupsService!.createSpaceDriftCheck(id);
         return c.json(result, 201);
       },
     }),

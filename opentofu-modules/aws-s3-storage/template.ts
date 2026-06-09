@@ -1,5 +1,5 @@
 /**
- * Official template: aws-s3-storage.
+ * First-party Capsule module: aws-s3-storage.
  *
  * Provisions a single AWS S3 bucket from a name and region. Authored as
  * TypeScript catalog data (the service cannot read the filesystem in Workers).
@@ -8,7 +8,7 @@
  * this object in sync with `module/main.tf`.
  */
 
-import type { TemplateDefinition } from "takosumi-contract/deploy-control-api";
+import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 
 export const awsS3StorageTemplate: TemplateDefinition = {
   id: "aws-s3-storage",

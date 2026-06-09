@@ -5,6 +5,7 @@ import {
   CredentialBundle,
   StaticSecretConnectionVault,
 } from "./mod.ts";
+import type { Connection } from "@takosumi/internal/deploy-control-api";
 import { InMemoryOpenTofuDeploymentStore } from "../../domains/deploy-control/store.ts";
 import { MultiCloudSecretBoundaryCrypto } from "../secret-store/memory.ts";
 
@@ -27,6 +28,35 @@ function makeVault(overrides: { fetch?: typeof fetch } = {}) {
     fetch: overrides.fetch as never,
   });
   return { store, vault };
+}
+
+async function markVerified(
+  store: InMemoryOpenTofuDeploymentStore,
+  connection: Connection,
+): Promise<Connection> {
+  const now = "2026-06-04T00:00:00.000Z";
+  const verified: Connection = {
+    ...connection,
+    status: "verified",
+    verifiedAt: now,
+    updatedAt: now,
+  };
+  await store.putConnection(verified);
+  return verified;
+}
+
+function stsSuccessXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleResult>
+    <Credentials>
+      <AccessKeyId>ASIA_assumed</AccessKeyId>
+      <SecretAccessKey>assumed_secret</SecretAccessKey>
+      <SessionToken>assumed_session</SessionToken>
+      <Expiration>2026-06-04T01:00:00Z</Expiration>
+    </Credentials>
+  </AssumeRoleResult>
+</AssumeRoleResponse>`;
 }
 
 test("register seals values and returns a public Connection with no secret material", async () => {
@@ -81,16 +111,17 @@ test("register rejects unknown env names and unsatisfied required groups", async
   ]);
 });
 
-test("register rejects unknown provider and non-static authMethod", async () => {
+test("register accepts unknown provider env sets and rejects non-static authMethod", async () => {
   const { vault } = makeVault();
-  await expect(
-    vault.register({
-      spaceId: "space_1",
-      provider: "does-not-exist",
-      authMethod: "static_secret",
-      values: { X: "y" },
-    }),
-  ).rejects.toThrow(/unknown provider/);
+  const custom = await vault.register({
+    spaceId: "space_1",
+    provider: "does-not-exist",
+    authMethod: "static_secret",
+    values: { X: "y" },
+  });
+
+  expect(custom.provider).toBe("does-not-exist");
+  expect(custom.envNames).toEqual(["X"]);
 
   await expect(
     vault.register({
@@ -104,26 +135,28 @@ test("register rejects unknown provider and non-static authMethod", async () => 
 });
 
 test("mint round-trips the decrypted values into a credential bundle", async () => {
-  const { vault } = makeVault();
-  await vault.register({
-    spaceId: "space_1",
-    provider: "cloudflare",
-    authMethod: "static_secret",
-    values: {
-      CLOUDFLARE_API_TOKEN: "cf-secret-token",
-      CLOUDFLARE_ACCOUNT_ID: "acct_xyz",
-    },
-  });
+  const { store, vault } = makeVault();
+  await markVerified(
+    store,
+    await vault.register({
+      spaceId: "space_1",
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      values: {
+        CLOUDFLARE_API_TOKEN: "cf-secret-token",
+        CLOUDFLARE_ACCOUNT_ID: "acct_xyz",
+      },
+    }),
+  );
 
   const bundle = await vault.mint("space_1", ["cloudflare"]);
   expect(bundle).toBeInstanceOf(CredentialBundle);
   expect(bundle.env.CLOUDFLARE_API_TOKEN).toBe("cf-secret-token");
   expect(bundle.env.CLOUDFLARE_ACCOUNT_ID).toBe("acct_xyz");
-  // pending (unverified) connection is flagged.
-  expect(bundle.warnings.join(" ")).toMatch(/pending/);
+  expect(bundle.warnings).toEqual([]);
 });
 
-test("credential bundle never serializes its secret values", async () => {
+test("mint refuses a pending connection before verification", async () => {
   const { vault } = makeVault();
   await vault.register({
     spaceId: "space_1",
@@ -131,6 +164,23 @@ test("credential bundle never serializes its secret values", async () => {
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
   });
+
+  await expect(vault.mint("space_1", ["cloudflare"])).rejects.toThrow(
+    /pending \(not verified\)/,
+  );
+});
+
+test("credential bundle never serializes its secret values", async () => {
+  const { store, vault } = makeVault();
+  await markVerified(
+    store,
+    await vault.register({
+      spaceId: "space_1",
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
+    }),
+  );
   const bundle = await vault.mint("space_1", ["cloudflare"]);
 
   expect(JSON.stringify(bundle)).toBe('"[credential-bundle]"');
@@ -203,6 +253,132 @@ test("test() stays pending when the provider reports the token is inactive", asy
 
   const result = await vault.test(connection.id);
   expect(result.status).toBe("pending");
+  expect((await store.getConnection(connection.id))?.status).toBe("pending");
+});
+
+test("test() verifies an aws assume-role connection via STS and persists verified", async () => {
+  let called:
+    | {
+        readonly url: string;
+        readonly auth: string | null;
+        readonly body: string;
+      }
+    | undefined;
+  const fakeFetch = (input: string, init?: RequestInit): Promise<Response> => {
+    called = {
+      url: input,
+      auth: new Headers(init?.headers).get("authorization"),
+      body: String(init?.body ?? ""),
+    };
+    return Promise.resolve(
+      new Response(stsSuccessXml(), {
+        status: 200,
+        headers: { "content-type": "text/xml" },
+      }),
+    );
+  };
+  const { store, vault } = makeVault({ fetch: fakeFetch as never });
+  const connection = await vault.register({
+    spaceId: "space_1",
+    provider: "aws",
+    authMethod: "static_secret",
+    scopeHints: {
+      awsRoleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
+      awsExternalId: "space_1",
+      awsRegion: "us-west-2",
+    },
+    values: {
+      AWS_ACCESS_KEY_ID: "AKIA_source",
+      AWS_SECRET_ACCESS_KEY: "source_secret",
+    },
+  });
+
+  const result = await vault.test(connection.id);
+  expect(result.status).toBe("verified");
+  expect(called?.url).toBe("https://sts.us-west-2.amazonaws.com/");
+  expect(called?.body).toContain("Action=AssumeRole");
+  expect(called?.body).toContain(
+    "RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Ftakosumi-prod",
+  );
+  expect(called?.body).toContain("ExternalId=space_1");
+  expect(called?.auth).toContain("AWS4-HMAC-SHA256");
+  expect(called?.auth).toContain(
+    "Credential=AKIA_source/20260604/us-west-2/sts/aws4_request",
+  );
+
+  const persisted = await store.getConnection(connection.id);
+  expect(persisted?.status).toBe("verified");
+  expect(persisted?.verifiedAt).toBeDefined();
+});
+
+test("test() keeps aws assume-role pending when STS rejects the role", async () => {
+  const { store, vault } = makeVault({
+    fetch: (() =>
+      Promise.resolve(
+        new Response(
+          "<ErrorResponse><Error><Code>AccessDenied</Code></Error></ErrorResponse>",
+          { status: 403, headers: { "content-type": "text/xml" } },
+        ),
+      )) as never,
+  });
+  const connection = await vault.register({
+    spaceId: "space_1",
+    provider: "aws",
+    authMethod: "static_secret",
+    scopeHints: {
+      awsRoleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
+      awsExternalId: "space_1",
+      awsRegion: "us-west-2",
+    },
+    values: {
+      AWS_ACCESS_KEY_ID: "AKIA_source",
+      AWS_SECRET_ACCESS_KEY: "source_secret",
+    },
+  });
+
+  const result = await vault.test(connection.id);
+  expect(result.status).toBe("pending");
+  expect(result.detail).toContain("AccessDenied");
+  expect((await store.getConnection(connection.id))?.status).toBe("pending");
+});
+
+test("test() keeps aws assume-role pending when role ARN is missing", async () => {
+  const { store, vault } = makeVault();
+  const connection = await vault.register({
+    spaceId: "space_1",
+    provider: "aws",
+    authMethod: "static_secret",
+    values: {
+      AWS_ACCESS_KEY_ID: "AKIA_source",
+      AWS_SECRET_ACCESS_KEY: "source_secret",
+    },
+  });
+
+  const result = await vault.test(connection.id);
+  expect(result.status).toBe("pending");
+  expect(result.detail).toContain("scopeHints.awsRoleArn");
+  expect((await store.getConnection(connection.id))?.status).toBe("pending");
+});
+
+test("test() keeps aws assume-role pending when source credentials are missing", async () => {
+  const { store, vault } = makeVault();
+  const connection = await vault.register({
+    spaceId: "space_1",
+    provider: "aws",
+    authMethod: "static_secret",
+    scopeHints: {
+      awsRoleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
+    },
+    values: {
+      AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/takosumi-prod",
+      AWS_WEB_IDENTITY_TOKEN_FILE: "/var/run/secrets/token",
+    },
+  });
+
+  const result = await vault.test(connection.id);
+  expect(result.status).toBe("pending");
+  expect(result.detail).toContain("AWS_ACCESS_KEY_ID");
+  expect(result.detail).toContain("AWS_SECRET_ACCESS_KEY");
   expect((await store.getConnection(connection.id))?.status).toBe("pending");
 });
 

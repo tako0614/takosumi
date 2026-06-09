@@ -1,5 +1,5 @@
 /**
- * Official template domain entry point.
+ * Built-in first-party Capsule module registry domain entry point.
  *
  * Composes the catalog registry (`registry.ts`) with input validation
  * (`validation.ts`). The deploy-control domain depends on this module to resolve

@@ -13,9 +13,10 @@ Takosumi の backup は **control backup** と **Installation service-data backu
 **Backup/Restore layers**:
 
 1. **Control backup** (Takosumi control plane 所有): Space、Source、Connection
-   metadata、InstallConfig、Installation、Dependency、Run、Deployment、
-   StateSnapshot、OutputSnapshot、artifacts manifest、billing credit ledger、
-   audit / activity ledger。
+   metadata、Provider Template、Provider Env Set、provider env set policy、
+   CapsuleCompatibilityReport、InstallConfig、DeploymentProfile / ProviderBinding、
+   Installation、Dependency、Run、RunGroup、Deployment、StateSnapshot、OutputSnapshot、
+   artifacts manifest、billing credit ledger、audit / activity ledger。
 2. **Service-data backup** (Installation 所有): messages、attachments、files、
    posts、profiles など Capsule が provision した service 固有データ。
 
@@ -25,18 +26,23 @@ service-data backup は各 Installation の BackupConfig に従い、control res
 
 対象データ:
 
-- Space / Source / Connection metadata / InstallConfig / Installation graph
+- Space / Source / Connection metadata / Provider Template / Provider Env Set /
+  provider env set policy / InstallConfig / DeploymentProfile / Installation graph
 - Run / RunGroup / Deployment / StateSnapshot / OutputSnapshot / Activity /
   audit ledger
-- R2 artifact manifest and encrypted state / raw output object inventory
-- billing account reference, credit balance, credit reservation, usage events
-- Installation service-data export or provider snapshot metadata
-- secret metadata and encrypted envelopes
+- projected output metadata and state snapshot pointers
+- Installation service-data export / provider snapshot / custom command archive
 
-Operator account-plane distribution は identity / payer / OIDC issuer records を
-持ちます。control backup は payer reference と workload service projection
-metadata を保持しますが、raw secret や payment processor credential は repo 外の
-operator vault に残します。
+Control backup は metadata、state/artifact manifest、billing ledger
+(`BillingAccount` / `SpaceSubscription` / `CreditBalance` / `UsageEvent` /
+`CreditReservation`)、audit/activity ledger を対象にします。raw state bytes と raw
+outputs は R2_STATE / R2_ARTIFACTS の encrypted object inventory と digest で
+復元・照合します。SecretBlob は encrypted envelope と metadata だけを扱い、raw
+secret や payment processor credential は repo 外の operator vault に残します。
+
+Takosumi platform worker は users / sessions / billing / OIDC issuer records も
+所有します。control backup は payer reference と OIDC discovery/JWKS に必要な
+public metadata を保持しますが、raw secret を含めません。
 
 対象外:
 
@@ -49,13 +55,13 @@ Customer-facing export は portability surface であり、operator backup の�
 
 ## Cadence
 
-| Drill                         | Frequency      | Environment                                   | Required evidence                                                              | Owner                              |
-| ----------------------------- | -------------- | --------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------- |
-| Control ledger restore        | monthly        | staging / isolated control-plane restore target | Space/Installation/Run/Deployment counts, state/output inventory, billing ledger smoke | Takosumi platform owner            |
-| Service-data restore sample   | monthly        | staging                                         | one Installation service-data restore transcript, smoke result, RTO / RPO sample       | platform on-call owner             |
-| Production restore simulation | quarterly      | production shadow / isolated recovery account   | dry-run transcript, latest backup freshness, restore plan review, access check         | platform owner + secondary on-call |
-| Backup inventory audit        | monthly        | staging + production                            | backup age, chain head, encryption key availability, retention window                  | storage owner                      |
-| Emergency restore tabletop    | twice per year | staging or meeting room                         | timeline, decision log, role assignment, runbook gaps                                  | incident commander pool            |
+| Drill                         | Frequency      | Environment                                     | Required evidence                                                                | Owner                              |
+| ----------------------------- | -------------- | ----------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------- |
+| Control ledger restore        | monthly        | staging / isolated control-plane restore target | Space/Installation/Run/Deployment counts, state/output pointer inventory         | Takosumi platform owner            |
+| Service-data restore sample   | monthly        | staging                                         | one Installation service-data restore transcript, smoke result, RTO / RPO sample | platform on-call owner             |
+| Production restore simulation | quarterly      | production shadow / isolated recovery account   | dry-run transcript, latest backup freshness, restore plan review, access check   | platform owner + secondary on-call |
+| Backup inventory audit        | monthly        | staging + production                            | backup age, chain head, encryption key availability, retention window            | storage owner                      |
+| Emergency restore tabletop    | twice per year | staging or meeting room                         | timeline, decision log, role assignment, runbook gaps                            | incident commander pool            |
 
 月次 staging restore を skip した場合は、次の production release promotion に
 platform owner の明示的な承認が必要です。
@@ -71,17 +77,22 @@ platform owner の明示的な承認が必要です。
 2. non-production issuer URL / hostname を持つ isolated restore target に restore
    する。
 3. 以下を検証する:
-   - Space / Source / Connection metadata / Installation / Dependency / Run /
-     Deployment / StateSnapshot / OutputSnapshot / UsageEvent の row 数が source
+   - Space / Source / Connection metadata / provider template entries /
+     provider env set connections and policy / compatibility reports / Installation /
+     DeploymentProfile / Dependency / SourceSnapshot / DependencySnapshot /
+     StateSnapshot / Run / RunGroup / Deployment / OutputSnapshot / Backup /
+     UsageEvent の row 数が source
      inventory と一致すること
    - `current_state_generation` と R2 state inventory が一致すること
    - OutputSnapshot projection と raw output artifact manifest が一致すること
+   - Provider Template resolution、Provider Env Set status
+     records、Connection status、egress/custom runner policy が復元後も一致すること
    - 既知の staging Space で Installation list / inspect が動くこと
    - billing mode、credit balance、reservation / usage records が live payment
      processor に接触せず load されること
-   - operator account-plane distribution を含む restore では、復元した issuer
-     から OIDC discovery と JWKS が serve され、`identity.primary.oidc` public
-     PKCE client metadata が secret なしで resolve できること
+   - Takosumi platform worker の identity / OIDC records を含む restore では、
+     復元した issuer から OIDC discovery と JWKS が serve され、必要な public
+     client metadata が secret なしで resolve できること
 4. RTO/RPO sample と復元 target URL を記録する。
 5. evidence を添付したら、isolated restore target を削除する。
 

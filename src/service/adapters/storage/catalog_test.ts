@@ -47,6 +47,10 @@ const mirroredMigrationFiles: readonly {
     fileName: "20260430000025_catalog_releases.sql",
     migrationId: "registry.catalog_releases.create",
   },
+  {
+    fileName: "20260430000043_takosumi_provider_templates.sql",
+    migrationId: "deploy.takosumi_provider_templates.create",
+  },
 ];
 
 test("migration catalog creates every declared storage table", () => {

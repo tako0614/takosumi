@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 import { getTableColumns, getTableName } from "drizzle-orm";
 import { getTableConfig as getPgTableConfig } from "drizzle-orm/pg-core";
 import { getTableConfig as getSqliteTableConfig } from "drizzle-orm/sqlite-core";
+import { ensureD1OpenTofuLedgerSchema } from "../../../../../../worker/src/d1_opentofu_store.ts";
+import { SqliteFakeD1 } from "../../../../domains/deploy-control/sqlite_fake_d1.ts";
 import * as d1Schema from "./d1.ts";
+import { deployControlLogicalTables } from "./logical.ts";
 import * as postgresSchema from "./postgres.ts";
 
 type ColumnMirror = {
@@ -19,6 +22,15 @@ type UniqueIndexMirror = {
 };
 
 type TableLike = Parameters<typeof getTableName>[0];
+
+type SqlitePragmaTableInfoRow = {
+  cid: number;
+  name: string;
+  type: string;
+  notnull: number;
+  dflt_value: string | null;
+  pk: number;
+};
 
 function columnsOf(table: TableLike): ColumnMirror[] {
   const columns = getTableColumns(table);
@@ -72,6 +84,21 @@ function pgUniqueIndexesOf(
   });
 }
 
+async function liveD1ColumnsOf(
+  db: SqliteFakeD1,
+  tableName: string,
+): Promise<ColumnMirror[]> {
+  const result = await db
+    .prepare(`pragma table_info(${tableName})`)
+    .all<SqlitePragmaTableInfoRow>();
+  return result.results.map((row) => ({
+    name: row.name,
+    notNull: row.notnull === 1 || row.pk > 0,
+    hasDefault: row.dflt_value !== null,
+    primary: row.pk > 0,
+  }));
+}
+
 const nn = (name: string): ColumnMirror => ({
   name,
   notNull: true,
@@ -104,16 +131,27 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
   expect(getTableName(d1Schema.connections)).toBe("connections");
   expect(columnsOf(d1Schema.connections)).toEqual([
     pk("id"),
-    nn("space_id"),
+    nullable("space_id"),
+    nn("provider"),
     nn("status"),
-    nn("record_json"),
+    nn("connection_json"),
     nn("created_at"),
     nn("updated_at"),
   ]);
 
   expect(getTableName(d1Schema.secretBlobs)).toBe("secret_blobs");
   expect(columnsOf(d1Schema.secretBlobs)).toEqual([
-    pk("connection_id"),
+    pk("id"),
+    nn("connection_id"),
+    nullable("space_id"),
+    nn("kind"),
+    nn("ciphertext"),
+    nn("encrypted_dek"),
+    nn("nonce"),
+    nn("aad"),
+    nn("key_version"),
+    nn("created_at"),
+    nullable("rotated_at"),
     nn("blob_json"),
   ]);
 
@@ -122,7 +160,6 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
   );
   expect(columnsOf(d1Schema.operatorConnectionDefaults)).toEqual([
     pk("id"),
-    nn("capability"),
     nn("provider"),
     nn("connection_id"),
     nn("record_json"),
@@ -132,8 +169,8 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
   expect(
     sqliteUniqueIndexesOf(d1Schema.operatorConnectionDefaults),
   ).toContainEqual({
-    name: "operator_connection_defaults_capability_idx",
-    columns: ["capability"],
+    name: "operator_connection_defaults_provider_idx",
+    columns: ["provider"],
     unique: true,
   });
 
@@ -143,7 +180,8 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("space_id"),
     nn("name"),
     nn("slug"),
-    nn("source_id"),
+    // Nullable: upload-origin installations (takosumi deploy) have no Source.
+    nullable("source_id"),
     nn("install_type"),
     nn("install_config_id"),
     nn("environment"),
@@ -161,6 +199,8 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
   );
   expect(columnsOf(d1Schema.capsuleCompatibilityReports)).toEqual([
     pk("id"),
+    nullable("source_id"),
+    nullable("installation_id"),
     nn("source_snapshot_id"),
     nn("level"),
     nn("findings_json"),
@@ -178,6 +218,7 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     pk("id"),
     nullable("run_group_id"),
     nn("space_id"),
+    nullable("source_id"),
     nullable("installation_id"),
     nullable("environment"),
     nn("type"),
@@ -206,12 +247,23 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("installation_id"),
     nn("environment"),
     nn("apply_run_id"),
-    nullable("source_snapshot_id"),
+    nn("source_snapshot_id"),
     nullable("dependency_snapshot_id"),
     nn("state_generation"),
-    nullable("output_snapshot_id"),
+    nn("output_snapshot_id"),
     nn("outputs_public_json"),
     nn("status"),
+    nn("created_at"),
+  ]);
+
+  expect(getTableName(d1Schema.artifacts)).toBe("artifacts");
+  expect(columnsOf(d1Schema.artifacts)).toEqual([
+    pk("id"),
+    nn("run_id"),
+    nn("kind"),
+    nn("object_key"),
+    nn("digest"),
+    nn("size_bytes"),
     nn("created_at"),
   ]);
 
@@ -227,9 +279,19 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("updated_at"),
   ]);
 
-  expect(getTableName(d1Schema.spaceSubscriptions)).toBe(
-    "space_subscriptions",
-  );
+  expect(getTableName(d1Schema.billingPlans)).toBe("plans");
+  expect(columnsOf(d1Schema.billingPlans)).toEqual([
+    pk("id"),
+    nn("name"),
+    nn("monthly_base_price"),
+    nn("included_credits"),
+    nn("limits_json"),
+    nn("record_json"),
+    nn("created_at"),
+    nn("updated_at"),
+  ]);
+
+  expect(getTableName(d1Schema.spaceSubscriptions)).toBe("space_subscriptions");
   expect(columnsOf(d1Schema.spaceSubscriptions)).toEqual([
     pk("id"),
     nn("space_id"),
@@ -265,15 +327,14 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("created_at"),
   ]);
 
-  expect(getTableName(d1Schema.creditReservations)).toBe(
-    "credit_reservations",
-  );
+  expect(getTableName(d1Schema.creditReservations)).toBe("credit_reservations");
   expect(columnsOf(d1Schema.creditReservations)).toEqual([
     pk("id"),
     nn("space_id"),
     nn("run_id"),
     nn("estimated_credits"),
     nn("status"),
+    nn("mode"),
     nn("record_json"),
     nn("created_at"),
     nn("expires_at"),
@@ -286,7 +347,8 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     pk("id"),
     nn("run_id"),
     nn("space_id"),
-    nn("installation_id"),
+    nullable("installation_id"),
+    nullable("source_id"),
     nn("connection_id"),
     nn("phase"),
     nn("record_json"),
@@ -331,16 +393,162 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
   expect(columnsOf(d1Schema.backups)).toEqual([
     pk("id"),
     nn("space_id"),
+    nullable("installation_id"),
+    nullable("environment"),
+    nullable("created_by_run_id"),
     nn("record_json"),
     nn("created_at"),
   ]);
+});
+
+test("Worker D1 bootstrap mirrors every logical D1 Drizzle table", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  for (const logicalName of deployControlLogicalTables) {
+    const table = d1Schema[logicalName];
+    expect(await liveD1ColumnsOf(db, getTableName(table)), logicalName).toEqual(
+      columnsOf(table),
+    );
+  }
+});
+
+test("Worker D1 bootstrap additively migrates older ledger tables", async () => {
+  const db = new SqliteFakeD1();
+	  await db.prepare(
+	    `create table connections (
+	      id text primary key,
+	      status text not null,
+      record_json text not null,
+      created_at text not null,
+      updated_at text not null
+    )`,
+  ).run();
+  await db.prepare(
+    `create table installations (
+      id text primary key,
+      space_id text not null,
+      name text not null,
+      slug text not null,
+      source_id text not null,
+      install_type text not null,
+      install_config_id text not null,
+      environment text not null,
+      current_deployment_id text,
+      current_state_generation integer not null default 0,
+      status text not null,
+      record_json text not null,
+      created_at text not null,
+      updated_at text not null,
+      unique (space_id, name, environment)
+    )`,
+  ).run();
+  await db.prepare(
+    `create table runs (
+      id text primary key,
+      run_group_id text,
+      space_id text not null,
+      installation_id text not null,
+      environment text not null,
+      type text not null,
+      status text not null,
+      run_json text not null,
+      created_at text not null default ""
+    )`,
+  ).run();
+  await db.prepare(
+    `create table credential_mint_events (
+      id text primary key,
+      run_id text not null,
+      space_id text not null,
+      installation_id text,
+      connection_id text not null,
+      phase text not null,
+      record_json text not null,
+      created_at text not null
+    )`,
+  ).run();
+  await db.prepare(
+    `create table credit_reservations (
+      id text primary key,
+      space_id text not null,
+      run_id text not null,
+      estimated_credits integer not null,
+      status text not null,
+      record_json text not null,
+      created_at text not null,
+      expires_at text not null
+    )`,
+  ).run();
+  await db.prepare(
+    `insert into credit_reservations (
+      id,
+      space_id,
+      run_id,
+      estimated_credits,
+      status,
+      record_json,
+      created_at,
+      expires_at
+    ) values (
+      'cr_old',
+      'space_1',
+      'run_1',
+      10,
+      'reserved',
+      '{}',
+      '2026-06-08T00:00:00.000Z',
+      '2026-06-08T01:00:00.000Z'
+    )`,
+  ).run();
+  await db.prepare(
+    `create table backups (
+      id text primary key,
+      space_id text not null,
+      record_json text not null,
+      created_at text not null
+    )`,
+  ).run();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  expect(await liveD1ColumnsOf(db, "connections")).toContainEqual(
+    nullable("space_id"),
+  );
+  expect(await liveD1ColumnsOf(db, "connections")).toContainEqual(
+    nn("provider"),
+  );
+  expect(await liveD1ColumnsOf(db, "connections")).toContainEqual(
+    nn("connection_json"),
+  );
+  expect(await liveD1ColumnsOf(db, "installations")).toContainEqual(
+    nullable("current_output_snapshot_id"),
+  );
+  const runColumns = await liveD1ColumnsOf(db, "runs");
+  expect(runColumns).toContainEqual(nullable("source_id"));
+  expect(runColumns).toContainEqual(nullable("installation_id"));
+  expect(runColumns).toContainEqual(nullable("environment"));
+  expect(await liveD1ColumnsOf(db, "credential_mint_events")).toContainEqual(
+    nullable("source_id"),
+  );
+  expect(await liveD1ColumnsOf(db, "credit_reservations")).toContainEqual(
+    defaulted("mode"),
+  );
+  const migratedReservation = await db
+    .prepare(`select mode from credit_reservations where id = 'cr_old'`)
+    .first<{ mode: string }>();
+  expect(migratedReservation?.mode).toBe("disabled");
+  const backupColumns = await liveD1ColumnsOf(db, "backups");
+  expect(backupColumns).toContainEqual(nullable("installation_id"));
+  expect(backupColumns).toContainEqual(nullable("environment"));
+  expect(backupColumns).toContainEqual(nullable("created_by_run_id"));
 });
 
 test("Postgres Drizzle schema mirrors critical migration catalog tables", () => {
   expect(getTableName(postgresSchema.connections)).toBe("takosumi_connections");
   expect(columnsOf(postgresSchema.connections)).toEqual([
     pk("id"),
-    nn("space_id"),
+    nullable("space_id"),
     nn("provider"),
     nn("status"),
     nn("connection_json"),
@@ -352,7 +560,17 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     "takosumi_connection_secret_blobs",
   );
   expect(columnsOf(postgresSchema.secretBlobs)).toEqual([
-    pk("connection_id"),
+    pk("id"),
+    nn("connection_id"),
+    nullable("space_id"),
+    nn("kind"),
+    nn("ciphertext"),
+    nn("encrypted_dek"),
+    nn("nonce"),
+    nn("aad"),
+    nn("key_version"),
+    nn("created_at"),
+    nullable("rotated_at"),
     nn("blob_json"),
   ]);
 
@@ -361,7 +579,6 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
   );
   expect(columnsOf(postgresSchema.operatorConnectionDefaults)).toEqual([
     pk("id"),
-    nn("capability"),
     nn("provider"),
     nn("connection_id"),
     nn("default_json"),
@@ -371,8 +588,8 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
   expect(
     pgUniqueIndexesOf(postgresSchema.operatorConnectionDefaults),
   ).toContainEqual({
-    name: "takosumi_operator_connection_defaults_capability_unique",
-    columns: ["capability"],
+    name: "takosumi_operator_connection_defaults_provider_unique",
+    columns: ["provider"],
     unique: true,
   });
 
@@ -384,7 +601,8 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("space_id"),
     nn("name"),
     nn("environment"),
-    nn("source_id"),
+    // Nullable: upload-origin installations (takosumi deploy) have no Source.
+    nullable("source_id"),
     nn("install_config_id"),
     nullable("current_deployment_id"),
     nn("status"),
@@ -398,6 +616,8 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
   );
   expect(columnsOf(postgresSchema.capsuleCompatibilityReports)).toEqual([
     pk("id"),
+    nullable("source_id"),
+    nullable("installation_id"),
     nn("source_snapshot_id"),
     nn("level"),
     nn("findings_json"),
@@ -415,6 +635,7 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     pk("id"),
     nn("kind"),
     nn("space_id"),
+    nullable("source_id"),
     nullable("installation_id"),
     nn("created_at"),
     nn("run_json"),
@@ -461,6 +682,18 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("provider"),
     nn("status"),
     nn("account_json"),
+    nn("created_at"),
+    nn("updated_at"),
+  ]);
+
+  expect(getTableName(postgresSchema.billingPlans)).toBe("takosumi_plans");
+  expect(columnsOf(postgresSchema.billingPlans)).toEqual([
+    pk("id"),
+    nn("name"),
+    nn("monthly_base_price"),
+    nn("included_credits"),
+    nn("limits_json"),
+    nn("plan_json"),
     nn("created_at"),
     nn("updated_at"),
   ]);
@@ -516,6 +749,7 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("run_id"),
     nn("estimated_credits"),
     nn("status"),
+    nn("mode"),
     nn("reservation_json"),
     nn("created_at"),
     nn("expires_at"),
@@ -528,7 +762,8 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     pk("id"),
     nn("run_id"),
     nn("space_id"),
-    nn("installation_id"),
+    nullable("installation_id"),
+    nullable("source_id"),
     nn("connection_id"),
     nn("phase"),
     nn("event_json"),
@@ -577,6 +812,9 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
   expect(columnsOf(postgresSchema.backups)).toEqual([
     pk("id"),
     nn("space_id"),
+    nullable("installation_id"),
+    nullable("environment"),
+    nullable("created_by_run_id"),
     nn("backup_json"),
     nn("created_at"),
   ]);

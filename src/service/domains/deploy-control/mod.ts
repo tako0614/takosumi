@@ -32,7 +32,6 @@ import type {
   DispatchGeneratedRoot,
   DispatchSourceArchive,
   DispatchStateScope,
-  DispatchTemplateRef,
   GetInstallationResponse,
   InstallBuildConfig,
   InstallConfig,
@@ -50,8 +49,10 @@ import type {
   PlanResourceChange,
   PlanRun,
   PlanRunResponse,
+  PublicPlanRun,
   PlanRunSummary,
   PlanRunTemplateBinding,
+  PolicyDecision,
   PolicyConfig,
   RunnerProfile,
   RunnerStateLockEvidence,
@@ -59,18 +60,45 @@ import type {
   RunStatus,
   TemplateDefinition,
   TestConnectionResponse,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import type {
-  CapabilityMintEntry,
+  ListProviderTemplatesResponse,
+  ProviderTemplate,
+  ProviderTemplateResponse,
+} from "takosumi-contract/providers";
+import { CredentialBundle } from "../../adapters/vault/mod.ts";
+import type {
+  ProviderBindingMintEntry,
   ConnectionVault,
-  CredentialBundle,
 } from "../../adapters/vault/mod.ts";
-import type { Capability } from "takosumi-contract/capability-bindings";
+import type { PublicInstallation } from "takosumi-contract/installations";
+import type {
+  BillingAccount,
+  BillingMode,
+  BillingPlan,
+  BillingProvider,
+  BillingSettings,
+  CreditBalance,
+  CreditReservation,
+  InvoiceUsageReconciliation,
+  ManagedResourceUsageMeter,
+  SpaceSubscription,
+  UsageEvent,
+  UsageEventKind,
+  UsageEventSource,
+} from "takosumi-contract/billing";
+import { billingReservationRequired } from "takosumi-contract/billing";
+import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import type { SourcesService } from "../sources/mod.ts";
 import type {
+  CapsuleCompatibilityReport,
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
+import {
+  providerCredentialArgs,
+  providerEnvRule,
+} from "takosumi-contract/provider-env-rules";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
@@ -101,7 +129,7 @@ import {
   type RecordActivityInput,
 } from "../activity/mod.ts";
 import { createDefaultRunnerProfiles } from "./runner_profiles.ts";
-import { evaluatePolicy } from "./policy.ts";
+import { evaluatePolicy, providerMatches } from "./policy.ts";
 import {
   normalizeProviders,
   normalizeVariables,
@@ -116,9 +144,10 @@ import {
   normalizeDeploymentOutputs,
   normalizePlanArtifact,
   normalizePlanSummary,
+  projectOutputAllowlistPublicOutputs,
+  projectOutputAllowlistSpaceOutputs,
   projectTemplatePublicOutputs,
   redactRunDiagnostics,
-  spaceOutputsFromOpenTofu,
   stateLockEvidence,
 } from "./projection.ts";
 import { evaluateTemplatePlanPolicy } from "./template_policy.ts";
@@ -141,8 +170,8 @@ import {
   validateTemplateInputs,
 } from "../templates/mod.ts";
 import {
-  type CapabilityKind,
-  type CapabilityProvider,
+  type RootProviderBinding,
+  generateGenericCapsuleRoot,
   generateInstallationRoot,
   type GeneratedRootInstallType,
   generateRootModule,
@@ -176,7 +205,7 @@ import {
 import {
   ConnectionsService,
   mintableConnectionIds,
-  type ResolvedCapability,
+  type ResolvedProviderBinding,
 } from "../connections/mod.ts";
 import { SourceManagement } from "./source_management.ts";
 import { ConnectionManagement } from "./connection_management.ts";
@@ -195,25 +224,34 @@ export {
 export { providerMatches } from "./policy.ts";
 export { deploymentOutputsFromOpenTofu } from "./projection.ts";
 
+function publicInstallation(installation: Installation): PublicInstallation {
+  const { installType: _installType, ...publicRecord } = installation;
+  return publicRecord;
+}
+
+function publicPlanRun(planRun: PlanRun): PublicPlanRun {
+  const { templateBinding: _templateBinding, ...publicRecord } = planRun;
+  return publicRecord;
+}
+
 /**
  * Minted provider credential env vars threaded onto the runner dispatch payload
- * only. The controller fills this from `vault.mint(...).env` in the queue
+ * only. The controller fills this from the Connection Vault in the queue
  * consumer just before dispatch; it is NEVER persisted to the store and NEVER
- * logged. The runner filters it through provider-env-rules and falls back to its
- * own `Bun.env` when absent.
+ * logged. For provider-using runs, an absent Vault is fail-closed before runner
+ * dispatch so the runner never falls back to ambient provider credentials.
  */
 export type RunCredentials = Readonly<Record<string, string>>;
 
 /**
- * Template dispatch fields threaded onto a run job (Phase 1C). When present the
- * runner runs `tofu` in `/work/generated-root` against the baked-in template
- * module; the optional build phase runs first in the user source checkout with
- * NO credentials. These map 1:1 onto the `request.template` / `generatedRoot` /
- * `build` fields of the `takosumi.opentofu-run@v1` dispatch envelope.
+ * Generated-root dispatch fields threaded onto a run job. `generatedRoot` is
+ * the canonical path for both built-in first-party modules and generic
+ * Capsules; bundled modules are carried as `generatedRoot.moduleFiles`. The optional
+ * build phase runs first in the user source checkout with NO credentials.
  */
 export interface RunTemplateDispatch {
-  readonly template?: DispatchTemplateRef;
   readonly generatedRoot?: DispatchGeneratedRoot;
+  readonly outputAllowlist?: InstallConfig["outputAllowlist"];
   readonly build?: DispatchBuildSpec;
 }
 
@@ -252,6 +290,9 @@ export interface OpenTofuPlanJob
   readonly planRun: PlanRun;
   readonly runnerProfile: RunnerProfile;
   readonly variables: Readonly<Record<string, JsonValue>>;
+  readonly providerInstallationPolicy?: {
+    readonly requireMirror: boolean;
+  };
   readonly credentials?: RunCredentials;
 }
 
@@ -261,6 +302,9 @@ export interface OpenTofuApplyJob
   readonly planRun: PlanRun;
   readonly planArtifact: OpenTofuPlanArtifact;
   readonly runnerProfile: RunnerProfile;
+  readonly providerInstallationPolicy?: {
+    readonly requireMirror: boolean;
+  };
   readonly credentials?: RunCredentials;
 }
 
@@ -271,6 +315,9 @@ export interface OpenTofuDestroyJob
   readonly planArtifact: OpenTofuPlanArtifact;
   readonly installation: Installation;
   readonly runnerProfile: RunnerProfile;
+  readonly providerInstallationPolicy?: {
+    readonly requireMirror: boolean;
+  };
   readonly credentials?: RunCredentials;
 }
 
@@ -280,6 +327,7 @@ export interface OpenTofuPlanResult {
   readonly requiredProviders?: readonly string[];
   readonly sourceCommit?: string;
   readonly providerLockDigest?: string;
+  readonly providerInstallation?: readonly ProviderInstallationEvidence[];
   readonly summary?: PlanRunSummary;
   readonly diagnostics?: readonly RunDiagnostic[];
   /**
@@ -290,10 +338,23 @@ export interface OpenTofuPlanResult {
   readonly planResourceChanges?: readonly PlanResourceChange[];
 }
 
+export interface ProviderInstallationEvidence {
+  readonly provider: string;
+  readonly mirrored: boolean;
+  readonly installationMethod: "filesystem_mirror" | "direct" | "unknown";
+  readonly mirrorPath?: string;
+  readonly attested?: boolean;
+  readonly attestationMethod?: "forced_filesystem_mirror_init";
+  readonly cliConfigDigest?: string;
+  readonly installedPath?: string;
+  readonly installedDigest?: string;
+}
+
 export interface OpenTofuApplyResult {
   readonly outputs?: OpenTofuOutputEnvelope | readonly DeploymentOutput[];
   readonly stateLock?: RunnerStateLockEvidence;
   readonly diagnostics?: readonly RunDiagnostic[];
+  readonly providerInstallation?: readonly ProviderInstallationEvidence[];
   /**
    * Plaintext digest of the persisted OpenTofu state, echoed by the runner DO
    * after it sealed + wrote the state object to R2_STATE (M2 env-driven runs).
@@ -312,6 +373,7 @@ export interface OpenTofuApplyResult {
 
 export interface OpenTofuDestroyResult {
   readonly diagnostics?: readonly RunDiagnostic[];
+  readonly providerInstallation?: readonly ProviderInstallationEvidence[];
 }
 
 export interface OpenTofuRunner {
@@ -404,10 +466,172 @@ export type EnqueueRun = (dispatch: OpenTofuRunDispatch) => Promise<void>;
  * heartbeat means a sibling consumer holds the run and the duplicate no-ops.
  */
 const RUN_HEARTBEAT_STALE_MS = 10 * 60 * 1000;
+const DISABLED_BILLING_SETTINGS: BillingSettings = {
+  mode: "disabled",
+  provider: "none",
+};
+
+export interface ReconcileStripeSpaceSubscriptionInput {
+  readonly stripeCustomerId: string;
+  readonly stripeSubscriptionId: string;
+  readonly stripePriceId?: string;
+  readonly planCode: string;
+  readonly status: string;
+  readonly currentPeriodStartUnix?: number;
+  readonly currentPeriodEndUnix?: number;
+}
+const BILLING_RESERVATION_TTL_MS = 24 * 60 * 60 * 1000;
+const PROVIDER_CATALOG_SEED_TIMESTAMP = "2026-06-08T00:00:00.000Z";
+
+function initialProviderTemplates(): readonly ProviderTemplate[] {
+  return [
+    {
+      id: "cloudflare",
+      providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+      displayName: "Cloudflare",
+      recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
+      helpers: ["cloudflare_api_token", "cloudflare_oauth"],
+      credentialSources: ["takosumi_managed", "user_env_set"],
+      takosumiManagedAvailable: true,
+      allowedResources: [
+        "cloudflare_workers_script",
+        "cloudflare_workers_route",
+        "cloudflare_dns_record",
+        "cloudflare_r2_bucket",
+      ],
+      allowedDataSources: [],
+      policyPackId: "cloudflare-default",
+      costEstimatorId: "cloudflare-basic",
+      docsUrl: "https://developers.cloudflare.com/",
+      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
+      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
+    },
+    {
+      id: "aws",
+      providerSource: "registry.opentofu.org/hashicorp/aws",
+      displayName: "AWS",
+      recommendedEnvNames: [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_REGION",
+      ],
+      helpers: ["aws_assume_role", "generic_env"],
+      credentialSources: ["user_env_set"],
+      takosumiManagedAvailable: false,
+      allowedResources: ["aws_s3_bucket", "aws_s3_bucket_public_access_block"],
+      allowedDataSources: [],
+      policyPackId: "aws-basic",
+      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
+      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
+    },
+    {
+      id: "gcp",
+      providerSource: "registry.opentofu.org/hashicorp/google",
+      displayName: "Google Cloud",
+      recommendedEnvNames: [
+        "GOOGLE_CREDENTIALS",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+      ],
+      helpers: [
+        "gcp_oauth_bootstrap",
+        "gcp_service_account_impersonation",
+        "generic_env",
+      ],
+      credentialSources: ["user_env_set"],
+      takosumiManagedAvailable: false,
+      allowedResources: [
+        "google_storage_bucket",
+        "google_cloud_run_v2_service",
+      ],
+      allowedDataSources: [],
+      policyPackId: "gcp-basic",
+      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
+      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
+    },
+    {
+      id: "github",
+      providerSource: "registry.opentofu.org/integrations/github",
+      displayName: "GitHub",
+      recommendedEnvNames: ["GITHUB_TOKEN"],
+      helpers: ["generic_env"],
+      credentialSources: ["user_env_set"],
+      takosumiManagedAvailable: false,
+      allowedResources: [],
+      allowedDataSources: [],
+      policyPackId: "github-basic",
+      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
+      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
+    },
+    {
+      id: "kubernetes",
+      providerSource: "registry.opentofu.org/hashicorp/kubernetes",
+      displayName: "Kubernetes",
+      recommendedEnvNames: ["KUBE_CONFIG_PATH", "KUBE_HOST", "KUBE_TOKEN"],
+      helpers: ["generic_env"],
+      credentialSources: ["user_env_set"],
+      takosumiManagedAvailable: false,
+      allowedResources: [],
+      allowedDataSources: [],
+      policyPackId: "kubernetes-basic",
+      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
+      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
+    },
+  ];
+}
+
+function validateStringArray(
+  value: unknown,
+  field: string,
+  options: { readonly allowEmpty: boolean },
+): asserts value is readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field} must be an array`,
+    );
+  }
+  if (!options.allowEmpty && value.length === 0) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field} must contain at least one value`,
+    );
+  }
+  for (const item of value) {
+    requireNonEmptyString(item, `${field}[]`);
+  }
+}
+
+export interface RecordMeteredUsageInput {
+  readonly installationId?: string;
+  readonly runId?: string;
+  readonly kind: UsageEventKind;
+  readonly quantity: number;
+  readonly credits: number;
+  readonly source: Exclude<UsageEventSource, "runner">;
+  readonly idempotencyKey: string;
+  readonly createdAt?: string;
+}
+
+export interface RecordManagedResourceUsageInput {
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  readonly meters: readonly ManagedResourceUsageMeter[];
+}
+
+export interface ReconcileInvoiceUsageInput {
+  readonly invoiceId: string;
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  readonly invoicedCredits: number;
+  readonly createdAt?: string;
+}
 
 export interface OpenTofuDeploymentControllerDependencies {
   readonly store?: OpenTofuDeploymentStore;
   readonly runner?: OpenTofuRunner;
+  readonly userEnvSetProviderRunner?: OpenTofuRunner;
   readonly runnerProfiles?: readonly RunnerProfile[];
   readonly defaultRunnerProfileId?: string;
   readonly newId?: (prefix: string) => string;
@@ -438,7 +662,7 @@ export interface OpenTofuDeploymentControllerDependencies {
    */
   readonly enqueueRun?: EnqueueRun;
   /**
-   * Official template catalog (Phase 1C). Defaults to the built-in registry.
+   * Built-in first-party module registry. Defaults to the bundled registry.
    * Resolves template-backed plan runs, validates inputs, and drives rootgen.
    */
   readonly templateRegistry?: TemplateRegistry;
@@ -467,6 +691,11 @@ export interface OpenTofuDeploymentControllerDependencies {
    * dependency injection; values are never persisted outside DependencySnapshot.
    */
   readonly sensitiveOutputResolver?: SensitiveOutputResolver;
+  /**
+   * Operator/self-host billing default (§28). Space.billingSettings overrides
+   * this. Omitted means self-host style `disabled`.
+   */
+  readonly defaultBillingSettings?: BillingSettings;
 }
 
 export interface DeployControlActorContext {
@@ -477,22 +706,35 @@ export interface DeployControlActorContext {
  * Install-type wiring for an installation-driven template plan (§13). Carried
  * through {@link PlanRunInternalContext} so {@link
  * OpenTofuDeploymentController.createPlanRun} can drive `generateInstallationRoot`
- * (installType-aware generated root + per-capability provider aliases + the
- * `app_source` build) instead of the raw {@link generateRootModule}. Absent for
- * the raw `/v1/plan-runs` template path (no installation context = no
- * capabilities), which stays on `generateRootModule`.
+ * (installType-aware generated root + provider aliases + the
+ * `app_source` build) instead of the raw {@link generateRootModule}. Public
+ * `/api` calls always target an Installation; the low-level compatibility path
+ * backfills this context from the Installation row when callers omit it.
  */
 interface InstallTypePlanContext {
   /** §13 generated-root install type (core / opentofu_module / app_source). */
   readonly installType: GeneratedRootInstallType;
-  /** Per-capability provider mapping derived from the resolved capabilities. */
-  readonly capabilityProviders: readonly CapabilityProvider[];
+  /** Provider mapping derived from the resolved provider bindings. */
+  readonly providerBindings: readonly RootProviderBinding[];
   /**
-   * Manual-mode capability values flattened into module input overrides (§13
+   * Manual-mode provider values flattened into module input overrides (§13
    * decision: manual values override the InstallConfig variableMapping).
    */
   readonly manualValues: Readonly<Record<string, JsonValue>>;
   /** InstallConfig.build, when enabled (overrides the template build). */
+  readonly build?: DispatchBuildSpec;
+}
+
+interface GenericRootPlanContext {
+  readonly providerBindings: readonly RootProviderBinding[];
+  readonly outputAllowlist: InstallConfig["outputAllowlist"];
+  readonly moduleFiles?: readonly OpenTofuCapsuleSourceFile[];
+  readonly build?: DispatchBuildSpec;
+}
+
+interface GenericRootDispatchContext {
+  readonly generatedRoot: DispatchGeneratedRoot;
+  readonly outputAllowlist: InstallConfig["outputAllowlist"];
   readonly build?: DispatchBuildSpec;
 }
 
@@ -505,10 +747,13 @@ interface InstallTypePlanContext {
 interface PlanRunInternalContext {
   readonly installationContext?: PlanRunInstallationContext;
   readonly sourceSnapshotId?: string;
+  readonly compatibilityReportId?: string;
   /** The Installation's current state generation (its latest StateSnapshot, or 0). */
   readonly baseStateGeneration?: number;
   /** Install-type wiring for an installation-driven template plan (§13). */
   readonly installTypePlan?: InstallTypePlanContext;
+  /** Generated-root dispatch for a non-template OpenTofu Capsule (§7). */
+  readonly genericRootDispatch?: GenericRootDispatchContext;
   /**
    * RunGroup this plan belongs to (spec §19 / §24). Stamped onto the PlanRun by
    * the RunGroup space-update path so the §19 Run projects `runGroupId` and the
@@ -522,6 +767,13 @@ interface PlanRunInternalContext {
    * rejected by `createApplyRun`. Set only by `createInstallationDriftCheck`.
    */
   readonly driftCheck?: true;
+  /**
+   * Dependency pins resolved by the Installation planning path before the PlanRun
+   * row exists. `createPlanRun` persists them immediately after creating the run
+   * row and before queue dispatch, so runner dispatch can restore remote_state
+   * from the same DependencySnapshot apply will verify.
+   */
+  readonly resolvedDependencies?: ResolvedDependencies;
 }
 
 /**
@@ -591,6 +843,7 @@ export interface CreateInstallationPlanInternal {
 export class OpenTofuDeploymentController {
   readonly #store: OpenTofuDeploymentStore;
   readonly #runner?: OpenTofuRunner;
+  readonly #userEnvSetProviderRunner?: OpenTofuRunner;
   readonly #vault?: ConnectionVault;
   readonly #sourcesService?: SourcesService;
   readonly #defaultRunnerProfileId: string;
@@ -601,7 +854,9 @@ export class OpenTofuDeploymentController {
   readonly #installationCoordination?: InstallationCoordination;
   readonly #activity: ActivityRecorder;
   readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
+  readonly #defaultBillingSettings: BillingSettings;
   readonly #seededProfiles: Promise<void>;
+  readonly #seededProviderTemplates: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
   readonly #sources: SourceManagement;
   readonly #connections: ConnectionManagement;
@@ -610,6 +865,7 @@ export class OpenTofuDeploymentController {
   constructor(dependencies: OpenTofuDeploymentControllerDependencies = {}) {
     this.#store = dependencies.store ?? new InMemoryOpenTofuDeploymentStore();
     this.#runner = dependencies.runner;
+    this.#userEnvSetProviderRunner = dependencies.userEnvSetProviderRunner;
     this.#vault = dependencies.vault;
     this.#sourcesService = dependencies.sourcesService;
     this.#sources = new SourceManagement(dependencies.sourcesService);
@@ -617,6 +873,8 @@ export class OpenTofuDeploymentController {
     this.#installationCoordination = dependencies.installationCoordination;
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
+    this.#defaultBillingSettings =
+      dependencies.defaultBillingSettings ?? DISABLED_BILLING_SETTINGS;
     this.#defaultRunnerProfileId =
       dependencies.defaultRunnerProfileId ?? "cloudflare-default";
     this.#newId = dependencies.newId ?? newId;
@@ -631,11 +889,338 @@ export class OpenTofuDeploymentController {
     this.#seededProfiles = this.#seedRunnerProfiles(
       dependencies.runnerProfiles ?? createDefaultRunnerProfiles(this.#now()),
     );
+    this.#seededProviderTemplates = this.#seedProviderTemplates(
+      initialProviderTemplates(),
+    );
   }
 
   async listRunnerProfiles(): Promise<ListRunnerProfilesResponse> {
     await this.#seededProfiles;
     return { runnerProfiles: await this.#store.listRunnerProfiles() };
+  }
+
+  async listProviderTemplates(): Promise<ListProviderTemplatesResponse> {
+    await this.#seededProviderTemplates;
+    return { providers: await this.#store.listProviderTemplates() };
+  }
+
+  async #seedProviderTemplates(
+    entries: readonly ProviderTemplate[],
+  ): Promise<void> {
+    for (const entry of entries) {
+      await this.#store.putProviderTemplate(entry);
+    }
+  }
+
+  async getProviderTemplate(
+    providerId: string,
+  ): Promise<ProviderTemplateResponse> {
+    requireNonEmptyString(providerId, "providerId");
+    await this.#seededProviderTemplates;
+    const provider = await this.#store.getProviderTemplate(providerId);
+    if (!provider) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `provider ${providerId} not found`,
+      );
+    }
+    return { provider };
+  }
+
+  async getSpaceBilling(spaceId: string): Promise<{
+    readonly billing: {
+      readonly settings: BillingSettings;
+      readonly balance?: CreditBalance;
+      readonly account?: BillingAccount;
+      readonly subscription?: SpaceSubscription;
+      readonly plan?: BillingPlan;
+    };
+  }> {
+    requireNonEmptyString(spaceId, "spaceId");
+    await this.#requireSpace(spaceId);
+    await this.#reconcileSpaceMonthlyCredits(spaceId);
+    const settings = await this.#billingSettingsForSpace(spaceId);
+    const balance = await this.#store.getCreditBalance(spaceId);
+    const account = await this.#store.getBillingAccountForOwner(
+      "space",
+      spaceId,
+    );
+    const subscription = await this.#store.getSpaceSubscription(spaceId);
+    const plan = subscription
+      ? await this.#store.getBillingPlan(subscription.planId)
+      : undefined;
+    return {
+      billing: {
+        settings,
+        ...(balance ? { balance } : {}),
+        ...(account ? { account } : {}),
+        ...(subscription ? { subscription } : {}),
+        ...(plan ? { plan } : {}),
+      },
+    };
+  }
+
+  async listSpaceUsage(spaceId: string): Promise<{
+    readonly usageEvents: readonly UsageEvent[];
+  }> {
+    requireNonEmptyString(spaceId, "spaceId");
+    await this.#requireSpace(spaceId);
+    return { usageEvents: await this.#store.listUsageEvents(spaceId) };
+  }
+
+  async recordMeteredUsage(
+    spaceId: string,
+    input: RecordMeteredUsageInput,
+  ): Promise<{ readonly usageEvent: UsageEvent }> {
+    requireNonEmptyString(spaceId, "spaceId");
+    await this.#requireSpace(spaceId);
+    if (input.source === "billing_reconciliation") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "usage event source must be resource_meter or manual_adjustment",
+      );
+    }
+    if (!isExternalOperatorUsageEventSource(input.source)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "usage event source must be resource_meter or manual_adjustment",
+      );
+    }
+    const usageEvent = await this.#store.putUsageEvent(
+      normalizeMeteredUsageEvent(
+        spaceId,
+        input,
+        () => this.#newId("usage"),
+        () => new Date(this.#now()).toISOString(),
+      ),
+    );
+    return { usageEvent };
+  }
+
+  async #recordBillingReconciliationUsage(
+    spaceId: string,
+    input: Omit<RecordMeteredUsageInput, "source"> & {
+      readonly source: "billing_reconciliation";
+    },
+  ): Promise<{ readonly usageEvent: UsageEvent }> {
+    const usageEvent = await this.#store.putUsageEvent(
+      normalizeMeteredUsageEvent(
+        spaceId,
+        input,
+        () => this.#newId("usage"),
+        () => new Date(this.#now()).toISOString(),
+      ),
+    );
+    return { usageEvent };
+  }
+
+  async #recordResourceMeterUsage(
+    spaceId: string,
+    input: Omit<RecordMeteredUsageInput, "source">,
+  ): Promise<{ readonly usageEvent: UsageEvent }> {
+    const usageEvent = await this.#store.putUsageEvent(
+      normalizeMeteredUsageEvent(
+        spaceId,
+        {
+          ...input,
+          source: "resource_meter",
+        },
+        () => this.#newId("usage"),
+        () => new Date(this.#now()).toISOString(),
+      ),
+    );
+    return { usageEvent };
+  }
+
+  async recordManagedResourceUsage(
+    spaceId: string,
+    input: RecordManagedResourceUsageInput,
+  ): Promise<{ readonly usageEvents: readonly UsageEvent[] }> {
+    requireNonEmptyString(spaceId, "spaceId");
+    await this.#requireSpace(spaceId);
+    const period = normalizeUsagePeriod(input);
+    const usageEvents: UsageEvent[] = [];
+    for (const meter of input.meters) {
+      const recorded = await this.#recordResourceMeterUsage(spaceId, {
+        ...(meter.installationId
+          ? { installationId: meter.installationId }
+          : {}),
+        kind: meter.kind,
+        quantity: meter.quantity,
+        credits: meter.credits,
+        idempotencyKey: [
+          "managed-resource",
+          spaceId,
+          period.periodStart,
+          period.periodEnd,
+          meter.meterId,
+          meter.installationId ?? "space",
+          meter.kind,
+        ].join(":"),
+        createdAt: period.periodEnd,
+      });
+      usageEvents.push(recorded.usageEvent);
+    }
+    return { usageEvents };
+  }
+
+  async reconcileInvoiceUsage(
+    spaceId: string,
+    input: ReconcileInvoiceUsageInput,
+  ): Promise<InvoiceUsageReconciliation> {
+    requireNonEmptyString(spaceId, "spaceId");
+    await this.#requireSpace(spaceId);
+    requireNonEmptyString(input.invoiceId, "invoiceId");
+    const period = normalizeInvoiceUsagePeriod(input);
+    const events = await this.#store.listUsageEvents(spaceId);
+    const meteredCredits = events
+      .filter((event) => isMeteredInvoiceUsageSource(event.source))
+      .filter((event) =>
+        isUsageEventInInvoicePeriod(
+          event,
+          period.periodStart,
+          period.periodEnd,
+        ),
+      )
+      .reduce((sum, event) => sum + event.credits, 0);
+    const adjustmentCredits = input.invoicedCredits - meteredCredits;
+    const { usageEvent } = await this.#recordBillingReconciliationUsage(
+      spaceId,
+      {
+      kind: "operation",
+      quantity: 1,
+      credits: adjustmentCredits,
+      source: "billing_reconciliation",
+        idempotencyKey: [
+          "invoice-reconciliation",
+          spaceId,
+          input.invoiceId,
+          period.periodStart,
+          period.periodEnd,
+        ].join(":"),
+      createdAt: input.createdAt ?? new Date(this.#now()).toISOString(),
+      },
+    );
+    return {
+      invoiceId: input.invoiceId,
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      meteredCredits,
+      invoicedCredits: input.invoicedCredits,
+      adjustmentCredits,
+      usageEvent,
+    };
+  }
+
+  async listSpaceCreditReservations(spaceId: string): Promise<{
+    readonly creditReservations: readonly CreditReservation[];
+  }> {
+    requireNonEmptyString(spaceId, "spaceId");
+    await this.#requireSpace(spaceId);
+    return {
+      creditReservations: await this.#store.listCreditReservations(spaceId),
+    };
+  }
+
+  async topUpSpaceCredits(
+    spaceId: string,
+    input: { readonly credits: number },
+  ): Promise<{ readonly balance: CreditBalance }> {
+    requireNonEmptyString(spaceId, "spaceId");
+    await this.#requireSpace(spaceId);
+    if (
+      !Number.isInteger(input.credits) ||
+      !Number.isFinite(input.credits) ||
+      input.credits <= 0
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "credits must be a positive integer",
+      );
+    }
+    await this.#reconcileSpaceMonthlyCredits(spaceId);
+    const existing = await this.#store.getCreditBalance(spaceId);
+    const nowIso = new Date(this.#now()).toISOString();
+    const balance = await this.#store.putCreditBalance({
+      spaceId,
+      availableCredits: (existing?.availableCredits ?? 0) + input.credits,
+      reservedCredits: existing?.reservedCredits ?? 0,
+      monthlyIncludedCredits: existing?.monthlyIncludedCredits ?? 0,
+      purchasedCredits: (existing?.purchasedCredits ?? 0) + input.credits,
+      updatedAt: nowIso,
+    });
+    return { balance };
+  }
+
+  async changeSpaceSubscription(
+    spaceId: string,
+    input: { readonly billingSettings: BillingSettings },
+  ): Promise<{ readonly billing: { readonly settings: BillingSettings } }> {
+    requireNonEmptyString(spaceId, "spaceId");
+    const space = await this.#requireSpace(spaceId);
+    const settings = normalizeBillingSettings(input.billingSettings);
+    await this.#store.putSpace({
+      ...space,
+      billingSettings: settings,
+      updatedAt: new Date(this.#now()).toISOString(),
+    });
+    return { billing: { settings } };
+  }
+
+  async reconcileStripeSpaceSubscription(
+    spaceId: string,
+    input: ReconcileStripeSpaceSubscriptionInput,
+  ): Promise<{
+    readonly billingAccount: BillingAccount;
+    readonly subscription: SpaceSubscription;
+    readonly billing: { readonly settings: BillingSettings };
+  }> {
+    requireNonEmptyString(spaceId, "spaceId");
+    const space = await this.#requireSpace(spaceId);
+    requireNonEmptyString(input.stripeCustomerId, "stripeCustomerId");
+    requireNonEmptyString(input.stripeSubscriptionId, "stripeSubscriptionId");
+    requireNonEmptyString(input.planCode, "planCode");
+    const nowIso = new Date(this.#now()).toISOString();
+    const existingAccount = await this.#store.getBillingAccountForOwner(
+      "space",
+      spaceId,
+    );
+    const billingAccountId = existingAccount?.id ?? `bill_space_${spaceId}`;
+    const billingAccount = await this.#store.putBillingAccount({
+      id: billingAccountId,
+      ownerType: "space",
+      ownerId: spaceId,
+      provider: "stripe",
+      stripeCustomerId: input.stripeCustomerId,
+      status: stripeCoreBillingStatus(input.status),
+      createdAt: existingAccount?.createdAt ?? nowIso,
+      updatedAt: nowIso,
+    });
+    const existingSubscription =
+      await this.#store.getSpaceSubscription(spaceId);
+    const subscription = await this.#store.putSpaceSubscription({
+      id: existingSubscription?.id ?? input.stripeSubscriptionId,
+      spaceId,
+      billingAccountId: billingAccount.id,
+      planId: input.planCode,
+      status: stripeSpaceSubscriptionStatus(input.status),
+      currentPeriodStart: input.currentPeriodStartUnix
+        ? new Date(input.currentPeriodStartUnix * 1000).toISOString()
+        : (existingSubscription?.currentPeriodStart ?? nowIso),
+      currentPeriodEnd: input.currentPeriodEndUnix
+        ? new Date(input.currentPeriodEndUnix * 1000).toISOString()
+        : (existingSubscription?.currentPeriodEnd ?? nowIso),
+      createdAt: existingSubscription?.createdAt ?? nowIso,
+      updatedAt: nowIso,
+    });
+    const settings = stripeSpaceBillingSettings(input.status);
+    await this.#store.putSpace({
+      ...space,
+      billingAccountId: billingAccount.id,
+      billingSettings: settings,
+      updatedAt: nowIso,
+    });
+    return { billingAccount, subscription, billing: { settings } };
   }
 
   async createPlanRun(
@@ -656,8 +1241,6 @@ export class OpenTofuDeploymentController {
       request.installationId !== undefined
         ? await this.#requireInstallation(request.installationId)
         : undefined;
-    // Installation-first model (spec §5): every plan / destroy plan targets an
-    // existing Installation row. The create-on-apply legacy path is removed.
     if (!installation) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -670,14 +1253,15 @@ export class OpenTofuDeploymentController {
         `installation ${installation.id} belongs to space ${installation.spaceId}, not ${request.spaceId}`,
       );
     }
+    const installationContext: PlanRunInstallationContext =
+      internal.installationContext ?? {
+        spaceId: installation.spaceId,
+        installationId: installation.id,
+        environment: installation.environment,
+      };
     validateSourceAllowedByProfile(request.source, profile);
     const now = this.#now();
     const variables = normalizeVariables(request.variables);
-    // Template path (Phase 1C). When templateId is present the official template
-    // is the OpenTofu surface: requiredProviders come from the template policy
-    // (the request must NOT also pass requiredProviders), inputs are validated
-    // against the template, and rootgen produces the generated root module that
-    // is threaded onto the dispatch payload via the plan-run-inputs sidecar.
     const templatePlan = this.#resolveTemplatePlan(
       request,
       internal.installTypePlan,
@@ -685,49 +1269,46 @@ export class OpenTofuDeploymentController {
     const declaredProviders = templatePlan
       ? normalizeProviders(templatePlan.requiredProviders)
       : normalizeProviders(request.requiredProviders ?? []);
-    // A template that declares zero allowed providers is an intentionally
-    // provider-free §10 install (e.g. `core`, pure value plumbing): the
-    // "requiredProviders before init" gate does not apply. A raw cloud run still
-    // must declare providers.
     const allowNoProviders =
       templatePlan !== undefined &&
       templatePlan.template.policy.allowedProviders.length === 0;
-    const policy = evaluatePolicy({
+    const basePolicy = evaluatePolicy({
       profile,
       requiredProviders: declaredProviders,
       checkedAt: now,
       ...(allowNoProviders ? { allowNoProviders: true } : {}),
     });
+    const userEnvPolicy = await this.#evaluateUserEnvSetProviderExecutionPolicy({
+      profile,
+      installation,
+      hasUserEnvSetProviderRunner: this.#userEnvSetProviderRunner !== undefined,
+    });
+    const policyReasons = [
+      ...basePolicy.reasons,
+      ...userEnvPolicy.reasons,
+    ];
+    const policy: PolicyDecision =
+      policyReasons.length === basePolicy.reasons.length
+        ? basePolicy
+        : {
+            ...basePolicy,
+            status: policyReasons.length === 0 ? "passed" : "blocked",
+            reasons: policyReasons,
+          };
     const sourceDigest = await stableJsonDigest(request.source);
     const variablesDigest = await stableJsonDigest(variables);
     const policyDecisionDigest = await stableJsonDigest(policy);
     const sourceSnapshotId =
       internal.sourceSnapshotId ??
       (await this.#resolvePlanSourceSnapshotId(installation));
-    // Snapshot the target's state generation so a stale plan cannot apply over a
-    // newer state. `create` plans have no prior target and record 0. An
-    // env-driven run carries the Environment's current generation (read from its
-    // latest StateSnapshot) so the M2 dispatch can derive the restore/persist
-    // generations even before the first Installation exists.
     const baseStateGeneration =
-      internal.baseStateGeneration ??
-      (installation ? installation.currentStateGeneration : 0);
-    const planRun: PlanRun = {
+      internal.baseStateGeneration ?? installation.currentStateGeneration;
+    let planRun: PlanRun = {
       id: this.#newId("plan"),
       spaceId: request.spaceId,
-      ...(request.installationId
-        ? { installationId: request.installationId }
-        : {}),
-      ...(installation
-        ? {
-            // A fresh Installation has no current Deployment yet; record an
-            // explicit `null` (not `undefined`) so the apply expected-guard
-            // precondition treats the run as having recorded its installation
-            // context (the guard builder normalizes undefined -> null anyway).
-            installationCurrentDeploymentId:
-              installation.currentDeploymentId ?? null,
-          }
-        : {}),
+      installationId: request.installationId,
+      installationCurrentDeploymentId:
+        installation.currentDeploymentId ?? null,
       source: request.source,
       sourceDigest,
       operation,
@@ -735,10 +1316,11 @@ export class OpenTofuDeploymentController {
       variablesDigest,
       requiredProviders: declaredProviders,
       baseStateGeneration,
-      ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
-      ...(internal.installationContext
-        ? { installationContext: internal.installationContext }
+      sourceSnapshotId,
+      ...(internal.compatibilityReportId
+        ? { compatibilityReportId: internal.compatibilityReportId }
         : {}),
+      installationContext,
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
       ...(templatePlan
@@ -786,8 +1368,12 @@ export class OpenTofuDeploymentController {
       ...(policy.status === "blocked" ? { finishedAt: now } : {}),
     };
     await this.#store.putPlanRun(planRun);
-    // Activity (§27 / §34): a plan / destroy-plan Run was created. Run id +
-    // operation + policy status only.
+    if (internal.resolvedDependencies?.entries.length) {
+      planRun = await this.#pinDependencySnapshotRecord(
+        planRun,
+        internal.resolvedDependencies,
+      );
+    }
     await this.#recordActivity({
       spaceId: planRun.spaceId,
       ...(context.actor ? { actorId: context.actor } : {}),
@@ -801,52 +1387,46 @@ export class OpenTofuDeploymentController {
         policyStatus: planRun.policy.status,
       },
     });
-    // Persist the plan inputs out-of-band (internal, never part of the public
-    // ledger projection) so the queue consumer can re-run the plan without the
-    // controller retaining them on the public PlanRun record. This sidecar also
-    // carries the template dispatch data (template ref / generated root / build)
-    // for template-backed runs. Skipped only when there is nothing to persist.
-    if (Object.keys(variables).length > 0 || templatePlan) {
+    const genericRootDispatch =
+      internal.genericRootDispatch ??
+      (templatePlan
+        ? undefined
+        : await this.#defaultGenericRootDispatchForPlanRun(
+            request,
+            installation,
+            internal.compatibilityReportId,
+            sourceSnapshotId,
+          ));
+    const generatedRoot =
+      templatePlan?.generatedRoot ?? genericRootDispatch?.generatedRoot;
+    const outputAllowlist = genericRootDispatch?.outputAllowlist;
+    const build = genericRootDispatch?.build ?? templatePlan?.build;
+    if (
+      Object.keys(variables).length > 0 ||
+      generatedRoot !== undefined ||
+      outputAllowlist !== undefined ||
+      build !== undefined
+    ) {
       await this.#store.putPlanRunInputs({
         planRunId: planRun.id,
         variables,
-        ...(templatePlan
-          ? {
-              template: {
-                id: templatePlan.template.id,
-                version: templatePlan.template.version,
-                localModulePath: templatePlan.template.source.localModulePath,
-              },
-              generatedRoot: templatePlan.generatedRoot,
-              ...(templatePlan.build ? { build: templatePlan.build } : {}),
-            }
-          : {}),
+        ...(generatedRoot ? { generatedRoot } : {}),
+        ...(outputAllowlist ? { outputAllowlist } : {}),
+        ...(build ? { build } : {}),
       });
     }
-    if (policy.status === "passed" && this.#runner) {
-      // Hand off to the dispatch seam. The default inline dispatcher executes the
-      // consumer synchronously (so this call returns a terminal PlanRun, exactly
-      // as before); the Workers producer enqueues and returns immediately, after
-      // which clients poll GET /v1/plan-runs/:id.
+    if (policy.status === "passed" && this.#hasRunnerForProfile(profile)) {
       await this.#enqueueRun({
         action: "plan",
         runId: planRun.id,
         spaceId: planRun.spaceId,
       });
       const dispatched = await this.#store.getPlanRun(planRun.id);
-      return { planRun: dispatched ?? planRun };
+      return { planRun: publicPlanRun(dispatched ?? planRun) };
     }
-    return { planRun };
+    return { planRun: publicPlanRun(planRun) };
   }
 
-  /**
-   * Installation-driven plan (spec §23 Plan). Resolves the Installation ->
-   * InstallConfig -> Source (installation.sourceId), picks the LATEST
-   * SourceSnapshot for the source (preferring the Source's defaultRef), and
-   * creates a plan run carrying installation context + the resolved snapshot.
-   * The base state generation is the Installation's current generation (its
-   * latest StateSnapshot, or 0).
-   */
   async createInstallationPlan(
     installationId: string,
     context: DeployControlActorContext = {},
@@ -885,23 +1465,26 @@ export class OpenTofuDeploymentController {
    *   - can NEVER be applied (`createApplyRun` rejects a drift-check plan with
    *     `failed_precondition`);
    *   - on completion with a non-empty change summary emits an
-   *     `installation.drift_detected` Activity event (COUNTS ONLY — no values,
-   *     no installation status change; the spec has no `drifted` status).
+   *     `installation.drift_detected` Activity event with public-safe aggregate
+   *     metadata only (no values, no installation status change; the spec has no
+   *     `drifted` status).
    * The §19 Run projection maps it to `type: "drift_check"`.
    *
-   * Spec divergence note: §30 does not enumerate a drift-check create route, but
-   * §19 defines the run type; the public route is registered as a documented
-   * spec-extension (see deploy_control_public_routes.ts).
+   * The public API exposes drift-check creation as a canonical read-only run
+   * route; it records ledger/activity evidence without creating an applyable
+   * plan artifact.
    */
   async createInstallationDriftCheck(
     installationId: string,
     context: DeployControlActorContext = {},
+    internal: Pick<CreateInstallationPlanInternal, "runGroupId"> = {},
   ): Promise<PlanRunResponse> {
     return await this.#createInstallationPlanRun(
       installationId,
       false,
       context,
       {
+        ...internal,
         driftCheck: true,
       },
     );
@@ -926,31 +1509,64 @@ export class OpenTofuDeploymentController {
           `installation ${installationId}`,
       );
     }
-    const source = await this.#store.getSource(installation.sourceId);
-    if (!source) {
-      throw new OpenTofuControllerError(
-        "not_found",
-        `source ${installation.sourceId} not found for installation ${installationId}`,
+    // Two snapshot-resolution paths share the rest of the pipeline:
+    //   - git installations resolve their registered Source's snapshot;
+    //   - upload installations (no Source) pin the upload snapshot the deploy
+    //     passed in and run against an in-memory synthesized Source. Both feed
+    //     the same Capsule Gate / generated-root / plan dispatch because the
+    //     runner restores the archive from the snapshot's archiveObjectKey
+    //     regardless of origin.
+    let source: Source;
+    let snapshot: SourceSnapshot;
+    if (installation.sourceId) {
+      const stored = await this.#store.getSource(installation.sourceId);
+      if (!stored) {
+        throw new OpenTofuControllerError(
+          "not_found",
+          `source ${installation.sourceId} not found for installation ${installationId}`,
+        );
+      }
+      source = stored;
+      // The rollback-plan path pins a SPECIFIC SourceSnapshot (a prior
+      // Deployment's snapshot); otherwise resolve the Source's latest snapshot
+      // for its default ref.
+      const resolved = internal.sourceSnapshotId
+        ? await this.#requireSourceSnapshotForSource(
+            stored.id,
+            internal.sourceSnapshotId,
+          )
+        : await this.#resolveLatestSnapshot(stored.id, stored.defaultRef);
+      if (!resolved) {
+        // Typed 409: the Installation cannot plan until a SourceSnapshot exists
+        // for its source. Callers run a source_sync first.
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `source_sync_required: installation ${installationId} has no ` +
+            `SourceSnapshot for source ${stored.id} ref ${stored.defaultRef}; ` +
+            `run a source sync first`,
+        );
+      }
+      snapshot = resolved;
+    } else {
+      if (!internal.sourceSnapshotId) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `installation ${installationId} is upload-origin; a plan requires a ` +
+            `pinned upload SourceSnapshot (deploy a new upload via takosumi deploy)`,
+        );
+      }
+      const pinned = await this.#store.getSourceSnapshot(
+        internal.sourceSnapshotId,
       );
-    }
-    // The rollback-plan path pins a SPECIFIC SourceSnapshot (a prior
-    // Deployment's snapshot); otherwise resolve the Source's latest snapshot for
-    // its default ref.
-    const snapshot = internal.sourceSnapshotId
-      ? await this.#requireSourceSnapshotForSource(
-          source.id,
-          internal.sourceSnapshotId,
-        )
-      : await this.#resolveLatestSnapshot(source.id, source.defaultRef);
-    if (!snapshot) {
-      // Typed 409: the Installation cannot plan until a SourceSnapshot exists
-      // for its source. Callers run a source_sync first.
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `source_sync_required: installation ${installationId} has no ` +
-          `SourceSnapshot for source ${source.id} ref ${source.defaultRef}; ` +
-          `run a source sync first`,
-      );
+      if (!pinned || pinned.spaceId !== installation.spaceId) {
+        throw new OpenTofuControllerError(
+          "not_found",
+          `upload SourceSnapshot ${internal.sourceSnapshotId} not found in ` +
+            `space ${installation.spaceId}`,
+        );
+      }
+      snapshot = pinned;
+      source = syntheticUploadSource(installation, pinned);
     }
     // The Installation's current state generation drives the dispatch
     // restore/persist arithmetic. No prior StateSnapshot -> generation 0.
@@ -964,14 +1580,24 @@ export class OpenTofuDeploymentController {
       : installation.currentDeploymentId
         ? "update"
         : "create";
-    const { request: planRequest, installTypePlan } =
-      await this.#installationPlanRequest({
+    const compatibilityReport =
+      await this.#ensureInstallationCompatibilityReport(
         installation,
-        installConfig,
         source,
         snapshot,
-        operation,
-      });
+      );
+    const {
+      request: planRequest,
+      installTypePlan,
+      genericRootPlan,
+    } = await this.#installationPlanRequest({
+      installation,
+      installConfig,
+      source,
+      snapshot,
+      operation,
+      ...(compatibilityReport ? { compatibilityReport } : {}),
+    });
     const installationContext: PlanRunInstallationContext = {
       spaceId: installation.spaceId,
       installationId: installation.id,
@@ -981,8 +1607,8 @@ export class OpenTofuDeploymentController {
     // inject dependency values: there is nothing to wire into a teardown, and the
     // pinned producer outputs would be irrelevant. For plan/update, resolve the
     // consumer's Dependencies, read each producer's OutputSnapshot, build the
-    // injected values, and merge them into the plan inputs (template) / variables
-    // (raw module) BEFORE the run is created. The DependencySnapshot is pinned
+    // injected values, and merge them into the generated-root module inputs
+    // BEFORE the run is created. The DependencySnapshot is pinned
     // AFTER the run row exists (runId known), then the planRun is re-put with its
     // id (order: resolve -> inject -> create plan -> snapshot -> re-put).
     const resolvedDeps = destroy
@@ -991,21 +1617,32 @@ export class OpenTofuDeploymentController {
     const injectedRequest = resolvedDeps
       ? this.#injectDependencyValues(planRequest, resolvedDeps.injectedValues)
       : planRequest;
+    const finalizedGenericRoot = genericRootPlan
+      ? await this.#genericRootDispatchForRequest(
+          injectedRequest,
+          genericRootPlan,
+          compatibilityReport,
+          snapshot,
+        )
+      : undefined;
     const response = await this.createPlanRun(injectedRequest, context, {
       installationContext,
       sourceSnapshotId: snapshot.id,
       baseStateGeneration,
+      ...(compatibilityReport
+        ? { compatibilityReportId: compatibilityReport.id }
+        : {}),
       ...(installTypePlan ? { installTypePlan } : {}),
+      ...(finalizedGenericRoot
+        ? { genericRootDispatch: finalizedGenericRoot }
+        : {}),
+      ...(resolvedDeps && resolvedDeps.entries.length > 0
+        ? { resolvedDependencies: resolvedDeps }
+        : {}),
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
     });
-    if (!resolvedDeps || resolvedDeps.entries.length === 0) {
-      return response;
-    }
-    // Pin the DependencySnapshot against the just-created run, record it, and
-    // re-put the PlanRun carrying its id so the apply consumer re-reads + verifies
-    // it (invariant 9). Return the updated PlanRun.
-    return await this.#pinDependencySnapshot(response.planRun, resolvedDeps);
+    return response;
   }
 
   /**
@@ -1039,17 +1676,25 @@ export class OpenTofuDeploymentController {
             `installation ${dependency.producerInstallationId} not found`,
         );
       }
-      // remote_state injects NO values: the producer state is materialized into
-      // the container at dispatch time (#installationDispatch derives depStates
-      // from the producer's LATEST StateSnapshot). The snapshot entry still pins
-      // the producer state generation so strict mode can detect a moved producer;
-      // the values digest is over `{}` (empty mapping or otherwise no injection).
+      // remote_state injects NO values: instead the producer StateSnapshot bytes
+      // are pinned here and later materialized into the container at dispatch
+      // time. This makes both `strict` and `pinned` plans apply the same producer
+      // state bytes that were reviewed at plan time; strict mode additionally
+      // rejects a producer whose current generation moved.
       if (dependency.mode === "remote_state") {
+        const stateSnapshot =
+          await this.#latestProducerStateSnapshotForDependency(
+            dependency.id,
+            producer,
+          );
         const values: Record<string, JsonValue> = {};
         entries.push({
           dependencyId: dependency.id,
           producerInstallationId: producer.id,
-          producerStateGeneration: producer.currentStateGeneration,
+          producerStateGeneration: stateSnapshot.generation,
+          producerStateSnapshotId: stateSnapshot.id,
+          producerStateObjectKey: stateSnapshot.objectKey,
+          producerStateDigest: stateSnapshot.digest,
           producerOutputSnapshotId: "",
           producerOutputDigest: "",
           valuesDigest: await stableJsonDigest(values),
@@ -1217,7 +1862,8 @@ export class OpenTofuDeploymentController {
    * keys the template would accept; `validateTemplateInputs` downstream rejects
    * unknown keys, so the injected `to` names MUST be declared template inputs —
    * a required mapping to an undeclared input surfaces as `failed_precondition`
-   * via the template validator); a raw-module request merges into `variables`.
+   * via the template validator); a template-less Capsule request merges into
+   * `variables`, which rootgen later exposes as module inputs.
    * Injected values win on a key collision (they are the resolved producer
    * outputs the consumer was wired to consume).
    */
@@ -1243,12 +1889,12 @@ export class OpenTofuDeploymentController {
    * its id (spec §17). The snapshot pins exactly the entries resolved at plan
    * creation; the apply consumer re-reads it to verify producer state generations
    * (strict mode) + recompute the values digests (tamper check) before applying.
-   * Returns the updated PlanRunResponse.
+   * Returns the updated PlanRun.
    */
-  async #pinDependencySnapshot(
+  async #pinDependencySnapshotRecord(
     planRun: PlanRun,
     resolved: ResolvedDependencies,
-  ): Promise<PlanRunResponse> {
+  ): Promise<PlanRun> {
     const snapshot: DependencySnapshot = {
       id: this.#newId("depsnap"),
       runId: planRun.id,
@@ -1259,7 +1905,7 @@ export class OpenTofuDeploymentController {
     await this.#store.putDependencySnapshot(snapshot);
     const updated: PlanRun = { ...planRun, dependencySnapshotId: snapshot.id };
     await this.#store.putPlanRun(updated);
-    return { planRun: updated };
+    return updated;
   }
 
   /**
@@ -1284,6 +1930,13 @@ export class OpenTofuDeploymentController {
   async #resolvePlanSourceSnapshotId(
     installation: Installation,
   ): Promise<string> {
+    if (!installation.sourceId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `installation ${installation.id} is upload-origin (no git Source); ` +
+          `deploy a new upload snapshot via takosumi deploy`,
+      );
+    }
     const source = await this.#store.getSource(installation.sourceId);
     if (!source) {
       throw new OpenTofuControllerError(
@@ -1324,6 +1977,202 @@ export class OpenTofuDeploymentController {
     return snapshot;
   }
 
+  async #ensureInstallationCompatibilityReport(
+    installation: Installation,
+    source: Source,
+    snapshot: SourceSnapshot,
+  ): Promise<CapsuleCompatibilityReport | undefined> {
+    const existing = installation.compatibilityReportId
+      ? await this.#store.getCapsuleCompatibilityReport(
+          installation.compatibilityReportId,
+        )
+      : undefined;
+    const policy = await this.#policyForInstallation(installation);
+    if (existing && existing.sourceSnapshotId === snapshot.id) {
+      this.#assertCompatibilityReportRunnable(existing, policy);
+      return existing;
+    }
+    if (!this.#sourcesService) {
+      if (existing && existing.sourceSnapshotId !== snapshot.id) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `compatibility_report_stale: installation ${installation.id} ` +
+            `has report ${existing.id} for SourceSnapshot ` +
+            `${existing.sourceSnapshotId}, but plan uses ${snapshot.id}`,
+        );
+      }
+      return undefined;
+    }
+    // Upload-origin installations have no registered Source; gate the snapshot
+    // directly. Git installations gate through their Source id.
+    const { report } = installation.sourceId
+      ? await this.#sourcesService.createCompatibilityCheck(source.id, {
+          sourceSnapshotId: snapshot.id,
+          installationId: installation.id,
+        })
+      : await this.#sourcesService.createCompatibilityCheckForSnapshot(
+          snapshot,
+          { installationId: installation.id },
+        );
+    await this.#store.patchInstallation(installation.id, {
+      compatibilityReportId: report.id,
+      compatibilityStatus: report.level,
+      updatedAt: new Date(this.#now()).toISOString(),
+    });
+    this.#assertCompatibilityReportRunnable(report, policy);
+    return report;
+  }
+
+  #assertCompatibilityReportRunnable(
+    report: CapsuleCompatibilityReport,
+    policy?: PolicyConfig,
+  ): void {
+    const evaluation = evaluateCompatibilityReportAgainstPolicy(report, policy);
+    if (evaluation.runnable) {
+      return;
+    }
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      evaluation.reasons[0] ??
+        `compatibility_report_not_runnable: report ${report.id} is ${report.level}`,
+    );
+  }
+
+  #mergePolicyReasons(
+    policy: PolicyDecision,
+    reasons: readonly string[],
+  ): PolicyDecision {
+    if (reasons.length === 0) return policy;
+    return {
+      status: "blocked",
+      reasons: [...policy.reasons, ...reasons],
+      checkedAt: policy.checkedAt,
+    };
+  }
+
+  async #evaluateUserEnvSetProviderExecutionPolicy(input: {
+    readonly profile: RunnerProfile;
+    readonly installation?: Installation;
+    readonly hasUserEnvSetProviderRunner?: boolean;
+  }): Promise<{ readonly reasons: readonly string[] }> {
+    if (!input.installation) return { reasons: [] };
+    this.#connectionsService ??= new ConnectionsService({ store: this.#store });
+    const resolved = await this.#connectionsService.resolveProviderBindings(
+      input.installation,
+    );
+    const envSetConnections = resolved
+      .map((entry) => entry.connection)
+      .filter(
+        (connection): connection is NonNullable<typeof connection> =>
+          connection !== undefined && connection.kind === "provider_env_set",
+      );
+    if (envSetConnections.length === 0) return { reasons: [] };
+
+    const reasons: string[] = [];
+    if (input.profile.labels?.["takosumi.com/runner-class"] !== "custom") {
+      reasons.push(
+        `runner profile ${input.profile.id} is not a user env set provider runner class`,
+      );
+    } else if (input.hasUserEnvSetProviderRunner !== true) {
+      reasons.push(
+        `runner profile ${input.profile.id} requires a configured user env set provider runner`,
+      );
+    }
+    for (const connection of envSetConnections) {
+      if (connection.scope !== "space") {
+        reasons.push(
+          `provider env set connection ${connection.id} for ${connection.provider} must be Space-scoped`,
+        );
+      }
+    }
+    return { reasons };
+  }
+
+  #isCustomRunnerProfile(profile: RunnerProfile): boolean {
+    return profile.labels?.["takosumi.com/runner-class"] === "custom";
+  }
+
+  #hasRunnerForProfile(profile: RunnerProfile): boolean {
+    return this.#isCustomRunnerProfile(profile)
+      ? this.#userEnvSetProviderRunner !== undefined
+      : this.#runner !== undefined;
+  }
+
+  #runnerForProfile(profile: RunnerProfile): OpenTofuRunner {
+    const runner = this.#isCustomRunnerProfile(profile)
+      ? this.#userEnvSetProviderRunner
+      : this.#runner;
+    if (!runner) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        this.#isCustomRunnerProfile(profile)
+          ? `runner profile ${profile.id} requires a configured user env set provider runner`
+          : "OpenTofu runner is not configured",
+      );
+    }
+    return runner;
+  }
+
+  /**
+   * Threads Capsule Gate results into the plan PolicyDecision (core-spec §25)
+   * without replacing the hard pre-mint guard (§26). Runnable reports keep the
+   * policy passed but are still summarized in `plan.policy_evaluated` audit
+   * metadata; stale/missing/non-runnable reports become policy block reasons.
+   */
+  async #evaluateCapsuleCompatibilityPolicy(input: {
+    readonly planRunId: string;
+    readonly compatibilityReportId?: string;
+    readonly sourceSnapshotId?: string;
+    readonly policy?: PolicyConfig;
+  }): Promise<{
+    readonly reasons: readonly string[];
+    readonly audit?: Readonly<Record<string, JsonValue>>;
+  }> {
+    if (!input.compatibilityReportId) return { reasons: [] };
+    const report = await this.#store.getCapsuleCompatibilityReport(
+      input.compatibilityReportId,
+    );
+    if (!report) {
+      return {
+        reasons: [
+          `compatibility_report_missing: plan run ${input.planRunId} references CompatibilityReport ${input.compatibilityReportId} which no longer exists`,
+        ],
+        audit: {
+          reportId: input.compatibilityReportId,
+          status: "missing",
+        },
+      };
+    }
+    const findingCounts = report.findings.reduce(
+      (counts, finding) => {
+        counts[finding.severity] += 1;
+        return counts;
+      },
+      { info: 0, warning: 0, error: 0 },
+    );
+    const audit = {
+      reportId: report.id,
+      level: report.level,
+      findingCount: report.findings.length,
+      infoCount: findingCounts.info,
+      warningCount: findingCounts.warning,
+      errorCount: findingCounts.error,
+    } satisfies Readonly<Record<string, JsonValue>>;
+    const reasons: string[] = [];
+    if (
+      input.sourceSnapshotId &&
+      report.sourceSnapshotId !== input.sourceSnapshotId
+    ) {
+      reasons.push(
+        `compatibility_report_snapshot_mismatch: plan run ${input.planRunId} uses SourceSnapshot ${input.sourceSnapshotId} but report ${report.id} was created for ${report.sourceSnapshotId}`,
+      );
+    }
+    reasons.push(
+      ...evaluateCompatibilityReportAgainstPolicy(report, input.policy).reasons,
+    );
+    return { reasons, audit };
+  }
+
   /**
    * Builds the {@link CreatePlanRunRequest} (+ install-type plan context) for an
    * installation-driven plan. The InstallConfig's installType selects the
@@ -1331,13 +2180,12 @@ export class OpenTofuDeploymentController {
    *
    *   - `core` / `opentofu_module` / `app_source`: a template-bound config reuses
    *     the template plan path with an {@link InstallTypePlanContext} so the
-   *     generated root comes from {@link generateInstallationRoot} (installType +
-   *     per-capability provider aliases + the app_source build); the config's
-   *     variableMapping supplies the template inputs and manual-mode capability
-   *     values override them. A non-template `opentofu_module` / `app_source`
-   *     config has no generated root to build yet and falls back to the raw path.
-   *   - `opentofu_root`: the SourceSnapshot IS the root configuration — no
-   *     generated root, no template (asserted) — exactly the raw-module path.
+   *     generated root comes from {@link generateInstallationRoot}. A non-template
+   *     config uses the generic Capsule root builder, wrapping the SourceSnapshot
+   *     module as a child module under Takosumi-owned provider/state/root wiring.
+   *   - `opentofu_root`: legacy direct-root ledger rows remain readable but cannot
+   *     create new plans; Takosumi v1 runs OpenTofu Capsules through a generated
+   *     root.
    */
   async #installationPlanRequest(input: {
     readonly installation: Installation;
@@ -1345,26 +2193,22 @@ export class OpenTofuDeploymentController {
     readonly source: Source;
     readonly snapshot: SourceSnapshot;
     readonly operation: "create" | "update" | "destroy";
+    readonly compatibilityReport?: CapsuleCompatibilityReport;
   }): Promise<{
     readonly request: CreatePlanRunRequest;
     readonly installTypePlan?: InstallTypePlanContext;
+    readonly genericRootPlan?: GenericRootPlanContext;
   }> {
     const moduleSource = snapshotModuleSource(input.source, input.snapshot);
     const installType = input.installConfig.installType;
     const templateBinding = installConfigTemplateBinding(input.installConfig);
-    // opentofu_root: the SourceSnapshot IS the root configuration (no generated
-    // root, no template). A templateBinding here is a config error — it would
-    // silently generate a root over a config that asked for the raw root path.
     if (installType === "opentofu_root") {
-      if (templateBinding) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `install config ${input.installConfig.id} is opentofu_root but ` +
-            `carries a templateBinding; opentofu_root uses the SourceSnapshot ` +
-            `as the root configuration directly (no generated root)`,
-        );
-      }
-      return { request: await this.#rawModulePlanRequest(input, moduleSource) };
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `install config ${input.installConfig.id} is legacy opentofu_root; ` +
+          `Takosumi v1 plans require an OpenTofu Capsule install type wrapped by ` +
+          `a Takosumi generated root`,
+      );
     }
     if (templateBinding) {
       // Template-backed config (core / opentofu_module / app_source): reuse the
@@ -1389,47 +2233,176 @@ export class OpenTofuDeploymentController {
         installTypePlan,
       };
     }
-    // Non-template opentofu_module / app_source / core config: no catalog
-    // template to generate a root from — fall back to the raw-module path with
-    // the snapshot as the module source.
-    return { request: await this.#rawModulePlanRequest(input, moduleSource) };
-  }
-
-  /**
-   * Raw-module plan request: the snapshot is the OpenTofu module source (used by
-   * opentofu_root and by template-less configs). The runner profile's allowed
-   * providers are declared as the run's required providers so the create-time
-   * policy gate (which requires providers before init) is satisfied; the runner
-   * re-reports the providers it actually used.
-   */
-  async #rawModulePlanRequest(
-    input: {
-      readonly installation: Installation;
-      readonly operation: "create" | "update" | "destroy";
-    },
-    moduleSource: OpenTofuModuleSource,
-  ): Promise<CreatePlanRunRequest> {
-    const profile = await this.#requireRunnerProfile(
-      this.#defaultRunnerProfileId,
-    );
+    const generic = await this.#genericCapsulePlanRequest(input, moduleSource);
     return {
-      spaceId: input.installation.spaceId,
-      installationId: input.installation.id,
-      source: moduleSource,
-      operation: input.operation,
-      runnerProfileId: profile.id,
-      requiredProviders: [...profile.allowedProviders],
+      request: generic.request,
+      genericRootPlan: generic.genericRootPlan,
     };
   }
 
   /**
+   * Generic Capsule plan request: the snapshot source stays as the child module
+   * to be copied under the Takosumi generated root. The generated root itself is
+   * created after DependencySnapshot injection, because dependency values become
+   * root module inputs.
+   */
+  async #genericCapsulePlanRequest(
+    input: {
+      readonly installation: Installation;
+      readonly installConfig: InstallConfig;
+      readonly operation: "create" | "update" | "destroy";
+      readonly compatibilityReport?: CapsuleCompatibilityReport;
+    },
+    moduleSource: OpenTofuModuleSource,
+  ): Promise<{
+    readonly request: CreatePlanRunRequest;
+    readonly genericRootPlan: GenericRootPlanContext;
+  }> {
+    const profile = await this.#requireRunnerProfile(
+      this.#defaultRunnerProfileId,
+    );
+    const compatibilityProviders = requiredProvidersFromCompatibilityReport(
+      input.compatibilityReport,
+      profile.allowedProviders,
+    );
+    const requiredProviders =
+      compatibilityProviders.length > 0
+        ? compatibilityProviders
+        : [...profile.allowedProviders];
+    const installTypePlan = await this.#resolveInstallTypePlan(
+      input.installation,
+      input.installConfig,
+      input.installConfig.installType,
+    );
+    const variables = normalizeVariables(
+      mergeJsonVariables(
+        input.installConfig.variableMapping,
+        installTypePlan.manualValues,
+      ),
+    );
+    return {
+      request: {
+        spaceId: input.installation.spaceId,
+        installationId: input.installation.id,
+        source: moduleSource,
+        operation: input.operation,
+        runnerProfileId: profile.id,
+        requiredProviders,
+        ...(Object.keys(variables).length > 0 ? { variables } : {}),
+      },
+      genericRootPlan: {
+        providerBindings: installTypePlan.providerBindings,
+        outputAllowlist: input.installConfig.outputAllowlist,
+        ...(installTypePlan.build ? { build: installTypePlan.build } : {}),
+      },
+    };
+  }
+
+  async #genericRootDispatchForRequest(
+    request: CreatePlanRunRequest,
+    context: GenericRootPlanContext,
+    compatibilityReport: CapsuleCompatibilityReport | undefined,
+    sourceSnapshot: SourceSnapshot | undefined,
+  ): Promise<GenericRootDispatchContext> {
+    const requiredProviders = normalizeProviders(
+      request.requiredProviders ?? [],
+    );
+    const moduleFiles =
+      context.moduleFiles ??
+      (compatibilityReport && sourceSnapshot
+        ? await this.#normalizedModuleFilesForReport(
+            compatibilityReport,
+            sourceSnapshot,
+          )
+        : undefined);
+    return {
+      generatedRoot: {
+        ...generateGenericCapsuleRoot({
+          requiredProviders,
+          inputs: normalizeVariables(request.variables),
+          outputAllowlist: context.outputAllowlist,
+          ...(context.providerBindings.length > 0
+            ? { providerBindings: context.providerBindings }
+            : {}),
+        }),
+        ...(moduleFiles && moduleFiles.length > 0 ? { moduleFiles } : {}),
+      },
+      outputAllowlist: context.outputAllowlist,
+      ...(context.build ? { build: context.build } : {}),
+    };
+  }
+
+  async #defaultGenericRootDispatchForPlanRun(
+    request: CreatePlanRunRequest,
+    installation: Installation,
+    compatibilityReportId: string | undefined,
+    sourceSnapshotId: string | undefined,
+  ): Promise<GenericRootDispatchContext> {
+    const installConfig = await this.#store.getInstallConfig(
+      installation.installConfigId,
+    );
+    if (!installConfig) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `install_config_not_found: ${installation.installConfigId}`,
+      );
+    }
+    const compatibilityReport = compatibilityReportId
+      ? await this.#store.getCapsuleCompatibilityReport(compatibilityReportId)
+      : undefined;
+    const sourceSnapshot = sourceSnapshotId
+      ? await this.#store.getSourceSnapshot(sourceSnapshotId)
+      : undefined;
+    const requiredProviders = normalizeProviders(
+      request.requiredProviders ?? installConfig.policy.allowedProviders ?? [],
+    );
+    return await this.#genericRootDispatchForRequest(
+      request,
+      {
+        providerBindings: [],
+        outputAllowlist: installConfig.outputAllowlist,
+        ...(installConfig.build?.enabled
+          ? { build: installConfigBuildSpec(installConfig.build) }
+          : {}),
+      },
+      compatibilityReport,
+      sourceSnapshot,
+    );
+  }
+
+  async #normalizedModuleFilesForReport(
+    report: CapsuleCompatibilityReport,
+    sourceSnapshot: SourceSnapshot,
+  ): Promise<readonly OpenTofuCapsuleSourceFile[] | undefined> {
+    if (report.level !== "auto_capsulized") return undefined;
+    if (!report.normalizedObjectKey || !report.normalizedDigest) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `normalized_capsule_artifact_missing: CompatibilityReport ${report.id} ` +
+          "is auto_capsulized but has no normalizedObjectKey/normalizedDigest",
+      );
+    }
+    if (!this.#sourcesService) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "normalized capsule artifact reader is not configured",
+      );
+    }
+    return await this.#sourcesService.readNormalizedCapsuleArtifact({
+      sourceSnapshot,
+      objectKey: report.normalizedObjectKey,
+      digest: report.normalizedDigest as `sha256:${string}`,
+    });
+  }
+
+  /**
    * Derives the §13 install-type plan context for a template-bound installation
-   * config: the generated-root install type, the per-capability provider aliases
-   * (from the installation's resolved capabilities), the flattened manual-mode
-   * values, and the build override. Capabilities resolve through the
+   * config: the generated-root install type, the provider aliases
+   * (from the installation's resolved provider bindings), the flattened manual-mode
+   * values, and the build override. Provider bindings resolve through the
    * {@link ConnectionsService} so binding changes take effect on the next plan.
-   * `source` and `disabled` capabilities (and `manual`, which contributes values
-   * not a provider) are skipped for the provider-alias derivation.
+   * `disabled` provider bindings (and `manual`, which contributes values not a
+   * provider credential) are skipped for provider-alias derivation.
    */
   async #resolveInstallTypePlan(
     installation: Installation,
@@ -1438,19 +2411,46 @@ export class OpenTofuDeploymentController {
   ): Promise<InstallTypePlanContext> {
     this.#connectionsService ??= new ConnectionsService({ store: this.#store });
     const resolved =
-      await this.#connectionsService.resolveCapabilities(installation);
-    const capabilityProviders = capabilityProvidersFromResolved(resolved);
+      await this.#connectionsService.resolveProviderBindings(installation);
+    const providerBindings = providerBindingsFromResolved(resolved);
+    const requiredProviders = installConfig.policy.allowedProviders ?? [];
     const manualValues = manualValuesFromResolved(resolved);
     return {
       // opentofu_root never reaches here (asserted in #installationPlanRequest);
       // core / opentofu_module / app_source map 1:1 to the generated-root types.
       installType: installType as GeneratedRootInstallType,
-      capabilityProviders,
+      providerBindings,
       manualValues,
       ...(installConfig.build?.enabled
         ? { build: installConfigBuildSpec(installConfig.build) }
         : {}),
     };
+  }
+
+  async #inferInstallTypePlanForTemplateRequest(
+    installation: Installation,
+  ): Promise<InstallTypePlanContext> {
+    const installConfig = await this.#store.getInstallConfig(
+      installation.installConfigId,
+    );
+    if (!installConfig) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `install_config_not_found: ${installation.installConfigId}`,
+      );
+    }
+    if (installConfig.installType === "opentofu_root") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `install config ${installConfig.id} is legacy opentofu_root; ` +
+          "template plans require a generated-root install type",
+      );
+    }
+    return await this.#resolveInstallTypePlan(
+      installation,
+      installConfig,
+      installConfig.installType,
+    );
   }
 
   async getPlanRun(id: string): Promise<PlanRunResponse> {
@@ -1462,23 +2462,24 @@ export class OpenTofuDeploymentController {
         `plan run ${id} not found`,
       );
     }
-    return { planRun };
+    return { planRun: publicPlanRun(planRun) };
   }
 
   /**
    * Resolves a template-backed plan request into its resolved template, derived
    * required providers, generated root module, and optional build phase. Returns
-   * `undefined` for raw-module plans. Throws on a malformed template request
+   * `undefined` only when the caller should use the generic Capsule generated
+   * root path. Throws on a malformed template request
    * (missing version, conflicting requiredProviders, unknown template, invalid
    * inputs).
    *
    * `installTypePlan` is present only for an installation-driven plan (§13). When
    * present the generated root comes from {@link generateInstallationRoot}
-   * (installType-aware, per-capability provider aliases, the `app_source` build);
-   * the manual-mode capability values are merged into the template inputs with
+   * (installType-aware, provider aliases, the `app_source` build);
+   * the manual-mode provider values are merged into the template inputs with
    * manual values overriding the InstallConfig variableMapping (§13 decision:
    * manual values are per-installation overrides). When absent (the raw
-   * `/v1/plan-runs` template path, no installation context = no capabilities) the
+   * `/v1/plan-runs` template path, no installation context = no provider bindings) the
    * generated root stays on {@link generateRootModule} byte-for-byte.
    */
   #resolveTemplatePlan(
@@ -1487,7 +2488,8 @@ export class OpenTofuDeploymentController {
   ): ResolvedTemplatePlan | undefined {
     if (request.templateId === undefined) {
       // A bare inputs/templateVersion without templateId is a request error: it
-      // would otherwise silently fall back to a raw-module plan that ignores them.
+      // would otherwise silently fall back to a generic Capsule plan that ignores
+      // template-only fields.
       if (
         request.templateVersion !== undefined ||
         request.inputs !== undefined
@@ -1511,12 +2513,10 @@ export class OpenTofuDeploymentController {
       request.templateId,
       request.templateVersion!,
     );
-    // Manual-mode capability values are per-installation overrides: they win on a
+    // Manual-mode provider values are per-installation overrides: they win on a
     // key collision with the InstallConfig variableMapping (which flows in via
-    // request.inputs). Only keys the template DECLARES as inputs survive
-    // validation (validateTemplateInputs rejects unknown keys), so an unknown
-    // manual key would otherwise throw — filter to declared inputs for MVP and
-    // ignore the rest (no DependencySnapshot/manual-value contract here yet).
+    // request.inputs). Unknown keys fail closed instead of being silently
+    // dropped, so manual inputs remain auditable and match the template contract.
     const mergedInputs = installTypePlan
       ? mergeManualInputs(
           template,
@@ -1526,18 +2526,25 @@ export class OpenTofuDeploymentController {
       : request.inputs;
     const inputs = validateTemplateInputs(template, mergedInputs);
     // Installation-driven (§13): installType-aware generated root with
-    // per-capability provider aliases + the app_source artifact_path wiring.
+    // provider aliases + the app_source artifact_path wiring.
     // Raw template path (no installation context): the byte-stable wrapper.
-    const generatedRoot = installTypePlan
+    const baseGeneratedRoot = installTypePlan
       ? generateInstallationRoot({
           template,
           inputs,
           installType: installTypePlan.installType,
-          ...(installTypePlan.capabilityProviders.length > 0
-            ? { capabilityProviders: installTypePlan.capabilityProviders }
+          ...(installTypePlan.providerBindings.length > 0
+            ? { providerBindings: installTypePlan.providerBindings }
             : {}),
         })
       : generateRootModule(template, inputs);
+    const generatedRoot: DispatchGeneratedRoot = {
+      ...baseGeneratedRoot,
+      moduleFiles: this.#templateRegistry.requireModuleFiles(
+        template.id,
+        template.version,
+      ),
+    };
     // Build phase precedence: an installation-driven app_source InstallConfig.build
     // (when enabled) overrides the template's own build; otherwise the template
     // build is used (§13 / M5 decision: InstallConfig.build takes precedence).
@@ -1658,7 +2665,7 @@ export class OpenTofuDeploymentController {
       updatedAt: now,
     };
     await this.#store.putApplyRun(applyRun);
-    if (!this.#runner) return { applyRun };
+    if (!this.#hasRunnerForProfile(profile)) return { applyRun };
     // Hand off to the dispatch seam. The default inline dispatcher runs the
     // apply consumer synchronously and returns the terminal ApplyRunResponse;
     // the Workers producer enqueues and returns the queued ApplyRun immediately.
@@ -1737,6 +2744,12 @@ export class OpenTofuDeploymentController {
           phase: "source",
           sourceConnectionId: stored.authConnectionId,
         });
+        await this.#recordSourceCredentialMintEvent({
+          runId: run.id,
+          spaceId: run.spaceId,
+          sourceId: run.sourceId,
+          connectionId: stored.authConnectionId,
+        });
         credentials = bundle.toMintResponse();
       }
     } catch (error) {
@@ -1769,6 +2782,8 @@ export class OpenTofuDeploymentController {
     const snapshotId = running.snapshotId ?? this.#newId("snap");
     const snapshot: SourceSnapshot = {
       id: snapshotId,
+      origin: "git",
+      spaceId: running.spaceId,
       sourceId: running.sourceId,
       url: running.url,
       ref: running.ref,
@@ -1863,7 +2878,6 @@ export class OpenTofuDeploymentController {
    * store.
    */
   async runQueuedPlan(runId: string): Promise<PlanRun | undefined> {
-    if (!this.#runner) return await this.#store.getPlanRun(runId);
     const planRun = await this.#store.getPlanRun(runId);
     if (!planRun) {
       throw new OpenTofuControllerError(
@@ -1876,55 +2890,66 @@ export class OpenTofuDeploymentController {
       return planRun;
     }
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
+    if (!this.#hasRunnerForProfile(profile)) return planRun;
     const inputs = await this.#store.getPlanRunInputs(runId);
     const variables = normalizeVariables(inputs?.variables);
     const dispatch = templateDispatchFromInputs(inputs);
+    try {
+      await this.#assertCapsuleCompatibilityAllowsRun(planRun);
+      assertGeneratedRootDispatchPresent(planRun, dispatch);
+    } catch (error) {
+      await this.#store.deletePlanRunInputs(runId);
+      return await this.#failPlanRun(planRun, error);
+    }
     const running = await this.#markPlanRunning(planRun);
-    const credentials = await this.#mintRunCredentials(
-      planRun,
-      "plan",
-      planRun.id,
-    );
-    const result = await this.#executePlan(
-      running,
-      profile,
-      variables,
-      credentials,
-      dispatch,
-    );
-    // Retain the inputs sidecar for a SUCCEEDED template run: the apply consumer
-    // re-reads the generated root / build / template ref to build the apply
-    // dispatch payload (the same generated root the plan was reviewed against).
+    let result: PlanRun;
+    try {
+      const credentials = await this.#mintRunCredentials(
+        planRun,
+        "plan",
+        planRun.id,
+      );
+      result = await this.#executePlan(
+        running,
+        profile,
+        variables,
+        credentials,
+        dispatch,
+      );
+    } catch (error) {
+      await this.#store.deletePlanRunInputs(runId);
+      return await this.#failPlanRun(running, error);
+    }
+    // Retain the inputs sidecar for a SUCCEEDED generated-root run: the apply
+    // consumer re-reads the generated root / build payload (the same generated
+    // root the plan was reviewed against).
     // It is deleted once the plan is applied (apply-once) or the run is failed.
-    // Raw-module runs and non-succeeded template plans drop the sidecar now.
+    // Non-succeeded generated-root plans drop the sidecar now.
     const retainForApply =
-      result.status === "succeeded" && dispatch.template !== undefined;
+      result.status === "succeeded" && dispatch.generatedRoot !== undefined;
     if (!retainForApply) {
       await this.#store.deletePlanRunInputs(runId);
-    }
-    // Drift check (§19 drift_check; Phase 8): a succeeded drift check whose plan
-    // observed any change (add/change/destroy > 0) means the live state has
-    // drifted from the recorded configuration. Emit `installation.drift_detected`
-    // with COUNTS ONLY — no installation status change (the spec has no `drifted`
-    // status) and never any resource names/values.
-    if (result.driftCheck === true && result.status === "succeeded") {
-      await this.#recordDriftDetected(result);
     }
     return result;
   }
 
   /**
    * Emits `installation.drift_detected` (§27 / §34 Activity) when a succeeded
-   * drift_check observed a non-empty change summary. Metadata carries the run id
-   * + the add/change/destroy counts only (never resource names or values). A run
-   * with an empty summary (no drift) emits nothing.
+   * drift_check observed a non-empty change summary. Metadata carries the run id,
+   * add/change/destroy counts, provider/type/action aggregates, and public-safe
+   * remediation hints only (never resource names, values, or scope identifiers).
+   * A run with an empty summary emits nothing.
    */
-  async #recordDriftDetected(planRun: PlanRun): Promise<void> {
+  async #recordDriftDetected(
+    planRun: PlanRun,
+    changes: readonly PlanResourceChange[],
+  ): Promise<void> {
     const summary = planRun.summary;
     const add = summary?.add ?? 0;
     const change = summary?.change ?? 0;
     const destroy = summary?.destroy ?? 0;
     if (add + change + destroy <= 0) return;
+    const classification = classifyDriftResourceChanges(changes);
     await this.#recordActivity({
       spaceId: planRun.spaceId,
       action: "installation.drift_detected",
@@ -1943,6 +2968,18 @@ export class OpenTofuDeploymentController {
         add,
         change,
         destroy,
+        ...(Object.keys(classification.resourceTypes).length > 0
+          ? { resourceTypes: classification.resourceTypes }
+          : {}),
+        ...(Object.keys(classification.providers).length > 0
+          ? { providers: classification.providers }
+          : {}),
+        ...(Object.keys(classification.actions).length > 0
+          ? { actions: classification.actions }
+          : {}),
+        ...(classification.remediationHints.length > 0
+          ? { remediationHints: classification.remediationHints }
+          : {}),
       },
     });
   }
@@ -1960,14 +2997,14 @@ export class OpenTofuDeploymentController {
         `apply run ${runId} not found`,
       );
     }
-    if (!this.#runner) return { applyRun };
     if (!this.#shouldProcessRun(applyRun.status, applyRun.heartbeatAt)) {
       return await this.getApplyRun(runId);
     }
     const planRun = await this.#requirePlanRun(applyRun.planRunId);
     const profile = await this.#requireRunnerProfile(applyRun.runnerProfileId);
-    // Template dispatch for apply: re-read the retained inputs sidecar so the
-    // apply runs tofu in the SAME generated root the plan was reviewed against.
+    if (!this.#hasRunnerForProfile(profile)) return { applyRun };
+    // Generated-root dispatch for apply: re-read the retained inputs sidecar so
+    // apply runs tofu in the SAME generated root the plan reviewed.
     const inputs = await this.#store.getPlanRunInputs(planRun.id);
     const dispatch = templateDispatchFromInputs(inputs);
     const key = planRun.installationId ?? planRun.id;
@@ -2015,9 +3052,10 @@ export class OpenTofuDeploymentController {
   }
 
   /**
-   * Mints provider credentials for a run when a Vault is configured. Returns
-   * `undefined` (and dispatches with no credential override, leaving the runner
-   * to fall back to its own env) when no Vault is wired. Never logs the bundle.
+   * Mints provider credentials for provider-using runs. Provider-free runs
+   * dispatch without a credential bundle; provider-using runs fail closed when
+   * no Vault is wired so the runner never falls back to ambient provider env.
+   * Never logs the bundle.
    */
   /**
    * Builds the M2 environment dispatch fields (`stateScope` + `sourceArchive`)
@@ -2051,19 +3089,11 @@ export class OpenTofuDeploymentController {
       environment: ctx.environment,
       generation,
     };
-    const sourceArchive: DispatchSourceArchive = {
-      objectKey: snapshot.archiveObjectKey,
-      digest: snapshot.archiveDigest,
-    };
-    // remote_state dependencies (spec §15): for each remote_state edge of the
-    // consumer Installation, resolve the producer's LATEST StateSnapshot and emit
-    // a depState the DO fetches + decrypts into /work/deps/<name>.tfstate before
-    // init/plan/apply. Derived at dispatch (not pinned) so the consumer reads the
-    // producer's current state; the pinned generation in the DependencySnapshot
-    // is what strict mode guards against.
-    const depStates = await this.#resolveRemoteStateDispatch(
-      ctx.installationId,
-    );
+    const sourceArchive = await this.#dispatchSourceArchive(planRun, snapshot);
+    // remote_state dependencies (spec §15): for each remote_state edge, dispatch
+    // the producer StateSnapshot pinned by the plan's DependencySnapshot so
+    // apply/destroy use the same state bytes the plan reviewed.
+    const depStates = await this.#resolveRemoteStateDispatch(planRun);
     return {
       stateScope,
       sourceArchive,
@@ -2071,56 +3101,184 @@ export class OpenTofuDeploymentController {
     };
   }
 
+  async #dispatchSourceArchive(
+    planRun: PlanRun,
+    snapshot: SourceSnapshot,
+  ): Promise<DispatchSourceArchive> {
+    if (!planRun.compatibilityReportId) {
+      return {
+        objectKey: snapshot.archiveObjectKey,
+        digest: snapshot.archiveDigest,
+      };
+    }
+    const report = await this.#store.getCapsuleCompatibilityReport(
+      planRun.compatibilityReportId,
+    );
+    if (!report) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_missing: plan run ${planRun.id} references ` +
+          `CompatibilityReport ${planRun.compatibilityReportId} which no longer exists`,
+      );
+    }
+    if (report.sourceSnapshotId !== snapshot.id) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_snapshot_mismatch: plan run ${planRun.id} ` +
+          `uses SourceSnapshot ${snapshot.id} but report ${report.id} was created for ${report.sourceSnapshotId}`,
+      );
+    }
+    const policy = await this.#policyForPlanRun(planRun);
+    this.#assertCompatibilityReportRunnable(report, policy);
+    if (
+      report.level === "auto_capsulized" &&
+      (!report.normalizedObjectKey || !report.normalizedDigest)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `normalized_capsule_artifact_missing: CompatibilityReport ${report.id} ` +
+          "is auto_capsulized but has no normalizedObjectKey/normalizedDigest",
+      );
+    }
+    // auto_capsulized normalized modules are threaded through generatedRoot
+    // moduleFiles; sourceArchive remains the immutable original SourceSnapshot
+    // so the runner can still restore source/build context and verify commit
+    // lineage without pretending the JSON artifact is an R2_SOURCE archive.
+    return {
+      objectKey: snapshot.archiveObjectKey,
+      digest: snapshot.archiveDigest,
+    };
+  }
+
   /**
-   * Builds the {@link DispatchDepState} list for a consumer Installation's
-   * `remote_state` Dependency edges (spec §15). For each edge it reads the
-   * producer Installation + its LATEST StateSnapshot (the env's current
-   * generation); a producer with no StateSnapshot yet (never applied) is a typed
-   * `dependency_state_unavailable`. `name` is the producer Installation name —
-   * the `/work/deps/<name>.tfstate` filename the consumer references via
-   * `terraform_remote_state`. Returns an empty list when the consumer has no
-   * remote_state edges.
+   * Builds the {@link DispatchDepState} list for a PlanRun's `remote_state`
+   * DependencySnapshot entries (spec §15/§17). New PlanRuns pin the exact
+   * StateSnapshot objectKey/digest at plan time. Older snapshots without those
+   * optional fields fall back to the StateSnapshot with the pinned generation.
+   * `name` is the producer Installation name — the `/work/deps/<name>.tfstate`
+   * filename the consumer references via `terraform_remote_state`. Returns an
+   * empty list when the plan pinned no remote_state edges.
    */
   async #resolveRemoteStateDispatch(
-    consumerInstallationId: string,
+    planRun: PlanRun,
   ): Promise<readonly DispatchDepState[]> {
-    const dependencies = await this.#store.listDependenciesForConsumer(
-      consumerInstallationId,
+    if (!planRun.dependencySnapshotId) return [];
+    const snapshot = await this.#store.getDependencySnapshot(
+      planRun.dependencySnapshotId,
     );
+    if (!snapshot) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `dependency_snapshot_missing: plan run ${planRun.id} references ` +
+          `DependencySnapshot ${planRun.dependencySnapshotId} which is no ` +
+          `longer present`,
+      );
+    }
     const depStates: DispatchDepState[] = [];
-    for (const dependency of dependencies) {
+    for (const entry of snapshot.dependencies) {
+      const dependency = await this.#store.getDependency(entry.dependencyId);
+      if (!dependency) continue;
       if (dependency.mode !== "remote_state") continue;
       const producer = await this.#store.getInstallation(
-        dependency.producerInstallationId,
+        entry.producerInstallationId,
       );
       if (!producer) {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `dependency_state_unavailable: dependency ${dependency.id} producer ` +
-            `installation ${dependency.producerInstallationId} not found`,
+            `installation ${entry.producerInstallationId} not found`,
         );
       }
-      const latest = await this.#store.getLatestStateSnapshot(
-        producer.id,
-        producer.environment,
+      const pinned = await this.#pinnedRemoteStateSnapshotForEntry(
+        planRun,
+        entry,
+        producer,
       );
-      if (!latest) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `dependency_state_unavailable: dependency ${dependency.id} producer ` +
-            `installation ${producer.id} has no StateSnapshot yet (apply it first)`,
-        );
-      }
       depStates.push({
         name: producer.name,
         installationId: producer.id,
         environment: producer.environment,
-        generation: latest.generation,
-        objectKey: latest.objectKey,
-        digest: latest.digest,
+        generation: pinned.generation,
+        objectKey: pinned.objectKey,
+        digest: pinned.digest,
       });
     }
     return depStates;
+  }
+
+  async #latestProducerStateSnapshotForDependency(
+    dependencyId: string,
+    producer: Installation,
+  ): Promise<StateSnapshot> {
+    const stateSnapshot = await this.#store.getLatestStateSnapshot(
+      producer.id,
+      producer.environment,
+    );
+    if (!stateSnapshot) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `dependency_state_unavailable: dependency ${dependencyId} producer ` +
+          `installation ${producer.id} has no StateSnapshot yet (apply it first)`,
+      );
+    }
+    return stateSnapshot;
+  }
+
+  async #pinnedRemoteStateSnapshotForEntry(
+    planRun: PlanRun,
+    entry: DependencySnapshotEntry,
+    producer: Installation,
+  ): Promise<StateSnapshot> {
+    const snapshots = await this.#store.listStateSnapshots(
+      producer.id,
+      producer.environment,
+    );
+    const pinned = snapshots.find(
+      (snapshot) => snapshot.generation === entry.producerStateGeneration,
+    );
+    if (!pinned) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `dependency_state_unavailable: plan run ${planRun.id} dependency ` +
+          `${entry.dependencyId} pinned producer StateSnapshot generation ` +
+          `${entry.producerStateGeneration} is no longer present`,
+      );
+    }
+    if (entry.producerStateObjectKey || entry.producerStateDigest) {
+      if (
+        (entry.producerStateSnapshotId &&
+          pinned.id !== entry.producerStateSnapshotId) ||
+        pinned.objectKey !== entry.producerStateObjectKey ||
+        pinned.digest !== entry.producerStateDigest
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `dependency_snapshot_tampered: plan run ${planRun.id} dependency ` +
+            `${entry.dependencyId} pinned producer StateSnapshot no longer ` +
+            `matches the ledger row`,
+        );
+      }
+    }
+    return pinned;
+  }
+
+  async #reverifyRemoteStateSnapshotPin(
+    planRun: PlanRun,
+    entry: DependencySnapshotEntry,
+  ): Promise<void> {
+    const dependency = await this.#store.getDependency(entry.dependencyId);
+    if (dependency?.mode !== "remote_state") return;
+    const producer = await this.#store.getInstallation(
+      entry.producerInstallationId,
+    );
+    if (!producer) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `dependency_state_unavailable: dependency ${entry.dependencyId} ` +
+          `producer installation ${entry.producerInstallationId} not found`,
+      );
+    }
+    await this.#pinnedRemoteStateSnapshotForEntry(planRun, entry, producer);
   }
 
   /**
@@ -2181,6 +3339,40 @@ export class OpenTofuDeploymentController {
   }
 
   /**
+   * Capsule Gate precondition (core-spec §6 / §26): when a PlanRun was created
+   * from an Installation that has a reviewed CompatibilityReport, the queued
+   * plan/apply consumer must re-read it before provider credential mint. Only
+   * `ready` and `auto_capsulized` reports are runnable; `needs_patch` and
+   * `unsupported` stop before credentials are issued.
+   */
+  async #assertCapsuleCompatibilityAllowsRun(planRun: PlanRun): Promise<void> {
+    if (!planRun.compatibilityReportId) return;
+    const report = await this.#store.getCapsuleCompatibilityReport(
+      planRun.compatibilityReportId,
+    );
+    if (!report) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_missing: plan run ${planRun.id} references ` +
+          `CompatibilityReport ${planRun.compatibilityReportId} which no longer exists`,
+      );
+    }
+    if (
+      planRun.sourceSnapshotId &&
+      report.sourceSnapshotId !== planRun.sourceSnapshotId
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_snapshot_mismatch: plan run ${planRun.id} ` +
+          `uses SourceSnapshot ${planRun.sourceSnapshotId} but report ` +
+          `${report.id} was created for ${report.sourceSnapshotId}`,
+      );
+    }
+    const policy = await this.#policyForPlanRun(planRun);
+    this.#assertCompatibilityReportRunnable(report, policy);
+  }
+
+  /**
    * Verifies the plan's pinned DependencySnapshot at apply time (spec §17 /
    * invariant 9). No-ops when the plan pinned no snapshot.
    *
@@ -2227,6 +3419,9 @@ export class OpenTofuDeploymentController {
       // published_output: re-verify the backing OutputShare at apply (spec §18).
       // A revoke after plan must fail the apply regardless of snapshot mode.
       await this.#reverifyPublishedOutputShare(planRun, entry.dependencyId);
+      // remote_state: the pinned state objectKey/digest must still match the
+      // immutable StateSnapshot ledger row, regardless of strict/pinned mode.
+      await this.#reverifyRemoteStateSnapshotPin(planRun, entry);
       if (snapshot.mode !== "strict") continue;
       // Strict freshness: the producer must not have moved since plan.
       const producer = await this.#store.getInstallation(
@@ -2315,12 +3510,12 @@ export class OpenTofuDeploymentController {
   /**
    * Records the §16 OutputSnapshot after a successful (non-destroy) apply.
    *
-   *   - `spaceOutputs` = EVERY non-sensitive output from the raw runner envelope
-   *     (name -> value), the same-Space dependency-consumption surface.
-   *   - `publicOutputs` = the existing public projection already computed for
-   *     `Deployment.outputsPublic` (well-known / template-allowlisted + secret
-   *     filter), the UI / display surface.
-   *   - Sensitive-flagged outputs appear in NEITHER (invariants 11/12).
+   *   - `spaceOutputs` = InstallConfig.outputAllowlist projection (or template
+   *     public projection for template-backed runs), after sensitive filtering
+   *     and type validation.
+   *   - `publicOutputs` = the same projection surfaced on Deployment.
+   *   - Sensitive-flagged outputs appear in NEITHER (invariants 11/12), and a
+   *     required sensitive/missing/wrong-type output fails closed.
    *   - `outputDigest` = stableJsonDigest over `{ spaceOutputs, publicOutputs }`,
    *     which drives stale propagation (§24).
    *   - `rawOutputArtifactKey` = the §26 key the runner DO sealed + wrote the raw
@@ -2334,10 +3529,18 @@ export class OpenTofuDeploymentController {
     readonly applyRun: ApplyRun;
     readonly result: OpenTofuApplyResult;
     readonly publicOutputs: readonly DeploymentOutput[];
+    readonly outputAllowlist?: RunTemplateDispatch["outputAllowlist"];
     readonly stateGeneration: number;
     readonly now: number;
   }): Promise<OutputSnapshot> {
-    const spaceOutputs = spaceOutputsFromOpenTofu(input.result.outputs);
+    const spaceOutputs = input.outputAllowlist
+      ? projectOutputAllowlistSpaceOutputs(
+          input.outputAllowlist,
+          input.result.outputs,
+        )
+      : Object.fromEntries(
+          input.publicOutputs.map((output) => [output.name, output.value]),
+        );
     const publicOutputs = Object.fromEntries(
       input.publicOutputs.map((output) => [output.name, output.value]),
     );
@@ -2382,15 +3585,26 @@ export class OpenTofuDeploymentController {
    */
   async #propagateStale(input: {
     readonly installation: Installation;
-    readonly previousDigest: string | undefined;
-    readonly newDigest: string;
+    readonly previousOutputSnapshot: OutputSnapshot | undefined;
+    readonly newOutputSnapshot: OutputSnapshot;
     readonly now: number;
   }): Promise<void> {
-    if (input.previousDigest === input.newDigest) return;
+    if (
+      input.previousOutputSnapshot?.outputDigest ===
+      input.newOutputSnapshot.outputDigest
+    )
+      return;
     const edges = await this.#store.listDependenciesBySpace(
       input.installation.spaceId,
     );
     if (edges.length === 0) return;
+    const changedOutputNames = changedOutputNamesBetween(
+      input.previousOutputSnapshot,
+      input.newOutputSnapshot,
+    );
+    const producerOutputReasons = changedOutputNames.map(
+      (outputName) => `${input.installation.name}.${outputName} changed`,
+    );
     const closure = downstreamClosure(
       edges.map((edge) => ({
         from: edge.producerInstallationId,
@@ -2411,12 +3625,30 @@ export class OpenTofuDeploymentController {
       });
       // Activity (§27 / §34): a downstream consumer was marked stale by the
       // producer's changed outputs (§24). One event per affected consumer.
+      const directOutputNames = directChangedDependencyOutputs({
+        edges,
+        producerInstallationId: input.installation.id,
+        consumerInstallationId: consumer.id,
+        changedOutputNames,
+      });
+      const directReasons = directOutputNames.map(
+        (outputName) => `${input.installation.name}.${outputName} changed`,
+      );
       await this.#recordActivity({
         spaceId: consumer.spaceId,
         action: "installation.stale",
         targetType: "installation",
         targetId: consumer.id,
-        metadata: { producerInstallationId: input.installation.id },
+        metadata: {
+          producerInstallationId: input.installation.id,
+          producerInstallationName: input.installation.name,
+          changedOutputs: changedOutputNames,
+          reasons:
+            directReasons.length > 0 ? directReasons : producerOutputReasons,
+          directChangedOutputs: directOutputNames,
+          outputSnapshotId: input.newOutputSnapshot.id,
+          previousOutputSnapshotId: input.previousOutputSnapshot?.id ?? null,
+        },
       });
     }
   }
@@ -2443,96 +3675,202 @@ export class OpenTofuDeploymentController {
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
   ): Promise<RunCredentials | undefined> {
-    if (!this.#vault || planRun.requiredProviders.length === 0) {
+    if (planRun.requiredProviders.length === 0) {
       return undefined;
     }
-    try {
-      // Resolve the installation's capabilities ONCE: the same resolution feeds
-      // BOTH the shared provider-pool selection (connectionIds) AND the §13
-      // per-alias credential split (TF_VAR entries) so the minted TF_VAR vars
-      // line up byte-for-byte with the rootgen aliases (resolved once per
-      // dispatch). Runs without installation context resolve to undefined/[].
-      const resolved = await this.#resolveRunCapabilities(planRun);
-      const connectionIds = resolved
-        ? mintableConnectionIds(resolved)
-        : undefined;
-      // Shared provider env (compatibility): a single credential per provider.
-      const bundle = await this.#vault.mint(
-        planRun.spaceId,
-        planRun.requiredProviders,
-        connectionIds && connectionIds.length > 0
-          ? { connectionIds }
-          : undefined,
+    if (!this.#vault) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "credential_mint_failed: connection vault is not configured for provider credentials",
       );
+    }
+    try {
+      // Resolve the installation's provider bindings ONCE: the same resolution
+      // feeds the per-binding credential split (TF_VAR entries) so minted vars
+      // line up byte-for-byte with rootgen.
+      const resolved = await this.#resolveRunProviderBindings(planRun);
+      // Per-binding split: the same resolved entries that produced the rootgen
+      // provider blocks produce these TF_VAR_<provider>_<alias>_<arg> vars.
+      // This is the only provider credential delivery path for Installation
+      // runs; providers without a root-only arg mapping receive no shared env.
+      const providerEntries = resolved
+        ? providerMintEntriesFromResolved(resolved)
+        : [];
+      if (resolved) {
+        const missingRootOnly = missingRootOnlyCredentialProviders(
+          planRun.requiredProviders,
+          resolved,
+        );
+        const credentialPolicy = (await this.#policyForPlanRun(planRun))
+          ?.providerCredentials;
+        const rootOnlyRequired =
+          credentialPolicy?.requireRootOnly === true ||
+          resolved.some((entry) => entry.mode === "disabled");
+        if (missingRootOnly.length > 0 && rootOnlyRequired) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `credential_mint_failed: root-only provider binding is required for providers: ${missingRootOnly.join(", ")}`,
+          );
+        }
+      }
+      const sharedProviders = resolved
+        ? sharedProviderEnvProviders(planRun.requiredProviders, resolved)
+        : planRun.requiredProviders;
+      const connectionIds =
+        resolved && sharedProviders.length > 0
+          ? mintableConnectionIds(resolved)
+          : resolved
+            ? []
+            : undefined;
+      const bundle =
+        sharedProviders.length > 0
+          ? await this.#vault.mintForPhase({
+              spaceId: planRun.spaceId,
+              phase,
+              providers: sharedProviders,
+              ...(connectionIds !== undefined ? { connectionIds } : {}),
+            })
+          : new CredentialBundle({});
+      if (providerEntries.length === 0) {
+        if (resolved) {
+          await this.#recordProviderCredentialMintEvents(
+            planRun,
+            resolved,
+            phase,
+            auditRunId,
+            bundle.providerCredentialEvidence,
+          );
+        }
+        await this.#assertProviderCredentialPolicy(
+          planRun,
+          bundle.providerCredentialEvidence,
+          resolved ? providerEntries.length : 0,
+        );
+        return bundle.env;
+      }
+      const perAlias = await this.#vault.mintForProviderBindings(
+        planRun.spaceId,
+        providerEntries,
+        { phase },
+      );
+      const evidence = [
+        ...bundle.providerCredentialEvidence,
+        ...perAlias.providerCredentialEvidence,
+      ];
       if (resolved) {
         await this.#recordProviderCredentialMintEvents(
           planRun,
           resolved,
           phase,
           auditRunId,
+          evidence,
         );
       }
-      // §13 per-alias split: merge the per-capability TF_VAR env ON TOP of the
-      // shared mint. The same resolved entries that produced the rootgen aliases
-      // produce these TF_VAR_<provider>_<capability>_<arg> vars; the shared env
-      // stays for providers without an arg mapping.
-      const capabilityEntries = resolved
-        ? capabilityMintEntriesFromResolved(resolved)
-        : [];
-      if (capabilityEntries.length === 0) {
-        return bundle.env;
-      }
-      const perAlias = await this.#vault.mintForCapabilities(
-        planRun.spaceId,
-        capabilityEntries,
-        { phase },
+      await this.#assertProviderCredentialPolicy(
+        planRun,
+        evidence,
+        providerEntries.length,
       );
       return { ...bundle.env, ...perAlias.env };
     } catch (error) {
-      throw mapVaultError(error);
+      const mapped = mapVaultError(error);
+      if (mapped instanceof OpenTofuControllerError) {
+        if (mapped.message.startsWith("credential_policy_failed:")) {
+          throw mapped;
+        }
+        throw new OpenTofuControllerError(
+          mapped.code,
+          mapped.message.startsWith("credential_mint_failed:")
+            ? mapped.message
+            : `credential_mint_failed: ${mapped.message}`,
+        );
+      }
+      throw mapped;
     }
+  }
+
+  async #assertProviderCredentialPolicy(
+    planRun: PlanRun,
+    evidence: readonly ProviderCredentialMintEvidence[],
+    expectedCredentialEvidenceCount = 0,
+  ): Promise<void> {
+    const policy = await this.#policyForPlanRun(planRun);
+    const result = evaluateProviderCredentialMintPolicy(
+      evidence,
+      policy,
+      planRun.requiredProviders,
+      expectedCredentialEvidenceCount,
+    );
+    if (result.reasons.length === 0) return;
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `credential_policy_failed: ${result.reasons[0]}`,
+    );
   }
 
   async #recordProviderCredentialMintEvents(
     planRun: PlanRun,
-    resolved: readonly ResolvedCapability[],
+    resolved: readonly ResolvedProviderBinding[],
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
+    evidence: readonly ProviderCredentialMintEvidence[] = [],
   ): Promise<void> {
     const byConnection = credentialMintAuditEntries(resolved);
     if (byConnection.length === 0) return;
     const createdAt = new Date(this.#now()).toISOString();
     const installationId =
-      planRun.installationContext?.installationId ??
-      planRun.installationId ??
-      "legacy_unscoped";
+      planRun.installationContext?.installationId ?? planRun.installationId;
+    const evidenceByConnection = groupProviderCredentialEvidence(evidence);
     for (const entry of byConnection) {
+      const providerCredentialEvidence =
+        evidenceByConnection.get(entry.connectionId) ?? [];
       await this.#store.putCredentialMintEvent({
         id: this.#newId("credmint"),
         runId: auditRunId,
         spaceId: planRun.spaceId,
-        installationId,
+        ...(installationId ? { installationId } : {}),
         connectionId: entry.connectionId,
         phase,
         capabilities: entry.capabilities,
+        ...(providerCredentialEvidence.length > 0
+          ? { providerCredentialEvidence }
+          : {}),
         createdAt,
       });
     }
   }
 
+  async #recordSourceCredentialMintEvent(input: {
+    readonly runId: string;
+    readonly spaceId: string;
+    readonly sourceId: string;
+    readonly connectionId: string;
+  }): Promise<void> {
+    await this.#store.putCredentialMintEvent({
+      id: this.#newId("credmint"),
+      runId: input.runId,
+      spaceId: input.spaceId,
+      sourceId: input.sourceId,
+      connectionId: input.connectionId,
+      phase: "source",
+      capabilities: ["source"],
+      createdAt: new Date(this.#now()).toISOString(),
+    });
+  }
+
   /**
-   * Resolves an installation-driven run's capabilities (spec §9) at mint time so
+   * Resolves an installation-driven run's provider bindings (spec §9) at mint time so
    * binding changes take effect on the next run. Returns `undefined` for runs
    * without installation context or whose installation row is gone — the legacy
    * space-wide pool then applies and no per-alias split is produced. The result
    * feeds BOTH {@link mintableConnectionIds} (shared pool) and
-   * {@link capabilityMintEntriesFromResolved} (the §13 per-alias TF_VAR split),
-   * mirroring `capabilityProvidersFromResolved` so the minted vars match the
+   * {@link providerMintEntriesFromResolved} (the §13 per-alias TF_VAR split),
+   * mirroring `providerBindingsFromResolved` so the minted vars match the
    * rootgen aliases.
    */
-  async #resolveRunCapabilities(
+  async #resolveRunProviderBindings(
     planRun: PlanRun,
-  ): Promise<readonly ResolvedCapability[] | undefined> {
+  ): Promise<readonly ResolvedProviderBinding[] | undefined> {
     const ctx = planRun.installationContext;
     if (!ctx) return undefined;
     const installation = await this.#store.getInstallation(ctx.installationId);
@@ -2540,7 +3878,7 @@ export class OpenTofuDeploymentController {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
     });
-    return await this.#connectionsService.resolveCapabilities(installation);
+    return await this.#connectionsService.resolveProviderBindings(installation);
   }
 
   async getApplyRun(id: string): Promise<ApplyRunResponse> {
@@ -2560,13 +3898,17 @@ export class OpenTofuDeploymentController {
       : undefined;
     return {
       applyRun,
-      ...(installation ? { installation } : {}),
+      ...(installation
+        ? { installation: publicInstallation(installation) }
+        : {}),
       ...(deployment ? { deployment } : {}),
     };
   }
 
   async getInstallation(id: string): Promise<GetInstallationResponse> {
-    return { installation: await this.#requireInstallation(id) };
+    return {
+      installation: publicInstallation(await this.#requireInstallation(id)),
+    };
   }
 
   /**
@@ -2739,6 +4081,26 @@ export class OpenTofuDeploymentController {
     return await this.#sources.listSourceSnapshots(sourceId);
   }
 
+  async getSourceSnapshot(id: string): Promise<SourceSnapshot> {
+    return await this.#sources.getSourceSnapshot(id);
+  }
+
+  /**
+   * Records an upload-origin SourceSnapshot. The archive bytes are written to
+   * R2_SOURCE by the upload route before this call; this persists the ledger row
+   * for the `takosumi deploy` pipeline.
+   */
+  async recordUploadSnapshot(input: {
+    readonly spaceId: string;
+    readonly archiveObjectKey: string;
+    readonly archiveDigest: string;
+    readonly archiveSizeBytes: number;
+    readonly path?: string;
+    readonly snapshotId?: string;
+  }): Promise<SourceSnapshot> {
+    return await this.#sources.recordUploadSnapshot(input);
+  }
+
   async createSourceCompatibilityCheck(
     sourceId: string,
     request: CreateSourceCompatibilityCheckRequest = {},
@@ -2789,6 +4151,10 @@ export class OpenTofuDeploymentController {
     }
     const sync = await this.#store.getSourceSyncRun(id);
     if (sync) return projectSourceSyncRun(sync);
+    const compatibilityCheck = await this.#store.getCompatibilityCheckRun(id);
+    if (compatibilityCheck) return compatibilityCheck;
+    const backupRun = await this.#store.getBackupRun(id);
+    if (backupRun) return backupRun;
     throw new OpenTofuControllerError("not_found", `run ${id} not found`);
   }
 
@@ -2846,6 +4212,24 @@ export class OpenTofuDeploymentController {
       return {
         diagnostics: sync.error
           ? [{ severity: "error", message: sync.error }]
+          : [],
+        auditEvents: [],
+      };
+    }
+    const compatibilityCheck = await this.#store.getCompatibilityCheckRun(id);
+    if (compatibilityCheck) {
+      return {
+        diagnostics: compatibilityCheck.errorCode
+          ? [{ severity: "error", message: compatibilityCheck.errorCode }]
+          : [],
+        auditEvents: [],
+      };
+    }
+    const backupRun = await this.#store.getBackupRun(id);
+    if (backupRun) {
+      return {
+        diagnostics: backupRun.errorCode
+          ? [{ severity: "error", message: backupRun.errorCode }]
           : [],
         auditEvents: [],
       };
@@ -2941,6 +4325,16 @@ export class OpenTofuDeploymentController {
       await this.#store.putApplyRun(cancelled);
       return projectApplyRun(cancelled);
     }
+    if (
+      (await this.#store.getSourceSyncRun(id)) ||
+      (await this.#store.getCompatibilityCheckRun(id)) ||
+      (await this.#store.getBackupRun(id))
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `run ${id} is not a cancellable plan or apply run`,
+      );
+    }
     throw new OpenTofuControllerError("not_found", `run ${id} not found`);
   }
 
@@ -2991,7 +4385,9 @@ export class OpenTofuDeploymentController {
       // client error here.
       if (
         (await this.#store.getApplyRun(id)) ||
-        (await this.#store.getSourceSyncRun(id))
+        (await this.#store.getSourceSyncRun(id)) ||
+        (await this.#store.getCompatibilityCheckRun(id)) ||
+        (await this.#store.getBackupRun(id))
       ) {
         throw new OpenTofuControllerError(
           "failed_precondition",
@@ -3181,13 +4577,20 @@ export class OpenTofuDeploymentController {
         running,
         running.baseStateGeneration ?? 0,
       );
-      const result = await this.#runner!.plan({
+      const planPolicy = await this.#policyForPlanRun(running);
+      const providerInstallationPolicy =
+        planPolicy?.providerInstallation?.requireMirror === true
+          ? { requireMirror: true }
+          : undefined;
+      const runner = this.#runnerForProfile(profile);
+      const result = await runner.plan({
         planRun: running,
         runnerProfile: profile,
         variables,
-        // Template dispatch (Phase 1C): the runner runs tofu in the generated
-        // root against the baked-in template module. Empty for raw-module runs.
-        ...(dispatch.template ? { template: dispatch.template } : {}),
+        ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
+        // Generated-root dispatch (§7): built-in modules and generic Capsules
+        // use the same generated-root/moduleFiles shape. Empty only for the
+        // lower-level raw `/v1/plan-runs` compatibility path.
         ...(dispatch.generatedRoot
           ? { generatedRoot: dispatch.generatedRoot }
           : {}),
@@ -3242,14 +4645,45 @@ export class OpenTofuDeploymentController {
         ...(layered.resource?.reasons ?? []),
         ...(layered.scope?.reasons ?? []),
         ...(layered.quota?.reasons ?? []),
+        ...(layered.providerLockfile?.reasons ?? []),
+        ...(layered.providerInstallation?.reasons ?? []),
       ];
+      const runPolicy = await this.#policyForPlanRun(running);
+      const compatibilityPolicy =
+        await this.#evaluateCapsuleCompatibilityPolicy({
+          planRunId: running.id,
+          ...(running.compatibilityReportId
+            ? { compatibilityReportId: running.compatibilityReportId }
+            : {}),
+          ...(running.sourceSnapshotId
+            ? { sourceSnapshotId: running.sourceSnapshotId }
+            : {}),
+          ...(runPolicy ? { policy: runPolicy } : {}),
+        });
+      const billingPolicy = await this.#evaluatePlanBillingReservation({
+        planRun: running,
+        result,
+        now,
+        policyPassedBeforeBilling:
+          policy.status === "passed" &&
+          blockedByLayeredPolicy.length === 0 &&
+          compatibilityPolicy.reasons.length === 0,
+      });
       const passedPolicy =
-        policy.status === "passed" && blockedByLayeredPolicy.length === 0;
+        policy.status === "passed" &&
+        blockedByLayeredPolicy.length === 0 &&
+        compatibilityPolicy.reasons.length === 0 &&
+        billingPolicy.reasons.length === 0;
       const completedPolicy = passedPolicy
         ? policy
         : {
             status: "blocked" as const,
-            reasons: [...policy.reasons, ...blockedByLayeredPolicy],
+            reasons: [
+              ...policy.reasons,
+              ...blockedByLayeredPolicy,
+              ...compatibilityPolicy.reasons,
+              ...billingPolicy.reasons,
+            ],
             checkedAt: now,
           };
       const policyDecisionDigest = await stableJsonDigest(completedPolicy);
@@ -3308,12 +4742,32 @@ export class OpenTofuDeploymentController {
                     layered.resource.disallowedResourceTypes.length === 0,
                 }
               : {}),
+            ...(compatibilityPolicy.audit
+              ? { capsuleCompatibility: compatibilityPolicy.audit }
+              : {}),
+            ...(layered.providerLockfile
+              ? {
+                  providerLockfileDigestPresent:
+                    layered.providerLockfile.digestPresent,
+                }
+              : {}),
+            ...(layered.providerInstallation
+              ? {
+                  providerMirrorRequired:
+                    layered.providerInstallation.requireMirror,
+                  providerMirrorPassed:
+                    layered.providerInstallation.reasons.length === 0,
+                  providerMirrorEvidenceCount:
+                    layered.providerInstallation.evidenceCount,
+                }
+              : {}),
             ...(layered.scope
               ? { scopeBoundaryPassed: layered.scope.outOfScope.length === 0 }
               : {}),
             ...(layered.quota
               ? { quotaPassed: layered.quota.exceeded.length === 0 }
               : {}),
+            ...(billingPolicy.audit ? { billing: billingPolicy.audit } : {}),
             ...(layered.templatePolicy
               ? {
                   templateRequiresConfirmation:
@@ -3331,6 +4785,23 @@ export class OpenTofuDeploymentController {
         finishedAt: now,
       };
       await this.#store.putPlanRun(updated);
+      await this.#recordRunnerMinuteUsage({
+        spaceId: updated.spaceId,
+        runId: updated.id,
+        installationId: updated.installationId,
+        startedAt: running.startedAt,
+        finishedAt: now,
+      });
+      // Drift check (§19 drift_check; Phase 8): resource changes are available
+      // only in the runner result and are intentionally not persisted on the
+      // PlanRun. Emit the sanitized aggregate Activity here while the plan JSON
+      // projection is still in scope.
+      if (updated.driftCheck === true && updated.status === "succeeded") {
+        await this.#recordDriftDetected(
+          updated,
+          result.planResourceChanges ?? [],
+        );
+      }
       return updated;
     } catch (error) {
       return await this.#failPlanRun(running, error);
@@ -3360,20 +4831,41 @@ export class OpenTofuDeploymentController {
     result: OpenTofuPlanResult,
   ): Promise<{
     provider?: ProviderAllowlistResult;
+    providerLockfile?: ProviderLockfilePolicyResult;
     resource?: ResourceAllowlistResult;
     scope?: ScopeBoundaryResult;
     action?: ActionPolicyResult;
     quota?: QuotaResult;
+    providerInstallation?: ProviderInstallationPolicyResult;
     templatePolicy?: ReturnType<typeof evaluateTemplatePlanPolicy>;
   }> {
     const changes = result.planResourceChanges;
     const policy = await this.#policyForPlanRun(planRun);
-    const provider = evaluateConfiguredProviderAllowlist(
+    const observedProviders = normalizeProviders(
       result.requiredProviders ?? planRun.requiredProviders,
+    );
+    const provider = evaluateConfiguredProviderAllowlist(
+      observedProviders,
       policy,
       this.#planAllowsNoProviders(planRun),
     );
-    if (changes === undefined) return provider ? { provider } : {};
+    const providerLockfile = evaluateProviderLockfilePolicy(
+      result.providerLockDigest,
+      policy,
+      observedProviders,
+    );
+    const providerInstallation = evaluateProviderInstallationPolicy(
+      result.providerInstallation,
+      policy,
+      observedProviders,
+    );
+    if (changes === undefined) {
+      return compactLayeredPolicy({
+        provider,
+        providerLockfile,
+        providerInstallation,
+      });
+    }
     const action = evaluateActionPolicy(changes);
     const binding = planRun.templateBinding;
     if (binding) {
@@ -3391,7 +4883,16 @@ export class OpenTofuDeploymentController {
       );
       const scope = evaluateScopeBoundary(changes, policy?.scopeBoundary);
       const quota = evaluateQuotaPolicy(changes, policy?.quota);
-      return { provider, resource, scope, action, quota, templatePolicy };
+      return {
+        provider,
+        providerLockfile,
+        providerInstallation,
+        resource,
+        scope,
+        action,
+        quota,
+        templatePolicy,
+      };
     }
     // Non-template installation-context run: enforce the composed
     // Space/InstallConfig policy. An undefined allowlist (or a run without
@@ -3402,7 +4903,15 @@ export class OpenTofuDeploymentController {
     );
     const scope = evaluateScopeBoundary(changes, policy?.scopeBoundary);
     const quota = evaluateQuotaPolicy(changes, policy?.quota);
-    return { provider, resource, scope, action, quota };
+    return {
+      provider,
+      providerLockfile,
+      providerInstallation,
+      resource,
+      scope,
+      action,
+      quota,
+    };
   }
 
   /**
@@ -3417,11 +4926,373 @@ export class OpenTofuDeploymentController {
     if (!installationId) return undefined;
     const installation = await this.#store.getInstallation(installationId);
     if (!installation) return undefined;
+    return await this.#policyForInstallation(installation);
+  }
+
+  async #policyForInstallation(
+    installation: Installation,
+  ): Promise<PolicyConfig | undefined> {
     const [space, installConfig] = await Promise.all([
       this.#store.getSpace(installation.spaceId),
       this.#store.getInstallConfig(installation.installConfigId),
     ]);
-    return mergePolicyConfigs(space?.policy, installConfig?.policy);
+    return withDefaultProviderSupplyChainPolicy(
+      mergePolicyConfigs(space?.policy, installConfig?.policy),
+    );
+  }
+
+  async #billingSettingsForSpace(spaceId: string): Promise<BillingSettings> {
+    const space = await this.#store.getSpace(spaceId);
+    return space?.billingSettings ?? this.#defaultBillingSettings;
+  }
+
+  async #billingPlanForSpace(spaceId: string) {
+    const subscription = await this.#store.getSpaceSubscription(spaceId);
+    if (!subscription) return undefined;
+    const plan = await this.#store.getBillingPlan(subscription.planId);
+    return plan ? { subscription, plan } : undefined;
+  }
+
+  async #reconcileSpaceMonthlyCredits(spaceId: string): Promise<void> {
+    const billingPlan = await this.#billingPlanForSpace(spaceId);
+    if (!billingPlan) return;
+    if (
+      billingPlan.subscription.status !== "active" &&
+      billingPlan.subscription.status !== "trialing"
+    ) {
+      return;
+    }
+    const periodStartMs = Date.parse(
+      billingPlan.subscription.currentPeriodStart,
+    );
+    if (!Number.isFinite(periodStartMs) || periodStartMs > this.#now()) {
+      return;
+    }
+    const balance = await this.#store.getCreditBalance(spaceId);
+    const nowIso = new Date(this.#now()).toISOString();
+    if (!balance) {
+      await this.#store.putCreditBalance({
+        spaceId,
+        availableCredits: billingPlan.plan.includedCredits,
+        reservedCredits: 0,
+        monthlyIncludedCredits: billingPlan.plan.includedCredits,
+        purchasedCredits: 0,
+        updatedAt: nowIso,
+      });
+      return;
+    }
+    const balanceUpdatedAtMs = Date.parse(balance.updatedAt);
+    if (
+      Number.isFinite(balanceUpdatedAtMs) &&
+      balanceUpdatedAtMs >= periodStartMs &&
+      balance.monthlyIncludedCredits === billingPlan.plan.includedCredits
+    ) {
+      return;
+    }
+    const purchasedAvailableCredits = Math.max(
+      0,
+      balance.availableCredits - balance.monthlyIncludedCredits,
+    );
+    await this.#store.putCreditBalance({
+      ...balance,
+      availableCredits:
+        purchasedAvailableCredits + billingPlan.plan.includedCredits,
+      monthlyIncludedCredits: billingPlan.plan.includedCredits,
+      updatedAt: nowIso,
+    });
+  }
+
+  async #requireBillingSettingsForSpace(
+    spaceId: string,
+  ): Promise<BillingSettings> {
+    const space = await this.#requireSpace(spaceId);
+    return space.billingSettings ?? this.#defaultBillingSettings;
+  }
+
+  async #requireSpace(spaceId: string) {
+    const space = await this.#store.getSpace(spaceId);
+    if (!space) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `space ${spaceId} not found`,
+      );
+    }
+    return space;
+  }
+
+  async #evaluatePlanBillingReservation(input: {
+    readonly planRun: PlanRun;
+    readonly result: OpenTofuPlanResult;
+    readonly now: number;
+    readonly policyPassedBeforeBilling: boolean;
+  }): Promise<{
+    readonly reasons: readonly string[];
+    readonly audit?: Readonly<Record<string, JsonValue>>;
+  }> {
+    const settings = await this.#billingSettingsForSpace(input.planRun.spaceId);
+    if (settings.mode === "disabled") {
+      return {
+        reasons: [],
+        audit: { mode: settings.mode, estimatedCredits: 0 },
+      };
+    }
+    await this.#reconcileSpaceMonthlyCredits(input.planRun.spaceId);
+    const estimatedCredits = estimatePlanCredits(input.planRun, input.result);
+    const auditBase = {
+      mode: settings.mode,
+      estimatedCredits,
+    } satisfies Readonly<Record<string, JsonValue>>;
+    const planLimit = await this.#evaluateBillingPlanLimits({
+      spaceId: input.planRun.spaceId,
+      estimatedCredits,
+      changes: input.result.planResourceChanges ?? [],
+    });
+    const auditWithPlanLimits = planLimit.audit
+      ? { ...auditBase, planLimits: planLimit.audit }
+      : auditBase;
+    if (!input.policyPassedBeforeBilling) {
+      return { reasons: [], audit: auditWithPlanLimits };
+    }
+    if (settings.mode === "enforce" && planLimit.reasons.length > 0) {
+      return { reasons: planLimit.reasons, audit: auditWithPlanLimits };
+    }
+    if (billingReservationRequired(settings)) {
+      const balance = await this.#store.getCreditBalance(input.planRun.spaceId);
+      const available = balance?.availableCredits ?? 0;
+      if (available < estimatedCredits) {
+        return {
+          reasons: [
+            `credit reservation failed: ${estimatedCredits} credits estimated but only ${available} available`,
+          ],
+          audit: {
+            ...auditWithPlanLimits,
+            availableCredits: available,
+            reservationStatus: "insufficient_credits",
+          },
+        };
+      }
+      const reservedBalance = await this.#store.reserveCredits(
+        input.planRun.spaceId,
+        {
+          credits: estimatedCredits,
+          updatedAt: new Date(input.now).toISOString(),
+        },
+      );
+      if (!reservedBalance) {
+        const latest = await this.#store.getCreditBalance(
+          input.planRun.spaceId,
+        );
+        return {
+          reasons: [
+            `credit reservation failed: ${estimatedCredits} credits estimated but only ${latest?.availableCredits ?? 0} available`,
+          ],
+          audit: {
+            ...auditWithPlanLimits,
+            availableCredits: latest?.availableCredits ?? 0,
+            reservationStatus: "insufficient_credits",
+          },
+        };
+      }
+    }
+    const reservation: CreditReservation = {
+      id: this.#newId("creditres"),
+      spaceId: input.planRun.spaceId,
+      runId: input.planRun.id,
+      estimatedCredits,
+      status: "reserved",
+      mode: settings.mode,
+      createdAt: new Date(input.now).toISOString(),
+      expiresAt: new Date(input.now + BILLING_RESERVATION_TTL_MS).toISOString(),
+    };
+    await this.#store.putCreditReservation(reservation);
+    return {
+      reasons: [],
+      audit: {
+        ...auditWithPlanLimits,
+        reservationId: reservation.id,
+        reservationStatus: reservation.status,
+      },
+    };
+  }
+
+  async #evaluateBillingPlanLimits(input: {
+    readonly spaceId: string;
+    readonly estimatedCredits: number;
+    readonly changes: readonly PlanResourceChange[];
+  }): Promise<{
+    readonly reasons: readonly string[];
+    readonly audit?: Readonly<Record<string, JsonValue>>;
+  }> {
+    const billingPlan = await this.#billingPlanForSpace(input.spaceId);
+    if (!billingPlan) return { reasons: [] };
+    const reasons: string[] = [];
+    const limits = billingPlan.plan.limits;
+    const maxEstimatedCredits = limits.maxEstimatedCreditsPerRun;
+    if (
+      maxEstimatedCredits !== undefined &&
+      Number.isFinite(maxEstimatedCredits) &&
+      input.estimatedCredits > maxEstimatedCredits
+    ) {
+      reasons.push(
+        `billing plan ${billingPlan.plan.id} limits estimated credits per run to ${maxEstimatedCredits}; plan estimated ${input.estimatedCredits}`,
+      );
+    }
+    const quota = evaluateQuotaPolicy(input.changes, limits.quota);
+    reasons.push(
+      ...quota.reasons.map(
+        (reason) => `billing plan ${billingPlan.plan.id} ${reason}`,
+      ),
+    );
+    return {
+      reasons,
+      audit: {
+        planId: billingPlan.plan.id,
+        subscriptionId: billingPlan.subscription.id,
+        ...(maxEstimatedCredits !== undefined
+          ? { maxEstimatedCreditsPerRun: maxEstimatedCredits }
+          : {}),
+        ...(limits.quota ? { quota: limits.quota } : {}),
+        exceeded: reasons,
+      },
+    };
+  }
+
+  async #assertApplyBillingReservation(planRun: PlanRun): Promise<void> {
+    const settings = await this.#billingSettingsForSpace(planRun.spaceId);
+    if (!billingReservationRequired(settings)) return;
+    const reservation = await this.#store.getCreditReservationForRun(
+      planRun.id,
+    );
+    if (!reservation) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `credit_reservation_missing: plan run ${planRun.id} has no reserved credits`,
+      );
+    }
+    if (reservation.status !== "reserved") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `credit_reservation_not_reserved: reservation ${reservation.id} is ${reservation.status}`,
+      );
+    }
+    if (Date.parse(reservation.expiresAt) <= this.#now()) {
+      await this.#expireCreditReservation(reservation);
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `credit_reservation_expired: reservation ${reservation.id} expired at ${reservation.expiresAt}`,
+      );
+    }
+  }
+
+  async #captureApplyBillingUsage(input: {
+    readonly planRun: PlanRun;
+    readonly applyRun: ApplyRun;
+    readonly now: number;
+  }): Promise<void> {
+    const reservation = await this.#store.getCreditReservationForRun(
+      input.planRun.id,
+    );
+    if (!reservation) return;
+    if (reservation.status !== "reserved") return;
+    await this.#store.putUsageEvent({
+      id: this.#newId("usage"),
+      spaceId: input.planRun.spaceId,
+      ...(input.planRun.installationId
+        ? { installationId: input.planRun.installationId }
+        : {}),
+      runId: input.applyRun.id,
+      kind: "operation",
+      quantity: 1,
+      credits: reservation.estimatedCredits,
+      source: "runner",
+      idempotencyKey: `${input.applyRun.id}:operation`,
+      createdAt: new Date(input.now).toISOString(),
+    });
+    await this.#store.putCreditReservation({
+      ...reservation,
+      status: "captured",
+    });
+    const balance = await this.#store.getCreditBalance(input.planRun.spaceId);
+    if (balance && reservation.mode === "enforce") {
+      await this.#store.putCreditBalance({
+        ...balance,
+        reservedCredits: Math.max(
+          0,
+          balance.reservedCredits - reservation.estimatedCredits,
+        ),
+        updatedAt: new Date(input.now).toISOString(),
+      });
+    }
+  }
+
+  async #recordRunnerMinuteUsage(input: {
+    readonly spaceId: string;
+    readonly runId: string;
+    readonly installationId?: string;
+    readonly startedAt?: number;
+    readonly finishedAt: number;
+  }): Promise<void> {
+    if (input.startedAt === undefined) return;
+    const durationMs = Math.max(0, input.finishedAt - input.startedAt);
+    const quantity = durationMs / 60_000;
+    await this.#store.putUsageEvent({
+      id: this.#newId("usage"),
+      spaceId: input.spaceId,
+      ...(input.installationId ? { installationId: input.installationId } : {}),
+      runId: input.runId,
+      kind: "runner_minute",
+      quantity,
+      credits: Math.max(1, Math.ceil(quantity)),
+      source: "runner",
+      idempotencyKey: `${input.runId}:runner_minute`,
+      createdAt: new Date(input.finishedAt).toISOString(),
+    });
+  }
+
+  async #releaseApplyBillingReservation(planRun: PlanRun): Promise<void> {
+    const reservation = await this.#store.getCreditReservationForRun(
+      planRun.id,
+    );
+    if (!reservation || reservation.status !== "reserved") return;
+    await this.#store.putCreditReservation({
+      ...reservation,
+      status: "released",
+    });
+    const balance = await this.#store.getCreditBalance(planRun.spaceId);
+    if (balance && reservation.mode === "enforce") {
+      await this.#store.putCreditBalance({
+        ...balance,
+        availableCredits:
+          balance.availableCredits + reservation.estimatedCredits,
+        reservedCredits: Math.max(
+          0,
+          balance.reservedCredits - reservation.estimatedCredits,
+        ),
+        updatedAt: new Date(this.#now()).toISOString(),
+      });
+    }
+  }
+
+  async #expireCreditReservation(
+    reservation: CreditReservation,
+  ): Promise<void> {
+    await this.#store.putCreditReservation({
+      ...reservation,
+      status: "expired",
+    });
+    const balance = await this.#store.getCreditBalance(reservation.spaceId);
+    if (balance && reservation.mode === "enforce") {
+      await this.#store.putCreditBalance({
+        ...balance,
+        availableCredits:
+          balance.availableCredits + reservation.estimatedCredits,
+        reservedCredits: Math.max(
+          0,
+          balance.reservedCredits - reservation.estimatedCredits,
+        ),
+        updatedAt: new Date(this.#now()).toISOString(),
+      });
+    }
   }
 
   /**
@@ -3429,7 +5300,7 @@ export class OpenTofuDeploymentController {
    * policy declares zero allowed providers, e.g. `core`). Such a run is allowed
    * to declare/observe zero providers without tripping the profile's
    * "requiredProviders before init" gate. Resolved from the recorded binding;
-   * raw-module runs are never provider-free here.
+   * generic Capsule runs are never provider-free here.
    */
   #planAllowsNoProviders(planRun: PlanRun): boolean {
     const binding = planRun.templateBinding;
@@ -3447,78 +5318,90 @@ export class OpenTofuDeploymentController {
     profile: RunnerProfile,
     dispatch: RunTemplateDispatch,
   ): Promise<ApplyRunResponse> {
-    if (!planRun.planArtifact) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `plan run ${planRun.id} has no immutable plan artifact`,
-      );
-    }
-    // Apply-once re-check inside the serialized section: a concurrent apply of the
-    // same PlanRun is serialized on its id, so re-read the persisted PlanRun here
-    // to observe a sibling apply that already completed and marked it applied.
-    const persistedPlan = await this.#store.getPlanRun(planRun.id);
-    if (persistedPlan?.appliedApplyRunId) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `plan run ${planRun.id} has already been applied by apply run ${persistedPlan.appliedApplyRunId}`,
-      );
-    }
-    const plannedInstallation = planRun.installationId
-      ? await this.#requireCurrentPlannedInstallation(planRun)
-      : undefined;
-    // State generation guard: reject when the target's state advanced past the
-    // generation this plan was created against (a stale plan over newer state).
-    assertStateGenerationMatches(planRun, plannedInstallation);
-    // Env-driven runs guard against the Environment's latest StateSnapshot
-    // generation instead of an Installation generation (M2).
-    await this.#assertInstallationStateGeneration(planRun);
-    // Consumer pre-flight: re-assert the plan still references its SourceSnapshot
-    // (spec invariant 10) just before dispatch, mirroring the digest/generation
-    // pre-flight checks.
-    await this.#revalidateSourceSnapshot(planRun);
-    // DependencySnapshot verification (spec §17 / invariant 9): when the plan
-    // pinned a DependencySnapshot, re-read it and verify producer state
-    // generations (strict mode) + recompute the pinned values digests (tamper
-    // check) before applying. A moved producer (strict) is
-    // `dependency_snapshot_stale`; a digest mismatch is
-    // `dependency_snapshot_tampered`.
-    await this.#verifyDependencySnapshot(planRun);
     const startedAt = this.#now();
     const running = await this.#markApplyRunning(applyRun, profile, startedAt);
-    // Mint provider credentials NOW (just before dispatch). Apply runs resolve
-    // requiredProviders from the reviewed PlanRun. The bundle is attached to the
-    // runner dispatch ONLY — never stored, never logged.
-    const credentials = await this.#mintRunCredentials(
-      planRun,
-      planRun.operation === "destroy" ? "destroy" : "apply",
-      running.id,
-    );
-    if (planRun.operation === "destroy") {
-      return await this.#executeDestroyApply(
-        running,
-        planRun,
-        profile,
-        startedAt,
-        plannedInstallation,
-        credentials,
-        dispatch,
-      );
-    }
-    // M2 env dispatch: an apply persists state at `base + 1` (the DO writes the
-    // new state object + current.json at this generation). Empty without env ctx.
-    const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
-    const envDispatch = await this.#installationDispatch(
-      planRun,
-      persistGeneration,
-    );
+    let runnerDispatched = false;
+
     try {
-      const result = await this.#runner!.apply({
+      if (!planRun.planArtifact) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `plan run ${planRun.id} has no immutable plan artifact`,
+        );
+      }
+      // Apply-once re-check inside the serialized section: a concurrent apply of the
+      // same PlanRun is serialized on its id, so re-read the persisted PlanRun here
+      // to observe a sibling apply that already completed and marked it applied.
+      const persistedPlan = await this.#store.getPlanRun(planRun.id);
+      if (persistedPlan?.appliedApplyRunId) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `plan run ${planRun.id} has already been applied by apply run ${persistedPlan.appliedApplyRunId}`,
+        );
+      }
+      const plannedInstallation = planRun.installationId
+        ? await this.#requireCurrentPlannedInstallation(planRun)
+        : undefined;
+      // State generation guard: reject when the target's state advanced past the
+      // generation this plan was created against (a stale plan over newer state).
+      assertStateGenerationMatches(planRun, plannedInstallation);
+      // Env-driven runs guard against the Environment's latest StateSnapshot
+      // generation instead of an Installation generation (M2).
+      await this.#assertInstallationStateGeneration(planRun);
+      // Consumer pre-flight: re-assert the plan still references its SourceSnapshot
+      // (spec invariant 10) just before dispatch, mirroring the digest/generation
+      // pre-flight checks.
+      await this.#revalidateSourceSnapshot(planRun);
+      // DependencySnapshot verification (spec §17 / invariant 9): when the plan
+      // pinned a DependencySnapshot, re-read it and verify producer state
+      // generations (strict mode) + recompute the pinned values digests (tamper
+      // check) before applying. A moved producer (strict) is
+      // `dependency_snapshot_stale`; a digest mismatch is
+      // `dependency_snapshot_tampered`.
+      await this.#verifyDependencySnapshot(planRun);
+      await this.#assertCapsuleCompatibilityAllowsRun(planRun);
+      assertGeneratedRootDispatchPresent(planRun, dispatch);
+      await this.#assertApplyBillingReservation(planRun);
+      // Mint provider credentials NOW (just before dispatch). Apply runs resolve
+      // requiredProviders from the reviewed PlanRun. The bundle is attached to the
+      // runner dispatch ONLY — never stored, never logged.
+      const credentials = await this.#mintRunCredentials(
+        planRun,
+        planRun.operation === "destroy" ? "destroy" : "apply",
+        running.id,
+      );
+      if (planRun.operation === "destroy") {
+        return await this.#executeDestroyApply(
+          running,
+          planRun,
+          profile,
+          startedAt,
+          plannedInstallation,
+          credentials,
+          dispatch,
+        );
+      }
+      // M2 env dispatch: an apply persists state at `base + 1` (the DO writes the
+      // new state object + current.json at this generation). Empty without env ctx.
+      const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
+      const envDispatch = await this.#installationDispatch(
+        planRun,
+        persistGeneration,
+      );
+      const planPolicy = await this.#policyForPlanRun(planRun);
+      const providerInstallationPolicy =
+        planPolicy?.providerInstallation?.requireMirror === true
+          ? { requireMirror: true }
+          : undefined;
+      runnerDispatched = true;
+      const runner = this.#runnerForProfile(profile);
+      const result = await runner.apply({
         applyRun: running,
         planRun,
         planArtifact: planRun.planArtifact,
         runnerProfile: profile,
-        // Template dispatch (Phase 1C): apply tofu in the generated root.
-        ...(dispatch.template ? { template: dispatch.template } : {}),
+        ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
+        // Generated-root dispatch: apply tofu in the reviewed root.
         ...(dispatch.generatedRoot
           ? { generatedRoot: dispatch.generatedRoot }
           : {}),
@@ -3536,10 +5419,10 @@ export class OpenTofuDeploymentController {
       });
       const now = this.#now();
       // Output allowlist: a template run projects ONLY the template's public
-      // outputs (mapped from their `from` module-output names) after the existing
-      // sensitive/redaction filter. Raw-module runs keep the well-known
-      // projection.
-      const outputs = this.#projectApplyOutputs(planRun, result);
+      // outputs after the existing sensitive/redaction filter. Generic Capsule
+      // runs use InstallConfig.outputAllowlist for both dependency-consumable
+      // space outputs and public Deployment outputs.
+      const outputs = this.#projectApplyOutputs(planRun, result, dispatch);
       const installation =
         plannedInstallation ??
         (await this.#requireCurrentPlannedInstallation(planRun));
@@ -3547,13 +5430,11 @@ export class OpenTofuDeploymentController {
       // currentDeployment pointer move). A create starts at base 0 -> 1; an
       // update advances the installation's generation by one.
       const nextStateGeneration = installation.currentStateGeneration + 1;
-      // §16 OutputSnapshot: capture the projected outputs after a successful
-      // apply. `spaceOutputs` is every non-sensitive output from the raw runner
-      // envelope; `publicOutputs` is the existing public projection (what
-      // Deployment.outputsPublic carries). Sensitive-flagged outputs appear in
-      // NEITHER (invariants 11/12); the raw envelope stays an encrypted artifact
-      // referenced by rawOutputArtifactKey. The Installation's PREVIOUS snapshot
-      // digest drives stale propagation (§24) after this record.
+      // §16 OutputSnapshot: capture the allowlisted projected outputs after a
+      // successful apply. Sensitive-flagged outputs appear in NEITHER
+      // projection; the raw envelope stays an encrypted artifact referenced by
+      // rawOutputArtifactKey. The Installation's PREVIOUS snapshot digest drives
+      // stale propagation (§24) after this record.
       const previousOutputSnapshot = installation.currentOutputSnapshotId
         ? await this.#store.getOutputSnapshot(
             installation.currentOutputSnapshotId,
@@ -3569,6 +5450,9 @@ export class OpenTofuDeploymentController {
         applyRun,
         result,
         publicOutputs: outputs,
+        ...(dispatch.outputAllowlist
+          ? { outputAllowlist: dispatch.outputAllowlist }
+          : {}),
         stateGeneration: nextStateGeneration,
         now,
       });
@@ -3639,8 +5523,8 @@ export class OpenTofuDeploymentController {
       // above); pending/error/destroyed consumers are left untouched.
       await this.#propagateStale({
         installation,
-        previousDigest: previousOutputSnapshot?.outputDigest,
-        newDigest: outputSnapshot.outputDigest,
+        previousOutputSnapshot,
+        newOutputSnapshot: outputSnapshot,
         now,
       });
       const diagnostics = redactRunDiagnostics(result.diagnostics);
@@ -3656,6 +5540,13 @@ export class OpenTofuDeploymentController {
         ...(diagnostics ? { diagnostics } : {}),
         auditEvents: [
           ...running.auditEvents,
+          ...providerInstallationAuditEvents(
+            applyRun.id,
+            "apply",
+            now,
+            result.providerInstallation,
+            providerInstallationPolicy,
+          ),
           auditEvent(applyRun.id, "apply.completed", now, {
             deploymentId: deployment.id,
             outputCount: outputs.length,
@@ -3665,14 +5556,26 @@ export class OpenTofuDeploymentController {
         finishedAt: now,
       };
       await this.#store.putApplyRun(completed);
+      await this.#recordRunnerMinuteUsage({
+        spaceId: completed.spaceId,
+        runId: completed.id,
+        installationId: completed.installationId,
+        startedAt,
+        finishedAt: now,
+      });
       // Mark the PlanRun applied so it cannot be applied again (apply-once).
       await this.#store.putPlanRun({
         ...planRun,
         appliedApplyRunId: applyRun.id,
         updatedAt: now,
       });
-      // The retained template inputs sidecar is no longer needed once applied.
-      if (dispatch.template) {
+      await this.#captureApplyBillingUsage({
+        planRun,
+        applyRun: completed,
+        now,
+      });
+      // The retained generated-root inputs sidecar is no longer needed once applied.
+      if (dispatch.generatedRoot) {
         await this.#store.deletePlanRunInputs(planRun.id);
       }
       // Activity (§27 / §34): a successful apply produced a new Deployment. Run
@@ -3697,6 +5600,7 @@ export class OpenTofuDeploymentController {
         deployment,
       };
     } catch (error) {
+      await this.#releaseApplyBillingReservation(planRun);
       const failed = await this.#failApplyRun(
         running,
         profile,
@@ -3704,6 +5608,15 @@ export class OpenTofuDeploymentController {
         "apply.failed",
         error,
       );
+      if (runnerDispatched && failed.finishedAt !== undefined) {
+        await this.#recordRunnerMinuteUsage({
+          spaceId: failed.spaceId,
+          runId: failed.id,
+          installationId: failed.installationId,
+          startedAt,
+          finishedAt: failed.finishedAt,
+        });
+      }
       return { applyRun: failed };
     }
   }
@@ -3711,15 +5624,25 @@ export class OpenTofuDeploymentController {
   /**
    * Projects the public DeploymentOutputs for an apply result. Template runs are
    * restricted to the template's allowlisted public outputs (resolved from the
-   * recorded binding); raw-module runs use the well-known output projection.
+   * recorded binding); generic Capsule runs use the InstallConfig output
+   * allowlist captured in the generated-root dispatch.
    * Both run AFTER the sensitive/redaction filter in `projection.ts`.
    */
   #projectApplyOutputs(
     planRun: PlanRun,
     result: OpenTofuApplyResult,
+    dispatch: RunTemplateDispatch,
   ): readonly DeploymentOutput[] {
     const binding = planRun.templateBinding;
-    if (!binding) return normalizeDeploymentOutputs(result.outputs);
+    if (!binding) {
+      if (dispatch.outputAllowlist) {
+        return projectOutputAllowlistPublicOutputs(
+          dispatch.outputAllowlist,
+          result.outputs,
+        );
+      }
+      return normalizeDeploymentOutputs(result.outputs);
+    }
     const template = this.#templateRegistry.require(
       binding.templateId,
       binding.templateVersion,
@@ -3758,8 +5681,15 @@ export class OpenTofuDeploymentController {
       planRun,
       persistGeneration,
     );
+    const planPolicy = await this.#policyForPlanRun(planRun);
+    const providerInstallationPolicy =
+      planPolicy?.providerInstallation?.requireMirror === true
+        ? { requireMirror: true }
+        : undefined;
+    let runnerDispatched = false;
     try {
-      if (typeof this.#runner!.destroy !== "function") {
+      const runner = this.#runnerForProfile(profile);
+      if (typeof runner.destroy !== "function") {
         // Without a real teardown the Installation must NOT be marked
         // destroyed: doing so would record a successful destroy in the ledger
         // while the underlying cloud resources keep running (silent leak).
@@ -3768,14 +5698,15 @@ export class OpenTofuDeploymentController {
           "runner does not implement destroy; refusing to mark installation destroyed without teardown",
         );
       }
-      const result = await this.#runner!.destroy({
+      runnerDispatched = true;
+      const result = await runner.destroy({
         applyRun: running,
         planRun,
         planArtifact: planRun.planArtifact,
         installation,
         runnerProfile: profile,
-        // Template dispatch (Phase 1C): destroy tofu in the generated root.
-        ...(dispatch.template ? { template: dispatch.template } : {}),
+        ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
+        // Generated-root dispatch: destroy tofu in the reviewed root.
         ...(dispatch.generatedRoot
           ? { generatedRoot: dispatch.generatedRoot }
           : {}),
@@ -3841,6 +5772,13 @@ export class OpenTofuDeploymentController {
         ...(diagnostics ? { diagnostics } : {}),
         auditEvents: [
           ...running.auditEvents,
+          ...providerInstallationAuditEvents(
+            running.id,
+            "destroy",
+            now,
+            result?.providerInstallation,
+            providerInstallationPolicy,
+          ),
           auditEvent(running.id, "destroy.completed", now, {
             installationId: installation.id,
           }),
@@ -3853,13 +5791,25 @@ export class OpenTofuDeploymentController {
         finishedAt: now,
       };
       await this.#store.putApplyRun(completed);
+      await this.#recordRunnerMinuteUsage({
+        spaceId: completed.spaceId,
+        runId: completed.id,
+        installationId: completed.installationId,
+        startedAt,
+        finishedAt: now,
+      });
       // Mark the PlanRun applied so a destroy plan cannot be re-applied.
       await this.#store.putPlanRun({
         ...planRun,
         appliedApplyRunId: running.id,
         updatedAt: now,
       });
-      if (dispatch.template) {
+      await this.#captureApplyBillingUsage({
+        planRun,
+        applyRun: completed,
+        now,
+      });
+      if (dispatch.generatedRoot) {
         await this.#store.deletePlanRunInputs(planRun.id);
       }
       // Activity (§27 / §34): a successful destroy tore the Installation down.
@@ -3874,8 +5824,12 @@ export class OpenTofuDeploymentController {
           stateGeneration: nextStateGeneration,
         },
       });
-      return { applyRun: completed, installation: patched ?? installation };
+      return {
+        applyRun: completed,
+        installation: publicInstallation(patched ?? installation),
+      };
     } catch (error) {
+      await this.#releaseApplyBillingReservation(planRun);
       if (error instanceof InstallationPatchGuardConflict) {
         throw new OpenTofuControllerError("failed_precondition", error.message);
       }
@@ -3886,7 +5840,19 @@ export class OpenTofuDeploymentController {
         "destroy.failed",
         error,
       );
-      return { applyRun: failed, installation };
+      if (runnerDispatched && failed.finishedAt !== undefined) {
+        await this.#recordRunnerMinuteUsage({
+          spaceId: failed.spaceId,
+          runId: failed.id,
+          installationId: failed.installationId,
+          startedAt,
+          finishedAt: failed.finishedAt,
+        });
+      }
+      return {
+        applyRun: failed,
+        installation: publicInstallation(installation),
+      };
     }
   }
 
@@ -4098,8 +6064,7 @@ export function applyExpectedGuardFromPlanRun(
 /**
  * Resolves an InstallConfig's catalog template binding + its variable mapping
  * (template inputs). Returns `undefined` when the config has no template
- * binding (an opentofu_module / opentofu_root config that is not
- * template-backed).
+ * binding and should be wrapped by the generic generated-root path.
  */
 function installConfigTemplateBinding(config: InstallConfig):
   | {
@@ -4119,111 +6084,183 @@ function installConfigTemplateBinding(config: InstallConfig):
   };
 }
 
-/**
- * §13 capability kinds the generated root emits provider aliases for. The
- * `source` capability is a git credential (mapped only at the source phase, not
- * a provider in the generated root) so it has no rootgen CapabilityKind.
- */
-const PROVIDER_CAPABILITY_KINDS = {
-  compute: "compute",
-  dns: "dns",
-  storage: "storage",
-  database: "database",
-  secrets: "secrets",
-} as const satisfies Readonly<Record<string, CapabilityKind>>;
+function templateOutputAllowlist(
+  template: TemplateDefinition,
+): InstallConfig["outputAllowlist"] {
+  return Object.fromEntries(
+    Object.entries(template.outputs.public).map(([name, output]) => [
+      name,
+      {
+        from: output.from,
+        type: outputAllowlistType(output.type),
+        required: true,
+      },
+    ]),
+  );
+}
 
-/**
- * Derives the §13 per-capability provider mapping from an installation's
- * resolved capabilities: one {@link CapabilityProvider} per capability that
- * resolved to a Connection (mode `connection` or `default` with an operator
- * default) and carries a provider. `source` (git credential, not a provider),
- * `disabled`, and `manual` (values, not a provider) contribute no alias.
- */
-function capabilityProvidersFromResolved(
-  resolved: readonly ResolvedCapability[],
-): readonly CapabilityProvider[] {
-  const providers: CapabilityProvider[] = [];
+function outputAllowlistType(
+  value: string,
+): InstallConfig["outputAllowlist"][string]["type"] {
+  if (
+    value === "string" ||
+    value === "url" ||
+    value === "hostname" ||
+    value === "number" ||
+    value === "boolean" ||
+    value === "json"
+  ) {
+    return value;
+  }
+  throw new OpenTofuControllerError(
+    "failed_precondition",
+    `template output type ${value} is not valid for InstallConfig.outputAllowlist`,
+  );
+}
+
+/** Derives generated-root provider bindings from resolved provider bindings. */
+function providerBindingsFromResolved(
+  resolved: readonly ResolvedProviderBinding[],
+): readonly RootProviderBinding[] {
+  const providers: RootProviderBinding[] = [];
   for (const entry of resolved) {
-    const kind =
-      PROVIDER_CAPABILITY_KINDS[
-        entry.capability as keyof typeof PROVIDER_CAPABILITY_KINDS
-      ];
-    if (!kind) continue;
     const provider = entry.connection?.provider;
     if (!provider) continue;
-    providers.push({ capability: kind, provider });
+    providers.push({
+      provider,
+      ...(entry.alias ? { alias: entry.alias } : {}),
+    });
   }
   return providers;
 }
 
 /**
- * Derives the §13 per-alias credential mint entries from an installation's
- * resolved capabilities. Mirrors {@link capabilityProvidersFromResolved} EXACTLY
- * (same capability filter, same "resolved to a Connection" gate) so the minted
- * `TF_VAR_<provider>_<capability>_<arg>` vars line up byte-for-byte with the
- * rootgen alias variables. The vault still re-validates each connection id (it
- * never trusts these claims) and contributes no TF_VAR for a provider without an
- * arg mapping.
+ * Derives per-binding credential mint entries from resolved provider bindings.
+ * Mirrors {@link providerBindingsFromResolved} so minted TF_VAR names line up
+ * byte-for-byte with rootgen. The vault still re-validates each connection id.
  */
-function capabilityMintEntriesFromResolved(
-  resolved: readonly ResolvedCapability[],
-): readonly CapabilityMintEntry[] {
-  const entries: CapabilityMintEntry[] = [];
+function providerMintEntriesFromResolved(
+  resolved: readonly ResolvedProviderBinding[],
+): readonly ProviderBindingMintEntry[] {
+  const entries: ProviderBindingMintEntry[] = [];
   for (const entry of resolved) {
-    const kind =
-      PROVIDER_CAPABILITY_KINDS[
-        entry.capability as keyof typeof PROVIDER_CAPABILITY_KINDS
-      ];
-    if (!kind) continue;
     const connection = entry.connection;
     if (!connection) continue;
-    entries.push({ capability: kind, connectionId: connection.id });
+    entries.push({
+      provider: connection.provider,
+      ...(entry.alias ? { alias: entry.alias } : {}),
+      connectionId: connection.id,
+    });
   }
   return entries;
 }
 
-/**
- * Produces the non-secret audit rows for provider credential mints. `source`
- * capability is intentionally excluded: it is a git credential minted by the
- * source-sync path, not a provider credential for the generated root.
- */
-function credentialMintAuditEntries(
-  resolved: readonly ResolvedCapability[],
-): readonly {
-  readonly connectionId: string;
-  readonly capabilities: readonly Capability[];
-}[] {
-  const byConnection = new Map<string, Set<Capability>>();
-  for (const entry of resolved) {
-    const kind =
-      PROVIDER_CAPABILITY_KINDS[
-        entry.capability as keyof typeof PROVIDER_CAPABILITY_KINDS
-      ];
-    if (!kind || !entry.connection) continue;
-    let capabilities = byConnection.get(entry.connection.id);
-    if (!capabilities) {
-      capabilities = new Set<Capability>();
-      byConnection.set(entry.connection.id, capabilities);
+function sharedProviderEnvProviders(
+  requiredProviders: readonly string[],
+  resolved: readonly ResolvedProviderBinding[],
+): readonly string[] {
+  void requiredProviders;
+  void resolved;
+  return [];
+}
+
+function missingRootOnlyCredentialProviders(
+  requiredProviders: readonly string[],
+  resolved: readonly ResolvedProviderBinding[],
+): readonly string[] {
+  return requiredProviders
+    .filter((provider) => providerEnvRule(provider))
+    .filter((provider) => !rootOnlyProviderCovered(provider, resolved))
+    .sort();
+}
+
+function rootOnlyProviderCovered(
+  requiredProvider: string,
+  resolved: readonly ResolvedProviderBinding[],
+): boolean {
+  return resolved.some((entry) => {
+    if (!entry.connection) return false;
+    if (providerCredentialArgs(entry.connection.provider).length === 0) {
+      return false;
     }
-    capabilities.add(kind);
-  }
-  return Array.from(byConnection.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([connectionId, capabilities]) => ({
-      connectionId,
-      capabilities: Array.from(capabilities).sort(),
-    }));
+    return providerMatches(requiredProvider, entry.connection.provider);
+  });
 }
 
 /**
- * Flattens an installation's manual-mode capability values into module input
+ * Produces the non-secret audit rows for provider credential mints. The legacy
+ * `capabilities` field carries provider keys until the physical column is
+ * migrated.
+ */
+function credentialMintAuditEntries(
+  resolved: readonly ResolvedProviderBinding[],
+): readonly {
+  readonly connectionId: string;
+  readonly capabilities: readonly string[];
+}[] {
+  const byConnection = new Map<string, Set<string>>();
+  for (const entry of resolved) {
+    if (!entry.connection) continue;
+    let providers = byConnection.get(entry.connection.id);
+    if (!providers) {
+      providers = new Set<string>();
+      byConnection.set(entry.connection.id, providers);
+    }
+    providers.add(entry.connection.provider);
+  }
+  return Array.from(byConnection.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([connectionId, providers]) => ({
+      connectionId,
+      capabilities: Array.from(providers).sort(),
+    }));
+}
+
+function groupProviderCredentialEvidence(
+  evidence: readonly ProviderCredentialMintEvidence[],
+): ReadonlyMap<string, readonly ProviderCredentialMintEvidence[]> {
+  const byConnection = new Map<string, ProviderCredentialMintEvidence[]>();
+  const seen = new Set<string>();
+  for (const item of evidence) {
+    const key = [
+      item.connectionId,
+      item.provider,
+      item.delivery,
+      item.rootOnly ? "root" : "shared",
+      item.temporary ? "temporary" : "static",
+      item.ttlEnforced ? "ttl" : "no-ttl",
+      item.expiresAt ?? "",
+      item.ttlSeconds ?? "",
+      item.issuer ?? "",
+    ].join("\0");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const existing = byConnection.get(item.connectionId) ?? [];
+    existing.push(item);
+    byConnection.set(item.connectionId, existing);
+  }
+  for (const [connectionId, entries] of byConnection) {
+    byConnection.set(
+      connectionId,
+      entries.sort((a, b) =>
+        `${a.delivery}:${a.provider}:${a.expiresAt ?? ""}`.localeCompare(
+          `${b.delivery}:${b.provider}:${b.expiresAt ?? ""}`,
+        ),
+      ),
+    );
+  }
+  return byConnection;
+}
+
+/**
+ * Flattens an installation's manual-mode provider binding values into module input
  * overrides (§13 decision). Manual values are per-installation overrides; only
  * JSON-scalar values flow through (the template input validator rejects unknown
- * keys downstream, and rootgen renders scalars only). Later capabilities win on
- * a key collision (deterministic by the fixed CAPABILITIES order).
+ * keys downstream, and rootgen renders scalars only). Later bindings win on a
+ * key collision in profile order.
  */
 function manualValuesFromResolved(
-  resolved: readonly ResolvedCapability[],
+  resolved: readonly ResolvedProviderBinding[],
 ): Readonly<Record<string, JsonValue>> {
   const merged: Record<string, JsonValue> = {};
   for (const entry of resolved) {
@@ -4236,7 +6273,7 @@ function manualValuesFromResolved(
 }
 
 /**
- * Merges the manual-mode capability values OVER the InstallConfig variableMapping
+ * Merges the manual-mode provider values OVER the InstallConfig variableMapping
  * (§13 decision: manual values are per-installation overrides and win on a key
  * collision). Returns `undefined` when neither side contributes a key so the
  * caller passes `undefined` (byte-identical to no inputs).
@@ -4248,10 +6285,13 @@ function mergeManualInputs(
 ): Readonly<Record<string, JsonValue>> | undefined {
   const manualForTemplate: Record<string, JsonValue> = {};
   for (const [key, value] of Object.entries(manualValues)) {
-    // Only keys the template declares as inputs are merged; unknown manual keys
-    // are ignored for MVP (no DependencySnapshot / typed manual-value contract
-    // yet), avoiding a validateTemplateInputs "unknown input" rejection.
-    if (key in template.inputs) manualForTemplate[key] = value;
+    if (!(key in template.inputs)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `manual provider value '${key}' is not declared by template ${template.id}`,
+      );
+    }
+    manualForTemplate[key] = value;
   }
   if (
     (!configInputs || Object.keys(configInputs).length === 0) &&
@@ -4265,6 +6305,34 @@ function mergeManualInputs(
 function isJsonScalar(value: unknown): value is string | number | boolean {
   const t = typeof value;
   return t === "string" || t === "number" || t === "boolean";
+}
+
+function mergeJsonVariables(
+  ...records: readonly Readonly<Record<string, unknown>>[]
+): Readonly<Record<string, JsonValue>> {
+  const out: Record<string, JsonValue> = {};
+  for (const record of records) {
+    for (const [key, value] of Object.entries(record)) {
+      if (!isJsonValue(value)) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          `variableMapping.${key} must be a JSON value`,
+        );
+      }
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null) return true;
+  const type = typeof value;
+  if (type === "string" || type === "boolean") return true;
+  if (type === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (type !== "object") return false;
+  return Object.values(value as Record<string, unknown>).every(isJsonValue);
 }
 
 /** Maps a TemplateDefinition's optional build into a DispatchBuildSpec. */
@@ -4338,6 +6406,30 @@ function rawOutputArtifactKey(input: {
  * https form so the descriptor satisfies the HTTPS-only git source validation
  * (the real fetch never uses this URL).
  */
+/**
+ * In-memory Source for an upload-origin Installation that has no registered
+ * Source row. It is never persisted; it only supplies the few fields the plan
+ * pipeline reads (`url` / `defaultRef` / `defaultPath`) so the generated-root
+ * module-source descriptor validates. The runner still restores the actual code
+ * from the snapshot's `archiveObjectKey`, so the synthetic git url is metadata.
+ */
+function syntheticUploadSource(
+  installation: Installation,
+  snapshot: SourceSnapshot,
+): Source {
+  return {
+    id: `upload:${installation.id}`,
+    spaceId: installation.spaceId,
+    name: `${installation.name}-upload`,
+    url: snapshot.url,
+    defaultRef: snapshot.ref,
+    defaultPath: snapshot.path,
+    status: "active",
+    createdAt: snapshot.fetchedAt,
+    updatedAt: snapshot.fetchedAt,
+  };
+}
+
 function snapshotModuleSource(
   source: Source,
   snapshot: SourceSnapshot,
@@ -4397,31 +6489,45 @@ function canonicalProviderAddress(rule: string): string {
 }
 
 /**
- * Reads the template dispatch fields off the persisted plan-run-inputs sidecar.
- * Returns an empty dispatch for raw-module runs. Defensive copies are not needed
+ * Reads generated-root dispatch fields off the persisted plan-run-inputs
+ * sidecar. Sidecars carry `generatedRoot` (+ optional build/output allowlist)
+ * for built-in modules and generic Capsules. Defensive copies are not needed
  * because the store hands back its own records and the runner job only reads.
  */
 function templateDispatchFromInputs(
   inputs:
     | {
-        readonly template?: DispatchTemplateRef;
         readonly generatedRoot?: DispatchGeneratedRoot;
+        readonly outputAllowlist?: InstallConfig["outputAllowlist"];
         readonly build?: DispatchBuildSpec;
       }
     | undefined,
 ): RunTemplateDispatch {
-  if (!inputs?.template) return {};
+  if (!inputs) return {};
   return {
-    template: inputs.template,
     ...(inputs.generatedRoot ? { generatedRoot: inputs.generatedRoot } : {}),
+    ...(inputs.outputAllowlist
+      ? { outputAllowlist: inputs.outputAllowlist }
+      : {}),
     ...(inputs.build ? { build: inputs.build } : {}),
   };
+}
+
+function assertGeneratedRootDispatchPresent(
+  planRun: PlanRun,
+  dispatch: RunTemplateDispatch,
+): void {
+  if (!planRun.installationId || dispatch.generatedRoot) return;
+  throw new OpenTofuControllerError(
+    "failed_precondition",
+    `generated_root_sidecar_missing: plan run ${planRun.id} is Installation-bound but has no generated root sidecar`,
+  );
 }
 
 /**
  * Folds the template plan-JSON policy verdict into the recorded template
  * binding, setting `requiresConfirmation`. Returns `undefined` (binding unchanged
- * / absent) for raw-module runs or when there is no policy verdict yet.
+ * / absent) for non-template runs or when there is no policy verdict yet.
  */
 function updatedTemplateBinding(
   planRun: PlanRun,
@@ -4450,8 +6556,28 @@ function mergePolicyConfigs(
       spacePolicy?.allowedResourceTypes,
       installPolicy?.allowedResourceTypes,
     ),
+    allowedDataSourceTypes: intersectOptionalLists(
+      spacePolicy?.allowedDataSourceTypes,
+      installPolicy?.allowedDataSourceTypes,
+    ),
+    allowedProvisionerTypes: intersectOptionalLists(
+      spacePolicy?.allowedProvisionerTypes,
+      installPolicy?.allowedProvisionerTypes,
+    ),
     destructiveChanges:
       installPolicy?.destructiveChanges ?? spacePolicy?.destructiveChanges,
+    providerLockfile: mergeProviderLockfilePolicy(
+      spacePolicy?.providerLockfile,
+      installPolicy?.providerLockfile,
+    ),
+    providerInstallation: mergeProviderInstallationPolicy(
+      spacePolicy?.providerInstallation,
+      installPolicy?.providerInstallation,
+    ),
+    providerCredentials: mergeProviderCredentialPolicy(
+      spacePolicy?.providerCredentials,
+      installPolicy?.providerCredentials,
+    ),
     scopeBoundary: mergeScopeBoundary(
       spacePolicy?.scopeBoundary,
       installPolicy?.scopeBoundary,
@@ -4470,6 +6596,758 @@ function evaluateConfiguredProviderAllowlist(
     allowed: policy.allowedProviders,
     ...(allowNoProviders ? { allowNoProviders: true } : {}),
   });
+}
+
+function evaluateCompatibilityReportAgainstPolicy(
+  report: CapsuleCompatibilityReport,
+  policy: PolicyConfig | undefined,
+): { readonly runnable: boolean; readonly reasons: readonly string[] } {
+  const reasons: string[] = [];
+  const providerReasons = compatibilityProviderPolicyReasons(report, policy);
+  const resourceReasons = compatibilityResourcePolicyReasons(report, policy);
+  const dataSourceReasons = compatibilityDataSourcePolicyReasons(
+    report,
+    policy,
+  );
+  const provisionerReasons = compatibilityProvisionerPolicyReasons(
+    report,
+    policy,
+  );
+  reasons.push(
+    ...providerReasons,
+    ...resourceReasons,
+    ...dataSourceReasons,
+    ...provisionerReasons,
+  );
+  if (report.level === "ready" || report.level === "auto_capsulized") {
+    return { runnable: reasons.length === 0, reasons };
+  }
+  if (report.level === "needs_patch") {
+    return {
+      runnable: false,
+      reasons: [
+        `compatibility_report_not_runnable: report ${report.id} is ${report.level}`,
+        ...reasons,
+      ],
+    };
+  }
+  const fatalFindings = report.findings.filter((finding) => {
+    if (finding.severity !== "error") return false;
+    if (finding.code === "provider_not_allowed") {
+      return providerReasons.length > 0;
+    }
+    if (finding.code === "resource_type_not_allowed") {
+      return resourceReasons.length > 0;
+    }
+    if (finding.code === "external_data_source_unsupported") {
+      return dataSourceReasons.length > 0;
+    }
+    if (finding.code === "provisioner_unsupported") {
+      return provisionerReasons.length > 0;
+    }
+    return true;
+  });
+  if (fatalFindings.length === 0 && reasons.length === 0) {
+    return { runnable: true, reasons: [] };
+  }
+  return {
+    runnable: false,
+    reasons: [
+      `compatibility_report_not_runnable: report ${report.id} is ${report.level}`,
+      ...fatalFindings.map(
+        (finding) => `capsule_gate_${finding.code}: ${finding.message}`,
+      ),
+      ...reasons,
+    ],
+  };
+}
+
+function compatibilityProviderPolicyReasons(
+  report: CapsuleCompatibilityReport,
+  policy: PolicyConfig | undefined,
+): readonly string[] {
+  const allowed = policy?.allowedProviders;
+  const denied = report.providers.filter((provider) => {
+    if (allowed === undefined) return !provider.allowed;
+    const canonical = canonicalProviderAddress(provider.source);
+    return !allowed.some(
+      (entry) => entry === "*" || providerMatches(canonical, entry),
+    );
+  });
+  return denied.map(
+    (provider) =>
+      `capsule provider ${provider.source} is not allowed by Space/InstallConfig policy`,
+  );
+}
+
+function compatibilityResourcePolicyReasons(
+  report: CapsuleCompatibilityReport,
+  policy: PolicyConfig | undefined,
+): readonly string[] {
+  const allowed = policy?.allowedResourceTypes;
+  const denied = report.resources.filter((resource) => {
+    if (allowed === undefined) return !resource.allowed;
+    return !allowed.includes(resource.type);
+  });
+  return denied.map(
+    (resource) =>
+      `capsule resource type ${resource.type} is not allowed by Space/InstallConfig policy`,
+  );
+}
+
+function compatibilityDataSourcePolicyReasons(
+  report: CapsuleCompatibilityReport,
+  policy: PolicyConfig | undefined,
+): readonly string[] {
+  const allowed = policy?.allowedDataSourceTypes;
+  const denied = report.dataSources.filter((dataSource) => {
+    if (allowed === undefined) return !dataSource.allowed;
+    return !allowed.includes(dataSource.type);
+  });
+  return denied.map(
+    (dataSource) =>
+      `capsule data source ${dataSource.type} is not allowed by Space/InstallConfig policy`,
+  );
+}
+
+function compatibilityProvisionerPolicyReasons(
+  report: CapsuleCompatibilityReport,
+  policy: PolicyConfig | undefined,
+): readonly string[] {
+  const allowed = policy?.allowedProvisionerTypes;
+  const denied = report.provisioners.filter((provisioner) => {
+    if (allowed === undefined) return !provisioner.allowed;
+    return !allowed.includes(provisioner.type);
+  });
+  return denied.map(
+    (provisioner) =>
+      `capsule provisioner ${provisioner.type} is not allowed by Space/InstallConfig policy`,
+  );
+}
+
+function requiredProvidersFromCompatibilityReport(
+  report: CapsuleCompatibilityReport | undefined,
+  allowedProviders: readonly string[],
+): readonly string[] {
+  if (!report || report.providers.length === 0) return [];
+  return normalizeProviders(
+    report.providers
+      .filter((provider) => provider.allowed)
+      .map((provider) => provider.source)
+      .filter((source) => source.trim().length > 0)
+      .map(canonicalProviderAddress)
+      .filter((source) =>
+        allowedProviders.some(
+          (allowed) => allowed === "*" || providerMatches(source, allowed),
+        ),
+      ),
+  );
+}
+
+function mergeProviderLockfilePolicy(
+  ceiling: PolicyConfig["providerLockfile"] | undefined,
+  local: PolicyConfig["providerLockfile"] | undefined,
+): PolicyConfig["providerLockfile"] | undefined {
+  if (!ceiling) return local;
+  if (!local) return ceiling;
+  return {
+    requireDigest: ceiling.requireDigest || local.requireDigest,
+  };
+}
+
+function withDefaultProviderSupplyChainPolicy(
+  policy: PolicyConfig | undefined,
+): PolicyConfig {
+  return {
+    ...(policy ?? {}),
+    providerLockfile: mergeProviderLockfilePolicy(
+      { requireDigest: true },
+      policy?.providerLockfile,
+    ),
+    providerInstallation: mergeProviderInstallationPolicy(
+      { requireMirror: true },
+      policy?.providerInstallation,
+    ),
+    providerCredentials: mergeProviderCredentialPolicy(
+      {
+        requireTemporary: true,
+        requireTtlEnforced: true,
+      },
+      policy?.providerCredentials,
+    ),
+  };
+}
+
+function mergeProviderInstallationPolicy(
+  ceiling: PolicyConfig["providerInstallation"] | undefined,
+  local: PolicyConfig["providerInstallation"] | undefined,
+): PolicyConfig["providerInstallation"] | undefined {
+  if (!ceiling) return local;
+  if (!local) return ceiling;
+  return {
+    requireMirror: ceiling.requireMirror || local.requireMirror,
+  };
+}
+
+function mergeProviderCredentialPolicy(
+  ceiling: PolicyConfig["providerCredentials"] | undefined,
+  local: PolicyConfig["providerCredentials"] | undefined,
+): PolicyConfig["providerCredentials"] | undefined {
+  if (!ceiling) return local;
+  if (!local) return ceiling;
+  return {
+    requireTemporary:
+      ceiling.requireTemporary === true || local.requireTemporary === true,
+    requireTtlEnforced:
+      ceiling.requireTtlEnforced === true || local.requireTtlEnforced === true,
+    requireRootOnly:
+      ceiling.requireRootOnly === true || local.requireRootOnly === true,
+  };
+}
+
+interface ProviderLockfilePolicyResult {
+  readonly digestPresent: boolean;
+  readonly reasons: readonly string[];
+}
+
+interface ProviderInstallationPolicyResult {
+  readonly requireMirror: boolean;
+  readonly evidenceCount: number;
+  readonly missingEvidenceProviders: readonly string[];
+  readonly unmirroredProviders: readonly string[];
+  readonly reasons: readonly string[];
+}
+
+interface ProviderCredentialMintPolicyResult {
+  readonly reasons: readonly string[];
+}
+
+function evaluateProviderCredentialMintPolicy(
+  evidence: readonly ProviderCredentialMintEvidence[],
+  policy: PolicyConfig | undefined,
+  requiredProviders: readonly string[] = [],
+  expectedCredentialEvidenceCount = 0,
+): ProviderCredentialMintPolicyResult {
+  const credentialPolicy = policy?.providerCredentials;
+  if (!credentialPolicy) return { reasons: [] };
+  const reasons: string[] = [];
+  if (
+    expectedCredentialEvidenceCount > 0 &&
+    evidence.length < expectedCredentialEvidenceCount
+  ) {
+    reasons.push(
+      `provider credential policy requires mint evidence for providers: ${requiredProviders
+        .slice()
+        .sort()
+        .join(", ")}`,
+    );
+  }
+  if (expectedCredentialEvidenceCount > 0) {
+    const requiredProviderSet = Array.from(
+      new Set(requiredProviders.map(canonicalProviderAddress)),
+    );
+    const evidenceProviders = evidence.map((row) => row.provider);
+    const missingEvidenceProviders = requiredProviderSet
+      .filter(
+        (provider) =>
+          !evidenceProviders.some((evidenceProvider) =>
+            providerMatches(provider, evidenceProvider)
+          ),
+      )
+      .sort();
+    if (missingEvidenceProviders.length > 0) {
+      reasons.push(
+        `provider credential policy requires mint evidence for providers: ${missingEvidenceProviders.join(", ")}`,
+      );
+    }
+  }
+  const nonTemporary = evidence.filter((row) => row.temporary !== true);
+  if (credentialPolicy.requireTemporary === true && nonTemporary.length > 0) {
+    reasons.push(
+      `provider credential policy requires temporary credentials; non-temporary providers: ${credentialEvidenceProviderList(nonTemporary)}`,
+    );
+  }
+  const nonTtl = evidence.filter((row) => row.ttlEnforced !== true);
+  if (credentialPolicy.requireTtlEnforced === true && nonTtl.length > 0) {
+    reasons.push(
+      `provider credential policy requires ttl-enforced credentials; providers without ttl evidence: ${credentialEvidenceProviderList(nonTtl)}`,
+    );
+  }
+  const nonRootOnly = evidence.filter((row) => row.rootOnly !== true);
+  if (credentialPolicy.requireRootOnly === true && nonRootOnly.length > 0) {
+    reasons.push(
+      `provider credential policy requires generated-root-only delivery; non-root-only providers: ${credentialEvidenceProviderList(nonRootOnly)}`,
+    );
+  }
+  return { reasons };
+}
+
+function credentialEvidenceProviderList(
+  evidence: readonly ProviderCredentialMintEvidence[],
+): string {
+  return [
+    ...new Set(
+      evidence.map(
+        (row) =>
+          `${row.provider}:${row.issuer ?? "unknown"}:${row.delivery}:${
+            row.connectionId
+          }`,
+      ),
+    ),
+  ]
+    .sort()
+    .join(", ");
+}
+
+function evaluateProviderLockfilePolicy(
+  providerLockDigest: string | undefined,
+  policy: PolicyConfig | undefined,
+  requiredProviders: readonly string[],
+): ProviderLockfilePolicyResult | undefined {
+  if (policy?.providerLockfile?.requireDigest !== true) return undefined;
+  if (requiredProviders.length === 0) return undefined;
+  const digestPresent =
+    providerLockDigest !== undefined && providerLockDigest.trim().length > 0;
+  return {
+    digestPresent,
+    reasons: digestPresent
+      ? []
+      : [
+          "provider lockfile digest is required by policy but was not returned by the runner",
+        ],
+  };
+}
+
+function evaluateProviderInstallationPolicy(
+  evidence: readonly ProviderInstallationEvidence[] | undefined,
+  policy: PolicyConfig | undefined,
+  requiredProviders: readonly string[],
+): ProviderInstallationPolicyResult | undefined {
+  if (policy?.providerInstallation?.requireMirror !== true) return undefined;
+  if (requiredProviders.length === 0) {
+    return {
+      requireMirror: true,
+      evidenceCount: 0,
+      missingEvidenceProviders: [],
+      unmirroredProviders: [],
+      reasons: [],
+    };
+  }
+  const rows = evidence ?? [];
+  const requiredProviderSet = new Set(
+    requiredProviders.map(canonicalProviderAddress),
+  );
+  const evidenceByProvider = new Map(
+    rows.map((row) => [canonicalProviderAddress(row.provider), row]),
+  );
+  const requiredCanonicalProviders = Array.from(requiredProviderSet).sort();
+  const missingEvidenceProviders = requiredCanonicalProviders
+    .filter((provider) => !evidenceByProvider.has(provider))
+    .sort();
+  const unmirroredProviders = rows
+    .filter(
+      (row) =>
+        requiredProviderSet.has(canonicalProviderAddress(row.provider)) &&
+        (row.mirrored !== true ||
+          row.attested !== true ||
+          row.installationMethod !== "filesystem_mirror"),
+    )
+    .map((row) => canonicalProviderAddress(row.provider))
+    .sort();
+  const reasons: string[] = [];
+  if (rows.length === 0) {
+    reasons.push(
+      "provider installation attestation is required by policy but was not returned by the runner",
+    );
+  }
+  if (missingEvidenceProviders.length > 0) {
+    reasons.push(
+      `provider installation attestation is missing for required providers: ${missingEvidenceProviders.join(", ")}`,
+    );
+  }
+  if (unmirroredProviders.length > 0) {
+    reasons.push(
+      `provider mirror is required by policy but these providers were not attested as installed from the filesystem mirror: ${unmirroredProviders.join(", ")}`,
+    );
+  }
+  return {
+    requireMirror: true,
+    evidenceCount: rows.length,
+    missingEvidenceProviders,
+    unmirroredProviders,
+    reasons,
+  };
+}
+
+function estimatePlanCredits(
+  _planRun: PlanRun,
+  _result: OpenTofuPlanResult,
+): number {
+  return 1;
+}
+
+function normalizeBillingSettings(value: unknown): BillingSettings {
+  if (!isRecord(value)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "billingSettings must be an object",
+    );
+  }
+  if (value.mode === "disabled") {
+    if (value.provider !== "none") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "disabled billing requires provider none",
+      );
+    }
+    return { mode: "disabled", provider: "none" };
+  }
+  if (value.mode === "showback") {
+    if (!isBillingProvider(value.provider)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "showback billing provider must be stripe, manual, or none",
+      );
+    }
+    if (
+      value.reservationRequired !== undefined &&
+      value.reservationRequired !== false
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "showback billing reservationRequired must be false when provided",
+      );
+    }
+    return {
+      mode: "showback",
+      provider: value.provider,
+      ...(value.reservationRequired === false
+        ? { reservationRequired: false }
+        : {}),
+    };
+  }
+  if (value.mode === "enforce") {
+    if (value.provider !== "stripe" && value.provider !== "manual") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "enforced billing requires stripe or manual provider",
+      );
+    }
+    if (value.reservationRequired !== true) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "enforced billing requires reservationRequired true",
+      );
+    }
+    return {
+      mode: "enforce",
+      provider: value.provider,
+      reservationRequired: true,
+    };
+  }
+  throw new OpenTofuControllerError("invalid_argument", "unknown billing mode");
+}
+
+function normalizeMeteredUsageEvent(
+  spaceId: string,
+  input: RecordMeteredUsageInput,
+  newIdForUsage: () => string,
+  nowIso: () => string,
+): UsageEvent {
+  if (!isUsageEventKind(input.kind)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "usage event kind is not supported",
+    );
+  }
+  if (!isExternalUsageEventSource(input.source)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "usage event source must be resource_meter, billing_reconciliation, or manual_adjustment",
+    );
+  }
+  if (!Number.isFinite(input.quantity) || input.quantity < 0) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "usage quantity must be a non-negative finite number",
+    );
+  }
+  if (
+    !Number.isInteger(input.credits) ||
+    (input.source !== "billing_reconciliation" && input.credits < 0)
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      input.source === "billing_reconciliation"
+        ? "usage credits must be an integer"
+        : "usage credits must be a non-negative integer",
+    );
+  }
+  requireNonEmptyString(input.idempotencyKey, "idempotencyKey");
+  const createdAt = input.createdAt ?? nowIso();
+  if (Number.isNaN(Date.parse(createdAt))) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "usage createdAt must be an ISO timestamp",
+    );
+  }
+  return {
+    id: newIdForUsage(),
+    spaceId,
+    ...(input.installationId ? { installationId: input.installationId } : {}),
+    ...(input.runId ? { runId: input.runId } : {}),
+    kind: input.kind,
+    quantity: input.quantity,
+    credits: input.credits,
+    source: input.source,
+    idempotencyKey: input.idempotencyKey,
+    createdAt,
+  };
+}
+
+function normalizeUsagePeriod(input: RecordManagedResourceUsageInput): {
+  readonly periodStart: string;
+  readonly periodEnd: string;
+} {
+  const periodStartMs = Date.parse(input.periodStart);
+  const periodEndMs = Date.parse(input.periodEnd);
+  if (
+    !Number.isFinite(periodStartMs) ||
+    !Number.isFinite(periodEndMs) ||
+    periodEndMs <= periodStartMs
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "managed resource usage period must have valid ISO periodStart < periodEnd",
+    );
+  }
+  if (!Array.isArray(input.meters)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "managed resource usage meters must be an array",
+    );
+  }
+  for (const meter of input.meters) {
+    if (!isManagedResourceUsageKind(meter.kind)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "managed resource usage kind is not supported",
+      );
+    }
+    requireNonEmptyString(meter.meterId, "meterId");
+  }
+  return {
+    periodStart: new Date(periodStartMs).toISOString(),
+    periodEnd: new Date(periodEndMs).toISOString(),
+  };
+}
+
+function normalizeInvoiceUsagePeriod(input: ReconcileInvoiceUsageInput): {
+  readonly periodStart: string;
+  readonly periodEnd: string;
+} {
+  const periodStartMs = Date.parse(input.periodStart);
+  const periodEndMs = Date.parse(input.periodEnd);
+  if (
+    !Number.isFinite(periodStartMs) ||
+    !Number.isFinite(periodEndMs) ||
+    periodEndMs <= periodStartMs
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "invoice usage period must have valid ISO periodStart < periodEnd",
+    );
+  }
+  return {
+    periodStart: new Date(periodStartMs).toISOString(),
+    periodEnd: new Date(periodEndMs).toISOString(),
+  };
+}
+
+function stripeCoreBillingStatus(status: string): BillingAccount["status"] {
+  switch (status) {
+    case "active":
+      return "active";
+    case "trialing":
+      return "trialing";
+    case "past_due":
+    case "unpaid":
+      return "past_due";
+    default:
+      return "disabled";
+  }
+}
+
+function stripeSpaceSubscriptionStatus(
+  status: string,
+): SpaceSubscription["status"] {
+  switch (status) {
+    case "active":
+      return "active";
+    case "trialing":
+      return "trialing";
+    case "past_due":
+    case "unpaid":
+      return "past_due";
+    case "cancelled":
+    case "canceled":
+      return "cancelled";
+    default:
+      return "cancelled";
+  }
+}
+
+function stripeSpaceBillingSettings(status: string): BillingSettings {
+  switch (status) {
+    case "active":
+    case "trialing":
+    case "past_due":
+    case "unpaid":
+      return {
+        mode: "enforce",
+        provider: "stripe",
+        reservationRequired: true,
+      };
+    default:
+      return DISABLED_BILLING_SETTINGS;
+  }
+}
+
+function unixSecondsToIso(value: number | undefined, fallback: string): string {
+  if (
+    value === undefined ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value < 0
+  ) {
+    return fallback;
+  }
+  return new Date(value * 1000).toISOString();
+}
+
+function isBillingProvider(value: unknown): value is BillingProvider {
+  return value === "stripe" || value === "manual" || value === "none";
+}
+
+function isUsageEventKind(value: unknown): value is UsageEventKind {
+  return (
+    value === "runner_minute" ||
+    value === "managed_compute" ||
+    value === "managed_storage_gb_hour" ||
+    value === "artifact_storage_gb_hour" ||
+    value === "backup_storage_gb_hour" ||
+    value === "egress_gb" ||
+    value === "operation"
+  );
+}
+
+function isManagedResourceUsageKind(
+  value: unknown,
+): value is ManagedResourceUsageMeter["kind"] {
+  return (
+    value === "managed_compute" ||
+    value === "managed_storage_gb_hour" ||
+    value === "artifact_storage_gb_hour" ||
+    value === "backup_storage_gb_hour" ||
+    value === "egress_gb"
+  );
+}
+
+function isExternalUsageEventSource(
+  value: unknown,
+): value is Exclude<UsageEventSource, "runner"> {
+  return (
+    value === "resource_meter" ||
+    value === "billing_reconciliation" ||
+    value === "manual_adjustment"
+  );
+}
+
+function isExternalOperatorUsageEventSource(
+  value: unknown,
+): value is "resource_meter" | "manual_adjustment" {
+  return value === "resource_meter" || value === "manual_adjustment";
+}
+
+function isMeteredInvoiceUsageSource(source: UsageEventSource): boolean {
+  return source === "runner" || source === "resource_meter";
+}
+
+function isUsageEventInInvoicePeriod(
+  event: UsageEvent,
+  periodStart: string,
+  periodEnd: string,
+): boolean {
+  const createdAt = Date.parse(event.createdAt);
+  if (!Number.isFinite(createdAt)) return false;
+  const start = Date.parse(periodStart);
+  const end = Date.parse(periodEnd);
+  if (event.source === "resource_meter") {
+    return createdAt > start && createdAt <= end;
+  }
+  return createdAt >= start && createdAt < end;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function compactLayeredPolicy(input: {
+  readonly provider?: ProviderAllowlistResult;
+  readonly providerLockfile?: ProviderLockfilePolicyResult;
+  readonly providerInstallation?: ProviderInstallationPolicyResult;
+}): {
+  readonly provider?: ProviderAllowlistResult;
+  readonly providerLockfile?: ProviderLockfilePolicyResult;
+  readonly providerInstallation?: ProviderInstallationPolicyResult;
+} {
+  return {
+    ...(input.provider ? { provider: input.provider } : {}),
+    ...(input.providerLockfile
+      ? { providerLockfile: input.providerLockfile }
+      : {}),
+    ...(input.providerInstallation
+      ? { providerInstallation: input.providerInstallation }
+      : {}),
+  };
+}
+
+function providerInstallationAuditEvents(
+  ownerId: string,
+  phase: "apply" | "destroy",
+  at: number,
+  evidence: readonly ProviderInstallationEvidence[] | undefined,
+  policy: { readonly requireMirror: boolean } | undefined,
+): readonly DeployControlAuditEvent[] {
+  if (!evidence && policy?.requireMirror !== true) return [];
+  const rows = evidence ?? [];
+  const mirroredCount = rows.filter((entry) => entry.mirrored).length;
+  const attestedCount = rows.filter((entry) => entry.attested === true).length;
+  return [
+    auditEvent(ownerId, `${phase}.provider_installation_evaluated`, at, {
+      requireMirror: policy?.requireMirror === true,
+      evidenceCount: rows.length,
+      mirroredCount,
+      attestedCount,
+      providers: rows.map((entry) => ({
+        provider: entry.provider,
+        mirrored: entry.mirrored,
+        installationMethod: entry.installationMethod,
+        ...(entry.mirrorPath ? { mirrorPath: entry.mirrorPath } : {}),
+        ...(entry.attested === true ? { attested: true } : {}),
+        ...(entry.attestationMethod
+          ? { attestationMethod: entry.attestationMethod }
+          : {}),
+        ...(entry.cliConfigDigest
+          ? { cliConfigDigest: entry.cliConfigDigest }
+          : {}),
+        ...(entry.installedPath ? { installedPath: entry.installedPath } : {}),
+        ...(entry.installedDigest
+          ? { installedDigest: entry.installedDigest }
+          : {}),
+      })),
+    }),
+  ];
 }
 
 function intersectOptionalLists(
@@ -4528,6 +7406,235 @@ function mergeQuota(
     out[key] = a === undefined ? b! : b === undefined ? a : Math.min(a, b);
   }
   return out;
+}
+
+function changedOutputNamesBetween(
+  previous: OutputSnapshot | undefined,
+  next: OutputSnapshot,
+): readonly string[] {
+  const before = previous?.spaceOutputs ?? {};
+  const after = next.spaceOutputs;
+  const names = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...names]
+    .filter(
+      (name) => canonicalJson(before[name]) !== canonicalJson(after[name]),
+    )
+    .sort();
+}
+
+function directChangedDependencyOutputs(input: {
+  readonly edges: readonly Dependency[];
+  readonly producerInstallationId: string;
+  readonly consumerInstallationId: string;
+  readonly changedOutputNames: readonly string[];
+}): readonly string[] {
+  const changed = new Set(input.changedOutputNames);
+  const direct = new Set<string>();
+  for (const edge of input.edges) {
+    if (
+      edge.producerInstallationId !== input.producerInstallationId ||
+      edge.consumerInstallationId !== input.consumerInstallationId
+    ) {
+      continue;
+    }
+    for (const mapping of Object.values(edge.outputs)) {
+      if (changed.has(mapping.from)) direct.add(mapping.from);
+    }
+  }
+  return [...direct].sort();
+}
+
+function classifyDriftResourceChanges(changes: readonly PlanResourceChange[]): {
+  readonly resourceTypes: Readonly<Record<string, number>>;
+  readonly providers: Readonly<Record<string, number>>;
+  readonly actions: Readonly<Record<string, number>>;
+  readonly remediationHints: readonly Readonly<Record<string, JsonValue>>[];
+} {
+  const resourceTypes: Record<string, number> = {};
+  const providers: Record<string, number> = {};
+  const actions: Record<string, number> = {};
+  const semanticTags = new Set<string>();
+  for (const change of changes) {
+    if (change.actions.includes("no-op")) continue;
+    const type = change.type.trim();
+    if (type.length > 0) {
+      resourceTypes[type] = (resourceTypes[type] ?? 0) + 1;
+    }
+    const provider = driftProviderForChange(change);
+    if (provider) {
+      providers[provider] = (providers[provider] ?? 0) + 1;
+    }
+    const actionKey = change.actions
+      .map((action) => action.trim())
+      .filter((action) => action.length > 0)
+      .join("+");
+    if (actionKey.length > 0) {
+      actions[actionKey] = (actions[actionKey] ?? 0) + 1;
+    }
+    for (const tag of driftSemanticTags(provider, type, actionKey)) {
+      semanticTags.add(tag);
+    }
+  }
+  const sortedProviders = Object.fromEntries(Object.entries(providers).sort());
+  const sortedActions = Object.fromEntries(Object.entries(actions).sort());
+  return {
+    resourceTypes: Object.fromEntries(Object.entries(resourceTypes).sort()),
+    providers: sortedProviders,
+    actions: sortedActions,
+    remediationHints: driftRemediationHints({
+      providers: sortedProviders,
+      actions: sortedActions,
+      semanticTags: [...semanticTags].sort(),
+    }),
+  };
+}
+
+function driftSemanticTags(
+  provider: string | undefined,
+  type: string,
+  actionKey: string,
+): string[] {
+  const tags: string[] = [];
+  if (actionKey.includes("delete")) tags.push("destructive");
+  if (actionKey === "delete+create" || actionKey === "create+delete") {
+    tags.push("replacement");
+  }
+  if (provider === "cloudflare") {
+    tags.push("cloudflare");
+    if (type === "cloudflare_dns_record") tags.push("cloudflare_dns");
+    if (type.startsWith("cloudflare_workers_")) tags.push("cloudflare_workers");
+    if (type === "cloudflare_r2_bucket") tags.push("cloudflare_storage");
+  }
+  if (provider === "aws") {
+    tags.push("aws");
+    if (type.startsWith("aws_s3_bucket")) tags.push("aws_storage");
+  }
+  if (provider === "random" || provider === "tls") {
+    tags.push("local_material");
+  }
+  return tags;
+}
+
+function driftRemediationHints(input: {
+  readonly providers: Readonly<Record<string, number>>;
+  readonly actions: Readonly<Record<string, number>>;
+  readonly semanticTags: readonly string[];
+}): readonly Readonly<Record<string, JsonValue>>[] {
+  const tags = new Set(input.semanticTags);
+  const hints: Record<string, JsonValue>[] = [];
+  if (tags.has("replacement")) {
+    hints.push({
+      code: "review_replacements",
+      severity: "warning",
+      category: "replacement",
+      action: "create a reviewed update plan before applying remediation",
+    });
+  } else if (tags.has("destructive")) {
+    hints.push({
+      code: "review_deletes",
+      severity: "warning",
+      category: "destructive",
+      action: "confirm deleted remote objects before planning remediation",
+    });
+  }
+  if (tags.has("cloudflare_dns")) {
+    hints.push({
+      code: "cloudflare_dns_drift",
+      severity: "info",
+      provider: "cloudflare",
+      category: "dns",
+      action: "compare zone records against the last reviewed plan",
+    });
+  }
+  if (tags.has("cloudflare_workers")) {
+    hints.push({
+      code: "cloudflare_workers_drift",
+      severity: "info",
+      provider: "cloudflare",
+      category: "compute",
+      action:
+        "compare Worker script and route settings against the last reviewed plan",
+    });
+  }
+  if (tags.has("cloudflare_storage")) {
+    hints.push({
+      code: "cloudflare_storage_drift",
+      severity: "info",
+      provider: "cloudflare",
+      category: "storage",
+      action: "compare R2 storage settings against the last reviewed plan",
+    });
+  }
+  if (tags.has("aws_storage")) {
+    hints.push({
+      code: "aws_storage_drift",
+      severity: "info",
+      provider: "aws",
+      category: "storage",
+      action: "compare bucket configuration against the last reviewed plan",
+    });
+  }
+  if (tags.has("local_material")) {
+    hints.push({
+      code: "local_material_drift",
+      severity: "info",
+      category: "local_material",
+      action: "verify generated local material is expected before replacing it",
+    });
+  }
+  if (hints.length === 0 && Object.keys(input.providers).length > 0) {
+    hints.push({
+      code: "provider_drift_detected",
+      severity: "info",
+      category: "provider",
+      providers: Object.keys(input.providers),
+      action: "create a reviewed update plan to reconcile provider drift",
+    });
+  } else if (hints.length === 0 && Object.keys(input.actions).length > 0) {
+    hints.push({
+      code: "drift_detected",
+      severity: "info",
+      category: "generic",
+      action: "create a reviewed update plan to reconcile drift",
+    });
+  }
+  return hints;
+}
+
+function driftProviderForChange(
+  change: PlanResourceChange,
+): string | undefined {
+  const type = change.type.trim();
+  if (type.startsWith("cloudflare_")) return "cloudflare";
+  if (type.startsWith("aws_")) return "aws";
+  if (type.startsWith("random_")) return "random";
+  if (type.startsWith("tls_")) return "tls";
+  if (
+    change.scope?.cloudflareAccountId !== undefined ||
+    change.scope?.cloudflareZoneId !== undefined
+  ) {
+    return "cloudflare";
+  }
+  if (
+    change.scope?.awsAccountId !== undefined ||
+    change.scope?.awsRegion !== undefined
+  ) {
+    return "aws";
+  }
+  return undefined;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  }
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function auditEvent(

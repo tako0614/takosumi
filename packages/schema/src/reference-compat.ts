@@ -1,7 +1,7 @@
 // Internal compatibility umbrella for Takosumi reference implementation code.
 //
 // The Takosumi v1 Deploy Control API contract is owned by the package root
-// (`@takosjp/takosumi/contract`) and the focused `deploy-control-api` subpath.
+// (`takosumi-contract`) and the focused `deploy-control-api` source-module subpath.
 // This file is intentionally not exported from package.json; it exists for
 // service-local compatibility imports while legacy implementation modules are
 // being retired behind RunnerProfile/OpenTofu execution.
@@ -12,8 +12,8 @@
 // avoids re-exporting the retired takosumi-v1 component / descriptor / binding
 // surface or reference materializer API as a public umbrella.
 //
-// New consumers must import directly from `@takosjp/takosumi/contract` or
-// `@takosjp/takosumi/contract/deploy-control-api`.
+// New consumers must import directly from `takosumi-contract` or
+// `@takosumi/internal/deploy-control-api`.
 
 // Selected scalar / DTO surface from ./types.ts (allowlist; no `export *`).
 export type {

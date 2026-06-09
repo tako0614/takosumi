@@ -1,0 +1,83 @@
+name: runner-image proof
+
+# Highest-risk uncovered component gate: the OpenTofu runner container image
+# (runner-image/Dockerfile) was only ever exercised by scripts/prove-runner-docker.sh
+# run by hand — no workflow built it, so a regression in the Dockerfile, the baked
+# provider mirror, or the container HTTP server (runner-image/entrypoint.ts) could
+# ship undetected.
+#
+# This job runs the existing end-to-end proof through REAL docker: it builds the
+# image (which bakes the offline OpenTofu provider mirror, including the large
+# hashicorp/aws provider) and drives a real tofu init/plan/apply through the
+# container's HTTP server using the production `takosumi.opentofu-run@v1` envelope.
+# The proof uses the baked-in provider-free `core` template, so it needs NO cloud
+# credentials or repository secrets.
+#
+# Triggers are scoped to changes that can break the image (runner-image sources,
+# the first-party modules baked into it, the schema files copied into it, and the
+# proof script itself) plus a weekly schedule so upstream base-image / OpenTofu /
+# provider drift is caught even when nobody touches these paths.
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "runner-image/**"
+      - "opentofu-modules/**"
+      - "packages/schema/src/provider-env-rules.ts"
+      - "packages/schema/src/reference/ip-classification.ts"
+      - "packages/schema/src/reference/host-blocklist.ts"
+      - "scripts/prove-runner-docker.sh"
+      - "scripts/prove-runner-docker-payload.ts"
+      - ".github/workflows/runner-image-proof.yml"
+  pull_request:
+    paths:
+      - "runner-image/**"
+      - "opentofu-modules/**"
+      - "packages/schema/src/provider-env-rules.ts"
+      - "packages/schema/src/reference/ip-classification.ts"
+      - "packages/schema/src/reference/host-blocklist.ts"
+      - "scripts/prove-runner-docker.sh"
+      - "scripts/prove-runner-docker-payload.ts"
+      - ".github/workflows/runner-image-proof.yml"
+  schedule:
+    # Weekly (Monday 06:00 UTC) to catch base-image / OpenTofu / provider drift.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-image-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  prove-runner-docker:
+    name: build runner image + container HTTP E2E
+    runs-on: ubuntu-latest
+    # The provider-mirror layer (now including the large hashicorp/aws provider)
+    # dominates build time; allow generous headroom over the script's ~10-minute
+    # estimate plus the run/plan/apply E2E.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pinned: v6.0.2 (2026)
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun (proof payload + response assertions use bun)
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # pinned: v2.0.2
+        with:
+          bun-version: latest
+
+      - name: Show docker version
+        run: docker version
+
+      - name: Build runner image and run container HTTP plan/apply E2E
+        run: bash scripts/prove-runner-docker.sh

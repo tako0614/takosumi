@@ -13,13 +13,15 @@ import { seedInstallationModel } from "./test_model_fixture.ts";
 import {
   type ConnectionVault,
   CredentialBundle,
+  PhaseMintBundle,
+  type ProviderBindingMintEntry,
   type RegisterConnectionInput,
   type TestConnectionResult,
 } from "../../adapters/vault/mod.ts";
 import type {
   Connection,
   CreatePlanRunRequest,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 
 const SOURCE = {
   kind: "git",
@@ -33,6 +35,15 @@ const LOCK_DIGEST =
   "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 const CLOUDFLARE = "registry.opentofu.org/cloudflare/cloudflare";
 const SECRET_TOKEN = "cf-token-super-secret-value";
+const CLOUDFLARE_MIRROR_EVIDENCE = {
+  provider: CLOUDFLARE,
+  mirrored: true,
+  installationMethod: "filesystem_mirror",
+  attested: true,
+  attestationMethod: "forced_filesystem_mirror_init",
+  mirrorPath:
+    "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+} as const;
 
 /**
  * Seeds the Space-direct Installation model (spec §5) and returns an UPDATE
@@ -48,6 +59,34 @@ async function seedUpdatable(
   const generation = options.generation ?? 0;
   const { installation } = await seedInstallationModel(store, {
     installationId: options.installationId,
+  });
+  await store.putConnection({
+    id: `conn_${options.installationId}`,
+    scope: "space",
+    spaceId: installation.spaceId,
+    provider: "cloudflare",
+    kind: "cloudflare_api_token",
+    displayName: "Lifecycle Cloudflare",
+    status: "verified",
+    scopeJson: {},
+    secretRef: `sec_${options.installationId}`,
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putDeploymentProfile({
+    id: `profile_${options.installationId}`,
+    spaceId: installation.spaceId,
+    installationId: installation.id,
+    environment: installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        mode: "connection",
+        connectionId: `conn_${options.installationId}`,
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
   });
   await store.putInstallation({
     ...installation,
@@ -83,7 +122,7 @@ test("consumer plan + apply: credentials reach the dispatch payload but never th
 
   // The plan job saw the minted credential...
   expect(captured.plan?.credentials).toEqual({
-    CLOUDFLARE_API_TOKEN: SECRET_TOKEN,
+    TF_VAR_cloudflare_main_api_token: SECRET_TOKEN,
   });
   // ...but the persisted PlanRun never carries it.
   const persistedPlan = await store.getPlanRun(planRun.id);
@@ -95,7 +134,7 @@ test("consumer plan + apply: credentials reach the dispatch payload but never th
   });
   expect(applied.applyRun.status).toEqual("succeeded");
   expect(captured.apply?.credentials).toEqual({
-    CLOUDFLARE_API_TOKEN: SECRET_TOKEN,
+    TF_VAR_cloudflare_main_api_token: SECRET_TOKEN,
   });
 
   // Neither the apply run, the deployment, nor the installation leak the secret.
@@ -127,6 +166,7 @@ test("idempotency: dispatching a terminal run no-ops", async () => {
     now: monotonicNow(2000),
     newId: deterministicIds(),
     runner: countingRunner(() => planCalls++),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
   });
   const request = await seedUpdatable(store, { installationId: "inst_idem" });
   const { planRun } = await controller.createPlanRun(request);
@@ -151,6 +191,7 @@ test("idempotency: a fresh-heartbeat running run is not taken over", async () =>
     now: clock.now,
     newId: deterministicIds(),
     runner: countingRunner(() => planCalls++),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
     // Hold dispatch so the run stays queued; we drive the consumer by hand.
     enqueueRun: noopEnqueue,
   });
@@ -179,6 +220,7 @@ test("stale-heartbeat running run is taken over by the consumer", async () => {
     now: clock.now,
     newId: deterministicIds(),
     runner: countingRunner(() => planCalls++),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
     enqueueRun: noopEnqueue,
   });
   const request = await seedUpdatable(store, { installationId: "inst_stale" });
@@ -231,6 +273,7 @@ test("DLQ backstop marks a non-terminal run failed (retries-exhausted)", async (
     now: monotonicNow(6000),
     newId: deterministicIds(),
     runner: stubRunner(),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
     enqueueRun: noopEnqueue, // leave the run queued
   });
   const request = await seedUpdatable(store, { installationId: "inst_dlq" });
@@ -261,6 +304,7 @@ test("state generation: a successful apply increments the installation generatio
     now: monotonicNow(7000),
     newId: deterministicIds(),
     runner: stubRunner(),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
   });
   const request = await seedUpdatable(store, { installationId: "inst_gen" });
   const { planRun } = await controller.createPlanRun(request);
@@ -278,9 +322,12 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
     now: monotonicNow(8000),
     newId: deterministicIds(),
     runner: stubRunner(),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
   });
   // Installation seeded at generation 0 with a current deployment.
-  const request = await seedUpdatable(store, { installationId: "inst_stale_gen" });
+  const request = await seedUpdatable(store, {
+    installationId: "inst_stale_gen",
+  });
   const installationId = request.installationId!;
 
   // First update against generation 0 -> apply advances to generation 1.
@@ -294,13 +341,15 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
   expect(afterA?.currentStateGeneration).toEqual(1);
 
   // Second update created against generation 1.
-  const updateB = (await controller.createPlanRun({
-    spaceId: request.spaceId,
-    installationId,
-    operation: "update",
-    source: { ...SOURCE, ref: "release-2" },
-    requiredProviders: [CLOUDFLARE],
-  })).planRun;
+  const updateB = (
+    await controller.createPlanRun({
+      spaceId: request.spaceId,
+      installationId,
+      operation: "update",
+      source: { ...SOURCE, ref: "release-2" },
+      requiredProviders: [CLOUDFLARE],
+    })
+  ).planRun;
   expect(updateB.baseStateGeneration).toEqual(1);
 
   // Apply updateB -> generation advances to 2.
@@ -323,21 +372,25 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
     appliedApplyRunId: undefined,
     status: "succeeded",
   });
-  await expect(
-    controller.createApplyRun({
-      planRunId: forgedId,
-      expected: applyExpectedGuardFromPlanRun(
-        (await store.getPlanRun(forgedId))!,
-      ),
-    }),
-  ).rejects.toThrow(/state_generation_mismatch/);
+  const staleApply = await controller.createApplyRun({
+    planRunId: forgedId,
+    expected: applyExpectedGuardFromPlanRun(
+      (await store.getPlanRun(forgedId))!,
+    ),
+  });
+  expect(staleApply.applyRun.status).toBe("failed");
+  expect(staleApply.applyRun.diagnostics?.[0]?.message).toContain(
+    "state_generation_mismatch",
+  );
 });
 
 // --- fakes / helpers ---
 
-function capturingRunner(
-  captured: { plan?: OpenTofuPlanJob; apply?: OpenTofuApplyJob; destroy?: OpenTofuDestroyJob },
-): OpenTofuRunner {
+function capturingRunner(captured: {
+  plan?: OpenTofuPlanJob;
+  apply?: OpenTofuApplyJob;
+  destroy?: OpenTofuDestroyJob;
+}): OpenTofuRunner {
   return {
     plan: (job) => {
       captured.plan = job;
@@ -346,6 +399,7 @@ function capturingRunner(
         planArtifact: planArtifact(),
         providerLockDigest: LOCK_DIGEST,
         requiredProviders: [CLOUDFLARE],
+        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
       });
     },
     apply: (job) => {
@@ -370,7 +424,9 @@ function countingRunner(onPlan: () => void): OpenTofuRunner {
       return Promise.resolve({
         planDigest: PLAN_DIGEST,
         planArtifact: planArtifact(),
+        providerLockDigest: LOCK_DIGEST,
         requiredProviders: [CLOUDFLARE],
+        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
       });
     },
     apply: () => Promise.resolve({}),
@@ -383,7 +439,9 @@ function stubRunner(): OpenTofuRunner {
       Promise.resolve({
         planDigest: PLAN_DIGEST,
         planArtifact: planArtifact(),
+        providerLockDigest: LOCK_DIGEST,
         requiredProviders: [CLOUDFLARE],
+        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
       }),
     apply: () =>
       Promise.resolve({
@@ -418,10 +476,43 @@ function fakeVault(
     revoke: () => Promise.resolve(false),
     mint: (_spaceId, providers) => {
       const env: Record<string, string> = {};
+      const evidence = [];
       for (const provider of providers) {
         Object.assign(env, byProvider[provider] ?? {});
+        evidence.push({
+          provider,
+          connectionId: "conn_shared",
+          delivery: "provider_env" as const,
+          rootOnly: false,
+          temporary: true,
+          ttlEnforced: true,
+          phase: "plan" as const,
+        });
       }
-      return Promise.resolve(new CredentialBundle(env));
+      return Promise.resolve(new CredentialBundle(env, [], evidence));
+    },
+    mintForPhase: () =>
+      Promise.resolve(new PhaseMintBundle({ env: {} }, [], [])),
+    mintForProviderBindings: (
+      _spaceId: string,
+      entries: readonly ProviderBindingMintEntry[],
+    ) => {
+      const env: Record<string, string> = {};
+      const evidence = [];
+      for (const entry of entries) {
+        const alias = entry.alias ? `_${entry.alias}` : "";
+        env[`TF_VAR_cloudflare${alias}_api_token`] = SECRET_TOKEN;
+        evidence.push({
+          provider: CLOUDFLARE,
+          connectionId: entry.connectionId,
+          delivery: "generated_root_variable" as const,
+          rootOnly: true,
+          temporary: true,
+          ttlEnforced: true,
+          phase: "plan" as const,
+        });
+      }
+      return Promise.resolve(new CredentialBundle(env, [], evidence));
     },
   };
 }

@@ -10,9 +10,10 @@
  * environment)), deployment_profiles (keyed (installation_id, environment)),
  * state_snapshots (keyed (installation_id, environment, generation) UNIQUE),
  * deployments (new shape), and a SINGLE `runs` table — the internal PlanRun
- * (kind `plan`), ApplyRun (kind `apply`), and SourceSyncRun (kind `source_sync`)
- * records persist as rows discriminated by `kind`; the typed accessors verify the
- * row kind before parsing.
+ * (kind `plan`), ApplyRun (kind `apply`), SourceSyncRun (kind `source_sync`),
+ * CompatibilityCheck Run (kind `compatibility_check`), and Backup Run records
+ * persist as rows discriminated by `kind`; the typed accessors verify the row
+ * kind before parsing.
  */
 import type {
   ApplyRun,
@@ -23,18 +24,15 @@ import type {
   PlanRun,
   RunnerProfile,
   StateSnapshot,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import type { SqlClient } from "../../adapters/storage/sql.ts";
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Space } from "takosumi-contract/spaces";
-import type {
-  Capability,
-  OperatorConnectionDefault,
-} from "takosumi-contract/capability-bindings";
+import type { OperatorConnectionDefault } from "takosumi-contract/provider-bindings";
 import type { DeploymentProfile } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -44,10 +42,22 @@ import type {
   OutputShare,
   OutputSnapshot,
 } from "takosumi-contract/output-snapshots";
-import type { RunGroup } from "takosumi-contract/runs";
+import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { BackupRecord } from "takosumi-contract/backups";
-import type { CredentialMintEvent } from "takosumi-contract/security";
+import type {
+  BillingAccount,
+  BillingPlan,
+  CreditBalance,
+  CreditReservation,
+  SpaceSubscription,
+  UsageEvent,
+} from "takosumi-contract/billing";
+import type {
+  CredentialMintEvent,
+  SecurityFinding,
+} from "takosumi-contract/security";
+import type { ProviderTemplate } from "takosumi-contract/providers";
 import type {
   InstallationPatch,
   InstallationPatchGuard,
@@ -65,6 +75,9 @@ import { clampActivityLimit, InstallationPatchGuardConflict } from "./store.ts";
 const RUN_KINDS_PLAN = ["plan", "destroy_plan"] as const;
 const RUN_KINDS_APPLY = ["apply", "destroy_apply"] as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync";
+const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check";
+const RUN_KIND_BACKUP = "backup";
+const RUN_KIND_RESTORE = "restore";
 
 export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   readonly #client: SqlClient;
@@ -112,11 +125,55 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
+  async putProviderTemplate(
+    entry: ProviderTemplate,
+  ): Promise<ProviderTemplate> {
+    await this.#pgUpsert(pgSchema.providerTemplates, {
+      id: entry.id,
+      providerSource: entry.providerSource,
+      primaryCredentialSource: entry.credentialSources.includes("takosumi_managed")
+        ? "takosumi_managed"
+        : "user_env_set",
+      defaultEligible: entry.takosumiManagedAvailable ? 1 : 0,
+      entryJson: entry,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+    });
+    return entry;
+  }
+
+  async getProviderTemplate(
+    id: string,
+  ): Promise<ProviderTemplate | undefined> {
+    return await this.#pgFirstJson<ProviderTemplate>(
+      pgSchema.providerTemplates,
+      pgSchema.providerTemplates.entryJson,
+      eq(pgSchema.providerTemplates.id, id),
+    );
+  }
+
+  async listProviderTemplates(): Promise<readonly ProviderTemplate[]> {
+    return await this.#pgManyJson<ProviderTemplate>(
+      pgSchema.providerTemplates,
+      pgSchema.providerTemplates.entryJson,
+      {
+        orderBy: [
+          asc(pgSchema.providerTemplates.primaryCredentialSource),
+          asc(pgSchema.providerTemplates.id),
+        ],
+      },
+    );
+  }
+
   // --- runs (single §27 table; rows discriminated by kind) -----------------
 
   async putPlanRun(run: PlanRun): Promise<PlanRun> {
     await this.#putRunDrizzle(
-      run.operation === "destroy" ? "destroy_plan" : "plan",
+      run.driftCheck === true
+        ? "drift_check"
+        : run.operation === "destroy"
+          ? "destroy_plan"
+          : "plan",
       {
         id: run.id,
         spaceId: run.spaceId,
@@ -129,7 +186,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async getPlanRun(id: string): Promise<PlanRun | undefined> {
-    return await this.#getRun<PlanRun>(id, RUN_KINDS_PLAN);
+    return await this.#getRun<PlanRun>(id, [...RUN_KINDS_PLAN, "drift_check"]);
   }
 
   async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
@@ -154,9 +211,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     await this.#putRunDrizzle(RUN_KIND_SOURCE_SYNC, {
       id: run.id,
       spaceId: run.spaceId,
-      // SourceSyncRun is Source-scoped; carry the source id in the indexed
-      // installation_id slot so listSourceSyncRuns can filter without a JSON scan.
-      installationId: run.sourceId,
+      sourceId: run.sourceId,
+      installationId: null,
       createdAt: run.createdAt,
       json: run,
     });
@@ -167,10 +223,77 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return await this.#getRun<SourceSyncRun>(id, RUN_KIND_SOURCE_SYNC);
   }
 
+  async putCompatibilityCheckRun(run: Run): Promise<Run> {
+    if (run.type !== "compatibility_check") {
+      throw new Error(
+        "putCompatibilityCheckRun only accepts compatibility_check runs",
+      );
+    }
+    await this.#putRunDrizzle(RUN_KIND_COMPATIBILITY_CHECK, {
+      id: run.id,
+      spaceId: run.spaceId,
+      sourceId: run.sourceId ?? null,
+      installationId: null,
+      createdAt: run.createdAt,
+      json: run,
+    });
+    return run;
+  }
+
+  async getCompatibilityCheckRun(id: string): Promise<Run | undefined> {
+    return await this.#getRun<Run>(id, RUN_KIND_COMPATIBILITY_CHECK);
+  }
+
+  async putBackupRun(run: Run): Promise<Run> {
+    if (run.type !== "backup") {
+      throw new Error("putBackupRun only accepts backup runs");
+    }
+    await this.#putRunDrizzle(RUN_KIND_BACKUP, {
+      id: run.id,
+      spaceId: run.spaceId,
+      installationId: run.installationId ?? null,
+      createdAt: run.createdAt,
+      json: run,
+    });
+    return run;
+  }
+
+  async getBackupRun(id: string): Promise<Run | undefined> {
+    return await this.#getRun<Run>(id, RUN_KIND_BACKUP);
+  }
+
+  async putRestoreRun(run: Run): Promise<Run> {
+    if (run.type !== "restore") {
+      throw new Error("putRestoreRun only accepts restore runs");
+    }
+    await this.#putRunDrizzle(RUN_KIND_RESTORE, {
+      id: run.id,
+      spaceId: run.spaceId,
+      installationId: run.installationId ?? null,
+      createdAt: run.createdAt,
+      json: run,
+    });
+    return run;
+  }
+
+  async getRestoreRun(id: string): Promise<Run | undefined> {
+    return await this.#getRun<Run>(id, RUN_KIND_RESTORE);
+  }
+
   async listSourceSyncRuns(
     sourceId: string,
   ): Promise<readonly SourceSyncRun[]> {
-    const rows = await this.#db
+    const currentRows = await this.#db
+      .select({ json: pgSchema.runs.runJson })
+      .from(pgSchema.runs)
+      .where(
+        and(
+          eq(pgSchema.runs.kind, RUN_KIND_SOURCE_SYNC),
+          eq(pgSchema.runs.sourceId, sourceId),
+        ),
+      )
+      .orderBy(asc(pgSchema.runs.createdAt), asc(pgSchema.runs.id));
+    const legacyRows = await this.#db
       .select({ json: pgSchema.runs.runJson })
       .from(pgSchema.runs)
       .where(
@@ -180,7 +303,41 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         ),
       )
       .orderBy(asc(pgSchema.runs.createdAt), asc(pgSchema.runs.id));
-    return rows.map((row) => parseRow(row) as SourceSyncRun);
+    const byId = new Map<string, SourceSyncRun>();
+    for (const row of [...currentRows, ...legacyRows]) {
+      const parsed = parseRow(row) as SourceSyncRun;
+      byId.set(parsed.id, parsed);
+    }
+    return [...byId.values()].sort(
+      (a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    );
+  }
+
+  // --- artifact ledger (§30 artifacts) -------------------------------------
+
+  async putArtifactRecord(record: ArtifactRecord): Promise<ArtifactRecord> {
+    await this.#pgUpsert(pgSchema.artifacts, {
+      id: record.id,
+      runId: record.runId,
+      kind: record.kind,
+      objectKey: record.objectKey,
+      digest: record.digest,
+      sizeBytes: record.sizeBytes,
+      createdAt: record.createdAt,
+    });
+    return record;
+  }
+
+  async listArtifactRecordsForRun(
+    runId: string,
+  ): Promise<readonly ArtifactRecord[]> {
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.artifacts)
+      .where(eq(pgSchema.artifacts.runId, runId))
+      .orderBy(asc(pgSchema.artifacts.createdAt), asc(pgSchema.artifacts.id));
+    return rows.map(artifactRecordFromRow);
   }
 
   async #putRunDrizzle(
@@ -188,6 +345,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     fields: {
       readonly id: string;
       readonly spaceId: string;
+      readonly sourceId?: string | null;
       readonly installationId: string | null;
       readonly createdAt: number | string;
       readonly json: unknown;
@@ -197,6 +355,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       id: fields.id,
       kind,
       spaceId: fields.spaceId,
+      sourceId: fields.sourceId ?? null,
       installationId: fields.installationId,
       // created_at is TEXT so it can hold both the internal epoch-number runs
       // and the ISO-string SourceSyncRun without a per-kind column.
@@ -211,6 +370,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         set: {
           kind: values.kind,
           spaceId: values.spaceId,
+          sourceId: values.sourceId,
           installationId: values.installationId,
           createdAt: values.createdAt,
           runJson: values.runJson,
@@ -597,10 +757,30 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     await this.#pgUpsert(
       pgSchema.secretBlobs,
       {
+        id: blob.id,
         connectionId: blob.connectionId,
+        spaceId: blob.spaceId ?? null,
+        kind: blob.kind,
+        ciphertext: blob.ciphertext,
+        encryptedDek: blob.encryptedDek,
+        nonce: blob.nonce,
+        aad: blob.aad,
+        keyVersion: blob.keyVersion,
+        createdAt: blob.createdAt,
+        rotatedAt: blob.rotatedAt ?? null,
         blobJson: blob,
       },
       {
+        id: blob.id,
+        spaceId: blob.spaceId ?? null,
+        kind: blob.kind,
+        ciphertext: blob.ciphertext,
+        encryptedDek: blob.encryptedDek,
+        nonce: blob.nonce,
+        aad: blob.aad,
+        keyVersion: blob.keyVersion,
+        createdAt: blob.createdAt,
+        rotatedAt: blob.rotatedAt ?? null,
         blobJson: blob,
       },
       pgSchema.secretBlobs.connectionId,
@@ -630,19 +810,16 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putOperatorConnectionDefault(
     record: OperatorConnectionDefault,
   ): Promise<OperatorConnectionDefault> {
-    // One default per capability: drop any stale row for the same capability under
-    // a different id before upserting (the capability is the natural upsert key).
     await this.#db
       .delete(pgSchema.operatorConnectionDefaults)
       .where(
         and(
-          eq(pgSchema.operatorConnectionDefaults.capability, record.capability),
+          eq(pgSchema.operatorConnectionDefaults.provider, record.provider),
           ne(pgSchema.operatorConnectionDefaults.id, record.id),
         ),
       );
     await this.#pgUpsert(pgSchema.operatorConnectionDefaults, {
       id: record.id,
-      capability: record.capability,
       provider: record.provider,
       connectionId: record.connectionId,
       defaultJson: record,
@@ -653,12 +830,12 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async getOperatorConnectionDefault(
-    capability: Capability,
+    provider: string,
   ): Promise<OperatorConnectionDefault | undefined> {
     return await this.#pgFirstJson<OperatorConnectionDefault>(
       pgSchema.operatorConnectionDefaults,
       pgSchema.operatorConnectionDefaults.defaultJson,
-      eq(pgSchema.operatorConnectionDefaults.capability, capability),
+      eq(pgSchema.operatorConnectionDefaults.provider, provider),
     );
   }
 
@@ -668,7 +845,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return await this.#pgManyJson<OperatorConnectionDefault>(
       pgSchema.operatorConnectionDefaults,
       pgSchema.operatorConnectionDefaults.defaultJson,
-      { orderBy: [asc(pgSchema.operatorConnectionDefaults.capability)] },
+      { orderBy: [asc(pgSchema.operatorConnectionDefaults.provider)] },
     );
   }
 
@@ -715,7 +892,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
     await this.#pgUpsert(pgSchema.sourceSnapshots, {
       id: snapshot.id,
-      sourceId: snapshot.sourceId,
+      sourceId: snapshot.sourceId ?? null,
       snapshotJson: snapshot,
       fetchedAt: snapshot.fetchedAt,
     });
@@ -751,6 +928,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   ): Promise<CapsuleCompatibilityReport> {
     await this.#pgUpsert(pgSchema.capsuleCompatibilityReports, {
       id: report.id,
+      sourceId: report.sourceId ?? null,
+      installationId: report.installationId ?? null,
       sourceSnapshotId: report.sourceSnapshotId,
       level: report.level,
       findingsJson: report.findings,
@@ -777,6 +956,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     if (!row) return undefined;
     return {
       id: row.id,
+      ...(row.sourceId ? { sourceId: row.sourceId } : {}),
+      ...(row.installationId ? { installationId: row.installationId } : {}),
       sourceSnapshotId: row.sourceSnapshotId,
       level: row.level as CapsuleCompatibilityReport["level"],
       findings: parseJson(
@@ -1070,6 +1251,23 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return rows[0];
   }
 
+  async listOutputSnapshots(
+    installationId: string,
+  ): Promise<readonly OutputSnapshot[]> {
+    return await this.#pgManyJson<OutputSnapshot>(
+      pgSchema.outputSnapshots,
+      pgSchema.outputSnapshots.snapshotJson,
+      {
+        where: eq(pgSchema.outputSnapshots.installationId, installationId),
+        orderBy: [
+          pgSchema.outputSnapshots.stateGeneration,
+          pgSchema.outputSnapshots.createdAt,
+          pgSchema.outputSnapshots.id,
+        ],
+      },
+    );
+  }
+
   // --- output_shares (§18) --------------------------------------------------
 
   async putOutputShare(share: OutputShare): Promise<OutputShare> {
@@ -1204,7 +1402,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   // --- credential_mint_events (spec invariant 17) ---------------------------
   //
   // Non-secret mint audit rows. The JSON payload carries metadata only:
-  // run/space/installation/connection/phase/capability labels.
+  // run/space/installation/connection/phase/provider labels.
 
   async putCredentialMintEvent(
     event: CredentialMintEvent,
@@ -1213,7 +1411,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       id: event.id,
       runId: event.runId,
       spaceId: event.spaceId,
-      installationId: event.installationId,
+      installationId: event.installationId ?? null,
+      sourceId: event.sourceId ?? null,
       connectionId: event.connectionId,
       phase: event.phase,
       eventJson: event,
@@ -1238,6 +1437,371 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
+  async putSecurityFinding(finding: SecurityFinding): Promise<SecurityFinding> {
+    await this.#pgUpsert(pgSchema.securityFindings, {
+      id: finding.id,
+      spaceId: finding.spaceId,
+      installationId: finding.installationId ?? null,
+      runId: finding.runId ?? null,
+      severity: finding.severity,
+      type: finding.type,
+      findingJson: finding,
+      createdAt: finding.createdAt,
+    });
+    return finding;
+  }
+
+  async listSecurityFindings(
+    spaceId: string,
+    options: { readonly runId?: string; readonly limit?: number } = {},
+  ): Promise<readonly SecurityFinding[]> {
+    const limit = clampActivityLimit(options.limit);
+    return await this.#pgManyJson<SecurityFinding>(
+      pgSchema.securityFindings,
+      pgSchema.securityFindings.findingJson,
+      {
+        where:
+          options.runId === undefined
+            ? eq(pgSchema.securityFindings.spaceId, spaceId)
+            : and(
+                eq(pgSchema.securityFindings.spaceId, spaceId),
+                eq(pgSchema.securityFindings.runId, options.runId),
+              ),
+        orderBy: [
+          desc(pgSchema.securityFindings.createdAt),
+          desc(pgSchema.securityFindings.id),
+        ],
+        limit,
+      },
+    );
+  }
+
+  // --- billing ledger (§28) -------------------------------------------------
+
+  async putBillingPlan(plan: BillingPlan): Promise<BillingPlan> {
+    await this.#pgUpsert(
+      pgSchema.billingPlans,
+      {
+        id: plan.id,
+        name: plan.name,
+        monthlyBasePrice: plan.monthlyBasePrice,
+        includedCredits: plan.includedCredits,
+        limitsJson: plan.limits,
+        planJson: plan,
+        createdAt: plan.createdAt,
+        updatedAt: plan.updatedAt,
+      },
+      {
+        name: plan.name,
+        monthlyBasePrice: plan.monthlyBasePrice,
+        includedCredits: plan.includedCredits,
+        limitsJson: plan.limits,
+        planJson: plan,
+        updatedAt: plan.updatedAt,
+      },
+      pgSchema.billingPlans.id,
+    );
+    return plan;
+  }
+
+  async getBillingPlan(id: string): Promise<BillingPlan | undefined> {
+    const rows = await this.#pgManyJson<BillingPlan>(
+      pgSchema.billingPlans,
+      pgSchema.billingPlans.planJson,
+      {
+        where: eq(pgSchema.billingPlans.id, id),
+        limit: 1,
+      },
+    );
+    return rows[0];
+  }
+
+  async putBillingAccount(account: BillingAccount): Promise<BillingAccount> {
+    await this.#pgUpsert(
+      pgSchema.billingAccounts,
+      {
+        id: account.id,
+        ownerType: account.ownerType,
+        ownerId: account.ownerId,
+        provider: account.provider,
+        status: account.status,
+        accountJson: account,
+        createdAt: account.createdAt,
+        updatedAt: account.updatedAt,
+      },
+      {
+        ownerType: account.ownerType,
+        ownerId: account.ownerId,
+        provider: account.provider,
+        status: account.status,
+        accountJson: account,
+        updatedAt: account.updatedAt,
+      },
+      pgSchema.billingAccounts.id,
+    );
+    return account;
+  }
+
+  async getBillingAccount(id: string): Promise<BillingAccount | undefined> {
+    const rows = await this.#pgManyJson<BillingAccount>(
+      pgSchema.billingAccounts,
+      pgSchema.billingAccounts.accountJson,
+      {
+        where: eq(pgSchema.billingAccounts.id, id),
+        limit: 1,
+      },
+    );
+    return rows[0];
+  }
+
+  async getBillingAccountForOwner(
+    ownerType: BillingAccount["ownerType"],
+    ownerId: string,
+  ): Promise<BillingAccount | undefined> {
+    const rows = await this.#pgManyJson<BillingAccount>(
+      pgSchema.billingAccounts,
+      pgSchema.billingAccounts.accountJson,
+      {
+        where: and(
+          eq(pgSchema.billingAccounts.ownerType, ownerType),
+          eq(pgSchema.billingAccounts.ownerId, ownerId),
+        ),
+        limit: 1,
+      },
+    );
+    return rows[0];
+  }
+
+  async putSpaceSubscription(
+    subscription: SpaceSubscription,
+  ): Promise<SpaceSubscription> {
+    await this.#pgUpsert(
+      pgSchema.spaceSubscriptions,
+      {
+        id: subscription.id,
+        spaceId: subscription.spaceId,
+        billingAccountId: subscription.billingAccountId,
+        planId: subscription.planId,
+        status: subscription.status,
+        subscriptionJson: subscription,
+        createdAt: subscription.createdAt,
+        updatedAt: subscription.updatedAt,
+      },
+      {
+        spaceId: subscription.spaceId,
+        billingAccountId: subscription.billingAccountId,
+        planId: subscription.planId,
+        status: subscription.status,
+        subscriptionJson: subscription,
+        updatedAt: subscription.updatedAt,
+      },
+      pgSchema.spaceSubscriptions.id,
+    );
+    return subscription;
+  }
+
+  async getSpaceSubscription(
+    spaceId: string,
+  ): Promise<SpaceSubscription | undefined> {
+    const rows = await this.#pgManyJson<SpaceSubscription>(
+      pgSchema.spaceSubscriptions,
+      pgSchema.spaceSubscriptions.subscriptionJson,
+      {
+        where: eq(pgSchema.spaceSubscriptions.spaceId, spaceId),
+        orderBy: [
+          desc(pgSchema.spaceSubscriptions.updatedAt),
+          desc(pgSchema.spaceSubscriptions.id),
+        ],
+        limit: 1,
+      },
+    );
+    return rows[0];
+  }
+
+  async putCreditBalance(balance: CreditBalance): Promise<CreditBalance> {
+    await this.#pgUpsert(
+      pgSchema.creditBalances,
+      {
+        spaceId: balance.spaceId,
+        availableCredits: balance.availableCredits,
+        reservedCredits: balance.reservedCredits,
+        monthlyIncludedCredits: balance.monthlyIncludedCredits,
+        purchasedCredits: balance.purchasedCredits,
+        updatedAt: balance.updatedAt,
+      },
+      {
+        availableCredits: balance.availableCredits,
+        reservedCredits: balance.reservedCredits,
+        monthlyIncludedCredits: balance.monthlyIncludedCredits,
+        purchasedCredits: balance.purchasedCredits,
+        updatedAt: balance.updatedAt,
+      },
+      pgSchema.creditBalances.spaceId,
+    );
+    return balance;
+  }
+
+  async getCreditBalance(spaceId: string): Promise<CreditBalance | undefined> {
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.creditBalances)
+      .where(eq(pgSchema.creditBalances.spaceId, spaceId))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      spaceId: row.spaceId,
+      availableCredits: row.availableCredits,
+      reservedCredits: row.reservedCredits,
+      monthlyIncludedCredits: row.monthlyIncludedCredits,
+      purchasedCredits: row.purchasedCredits,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  async reserveCredits(
+    spaceId: string,
+    input: { readonly credits: number; readonly updatedAt: string },
+  ): Promise<CreditBalance | undefined> {
+    const rows = await this.#db
+      .update(pgSchema.creditBalances)
+      .set({
+        availableCredits: sql`${pgSchema.creditBalances.availableCredits} - ${input.credits}`,
+        reservedCredits: sql`${pgSchema.creditBalances.reservedCredits} + ${input.credits}`,
+        updatedAt: input.updatedAt,
+      })
+      .where(
+        and(
+          eq(pgSchema.creditBalances.spaceId, spaceId),
+          gte(pgSchema.creditBalances.availableCredits, input.credits),
+        ),
+      )
+      .returning();
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      spaceId: row.spaceId,
+      availableCredits: row.availableCredits,
+      reservedCredits: row.reservedCredits,
+      monthlyIncludedCredits: row.monthlyIncludedCredits,
+      purchasedCredits: row.purchasedCredits,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  async putCreditReservation(
+    reservation: CreditReservation,
+  ): Promise<CreditReservation> {
+    await this.#pgUpsert(pgSchema.creditReservations, {
+      id: reservation.id,
+      spaceId: reservation.spaceId,
+      runId: reservation.runId,
+      estimatedCredits: reservation.estimatedCredits,
+      status: reservation.status,
+      mode: reservation.mode,
+      reservationJson: reservation,
+      createdAt: reservation.createdAt,
+      expiresAt: reservation.expiresAt,
+    });
+    return reservation;
+  }
+
+  async getCreditReservationForRun(
+    runId: string,
+  ): Promise<CreditReservation | undefined> {
+    const rows = await this.#pgManyJson<CreditReservation>(
+      pgSchema.creditReservations,
+      pgSchema.creditReservations.reservationJson,
+      {
+        where: eq(pgSchema.creditReservations.runId, runId),
+        orderBy: [
+          desc(pgSchema.creditReservations.createdAt),
+          desc(pgSchema.creditReservations.id),
+        ],
+        limit: 1,
+      },
+    );
+    return rows[0];
+  }
+
+  async listCreditReservations(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly CreditReservation[]> {
+    return await this.#pgManyJson<CreditReservation>(
+      pgSchema.creditReservations,
+      pgSchema.creditReservations.reservationJson,
+      {
+        where: eq(pgSchema.creditReservations.spaceId, spaceId),
+        orderBy: [
+          desc(pgSchema.creditReservations.createdAt),
+          desc(pgSchema.creditReservations.id),
+        ],
+        limit: options.limit ?? 100,
+      },
+    );
+  }
+
+  async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
+    const existing = await this.#usageEventByIdempotencyKey(
+      event.idempotencyKey,
+    );
+    if (existing) return existing;
+    await this.#pgUpsert(
+      pgSchema.usageEvents,
+      {
+        id: event.id,
+        spaceId: event.spaceId,
+        installationId: event.installationId ?? null,
+        runId: event.runId ?? null,
+        kind: event.kind,
+        quantity: event.quantity,
+        credits: event.credits,
+        source: event.source,
+        idempotencyKey: event.idempotencyKey,
+        createdAt: event.createdAt,
+      },
+      {
+        id: event.id,
+        spaceId: event.spaceId,
+        installationId: event.installationId ?? null,
+        runId: event.runId ?? null,
+        kind: event.kind,
+        quantity: event.quantity,
+        credits: event.credits,
+        source: event.source,
+        createdAt: event.createdAt,
+      },
+      pgSchema.usageEvents.idempotencyKey,
+    );
+    return event;
+  }
+
+  async #usageEventByIdempotencyKey(
+    idempotencyKey: string,
+  ): Promise<UsageEvent | undefined> {
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.usageEvents)
+      .where(eq(pgSchema.usageEvents.idempotencyKey, idempotencyKey))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return undefined;
+    return usageEventFromRow(row);
+  }
+
+  async listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]> {
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.usageEvents)
+      .where(eq(pgSchema.usageEvents.spaceId, spaceId))
+      .orderBy(
+        asc(pgSchema.usageEvents.createdAt),
+        asc(pgSchema.usageEvents.id),
+      );
+    return rows.map(usageEventFromRow);
+  }
+
   // --- backups (§33 layer 1 / §26 R2_BACKUPS) -------------------------------
   //
   // One ledger pointer row per sealed control-backup bundle. The bundle bytes
@@ -1248,6 +1812,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     await this.#pgUpsert(pgSchema.backups, {
       id: record.id,
       spaceId: record.spaceId,
+      installationId: record.installationId ?? null,
+      environment: record.environment ?? null,
+      createdByRunId: record.createdByRunId ?? null,
       backupJson: record,
       createdAt: record.createdAt,
     });
@@ -1339,13 +1906,59 @@ function parseJson(value: unknown): unknown {
   return value;
 }
 
+function usageEventFromRow(row: {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly installationId: string | null;
+  readonly runId: string | null;
+  readonly kind: string;
+  readonly quantity: number;
+  readonly credits: number;
+  readonly source: string;
+  readonly idempotencyKey: string;
+  readonly createdAt: string;
+}): UsageEvent {
+  return {
+    id: row.id,
+    spaceId: row.spaceId,
+    ...(row.installationId ? { installationId: row.installationId } : {}),
+    ...(row.runId ? { runId: row.runId } : {}),
+    kind: row.kind as UsageEvent["kind"],
+    quantity: row.quantity,
+    credits: row.credits,
+    source: row.source as UsageEvent["source"],
+    idempotencyKey: row.idempotencyKey,
+    createdAt: row.createdAt,
+  };
+}
+
+function artifactRecordFromRow(row: {
+  readonly id: string;
+  readonly runId: string;
+  readonly kind: string;
+  readonly objectKey: string;
+  readonly digest: string;
+  readonly sizeBytes: number;
+  readonly createdAt: string;
+}): ArtifactRecord {
+  return {
+    id: row.id,
+    runId: row.runId,
+    kind: row.kind,
+    objectKey: row.objectKey,
+    digest: row.digest,
+    sizeBytes: row.sizeBytes,
+    createdAt: row.createdAt,
+  };
+}
+
 function installationValues(installation: Installation) {
   return {
     id: installation.id,
     spaceId: installation.spaceId,
     name: installation.name,
     environment: installation.environment,
-    sourceId: installation.sourceId,
+    sourceId: installation.sourceId ?? null,
     installConfigId: installation.installConfigId,
     currentDeploymentId: installation.currentDeploymentId ?? null,
     status: installation.status,

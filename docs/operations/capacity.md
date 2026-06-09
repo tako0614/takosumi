@@ -16,7 +16,7 @@ floor を使います。
 | Surface | Current measured production traffic | Planning floor for launch | Notes |
 | --- | ---: | ---: | --- |
 | Dashboard / account read traffic | 0 customer RPS | 50 RPS peak | platform worker Web/API |
-| Control-plane write traffic | 0 customer RPS | 10 RPS peak | Space / Source / Connection / Installation writes |
+| Control-plane write traffic | 0 customer RPS | 10 RPS peak | Space / Source / Connection / Provider Template read / Provider Env Set / Installation / InstallConfig writes |
 | Source sync / compatibility checks | 0 customer runs/min | 30 runs/min peak | git/provider-bound |
 | Plan runs | 0 customer plans/min | 30 plans/min peak | OpenTofu init/plan and policy-bound |
 | Apply / destroy runs | 0 customer applies/min | 10 applies/min peak | provider RPC-bound |
@@ -50,7 +50,7 @@ required_capacity = forecast_peak * 2.0 headroom
 | Queue consumer | 2 logical consumers / env | queue age above target or DLQ growth | keep one consumer failure domain spare |
 | Runner container pool | 50 active launch cap | active runs > 60 % of cap for 15 min | throttle apply below provider limits |
 | CoordinationObject | per-Installation lease namespace | lease takeover or alarm lag | no single DO hot spot for all Spaces |
-| D1 / SQL ledger | managed HA tier where applicable | connection / lock wait / storage threshold | 90 days storage runway |
+| D1 control ledger | managed D1 tier | lock wait / storage threshold | 90 days storage runway |
 | R2 source/artifact/state/backup | provider managed | growth > forecast for 7 days | lifecycle policy reviewed monthly |
 
 planning に使う conservative capacity:
@@ -70,11 +70,12 @@ capacity review で見る signal:
 
 - platform worker 5xx / latency
 - `/api` read/write RPS
+- Provider Template read RPS and Provider Env Set create/update/rotate write rate
 - source sync / compatibility / plan / apply run counts
 - queue depth, queue age, DLQ count
 - CoordinationObject lease waits and takeover count
 - runner container startup latency and failure rate
-- D1 / SQL CPU, lock wait, connection pool, storage growth
+- D1 CPU, lock wait, storage growth
 - R2 object count / byte growth per bucket
 - Space-level top-N usage concentration
 

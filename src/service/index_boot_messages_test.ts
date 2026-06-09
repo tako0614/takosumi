@@ -11,7 +11,7 @@ test("service startup diagnostics reference current docs", async () => {
 
   for (const docPath of [
     "docs/reference/operator.md",
-    "docs/reference/runner-profiles.md",
+    "docs/reference/internal-execution-profiles.md",
   ]) {
     assert.ok(
       source.includes(docPath),

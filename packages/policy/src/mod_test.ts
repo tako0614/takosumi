@@ -372,9 +372,9 @@ test("composePolicyVerdict folds the post-MVP scope/quota seams when populated",
   const scope = composePolicyVerdict({ scope: { outOfScope: ["res.a"] } });
   expect(scope.status).toBe("deny");
   expect(scope.reasons.join("\n")).toMatch(/res.a is out of scope/);
-  const quota = composePolicyVerdict({ quota: { exceeded: ["compute"] } });
+  const quota = composePolicyVerdict({ quota: { exceeded: ["cloudflare"] } });
   expect(quota.status).toBe("deny");
-  expect(quota.reasons.join("\n")).toMatch(/quota compute is exceeded/);
+  expect(quota.reasons.join("\n")).toMatch(/quota cloudflare is exceeded/);
   // Empty/absent post-MVP inputs do not deny.
   const clean = composePolicyVerdict({ scope: {}, quota: {} });
   expect(clean.status).toBe("pass");

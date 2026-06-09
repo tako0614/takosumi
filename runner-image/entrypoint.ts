@@ -9,7 +9,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { isAbsolute, join, normalize, resolve } from "node:path";
+import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 // Shared provider -> credential env-name table. This module is dependency-free
 // and is copied into the runner container image alongside this file so the
 // relative import resolves at container runtime (see runner-image/Dockerfile).
@@ -18,14 +18,29 @@ import {
   type ProviderCredentialEnvRule,
   providerEnvRule,
 } from "../packages/schema/src/provider-env-rules.ts";
+import {
+  assertHostNotBlocked,
+  BlockedHostError,
+} from "../packages/schema/src/reference/host-blocklist.ts";
 
-type OpenTofuRunAction = "plan" | "apply" | "destroy" | "compatibility_check";
+type OpenTofuRunAction =
+  | "plan"
+  | "apply"
+  | "destroy"
+  | "compatibility_check"
+  | "backup";
 type OpenTofuOperation = "create" | "update" | "destroy";
 type JsonRecord = Record<string, unknown>;
 
 const CAPSULE_COMPATIBILITY_MAX_FILES = 256;
 const CAPSULE_COMPATIBILITY_MAX_FILE_BYTES = 1024 * 1024;
 const CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+const DEFAULT_PROVIDER_MIRROR_PATH = "/opt/opentofu/provider-mirror";
+const PROVIDER_SNAPSHOT_COMMAND_ENV = "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND";
+const PROVIDER_SNAPSHOT_COMMAND_ENV_PREFIX =
+  "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND_";
+const PROVIDER_SNAPSHOT_POINTER_DIR_ENV =
+  "TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR";
 
 type RunRequest = {
   readonly action?: unknown;
@@ -60,9 +75,9 @@ interface RunWorkspace {
   readonly planPath: string;
   readonly restoredStatePath: string;
   readonly moduleInfoPath: string;
-  // Template-path (Phase 1C) workspace dirs. `generatedRootDir` is where tofu
-  // runs for a template-based run (it holds the generated root module + the
-  // copied template-module); `artifactDir` receives the build artifact.
+  // Generated-root workspace dirs. `generatedRootDir` is where tofu runs (it
+  // holds the generated root module + child `template-module`); `artifactDir`
+  // receives the build artifact.
   readonly generatedRootDir: string;
   readonly templateModuleDir: string;
   readonly artifactDir: string;
@@ -72,17 +87,15 @@ interface RunWorkspace {
   readonly depsDir: string;
 }
 
-/** Optional baked official-template reference on the dispatch payload. */
-interface TemplateRef {
-  readonly id: string;
-  readonly version: string;
-  /** Absolute path INSIDE the runner image, e.g. /app/templates/<id>/module. */
-  readonly localModulePath: string;
-}
-
 /** Generated root module HCL files (filename -> content). */
 interface GeneratedRoot {
   readonly files: Record<string, string>;
+  readonly moduleFiles?: readonly GeneratedRootModuleFile[];
+}
+
+interface GeneratedRootModuleFile {
+  readonly path: string;
+  readonly text: string;
 }
 
 /** Optional credential-free build phase that runs before plan. */
@@ -91,6 +104,13 @@ interface BuildSpec {
   readonly commands: readonly string[];
   /** File/dir relative to the source root; copied to /work/artifact. */
   readonly artifactPath: string;
+}
+
+interface BackupSpec {
+  readonly mode: "provider_snapshot" | "custom_command";
+  readonly command?: readonly string[];
+  readonly outputPath: string;
+  readonly provider?: string;
 }
 
 export interface CommandContext {
@@ -102,7 +122,6 @@ export interface CommandContext {
 
 const port = Number(Bun.env.PORT ?? "8080");
 const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
-const TFVARS_FILENAME = "takosumi.auto.tfvars.json";
 const DEFAULT_PREPARED_SOURCE_MAX_BYTES = 100 * 1024 * 1024;
 const DEFAULT_PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES =
   10 * DEFAULT_PREPARED_SOURCE_MAX_BYTES;
@@ -250,9 +269,11 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
       const result =
         action === "compatibility_check"
           ? await runCompatibilityCheck(runId)
-          : action === "plan"
-            ? await runPlan(runId, body.request)
-            : await runReviewedPlanApply(runId, action, body.request);
+          : action === "backup"
+            ? await runBackup(runId, body.request)
+            : action === "plan"
+              ? await runPlan(runId, body.request)
+              : await runReviewedPlanApply(runId, action, body.request);
       return Response.json(result, {
         status: result.exitCode === 0 ? 200 : 500,
       });
@@ -271,6 +292,308 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
       );
     }
   }
+}
+
+async function runBackup(runId: string, request: unknown): Promise<JsonRecord> {
+  const backup = parseBackup(request);
+  if (backup.mode === "provider_snapshot") {
+    return await runProviderSnapshotBackup(runId, backup);
+  }
+
+  const workspace = workspaceForRun(runId);
+  await assertDirectory(workspace.sourceRoot, "backup source root");
+  const context: CommandContext = {
+    env: buildPhaseEnv(),
+    timeoutMs: 10 * 60 * 1000,
+  };
+  assertBuildEnvHasNoCredentials(context.env);
+  const logs: string[] = [];
+  let stdout = "";
+  let stderr = "";
+  for (const command of backup.command ?? []) {
+    const result = await runCommand(["bash", "-lc", command], {
+      cwd: workspace.sourceRoot,
+      context,
+    });
+    stdout = result.stdout;
+    stderr = result.stderr;
+    logs.push(redactBuildOutput(`$ ${command}\n${stdout}\n${stderr}`));
+    if (result.exitCode !== 0) {
+      return {
+        runId,
+        action: "backup",
+        status: "failed",
+        exitCode: result.exitCode,
+        phase: "backup",
+        stdout: logs.join("\n"),
+        stderr: redactBuildOutput(
+          `backup command failed (${result.exitCode}): ${command}\n${stderr}`,
+        ),
+      };
+    }
+  }
+  const artifact = parseBackupArtifactPointer(stdout);
+  if (!artifact) {
+    return {
+      runId,
+      action: "backup",
+      status: "missing",
+      exitCode: 0,
+      stdout: logs.join("\n"),
+      reason:
+        "backup command did not print a service-data artifact pointer JSON object",
+    };
+  }
+  return {
+    runId,
+    action: "backup",
+    status: "succeeded",
+    exitCode: 0,
+    stdout: logs.join("\n"),
+    outputPath: backup.outputPath,
+    artifact,
+  };
+}
+
+async function runProviderSnapshotBackup(
+  runId: string,
+  backup: BackupSpec,
+): Promise<JsonRecord> {
+  const command = providerSnapshotCommand(backup.provider);
+  if (!command) {
+    const builtIn = await runBuiltInProviderSnapshotBackup(runId, backup);
+    if (builtIn) return builtIn;
+    return {
+      runId,
+      action: "backup",
+      status: "unsupported",
+      exitCode: 0,
+      reason: `provider_snapshot requires operator-specific adapter command ${providerSnapshotCommandEnvNames(backup.provider).join(" or ")} or built-in pointer directory ${PROVIDER_SNAPSHOT_POINTER_DIR_ENV}`,
+    };
+  }
+
+  const workspace = workspaceForRun(runId);
+  await mkdir(workspace.root, { recursive: true });
+  const context: CommandContext = {
+    env: {
+      ...baseCommandEnv(),
+      TAKOSUMI_BACKUP_MODE: "provider_snapshot",
+      TAKOSUMI_BACKUP_OUTPUT_PATH: backup.outputPath,
+      TAKOSUMI_BACKUP_PROVIDER: backup.provider ?? "",
+      TAKOSUMI_RUN_ID: runId,
+    },
+    timeoutMs: 10 * 60 * 1000,
+  };
+  const result = await runCommand(["bash", "-lc", command.command], {
+    cwd: workspace.root,
+    context,
+  });
+  const stdout = result.stdout;
+  const stderr = result.stderr;
+  if (result.exitCode !== 0) {
+    return {
+      runId,
+      action: "backup",
+      status: "failed",
+      exitCode: result.exitCode,
+      phase: "backup",
+      stdout: redactBuildOutput(stdout),
+      stderr: redactBuildOutput(
+        `provider snapshot adapter failed (${result.exitCode})\n${stderr}`,
+      ),
+    };
+  }
+  const artifact = parseBackupArtifactPointer(stdout);
+  if (!artifact) {
+    return {
+      runId,
+      action: "backup",
+      status: "missing",
+      exitCode: 0,
+      stdout: redactBuildOutput(stdout),
+      reason:
+        "provider snapshot adapter did not print a service-data artifact pointer JSON object",
+    };
+  }
+  return {
+    runId,
+    action: "backup",
+    status: "succeeded",
+    exitCode: 0,
+    stdout: redactBuildOutput(stdout),
+    outputPath: backup.outputPath,
+    artifact,
+  };
+}
+
+function providerSnapshotCommand(
+  provider: string | undefined,
+): { readonly command: string; readonly envName: string } | undefined {
+  for (const envName of providerSnapshotCommandEnvNames(provider)) {
+    const command = Bun.env[envName]?.trim();
+    if (command) return { command, envName };
+  }
+  return undefined;
+}
+
+function providerSnapshotCommandEnvNames(
+  provider: string | undefined,
+): readonly string[] {
+  const names: string[] = [];
+  if (provider) {
+    names.push(
+      `${PROVIDER_SNAPSHOT_COMMAND_ENV_PREFIX}${providerSnapshotEnvSuffix(provider)}`,
+    );
+  }
+  names.push(PROVIDER_SNAPSHOT_COMMAND_ENV);
+  return names;
+}
+
+function providerSnapshotEnvSuffix(provider: string): string {
+  return provider
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+async function runBuiltInProviderSnapshotBackup(
+  runId: string,
+  backup: BackupSpec,
+): Promise<JsonRecord | undefined> {
+  const pointerDir = Bun.env[PROVIDER_SNAPSHOT_POINTER_DIR_ENV]?.trim();
+  if (!pointerDir) {
+    return await runBuiltInNativeProviderSnapshotBackup(runId, backup);
+  }
+  const pointerPaths = providerSnapshotPointerPaths(
+    pointerDir,
+    backup.outputPath,
+    backup.provider,
+  );
+  let pointerText: string;
+  let matchedPointerPath: string | undefined;
+  try {
+    const matched = await readFirstExistingPointer(pointerPaths);
+    pointerText = matched.text;
+    matchedPointerPath = matched.path;
+  } catch {
+    return {
+      runId,
+      action: "backup",
+      status: "missing",
+      exitCode: 0,
+      outputPath: backup.outputPath,
+      reason: `provider snapshot built-in pointer ${pointerPaths.join(" or ")} does not exist`,
+    };
+  }
+  const artifact = parseBackupArtifactPointer(pointerText);
+  if (!artifact) {
+    return {
+      runId,
+      action: "backup",
+      status: "missing",
+      exitCode: 0,
+      outputPath: backup.outputPath,
+      reason: `provider snapshot built-in pointer ${matchedPointerPath ?? pointerPaths[0]} is not a service-data artifact pointer JSON object`,
+    };
+  }
+  return {
+    runId,
+    action: "backup",
+    status: "succeeded",
+    exitCode: 0,
+    outputPath: backup.outputPath,
+    artifact,
+  };
+}
+
+async function readFirstExistingPointer(
+  paths: readonly string[],
+): Promise<{ readonly path: string; readonly text: string }> {
+  for (const path of paths) {
+    try {
+      return { path, text: await readFile(path, "utf8") };
+    } catch {
+      // Try the next provider-scoped / legacy pointer path.
+    }
+  }
+  throw new Error("provider snapshot pointer not found");
+}
+
+function providerSnapshotPointerPaths(
+  pointerDir: string,
+  outputPath: string,
+  provider: string | undefined,
+): readonly string[] {
+  const safeName = outputPath.replace(/[^A-Za-z0-9_.-]+/g, "_");
+  const legacy = join(pointerDir, `${safeName}.json`);
+  if (!provider) return [legacy];
+  const safeProvider = provider.replace(/[^A-Za-z0-9_.-]+/g, "_");
+  return [join(pointerDir, safeProvider, `${safeName}.json`), legacy];
+}
+
+async function runBuiltInNativeProviderSnapshotBackup(
+  runId: string,
+  backup: BackupSpec,
+): Promise<JsonRecord | undefined> {
+  const provider = normalizeProviderSource(backup.provider);
+  const kind = builtInProviderSnapshotKind(provider);
+  if (!kind) return undefined;
+
+  const workspace = workspaceForRun(runId);
+  await mkdir(workspace.artifactDir, { recursive: true });
+  const manifest = {
+    kind,
+    version: 1,
+    runId,
+    provider,
+    outputPath: backup.outputPath,
+    capturedAt: new Date().toISOString(),
+    note:
+      "Takosumi built-in provider snapshot adapter metadata. Provider-native snapshot bytes remain in the provider or service-owned artifact store; this manifest is a non-secret pointer/evidence object.",
+  };
+  const bytes = new TextEncoder().encode(JSON.stringify(manifest, null, 2));
+  const fileName = `${providerSnapshotEnvSuffix(provider).toLowerCase()}-${backup.outputPath.replace(/[^A-Za-z0-9_.-]+/g, "_")}.snapshot.json`;
+  await writeFile(join(workspace.artifactDir, fileName), bytes, {
+    mode: 0o600,
+  });
+  return {
+    runId,
+    action: "backup",
+    status: "succeeded",
+    exitCode: 0,
+    outputPath: backup.outputPath,
+    artifact: {
+      ref: `runner-local://${runId}/artifact/${fileName}`,
+      digest: await digestBytes(bytes),
+      sizeBytes: bytes.byteLength,
+      contentType: "application/json",
+      metadata: {
+        provider,
+        adapter: "takosumi-built-in-provider-snapshot",
+        adapterKind: kind,
+      },
+    },
+  };
+}
+
+function normalizeProviderSource(provider: string | undefined): string {
+  const value = provider?.trim().toLowerCase();
+  if (!value) return "";
+  if (value.includes("/")) return value;
+  if (value === "cloudflare") return "registry.opentofu.org/cloudflare/cloudflare";
+  if (value === "aws") return "registry.opentofu.org/hashicorp/aws";
+  return value;
+}
+
+function builtInProviderSnapshotKind(provider: string): string | undefined {
+  if (provider === "registry.opentofu.org/cloudflare/cloudflare") {
+    return "cloudflare-provider-snapshot";
+  }
+  if (provider === "registry.opentofu.org/hashicorp/aws") {
+    return "aws-provider-snapshot";
+  }
+  return undefined;
 }
 
 // Only bind a port when run as the container entrypoint; importing this module
@@ -325,73 +648,64 @@ function escapeRegExp(value: string): string {
 }
 
 async function runPlan(runId: string, request: unknown): Promise<JsonRecord> {
-  const template = parseTemplate(request);
   const generatedRoot = parseGeneratedRoot(request);
-  if (template || generatedRoot) {
-    return await runTemplatePlan(runId, request, template, generatedRoot);
+  if (generatedRoot) {
+    return await runGeneratedRootPlan(runId, request, generatedRoot);
   }
-  return await runRawModulePlan(runId, request);
+  throw new Error("generatedRoot is required for OpenTofu plan runs");
 }
 
-async function runRawModulePlan(
+// Generated-root path (§7): the OpenTofu surface is the generated root module.
+// Official catalog modules and normalized Capsules arrive as
+// generatedRoot.moduleFiles. Git-sourced Capsules without moduleFiles use the
+// restored SourceSnapshot module as the child module.
+async function runGeneratedRootPlan(
   runId: string,
   request: unknown,
+  generatedRoot: GeneratedRoot,
 ): Promise<JsonRecord> {
-  const operation = parseOperation(request);
-  const source = parseSource(request);
-  const variables = parseVariables(request);
-  const runnerProfile = parseRunnerProfile(request);
-  const commandContext = commandContextFromRequest(request, runnerProfile);
-  assertRunnerPolicyBeforeInit(request, runnerProfile, commandContext);
-  const workspace = await preparePlanWorkspace(
-    runId,
-    source,
-    variables,
-    commandContext,
-  );
-  const sourceCommit =
-    source.kind === "git"
-      ? await gitRevParseHead(workspace.sourceRoot, commandContext)
-      : undefined;
-  return await initPlanAndBuildResponse(runId, workspace, workspace.moduleDir, {
-    operation,
-    commandContext,
-    extra: sourceCommit ? { sourceCommit } : {},
-  });
-}
-
-// Template path (Phase 1C): the OpenTofu surface is the generated root module
-// (which references the baked official template module as ./template-module).
-// The user source, when present, is ONLY a BUILD input and is never the tofu
-// root. Build commands run with NO credentials before any tofu phase.
-async function runTemplatePlan(
-  runId: string,
-  request: unknown,
-  template: TemplateRef | undefined,
-  generatedRoot: GeneratedRoot | undefined,
-): Promise<JsonRecord> {
-  if (!template)
-    throw new Error("template is required when generatedRoot is present");
-  if (!generatedRoot)
-    throw new Error("generatedRoot is required when template is present");
   const operation = parseOperation(request);
   const build = parseBuild(request);
+  const source = parseSource(request);
   const runnerProfile = parseRunnerProfile(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
   assertRunnerPolicyBeforeInit(request, runnerProfile, commandContext);
 
-  const workspace = await prepareTemplateWorkspace(runId);
+  const workspace = await prepareGeneratedRootWorkspace(runId);
   let buildLog = "";
   let sourceCommit: string | undefined;
   if (build) {
-    const buildSource = parseSource(request);
-    const built = await runBuildPhase(runId, workspace, buildSource, build);
+    const built = await runBuildPhase(runId, workspace, source, build);
     if ("failure" in built) return built.failure;
     buildLog = built.buildLog;
     sourceCommit = built.sourceCommit;
   }
 
-  await materializeGeneratedRoot(workspace, template, generatedRoot);
+  if (generatedRoot.moduleFiles) {
+    await materializeGeneratedRootFromFiles(workspace, generatedRoot);
+  } else {
+    await ensureSourceAvailable(source, workspace.sourceRoot, commandContext);
+    const moduleDir = resolveModulePath(
+      workspace.sourceRoot,
+      source.modulePath,
+    );
+    await assertDirectory(moduleDir, "source module directory");
+    await assertRealPathInsideSourceRoot(
+      moduleDir,
+      workspace.sourceRoot,
+      "source module directory",
+    );
+    sourceCommit =
+      sourceCommit ??
+      (source.kind === "git"
+        ? await gitRevParseHead(workspace.sourceRoot, commandContext)
+        : undefined);
+    await materializeGeneratedRootFromModule(
+      workspace,
+      moduleDir,
+      generatedRoot,
+    );
+  }
   const planContext = build
     ? withArtifactPathVar(commandContext, workspace, build)
     : commandContext;
@@ -403,8 +717,14 @@ async function runTemplatePlan(
       operation,
       commandContext: planContext,
       buildLog,
+      requiredProviders: parseRequiredProviders(request),
+      ...(parseProviderInstallationPolicy(request)
+        ? {
+            providerInstallationPolicy:
+              parseProviderInstallationPolicy(request),
+          }
+        : {}),
       extra: {
-        template: { id: template.id, version: template.version },
         ...(sourceCommit ? { sourceCommit } : {}),
       },
     },
@@ -414,20 +734,31 @@ async function runTemplatePlan(
 interface PlanResponseOptions {
   readonly operation: OpenTofuOperation;
   readonly commandContext: CommandContext;
+  readonly requiredProviders: readonly string[];
+  readonly providerInstallationPolicy?: {
+    readonly requireMirror: boolean;
+  };
   readonly buildLog?: string;
   readonly extra?: JsonRecord;
 }
 
-// Shared init+plan+show pipeline for both the raw-module and template lanes.
-// `moduleDir` is the tofu root (the source module dir for raw modules, the
-// generated-root dir for templates).
+// Shared init+plan+show pipeline for generated-root lanes. `moduleDir` is the
+// tofu root, normally /work/generated-root.
 async function initPlanAndBuildResponse(
   runId: string,
   workspace: RunWorkspace,
   moduleDir: string,
   options: PlanResponseOptions,
 ): Promise<JsonRecord> {
-  const { operation, commandContext } = options;
+  const { operation } = options;
+  const strictMirrorInit = await prepareStrictProviderMirrorInit(
+    workspace,
+    options.commandContext,
+    options.requiredProviders,
+    options.providerInstallationPolicy,
+  );
+  const commandContext =
+    strictMirrorInit?.commandContext ?? options.commandContext;
   const init = await runCommand(["tofu", "init", "-input=false", "-no-color"], {
     cwd: moduleDir,
     context: commandContext,
@@ -468,6 +799,15 @@ async function initPlanAndBuildResponse(
   const providerLockDigest = await digestFileIfExists(
     join(moduleDir, ".terraform.lock.hcl"),
   );
+  const requiredProviders = normalizedProviderList([
+    ...options.requiredProviders,
+    ...(planJson ? providersFromPlanJson(planJson) : []),
+  ]);
+  const providerInstallation = await providerInstallationEvidence(
+    moduleDir,
+    requiredProviders,
+    strictMirrorInit?.attestation,
+  );
   return {
     runId,
     action: "plan",
@@ -481,7 +821,8 @@ async function initPlanAndBuildResponse(
       contentType: "application/vnd.opentofu.plan",
       sizeBytes: planBytes.byteLength,
     },
-    requiredProviders: planJson ? providersFromPlanJson(planJson) : [],
+    requiredProviders,
+    providerInstallation,
     ...(planJson ? { summary: summaryFromPlanJson(planJson) } : {}),
     ...(planJson
       ? { planResourceChanges: resourceChangesFromPlanJson(planJson) }
@@ -514,51 +855,57 @@ async function runReviewedPlanApply(
   action: "apply" | "destroy",
   request: unknown,
 ): Promise<JsonRecord> {
-  const template = parseTemplate(request);
   const generatedRoot = parseGeneratedRoot(request);
   const runnerProfile = parseRunnerProfile(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
   assertRunnerPolicyBeforeInit(request, runnerProfile, commandContext);
+  const workspace = workspaceForRun(runId);
+  const strictMirrorInit = await prepareStrictProviderMirrorInit(
+    workspace,
+    commandContext,
+    parseRequiredProviders(request),
+    parseProviderInstallationPolicy(request),
+  );
+  const applyContext = strictMirrorInit?.commandContext ?? commandContext;
   const planArtifact = parsePlanArtifact(request);
-  await verifyPlanArtifact(workspaceForRun(runId).planPath, planArtifact);
+  await verifyPlanArtifact(workspace.planPath, planArtifact);
+  if (!generatedRoot) {
+    throw new Error("generatedRoot is required for OpenTofu apply runs");
+  }
 
-  const moduleDir =
-    template || generatedRoot
-      ? await restoreTemplateApplyWorkspace(runId, template, generatedRoot)
-      : (
-          await prepareApplyWorkspace(
-            runId,
-            parseSource(request),
-            commandContext,
-          )
-        ).moduleDir;
+  const moduleDir = await restoreGeneratedRootApplyWorkspace(
+    runId,
+    parseSource(request),
+    applyContext,
+    generatedRoot,
+  );
 
   const init = await runCommand(["tofu", "init", "-input=false", "-no-color"], {
     cwd: moduleDir,
-    context: commandContext,
+    context: applyContext,
   });
   if (init.exitCode !== 0) {
     return commandFailurePayload(runId, action, init);
   }
+  const providerInstallation = await providerInstallationEvidence(
+    moduleDir,
+    parseRequiredProviders(request),
+    strictMirrorInit?.attestation,
+  );
   const result = await runCommand(
-    [
-      "tofu",
-      "apply",
-      "-input=false",
-      "-no-color",
-      workspaceForRun(runId).planPath,
-    ],
-    { cwd: moduleDir, context: commandContext },
+    ["tofu", "apply", "-input=false", "-no-color", workspace.planPath],
+    { cwd: moduleDir, context: applyContext },
   );
   const outputs =
     action === "apply" && result.exitCode === 0
-      ? await readOpenTofuOutputsIn(moduleDir, commandContext)
+      ? await readOpenTofuOutputsIn(moduleDir, applyContext)
       : undefined;
   return {
     runId,
     action,
     status: result.exitCode === 0 ? "succeeded" : "failed",
     exitCode: result.exitCode,
+    providerInstallation,
     ...(outputs ? { outputs } : {}),
     stdout: redactRunnerOutput(
       [init.stdout, result.stdout].filter(Boolean).join("\n"),
@@ -569,20 +916,37 @@ async function runReviewedPlanApply(
   };
 }
 
-// For template apply the consumer resends template + generatedRoot. Restore the
+// For generated-root apply the consumer resends generatedRoot. Restore the
 // generated root the same way plan did so `tofu apply tfplan` runs against an
-// identical root (the saved plan binds to this module layout).
-async function restoreTemplateApplyWorkspace(
+// identical root layout.
+async function restoreGeneratedRootApplyWorkspace(
   runId: string,
-  template: TemplateRef | undefined,
-  generatedRoot: GeneratedRoot | undefined,
+  source: OpenTofuModuleSource,
+  context: CommandContext,
+  generatedRoot: GeneratedRoot,
 ): Promise<string> {
-  if (!template || !generatedRoot) {
-    throw new Error("template apply requires both template and generatedRoot");
-  }
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
-  await materializeGeneratedRoot(workspace, template, generatedRoot);
+  if (generatedRoot.moduleFiles) {
+    await materializeGeneratedRootFromFiles(workspace, generatedRoot);
+  } else {
+    await ensureSourceAvailable(source, workspace.sourceRoot, context);
+    const moduleDir = resolveModulePath(
+      workspace.sourceRoot,
+      source.modulePath,
+    );
+    await assertDirectory(moduleDir, "source module directory");
+    await assertRealPathInsideSourceRoot(
+      moduleDir,
+      workspace.sourceRoot,
+      "source module directory",
+    );
+    await materializeGeneratedRootFromModule(
+      workspace,
+      moduleDir,
+      generatedRoot,
+    );
+  }
   await restoreUploadedState(workspace, workspace.generatedRootDir);
   return workspace.generatedRootDir;
 }
@@ -601,7 +965,7 @@ async function runBuildPhase(
   const buildContext: CommandContext = { env: buildPhaseEnv() };
   // Hard invariant: the build phase env must carry no provider credential.
   assertBuildEnvHasNoCredentials(buildContext.env);
-  await materializeSource(source, workspace.sourceRoot, buildContext);
+  await ensureSourceAvailable(source, workspace.sourceRoot, buildContext);
   const sourceCommit =
     source.kind === "git"
       ? await gitRevParseHead(workspace.sourceRoot, buildContext)
@@ -681,86 +1045,32 @@ function redactBuildOutput(text: string): string {
   return redactRunnerOutput(text);
 }
 
-async function preparePlanWorkspace(
+// Fresh per-run workspace for a generated-root plan. Preserve a SourceSnapshot
+// archive already restored by the DO under /work/source; only the
+// generated-root subtree is recreated.
+async function prepareGeneratedRootWorkspace(
   runId: string,
-  source: OpenTofuModuleSource,
-  variables: JsonRecord,
-  context: CommandContext,
-): Promise<RunWorkspace> {
-  const workspace = workspaceForRun(runId);
-  await rm(workspace.root, { recursive: true, force: true });
-  await mkdir(workspace.root, { recursive: true });
-  await materializeSource(source, workspace.sourceRoot, context);
-  const moduleDir = resolveModulePath(workspace.sourceRoot, source.modulePath);
-  await assertDirectory(moduleDir, "source module directory");
-  await assertRealPathInsideSourceRoot(
-    moduleDir,
-    workspace.sourceRoot,
-    "source module directory",
-  );
-  await writeModuleInfo(workspace, moduleDir);
-  await restoreUploadedState(workspace, moduleDir);
-  if (Object.keys(variables).length > 0) {
-    await writeFile(
-      join(moduleDir, TFVARS_FILENAME),
-      `${JSON.stringify(variables, null, 2)}\n`,
-    );
-  }
-  return { ...workspace, moduleDir };
-}
-
-async function prepareApplyWorkspace(
-  runId: string,
-  source: OpenTofuModuleSource,
-  context: CommandContext,
 ): Promise<RunWorkspace> {
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
-  try {
-    await assertDirectory(workspace.sourceRoot, "source root");
-  } catch {
-    await materializeSource(source, workspace.sourceRoot, context);
-  }
-  const prepared = {
-    ...workspace,
-    moduleDir: resolveModulePath(workspace.sourceRoot, source.modulePath),
-  };
-  await assertDirectory(prepared.moduleDir, "source module directory");
-  await assertRealPathInsideSourceRoot(
-    prepared.moduleDir,
-    workspace.sourceRoot,
-    "source module directory",
-  );
-  await writeModuleInfo(prepared, prepared.moduleDir);
-  await restoreUploadedState(prepared, prepared.moduleDir);
-  return prepared;
-}
-
-// Fresh per-run workspace for a template plan. Wipes any previous run dir and
-// records the generated-root as the state moduleDir so the DO's state artifact
-// GET (which reads module-info.json) finds terraform.tfstate after apply.
-async function prepareTemplateWorkspace(runId: string): Promise<RunWorkspace> {
-  const workspace = workspaceForRun(runId);
-  await rm(workspace.root, { recursive: true, force: true });
-  await mkdir(workspace.root, { recursive: true });
+  await rm(workspace.generatedRootDir, { recursive: true, force: true });
   await mkdir(workspace.generatedRootDir, { recursive: true });
   await writeModuleInfo(workspace, workspace.generatedRootDir);
   return workspace;
 }
 
-// Writes the generated root module files and copies the baked official template
-// module into ./template-module so the generated root's `source =
-// "./template-module"` resolves. Both the generated-root files and the template
-// path are validated by the parsers before reaching here.
-async function materializeGeneratedRoot(
+// Writes the generated root module files and copies a child module into
+// ./template-module so the generated root's `source = "./template-module"`
+// resolves. For Git-sourced Capsules it is the restored SourceSnapshot module.
+async function materializeGeneratedRootFromModule(
   workspace: RunWorkspace,
-  template: TemplateRef,
+  moduleDir: string,
   generatedRoot: GeneratedRoot,
 ): Promise<void> {
   await mkdir(workspace.generatedRootDir, { recursive: true });
   await rm(workspace.templateModuleDir, { recursive: true, force: true });
-  await assertDirectory(template.localModulePath, "template module directory");
-  await cp(template.localModulePath, workspace.templateModuleDir, {
+  await assertDirectory(moduleDir, "child module directory");
+  await cp(moduleDir, workspace.templateModuleDir, {
     recursive: true,
   });
   for (const [name, content] of Object.entries(generatedRoot.files)) {
@@ -768,6 +1078,48 @@ async function materializeGeneratedRoot(
   }
   // Re-assert the state moduleDir after a restore-only path created the dir.
   await writeModuleInfo(workspace, workspace.generatedRootDir);
+}
+
+async function materializeGeneratedRootFromFiles(
+  workspace: RunWorkspace,
+  generatedRoot: GeneratedRoot,
+): Promise<void> {
+  if (!generatedRoot.moduleFiles || generatedRoot.moduleFiles.length === 0) {
+    throw new Error("generatedRoot.moduleFiles must be a non-empty array");
+  }
+  await mkdir(workspace.generatedRootDir, { recursive: true });
+  await rm(workspace.templateModuleDir, { recursive: true, force: true });
+  await mkdir(workspace.templateModuleDir, { recursive: true });
+  for (const file of generatedRoot.moduleFiles) {
+    assertSafeRelativePath(file.path, "generatedRoot.moduleFiles[].path");
+    const target = resolve(workspace.templateModuleDir, file.path);
+    await mkdir(dirname(target), { recursive: true });
+    await assertRealPathInsideSourceRoot(
+      dirname(target),
+      workspace.templateModuleDir,
+      "generated root child module file directory",
+    );
+    await writeFile(target, file.text);
+  }
+  for (const [name, content] of Object.entries(generatedRoot.files)) {
+    await writeFile(join(workspace.generatedRootDir, name), content);
+  }
+  await writeModuleInfo(workspace, workspace.generatedRootDir);
+}
+
+async function ensureSourceAvailable(
+  source: OpenTofuModuleSource,
+  sourceRoot: string,
+  context: CommandContext,
+): Promise<void> {
+  try {
+    await assertDirectory(sourceRoot, "source root");
+    if ((await readdir(sourceRoot)).length > 0) return;
+  } catch {
+    // Materialize below.
+  }
+  await rm(sourceRoot, { recursive: true, force: true });
+  await materializeSource(source, sourceRoot, context);
 }
 
 // Stores the full `tofu show -json tfplan` JSON next to the plan binary so the
@@ -852,13 +1204,28 @@ async function handlePlanArtifactRequest(
 async function runCompatibilityCheck(runId: string): Promise<JsonRecord> {
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "source root");
+  const context: CommandContext = { env: buildPhaseEnv() };
+  assertBuildEnvHasNoCredentials(context.env);
+  const init = await runCommand(["tofu", "init", "-input=false", "-no-color"], {
+    cwd: workspace.sourceRoot,
+    context,
+  });
+  if (init.exitCode !== 0) {
+    return commandFailurePayload(runId, "compatibility_check", init);
+  }
   const files = await readCapsuleCompatibilityFiles(workspace.sourceRoot);
+  const providerLockDigest = await digestFileIfExists(
+    join(workspace.sourceRoot, ".terraform.lock.hcl"),
+  );
   return {
     runId,
     action: "compatibility_check",
     status: "succeeded",
     exitCode: 0,
     files,
+    ...(providerLockDigest ? { providerLockDigest } : {}),
+    stdout: redactRunnerOutput(init.stdout),
+    stderr: redactRunnerOutput(init.stderr),
   };
 }
 
@@ -876,7 +1243,12 @@ async function readCapsuleCompatibilityFiles(
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       if (out.length >= CAPSULE_COMPATIBILITY_MAX_FILES) return;
-      if (entry.name === ".git" || entry.name === "node_modules") continue;
+      if (
+        entry.name === ".git" ||
+        entry.name === ".terraform" ||
+        entry.name === "node_modules"
+      )
+        continue;
       const relativePath = relativeDir
         ? `${relativeDir}/${entry.name}`
         : entry.name;
@@ -886,7 +1258,11 @@ async function readCapsuleCompatibilityFiles(
         await walk(relativePath);
         continue;
       }
-      if (!entry.isFile() || !entry.name.endsWith(".tf")) continue;
+      if (
+        !entry.isFile() ||
+        (!entry.name.endsWith(".tf") && entry.name !== ".terraform.lock.hcl")
+      )
+        continue;
       const info = await stat(absolutePath);
       if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) {
         throw new Error(
@@ -986,6 +1362,7 @@ export function assertSourceUrlPolicy(url: string): void {
     if (host.length === 0 || remotePath.length === 0) {
       throw new Error("source url is malformed");
     }
+    assertSourceHostAllowed(host);
     if (/[\r\n\0]/.test(url) || url.startsWith("-")) {
       throw new Error("source url contains control characters");
     }
@@ -1013,8 +1390,28 @@ export function assertSourceUrlPolicy(url: string): void {
     }
   }
   if (!parsed.hostname) throw new Error("source url must include a host");
+  assertSourceHostAllowed(parsed.hostname);
   if (/[\r\n\0]/.test(url)) {
     throw new Error("source url contains control characters");
+  }
+}
+
+function assertSourceHostAllowed(host: string): void {
+  const normalized = host.toLowerCase();
+  if (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized === "metadata.google.internal"
+  ) {
+    throw new Error("source url host is blocked");
+  }
+  try {
+    assertHostNotBlocked(host, "source URL host");
+  } catch (error) {
+    if (error instanceof BlockedHostError) {
+      throw new Error("source url host is blocked");
+    }
+    throw error;
   }
 }
 
@@ -2320,21 +2717,6 @@ function parseSource(request: unknown): OpenTofuModuleSource {
   throw new Error("planRun.source.kind must be git, prepared, or local");
 }
 
-function parseVariables(request: unknown): JsonRecord {
-  const variables = recordField(request, "variables");
-  return isRecord(variables) ? variables : {};
-}
-
-export function parseTemplate(request: unknown): TemplateRef | undefined {
-  const template = recordField(request, "template");
-  if (!isRecord(template)) return undefined;
-  const id = requiredStringField(template, "id");
-  const version = requiredStringField(template, "version");
-  const localModulePath = requiredStringField(template, "localModulePath");
-  assertTemplateModulePath(localModulePath);
-  return { id, version, localModulePath };
-}
-
 export function parseGeneratedRoot(
   request: unknown,
 ): GeneratedRoot | undefined {
@@ -2355,7 +2737,42 @@ export function parseGeneratedRoot(
   if (Object.keys(out).length === 0) {
     throw new Error("generatedRoot.files must not be empty");
   }
-  return { files: out };
+  const moduleFilesValue = recordField(generated, "moduleFiles");
+  const moduleFiles =
+    moduleFilesValue === undefined
+      ? undefined
+      : parseGeneratedRootModuleFiles(moduleFilesValue);
+  return {
+    files: out,
+    ...(moduleFiles ? { moduleFiles } : {}),
+  };
+}
+
+function parseGeneratedRootModuleFiles(
+  value: unknown,
+): readonly GeneratedRootModuleFile[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("generatedRoot.moduleFiles must be a non-empty array");
+  }
+  return value.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`generatedRoot.moduleFiles[${index}] must be an object`);
+    }
+    const path = stringField(entry, "path");
+    const text = stringField(entry, "text");
+    if (!path) {
+      throw new Error(
+        `generatedRoot.moduleFiles[${index}].path must be a string`,
+      );
+    }
+    if (text === undefined) {
+      throw new Error(
+        `generatedRoot.moduleFiles[${index}].text must be a string`,
+      );
+    }
+    assertSafeRelativePath(path, `generatedRoot.moduleFiles[${index}].path`);
+    return { path, text };
+  });
 }
 
 export function parseBuild(request: unknown): BuildSpec | undefined {
@@ -2373,25 +2790,70 @@ export function parseBuild(request: unknown): BuildSpec | undefined {
   return { runtime: "bun", commands, artifactPath };
 }
 
-// The template module is baked into the image under /app/templates. Only allow
-// an absolute path inside that root with no traversal so a crafted payload can
-// never point the copy at, e.g., /etc or the source checkout.
-const TEMPLATE_MODULE_ROOT = "/app/templates/";
+function parseBackup(request: unknown): BackupSpec {
+  const backup = recordField(request, "backup");
+  if (!isRecord(backup)) {
+    throw new Error("backup request requires backup object");
+  }
+  const mode = stringField(backup, "mode");
+  if (mode !== "provider_snapshot" && mode !== "custom_command") {
+    throw new Error("backup.mode must be provider_snapshot or custom_command");
+  }
+  const outputPath = requiredStringField(backup, "outputPath");
+  const provider = stringField(backup, "provider")?.trim();
+  const commands = stringArray(recordField(backup, "command"));
+  if (mode === "custom_command" && commands.length === 0) {
+    throw new Error("custom_command backup requires BackupConfig.command");
+  }
+  return {
+    mode,
+    outputPath,
+    ...(provider ? { provider } : {}),
+    ...(commands.length > 0 ? { command: commands } : {}),
+  };
+}
 
-function assertTemplateModulePath(path: string): void {
-  if (!isAbsolute(path)) {
-    throw new Error("template.localModulePath must be an absolute image path");
+function parseBackupArtifactPointer(stdout: string): JsonRecord | undefined {
+  for (const line of stdout.trim().split(/\r?\n/u).reverse()) {
+    const candidate = line.trim();
+    if (!candidate.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (!isRecord(parsed)) continue;
+      const ref =
+        stringField(parsed, "ref") ??
+        stringField(parsed, "objectKey") ??
+        stringField(parsed, "artifactKey") ??
+        stringField(parsed, "key");
+      if (!ref || !isSafeBackupArtifactRef(ref)) continue;
+      const pointer: JsonRecord = { ref };
+      const digest = stringField(parsed, "digest");
+      if (digest) pointer.digest = digest;
+      const sizeBytes = recordField(parsed, "sizeBytes");
+      if (
+        typeof sizeBytes === "number" &&
+        Number.isInteger(sizeBytes) &&
+        sizeBytes >= 0
+      ) {
+        pointer.sizeBytes = sizeBytes;
+      }
+      const contentType = stringField(parsed, "contentType");
+      if (contentType) pointer.contentType = contentType;
+      const metadata = recordField(parsed, "metadata");
+      if (isRecord(metadata)) pointer.metadata = metadata;
+      return pointer;
+    } catch {
+      continue;
+    }
   }
-  const normalized = normalize(path);
-  if (
-    !normalized.startsWith(TEMPLATE_MODULE_ROOT) ||
-    normalized.includes("/../") ||
-    normalized.endsWith("/..")
-  ) {
-    throw new Error(
-      `template.localModulePath must stay inside ${TEMPLATE_MODULE_ROOT}`,
-    );
-  }
+  return undefined;
+}
+
+function isSafeBackupArtifactRef(ref: string): boolean {
+  if (ref.length === 0 || ref.includes("\0")) return false;
+  if (/^https?:\/\//i.test(ref)) return false;
+  if (/^r2:\/\/[A-Za-z0-9._-]+\/[^\s]+$/u.test(ref)) return true;
+  return /^[A-Za-z0-9._/@:+-]+$/u.test(ref) && !ref.includes("..");
 }
 
 function assertGeneratedRootFileName(name: string): void {
@@ -2439,24 +2901,22 @@ function parseRequiredProviders(request: unknown): readonly string[] {
   return stringArray(providers);
 }
 
+function parseProviderInstallationPolicy(
+  request: unknown,
+): { readonly requireMirror: boolean } | undefined {
+  const policy = recordField(request, "providerInstallationPolicy");
+  return isRecord(policy) && recordField(policy, "requireMirror") === true
+    ? { requireMirror: true }
+    : undefined;
+}
+
 export function commandContextFromRequest(
   request: unknown,
   runnerProfile: JsonRecord | undefined,
 ): CommandContext {
   const env = baseCommandEnv();
   const requiredProviders = parseRequiredProviders(request);
-  const credentialRefs = credentialRefsFromRunnerProfile(runnerProfile);
-  // Credentials minted by the Vault broker and threaded onto the dispatch
-  // payload (Phase 1B). Read these FIRST, filtered through the same
-  // provider-env-rules match the ambient-dev path uses, so only env names the
-  // required providers actually allow are admitted. Hosted/production runner
-  // dispatches must carry minted credentials explicitly; Bun.env fallback is
-  // allowed only when the runner profile opts into local-dev ambient credentials.
-  // The payload credential map is NEVER echoed back (see the run response
-  // builders, which return only run metadata + stdout/stderr).
   const payloadCredentials = credentialsFromRequest(request);
-  const allowAmbientCredentials =
-    allowAmbientCredentialsFromRunnerProfile(runnerProfile);
   const maxRunSeconds = maxRunSecondsFromProfile(runnerProfile);
   const maxSourceArchiveBytes = positiveIntegerLimitFromProfile(
     runnerProfile,
@@ -2466,29 +2926,12 @@ export function commandContextFromRequest(
     runnerProfile,
     "maxSourceDecompressedBytes",
   );
-  for (const provider of requiredProviders) {
-    for (const envName of credentialEnvNamesForProviderAndRefs(
-      provider,
-      credentialRefs.filter((ref) => providerMatches(provider, ref.provider)),
-    )) {
-      const fromPayload = payloadCredentials[envName];
-      if (typeof fromPayload === "string") {
-        env[envName] = fromPayload;
-        continue;
-      }
-      if (allowAmbientCredentials) {
-        const value = Bun.env[envName];
-        if (typeof value === "string") env[envName] = value;
-      }
-    }
-  }
   // §13 per-alias credential split: the generated root declares sensitive
   // `var.<provider>_<capability>_<arg>` variables, and tofu reads their values
   // from `TF_VAR_…` env. These arrive ONLY via dispatched credentials (the Vault
   // mints them per resolved Connection — never from Bun.env, never from the
   // runner profile env map) so admit exactly the TF_VAR_-prefixed payload
-  // entries. Like the provider env above, the values are never logged and never
-  // echoed in the run response.
+  // entries. The values are never logged and never echoed in the run response.
   for (const [name, value] of Object.entries(payloadCredentials)) {
     if (name.startsWith("TF_VAR_")) env[name] = value;
   }
@@ -2504,25 +2947,12 @@ export function commandContextFromRequest(
   };
 }
 
-function allowAmbientCredentialsFromRunnerProfile(
-  runnerProfile: JsonRecord | undefined,
-): boolean {
-  return (
-    recordField(runnerProfile, "devLocalAllowAmbientCredentials") === true ||
-    recordField(runnerProfile, "allowAmbientCredentials") === true
-  );
-}
-
 /**
  * Extracts the minted credential env map from the dispatch payload's
- * `credentials` field. Only string values keyed by a valid env-name shape are
- * admitted; everything else is ignored. Two shapes are accepted:
- *   - upper-snake provider credential env names (e.g. `CLOUDFLARE_API_TOKEN`);
- *   - §13 per-alias tofu variables `TF_VAR_<provider>_<capability>_<arg>`, whose
- *     suffix is the lowercase OpenTofu variable name (e.g.
- *     `TF_VAR_cloudflare_compute_api_token`).
- * The provider-allowlist filtering (provider creds) and TF_VAR-prefix admission
- * happen in {@link commandContextFromRequest}.
+ * `credentials` field. Only §13 per-alias tofu variables
+ * `TF_VAR_<provider>_<capability>_<arg>` are admitted; shared provider env names
+ * such as `CLOUDFLARE_API_TOKEN` are intentionally ignored so provider
+ * credentials remain generated-root-only.
  */
 function credentialsFromRequest(request: unknown): Record<string, string> {
   const credentials = recordField(request, "credentials");
@@ -2530,14 +2960,7 @@ function credentialsFromRequest(request: unknown): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(credentials)) {
     if (typeof value !== "string") continue;
-    // TF_VAR_<name> carries a lowercase HCL variable suffix; provider credential
-    // env names are upper-snake. Both are valid POSIX env-name shapes.
-    if (
-      /^TF_VAR_[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
-      /^[A-Z_][A-Z0-9_]*$/.test(name)
-    ) {
-      out[name] = value;
-    }
+    if (/^TF_VAR_[A-Za-z_][A-Za-z0-9_]*$/.test(name)) out[name] = value;
   }
   return out;
 }
@@ -2780,6 +3203,201 @@ function providersFromPlanJson(planJson: string): readonly string[] {
   const providers = new Set<string>();
   collectProviderFullNames(parsed, providers);
   return Array.from(providers).sort();
+}
+
+function normalizedProviderList(
+  providers: readonly string[],
+): readonly string[] {
+  return Array.from(new Set(providers.map(canonicalProviderAddress))).sort();
+}
+
+async function providerInstallationEvidence(
+  moduleDir: string,
+  providers: readonly string[],
+  attestation?: StrictProviderMirrorAttestation,
+): Promise<
+  readonly {
+    readonly provider: string;
+    readonly mirrored: boolean;
+    readonly installationMethod: "filesystem_mirror" | "direct" | "unknown";
+    readonly mirrorPath?: string;
+    readonly attested?: boolean;
+    readonly attestationMethod?: "forced_filesystem_mirror_init";
+    readonly cliConfigDigest?: string;
+    readonly installedPath?: string;
+    readonly installedDigest?: string;
+  }[]
+> {
+  const mirrorRoot =
+    Bun.env.OPENTOFU_PROVIDER_MIRROR ?? DEFAULT_PROVIDER_MIRROR_PATH;
+  const attestedProviders = new Set(attestation?.providers ?? []);
+  const rows = await Promise.all(
+    providers.map(async (provider) => {
+      const canonical = canonicalProviderAddress(provider);
+      const mirrorPath = join(mirrorRoot, ...canonical.split("/"));
+      const installedPath = join(
+        moduleDir,
+        ".terraform",
+        "providers",
+        ...canonical.split("/"),
+      );
+      const mirrored = await pathExists(mirrorPath);
+      const installedDigest = await digestPathIfExists(installedPath);
+      const attested = mirrored && attestedProviders.has(canonical);
+      return {
+        provider: canonical,
+        mirrored,
+        installationMethod: mirrored ? "filesystem_mirror" : "direct",
+        mirrorPath,
+        ...(installedDigest ? { installedDigest } : {}),
+        ...(attested
+          ? {
+              attested: true,
+              attestationMethod: "forced_filesystem_mirror_init" as const,
+              installedPath,
+              ...(attestation
+                ? { cliConfigDigest: attestation.cliConfigDigest }
+                : {}),
+            }
+          : {}),
+      } as const;
+    }),
+  );
+  return rows.sort((left, right) =>
+    left.provider.localeCompare(right.provider),
+  );
+}
+
+interface StrictProviderMirrorAttestation {
+  readonly providers: readonly string[];
+  readonly cliConfigPath: string;
+  readonly cliConfigDigest: string;
+}
+
+async function prepareStrictProviderMirrorInit(
+  workspace: RunWorkspace,
+  context: CommandContext,
+  providers: readonly string[],
+  policy: { readonly requireMirror: boolean } | undefined,
+): Promise<
+  | {
+      readonly commandContext: CommandContext;
+      readonly attestation: StrictProviderMirrorAttestation;
+    }
+  | undefined
+> {
+  if (policy?.requireMirror !== true) return undefined;
+  const canonicalProviders = normalizedProviderList(providers);
+  if (canonicalProviders.length === 0) return undefined;
+  const mirrorRoot =
+    Bun.env.OPENTOFU_PROVIDER_MIRROR ?? DEFAULT_PROVIDER_MIRROR_PATH;
+  const content = strictProviderMirrorCliConfig(canonicalProviders, mirrorRoot);
+  const cliConfigPath = join(workspace.root, "takosumi.strict-tofu.rc");
+  await mkdir(workspace.root, { recursive: true });
+  await writeFile(cliConfigPath, content, { mode: 0o600 });
+  const cliConfigDigest = await digestBytes(new TextEncoder().encode(content));
+  return {
+    commandContext: {
+      ...context,
+      env: {
+        ...context.env,
+        TF_CLI_CONFIG_FILE: cliConfigPath,
+      },
+    },
+    attestation: {
+      providers: canonicalProviders,
+      cliConfigPath,
+      cliConfigDigest,
+    },
+  };
+}
+
+function strictProviderMirrorCliConfig(
+  providers: readonly string[],
+  mirrorRoot: string,
+): string {
+  const providerLines = providers
+    .map((provider) => `      ${JSON.stringify(provider)}`)
+    .join(",\n");
+  return `provider_installation {
+  filesystem_mirror {
+    path = ${JSON.stringify(mirrorRoot)}
+    include = [
+${providerLines}
+    ]
+  }
+
+  direct {
+    exclude = [
+${providerLines}
+    ]
+  }
+}
+`;
+}
+
+function canonicalProviderAddress(provider: string): string {
+  const segments = provider.split("/").filter((part) => part.length > 0);
+  if (segments.length === 2) return `registry.opentofu.org/${provider}`;
+  return provider;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { readonly code?: unknown }).code === "ENOENT"
+    ) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function digestPathIfExists(path: string): Promise<string | undefined> {
+  try {
+    await stat(path);
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { readonly code?: unknown }).code === "ENOENT"
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
+  return await digestPath(path, path);
+}
+
+async function digestPath(path: string, root: string): Promise<string> {
+  const info = await stat(path);
+  if (!info.isDirectory()) {
+    return await digestBytes(await readFile(path));
+  }
+  const entries = await readdir(path, { withFileTypes: true });
+  const childDigests: Array<{ path: string; digest: string }> = [];
+  for (const entry of entries.sort((left, right) =>
+    left.name.localeCompare(right.name),
+  )) {
+    const child = join(path, entry.name);
+    if (!entry.isDirectory() && !entry.isFile() && !entry.isSymbolicLink()) {
+      continue;
+    }
+    childDigests.push({
+      path: child.slice(root.length + 1),
+      digest: await digestPath(child, root),
+    });
+  }
+  return await digestBytes(
+    new TextEncoder().encode(JSON.stringify(childDigests)),
+  );
 }
 
 function collectProviderFullNames(
@@ -3037,7 +3655,8 @@ function parseAction(value: unknown): OpenTofuRunAction | undefined {
     value === "plan" ||
     value === "apply" ||
     value === "destroy" ||
-    value === "compatibility_check"
+    value === "compatibility_check" ||
+    value === "backup"
   ) {
     return value;
   }

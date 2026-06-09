@@ -1,8 +1,12 @@
 {
   "name": "@takosjp/takosumi",
   "version": "0.17.0",
+  "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",
+  "bin": {
+    "takosumi": "packages/cli/src/main.ts"
+  },
   "workspaces": [
     "packages/accounts-contract",
     "packages/accounts-service",
@@ -11,15 +15,18 @@
     "deploy/node-postgres"
   ],
   "scripts": {
-    "check": "tsc --noEmit && bun run check:cloudflare-worker-build",
+    "check": "tsc --noEmit && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",
     "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers worker/src/index.ts --outfile /tmp/takosumi-cf-worker-check.mjs && bun build --target browser --format esm worker/src/wfp_dispatch_worker.ts --outfile /tmp/takosumi-wfp-dispatch-worker-check.mjs",
-    "test": "bun test ./src/ ./packages/schema/src ./packages/rootgen/src ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./packages/platform-services/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src ./worker/src ./deploy/platform",
+    "test": "bun test ./src/ ./packages/schema/src ./packages/rootgen/src ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./packages/platform-services/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src ./worker/src ./deploy/platform ./scripts/",
     "test:service": "bun test ./src/",
     "test:accounts": "bun test ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src",
     "test:scripts": "bun test ./scripts/",
     "lint:json-ld": "bun scripts/lint-json-ld.ts",
-    "opentofu:deployment-output-proof": "bun scripts/prove-opentofu-deployment-output.ts",
+    "opentofu:output-snapshot-proof": "bun scripts/prove-opentofu-output-snapshot.ts",
     "opentofu:live-local-proof": "bun scripts/prove-live-opentofu-plan-apply.ts",
+    "production-hardening:evidence": "bun scripts/validate-production-hardening-evidence.ts",
+    "production-hardening:gates": "bun scripts/verify-production-hardening-gates.ts",
     "db:migrate": "bun src/service/scripts/db-migrate.ts",
     "db:migrate:dry-run": "bun src/service/scripts/db-migrate.ts --dry-run",
     "db:migrate:down": "bun src/service/scripts/db-migrate-down.ts",
@@ -27,6 +34,7 @@
     "db:drizzle:generate:d1": "drizzle-kit generate --config drizzle.config.d1.ts",
     "db:drizzle:generate:postgres": "drizzle-kit generate --config drizzle.config.postgres.ts",
     "accounts": "bun packages/cli/src/main.ts",
+    "cli": "bun packages/cli/src/main.ts",
     "docs:build": "cd docs && bun run build",
     "docs:dev": "cd docs && bun run dev",
     "website:build": "bash website/build.sh",

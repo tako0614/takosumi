@@ -12,12 +12,13 @@ export default function EndCTA() {
           のどれでも、同じ台帳で。
         </p>
         <CodeBlock terminal class="terminal">
-          <span class="k">$</span> npm install -g @takosjp/takosumi{"\n"}
-          <span class="k">$</span> takosumi install git:github.com/acme/api \
+          <span class="k">$</span> open
+          https://app.takosumi.com/install?git=https://git.example.com/acme/api.git
           {"\n"}
-          {"      "}--space prod{"\n"}
+          <span class="k">$</span> POST /api/installations/ins_api/plan{"\n"}
+          <span class="k">$</span> POST /api/runs/run_plan/approve{"\n"}
           <span class="c">
-            {"  "}→ Deployment live · operator-owned runtime
+            {"  "}→ Deployment live · OutputSnapshot recorded
           </span>
         </CodeBlock>
         <div class="cta-row" style="justify-content: center;">

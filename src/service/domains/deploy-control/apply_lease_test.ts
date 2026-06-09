@@ -12,7 +12,7 @@ import { seedInstallationModel } from "./test_model_fixture.ts";
 import type {
   ApplyRun,
   PlanRun,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -86,6 +86,16 @@ async function seedApply(
     updatedAt: 1,
   };
   await store.putPlanRun(planRun);
+  await store.putPlanRunInputs({
+    planRunId: planRun.id,
+    variables: {},
+    generatedRoot: {
+      files: {
+        "main.tf": 'module "app" { source = "./template-module" }',
+      },
+      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
+    },
+  });
   const applyRun: ApplyRun = {
     id: ids.applyRunId,
     planRunId: ids.planRunId,

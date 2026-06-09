@@ -15,14 +15,8 @@ export default function Footer() {
           <a href="https://github.com/tako0614/takosumi" rel="noopener">
             GitHub
           </a>
-          <a
-            href="https://www.npmjs.com/package/@takosjp/takosumi"
-            rel="noopener"
-          >
-            npm
-          </a>
           <a href="https://app.takosumi.com/" rel="noopener">
-            Cloud
+            App
           </a>
         </nav>
       </div>

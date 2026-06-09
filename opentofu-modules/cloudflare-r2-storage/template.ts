@@ -1,5 +1,5 @@
 /**
- * Official template: cloudflare-r2-storage.
+ * First-party Capsule module: cloudflare-r2-storage.
  *
  * Authored as TypeScript catalog data (the service cannot read the filesystem
  * in Workers). The `module/` directory next to this file is the human-readable
@@ -7,7 +7,7 @@
  * `source.localModulePath`. Keep this object in sync with `module/main.tf`.
  */
 
-import type { TemplateDefinition } from "takosumi-contract/deploy-control-api";
+import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 
 export const cloudflareR2StorageTemplate: TemplateDefinition = {
   id: "cloudflare-r2-storage",

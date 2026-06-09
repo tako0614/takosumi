@@ -6,13 +6,13 @@
  * Container execution defaults). Pure data + builders, no controller state.
  */
 
-import type { RunnerProfile } from "takosumi-contract/deploy-control-api";
+import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import { log } from "../../shared/log.ts";
 
 /**
  * Resolve the operator-curated set of enabled runner profiles from a CSV env
  * value (`TAKOSUMI_ENABLED_RUNNER_PROFILES`, e.g.
- * `"cloudflare-default,aws-default,gcp-default"`).
+ * `"cloudflare-default,aws-template,gcp-template"`).
  *
  * The returned list is the operator-curated provider surface: only the listed
  * profile ids appear (so `/v1/runner-profiles` and policy evaluation never see
@@ -88,7 +88,9 @@ function withProfileEnabledLabel(profile: RunnerProfile): RunnerProfile {
   };
 }
 
-export function createDefaultRunnerProfiles(now = Date.now()): readonly RunnerProfile[] {
+export function createDefaultRunnerProfiles(
+  now = Date.now(),
+): readonly RunnerProfile[] {
   const cloudflareProvider = "registry.opentofu.org/cloudflare/cloudflare";
   const awsProvider = "registry.opentofu.org/hashicorp/aws";
   const gcpProvider = "registry.opentofu.org/hashicorp/google";
@@ -97,7 +99,8 @@ export function createDefaultRunnerProfiles(now = Date.now()): readonly RunnerPr
   const helmProvider = "registry.opentofu.org/hashicorp/helm";
   const dockerProvider = "registry.opentofu.org/kreuzwerker/docker";
   const githubProvider = "registry.opentofu.org/integrations/github";
-  const digitalOceanProvider = "registry.opentofu.org/digitalocean/digitalocean";
+  const digitalOceanProvider =
+    "registry.opentofu.org/digitalocean/digitalocean";
 
   return [
     defaultProviderRunnerProfile(now, {
@@ -108,10 +111,7 @@ export function createDefaultRunnerProfiles(now = Date.now()): readonly RunnerPr
       allowedProviders: [cloudflareProvider],
       networkPolicy: {
         mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "api.cloudflare.com",
-        ],
+        allowedHosts: ["registry.opentofu.org", "api.cloudflare.com"],
       },
       cloudflareWorkersForPlatforms: {
         dispatchNamespace: "takosumi-tenants",
@@ -133,8 +133,8 @@ export function createDefaultRunnerProfiles(now = Date.now()): readonly RunnerPr
       },
     }),
     defaultProviderRunnerProfile(now, {
-      id: "aws-default",
-      name: "AWS default",
+      id: "aws-template",
+      name: "AWS verified-space template",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use AWS resources.",
       allowedProviders: [awsProvider],
@@ -147,15 +147,12 @@ export function createDefaultRunnerProfiles(now = Date.now()): readonly RunnerPr
           "iam.amazonaws.com",
           "route53.amazonaws.com",
         ],
-        allowedHostPatterns: [
-          "*.amazonaws.com",
-          "*.api.aws",
-        ],
+        allowedHostPatterns: ["*.amazonaws.com", "*.api.aws"],
       },
     }),
     defaultProviderRunnerProfile(now, {
-      id: "gcp-default",
-      name: "GCP default",
+      id: "gcp-template",
+      name: "GCP verified-space template",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use Google Cloud resources.",
       allowedProviders: [gcpProvider],
@@ -169,16 +166,14 @@ export function createDefaultRunnerProfiles(now = Date.now()): readonly RunnerPr
           "serviceusage.googleapis.com",
           "iam.googleapis.com",
         ],
-        allowedHostPatterns: [
-          "*.googleapis.com",
-        ],
+        allowedHostPatterns: ["*.googleapis.com"],
       },
     }),
     defaultProviderRunnerProfile(now, {
-      id: "azure-default",
-      name: "Azure default",
+      id: "azure-template",
+      name: "Azure template",
       description:
-        "Reference Cloudflare Container runner for OpenTofu modules that use Azure resources.",
+        "Future/custom reference Cloudflare Container runner for OpenTofu modules that use Azure resources.",
       allowedProviders: [azureProvider],
       labels: templateRunnerProfileLabels(),
       networkPolicy: {
@@ -197,27 +192,21 @@ export function createDefaultRunnerProfiles(now = Date.now()): readonly RunnerPr
       },
     }),
     defaultProviderRunnerProfile(now, {
-      id: "kubernetes-default",
-      name: "Kubernetes default",
+      id: "kubernetes-template",
+      name: "Kubernetes verified-space template",
       description:
         "Operator-managed OpenTofu runner for Kubernetes and Helm modules.",
       allowedProviders: [kubernetesProvider, helmProvider],
       labels: templateRunnerProfileLabels(),
       networkPolicy: {
         mode: "operator-managed",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "kubernetes.default.svc",
-        ],
-        allowedHostPatterns: [
-          "*.svc",
-          "*.cluster.local",
-        ],
+        allowedHosts: ["registry.opentofu.org", "kubernetes.default.svc"],
+        allowedHostPatterns: ["*.svc", "*.cluster.local"],
       },
     }),
     defaultProviderRunnerProfile(now, {
-      id: "github-default",
-      name: "GitHub default",
+      id: "github-template",
+      name: "GitHub verified-space template",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use GitHub resources.",
       allowedProviders: [githubProvider],
@@ -229,41 +218,34 @@ export function createDefaultRunnerProfiles(now = Date.now()): readonly RunnerPr
           "api.github.com",
           "uploads.github.com",
         ],
-        allowedHostPatterns: [
-          "*.githubusercontent.com",
-        ],
+        allowedHostPatterns: ["*.githubusercontent.com"],
       },
     }),
     defaultProviderRunnerProfile(now, {
-      id: "digitalocean-default",
-      name: "DigitalOcean default",
+      id: "digitalocean-template",
+      name: "DigitalOcean template",
       description:
-        "Reference Cloudflare Container runner for OpenTofu modules that use DigitalOcean resources.",
+        "Future/custom reference Cloudflare Container runner for OpenTofu modules that use DigitalOcean resources.",
       allowedProviders: [digitalOceanProvider],
       labels: templateRunnerProfileLabels(),
       networkPolicy: {
         mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "api.digitalocean.com",
-        ],
+        allowedHosts: ["registry.opentofu.org", "api.digitalocean.com"],
       },
     }),
     defaultProviderRunnerProfile(now, {
-      id: "docker-local",
-      name: "Docker local",
+      id: "docker-custom-example",
+      name: "Docker custom example",
       substrate: "local",
       description:
-        "Local runner profile for OpenTofu modules that use a host Docker daemon.",
+        "Provider env set example runner profile for OpenTofu modules that use a host Docker daemon.",
       allowedProviders: [dockerProvider],
       credentialRefs: [],
       cloudflareContainer: false,
       labels: templateRunnerProfileLabels(),
       networkPolicy: {
         mode: "operator-managed",
-        allowedHosts: [
-          "registry.opentofu.org",
-        ],
+        allowedHosts: ["registry.opentofu.org"],
       },
     }),
   ];
@@ -312,7 +294,8 @@ function defaultProviderRunnerProfile(
   now: number,
   options: DefaultProviderRunnerProfileOptions,
 ): RunnerProfile {
-  const credentialRefs = options.credentialRefs ??
+  const credentialRefs =
+    options.credentialRefs ??
     credentialRefsForProfile(options.id, options.allowedProviders);
   return {
     id: options.id,
@@ -336,9 +319,10 @@ function defaultProviderRunnerProfile(
     ...(options.cloudflareContainer === false
       ? {}
       : {
-        cloudflareContainer: options.cloudflareContainer ??
-          DEFAULT_CLOUDFLARE_CONTAINER_EXECUTION,
-      }),
+          cloudflareContainer:
+            options.cloudflareContainer ??
+            DEFAULT_CLOUDFLARE_CONTAINER_EXECUTION,
+        }),
     ...(options.cloudflareWorkersForPlatforms
       ? { cloudflareWorkersForPlatforms: options.cloudflareWorkersForPlatforms }
       : {}),

@@ -162,7 +162,8 @@ export class CloudflareD1DrizzleSourceStore implements D1SourceStoreSlice {
         id: run.id,
         runGroupId: null,
         spaceId: run.spaceId,
-        installationId: run.sourceId,
+        sourceId: run.sourceId,
+        installationId: null,
         environment: null,
         type: RUN_KIND_SOURCE_SYNC,
         status: run.status,
@@ -174,7 +175,8 @@ export class CloudflareD1DrizzleSourceStore implements D1SourceStoreSlice {
         set: {
           runGroupId: null,
           spaceId: run.spaceId,
-          installationId: run.sourceId,
+          sourceId: run.sourceId,
+          installationId: null,
           environment: null,
           type: RUN_KIND_SOURCE_SYNC,
           status: run.status,
@@ -202,7 +204,17 @@ export class CloudflareD1DrizzleSourceStore implements D1SourceStoreSlice {
     sourceId: string,
   ): Promise<readonly SourceSyncRun[]> {
     await this.#ensureSchema();
-    const rows = await this.#db
+    const currentRows = await this.#db
+      .select({ runJson: schema.runs.runJson })
+      .from(schema.runs)
+      .where(
+        and(
+          eq(schema.runs.type, RUN_KIND_SOURCE_SYNC),
+          eq(schema.runs.sourceId, sourceId),
+        ),
+      )
+      .orderBy(schema.runs.createdAt, schema.runs.id);
+    const legacyRows = await this.#db
       .select({ runJson: schema.runs.runJson })
       .from(schema.runs)
       .where(
@@ -212,7 +224,14 @@ export class CloudflareD1DrizzleSourceStore implements D1SourceStoreSlice {
         ),
       )
       .orderBy(schema.runs.createdAt, schema.runs.id);
-    return rows.map((row) => row.runJson as SourceSyncRun);
+    const byId = new Map<string, SourceSyncRun>();
+    for (const row of [...currentRows, ...legacyRows]) {
+      const parsed = row.runJson as SourceSyncRun;
+      byId.set(parsed.id, parsed);
+    }
+    return [...byId.values()].sort(
+      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    );
   }
 
   async #ensureSchema(): Promise<void> {

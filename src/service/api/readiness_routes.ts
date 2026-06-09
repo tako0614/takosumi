@@ -13,7 +13,9 @@ export const TAKOSUMI_SERVICE_READINESS_PATHS = {
 /**
  * Endpoint inventory for the `readiness` family, co-located with the mount
  * calls below. Consumed by `route_families.ts` to derive `/capabilities` and
- * `/openapi.json`. The status-summary endpoint contributes the `status` tag.
+ * `/openapi.json`. The status-summary endpoint is an operator-internal
+ * readiness projection and intentionally stays out of this endpoint inventory
+ * so it is not exposed through public capabilities or OpenAPI schemas.
  * Keep in lockstep with {@link registerReadinessRoutes}.
  */
 export const READINESS_ENDPOINTS: readonly ApiEndpoint[] = [
@@ -34,15 +36,6 @@ export const READINESS_ENDPOINTS: readonly ApiEndpoint[] = [
     operationId: "getLivez",
     tag: "readiness",
     openapi: { okSchema: "HealthProbeResponse" },
-  },
-  {
-    method: "GET",
-    path: TAKOSUMI_SERVICE_READINESS_PATHS.statusSummary,
-    summary: "Returns the current group summary status projection.",
-    auth: "none",
-    operationId: "getStatusSummary",
-    tag: "status",
-    openapi: { okSchema: "StatusSummaryResponse" },
   },
 ] as const;
 
@@ -67,6 +60,7 @@ export interface ReadinessRouteProbes {
 
 export interface RegisterReadinessRoutesOptions {
   readonly probes: ReadinessRouteProbes;
+  readonly includeStatusSummary?: boolean;
 }
 
 export function registerReadinessRoutes(
@@ -81,6 +75,8 @@ export function registerReadinessRoutes(
   app.get(TAKOSUMI_SERVICE_READINESS_PATHS.live, async (c) => {
     return await healthResponse(c, options.probes.live);
   });
+
+  if (!options.includeStatusSummary) return;
 
   app.get(TAKOSUMI_SERVICE_READINESS_PATHS.statusSummary, async (c) => {
     try {

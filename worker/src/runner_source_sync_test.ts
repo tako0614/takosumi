@@ -53,6 +53,28 @@ test("assertSourceUrlPolicy rejects control characters", () => {
   expect(() => assertSourceUrlPolicy("https://github.com/x/y\n.git")).toThrow();
 });
 
+test("assertSourceUrlPolicy rejects private and metadata hosts", () => {
+  for (const raw of [
+    "https://127.0.0.1/acme/repo.git",
+    "https://10.0.0.5/acme/repo.git",
+    "https://192.168.1.10/acme/repo.git",
+    "https://169.254.169.254/latest/meta-data",
+    "https://[::1]/acme/repo.git",
+    "https://[fc00::1]/acme/repo.git",
+    "https://[fe80::1]/acme/repo.git",
+    "https://[::ffff:169.254.169.254]/acme/repo.git",
+    "https://metadata.google.internal/acme/repo.git",
+    "https://localhost/acme/repo.git",
+    "https://git.localhost/acme/repo.git",
+    "ssh://git@127.0.0.1/acme/repo.git",
+    "git@127.0.0.1:acme/repo.git",
+  ]) {
+    expect(() => assertSourceUrlPolicy(raw)).toThrow(
+      "source url host is blocked",
+    );
+  }
+});
+
 // ---------------------------------------------------------------------------
 // parseSourceSyncSource — ref + path validation.
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 /**
- * Official template: core.
+ * First-party Capsule module: core.
  *
  * The base Installation under a Space (spec §5/§10). Authored as TypeScript
  * catalog data (the service cannot read the filesystem in Workers). The
@@ -11,7 +11,7 @@
  * resources, just origin derivation from `base_domain`.
  */
 
-import type { TemplateDefinition } from "takosumi-contract/deploy-control-api";
+import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 
 export const coreTemplate: TemplateDefinition = {
   id: "core",

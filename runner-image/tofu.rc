@@ -5,12 +5,14 @@
 #
 # provider_installation:
 #   filesystem_mirror is authoritative for the providers pre-mirrored into the
-#   image at build time (cloudflare/cloudflare, hashicorp/random, hashicorp/tls).
-#   `direct { exclude = [...] }` forbids the registry/network path for exactly
-#   those providers, so a `tofu init` for the official templates resolves them
-#   from disk with no network — which is what lets plan run under `--network
-#   none`. Any other provider (e.g. aws/google, not yet mirrored for size) falls
-#   through to `direct` and is fetched from the registry as usual.
+#   image at build time (cloudflare/cloudflare, hashicorp/random, hashicorp/tls,
+#   hashicorp/aws). `direct { exclude = [...] }` forbids the registry/network path
+#   for exactly those providers, so a `tofu init` for bundled first-party modules
+#   resolves them from disk with no network — which is what lets plan run under
+#   `--network none`. aws is mirrored so the first-party `aws-s3-storage` Capsule
+#   no longer fail-closes under offline init. Any provider NOT in these lists
+#   (e.g. google, not yet mirrored for size) falls through to `direct` and is
+#   fetched from the registry as usual.
 
 plugin_cache_dir = "/opt/opentofu/provider-cache"
 
@@ -21,6 +23,7 @@ provider_installation {
       "registry.opentofu.org/cloudflare/cloudflare",
       "registry.opentofu.org/hashicorp/random",
       "registry.opentofu.org/hashicorp/tls",
+      "registry.opentofu.org/hashicorp/aws",
     ]
   }
   direct {
@@ -28,6 +31,7 @@ provider_installation {
       "registry.opentofu.org/cloudflare/cloudflare",
       "registry.opentofu.org/hashicorp/random",
       "registry.opentofu.org/hashicorp/tls",
+      "registry.opentofu.org/hashicorp/aws",
     ]
   }
 }

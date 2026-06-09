@@ -21,9 +21,11 @@ import type {
 } from "takosumi-contract/sources";
 import type {
   CapsuleCompatibilityReport,
+  CapsuleProviderRequirement,
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
+import type { PolicyConfig } from "takosumi-contract/installations";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import {
@@ -34,7 +36,12 @@ import type {
   OpenTofuDeploymentStore,
   StoredSource,
 } from "../deploy-control/store.ts";
+import type { Run } from "takosumi-contract/runs";
+import type { ObjectStoragePort } from "../../adapters/object-storage/mod.ts";
 import {
+  normalizedCapsuleArtifactBody,
+  normalizedModuleObjectKey,
+  parseNormalizedCapsuleArtifactBody,
   StaticHclCapsuleCompatibilityAnalyzer,
   type CapsuleCompatibilityAnalyzer,
   type CapsuleSourceFile,
@@ -43,6 +50,7 @@ import { evaluateSourceUrl } from "./url-policy.ts";
 
 const DEFAULT_REF = "main";
 const DEFAULT_PATH = ".";
+const NORMALIZED_CAPSULE_ARTIFACT_BUCKET = "takosumi-artifacts";
 
 /**
  * Out-of-process source-sync dispatch seam. Mirrors the deploy-control
@@ -67,6 +75,8 @@ export interface SourcesServiceDependencies {
   readonly enqueueSourceSync?: EnqueueSourceSync;
   readonly compatibilityAnalyzer?: CapsuleCompatibilityAnalyzer;
   readonly readCapsuleSourceFiles?: ReadCapsuleSourceFiles;
+  readonly normalizedArtifactStorage?: ObjectStoragePort;
+  readonly normalizedArtifactBucket?: string;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
   /** Per-source webhook secret generator. Defaults to a random URL-safe token. */
@@ -78,6 +88,8 @@ export class SourcesService {
   readonly #enqueue: EnqueueSourceSync;
   readonly #compatibilityAnalyzer: CapsuleCompatibilityAnalyzer;
   readonly #readCapsuleSourceFiles: ReadCapsuleSourceFiles;
+  readonly #normalizedArtifactStorage?: ObjectStoragePort;
+  readonly #normalizedArtifactBucket: string;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
   readonly #newHookSecret: () => string;
@@ -89,6 +101,9 @@ export class SourcesService {
       deps.compatibilityAnalyzer ?? new StaticHclCapsuleCompatibilityAnalyzer();
     this.#readCapsuleSourceFiles =
       deps.readCapsuleSourceFiles ?? (() => Promise.resolve([]));
+    this.#normalizedArtifactStorage = deps.normalizedArtifactStorage;
+    this.#normalizedArtifactBucket =
+      deps.normalizedArtifactBucket ?? NORMALIZED_CAPSULE_ARTIFACT_BUCKET;
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
     this.#newHookSecret = deps.newHookSecret ?? defaultHookSecret;
@@ -208,6 +223,18 @@ export class SourcesService {
     return { snapshots: await this.#store.listSourceSnapshots(sourceId) };
   }
 
+  async getSourceSnapshot(id: string): Promise<SourceSnapshot> {
+    requireNonEmptyString(id, "sourceSnapshotId");
+    const snapshot = await this.#store.getSourceSnapshot(id);
+    if (!snapshot) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `source snapshot ${id} not found`,
+      );
+    }
+    return snapshot;
+  }
+
   /**
    * Scheduler scan: active sources whose autoSync flag is set, capped at
    * `limit`. Returns the public Source records (the scheduler only needs the id).
@@ -280,33 +307,280 @@ export class SourcesService {
       sourceId,
       request.sourceSnapshotId,
     );
-    const files = await this.#readCapsuleSourceFiles(snapshot);
-    const analysis = await this.#compatibilityAnalyzer.analyze({
-      sourceId,
-      sourceSnapshot: snapshot,
-      files,
-    });
-    const id = this.#newId("caprep");
-    const report: CapsuleCompatibilityReport = {
-      id,
+    const policy = await this.#compatibilityPolicyForInstallation(
+      stored,
+      request.installationId,
+    );
+    return await this.#runCompatibilityAnalysis({
+      snapshot,
+      spaceId: stored.spaceId,
       sourceId,
       ...(request.installationId
         ? { installationId: request.installationId }
         : {}),
+      ...(policy ? { policy } : {}),
+    });
+  }
+
+  /**
+   * Compatibility check for an upload-origin {@link SourceSnapshot} that has no
+   * registered {@link Source}. The snapshot already carries its owning Space,
+   * and policy comes from the consumer Installation's InstallConfig (plus the
+   * Space policy) rather than from a Source. The Capsule Gate / Normalizer run
+   * exactly as they do for a git snapshot.
+   */
+  async createCompatibilityCheckForSnapshot(
+    snapshot: SourceSnapshot,
+    options: { readonly installationId?: string } = {},
+  ): Promise<CapsuleCompatibilityReportResponse> {
+    const policy = await this.#compatibilityPolicyForSnapshot(
+      snapshot.spaceId,
+      options.installationId,
+    );
+    return await this.#runCompatibilityAnalysis({
+      snapshot,
+      spaceId: snapshot.spaceId,
+      ...(options.installationId
+        ? { installationId: options.installationId }
+        : {}),
+      ...(policy ? { policy } : {}),
+    });
+  }
+
+  /**
+   * Shared Capsule Gate / Normalizer core used by both the git-Source and the
+   * upload-origin compatibility paths. `sourceId` is recorded on the run/report
+   * only when the snapshot came from a registered Source.
+   */
+  async #runCompatibilityAnalysis(input: {
+    readonly snapshot: SourceSnapshot;
+    readonly spaceId: string;
+    readonly sourceId?: string;
+    readonly installationId?: string;
+    readonly policy?: PolicyConfig;
+  }): Promise<CapsuleCompatibilityReportResponse> {
+    const { snapshot, spaceId } = input;
+    const runId = this.#newId("ccr");
+    const nowIso = this.#now().toISOString();
+    const runningRun: Run = {
+      id: runId,
+      spaceId,
+      ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+      type: "compatibility_check",
+      status: "running",
       sourceSnapshotId: snapshot.id,
-      level: analysis.level,
-      findings: analysis.findings,
-      providers: analysis.providers,
-      resources: analysis.resources,
-      dataSources: analysis.dataSources,
-      provisioners: analysis.provisioners,
-      normalizedObjectKey: analysis.normalizedObjectKey,
-      normalizedDigest: analysis.normalizedDigest,
-      createdAt: this.#now().toISOString(),
+      createdBy: "system",
+      createdAt: nowIso,
+      startedAt: nowIso,
     };
-    await this.#store.putCapsuleCompatibilityReport(report);
-    void stored;
-    return { report };
+    await this.#store.putCompatibilityCheckRun(runningRun);
+    try {
+      const files = await this.#readCapsuleSourceFiles(snapshot);
+      const analysis = await this.#compatibilityAnalyzer.analyze({
+        ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+        sourceSnapshot: snapshot,
+        files,
+        ...(input.policy ? { policy: input.policy } : {}),
+      });
+      const normalizedArtifact = await this.#persistNormalizedArtifact(
+        snapshot,
+        analysis.normalizedFiles,
+      );
+      const id = this.#newId("caprep");
+      const normalizedObjectKey =
+        normalizedArtifact?.objectKey ??
+        (analysis.normalizedFiles ? undefined : analysis.normalizedObjectKey);
+      const normalizedDigest =
+        normalizedArtifact?.digest ??
+        (analysis.normalizedFiles ? undefined : analysis.normalizedDigest);
+      const report: CapsuleCompatibilityReport = {
+        id,
+        ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+        ...(input.installationId
+          ? { installationId: input.installationId }
+          : {}),
+        sourceSnapshotId: snapshot.id,
+        level: analysis.level,
+        findings: analysis.findings,
+        providers: await this.#enrichProviderCredentialSources(
+          spaceId,
+          analysis.providers,
+        ),
+        resources: analysis.resources,
+        dataSources: analysis.dataSources,
+        provisioners: analysis.provisioners,
+        ...(normalizedObjectKey ? { normalizedObjectKey } : {}),
+        ...(normalizedDigest ? { normalizedDigest } : {}),
+        createdAt: this.#now().toISOString(),
+      };
+      await this.#store.putCapsuleCompatibilityReport(report);
+      const succeededRun: Run = {
+        ...runningRun,
+        status: "succeeded",
+        compatibilityReportId: report.id,
+        finishedAt: this.#now().toISOString(),
+      };
+      await this.#store.putCompatibilityCheckRun(succeededRun);
+      return { report, run: succeededRun };
+    } catch (error) {
+      await this.#store.putCompatibilityCheckRun({
+        ...runningRun,
+        status: "failed",
+        errorCode: "compatibility_check_failed",
+        finishedAt: this.#now().toISOString(),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Records an upload-origin {@link SourceSnapshot}: the archive bytes are
+   * already in R2_SOURCE (written by the upload route); this only persists the
+   * ledger row. No Source, no Runner git clone. `resolvedCommit` is the bare
+   * 64-hex digest so the downstream plan module-source descriptor validates as
+   * a content-pinned source, and `url` is a self-describing upload origin.
+   */
+  async recordUploadSnapshot(input: {
+    readonly spaceId: string;
+    readonly archiveObjectKey: string;
+    readonly archiveDigest: string;
+    readonly archiveSizeBytes: number;
+    readonly path?: string;
+    /** Pre-generated id so the caller can key the R2 archive before recording. */
+    readonly snapshotId?: string;
+  }): Promise<SourceSnapshot> {
+    requireNonEmptyString(input.spaceId, "spaceId");
+    requireNonEmptyString(input.archiveObjectKey, "archiveObjectKey");
+    requireNonEmptyString(input.archiveDigest, "archiveDigest");
+    const snapshotId = nonEmpty(input.snapshotId) ?? this.#newId("snap");
+    const hexDigest = input.archiveDigest.startsWith("sha256:")
+      ? input.archiveDigest.slice("sha256:".length)
+      : input.archiveDigest;
+    const snapshot: SourceSnapshot = {
+      id: snapshotId,
+      origin: "upload",
+      spaceId: input.spaceId,
+      url: `https://uploads.takosumi.com/${input.spaceId}`,
+      ref: "upload",
+      resolvedCommit: hexDigest.toLowerCase(),
+      path: nonEmpty(input.path) ?? DEFAULT_PATH,
+      archiveObjectKey: input.archiveObjectKey,
+      archiveDigest: input.archiveDigest,
+      archiveSizeBytes: input.archiveSizeBytes,
+      fetchedByRunId: "upload",
+      fetchedAt: this.#now().toISOString(),
+    };
+    await this.#store.putSourceSnapshot(snapshot);
+    return snapshot;
+  }
+
+  /**
+   * Capsule Gate policy for an upload-origin snapshot. Same merge of Space
+   * policy + InstallConfig policy as {@link #compatibilityPolicyForInstallation}
+   * but without the Source-id match (upload installations have no Source).
+   */
+  async #compatibilityPolicyForSnapshot(
+    spaceId: string,
+    installationId: string | undefined,
+  ): Promise<PolicyConfig | undefined> {
+    if (!installationId) return undefined;
+    const installation = await this.#store.getInstallation(installationId);
+    if (!installation) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `installation ${installationId} does not exist`,
+      );
+    }
+    if (installation.spaceId !== spaceId) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        `installation ${installationId} is not in space ${spaceId}`,
+      );
+    }
+    const [space, config] = await Promise.all([
+      this.#store.getSpace(installation.spaceId),
+      this.#store.getInstallConfig(installation.installConfigId),
+    ]);
+    return mergePolicyConfigs(space?.policy, config?.policy);
+  }
+
+  async #compatibilityPolicyForInstallation(
+    source: StoredSource,
+    installationId: string | undefined,
+  ): Promise<PolicyConfig | undefined> {
+    if (!installationId) return undefined;
+    const installation = await this.#store.getInstallation(installationId);
+    if (!installation) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `installation ${installationId} does not exist`,
+      );
+    }
+    if (installation.spaceId !== source.spaceId) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        `installation ${installationId} is not in source space ${source.spaceId}`,
+      );
+    }
+    if (installation.sourceId !== source.id) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `installation ${installationId} does not use source ${source.id}`,
+      );
+    }
+    const [space, config] = await Promise.all([
+      this.#store.getSpace(installation.spaceId),
+      this.#store.getInstallConfig(installation.installConfigId),
+    ]);
+    return mergePolicyConfigs(space?.policy, config?.policy);
+  }
+
+  async #enrichProviderCredentialSources(
+    spaceId: string,
+    providers: readonly CapsuleProviderRequirement[],
+  ): Promise<readonly CapsuleProviderRequirement[]> {
+    void spaceId;
+    const catalogEntries = await this.#store.listProviderTemplates();
+    const catalogBySource = new Map(
+      catalogEntries.map((entry) => [
+        canonicalProviderSource(entry.providerSource),
+        entry.credentialSources,
+      ]),
+    );
+    return providers.map((provider) => {
+      const source = canonicalProviderSource(provider.source);
+      const credentialSources = catalogBySource.get(source);
+      return credentialSources
+        ? { ...provider, credentialSources }
+        : provider;
+    });
+  }
+
+  async #persistNormalizedArtifact(
+    snapshot: SourceSnapshot,
+    files: readonly CapsuleSourceFile[] | undefined,
+  ): Promise<
+    { readonly objectKey: string; readonly digest: string } | undefined
+  > {
+    if (!files || files.length === 0 || !this.#normalizedArtifactStorage) {
+      return undefined;
+    }
+    const objectKey = normalizedModuleObjectKey(snapshot);
+    const body = normalizedCapsuleArtifactBody({
+      sourceSnapshot: snapshot,
+      files,
+    });
+    const head = await this.#normalizedArtifactStorage.putObject({
+      bucket: this.#normalizedArtifactBucket,
+      key: objectKey,
+      body,
+      contentType: "application/json; charset=utf-8",
+      metadata: {
+        "takosumi-kind": "normalized-capsule",
+        "takosumi-source-snapshot-id": snapshot.id,
+      },
+    });
+    return { objectKey, digest: head.digest };
   }
 
   async getCompatibilityReport(
@@ -321,6 +595,55 @@ export class SourcesService {
       );
     }
     return { report };
+  }
+
+  async readNormalizedCapsuleArtifact(input: {
+    readonly sourceSnapshot: SourceSnapshot;
+    readonly objectKey: string;
+    readonly digest: `sha256:${string}`;
+  }): Promise<readonly CapsuleSourceFile[]> {
+    if (!this.#normalizedArtifactStorage) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "normalized capsule artifact storage is not configured",
+      );
+    }
+    const object = await this.#normalizedArtifactStorage.getObject({
+      bucket: this.#normalizedArtifactBucket,
+      key: input.objectKey,
+      expectedDigest: input.digest,
+    });
+    if (!object) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `normalized_capsule_artifact_missing: ${input.objectKey}`,
+      );
+    }
+    let artifact;
+    try {
+      artifact = parseNormalizedCapsuleArtifactBody(
+        new TextDecoder().decode(object.body),
+      );
+    } catch (error) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `normalized_capsule_artifact_invalid: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (
+      artifact.sourceSnapshotId !== input.sourceSnapshot.id ||
+      artifact.resolvedCommit !== input.sourceSnapshot.resolvedCommit ||
+      artifact.path !== input.sourceSnapshot.path
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `normalized_capsule_artifact_snapshot_mismatch: artifact ${input.objectKey} ` +
+          `does not match SourceSnapshot ${input.sourceSnapshot.id}`,
+      );
+    }
+    return artifact.files;
   }
 
   async getSyncRun(id: string): Promise<SourceSyncRun> {
@@ -428,6 +751,20 @@ export function sourceArchiveObjectKey(
   return `spaces/${spaceId}/sources/${sourceId}/snapshots/${snapshotId}/source.tar.zst`;
 }
 
+/**
+ * R2_SOURCE archive key layout for an upload-origin snapshot (no Source id).
+ * `takosumi deploy` writes the local Capsule archive here before recording the
+ * upload {@link SourceSnapshot}.
+ */
+export function uploadArchiveObjectKey(
+  spaceId: string,
+  snapshotId: string,
+): string {
+  return `spaces/${spaceId}/uploads/${snapshotId}/source.tar.zst`;
+}
+
+export { normalizedModuleObjectKey };
+
 function nonEmpty(value: string | undefined): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
@@ -444,6 +781,72 @@ function defaultHookSecret(): string {
   let hex = "";
   for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
   return `whk_${hex}`;
+}
+
+function mergePolicyConfigs(
+  spacePolicy: PolicyConfig | undefined,
+  installPolicy: PolicyConfig | undefined,
+): PolicyConfig | undefined {
+  if (!spacePolicy && !installPolicy) return undefined;
+  return {
+    allowedProviders: intersectOptionalLists(
+      spacePolicy?.allowedProviders,
+      installPolicy?.allowedProviders,
+    ),
+    allowedResourceTypes: intersectOptionalLists(
+      spacePolicy?.allowedResourceTypes,
+      installPolicy?.allowedResourceTypes,
+    ),
+    allowedDataSourceTypes: intersectOptionalLists(
+      spacePolicy?.allowedDataSourceTypes,
+      installPolicy?.allowedDataSourceTypes,
+    ),
+    allowedProvisionerTypes: intersectOptionalLists(
+      spacePolicy?.allowedProvisionerTypes,
+      installPolicy?.allowedProvisionerTypes,
+    ),
+    destructiveChanges:
+      installPolicy?.destructiveChanges ?? spacePolicy?.destructiveChanges,
+    providerLockfile:
+      installPolicy?.providerLockfile ?? spacePolicy?.providerLockfile,
+    providerInstallation:
+      installPolicy?.providerInstallation ?? spacePolicy?.providerInstallation,
+    scopeBoundary: installPolicy?.scopeBoundary ?? spacePolicy?.scopeBoundary,
+    quota: { ...(spacePolicy?.quota ?? {}), ...(installPolicy?.quota ?? {}) },
+  };
+}
+
+function intersectOptionalLists(
+  ceiling: readonly string[] | undefined,
+  local: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (ceiling === undefined) return local;
+  if (local === undefined) return ceiling;
+  const allowed = new Set(ceiling);
+  return local.filter((entry) => allowed.has(entry)).sort();
+}
+
+function canonicalProviderSource(source: string): string {
+  if (source.startsWith("registry.opentofu.org/")) return source;
+  if (source === "cloudflare/cloudflare") {
+    return "registry.opentofu.org/cloudflare/cloudflare";
+  }
+  if (
+    source === "hashicorp/aws" ||
+    source === "hashicorp/google" ||
+    source === "hashicorp/kubernetes" ||
+    source === "hashicorp/random" ||
+    source === "hashicorp/tls"
+  ) {
+    return `registry.opentofu.org/${source}`;
+  }
+  if (source === "integrations/github") {
+    return "registry.opentofu.org/integrations/github";
+  }
+  if (/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/u.test(source)) {
+    return `registry.opentofu.org/${source}`;
+  }
+  return source;
 }
 
 function timingSafeHexEquals(a: string, b: string): boolean {

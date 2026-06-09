@@ -6,6 +6,7 @@ import type {
   CapsuleProvisionerSummary,
   CapsuleResourceSummary,
 } from "takosumi-contract/capsules";
+import type { PolicyConfig } from "takosumi-contract/installations";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 
 export interface CapsuleSourceFile {
@@ -14,9 +15,11 @@ export interface CapsuleSourceFile {
 }
 
 export interface CapsuleCompatibilityAnalysisInput {
-  readonly sourceId: string;
+  /** Present for git-Source snapshots; absent for upload-origin snapshots. */
+  readonly sourceId?: string;
   readonly sourceSnapshot: SourceSnapshot;
   readonly files: readonly CapsuleSourceFile[];
+  readonly policy?: PolicyConfig;
 }
 
 export interface CapsuleCompatibilityAnalysis {
@@ -28,6 +31,7 @@ export interface CapsuleCompatibilityAnalysis {
   readonly provisioners: readonly CapsuleProvisionerSummary[];
   readonly normalizedObjectKey?: string;
   readonly normalizedDigest?: string;
+  readonly normalizedFiles?: readonly CapsuleSourceFile[];
 }
 
 export interface CapsuleCompatibilityAnalyzer {
@@ -105,7 +109,8 @@ export function analyzeOpenTofuCapsuleFiles(
     };
   }
 
-  const hclFiles = input.files.filter((file) => file.path.endsWith(".tf"));
+  const allHclFiles = input.files.filter((file) => file.path.endsWith(".tf"));
+  const hclFiles = selectReachableModuleTreeFiles(allHclFiles, findings);
   if (hclFiles.length === 0) {
     findings.push({
       severity: "error",
@@ -117,10 +122,25 @@ export function analyzeOpenTofuCapsuleFiles(
     });
   }
 
-  const providers = collectProviders(hclFiles, findings);
-  const resources = collectResources(hclFiles);
-  const dataSources = collectDataSources(hclFiles);
-  const provisioners = collectProvisioners(hclFiles);
+  const providerAllowlist = allowedProviderSet(input.policy);
+  const resourceAllowlist = allowedSet(
+    DEFAULT_ALLOWED_RESOURCE_TYPES,
+    input.policy?.allowedResourceTypes,
+  );
+  const dataSourceAllowlist = allowedSet(
+    DEFAULT_ALLOWED_DATA_SOURCE_TYPES,
+    input.policy?.allowedDataSourceTypes,
+  );
+  const provisionerAllowlist = allowedSet(
+    new Set<string>(),
+    input.policy?.allowedProvisionerTypes,
+  );
+  const providers = collectProviders(hclFiles, findings, providerAllowlist);
+  const resources = collectResources(hclFiles, resourceAllowlist);
+  const dataSources = collectDataSources(hclFiles, dataSourceAllowlist);
+  const provisioners = collectProvisioners(hclFiles, provisionerAllowlist);
+  collectDependencyLockFindings(input.files, findings);
+  collectFilesystemSensitiveExpressionFindings(hclFiles, findings);
 
   if (providers.length === 0) {
     findings.push({
@@ -189,6 +209,10 @@ export function analyzeOpenTofuCapsuleFiles(
   }
 
   const level = compatibilityLevel(findings);
+  const normalizedFiles =
+    level === "auto_capsulized"
+      ? normalizeAutoCapsulizedFiles(input.files, hclFiles)
+      : undefined;
   return {
     level,
     findings,
@@ -196,14 +220,236 @@ export function analyzeOpenTofuCapsuleFiles(
     resources,
     dataSources,
     provisioners,
-    normalizedObjectKey: input.sourceSnapshot.archiveObjectKey,
-    normalizedDigest: input.sourceSnapshot.archiveDigest,
+    normalizedObjectKey: normalizedFiles
+      ? normalizedModuleObjectKey(input.sourceSnapshot)
+      : input.sourceSnapshot.archiveObjectKey,
+    ...(normalizedFiles
+      ? {}
+      : { normalizedDigest: input.sourceSnapshot.archiveDigest }),
+    ...(normalizedFiles ? { normalizedFiles } : {}),
   };
+}
+
+function normalizeAutoCapsulizedFiles(
+  allFiles: readonly CapsuleSourceFile[],
+  hclFiles: readonly CapsuleSourceFile[],
+): readonly CapsuleSourceFile[] {
+  const normalizedHclFiles = hclFiles
+    .map((file) => ({
+      path: file.path,
+      text: normalizeAutoCapsulizedHcl(file.text),
+    }))
+    .filter((file) => file.text.trim().length > 0);
+  // Non-.tf files (migrations, schemas, templates, scripts …) are carried
+  // through unchanged so the normalized module artifact stays a complete
+  // Capsule, not just its rewritten HCL.
+  const passthroughFiles = allFiles.filter(
+    (file) => !file.path.endsWith(".tf"),
+  );
+  return [...normalizedHclFiles, ...passthroughFiles].sort((a, b) =>
+    a.path.localeCompare(b.path),
+  );
+}
+
+function normalizeAutoCapsulizedHcl(text: string): string {
+  const removals: BlockRange[] = [];
+  for (const backend of matchNamedBlockRanges(text, "backend")) {
+    removals.push(backend);
+  }
+  for (const provider of matchNamedBlockRanges(text, "provider")) {
+    if (!containsCredentialAttribute(provider.body)) removals.push(provider);
+  }
+  if (removals.length === 0) return text;
+  return removeRanges(text, removals)
+    .replace(/\n{3,}/g, "\n\n")
+    .trimStart();
+}
+
+function removeRanges(text: string, ranges: readonly BlockRange[]): string {
+  const merged = [...ranges].sort((a, b) => a.start - b.start);
+  let out = "";
+  let cursor = 0;
+  for (const range of merged) {
+    if (range.start < cursor) continue;
+    out += text.slice(cursor, range.start);
+    cursor = range.end;
+  }
+  out += text.slice(cursor);
+  return out;
+}
+
+function selectReachableModuleTreeFiles(
+  files: readonly CapsuleSourceFile[],
+  findings: CapsuleGateFinding[],
+): readonly CapsuleSourceFile[] {
+  const byDir = new Map<string, CapsuleSourceFile[]>();
+  for (const file of files) {
+    const dir = dirnameForRelativeFile(file.path);
+    const entries = byDir.get(dir) ?? [];
+    entries.push(file);
+    byDir.set(dir, entries);
+  }
+
+  const queued = ["."];
+  const visited = new Set<string>();
+  const selected = new Map<string, CapsuleSourceFile>();
+  while (queued.length > 0) {
+    const dir = queued.shift()!;
+    if (visited.has(dir)) continue;
+    visited.add(dir);
+    const dirFiles = byDir.get(dir) ?? [];
+    for (const file of dirFiles) {
+      selected.set(file.path, file);
+      for (const moduleBlock of matchNamedBlocks(file.text, "module")) {
+        const source = stringAttribute(moduleBlock.body, "source");
+        if (!source || !isLocalModuleSource(source)) continue;
+        const resolved = resolveLocalModuleDir(dir, source);
+        if (!resolved) {
+          findings.push({
+            severity: "error",
+            code: "local_module_source_escapes_capsule",
+            message: `Module ${moduleBlock.name} uses local source ${source} outside the Capsule archive.`,
+            path: file.path,
+            suggestion:
+              "Keep local module sources inside the Git path installed as the Capsule.",
+          });
+          continue;
+        }
+        if (!byDir.has(resolved)) {
+          findings.push({
+            severity: "warning",
+            code: "local_module_source_missing",
+            message: `Module ${moduleBlock.name} local source ${source} was not found in the Capsule archive.`,
+            path: file.path,
+            suggestion:
+              "Vendor the local module under the installed Git path or pin it as an explicit remote module source.",
+          });
+          continue;
+        }
+        queued.push(resolved);
+      }
+    }
+  }
+  return Array.from(selected.values()).sort((a, b) =>
+    a.path.localeCompare(b.path),
+  );
+}
+
+function dirnameForRelativeFile(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index === -1 ? "." : path.slice(0, index);
+}
+
+function isLocalModuleSource(source: string): boolean {
+  return source.startsWith("./") || source.startsWith("../");
+}
+
+function resolveLocalModuleDir(fromDir: string, source: string): string | undefined {
+  const parts = [
+    ...(fromDir === "." ? [] : fromDir.split("/")),
+    ...source.split("/"),
+  ];
+  const out: string[] = [];
+  for (const part of parts) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (out.length === 0) return undefined;
+      out.pop();
+      continue;
+    }
+    out.push(part);
+  }
+  return out.length === 0 ? "." : out.join("/");
+}
+
+export function normalizedCapsuleArtifactBody(input: {
+  readonly sourceSnapshot: SourceSnapshot;
+  readonly files: readonly CapsuleSourceFile[];
+}): string {
+  return (
+    JSON.stringify(
+      {
+        kind: "takosumi.normalized-capsule@v1",
+        sourceSnapshotId: input.sourceSnapshot.id,
+        resolvedCommit: input.sourceSnapshot.resolvedCommit,
+        path: input.sourceSnapshot.path,
+        files: [...input.files]
+          .map((file) => ({ path: file.path, text: file.text }))
+          .sort((a, b) => a.path.localeCompare(b.path)),
+      },
+      null,
+      2,
+    ) + "\n"
+  );
+}
+
+export interface NormalizedCapsuleArtifact {
+  readonly kind: "takosumi.normalized-capsule@v1";
+  readonly sourceSnapshotId: string;
+  readonly resolvedCommit: string;
+  readonly path: string;
+  readonly files: readonly CapsuleSourceFile[];
+}
+
+export function parseNormalizedCapsuleArtifactBody(
+  body: string,
+): NormalizedCapsuleArtifact {
+  const parsed: unknown = JSON.parse(body);
+  if (!isPlainRecord(parsed)) {
+    throw new Error("normalized capsule artifact must be a JSON object");
+  }
+  if (parsed.kind !== "takosumi.normalized-capsule@v1") {
+    throw new Error("normalized capsule artifact kind is unsupported");
+  }
+  const sourceSnapshotId = stringRecordField(parsed, "sourceSnapshotId");
+  const resolvedCommit = stringRecordField(parsed, "resolvedCommit");
+  const path = stringRecordField(parsed, "path");
+  const filesValue = parsed.files;
+  if (!Array.isArray(filesValue) || filesValue.length === 0) {
+    throw new Error("normalized capsule artifact files must be a non-empty array");
+  }
+  const files = filesValue.map((file) => {
+    if (!isPlainRecord(file)) {
+      throw new Error("normalized capsule artifact file must be an object");
+    }
+    return {
+      path: stringRecordField(file, "path"),
+      text: stringRecordField(file, "text"),
+    };
+  });
+  return {
+    kind: "takosumi.normalized-capsule@v1",
+    sourceSnapshotId,
+    resolvedCommit,
+    path,
+    files,
+  };
+}
+
+export function normalizedModuleObjectKey(snapshot: SourceSnapshot): string {
+  const base = snapshot.archiveObjectKey.replace(/\/source\.tar\.zst$/, "");
+  return `${base}/normalized-module.json`;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringRecordField(
+  record: Record<string, unknown>,
+  field: string,
+): string {
+  const value = record[field];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`normalized capsule artifact ${field} must be a string`);
+  }
+  return value;
 }
 
 function collectProviders(
   files: readonly CapsuleSourceFile[],
   findings: CapsuleGateFinding[],
+  allowedProviders: ReadonlySet<string>,
 ): CapsuleProviderRequirement[] {
   const providers = new Map<string, Set<string>>();
   for (const file of files) {
@@ -231,7 +477,7 @@ function collectProviders(
           message: `Provider ${providerBlock.name} contains credential-like attributes.`,
           path: file.path,
           suggestion:
-            "Move provider credentials to the Takosumi generated root through Connection and CapabilityBinding.",
+            "Move provider credentials to the Takosumi generated root through Connection and ProviderBinding.",
         });
       }
       if (providerBlock.body.trim().length > 0) {
@@ -269,13 +515,35 @@ function collectProviders(
     .map(([source, aliases]) => ({
       source,
       aliases: Array.from(aliases).sort(),
-      allowed: providerAllowed(source),
+      allowed: providerAllowed(source, allowedProviders),
     }))
     .sort((a, b) => a.source.localeCompare(b.source));
 }
 
+function canonicalProviderSource(source: string): string {
+  if (source.startsWith("registry.opentofu.org/")) return source;
+  if (source === "cloudflare/cloudflare") {
+    return "registry.opentofu.org/cloudflare/cloudflare";
+  }
+  if (
+    source === "hashicorp/aws" ||
+    source === "hashicorp/google" ||
+    source === "hashicorp/kubernetes"
+  ) {
+    return `registry.opentofu.org/${source}`;
+  }
+  if (source === "integrations/github") {
+    return "registry.opentofu.org/integrations/github";
+  }
+  if (/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/u.test(source)) {
+    return `registry.opentofu.org/${source}`;
+  }
+  return source;
+}
+
 function collectResources(
   files: readonly CapsuleSourceFile[],
+  allowedResources: ReadonlySet<string>,
 ): CapsuleResourceSummary[] {
   const counts = new Map<string, number>();
   for (const file of files) {
@@ -287,13 +555,14 @@ function collectResources(
     .map(([type, count]) => ({
       type,
       count,
-      allowed: DEFAULT_ALLOWED_RESOURCE_TYPES.has(type),
+      allowed: allowedResources.has(type),
     }))
     .sort((a, b) => a.type.localeCompare(b.type));
 }
 
 function collectDataSources(
   files: readonly CapsuleSourceFile[],
+  allowedDataSources: ReadonlySet<string>,
 ): CapsuleDataSourceSummary[] {
   const types = new Set<string>();
   for (const file of files) {
@@ -304,13 +573,14 @@ function collectDataSources(
   return Array.from(types)
     .map((type) => ({
       type,
-      allowed: DEFAULT_ALLOWED_DATA_SOURCE_TYPES.has(type),
+      allowed: allowedDataSources.has(type),
     }))
     .sort((a, b) => a.type.localeCompare(b.type));
 }
 
 function collectProvisioners(
   files: readonly CapsuleSourceFile[],
+  allowedProvisioners: ReadonlySet<string>,
 ): CapsuleProvisionerSummary[] {
   const types = new Set<string>();
   for (const file of files) {
@@ -319,8 +589,58 @@ function collectProvisioners(
     }
   }
   return Array.from(types)
-    .map((type) => ({ type, allowed: false }))
+    .map((type) => ({ type, allowed: allowedProvisioners.has(type) }))
     .sort((a, b) => a.type.localeCompare(b.type));
+}
+
+function collectDependencyLockFindings(
+  files: readonly CapsuleSourceFile[],
+  findings: CapsuleGateFinding[],
+): void {
+  const lock = files.find((file) => file.path.endsWith(".terraform.lock.hcl"));
+  if (!lock) return;
+  findings.push({
+    severity: "info",
+    code: "dependency_lock_detected",
+    message:
+      "A provider dependency lockfile is present and will be reviewed by the provider lockfile policy after credential-free init.",
+    path: lock.path,
+  });
+}
+
+const FILESYSTEM_SENSITIVE_PATTERNS: readonly {
+  readonly pattern: RegExp;
+  readonly label: string;
+}[] = [
+  { pattern: /\bfile\s*\(/, label: "file()" },
+  { pattern: /\bfileset\s*\(/, label: "fileset()" },
+  { pattern: /\btemplatefile\s*\(/, label: "templatefile()" },
+  { pattern: /\babspath\s*\(/, label: "abspath()" },
+  { pattern: /\bpathexpand\s*\(/, label: "pathexpand()" },
+  { pattern: /\bpath\.root\b/, label: "path.root" },
+  { pattern: /\bpath\.module\b/, label: "path.module" },
+];
+
+function collectFilesystemSensitiveExpressionFindings(
+  files: readonly CapsuleSourceFile[],
+  findings: CapsuleGateFinding[],
+): void {
+  for (const file of files) {
+    const hits = FILESYSTEM_SENSITIVE_PATTERNS.filter((entry) =>
+      entry.pattern.test(file.text),
+    );
+    if (hits.length === 0) continue;
+    findings.push({
+      severity: "warning",
+      code: "filesystem_sensitive_expression",
+      message: `Filesystem-sensitive OpenTofu expressions were detected: ${hits
+        .map((hit) => hit.label)
+        .join(", ")}.`,
+      path: file.path,
+      suggestion:
+        "Keep Capsule inputs explicit as variables or ensure file reads are confined to files shipped inside the normalized module.",
+    });
+  }
 }
 
 function compatibilityLevel(
@@ -333,7 +653,8 @@ function compatibilityLevel(
         (finding.code.includes("unsupported") ||
           finding.code === "provider_not_allowed" ||
           finding.code === "resource_type_not_allowed" ||
-          finding.code === "opentofu_configuration_missing"),
+          finding.code === "opentofu_configuration_missing" ||
+          finding.code === "local_module_source_escapes_capsule"),
     )
   ) {
     return "unsupported";
@@ -345,7 +666,9 @@ function compatibilityLevel(
         (finding.code === "required_providers_missing" ||
           finding.code === "outputs_missing" ||
           finding.code === "provider_credentials_in_source" ||
-          finding.code === "remote_module_unpinned"),
+          finding.code === "filesystem_sensitive_expression" ||
+          finding.code === "remote_module_unpinned" ||
+          finding.code === "local_module_source_missing"),
     )
   ) {
     return "needs_patch";
@@ -366,14 +689,36 @@ function hasOutputBlock(files: readonly CapsuleSourceFile[]): boolean {
   return files.some((file) => matchNamedBlocks(file.text, "output").length > 0);
 }
 
-function providerAllowed(source: string): boolean {
+function providerAllowed(
+  source: string,
+  allowedProviders: ReadonlySet<string>,
+): boolean {
   const normalized = source.startsWith("registry.opentofu.org/")
     ? source
     : `registry.opentofu.org/${source}`;
-  return (
-    DEFAULT_ALLOWED_PROVIDERS.has(source) ||
-    DEFAULT_ALLOWED_PROVIDERS.has(normalized)
-  );
+  return allowedProviders.has(source) || allowedProviders.has(normalized);
+}
+
+function allowedSet(
+  defaults: ReadonlySet<string>,
+  configured: readonly string[] | undefined,
+): ReadonlySet<string> {
+  if (configured === undefined) return defaults;
+  return new Set([...defaults, ...configured]);
+}
+
+function allowedProviderSet(policy: PolicyConfig | undefined): ReadonlySet<string> {
+  if (policy?.allowedProviders === undefined) return DEFAULT_ALLOWED_PROVIDERS;
+  const providers = new Set(DEFAULT_ALLOWED_PROVIDERS);
+  for (const provider of policy.allowedProviders) {
+    providers.add(provider);
+    providers.add(
+      provider.startsWith("registry.opentofu.org/")
+        ? provider
+        : `registry.opentofu.org/${provider}`,
+    );
+  }
+  return providers;
 }
 
 function containsCredentialAttribute(body: string): boolean {
@@ -411,16 +756,26 @@ interface NamedBlock {
   readonly body: string;
 }
 
+interface BlockRange extends NamedBlock {
+  readonly start: number;
+  readonly end: number;
+}
+
 function matchNamedBlocks(text: string, blockType: string): NamedBlock[] {
-  const blocks: NamedBlock[] = [];
+  return matchNamedBlockRanges(text, blockType);
+}
+
+function matchNamedBlockRanges(text: string, blockType: string): BlockRange[] {
+  const blocks: BlockRange[] = [];
   const pattern = new RegExp(
     `${blockType}\\s+"([^"]+)"(?:\\s+"[^"]+")?\\s*\\{`,
     "g",
   );
   for (const match of text.matchAll(pattern)) {
-    const body = readBlockBody(text, match.index! + match[0].length - 1);
-    if (body !== undefined) {
-      blocks.push({ name: match[1]!, body });
+    const start = match.index!;
+    const block = readBlock(text, match.index! + match[0].length - 1);
+    if (block !== undefined) {
+      blocks.push({ name: match[1]!, body: block.body, start, end: block.end });
     }
   }
   return blocks;
@@ -452,6 +807,13 @@ function readBlockBody(
   text: string,
   openBraceIndex: number,
 ): string | undefined {
+  return readBlock(text, openBraceIndex)?.body;
+}
+
+function readBlock(
+  text: string,
+  openBraceIndex: number,
+): { readonly body: string; readonly end: number } | undefined {
   let depth = 0;
   for (let index = openBraceIndex; index < text.length; index += 1) {
     const char = text[index];
@@ -462,7 +824,7 @@ function readBlockBody(
     if (char !== "}") continue;
     depth -= 1;
     if (depth === 0) {
-      return text.slice(openBraceIndex + 1, index);
+      return { body: text.slice(openBraceIndex + 1, index), end: index + 1 };
     }
   }
   return undefined;

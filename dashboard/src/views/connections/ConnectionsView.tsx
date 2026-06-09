@@ -177,12 +177,12 @@ function ConnectionsInner() {
       </div>
 
       {/* Operator default connections (spec §9 / §31) — instance-wide defaults
-          a CapabilityBinding of `default` resolves to. Read-only here. */}
+          a ProviderBinding of `default` resolves to. Read-only here. */}
       <Show when={(operatorDefaults() ?? []).length > 0}>
         <section class="detail-section">
           <h2>オペレーター既定の接続</h2>
           <p class="page-sub">
-            CapabilityBinding が <code>default</code> のとき解決される、
+            ProviderBinding が <code>default</code> のとき解決される、
             インスタンス全体の既定接続です。
           </p>
           <table class="data-table">

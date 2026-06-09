@@ -15,9 +15,11 @@ test("providerEnvRule resolves short name and registry-path forms", () => {
   const byShort = providerEnvRule("cloudflare");
   const byPath = providerEnvRule("registry.opentofu.org/cloudflare/cloudflare");
   const byBarePath = providerEnvRule("cloudflare/cloudflare");
+  const google = providerEnvRule("google");
   expect(byShort).toBeDefined();
   expect(byShort).toBe(byPath!);
   expect(byShort).toBe(byBarePath!);
+  expect(providerEnvRule("gcp")).toBe(google!);
   expect(providerEnvRule("unknown-provider")).toBeUndefined();
   expect(providerEnvRule("")).toBeUndefined();
 });
@@ -34,6 +36,7 @@ test("cloudFamilyForProvider maps providers to partitions, falling back to local
   expect(cloudFamilyForProvider("cloudflare")).toBe("cloudflare");
   expect(cloudFamilyForProvider("aws")).toBe("aws");
   expect(cloudFamilyForProvider("google")).toBe("gcp");
+  expect(cloudFamilyForProvider("gcp")).toBe("gcp");
   expect(cloudFamilyForProvider("kubernetes")).toBe("k8s");
   expect(cloudFamilyForProvider("github")).toBe("local-adapters");
   expect(cloudFamilyForProvider("totally-unknown")).toBe("local-adapters");
@@ -41,19 +44,31 @@ test("cloudFamilyForProvider maps providers to partitions, falling back to local
 
 test("requiredEnvGroupsSatisfied honors the provider required groups", () => {
   // cloudflare: any one of these single-name groups suffices.
-  expect(requiredEnvGroupsSatisfied("cloudflare", ["CLOUDFLARE_API_TOKEN"])).toBe(true);
+  expect(
+    requiredEnvGroupsSatisfied("cloudflare", ["CLOUDFLARE_API_TOKEN"]),
+  ).toBe(true);
   expect(requiredEnvGroupsSatisfied("cloudflare", ["CF_API_TOKEN"])).toBe(true);
   // ...but only an account id (no token) is NOT enough.
-  expect(requiredEnvGroupsSatisfied("cloudflare", ["CLOUDFLARE_ACCOUNT_ID"])).toBe(false);
-  // legacy key+email group must be complete.
-  expect(requiredEnvGroupsSatisfied("cloudflare", ["CLOUDFLARE_API_KEY"])).toBe(false);
   expect(
-    requiredEnvGroupsSatisfied("cloudflare", ["CLOUDFLARE_API_KEY", "CLOUDFLARE_EMAIL"]),
+    requiredEnvGroupsSatisfied("cloudflare", ["CLOUDFLARE_ACCOUNT_ID"]),
+  ).toBe(false);
+  // legacy key+email group must be complete.
+  expect(requiredEnvGroupsSatisfied("cloudflare", ["CLOUDFLARE_API_KEY"])).toBe(
+    false,
+  );
+  expect(
+    requiredEnvGroupsSatisfied("cloudflare", [
+      "CLOUDFLARE_API_KEY",
+      "CLOUDFLARE_EMAIL",
+    ]),
   ).toBe(true);
   // aws needs both halves of a key pair.
   expect(requiredEnvGroupsSatisfied("aws", ["AWS_ACCESS_KEY_ID"])).toBe(false);
   expect(
-    requiredEnvGroupsSatisfied("aws", ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]),
+    requiredEnvGroupsSatisfied("aws", [
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+    ]),
   ).toBe(true);
   // unknown providers are never satisfied.
   expect(requiredEnvGroupsSatisfied("unknown", ["X"])).toBe(false);

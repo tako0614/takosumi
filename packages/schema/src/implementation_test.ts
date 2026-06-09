@@ -18,7 +18,7 @@ import {
   outputsToOutputMaterial,
 } from "./implementation.ts";
 import type { Component } from "./implementation.ts";
-import type { Deployment, Installation } from "./deploy-control-api.ts";
+import type { Deployment, Installation } from "./internal-deploy-control-api.ts";
 
 test("operatorImplementationFromNativeKindOperations wraps native operations without provider bridge", async () => {
   const seenSpecs: unknown[] = [];

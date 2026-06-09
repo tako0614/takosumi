@@ -94,14 +94,12 @@ export async function resolveUpstreamAccount(
     updatedAt: now,
   });
 
-  // TODO(M9 space wire-up — DEFERRED): this is the account-plane first-login
-  // seam (spec §4: auto-create a personal Space on first login). The clean hook
-  // would be a fire-and-forget call to the control-plane operations facade here:
-  //   deployControl.ensurePersonalSpace(accountHandle(subject), spaceHandle)
-  // where spaceHandle = the account's username/slug if one exists else
-  // `u-<short id>` (validated against the spaces handle rule). It is NOT wired
-  // because `resolveUpstreamAccount` and its caller (`upstream-oauth-routes.ts`)
-  // do not have the deploy-control operations in scope; threading them through
+  // The first-login personal Space hook now lives on the session-me route, where
+  // the account plane already has the deploy-control operations facade in scope.
+  // Keep the OAuth identity resolver side-effect free: threading deploy-control
+  // through `resolveUpstreamAccount` and `upstream-oauth-routes.ts` would couple
+  // the OAuth seam to Space creation even though session-me owns the idempotent
+  // ensure.
   // the whole OAuth/OIDC route layer is deep accounts surgery deferred past M9.
   // `DeployControlOperations.ensurePersonalSpace` is exposed on the facade so
   // the wiring is a thread-through (not a new control-plane method) when taken.

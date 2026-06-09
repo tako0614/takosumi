@@ -1,4 +1,4 @@
-# cloudflare-static-site (official template module)
+# cloudflare-static-site (first-party Capsule module)
 
 Creates a Cloudflare Pages project that serves a static site.
 

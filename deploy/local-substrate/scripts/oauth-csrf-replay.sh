@@ -16,7 +16,7 @@
 set -euo pipefail
 
 PROVIDER="${PROVIDER:-google}"
-BASE="https://accounts.takosumi.test"
+BASE="https://app.takosumi.test"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"

@@ -13,12 +13,23 @@ operator が直接 push する Worker secret は Takosumi platform worker
 Takosumi vault / SecretBlob を通して rotate し、通常の GET API に raw value を
 返しません。
 
+Provider 対応が Cloudflare から AWS / GCP / GitHub / Kubernetes / Custom Provider
+Pack へ広がっても、provider credential を raw Worker env として増やさない。
+Hosted managed default provider は operator default Connection + sealed SecretBlob /
+Vault material を rotate し、Space-owned provider は Space Connection / SecretBlob
+を rotate する。`AWS_ACCESS_KEY_ID` や `GOOGLE_APPLICATION_CREDENTIALS` のような
+provider-specific credential 名は runner の ambient env として常駐させず、credential
+mint が run / phase / provider scoped な material に変換して generated root へ渡す。
+
 ## Before Rotation
 
 1. 対象 environment、secret class、影響する Space / Installation / Connection を特定する。
 2. [Secret Rotation Policy](secret-rotation-policy.md) の cadence、authorized role、maintenance window を確認する。
 3. current secret の参照先が repo 外の operator vault にあり、rollback 用に保持できることを確認する。
 4. rotation 中に触る API / CLI / provider dashboard の audit trail が有効であることを確認する。
+5. 対象 Connection が Provider Template のどの credential source に属するか、Provider Env Set / provider env set policy /
+   egress policy / custom runner class に影響するかを確認する。provider env set policy は credential ではないため、token rotation
+   では通常変更しない。
 
 ## Rotation Steps
 
@@ -48,19 +59,51 @@ test -d "$TAKOSUMI_SECRETS"
 find "$TAKOSUMI_SECRETS" -maxdepth 1 -type f -exec sh -c 'test "$(stat -c %a "$1")" = 600' sh {} \;
 ```
 
-non-interactive shell では必ず `--value-file` を使う:
+local vault と remote Worker secret 名を確認する:
 
 ```bash
-export TAKOSUMI_CONTROL_PLANE_BEARER_SECRET_NAME=TAKOSUMI_DEPLOY_CONTROL_TOKEN
-
-bunx wrangler secret put "$TAKOSUMI_CONTROL_PLANE_BEARER_SECRET_NAME" \
-  --config "$TAKOSUMI_WRANGLER_CONFIG" \
-  --value-file "$TAKOSUMI_SECRETS/$TAKOSUMI_CONTROL_PLANE_BEARER_SECRET_NAME"
+takosumi run secrets status
 ```
 
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` は現行実装の env 名です。operations docs では
 これを public API concept ではなく、platform worker 内の accounts/control-plane
 bearer secret class として扱います。値は operator vault にだけ置きます。
+
+Worker secret を適用する:
+
+```bash
+takosumi run secrets apply
+```
+
+`apply` は不足している safe generated secret を local vault に作ってから
+`wrangler secret put` の標準入力で push する。既存の OIDC signing key、
+secret-store passphrase、pairwise secret、provider credential は上書きしない。
+
+safe generated secret を個別に再生成する場合だけ `--regenerate` を使う:
+
+```bash
+takosumi run secrets apply --regenerate TAKOSUMI_DEPLOY_CONTROL_TOKEN
+takosumi run secrets apply --regenerate TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET
+```
+
+remote-only secret は自動削除しない。削除は `takosumi run secrets status` で drift
+を確認した後に operator が明示的に `wrangler secret delete` で行う。
+
+Provider credential rotation は Worker secret push ではなく Connection 更新として
+行う。新 credential を repo 外の file に置き、CLI で新 Connection を作成し、
+必要な provider default を新 Connection へ向ける。
+
+```bash
+export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN="$(cat "$TAKOSUMI_SECRETS/TAKOSUMI_DEPLOY_CONTROL_TOKEN")"
+
+takosumi run connections set-cloudflare-token \
+  --api-token-file "$TAKOSUMI_PRIVATE/.secrets/provider/cloudflare-api-token.next" \
+  --default cloudflare
+
+takosumi run connections test <new-connection-id>
+takosumi run connections revoke <old-connection-id>
+```
 
 bulk helper を使う場合も、一時 JSON は `/tmp` など repo 外に作成し、push 後に
 即削除する。shell history、terminal transcript、PR comment に secret value を
@@ -99,7 +142,7 @@ expected:
 
 1. new secret による認証失敗を確認したら、old secret の revoke 前なら参照先を old secret ref に戻す。
 2. revoke 済みの場合は provider で emergency replacement を発行し、new secret と同じ手順で参照先を更新する。
-3. Worker secret の場合は operator vault の previous value を `--value-file` で再 push する。
+3. Worker secret の場合は operator vault の previous value を `takosumi run secrets apply` で再 push する。
 4. rollback 後も audit log に原因、復旧時刻、残タスクを記録する。
 
 ## Related Documents

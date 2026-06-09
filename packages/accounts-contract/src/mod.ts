@@ -9,12 +9,23 @@ export const TAKOSUMI_ACCOUNTS_INTROSPECT_PATH = "/oauth/introspect";
 export const TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH = "/v1/account/tokens";
 export const TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH =
   "/v1/billing/stripe/checkout";
+export const TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH =
+  "/v1/billing/stripe/portal";
 export const TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH =
   "/v1/billing/stripe/webhook";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH =
   "/v1/auth/upstream/authorize";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH =
   "/v1/auth/upstream/callback";
+/**
+ * Public, unauthenticated read of which sign-in methods the operator has
+ * actually configured for this worker. The sign-in screen reads this so it can
+ * render only the enabled provider buttons instead of letting a user click a
+ * button that the backend would answer with 503 (operator never set the
+ * upstream OAuth env vars). It exposes provider ids + enabled flags only — no
+ * client ids, secrets, redirect URIs, or any other configuration value.
+ */
+export const TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH = "/v1/auth/providers";
 export const TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH =
   "/v1/auth/passkeys/register/options";
 export const TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH =
@@ -296,6 +307,23 @@ export type TakosumiAppInstallationMode =
 
 export interface TakosumiAccountsConfig {
   issuer?: string;
+}
+
+/**
+ * A single sign-in method as reported by `GET /v1/auth/providers`. `id` is the
+ * upstream provider id (`"google"`, `"github"`, a custom OIDC provider id) or
+ * `"passkey"`; `enabled` reflects whether the operator has configured it on
+ * this worker. Never carries credentials — only the id + flag the sign-in
+ * screen needs to enable/disable its button.
+ */
+export interface TakosumiAccountsAuthProvider {
+  readonly id: string;
+  readonly enabled: boolean;
+}
+
+/** Body of `GET /v1/auth/providers`. */
+export interface TakosumiAccountsAuthProvidersResponse {
+  readonly providers: readonly TakosumiAccountsAuthProvider[];
 }
 
 export interface OidcDiscoveryDocument {

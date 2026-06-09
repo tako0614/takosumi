@@ -27,6 +27,9 @@
       ],
       "takosumi-contract": ["./packages/schema/src/index.ts"],
       "takosumi-contract/deploy-control-api": ["./packages/schema/src/deploy-control-api.ts"],
+      "@takosumi/internal/deploy-control-api": [
+        "./packages/schema/src/internal-deploy-control-api.ts"
+      ],
       "takosumi-contract/sources": ["./packages/schema/src/sources.ts"],
       "takosumi-contract/provider-env-rules": ["./packages/schema/src/provider-env-rules.ts"],
       "takosumi-contract/reference/compat": [
@@ -61,9 +64,14 @@
       "takosumi-contract/internal/crypto": ["./packages/schema/src/internal-crypto.ts"],
       "takosumi-contract/spaces": ["./packages/schema/src/spaces.ts"],
       "takosumi-contract/installations": ["./packages/schema/src/installations.ts"],
+      "takosumi-contract/deploy": ["./packages/schema/src/deploy.ts"],
       "takosumi-contract/capsules": ["./packages/schema/src/capsules.ts"],
-      "takosumi-contract/capability-bindings": ["./packages/schema/src/capability-bindings.ts"],
+      "takosumi-contract/provider-bindings": ["./packages/schema/src/provider-bindings.ts"],
+      "takosumi-contract/connections": ["./packages/schema/src/connections.ts"],
       "takosumi-contract/dependencies": ["./packages/schema/src/dependencies.ts"],
+      "takosumi-contract/deploy-control-errors": [
+        "./packages/schema/src/deploy-control-errors.ts"
+      ],
       "takosumi-contract/activity": ["./packages/schema/src/activity.ts"],
       "takosumi-contract/output-snapshots": ["./packages/schema/src/output-snapshots.ts"],
       "takosumi-contract/runs": ["./packages/schema/src/runs.ts"],
@@ -72,6 +80,7 @@
       "takosumi-contract/backups": ["./packages/schema/src/backups.ts"],
       "takosumi-contract/billing": ["./packages/schema/src/billing.ts"],
       "takosumi-contract/security": ["./packages/schema/src/security.ts"],
+      "takosumi-contract/providers": ["./packages/schema/src/providers.ts"],
       "takosumi-rootgen": ["./packages/rootgen/src/mod.ts"],
       "takosumi-graph": ["./packages/graph/src/mod.ts"],
       "takosumi-policy": ["./packages/policy/src/mod.ts"],

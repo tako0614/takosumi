@@ -18,7 +18,7 @@ staging の secret 値を置きません。ownership boundary は以下に固定
 - secret 値、rotation evidence、private rollback note は operator vault
   (`takosumi-private/.secrets/<env>/` または承認済み operator-local vault path)
   と private run log に置き、repo にはコミットしない。
-- Takosumi control plane は OpenTofu Capsule Run、Connection、CapabilityBinding、
+- Takosumi control plane は OpenTofu Capsule Run、Connection、ProviderBinding、
   credential mint audit、billing workflow を所有する。
 
 本 policy はすべての Takosumi operated 環境に適用します。per-Installation
@@ -35,7 +35,7 @@ track は持ちません。
 | Upstream OAuth provider secrets | 6 months | 12 months | No if client id unchanged |
 | Stripe / payment processor secrets | 6 months | 12 months | Production if billing enforce is active |
 | Operator default connection bootstrap credentials | 6 months | 12 months | Production if plan/apply may mint credentials |
-| Git / Cloudflare / AWS / OCI provider tokens stored as Connections | 6 months | 12 months | Per Connection status |
+| Git / Cloudflare / AWS / GCP / GitHub / Kubernetes / Provider Env Set connection secrets | 6 months | 12 months | Per Connection status |
 | Emergency rotation (suspected exposure, leaked credential, departed operator with prior access) | Immediate | n/a | Per-secret class |
 
 ## Who Can Initiate
@@ -44,27 +44,31 @@ track は持ちません。
 | --------------------------------------- | --------------------------------------------- |
 | Scheduled rotation (cadence-driven)     | On-call operator (primary or secondary)       |
 | Emergency rotation (suspected exposure) | Any operator; incident commander notified     |
-| Connection / workload token rotation    | Operator account-plane distribution or Space owner, depending on scope |
+| Connection / Installation integration secret rotation | Takosumi operator, Space owner, or Connection owner, depending on scope |
 | Production maintenance-window rotation  | Release owner + on-call operator (two-person) |
 
 ## Connection Token and OIDC Ownership
 
-per-Installation OIDC projection は public PKCE client metadata です。workload へ
+per-Installation OIDC projection は public PKCE client metadata です。Installation workload へ
 渡す material は issuer、client id、redirect URI、scope などの public metadata
 に限り、client secret は発行・materialize しません。OAuth client registry /
 consent / token endpoint は Takosumi accounts plane が所有します。
 
-Connection / workload token の rotation contract:
+Connection / Installation integration secret の rotation contract:
 
 - source Git token、events webhook、billing usage report、operator extension token
-  など secret-backed tokens は per-Space / per-Installation / per-Connection scope
-  で発行する。
+  など secret-backed material は Connection / SecretBlob / Run credential / Installation integration secret
+  のいずれかとして scope を固定する。
 - raw token は rotation 時に一度だけ返し、通常の projection / GET response には
   `secret_ref` と expiry だけを出す。
 - rotation 時は new token を projection metadata に反映し、grace window (>=10 min)
   の間 old token を併用可能にする。
-- rotation 完了後、operator account-plane audit event に service id、scope、旧
-  secret ref、新 secret ref、rotation timestamp を残す。
+- rotation 完了後、`audit_events` に Space id、Installation id (該当する場合)、
+  Connection id / SecretBlob ref、scope、旧 secret ref、新 secret ref、rotation timestamp を残す。
+- Run credential の mint は secret rotation event ではなく、`credential_mint_events`
+  に phase / provider / Connection id だけを non-secret audit として残す。
+- Provider Env Set credential rotation は Connection / SecretBlob rotation として扱う。
+  provider env set policy は provider binary trust record であり credential ではないため、token rotation で作り直さない。
 - confidential OIDC client が必要な operator extension は public PKCE projection
   とは別の secret class としてこの policy に追加してから運用する。
 
@@ -75,9 +79,9 @@ Connection / workload token の rotation contract:
 1. private run log に日付、環境、secret class、実行コマンド、結果、
    rollback note を記録した entry。
 2. 該当する場合、operator vault の secret inventory / last rotated evidence を更新。
-3. Connection / workload token の場合、Space id、Installation id、service id、旧
-   secret ref、新 secret ref、rotation timestamp をリンクした operator
-   account-plane audit event。
+3. Connection / Installation integration secret の場合、Space id、Installation id (該当する場合)、
+   Connection id / SecretBlob ref、旧 secret ref、新 secret ref、rotation timestamp
+   をリンクした `audit_events` row。
 4. public / private を問わず、commit するファイルに secret 値、token body、key
    material、provider credential JSON を含めないこと。
 
@@ -87,7 +91,7 @@ Connection / workload token の rotation contract:
 | ---------------------------------------------------- | ------------------------------------------- |
 | Rotation blocked by remote / local omission mismatch | Secondary on-call within 1 business hour    |
 | Suspected secret exposure                            | Incident commander immediately (SEV-1 path) |
-| Connection / workload token rotation API failure     | operator account-plane owner immediately    |
+| Connection / Installation integration secret rotation API failure | Takosumi platform owner immediately         |
 | Cadence breach (overdue secret)                      | Release owner; block next promotion         |
 
 secret 漏洩疑いの対応は

@@ -21,26 +21,34 @@
  * the target record and check its `spaceId` before dispatching mutations.
  */
 
-import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "takosumi-contract/deploy-control-api";
+import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
 import type {
   Connection,
   DeployControlErrorCode,
   ListConnectionsResponse,
   ListRunnerProfilesResponse,
   PlanRunResponse,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import type {
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
+  ListSourceSnapshotsResponse,
   ListSourcesResponse,
 } from "takosumi-contract/sources";
+import type {
+  CapsuleCompatibilityReportResponse,
+  CreateSourceCompatibilityCheckRequest,
+} from "takosumi-contract/capsules";
+import type { ListProviderTemplatesResponse } from "takosumi-contract/providers";
 import type { Space, SpaceType } from "takosumi-contract/spaces";
 import type {
   DeploymentProfile,
   InstallConfig,
   Installation,
   PolicyConfig,
+  PublicInstallConfig,
+  PublicInstallation,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -50,25 +58,51 @@ import type {
 } from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type {
-  Capability,
-  CapabilityBinding,
-  CapabilityBindingMode,
-  CapabilityBindings,
+  ProviderBinding,
+  ProviderBindingMode,
+  ProviderBindings,
   OperatorConnectionDefault,
-} from "takosumi-contract/capability-bindings";
+} from "takosumi-contract/provider-bindings";
 import type {
   OutputShare,
   OutputShareEntry,
 } from "takosumi-contract/output-snapshots";
+import type {
+  BackupRecord,
+  CreateBackupResponse,
+  ListBackupsResponse,
+} from "takosumi-contract/backups";
+import type {
+  BillingSettings,
+  CreditBalance,
+  CreditReservation,
+  UsageEvent,
+} from "takosumi-contract/billing";
 import type { Run } from "takosumi-contract/runs";
 import {
   json,
   methodNotAllowed,
+  numberValue,
   readJsonObject,
+  readOptionalJsonObject,
   stringValue,
 } from "./http-helpers.ts";
 import { requireAccountSession } from "./account-session.ts";
 import type { AccountsStore } from "./store.ts";
+
+function publicInstallation(installation: Installation): PublicInstallation {
+  const { installType: _installType, ...publicRecord } = installation;
+  return publicRecord;
+}
+
+function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
+  const {
+    installType: _installType,
+    templateBinding: _templateBinding,
+    ...publicRecord
+  } = config;
+  return publicRecord;
+}
 
 /**
  * Structural subset of the host's `TakosumiOperations` facade the control
@@ -145,6 +179,46 @@ export interface ControlPlaneOperations {
   readonly activity: {
     list(spaceId: string, limit?: number): Promise<readonly ActivityEvent[]>;
   };
+  // --- Backups (§29) ---
+  readonly backups: {
+    createBackup(input: {
+      readonly spaceId: string;
+      readonly createdByRunId?: string;
+    }): Promise<BackupRecord>;
+    listBackups(spaceId: string): Promise<readonly BackupRecord[]>;
+  };
+  // --- Billing (§28) ---
+  getSpaceBilling(spaceId: string): Promise<{
+    readonly billing: {
+      readonly settings: BillingSettings;
+      readonly balance?: CreditBalance;
+    };
+  }>;
+  listSpaceUsage(spaceId: string): Promise<{
+    readonly usageEvents: readonly UsageEvent[];
+  }>;
+  listSpaceCreditReservations(spaceId: string): Promise<{
+    readonly creditReservations: readonly CreditReservation[];
+  }>;
+  topUpSpaceCredits(
+    spaceId: string,
+    input: { readonly credits: number },
+  ): Promise<{ readonly balance: CreditBalance }>;
+  changeSpaceSubscription(
+    spaceId: string,
+    input: { readonly billingSettings: BillingSettings },
+  ): Promise<{ readonly billing: { readonly settings: BillingSettings } }>;
+  reconcileStripeSpaceSubscription(
+    spaceId: string,
+    input: {
+      readonly stripeCustomerId: string;
+      readonly stripeSubscriptionId: string;
+      readonly stripePriceId?: string;
+      readonly planCode: string;
+      readonly status: string;
+      readonly currentPeriodEndUnix?: number;
+    },
+  ): Promise<unknown>;
   // --- Connections (§9) ---
   readonly connections: {
     listOperatorConnectionDefaults(): Promise<
@@ -190,6 +264,13 @@ export interface ControlPlaneOperations {
     sourceId: string,
     options?: { readonly dedupe?: boolean },
   ): Promise<unknown>;
+  listSourceSnapshots(sourceId: string): Promise<ListSourceSnapshotsResponse>;
+  createSourceCompatibilityCheck(
+    sourceId: string,
+    request?: CreateSourceCompatibilityCheckRequest,
+  ): Promise<CapsuleCompatibilityReportResponse>;
+  // --- Providers (§7 / §8) ---
+  listProviderTemplates(): Promise<ListProviderTemplatesResponse>;
   // --- Runner profiles (read; used by operator-connection-defaults view) ---
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
 }
@@ -354,6 +435,45 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       if (method !== "GET") return methodNotAllowed("GET");
       return await spaceActivity(operations, spaceId, url);
     }
+    if (leaf === "backups" && segments.length === 3) {
+      if (method === "GET") {
+        const backups = await operations.backups.listBackups(spaceId);
+        return json({ backups } satisfies ListBackupsResponse);
+      }
+      if (method === "POST") {
+        const backup = await operations.backups.createBackup({ spaceId });
+        return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
+      }
+      return methodNotAllowed("GET, POST");
+    }
+    if (leaf === "billing" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return json(await operations.getSpaceBilling(spaceId));
+    }
+    if (leaf === "usage" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return json(await operations.listSpaceUsage(spaceId));
+    }
+    if (leaf === "credit-reservations" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return json(await operations.listSpaceCreditReservations(spaceId));
+    }
+    if (
+      leaf === "credits" &&
+      segments.length === 4 &&
+      segments[3] === "top-up"
+    ) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      return await topUpSpaceCredits(request, operations, spaceId);
+    }
+    if (
+      leaf === "subscription" &&
+      segments.length === 4 &&
+      segments[3] === "change"
+    ) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      return await changeSpaceSubscription(request, operations, spaceId);
+    }
     if (leaf === "plan-update" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       return await spacePlanUpdate(operations, spaceId);
@@ -374,7 +494,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return json({ installation });
+      return json({ installation: publicInstallation(installation) });
     }
     const leaf = segments[2];
     if (leaf === "plan" && segments.length === 3) {
@@ -390,6 +510,13 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         await operations.createInstallationDestroyPlan(installationId),
         201,
       );
+    }
+    if (leaf === "backups" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      const backup = await operations.backups.createBackup({
+        spaceId: installation.spaceId,
+      });
+      return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
     }
     if (leaf === "dependencies" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -423,6 +550,12 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     );
   }
 
+  // /v1/control/providers
+  if (segments.length === 1 && segments[0] === "providers") {
+    if (method !== "GET") return methodNotAllowed("GET");
+    return json(await operations.listProviderTemplates());
+  }
+
   // /v1/control/dependencies/:id
   if (segments[0] === "dependencies" && segments.length === 2) {
     const dependencyId = decodeURIComponent(segments[1] ?? "");
@@ -435,7 +568,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     );
   }
 
-  // /v1/control/sources ; /v1/control/sources/:id/sync
+  // /v1/control/sources ; /v1/control/sources/:id/sync ; .../snapshots ; .../compatibility-check
   if (segments[0] === "sources") {
     if (segments.length === 1) {
       if (method === "GET") {
@@ -463,6 +596,48 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       });
       if (!auth.ok) return auth.response;
       return jsonStatus(await operations.createSourceSync(sourceId), 201);
+    }
+    if (segments.length === 3 && segments[2] === "snapshots") {
+      const sourceId = decodeURIComponent(segments[1] ?? "");
+      if (method !== "GET") return methodNotAllowed("GET");
+      const source = await operations.getSource(sourceId);
+      const auth = await requireSpaceAccess({
+        operations,
+        store,
+        spaceId: source.spaceId,
+        subject: input.session.subject,
+      });
+      if (!auth.ok) return auth.response;
+      return json(await operations.listSourceSnapshots(sourceId));
+    }
+    if (segments.length === 3 && segments[2] === "compatibility-check") {
+      const sourceId = decodeURIComponent(segments[1] ?? "");
+      if (method !== "POST") return methodNotAllowed("POST");
+      const source = await operations.getSource(sourceId);
+      const auth = await requireSpaceAccess({
+        operations,
+        store,
+        spaceId: source.spaceId,
+        subject: input.session.subject,
+      });
+      if (!auth.ok) return auth.response;
+      const body = await readOptionalJsonObject(request);
+      if (body === null) {
+        return json({ error: "invalid_json" }, 400);
+      }
+      const sourceSnapshotId = stringValue(body.sourceSnapshotId);
+      const installationId = stringValue(body.installationId);
+      const compatibilityRequest: CreateSourceCompatibilityCheckRequest = {
+        ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
+        ...(installationId ? { installationId } : {}),
+      };
+      return jsonStatus(
+        await operations.createSourceCompatibilityCheck(
+          sourceId,
+          compatibilityRequest,
+        ),
+        201,
+      );
     }
   }
 
@@ -698,8 +873,9 @@ async function listSpaceInstallations(
   operations: ControlPlaneOperations,
   spaceId: string,
 ): Promise<Response> {
+  const records = await operations.installations.listInstallations(spaceId);
   return json({
-    installations: await operations.installations.listInstallations(spaceId),
+    installations: records.map(publicInstallation),
   });
 }
 
@@ -707,9 +883,10 @@ async function getInstallation(
   operations: ControlPlaneOperations,
   installationId: string,
 ): Promise<Response> {
+  const installation =
+    await operations.installations.getInstallation(installationId);
   return json({
-    installation:
-      await operations.installations.getInstallation(installationId),
+    installation: publicInstallation(installation),
   });
 }
 
@@ -760,7 +937,7 @@ async function createInstallation(
     sourceId,
     installConfigId,
   });
-  return jsonStatus({ installation }, 201);
+  return jsonStatus({ installation: publicInstallation(installation) }, 201);
 }
 
 async function getDeploymentProfile(
@@ -782,7 +959,7 @@ async function putDeploymentProfile(
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return json({ error: "invalid_request" }, 400);
-  const parsed = parseCapabilityBindings(body.bindings);
+  const parsed = parseProviderBindings(body.bindings);
   if (!parsed.ok) {
     return json(
       {
@@ -821,8 +998,8 @@ async function listInstallConfigs(
   const spaceId =
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
-  // Without a spaceId only the official catalog (spaceId-less configs) is
-  // returned; with one, the official catalog plus that Space's own configs —
+  // Without a spaceId only built-in shared configs (spaceId-less configs) are
+  // returned; with one, built-ins plus that Space's own configs —
   // mirroring the §30 `/api/install-configs` projection.
   const official = (await operations.installations.listInstallConfigs()).filter(
     (config) => config.spaceId === undefined,
@@ -840,7 +1017,9 @@ async function listInstallConfigs(
     spaceId === undefined
       ? []
       : await operations.installations.listInstallConfigs(spaceId);
-  return json({ installConfigs: [...official, ...scoped] });
+  return json({
+    installConfigs: [...official, ...scoped].map(publicInstallConfig),
+  });
 }
 
 // --- Graph -----------------------------------------------------------------
@@ -960,6 +1139,51 @@ async function spaceActivity(
   }
   const events = await operations.activity.list(spaceId, limit);
   return json({ events });
+}
+
+// --- Billing ---------------------------------------------------------------
+
+async function topUpSpaceCredits(
+  request: Request,
+  operations: ControlPlaneOperations,
+  spaceId: string,
+): Promise<Response> {
+  const body = await readJsonObject(request);
+  if (!body) return json({ error: "invalid_request" }, 400);
+  const credits = numberValue(body.credits);
+  if (credits === undefined || credits <= 0) {
+    return json(
+      {
+        error: "invalid_argument",
+        error_description: "credits must be a positive integer",
+      },
+      400,
+    );
+  }
+  return json(await operations.topUpSpaceCredits(spaceId, { credits }));
+}
+
+async function changeSpaceSubscription(
+  request: Request,
+  operations: ControlPlaneOperations,
+  spaceId: string,
+): Promise<Response> {
+  const body = await readJsonObject(request);
+  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!isPlainJsonObject(body.billingSettings)) {
+    return json(
+      {
+        error: "invalid_argument",
+        error_description: "billingSettings must be an object",
+      },
+      400,
+    );
+  }
+  return json(
+    await operations.changeSpaceSubscription(spaceId, {
+      billingSettings: body.billingSettings as BillingSettings,
+    }),
+  );
 }
 
 // --- Sources ---------------------------------------------------------------
@@ -1358,42 +1582,31 @@ function jsonStatus(body: unknown, status: number): Response {
   return json(body, status);
 }
 
-const CAPABILITIES: readonly Capability[] = [
-  "source",
-  "compute",
-  "dns",
-  "storage",
-  "database",
-  "secrets",
-];
-
-function parseCapabilityBindings(value: unknown):
-  | { readonly ok: true; readonly bindings: CapabilityBindings }
+function parseProviderBindings(value: unknown):
+  | { readonly ok: true; readonly bindings: ProviderBindings }
   | {
       readonly ok: false;
       readonly message: string;
     } {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return { ok: false, message: "bindings must be an object" };
+  if (!Array.isArray(value)) {
+    return { ok: false, message: "bindings must be an array" };
   }
-  const input = value as Record<string, unknown>;
-  const bindings: Partial<Record<Capability, CapabilityBinding>> = {};
-  for (const capability of CAPABILITIES) {
-    if (!(capability in input)) continue;
-    const parsed = parseCapabilityBinding(input[capability]);
+  const bindings: ProviderBinding[] = [];
+  for (const [index, item] of value.entries()) {
+    const parsed = parseProviderBinding(item);
     if (!parsed.ok) {
       return {
         ok: false,
-        message: `${capability}: ${parsed.message}`,
+        message: `bindings[${index}]: ${parsed.message}`,
       };
     }
-    bindings[capability] = parsed.binding;
+    bindings.push(parsed.binding);
   }
   return { ok: true, bindings };
 }
 
-function parseCapabilityBinding(value: unknown):
-  | { readonly ok: true; readonly binding: CapabilityBinding }
+function parseProviderBinding(value: unknown):
+  | { readonly ok: true; readonly binding: ProviderBinding }
   | {
       readonly ok: false;
       readonly message: string;
@@ -1404,17 +1617,20 @@ function parseCapabilityBinding(value: unknown):
   const input = value as Record<string, unknown>;
   const mode = capabilityBindingModeValue(input.mode);
   if (!mode) return { ok: false, message: "mode is invalid" };
+  const provider = stringValue(input.provider);
+  if (!provider) return { ok: false, message: "provider is required" };
   const binding: {
-    mode: CapabilityBindingMode;
+    provider: string;
+    alias?: string;
+    mode: ProviderBindingMode;
     connectionId?: string;
-    provider?: string;
     region?: string;
     values?: Readonly<Record<string, unknown>>;
-  } = { mode };
+  } = { provider, mode };
+  const alias = stringValue(input.alias);
+  if (alias) binding.alias = alias;
   const connectionId = stringValue(input.connectionId);
   if (connectionId) binding.connectionId = connectionId;
-  const provider = stringValue(input.provider);
-  if (provider) binding.provider = provider;
   const region = stringValue(input.region);
   if (region) binding.region = region;
   if (input.values !== undefined) {
@@ -1438,7 +1654,7 @@ function parseCapabilityBinding(value: unknown):
 
 function capabilityBindingModeValue(
   value: unknown,
-): CapabilityBindingMode | undefined {
+): ProviderBindingMode | undefined {
   return value === "default" ||
     value === "connection" ||
     value === "manual" ||

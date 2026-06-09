@@ -9,14 +9,17 @@ import {
   Switch,
 } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
+import { Archive } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import StatusPill from "../account/components/StatusPill.tsx";
 import {
-  type Capability,
-  type CapabilityBindingMode,
-  type CapabilityBindings,
+  type BackupRecord,
   type ControlApiError,
+  type ProviderBinding,
+  type ProviderBindingMode,
+  type ProviderBindings,
+  createInstallationBackup,
   destroyPlanInstallation,
   extractRunId,
   getDeploymentProfile,
@@ -34,15 +37,6 @@ import {
   controlInstallationStatusClass,
   controlInstallationStatusLabel,
 } from "../../lib/status-labels.ts";
-
-const CAPABILITIES: readonly Capability[] = [
-  "source",
-  "compute",
-  "dns",
-  "storage",
-  "database",
-  "secrets",
-];
 
 export default function ControlInstallationDetailView() {
   return <Page title="Installation">{() => <Inner />}</Page>;
@@ -70,35 +64,13 @@ function Inner() {
     id ? await listOperatorConnectionDefaults(id) : [],
   );
 
-  const [modes, setModes] = createSignal<
-    Partial<Record<Capability, CapabilityBindingMode>>
-  >({});
-  const [connectionIds, setConnectionIds] = createSignal<
-    Partial<Record<Capability, string>>
-  >({});
-  const [manualValues, setManualValues] = createSignal<
-    Partial<Record<Capability, string>>
-  >({});
+  const [bindingRows, setBindingRows] = createSignal<ProviderBindingRow[]>([]);
   const [formError, setFormError] = createSignal<string | null>(null);
 
   createEffect(() => {
     const bindings = profile()?.bindings;
     if (!bindings) return;
-    const nextModes: Partial<Record<Capability, CapabilityBindingMode>> = {};
-    const nextConnections: Partial<Record<Capability, string>> = {};
-    const nextManual: Partial<Record<Capability, string>> = {};
-    for (const capability of CAPABILITIES) {
-      const binding = bindings[capability];
-      nextModes[capability] = binding?.mode ?? "default";
-      if (binding?.connectionId)
-        nextConnections[capability] = binding.connectionId;
-      if (binding?.values) {
-        nextManual[capability] = JSON.stringify(binding.values, null, 2);
-      }
-    }
-    setModes(nextModes);
-    setConnectionIds(nextConnections);
-    setManualValues(nextManual);
+    setBindingRows(bindings.map(providerBindingToRow));
   });
 
   const source = createMemo(() =>
@@ -143,10 +115,10 @@ function Inner() {
         outputs: Object.values(edge.outputs),
       }));
   });
-  const defaultByCapability = createMemo(() => {
-    const map = new Map<Capability, string>();
+  const defaultByProvider = createMemo(() => {
+    const map = new Map<string, string>();
     for (const item of operatorDefaults() ?? []) {
-      map.set(item.capability as Capability, item.provider);
+      map.set(item.provider, item.provider);
     }
     return map;
   });
@@ -161,9 +133,12 @@ function Inner() {
     const runId = extractRunId(envelope);
     if (runId) navigate(`/runs/${runId}`);
   });
+  const backup = createAction(async (): Promise<BackupRecord> => {
+    return await createInstallationBackup(installationId());
+  });
   const saveProfile = createAction(async () => {
     setFormError(null);
-    const bindings = buildBindings(modes(), connectionIds(), manualValues());
+    const bindings = buildBindings(bindingRows());
     if ("error" in bindings) {
       setFormError(bindings.error);
       return;
@@ -183,6 +158,15 @@ function Inner() {
           <a href="/installations" class="btn btn-secondary">
             一覧へ
           </a>
+          <button
+            class="btn btn-secondary"
+            type="button"
+            disabled={backup.busy()}
+            onClick={() => void backup.run()}
+          >
+            <Archive size={16} />
+            Backup
+          </button>
           <button
             class="btn btn-primary"
             type="button"
@@ -224,6 +208,16 @@ function Inner() {
               </Show>
               <Show when={destroyPlan.error()}>
                 {(m) => <p class="sign-in-error">{m()}</p>}
+              </Show>
+              <Show when={backup.error()}>
+                {(m) => <p class="sign-in-error">{m()}</p>}
+              </Show>
+              <Show when={backup.result()}>
+                {(record) => (
+                  <p class="muted backup-progress">
+                    Backup created: <code>{record().id}</code>
+                  </p>
+                )}
               </Show>
 
               <section class="detail-section">
@@ -303,7 +297,7 @@ function Inner() {
               </section>
 
               <section class="detail-section">
-                <h2>Capability bindings</h2>
+                <h2>Provider bindings</h2>
                 <form
                   class="install-form"
                   onSubmit={(e) => {
@@ -312,13 +306,34 @@ function Inner() {
                   }}
                 >
                   <div class="capability-grid">
-                    <For each={CAPABILITIES}>
-                      {(capability) => (
+                    <For each={bindingRows()}>
+                      {(row, index) => (
                         <div class="capability-row">
                           <div class="capability-head">
-                            <strong>{capability}</strong>
+                            <input
+                              value={row.provider}
+                              onInput={(e) =>
+                                updateProviderBindingRow(
+                                  setBindingRows,
+                                  index(),
+                                  { provider: e.currentTarget.value },
+                                )
+                              }
+                              placeholder="registry.opentofu.org/cloudflare/cloudflare"
+                            />
+                            <input
+                              value={row.alias}
+                              onInput={(e) =>
+                                updateProviderBindingRow(
+                                  setBindingRows,
+                                  index(),
+                                  { alias: e.currentTarget.value },
+                                )
+                              }
+                              placeholder="alias (optional)"
+                            />
                             <Show
-                              when={defaultByCapability().get(capability)}
+                              when={defaultByProvider().get(row.provider)}
                               fallback={
                                 <span class="muted">default 未設定</span>
                               }
@@ -330,13 +345,16 @@ function Inner() {
                           </div>
                           <div class="capability-controls">
                             <select
-                              value={modes()[capability] ?? "default"}
+                              value={row.mode}
                               onChange={(e) =>
-                                setModes((prev) => ({
-                                  ...prev,
-                                  [capability]: e.currentTarget
-                                    .value as CapabilityBindingMode,
-                                }))
+                                updateProviderBindingRow(
+                                  setBindingRows,
+                                  index(),
+                                  {
+                                    mode: e.currentTarget
+                                      .value as ProviderBindingMode,
+                                  },
+                                )
                               }
                             >
                               <option value="default">default</option>
@@ -345,18 +363,16 @@ function Inner() {
                               <option value="disabled">disabled</option>
                             </select>
                             <Show
-                              when={
-                                (modes()[capability] ?? "default") ===
-                                "connection"
-                              }
+                              when={row.mode === "connection"}
                             >
                               <select
-                                value={connectionIds()[capability] ?? ""}
+                                value={row.connectionId}
                                 onChange={(e) =>
-                                  setConnectionIds((prev) => ({
-                                    ...prev,
-                                    [capability]: e.currentTarget.value,
-                                  }))
+                                  updateProviderBindingRow(
+                                    setBindingRows,
+                                    index(),
+                                    { connectionId: e.currentTarget.value },
+                                  )
                                 }
                               >
                                 <option value="">接続を選択</option>
@@ -371,30 +387,56 @@ function Inner() {
                                 </For>
                               </select>
                             </Show>
-                            <Show
-                              when={
-                                (modes()[capability] ?? "default") === "manual"
-                              }
-                            >
+                            <Show when={row.mode === "manual"}>
                               <textarea
                                 rows={3}
-                                value={manualValues()[capability] ?? ""}
+                                value={row.manualValues}
                                 onInput={(e) =>
-                                  setManualValues((prev) => ({
-                                    ...prev,
-                                    [capability]: e.currentTarget.value,
-                                  }))
+                                  updateProviderBindingRow(
+                                    setBindingRows,
+                                    index(),
+                                    { manualValues: e.currentTarget.value },
+                                  )
                                 }
                                 placeholder='{"name":"value"}'
                                 spellcheck={false}
                               />
                             </Show>
+                            <button
+                              class="btn btn-secondary"
+                              type="button"
+                              onClick={() =>
+                                setBindingRows((prev) =>
+                                  prev.filter((_, i) => i !== index()),
+                                )
+                              }
+                            >
+                              Remove
+                            </button>
                           </div>
                         </div>
                       )}
                     </For>
                   </div>
                   <div class="form-actions">
+                    <button
+                      class="btn btn-secondary"
+                      type="button"
+                      onClick={() =>
+                        setBindingRows((prev) => [
+                          ...prev,
+                          {
+                            provider: "",
+                            alias: "",
+                            mode: "default",
+                            connectionId: "",
+                            manualValues: "",
+                          },
+                        ])
+                      }
+                    >
+                      Add provider
+                    </button>
                     <button
                       class="btn btn-primary"
                       type="submit"
@@ -453,48 +495,84 @@ function DependencyList(props: {
   );
 }
 
+interface ProviderBindingRow {
+  readonly provider: string;
+  readonly alias: string;
+  readonly mode: ProviderBindingMode;
+  readonly connectionId: string;
+  readonly manualValues: string;
+}
+
+function providerBindingToRow(binding: ProviderBinding): ProviderBindingRow {
+  return {
+    provider: binding.provider,
+    alias: binding.alias ?? "",
+    mode: binding.mode,
+    connectionId: binding.connectionId ?? "",
+    manualValues: binding.values
+      ? JSON.stringify(binding.values, null, 2)
+      : "",
+  };
+}
+
+function updateProviderBindingRow(
+  setRows: (updater: (rows: ProviderBindingRow[]) => ProviderBindingRow[]) =>
+    void,
+  index: number,
+  patch: Partial<ProviderBindingRow>,
+): void {
+  setRows((rows) =>
+    rows.map((row, i) => i === index ? { ...row, ...patch } : row),
+  );
+}
+
 function buildBindings(
-  modes: Partial<Record<Capability, CapabilityBindingMode>>,
-  connectionIds: Partial<Record<Capability, string>>,
-  manualValues: Partial<Record<Capability, string>>,
-): { readonly bindings: CapabilityBindings } | { readonly error: string } {
-  const bindings: Partial<Record<Capability, CapabilityBindings[Capability]>> =
-    {};
-  for (const capability of CAPABILITIES) {
-    const mode = modes[capability] ?? "default";
+  rows: readonly ProviderBindingRow[],
+): { readonly bindings: ProviderBindings } | { readonly error: string } {
+  const bindings: ProviderBinding[] = [];
+  for (const [index, row] of rows.entries()) {
+    const provider = row.provider.trim();
+    if (!provider) {
+      return { error: `Provider binding ${index + 1} の provider を入力してください。` };
+    }
+    const mode = row.mode ?? "default";
+    const binding: {
+      provider: string;
+      alias?: string;
+      mode: ProviderBindingMode;
+      connectionId?: string;
+      values?: Record<string, unknown>;
+    } = { provider, mode };
+    const alias = row.alias.trim();
+    if (alias) binding.alias = alias;
     if (mode === "connection") {
-      const connectionId = connectionIds[capability]?.trim();
+      const connectionId = row.connectionId.trim();
       if (!connectionId) {
-        return { error: `${capability} の Connection を選択してください。` };
+        return { error: `${provider} の Connection を選択してください。` };
       }
-      bindings[capability] = { mode, connectionId };
-      continue;
+      binding.connectionId = connectionId;
     }
     if (mode === "manual") {
-      const text = manualValues[capability]?.trim();
+      const text = row.manualValues.trim();
       if (!text) {
-        return { error: `${capability} の manual value を入力してください。` };
+        return { error: `${provider} の manual value を入力してください。` };
       }
       let values: unknown;
       try {
         values = JSON.parse(text);
       } catch {
-        return { error: `${capability} の manual value は JSON object です。` };
+        return { error: `${provider} の manual value は JSON object です。` };
       }
       if (
         typeof values !== "object" ||
         values === null ||
         Array.isArray(values)
       ) {
-        return { error: `${capability} の manual value は JSON object です。` };
+        return { error: `${provider} の manual value は JSON object です。` };
       }
-      bindings[capability] = {
-        mode,
-        values: values as Record<string, unknown>,
-      };
-      continue;
+      binding.values = values as Record<string, unknown>;
     }
-    bindings[capability] = { mode };
+    bindings.push(binding);
   }
   return { bindings };
 }

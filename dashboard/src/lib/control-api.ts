@@ -17,7 +17,7 @@
  * `@takosjp/takosumi-accounts-contract`, not `takosumi-contract/*`, so we cannot
  * import the deploy-control contract types directly here. Keep these in sync
  * with packages/schema/src/{spaces,installations,dependencies,runs,sources,
- * activity,deploy-control-api,capability-bindings}.ts.
+ * activity,deploy-control-api,provider-bindings}.ts.
  */
 
 // ===========================================================================
@@ -89,9 +89,15 @@ async function controlFetch<T>(
     : undefined;
 
   if (!res.ok) {
-    const code = (data as { error?: string } | undefined)?.error;
-    const desc = (data as { error_description?: string } | undefined)
-      ?.error_description;
+    const deployControlError = (data as {
+      error?: { code?: string; message?: string };
+    } | undefined)?.error;
+    const legacyError = (data as { error?: string } | undefined)?.error;
+    const code =
+      typeof legacyError === "string" ? legacyError : deployControlError?.code;
+    const desc =
+      (data as { error_description?: string } | undefined)?.error_description ??
+      deployControlError?.message;
     throw new ControlApiError(
       res.status,
       code,
@@ -138,16 +144,96 @@ export interface Space {
   readonly type: SpaceType;
   readonly ownerUserId: string;
   readonly billingAccountId?: string;
+  readonly billingSettings?: BillingSettings;
   readonly policy?: PolicyConfig;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
-export type InstallType =
-  | "core"
-  | "opentofu_module"
-  | "opentofu_root"
-  | "app_source";
+export type BillingMode = "disabled" | "showback" | "enforce";
+export type BillingProvider = "stripe" | "manual" | "none";
+
+export type BillingSettings =
+  | {
+      readonly mode: "disabled";
+      readonly provider: "none";
+      readonly reservationRequired?: false;
+    }
+  | {
+      readonly mode: "showback";
+      readonly provider: BillingProvider;
+      readonly reservationRequired?: false;
+    }
+  | {
+      readonly mode: "enforce";
+      readonly provider: Exclude<BillingProvider, "none">;
+      readonly reservationRequired: true;
+    };
+
+export interface CreditBalance {
+  readonly spaceId: string;
+  readonly availableCredits: number;
+  readonly reservedCredits: number;
+  readonly monthlyIncludedCredits: number;
+  readonly purchasedCredits: number;
+  readonly updatedAt: string;
+}
+
+export interface CreditReservation {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly runId: string;
+  readonly estimatedCredits: number;
+  readonly status: "reserved" | "captured" | "released" | "expired";
+  readonly mode: BillingMode;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+}
+
+export interface BackupRecord {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly objectKey: string;
+  readonly digest: string;
+  readonly sizeBytes: number;
+  readonly serviceData?: {
+    readonly objectKey: string;
+    readonly digest: string;
+    readonly sizeBytes: number;
+    readonly exportedCount: number;
+    readonly unsupportedCount: number;
+    readonly missingCount: number;
+  };
+  readonly createdByRunId?: string;
+  readonly createdAt: string;
+}
+
+export type UsageEventKind =
+  | "runner_minute"
+  | "managed_compute"
+  | "managed_storage_gb_hour"
+  | "artifact_storage_gb_hour"
+  | "backup_storage_gb_hour"
+  | "egress_gb"
+  | "operation";
+
+export interface UsageEvent {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly installationId?: string;
+  readonly runId?: string;
+  readonly kind: UsageEventKind;
+  readonly quantity: number;
+  readonly credits: number;
+  readonly source: string;
+  readonly idempotencyKey: string;
+  readonly createdAt: string;
+}
+
+export interface SpaceBilling {
+  readonly settings: BillingSettings;
+  readonly balance?: CreditBalance;
+}
 
 export type TrustLevel = "official" | "trusted" | "space" | "raw";
 
@@ -165,7 +251,6 @@ export interface Installation {
   readonly name: string;
   readonly slug: string;
   readonly sourceId: string;
-  readonly installType: InstallType;
   readonly installConfigId: string;
   readonly environment: string;
   readonly currentDeploymentId?: string;
@@ -176,38 +261,29 @@ export interface Installation {
   readonly updatedAt: string;
 }
 
-export type Capability =
-  | "source"
-  | "compute"
-  | "dns"
-  | "storage"
-  | "database"
-  | "secrets";
-
-export type CapabilityBindingMode =
+export type ProviderBindingMode =
   | "default"
   | "connection"
   | "manual"
   | "disabled";
 
-export interface CapabilityBinding {
-  readonly mode: CapabilityBindingMode;
+export interface ProviderBinding {
+  readonly provider: string;
+  readonly alias?: string;
+  readonly mode: ProviderBindingMode;
   readonly connectionId?: string;
-  readonly provider?: string;
   readonly region?: string;
   readonly values?: Readonly<Record<string, unknown>>;
 }
 
-export type CapabilityBindings = Readonly<
-  Partial<Record<Capability, CapabilityBinding>>
->;
+export type ProviderBindings = readonly ProviderBinding[];
 
 export interface DeploymentProfile {
   readonly id: string;
   readonly spaceId: string;
   readonly installationId: string;
   readonly environment: string;
-  readonly bindings: CapabilityBindings;
+  readonly bindings: ProviderBindings;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -216,7 +292,6 @@ export interface InstallConfig {
   readonly id: string;
   readonly spaceId?: string;
   readonly name: string;
-  readonly installType: InstallType;
   readonly trustLevel: TrustLevel;
   readonly modulePath?: string;
   readonly createdAt: string;
@@ -363,6 +438,20 @@ export interface Source {
   readonly updatedAt: string;
 }
 
+export interface SourceSnapshot {
+  readonly id: string;
+  readonly sourceId: string;
+  readonly url: string;
+  readonly ref: string;
+  readonly resolvedCommit: string;
+  readonly path: string;
+  readonly archiveObjectKey: string;
+  readonly archiveDigest: string;
+  readonly archiveSizeBytes: number;
+  readonly fetchedByRunId: string;
+  readonly fetchedAt: string;
+}
+
 export interface OutputShareEntry {
   readonly name: string;
   readonly alias?: string;
@@ -393,7 +482,12 @@ export interface ActivityEvent {
   readonly createdAt: string;
 }
 
-export type ConnectionStatus = "pending" | "verified" | "revoked";
+export type ConnectionStatus =
+  | "pending"
+  | "verified"
+  | "revoked"
+  | "expired"
+  | "error";
 export type ConnectionScopeKind = "operator" | "space";
 
 export interface Connection {
@@ -409,13 +503,32 @@ export interface Connection {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly verifiedAt?: string;
+  readonly expiresAt?: string;
 }
 
 export interface OperatorConnectionDefault {
   readonly id: string;
-  readonly capability: string;
   readonly provider: string;
   readonly connectionId: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export type ProviderCredentialSource = "takosumi_managed" | "user_env_set";
+
+export interface ProviderTemplate {
+  readonly id: string;
+  readonly providerSource: string;
+  readonly displayName: string;
+  readonly recommendedEnvNames: readonly string[];
+  readonly helpers: readonly string[];
+  readonly credentialSources: readonly ProviderCredentialSource[];
+  readonly takosumiManagedAvailable: boolean;
+  readonly allowedResources: readonly string[];
+  readonly allowedDataSources: readonly string[];
+  readonly policyPackId?: string;
+  readonly costEstimatorId?: string;
+  readonly docsUrl?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -437,7 +550,8 @@ export interface CapsuleCompatibilityResult {
   readonly summary: string;
   readonly diagnostics: readonly CapsuleCompatibilityDiagnostic[];
   readonly installConfigId?: string;
-  readonly source?: "api" | "placeholder";
+  readonly sourceId?: string;
+  readonly source?: "api";
 }
 
 // ===========================================================================
@@ -488,6 +602,53 @@ export async function updateSpace(
     { method: "PATCH", body: input },
   );
   return body.space;
+}
+
+export async function getSpaceBilling(spaceId: string): Promise<SpaceBilling> {
+  const body = await controlFetch<{ billing: SpaceBilling }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}/billing`,
+  );
+  return body.billing;
+}
+
+export async function listSpaceUsage(
+  spaceId: string,
+): Promise<readonly UsageEvent[]> {
+  const body = await controlFetch<{ usageEvents?: readonly UsageEvent[] }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}/usage`,
+  );
+  return body.usageEvents ?? [];
+}
+
+export async function listSpaceCreditReservations(
+  spaceId: string,
+): Promise<readonly CreditReservation[]> {
+  const body = await controlFetch<{
+    creditReservations?: readonly CreditReservation[];
+  }>(`${BASE}/spaces/${encodeURIComponent(spaceId)}/credit-reservations`);
+  return body.creditReservations ?? [];
+}
+
+export async function topUpSpaceCredits(
+  spaceId: string,
+  credits: number,
+): Promise<CreditBalance> {
+  const body = await controlFetch<{ balance: CreditBalance }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}/credits/top-up`,
+    { method: "POST", body: { credits } },
+  );
+  return body.balance;
+}
+
+export async function changeSpaceSubscription(
+  spaceId: string,
+  billingSettings: BillingSettings,
+): Promise<SpaceBilling> {
+  const body = await controlFetch<{ billing: SpaceBilling }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}/subscription/change`,
+    { method: "POST", body: { billingSettings } },
+  );
+  return body.billing;
 }
 
 // --- Installations ---------------------------------------------------------
@@ -543,7 +704,7 @@ export async function getDeploymentProfile(
 
 export async function putDeploymentProfile(
   installationId: string,
-  bindings: CapabilityBindings,
+  bindings: ProviderBindings,
 ): Promise<DeploymentProfile> {
   const body = await controlFetch<{ deploymentProfile: DeploymentProfile }>(
     `${BASE}/installations/${encodeURIComponent(installationId)}/deployment-profile`,
@@ -573,36 +734,44 @@ export async function checkCapsuleCompatibility(input: {
   readonly name: string;
   readonly installConfigId?: string;
 }): Promise<CapsuleCompatibilityResult> {
-  const body = await controlFetch<
-    | CapsuleCompatibilityResult
-    | {
-        compatibility?: CapsuleCompatibilityResult;
-        result?: CapsuleCompatibilityResult;
-      }
-  >(`${BASE}/capsules/compatibility`, {
-    method: "POST",
-    body: {
-      spaceId: input.spaceId,
-      gitUrl: input.gitUrl,
-      ref: input.ref,
-      path: input.path,
-      name: input.name,
-      ...(input.installConfigId
-        ? { installConfigId: input.installConfigId }
-        : {}),
-    },
+  const { source } = await createSource({
+    spaceId: input.spaceId,
+    name: input.name,
+    url: input.gitUrl,
+    defaultRef: input.ref,
+    defaultPath: input.path,
   });
-  if ("level" in body) return body;
-  return (
-    body.compatibility ??
-    body.result ?? {
-      level: "ready",
-      summary:
-        "Compatibility response was empty. The OpenTofu Capsule will be validated by the existing plan flow.",
-      diagnostics: [],
-      source: "placeholder",
-    }
-  );
+  await syncSource(source.id);
+  const snapshot = await waitForLatestSourceSnapshot(source.id);
+  const body = await controlFetch<{
+    report: {
+      readonly level: CapsuleCompatibilityLevel;
+      readonly findings?: readonly {
+        readonly severity?: "info" | "warning" | "error";
+        readonly code?: string;
+        readonly message?: string;
+        readonly suggestion?: string;
+      }[];
+    };
+  }>(`${BASE}/sources/${encodeURIComponent(source.id)}/compatibility-check`, {
+    method: "POST",
+    body: { sourceSnapshotId: snapshot.id },
+  });
+  const diagnostics = (body.report.findings ?? []).map((finding) => ({
+    severity: finding.severity ?? "info",
+    message: finding.message ?? finding.code ?? "Compatibility finding",
+    ...(finding.suggestion ? { detail: finding.suggestion } : {}),
+  }));
+  return {
+    level: body.report.level,
+    summary:
+      diagnostics[0]?.message ??
+      "Compatibility check completed for the synced SourceSnapshot.",
+    diagnostics,
+    ...(input.installConfigId ? { installConfigId: input.installConfigId } : {}),
+    sourceId: source.id,
+    source: "api",
+  };
 }
 
 // --- Graph -----------------------------------------------------------------
@@ -611,6 +780,35 @@ export async function getSpaceGraph(spaceId: string): Promise<SpaceGraph> {
   return await controlFetch<SpaceGraph>(
     `${BASE}/spaces/${encodeURIComponent(spaceId)}/graph`,
   );
+}
+
+// --- Backups ---------------------------------------------------------------
+
+export async function createSpaceBackup(spaceId: string): Promise<BackupRecord> {
+  const body = await controlFetch<{ backup: BackupRecord }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}/backups`,
+    { method: "POST" },
+  );
+  return body.backup;
+}
+
+export async function createInstallationBackup(
+  installationId: string,
+): Promise<BackupRecord> {
+  const body = await controlFetch<{ backup: BackupRecord }>(
+    `${BASE}/installations/${encodeURIComponent(installationId)}/backups`,
+    { method: "POST" },
+  );
+  return body.backup;
+}
+
+export async function listSpaceBackups(
+  spaceId: string,
+): Promise<readonly BackupRecord[]> {
+  const body = await controlFetch<{ backups: readonly BackupRecord[] }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}/backups`,
+  );
+  return body.backups ?? [];
 }
 
 // --- Dependencies ----------------------------------------------------------
@@ -703,6 +901,36 @@ export async function syncSource(sourceId: string): Promise<unknown> {
   );
 }
 
+export async function listSourceSnapshots(
+  sourceId: string,
+): Promise<readonly SourceSnapshot[]> {
+  const body = await controlFetch<{
+    snapshots?: readonly SourceSnapshot[];
+  }>(`${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots`);
+  return body.snapshots ?? [];
+}
+
+export async function waitForLatestSourceSnapshot(
+  sourceId: string,
+): Promise<SourceSnapshot> {
+  const deadline = Date.now() + 20_000;
+  let lastSnapshots: readonly SourceSnapshot[] = [];
+  while (Date.now() < deadline) {
+    lastSnapshots = await listSourceSnapshots(sourceId);
+    const latest = [...lastSnapshots].sort((a, b) =>
+      b.fetchedAt.localeCompare(a.fetchedAt),
+    )[0];
+    if (latest) return latest;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new ControlApiError(
+    409,
+    "source_sync_required",
+    "Source sync has not produced a SourceSnapshot yet.",
+    { snapshots: lastSnapshots },
+  );
+}
+
 // --- Runs ------------------------------------------------------------------
 
 /** Create a plan run for an Installation. Returns the opaque Run envelope. */
@@ -792,6 +1020,18 @@ export async function listOperatorConnectionDefaults(
   return body.operatorConnectionDefaults ?? [];
 }
 
+// --- Providers -------------------------------------------------------------
+
+export async function listProviderTemplates(): Promise<
+  readonly ProviderTemplate[]
+> {
+  const body = await controlFetch<{
+    providers?: readonly ProviderTemplate[];
+    providerTemplates?: readonly ProviderTemplate[];
+  }>(`${BASE}/providers`);
+  return body.providerTemplates ?? body.providers ?? [];
+}
+
 // --- OutputShares ----------------------------------------------------------
 
 export async function listOutputShares(
@@ -853,7 +1093,7 @@ export function extractRunId(envelope: unknown): string | undefined {
   const obj = envelope as Record<string, unknown>;
   // Plan response: { planRun: { id } }; source sync: { run: { id } }; or a
   // bare { id }.
-  for (const wrap of ["planPreview", "run"] as const) {
+  for (const wrap of ["planRun", "planPreview", "run"] as const) {
     const nested = obj[wrap];
     if (nested && typeof nested === "object") {
       const id = (nested as Record<string, unknown>).id;

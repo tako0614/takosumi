@@ -7,7 +7,7 @@ import { dirname, resolve } from "node:path";
 import type {
   OpenTofuOutputEnvelope,
   RunnerProfile,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import {
   applyExpectedGuardFromPlanRun,
   OpenTofuDeploymentController,
@@ -19,7 +19,7 @@ import { InMemoryOpenTofuDeploymentStore } from "../src/service/domains/deploy-c
 import { seedInstallationModel } from "../src/service/domains/deploy-control/test_model_fixture.ts";
 import { parseOpenTofuOutputs } from "../packages/platform-services/src/opentofu-output-resolver.ts";
 
-const FIXTURE_SOURCE = "fixtures/opentofu-deployment-output-proof/source";
+const FIXTURE_SOURCE = "fixtures/opentofu-output-snapshot-proof/source";
 const PROOF_KIND = "takosumi.live-local-opentofu-plan-apply-proof@v1";
 
 export interface LiveOpenTofuPlanApplyProof {
@@ -54,6 +54,22 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
     const seeded = await seedInstallationModel(store, {
       spaceId: "space_live_local",
       installationId: ids.next("inst"),
+      installConfig: {
+        outputAllowlist: {
+          takosumi_launch_url: {
+            from: "takosumi_launch_url",
+            type: "url",
+          },
+          takosumi_admin_url: {
+            from: "takosumi_admin_url",
+            type: "url",
+          },
+          health_url: {
+            from: "health_url",
+            type: "url",
+          },
+        },
+      },
     });
     await store.putInstallation({
       ...seeded.installation,
@@ -93,15 +109,16 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
       runnerProfileId: runnerProfile.id,
       evidence: {
         planDigest: planned.planRun.planDigest!,
-        // DeploymentOutput snapshot is the ApplyRun outputs (the
-        // Deployment records the public projection as `outputsPublic`).
+        // The internal apply compatibility output list feeds the
+        // OutputSnapshot projection; Deployment records the public projection
+        // as `outputsPublic`.
         outputCount: applied.applyRun.outputs?.length ?? 0,
         stateLockStatus: applied.applyRun.stateLock.status,
         applyAuditEventCount: applied.applyRun.auditEvents.length,
       },
     };
     if (proof.evidence.outputCount < 1) {
-      throw new Error("live local OpenTofu proof did not record DeploymentOutput");
+      throw new Error("live local OpenTofu proof did not record OutputSnapshot projection");
     }
     if (options.outputPath) {
       const outputPath = resolve(options.outputPath);

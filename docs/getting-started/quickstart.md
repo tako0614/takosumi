@@ -2,7 +2,9 @@
 
 この手順は local Takosumi service に対して、Space 直下の OpenTofu Capsule Installation の control-plane record を作り、Compatibility Check / Plan / Apply の contract を確認する最小例です。
 
-完成形の正本は [Core spec](../core-spec.md) です。現時点では Runner-backed Capsule Normalizer / Capsule Gate、Compatibility Report の apply guard 統合、billing enforce は実装中です。local service だけでは実際の OpenTofu 実行や credit による apply blocking まで完了したと誤読しないでください。実装差分は [Core conformance](../core-conformance.md) に集約しています。
+正本は [Core spec](../core-spec.md) です。local service で runner / R2 / billing adapter が未配線の場合、実際の OpenTofu 実行や credit による apply blocking は queued / failed / adapter-unavailable として見えることがあります。現実装の適合状況と追加拡張の候補は [Core conformance](../core-conformance.md) に集約しています。
+
+Provider Templates / Provider Env Set が正本モデルです。Takosumi提供は Cloudflare only から始まり、AWS / GCP / GitHub / Kubernetes / 任意 provider は Space-owned Connection のユーザーenvセットで使います。
 
 ## Prerequisites
 
@@ -28,6 +30,28 @@ export BASE=http://127.0.0.1:8788
 export AUTH="Authorization: Bearer dev-token"
 ```
 
+## 既定経路: `takosumi deploy ./dir` (upload)
+
+Installation を作る既定経路は **ローカル作業ディレクトリの upload** です。git Source の登録は不要で、`wrangler deploy`
+と同じくローカル Capsule をそのまま Space にデプロイします。git Source への push は「繋ぐと自動ビルドしてくれる任意
+の add-on」であり、Installation の前提ではありません。
+
+```bash
+export TAKOSUMI_DEPLOY_CONTROL_URL=$BASE
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
+
+takosumi deploy ./my-capsule --space @me --name my-app --var region=apac
+takosumi plan   ./my-capsule --space @me --name my-app   # upload + plan のみ
+```
+
+CLI はローカルを `tar`(zstd) で固めて `POST /api/spaces/:id/uploads` に送り (R2_SOURCE に保存され **upload origin の
+SourceSnapshot** が記録される)、`POST /api/deploy` に「upload snapshot を pin して `@space/name` Installation を
+解決/作成し plan せよ」と依頼します。upload origin なので **Source 行は不要で `Installation.sourceId` は不在**であり、
+Capsule Gate / plan / apply / DAG の downstream は origin 非依存に同じ pipeline を通ります。詳細は
+[CLI](../reference/cli.md) と [Control Plane API](../reference/deploy-control-api.md) の Deploy / Upload を参照。
+
+以降の手順 (### 2 以降) は、もう一方の経路である **git Source 連携** を control-plane record として確認する流れです。
+
 ## 2. Space と Source を登録
 
 ```bash
@@ -49,7 +73,16 @@ curl -s -X POST "$BASE/api/sources/<sourceId>/sync" -H "$AUTH"
 # source_sync Run が ref を commit に固定し SourceSnapshot を作ります
 ```
 
-## 3. Installation を作る
+## 3. Provider と Connection 方針を確認
+
+```bash
+curl -s "$BASE/api/providers" -H "$AUTH"
+```
+
+Takosumi提供は Cloudflare only です。AWS / GCP / GitHub / Kubernetes / 任意 provider は Space-owned Connection の
+ユーザーenvセットを使います。Provider Template route と provider-env-set Connection route が、compatibility UI / CLI の入口です。
+
+## 4. Installation を作る
 
 InstallConfig は公式カタログ由来のもの (`GET /api/install-configs`) か Space 自身のものを使います。InstallConfig は
 `modulePath` / `normalization` / variable mapping / output allowlist / policy を持つ service-side config です。
@@ -62,9 +95,9 @@ curl -s -X POST "$BASE/api/spaces/<spaceId>/installations" -H "$AUTH" -H 'conten
 # -> {"installation":{"id":"inst_...","status":"pending", ...}}
 ```
 
-## 4. Compatibility Check
+## 5. Compatibility Check
 
-Compatibility Check は SourceSnapshot を固定し、完成形では Capsule Normalizer と Capsule Gate を provider credential なしで実行します。現在の local service は metadata-only report を返す場合があります。これは API contract の確認用であり、Runner-backed Gate が完成済みであることを意味しません。
+Compatibility Check は SourceSnapshot を固定し、Capsule Normalizer と Capsule Gate を provider credential なしで実行します。runner-backed source reader が未配線の host では、`capsule_source_files_unavailable` warning を含む report になります。
 
 ```bash
 curl -s -X POST "$BASE/api/sources/<sourceId>/compatibility-check" -H "$AUTH" -H 'content-type: application/json' \
@@ -74,20 +107,20 @@ curl -s -X POST "$BASE/api/sources/<sourceId>/compatibility-check" -H "$AUTH" -H
 curl -s "$BASE/api/compatibility-reports/<reportId>" -H "$AUTH"
 ```
 
-## 5. plan → (approve) → apply
+## 6. plan → (approve) → apply
 
-この API surface は正本の Run contract です。runner-backed plan/apply が未構成の local service では、Run が queued / failed / 実装中の応答になることがあります。
+この API surface は正本の Run contract です。runner-backed plan/apply が未構成の local service では、Run が queued / failed / adapter-unavailable の応答になることがあります。
 
 ```bash
 curl -s -X POST "$BASE/api/installations/<installationId>/plan" -H "$AUTH"
-# -> plan Run。完成形では SourceSnapshot / Compatibility Report / DependencySnapshot を固定し、generated root で tofu plan を実行します
+# -> plan Run。platform pipeline は SourceSnapshot / Compatibility Report / DependencySnapshot を固定し、generated root で tofu plan を実行します
 
 curl -s "$BASE/api/runs/<runId>" -H "$AUTH"
 # status が waiting_approval (destroy / destructive change のみ) なら:
 curl -s -X POST "$BASE/api/runs/<runId>/approve" -H "$AUTH"
 ```
 
-完成形の apply は saved plan のみを実行し、plan digest / source snapshot / dependency snapshot / state generation を検証します。成功すると StateSnapshot 世代が進み、OutputSnapshot と Deployment が記録されます。
+apply は saved plan のみを実行し、plan digest / source snapshot / compatibility report / dependency snapshot / state generation を検証します。成功すると StateSnapshot 世代が進み、OutputSnapshot と Deployment が記録されます。
 
 ```bash
 curl -s "$BASE/api/installations/<installationId>/deployments" -H "$AUTH"
@@ -96,7 +129,7 @@ curl -s "$BASE/api/spaces/<spaceId>/activity" -H "$AUTH"
 
 ## 6. Billing mode を確認
 
-Billing は Space 単位の ledger です。self-host や local dev では `disabled`、費用表示だけをしたい場合は `showback`、hosted で apply を credit reservation によって止めたい場合は `enforce` を使います。現時点の billing enforce は実装中なので、この quickstart では ledger surface の確認に留めます。
+Billing は Space 単位の ledger です。self-host や local dev では `disabled`、費用表示だけをしたい場合は `showback`、hosted で apply を credit reservation によって止めたい場合は `enforce` を使います。この quickstart では ledger surface を確認します。
 
 ```bash
 curl -s "$BASE/api/spaces/<spaceId>/billing" -H "$AUTH"

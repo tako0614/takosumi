@@ -6,6 +6,7 @@ export const deployControlLogicalTables = [
   "connections",
   "secretBlobs",
   "operatorConnectionDefaults",
+  "providerTemplates",
   "installConfigs",
   "installations",
   "capsuleCompatibilityReports",
@@ -19,6 +20,8 @@ export const deployControlLogicalTables = [
   "runsInputs",
   "stateSnapshots",
   "deployments",
+  "artifacts",
+  "billingPlans",
   "billingAccounts",
   "spaceSubscriptions",
   "creditBalances",
@@ -31,7 +34,7 @@ export const deployControlLogicalTables = [
 ] as const;
 
 export type DeployControlLogicalTable =
-  typeof deployControlLogicalTables[number];
+  (typeof deployControlLogicalTables)[number];
 
 export const deployControlD1TableNames = {
   runnerProfiles: "runner_profiles",
@@ -41,6 +44,7 @@ export const deployControlD1TableNames = {
   connections: "connections",
   secretBlobs: "secret_blobs",
   operatorConnectionDefaults: "operator_connection_defaults",
+  providerTemplates: "provider_templates",
   installConfigs: "install_configs",
   installations: "installations",
   capsuleCompatibilityReports: "capsule_compatibility_reports",
@@ -54,6 +58,8 @@ export const deployControlD1TableNames = {
   runsInputs: "runs_inputs",
   stateSnapshots: "state_snapshots",
   deployments: "deployments",
+  artifacts: "artifacts",
+  billingPlans: "plans",
   billingAccounts: "billing_accounts",
   spaceSubscriptions: "space_subscriptions",
   creditBalances: "credit_balances",
@@ -73,6 +79,7 @@ export const deployControlPostgresTableNames = {
   connections: "takosumi_connections",
   secretBlobs: "takosumi_connection_secret_blobs",
   operatorConnectionDefaults: "takosumi_operator_connection_defaults",
+  providerTemplates: "takosumi_provider_templates",
   installConfigs: "takosumi_install_configs",
   installations: "takosumi_opentofu_installations",
   capsuleCompatibilityReports: "takosumi_capsule_compatibility_reports",
@@ -86,6 +93,8 @@ export const deployControlPostgresTableNames = {
   runsInputs: "takosumi_plan_run_inputs",
   stateSnapshots: "takosumi_state_snapshots",
   deployments: "takosumi_opentofu_deployments",
+  artifacts: "takosumi_artifacts",
+  billingPlans: "takosumi_plans",
   billingAccounts: "takosumi_billing_accounts",
   spaceSubscriptions: "takosumi_space_subscriptions",
   creditBalances: "takosumi_credit_balances",

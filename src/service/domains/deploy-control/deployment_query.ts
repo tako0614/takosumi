@@ -19,7 +19,7 @@ import type {
   Installation,
   ListDeploymentsResponse,
   ListDeploymentOutputsResponse,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 

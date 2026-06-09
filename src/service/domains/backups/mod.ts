@@ -2,12 +2,12 @@
  * Control-backup domain service (Core Specification §33 layer 1 "Control
  * backup" + §26 R2_BACKUPS object layout).
  *
- * Produces a single sealed bundle that captures a Space's CONTROL ledger — the
+ * Produces a sealed bundle that captures a Space's CONTROL ledger — the
  * information Takosumi manages about a Space — so an operator can export /
- * archive / migrate it. The bundle is the JSON of the Space's ledger rows, gzip
+ * archive / migrate it. The bundle is the JSON of the Space's ledger rows,
  * compressed, then sealed with the same at-rest secret-boundary crypto the
  * state / secret lanes use, and written to R2_BACKUPS under the §26 key
- * `spaces/{spaceId}/backups/{backupId}/control.json.gz.enc`. A {@link
+ * `spaces/{spaceId}/backups/{backupId}/control.json.zst.enc`. A {@link
  * BackupRecord} ledger pointer (objectKey / digest / sizeBytes) is recorded and
  * a Space Activity event is emitted.
  *
@@ -20,33 +20,36 @@
  *   - raw output VALUES (only the projected `publicOutputs` / `spaceOutputs` +
  *     the raw artifact KEY are included — the encrypted raw envelope is not copied).
  *
- * Spec §33 layer 2 ("service data backup": messages / files / posts / …) is
- * implemented for the safe MVP case: `BackupConfig.mode = "artifact_export"`
- * records a sealed manifest of service-owned artifact pointers published through
- * projected OpenTofu outputs. It does not fetch provider data, run arbitrary
- * commands, or copy raw service bytes. `provider_snapshot` and `custom_command`
- * are explicitly recorded as unsupported until their runner / credential
- * boundaries exist.
+ * Spec §33 layer 2 ("service data backup": messages / files / posts / …)
+ * records a sealed manifest of service-owned backup pointers. Takosumi does
+ * not fetch provider data, run arbitrary commands, or copy raw service bytes in
+ * the control backup path. `provider_snapshot` and `custom_command` may be
+ * delegated to an injected isolated backup runner; otherwise the control path
+ * captures the pointer the Installation already projected at
+ * `BackupConfig.outputPath`.
  *
- * DIVERGENCE (spec §26 names `control.json.zst.enc`): zstd has no streaming
- * primitive in workerd, so the bundle is gzip-compressed
- * (`CompressionStream("gzip")`) and the object key ends `.gz.enc`. The seal is
- * the same secret-boundary AES-GCM; `digest` is the SHA-256 over the SEALED
- * bytes written to R2.
+ * Backup sidecars use the canonical R2_BACKUPS names from the spec:
+ * `state.tar.zst.enc`, `artifacts.manifest.json`, and
+ * `service-data.tar.zst.enc`.
  */
 
 import {
+  ARTIFACTS_MANIFEST_OBJECT_KEY,
+  type BackupArtifactPointer,
   type BackupRecord,
   CONTROL_BACKUP_CONTENT_TYPE,
   CONTROL_BACKUP_OBJECT_KEY,
   SERVICE_DATA_BACKUP_OBJECT_KEY,
+  STATE_BACKUP_OBJECT_KEY,
 } from "takosumi-contract/backups";
 import type {
   Connection,
   InstallConfig,
   Installation,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { Run } from "takosumi-contract/runs";
+import type { SourceSnapshot } from "takosumi-contract/sources";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import type {
   OpenTofuDeploymentStore,
@@ -61,26 +64,71 @@ import {
  * Narrow injected seam for sealing + persisting a control-backup bundle. The
  * host worker supplies an implementation backed by R2_BACKUPS + the at-rest
  * secret-boundary crypto (see {@link InMemoryBackupArtifactStore} for the
- * local/dev fallback). The service hands it the PLAINTEXT gzip bytes; the store
+ * local/dev fallback). The service hands it the PLAINTEXT payload bytes; the store
  * seals them and writes the sealed object to its backing bucket.
  */
 export interface BackupArtifactStore {
   /**
-   * Seals `compressed` (the gzip-compressed bundle JSON) and writes the sealed
+   * Seals `payload` (already encoded/compressed where applicable) and writes the sealed
    * object to backup storage at `objectKey`. Returns the digest over the SEALED
    * bytes and their length, which become the {@link BackupRecord} pointer.
    */
   put(input: {
     readonly objectKey: string;
-    readonly compressed: Uint8Array;
+    readonly payload: Uint8Array;
+    readonly contentType: string;
+  }): Promise<{ readonly digest: string; readonly sizeBytes: number }>;
+  /**
+   * Writes a non-secret public backup sidecar, such as
+   * `artifacts.manifest.json`. Stores that cannot expose plain objects may omit
+   * this; the service then falls back to `put`.
+   */
+  putPlain?(input: {
+    readonly objectKey: string;
+    readonly payload: Uint8Array;
     readonly contentType: string;
   }): Promise<{ readonly digest: string; readonly sizeBytes: number }>;
 }
+
+export interface BackupObjectReader {
+  get(objectKey: string): Promise<Uint8Array | undefined>;
+}
+
+export interface ServiceDataBackupRunner {
+  run(input: ServiceDataBackupRunnerInput): Promise<ServiceDataBackupRunnerResult>;
+}
+
+export interface ServiceDataBackupRunnerInput {
+  readonly spaceId: string;
+  readonly capturedAt: string;
+  readonly installation: Installation;
+  readonly installConfig: InstallConfig;
+  readonly sourceSnapshot?: SourceSnapshot;
+  readonly mode: "provider_snapshot" | "custom_command";
+  readonly outputPath: string;
+  readonly provider?: string;
+  readonly command?: readonly string[];
+}
+
+export type ServiceDataBackupRunnerResult =
+  | {
+      readonly status: "exported";
+      readonly runId: string;
+      readonly artifact: ServiceDataArtifactPointer;
+    }
+  | {
+      readonly status: "missing" | "unsupported";
+      readonly runId?: string;
+      readonly reason: string;
+    };
 
 export interface CreateBackupRequest {
   readonly spaceId: string;
   /** Optional run id that triggered the backup (operator / scheduled flows). */
   readonly createdByRunId?: string;
+  /** Optional Installation context for Installation-scoped backup Runs. */
+  readonly installationId?: string;
+  readonly environment?: string;
 }
 
 export interface BackupsServiceDependencies {
@@ -91,6 +139,19 @@ export interface BackupsServiceDependencies {
    * R2_BACKUPS + crypto must not silently drop backups).
    */
   readonly artifactStore?: BackupArtifactStore;
+  /**
+   * Reader for immutable R2_STATE objects. Required when exporting a backup that
+   * includes StateSnapshot rows, because `state.tar.zst.enc` contains the sealed
+   * state objects, not only their ledger metadata.
+   */
+  readonly stateObjectReader?: BackupObjectReader;
+  /**
+   * Isolated execution seam for service-data producer work. Hosts wire this to
+   * a backup Run / Runner Container flow for `provider_snapshot` and
+   * `custom_command`. The control-backup path only consumes the returned
+   * pointer/evidence.
+   */
+  readonly serviceDataRunner?: ServiceDataBackupRunner;
   readonly activity?: ActivityRecorder;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
@@ -104,6 +165,8 @@ export const CONTROL_BACKUP_ACTIVITY_LIMIT = 500;
 export class BackupsService {
   readonly #store: OpenTofuDeploymentStore;
   readonly #artifactStore: BackupArtifactStore | undefined;
+  readonly #stateObjectReader: BackupObjectReader | undefined;
+  readonly #serviceDataRunner: ServiceDataBackupRunner | undefined;
   readonly #activity: ActivityRecorder;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
@@ -112,6 +175,8 @@ export class BackupsService {
   constructor(deps: BackupsServiceDependencies) {
     this.#store = deps.store;
     this.#artifactStore = deps.artifactStore;
+    this.#stateObjectReader = deps.stateObjectReader;
+    this.#serviceDataRunner = deps.serviceDataRunner;
     this.#activity = deps.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
@@ -125,8 +190,9 @@ export class BackupsService {
 
   /**
    * Creates one control backup for a Space: gathers the ledger, strips secret
-   * material, gzips + seals + writes the bundle to backup storage, records the
-   * pointer, and emits a Space Activity event. Returns the {@link BackupRecord}.
+   * material, zstd-compresses + seals + writes the bundle to backup storage,
+   * records the pointer, and emits a Space Activity event. Returns the
+   * {@link BackupRecord}.
    */
   async createBackup(request: CreateBackupRequest): Promise<BackupRecord> {
     const spaceId = request.spaceId.trim();
@@ -150,54 +216,140 @@ export class BackupsService {
       );
     }
 
-    const backupId = this.#newId("bkp");
     const createdAt = this.#now().toISOString();
-    const bundle = await this.#collectControlBundle(spaceId, createdAt);
-    const json = JSON.stringify(bundle);
-    const compressed = await gzip(new TextEncoder().encode(json));
-    const objectKey = CONTROL_BACKUP_OBJECT_KEY(spaceId, backupId);
-    const { digest, sizeBytes } = await this.#artifactStore.put({
-      objectKey,
-      compressed,
-      contentType: CONTROL_BACKUP_CONTENT_TYPE,
-    });
-    const serviceData = await this.#writeServiceDataManifest({
-      backupId,
-      spaceId,
-      capturedAt: createdAt,
-    });
+    const backupId = this.#newId("bkp");
+    const runId = request.createdByRunId ?? this.#newId("backup");
+    if (!request.createdByRunId) {
+      await this.#putBackupRun({
+        request,
+        runId,
+        spaceId,
+        status: "running",
+        createdAt,
+        startedAt: createdAt,
+      });
+    }
 
-    const record: BackupRecord = {
-      id: backupId,
-      spaceId,
-      objectKey,
-      digest,
-      sizeBytes,
-      ...(serviceData ? { serviceData } : {}),
-      ...(request.createdByRunId
-        ? { createdByRunId: request.createdByRunId }
-        : {}),
-      createdAt,
-    };
-    await this.#store.putBackupRecord(record);
+    try {
+      const bundle = await this.#collectControlBundle(spaceId, createdAt);
+      const payload = zstdCompressRaw(jsonBytes(bundle));
+      const objectKey = CONTROL_BACKUP_OBJECT_KEY(spaceId, backupId);
+      const { digest, sizeBytes } = await this.#artifactStore.put({
+        objectKey,
+        payload,
+        contentType: CONTROL_BACKUP_CONTENT_TYPE,
+      });
+      const stateArchive = await this.#writeStateArchive({
+        backupId,
+        spaceId,
+        stateSnapshots: bundle.stateSnapshots,
+      });
+      const serviceData = await this.#writeServiceDataArchive({
+        backupId,
+        spaceId,
+        capturedAt: createdAt,
+      });
+      const artifactsManifest = await this.#writeArtifactsManifest({
+        backupId,
+        spaceId,
+        control: { objectKey, digest, sizeBytes },
+        ...(stateArchive ? { stateArchive } : {}),
+        ...(serviceData ? { serviceData } : {}),
+      });
 
-    // Activity (§27 / §34): a control backup was created. Pointer metadata only
-    // (ids / digest / size) — never bundle contents.
-    await this.#activity.record({
-      spaceId,
-      action: "backup.created",
-      targetType: "backup",
-      targetId: backupId,
-      metadata: {
+      const record: BackupRecord = {
+        id: backupId,
+        spaceId,
+        ...(request.installationId
+          ? { installationId: request.installationId }
+          : {}),
+        ...(request.environment ? { environment: request.environment } : {}),
         objectKey,
         digest,
         sizeBytes,
+        ...(stateArchive ? { stateArchive } : {}),
+        ...(artifactsManifest ? { artifactsManifest } : {}),
         ...(serviceData ? { serviceData } : {}),
-        ...(request.createdByRunId ? { runId: request.createdByRunId } : {}),
-      },
-    });
+        createdByRunId: runId,
+        createdAt,
+      };
+      await this.#store.putBackupRecord(record);
 
-    return record;
+      if (!request.createdByRunId) {
+        await this.#putBackupRun({
+          request,
+          runId,
+          spaceId,
+          status: "succeeded",
+          createdAt,
+          startedAt: createdAt,
+          finishedAt: this.#now().toISOString(),
+        });
+      }
+
+      // Activity (§27 / §34): a control backup was created. Pointer metadata only
+      // (ids / digest / size) — never bundle contents.
+      await this.#activity.record({
+        spaceId,
+        action: "backup.created",
+        targetType: "backup",
+        targetId: backupId,
+        metadata: {
+          objectKey,
+          digest,
+          sizeBytes,
+          ...(stateArchive ? { stateArchive } : {}),
+          ...(artifactsManifest ? { artifactsManifest } : {}),
+          ...(serviceData ? { serviceData } : {}),
+          runId,
+        },
+      });
+
+      return record;
+    } catch (error) {
+      if (!request.createdByRunId) {
+        await this.#putBackupRun({
+          request,
+          runId,
+          spaceId,
+          status: "failed",
+          errorCode: "backup_failed",
+          createdAt,
+          startedAt: createdAt,
+          finishedAt: this.#now().toISOString(),
+        });
+      }
+      throw error;
+    }
+  }
+
+  async #putBackupRun(input: {
+    readonly request: CreateBackupRequest;
+    readonly runId: string;
+    readonly spaceId: string;
+    readonly status: Run["status"];
+    readonly errorCode?: string;
+    readonly createdAt: string;
+    readonly startedAt?: string;
+    readonly finishedAt?: string;
+  }): Promise<void> {
+    await this.#store.putBackupRun({
+      id: input.runId,
+      spaceId: input.spaceId,
+      ...(input.request.installationId
+        ? { installationId: input.request.installationId }
+        : {}),
+      ...(input.request.environment
+        ? { environment: input.request.environment }
+        : {}),
+      type: "backup",
+      status: input.status,
+      ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+      createdBy: "system",
+      createdAt: input.createdAt,
+      ...(input.startedAt ? { startedAt: input.startedAt } : {}),
+      ...(input.finishedAt ? { finishedAt: input.finishedAt } : {}),
+    });
   }
 
   /** Lists a Space's control backups, newest first. */
@@ -213,24 +365,43 @@ export class BackupsService {
   }
 
   /**
-   * Reads every control-ledger row for the Space and assembles the bundle,
-   * stripping internal fields + secret material. Read-only: uses existing store
-   * list methods (no new store reads were added for the export).
+   * Reads the public-safe control-ledger projection for the Space and assembles
+   * the bundle, stripping internal fields + secret material. Object bytes stay
+   * in R2/state/artifact stores; this bundle carries ledger rows and pointers.
    */
   async #collectControlBundle(
     spaceId: string,
     capturedAt: string,
   ): Promise<ControlBackupBundle> {
     const space = await this.#store.getSpace(spaceId);
+    const providerTemplates = await this.#store.listProviderTemplates();
     const sources = await this.#store.listSources(spaceId);
     const installConfigs = await this.#store.listInstallConfigs(spaceId);
     const installations = await this.#store.listInstallations(spaceId);
     const dependencies = await this.#store.listDependenciesBySpace(spaceId);
     const connections = await this.#store.listConnections(spaceId);
+    const outputSharesGranted =
+      await this.#store.listOutputSharesFromSpace(spaceId);
+    const outputSharesReceived =
+      await this.#store.listOutputSharesToSpace(spaceId);
     const runGroups = await this.#store.listRunGroups(spaceId);
     const activity = await this.#store.listActivityEvents(spaceId, {
       limit: this.#activityLimit,
     });
+    const securityFindings = await this.#store.listSecurityFindings(spaceId, {
+      limit: this.#activityLimit,
+    });
+    const billingAccount =
+      space && typeof (space as { billingAccountId?: unknown }).billingAccountId === "string"
+        ? await this.#store.getBillingAccount(
+            (space as { billingAccountId: string }).billingAccountId,
+          )
+        : undefined;
+    const spaceSubscription = await this.#store.getSpaceSubscription(spaceId);
+    const creditBalance = await this.#store.getCreditBalance(spaceId);
+    const creditReservations = await this.#store.listCreditReservations(spaceId);
+    const usageEvents = await this.#store.listUsageEvents(spaceId);
+    const backupRecords = await this.#store.listBackupRecords(spaceId);
 
     // Per-installation fan-out: source snapshots (by source), deployments,
     // state-snapshot metadata, and output-snapshot projections.
@@ -239,7 +410,9 @@ export class BackupsService {
       for (const snapshot of await this.#store.listSourceSnapshots(source.id)) {
         sourceSnapshots.push({
           id: snapshot.id,
-          sourceId: snapshot.sourceId,
+          origin: snapshot.origin,
+          spaceId: snapshot.spaceId,
+          ...(snapshot.sourceId ? { sourceId: snapshot.sourceId } : {}),
           url: snapshot.url,
           ref: snapshot.ref,
           resolvedCommit: snapshot.resolvedCommit,
@@ -254,9 +427,17 @@ export class BackupsService {
     }
 
     const deployments: unknown[] = [];
+    const deploymentProfiles: unknown[] = [];
     const stateSnapshots: BundleStateSnapshot[] = [];
     const outputSnapshots: BundleOutputSnapshot[] = [];
     for (const installation of installations) {
+      const profile = await this.#store.getDeploymentProfileByInstallation(
+        installation.id,
+        installation.environment,
+      );
+      if (profile) {
+        deploymentProfiles.push(profile);
+      }
       for (const deployment of await this.#store.listDeployments(
         installation.id,
       )) {
@@ -280,8 +461,9 @@ export class BackupsService {
           createdAt: snapshot.createdAt,
         });
       }
-      const output = await this.#store.getLatestOutputSnapshot(installation.id);
-      if (output) {
+      for (const output of await this.#store.listOutputSnapshots(
+        installation.id,
+      )) {
         // publicOutputs + spaceOutputs PROJECTIONS only — raw output VALUES are
         // never copied; the raw artifact KEY is listed but the bytes are not.
         outputSnapshots.push({
@@ -304,21 +486,125 @@ export class BackupsService {
       spaceId,
       capturedAt,
       space: space ?? null,
+      providerTemplates,
       sources: sources.map(stripSource),
       sourceSnapshots,
       installConfigs: [...installConfigs],
       installations: [...installations],
+      deploymentProfiles,
       dependencies: [...dependencies],
+      outputSharesGranted: [...outputSharesGranted],
+      outputSharesReceived: [...outputSharesReceived],
       deployments,
       stateSnapshots,
       outputSnapshots,
       runGroups: [...runGroups],
       activity: [...activity],
       connections: connections.map(publicConnection),
+      securityFindings: [...securityFindings],
+      billing: {
+        account: billingAccount ?? null,
+        subscription: spaceSubscription ?? null,
+        creditBalance: creditBalance ?? null,
+        creditReservations: [...creditReservations],
+        usageEvents: [...usageEvents],
+      },
+      backupRecords: [...backupRecords],
     };
   }
 
-  async #writeServiceDataManifest(input: {
+  async #writeStateArchive(input: {
+    readonly backupId: string;
+    readonly spaceId: string;
+    readonly stateSnapshots: readonly BundleStateSnapshot[];
+  }): Promise<BackupArtifactPointer | undefined> {
+    if (!this.#artifactStore || input.stateSnapshots.length === 0) {
+      return undefined;
+    }
+    if (!this.#stateObjectReader) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "state backup export requires an R2_STATE object reader",
+      );
+    }
+    const entries: TarEntry[] = [
+      {
+        name: "state.json",
+        body: jsonBytes({
+          bundleVersion: 1,
+          kind: "state-backup-archive",
+          spaceId: input.spaceId,
+          stateSnapshots: input.stateSnapshots,
+        }),
+      },
+    ];
+    for (const snapshot of input.stateSnapshots) {
+      const bytes = await this.#stateObjectReader.get(snapshot.objectKey);
+      if (!bytes) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `state snapshot object ${snapshot.objectKey} is missing`,
+        );
+      }
+      entries.push({
+        name: `states/${snapshot.installationId}/${snapshot.environment}/${formatStateGeneration(snapshot.generation)}.tfstate.enc`,
+        body: bytes,
+      });
+    }
+    const objectKey = STATE_BACKUP_OBJECT_KEY(input.spaceId, input.backupId);
+    const payload = zstdCompressRaw(tarArchive(entries));
+    const { digest, sizeBytes } = await this.#artifactStore.put({
+      objectKey,
+      payload,
+      contentType: CONTROL_BACKUP_CONTENT_TYPE,
+    });
+    return { objectKey, digest, sizeBytes };
+  }
+
+  async #writeArtifactsManifest(input: {
+    readonly backupId: string;
+    readonly spaceId: string;
+    readonly control: BackupArtifactPointer;
+    readonly stateArchive?: BackupArtifactPointer;
+    readonly serviceData?: BackupArtifactPointer;
+  }): Promise<BackupArtifactPointer | undefined> {
+    if (!this.#artifactStore) return undefined;
+    const objectKey = ARTIFACTS_MANIFEST_OBJECT_KEY(
+      input.spaceId,
+      input.backupId,
+    );
+    const artifacts = [
+      { kind: "control", ...input.control },
+      ...(input.stateArchive
+        ? [{ kind: "state", ...input.stateArchive }]
+        : []),
+      ...(input.serviceData
+        ? [{ kind: "service_data", ...input.serviceData }]
+        : []),
+    ];
+    const payload = new TextEncoder().encode(
+      JSON.stringify(
+        {
+          bundleVersion: 1,
+          kind: "backup-artifacts-manifest",
+          spaceId: input.spaceId,
+          backupId: input.backupId,
+          artifacts,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    const writer = this.#artifactStore.putPlain ?? this.#artifactStore.put;
+    const { digest, sizeBytes } = await writer.call(this.#artifactStore, {
+      objectKey,
+      payload,
+      contentType: "application/json",
+    });
+    return { objectKey, digest, sizeBytes };
+  }
+
+  async #writeServiceDataArchive(input: {
     readonly backupId: string;
     readonly spaceId: string;
     readonly capturedAt: string;
@@ -334,12 +620,17 @@ export class BackupsService {
       input.spaceId,
       input.backupId,
     );
-    const compressed = await gzip(
-      new TextEncoder().encode(JSON.stringify(manifest)),
+    const payload = zstdCompressRaw(
+      tarArchive([
+        {
+          name: "service-data.json",
+          body: jsonBytes(manifest),
+        },
+      ]),
     );
     const { digest, sizeBytes } = await this.#artifactStore.put({
       objectKey,
-      compressed,
+      payload,
       contentType: CONTROL_BACKUP_CONTENT_TYPE,
     });
     return {
@@ -375,30 +666,25 @@ export class BackupsService {
     const entries: ServiceDataBackupEntry[] = [];
     for (const installation of await this.#store.listInstallations(spaceId)) {
       const config = installConfigs.get(installation.installConfigId);
-      const backup = config?.backup;
+      if (!config) continue;
+      const backup = config.backup;
       if (!backup?.enabled || backup.mode === "none") continue;
 
-      if (backup.mode === "provider_snapshot") {
-        entries.push(
-          serviceDataEntry(installation, config, {
-            status: "unsupported",
-            mode: backup.mode,
-            reason:
-              "provider_snapshot requires provider-native snapshot orchestration and short-lived provider credential vending",
-          }),
-        );
-        continue;
-      }
       if (backup.mode === "custom_command") {
-        entries.push(
-          serviceDataEntry(installation, config, {
-            status: "unsupported",
-            mode: backup.mode,
-            reason:
-              "custom_command requires an isolated backup run phase and explicit command allowlist",
-          }),
+        const command = backup.command?.filter(
+          (part) => part.trim().length > 0,
         );
-        continue;
+        if (!command || command.length === 0) {
+          entries.push(
+            serviceDataEntry(installation, config, {
+              status: "missing",
+              mode: backup.mode,
+              reason:
+                "custom_command requires BackupConfig.command so the backup artifact producer is auditable",
+            }),
+          );
+          continue;
+        }
       }
 
       const outputPath = backup.outputPath?.trim();
@@ -407,9 +693,55 @@ export class BackupsService {
           serviceDataEntry(installation, config, {
             status: "missing",
             mode: backup.mode,
-            reason: "artifact_export requires BackupConfig.outputPath",
+            reason: `${backup.mode} requires BackupConfig.outputPath`,
           }),
         );
+        continue;
+      }
+
+      if (
+        (backup.mode === "provider_snapshot" ||
+          backup.mode === "custom_command") &&
+        this.#serviceDataRunner
+      ) {
+        // Upload-origin installations have no git Source to resolve a "latest"
+        // snapshot from; their snapshot lineage comes from deploy uploads.
+        const sourceSnapshot = installation.sourceId
+          ? await latestSourceSnapshot(this.#store, installation.sourceId)
+          : undefined;
+        const produced = await this.#serviceDataRunner.run({
+          spaceId,
+          capturedAt,
+          installation,
+          installConfig: config,
+          ...(sourceSnapshot ? { sourceSnapshot } : {}),
+          mode: backup.mode,
+          outputPath,
+          ...(backup.mode === "provider_snapshot"
+            ? { provider: primaryBackupProvider(config) }
+            : {}),
+          ...(backup.command ? { command: backup.command } : {}),
+        });
+        if (produced.status === "exported") {
+          entries.push(durableServiceDataEntry({
+            installation,
+            config,
+            mode: backup.mode,
+            outputPath,
+            artifact: produced.artifact,
+            backupRunId: produced.runId,
+          }));
+        } else {
+          entries.push(
+            serviceDataEntry(installation, config, {
+              status: produced.status,
+              mode: backup.mode,
+              outputPath,
+              reason: produced.reason,
+              ...(produced.runId ? { backupRunId: produced.runId } : {}),
+            }),
+          );
+        }
         continue;
       }
 
@@ -442,24 +774,34 @@ export class BackupsService {
         continue;
       }
 
-      entries.push(
-        serviceDataEntry(installation, config, {
-          status: "exported",
-          mode: backup.mode,
-          outputPath,
-          artifact,
-        }),
-      );
+      entries.push(durableServiceDataEntry({
+        installation,
+        config,
+        mode: backup.mode,
+        outputPath,
+        artifact,
+      }));
     }
 
     return {
       bundleVersion: 1,
-      kind: "service-data-artifact-export",
+      kind: "service-data-backup-manifest",
       spaceId,
       capturedAt,
       entries,
     };
   }
+}
+
+async function latestSourceSnapshot(
+  store: OpenTofuDeploymentStore,
+  sourceId: string,
+): Promise<SourceSnapshot | undefined> {
+  const snapshots = [...await store.listSourceSnapshots(sourceId)].sort(
+    (a, b) =>
+      b.fetchedAt.localeCompare(a.fetchedAt) || b.id.localeCompare(a.id),
+  );
+  return snapshots[0];
 }
 
 /**
@@ -472,26 +814,66 @@ export interface ControlBackupBundle {
   readonly spaceId: string;
   readonly capturedAt: string;
   readonly space: unknown;
+  readonly providerTemplates: readonly unknown[];
   readonly sources: readonly PublicSource[];
   readonly sourceSnapshots: readonly BundleSourceSnapshot[];
   readonly installConfigs: readonly unknown[];
   readonly installations: readonly unknown[];
+  readonly deploymentProfiles: readonly unknown[];
   readonly dependencies: readonly unknown[];
+  readonly outputSharesGranted: readonly unknown[];
+  readonly outputSharesReceived: readonly unknown[];
   readonly deployments: readonly unknown[];
   readonly stateSnapshots: readonly BundleStateSnapshot[];
   readonly outputSnapshots: readonly BundleOutputSnapshot[];
   readonly runGroups: readonly unknown[];
   readonly activity: readonly unknown[];
   readonly connections: readonly Connection[];
+  readonly securityFindings: readonly unknown[];
+  readonly billing: {
+    readonly account: unknown;
+    readonly subscription: unknown;
+    readonly creditBalance: unknown;
+    readonly creditReservations: readonly unknown[];
+    readonly usageEvents: readonly unknown[];
+  };
+  readonly backupRecords: readonly unknown[];
 }
 
-/** Sealed JSON manifest for §33 service-data artifact export. */
+/** Sealed tar entry manifest for §33 service-data backup durable artifacts. */
 export interface ServiceDataBackupManifest {
   readonly bundleVersion: 1;
-  readonly kind: "service-data-artifact-export";
+  readonly kind: "service-data-backup-manifest";
   readonly spaceId: string;
   readonly capturedAt: string;
   readonly entries: readonly ServiceDataBackupEntry[];
+}
+
+function durableServiceDataEntry(input: {
+  readonly installation: Installation;
+  readonly config: InstallConfig;
+  readonly mode: "artifact_export" | "provider_snapshot" | "custom_command";
+  readonly outputPath: string;
+  readonly artifact: ServiceDataArtifactPointer;
+  readonly backupRunId?: string;
+}): ServiceDataBackupEntry {
+  if (!isDurableServiceDataRef(input.artifact.ref)) {
+    return serviceDataEntry(input.installation, input.config, {
+      status: "missing",
+      mode: input.mode,
+      outputPath: input.outputPath,
+      reason:
+        `service-data artifact ref ${input.artifact.ref} is not durable outside the runner`,
+      ...(input.backupRunId ? { backupRunId: input.backupRunId } : {}),
+    });
+  }
+  return serviceDataEntry(input.installation, input.config, {
+    status: "exported",
+    mode: input.mode,
+    outputPath: input.outputPath,
+    artifact: input.artifact,
+    ...(input.backupRunId ? { backupRunId: input.backupRunId } : {}),
+  });
 }
 
 export type ServiceDataBackupEntry =
@@ -507,11 +889,13 @@ interface ServiceDataBackupEntryBase {
   readonly installConfigName?: string;
   readonly mode: "artifact_export" | "provider_snapshot" | "custom_command";
   readonly outputPath?: string;
+  /** Isolated backup Run that produced the pointer, when generated by Takosumi. */
+  readonly backupRunId?: string;
 }
 
 export interface ServiceDataBackupExportedEntry extends ServiceDataBackupEntryBase {
   readonly status: "exported";
-  readonly mode: "artifact_export";
+  readonly mode: "artifact_export" | "provider_snapshot" | "custom_command";
   readonly artifact: ServiceDataArtifactPointer;
 }
 
@@ -526,9 +910,11 @@ export interface ServiceDataBackupMissingEntry extends ServiceDataBackupEntryBas
 }
 
 /**
- * Service-owned artifact pointer published by an Installation output. Takosumi
- * records the pointer only; it does not read provider data or include service
- * bytes in the control ledger.
+ * Service-owned backup pointer published by an Installation output. Depending
+ * on `mode`, this can be an exported artifact, a provider-native snapshot
+ * reference, or an artifact produced by a backup command. Takosumi records the
+ * pointer only; it does not read provider data or include service bytes in the
+ * control ledger.
  */
 export interface ServiceDataArtifactPointer {
   readonly ref: string;
@@ -541,7 +927,10 @@ export interface ServiceDataArtifactPointer {
 /** SourceSnapshot metadata as captured in a control bundle. */
 export interface BundleSourceSnapshot {
   readonly id: string;
-  readonly sourceId: string;
+  readonly origin: "git" | "upload";
+  readonly spaceId: string;
+  /** Present for git-origin snapshots; absent for upload-origin snapshots. */
+  readonly sourceId?: string;
   readonly url: string;
   readonly ref: string;
   readonly resolvedCommit: string;
@@ -697,18 +1086,159 @@ function isSafeArtifactRef(ref: string): boolean {
   return /^[A-Za-z0-9._/@:+-]+$/u.test(ref) && !ref.includes("..");
 }
 
+function isDurableServiceDataRef(ref: string): boolean {
+  if (/^runner-local:\/\//u.test(ref)) return false;
+  if (/^r2:\/\/[A-Za-z0-9._-]+\/[^\s]+$/u.test(ref)) return true;
+  return /^[A-Za-z][A-Za-z0-9_-]*:[A-Za-z0-9._/@:+-]+$/u.test(ref) &&
+    !ref.includes("..");
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** gzip-compresses bytes via the platform `CompressionStream` (workerd / Bun). */
-async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
-  const stream = new Response(
-    new Blob([toArrayBuffer(bytes)])
-      .stream()
-      .pipeThrough(new CompressionStream("gzip")),
+function primaryBackupProvider(config: InstallConfig): string | undefined {
+  const provider = config.policy.allowedProviders?.find(
+    (value) => value.trim().length > 0,
   );
-  return new Uint8Array(await stream.arrayBuffer());
+  return provider?.trim();
+}
+
+function jsonBytes(value: unknown): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(value));
+}
+
+interface TarEntry {
+  readonly name: string;
+  readonly body: Uint8Array;
+}
+
+function tarArchive(entries: readonly TarEntry[]): Uint8Array {
+  const chunks: Uint8Array[] = [];
+  for (const entry of entries) {
+    assertSafeTarPath(entry.name);
+    chunks.push(tarHeader(entry.name, entry.body.byteLength));
+    chunks.push(entry.body);
+    const padding = (512 - (entry.body.byteLength % 512)) % 512;
+    if (padding > 0) chunks.push(new Uint8Array(padding));
+  }
+  chunks.push(new Uint8Array(1024));
+  return concatBytes(chunks);
+}
+
+function tarHeader(name: string, size: number): Uint8Array {
+  const header = new Uint8Array(512);
+  writeTarString(header, 0, 100, name);
+  writeTarOctal(header, 100, 8, 0o644);
+  writeTarOctal(header, 108, 8, 0);
+  writeTarOctal(header, 116, 8, 0);
+  writeTarOctal(header, 124, 12, size);
+  writeTarOctal(header, 136, 12, 0);
+  header.fill(0x20, 148, 156);
+  header[156] = "0".charCodeAt(0);
+  writeTarString(header, 257, 6, "ustar");
+  writeTarString(header, 263, 2, "00");
+  let checksum = 0;
+  for (const byte of header) checksum += byte;
+  writeTarOctal(header, 148, 8, checksum);
+  return header;
+}
+
+function writeTarString(
+  header: Uint8Array,
+  offset: number,
+  length: number,
+  value: string,
+): void {
+  const bytes = new TextEncoder().encode(value);
+  if (bytes.byteLength > length) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `tar path is too long: ${value}`,
+    );
+  }
+  header.set(bytes, offset);
+}
+
+function writeTarOctal(
+  header: Uint8Array,
+  offset: number,
+  length: number,
+  value: number,
+): void {
+  const encoded = value.toString(8).padStart(length - 1, "0");
+  writeTarString(header, offset, length - 1, encoded);
+  header[offset + length - 1] = 0;
+}
+
+function assertSafeTarPath(path: string): void {
+  if (
+    path.length === 0 ||
+    path.startsWith("/") ||
+    path.includes("..") ||
+    path.includes("\\") ||
+    path.includes("\0")
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `unsafe backup tar path: ${path}`,
+    );
+  }
+}
+
+function formatStateGeneration(generation: number): string {
+  return String(generation).padStart(8, "0");
+}
+
+function zstdCompressRaw(input: Uint8Array): Uint8Array {
+  if (input.byteLength > 0xffffffff) {
+    throw new OpenTofuControllerError(
+      "resource_exhausted",
+      "backup payload exceeds the portable zstd encoder limit",
+    );
+  }
+  const chunks: Uint8Array[] = [];
+  chunks.push(new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]));
+  chunks.push(new Uint8Array([0xa0]));
+  chunks.push(uint32le(input.byteLength));
+  const maxBlockSize = 128 * 1024;
+  for (let offset = 0; offset < input.byteLength || offset === 0; offset += maxBlockSize) {
+    const end = Math.min(offset + maxBlockSize, input.byteLength);
+    const block = input.slice(offset, end);
+    const last = end >= input.byteLength ? 1 : 0;
+    chunks.push(uint24le((block.byteLength << 3) | last));
+    chunks.push(block);
+    if (input.byteLength === 0) break;
+  }
+  return concatBytes(chunks);
+}
+
+function uint32le(value: number): Uint8Array {
+  return new Uint8Array([
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 24) & 0xff,
+  ]);
+}
+
+function uint24le(value: number): Uint8Array {
+  return new Uint8Array([
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+  ]);
+}
+
+function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -733,16 +1263,28 @@ export class InMemoryBackupArtifactStore implements BackupArtifactStore {
 
   async put(input: {
     readonly objectKey: string;
-    readonly compressed: Uint8Array;
+    readonly payload: Uint8Array;
     readonly contentType: string;
   }): Promise<{ readonly digest: string; readonly sizeBytes: number }> {
     // The in-memory fallback does NOT encrypt (no crypto seam in dev); it stores
-    // the compressed bytes verbatim and digests them. Production wires a sealing
+    // the payload bytes verbatim and digests them. Production wires a sealing
     // store (see the worker `backupArtifactStore` seam).
-    this.#objects.set(input.objectKey, input.compressed);
+    this.#objects.set(input.objectKey, input.payload);
     return {
-      digest: await digestBytes(input.compressed),
-      sizeBytes: input.compressed.byteLength,
+      digest: await digestBytes(input.payload),
+      sizeBytes: input.payload.byteLength,
+    };
+  }
+
+  async putPlain(input: {
+    readonly objectKey: string;
+    readonly payload: Uint8Array;
+    readonly contentType: string;
+  }): Promise<{ readonly digest: string; readonly sizeBytes: number }> {
+    this.#objects.set(input.objectKey, input.payload);
+    return {
+      digest: await digestBytes(input.payload),
+      sizeBytes: input.payload.byteLength,
     };
   }
 

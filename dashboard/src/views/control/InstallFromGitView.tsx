@@ -5,7 +5,7 @@
  * snapshot, create an Installation bound to an InstallConfig, then create the
  * first plan Run. The user-facing form fields are Git URL / Ref / Path /
  * target Space / Installation name. InstallConfig, deployment environment, and
- * capability binding details stay internal defaults.
+ * provider binding details stay internal defaults.
  *
  * The flow runs as four ordered steps, each surfaced so a mid-flow failure is
  * recoverable without restarting from scratch:
@@ -42,7 +42,7 @@ import {
   createInstallation,
   createSource,
   extractRunId,
-  type CapabilityBindings,
+  type ProviderBindings,
   type CapsuleCompatibilityLevel,
   type CapsuleCompatibilityResult,
   type InstallConfig,
@@ -50,6 +50,7 @@ import {
   planInstallation,
   putDeploymentProfile,
   syncSource,
+  waitForLatestSourceSnapshot,
 } from "../../lib/control-api.ts";
 
 /** Reads `git` / `ref` / `path` from the path-route search OR the M9 hash link. */
@@ -99,15 +100,6 @@ function findModulePathMarker(value: string): number {
 }
 
 type StepState = "idle" | "running" | "done" | "error";
-type CapabilityName = "compute" | "dns" | "storage" | "source";
-
-const CAPABILITIES: readonly CapabilityName[] = [
-  "compute",
-  "dns",
-  "storage",
-  "source",
-];
-
 export default function InstallFromGitView() {
   return <Page title="Git から導入">{() => <Inner />}</Page>;
 }
@@ -176,15 +168,7 @@ function Inner() {
     return null;
   };
 
-  const deploymentProfileBindings = (): CapabilityBindings => {
-    const out: Record<CapabilityName, CapabilityBindings[CapabilityName]> = {
-      compute: { mode: "default" },
-      dns: { mode: "default" },
-      storage: { mode: "default" },
-      source: { mode: "default" },
-    };
-    return out;
-  };
+  const deploymentProfileBindings = (): ProviderBindings => [];
 
   const resetCompatibility = () => {
     setCompatibility(null);
@@ -224,32 +208,15 @@ function Inner() {
         name: name().trim(),
         installConfigId: selectedInstallConfigId(),
       });
+      if (result.sourceId) {
+        setCreatedSourceId(result.sourceId);
+        setStepSource("done");
+        setStepSync("done");
+      }
       setCompatibility(result);
     } catch (err) {
       const apiError = err instanceof ControlApiError ? err : undefined;
-      if (
-        apiError &&
-        (apiError.status === 404 ||
-          apiError.status === 405 ||
-          apiError.status === 501)
-      ) {
-        setCompatibility({
-          level: "ready",
-          summary:
-            "Compatibility API is not available yet. The OpenTofu Capsule will be validated by the existing plan flow.",
-          diagnostics: [
-            {
-              severity: "info",
-              message:
-                "Placeholder compatibility result; Continue/Plan remains available.",
-            },
-          ],
-          installConfigId: selectedInstallConfigId(),
-          source: "placeholder",
-        });
-      } else {
-        setError(apiError?.message ?? String(err));
-      }
+      setError(apiError?.message ?? String(err));
     } finally {
       setCheckingCompatibility(false);
     }
@@ -291,6 +258,7 @@ function Inner() {
       // Step 2 — sync the Source to resolve an immutable snapshot.
       setStepSync("running");
       await syncSource(sourceId);
+      await waitForLatestSourceSnapshot(sourceId);
       setStepSync("done");
 
       // Step 3 — create the Installation bound to the chosen InstallConfig.
@@ -457,12 +425,6 @@ function Inner() {
                     </span>
                   </div>
                   <p>{result().summary}</p>
-                  <Show when={result().source === "placeholder"}>
-                    <p class="muted">
-                      Compatibility API placeholder: the existing plan flow will
-                      perform the authoritative validation.
-                    </p>
-                  </Show>
                   <Show when={result().diagnostics.length > 0}>
                     <ul class="compatibility-diagnostics">
                       <For each={result().diagnostics}>

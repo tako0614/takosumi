@@ -26,7 +26,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 ROOTS=(
 	"https://takosumi.test/docs/"
-	"https://accounts.takosumi.test/"
+	"https://app.takosumi.test/"
 )
 
 errors=0

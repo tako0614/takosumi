@@ -8,9 +8,14 @@ import {
   type UpstreamOAuthProvider,
 } from "./upstream.ts";
 import type {
+  PasskeyHttpOptions,
   UpstreamOAuthClientRegistration,
   UpstreamOAuthOptions,
 } from "./mod.ts";
+import type {
+  TakosumiAccountsAuthProvider,
+  TakosumiAccountsAuthProvidersResponse,
+} from "@takosjp/takosumi-accounts-contract";
 import { json, stringValue } from "./http-helpers.ts";
 import {
   extractAccountSessionId,
@@ -26,6 +31,40 @@ export function upstreamOAuthNotConfigured(): Response {
     error: "feature_unavailable",
     error_description: "Sign-in is temporarily unavailable.",
   }, 503);
+}
+
+/**
+ * GET /v1/auth/providers — public, unauthenticated read of which sign-in
+ * methods the operator actually configured on this worker. The sign-in screen
+ * reads this so it only enables buttons the backend can honour (clicking an
+ * unconfigured provider otherwise hits a 503). Exposes provider ids + enabled
+ * flags only — never client ids, secrets, or redirect URIs.
+ *
+ * Always lists the built-in `google`/`github`/`passkey` methods so the screen
+ * can render disabled placeholders for unconfigured ones; any additional
+ * configured upstream provider (e.g. a custom OIDC id) is appended as enabled.
+ */
+export function handleAuthProvidersRequest(input: {
+  upstreamOAuth?: UpstreamOAuthOptions;
+  passkeys?: PasskeyHttpOptions;
+}): Response {
+  const configuredUpstream = new Set(
+    (input.upstreamOAuth?.providers ?? []).map((p) => p.providerId),
+  );
+  const providers: TakosumiAccountsAuthProvider[] = [];
+  // Built-in methods the sign-in screen always renders (enabled or disabled).
+  for (const id of ["google", "github"] as const) {
+    providers.push({ id, enabled: configuredUpstream.has(id) });
+  }
+  providers.push({ id: "passkey", enabled: input.passkeys !== undefined });
+  // Surface any extra configured upstream providers (custom OIDC ids) as
+  // enabled so a non-builtin operator-configured provider isn't hidden.
+  for (const id of configuredUpstream) {
+    if (id === "google" || id === "github") continue;
+    providers.push({ id, enabled: true });
+  }
+  const body: TakosumiAccountsAuthProvidersResponse = { providers };
+  return json(body, 200, { "cache-control": "no-store" });
 }
 
 export function handleUpstreamAuthorizeRequest(input: {

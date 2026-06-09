@@ -49,7 +49,8 @@ export const sourceSnapshots = sqliteTable(
   names.sourceSnapshots,
   {
     id: text("id").primaryKey(),
-    sourceId: text("source_id").notNull(),
+    // Nullable: upload-origin snapshots (takosumi deploy) have no Source.
+    sourceId: text("source_id"),
     recordJson: jsonText("record_json").notNull(),
     fetchedAt: text("fetched_at").notNull(),
   },
@@ -60,28 +61,41 @@ export const connections = sqliteTable(
   names.connections,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
+    spaceId: text("space_id"),
+    provider: text("provider").notNull(),
     status: text("status").notNull(),
-    recordJson: jsonText("record_json").notNull(),
+    connectionJson: jsonText("connection_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
     index("connections_space_idx").on(table.spaceId),
+    index("connections_provider_idx").on(table.provider),
     index("connections_status_idx").on(table.status),
   ],
 );
 
 export const secretBlobs = sqliteTable(names.secretBlobs, {
-  connectionId: text("connection_id").primaryKey(),
+  id: text("id").primaryKey(),
+  connectionId: text("connection_id").notNull(),
+  spaceId: text("space_id"),
+  kind: text("kind").notNull(),
+  ciphertext: text("ciphertext").notNull(),
+  encryptedDek: text("encrypted_dek").notNull(),
+  nonce: text("nonce").notNull(),
+  aad: text("aad").notNull(),
+  keyVersion: integer("key_version").notNull(),
+  createdAt: text("created_at").notNull(),
+  rotatedAt: text("rotated_at"),
   blobJson: jsonText("blob_json").notNull(),
-});
+}, (table) => [
+  uniqueIndex("secret_blobs_connection_idx").on(table.connectionId),
+]);
 
 export const operatorConnectionDefaults = sqliteTable(
   names.operatorConnectionDefaults,
   {
     id: text("id").primaryKey(),
-    capability: text("capability").notNull(),
     provider: text("provider").notNull(),
     connectionId: text("connection_id").notNull(),
     recordJson: jsonText("record_json").notNull(),
@@ -89,8 +103,30 @@ export const operatorConnectionDefaults = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    uniqueIndex("operator_connection_defaults_capability_idx").on(
-      table.capability,
+    uniqueIndex("operator_connection_defaults_provider_idx").on(
+      table.provider,
+    ),
+  ],
+);
+
+export const providerTemplates = sqliteTable(
+  names.providerTemplates,
+  {
+    id: text("id").primaryKey(),
+    providerSource: text("provider_source").notNull(),
+    primaryCredentialSource: text("primary_credential_source").notNull(),
+    defaultEligible: integer("default_eligible").notNull(),
+    recordJson: jsonText("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("provider_templates_source_unique").on(
+      table.providerSource,
+    ),
+    index("provider_templates_primary_credential_source_idx").on(table.primaryCredentialSource),
+    index("provider_templates_default_eligible_idx").on(
+      table.defaultEligible,
     ),
   ],
 );
@@ -119,7 +155,8 @@ export const installations = sqliteTable(
     spaceId: text("space_id").notNull(),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
-    sourceId: text("source_id").notNull(),
+    // Nullable: upload-origin installations (takosumi deploy) have no Source.
+    sourceId: text("source_id"),
     installType: text("install_type").notNull(),
     installConfigId: text("install_config_id").notNull(),
     environment: text("environment").notNull(),
@@ -148,6 +185,8 @@ export const capsuleCompatibilityReports = sqliteTable(
   names.capsuleCompatibilityReports,
   {
     id: text("id").primaryKey(),
+    sourceId: text("source_id"),
+    installationId: text("installation_id"),
     sourceSnapshotId: text("source_snapshot_id").notNull(),
     level: text("level").notNull(),
     findingsJson: jsonText("findings_json").notNull(),
@@ -162,6 +201,10 @@ export const capsuleCompatibilityReports = sqliteTable(
   (table) => [
     index("capsule_compatibility_reports_source_snapshot_idx").on(
       table.sourceSnapshotId,
+    ),
+    index("capsule_compatibility_reports_source_idx").on(table.sourceId),
+    index("capsule_compatibility_reports_installation_idx").on(
+      table.installationId,
     ),
     index("capsule_compatibility_reports_level_idx").on(table.level),
   ],
@@ -270,6 +313,7 @@ export const runs = sqliteTable(
     id: text("id").primaryKey(),
     runGroupId: text("run_group_id"),
     spaceId: text("space_id").notNull(),
+    sourceId: text("source_id"),
     installationId: text("installation_id"),
     environment: text("environment"),
     type: text("type").notNull(),
@@ -279,6 +323,7 @@ export const runs = sqliteTable(
   },
   (table) => [
     index("runs_space_idx").on(table.spaceId),
+    index("runs_source_idx").on(table.sourceId),
     index("runs_installation_idx").on(table.installationId),
     index("runs_type_idx").on(table.type),
     index("runs_created_at_idx").on(table.createdAt),
@@ -319,10 +364,10 @@ export const deployments = sqliteTable(
     installationId: text("installation_id").notNull(),
     environment: text("environment").notNull(),
     applyRunId: text("apply_run_id").notNull(),
-    sourceSnapshotId: text("source_snapshot_id"),
+    sourceSnapshotId: text("source_snapshot_id").notNull(),
     dependencySnapshotId: text("dependency_snapshot_id"),
     stateGeneration: integer("state_generation").notNull(),
-    outputSnapshotId: text("output_snapshot_id"),
+    outputSnapshotId: text("output_snapshot_id").notNull(),
     outputsPublicJson: jsonText("outputs_public_json").notNull(),
     status: text("status").notNull(),
     createdAt: text("created_at").notNull(),
@@ -332,6 +377,20 @@ export const deployments = sqliteTable(
     index("deployments_installation_idx").on(table.installationId),
     index("deployments_apply_idx").on(table.applyRunId),
   ],
+);
+
+export const artifacts = sqliteTable(
+  names.artifacts,
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    kind: text("kind").notNull(),
+    objectKey: text("object_key").notNull(),
+    digest: text("digest").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("artifacts_run_idx").on(table.runId)],
 );
 
 export const billingAccounts = sqliteTable(
@@ -352,6 +411,17 @@ export const billingAccounts = sqliteTable(
   ],
 );
 
+export const billingPlans = sqliteTable(names.billingPlans, {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  monthlyBasePrice: integer("monthly_base_price").notNull(),
+  includedCredits: integer("included_credits").notNull(),
+  limitsJson: jsonText("limits_json").notNull(),
+  recordJson: jsonText("record_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const spaceSubscriptions = sqliteTable(
   names.spaceSubscriptions,
   {
@@ -366,9 +436,7 @@ export const spaceSubscriptions = sqliteTable(
   },
   (table) => [
     index("space_subscriptions_space_idx").on(table.spaceId),
-    index("space_subscriptions_billing_account_idx").on(
-      table.billingAccountId,
-    ),
+    index("space_subscriptions_billing_account_idx").on(table.billingAccountId),
   ],
 );
 
@@ -398,9 +466,7 @@ export const usageEvents = sqliteTable(
   (table) => [
     index("usage_events_space_idx").on(table.spaceId),
     index("usage_events_run_idx").on(table.runId),
-    uniqueIndex("usage_events_idempotency_key_unique").on(
-      table.idempotencyKey,
-    ),
+    uniqueIndex("usage_events_idempotency_key_unique").on(table.idempotencyKey),
   ],
 );
 
@@ -412,6 +478,7 @@ export const creditReservations = sqliteTable(
     runId: text("run_id").notNull(),
     estimatedCredits: integer("estimated_credits").notNull(),
     status: text("status").notNull(),
+    mode: text("mode").notNull(),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
     expiresAt: text("expires_at").notNull(),
@@ -429,7 +496,8 @@ export const credentialMintEvents = sqliteTable(
     id: text("id").primaryKey(),
     runId: text("run_id").notNull(),
     spaceId: text("space_id").notNull(),
-    installationId: text("installation_id").notNull(),
+    installationId: text("installation_id"),
+    sourceId: text("source_id"),
     connectionId: text("connection_id").notNull(),
     phase: text("phase").notNull(),
     recordJson: jsonText("record_json").notNull(),
@@ -438,6 +506,7 @@ export const credentialMintEvents = sqliteTable(
   (table) => [
     index("credential_mint_events_run_idx").on(table.runId),
     index("credential_mint_events_space_idx").on(table.spaceId),
+    index("credential_mint_events_source_idx").on(table.sourceId),
   ],
 );
 
@@ -481,8 +550,14 @@ export const backups = sqliteTable(
   {
     id: text("id").primaryKey(),
     spaceId: text("space_id").notNull(),
+    installationId: text("installation_id"),
+    environment: text("environment"),
+    createdByRunId: text("created_by_run_id"),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
   },
-  (table) => [index("backups_space_idx").on(table.spaceId)],
+  (table) => [
+    index("backups_space_idx").on(table.spaceId),
+    index("backups_installation_idx").on(table.installationId),
+  ],
 );

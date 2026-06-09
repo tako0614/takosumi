@@ -53,14 +53,42 @@ export interface Source {
 }
 
 /**
- * Immutable archive snapshot of a Source at a resolved commit.
- * Produced by a `source_sync` run in the Runner Container; the worker only
- * records the result. The archive bytes live in R2_SOURCE under
- * `spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst`.
+ * How a {@link SourceSnapshot} archive came to exist.
+ *
+ *   - `git`    — fetched from a registered {@link Source} by a `source_sync`
+ *                run in the Runner Container (the historical default).
+ *   - `upload` — uploaded directly from a local working directory by
+ *                `takosumi deploy` (the `wrangler deploy`-style path). There is
+ *                no {@link Source} row and no git clone; the worker archives the
+ *                uploaded bytes and records the snapshot. Downstream (Capsule
+ *                Gate / plan / apply / Deployment / OutputSnapshot / DAG) is
+ *                origin-agnostic because it only consumes the digest-pinned
+ *                archive artifact, never git directly.
+ */
+export type SourceSnapshotOrigin = "git" | "upload";
+
+/**
+ * Immutable archive snapshot of a Capsule pinned to a content digest.
+ *
+ * For `origin: "git"` it is produced by a `source_sync` run in the Runner
+ * Container (the worker only records the result) and `sourceId` references the
+ * registered {@link Source}. For `origin: "upload"` it is produced by a direct
+ * `takosumi deploy` upload: `sourceId` is absent and `url`/`ref`/`resolvedCommit`
+ * carry self-describing upload identity (`url = "upload://{spaceId}"`,
+ * `ref = "upload"`, `resolvedCommit = archiveDigest`) so existing readers that
+ * treat these as descriptive strings keep working unchanged.
+ *
+ * The archive bytes live in R2_SOURCE under
+ * `spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst`
+ * for git, and `spaces/{spaceId}/uploads/{snapshotId}/source.tar.zst` for upload.
  */
 export interface SourceSnapshot {
   readonly id: string;
-  readonly sourceId: string;
+  readonly origin: SourceSnapshotOrigin;
+  /** Owning Space. Always present (derived from the Source for `git`). */
+  readonly spaceId: string;
+  /** Registered Source. Present for `git`, absent for `upload`. */
+  readonly sourceId?: string;
   readonly url: string;
   readonly ref: string;
   readonly resolvedCommit: string;
@@ -94,7 +122,7 @@ export interface SourceSyncRun {
   readonly startedAt?: string;
   /**
    * Liveness marker refreshed while the run executes (epoch millis). Mirrors the
-   * PlanRun/ApplyRun heartbeat used by the queue-consumer idempotency guard.
+   * plan/apply Run heartbeat used by the queue-consumer idempotency guard.
    */
   readonly heartbeatAt?: number;
   readonly finishedAt?: string;
@@ -195,6 +223,15 @@ export const COMPATIBILITY_REPORT_PATH = (id: string): string =>
 export const SOURCE_HOOK_PATH = (id: string): string =>
   `/hooks/sources/${encodeURIComponent(id)}`;
 
+/**
+ * Direct upload ingest for `takosumi deploy`. The CLI POSTs a `tar` (zstd)
+ * archive of the local Capsule directory; the worker archives the bytes to
+ * R2_SOURCE, computes the digest, and records a `SourceSnapshot(origin=upload)`.
+ * No Source row and no Runner git clone are involved.
+ */
+export const SPACE_UPLOADS_PATH = (spaceId: string): string =>
+  `/api/spaces/${encodeURIComponent(spaceId)}/uploads`;
+
 export interface CreateSourceRequest {
   readonly spaceId: string;
   readonly name: string;
@@ -237,4 +274,18 @@ export interface CreateSourceSyncResponse {
 
 export interface ListSourceSnapshotsResponse {
   readonly snapshots: readonly SourceSnapshot[];
+}
+
+/**
+ * Optional metadata accepted alongside an upload. `path` is the Capsule path
+ * within the uploaded tree (defaults to `"."`). The archive bytes themselves
+ * are the request body; values here are advisory descriptors only.
+ */
+export interface UploadSnapshotRequest {
+  readonly path?: string;
+}
+
+/** Response of `POST {@link SPACE_UPLOADS_PATH}`: the recorded upload snapshot. */
+export interface UploadSnapshotResponse {
+  readonly snapshot: SourceSnapshot;
 }

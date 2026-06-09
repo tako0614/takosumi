@@ -14,7 +14,9 @@ import {
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PAT_SCOPES,
   TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH,
+  TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH,
   TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH,
+  TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
  takosumiAccountsAccountTokenRevokePath,
@@ -86,9 +88,11 @@ test("account token contract exposes the Accounts PAT route surface", () => {
 
 test("optional Accounts HTTP path constants are exported from the contract", () => {
   expect(TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH).toEqual("/v1/billing/stripe/checkout");
+  expect(TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH).toEqual("/v1/billing/stripe/portal");
   expect(TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH).toEqual("/v1/billing/stripe/webhook");
   expect(TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH).toEqual("/v1/auth/upstream/authorize");
   expect(TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH).toEqual("/v1/auth/upstream/callback");
+  expect(TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH).toEqual("/v1/auth/providers");
   expect(TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH).toEqual("/v1/auth/passkeys/register/options");
   expect(TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH).toEqual("/v1/auth/passkeys/register/complete");
   expect(TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH).toEqual("/v1/auth/passkeys/authenticate/options");

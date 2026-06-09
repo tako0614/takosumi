@@ -20,7 +20,7 @@ const REQUEST = {
   },
 };
 
-test("payload credentials take precedence over Bun.env", () => {
+test("shared provider env payload credentials are ignored", () => {
   const prev = Bun.env.CLOUDFLARE_API_TOKEN;
   Bun.env.CLOUDFLARE_API_TOKEN = "ambient-env-token";
   try {
@@ -28,7 +28,7 @@ test("payload credentials take precedence over Bun.env", () => {
       { ...REQUEST, credentials: { CLOUDFLARE_API_TOKEN: "payload-token" } },
       CLOUDFLARE_PROFILE,
     );
-    expect(context.env.CLOUDFLARE_API_TOKEN).toEqual("payload-token");
+    expect(context.env.CLOUDFLARE_API_TOKEN).toBeUndefined();
   } finally {
     restoreEnv("CLOUDFLARE_API_TOKEN", prev);
   }
@@ -45,7 +45,7 @@ test("does not fall back to Bun.env by default when the payload omits the creden
   }
 });
 
-test("falls back to Bun.env only for an explicit local-dev runner profile", () => {
+test("does not fall back to Bun.env even for a local-dev runner profile", () => {
   const prev = Bun.env.CLOUDFLARE_API_TOKEN;
   Bun.env.CLOUDFLARE_API_TOKEN = "ambient-env-token";
   try {
@@ -53,13 +53,13 @@ test("falls back to Bun.env only for an explicit local-dev runner profile", () =
       ...CLOUDFLARE_PROFILE,
       devLocalAllowAmbientCredentials: true,
     });
-    expect(context.env.CLOUDFLARE_API_TOKEN).toEqual("ambient-env-token");
+    expect(context.env.CLOUDFLARE_API_TOKEN).toBeUndefined();
   } finally {
     restoreEnv("CLOUDFLARE_API_TOKEN", prev);
   }
 });
 
-test("only env names a required provider allows are admitted from the payload", () => {
+test("shared provider env names are ignored from the payload", () => {
   const prev = Bun.env.CLOUDFLARE_API_TOKEN;
   delete Bun.env.CLOUDFLARE_API_TOKEN;
   try {
@@ -76,7 +76,7 @@ test("only env names a required provider allows are admitted from the payload", 
       },
       CLOUDFLARE_PROFILE,
     );
-    expect(context.env.CLOUDFLARE_API_TOKEN).toEqual("payload-token");
+    expect(context.env.CLOUDFLARE_API_TOKEN).toBeUndefined();
     expect(context.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
     expect(context.env["lower-case"]).toBeUndefined();
   } finally {
@@ -84,7 +84,7 @@ test("only env names a required provider allows are admitted from the payload", 
   }
 });
 
-// --- §13 per-alias credential split (TF_VAR_<provider>_<capability>_<arg>) ---
+// --- §13 per-alias credential split (TF_VAR_<provider>_<alias>_<arg>) ---
 
 test("TF_VAR_ per-alias credentials from the payload are admitted into the tofu env", () => {
   const context = commandContextFromRequest(
@@ -92,16 +92,16 @@ test("TF_VAR_ per-alias credentials from the payload are admitted into the tofu 
       ...REQUEST,
       credentials: {
         CLOUDFLARE_API_TOKEN: "shared-token",
-        TF_VAR_cloudflare_compute_api_token: "per-alias-compute-token",
+        TF_VAR_cloudflare_main_api_token: "per-alias-compute-token",
         TF_VAR_cloudflare_dns_api_token: "per-alias-dns-token",
       },
     },
     CLOUDFLARE_PROFILE,
   );
-  // The shared provider env stays (compatibility) AND the per-alias TF_VARs are
-  // admitted even though they are not provider env names.
-  expect(context.env.CLOUDFLARE_API_TOKEN).toEqual("shared-token");
-  expect(context.env.TF_VAR_cloudflare_compute_api_token).toEqual(
+  // The shared provider env is ignored; only generated-root TF_VAR credentials
+  // are admitted.
+  expect(context.env.CLOUDFLARE_API_TOKEN).toBeUndefined();
+  expect(context.env.TF_VAR_cloudflare_main_api_token).toEqual(
     "per-alias-compute-token",
   );
   expect(context.env.TF_VAR_cloudflare_dns_api_token).toEqual(
@@ -110,7 +110,7 @@ test("TF_VAR_ per-alias credentials from the payload are admitted into the tofu 
 });
 
 test("TF_VAR_ per-alias credentials are sourced ONLY from the payload, never Bun.env", () => {
-  const name = "TF_VAR_cloudflare_compute_api_token";
+  const name = "TF_VAR_cloudflare_main_api_token";
   const prev = Bun.env[name];
   Bun.env[name] = "ambient-tf-var";
   try {

@@ -8,12 +8,19 @@
 import {
   APPLY_RUNS_PATH,
   CONNECTIONS_AWS_ASSUME_ROLE_PATH,
+  CONNECTIONS_CLOUDFLARE_OAUTH_CALLBACK_PATH,
+  CONNECTIONS_CLOUDFLARE_OAUTH_START_PATH,
   CONNECTIONS_CLOUDFLARE_TOKEN_PATH,
+  CONNECTIONS_GCP_IMPERSONATION_PATH,
+  CONNECTIONS_GCP_OAUTH_CALLBACK_PATH,
+  CONNECTIONS_GCP_OAUTH_START_PATH,
+  CONNECTIONS_PROVIDER_ENV_SET_PATH,
   CONNECTIONS_PATH,
   CONNECTIONS_SOURCE_HTTPS_TOKEN_PATH,
   CONNECTIONS_SOURCE_SSH_KEY_PATH,
+  PROVIDERS_PATH,
   RUNNER_PROFILES_PATH,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import { SOURCES_PATH } from "takosumi-contract/sources";
 
 // --- INTERNAL `/v1` seam routes (NOT public `/api`). These are the in-process
@@ -44,6 +51,20 @@ export const TAKOSUMI_CONNECTIONS_CLOUDFLARE_TOKEN_ROUTE =
   CONNECTIONS_CLOUDFLARE_TOKEN_PATH;
 export const TAKOSUMI_CONNECTIONS_AWS_ASSUME_ROLE_ROUTE =
   CONNECTIONS_AWS_ASSUME_ROLE_PATH;
+export const TAKOSUMI_CONNECTIONS_PROVIDER_ENV_SET_ROUTE =
+  CONNECTIONS_PROVIDER_ENV_SET_PATH;
+export const TAKOSUMI_CONNECTIONS_CLOUDFLARE_OAUTH_START_ROUTE =
+  CONNECTIONS_CLOUDFLARE_OAUTH_START_PATH;
+export const TAKOSUMI_CONNECTIONS_CLOUDFLARE_OAUTH_CALLBACK_ROUTE =
+  CONNECTIONS_CLOUDFLARE_OAUTH_CALLBACK_PATH;
+export const TAKOSUMI_CONNECTIONS_GCP_OAUTH_START_ROUTE =
+  CONNECTIONS_GCP_OAUTH_START_PATH;
+export const TAKOSUMI_CONNECTIONS_GCP_OAUTH_CALLBACK_ROUTE =
+  CONNECTIONS_GCP_OAUTH_CALLBACK_PATH;
+export const TAKOSUMI_CONNECTIONS_GCP_IMPERSONATION_ROUTE =
+  CONNECTIONS_GCP_IMPERSONATION_PATH;
+export const TAKOSUMI_PROVIDERS_ROUTE = PROVIDERS_PATH;
+export const TAKOSUMI_PROVIDER_ROUTE = "/api/providers/:providerId" as const;
 export const TAKOSUMI_CONNECTION_TEST_ROUTE =
   "/api/connections/:connectionId/test" as const;
 export const TAKOSUMI_CONNECTION_REVOKE_ROUTE =
@@ -75,6 +96,8 @@ export const TAKOSUMI_DEPLOYMENT_ROUTE =
 export const TAKOSUMI_DEPLOYMENT_ROLLBACK_PLAN_ROUTE =
   "/api/deployments/:deploymentId/rollback-plan" as const;
 export const TAKOSUMI_INSTALL_CONFIGS_ROUTE = "/api/install-configs" as const;
+export const TAKOSUMI_INSTALL_CONFIG_ROUTE =
+  "/api/install-configs/:installConfigId" as const;
 export const TAKOSUMI_INSTALLATION_PLAN_ROUTE =
   "/api/installations/:installationId/plan" as const;
 export const TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE =
@@ -101,10 +124,23 @@ export const TAKOSUMI_OUTPUT_SHARE_REVOKE_ROUTE =
   "/api/output-shares/:shareId/revoke" as const;
 export const TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE =
   "/api/spaces/:spaceId/plan-update" as const;
+export const TAKOSUMI_SPACE_DRIFT_CHECK_ROUTE =
+  "/api/spaces/:spaceId/drift-check" as const;
 export const TAKOSUMI_RUN_GROUP_ROUTE = "/api/run-groups/:runGroupId" as const;
 export const TAKOSUMI_RUN_GROUP_APPROVE_ROUTE =
   "/api/run-groups/:runGroupId/approve" as const;
 export const TAKOSUMI_SPACE_ACTIVITY_ROUTE =
   "/api/spaces/:spaceId/activity" as const;
+export const TAKOSUMI_SPACE_BILLING_ROUTE =
+  "/api/spaces/:spaceId/billing" as const;
+export const TAKOSUMI_SPACE_USAGE_ROUTE = "/api/spaces/:spaceId/usage" as const;
+export const TAKOSUMI_SPACE_CREDIT_RESERVATIONS_ROUTE =
+  "/api/spaces/:spaceId/credit-reservations" as const;
+export const TAKOSUMI_SPACE_CREDITS_TOP_UP_ROUTE =
+  "/api/spaces/:spaceId/credits/top-up" as const;
+export const TAKOSUMI_SPACE_SUBSCRIPTION_CHANGE_ROUTE =
+  "/api/spaces/:spaceId/subscription/change" as const;
 export const TAKOSUMI_SPACE_BACKUPS_ROUTE =
   "/api/spaces/:spaceId/backups" as const;
+export const TAKOSUMI_INSTALLATION_BACKUPS_ROUTE =
+  "/api/installations/:installationId/backups" as const;

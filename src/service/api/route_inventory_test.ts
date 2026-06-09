@@ -1,7 +1,12 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createApiCapabilitiesDescription } from "./capabilities.ts";
-import { createTakosumiOpenApiDocument } from "./openapi.ts";
+import {
+  createTakosumiOpenApiDocument,
+  TAKOSUMI_OPENAPI_VERSION,
+} from "./openapi.ts";
 import {
   ALWAYS_MOUNTED_ENDPOINTS,
   type ApiEndpoint,
@@ -24,13 +29,13 @@ function toOpenApiPath(path: string): string {
 }
 
 /**
- * The /capabilities inventory and the /openapi.json paths must be derived from
- * the SAME route-family endpoint descriptors. Before item [17] these were three
- * hand-maintained enumerations that had drifted (artifact kinds and the
- * runtime-agent gateway manifest were missing from capabilities; capabilities
- * invented a `metrics-token` auth value). This locks the two surfaces together.
+ * The all-mounted process /capabilities inventory and /openapi.json paths must
+ * be derived from the SAME route-family endpoint descriptors. This is broader
+ * than the default public Takosumi API: optional operator/internal families
+ * such as artifacts, metrics, and runtime-agent are mounted here on purpose.
+ * Before item [17] these were hand-maintained enumerations that had drifted.
  */
-test("capabilities and openapi cover the same (method, path) endpoint set", () => {
+test("all-mounted capabilities and openapi cover the same endpoint set", () => {
   const capabilities = createApiCapabilitiesDescription(
     "takosumi-api",
     ALL_MOUNTED,
@@ -54,7 +59,7 @@ test("capabilities and openapi cover the same (method, path) endpoint set", () =
   );
 });
 
-test("previously-drifted endpoints are present in both surfaces", () => {
+test("previously-drifted all-mounted endpoints are present in both inventories", () => {
   const capabilities = createApiCapabilitiesDescription(
     "takosumi-api",
     ALL_MOUNTED,
@@ -62,7 +67,7 @@ test("previously-drifted endpoints are present in both surfaces", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   const capPaths = capabilities.endpoints.map((e) => e.path);
 
-  // §30 public deployment routes must be represented in both surfaces.
+  // Public deployment routes must be represented in both inventories.
   assert.ok(capPaths.includes("/api/deployments/:deploymentId"));
   assert.ok(openapi.paths["/api/deployments/{deploymentId}"]?.get);
   assert.ok(
@@ -74,7 +79,7 @@ test("previously-drifted endpoints are present in both surfaces", () => {
     openapi.paths["/api/deployments/{deploymentId}/rollback-plan"]?.post,
   );
 
-  // BUG FIX: GET /v1/artifacts/kinds appeared in neither surface.
+  // Optional operator artifact route appears when the artifact family is mounted.
   assert.ok(capPaths.includes("/v1/artifacts/kinds"));
   assert.ok(openapi.paths["/v1/artifacts/kinds"]?.get);
 
@@ -111,6 +116,171 @@ test("capabilities and openapi agree on summary and auth per endpoint", () => {
   assert.equal(metrics?.auth, "metrics-scrape");
 });
 
+test("openapi endpoint auth enum matches mounted capabilities auth values", () => {
+  const capabilities = createApiCapabilitiesDescription(
+    "takosumi-api",
+    ALL_MOUNTED,
+  );
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+
+  assert.deepEqual(
+    [
+      ...openapi.components.schemas.ApiEndpointDescription.properties.auth.enum,
+    ].sort(),
+    [...new Set(capabilities.endpoints.map((e) => e.auth))].sort(),
+  );
+});
+
+test("all-mounted public inventory keeps retired internal ledger routes hidden", () => {
+  const capabilities = createApiCapabilitiesDescription(
+    "takosumi-api",
+    ALL_MOUNTED,
+  );
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const retiredPaths = [
+    "/api/public/v1/capabilities",
+    "/api/public/v1/deployments",
+    "/v1/deployments",
+    "/v1/plan-runs",
+    "/v1/apply-runs",
+    "/v1/runner-profiles",
+    "/v1/installations/:installationId/deployment-outputs",
+    "/v1/installations/{installationId}/deployment-outputs",
+  ] as const;
+
+  const capabilityPaths = new Set(capabilities.endpoints.map((e) => e.path));
+  for (const path of retiredPaths) {
+    assert.equal(capabilityPaths.has(path), false, path);
+    assert.equal(openapi.paths[toOpenApiPath(path)], undefined, path);
+  }
+
+  for (const schemaName of [
+    "DeployControlAuditEvent",
+    "PlanRun",
+    "ApplyRun",
+    "RunnerProfile",
+    "DeploymentOutput",
+    "StatusSummaryResponse",
+  ] as const) {
+    assert.equal(openapi.components.schemas[schemaName], undefined, schemaName);
+  }
+});
+
+test("openapi version follows package version", () => {
+  const pkg = JSON.parse(
+    readFileSync(join(import.meta.dir, "../../../package.json"), "utf8"),
+  ) as { version: string };
+
+  assert.equal(TAKOSUMI_OPENAPI_VERSION, pkg.version);
+  assert.equal(
+    createTakosumiOpenApiDocument(ALL_MOUNTED).info.version,
+    pkg.version,
+  );
+});
+
+test("public openapi component names do not expose internal deploy-control seams", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const forbidden = [
+    "DeployControl",
+    "PlanRun",
+    "ApplyRun",
+    "RunnerProfile",
+    "DeploymentOutput",
+  ];
+
+  for (const schemaName of Object.keys(openapi.components.schemas)) {
+    for (const term of forbidden) {
+      assert.equal(
+        schemaName.includes(term),
+        false,
+        `${schemaName} must not expose internal ${term} vocabulary`,
+      );
+    }
+  }
+});
+
+test("openapi component schema refs are resolved", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const refs = new Set<string>();
+  collectSchemaRefs(openapi, refs);
+
+  for (const schemaName of refs) {
+    assert.ok(
+      openapi.components.schemas[schemaName],
+      `openapi schema ref ${schemaName} is not defined`,
+    );
+  }
+});
+
+test("core public openapi schemas are concrete", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  for (const schemaName of [
+    "CreateSpaceRequest",
+    "SpaceResponse",
+    "ListSpacesResponse",
+    "PutOperatorConnectionDefaultRequest",
+    "OperatorConnectionDefaultResponse",
+    "ListOperatorConnectionDefaultsResponse",
+    "DeploymentResponse",
+    "CreateOutputShareRequest",
+    "OutputShareResponse",
+    "ListOutputSharesResponse",
+    "CapabilitiesResponse",
+    "HealthProbeResponse",
+    "ArtifactGcResponse",
+    "RuntimeAgentEnrollRequest",
+    "RuntimeAgentHeartbeatRequest",
+    "RuntimeAgentLeaseRequest",
+    "RuntimeAgentReportRequest",
+    "RuntimeAgentDrainRequest",
+    "RuntimeAgentResponse",
+    "RuntimeAgentLeaseResponse",
+    "RuntimeAgentWorkResponse",
+    "GatewayManifestResponse",
+  ] as const) {
+    assert.ok(openapi.components.schemas[schemaName], `${schemaName} missing`);
+    assert.notEqual(
+      openapi.components.schemas[schemaName].additionalProperties,
+      true,
+      `${schemaName} must not regress to a generic jsonObject placeholder`,
+    );
+  }
+  assert.deepEqual(
+    openapi.components.schemas.ArtifactGcResponse.required,
+    ["deleted", "retained", "dryRun"],
+  );
+  assert.deepEqual(
+    openapi.components.schemas.RuntimeAgentEnrollRequest.required,
+    ["provider"],
+  );
+  assert.deepEqual(
+    openapi.components.schemas.RuntimeAgentReportRequest.oneOf.map((
+      schema: { properties: { status: { const: string } } },
+    ) => schema.properties.status.const),
+    ["progress", "completed", "failed"],
+  );
+  assert.equal(
+    openapi.components.schemas.GatewayManifestResponse.properties.manifest.$ref,
+    "#/components/schemas/GatewayManifest",
+  );
+});
+
+test("openapi request and response components are not generic placeholders", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const generic: string[] = [];
+  for (const [schemaName, schema] of Object.entries(
+    openapi.components.schemas,
+  )) {
+    if (!/(Request|Response)$/.test(schemaName)) continue;
+    if (schema.additionalProperties === true) generic.push(schemaName);
+  }
+  assert.deepEqual(
+    generic.sort(),
+    [],
+    "request/response schemas must be concrete enough for generated clients",
+  );
+});
+
 test("mountedEndpoints gates families and always includes process endpoints", () => {
   const none = mountedEndpoints({});
   assert.deepEqual(
@@ -137,3 +307,20 @@ test("every endpoint descriptor has a unique operationId", () => {
     "operationIds must be unique across all families",
   );
 });
+
+function collectSchemaRefs(value: unknown, output: Set<string>): void {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectSchemaRefs(item, output);
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  const maybeRef = record["$ref"];
+  if (
+    typeof maybeRef === "string" &&
+    maybeRef.startsWith("#/components/schemas/")
+  ) {
+    output.add(maybeRef.slice("#/components/schemas/".length));
+  }
+  for (const item of Object.values(record)) collectSchemaRefs(item, output);
+}

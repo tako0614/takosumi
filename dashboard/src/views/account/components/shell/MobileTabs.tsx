@@ -1,11 +1,21 @@
 import { A, useLocation } from "@solidjs/router";
-import { GitBranch, Home, KeyRound, LayoutGrid, Network } from "lucide-solid";
+import {
+  Archive,
+  GitBranch,
+  Home,
+  KeyRound,
+  LayoutGrid,
+  Network,
+  PackageSearch,
+} from "lucide-solid";
 
 const TABS = [
   { href: "/home", label: "ホーム", icon: Home },
   { href: "/installations", label: "Installs", icon: LayoutGrid },
   { href: "/sources", label: "Sources", icon: GitBranch },
+  { href: "/providers", label: "Providers", icon: PackageSearch },
   { href: "/graph", label: "Graph", icon: Network },
+  { href: "/backups", label: "Backups", icon: Archive },
   { href: "/connections", label: "接続", icon: KeyRound },
 ];
 

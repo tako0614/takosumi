@@ -2,9 +2,9 @@
 
 This file is intentionally retired.
 
-It used to describe a split production topology with `accounts.takosumi.com` and
-an operator-selected service Worker hostname. That topology is no longer the
-canonical Takosumi model.
+It used to describe a split production topology with a dedicated accounts
+subdomain and an operator-selected service Worker hostname. That topology is no
+longer the canonical Takosumi model.
 
 The current production shape is:
 
@@ -22,8 +22,8 @@ The platform worker is the only operator-run Cloudflare Worker. It composes:
 - the OpenTofu runner container and control-plane bindings.
 
 Operator-realized Worker routes, resource IDs, and secrets live outside this
-repository in operator-private state. Do not recreate the old
-`accounts.takosumi.com` / separate service Worker production topology from this
+repository in operator-private state. Do not recreate the old dedicated
+accounts-subdomain / separate service Worker production topology from this
 archived runbook.
 
 Use these current references instead:

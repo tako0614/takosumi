@@ -276,6 +276,54 @@ test("createShare activity records names only for sensitive outputs", async () =
   expect(serialized).not.toContain("super-secret-token");
 });
 
+test("createShare never persists the sensitive value in the at-rest output_shares record", async () => {
+  // Audit guard (medium / security): a cross-Space sensitive OutputShare must
+  // not leave its plaintext value at rest. The service resolves the sensitive
+  // value ONLY to verify presence; the persisted OutputShare record (the
+  // `output_shares.record_json` payload) and the listed grants must carry
+  // names / aliases / flags only. This locks the redaction invariant for the
+  // OutputShare ledger row specifically (the producer's raw value stays in the
+  // encrypted raw-output artifact, never copied into the grant).
+  const SENSITIVE = "super-secret-token-value-do-not-leak";
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seedProducerWithOutputs(store, { spaceOutputs: { bucket_name: "my-bucket" } });
+  const svc = service(store, {
+    sensitiveOutputResolver: sensitiveResolver({ admin_token: SENSITIVE }),
+  });
+
+  const share = await svc.createShare(
+    baseRequest({
+      outputs: [{ name: "admin_token", alias: "token", sensitive: true }],
+      sensitivePolicy: { allow: true, reason: "approved by both spaces" },
+    }),
+  );
+
+  // The returned grant carries only the name / alias / sensitive flag.
+  expect(share.outputs).toEqual([
+    { name: "admin_token", alias: "token", sensitive: true },
+  ]);
+
+  // The AT-REST record (what the D1 store serializes into output_shares
+  // record_json) must not contain the resolved sensitive value anywhere.
+  const persisted = await store.getOutputShare(share.id);
+  expect(persisted).toBeDefined();
+  expect(JSON.stringify(persisted)).not.toContain(SENSITIVE);
+
+  // Structural guarantee (not just a substring scan): each persisted entry
+  // carries ONLY name / alias / sensitive / optional type — there is no
+  // value-bearing key on the grant for a secret to hide in. This is WHY the
+  // output_shares row needs no separate at-rest encryption (names-only), and
+  // why the real sealing obligation lives on the dependency_snapshots path.
+  for (const entry of persisted!.outputs) {
+    expect(Object.keys(entry).sort()).toEqual(["name", "alias", "sensitive"].sort());
+    expect("value" in entry).toBe(false);
+  }
+
+  // Neither does the list projection consumed by the dashboard / API.
+  const listed = await svc.listForSpace("space_from");
+  expect(JSON.stringify(listed)).not.toContain(SENSITIVE);
+});
+
 test("createShare rejects duplicate names invalid_argument", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   await seedProducerWithOutputs(store);

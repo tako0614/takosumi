@@ -19,11 +19,13 @@ import {
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import {
+  TAKOSUMI_INSTALLATION_BACKUPS_ROUTE,
   TAKOSUMI_SPACE_ACTIVITY_ROUTE,
   TAKOSUMI_SPACE_BACKUPS_ROUTE,
 } from "./deploy_control_route_paths.ts";
 
 const SPACE_ID_PARAM = { param: "spaceId", pattern: SPACE_ID_PATTERN } as const;
+const INSTALLATION_ID_PARAM = { id: "installationId" } as const;
 
 export const DEPLOY_CONTROL_ACTIVITY_ENDPOINTS:
   readonly DeployControlEndpoint[] = [
@@ -41,11 +43,25 @@ export const DEPLOY_CONTROL_ACTIVITY_ENDPOINTS:
       method: "POST",
       path: TAKOSUMI_SPACE_BACKUPS_ROUTE,
       summary:
-        "Creates a sealed control backup of a Space's ledger (gzip+sealed to R2_BACKUPS; no secret material).",
+        "Creates a sealed zstd control backup of a Space's ledger in R2_BACKUPS (no secret material).",
       auth: "deploy-control-token",
       operationId: "createSpaceBackup",
       openapi: {
         pathParams: ["spaceId"],
+        okStatus: "201",
+        okSchema: "CreateBackupResponse",
+      },
+      notImplementedMessage: "backups not wired",
+    },
+    {
+      method: "POST",
+      path: TAKOSUMI_INSTALLATION_BACKUPS_ROUTE,
+      summary:
+        "Creates a sealed control backup for the Installation's Space after resolving the Installation.",
+      auth: "deploy-control-token",
+      operationId: "createInstallationBackup",
+      openapi: {
+        pathParams: ["installationId"],
         okStatus: "201",
         okSchema: "CreateBackupResponse",
       },
@@ -124,6 +140,28 @@ export function mountDeployControlActivityRoutes(
         ensureSpacePermission(principal, id);
         const backup = await dependencies.backupsService!.createBackup({
           spaceId: id,
+        });
+        return c.json({ backup }, 201);
+      },
+    }),
+  );
+
+  app.post(
+    TAKOSUMI_INSTALLATION_BACKUPS_ROUTE,
+    defineRoute({
+      ctx,
+      requireService: (deps) =>
+        deps.backupsService && deps.controller
+          ? undefined
+          : "backups not wired",
+      param: INSTALLATION_ID_PARAM,
+      handler: async ({ c, principal, id }) => {
+        const response = await dependencies.controller!.getInstallation(id);
+        ensureSpacePermission(principal, response.installation.spaceId);
+        const backup = await dependencies.backupsService!.createBackup({
+          spaceId: response.installation.spaceId,
+          installationId: response.installation.id,
+          environment: response.installation.environment,
         });
         return c.json({ backup }, 201);
       },

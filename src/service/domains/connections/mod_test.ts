@@ -1,18 +1,13 @@
 /**
- * Capability binding resolution matrix (core-spec.md §9): default /
- * connection / manual / disabled across operator defaults and space
- * connections, including the cross-space rejection and the operator-default
- * fallback for unbound capabilities.
+ * Provider binding resolution matrix: default / connection / manual / disabled
+ * across Takosumi-provided defaults and Space connections.
  */
 import { expect, test } from "bun:test";
 
-import type { Connection } from "takosumi-contract/deploy-control-api";
+import type { Connection } from "@takosumi/internal/deploy-control-api";
 import { InMemoryOpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import { seedInstallationModel } from "../deploy-control/test_model_fixture.ts";
-import {
-  ConnectionsService,
-  mintableConnectionIds,
-} from "./mod.ts";
+import { ConnectionsService, mintableConnectionIds } from "./mod.ts";
 
 const NOW = "2026-06-06T00:00:00.000Z";
 
@@ -22,11 +17,12 @@ function connection(input: {
   readonly spaceId?: string;
   readonly provider?: string;
 }): Connection {
+  const provider = input.provider ?? "cloudflare";
   return {
     id: input.id,
     ...(input.spaceId ? { spaceId: input.spaceId } : {}),
-    provider: input.provider ?? "cloudflare",
-    kind: "provider",
+    provider,
+    kind: provider === "aws" ? "aws_assume_role" : "cloudflare_api_token",
     scope: input.scope,
     authMethod: "static_secret",
     status: "verified",
@@ -47,31 +43,39 @@ async function setup() {
   return { store, model, service };
 }
 
-test("unbound capabilities resolve to the operator default (spec §9)", async () => {
+test("default provider binding resolves to the provider default", async () => {
   const { store, model, service } = await setup();
-  await store.putConnection(
-    connection({ id: "conn_op_cf", scope: "operator" }),
-  );
+  await store.putConnection(connection({ id: "conn_op_cf", scope: "operator" }));
   await service.putOperatorConnectionDefault({
-    capability: "compute",
+    provider: "cloudflare",
     connectionId: "conn_op_cf",
   });
+  await store.putDeploymentProfile({
+    id: "dp_1",
+    spaceId: model.space.id,
+    installationId: model.installation.id,
+    environment: model.installation.environment,
+    bindings: [{ provider: "cloudflare", alias: "main", mode: "default" }],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
 
-  const resolved = await service.resolveCapabilities(model.installation);
-  const compute = resolved.find((r) => r.capability === "compute");
-  expect(compute?.mode).toBe("default");
-  expect(compute?.connection?.id).toBe("conn_op_cf");
-  // No operator default for dns -> default mode with no connection.
-  const dns = resolved.find((r) => r.capability === "dns");
-  expect(dns?.mode).toBe("default");
-  expect(dns?.connection).toBeUndefined();
+  const resolved = await service.resolveProviderBindings(model.installation);
+  expect(resolved).toEqual([
+    {
+      provider: "cloudflare",
+      alias: "main",
+      mode: "default",
+      connection: await store.getConnection("conn_op_cf"),
+    },
+  ]);
 });
 
-test("connection / manual / disabled bindings resolve per mode", async () => {
+test("connection / manual / disabled provider bindings resolve per mode", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(
     connection({
-      id: "conn_space_dns",
+      id: "conn_space_cf",
       scope: "space",
       spaceId: model.space.id,
     }),
@@ -81,36 +85,46 @@ test("connection / manual / disabled bindings resolve per mode", async () => {
     spaceId: model.space.id,
     installationId: model.installation.id,
     environment: model.installation.environment,
-    bindings: {
-      dns: { mode: "connection", connectionId: "conn_space_dns" },
-      storage: {
-        mode: "manual",
-        values: { type: "CNAME", name: "talk.example.com" },
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        mode: "connection",
+        connectionId: "conn_space_cf",
       },
-      database: { mode: "disabled" },
-    },
+      {
+        provider: "hashicorp/aws",
+        alias: "archive",
+        mode: "manual",
+        values: { bucket: "manual-bucket" },
+      },
+      {
+        provider: "hashicorp/postgresql",
+        alias: "db",
+        mode: "disabled",
+      },
+    ],
     createdAt: NOW,
     updatedAt: NOW,
   });
 
-  const resolved = await service.resolveCapabilities(model.installation);
-  expect(
-    resolved.find((r) => r.capability === "dns")?.connection?.id,
-  ).toBe("conn_space_dns");
-  expect(resolved.find((r) => r.capability === "storage")).toEqual({
-    capability: "storage",
+  const resolved = await service.resolveProviderBindings(model.installation);
+  expect(resolved[0]?.connection?.id).toBe("conn_space_cf");
+  expect(resolved[1]).toEqual({
+    provider: "hashicorp/aws",
+    alias: "archive",
     mode: "manual",
-    values: { type: "CNAME", name: "talk.example.com" },
+    values: { bucket: "manual-bucket" },
   });
-  expect(resolved.find((r) => r.capability === "database")).toEqual({
-    capability: "database",
+  expect(resolved[2]).toEqual({
+    provider: "hashicorp/postgresql",
+    alias: "db",
     mode: "disabled",
   });
-  // mintableConnectionIds carries connection/default resolutions only.
-  expect(mintableConnectionIds(resolved)).toEqual(["conn_space_dns"]);
+  expect(mintableConnectionIds(resolved)).toEqual(["conn_space_cf"]);
 });
 
-test("a space connection from ANOTHER space is rejected", async () => {
+test("a space connection from another space is rejected", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(
     connection({
@@ -124,17 +138,22 @@ test("a space connection from ANOTHER space is rejected", async () => {
     spaceId: model.space.id,
     installationId: model.installation.id,
     environment: model.installation.environment,
-    bindings: {
-      compute: { mode: "connection", connectionId: "conn_other_space" },
-    },
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        mode: "connection",
+        connectionId: "conn_other_space",
+      },
+    ],
     createdAt: NOW,
     updatedAt: NOW,
   });
-  await expect(service.resolveCapabilities(model.installation)).rejects
+  await expect(service.resolveProviderBindings(model.installation)).rejects
     .toThrow(/belongs to another space/);
 });
 
-test("operator defaults require an operator-scoped connection", async () => {
+test("provider defaults require an operator-scoped connection", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(
     connection({
@@ -145,19 +164,19 @@ test("operator defaults require an operator-scoped connection", async () => {
   );
   await expect(
     service.putOperatorConnectionDefault({
-      capability: "compute",
+      provider: "cloudflare",
       connectionId: "conn_space_cf",
     }),
   ).rejects.toThrow(/operator-scoped/);
-  // One default per capability: the second put replaces the first.
+
   await store.putConnection(connection({ id: "conn_op_1", scope: "operator" }));
   await store.putConnection(connection({ id: "conn_op_2", scope: "operator" }));
   await service.putOperatorConnectionDefault({
-    capability: "compute",
+    provider: "cloudflare",
     connectionId: "conn_op_1",
   });
   await service.putOperatorConnectionDefault({
-    capability: "compute",
+    provider: "cloudflare",
     connectionId: "conn_op_2",
   });
   const defaults = await service.listOperatorConnectionDefaults();
@@ -165,17 +184,17 @@ test("operator defaults require an operator-scoped connection", async () => {
   expect(defaults[0]?.connectionId).toBe("conn_op_2");
 });
 
-test("binding mode connection without a connectionId is rejected", async () => {
+test("connection mode without a connectionId is rejected", async () => {
   const { store, model, service } = await setup();
   await store.putDeploymentProfile({
     id: "dp_1",
     spaceId: model.space.id,
     installationId: model.installation.id,
     environment: model.installation.environment,
-    bindings: { compute: { mode: "connection" } },
+    bindings: [{ provider: "cloudflare", mode: "connection" }],
     createdAt: NOW,
     updatedAt: NOW,
   });
-  await expect(service.resolveCapabilities(model.installation)).rejects
+  await expect(service.resolveProviderBindings(model.installation)).rejects
     .toThrow(/without a connectionId/);
 });

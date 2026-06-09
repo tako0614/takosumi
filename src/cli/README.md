@@ -1,14 +1,12 @@
-# @takosjp/takosumi/cli
+# Takosumi in-repo operator CLI
 
 In-repo operator CLI for the Takosumi service (server boot / DB migrations /
 OpenTofu module scaffold).
 
-Takosumi is not npm-published: the deploy-control plane has no public routes and
-is consumed in-process by the host worker. The earlier `plan` / `install` /
-`deploy` / `rollback` remote-HTTP wire commands (which required `--remote` + a
-bearer token and posted raw PlanRun/ApplyRun calls) have been retired — the
-unified worker is the only caller of deploy-control. Create Installations and
-runs through the in-process deploy-control seam, not this CLI.
+Takosumi's CLI is not npm-published. It runs against the cloned source for
+operator tasks. The canonical external install / plan / apply flow is the
+dashboard and public `/api` Run surface; the earlier CLI `plan` / `install` /
+`deploy` / `rollback` remote-HTTP wire commands have been retired.
 
 ## Run
 
@@ -46,6 +44,5 @@ bun src/cli/main.ts server --port 8788 &
 
 ## See also
 
-- `@takosjp/takosumi`
-- `@takosjp/takosumi/contract`
-- `@takosjp/takosumi/contract/deploy-control-api`
+- `docs/reference/cli.md`
+- `docs/reference/deploy-control-api.md`

@@ -7,9 +7,9 @@
  * a milestone, a Dependency added, stale propagation, a RunGroup created — keyed
  * by the Space so the dashboard can list a Space's recent activity.
  *
- * This is the PUBLIC, Space-level audit trail. It is distinct from the internal
- * run-level {@link DeployControlAuditEvent} (the per-run policy / lease / dispatch
- * trace carried inside a PlanRun / ApplyRun record); the two never share a type.
+ * This is the PUBLIC, Space-level audit trail. It is distinct from the public
+ * run-level `RunAuditEvent` projection (the per-run policy / lease / dispatch
+ * trace carried inside a Run response); the two never share a type.
  *
  * Security invariant: an ActivityEvent records WHAT happened, not secrets.
  * `metadata` carries identifiers, names, digests, and counts only — never

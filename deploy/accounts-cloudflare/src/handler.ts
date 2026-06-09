@@ -25,6 +25,10 @@ import {
   type WorkloadPlatformServiceResolverHttpOptions,
 } from "@takosjp/takosumi-accounts-service";
 import { parseInstallLink } from "takosumi-contract/install-link";
+import {
+  assertHostNotBlocked,
+  BlockedHostError,
+} from "takosumi-contract/reference/host-blocklist";
 import { evaluateSourceUrl } from "../../../src/service/domains/sources/url-policy.ts";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 
@@ -96,8 +100,11 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF?: string;
   readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL?: string;
-  readonly TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN?: string;
   // Shared deploy-control bearer for the in-process transport; must match the
   // embedded deploy-control service's `TAKOSUMI_DEPLOY_CONTROL_TOKEN` gate.
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
@@ -225,12 +232,14 @@ export function createCloudflareWorker(
         const handler = await cachedAccountsHandler(env, options);
         return await handler(request);
       } catch (error) {
-        return Response.json({
-          error: "worker_configuration_error",
-          error_description: error instanceof Error
-            ? error.message
-            : String(error),
-        }, { status: 500 });
+        return Response.json(
+          {
+            error: "worker_configuration_error",
+            error_description:
+              error instanceof Error ? error.message : String(error),
+          },
+          { status: 500 },
+        );
       }
     },
   };
@@ -300,6 +309,19 @@ async function buildAccountsHandler(
       deployControlOperations,
     ),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
+    ...(controlPlaneOperations
+      ? {
+          billingReconciler:
+            controlPlaneOperations.reconcileStripeSpaceSubscription,
+          billingCreditReconciler: (
+            spaceId: string,
+            input: { readonly credits: number },
+          ) =>
+            controlPlaneOperations.topUpSpaceCredits(spaceId, {
+              credits: input.credits,
+            }),
+        }
+      : {}),
     workloadPlatformServices: parseWorkloadPlatformServices(env),
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
@@ -388,12 +410,11 @@ async function seedLocalSubstrateAccount(
   );
   const sessionId =
     optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID) ??
-      "sess_local_substrate";
+    "sess_local_substrate";
   const accountId =
-    optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_ACCOUNT_ID) ??
-      "acct_local";
-  const spaceId = optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SPACE_ID) ??
-    "space_local";
+    optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_ACCOUNT_ID) ?? "acct_local";
+  const spaceId =
+    optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SPACE_ID) ?? "space_local";
   await store.saveAccount({
     subject,
     displayName: "Local Substrate",
@@ -430,28 +451,27 @@ function localTakosumiSubject(value: string): TakosumiSubject {
   );
 }
 
-async function parseStableOidcFlow(
-  env: CloudflareWorkerEnv,
-): Promise<
+async function parseStableOidcFlow(env: CloudflareWorkerEnv): Promise<
   | {
-    readonly jwks: JsonWebKeySet;
-    readonly oidcFlow: {
-      readonly subject: string;
-      readonly pairwiseSubjectSecret: string;
-      readonly issueIdToken: (
-        claims: Record<string, unknown>,
-      ) => Promise<string>;
-    };
-    readonly launchTokens: {
-      readonly pairwiseSubjectSecret: string;
-    };
-  }
+      readonly jwks: JsonWebKeySet;
+      readonly oidcFlow: {
+        readonly subject: string;
+        readonly pairwiseSubjectSecret: string;
+        readonly issueIdToken: (
+          claims: Record<string, unknown>,
+        ) => Promise<string>;
+      };
+      readonly launchTokens: {
+        readonly pairwiseSubjectSecret: string;
+      };
+    }
   | undefined
 > {
   const rawJwk = optionalString(env.TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK);
   if (!rawJwk) return undefined;
   const privateJwk = JSON.parse(rawJwk) as Es256PrivateJwk;
-  const kid = optionalString(env.TAKOSUMI_ACCOUNTS_ES256_KEY_ID) ??
+  const kid =
+    optionalString(env.TAKOSUMI_ACCOUNTS_ES256_KEY_ID) ??
     optionalString(privateJwk.kid) ??
     "takosumi-accounts-cloudflare-accounts";
   const pairwiseSubjectSecret = optionalString(
@@ -476,8 +496,8 @@ async function parseStableOidcFlow(
   return {
     jwks: { keys: [publicJwk] },
     oidcFlow: {
-      subject: optionalString(env.TAKOSUMI_ACCOUNTS_SUBJECT) ??
-        "tsub_cloudflare_seed",
+      subject:
+        optionalString(env.TAKOSUMI_ACCOUNTS_SUBJECT) ?? "tsub_cloudflare_seed",
       pairwiseSubjectSecret,
       issueIdToken: (claims) =>
         signEs256Jwt({
@@ -532,14 +552,16 @@ function parseClients(
       "TAKOSUMI_ACCOUNTS_CLIENT_ID and TAKOSUMI_ACCOUNTS_REDIRECT_URIS must be set together",
     );
   }
-  return [{
-    clientId,
-    redirectUris,
-    clientSecret: optionalString(env.TAKOSUMI_ACCOUNTS_CLIENT_SECRET),
-    tokenEndpointAuthMethod: parseClientAuthMethod(
-      env.TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD,
-    ),
-  }];
+  return [
+    {
+      clientId,
+      redirectUris,
+      clientSecret: optionalString(env.TAKOSUMI_ACCOUNTS_CLIENT_SECRET),
+      tokenEndpointAuthMethod: parseClientAuthMethod(
+        env.TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD,
+      ),
+    },
+  ];
 }
 
 function parseClientRecord(value: unknown): OidcClientRegistration {
@@ -571,7 +593,8 @@ function parseClientAuthMethod(
   const raw = optionalString(value);
   if (!raw) return undefined;
   if (
-    raw !== "client_secret_basic" && raw !== "client_secret_post" &&
+    raw !== "client_secret_basic" &&
+    raw !== "client_secret_post" &&
     raw !== "none"
   ) {
     throw new TypeError(
@@ -737,14 +760,25 @@ function parseCustomOidcUpstreamProvider(
   );
   const scopes = splitList(env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_SCOPES);
   const configured = Boolean(
-    providerId || issuer || authorizationEndpoint || tokenEndpoint ||
-      userInfoEndpoint || clientId || clientSecret || redirectUri ||
-      scopes.length > 0,
+    providerId ||
+    issuer ||
+    authorizationEndpoint ||
+    tokenEndpoint ||
+    userInfoEndpoint ||
+    clientId ||
+    clientSecret ||
+    redirectUri ||
+    scopes.length > 0,
   );
   if (!configured) return undefined;
   if (
-    !providerId || !issuer || !authorizationEndpoint || !tokenEndpoint ||
-    !userInfoEndpoint || !clientId || !redirectUri
+    !providerId ||
+    !issuer ||
+    !authorizationEndpoint ||
+    !tokenEndpoint ||
+    !userInfoEndpoint ||
+    !clientId ||
+    !redirectUri
   ) {
     throw new TypeError(
       "Custom upstream OIDC requires provider id, issuer, endpoints, client id, and redirect uri",
@@ -779,12 +813,14 @@ function parseDeployControl(
   env: CloudflareWorkerEnv,
   deployControlFetch?: typeof fetch,
   deployControlOperations?: DeployControlOperations,
-): {
-  url: string;
-  token?: string;
-  fetch?: typeof fetch;
-  operations?: DeployControlOperations;
-} | undefined {
+):
+  | {
+      url: string;
+      token?: string;
+      fetch?: typeof fetch;
+      operations?: DeployControlOperations;
+    }
+  | undefined {
   // In-process transport (unified single-worker deployment): the deploy-control
   // plane runs in this same worker. When the host injects the typed `operations`
   // facade the proxy calls the controller directly (no Bearer handshake, no JSON
@@ -793,20 +829,22 @@ function parseDeployControl(
   // `TAKOSUMI_DEPLOY_CONTROL_TOKEN` (which gates `authorizeDeployControl`), so we
   // read that shared secret here and pass a syntactically valid synthetic base.
   if (deployControlFetch || deployControlOperations) {
-    const token = optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN) ??
-      optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN);
-    const url = optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL) ??
+    const token = optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN);
+    const url =
+      optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL) ??
       IN_PROCESS_DEPLOY_CONTROL_BASE;
     return {
       url,
       ...(token ? { token } : {}),
       ...(deployControlFetch ? { fetch: deployControlFetch } : {}),
-      ...(deployControlOperations ? { operations: deployControlOperations } : {}),
+      ...(deployControlOperations
+        ? { operations: deployControlOperations }
+        : {}),
     };
   }
   const url = optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL);
   if (!url) return undefined;
-  const token = optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN);
+  const token = optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN);
   return token ? { url, token } : { url };
 }
 
@@ -836,16 +874,16 @@ function parseR2ExportWorker(
 ): AppInstallationExportWorker | undefined {
   const bucket = env.TAKOSUMI_ACCOUNTS_EXPORTS;
   const secret = optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET);
-  const baseUrl = optionalString(
-    env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL,
-  ) ?? issuer;
-  const ttlMs = optionalInteger(
-    env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS,
-  ) ?? defaultExportDownloadTtlMs;
+  const baseUrl =
+    optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL) ?? issuer;
+  const ttlMs =
+    optionalInteger(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS) ??
+    defaultExportDownloadTtlMs;
   const configured = Boolean(
-    bucket || secret ||
-      optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL) ||
-      optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS),
+    bucket ||
+    secret ||
+    optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL) ||
+    optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS),
   );
   if (!configured) return undefined;
   if (!bucket) {
@@ -940,9 +978,9 @@ export function createR2InstallationExportWorker(options: {
  * External install link (Core Specification §12 / §30): `GET /install`.
  *
  * Parses both link forms via the contract `parseInstallLink`, validates the
- * resolved Git URL against the canonical Source URL policy
- * ({@link evaluateSourceUrl} — https/ssh only, no embedded credentials, no
- * `file://`), and on success 302-redirects once to the dashboard SPA install
+ * resolved Git URL against the external install-link Source URL policy
+ * (https only, no embedded credentials, no local/private/metadata IP literal),
+ * and on success 302-redirects once to the dashboard SPA install
  * flow `/install?git=<url>&ref=<ref>&path=<path>&takosumiInstall=1` with the
  * validated params re-encoded. The marker is internal and makes the normalized
  * dashboard URL fall through to ASSETS on the next request. A malformed link or
@@ -955,7 +993,10 @@ function maybeHandleInstallLink(
   url: URL,
 ): Response | undefined {
   if (url.pathname !== "/install") return undefined;
-  if (url.search.length === 0 || url.searchParams.get("takosumiInstall") === "1") {
+  if (
+    url.search.length === 0 ||
+    url.searchParams.get("takosumiInstall") === "1"
+  ) {
     return undefined;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -975,12 +1016,12 @@ function maybeHandleInstallLink(
       { status: 400 },
     );
   }
-  const policy = evaluateSourceUrl(target.url);
-  if (!policy.ok) {
+  const policy = evaluateInstallSourceUrl(target.url);
+  if (policy !== "ok") {
     return Response.json(
       {
         error: "invalid_install_source_url",
-        error_description: `source url rejected by policy: ${policy.reason}`,
+        error_description: `source url rejected by policy: ${policy}`,
       },
       { status: 400 },
     );
@@ -995,6 +1036,29 @@ function maybeHandleInstallLink(
   // Redirect into the SPA path route so the dashboard owns the install flow UI.
   const location = `/install?${params.toString()}`;
   return new Response(null, { status: 302, headers: { location } });
+}
+
+function evaluateInstallSourceUrl(raw: string): "ok" | string {
+  const policy = evaluateSourceUrl(raw);
+  if (!policy.ok) return policy.reason;
+  if (policy.scheme !== "https") return "install_link_requires_https";
+  const host = policy.host.toLowerCase();
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "metadata.google.internal"
+  ) {
+    return "blocked_host";
+  }
+  try {
+    assertHostNotBlocked(policy.host, "install source host");
+  } catch (error) {
+    if (error instanceof BlockedHostError) {
+      return "blocked_host";
+    }
+    throw error;
+  }
+  return "ok";
 }
 
 async function maybeHandleR2ExportDownload(
@@ -1012,35 +1076,49 @@ async function maybeHandleR2ExportDownload(
   const bucket = env.TAKOSUMI_ACCOUNTS_EXPORTS;
   const secret = optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET);
   if (!bucket || !secret) {
-    return Response.json({
-      error: "worker_configuration_error",
-      error_description:
-        "R2 export downloads require TAKOSUMI_ACCOUNTS_EXPORTS and TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
-    }, { status: 500 });
+    return Response.json(
+      {
+        error: "worker_configuration_error",
+        error_description:
+          "R2 export downloads require TAKOSUMI_ACCOUNTS_EXPORTS and TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
+      },
+      { status: 500 },
+    );
   }
   const encodedKey = url.pathname.slice(r2ExportDownloadPrefix.length);
   const decodedKey = safeDecodeURIComponent(encodedKey);
   if (!decodedKey.ok) {
-    return Response.json({ error: "invalid_export_download_url" }, {
-      status: 400,
-    });
+    return Response.json(
+      { error: "invalid_export_download_url" },
+      {
+        status: 400,
+      },
+    );
   }
   const objectKey = decodedKey.value;
   const expiresRaw = url.searchParams.get("expires") ?? "";
   const signature = url.searchParams.get("sig") ?? "";
   const expiresAtMs = Number(expiresRaw);
   if (
-    !objectKey || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= 0 ||
+    !objectKey ||
+    !Number.isSafeInteger(expiresAtMs) ||
+    expiresAtMs <= 0 ||
     !signature
   ) {
-    return Response.json({ error: "invalid_export_download_url" }, {
-      status: 400,
-    });
+    return Response.json(
+      { error: "invalid_export_download_url" },
+      {
+        status: 400,
+      },
+    );
   }
   if (Date.now() > expiresAtMs) {
-    return Response.json({ error: "export_download_expired" }, {
-      status: 410,
-    });
+    return Response.json(
+      { error: "export_download_expired" },
+      {
+        status: 410,
+      },
+    );
   }
   const expectedSignature = await r2ExportDownloadSignature({
     objectKey,
@@ -1048,15 +1126,21 @@ async function maybeHandleR2ExportDownload(
     secret,
   });
   if (!constantTimeEqual(signature, expectedSignature)) {
-    return Response.json({ error: "invalid_export_download_signature" }, {
-      status: 403,
-    });
+    return Response.json(
+      { error: "invalid_export_download_signature" },
+      {
+        status: 403,
+      },
+    );
   }
   const object = await bucket.get(objectKey);
   if (!object) {
-    return Response.json({ error: "export_artifact_not_found" }, {
-      status: 404,
-    });
+    return Response.json(
+      { error: "export_artifact_not_found" },
+      {
+        status: 404,
+      },
+    );
   }
   const headers = new Headers({
     "cache-control": "private, max-age=0, no-store",
@@ -1112,10 +1196,7 @@ async function signedR2ExportDownloadUrl(input: {
     input.baseUrl,
   );
   url.searchParams.set("expires", String(input.expiresAtMs));
-  url.searchParams.set(
-    "sig",
-    await r2ExportDownloadSignature(input),
-  );
+  url.searchParams.set("sig", await r2ExportDownloadSignature(input));
   return url.toString();
 }
 
@@ -1143,10 +1224,10 @@ async function r2ExportDownloadSignature(input: {
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(
-    /=+$/g,
-    "",
-  );
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
@@ -1174,9 +1255,8 @@ function validateHttpUrl(value: string, label: string): string {
 function parseManagedOfferingAccess(
   env: CloudflareWorkerEnv,
 ): ManagedOfferingAccessPolicy {
-  const status = optionalString(
-    env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS,
-  ) ?? "closed";
+  const status =
+    optionalString(env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS) ?? "closed";
   if (status === "closed") return { status: "closed" };
   if (status !== "open") {
     throw new TypeError(
@@ -1198,20 +1278,68 @@ function parseManagedOfferingAccess(
       "Open managed offering access requires TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST",
     );
   }
-  return createOpenManagedOfferingAccessPolicy({
-    evidenceRef: optionalString(
-      env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF,
-    ),
-    approvalRef: optionalString(
-      env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF,
-    ),
-    publicSummary: optionalString(
-      env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY,
-    ),
-  }, {
-    ready: true,
-    evidenceDigest,
-  });
+  requireProductionHardeningEvidence(env);
+  return createOpenManagedOfferingAccessPolicy(
+    {
+      evidenceRef: optionalString(
+        env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF,
+      ),
+      approvalRef: optionalString(
+        env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF,
+      ),
+      publicSummary: optionalString(
+        env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY,
+      ),
+    },
+    {
+      ready: true,
+      evidenceDigest,
+    },
+  );
+}
+
+function requireProductionHardeningEvidence(env: CloudflareWorkerEnv): void {
+  if (optionalString(env.TAKOSUMI_PRODUCTION_HARDENING_GATE) !== "enforce") {
+    throw new TypeError(
+      "Open managed offering access requires TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce",
+    );
+  }
+  const commitPinnedGitRefPattern = /^git\+.+@[0-9a-f]{40,64}#.+/i;
+  for (const [refName, digestName] of [
+    [
+      "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF",
+      "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF",
+      "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF",
+      "TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF",
+      "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST",
+    ],
+  ] as const) {
+    const ref = optionalString(env[refName]);
+    if (!ref) {
+      throw new TypeError(`Open managed offering access requires ${refName}`);
+    }
+    if (!commitPinnedGitRefPattern.test(ref)) {
+      throw new TypeError(`${refName} must be commit-pinned git+ ref`);
+    }
+    const digest = optionalString(env[digestName]);
+    if (!digest) {
+      throw new TypeError(
+        `Open managed offering access requires ${digestName}`,
+      );
+    }
+    if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {
+      throw new TypeError(`${digestName} must be sha256:<64hex>`);
+    }
+  }
 }
 
 function optionalString(value: unknown): string | undefined {

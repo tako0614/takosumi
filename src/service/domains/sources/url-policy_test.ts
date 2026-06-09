@@ -56,6 +56,16 @@ const DENIED: readonly DenyCase[] = [
   { url: "http://github.com/acme/repo", reason: "forbidden_scheme_other" },
   { url: "ftp://host/x", reason: "forbidden_scheme_other" },
   { url: "s3://bucket/key", reason: "forbidden_scheme_other" },
+  // literal and special host SSRF guard
+  { url: "https://127.0.0.1/acme/repo.git", reason: "blocked_host" },
+  { url: "https://10.0.0.10/acme/repo.git", reason: "blocked_host" },
+  { url: "https://169.254.169.254/latest/meta-data", reason: "blocked_host" },
+  { url: "https://[::1]/acme/repo.git", reason: "blocked_host" },
+  { url: "https://[fc00::1]/acme/repo.git", reason: "blocked_host" },
+  { url: "https://[fe80::1]/acme/repo.git", reason: "blocked_host" },
+  { url: "https://localhost/acme/repo.git", reason: "blocked_host" },
+  { url: "https://git.localhost/acme/repo.git", reason: "blocked_host" },
+  { url: "ssh://git@metadata.google.internal/acme/repo.git", reason: "blocked_host" },
 ];
 
 describe("evaluateSourceUrl — allowed forms", () => {

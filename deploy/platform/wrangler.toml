@@ -41,7 +41,7 @@ binding = "TAKOSUMI_ACCOUNTS_DB"
 database_name = "takosumi-accounts"
 database_id = "replace-with-accounts-d1-database-id"
 
-# Deploy-control store (PlanRun / ApplyRun / Deployment / DeploymentOutput).
+# OpenTofu Capsule ledger (Runs / Deployments / OutputSnapshots).
 [[d1_databases]]
 binding = "TAKOS_D1"
 database_name = "takosumi-deploy"
@@ -70,9 +70,8 @@ binding = "R2_STATE"
 bucket_name = "takosumi-state"
 
 # Backup/export artifacts (core-spec.md §26 R2_BACKUPS / §33 control backup).
-# Holds the sealed control-backup bundles written by the backups service
-# (spaces/{spaceId}/backups/{backupId}/control.json.gz.enc; gzip instead of the
-# spec's .zst since zstd is unavailable in workerd).
+# Holds sealed zstd control/state/service-data backup bundles written by the
+# backups service under spaces/{spaceId}/backups/{backupId}/.
 [[r2_buckets]]
 binding = "R2_BACKUPS"
 bucket_name = "takosumi-backups"
@@ -149,8 +148,10 @@ TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default"
 # point at immutable, reviewed operator-private proof files:
 #   TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF / _DIGEST
+#   TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF / _DIGEST
+#   TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF / _DIGEST
 # The internal `/internal/platform/hardening-gates` route is operator-bearer
-# gated and returns 503 while enforce mode is missing either proof.
+# gated and returns 503 while enforce mode is missing any required proof.
 TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 
 # Required secrets (pushed via `wrangler secret put`, NEVER committed):
@@ -159,9 +160,7 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 #   TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET pairwise OIDC subject secret
 #   TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET launch-token pairwise secret
 #   TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET       R2 export download HMAC secret
-#   TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_TOKEN         accounts->deploy-control bearer
-#   TAKOSUMI_DEPLOY_CONTROL_TOKEN                  same value; embedded service's
-#                                                  in-process handshake gate
+#   TAKOSUMI_DEPLOY_CONTROL_TOKEN                  accounts/control-plane bearer
 # Optional (upstream OAuth providers; set the full group per provider):
 #   TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_CLIENT_ID / _CLIENT_SECRET / _REDIRECT_URI
 #   TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID / _CLIENT_SECRET / _REDIRECT_URI

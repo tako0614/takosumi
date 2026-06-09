@@ -22,12 +22,19 @@ import {
 import { InMemoryOpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import { DependenciesService } from "../dependencies/mod.ts";
-import { seedInstallationModel } from "../deploy-control/test_model_fixture.ts";
+import {
+  FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
+  FIXTURE_CLOUDFLARE_PROVIDER,
+  fakeProviderVault,
+  seedInstallationModel,
+} from "../deploy-control/test_model_fixture.ts";
 import { computeGroupStatus, RunGroupsService } from "./mod.ts";
 import type { Run } from "takosumi-contract/runs";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const LOCK_DIGEST =
+  "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
 function deterministicIds(): (prefix: string) => string {
   let next = 1;
@@ -46,7 +53,10 @@ function sequenceNow(start: number): () => number {
  */
 function recordingRunner(
   outputByInstallation: ReadonlyMap<string, string>,
-): OpenTofuRunner & { planJobs: OpenTofuPlanJob[]; applyJobs: OpenTofuApplyJob[] } {
+): OpenTofuRunner & {
+  planJobs: OpenTofuPlanJob[];
+  applyJobs: OpenTofuApplyJob[];
+} {
   const planJobs: OpenTofuPlanJob[] = [];
   const applyJobs: OpenTofuApplyJob[] = [];
   return {
@@ -62,6 +72,9 @@ function recordingRunner(
           digest: PLAN_DIGEST,
           contentType: "application/vnd.opentofu.plan",
         },
+        providerLockDigest: LOCK_DIGEST,
+        requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
         // A replace (delete+create) change so the §25 action policy flags the
         // plan requiresApproval. This drives the RunGroup status transition
         // through `waiting_approval` (approval is no longer gated by the
@@ -80,8 +93,8 @@ function recordingRunner(
     apply: (job) => {
       applyJobs.push(job);
       const installationId = job.planRun.installationId ?? "";
-      const value = outputByInstallation.get(installationId) ??
-        "default.example.com";
+      const value =
+        outputByInstallation.get(installationId) ?? "default.example.com";
       return Promise.resolve({
         outputs: {
           base_domain: { sensitive: false, value },
@@ -101,6 +114,7 @@ function controllerWith(
   return new OpenTofuDeploymentController({
     store,
     runner,
+    vault: fakeProviderVault() as never,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -123,13 +137,27 @@ async function seedChain(
       installConfigId: `cfg_${name}`,
       installationId: `inst_${name}`,
       name,
+      ...(name === "core" || name === "files"
+        ? {
+            installConfig: {
+              outputAllowlist: {
+                base_domain: {
+                  from: "base_domain",
+                  type: "hostname",
+                  required: true,
+                },
+              },
+            },
+          }
+        : {}),
     });
   }
   const deps = new DependenciesService({
     store,
     newId: (() => {
       let n = 1;
-      return (prefix: string) => `${prefix}_edge${String(n++).padStart(4, "0")}`;
+      return (prefix: string) =>
+        `${prefix}_edge${String(n++).padStart(4, "0")}`;
     })(),
     now: () => "2026-06-06T00:00:00.000Z",
   });
@@ -181,24 +209,30 @@ function fakeRun(status: Run["status"]): Run {
 
 test("computeGroupStatus precedence: active dominates, then waiting, failed, cancelled, succeeded", () => {
   expect(computeGroupStatus([])).toEqual("succeeded");
-  expect(computeGroupStatus([fakeRun("succeeded"), fakeRun("succeeded")]))
-    .toEqual("succeeded");
-  expect(computeGroupStatus([fakeRun("succeeded"), fakeRun("queued")]))
-    .toEqual("running");
-  expect(computeGroupStatus([fakeRun("running"), fakeRun("waiting_approval")]))
-    .toEqual("running");
+  expect(
+    computeGroupStatus([fakeRun("succeeded"), fakeRun("succeeded")]),
+  ).toEqual("succeeded");
+  expect(computeGroupStatus([fakeRun("succeeded"), fakeRun("queued")])).toEqual(
+    "running",
+  );
+  expect(
+    computeGroupStatus([fakeRun("running"), fakeRun("waiting_approval")]),
+  ).toEqual("running");
   expect(
     computeGroupStatus([fakeRun("succeeded"), fakeRun("waiting_approval")]),
   ).toEqual("waiting_approval");
   // failed beats waiting only when nothing is still active; with a waiting member
   // present and no active member, waiting wins per the precedence order.
-  expect(computeGroupStatus([fakeRun("failed"), fakeRun("succeeded")]))
-    .toEqual("failed");
-  expect(computeGroupStatus([fakeRun("cancelled"), fakeRun("succeeded")]))
-    .toEqual("cancelled");
+  expect(computeGroupStatus([fakeRun("failed"), fakeRun("succeeded")])).toEqual(
+    "failed",
+  );
+  expect(
+    computeGroupStatus([fakeRun("cancelled"), fakeRun("succeeded")]),
+  ).toEqual("cancelled");
   // failed dominates cancelled when both terminal-negative are present.
-  expect(computeGroupStatus([fakeRun("cancelled"), fakeRun("failed")]))
-    .toEqual("failed");
+  expect(computeGroupStatus([fakeRun("cancelled"), fakeRun("failed")])).toEqual(
+    "failed",
+  );
 });
 
 test("createSpaceUpdate with no stale installations is failed_precondition nothing_to_update", async () => {
@@ -235,8 +269,9 @@ test("producer output change cascades stale to chained consumers (core -> files 
   await applyPlan(controller, "inst_files");
   await applyPlan(controller, "inst_talk");
   for (const id of ["inst_core", "inst_files", "inst_talk"]) {
-    expect((await controller.getInstallation(id)).installation.status)
-      .toEqual("active");
+    expect((await controller.getInstallation(id)).installation.status).toEqual(
+      "active",
+    );
   }
 
   // core re-applies with a CHANGED output -> its downstream (files, talk) go stale.
@@ -252,6 +287,7 @@ test("producer output change cascades stale to chained consumers (core -> files 
   const controller2 = new OpenTofuDeploymentController({
     store,
     runner: changed,
+    vault: fakeProviderVault() as never,
     now: sequenceNow(10_000),
     newId: (() => {
       let n = 1;
@@ -260,12 +296,15 @@ test("producer output change cascades stale to chained consumers (core -> files 
   });
   await applyPlan(controller2, "inst_core");
 
-  expect((await controller2.getInstallation("inst_core")).installation.status)
-    .toEqual("active");
-  expect((await controller2.getInstallation("inst_files")).installation.status)
-    .toEqual("stale");
-  expect((await controller2.getInstallation("inst_talk")).installation.status)
-    .toEqual("stale");
+  expect(
+    (await controller2.getInstallation("inst_core")).installation.status,
+  ).toEqual("active");
+  expect(
+    (await controller2.getInstallation("inst_files")).installation.status,
+  ).toEqual("stale");
+  expect(
+    (await controller2.getInstallation("inst_talk")).installation.status,
+  ).toEqual("stale");
 });
 
 test("unchanged producer output marks nothing stale", async () => {
@@ -286,10 +325,12 @@ test("unchanged producer output marks nothing stale", async () => {
 
   // core re-applies emitting the SAME base_domain -> no stale cascade.
   await applyPlan(controller, "inst_core");
-  expect((await controller.getInstallation("inst_files")).installation.status)
-    .toEqual("active");
-  expect((await controller.getInstallation("inst_talk")).installation.status)
-    .toEqual("active");
+  expect(
+    (await controller.getInstallation("inst_files")).installation.status,
+  ).toEqual("active");
+  expect(
+    (await controller.getInstallation("inst_talk")).installation.status,
+  ).toEqual("active");
 });
 
 test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> applies -> succeeded", async () => {
@@ -328,6 +369,7 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
         ["inst_talk", "talk.example.com"],
       ]),
     ),
+    vault: fakeProviderVault() as never,
     now: sequenceNow(20_000),
     newId: (() => {
       let n = 1;
@@ -340,8 +382,9 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
     planRunId: corePlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(corePlan.planRun),
   });
-  expect((await changed.getInstallation("inst_files")).installation.status)
-    .toEqual("stale");
+  expect(
+    (await changed.getInstallation("inst_files")).installation.status,
+  ).toEqual("stale");
 
   // plan-update: build the RunGroup. files + talk are stale -> members; their
   // topological order is [[files], [talk]] (files produces for talk).
@@ -384,8 +427,9 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
     planRunId: filesRunId,
     expected: applyExpectedGuardFromPlanRun(filesPlan.planRun),
   });
-  expect((await changed.getInstallation("inst_files")).installation.status)
-    .toEqual("active");
+  expect(
+    (await changed.getInstallation("inst_files")).installation.status,
+  ).toEqual("active");
 
   // In production (strict mode) the consumer (talk) was pinned to files' PRIOR
   // state generation; once files advanced, talk's group plan is correctly stale.
@@ -393,12 +437,14 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
   // producer state, which then applies cleanly.
   const talkRunId = graph.runs["inst_talk"]!;
   const talkPlanStale = await changed.getPlanRun(talkRunId);
-  await expect(
-    changed.createApplyRun({
-      planRunId: talkRunId,
-      expected: applyExpectedGuardFromPlanRun(talkPlanStale.planRun),
-    }),
-  ).rejects.toThrow(/dependency_snapshot_stale/);
+  const staleTalkApply = await changed.createApplyRun({
+    planRunId: talkRunId,
+    expected: applyExpectedGuardFromPlanRun(talkPlanStale.planRun),
+  });
+  expect(staleTalkApply.applyRun.status).toBe("failed");
+  expect(staleTalkApply.applyRun.diagnostics?.[0]?.message).toContain(
+    "dependency_snapshot_stale",
+  );
 
   const talkReplan = await changed.createInstallationPlan("inst_talk");
   await changed.approveRun(talkReplan.planRun.id);
@@ -406,6 +452,52 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
     planRunId: talkReplan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(talkReplan.planRun),
   });
-  expect((await changed.getInstallation("inst_talk")).installation.status)
-    .toEqual("active");
+  expect(
+    (await changed.getInstallation("inst_talk")).installation.status,
+  ).toEqual("active");
+});
+
+test("space_drift_check groups active installations into read-only drift_check runs", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    new Map([
+      ["inst_core", "core.example.com"],
+      ["inst_files", "files.example.com"],
+      ["inst_talk", "talk.example.com"],
+    ]),
+  );
+  await seedChain(store, "preview");
+  const controller = controllerWith(store, runner);
+
+  for (const id of ["inst_core", "inst_files", "inst_talk"]) {
+    await applyPlan(controller, id);
+  }
+
+  const runGroups = new RunGroupsService({
+    store,
+    controller,
+    newId: (() => {
+      let n = 1;
+      return (prefix: string) =>
+        `${prefix}_drift${String(n++).padStart(5, "0")}`;
+    })(),
+    now: () => "2026-06-06T02:00:00.000Z",
+  });
+  const created = await runGroups.createSpaceDriftCheck("space_test", {
+    limit: 2,
+  });
+
+  expect(created.runGroup.type).toEqual("space_drift_check");
+  expect(created.runs).toHaveLength(2);
+  expect(created.runs.every((run) => run.type === "drift_check")).toBe(true);
+  expect(
+    created.runs.every((run) => run.runGroupId === created.runGroup.id),
+  ).toBe(true);
+  expect(created.runs.every((run) => run.status === "succeeded")).toBe(true);
+
+  const graph = JSON.parse(created.runGroup.graphJson) as {
+    order: string[][];
+    runs: Record<string, string>;
+  };
+  expect(Object.keys(graph.runs).sort()).toEqual(["inst_core", "inst_files"]);
 });

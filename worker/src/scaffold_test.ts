@@ -10,6 +10,7 @@ const workerSrcRoot = new URL("./", import.meta.url);
 
 test("Cloudflare scaffold wires D1/R2 and the OpenTofu runner container", async () => {
   const wrangler = await readText(new URL("wrangler.toml", cloudflareRoot));
+  const workerService = await readText(new URL("worker_service.ts", workerSrcRoot));
 
   assert.doesNotMatch(wrangler, /TAKOS_WORKLOAD_CONTAINER/);
   assert.doesNotMatch(wrangler, /TAKOS_SERVICE_CONTAINER/);
@@ -33,6 +34,7 @@ test("Cloudflare scaffold wires D1/R2 and the OpenTofu runner container", async 
   assert.match(wrangler, /image_build_context = "\.\.\/\.\."/);
   assert.match(wrangler, /new_sqlite_classes = \["CoordinationObject"\]/);
   assert.match(wrangler, /new_sqlite_classes = \["OpenTofuRunnerObject"\]/);
+  assert.match(workerService, /userEnvSetProviderRunner: opentofuRunner/);
 });
 
 test("platform scaffold exposes production hardening evidence gates", async () => {
@@ -42,11 +44,13 @@ test("platform scaffold exposes production hardening evidence gates", async () =
   assert.match(wrangler, /TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"/);
   assert.match(wrangler, /TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF/);
   assert.match(wrangler, /TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF/);
+  assert.match(wrangler, /TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF/);
+  assert.match(wrangler, /TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF/);
   assert.match(worker, /\/internal\/platform\/hardening-gates/);
   assert.match(worker, /evaluateProductionHardeningGates/);
 });
 
-test("Cloudflare scaffold docs describe PlanRun and ApplyRun routing", async () => {
+test("Cloudflare scaffold docs describe internal plan/apply Run routing", async () => {
   const readme = await readText(new URL("README.md", cloudflareRoot));
 
   assert.match(readme, /plan/);
@@ -56,6 +60,8 @@ test("Cloudflare scaffold docs describe PlanRun and ApplyRun routing", async () 
   assert.match(readme, /\/internal\/platform\/hardening-gates/);
   assert.match(readme, /real Cloudflare Container smoke proof/);
   assert.match(readme, /egress enforcement proof/);
+  assert.match(readme, /Provider Template proof/);
+  assert.match(readme, /secret-boundary proof/);
   assert.match(readme, /OpenTofu/);
   assert.match(readme, /\/v1\/plan-runs/);
   assert.match(readme, /\/v1\/apply-runs/);
@@ -65,7 +71,13 @@ test("Cloudflare scaffold docs describe PlanRun and ApplyRun routing", async () 
   assert.match(readme, /D1/);
   assert.match(readme, /R2/);
   assert.match(readme, /r2_object_storage/);
-  assert.match(readme, /opentofu-plan-runs/);
+  assert.match(
+    readme,
+    /spaces\/\{spaceId\}\/installations\/\{installationId\}\/runs\/\{runId\}\/plan\.bin/,
+  );
+  assert.match(readme, /plan\.json\.zst/);
+  assert.match(readme, /R2_STATE/);
+  assert.match(readme, /opentofu-plan-runs\/` objects are accepted only/);
   assert.match(readme, /does not depend on a still-warm runner-local file/);
   assert.doesNotMatch(readme, /five public deploy control endpoints/);
   assert.doesNotMatch(readme, /\/v1\/installations\/dry-run/);
@@ -74,9 +86,7 @@ test("Cloudflare scaffold docs describe PlanRun and ApplyRun routing", async () 
 });
 
 test("OpenTofu runner image stays isolated from the Worker browser bundle", async () => {
-  const dockerfile = await readText(
-    new URL("Dockerfile", runnerImageRoot),
-  );
+  const dockerfile = await readText(new URL("Dockerfile", runnerImageRoot));
   const server = await readText(new URL("entrypoint.ts", runnerImageRoot));
 
   assert.match(dockerfile, /FROM oven\/bun:1/);
@@ -85,13 +95,16 @@ test("OpenTofu runner image stays isolated from the Worker browser bundle", asyn
   assert.match(dockerfile, /tofu version/);
   assert.match(server, /Bun\.serve/);
   assert.match(server, /Bun\.spawn\(command/);
-  assert.match(server, /preparePlanWorkspace/);
-  assert.match(server, /prepareApplyWorkspace/);
+  assert.match(server, /prepareGeneratedRootWorkspace/);
+  assert.match(server, /restoreGeneratedRootApplyWorkspace/);
   assert.match(server, /materializeSource/);
   assert.match(server, /handlePlanArtifactRequest/);
   assert.match(server, /verifyPlanArtifact/);
   assert.match(server, /assertHttpsSourceUrl\(source\.url, "git source url"\)/);
-  assert.match(server, /assertHttpsSourceUrl\(source\.url, "prepared source url"\)/);
+  assert.match(
+    server,
+    /assertHttpsSourceUrl\(source\.url, "prepared source url"\)/,
+  );
   assert.match(server, /fetch\(source\.url, \{ redirect: "error" \}\)/);
   assert.match(server, /readResponseBytesWithCap/);
   assert.match(server, /PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES/);
@@ -124,9 +137,7 @@ test("OpenTofu runner DO routes M2 state through R2_STATE with at-rest encryptio
   const container = await readText(
     new URL("durable/OpenTofuRunnerObject.ts", workerSrcRoot),
   );
-  const stateCrypto = await readText(
-    new URL("state_crypto.ts", workerSrcRoot),
-  );
+  const stateCrypto = await readText(new URL("state_crypto.ts", workerSrcRoot));
 
   // State goes to the R2_STATE bucket under the spec key layout, encrypted at
   // rest, with current.json written AFTER the state object.

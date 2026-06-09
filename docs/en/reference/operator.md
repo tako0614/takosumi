@@ -1,14 +1,17 @@
 # Operator
 
 An operator runs the Takosumi platform worker and owns storage, auth, dashboard, billing / OIDC surfaces, hosted
-runners, and internal execution profiles. The core public surface is Space, Source, Connection, OpenTofu Capsule,
-Installation, Dependency, Run, RunGroup, Deployment, OutputSnapshot, Billing, and Activity.
+runners, and operator-internal execution boundaries. The core public surface is Space, Source, Connection, Provider Template,
+Provider Env Set, OpenTofu Capsule, Installation, InstallConfig, DeploymentProfile, ProviderBinding,
+Dependency, SourceSnapshot, DependencySnapshot, StateSnapshot, Run, RunGroup, Deployment, OutputSnapshot, Backup,
+Billing, and Activity.
 
 ## Responsibilities
 
 - configure control-plane auth
-- define internal execution profiles (substrate / runner image / resource limits / provider allowlist seed); see [Internal execution profiles](./runner-profiles.md)
-- manage Connections / operator default connections and secret delivery
+- define operator-internal execution boundaries (substrate / runner image / resource limits / provider allowlist seed); see [Operator execution boundaries](./operator-execution-boundaries.md)
+- manage Provider Templates and provider env set policy
+- manage Connections / operator default connections and secret delivery; hosted managed default starts Cloudflare-only
 - manage state backend and lock backend
 - manage OpenTofu runner image / container / queue
 - when using Cloudflare Workers for Platforms, manage the dispatch namespace, outbound Worker, and tenant Worker binding policy
@@ -28,7 +31,7 @@ Integration token rules:
 - raw token values are returned once at creation/rotation time only
 - normal reads expose only a secret reference, expiry, and non-secret metadata
 - tokens are scoped to one Space and one intended capability
-- tokens cannot manage execution profiles, provider credentials, state backends, billing ownership, account tokens, or
+- tokens cannot manage operator execution boundaries, provider credentials, state backends, billing ownership, account tokens, or
   OIDC issuer configuration
 - token creation, rotation, and use are recorded as Activity or internal redacted audit evidence without storing token
   values
@@ -42,8 +45,9 @@ Integration token rules:
 | Account surface     | dashboard, OIDC, billing, credential delivery, audit trail                                                                                |
 | State               | remote state backend and lock evidence                                                                                                    |
 | Policy              | provider allowlist / credential delivery evidence / network policy / allowed host pattern enforcement                                     |
+| Provider templates  | Cloudflare Takosumi-provided evidence, AWS/GCP/GitHub/Kubernetes provider-template policy, and user env set / egress / runner-class evidence |
 | Tenant runtime      | Workers for Platforms dispatch namespace and outbound Worker isolation proof                                                              |
-| Provider live proof | non-production `plan/apply/destroy` evidence for each enabled Cloudflare / AWS / GCP / Azure / Kubernetes / GitHub / DigitalOcean execution boundary |
+| Provider live proof | non-production `plan/apply/destroy` evidence for each enabled execution boundary. MVP uses the Cloudflare reference boundary; AWS / GCP / GitHub / Kubernetes count only after the operator has Connection, network, state, and live-proof evidence. Azure / DigitalOcean and similar providers use provider env set evidence or a later Takosumi-provided promotion |
 | Secret boundary     | leak tests for runner diagnostics, failure audit messages, OpenTofu outputs, and tenant Worker bindings                                   |
 
 ## Local service

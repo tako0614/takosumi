@@ -49,7 +49,8 @@ export const sourceSnapshots = pgTable(
   names.sourceSnapshots,
   {
     id: text("id").primaryKey(),
-    sourceId: text("source_id").notNull(),
+    // Nullable: upload-origin snapshots (takosumi deploy) have no Source.
+    sourceId: text("source_id"),
     snapshotJson: json("snapshot_json").notNull(),
     fetchedAt: text("fetched_at").notNull(),
   },
@@ -60,7 +61,7 @@ export const connections = pgTable(
   names.connections,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
+    spaceId: text("space_id"),
     provider: text("provider").notNull(),
     status: text("status").notNull(),
     connectionJson: json("connection_json").notNull(),
@@ -74,15 +75,28 @@ export const connections = pgTable(
 );
 
 export const secretBlobs = pgTable(names.secretBlobs, {
-  connectionId: text("connection_id").primaryKey(),
+  id: text("id").primaryKey(),
+  connectionId: text("connection_id").notNull(),
+  spaceId: text("space_id"),
+  kind: text("kind").notNull(),
+  ciphertext: text("ciphertext").notNull(),
+  encryptedDek: text("encrypted_dek").notNull(),
+  nonce: text("nonce").notNull(),
+  aad: text("aad").notNull(),
+  keyVersion: integer("key_version").notNull(),
+  createdAt: text("created_at").notNull(),
+  rotatedAt: text("rotated_at"),
   blobJson: json("blob_json").notNull(),
-});
+}, (table) => [
+  uniqueIndex("takosumi_connection_secret_blobs_connection_idx").on(
+    table.connectionId,
+  ),
+]);
 
 export const operatorConnectionDefaults = pgTable(
   names.operatorConnectionDefaults,
   {
     id: text("id").primaryKey(),
-    capability: text("capability").notNull(),
     provider: text("provider").notNull(),
     connectionId: text("connection_id").notNull(),
     defaultJson: json("default_json").notNull(),
@@ -90,8 +104,32 @@ export const operatorConnectionDefaults = pgTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    uniqueIndex("takosumi_operator_connection_defaults_capability_unique").on(
-      table.capability,
+    uniqueIndex("takosumi_operator_connection_defaults_provider_unique").on(
+      table.provider,
+    ),
+  ],
+);
+
+export const providerTemplates = pgTable(
+  names.providerTemplates,
+  {
+    id: text("id").primaryKey(),
+    providerSource: text("provider_source").notNull(),
+    primaryCredentialSource: text("primary_credential_source").notNull(),
+    defaultEligible: integer("default_eligible").notNull(),
+    entryJson: json("entry_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("takosumi_provider_templates_source_unique").on(
+      table.providerSource,
+    ),
+    index("takosumi_provider_templates_primary_credential_source_idx").on(
+      table.primaryCredentialSource,
+    ),
+    index("takosumi_provider_templates_default_eligible_idx").on(
+      table.defaultEligible,
     ),
   ],
 );
@@ -120,7 +158,8 @@ export const installations = pgTable(
     spaceId: text("space_id").notNull(),
     name: text("name").notNull(),
     environment: text("environment").notNull(),
-    sourceId: text("source_id").notNull(),
+    // Nullable: upload-origin installations (takosumi deploy) have no Source.
+    sourceId: text("source_id"),
     installConfigId: text("install_config_id").notNull(),
     currentDeploymentId: text("current_deployment_id"),
     status: text("status").notNull(),
@@ -143,6 +182,8 @@ export const capsuleCompatibilityReports = pgTable(
   names.capsuleCompatibilityReports,
   {
     id: text("id").primaryKey(),
+    sourceId: text("source_id"),
+    installationId: text("installation_id"),
     sourceSnapshotId: text("source_snapshot_id").notNull(),
     level: text("level").notNull(),
     findingsJson: json("findings_json").notNull(),
@@ -157,6 +198,10 @@ export const capsuleCompatibilityReports = pgTable(
   (table) => [
     index("takosumi_capsule_compat_reports_source_snapshot_idx").on(
       table.sourceSnapshotId,
+    ),
+    index("takosumi_capsule_compat_reports_source_idx").on(table.sourceId),
+    index("takosumi_capsule_compat_reports_installation_idx").on(
+      table.installationId,
     ),
     index("takosumi_capsule_compat_reports_level_idx").on(table.level),
   ],
@@ -270,6 +315,7 @@ export const runs = pgTable(
     id: text("id").primaryKey(),
     kind: text("kind").notNull(),
     spaceId: text("space_id").notNull(),
+    sourceId: text("source_id"),
     installationId: text("installation_id"),
     createdAt: text("created_at").notNull(),
     runJson: json("run_json").notNull(),
@@ -277,6 +323,7 @@ export const runs = pgTable(
   (table) => [
     index("takosumi_runs_kind_idx").on(table.kind),
     index("takosumi_runs_space_idx").on(table.spaceId),
+    index("takosumi_runs_source_idx").on(table.sourceId),
     index("takosumi_runs_installation_idx").on(table.installationId),
     index("takosumi_runs_created_at_idx").on(table.createdAt),
   ],
@@ -331,6 +378,20 @@ export const deployments = pgTable(
   ],
 );
 
+export const artifacts = pgTable(
+  names.artifacts,
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    kind: text("kind").notNull(),
+    objectKey: text("object_key").notNull(),
+    digest: text("digest").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("takosumi_artifacts_run_idx").on(table.runId)],
+);
+
 export const billingAccounts = pgTable(
   names.billingAccounts,
   {
@@ -351,6 +412,17 @@ export const billingAccounts = pgTable(
     index("takosumi_billing_accounts_status_idx").on(table.status),
   ],
 );
+
+export const billingPlans = pgTable(names.billingPlans, {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  monthlyBasePrice: integer("monthly_base_price").notNull(),
+  includedCredits: integer("included_credits").notNull(),
+  limitsJson: json("limits_json").notNull(),
+  planJson: json("plan_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
 
 export const spaceSubscriptions = pgTable(
   names.spaceSubscriptions,
@@ -412,6 +484,7 @@ export const creditReservations = pgTable(
     runId: text("run_id").notNull(),
     estimatedCredits: integer("estimated_credits").notNull(),
     status: text("status").notNull(),
+    mode: text("mode").notNull(),
     reservationJson: json("reservation_json").notNull(),
     createdAt: text("created_at").notNull(),
     expiresAt: text("expires_at").notNull(),
@@ -429,7 +502,8 @@ export const credentialMintEvents = pgTable(
     id: text("id").primaryKey(),
     runId: text("run_id").notNull(),
     spaceId: text("space_id").notNull(),
-    installationId: text("installation_id").notNull(),
+    installationId: text("installation_id"),
+    sourceId: text("source_id"),
     connectionId: text("connection_id").notNull(),
     phase: text("phase").notNull(),
     eventJson: json("event_json").notNull(),
@@ -438,6 +512,7 @@ export const credentialMintEvents = pgTable(
   (table) => [
     index("takosumi_credential_mint_events_run_idx").on(table.runId),
     index("takosumi_credential_mint_events_space_idx").on(table.spaceId),
+    index("takosumi_credential_mint_events_source_idx").on(table.sourceId),
   ],
 );
 
@@ -481,8 +556,14 @@ export const backups = pgTable(
   {
     id: text("id").primaryKey(),
     spaceId: text("space_id").notNull(),
+    installationId: text("installation_id"),
+    environment: text("environment"),
+    createdByRunId: text("created_by_run_id"),
     backupJson: json("backup_json").notNull(),
     createdAt: text("created_at").notNull(),
   },
-  (table) => [index("takosumi_backups_space_idx").on(table.spaceId)],
+  (table) => [
+    index("takosumi_backups_space_idx").on(table.spaceId),
+    index("takosumi_backups_installation_idx").on(table.installationId),
+  ],
 );

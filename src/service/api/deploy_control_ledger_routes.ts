@@ -1,7 +1,8 @@
 /**
- * Plan / Apply run ledger + runner-profile routes and the INTERNAL `/v1`
- * Installation / Deployment / DeploymentOutput reads consumed by the accounts
- * plane + CLI (spec §30 binding: NOT part of the public `/api` vocabulary).
+ * Plan / Apply run ledger + operator execution boundary routes and the INTERNAL
+ * `/v1` Installation / Deployment / DeploymentOutput reads consumed by the
+ * accounts plane + CLI (spec §30 binding: NOT part of the public `/api`
+ * vocabulary).
  * This group owns its handlers and an internal descriptor slice used only for
  * route metadata; it is intentionally excluded from the public descriptor
  * inventory surfaced by `/capabilities` and `/openapi.json`.
@@ -10,7 +11,7 @@
 import type {
   CreateApplyRunRequest,
   CreatePlanRunRequest,
-} from "takosumi-contract/deploy-control-api";
+} from "@takosumi/internal/deploy-control-api";
 import {
   defineRoute,
   type DeployControlEndpoint,
@@ -37,17 +38,18 @@ export const DEPLOY_CONTROL_LEDGER_ENDPOINTS: readonly DeployControlEndpoint[] =
     {
       method: "GET",
       path: TAKOSUMI_RUNNER_PROFILES_ROUTE,
-      summary: "Lists OpenTofu runner profiles and provider allowlists.",
+      summary:
+        "Lists operator execution boundaries and provider allowlists for the OpenTofu runner seam.",
       auth: "deploy-control-token",
       operationId: "listRunnerProfiles",
       openapi: { okSchema: "ListRunnerProfilesResponse" },
-      notImplementedMessage: "runner profiles not wired",
+      notImplementedMessage: "operator execution boundaries not wired",
     },
     {
       method: "POST",
       path: TAKOSUMI_PLAN_RUNS_ROUTE,
       summary:
-        "Creates an OpenTofu plan run for a plain module source or an official template (templateId+inputs).",
+        "Creates an OpenTofu plan run for a plain module source or a built-in InstallConfig module (templateId+inputs).",
       auth: "deploy-control-token",
       operationId: "createPlanRun",
       openapi: {
