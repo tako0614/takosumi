@@ -51,11 +51,40 @@ const DEFAULT_ALLOWED_PROVIDERS = new Set([
   "hashicorp/tls",
 ]);
 
+// Default instance-wide resource-type allowlist (Core Specification §29 policy
+// layer "resource-type allowlist"). The managed Takosumi default deliberately
+// admits the *standard, tenant-scoped, data-plane* Cloudflare resource types so
+// a plain Cloudflare Capsule (a Worker, a Pages site, its D1 / KV / Queues / R2
+// data) is installable out of the box without a curated bounded InstallConfig.
+//
+// Excluded on purpose — these are NOT in the default and require an explicit
+// Space/InstallConfig allowlist to ever run, because each can reach beyond the
+// Capsule's own data plane and affect other domains / tenants:
+//   - cloudflare_dns_record  : can repoint arbitrary hostnames (domain / record
+//                              takeover on any zone the token can write).
+//   - cloudflare_workers_route: binds a Worker to an arbitrary hostname/route
+//                              pattern on a zone (production-traffic hijack on
+//                              any zone the token can touch).
+//   - cloudflare_zone / cloudflare_account / *_member / zone- or account-level
+//     settings: account/zone configuration and other-tenant-affecting types are
+//     never added to the managed default.
+//
+// This is a security-boundary widening of the *resource-type* layer only. The
+// other policy layers (Capsule Gate provisioner/filesystem checks, provider
+// allowlist with cloudflare-only managed default, billing/credit reservation,
+// scope/action policy, quota) are unchanged and still apply.
 const DEFAULT_ALLOWED_RESOURCE_TYPES = new Set([
+  // Cloudflare standard data-plane resources (tenant-scoped, no cross-domain
+  // reach). Workers static assets ship inside cloudflare_workers_script in
+  // provider v5, so no separate assets resource type is required.
   "cloudflare_workers_script",
-  "cloudflare_workers_route",
-  "cloudflare_dns_record",
+  "cloudflare_workers_script_subdomain",
+  "cloudflare_pages_project",
+  "cloudflare_d1_database",
+  "cloudflare_queue",
+  "cloudflare_workers_kv_namespace",
   "cloudflare_r2_bucket",
+  // AWS storage + benign helper providers retained from the prior default.
   "aws_s3_bucket",
   "aws_s3_bucket_public_access_block",
   "random_id",

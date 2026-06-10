@@ -526,6 +526,222 @@ output "attachments_bucket" {
   expect(filesystemFinding?.message).toContain("path.module");
 });
 
+test("admits standard Cloudflare data-plane resource types by default", () => {
+  // Promo path: a plain Cloudflare Capsule (a Worker + its D1 / KV / Queues /
+  // R2 / Pages data plane) is installable out of the box, with no curated
+  // bounded InstallConfig and no explicit per-Space allowlist.
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+resource "cloudflare_workers_script" "this" {
+  account_id  = var.account_id
+  script_name = var.name
+  content     = var.content
+}
+
+resource "cloudflare_workers_script_subdomain" "this" {
+  account_id  = var.account_id
+  script_name = cloudflare_workers_script.this.script_name
+  enabled     = true
+}
+
+resource "cloudflare_pages_project" "site" {
+  account_id = var.account_id
+  name       = var.name
+}
+
+resource "cloudflare_d1_database" "db" {
+  account_id = var.account_id
+  name       = var.name
+}
+
+resource "cloudflare_queue" "jobs" {
+  account_id = var.account_id
+  queue_name = var.name
+}
+
+resource "cloudflare_workers_kv_namespace" "cache" {
+  account_id = var.account_id
+  title      = var.name
+}
+
+resource "cloudflare_r2_bucket" "assets" {
+  account_id = var.account_id
+  name       = var.name
+}
+
+output "url" {
+  value = "https://example.workers.dev"
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.resources.every((resource) => resource.allowed)).toBe(true);
+  expect(result.resources.map((resource) => resource.type).sort()).toEqual([
+    "cloudflare_d1_database",
+    "cloudflare_pages_project",
+    "cloudflare_queue",
+    "cloudflare_r2_bucket",
+    "cloudflare_workers_kv_namespace",
+    "cloudflare_workers_script",
+    "cloudflare_workers_script_subdomain",
+  ]);
+  expect(
+    result.findings.some((finding) => finding.code === "resource_type_not_allowed"),
+  ).toBe(false);
+});
+
+test("still rejects domain-takeover Cloudflare resource types by default", () => {
+  // The default allowlist deliberately excludes cross-domain / cross-tenant
+  // reaching types: a DNS record (record/domain takeover) and a Worker route
+  // (binds a Worker to an arbitrary hostname on a zone). These require an
+  // explicit Space/InstallConfig allowlist to ever run.
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+resource "cloudflare_dns_record" "evil" {
+  zone_id = var.zone_id
+  name    = "victim.example.com"
+  type    = "CNAME"
+  content = "attacker.example.net"
+}
+
+resource "cloudflare_workers_route" "hijack" {
+  zone_id = var.zone_id
+  pattern = "*.victim.example.com/*"
+  script  = var.name
+}
+
+output "url" {
+  value = "https://example.workers.dev"
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  const denied = result.resources.filter((resource) => !resource.allowed);
+  expect(denied.map((resource) => resource.type).sort()).toEqual([
+    "cloudflare_dns_record",
+    "cloudflare_workers_route",
+  ]);
+  expect(
+    result.findings.some((finding) => finding.code === "resource_type_not_allowed"),
+  ).toBe(true);
+});
+
+test("still rejects account/zone-level Cloudflare resource types by default", () => {
+  // Account/zone configuration types affect the whole account or other tenants
+  // and are never in the managed default.
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+resource "cloudflare_zone" "z" {
+  account = { id = var.account_id }
+  name    = "victim.example.com"
+}
+
+resource "cloudflare_account_member" "m" {
+  account_id = var.account_id
+  email      = "attacker@example.net"
+  roles      = [var.role_id]
+}
+
+output "id" {
+  value = cloudflare_zone.z.id
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.resources.every((resource) => resource.allowed)).toBe(false);
+  expect(
+    result.findings.some((finding) => finding.code === "resource_type_not_allowed"),
+  ).toBe(true);
+});
+
+test("still rejects arbitrary providers by default", () => {
+  // Widening the resource-type layer does not relax the provider allowlist:
+  // the managed default stays cloudflare/aws/random/tls only.
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    evil = {
+      source = "acme/evil"
+    }
+  }
+}
+
+resource "cloudflare_r2_bucket" "ok" {
+  account_id = var.account_id
+  name       = var.name
+}
+
+output "url" {
+  value = "https://example.workers.dev"
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.providers).toEqual([
+    { source: "acme/evil", aliases: [], allowed: false },
+  ]);
+  expect(
+    result.findings.some((finding) => finding.code === "provider_not_allowed"),
+  ).toBe(true);
+});
+
 test("marks one-touch unsafe constructs as unsupported", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",

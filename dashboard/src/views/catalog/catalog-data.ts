@@ -1,56 +1,69 @@
 /**
- * Curated install catalog ("アプリを選んで入れる" front door).
+ * Capsule Store — a browseable, distributed list of installable Capsules.
+ *
+ * This is a STORE, not an "official catalog with a privileged tier". Anyone can
+ * publish an OpenTofu Capsule at any Git URL and anyone can install it; this
+ * client-side list is just a convenient front shelf of starting points. It has
+ * NO "official" rank: Takosumi's own modules (r2 / s3 / static-site / worker)
+ * sit on the shelf as ordinary entries, exactly like a third-party Capsule
+ * would. We may SAY a module is made by Takosumi in its description, but that
+ * never buys it a privileged install path — the install gate is the same for
+ * everyone. The real entry point is "install any Capsule from any Git URL"
+ * (`/install`); this shelf only saves a beginner from typing a URL by hand.
  *
  * The dashboard's only first input used to be a raw Git URL, which is a hard
- * wall for non-engineers. This module is the curated, client-side list of
- * entries a visitor can browse and install with one click. Each `installable`
- * entry deep-links into the existing `/install` flow with `git` / `ref` / `path`
- * pre-filled (the InstallFromGitView `readPrefill()` reader picks them up), so a
- * user never types a Git URL by hand.
+ * wall for non-engineers, so each `installable` entry deep-links into the
+ * existing `/install` flow with `git` / `ref` / `path` pre-filled (the
+ * InstallFromGitView `readPrefill()` reader picks them up).
  *
  * HONESTY CONTRACT (load-bearing — each installable claim was VERIFIED by
  * running the real compatibility analyzer
  * `src/service/domains/sources/capsule_compatibility.ts` against the exact git
- * path with the exact policy that flows at install time, NOT by assumption):
+ * path with the EXACT INSTANCE-WIDE DEFAULT policy that flows at install time,
+ * NOT by assumption, and NOT through any curated/privileged per-entry config):
  *   - `installable: true` is set ONLY when the analyzer returns a level other
- *     than `unsupported` (ready / auto_capsulized / needs_patch), so `/install`'s
- *     `canContinue()` actually enables. Today that is FOUR entries:
+ *     than `unsupported` (ready / auto_capsulized / needs_patch) under the plain
+ *     default policy, so `/install`'s `canContinue()` actually enables and the
+ *     button is live, not dead. Today that is FOUR entries, ALL passing under the
+ *     default policy with NO per-entry installConfig override:
  *       · cloudflare-r2-storage     -> `ready`            (cloudflare_r2_bucket)
  *       · aws-s3-storage            -> `auto_capsulized`  (aws_s3_bucket)
- *         Both pass under the instance-wide DEFAULT policy (no installConfigId).
- *       · cloudflare-static-site    -> `ready`       under the curated, BOUNDED
- *         InstallConfig `cfg-official-cloudflare-static-site`
- *         (allowedResourceTypes: ["cloudflare_pages_project"]).
- *       · cloudflare-worker-service -> `needs_patch` under the curated, BOUNDED
- *         InstallConfig `cfg-official-talk`
- *         (allowedResourceTypes: ["cloudflare_workers_script",
- *         "cloudflare_workers_script_subdomain"]); the only finding is a `file()`
+ *       · cloudflare-static-site    -> `ready`            (cloudflare_pages_project)
+ *       · cloudflare-worker-service -> `needs_patch`      (cloudflare_workers_script
+ *         + cloudflare_workers_script_subdomain); the only finding is a `file()`
  *         build-artifact warning, NOT an error, so `canContinue()` enables.
- *     The last two need a resource type that is NOT in the instance-wide DEFAULT
- *     allowlist, so they carry an `installConfigId` and the deep link pins it.
- *     CRITICAL: the global default allowlist (DEFAULT_ALLOWED_RESOURCE_TYPES) is
- *     NEVER widened — each curated config's bounded `allowedResourceTypes` is
- *     UNIONed with the default only while THAT config is in effect, scoped to
- *     exactly that vetted first-party module, and is re-enforced at plan/apply.
+ *     The default resource-type allowlist now covers the standard Cloudflare
+ *     building blocks (an operator-level decision to make CF actually deployable),
+ *     so the Store needs NO bounded per-entry InstallConfig and grants NO entry
+ *     a special policy. Abuse is held back NOT by a privileged catalog but by the
+ *     same boundaries every Capsule hits: the Capsule Gate (provisioners banned,
+ *     dangerous resource types excluded), the managed-default provider allowlist
+ *     (Cloudflare only), and billing / credit / quota.
  *   - `installable: false` entries render as "準備中" (coming-soon) cards with NO
  *     install button. Two honest reasons:
- *       (a) The Capsule is real but no SAFE bounded curated InstallConfig exists
- *           that makes it one-click installable. Verified case:
- *             · takos  (cloudflare_d1_database/_queue/_workers_kv_namespace, plus
- *               it needs a separate wrangler step after `tofu apply`, so a single
- *               Takosumi apply is not enough). Self-host via `tofu apply` + one
- *               wrangler step is the supported path for takos today.
- *       (b) It is NOT yet a standalone Takosumi Capsule at all — the bundled
- *           Takos apps (yurucommu / road-to-me / takos-docs / -slide / -excel /
- *           -computer) ship only a `takos_app_manifest` `outputs.tf` with no
- *           `terraform {}` / `provider {}` / `resource {}` blocks. They are
- *           Takos *product* apps consumed by the Takos in-product installer, not
- *           Takosumi Git-URL Capsules, so `/install` would provision nothing.
+ *       (a) The Capsule is real and PASSES the default-policy gate, but a single
+ *           Takosumi apply does not yield a working install. Verified case:
+ *             · takos — its resource types (cloudflare_d1_database / _queue /
+ *               _workers_kv_namespace / _r2_bucket) ARE in the default allowlist
+ *               now, so the analyzer returns `needs_patch` (not `unsupported`),
+ *               but `tofu apply` only provisions the durable infra: the worker
+ *               artifact needs a SEPARATE wrangler step afterward. A one-click
+ *               install would "succeed" yet leave a non-working takos, so it
+ *               stays coming-soon. Self-host via `tofu apply` + one wrangler step
+ *               is the supported path for takos today.
+ *       (b) It is NOT yet an OpenTofu Capsule at all — the bundled Takos apps
+ *           (yurucommu / road-to-me / takos-docs / -slide / -excel / -computer)
+ *           are real Git repos but have not been turned into OpenTofu modules
+ *           yet (no `terraform {}` / `provider {}` / `resource {}` blocks), so
+ *           `/install` would provision nothing. They are first-party to the Takos
+ *           PRODUCT, but to Takosumi they are just ordinary Git-URL Capsules with
+ *           no special standing — they flip to installable the moment someone
+ *           writes their OpenTofu module, not because of who made them.
  *
  * Git URLs are taken verbatim from the ecosystem `.gitmodules` remotes (never
  * fabricated):
  *   - takos      -> https://github.com/tako0614/takos.git
- *   - takosumi   -> https://github.com/tako0614/takosumi.git   (first-party modules)
+ *   - takosumi   -> https://github.com/tako0614/takosumi.git
  *   - yurucommu  -> https://github.com/tako0614/yurucommu.git
  *   - road-to-me -> https://github.com/tako0614/road-to-me.git
  *   - takos-docs / -slide / -excel / -computer -> .../<name>.git
@@ -104,27 +117,11 @@ export interface CatalogEntry {
   /** Module path inside the repo (the OpenTofu Capsule root). */
   readonly path: string;
   /**
-   * True ONLY when this resolves to a genuine, Gate-passing OpenTofu Capsule.
-   * False renders a coming-soon card with no install button.
+   * True ONLY when this resolves to a genuine, Gate-passing OpenTofu Capsule
+   * under the plain instance-wide DEFAULT policy (no privileged per-entry
+   * config). False renders a coming-soon card with no install button.
    */
   readonly installable: boolean;
-  /**
-   * Curated, service-side InstallConfig id this entry installs through. Present
-   * ONLY for installable entries whose module needs a resource type outside the
-   * instance-wide DEFAULT allowlist but is a vetted first-party Capsule: the
-   * compatibility check (and later plan/apply) is gated against this config's
-   * BOUNDED `allowedResourceTypes`, scoped to exactly this module. The default
-   * allowlist is never widened — see the honesty/security contract above. When
-   * absent (e.g. r2/s3, which already pass under the default policy) the install
-   * flow just uses the Space's first available InstallConfig profile.
-   *
-   * These ids are seeded by `officialInstallConfigs()` (official_seed.ts):
-   *   · cfg-official-cloudflare-static-site -> allowedResourceTypes
-   *       ["cloudflare_pages_project"]
-   *   · cfg-official-talk (the worker-service template alias) -> allowedResourceTypes
-   *       ["cloudflare_workers_script", "cloudflare_workers_script_subdomain"]
-   */
-  readonly installConfigId?: string;
   /**
    * Shown on coming-soon cards to explain (plainly) why it is not yet
    * one-click installable. Omitted for installable entries.
@@ -157,20 +154,26 @@ const TAKOS_EXCEL_GIT = "https://github.com/tako0614/takos-excel.git";
 const TAKOS_COMPUTER_GIT = "https://github.com/tako0614/takos-computer.git";
 
 /**
- * The curated catalog. Order is "most useful first": Takos itself, then the
- * first-party storage/compute building blocks, then the coming-soon apps.
- * `installable` is set per the VERIFIED honesty contract above (only the two
- * default-policy-passing storage modules are live install buttons today).
+ * The Store shelf. Order is "most useful first": Takos itself, then the storage
+ * / compute building blocks, then the not-yet-Capsule apps. There is NO
+ * "official" tier — Takosumi-made modules and any third-party Capsule are equal
+ * Store entries. `installable` is set per the VERIFIED honesty contract above:
+ * every live button passes the plain instance-wide DEFAULT policy gate (no
+ * privileged per-entry config), and the rest stay coming-soon.
  */
 export const CATALOG: readonly CatalogEntry[] = [
-  // ---- Takos (the flagship self-host Capsule) -----------------------------
+  // ---- Takos (one Capsule on the shelf, no special standing) --------------
   // HONESTY: verified with the real default-policy compatibility analyzer
-  // (capsule_compatibility.ts) — the takos Capsule uses cloudflare_d1_database
-  // / cloudflare_queue / cloudflare_workers_kv_namespace, which are NOT in the
-  // default allowedResourceTypes, so the Git-URL compatibility check returns
-  // `unsupported`. Showing an install button here would be a DEAD button. Until
-  // the default install policy allows those resource types, this stays
-  // coming-soon (self-host via `tofu apply` is the supported path today).
+  // (capsule_compatibility.ts) under the plain instance-wide default policy —
+  // the takos Capsule's resource types (cloudflare_d1_database / _queue /
+  // _workers_kv_namespace / _r2_bucket) ARE in the default allowlist now, so the
+  // analyzer returns `needs_patch`, NOT `unsupported`. The gate is not why this
+  // stays coming-soon: takos is NOT one-touch installable because a successful
+  // `tofu apply` only provisions the durable infra — the worker artifact still
+  // needs a SEPARATE wrangler step afterward, so a single Takosumi apply does
+  // not yield a running takos. Showing an install button here would be a button
+  // that "succeeds" but leaves a non-working install, so it stays coming-soon
+  // (self-host via `tofu apply` + one wrangler step is the supported path).
   {
     id: "takos",
     title: "Takos 本体",
@@ -183,15 +186,15 @@ export const CATALOG: readonly CatalogEntry[] = [
     path: "deploy/opentofu",
     installable: false,
     comingSoonReason:
-      "Takos 本体は D1 / Queue / KV など多くの部品を使うため、ワンクリック導入の対応は準備中です（現在は自分のインフラへの導入で動かせます）。",
+      "Takos 本体は、導入（apply）でインフラを作ったあとにもう 1 つ別の手順（wrangler でアプリ本体を上げる）が必要なため、ここからのワンクリック導入は準備中です（現在は自分のインフラへの導入で動かせます）。",
   },
 
-  // ---- First-party building blocks (genuine OpenTofu modules) -------------
+  // ---- Building blocks (Takosumi-made OpenTofu modules, no special tier) ---
   {
     id: "cloudflare-r2-storage",
     title: "ファイル置き場（Cloudflare R2）",
     summary:
-      "Cloudflare R2 にファイル保存用のバケットを 1 つ作るシンプルな部品です。",
+      "Cloudflare R2 にファイル保存用のバケットを 1 つ作るシンプルな部品です（Takosumi 製）。",
     category: "storage",
     icon: "r2",
     gitUrl: TAKOSUMI_GIT,
@@ -201,58 +204,49 @@ export const CATALOG: readonly CatalogEntry[] = [
     note: "適用には Cloudflare の接続が必要です。",
     requiresConnection: { provider: "cloudflare", label: "Cloudflare" },
   },
-  // HONESTY: this module uses `cloudflare_pages_project`, which is NOT in the
-  // instance-wide DEFAULT allowlist (so the default-policy check returns
-  // `unsupported`). It IS a vetted first-party Capsule, so it installs through
-  // the curated, BOUNDED InstallConfig `cfg-official-cloudflare-static-site`
-  // (allowedResourceTypes: ["cloudflare_pages_project"]). VERIFIED by running
-  // the real analyzer with that bounded policy -> `ready` (no errors). The
-  // global default allowlist is unchanged; the allowance is scoped to this one
-  // config and re-enforced at plan/apply.
+  // HONESTY: this module's only resource is `cloudflare_pages_project`, a
+  // standard Cloudflare building block now covered by the instance-wide DEFAULT
+  // allowlist. VERIFIED by running the real analyzer under the plain default
+  // policy (no per-entry config) -> `ready` (no errors), so `canContinue()`
+  // enables. No privileged Store config involved.
   {
     id: "cloudflare-static-site",
     title: "静的サイト公開（Cloudflare Pages）",
     summary:
-      "Cloudflare Pages の公開プロジェクトを作り、静的サイトを置けるようにします。",
+      "Cloudflare Pages の公開プロジェクトを作り、静的サイトを置けるようにします（Takosumi 製）。",
     category: "compute",
     icon: "site",
     gitUrl: TAKOSUMI_GIT,
     ref: "main",
     path: "opentofu-modules/cloudflare-static-site/module",
     installable: true,
-    installConfigId: "cfg-official-cloudflare-static-site",
     note: "適用には Cloudflare の接続が必要です。",
     requiresConnection: { provider: "cloudflare", label: "Cloudflare" },
   },
-  // HONESTY: this module uses `cloudflare_workers_script` (in the default
-  // allowlist) AND `cloudflare_workers_script_subdomain` (NOT in the default
-  // allowlist), so the default-policy check returns `unsupported`. It IS a
-  // vetted first-party Capsule, so it installs through the curated, BOUNDED
-  // InstallConfig `cfg-official-talk` (the worker-service template alias;
-  // allowedResourceTypes: ["cloudflare_workers_script",
-  // "cloudflare_workers_script_subdomain"]). VERIFIED by running the real
-  // analyzer with that bounded policy -> `needs_patch` (only a `file()` build-
-  // artifact warning, NOT `unsupported`), so `canContinue()` enables. The
-  // global default allowlist is unchanged.
+  // HONESTY: this module uses `cloudflare_workers_script` and
+  // `cloudflare_workers_script_subdomain`, both standard Cloudflare building
+  // blocks now covered by the instance-wide DEFAULT allowlist. VERIFIED by
+  // running the real analyzer under the plain default policy (no per-entry
+  // config) -> `needs_patch` (only a `file()` build-artifact warning, NOT
+  // `unsupported`), so `canContinue()` enables. No privileged Store config.
   {
     id: "cloudflare-worker-service",
     title: "小さなサーバー（Cloudflare Worker）",
     summary:
-      "Cloudflare 上に Worker（小さなサーバー）を 1 つ立てるための部品です。",
+      "Cloudflare 上に Worker（小さなサーバー）を 1 つ立てるための部品です（Takosumi 製）。",
     category: "compute",
     icon: "worker",
     gitUrl: TAKOSUMI_GIT,
     ref: "main",
     path: "opentofu-modules/cloudflare-worker-service/module",
     installable: true,
-    installConfigId: "cfg-official-talk",
     note: "適用には Cloudflare の接続が必要です。",
     requiresConnection: { provider: "cloudflare", label: "Cloudflare" },
   },
   {
     id: "aws-s3-storage",
     title: "ファイル置き場（AWS S3）",
-    summary: "AWS S3 にファイル保存用のバケットを 1 つ作るシンプルな部品です。",
+    summary: "AWS S3 にファイル保存用のバケットを 1 つ作るシンプルな部品です（Takosumi 製）。",
     category: "storage",
     icon: "s3",
     gitUrl: TAKOSUMI_GIT,
@@ -263,7 +257,12 @@ export const CATALOG: readonly CatalogEntry[] = [
     requiresConnection: { provider: "aws", label: "AWS" },
   },
 
-  // ---- Coming-soon apps (Takos product apps, not yet standalone Capsules) --
+  // ---- Git-URL Capsules that are not yet OpenTofu modules ------------------
+  // HONESTY: these are real Git repos, but they do not yet contain an OpenTofu
+  // module (no terraform/provider/resource blocks), so `/install` would
+  // provision nothing. They flip to installable when someone writes the module,
+  // not because of who made them — to Takosumi they are ordinary Git-URL
+  // Capsules with no special standing.
   {
     id: "yurucommu",
     title: "ゆるコミュ",
@@ -275,7 +274,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     path: ".",
     installable: false,
     comingSoonReason:
-      "現在は Takos 本体に同梱されるアプリです。Takosumi 単体で入れられる Capsule は準備中です。",
+      "このリポジトリはまだ OpenTofu module 化されていないため、Git URL からそのまま入れられません（module ができ次第、入れられるようになります）。",
   },
   {
     id: "road-to-me",
@@ -288,7 +287,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     path: ".",
     installable: false,
     comingSoonReason:
-      "Takosumi 単体で入れられる Capsule は準備中です。今は紹介のみ表示しています。",
+      "このリポジトリはまだ OpenTofu module 化されていないため、Git URL からそのまま入れられません（module ができ次第、入れられるようになります）。",
   },
   {
     id: "takos-docs",
@@ -301,7 +300,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     path: ".",
     installable: false,
     comingSoonReason:
-      "現在は Takos 本体に同梱されるアプリです。Takosumi 単体 Capsule は準備中です。",
+      "このリポジトリはまだ OpenTofu module 化されていないため、Git URL からそのまま入れられません（module ができ次第、入れられるようになります）。",
   },
   {
     id: "takos-slide",
@@ -314,7 +313,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     path: ".",
     installable: false,
     comingSoonReason:
-      "現在は Takos 本体に同梱されるアプリです。Takosumi 単体 Capsule は準備中です。",
+      "このリポジトリはまだ OpenTofu module 化されていないため、Git URL からそのまま入れられません（module ができ次第、入れられるようになります）。",
   },
   {
     id: "takos-excel",
@@ -327,7 +326,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     path: ".",
     installable: false,
     comingSoonReason:
-      "現在は Takos 本体に同梱されるアプリです。Takosumi 単体 Capsule は準備中です。",
+      "このリポジトリはまだ OpenTofu module 化されていないため、Git URL からそのまま入れられません（module ができ次第、入れられるようになります）。",
   },
   {
     id: "takos-computer",
@@ -340,7 +339,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     path: ".",
     installable: false,
     comingSoonReason:
-      "現在は Takos 本体に同梱されるアプリです。Takosumi 単体 Capsule は準備中です。",
+      "このリポジトリはまだ OpenTofu module 化されていないため、Git URL からそのまま入れられません（module ができ次第、入れられるようになります）。",
   },
 ];
 
@@ -381,12 +380,8 @@ export function installHref(entry: CatalogEntry): string {
   params.set("git", entry.gitUrl);
   params.set("ref", entry.ref);
   params.set("path", entry.path);
-  // Curated entries pin their bounded InstallConfig so the compatibility check
-  // (and plan/apply) is gated against that module's minimal allowlist instead of
-  // only the instance-wide default. Omitted when the module already passes under
-  // the default policy (r2/s3).
-  if (entry.installConfigId) {
-    params.set("installConfig", entry.installConfigId);
-  }
+  // Every Store entry installs through the SAME plain `/install` flow under the
+  // instance-wide default policy — no per-entry privileged config is pinned, so
+  // the deep link carries only the Git address (git / ref / path).
   return `/install?${params.toString()}`;
 }
