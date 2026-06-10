@@ -65,8 +65,6 @@ export interface CreateApiAppOptions {
    * behavior without service middleware.
    */
   readonly requestCorrelation?: RegisterRequestCorrelationOptions | false;
-  /** Optional extension point for mounting current/future route modules. */
-  readonly configure?: (app: HonoApp) => void | Promise<void>;
 }
 
 export async function createApiApp(
@@ -146,8 +144,6 @@ export async function createApiApp(
       async (c) => c.json(await createOpenApiDocument()),
     );
   }
-
-  await options.configure?.(app);
 
   return app;
 }

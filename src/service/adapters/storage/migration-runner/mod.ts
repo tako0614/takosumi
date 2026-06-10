@@ -279,31 +279,6 @@ export const noopStorageMigrationLock: StorageMigrationLock = Object.freeze({
   },
 });
 
-export function createPostgresAdvisoryStorageMigrationLock(
-  classId = 20260430,
-  objectId = 1,
-): StorageMigrationLock {
-  return {
-    async runExclusive<T>(
-      client: SqlClient,
-      fn: () => T | Promise<T>,
-    ): Promise<T> {
-      await client.query(
-        "select pg_advisory_lock(:classId, :objectId)",
-        { classId, objectId },
-      );
-      try {
-        return await fn();
-      } finally {
-        await client.query(
-          "select pg_advisory_unlock(:classId, :objectId)",
-          { classId, objectId },
-        );
-      }
-    },
-  };
-}
-
 async function ensureMigrationLedger(client: SqlClient): Promise<void> {
   await client.query(
     `create table if not exists storage_migrations (

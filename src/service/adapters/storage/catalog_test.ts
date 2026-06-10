@@ -51,6 +51,10 @@ const mirroredMigrationFiles: readonly {
     fileName: "20260430000043_takosumi_provider_templates.sql",
     migrationId: "deploy.takosumi_provider_templates.create",
   },
+  {
+    fileName: "20260430000045_takosumi_provider_template_dead_tables.sql",
+    migrationId: "deploy.takosumi_provider_template_dead_tables.drop",
+  },
 ];
 
 test("migration catalog creates every declared storage table", () => {

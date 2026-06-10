@@ -206,34 +206,6 @@ function outputValueMatchesType(
   }
 }
 
-/**
- * Legacy compatibility projection for callers that still need a non-sensitive
- * raw-output map. Installation OutputSnapshot recording uses
- * `projectOutputAllowlistSpaceOutputs` instead so both `spaceOutputs` and
- * `publicOutputs` pass through InstallConfig.outputAllowlist and type
- * validation.
- */
-export function spaceOutputsFromOpenTofu(
-  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
-): Readonly<Record<string, JsonValue>> {
-  if (!outputs) return {};
-  const result: Record<string, JsonValue> = {};
-  if (Array.isArray(outputs as unknown)) {
-    for (const output of outputs as readonly DeploymentOutput[]) {
-      if ((output as { sensitive?: boolean }).sensitive === true) continue;
-      result[output.name] = output.value;
-    }
-    return result;
-  }
-  for (const [name, output] of Object.entries(
-    outputs as OpenTofuOutputEnvelope,
-  )) {
-    if (output.sensitive === true) continue;
-    result[name] = output.value;
-  }
-  return result;
-}
-
 export function normalizeDeploymentOutputs(
   outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
 ): readonly DeploymentOutput[] {

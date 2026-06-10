@@ -10,7 +10,6 @@ import type {
   InstallationEventRecord,
   InstallationRecord,
   LedgerAccountRecord,
-  RuntimeBindingRecord,
   SpaceKind,
   SpaceRecord,
 } from "../ledger.ts";
@@ -287,16 +286,6 @@ export interface AppInstallationRow {
   billing_account_id: string | null;
   status: InstallationRecord["status"];
   created_by_subject: TakosumiSubject;
-  created_at: TimeValue;
-  updated_at: TimeValue;
-}
-
-export interface RuntimeBindingRow {
-  runtime_binding_id: string;
-  installation_id: string;
-  mode: RuntimeBindingRecord["mode"];
-  target_type: RuntimeBindingRecord["targetType"];
-  target_id: string;
   created_at: TimeValue;
   updated_at: TimeValue;
 }
@@ -596,20 +585,6 @@ export function appInstallationFromRow(
     billingAccountId: optional(row.billing_account_id),
     status: row.status,
     createdBySubject: row.created_by_subject,
-    createdAt: millis(row.created_at),
-    updatedAt: millis(row.updated_at),
-  };
-}
-
-export function runtimeBindingFromRow(
-  row: RuntimeBindingRow,
-): RuntimeBindingRecord {
-  return {
-    runtimeBindingId: row.runtime_binding_id,
-    installationId: row.installation_id,
-    mode: row.mode,
-    targetType: row.target_type,
-    targetId: row.target_id,
     createdAt: millis(row.created_at),
     updatedAt: millis(row.updated_at),
   };

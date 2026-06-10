@@ -8,16 +8,27 @@ import {
   InMemoryOpenTofuDeploymentStore,
   type StoredSource,
 } from "./store.ts";
-import {
-  CloudflareD1DrizzleSourceStore,
-  type D1SourceStoreSlice,
-} from "../../../../worker/src/d1_drizzle_source_store.ts";
 import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "./sqlite_fake_d1.ts";
 import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+
+interface D1SourceStoreSlice {
+  putSource(source: StoredSource): Promise<StoredSource>;
+  getSource(id: string): Promise<StoredSource | undefined>;
+  listSources(spaceId?: string): Promise<readonly StoredSource[]>;
+  deleteSource(id: string): Promise<boolean>;
+
+  putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
+  getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined>;
+  listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]>;
+
+  putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun>;
+  getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined>;
+  listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]>;
+}
 
 function source(overrides: Partial<StoredSource> = {}): StoredSource {
   return {
@@ -73,7 +84,6 @@ function syncRun(overrides: Partial<SourceSyncRun> = {}): SourceSyncRun {
 const STORES: ReadonlyArray<[string, () => D1SourceStoreSlice]> = [
   ["in-memory", () => new InMemoryOpenTofuDeploymentStore()],
   ["d1", () => new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1())],
-  ["d1-drizzle", () => new CloudflareD1DrizzleSourceStore(new SqliteFakeD1())],
 ];
 
 for (const [name, make] of STORES) {

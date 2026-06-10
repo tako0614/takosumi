@@ -639,7 +639,7 @@ export interface OpenTofuDeploymentControllerDependencies {
   /**
    * Credential Vault broker. When present, the controller exposes the
    * Connection lifecycle (`createConnection` / `listConnections` /
-   * `testConnection` / `deleteConnection`) and `mintCredentialBundle`. When
+   * `testConnection` / `deleteConnection`). When
    * absent, those methods throw `not_implemented`. The Vault is intentionally
    * Wired into plan/apply dispatch from Phase 1B onward: the queue consumer
    * mints a {@link CredentialBundle} just before the container dispatch and
@@ -4021,18 +4021,6 @@ export class OpenTofuDeploymentController {
 
   async deleteConnection(connectionId: string): Promise<boolean> {
     return await this.#connections.deleteConnection(connectionId);
-  }
-
-  /**
-   * Mints a credential bundle for a space + providers. Exposed for Phase 1B
-   * dispatch; NOT wired into plan/apply here. Returns an opaque
-   * {@link CredentialBundle} that never serializes its values.
-   */
-  async mintCredentialBundle(
-    spaceId: string,
-    providers: readonly string[],
-  ): Promise<CredentialBundle> {
-    return await this.#connections.mintCredentialBundle(spaceId, providers);
   }
 
   #requireVault(): ConnectionVault {

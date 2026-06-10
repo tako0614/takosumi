@@ -2279,4 +2279,19 @@ alter table takosumi_runs
   add constraint takosumi_runs_kind_check
   check (kind in ('plan','destroy_plan','apply','destroy_apply','source_sync'));`,
     },
+    {
+      id: "deploy.takosumi_provider_template_dead_tables.drop",
+      version: 45,
+      domain: "deploy",
+      description:
+        "Drop the never-read provider-template / provider-env-set ledger tables created by the v43 migration. A global sed rename collapsed two distinct env-set tables onto the same takosumi_provider_env_sets name (the second create was a silent no-op) and corrupted the entries CHECK constraint, and no live read path queries these tables: provider templates persist in takosumi_provider_templates and provider env sets persist as user_env_set Connections. v43 is checksum-locked, so this forward migration removes the dead schema instead of editing v43 in place. Idempotent: the tables were never created on healthy databases, so each drop is a no-op there.",
+      sql: `drop index if exists takosumi_provider_env_sets_pack_idx;
+drop index if exists takosumi_provider_env_sets_status_idx;
+drop index if exists takosumi_provider_env_sets_provider_source_idx;
+drop index if exists takosumi_provider_env_sets_space_idx;
+drop table if exists takosumi_provider_env_sets;
+drop index if exists takosumi_provider_templates_entries_default_eligible_idx;
+drop index if exists takosumi_provider_templates_entries_primary_credential_source_idx;
+drop table if exists takosumi_provider_templates_entries;`,
+    },
   ]);

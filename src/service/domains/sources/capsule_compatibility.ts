@@ -520,27 +520,6 @@ function collectProviders(
     .sort((a, b) => a.source.localeCompare(b.source));
 }
 
-function canonicalProviderSource(source: string): string {
-  if (source.startsWith("registry.opentofu.org/")) return source;
-  if (source === "cloudflare/cloudflare") {
-    return "registry.opentofu.org/cloudflare/cloudflare";
-  }
-  if (
-    source === "hashicorp/aws" ||
-    source === "hashicorp/google" ||
-    source === "hashicorp/kubernetes"
-  ) {
-    return `registry.opentofu.org/${source}`;
-  }
-  if (source === "integrations/github") {
-    return "registry.opentofu.org/integrations/github";
-  }
-  if (/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/u.test(source)) {
-    return `registry.opentofu.org/${source}`;
-  }
-  return source;
-}
-
 function collectResources(
   files: readonly CapsuleSourceFile[],
   allowedResources: ReadonlySet<string>,
