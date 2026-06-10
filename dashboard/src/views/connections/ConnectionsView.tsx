@@ -188,17 +188,15 @@ function ConnectionsInner() {
           <table class="data-table">
             <thead>
               <tr>
-                <th>Capability</th>
-                <th>Provider</th>
-                <th>Connection</th>
+                <th>プロバイダー</th>
+                <th>接続</th>
               </tr>
             </thead>
             <tbody>
               <For each={operatorDefaults() ?? []}>
                 {(d) => (
                   <tr>
-                    <td><code>{d.capability}</code></td>
-                    <td>{d.provider}</td>
+                    <td><code>{d.provider}</code></td>
                     <td><code>{d.connectionId}</code></td>
                   </tr>
                 )}

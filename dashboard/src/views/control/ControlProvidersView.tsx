@@ -167,12 +167,6 @@ function ProviderCard(props: { readonly provider: ProviderTemplate }) {
           </dd>
         </div>
         <div>
-          <dt>Aliases</dt>
-          <dd>
-            <InlineCodeList items={provider().aliases} />
-          </dd>
-        </div>
-        <div>
           <dt>Env</dt>
           <dd>
             <InlineCodeList items={provider().recommendedEnvNames} />
