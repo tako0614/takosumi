@@ -2802,6 +2802,21 @@ export class OpenTofuDeploymentController {
         `plan run ${planRun.id} contains destructive changes; resubmit apply with confirmDestructive=true`,
       );
     }
+    // Approval gate (spec §10.6 always-two-stage destroy / invariant 22). A
+    // destroy plan is "always two-stage": it must carry a RECORDED approval
+    // (POST /runs/:id/approve, which sets planRun.approval) before it can apply.
+    // Without this the approval surfaced as `awaitingApproval` in the dashboard
+    // is display-only and the single most destructive operation would apply
+    // unreviewed. (A non-destroy delete/replace flagged `requiresApproval` is
+    // additionally gated by the confirmDestructive flow above for template
+    // Capsules; broadening the recorded-approval requirement to every
+    // requiresApproval plan is a separate, intentional decision.)
+    if (planRun.operation === "destroy" && !planRun.approval) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${planRun.id} is a destroy awaiting approval; approve it (POST /runs/${planRun.id}/approve) before apply`,
+      );
+    }
     await checkApplyExpected(request.expected, planRun);
     if (planRun.installationId) {
       await this.#requireCurrentPlannedInstallation(planRun);
