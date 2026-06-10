@@ -5,7 +5,6 @@
 
 import { expect, test } from "bun:test";
 import {
-  composePolicyVerdict,
   evaluateActionPolicy,
   evaluateProviderAllowlist,
   evaluateQuotaPolicy,
@@ -286,91 +285,4 @@ test("quota policy enforces total and per-resource mutating counts", () => {
 test("quota policy treats invalid limits as deny reasons", () => {
   const result = evaluateQuotaPolicy([], { resources: -1 });
   expect(result.exceeded).toEqual(["resources limit is invalid"]);
-});
-
-// --- composition -----------------------------------------------------------
-
-test("composePolicyVerdict passes a clean create plan", () => {
-  const verdict = composePolicyVerdict({
-    provider: evaluateProviderAllowlist(["cloudflare"], { allowed: ["cloudflare"] }),
-    resource: evaluateResourceAllowlist(
-      [{ address: "a", type: "cloudflare_r2_bucket", actions: ["create"] }],
-      ["cloudflare_r2_bucket"],
-    ),
-    action: evaluateActionPolicy([
-      { address: "a", type: "cloudflare_r2_bucket", actions: ["create"] },
-    ]),
-  });
-  expect(verdict.status).toBe("pass");
-  expect(verdict.requiresApproval).toBe(false);
-  expect(verdict.reasons).toEqual([]);
-});
-
-test("composePolicyVerdict denies on a disallowed resource type", () => {
-  const verdict = composePolicyVerdict({
-    resource: evaluateResourceAllowlist(
-      [{ address: "a", type: "aws_s3_bucket", actions: ["create"] }],
-      ["cloudflare_r2_bucket"],
-    ),
-  });
-  expect(verdict.status).toBe("deny");
-  expect(verdict.requiresApproval).toBe(false);
-  expect(verdict.reasons.join("\n")).toMatch(/aws_s3_bucket is not allowed/);
-});
-
-test("composePolicyVerdict denies on a denied provider", () => {
-  const verdict = composePolicyVerdict({
-    provider: evaluateProviderAllowlist(["aws"], {
-      allowed: ["*"],
-      denied: ["aws"],
-    }),
-  });
-  expect(verdict.status).toBe("deny");
-});
-
-test("composePolicyVerdict passes but requires approval on a delete/replace", () => {
-  const verdict = composePolicyVerdict({
-    resource: evaluateResourceAllowlist(
-      [{ address: "a", type: "cloudflare_r2_bucket", actions: ["delete", "create"] }],
-      ["cloudflare_r2_bucket"],
-    ),
-    action: evaluateActionPolicy([
-      { address: "a", type: "cloudflare_r2_bucket", actions: ["delete", "create"] },
-    ]),
-  });
-  expect(verdict.status).toBe("pass");
-  expect(verdict.requiresApproval).toBe(true);
-});
-
-test("composePolicyVerdict requires approval for a destroy flow", () => {
-  const verdict = composePolicyVerdict({ destroy: true });
-  expect(verdict.status).toBe("pass");
-  expect(verdict.requiresApproval).toBe(true);
-});
-
-test("composePolicyVerdict deny dominates requiresApproval", () => {
-  const verdict = composePolicyVerdict({
-    resource: evaluateResourceAllowlist(
-      [{ address: "a", type: "aws_s3_bucket", actions: ["delete"] }],
-      ["cloudflare_r2_bucket"],
-    ),
-    action: evaluateActionPolicy([
-      { address: "a", type: "aws_s3_bucket", actions: ["delete"] },
-    ]),
-  });
-  expect(verdict.status).toBe("deny");
-  // The action layer still surfaces the approval requirement.
-  expect(verdict.requiresApproval).toBe(true);
-});
-
-test("composePolicyVerdict folds the post-MVP scope/quota seams when populated", () => {
-  const scope = composePolicyVerdict({ scope: { outOfScope: ["res.a"] } });
-  expect(scope.status).toBe("deny");
-  expect(scope.reasons.join("\n")).toMatch(/res.a is out of scope/);
-  const quota = composePolicyVerdict({ quota: { exceeded: ["cloudflare"] } });
-  expect(quota.status).toBe("deny");
-  expect(quota.reasons.join("\n")).toMatch(/quota cloudflare is exceeded/);
-  // Empty/absent post-MVP inputs do not deny.
-  const clean = composePolicyVerdict({ scope: {}, quota: {} });
-  expect(clean.status).toBe("pass");
 });

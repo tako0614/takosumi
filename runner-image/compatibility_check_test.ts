@@ -773,7 +773,10 @@ esac
       '"registry.opentofu.org/cloudflare/cloudflare"',
     );
     expect(seenConfig).toContain("direct");
-    expect(seenConfig).toContain("exclude");
+    // strict mirror is fail-closed: the direct registry excludes everything so a
+    // provider missing from the mirror include list cannot silently pull from the
+    // public registry, it fails at `tofu init` instead.
+    expect(seenConfig).toContain('exclude = ["*"]');
   } finally {
     if (previousPath === undefined) {
       delete Bun.env.PATH;

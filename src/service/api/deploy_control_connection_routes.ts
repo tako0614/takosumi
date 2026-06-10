@@ -411,7 +411,11 @@ export function mountDeployControlConnectionRoutes(
           "connectionCreate",
         );
         const request = build(body);
-        ensureConnectionPermission(auth.principal, request.spaceId);
+        ensureConnectionPermission(
+          auth.principal,
+          request.spaceId,
+          request.scope,
+        );
         const response = await controller.createConnection(request);
         await recordConnectionCreatedActivity(
           ctx,
@@ -488,7 +492,7 @@ export function mountDeployControlConnectionRoutes(
           c,
           "connectionOAuthStart",
         );
-        ensureConnectionPermission(auth.principal, body.spaceId);
+        ensureConnectionPermission(auth.principal, body.spaceId, body.scope);
         return c.json(
           await helper.start({
             provider,
@@ -514,7 +518,11 @@ export function mountDeployControlConnectionRoutes(
           provider,
           completion.request,
         );
-        ensureConnectionPermission(auth.principal, request.spaceId);
+        ensureConnectionPermission(
+          auth.principal,
+          request.spaceId,
+          request.scope,
+        );
         const response = await controller.createConnection(request);
         await recordConnectionCreatedActivity(
           ctx,

@@ -36,6 +36,7 @@ import {
   providerEnvRule,
   requiredEnvGroupsForProvider,
   requiredEnvGroupsSatisfied,
+  sameProviderFamily,
 } from "takosumi-contract/provider-env-rules";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import type {
@@ -344,6 +345,17 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     // present it must be a real id.
     if (input.spaceId !== undefined || input.scope === "space") {
       requireNonEmpty(input.spaceId, "spaceId");
+    }
+    // Privilege-escalation guard: an operator default (spec §8) has NO owning
+    // Space, so a caller-supplied `scope: "operator"` must never win against a
+    // present spaceId. A hybrid `{ spaceId, scope: "operator" }` row would
+    // otherwise bypass the `scope === "space" && spaceId mismatch` cross-tenant
+    // guard at mint time, letting any Space bind another Space's secret.
+    if (input.spaceId !== undefined && input.scope === "operator") {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        "operator-scoped connections must not have an owning space (omit spaceId for scope: operator)",
+      );
     }
     if (input.authMethod !== "static_secret") {
       // Phase 1 implements static_secret only; other methods are reserved.
@@ -1535,7 +1547,7 @@ function selectConnectionForProvider(
       c.status !== "expired" &&
       !connectionIsExpired(c, now) &&
       !isSourceGitKind(c.kind) &&
-      providerMatches(c.provider, provider),
+      sameProviderFamily(c.provider, provider),
   );
   const sorted = matches.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return sorted.find((c) => c.status === "verified") ?? sorted[0];
@@ -1548,13 +1560,6 @@ function assertConnectionVerified(connection: Connection): void {
       `connection ${connection.id} is ${connection.status} (not verified)`,
     );
   }
-}
-
-function providerMatches(left: string, right: string): boolean {
-  if (left === right) return true;
-  const lrule = providerEnvRule(left);
-  const rrule = providerEnvRule(right);
-  return lrule !== undefined && lrule === rrule;
 }
 
 function isAwsProvider(provider: string): boolean {

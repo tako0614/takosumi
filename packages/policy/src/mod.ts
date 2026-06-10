@@ -16,15 +16,18 @@
  *     sanitized provider scope metadata when configured.
  *   - {@link evaluateQuotaPolicy} — §25 layer 10 (quota): mutating resource
  *     count ceilings.
- *   - {@link composePolicyVerdict} — folds the layer results into a single
- *     {@link PolicyVerdict} (pass / warn / deny + requiresApproval + reasons).
  *
  * The package is deliberately free of service / contract-store imports: it
  * operates on plain plan data (required providers, resource-change lines,
  * allowlists) so both the RunnerProfile engine and the controller's post-runner
- * evaluation can reuse it without pulling in any service dependency.
+ * evaluation can reuse it without pulling in any service dependency. The one
+ * exception is the dependency-free `providerMatches` from the shared
+ * provider-env-rule table, hoisted there so the runner, vault, and policy
+ * layers share a single provider-name matcher.
  *
  */
+
+import { providerMatches } from "takosumi-contract/provider-env-rules";
 
 /**
  * One resource change line projected from `tofu show -json tfplan`
@@ -310,109 +313,6 @@ export function evaluateActionPolicy(
 }
 
 // ---------------------------------------------------------------------------
-// composition
-// ---------------------------------------------------------------------------
-
-export type PolicyStatus = "pass" | "warn" | "deny";
-
-export interface PolicyVerdict {
-  readonly status: PolicyStatus;
-  /**
-   * Whether an explicit approval is required before apply may proceed. Set by
-   * the action policy (delete/replace) and, when composed in, the destroy flow.
-   */
-  readonly requiresApproval: boolean;
-  /** Aggregated reasons across the composed layers (never includes values). */
-  readonly reasons: readonly string[];
-}
-
-/**
- * Scope-boundary inputs (§25 layer 6). A non-empty `outOfScope` list denies.
- */
-export interface ScopeBoundaryInput {
-  readonly outOfScope?: readonly string[];
-  readonly reasons?: readonly string[];
-}
-
-/**
- * Quota inputs (§25 layer 10). A non-empty `exceeded` list denies.
- */
-export interface QuotaInput {
-  readonly exceeded?: readonly string[];
-  readonly reasons?: readonly string[];
-}
-
-export interface ComposePolicyVerdictInput {
-  /** §25 layer 4 — provider allowlist result. */
-  readonly provider?: ProviderAllowlistResult;
-  /** §25 layer 5 — resource-type allowlist result. */
-  readonly resource?: ResourceAllowlistResult;
-  /** §25 layer 7 — action policy result. */
-  readonly action?: ActionPolicyResult;
-  /**
-   * Destroy flow (§25 action policy `destroy: destroy flow`): a destroy plan
-   * always requires approval, independent of its resource changes.
-   */
-  readonly destroy?: boolean;
-  /**
-   * §25 layer 6 — scope boundary.
-   */
-  readonly scope?: ScopeBoundaryInput;
-  /**
-   * §25 layer 10 — quota.
-   */
-  readonly quota?: QuotaInput;
-}
-
-/**
- * Folds the layer results into a single {@link PolicyVerdict} (§25). A provider
- * denial / not-allowed, a missing-provider gate trip, or a disallowed resource
- * type DENIES the plan (it cannot apply). A delete/replace action or a destroy
- * flow requires approval but does not deny (the plan succeeds, parked awaiting
- * approval). `warn` is reserved for future advisory layers; the MVP layers emit
- * only `pass` / `deny`.
- *
- */
-export function composePolicyVerdict(
-  input: ComposePolicyVerdictInput,
-): PolicyVerdict {
-  const reasons: string[] = [];
-  let deny = false;
-  if (input.provider) {
-    reasons.push(...input.provider.reasons);
-    if (
-      input.provider.missingProviders ||
-      input.provider.denied.length > 0 ||
-      input.provider.notAllowed.length > 0
-    ) {
-      deny = true;
-    }
-  }
-  if (input.resource) {
-    reasons.push(...input.resource.reasons);
-    if (input.resource.disallowedResourceTypes.length > 0) deny = true;
-  }
-  if (input.scope?.outOfScope && input.scope.outOfScope.length > 0) {
-    deny = true;
-    reasons.push(...(input.scope.reasons ??
-      input.scope.outOfScope.map((r) => `resource ${r} is out of scope`)));
-  }
-  if (input.quota?.exceeded && input.quota.exceeded.length > 0) {
-    deny = true;
-    reasons.push(...(input.quota.reasons ??
-      input.quota.exceeded.map((r) => `quota ${r} is exceeded`)));
-  }
-  const requiresApproval = (input.action?.requiresApproval ?? false) ||
-    (input.destroy ?? false);
-  if (input.action) reasons.push(...input.action.reasons);
-  return {
-    status: deny ? "deny" : "pass",
-    requiresApproval,
-    reasons,
-  };
-}
-
-// ---------------------------------------------------------------------------
 // internals
 // ---------------------------------------------------------------------------
 
@@ -465,14 +365,10 @@ function providerDenied(
 }
 
 /**
- * Hierarchical, one-directional provider match: a fully-qualified provider
- * address (`registry/namespace/type`) matches a short allowlist rule (its
- * trailing type), e.g. `registry.opentofu.org/cloudflare/cloudflare` matches
- * rule `cloudflare`. The reverse must NOT hold — a specific fully-qualified
- * RULE must not admit an ambiguous bare provider name (e.g. rule
- * `registry.opentofu.org/hashicorp/aws` must not match provider `aws`), which
- * would silently widen the allowlist (and inconsistently narrow the denylist).
+ * Hierarchical, one-directional provider match (`registry/namespace/type` vs a
+ * trailing short rule), hoisted to the shared provider-env-rule table so the
+ * runner, the vault, and the policy layers agree byte-for-byte. Re-exported here
+ * so the existing `takosumi-policy` import surface (and its directional test)
+ * stays stable. See `sameProviderFamily` for the bidirectional variant.
  */
-export function providerMatches(provider: string, rule: string): boolean {
-  return provider === rule || provider.endsWith(`/${rule}`);
-}
+export { providerMatches };

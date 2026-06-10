@@ -16,6 +16,7 @@ import type { ApiEndpoint, ApiEndpointMethod } from "./route_families.ts";
 import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
 import type {
   ConnectionScopeHints,
+  ConnectionScopeKind,
   CreateConnectionRequest,
   DeployControlErrorCode,
   DeployControlErrorEnvelope,
@@ -694,11 +695,23 @@ export function ensureSpaceCreatePermission(
  * Operator-scoped connections (spec §8: no owning Space) are instance-wide;
  * only the unrestricted bearer may touch them. A space-scoped connection
  * falls back to the normal space permission check.
+ *
+ * An explicit `scope: "operator"` request must come from the unrestricted
+ * bearer (`spaceIds === "*"`) even when a spaceId is also supplied: a hybrid
+ * `{ spaceId, scope: "operator" }` request must not let a space session mint an
+ * operator default (privilege-escalation guard; the vault rejects the row too).
  */
 export function ensureConnectionPermission(
   principal: DeployControlPrincipal,
   spaceId: string | undefined,
+  scope?: ConnectionScopeKind,
 ): void {
+  if (scope === "operator" && principal.spaceIds !== "*") {
+    throw new OpenTofuControllerError(
+      "permission_denied",
+      `deploy control principal ${principal.actor} cannot manage operator-scoped connections`,
+    );
+  }
   if (spaceId !== undefined) {
     ensureSpacePermission(principal, spaceId);
     return;

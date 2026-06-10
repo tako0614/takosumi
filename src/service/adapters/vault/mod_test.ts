@@ -134,6 +134,28 @@ test("register accepts unknown provider env sets and rejects non-static authMeth
   ).rejects.toThrow(/not implemented/);
 });
 
+test("register rejects a hybrid { spaceId, scope: operator } privilege escalation", async () => {
+  const { store, vault } = makeVault();
+  // An operator default (spec §8) has NO owning Space, so a caller-supplied
+  // `scope: "operator"` must never win against a present spaceId — otherwise the
+  // row would bypass the cross-tenant mint guard and let any Space bind it.
+  const err = await vault
+    .register({
+      spaceId: "space_a",
+      scope: "operator",
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
+    })
+    .catch((e) => e);
+  expect(err).toBeInstanceOf(ConnectionVaultError);
+  expect((err as ConnectionVaultError).code).toBe("invalid_argument");
+  expect((err as ConnectionVaultError).message).toMatch(/owning space/);
+
+  // Nothing was persisted by the rejected register.
+  expect(await store.listConnections("space_a")).toEqual([]);
+});
+
 test("mint round-trips the decrypted values into a credential bundle", async () => {
   const { store, vault } = makeVault();
   await markVerified(

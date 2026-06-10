@@ -228,8 +228,6 @@ export interface OpenTofuDeploymentStore {
   getCompatibilityCheckRun(id: string): Promise<Run | undefined>;
   putBackupRun(run: Run): Promise<Run>;
   getBackupRun(id: string): Promise<Run | undefined>;
-  putRestoreRun(run: Run): Promise<Run>;
-  getRestoreRun(id: string): Promise<Run | undefined>;
 
   // Artifact ledger rows (spec §30 artifacts). Artifact bytes live in object
   // storage; these rows keep non-secret run-scoped pointers for audit and
@@ -471,7 +469,6 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   readonly #applyRuns = new Map<string, ApplyRun>();
   readonly #sourceSyncRuns = new Map<string, SourceSyncRun>();
   readonly #backupRuns = new Map<string, Run>();
-  readonly #restoreRuns = new Map<string, Run>();
   readonly #spaces = new Map<string, Space>();
   readonly #installConfigs = new Map<string, InstallConfig>();
   readonly #installations = new Map<string, Installation>();
@@ -605,18 +602,6 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
 
   getBackupRun(id: string): Promise<Run | undefined> {
     return Promise.resolve(this.#backupRuns.get(id));
-  }
-
-  putRestoreRun(run: Run): Promise<Run> {
-    if (run.type !== "restore") {
-      return Promise.reject(new Error("putRestoreRun only accepts restore runs"));
-    }
-    this.#restoreRuns.set(run.id, run);
-    return Promise.resolve(run);
-  }
-
-  getRestoreRun(id: string): Promise<Run | undefined> {
-    return Promise.resolve(this.#restoreRuns.get(id));
   }
 
   putArtifactRecord(record: ArtifactRecord): Promise<ArtifactRecord> {

@@ -25,7 +25,10 @@ import type {
   OperatorConnectionDefault,
   ManagedDefaultStatus,
 } from "takosumi-contract/provider-bindings";
-import { providerEnvRule } from "takosumi-contract/provider-env-rules";
+import {
+  providerEnvRule,
+  sameProviderFamily,
+} from "takosumi-contract/provider-env-rules";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 
@@ -203,11 +206,11 @@ export class ConnectionsService {
     for (const required of requiredProviders) {
       // Respect any explicit binding for the provider (default / connection /
       // manual / disabled): the user's configuration wins over the fall-through.
-      if (explicit.some((entry) => providersMatch(required, entry.provider))) {
+      if (explicit.some((entry) => sameProviderFamily(required, entry.provider))) {
         continue;
       }
       const match = operatorDefaults.find((entry) =>
-        providersMatch(required, entry.provider)
+        sameProviderFamily(required, entry.provider)
       );
       // Fail closed: no operator default for this provider -> no credential.
       if (!match) continue;
@@ -314,20 +317,6 @@ export function mintableConnectionIds(
     if (entry.connection) ids.add(entry.connection.id);
   }
   return [...ids];
-}
-
-/**
- * True when two provider identifiers name the same OpenTofu provider, matching
- * a short name (`cloudflare`) against a canonical registry address
- * (`registry.opentofu.org/cloudflare/cloudflare`) through the shared
- * provider-env-rule table. Mirrors the vault's `providerMatches` so the
- * operator-default fall-through keys consistently with credential mint.
- */
-function providersMatch(left: string, right: string): boolean {
-  if (left === right) return true;
-  const lrule = providerEnvRule(left);
-  const rrule = providerEnvRule(right);
-  return lrule !== undefined && lrule === rrule;
 }
 
 export function createConnectionsService(
