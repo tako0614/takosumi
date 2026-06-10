@@ -786,6 +786,19 @@ export interface OpenTofuDeploymentControllerDependencies {
    * this. Omitted means self-host style `disabled`.
    */
   readonly defaultBillingSettings?: BillingSettings;
+  /**
+   * Per-Space cumulative write-apply ceiling for runs that resolve to an
+   * operator-default (managed) credential while billing is NOT in `enforce`
+   * mode. It protects the OPERATOR'S key on the managed/free default, where no
+   * credit reservation gates apply: a Space whose cumulative write-applies
+   * (create / update / destroy_apply) reach this cap can no longer apply on the
+   * operator key until billing is upgraded to `enforce` or it brings its own
+   * Connection. Keyed on operator-default-credential usage, NOT billing mode
+   * alone, so a self-hoster applying on their OWN Connection is never capped.
+   * Omitted (the self-host build target default) means uncapped — a self-hoster
+   * owns their own infrastructure, so only the hosted platform worker sets this.
+   */
+  readonly managedDefaultApplyCap?: number;
 }
 
 export interface DeployControlActorContext {
@@ -955,6 +968,7 @@ export class OpenTofuDeploymentController {
   readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
   readonly #dependencyValueSealer?: DependencyValueSealer;
   readonly #defaultBillingSettings: BillingSettings;
+  readonly #managedDefaultApplyCap?: number;
   readonly #seededProfiles: Promise<void>;
   readonly #seededProviderTemplates: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
@@ -976,6 +990,12 @@ export class OpenTofuDeploymentController {
     this.#dependencyValueSealer = dependencies.dependencyValueSealer;
     this.#defaultBillingSettings =
       dependencies.defaultBillingSettings ?? DISABLED_BILLING_SETTINGS;
+    this.#managedDefaultApplyCap =
+      dependencies.managedDefaultApplyCap !== undefined &&
+      Number.isFinite(dependencies.managedDefaultApplyCap) &&
+      dependencies.managedDefaultApplyCap > 0
+        ? Math.floor(dependencies.managedDefaultApplyCap)
+        : undefined;
     this.#defaultRunnerProfileId =
       dependencies.defaultRunnerProfileId ?? "cloudflare-default";
     this.#newId = dependencies.newId ?? newId;
@@ -2821,6 +2841,14 @@ export class OpenTofuDeploymentController {
     if (planRun.installationId) {
       await this.#requireCurrentPlannedInstallation(planRun);
     }
+    // Operator-economic ceiling (P2): a managed/free default Space is NOT in
+    // `enforce` mode, so the credit-reservation path that gates apply under
+    // `enforce` does nothing here. Without this, a Space could spend unbounded
+    // amounts on the OPERATOR'S key by repeatedly applying. Reject apply once a
+    // Space's cumulative write-applies reach the operator-configured cap — but
+    // ONLY for runs that actually resolve to an operator-default credential, so
+    // a self-hoster applying on their own Connection is never capped.
+    await this.#assertManagedDefaultApplyCap(planRun);
     // Source snapshot revalidation (spec invariant 10): an env-driven plan is
     // pinned to a SourceSnapshot; the apply must run against the SAME snapshot
     // the plan was reviewed against. Re-read the persisted plan and confirm its
@@ -5396,6 +5424,66 @@ export class OpenTofuDeploymentController {
       );
     }
     return space;
+  }
+
+  /**
+   * Per-Space cumulative write-apply ceiling on the managed (operator-key)
+   * default (P2 operator-economic guard). Apply on the `enforce`-mode hosted
+   * SaaS path is already gated by credit reservation; a free/default Space is
+   * NOT in `enforce` mode, so on the operator-pays managed key there is
+   * otherwise no in-code ceiling on how much a Space can spend by repeatedly
+   * applying. This gate fail-closes the unbounded hole, but ONLY when:
+   *   1. the operator configured a cap (`managedDefaultApplyCap`) — omitted on
+   *      the self-host build target, which is uncapped;
+   *   2. billing is NOT `enforce` (the credit path already covers `enforce`);
+   *   3. the run actually resolves to an operator-default credential (a
+   *      `default`-mode binding backed by an operator-scoped Connection) — so a
+   *      self-hoster (or any Space) applying on its OWN Connection is never
+   *      capped. The cap protects the OPERATOR'S key, not billing mode alone.
+   * The cumulative count is the Space's total successful write-applies, derived
+   * from the per-Installation `currentStateGeneration` (bumped +1 by every
+   * create / update / destroy_apply), so no new ledger write is introduced.
+   */
+  async #assertManagedDefaultApplyCap(planRun: PlanRun): Promise<void> {
+    const cap = this.#managedDefaultApplyCap;
+    if (cap === undefined) return;
+    // A destroy is the way to STOP spending on the operator key, so it must
+    // never be blocked by the spend cap — capping teardown would trap a Space
+    // at its ceiling with no way to reclaim the operator's resources.
+    if (planRun.operation === "destroy") return;
+    const settings = await this.#billingSettingsForSpace(planRun.spaceId);
+    if (settings.mode === "enforce") return;
+    if (!(await this.#runUsesOperatorDefaultCredential(planRun))) return;
+    const installations = await this.#store.listInstallations(planRun.spaceId);
+    const appliedCount = installations.reduce(
+      (total, installation) => total + (installation.currentStateGeneration ?? 0),
+      0,
+    );
+    if (appliedCount >= cap) {
+      throw new OpenTofuControllerError(
+        "resource_exhausted",
+        `managed_apply_cap_reached: space ${planRun.spaceId} has reached the ` +
+          `operator-default apply cap (${appliedCount}/${cap}); connect your own ` +
+          `provider Connection or enable enforce-mode billing to continue`,
+      );
+    }
+  }
+
+  /**
+   * True when a run's provider bindings resolve to an operator-default
+   * credential: a `default`-mode binding that fell through to an OPERATOR-scoped
+   * Connection (the managed key). A run that binds only the Space's own
+   * Connections (mode `connection`), `manual`, or `disabled` returns false, so
+   * self-host on an owned Connection is never treated as managed usage. A run
+   * without installation context (no resolvable bindings) also returns false.
+   */
+  async #runUsesOperatorDefaultCredential(planRun: PlanRun): Promise<boolean> {
+    const resolved = await this.#resolveRunProviderBindings(planRun);
+    if (!resolved) return false;
+    return resolved.some(
+      (entry) =>
+        entry.mode === "default" && entry.connection?.scope === "operator",
+    );
   }
 
   async #evaluatePlanBillingReservation(input: {

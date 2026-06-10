@@ -16,6 +16,8 @@ function connection(input: {
   readonly scope: "operator" | "space";
   readonly spaceId?: string;
   readonly provider?: string;
+  readonly status?: Connection["status"];
+  readonly tokenVending?: boolean;
 }): Connection {
   const provider = input.provider ?? "cloudflare";
   return {
@@ -25,7 +27,22 @@ function connection(input: {
     kind: provider === "aws" ? "aws_assume_role" : "cloudflare_api_token",
     scope: input.scope,
     authMethod: "static_secret",
-    status: "verified",
+    status: input.status ?? "verified",
+    ...(input.tokenVending
+      ? {
+          scopeHints: {
+            cloudflareTokenVending: {
+              policies: [
+                {
+                  effect: "allow",
+                  permission_groups: [{ id: "pg_account" }],
+                  resources: { "com.cloudflare.api.account.*": "*" },
+                },
+              ],
+            },
+          },
+        }
+      : {}),
     envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: NOW,
     updatedAt: NOW,
@@ -215,7 +232,12 @@ test("managed-default status projects covered providers without credentials", as
     newId: (prefix) => `${prefix}_${++n}`,
     now: () => NOW,
   });
-  await store.putConnection(connection({ id: "conn_op_cf", scope: "operator" }));
+  // The cloudflare default must vend temporary tokens to be apply-usable; aws
+  // (assume-role) is not a temporary-only provider, so a verified static
+  // connection covers it.
+  await store.putConnection(
+    connection({ id: "conn_op_cf", scope: "operator", tokenVending: true }),
+  );
   await store.putConnection(
     connection({ id: "conn_op_aws", scope: "operator", provider: "aws" }),
   );
@@ -235,6 +257,56 @@ test("managed-default status projects covered providers without credentials", as
   expect(status).toEqual({ available: true, providers: ["aws", "cloudflare"] });
   expect(JSON.stringify(status)).not.toContain("conn_op_cf");
   expect(JSON.stringify(status)).not.toContain("connectionId");
+});
+
+test("a static (non-vending) cloudflare default is NOT reported available", async () => {
+  const { store, service } = await setup();
+  // A verified static cloudflare default mints a non-temporary token that apply
+  // rejects (credential_policy_failed: requires temporary credentials), so the
+  // dashboard must NOT claim it can be installed via managed default.
+  await store.putConnection(connection({ id: "conn_op_cf", scope: "operator" }));
+  await service.putOperatorConnectionDefault({
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+  });
+
+  const status = await service.getManagedDefaultStatus();
+  expect(status).toEqual({ available: false, providers: [] });
+});
+
+test("a token-vending verified cloudflare default IS reported available", async () => {
+  const { store, service } = await setup();
+  await store.putConnection(
+    connection({ id: "conn_op_cf", scope: "operator", tokenVending: true }),
+  );
+  await service.putOperatorConnectionDefault({
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+  });
+
+  const status = await service.getManagedDefaultStatus();
+  expect(status).toEqual({ available: true, providers: ["cloudflare"] });
+});
+
+test("an unverified cloudflare default is NOT reported available", async () => {
+  const { store, service } = await setup();
+  // Even with token vending, a pending/unverified Connection cannot satisfy
+  // apply-time policy, so it is fail-closed unavailable.
+  await store.putConnection(
+    connection({
+      id: "conn_op_cf",
+      scope: "operator",
+      tokenVending: true,
+      status: "pending",
+    }),
+  );
+  await service.putOperatorConnectionDefault({
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+  });
+
+  const status = await service.getManagedDefaultStatus();
+  expect(status).toEqual({ available: false, providers: [] });
 });
 
 // --- resolveProviderBindingsForRun: the operator-default fall-through (§7.1) ---

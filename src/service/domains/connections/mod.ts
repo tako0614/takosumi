@@ -109,18 +109,45 @@ export class ConnectionsService {
    * to decide whether to nudge the user to "connect your own cloud first" — it
    * should only nudge when the managed default is NOT available.
    *
+   * A default only counts as available when it is plausibly usable at apply
+   * time: its Connection must be `verified`, and for providers whose runner
+   * credential policy requires temporary credentials (cloudflare — the
+   * supply-chain ceiling sets `requireTemporary`), the Connection must have
+   * token vending configured (`scopeHints.cloudflareTokenVending`). A static
+   * (non-vending) cloudflare default mints a non-temporary token that apply then
+   * rejects (`credential_policy_failed: requires temporary credentials`), so it
+   * must NOT be reported as available here.
+   *
    * The projection is intentionally credential-free: it reads the operator
-   * defaults but returns ONLY a boolean and the covered provider source names.
-   * The operator default's id / connectionId / secret material NEVER leave this
-   * method — they stay on the bearer-gated §30 surface. Binding resolution
-   * (`resolveProviderBindings`) is unaffected.
+   * defaults' Connections to gate availability but returns ONLY a boolean and
+   * the covered provider source names. The operator default's id / connectionId
+   * / secret material NEVER leave this method — they stay on the bearer-gated §30
+   * surface. Binding resolution (`resolveProviderBindings`) is unaffected.
    */
   async getManagedDefaultStatus(): Promise<ManagedDefaultStatus> {
     const defaults = await this.#store.listOperatorConnectionDefaults();
-    const providers = [
-      ...new Set(defaults.map((entry) => entry.provider)),
-    ].sort((a, b) => a.localeCompare(b));
+    const usable = new Set<string>();
+    for (const entry of defaults) {
+      const connection = await this.#store.getConnection(entry.connectionId);
+      if (this.#managedDefaultUsable(connection)) usable.add(entry.provider);
+    }
+    const providers = [...usable].sort((a, b) => a.localeCompare(b));
     return { available: providers.length > 0, providers };
+  }
+
+  /**
+   * Whether an operator default's Connection is plausibly usable to satisfy
+   * apply-time credential policy. Fail-closed: a missing or non-`verified`
+   * Connection is never usable, and a cloudflare default is usable only when it
+   * vends temporary tokens (the cloudflare-default runner profile rejects static
+   * credentials).
+   */
+  #managedDefaultUsable(connection: Connection | undefined): boolean {
+    if (!connection || connection.status !== "verified") return false;
+    if (providerEnvRule(connection.provider)?.shortName === "cloudflare") {
+      return connection.scopeHints?.cloudflareTokenVending !== undefined;
+    }
+    return true;
   }
 
   /**
