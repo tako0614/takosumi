@@ -79,7 +79,6 @@ import type {
   BillingAccount,
   BillingMode,
   BillingPlan,
-  BillingProvider,
   BillingSettings,
   CreditBalance,
   CreditReservation,
@@ -90,7 +89,6 @@ import type {
   UsageEventKind,
   UsageEventSource,
 } from "takosumi-contract/billing";
-import { billingReservationRequired } from "takosumi-contract/billing";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import type { SourcesService } from "../sources/mod.ts";
 import type {
@@ -217,6 +215,12 @@ import {
 } from "../connections/mod.ts";
 import { SourceManagement } from "./source_management.ts";
 import { ConnectionManagement } from "./connection_management.ts";
+import { DeploymentQuery, requireInstallation } from "./deployment_query.ts";
+import {
+  BillingService,
+  DISABLED_BILLING_SETTINGS,
+  type ReconcileStripeSpaceSubscriptionInput,
+} from "./billing_service.ts";
 import {
   canonicalProviderAddress,
   compactLayeredPolicy,
@@ -246,6 +250,7 @@ export {
 } from "./runner_profiles.ts";
 export { providerMatches } from "./policy.ts";
 export { deploymentOutputsFromOpenTofu } from "./projection.ts";
+export type { ReconcileStripeSpaceSubscriptionInput } from "./billing_service.ts";
 
 function publicInstallation(installation: Installation): PublicInstallation {
   const { installType: _installType, ...publicRecord } = installation;
@@ -489,77 +494,7 @@ export type EnqueueRun = (dispatch: OpenTofuRunDispatch) => Promise<void>;
  * heartbeat means a sibling consumer holds the run and the duplicate no-ops.
  */
 const RUN_HEARTBEAT_STALE_MS = 10 * 60 * 1000;
-const DISABLED_BILLING_SETTINGS: BillingSettings = {
-  mode: "disabled",
-  provider: "none",
-};
-
-export interface ReconcileStripeSpaceSubscriptionInput {
-  readonly stripeCustomerId: string;
-  readonly stripeSubscriptionId: string;
-  readonly stripePriceId?: string;
-  readonly planCode: string;
-  readonly status: string;
-  readonly currentPeriodStartUnix?: number;
-  readonly currentPeriodEndUnix?: number;
-}
-const BILLING_RESERVATION_TTL_MS = 24 * 60 * 60 * 1000;
 const PROVIDER_CATALOG_SEED_TIMESTAMP = "2026-06-08T00:00:00.000Z";
-
-/**
- * Transparent, deterministic plan cost model (core-spec §32.3.1).
- *
- * `credits = max(PLAN_CREDIT_BASE, Σ per-change weight)` where each plan
- * resource change contributes the weight of its heaviest OpenTofu action. A
- * replacement (`["delete","create"]` / `["create","delete"]`) is therefore
- * billed once as a create (`max(delete=1, create=2) = 2`) rather than
- * double-counted as create + delete. `read` / `no-op` contribute nothing.
- *
- * Future runner-minute cost (`runner_minute` usage) is intentionally NOT folded
- * in here; it is metered separately as a `UsageEvent` after the run and would be
- * added to this estimate as a separate additive term when introduced.
- */
-const PLAN_CREDIT_BASE = 1;
-const PLAN_CREDIT_WEIGHT_CREATE = 2;
-const PLAN_CREDIT_WEIGHT_REPLACE = 2;
-const PLAN_CREDIT_WEIGHT_UPDATE = 1;
-const PLAN_CREDIT_WEIGHT_DELETE = 1;
-const PLAN_CREDIT_WEIGHT_READ = 0;
-const PLAN_CREDIT_WEIGHT_NOOP = 0;
-
-/** Weight of a single OpenTofu plan action token. Unknown tokens cost nothing. */
-function planActionWeight(action: string): number {
-  switch (action.trim()) {
-    case "create":
-      return PLAN_CREDIT_WEIGHT_CREATE;
-    case "replace":
-      return PLAN_CREDIT_WEIGHT_REPLACE;
-    case "update":
-      return PLAN_CREDIT_WEIGHT_UPDATE;
-    case "delete":
-      return PLAN_CREDIT_WEIGHT_DELETE;
-    case "read":
-      return PLAN_CREDIT_WEIGHT_READ;
-    case "no-op":
-      return PLAN_CREDIT_WEIGHT_NOOP;
-    default:
-      return 0;
-  }
-}
-
-/**
- * Weight of one plan resource change: the heaviest of its action tokens. Taking
- * the max (rather than the sum) keeps a replacement, which OpenTofu emits as the
- * two-token `["delete","create"]`, billed as a single create instead of
- * create + delete.
- */
-function planChangeWeight(change: PlanResourceChange): number {
-  let weight = 0;
-  for (const action of change.actions) {
-    weight = Math.max(weight, planActionWeight(action));
-  }
-  return weight;
-}
 
 function initialProviderTemplates(): readonly ProviderTemplate[] {
   return [
@@ -967,6 +902,8 @@ export class OpenTofuDeploymentController {
   readonly #mutationChains = new Map<string, Promise<void>>();
   readonly #sources: SourceManagement;
   readonly #connections: ConnectionManagement;
+  readonly #deployments: DeploymentQuery;
+  readonly #billing: BillingService;
   #connectionsService?: ConnectionsService;
 
   constructor(dependencies: OpenTofuDeploymentControllerDependencies = {}) {
@@ -977,6 +914,7 @@ export class OpenTofuDeploymentController {
     this.#sourcesService = dependencies.sourcesService;
     this.#sources = new SourceManagement(dependencies.sourcesService);
     this.#connections = new ConnectionManagement(this.#store, this.#vault);
+    this.#deployments = new DeploymentQuery(this.#store, publicInstallation);
     this.#installationCoordination = dependencies.installationCoordination;
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
@@ -993,6 +931,18 @@ export class OpenTofuDeploymentController {
       dependencies.defaultRunnerProfileId ?? "cloudflare-default";
     this.#newId = dependencies.newId ?? newId;
     this.#now = dependencies.now ?? (() => Date.now());
+    this.#billing = new BillingService({
+      store: this.#store,
+      newId: this.#newId,
+      now: this.#now,
+      defaultBillingSettings: this.#defaultBillingSettings,
+      ...(this.#managedDefaultApplyCap !== undefined
+        ? { managedDefaultApplyCap: this.#managedDefaultApplyCap }
+        : {}),
+      requireSpace: (spaceId) => this.#requireSpace(spaceId),
+      resolveRunProviderBindings: (planRun) =>
+        this.#resolveRunProviderBindings(planRun),
+    });
     // Default to an inline dispatcher: run the consumer immediately so local /
     // node substrates and tests keep the historical synchronous semantics.
     this.#enqueueRun =
@@ -1052,8 +1002,8 @@ export class OpenTofuDeploymentController {
   }> {
     requireNonEmptyString(spaceId, "spaceId");
     await this.#requireSpace(spaceId);
-    await this.#reconcileSpaceMonthlyCredits(spaceId);
-    const settings = await this.#billingSettingsForSpace(spaceId);
+    await this.#billing.reconcileSpaceMonthlyCredits(spaceId);
+    const settings = await this.#billing.billingSettingsForSpace(spaceId);
     const balance = await this.#store.getCreditBalance(spaceId);
     const account = await this.#store.getBillingAccountForOwner(
       "space",
@@ -1252,7 +1202,7 @@ export class OpenTofuDeploymentController {
         "credits must be a positive integer",
       );
     }
-    await this.#reconcileSpaceMonthlyCredits(spaceId);
+    await this.#billing.reconcileSpaceMonthlyCredits(spaceId);
     const existing = await this.#store.getCreditBalance(spaceId);
     const nowIso = new Date(this.#now()).toISOString();
     const balance = await this.#store.putCreditBalance({
@@ -1270,15 +1220,7 @@ export class OpenTofuDeploymentController {
     spaceId: string,
     input: { readonly billingSettings: BillingSettings },
   ): Promise<{ readonly billing: { readonly settings: BillingSettings } }> {
-    requireNonEmptyString(spaceId, "spaceId");
-    const space = await this.#requireSpace(spaceId);
-    const settings = normalizeBillingSettings(input.billingSettings);
-    await this.#store.putSpace({
-      ...space,
-      billingSettings: settings,
-      updatedAt: new Date(this.#now()).toISOString(),
-    });
-    return { billing: { settings } };
+    return await this.#billing.changeSpaceSubscription(spaceId, input);
   }
 
   async reconcileStripeSpaceSubscription(
@@ -1289,52 +1231,7 @@ export class OpenTofuDeploymentController {
     readonly subscription: SpaceSubscription;
     readonly billing: { readonly settings: BillingSettings };
   }> {
-    requireNonEmptyString(spaceId, "spaceId");
-    const space = await this.#requireSpace(spaceId);
-    requireNonEmptyString(input.stripeCustomerId, "stripeCustomerId");
-    requireNonEmptyString(input.stripeSubscriptionId, "stripeSubscriptionId");
-    requireNonEmptyString(input.planCode, "planCode");
-    const nowIso = new Date(this.#now()).toISOString();
-    const existingAccount = await this.#store.getBillingAccountForOwner(
-      "space",
-      spaceId,
-    );
-    const billingAccountId = existingAccount?.id ?? `bill_space_${spaceId}`;
-    const billingAccount = await this.#store.putBillingAccount({
-      id: billingAccountId,
-      ownerType: "space",
-      ownerId: spaceId,
-      provider: "stripe",
-      stripeCustomerId: input.stripeCustomerId,
-      status: stripeCoreBillingStatus(input.status),
-      createdAt: existingAccount?.createdAt ?? nowIso,
-      updatedAt: nowIso,
-    });
-    const existingSubscription =
-      await this.#store.getSpaceSubscription(spaceId);
-    const subscription = await this.#store.putSpaceSubscription({
-      id: existingSubscription?.id ?? input.stripeSubscriptionId,
-      spaceId,
-      billingAccountId: billingAccount.id,
-      planId: input.planCode,
-      status: stripeSpaceSubscriptionStatus(input.status),
-      currentPeriodStart: input.currentPeriodStartUnix
-        ? new Date(input.currentPeriodStartUnix * 1000).toISOString()
-        : (existingSubscription?.currentPeriodStart ?? nowIso),
-      currentPeriodEnd: input.currentPeriodEndUnix
-        ? new Date(input.currentPeriodEndUnix * 1000).toISOString()
-        : (existingSubscription?.currentPeriodEnd ?? nowIso),
-      createdAt: existingSubscription?.createdAt ?? nowIso,
-      updatedAt: nowIso,
-    });
-    const settings = stripeSpaceBillingSettings(input.status);
-    await this.#store.putSpace({
-      ...space,
-      billingAccountId: billingAccount.id,
-      billingSettings: settings,
-      updatedAt: nowIso,
-    });
-    return { billingAccount, subscription, billing: { settings } };
+    return await this.#billing.reconcileStripeSpaceSubscription(spaceId, input);
   }
 
   async createPlanRun(
@@ -2796,7 +2693,7 @@ export class OpenTofuDeploymentController {
     // Space's cumulative write-applies reach the operator-configured cap — but
     // ONLY for runs that actually resolve to an operator-default credential, so
     // a self-hoster applying on their own Connection is never capped.
-    await this.#assertManagedDefaultApplyCap(planRun);
+    await this.#billing.assertManagedDefaultApplyCap(planRun);
     // Source snapshot revalidation (spec invariant 10): an env-driven plan is
     // pinned to a SourceSnapshot; the apply must run against the SAME snapshot
     // the plan was reviewed against. Re-read the persisted plan and confirm its
@@ -4196,33 +4093,11 @@ export class OpenTofuDeploymentController {
   }
 
   async getApplyRun(id: string): Promise<ApplyRunResponse> {
-    requireNonEmptyString(id, "applyRunId");
-    const applyRun = await this.#store.getApplyRun(id);
-    if (!applyRun) {
-      throw new OpenTofuControllerError(
-        "not_found",
-        `apply run ${id} not found`,
-      );
-    }
-    const installation = applyRun.installationId
-      ? await this.#store.getInstallation(applyRun.installationId)
-      : undefined;
-    const deployment = applyRun.deploymentId
-      ? await this.#store.getDeployment(applyRun.deploymentId)
-      : undefined;
-    return {
-      applyRun,
-      ...(installation
-        ? { installation: publicInstallation(installation) }
-        : {}),
-      ...(deployment ? { deployment } : {}),
-    };
+    return await this.#deployments.getApplyRun(id);
   }
 
   async getInstallation(id: string): Promise<GetInstallationResponse> {
-    return {
-      installation: publicInstallation(await this.#requireInstallation(id)),
-    };
+    return await this.#deployments.getInstallation(id);
   }
 
   /**
@@ -4236,37 +4111,19 @@ export class OpenTofuDeploymentController {
   async listActiveInstallations(
     limit: number,
   ): Promise<readonly Installation[]> {
-    if (!Number.isFinite(limit) || limit <= 0) return [];
-    const all = await this.#store.listInstallations();
-    return all.filter((i) => i.status === "active").slice(0, Math.floor(limit));
+    return await this.#deployments.listActiveInstallations(limit);
   }
 
   async listDeployments(
     installationId: string,
   ): Promise<ListDeploymentsResponse> {
-    await this.#requireInstallation(installationId);
-    return {
-      deployments: await this.#store.listDeployments(installationId),
-    };
+    return await this.#deployments.listDeployments(installationId);
   }
 
   async listDeploymentOutputs(
     installationId: string,
   ): Promise<ListDeploymentOutputsResponse> {
-    const installation = await this.#requireInstallation(installationId);
-    if (!installation.currentDeploymentId) return { outputs: [] };
-    const deployment = await this.#store.getDeployment(
-      installation.currentDeploymentId,
-    );
-    const outputsPublic = deployment?.outputsPublic ?? {};
-    return {
-      outputs: Object.entries(outputsPublic).map(([name, value]) => ({
-        name,
-        kind: name,
-        value: value as JsonValue,
-        sensitive: false,
-      })),
-    };
+    return await this.#deployments.listDeploymentOutputs(installationId);
   }
 
   /**
@@ -4274,15 +4131,7 @@ export class OpenTofuDeploymentController {
    * /api/deployments/:id`). A missing id is a typed 404.
    */
   async getDeployment(id: string): Promise<Deployment> {
-    requireNonEmptyString(id, "deploymentId");
-    const deployment = await this.#store.getDeployment(id);
-    if (!deployment) {
-      throw new OpenTofuControllerError(
-        "not_found",
-        `deployment ${id} not found`,
-      );
-    }
-    return deployment;
+    return await this.#deployments.getDeployment(id);
   }
 
   /**
@@ -5026,7 +4875,7 @@ export class OpenTofuDeploymentController {
             : {}),
           ...(runPolicy ? { policy: runPolicy } : {}),
         });
-      const billingPolicy = await this.#evaluatePlanBillingReservation({
+      const billingPolicy = await this.#billing.evaluatePlanBillingReservation({
         planRun: running,
         result,
         now,
@@ -5307,67 +5156,6 @@ export class OpenTofuDeploymentController {
     );
   }
 
-  async #billingSettingsForSpace(spaceId: string): Promise<BillingSettings> {
-    const space = await this.#store.getSpace(spaceId);
-    return space?.billingSettings ?? this.#defaultBillingSettings;
-  }
-
-  async #billingPlanForSpace(spaceId: string) {
-    const subscription = await this.#store.getSpaceSubscription(spaceId);
-    if (!subscription) return undefined;
-    const plan = await this.#store.getBillingPlan(subscription.planId);
-    return plan ? { subscription, plan } : undefined;
-  }
-
-  async #reconcileSpaceMonthlyCredits(spaceId: string): Promise<void> {
-    const billingPlan = await this.#billingPlanForSpace(spaceId);
-    if (!billingPlan) return;
-    if (
-      billingPlan.subscription.status !== "active" &&
-      billingPlan.subscription.status !== "trialing"
-    ) {
-      return;
-    }
-    const periodStartMs = Date.parse(
-      billingPlan.subscription.currentPeriodStart,
-    );
-    if (!Number.isFinite(periodStartMs) || periodStartMs > this.#now()) {
-      return;
-    }
-    const balance = await this.#store.getCreditBalance(spaceId);
-    const nowIso = new Date(this.#now()).toISOString();
-    if (!balance) {
-      await this.#store.putCreditBalance({
-        spaceId,
-        availableCredits: billingPlan.plan.includedCredits,
-        reservedCredits: 0,
-        monthlyIncludedCredits: billingPlan.plan.includedCredits,
-        purchasedCredits: 0,
-        updatedAt: nowIso,
-      });
-      return;
-    }
-    const balanceUpdatedAtMs = Date.parse(balance.updatedAt);
-    if (
-      Number.isFinite(balanceUpdatedAtMs) &&
-      balanceUpdatedAtMs >= periodStartMs &&
-      balance.monthlyIncludedCredits === billingPlan.plan.includedCredits
-    ) {
-      return;
-    }
-    const purchasedAvailableCredits = Math.max(
-      0,
-      balance.availableCredits - balance.monthlyIncludedCredits,
-    );
-    await this.#store.putCreditBalance({
-      ...balance,
-      availableCredits:
-        purchasedAvailableCredits + billingPlan.plan.includedCredits,
-      monthlyIncludedCredits: billingPlan.plan.includedCredits,
-      updatedAt: nowIso,
-    });
-  }
-
   async #requireSpace(spaceId: string) {
     const space = await this.#store.getSpace(spaceId);
     if (!space) {
@@ -5377,271 +5165,6 @@ export class OpenTofuDeploymentController {
       );
     }
     return space;
-  }
-
-  /**
-   * Per-Space cumulative write-apply ceiling on the managed (operator-key)
-   * default (P2 operator-economic guard). Apply on the `enforce`-mode hosted
-   * SaaS path is already gated by credit reservation; a free/default Space is
-   * NOT in `enforce` mode, so on the operator-pays managed key there is
-   * otherwise no in-code ceiling on how much a Space can spend by repeatedly
-   * applying. This gate fail-closes the unbounded hole, but ONLY when:
-   *   1. the operator configured a cap (`managedDefaultApplyCap`) — omitted on
-   *      the self-host build target, which is uncapped;
-   *   2. billing is NOT `enforce` (the credit path already covers `enforce`);
-   *   3. the run actually resolves to an operator-default credential (a
-   *      `default`-mode binding backed by an operator-scoped Connection) — so a
-   *      self-hoster (or any Space) applying on its OWN Connection is never
-   *      capped. The cap protects the OPERATOR'S key, not billing mode alone.
-   * The cumulative count is the Space's total successful write-applies, derived
-   * from the per-Installation `currentStateGeneration` (bumped +1 by every
-   * create / update / destroy_apply), so no new ledger write is introduced.
-   */
-  async #assertManagedDefaultApplyCap(planRun: PlanRun): Promise<void> {
-    const cap = this.#managedDefaultApplyCap;
-    if (cap === undefined) return;
-    // A destroy is the way to STOP spending on the operator key, so it must
-    // never be blocked by the spend cap — capping teardown would trap a Space
-    // at its ceiling with no way to reclaim the operator's resources.
-    if (planRun.operation === "destroy") return;
-    const settings = await this.#billingSettingsForSpace(planRun.spaceId);
-    if (settings.mode === "enforce") return;
-    if (!(await this.#runUsesOperatorDefaultCredential(planRun))) return;
-    const installations = await this.#store.listInstallations(planRun.spaceId);
-    const appliedCount = installations.reduce(
-      (total, installation) => total + (installation.currentStateGeneration ?? 0),
-      0,
-    );
-    if (appliedCount >= cap) {
-      throw new OpenTofuControllerError(
-        "resource_exhausted",
-        `managed_apply_cap_reached: space ${planRun.spaceId} has reached the ` +
-          `operator-default apply cap (${appliedCount}/${cap}); connect your own ` +
-          `provider Connection or enable enforce-mode billing to continue`,
-      );
-    }
-  }
-
-  /**
-   * True when a run's provider bindings resolve to an operator-default
-   * credential: a `default`-mode binding that fell through to an OPERATOR-scoped
-   * Connection (the managed key). A run that binds only the Space's own
-   * Connections (mode `connection`), `manual`, or `disabled` returns false, so
-   * self-host on an owned Connection is never treated as managed usage. A run
-   * without installation context (no resolvable bindings) also returns false.
-   */
-  async #runUsesOperatorDefaultCredential(planRun: PlanRun): Promise<boolean> {
-    const resolved = await this.#resolveRunProviderBindings(planRun);
-    if (!resolved) return false;
-    return resolved.some(
-      (entry) =>
-        entry.mode === "default" && entry.connection?.scope === "operator",
-    );
-  }
-
-  async #evaluatePlanBillingReservation(input: {
-    readonly planRun: PlanRun;
-    readonly result: OpenTofuPlanResult;
-    readonly now: number;
-    readonly policyPassedBeforeBilling: boolean;
-  }): Promise<{
-    readonly reasons: readonly string[];
-    readonly audit?: Readonly<Record<string, JsonValue>>;
-  }> {
-    const settings = await this.#billingSettingsForSpace(input.planRun.spaceId);
-    if (settings.mode === "disabled") {
-      return {
-        reasons: [],
-        audit: { mode: settings.mode, estimatedCredits: 0 },
-      };
-    }
-    await this.#reconcileSpaceMonthlyCredits(input.planRun.spaceId);
-    const estimatedCredits = estimatePlanCredits(input.planRun, input.result);
-    const auditBase = {
-      mode: settings.mode,
-      estimatedCredits,
-    } satisfies Readonly<Record<string, JsonValue>>;
-    const planLimit = await this.#evaluateBillingPlanLimits({
-      spaceId: input.planRun.spaceId,
-      estimatedCredits,
-      changes: input.result.planResourceChanges ?? [],
-    });
-    const auditWithPlanLimits = planLimit.audit
-      ? { ...auditBase, planLimits: planLimit.audit }
-      : auditBase;
-    if (!input.policyPassedBeforeBilling) {
-      return { reasons: [], audit: auditWithPlanLimits };
-    }
-    if (settings.mode === "enforce" && planLimit.reasons.length > 0) {
-      return { reasons: planLimit.reasons, audit: auditWithPlanLimits };
-    }
-    if (billingReservationRequired(settings)) {
-      const balance = await this.#store.getCreditBalance(input.planRun.spaceId);
-      const available = balance?.availableCredits ?? 0;
-      if (available < estimatedCredits) {
-        return {
-          reasons: [
-            `credit reservation failed: ${estimatedCredits} credits estimated but only ${available} available`,
-          ],
-          audit: {
-            ...auditWithPlanLimits,
-            availableCredits: available,
-            reservationStatus: "insufficient_credits",
-          },
-        };
-      }
-      const reservedBalance = await this.#store.reserveCredits(
-        input.planRun.spaceId,
-        {
-          credits: estimatedCredits,
-          updatedAt: new Date(input.now).toISOString(),
-        },
-      );
-      if (!reservedBalance) {
-        const latest = await this.#store.getCreditBalance(
-          input.planRun.spaceId,
-        );
-        return {
-          reasons: [
-            `credit reservation failed: ${estimatedCredits} credits estimated but only ${latest?.availableCredits ?? 0} available`,
-          ],
-          audit: {
-            ...auditWithPlanLimits,
-            availableCredits: latest?.availableCredits ?? 0,
-            reservationStatus: "insufficient_credits",
-          },
-        };
-      }
-    }
-    const reservation: CreditReservation = {
-      id: this.#newId("creditres"),
-      spaceId: input.planRun.spaceId,
-      runId: input.planRun.id,
-      estimatedCredits,
-      status: "reserved",
-      mode: settings.mode,
-      createdAt: new Date(input.now).toISOString(),
-      expiresAt: new Date(input.now + BILLING_RESERVATION_TTL_MS).toISOString(),
-    };
-    await this.#store.putCreditReservation(reservation);
-    return {
-      reasons: [],
-      audit: {
-        ...auditWithPlanLimits,
-        reservationId: reservation.id,
-        reservationStatus: reservation.status,
-      },
-    };
-  }
-
-  async #evaluateBillingPlanLimits(input: {
-    readonly spaceId: string;
-    readonly estimatedCredits: number;
-    readonly changes: readonly PlanResourceChange[];
-  }): Promise<{
-    readonly reasons: readonly string[];
-    readonly audit?: Readonly<Record<string, JsonValue>>;
-  }> {
-    const billingPlan = await this.#billingPlanForSpace(input.spaceId);
-    if (!billingPlan) return { reasons: [] };
-    const reasons: string[] = [];
-    const limits = billingPlan.plan.limits;
-    const maxEstimatedCredits = limits.maxEstimatedCreditsPerRun;
-    if (
-      maxEstimatedCredits !== undefined &&
-      Number.isFinite(maxEstimatedCredits) &&
-      input.estimatedCredits > maxEstimatedCredits
-    ) {
-      reasons.push(
-        `billing plan ${billingPlan.plan.id} limits estimated credits per run to ${maxEstimatedCredits}; plan estimated ${input.estimatedCredits}`,
-      );
-    }
-    const quota = evaluateQuotaPolicy(input.changes, limits.quota);
-    reasons.push(
-      ...quota.reasons.map(
-        (reason) => `billing plan ${billingPlan.plan.id} ${reason}`,
-      ),
-    );
-    return {
-      reasons,
-      audit: {
-        planId: billingPlan.plan.id,
-        subscriptionId: billingPlan.subscription.id,
-        ...(maxEstimatedCredits !== undefined
-          ? { maxEstimatedCreditsPerRun: maxEstimatedCredits }
-          : {}),
-        ...(limits.quota ? { quota: limits.quota } : {}),
-        exceeded: reasons,
-      },
-    };
-  }
-
-  async #assertApplyBillingReservation(planRun: PlanRun): Promise<void> {
-    const settings = await this.#billingSettingsForSpace(planRun.spaceId);
-    if (!billingReservationRequired(settings)) return;
-    const reservation = await this.#store.getCreditReservationForRun(
-      planRun.id,
-    );
-    if (!reservation) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `credit_reservation_missing: plan run ${planRun.id} has no reserved credits`,
-      );
-    }
-    if (reservation.status !== "reserved") {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `credit_reservation_not_reserved: reservation ${reservation.id} is ${reservation.status}`,
-      );
-    }
-    if (Date.parse(reservation.expiresAt) <= this.#now()) {
-      await this.#expireCreditReservation(reservation);
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `credit_reservation_expired: reservation ${reservation.id} expired at ${reservation.expiresAt}`,
-      );
-    }
-  }
-
-  async #captureApplyBillingUsage(input: {
-    readonly planRun: PlanRun;
-    readonly applyRun: ApplyRun;
-    readonly now: number;
-  }): Promise<void> {
-    const reservation = await this.#store.getCreditReservationForRun(
-      input.planRun.id,
-    );
-    if (!reservation) return;
-    if (reservation.status !== "reserved") return;
-    await this.#store.putUsageEvent({
-      id: this.#newId("usage"),
-      spaceId: input.planRun.spaceId,
-      ...(input.planRun.installationId
-        ? { installationId: input.planRun.installationId }
-        : {}),
-      runId: input.applyRun.id,
-      kind: "operation",
-      quantity: 1,
-      credits: reservation.estimatedCredits,
-      source: "runner",
-      idempotencyKey: `${input.applyRun.id}:operation`,
-      createdAt: new Date(input.now).toISOString(),
-    });
-    await this.#store.putCreditReservation({
-      ...reservation,
-      status: "captured",
-    });
-    const balance = await this.#store.getCreditBalance(input.planRun.spaceId);
-    if (balance && reservation.mode === "enforce") {
-      await this.#store.putCreditBalance({
-        ...balance,
-        reservedCredits: Math.max(
-          0,
-          balance.reservedCredits - reservation.estimatedCredits,
-        ),
-        updatedAt: new Date(input.now).toISOString(),
-      });
-    }
   }
 
   async #recordRunnerMinuteUsage(input: {
@@ -5666,52 +5189,6 @@ export class OpenTofuDeploymentController {
       idempotencyKey: `${input.runId}:runner_minute`,
       createdAt: new Date(input.finishedAt).toISOString(),
     });
-  }
-
-  async #releaseApplyBillingReservation(planRun: PlanRun): Promise<void> {
-    const reservation = await this.#store.getCreditReservationForRun(
-      planRun.id,
-    );
-    if (!reservation || reservation.status !== "reserved") return;
-    await this.#store.putCreditReservation({
-      ...reservation,
-      status: "released",
-    });
-    const balance = await this.#store.getCreditBalance(planRun.spaceId);
-    if (balance && reservation.mode === "enforce") {
-      await this.#store.putCreditBalance({
-        ...balance,
-        availableCredits:
-          balance.availableCredits + reservation.estimatedCredits,
-        reservedCredits: Math.max(
-          0,
-          balance.reservedCredits - reservation.estimatedCredits,
-        ),
-        updatedAt: new Date(this.#now()).toISOString(),
-      });
-    }
-  }
-
-  async #expireCreditReservation(
-    reservation: CreditReservation,
-  ): Promise<void> {
-    await this.#store.putCreditReservation({
-      ...reservation,
-      status: "expired",
-    });
-    const balance = await this.#store.getCreditBalance(reservation.spaceId);
-    if (balance && reservation.mode === "enforce") {
-      await this.#store.putCreditBalance({
-        ...balance,
-        availableCredits:
-          balance.availableCredits + reservation.estimatedCredits,
-        reservedCredits: Math.max(
-          0,
-          balance.reservedCredits - reservation.estimatedCredits,
-        ),
-        updatedAt: new Date(this.#now()).toISOString(),
-      });
-    }
   }
 
   /**
@@ -5780,7 +5257,7 @@ export class OpenTofuDeploymentController {
       await this.#verifyDependencySnapshot(planRun);
       await this.#assertCapsuleCompatibilityAllowsRun(planRun);
       assertGeneratedRootDispatchPresent(planRun, dispatch);
-      await this.#assertApplyBillingReservation(planRun);
+      await this.#billing.assertApplyBillingReservation(planRun);
       // Mint provider credentials NOW (just before dispatch). Apply runs resolve
       // requiredProviders from the reviewed PlanRun. The bundle is attached to the
       // runner dispatch ONLY — never stored, never logged.
@@ -5988,7 +5465,7 @@ export class OpenTofuDeploymentController {
         appliedApplyRunId: applyRun.id,
         updatedAt: now,
       });
-      await this.#captureApplyBillingUsage({
+      await this.#billing.captureApplyBillingUsage({
         planRun,
         applyRun: completed,
         now,
@@ -6019,7 +5496,7 @@ export class OpenTofuDeploymentController {
         deployment,
       };
     } catch (error) {
-      await this.#releaseApplyBillingReservation(planRun);
+      await this.#billing.releaseApplyBillingReservation(planRun);
       const failed = await this.#failApplyRun(
         running,
         profile,
@@ -6223,7 +5700,7 @@ export class OpenTofuDeploymentController {
         appliedApplyRunId: running.id,
         updatedAt: now,
       });
-      await this.#captureApplyBillingUsage({
+      await this.#billing.captureApplyBillingUsage({
         planRun,
         applyRun: completed,
         now,
@@ -6248,7 +5725,7 @@ export class OpenTofuDeploymentController {
         installation: publicInstallation(patched ?? installation),
       };
     } catch (error) {
-      await this.#releaseApplyBillingReservation(planRun);
+      await this.#billing.releaseApplyBillingReservation(planRun);
       if (error instanceof InstallationPatchGuardConflict) {
         throw new OpenTofuControllerError("failed_precondition", error.message);
       }
@@ -6299,15 +5776,7 @@ export class OpenTofuDeploymentController {
   }
 
   async #requireInstallation(id: string): Promise<Installation> {
-    requireNonEmptyString(id, "installationId");
-    const installation = await this.#store.getInstallation(id);
-    if (!installation) {
-      throw new OpenTofuControllerError(
-        "not_found",
-        `installation ${id} not found`,
-      );
-    }
-    return installation;
+    return await requireInstallation(this.#store, id);
   }
 
   async #requireCurrentPlannedInstallation(
@@ -6906,90 +6375,6 @@ function updatedTemplateBinding(
   };
 }
 
-/**
- * Transparent, deterministic credit estimate for a plan (core-spec §32.3.1):
- * `credits = max(PLAN_CREDIT_BASE, Σ per-change weight)`. The per-change weight
- * is the heaviest action token of that change (see {@link planChangeWeight}), so
- * a replacement is billed once as a create. With no resource changes the
- * estimate falls back to `PLAN_CREDIT_BASE` (minimum charge).
- *
- * `planRun` is unused today: cost depends only on the plan resource changes, but
- * the signature keeps the run available for a future runner-minute term.
- */
-function estimatePlanCredits(
-  _planRun: PlanRun,
-  result: OpenTofuPlanResult,
-): number {
-  const changes = result.planResourceChanges ?? [];
-  let sum = 0;
-  for (const change of changes) {
-    sum += planChangeWeight(change);
-  }
-  return Math.max(PLAN_CREDIT_BASE, sum);
-}
-
-function normalizeBillingSettings(value: unknown): BillingSettings {
-  if (!isRecord(value)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "billingSettings must be an object",
-    );
-  }
-  if (value.mode === "disabled") {
-    if (value.provider !== "none") {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "disabled billing requires provider none",
-      );
-    }
-    return { mode: "disabled", provider: "none" };
-  }
-  if (value.mode === "showback") {
-    if (!isBillingProvider(value.provider)) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "showback billing provider must be stripe, manual, or none",
-      );
-    }
-    if (
-      value.reservationRequired !== undefined &&
-      value.reservationRequired !== false
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "showback billing reservationRequired must be false when provided",
-      );
-    }
-    return {
-      mode: "showback",
-      provider: value.provider,
-      ...(value.reservationRequired === false
-        ? { reservationRequired: false }
-        : {}),
-    };
-  }
-  if (value.mode === "enforce") {
-    if (value.provider !== "stripe" && value.provider !== "manual") {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "enforced billing requires stripe or manual provider",
-      );
-    }
-    if (value.reservationRequired !== true) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "enforced billing requires reservationRequired true",
-      );
-    }
-    return {
-      mode: "enforce",
-      provider: value.provider,
-      reservationRequired: true,
-    };
-  }
-  throw new OpenTofuControllerError("invalid_argument", "unknown billing mode");
-}
-
 function normalizeMeteredUsageEvent(
   spaceId: string,
   input: RecordMeteredUsageInput,
@@ -7104,59 +6489,6 @@ function normalizeInvoiceUsagePeriod(input: ReconcileInvoiceUsageInput): {
     periodStart: new Date(periodStartMs).toISOString(),
     periodEnd: new Date(periodEndMs).toISOString(),
   };
-}
-
-function stripeCoreBillingStatus(status: string): BillingAccount["status"] {
-  switch (status) {
-    case "active":
-      return "active";
-    case "trialing":
-      return "trialing";
-    case "past_due":
-    case "unpaid":
-      return "past_due";
-    default:
-      return "disabled";
-  }
-}
-
-function stripeSpaceSubscriptionStatus(
-  status: string,
-): SpaceSubscription["status"] {
-  switch (status) {
-    case "active":
-      return "active";
-    case "trialing":
-      return "trialing";
-    case "past_due":
-    case "unpaid":
-      return "past_due";
-    case "cancelled":
-    case "canceled":
-      return "cancelled";
-    default:
-      return "cancelled";
-  }
-}
-
-function stripeSpaceBillingSettings(status: string): BillingSettings {
-  switch (status) {
-    case "active":
-    case "trialing":
-    case "past_due":
-    case "unpaid":
-      return {
-        mode: "enforce",
-        provider: "stripe",
-        reservationRequired: true,
-      };
-    default:
-      return DISABLED_BILLING_SETTINGS;
-  }
-}
-
-function isBillingProvider(value: unknown): value is BillingProvider {
-  return value === "stripe" || value === "manual" || value === "none";
 }
 
 function isUsageEventKind(value: unknown): value is UsageEventKind {
