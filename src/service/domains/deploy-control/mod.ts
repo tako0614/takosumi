@@ -66,11 +66,7 @@ import type {
   ProviderTemplate,
   ProviderTemplateResponse,
 } from "takosumi-contract/providers";
-import { CredentialBundle } from "../../adapters/vault/mod.ts";
-import type {
-  ProviderBindingMintEntry,
-  ConnectionVault,
-} from "../../adapters/vault/mod.ts";
+import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type {
   OutputAllowlistEntry,
   PublicInstallation,
@@ -89,17 +85,12 @@ import type {
   UsageEventKind,
   UsageEventSource,
 } from "takosumi-contract/billing";
-import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import type { SourcesService } from "../sources/mod.ts";
 import type {
   CapsuleCompatibilityReport,
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
-import {
-  providerCredentialArgs,
-  providerEnvRule,
-} from "takosumi-contract/provider-env-rules";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
@@ -131,7 +122,7 @@ import {
   type RecordActivityInput,
 } from "../activity/mod.ts";
 import { createDefaultRunnerProfiles } from "./runner_profiles.ts";
-import { evaluatePolicy, providerMatches } from "./policy.ts";
+import { evaluatePolicy } from "./policy.ts";
 import {
   normalizeProviders,
   normalizeVariables,
@@ -210,7 +201,6 @@ import {
 } from "./installation_lease.ts";
 import {
   ConnectionsService,
-  mintableConnectionIds,
   type ResolvedProviderBinding,
 } from "../connections/mod.ts";
 import { SourceManagement } from "./source_management.ts";
@@ -226,7 +216,6 @@ import {
   compactLayeredPolicy,
   evaluateCompatibilityReportAgainstPolicy,
   evaluateConfiguredProviderAllowlist,
-  evaluateProviderCredentialMintPolicy,
   evaluateProviderInstallationPolicy,
   evaluateProviderLockfilePolicy,
   mergePolicyConfigs,
@@ -236,6 +225,7 @@ import {
   withDefaultProviderSupplyChainPolicy,
 } from "./provider_policy.ts";
 import { classifyDriftResourceChanges } from "./drift.ts";
+import { RunCredentialBroker } from "./run_credential_broker.ts";
 
 // Re-export the shared error primitive and the four decomposed concerns so the
 // domain's public entry point stays `./mod.ts` for importers and tests.
@@ -880,6 +870,51 @@ export interface CreateInstallationPlanInternal {
   readonly driftCheck?: true;
 }
 
+/**
+ * The §25 layered plan-JSON policy verdict produced by
+ * {@link OpenTofuDeploymentController}'s `#evaluatePlanPolicy`. Each field is
+ * absent when its layer was not evaluated (e.g. the runner reported no resource
+ * changes, or there was no allowlist source).
+ */
+interface PlanPolicyLayers {
+  provider?: ProviderAllowlistResult;
+  providerLockfile?: ProviderLockfilePolicyResult;
+  resource?: ResourceAllowlistResult;
+  scope?: ScopeBoundaryResult;
+  action?: ActionPolicyResult;
+  quota?: QuotaResult;
+  providerInstallation?: ProviderInstallationPolicyResult;
+  templatePolicy?: ReturnType<typeof evaluateTemplatePlanPolicy>;
+}
+
+/** The Capsule compatibility policy verdict for a plan run. */
+interface CapsuleCompatibilityPolicyResult {
+  readonly reasons: readonly string[];
+  readonly audit?: Readonly<Record<string, JsonValue>>;
+}
+
+/** The plan billing reservation verdict for a plan run. */
+interface PlanBillingPolicyResult {
+  readonly reasons: readonly string[];
+  readonly audit?: Readonly<Record<string, JsonValue>>;
+}
+
+/**
+ * The composed completion verdict for a plan run: the observed providers, each
+ * policy layer's result, the merged pass/blocked policy, its digest, and the
+ * §25 approval flag.
+ */
+interface PlanCompletionVerdict {
+  readonly requiredProviders: readonly string[];
+  readonly layered: PlanPolicyLayers;
+  readonly compatibilityPolicy: CapsuleCompatibilityPolicyResult;
+  readonly billingPolicy: PlanBillingPolicyResult;
+  readonly passedPolicy: boolean;
+  readonly completedPolicy: PolicyDecision;
+  readonly policyDecisionDigest: string;
+  readonly requiresApproval: boolean;
+}
+
 export class OpenTofuDeploymentController {
   readonly #store: OpenTofuDeploymentStore;
   readonly #runner?: OpenTofuRunner;
@@ -904,6 +939,7 @@ export class OpenTofuDeploymentController {
   readonly #connections: ConnectionManagement;
   readonly #deployments: DeploymentQuery;
   readonly #billing: BillingService;
+  readonly #credentials: RunCredentialBroker;
   #connectionsService?: ConnectionsService;
 
   constructor(dependencies: OpenTofuDeploymentControllerDependencies = {}) {
@@ -942,6 +978,15 @@ export class OpenTofuDeploymentController {
       requireSpace: (spaceId) => this.#requireSpace(spaceId),
       resolveRunProviderBindings: (planRun) =>
         this.#resolveRunProviderBindings(planRun),
+    });
+    this.#credentials = new RunCredentialBroker({
+      store: this.#store,
+      newId: this.#newId,
+      now: this.#now,
+      ...(this.#vault ? { vault: this.#vault } : {}),
+      resolveRunProviderBindings: (planRun) =>
+        this.#resolveRunProviderBindings(planRun),
+      policyForPlanRun: (planRun) => this.#policyForPlanRun(planRun),
     });
     // Default to an inline dispatcher: run the consumer immediately so local /
     // node substrates and tests keep the historical synchronous semantics.
@@ -1151,10 +1196,10 @@ export class OpenTofuDeploymentController {
     const { usageEvent } = await this.#recordBillingReconciliationUsage(
       spaceId,
       {
-      kind: "operation",
-      quantity: 1,
-      credits: adjustmentCredits,
-      source: "billing_reconciliation",
+        kind: "operation",
+        quantity: 1,
+        credits: adjustmentCredits,
+        source: "billing_reconciliation",
         idempotencyKey: [
           "invoice-reconciliation",
           spaceId,
@@ -1162,7 +1207,7 @@ export class OpenTofuDeploymentController {
           period.periodStart,
           period.periodEnd,
         ].join(":"),
-      createdAt: input.createdAt ?? new Date(this.#now()).toISOString(),
+        createdAt: input.createdAt ?? new Date(this.#now()).toISOString(),
       },
     );
     return {
@@ -1289,15 +1334,15 @@ export class OpenTofuDeploymentController {
       checkedAt: now,
       ...(allowNoProviders ? { allowNoProviders: true } : {}),
     });
-    const userEnvPolicy = await this.#evaluateUserEnvSetProviderExecutionPolicy({
-      profile,
-      installation,
-      hasUserEnvSetProviderRunner: this.#userEnvSetProviderRunner !== undefined,
-    });
-    const policyReasons = [
-      ...basePolicy.reasons,
-      ...userEnvPolicy.reasons,
-    ];
+    const userEnvPolicy = await this.#evaluateUserEnvSetProviderExecutionPolicy(
+      {
+        profile,
+        installation,
+        hasUserEnvSetProviderRunner:
+          this.#userEnvSetProviderRunner !== undefined,
+      },
+    );
+    const policyReasons = [...basePolicy.reasons, ...userEnvPolicy.reasons];
     const policy: PolicyDecision =
       policyReasons.length === basePolicy.reasons.length
         ? basePolicy
@@ -1318,8 +1363,7 @@ export class OpenTofuDeploymentController {
       id: this.#newId("plan"),
       spaceId: request.spaceId,
       installationId: request.installationId,
-      installationCurrentDeploymentId:
-        installation.currentDeploymentId ?? null,
+      installationCurrentDeploymentId: installation.currentDeploymentId ?? null,
       source: request.source,
       sourceDigest,
       operation,
@@ -1810,10 +1854,8 @@ export class OpenTofuDeploymentController {
         sealedValues = await this.#dependencyValueSealer.seal(sensitiveValues);
         cleartextValues = Object.fromEntries(
           Object.entries(values).filter(
-            ([key]) => !Object.prototype.hasOwnProperty.call(
-              sensitiveValues,
-              key,
-            ),
+            ([key]) =>
+              !Object.prototype.hasOwnProperty.call(sensitiveValues, key),
           ),
         );
       }
@@ -2974,7 +3016,7 @@ export class OpenTofuDeploymentController {
     const running = await this.#markPlanRunning(planRun);
     let result: PlanRun;
     try {
-      const credentials = await this.#mintRunCredentials(
+      const credentials = await this.#credentials.mintRunCredentials(
         planRun,
         "plan",
         planRun.id,
@@ -3569,10 +3611,7 @@ export class OpenTofuDeploymentController {
    * this never persists a cleartext credential under any path). When `seal` is
    * unset the sidecar is plain (no sensitive value to protect).
    */
-  async #putPlanRunInputs(
-    inputs: PlanRunInputs,
-    seal: boolean,
-  ): Promise<void> {
+  async #putPlanRunInputs(inputs: PlanRunInputs, seal: boolean): Promise<void> {
     if (!seal) {
       await this.#store.putPlanRunInputs(inputs);
       return;
@@ -3593,9 +3632,7 @@ export class OpenTofuDeploymentController {
       ...(inputs.outputAllowlist
         ? { outputAllowlist: inputs.outputAllowlist as unknown as JsonValue }
         : {}),
-      ...(inputs.build
-        ? { build: inputs.build as unknown as JsonValue }
-        : {}),
+      ...(inputs.build ? { build: inputs.build as unknown as JsonValue } : {}),
     };
     const sealed = await this.#dependencyValueSealer.seal(payload);
     // Cleartext sealable fields are dropped; only `planRunId` + `sealed` persist.
@@ -3873,174 +3910,6 @@ export class OpenTofuDeploymentController {
       log.warn("service.deploy_control.activity_record_failed", {
         action: event.action,
         error,
-      });
-    }
-  }
-
-  async #mintRunCredentials(
-    planRun: PlanRun,
-    phase: "plan" | "apply" | "destroy",
-    auditRunId: string,
-  ): Promise<RunCredentials | undefined> {
-    if (planRun.requiredProviders.length === 0) {
-      return undefined;
-    }
-    if (!this.#vault) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "credential_mint_failed: connection vault is not configured for provider credentials",
-      );
-    }
-    try {
-      // Resolve the installation's provider bindings ONCE: the same resolution
-      // feeds the per-binding credential split (TF_VAR entries) so minted vars
-      // line up byte-for-byte with rootgen.
-      const resolved = await this.#resolveRunProviderBindings(planRun);
-      // Per-binding split: the same resolved entries that produced the rootgen
-      // provider blocks produce these TF_VAR_<provider>_<alias>_<arg> vars.
-      // This is the only provider credential delivery path for Installation
-      // runs; providers without a root-only arg mapping receive no shared env.
-      const providerEntries = resolved
-        ? providerMintEntriesFromResolved(resolved)
-        : [];
-      if (resolved) {
-        const missingRootOnly = missingRootOnlyCredentialProviders(
-          planRun.requiredProviders,
-          resolved,
-        );
-        const credentialPolicy = (await this.#policyForPlanRun(planRun))
-          ?.providerCredentials;
-        const rootOnlyRequired =
-          credentialPolicy?.requireRootOnly === true ||
-          resolved.some((entry) => entry.mode === "disabled");
-        if (missingRootOnly.length > 0 && rootOnlyRequired) {
-          throw new OpenTofuControllerError(
-            "failed_precondition",
-            `credential_mint_failed: root-only provider binding is required for providers: ${missingRootOnly.join(", ")}`,
-          );
-        }
-      }
-      const sharedProviders = resolved ? [] : planRun.requiredProviders;
-      const connectionIds =
-        resolved && sharedProviders.length > 0
-          ? mintableConnectionIds(resolved)
-          : resolved
-            ? []
-            : undefined;
-      const bundle =
-        sharedProviders.length > 0
-          ? await this.#vault.mintForPhase({
-              spaceId: planRun.spaceId,
-              phase,
-              providers: sharedProviders,
-              ...(connectionIds !== undefined ? { connectionIds } : {}),
-            })
-          : new CredentialBundle({});
-      if (providerEntries.length === 0) {
-        if (resolved) {
-          await this.#recordProviderCredentialMintEvents(
-            planRun,
-            resolved,
-            phase,
-            auditRunId,
-            bundle.providerCredentialEvidence,
-          );
-        }
-        await this.#assertProviderCredentialPolicy(
-          planRun,
-          bundle.providerCredentialEvidence,
-          resolved ? providerEntries.length : 0,
-        );
-        return bundle.env;
-      }
-      const perAlias = await this.#vault.mintForProviderBindings(
-        planRun.spaceId,
-        providerEntries,
-        { phase },
-      );
-      const evidence = [
-        ...bundle.providerCredentialEvidence,
-        ...perAlias.providerCredentialEvidence,
-      ];
-      if (resolved) {
-        await this.#recordProviderCredentialMintEvents(
-          planRun,
-          resolved,
-          phase,
-          auditRunId,
-          evidence,
-        );
-      }
-      await this.#assertProviderCredentialPolicy(
-        planRun,
-        evidence,
-        providerEntries.length,
-      );
-      return { ...bundle.env, ...perAlias.env };
-    } catch (error) {
-      const mapped = mapVaultError(error);
-      if (mapped instanceof OpenTofuControllerError) {
-        if (mapped.message.startsWith("credential_policy_failed:")) {
-          throw mapped;
-        }
-        throw new OpenTofuControllerError(
-          mapped.code,
-          mapped.message.startsWith("credential_mint_failed:")
-            ? mapped.message
-            : `credential_mint_failed: ${mapped.message}`,
-        );
-      }
-      throw mapped;
-    }
-  }
-
-  async #assertProviderCredentialPolicy(
-    planRun: PlanRun,
-    evidence: readonly ProviderCredentialMintEvidence[],
-    expectedCredentialEvidenceCount = 0,
-  ): Promise<void> {
-    const policy = await this.#policyForPlanRun(planRun);
-    const result = evaluateProviderCredentialMintPolicy(
-      evidence,
-      policy,
-      planRun.requiredProviders,
-      expectedCredentialEvidenceCount,
-    );
-    if (result.reasons.length === 0) return;
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `credential_policy_failed: ${result.reasons[0]}`,
-    );
-  }
-
-  async #recordProviderCredentialMintEvents(
-    planRun: PlanRun,
-    resolved: readonly ResolvedProviderBinding[],
-    phase: "plan" | "apply" | "destroy",
-    auditRunId: string,
-    evidence: readonly ProviderCredentialMintEvidence[] = [],
-  ): Promise<void> {
-    const byConnection = credentialMintAuditEntries(resolved);
-    if (byConnection.length === 0) return;
-    const createdAt = new Date(this.#now()).toISOString();
-    const installationId =
-      planRun.installationContext?.installationId ?? planRun.installationId;
-    const evidenceByConnection = groupProviderCredentialEvidence(evidence);
-    for (const entry of byConnection) {
-      const providerCredentialEvidence =
-        evidenceByConnection.get(entry.connectionId) ?? [];
-      await this.#store.putCredentialMintEvent({
-        id: this.#newId("credmint"),
-        runId: auditRunId,
-        spaceId: planRun.spaceId,
-        ...(installationId ? { installationId } : {}),
-        connectionId: entry.connectionId,
-        phase,
-        capabilities: entry.capabilities,
-        ...(providerCredentialEvidence.length > 0
-          ? { providerCredentialEvidence }
-          : {}),
-        createdAt,
       });
     }
   }
@@ -4823,182 +4692,18 @@ export class OpenTofuDeploymentController {
         ...(credentials ? { credentials } : {}),
       });
       const now = this.#now();
-      const diagnostics = redactRunDiagnostics(result.diagnostics);
-      const requiredProviders = normalizeProviders(
-        result.requiredProviders ?? running.requiredProviders,
-      );
-      // Re-evaluate against the SAME provider-free allowance as the create gate:
-      // a provider-free template (e.g. `core`) that observes zero providers at
-      // plan time stays passed instead of tripping the "providers before init"
-      // gate. Resolved from the recorded binding so a tampered catalog cannot
-      // retroactively change the allowance.
-      const policy = evaluatePolicy({
+      const verdict = await this.#evaluatePlanCompletion({
+        running,
         profile,
-        requiredProviders,
-        checkedAt: now,
-        ...(this.#planAllowsNoProviders(running)
-          ? { allowNoProviders: true }
-          : {}),
-      });
-      // Layered plan-JSON policy (§25). When the runner returned resource
-      // changes, evaluate the resource-type allowlist (layer 5) and the action
-      // policy (layer 7) over them for ALL runs — not only template-backed:
-      //   - template-backed runs use the recorded template.policy for resource
-      //     types (tamper-safe) and the target Space/InstallConfig for scope +
-      //     quota;
-      //   - non-template installation-context runs use the Installation's
-      //     Space/InstallConfig policy (resolved via installConfigId);
-      //   - raw `/v1/plan-runs` runs without installation context keep today's
-      //     behavior (no allowlist source -> no resource enforcement).
-      // A disallowed resource type DENIES the plan; a delete/replace marks it
-      // requiresApproval (parked waiting_approval until approved). The template
-      // destructive-confirmation gate (requiresConfirmation) additionally needs
-      // confirmDestructive at apply.
-      const layered = await this.#evaluatePlanPolicy(running, result);
-      const blockedByLayeredPolicy = [
-        ...(layered.provider?.reasons ?? []),
-        ...(layered.resource?.reasons ?? []),
-        ...(layered.scope?.reasons ?? []),
-        ...(layered.quota?.reasons ?? []),
-        ...(layered.providerLockfile?.reasons ?? []),
-        ...(layered.providerInstallation?.reasons ?? []),
-      ];
-      const runPolicy = await this.#policyForPlanRun(running);
-      const compatibilityPolicy =
-        await this.#evaluateCapsuleCompatibilityPolicy({
-          planRunId: running.id,
-          ...(running.compatibilityReportId
-            ? { compatibilityReportId: running.compatibilityReportId }
-            : {}),
-          ...(running.sourceSnapshotId
-            ? { sourceSnapshotId: running.sourceSnapshotId }
-            : {}),
-          ...(runPolicy ? { policy: runPolicy } : {}),
-        });
-      const billingPolicy = await this.#billing.evaluatePlanBillingReservation({
-        planRun: running,
         result,
         now,
-        policyPassedBeforeBilling:
-          policy.status === "passed" &&
-          blockedByLayeredPolicy.length === 0 &&
-          compatibilityPolicy.reasons.length === 0,
       });
-      const passedPolicy =
-        policy.status === "passed" &&
-        blockedByLayeredPolicy.length === 0 &&
-        compatibilityPolicy.reasons.length === 0 &&
-        billingPolicy.reasons.length === 0;
-      const completedPolicy = passedPolicy
-        ? policy
-        : {
-            status: "blocked" as const,
-            reasons: [
-              ...policy.reasons,
-              ...blockedByLayeredPolicy,
-              ...compatibilityPolicy.reasons,
-              ...billingPolicy.reasons,
-            ],
-            checkedAt: now,
-          };
-      const policyDecisionDigest = await stableJsonDigest(completedPolicy);
-      const planArtifact = normalizePlanArtifact({
-        artifact: result.planArtifact,
-        planDigest: result.planDigest,
+      const updated = this.#buildCompletedPlanRun({
+        running,
+        result,
+        verdict,
         now,
       });
-      const summary = normalizePlanSummary(result.summary);
-      const templateBinding = updatedTemplateBinding(
-        running,
-        layered.templatePolicy,
-      );
-      // §25 action policy: any delete/replace requires approval before apply.
-      // Recorded so the §19 Run projection parks the succeeded plan
-      // `waiting_approval`. Destroy plans are always-approval independently
-      // (#planAwaitsApproval), so they need no field. A drift_check is read-only
-      // and can never be applied (Phase 8), so it never carries requiresApproval.
-      const requiresApproval =
-        running.driftCheck !== true &&
-        layered.action?.requiresApproval === true;
-      const updated: PlanRun = {
-        ...running,
-        status: passedPolicy ? "succeeded" : "blocked",
-        requiredProviders,
-        policy: completedPolicy,
-        policyDecisionDigest,
-        planDigest: result.planDigest,
-        planArtifact,
-        ...(result.sourceCommit ? { sourceCommit: result.sourceCommit } : {}),
-        ...(result.providerLockDigest
-          ? { providerLockDigest: result.providerLockDigest }
-          : {}),
-        ...(summary ? { summary } : {}),
-        ...(diagnostics ? { diagnostics } : {}),
-        ...(templateBinding ? { templateBinding } : {}),
-        ...(requiresApproval ? { requiresApproval: true } : {}),
-        auditEvents: [
-          ...running.auditEvents,
-          auditEvent(running.id, "plan.policy_evaluated", now, {
-            policyDecisionDigest,
-            status: passedPolicy ? "passed" : "blocked",
-            observedProviderCount: requiredProviders.length,
-            requiresApproval,
-            ...(layered.provider
-              ? {
-                  installConfigProvidersAllowed:
-                    layered.provider.denied.length === 0 &&
-                    layered.provider.notAllowed.length === 0 &&
-                    !layered.provider.missingProviders,
-                }
-              : {}),
-            ...(layered.resource
-              ? {
-                  resourceTypesAllowed:
-                    layered.resource.disallowedResourceTypes.length === 0,
-                }
-              : {}),
-            ...(compatibilityPolicy.audit
-              ? { capsuleCompatibility: compatibilityPolicy.audit }
-              : {}),
-            ...(layered.providerLockfile
-              ? {
-                  providerLockfileDigestPresent:
-                    layered.providerLockfile.digestPresent,
-                }
-              : {}),
-            ...(layered.providerInstallation
-              ? {
-                  providerMirrorRequired:
-                    layered.providerInstallation.requireMirror,
-                  providerMirrorPassed:
-                    layered.providerInstallation.reasons.length === 0,
-                  providerMirrorEvidenceCount:
-                    layered.providerInstallation.evidenceCount,
-                }
-              : {}),
-            ...(layered.scope
-              ? { scopeBoundaryPassed: layered.scope.outOfScope.length === 0 }
-              : {}),
-            ...(layered.quota
-              ? { quotaPassed: layered.quota.exceeded.length === 0 }
-              : {}),
-            ...(billingPolicy.audit ? { billing: billingPolicy.audit } : {}),
-            ...(layered.templatePolicy
-              ? {
-                  templateRequiresConfirmation:
-                    layered.templatePolicy.requiresConfirmation,
-                }
-              : {}),
-          }),
-          auditEvent(running.id, "plan.completed", now, {
-            planDigest: result.planDigest,
-            planArtifactDigest: planArtifact.digest,
-            providerLockDigest: result.providerLockDigest ?? "",
-          }),
-        ],
-        updatedAt: now,
-        finishedAt: now,
-      };
       await this.#store.putPlanRun(updated);
       await this.#recordRunnerMinuteUsage({
         spaceId: updated.spaceId,
@@ -5024,6 +4729,230 @@ export class OpenTofuDeploymentController {
   }
 
   /**
+   * Composes every plan policy layer (profile gate + §25 layered + Capsule
+   * compatibility + billing reservation) into the completed policy verdict for a
+   * plan run. Returns the observed providers, each layer's result, the merged
+   * pass/blocked policy, its digest, and the §25 approval flag.
+   */
+  async #evaluatePlanCompletion(input: {
+    readonly running: PlanRun;
+    readonly profile: RunnerProfile;
+    readonly result: OpenTofuPlanResult;
+    readonly now: number;
+  }): Promise<PlanCompletionVerdict> {
+    const { running, profile, result, now } = input;
+    const requiredProviders = normalizeProviders(
+      result.requiredProviders ?? running.requiredProviders,
+    );
+    // Re-evaluate against the SAME provider-free allowance as the create gate:
+    // a provider-free template (e.g. `core`) that observes zero providers at
+    // plan time stays passed instead of tripping the "providers before init"
+    // gate. Resolved from the recorded binding so a tampered catalog cannot
+    // retroactively change the allowance.
+    const policy = evaluatePolicy({
+      profile,
+      requiredProviders,
+      checkedAt: now,
+      ...(this.#planAllowsNoProviders(running)
+        ? { allowNoProviders: true }
+        : {}),
+    });
+    // Layered plan-JSON policy (§25). When the runner returned resource
+    // changes, evaluate the resource-type allowlist (layer 5) and the action
+    // policy (layer 7) over them for ALL runs — not only template-backed:
+    //   - template-backed runs use the recorded template.policy for resource
+    //     types (tamper-safe) and the target Space/InstallConfig for scope +
+    //     quota;
+    //   - non-template installation-context runs use the Installation's
+    //     Space/InstallConfig policy (resolved via installConfigId);
+    //   - raw `/v1/plan-runs` runs without installation context keep today's
+    //     behavior (no allowlist source -> no resource enforcement).
+    // A disallowed resource type DENIES the plan; a delete/replace marks it
+    // requiresApproval (parked waiting_approval until approved). The template
+    // destructive-confirmation gate (requiresConfirmation) additionally needs
+    // confirmDestructive at apply.
+    const layered = await this.#evaluatePlanPolicy(running, result);
+    const blockedByLayeredPolicy = [
+      ...(layered.provider?.reasons ?? []),
+      ...(layered.resource?.reasons ?? []),
+      ...(layered.scope?.reasons ?? []),
+      ...(layered.quota?.reasons ?? []),
+      ...(layered.providerLockfile?.reasons ?? []),
+      ...(layered.providerInstallation?.reasons ?? []),
+    ];
+    const runPolicy = await this.#policyForPlanRun(running);
+    const compatibilityPolicy = await this.#evaluateCapsuleCompatibilityPolicy({
+      planRunId: running.id,
+      ...(running.compatibilityReportId
+        ? { compatibilityReportId: running.compatibilityReportId }
+        : {}),
+      ...(running.sourceSnapshotId
+        ? { sourceSnapshotId: running.sourceSnapshotId }
+        : {}),
+      ...(runPolicy ? { policy: runPolicy } : {}),
+    });
+    const billingPolicy = await this.#billing.evaluatePlanBillingReservation({
+      planRun: running,
+      result,
+      now,
+      policyPassedBeforeBilling:
+        policy.status === "passed" &&
+        blockedByLayeredPolicy.length === 0 &&
+        compatibilityPolicy.reasons.length === 0,
+    });
+    const passedPolicy =
+      policy.status === "passed" &&
+      blockedByLayeredPolicy.length === 0 &&
+      compatibilityPolicy.reasons.length === 0 &&
+      billingPolicy.reasons.length === 0;
+    const completedPolicy = passedPolicy
+      ? policy
+      : {
+          status: "blocked" as const,
+          reasons: [
+            ...policy.reasons,
+            ...blockedByLayeredPolicy,
+            ...compatibilityPolicy.reasons,
+            ...billingPolicy.reasons,
+          ],
+          checkedAt: now,
+        };
+    const policyDecisionDigest = await stableJsonDigest(completedPolicy);
+    // §25 action policy: any delete/replace requires approval before apply.
+    // Recorded so the §19 Run projection parks the succeeded plan
+    // `waiting_approval`. Destroy plans are always-approval independently
+    // (#planAwaitsApproval), so they need no field. A drift_check is read-only
+    // and can never be applied (Phase 8), so it never carries requiresApproval.
+    const requiresApproval =
+      running.driftCheck !== true && layered.action?.requiresApproval === true;
+    return {
+      requiredProviders,
+      layered,
+      compatibilityPolicy,
+      billingPolicy,
+      passedPolicy,
+      completedPolicy,
+      policyDecisionDigest,
+      requiresApproval,
+    };
+  }
+
+  /**
+   * Assembles the completed PlanRun from the runner result and the policy
+   * verdict: the succeeded/blocked status, the normalized plan artifact /
+   * summary / template binding, and the `plan.policy_evaluated` +
+   * `plan.completed` audit events.
+   */
+  #buildCompletedPlanRun(input: {
+    readonly running: PlanRun;
+    readonly result: OpenTofuPlanResult;
+    readonly verdict: PlanCompletionVerdict;
+    readonly now: number;
+  }): PlanRun {
+    const { running, result, verdict, now } = input;
+    const {
+      requiredProviders,
+      layered,
+      compatibilityPolicy,
+      billingPolicy,
+      passedPolicy,
+      completedPolicy,
+      policyDecisionDigest,
+      requiresApproval,
+    } = verdict;
+    const diagnostics = redactRunDiagnostics(result.diagnostics);
+    const planArtifact = normalizePlanArtifact({
+      artifact: result.planArtifact,
+      planDigest: result.planDigest,
+      now,
+    });
+    const summary = normalizePlanSummary(result.summary);
+    const templateBinding = updatedTemplateBinding(
+      running,
+      layered.templatePolicy,
+    );
+    return {
+      ...running,
+      status: passedPolicy ? "succeeded" : "blocked",
+      requiredProviders,
+      policy: completedPolicy,
+      policyDecisionDigest,
+      planDigest: result.planDigest,
+      planArtifact,
+      ...(result.sourceCommit ? { sourceCommit: result.sourceCommit } : {}),
+      ...(result.providerLockDigest
+        ? { providerLockDigest: result.providerLockDigest }
+        : {}),
+      ...(summary ? { summary } : {}),
+      ...(diagnostics ? { diagnostics } : {}),
+      ...(templateBinding ? { templateBinding } : {}),
+      ...(requiresApproval ? { requiresApproval: true } : {}),
+      auditEvents: [
+        ...running.auditEvents,
+        auditEvent(running.id, "plan.policy_evaluated", now, {
+          policyDecisionDigest,
+          status: passedPolicy ? "passed" : "blocked",
+          observedProviderCount: requiredProviders.length,
+          requiresApproval,
+          ...(layered.provider
+            ? {
+                installConfigProvidersAllowed:
+                  layered.provider.denied.length === 0 &&
+                  layered.provider.notAllowed.length === 0 &&
+                  !layered.provider.missingProviders,
+              }
+            : {}),
+          ...(layered.resource
+            ? {
+                resourceTypesAllowed:
+                  layered.resource.disallowedResourceTypes.length === 0,
+              }
+            : {}),
+          ...(compatibilityPolicy.audit
+            ? { capsuleCompatibility: compatibilityPolicy.audit }
+            : {}),
+          ...(layered.providerLockfile
+            ? {
+                providerLockfileDigestPresent:
+                  layered.providerLockfile.digestPresent,
+              }
+            : {}),
+          ...(layered.providerInstallation
+            ? {
+                providerMirrorRequired:
+                  layered.providerInstallation.requireMirror,
+                providerMirrorPassed:
+                  layered.providerInstallation.reasons.length === 0,
+                providerMirrorEvidenceCount:
+                  layered.providerInstallation.evidenceCount,
+              }
+            : {}),
+          ...(layered.scope
+            ? { scopeBoundaryPassed: layered.scope.outOfScope.length === 0 }
+            : {}),
+          ...(layered.quota
+            ? { quotaPassed: layered.quota.exceeded.length === 0 }
+            : {}),
+          ...(billingPolicy.audit ? { billing: billingPolicy.audit } : {}),
+          ...(layered.templatePolicy
+            ? {
+                templateRequiresConfirmation:
+                  layered.templatePolicy.requiresConfirmation,
+              }
+            : {}),
+        }),
+        auditEvent(running.id, "plan.completed", now, {
+          planDigest: result.planDigest,
+          planArtifactDigest: planArtifact.digest,
+          providerLockDigest: result.providerLockDigest ?? "",
+        }),
+      ],
+      updatedAt: now,
+      finishedAt: now,
+    };
+  }
+
+  /**
    * Evaluates the layered plan-JSON policy (§25 layers 5 + 7) over the runner's
    * resource changes for ANY run that returned them:
    *   - `resource`: the resource-type allowlist verdict. The allowlist source is
@@ -5044,16 +4973,7 @@ export class OpenTofuDeploymentController {
   async #evaluatePlanPolicy(
     planRun: PlanRun,
     result: OpenTofuPlanResult,
-  ): Promise<{
-    provider?: ProviderAllowlistResult;
-    providerLockfile?: ProviderLockfilePolicyResult;
-    resource?: ResourceAllowlistResult;
-    scope?: ScopeBoundaryResult;
-    action?: ActionPolicyResult;
-    quota?: QuotaResult;
-    providerInstallation?: ProviderInstallationPolicyResult;
-    templatePolicy?: ReturnType<typeof evaluateTemplatePlanPolicy>;
-  }> {
+  ): Promise<PlanPolicyLayers> {
     const changes = result.planResourceChanges;
     const policy = await this.#policyForPlanRun(planRun);
     const observedProviders = normalizeProviders(
@@ -5219,49 +5139,14 @@ export class OpenTofuDeploymentController {
     let runnerDispatched = false;
 
     try {
-      if (!planRun.planArtifact) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `plan run ${planRun.id} has no immutable plan artifact`,
-        );
-      }
-      // Apply-once re-check inside the serialized section: a concurrent apply of the
-      // same PlanRun is serialized on its id, so re-read the persisted PlanRun here
-      // to observe a sibling apply that already completed and marked it applied.
-      const persistedPlan = await this.#store.getPlanRun(planRun.id);
-      if (persistedPlan?.appliedApplyRunId) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `plan run ${planRun.id} has already been applied by apply run ${persistedPlan.appliedApplyRunId}`,
-        );
-      }
-      const plannedInstallation = planRun.installationId
-        ? await this.#requireCurrentPlannedInstallation(planRun)
-        : undefined;
-      // State generation guard: reject when the target's state advanced past the
-      // generation this plan was created against (a stale plan over newer state).
-      assertStateGenerationMatches(planRun, plannedInstallation);
-      // Env-driven runs guard against the Environment's latest StateSnapshot
-      // generation instead of an Installation generation (M2).
-      await this.#assertInstallationStateGeneration(planRun);
-      // Consumer pre-flight: re-assert the plan still references its SourceSnapshot
-      // (spec invariant 10) just before dispatch, mirroring the digest/generation
-      // pre-flight checks.
-      await this.#revalidateSourceSnapshot(planRun);
-      // DependencySnapshot verification (spec §17 / invariant 9): when the plan
-      // pinned a DependencySnapshot, re-read it and verify producer state
-      // generations (strict mode) + recompute the pinned values digests (tamper
-      // check) before applying. A moved producer (strict) is
-      // `dependency_snapshot_stale`; a digest mismatch is
-      // `dependency_snapshot_tampered`.
-      await this.#verifyDependencySnapshot(planRun);
-      await this.#assertCapsuleCompatibilityAllowsRun(planRun);
-      assertGeneratedRootDispatchPresent(planRun, dispatch);
-      await this.#billing.assertApplyBillingReservation(planRun);
+      const plannedInstallation = await this.#assertApplyPreconditions(
+        planRun,
+        dispatch,
+      );
       // Mint provider credentials NOW (just before dispatch). Apply runs resolve
       // requiredProviders from the reviewed PlanRun. The bundle is attached to the
       // runner dispatch ONLY — never stored, never logged.
-      const credentials = await this.#mintRunCredentials(
+      const credentials = await this.#credentials.mintRunCredentials(
         planRun,
         planRun.operation === "destroy" ? "destroy" : "apply",
         running.id,
@@ -5277,224 +5162,82 @@ export class OpenTofuDeploymentController {
           dispatch,
         );
       }
-      // M2 env dispatch: an apply persists state at `base + 1` (the DO writes the
-      // new state object + current.json at this generation). Empty without env ctx.
-      const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
-      const envDispatch = await this.#installationDispatch(
-        planRun,
+      const {
+        result,
+        envDispatch,
         persistGeneration,
-      );
-      const planPolicy = await this.#policyForPlanRun(planRun);
-      const providerInstallationPolicy =
-        planPolicy?.providerInstallation?.requireMirror === true
-          ? { requireMirror: true }
-          : undefined;
-      runnerDispatched = true;
-      const runner = this.#runnerForProfile(profile);
-      const result = await runner.apply({
-        applyRun: running,
+        providerInstallationPolicy,
+      } = await this.#dispatchApply({
+        running,
         planRun,
-        planArtifact: planRun.planArtifact,
-        runnerProfile: profile,
-        ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
-        // Generated-root dispatch: apply tofu in the reviewed root.
-        ...(dispatch.generatedRoot
-          ? { generatedRoot: dispatch.generatedRoot }
-          : {}),
-        ...(dispatch.build ? { build: dispatch.build } : {}),
-        // M2 env dispatch (state scope at base+1 + source archive).
-        ...(envDispatch.stateScope
-          ? { stateScope: envDispatch.stateScope }
-          : {}),
-        ...(envDispatch.sourceArchive
-          ? { sourceArchive: envDispatch.sourceArchive }
-          : {}),
-        // remote_state dependency states materialized into /work/deps (spec §15).
-        ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
-        ...(credentials ? { credentials } : {}),
+        profile,
+        dispatch,
+        credentials,
+        // Flip the runner-dispatched flag ONLY when the runner is actually
+        // invoked, so a throw from the pre-dispatch env/policy resolution does
+        // not record runner-minute usage (matches the pre-extraction order).
+        onDispatch: () => {
+          runnerDispatched = true;
+        },
       });
       const now = this.#now();
-      // Output allowlist: a template run projects ONLY the template's public
-      // outputs after the existing sensitive/redaction filter. Generic Capsule
-      // runs use InstallConfig.outputAllowlist for both dependency-consumable
-      // space outputs and public Deployment outputs.
-      const outputs = this.#projectApplyOutputs(planRun, result, dispatch);
-      const installation =
-        plannedInstallation ??
-        (await this.#requireCurrentPlannedInstallation(planRun));
-      // Bump the state generation atomically with the state persist (the
-      // currentDeployment pointer move). A create starts at base 0 -> 1; an
-      // update advances the installation's generation by one.
-      const nextStateGeneration = installation.currentStateGeneration + 1;
-      // §16 OutputSnapshot: capture the allowlisted projected outputs after a
-      // successful apply. Sensitive-flagged outputs appear in NEITHER
-      // projection; the raw envelope stays an encrypted artifact referenced by
-      // rawOutputArtifactKey. The Installation's PREVIOUS snapshot digest drives
-      // stale propagation (§24) after this record.
-      const previousOutputSnapshot = installation.currentOutputSnapshotId
-        ? await this.#store.getOutputSnapshot(
-            installation.currentOutputSnapshotId,
-          )
-        : undefined;
-      if (!planRun.sourceSnapshotId) {
-        throw new Error(
-          `PlanRun ${planRun.id} has no SourceSnapshot for Deployment recording`,
-        );
-      }
-      const outputSnapshot = await this.#recordOutputSnapshot({
-        installation,
+      const projected = await this.#projectAndRecordApplyOutputs({
+        planRun,
         applyRun,
+        plannedInstallation,
         result,
-        publicOutputs: outputs,
-        ...(dispatch.outputAllowlist
-          ? { outputAllowlist: dispatch.outputAllowlist }
-          : {}),
-        stateGeneration: nextStateGeneration,
+        dispatch,
         now,
       });
-      const deployment: Deployment = {
-        id: this.#newId("dep"),
-        spaceId: planRun.spaceId,
-        installationId: installation.id,
-        environment: installation.environment,
-        applyRunId: applyRun.id,
-        sourceSnapshotId: planRun.sourceSnapshotId,
-        ...(planRun.dependencySnapshotId
-          ? { dependencySnapshotId: planRun.dependencySnapshotId }
-          : {}),
-        stateGeneration: nextStateGeneration,
-        outputSnapshotId: outputSnapshot.id,
-        outputsPublic: Object.fromEntries(
-          outputs.map((output) => [output.name, output.value]),
-        ),
-        status: "active",
-        createdAt: new Date(now).toISOString(),
-      };
-      await this.#store.putDeployment(deployment);
-      // §21 status transition: the previously-current Deployment is superseded
-      // by the new active one.
-      if (installation.currentDeploymentId) {
-        const previous = await this.#store.getDeployment(
-          installation.currentDeploymentId,
-        );
-        if (previous && previous.status === "active") {
-          await this.#store.putDeployment({
-            ...previous,
-            status: "superseded",
-          });
-        }
-      }
-      // Record the StateSnapshot metadata aligned to the SAME generation
-      // written to R2_STATE (persistGeneration). The DO wrote the encrypted
-      // object + current.json at this key; only metadata enters the ledger.
-      // Recorded BEFORE the installation generation bump so the two advance
-      // together.
-      await this.#recordStateSnapshot({
+      const deployment = await this.#recordApplyDeployment({
         planRun,
+        applyRun,
+        installation: projected.installation,
+        outputs: projected.outputs,
+        outputSnapshot: projected.outputSnapshot,
+        nextStateGeneration: projected.nextStateGeneration,
+        now,
+      });
+      const patched = await this.#persistApplyStateGeneration({
+        planRun,
+        plannedInstallation,
+        installation: projected.installation,
+        deployment,
+        outputSnapshot: projected.outputSnapshot,
         envDispatch,
-        generation: persistGeneration,
+        persistGeneration,
+        nextStateGeneration: projected.nextStateGeneration,
         stateDigest: result.stateDigest,
         runId: applyRun.id,
         now,
       });
-      const patched = await this.#store.patchInstallation(
-        installation.id,
-        {
-          currentDeploymentId: deployment.id,
-          status: "active",
-          updatedAt: new Date(now).toISOString(),
-          currentStateGeneration: nextStateGeneration,
-          currentOutputSnapshotId: outputSnapshot.id,
-        },
-        {
-          currentDeploymentId:
-            planRun.installationCurrentDeploymentId ?? undefined,
-          status: plannedInstallation?.status,
-        },
-      );
       // §24 stale propagation: when this apply's projected outputs changed
       // versus the Installation's PREVIOUS OutputSnapshot, every transitive
       // downstream consumer in the Space that is currently `active` is marked
       // `stale`. The just-applied Installation itself stays `active` (patched
       // above); pending/error/destroyed consumers are left untouched.
-      await this.#propagateStale({
-        installation,
-        previousOutputSnapshot,
-        newOutputSnapshot: outputSnapshot,
+      await this.#markDownstreamInstallationsStale({
+        installation: projected.installation,
+        previousOutputSnapshot: projected.previousOutputSnapshot,
+        newOutputSnapshot: projected.outputSnapshot,
         now,
       });
-      const diagnostics = redactRunDiagnostics(result.diagnostics);
-      const completed: ApplyRun = {
-        ...running,
-        installationId: installation.id,
-        deploymentId: deployment.id,
-        status: "succeeded",
-        stateLock:
-          result.stateLock ??
-          stateLockEvidence(profile.stateBackend, startedAt, now, "recorded"),
-        outputs,
-        ...(diagnostics ? { diagnostics } : {}),
-        auditEvents: [
-          ...running.auditEvents,
-          ...providerInstallationAuditEvents(
-            applyRun.id,
-            "apply",
-            now,
-            result.providerInstallation,
-            providerInstallationPolicy,
-          ),
-          auditEvent(applyRun.id, "apply.completed", now, {
-            deploymentId: deployment.id,
-            outputCount: outputs.length,
-          }),
-        ],
-        updatedAt: now,
-        finishedAt: now,
-      };
-      await this.#store.putApplyRun(completed);
-      await this.#recordRunnerMinuteUsage({
-        spaceId: completed.spaceId,
-        runId: completed.id,
-        installationId: completed.installationId,
-        startedAt,
-        finishedAt: now,
-      });
-      // Mark the PlanRun applied so it cannot be applied again (apply-once).
-      await this.#store.putPlanRun({
-        ...planRun,
-        appliedApplyRunId: applyRun.id,
-        updatedAt: now,
-      });
-      await this.#billing.captureApplyBillingUsage({
+      return await this.#completeApplyRun({
+        running,
         planRun,
-        applyRun: completed,
+        applyRun,
+        profile,
+        installation: projected.installation,
+        patched,
+        deployment,
+        outputs: projected.outputs,
+        nextStateGeneration: projected.nextStateGeneration,
+        result,
+        providerInstallationPolicy,
+        dispatch,
+        startedAt,
         now,
       });
-      // The retained generated-root inputs sidecar is no longer needed once applied.
-      if (dispatch.generatedRoot) {
-        await this.#store.deletePlanRunInputs(planRun.id);
-      }
-      // Activity (§27 / §34): a successful apply produced a new Deployment. Run
-      // id + deployment id + state generation + output COUNT only (never output
-      // values).
-      await this.#recordActivity({
-        spaceId: completed.spaceId,
-        action: "run.applied",
-        targetType: "run",
-        targetId: completed.id,
-        runId: completed.id,
-        metadata: {
-          installationId: installation.id,
-          deploymentId: deployment.id,
-          stateGeneration: nextStateGeneration,
-          outputCount: outputs.length,
-        },
-      });
-      return {
-        applyRun: completed,
-        installation: patched ?? installation,
-        deployment,
-      };
     } catch (error) {
       await this.#billing.releaseApplyBillingReservation(planRun);
       const failed = await this.#failApplyRun(
@@ -5544,6 +5287,420 @@ export class OpenTofuDeploymentController {
       binding.templateVersion,
     );
     return projectTemplatePublicOutputs(template, result.outputs);
+  }
+
+  /**
+   * Re-asserts every apply pre-flight invariant inside the serialized section
+   * (immutable plan artifact, apply-once, state generation, source snapshot,
+   * dependency snapshot, Capsule compatibility, generated-root dispatch, and
+   * billing reservation) just before dispatch. Returns the currently-planned
+   * Installation (undefined for runs without installation context).
+   */
+  async #assertApplyPreconditions(
+    planRun: PlanRun,
+    dispatch: RunTemplateDispatch,
+  ): Promise<Installation | undefined> {
+    if (!planRun.planArtifact) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${planRun.id} has no immutable plan artifact`,
+      );
+    }
+    // Apply-once re-check inside the serialized section: a concurrent apply of the
+    // same PlanRun is serialized on its id, so re-read the persisted PlanRun here
+    // to observe a sibling apply that already completed and marked it applied.
+    const persistedPlan = await this.#store.getPlanRun(planRun.id);
+    if (persistedPlan?.appliedApplyRunId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${planRun.id} has already been applied by apply run ${persistedPlan.appliedApplyRunId}`,
+      );
+    }
+    const plannedInstallation = planRun.installationId
+      ? await this.#requireCurrentPlannedInstallation(planRun)
+      : undefined;
+    // State generation guard: reject when the target's state advanced past the
+    // generation this plan was created against (a stale plan over newer state).
+    assertStateGenerationMatches(planRun, plannedInstallation);
+    // Env-driven runs guard against the Environment's latest StateSnapshot
+    // generation instead of an Installation generation (M2).
+    await this.#assertInstallationStateGeneration(planRun);
+    // Consumer pre-flight: re-assert the plan still references its SourceSnapshot
+    // (spec invariant 10) just before dispatch, mirroring the digest/generation
+    // pre-flight checks.
+    await this.#revalidateSourceSnapshot(planRun);
+    // DependencySnapshot verification (spec §17 / invariant 9): when the plan
+    // pinned a DependencySnapshot, re-read it and verify producer state
+    // generations (strict mode) + recompute the pinned values digests (tamper
+    // check) before applying. A moved producer (strict) is
+    // `dependency_snapshot_stale`; a digest mismatch is
+    // `dependency_snapshot_tampered`.
+    await this.#verifyDependencySnapshot(planRun);
+    await this.#assertCapsuleCompatibilityAllowsRun(planRun);
+    assertGeneratedRootDispatchPresent(planRun, dispatch);
+    await this.#billing.assertApplyBillingReservation(planRun);
+    return plannedInstallation;
+  }
+
+  /**
+   * Dispatches the non-destroy apply to the runner. Resolves the M2 env dispatch
+   * (state scope at `base + 1` + source archive + dependency states) and the
+   * provider-installation mirror policy, then runs `runner.apply` with the minted
+   * credentials (dispatch-only — never persisted).
+   */
+  async #dispatchApply(input: {
+    readonly running: ApplyRun;
+    readonly planRun: PlanRun;
+    readonly profile: RunnerProfile;
+    readonly dispatch: RunTemplateDispatch;
+    readonly credentials: RunCredentials | undefined;
+    /** Fired immediately before the runner is invoked (runner-dispatched flag). */
+    readonly onDispatch: () => void;
+  }): Promise<{
+    result: OpenTofuApplyResult;
+    envDispatch: RunInstallationDispatch;
+    persistGeneration: number;
+    providerInstallationPolicy: { requireMirror: boolean } | undefined;
+  }> {
+    const { running, planRun, profile, dispatch, credentials } = input;
+    // Narrowed by #assertApplyPreconditions; re-checked here for the type guard.
+    const planArtifact = planRun.planArtifact;
+    if (!planArtifact) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${planRun.id} has no immutable plan artifact`,
+      );
+    }
+    // M2 env dispatch: an apply persists state at `base + 1` (the DO writes the
+    // new state object + current.json at this generation). Empty without env ctx.
+    const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
+    const envDispatch = await this.#installationDispatch(
+      planRun,
+      persistGeneration,
+    );
+    const planPolicy = await this.#policyForPlanRun(planRun);
+    const providerInstallationPolicy =
+      planPolicy?.providerInstallation?.requireMirror === true
+        ? { requireMirror: true }
+        : undefined;
+    input.onDispatch();
+    const runner = this.#runnerForProfile(profile);
+    const result = await runner.apply({
+      applyRun: running,
+      planRun,
+      planArtifact,
+      runnerProfile: profile,
+      ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
+      // Generated-root dispatch: apply tofu in the reviewed root.
+      ...(dispatch.generatedRoot
+        ? { generatedRoot: dispatch.generatedRoot }
+        : {}),
+      ...(dispatch.build ? { build: dispatch.build } : {}),
+      // M2 env dispatch (state scope at base+1 + source archive).
+      ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+      ...(envDispatch.sourceArchive
+        ? { sourceArchive: envDispatch.sourceArchive }
+        : {}),
+      // remote_state dependency states materialized into /work/deps (spec §15).
+      ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
+      ...(credentials ? { credentials } : {}),
+    });
+    return {
+      result,
+      envDispatch,
+      persistGeneration,
+      providerInstallationPolicy,
+    };
+  }
+
+  /**
+   * Projects the apply outputs and captures the §16 OutputSnapshot. Returns the
+   * resolved Installation, the bumped state generation, the new OutputSnapshot,
+   * and the Installation's PREVIOUS OutputSnapshot (which drives §24 stale
+   * propagation).
+   */
+  async #projectAndRecordApplyOutputs(input: {
+    readonly planRun: PlanRun;
+    readonly applyRun: ApplyRun;
+    readonly plannedInstallation: Installation | undefined;
+    readonly result: OpenTofuApplyResult;
+    readonly dispatch: RunTemplateDispatch;
+    readonly now: number;
+  }): Promise<{
+    outputs: readonly DeploymentOutput[];
+    installation: Installation;
+    nextStateGeneration: number;
+    previousOutputSnapshot: OutputSnapshot | undefined;
+    outputSnapshot: OutputSnapshot;
+  }> {
+    const { planRun, applyRun, result, dispatch, now } = input;
+    // Output allowlist: a template run projects ONLY the template's public
+    // outputs after the existing sensitive/redaction filter. Generic Capsule
+    // runs use InstallConfig.outputAllowlist for both dependency-consumable
+    // space outputs and public Deployment outputs.
+    const outputs = this.#projectApplyOutputs(planRun, result, dispatch);
+    const installation =
+      input.plannedInstallation ??
+      (await this.#requireCurrentPlannedInstallation(planRun));
+    // Bump the state generation atomically with the state persist (the
+    // currentDeployment pointer move). A create starts at base 0 -> 1; an
+    // update advances the installation's generation by one.
+    const nextStateGeneration = installation.currentStateGeneration + 1;
+    // §16 OutputSnapshot: capture the allowlisted projected outputs after a
+    // successful apply. Sensitive-flagged outputs appear in NEITHER
+    // projection; the raw envelope stays an encrypted artifact referenced by
+    // rawOutputArtifactKey. The Installation's PREVIOUS snapshot digest drives
+    // stale propagation (§24) after this record.
+    const previousOutputSnapshot = installation.currentOutputSnapshotId
+      ? await this.#store.getOutputSnapshot(
+          installation.currentOutputSnapshotId,
+        )
+      : undefined;
+    const outputSnapshot = await this.#recordOutputSnapshot({
+      installation,
+      applyRun,
+      result,
+      publicOutputs: outputs,
+      ...(dispatch.outputAllowlist
+        ? { outputAllowlist: dispatch.outputAllowlist }
+        : {}),
+      stateGeneration: nextStateGeneration,
+      now,
+    });
+    return {
+      outputs,
+      installation,
+      nextStateGeneration,
+      previousOutputSnapshot,
+      outputSnapshot,
+    };
+  }
+
+  /**
+   * Records the §21 Deployment for a successful apply and supersedes the
+   * Installation's previously-current Deployment.
+   */
+  async #recordApplyDeployment(input: {
+    readonly planRun: PlanRun;
+    readonly applyRun: ApplyRun;
+    readonly installation: Installation;
+    readonly outputs: readonly DeploymentOutput[];
+    readonly outputSnapshot: OutputSnapshot;
+    readonly nextStateGeneration: number;
+    readonly now: number;
+  }): Promise<Deployment> {
+    const { planRun, applyRun, installation, outputs, now } = input;
+    if (!planRun.sourceSnapshotId) {
+      throw new Error(
+        `PlanRun ${planRun.id} has no SourceSnapshot for Deployment recording`,
+      );
+    }
+    const deployment: Deployment = {
+      id: this.#newId("dep"),
+      spaceId: planRun.spaceId,
+      installationId: installation.id,
+      environment: installation.environment,
+      applyRunId: applyRun.id,
+      sourceSnapshotId: planRun.sourceSnapshotId,
+      ...(planRun.dependencySnapshotId
+        ? { dependencySnapshotId: planRun.dependencySnapshotId }
+        : {}),
+      stateGeneration: input.nextStateGeneration,
+      outputSnapshotId: input.outputSnapshot.id,
+      outputsPublic: Object.fromEntries(
+        outputs.map((output) => [output.name, output.value]),
+      ),
+      status: "active",
+      createdAt: new Date(now).toISOString(),
+    };
+    await this.#store.putDeployment(deployment);
+    // §21 status transition: the previously-current Deployment is superseded
+    // by the new active one.
+    if (installation.currentDeploymentId) {
+      const previous = await this.#store.getDeployment(
+        installation.currentDeploymentId,
+      );
+      if (previous && previous.status === "active") {
+        await this.#store.putDeployment({
+          ...previous,
+          status: "superseded",
+        });
+      }
+    }
+    return deployment;
+  }
+
+  /**
+   * Records the StateSnapshot for the persisted generation and advances the
+   * Installation's currentDeployment / state generation / OutputSnapshot
+   * pointers. Returns the patched Installation (or undefined when the guarded
+   * patch did not apply).
+   */
+  async #persistApplyStateGeneration(input: {
+    readonly planRun: PlanRun;
+    readonly plannedInstallation: Installation | undefined;
+    readonly installation: Installation;
+    readonly deployment: Deployment;
+    readonly outputSnapshot: OutputSnapshot;
+    readonly envDispatch: RunInstallationDispatch;
+    readonly persistGeneration: number;
+    readonly nextStateGeneration: number;
+    readonly stateDigest: string | undefined;
+    readonly runId: string;
+    readonly now: number;
+  }): Promise<Installation | undefined> {
+    const { planRun, installation, deployment, outputSnapshot, now } = input;
+    // Record the StateSnapshot metadata aligned to the SAME generation
+    // written to R2_STATE (persistGeneration). The DO wrote the encrypted
+    // object + current.json at this key; only metadata enters the ledger.
+    // Recorded BEFORE the installation generation bump so the two advance
+    // together.
+    await this.#recordStateSnapshot({
+      planRun,
+      envDispatch: input.envDispatch,
+      generation: input.persistGeneration,
+      stateDigest: input.stateDigest,
+      runId: input.runId,
+      now,
+    });
+    return await this.#store.patchInstallation(
+      installation.id,
+      {
+        currentDeploymentId: deployment.id,
+        status: "active",
+        updatedAt: new Date(now).toISOString(),
+        currentStateGeneration: input.nextStateGeneration,
+        currentOutputSnapshotId: outputSnapshot.id,
+      },
+      {
+        currentDeploymentId:
+          planRun.installationCurrentDeploymentId ?? undefined,
+        status: input.plannedInstallation?.status,
+      },
+    );
+  }
+
+  /**
+   * §24 stale propagation for an apply: a thin named wrapper over
+   * `#propagateStale` so the top-level apply flow reads as a sequence of named
+   * steps.
+   */
+  async #markDownstreamInstallationsStale(input: {
+    readonly installation: Installation;
+    readonly previousOutputSnapshot: OutputSnapshot | undefined;
+    readonly newOutputSnapshot: OutputSnapshot;
+    readonly now: number;
+  }): Promise<void> {
+    await this.#propagateStale(input);
+  }
+
+  /**
+   * Finalizes a successful apply: persists the succeeded ApplyRun, records
+   * runner-minute usage, marks the PlanRun applied (apply-once), captures
+   * billing usage, drops the retained generated-root inputs sidecar, and emits
+   * the §27 / §34 activity. Returns the apply response.
+   */
+  async #completeApplyRun(input: {
+    readonly running: ApplyRun;
+    readonly planRun: PlanRun;
+    readonly applyRun: ApplyRun;
+    readonly profile: RunnerProfile;
+    readonly installation: Installation;
+    readonly patched: Installation | undefined;
+    readonly deployment: Deployment;
+    readonly outputs: readonly DeploymentOutput[];
+    readonly nextStateGeneration: number;
+    readonly result: OpenTofuApplyResult;
+    readonly providerInstallationPolicy: { requireMirror: boolean } | undefined;
+    readonly dispatch: RunTemplateDispatch;
+    readonly startedAt: number;
+    readonly now: number;
+  }): Promise<ApplyRunResponse> {
+    const {
+      running,
+      planRun,
+      applyRun,
+      profile,
+      installation,
+      deployment,
+      outputs,
+      result,
+      dispatch,
+      startedAt,
+      now,
+    } = input;
+    const diagnostics = redactRunDiagnostics(result.diagnostics);
+    const completed: ApplyRun = {
+      ...running,
+      installationId: installation.id,
+      deploymentId: deployment.id,
+      status: "succeeded",
+      stateLock:
+        result.stateLock ??
+        stateLockEvidence(profile.stateBackend, startedAt, now, "recorded"),
+      outputs,
+      ...(diagnostics ? { diagnostics } : {}),
+      auditEvents: [
+        ...running.auditEvents,
+        ...providerInstallationAuditEvents(
+          applyRun.id,
+          "apply",
+          now,
+          result.providerInstallation,
+          input.providerInstallationPolicy,
+        ),
+        auditEvent(applyRun.id, "apply.completed", now, {
+          deploymentId: deployment.id,
+          outputCount: outputs.length,
+        }),
+      ],
+      updatedAt: now,
+      finishedAt: now,
+    };
+    await this.#store.putApplyRun(completed);
+    await this.#recordRunnerMinuteUsage({
+      spaceId: completed.spaceId,
+      runId: completed.id,
+      installationId: completed.installationId,
+      startedAt,
+      finishedAt: now,
+    });
+    // Mark the PlanRun applied so it cannot be applied again (apply-once).
+    await this.#store.putPlanRun({
+      ...planRun,
+      appliedApplyRunId: applyRun.id,
+      updatedAt: now,
+    });
+    await this.#billing.captureApplyBillingUsage({
+      planRun,
+      applyRun: completed,
+      now,
+    });
+    // The retained generated-root inputs sidecar is no longer needed once applied.
+    if (dispatch.generatedRoot) {
+      await this.#store.deletePlanRunInputs(planRun.id);
+    }
+    // Activity (§27 / §34): a successful apply produced a new Deployment. Run
+    // id + deployment id + state generation + output COUNT only (never output
+    // values).
+    await this.#recordActivity({
+      spaceId: completed.spaceId,
+      action: "run.applied",
+      targetType: "run",
+      targetId: completed.id,
+      runId: completed.id,
+      metadata: {
+        installationId: installation.id,
+        deploymentId: deployment.id,
+        stateGeneration: input.nextStateGeneration,
+        outputCount: outputs.length,
+      },
+    });
+    return {
+      applyRun: completed,
+      installation: input.patched ?? installation,
+      deployment,
+    };
   }
 
   async #executeDestroyApply(
@@ -5986,115 +6143,6 @@ function providerBindingsFromResolved(
     });
   }
   return providers;
-}
-
-/**
- * Derives per-binding credential mint entries from resolved provider bindings.
- * Mirrors {@link providerBindingsFromResolved} so minted TF_VAR names line up
- * byte-for-byte with rootgen. The vault still re-validates each connection id.
- */
-function providerMintEntriesFromResolved(
-  resolved: readonly ResolvedProviderBinding[],
-): readonly ProviderBindingMintEntry[] {
-  const entries: ProviderBindingMintEntry[] = [];
-  for (const entry of resolved) {
-    const connection = entry.connection;
-    if (!connection) continue;
-    entries.push({
-      provider: connection.provider,
-      ...(entry.alias ? { alias: entry.alias } : {}),
-      connectionId: connection.id,
-    });
-  }
-  return entries;
-}
-
-function missingRootOnlyCredentialProviders(
-  requiredProviders: readonly string[],
-  resolved: readonly ResolvedProviderBinding[],
-): readonly string[] {
-  return requiredProviders
-    .filter((provider) => providerEnvRule(provider))
-    .filter((provider) => !rootOnlyProviderCovered(provider, resolved))
-    .sort();
-}
-
-function rootOnlyProviderCovered(
-  requiredProvider: string,
-  resolved: readonly ResolvedProviderBinding[],
-): boolean {
-  return resolved.some((entry) => {
-    if (!entry.connection) return false;
-    if (providerCredentialArgs(entry.connection.provider).length === 0) {
-      return false;
-    }
-    return providerMatches(requiredProvider, entry.connection.provider);
-  });
-}
-
-/**
- * Produces the non-secret audit rows for provider credential mints. The legacy
- * `capabilities` field carries provider keys until the physical column is
- * migrated.
- */
-function credentialMintAuditEntries(
-  resolved: readonly ResolvedProviderBinding[],
-): readonly {
-  readonly connectionId: string;
-  readonly capabilities: readonly string[];
-}[] {
-  const byConnection = new Map<string, Set<string>>();
-  for (const entry of resolved) {
-    if (!entry.connection) continue;
-    let providers = byConnection.get(entry.connection.id);
-    if (!providers) {
-      providers = new Set<string>();
-      byConnection.set(entry.connection.id, providers);
-    }
-    providers.add(entry.connection.provider);
-  }
-  return Array.from(byConnection.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([connectionId, providers]) => ({
-      connectionId,
-      capabilities: Array.from(providers).sort(),
-    }));
-}
-
-function groupProviderCredentialEvidence(
-  evidence: readonly ProviderCredentialMintEvidence[],
-): ReadonlyMap<string, readonly ProviderCredentialMintEvidence[]> {
-  const byConnection = new Map<string, ProviderCredentialMintEvidence[]>();
-  const seen = new Set<string>();
-  for (const item of evidence) {
-    const key = [
-      item.connectionId,
-      item.provider,
-      item.delivery,
-      item.rootOnly ? "root" : "shared",
-      item.temporary ? "temporary" : "static",
-      item.ttlEnforced ? "ttl" : "no-ttl",
-      item.expiresAt ?? "",
-      item.ttlSeconds ?? "",
-      item.issuer ?? "",
-    ].join("\0");
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const existing = byConnection.get(item.connectionId) ?? [];
-    existing.push(item);
-    byConnection.set(item.connectionId, existing);
-  }
-  for (const [connectionId, entries] of byConnection) {
-    byConnection.set(
-      connectionId,
-      entries.sort((a, b) =>
-        `${a.delivery}:${a.provider}:${a.expiresAt ?? ""}`.localeCompare(
-          `${b.delivery}:${b.provider}:${b.expiresAt ?? ""}`,
-        ),
-      ),
-    );
-  }
-  return byConnection;
 }
 
 /**

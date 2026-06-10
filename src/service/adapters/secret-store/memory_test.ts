@@ -238,6 +238,114 @@ test("MemoryEncryptedSecretStore stores per-cloud partition and rejects cross-pa
   assert.equal(awsList[0].name, "AWS_ACCESS_KEY_ID");
 });
 
+test("MultiCloudSecretBoundaryCrypto binds the canonical aad context", async () => {
+  const crypto = new MultiCloudSecretBoundaryCrypto({
+    globalPassphrase: "global-".padEnd(40, "g"),
+  });
+  const aad = new TextEncoder().encode("connection=conn_a");
+  const sealed = await crypto.seal("secret", "global", aad);
+  // Same aad opens.
+  assert.equal(await crypto.open(sealed, "global", aad), "secret");
+  // A different aad context fails the auth tag.
+  await assert.rejects(() =>
+    crypto.open(sealed, "global", new TextEncoder().encode("connection=conn_b"))
+  );
+  // Dropping the aad entirely also fails (the no-aad path is a distinct AAD).
+  await assert.rejects(() => crypto.open(sealed, "global"));
+});
+
+test("PlaceholderSecretBoundaryCrypto binds the canonical aad context", async () => {
+  const crypto = new PlaceholderSecretBoundaryCrypto();
+  const aad = new TextEncoder().encode("connection=conn_a");
+  const sealed = await crypto.seal("secret", "local-adapters", aad);
+  assert.equal(await crypto.open(sealed, "local-adapters", aad), "secret");
+  await assert.rejects(() =>
+    crypto.open(
+      sealed,
+      "local-adapters",
+      new TextEncoder().encode("connection=conn_b"),
+    )
+  );
+  await assert.rejects(() => crypto.open(sealed, "local-adapters"));
+});
+
+test("MultiCloudSecretBoundaryCrypto no-aad round-trip is unchanged", async () => {
+  // State/plan artifacts seal without a canonical aad; that path must stay
+  // byte-compatible (bare partition label) so existing at-rest data round-trips.
+  const crypto = new MultiCloudSecretBoundaryCrypto({
+    globalPassphrase: "global-".padEnd(40, "g"),
+  });
+  const sealed = await crypto.seal("artifact", "global");
+  assert.equal(await crypto.open(sealed, "global"), "artifact");
+});
+
+test("MultiCloudSecretBoundaryCrypto rejects a too-short global passphrase", () => {
+  assert.throws(
+    () =>
+      new MultiCloudSecretBoundaryCrypto({
+        // 31 bytes: one short of the 32-byte minimum.
+        globalPassphrase: "x".repeat(31),
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof SecretEncryptionConfigurationError);
+      assert.match((error as Error).message, /globalPassphrase is too short/);
+      return true;
+    },
+  );
+});
+
+test("MultiCloudSecretBoundaryCrypto rejects a too-short per-cloud override", () => {
+  assert.throws(
+    () =>
+      new MultiCloudSecretBoundaryCrypto({
+        globalPassphrase: "g".repeat(32),
+        perCloudPassphrases: { aws: "short-aws-key" },
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof SecretEncryptionConfigurationError);
+      assert.match(
+        (error as Error).message,
+        /perCloudPassphrases\.aws is too short/,
+      );
+      return true;
+    },
+  );
+});
+
+test("MultiCloudSecretBoundaryCrypto accepts a passphrase exactly at the minimum", async () => {
+  const crypto = new MultiCloudSecretBoundaryCrypto({
+    globalPassphrase: "z".repeat(32),
+  });
+  const sealed = await crypto.seal("ok", "global");
+  assert.equal(await crypto.open(sealed, "global"), "ok");
+});
+
+test("MultiCloudSecretBoundaryCrypto.keyVersion changes when the passphrase rotates", () => {
+  const before = new MultiCloudSecretBoundaryCrypto({
+    globalPassphrase: "old-global-passphrase-".padEnd(40, "o"),
+  });
+  const after = new MultiCloudSecretBoundaryCrypto({
+    globalPassphrase: "new-global-passphrase-".padEnd(40, "n"),
+  });
+  const v1 = before.keyVersion("global");
+  const v2 = after.keyVersion("global");
+  // Stable for the same passphrase, and a positive 31-bit integer.
+  assert.equal(before.keyVersion("global"), v1);
+  assert.ok(Number.isInteger(v1) && v1 >= 0 && v1 <= 0x7fffffff);
+  // Rotation is detectable: the fingerprint moves.
+  assert.notEqual(v1, v2);
+});
+
+test("MultiCloudSecretBoundaryCrypto.keyVersion is per-partition for per-cloud overrides", () => {
+  const crypto = new MultiCloudSecretBoundaryCrypto({
+    globalPassphrase: "global-passphrase-".padEnd(40, "g"),
+    perCloudPassphrases: { aws: "aws-only-passphrase-".padEnd(40, "a") },
+  });
+  // A partition with a dedicated override fingerprints differently from one
+  // that inherits the (derived) global passphrase.
+  assert.notEqual(crypto.keyVersion("aws"), crypto.keyVersion("gcp"));
+});
+
 test("MultiCloudSecretBoundaryCrypto.fromEnv picks per-cloud overrides", async () => {
   const env = {
     TAKOSUMI_SECRET_STORE_PASSPHRASE: "global-passphrase-".padEnd(40, "g"),

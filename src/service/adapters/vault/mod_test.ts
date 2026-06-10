@@ -178,6 +178,62 @@ test("mint round-trips the decrypted values into a credential bundle", async () 
   expect(bundle.warnings).toEqual([]);
 });
 
+test("opening a blob swapped onto a different connection id fails the aad bind", async () => {
+  const { store, vault } = makeVault();
+  const original = await markVerified(
+    store,
+    await vault.register({
+      spaceId: "space_1",
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
+    }),
+  );
+  const sealed = await store.getSecretBlob(original.id);
+  expect(sealed).toBeDefined();
+
+  // Attacker registers a second connection and overwrites its sealed blob with
+  // the FIRST connection's ciphertext (a swap). The ciphertext carries the
+  // original connection's identity in its AAD, so opening it under the second
+  // connection's row must fail to decrypt.
+  const victim = await markVerified(
+    store,
+    await vault.register({
+      spaceId: "space_1",
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "other-token" },
+    }),
+  );
+  await store.putSecretBlob({ ...sealed!, id: `secret_${victim.id}`, connectionId: victim.id });
+
+  // The vault re-derives the AAD from the victim row's identity; the swapped
+  // ciphertext was bound to the original id, so the auth tag rejects it.
+  await expect(vault.test(victim.id)).rejects.toThrow();
+});
+
+test("opening a blob moved to a different space fails the aad bind", async () => {
+  const { store, vault } = makeVault();
+  const original = await markVerified(
+    store,
+    await vault.register({
+      spaceId: "space_1",
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
+    }),
+  );
+  const sealed = await store.getSecretBlob(original.id);
+  expect(sealed).toBeDefined();
+
+  // Re-home the verified connection (and its blob) into a different Space. The
+  // blob's AAD is bound to space_1, so the cross-space row can no longer open it.
+  await store.putConnection({ ...original, spaceId: "space_2" });
+  await store.putSecretBlob({ ...sealed!, spaceId: "space_2" });
+
+  await expect(vault.mint("space_2", ["cloudflare"])).rejects.toThrow();
+});
+
 test("mint refuses a pending connection before verification", async () => {
   const { vault } = makeVault();
   await vault.register({
