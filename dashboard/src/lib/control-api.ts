@@ -755,7 +755,15 @@ export async function checkCapsuleCompatibility(input: {
     };
   }>(`${BASE}/sources/${encodeURIComponent(source.id)}/compatibility-check`, {
     method: "POST",
-    body: { sourceSnapshotId: snapshot.id },
+    body: {
+      sourceSnapshotId: snapshot.id,
+      // Gate the pre-install check against the curated InstallConfig's bounded
+      // policy (catalog deep-link path) so a vetted first-party module is judged
+      // by its own minimal allowlist, not only the instance-wide default.
+      ...(input.installConfigId
+        ? { installConfigId: input.installConfigId }
+        : {}),
+    },
   });
   const diagnostics = (body.report.findings ?? []).map((finding) => ({
     severity: finding.severity ?? "info",

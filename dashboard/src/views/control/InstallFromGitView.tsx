@@ -53,15 +53,28 @@ import {
   waitForLatestSourceSnapshot,
 } from "../../lib/control-api.ts";
 
-/** Reads `git` / `ref` / `path` from the path-route search OR the M9 hash link. */
-function readPrefill(): { git: string; ref: string; path: string } {
-  const out = { git: "", ref: "", path: "" };
+/**
+ * Reads `git` / `ref` / `path` (and the optional curated `installConfig`) from
+ * the path-route search OR the M9 hash link. `installConfig` is the catalog's
+ * bounded InstallConfig id (`cfg-official-…`); when present the compatibility
+ * check is gated against that config's minimal allowlist instead of only the
+ * instance-wide default policy, which is what makes the curated first-party
+ * catalog entries genuinely installable without widening the global default.
+ */
+function readPrefill(): {
+  git: string;
+  ref: string;
+  path: string;
+  installConfig: string;
+} {
+  const out = { git: "", ref: "", path: "", installConfig: "" };
   if (typeof location === "undefined") return out;
   const apply = (params: URLSearchParams) => {
     const packed = parsePackedInstallSource(params.get("source"));
     out.git = params.get("git") ?? packed?.git ?? out.git;
     out.ref = params.get("ref") ?? packed?.ref ?? out.ref;
     out.path = params.get("path") ?? packed?.path ?? out.path;
+    out.installConfig = params.get("installConfig") ?? out.installConfig;
   };
   // Path-route form: /install?git=...
   apply(new URLSearchParams(location.search));
@@ -112,7 +125,12 @@ function Inner() {
   const [ref, setRef] = createSignal(prefill.ref || "main");
   const [path, setPath] = createSignal(prefill.path || ".");
   const [name, setName] = createSignal("");
-  const [installConfigId, setInstallConfigId] = createSignal("");
+  // Seed from the catalog's curated bounded InstallConfig (if any). It is
+  // confirmed against the loaded config list below so a stale/unknown id falls
+  // back to the first available profile rather than failing the install.
+  const [installConfigId, setInstallConfigId] = createSignal(
+    prefill.installConfig,
+  );
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
   const [checkingCompatibility, setCheckingCompatibility] = createSignal(false);
@@ -138,7 +156,14 @@ function Inner() {
   );
   const ensureConfigSelected = () => {
     const list = configList();
-    if (!installConfigId() && list.length > 0) setInstallConfigId(list[0]!.id);
+    if (list.length === 0) return list;
+    const current = installConfigId();
+    // Keep the curated/selected config only if the loaded list actually has it;
+    // otherwise (empty or an unknown prefilled id) fall back to the first
+    // available profile so the install button never depends on a stale id.
+    if (!current || !list.some((config) => config.id === current)) {
+      setInstallConfigId(list[0]!.id);
+    }
     return list;
   };
   const selectedInstallConfigId = () => {

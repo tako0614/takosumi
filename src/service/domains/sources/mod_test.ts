@@ -470,6 +470,160 @@ output "public_url" {
   expect(report.provisioners).toEqual([{ type: "local-exec", allowed: true }]);
 });
 
+test("createCompatibilityCheck lifts unsupported -> ready via a curated bounded installConfigId (no Installation)", async () => {
+  // The catalog "選んで入れる" deep-link path: a vetted first-party module whose
+  // resource type is OUTSIDE the instance-wide DEFAULT allowlist becomes
+  // installable when its curated bounded InstallConfig is supplied, WITHOUT an
+  // Installation and WITHOUT widening the default allowlist.
+  const staticSiteHcl = `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+resource "cloudflare_pages_project" "this" {
+  account_id        = var.accountId
+  name              = var.projectName
+  production_branch = var.productionBranch
+}
+
+output "url" {
+  value = "https://example.pages.dev"
+}
+`;
+  const { store, service } = makeService({
+    readCapsuleSourceFiles: async () => [{ path: "main.tf", text: staticSiteHcl }],
+  });
+  await store.putSpace({
+    id: "space_1",
+    handle: "space",
+    displayName: "Space",
+    type: "personal",
+    ownerUserId: "user_1",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "static-site",
+    url: "https://github.com/tako0614/takosumi.git",
+    defaultPath: "opentofu-modules/cloudflare-static-site/module",
+  });
+  const { run } = await service.createSync(source.id);
+  await store.putSourceSnapshot({
+    id: run.snapshotId!,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: "opentofu-modules/cloudflare-static-site/module",
+    archiveObjectKey: run.archiveObjectKey,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+  // A built-in `official` InstallConfig has no spaceId and is usable from any
+  // Space; its policy is the BOUNDED minimal allowlist for this module only.
+  await store.putInstallConfig({
+    id: "cfg-official-cloudflare-static-site",
+    name: "cloudflare-static-site",
+    trustLevel: "official",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {
+      allowedProviders: ["cloudflare/cloudflare"],
+      allowedResourceTypes: ["cloudflare_pages_project"],
+    },
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  // Without the curated config, the DEFAULT allowlist rejects the resource.
+  const baseline = await service.createCompatibilityCheck(source.id, {
+    sourceSnapshotId: run.snapshotId,
+  });
+  expect(baseline.report.level).toBe("unsupported");
+  expect(
+    baseline.report.findings.some(
+      (f) => f.code === "resource_type_not_allowed",
+    ),
+  ).toBe(true);
+
+  // With the curated bounded config, the Gate passes (ready) and the resource
+  // is allowed — yet the global default allowlist is untouched (the baseline
+  // above still rejects it).
+  const curated = await service.createCompatibilityCheck(source.id, {
+    sourceSnapshotId: run.snapshotId,
+    installConfigId: "cfg-official-cloudflare-static-site",
+  });
+  expect(curated.report.level).toBe("ready");
+  expect(
+    curated.report.resources.every((resource) => resource.allowed),
+  ).toBe(true);
+  expect(
+    curated.report.findings.some((f) => f.code === "resource_type_not_allowed"),
+  ).toBe(false);
+});
+
+test("createCompatibilityCheck rejects a curated installConfig from another space", async () => {
+  const { store, service } = makeService({
+    readCapsuleSourceFiles: async () => [
+      { path: "main.tf", text: 'output "x" { value = "y" }' },
+    ],
+  });
+  await store.putSpace({
+    id: "space_1",
+    handle: "space",
+    displayName: "Space",
+    type: "personal",
+    ownerUserId: "user_1",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "capsule",
+    url: "https://github.com/acme/capsule.git",
+  });
+  const { run } = await service.createSync(source.id);
+  await store.putSourceSnapshot({
+    id: run.snapshotId!,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveObjectKey: run.archiveObjectKey,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+  // A Space-scoped config (has a spaceId) owned by a DIFFERENT space must not be
+  // borrowable to gate another space's check.
+  await store.putInstallConfig({
+    id: "cfg_other_space",
+    spaceId: "space_2",
+    name: "other",
+    trustLevel: "space",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: { allowedResourceTypes: ["cloudflare_pages_project"] },
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  await expect(
+    service.createCompatibilityCheck(source.id, {
+      sourceSnapshotId: run.snapshotId,
+      installConfigId: "cfg_other_space",
+    }),
+  ).rejects.toThrow(/not available in space/);
+});
+
 test("createCompatibilityCheck rejects an installation from another space", async () => {
   const { store, service } = makeService();
   const { source } = await service.createSource({

@@ -307,10 +307,18 @@ export class SourcesService {
       sourceId,
       request.sourceSnapshotId,
     );
-    const policy = await this.#compatibilityPolicyForInstallation(
-      stored,
-      request.installationId,
-    );
+    // Policy precedence: an existing Installation's own InstallConfig wins; only
+    // when none is supplied does a curated `installConfigId` (the catalog
+    // deep-link path) gate the pre-install check against its bounded policy.
+    const policy = request.installationId
+      ? await this.#compatibilityPolicyForInstallation(
+          stored,
+          request.installationId,
+        )
+      : await this.#compatibilityPolicyForInstallConfig(
+          stored.spaceId,
+          request.installConfigId,
+        );
     return await this.#runCompatibilityAnalysis({
       snapshot,
       spaceId: stored.spaceId,
@@ -533,6 +541,40 @@ export class SourcesService {
       this.#store.getInstallConfig(installation.installConfigId),
     ]);
     return mergePolicyConfigs(space?.policy, config?.policy);
+  }
+
+  /**
+   * Resolves the Capsule Gate policy for a pre-install compatibility check that
+   * carries a curated `installConfigId` but no Installation yet (the catalog
+   * "選んで入れる" deep-link). The InstallConfig's bounded policy is merged with
+   * the Space policy as a ceiling, exactly as {@link
+   * #compatibilityPolicyForInstallation} does for an existing Installation. The
+   * instance-wide default allowlist is never touched: the analyzer UNIONs this
+   * bounded policy with the default, so the extra allowance is scoped to this
+   * single vetted config and the SAME policy is enforced again at plan/apply.
+   * A built-in `official` config (no `spaceId`) is usable from any Space; a
+   * Space-scoped config must belong to this Space.
+   */
+  async #compatibilityPolicyForInstallConfig(
+    spaceId: string,
+    installConfigId: string | undefined,
+  ): Promise<PolicyConfig | undefined> {
+    if (!installConfigId) return undefined;
+    const config = await this.#store.getInstallConfig(installConfigId);
+    if (!config) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `install config ${installConfigId} does not exist`,
+      );
+    }
+    if (config.spaceId !== undefined && config.spaceId !== spaceId) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        `install config ${installConfigId} is not available in space ${spaceId}`,
+      );
+    }
+    const space = await this.#store.getSpace(spaceId);
+    return mergePolicyConfigs(space?.policy, config.policy);
   }
 
   async #enrichProviderCredentialSources(

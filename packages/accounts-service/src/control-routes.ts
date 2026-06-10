@@ -729,9 +729,16 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       }
       const sourceSnapshotId = stringValue(body.sourceSnapshotId);
       const installationId = stringValue(body.installationId);
+      // Curated catalog deep-link path: when no Installation exists yet, gate
+      // the pre-install check against the catalog's bounded InstallConfig so a
+      // vetted first-party module is judged by its own minimal allowlist
+      // (the instance-wide default allowlist is never widened — see
+      // CreateSourceCompatibilityCheckRequest.installConfigId).
+      const installConfigId = stringValue(body.installConfigId);
       const compatibilityRequest: CreateSourceCompatibilityCheckRequest = {
         ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
         ...(installationId ? { installationId } : {}),
+        ...(installConfigId ? { installConfigId } : {}),
       };
       return jsonStatus(
         await operations.createSourceCompatibilityCheck(
