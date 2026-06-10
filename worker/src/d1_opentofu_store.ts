@@ -35,7 +35,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
-import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
+import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import type {
   ApplyRun,
   Connection,
@@ -1735,6 +1735,10 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     });
   }
 
+  // Drizzle's `.insert(table).values(...)` demands a per-table insert model, so
+  // the table/values stay `any` here; the conflict target is the table's `id`
+  // column (or an explicit override) and rides through untyped with them. The
+  // read helpers below take the concrete `SQLiteTable` / `SQLiteColumn` types.
   async #drizzleUpsert(
     table: any,
     values: Record<string, unknown>,
@@ -1749,15 +1753,18 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       .run();
   }
 
-  async #drizzleDelete(table: any, where: SQL | undefined): Promise<boolean> {
+  async #drizzleDelete(
+    table: SQLiteTable,
+    where: SQL | undefined,
+  ): Promise<boolean> {
     await this.#ensureSchema();
     const result = await this.#orm.delete(table).where(where).run();
     return changes(result as D1Result) > 0;
   }
 
   async #drizzleFirstJson<T>(
-    table: any,
-    jsonColumn: any,
+    table: SQLiteTable,
+    jsonColumn: SQLiteColumn,
     where: SQL | undefined,
   ): Promise<T | undefined> {
     await this.#ensureSchema();
@@ -1770,8 +1777,8 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   async #drizzleManyJson<T>(
-    table: any,
-    jsonColumn: any,
+    table: SQLiteTable,
+    jsonColumn: SQLiteColumn,
     input: {
       readonly where?: SQL | undefined;
       readonly orderBy?: readonly (SQL | SQLiteColumn)[];

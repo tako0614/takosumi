@@ -420,6 +420,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const sealed = await this.#crypto.seal(
       JSON.stringify(values),
       cloudPartition,
+      secretEnvelopeAad({
+        cloudPartition,
+        ...(input.spaceId ? { spaceId: input.spaceId } : {}),
+        connectionId: id,
+        provider: input.provider,
+      }),
     );
     const now = this.#now();
     const nowIso = now.toISOString();
@@ -433,6 +439,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       sealed,
       cloudPartition,
       createdAt: nowIso,
+      crypto: this.#crypto,
     });
     await this.#store.putSecretBlob(blob);
 
@@ -504,6 +511,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const sealed = await this.#crypto.seal(
       JSON.stringify(values),
       cloudPartition,
+      secretEnvelopeAad({
+        cloudPartition,
+        spaceId: input.spaceId,
+        connectionId: id,
+        provider: input.provider,
+      }),
     );
     const now = this.#now();
     const nowIso = now.toISOString();
@@ -516,6 +529,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       sealed,
       cloudPartition,
       createdAt: nowIso,
+      crypto: this.#crypto,
     });
     await this.#store.putSecretBlob(blob);
 
@@ -604,9 +618,17 @@ export class StaticSecretConnectionVault implements ConnectionVault {
 
     const id = this.#newId();
     const cloudPartition = "local-adapters" as CloudPartition;
+    // A git connection stores `provider: kind`, so the AAD binds to `kind` to
+    // match the open-time derivation in `connectionEnvelopeAad`.
     const sealed = await this.#crypto.seal(
       JSON.stringify(values),
       cloudPartition,
+      secretEnvelopeAad({
+        cloudPartition,
+        ...(input.spaceId ? { spaceId: input.spaceId } : {}),
+        connectionId: id,
+        provider: kind,
+      }),
     );
     const now = this.#now();
     const nowIso = now.toISOString();
@@ -618,6 +640,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       sealed,
       cloudPartition,
       createdAt: nowIso,
+      crypto: this.#crypto,
     });
     await this.#store.putSecretBlob(blob);
 
@@ -1103,9 +1126,13 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `connection ${connection.id} has no secret blob`,
       );
     }
+    // Partition and AAD are derived from the CONNECTION ROW — never from the
+    // blob's self-described `aad.cloudPartition` — so a swapped or tampered blob
+    // cannot select its own key/AAD and fails the AES-GCM auth tag.
     const plaintext = await this.#crypto.open(
       base64ToBytes(blob.ciphertext),
-      cloudPartitionFromSecretBlob(blob),
+      cloudFamilyForProvider(connection.provider) as CloudPartition,
+      connectionEnvelopeAad(connection),
     );
     const parsed = JSON.parse(plaintext) as Record<string, unknown>;
     const values: Record<string, string> = {};
@@ -2012,6 +2039,51 @@ function defaultConnectionId(): string {
   return `conn_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
 
+/**
+ * Identity fields bound into the at-rest secret envelope's canonical AAD. The
+ * AAD ties a sealed blob to the CONNECTION ROW it belongs to so that opening it
+ * under a different connection / space / provider / partition fails the AES-GCM
+ * auth tag (a swapped or tampered blob never decrypts). `spaceId` falls back to
+ * {@link OPERATOR_SCOPE_AAD} for operator-scoped rows that have no owning Space.
+ */
+interface SecretEnvelopeIdentity {
+  readonly cloudPartition: CloudPartition;
+  readonly spaceId?: string;
+  readonly connectionId: string;
+  readonly provider: string;
+}
+
+/**
+ * Derives the canonical AES-GCM AAD bytes from a connection row's identity. The
+ * same identity MUST be reconstructed at seal and open time; at open we derive
+ * `cloudPartition` from the connection row's provider (never from the blob's
+ * self-described partition) so a tampered/swapped blob cannot pick its own key.
+ */
+function secretEnvelopeAad(identity: SecretEnvelopeIdentity): Uint8Array {
+  const canonical = JSON.stringify({
+    v: 1,
+    cloudPartition: identity.cloudPartition,
+    spaceId: identity.spaceId ?? OPERATOR_SCOPE_AAD,
+    connectionId: identity.connectionId,
+    provider: identity.provider,
+  });
+  return new TextEncoder().encode(canonical);
+}
+
+/**
+ * Reconstructs the at-rest AAD identity from a stored connection row. The
+ * partition is recomputed from the provider (mirroring the register path), so
+ * the blob's own `aad` partition field is never trusted at open time.
+ */
+function connectionEnvelopeAad(connection: Connection): Uint8Array {
+  return secretEnvelopeAad({
+    cloudPartition: cloudFamilyForProvider(connection.provider) as CloudPartition,
+    ...(connection.spaceId ? { spaceId: connection.spaceId } : {}),
+    connectionId: connection.id,
+    provider: connection.provider,
+  });
+}
+
 function makeStoredSecretBlob(input: {
   readonly connectionId: string;
   readonly spaceId?: string;
@@ -2020,6 +2092,7 @@ function makeStoredSecretBlob(input: {
   readonly sealed: Uint8Array;
   readonly cloudPartition: CloudPartition;
   readonly createdAt: string;
+  readonly crypto: SecretBoundaryCrypto;
 }): StoredSecretBlob {
   const aad = {
     cloudPartition: input.cloudPartition,
@@ -2033,9 +2106,14 @@ function makeStoredSecretBlob(input: {
     kind: secretBlobKindFor(input.provider, input.connectionKind),
     ciphertext: bytesToBase64(input.sealed),
     encryptedDek: `${SECRET_BLOB_KEY_SCHEME}/${input.cloudPartition}`,
+    // The IV is the ciphertext prefix; `nonce` is a non-load-bearing mirror of
+    // it kept for the persisted `NOT NULL` column (never read for decryption).
     nonce: bytesToBase64(input.sealed.slice(0, 12)),
     aad: JSON.stringify(aad),
-    keyVersion: 1,
+    // Real key-version fingerprint of the active passphrase (rotation-detectable)
+    // when the crypto exposes one; falls back to the legacy `1` for keyless
+    // (placeholder / dev) crypto so existing dev blobs keep a stable version.
+    keyVersion: input.crypto.keyVersion?.(input.cloudPartition) ?? 1,
     createdAt: input.createdAt,
   };
 }
@@ -2071,17 +2149,6 @@ function providerConnectionKindFor(provider: string): ConnectionKind {
     return "gcp_service_account_impersonation";
   }
   return "static_secret";
-}
-
-function cloudPartitionFromSecretBlob(blob: StoredSecretBlob): CloudPartition {
-  const parsed = JSON.parse(blob.aad) as { readonly cloudPartition?: unknown };
-  if (typeof parsed.cloudPartition !== "string") {
-    throw new ConnectionVaultError(
-      "failed_precondition",
-      `secret blob ${blob.id} has invalid aad`,
-    );
-  }
-  return parsed.cloudPartition as CloudPartition;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

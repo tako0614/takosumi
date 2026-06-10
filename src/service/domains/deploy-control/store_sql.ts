@@ -39,7 +39,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
-import type { PgColumn } from "drizzle-orm/pg-core";
+import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
@@ -1825,6 +1825,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
+  // Drizzle's `.insert(table).values(...)` demands a per-table insert model, so
+  // the table/values stay `any` here; the conflict target is the table's `id`
+  // column (or an explicit override) and rides through untyped with them. The
+  // read helpers below take the concrete `PgTable` / `PgColumn` types.
   async #pgUpsert(
     table: any,
     values: Record<string, unknown>,
@@ -1837,7 +1841,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       .onConflictDoUpdate({ target, set });
   }
 
-  async #pgDelete(table: any, where: SQL | undefined): Promise<boolean> {
+  async #pgDelete(
+    table: PgTable & { readonly id: PgColumn },
+    where: SQL | undefined,
+  ): Promise<boolean> {
     const rows = await this.#db
       .delete(table)
       .where(where)
@@ -1846,8 +1853,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async #pgFirstJson<T>(
-    table: any,
-    jsonColumn: any,
+    table: PgTable,
+    jsonColumn: PgColumn,
     where: SQL | undefined,
   ): Promise<T | undefined> {
     const rows = await this.#db
@@ -1859,8 +1866,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async #pgManyJson<T>(
-    table: any,
-    jsonColumn: any,
+    table: PgTable,
+    jsonColumn: PgColumn,
     input: {
       readonly where?: SQL | undefined;
       readonly orderBy?: readonly (SQL | PgColumn | SQL.Aliased)[];

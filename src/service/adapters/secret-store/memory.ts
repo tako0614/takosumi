@@ -36,10 +36,35 @@ export interface SecretBoundaryCrypto {
    * Seal `plaintext` for the given cloud partition. Implementations MUST
    * use a partition-bound key so that opening the resulting ciphertext
    * with another partition's key fails.
+   *
+   * `aad` is an optional canonical additional-authenticated-data context that
+   * the implementation folds into the cipher's authentication. When supplied,
+   * {@link open} MUST be given the byte-identical `aad` or decryption fails —
+   * binding the ciphertext to the caller's row identity (e.g. the owning
+   * connection), so a swapped or tampered blob fails to decrypt.
    */
-  seal(plaintext: string, cloudPartition: CloudPartition): Promise<Uint8Array>;
-  /** Opens ciphertext that was sealed with the same partition. */
-  open(ciphertext: Uint8Array, cloudPartition: CloudPartition): Promise<string>;
+  seal(
+    plaintext: string,
+    cloudPartition: CloudPartition,
+    aad?: Uint8Array,
+  ): Promise<Uint8Array>;
+  /**
+   * Opens ciphertext that was sealed with the same partition (and the same
+   * `aad` context, when one was supplied at seal time).
+   */
+  open(
+    ciphertext: Uint8Array,
+    cloudPartition: CloudPartition,
+    aad?: Uint8Array,
+  ): Promise<string>;
+  /**
+   * Optional stable fingerprint of the ACTIVE key material for `cloudPartition`,
+   * recorded alongside sealed blobs so a key rotation is detectable (the value
+   * changes when the passphrase changes). It is a one-way fold and never leaks
+   * the key. Implementations without keyed material may omit this; callers fall
+   * back to a constant version.
+   */
+  keyVersion?(cloudPartition: CloudPartition): number;
 }
 
 /** Minimal env shape consumed by {@link selectSecretBoundaryCrypto}. */
@@ -92,6 +117,15 @@ const PRODUCTION_LIKE_ENVIRONMENTS = new Set([
   "staging",
   "stage",
 ]);
+
+/**
+ * Minimum accepted secret-store passphrase length, in UTF-8 bytes. The AES key
+ * is `SHA-256(passphrase)` (a 32-byte / 256-bit key), so a passphrase shorter
+ * than 32 bytes cannot carry the entropy the key width implies. The crypto
+ * constructor fails closed below this threshold so a weak key is rejected at
+ * boot rather than silently producing an under-entropy key.
+ */
+export const MIN_SECRET_STORE_PASSPHRASE_BYTES = 32;
 
 export interface SelectSecretBoundaryCryptoOptions {
   readonly env: SecretCryptoEnvLike;
@@ -382,34 +416,65 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export class PlaceholderSecretBoundaryCrypto implements SecretBoundaryCrypto {
   readonly #prefix = "takos-secret-placeholder-v1:";
 
-  seal(plaintext: string, cloudPartition: CloudPartition): Promise<Uint8Array> {
-    const payload = `${cloudPartition}|${plaintext}`;
+  seal(
+    plaintext: string,
+    cloudPartition: CloudPartition,
+    aad?: Uint8Array,
+  ): Promise<Uint8Array> {
+    // The placeholder mirrors the AES-GCM impl's binding by tagging the
+    // partition and the canonical aad context (base64 of the hex digest, so
+    // `|` can never appear inside it) into the payload prefix.
+    const payload = `${cloudPartition}|${aadTag(aad)}|${plaintext}`;
     return Promise.resolve(
       new TextEncoder().encode(`${this.#prefix}${btoa(payload)}`),
     );
   }
 
+  // `async` so a partition / aad mismatch surfaces as a rejected promise
+  // (matching the AES-GCM impl's contract) rather than a synchronous throw.
   open(
     ciphertext: Uint8Array,
     cloudPartition: CloudPartition,
+    aad?: Uint8Array,
   ): Promise<string> {
-    const encoded = new TextDecoder().decode(ciphertext);
-    if (!encoded.startsWith(this.#prefix)) {
-      throw new Error("invalid placeholder secret payload");
-    }
-    const payload = atob(encoded.slice(this.#prefix.length));
-    const sep = payload.indexOf("|");
-    if (sep === -1) {
-      throw new Error("invalid placeholder secret payload (missing partition)");
-    }
-    const sealedPartition = payload.slice(0, sep);
-    if (sealedPartition !== cloudPartition) {
-      throw new Error(
-        `placeholder secret partition mismatch: sealed=${sealedPartition} requested=${cloudPartition}`,
-      );
-    }
-    return Promise.resolve(payload.slice(sep + 1));
+    return Promise.resolve().then(() => {
+      const encoded = new TextDecoder().decode(ciphertext);
+      if (!encoded.startsWith(this.#prefix)) {
+        throw new Error("invalid placeholder secret payload");
+      }
+      const payload = atob(encoded.slice(this.#prefix.length));
+      const sep = payload.indexOf("|");
+      if (sep === -1) {
+        throw new Error(
+          "invalid placeholder secret payload (missing partition)",
+        );
+      }
+      const sealedPartition = payload.slice(0, sep);
+      if (sealedPartition !== cloudPartition) {
+        throw new Error(
+          `placeholder secret partition mismatch: sealed=${sealedPartition} requested=${cloudPartition}`,
+        );
+      }
+      const rest = payload.slice(sep + 1);
+      const aadSep = rest.indexOf("|");
+      if (aadSep === -1) {
+        throw new Error("invalid placeholder secret payload (missing aad)");
+      }
+      const sealedAad = rest.slice(0, aadSep);
+      if (sealedAad !== aadTag(aad)) {
+        throw new Error("placeholder secret aad mismatch");
+      }
+      return rest.slice(aadSep + 1);
+    });
   }
+}
+
+/** Stable, separator-free tag for the optional canonical aad context. */
+function aadTag(aad: Uint8Array | undefined): string {
+  if (aad === undefined || aad.length === 0) return "-";
+  let binary = "";
+  for (const byte of aad) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 /**
@@ -442,13 +507,21 @@ export class MultiCloudSecretBoundaryCrypto implements SecretBoundaryCrypto {
         "MultiCloudSecretBoundaryCrypto requires a non-empty globalPassphrase",
       );
     }
+    guardPassphraseLength(options.globalPassphrase, "globalPassphrase");
     this.#fallbackPassphrase = options.globalPassphrase;
     this.#passphrases = new Map();
     for (const partition of CLOUD_PARTITIONS) {
       const override = options.perCloudPassphrases?.[partition];
-      const passphrase = (override && override.trim() !== "")
-        ? override
-        : this.#derivePartitionPassphrase(partition);
+      let passphrase: string;
+      if (override && override.trim() !== "") {
+        guardPassphraseLength(override, `perCloudPassphrases.${partition}`);
+        passphrase = override;
+      } else {
+        // Derived partition passphrases are the global passphrase plus a label
+        // suffix, so they are always at least as long as the (already guarded)
+        // global passphrase — no separate length check is needed.
+        passphrase = this.#derivePartitionPassphrase(partition);
+      }
       this.#passphrases.set(partition, passphrase);
     }
   }
@@ -476,12 +549,13 @@ export class MultiCloudSecretBoundaryCrypto implements SecretBoundaryCrypto {
   async seal(
     plaintext: string,
     cloudPartition: CloudPartition,
+    aad?: Uint8Array,
   ): Promise<Uint8Array> {
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const aad = new TextEncoder().encode(`takos.cloud:${cloudPartition}`);
+    const additionalData = additionalDataFor(cloudPartition, aad);
     const encrypted = new Uint8Array(
       await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv, additionalData: toArrayBuffer(aad) },
+        { name: "AES-GCM", iv, additionalData: toArrayBuffer(additionalData) },
         await this.#key(cloudPartition),
         toArrayBuffer(new TextEncoder().encode(plaintext)),
       ),
@@ -495,16 +569,31 @@ export class MultiCloudSecretBoundaryCrypto implements SecretBoundaryCrypto {
   async open(
     ciphertext: Uint8Array,
     cloudPartition: CloudPartition,
+    aad?: Uint8Array,
   ): Promise<string> {
     const iv = ciphertext.slice(0, 12);
     const payload = ciphertext.slice(12);
-    const aad = new TextEncoder().encode(`takos.cloud:${cloudPartition}`);
+    const additionalData = additionalDataFor(cloudPartition, aad);
     const plaintext = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv, additionalData: toArrayBuffer(aad) },
+      { name: "AES-GCM", iv, additionalData: toArrayBuffer(additionalData) },
       await this.#key(cloudPartition),
       toArrayBuffer(payload),
     );
     return new TextDecoder().decode(plaintext);
+  }
+
+  /**
+   * Stable fingerprint of the active passphrase for `partition`, so a rotation
+   * (global or a per-cloud override) is detectable in recorded blobs. The fold
+   * is one-way and the digest is truncated to a positive 31-bit integer, so the
+   * passphrase is never recoverable from the version tag.
+   */
+  keyVersion(cloudPartition: CloudPartition): number {
+    const passphrase = this.#passphrases.get(cloudPartition);
+    if (!passphrase) {
+      throw new Error(`unsupported cloud partition: ${cloudPartition}`);
+    }
+    return passphraseFingerprint(passphrase);
   }
 
   #key(partition: CloudPartition): Promise<CryptoKey> {
@@ -521,6 +610,38 @@ export class MultiCloudSecretBoundaryCrypto implements SecretBoundaryCrypto {
   }
 }
 
+/**
+ * Fails closed when a supplied passphrase is shorter than
+ * {@link MIN_SECRET_STORE_PASSPHRASE_BYTES} UTF-8 bytes, so a weak key is
+ * rejected at construction rather than producing an under-entropy AES key.
+ */
+function guardPassphraseLength(passphrase: string, label: string): void {
+  const byteLength = new TextEncoder().encode(passphrase).length;
+  if (byteLength < MIN_SECRET_STORE_PASSPHRASE_BYTES) {
+    throw new SecretEncryptionConfigurationError(
+      `secret-store ${label} is too short: ${byteLength} bytes ` +
+        `(need >= ${MIN_SECRET_STORE_PASSPHRASE_BYTES}). Use a 32+ byte ` +
+        `high-entropy passphrase. Refusing to derive an under-entropy key.`,
+    );
+  }
+}
+
+/**
+ * One-way FNV-1a fold of a passphrase into a positive 31-bit integer used as a
+ * rotation-detection key-version tag. It is NOT a key and NOT reversible; it
+ * exists only so a recorded version changes when the passphrase rotates.
+ */
+function passphraseFingerprint(passphrase: string): number {
+  const bytes = new TextEncoder().encode(passphrase);
+  let hash = 0x811c9dc5; // FNV offset basis
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193); // FNV prime
+  }
+  // Mask to a positive 31-bit integer (stays in JS safe-integer / DB int range).
+  return (hash >>> 0) & 0x7fffffff;
+}
+
 async function deriveAesKey(passphrase: string): Promise<CryptoKey> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -530,6 +651,30 @@ async function deriveAesKey(passphrase: string): Promise<CryptoKey> {
     "encrypt",
     "decrypt",
   ]);
+}
+
+/**
+ * Builds the AES-GCM additional-authenticated-data: the partition label plus
+ * the optional canonical aad context.
+ *
+ * When no `aad` is supplied the additionalData is the bare partition label
+ * (byte-identical to the pre-aad scheme, so callers that never bind a context —
+ * e.g. at-rest state/plan artifacts — round-trip unchanged). When an `aad` is
+ * supplied the label is length-framed (4-byte big-endian prefix) before the
+ * aad bytes, so a partition / aad boundary can never be shifted by an attacker:
+ * `(partitionA, aadB)` cannot collide with `(partitionA||aadB, undefined)`.
+ */
+function additionalDataFor(
+  cloudPartition: CloudPartition,
+  aad: Uint8Array | undefined,
+): Uint8Array {
+  const label = new TextEncoder().encode(`takos.cloud:${cloudPartition}`);
+  if (aad === undefined || aad.length === 0) return label;
+  const out = new Uint8Array(4 + label.length + aad.length);
+  new DataView(out.buffer).setUint32(0, label.length);
+  out.set(label, 4);
+  out.set(aad, 4 + label.length);
+  return out;
 }
 
 function key(ref: SecretVersionRef): string {
