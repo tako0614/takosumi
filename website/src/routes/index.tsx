@@ -7,6 +7,7 @@ import EcosystemMap from "~/components/EcosystemMap";
 import ForEveryone from "~/components/ForEveryone";
 import Showcase from "~/components/Showcase";
 import Comparison from "~/components/Comparison";
+import Pricing from "~/components/Pricing";
 import EndCTA from "~/components/EndCTA";
 import Footer from "~/components/Footer";
 
@@ -64,6 +65,7 @@ export default function Home() {
         <ForEveryone />
         <Showcase />
         <Comparison />
+        <Pricing />
         <EndCTA />
       </main>
       <Footer />

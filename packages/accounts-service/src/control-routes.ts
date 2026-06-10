@@ -88,7 +88,7 @@ import type {
   CreditReservation,
   UsageEvent,
 } from "takosumi-contract/billing";
-import type { Run } from "takosumi-contract/runs";
+import type { Run, RunCostInfo } from "takosumi-contract/runs";
 import {
   json,
   methodNotAllowed,
@@ -431,6 +431,16 @@ export interface ControlPlaneOperations {
     input?: { readonly approvedBy?: string; readonly reason?: string },
   ): Promise<Run>;
   getRunLogs(id: string): Promise<unknown>;
+  /**
+   * Reads a plan / destroy_plan Run's public cost projection (`GET
+   * /v1/control/runs/:id/cost`). The control surface resolves the Run's owning
+   * Space first and space-permission gates before calling this. The returned
+   * {@link RunCostInfo} carries only the billing reservation values the
+   * controller already computed at plan time (estimated / available credits,
+   * reservation status, credit-shortfall + plan-limit reasons) — no cost is
+   * computed here and no secret material is returned.
+   */
+  getRunCost(id: string): Promise<RunCostInfo>;
   // --- Sources (§6) ---
   createSource(request: CreateSourceRequest): Promise<CreateSourceResponse>;
   listSources(spaceId: string): Promise<ListSourcesResponse>;
@@ -951,7 +961,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     return json({ error: "not_found" }, 404);
   }
 
-  // /v1/control/runs/:id ; .../approve ; .../logs
+  // /v1/control/runs/:id ; .../approve ; .../logs ; .../cost
   if (segments[0] === "runs" && segments.length >= 2) {
     const runId = decodeURIComponent(segments[1] ?? "");
     const run = await operations.getRun(runId);
@@ -979,6 +989,13 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (leaf === "logs" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
       return json(await operations.getRunLogs(runId));
+    }
+    if (leaf === "cost" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      // Public, non-secret cost projection: the billing reservation values the
+      // controller already computed at plan time (estimated / available credits,
+      // reservation status, credit-shortfall reasons). Space-gated above.
+      return json({ cost: await operations.getRunCost(runId) });
     }
   }
 

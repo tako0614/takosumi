@@ -103,6 +103,49 @@ export interface RunEventsResponse {
   readonly auditEvents: readonly RunAuditEvent[];
 }
 
+/**
+ * Public, non-secret cost projection for a `plan` / `destroy_plan` Run
+ * (`GET /api/runs/:runId/cost`). It surfaces the billing reservation values the
+ * controller ALREADY computed at plan time so a dashboard can explain, before
+ * apply, why an apply would be blocked under `enforce` mode (insufficient
+ * credits / a billing-plan limit). It carries no credit cost formula and no
+ * secret material — only counts already recorded on the run's billing audit.
+ *
+ *   - `billingMode`        — the Space's billing mode at plan time
+ *                            (`disabled` / `showback` / `enforce`).
+ *   - `estimatedCredits`   — the credits the controller estimated this plan
+ *                            would consume on apply.
+ *   - `availableCredits`   — the Space's available credit balance observed when
+ *                            a reservation was attempted, when known.
+ *   - `reservationStatus`  — `reserved` when credits were held, or
+ *                            `insufficient_credits` when the reservation could
+ *                            not be made (the apply would be blocked under
+ *                            `enforce`). Absent when no reservation was needed.
+ *   - `creditShortfall`    — `estimatedCredits - availableCredits` when that is
+ *                            positive (the missing amount), else absent.
+ *   - `blocked`            — true when billing blocks this plan from applying
+ *                            under `enforce` mode.
+ *   - `reasons`            — public-safe human reasons billing blocked the plan
+ *                            (the credit-shortfall / plan-limit messages already
+ *                            recorded on the run's policy decision). Empty when
+ *                            nothing billing-related blocked the plan.
+ */
+export interface RunCostInfo {
+  readonly runId: string;
+  readonly billingMode: "disabled" | "showback" | "enforce";
+  readonly estimatedCredits: number;
+  readonly availableCredits?: number;
+  readonly reservationStatus?: "reserved" | "insufficient_credits";
+  readonly creditShortfall?: number;
+  readonly blocked: boolean;
+  readonly reasons: readonly string[];
+}
+
+/** Body of `GET /api/runs/:runId/cost`. */
+export interface RunCostResponse {
+  readonly cost: RunCostInfo;
+}
+
 export type RunGroupType =
   | "space_update"
   | "space_drift_check"

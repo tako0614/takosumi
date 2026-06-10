@@ -31,10 +31,8 @@ import {
   listOperatorConnectionDefaults,
   startCloudflareOAuth,
 } from "../../lib/control-api.ts";
-
-// Reuse the apps screen's space-id memory so a previously-selected space
-// carries across both screens.
-const STORAGE_KEY = "tg_apps_space_id";
+import SpaceSelector from "../control/SpaceSelector.tsx";
+import { currentSpaceId } from "../control/space-state.ts";
 
 /** Connection status badge — reuses the shared `.status-pill` styling. */
 function ConnectionStatusPill(props: { status: Connection["status"] }) {
@@ -50,20 +48,12 @@ export default function ConnectionsView() {
 }
 
 function ConnectionsInner() {
-  const initial = typeof localStorage !== "undefined"
-    ? (localStorage.getItem(STORAGE_KEY) ?? "")
-    : "";
-  const [spaceId, setSpaceId] = createSignal(initial);
-  const [draft, setDraft] = createSignal(initial);
   const { confirm } = useConfirmDialog();
 
-  const applySpace = (e: Event) => {
-    e.preventDefault();
-    const next = draft().trim();
-    setSpaceId(next);
-    if (next) localStorage.setItem(STORAGE_KEY, next);
-    else localStorage.removeItem(STORAGE_KEY);
-  };
+  // Current Space comes from the shared header selector (space-state.ts), so the
+  // space picked here matches the one picked on every other control view. No raw
+  // id typing — the user picks one of their Spaces from the dropdown below.
+  const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
 
   const [connections, { refetch }] = createResource(
     () => (spaceId() ? spaceId() : null),
@@ -147,7 +137,7 @@ function ConnectionsInner() {
   // Space-owned Connection through the session-authed control surface.
   const createFromHelper = createAction(async () => {
     const space = spaceId();
-    if (!space) throw new Error("space を指定してください。");
+    if (!space) throw new Error("Space を選んでください。");
     const helper = tokenHelper();
     const d = descriptor();
     if (!helper || !d) throw new Error("provider が不正です。");
@@ -168,7 +158,7 @@ function ConnectionsInner() {
   // for providers without a guided helper.
   const create = createAction(async () => {
     const space = spaceId();
-    if (!space) throw new Error("space を指定してください。");
+    if (!space) throw new Error("Space を選んでください。");
     const d = descriptor();
     if (!d) throw new Error("provider が不正です。");
     const submitValues: Record<string, string> = {};
@@ -322,29 +312,13 @@ function ConnectionsInner() {
         </p>
       </Show>
 
-      <section class="space-picker">
-        <form onSubmit={applySpace}>
-          <label>
-            Space ID
-            <input
-              type="text"
-              value={draft()}
-              onInput={(e) => setDraft(e.currentTarget.value)}
-              placeholder="space_xxxxxx"
-              autocomplete="off"
-            />
-          </label>
-          <button class="btn btn-secondary" type="submit">
-            表示
-          </button>
-        </form>
-      </section>
+      <SpaceSelector />
 
       <Show
         when={hasSpace()}
         fallback={
           <section class="empty-state">
-            <p>space を指定すると接続一覧を表示します。</p>
+            <p>Space を選ぶと接続一覧を表示します。</p>
           </section>
         }
       >
@@ -566,7 +540,7 @@ function ConnectionsInner() {
                 when={list().length > 0}
                 fallback={
                   <section class="empty-state">
-                    <p>この space にはまだ接続がありません。</p>
+                    <p>この Space にはまだ接続がありません。</p>
                   </section>
                 }
               >

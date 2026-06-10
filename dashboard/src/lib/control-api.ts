@@ -406,6 +406,31 @@ export interface RunLogs {
   readonly auditEvents: readonly RunAuditEvent[];
 }
 
+/**
+ * `GET /v1/control/runs/:id/cost` projection (RunCostInfo). The public,
+ * non-secret billing reservation values the controller already computed at plan
+ * time, so the Run view can explain — BEFORE apply — why an apply would be
+ * blocked under `enforce` mode (a credit shortfall or a billing-plan limit). It
+ * carries no cost formula and no secret material.
+ */
+export interface RunCostInfo {
+  readonly runId: string;
+  /** The Space's billing mode at plan time. */
+  readonly billingMode: "disabled" | "showback" | "enforce";
+  /** Credits the controller estimated this plan would consume on apply. */
+  readonly estimatedCredits: number;
+  /** Available credit balance observed when a reservation was attempted. */
+  readonly availableCredits?: number;
+  /** `reserved` when credits were held; `insufficient_credits` when not. */
+  readonly reservationStatus?: "reserved" | "insufficient_credits";
+  /** Missing credits (`estimated - available`) when positive. */
+  readonly creditShortfall?: number;
+  /** True when billing blocks this plan from applying under `enforce` mode. */
+  readonly blocked: boolean;
+  /** Public-safe human reasons billing blocked the plan (empty when none). */
+  readonly reasons: readonly string[];
+}
+
 export type RunGroupStatus =
   | "queued"
   | "running"
@@ -1116,6 +1141,20 @@ export async function getRunLogs(id: string): Promise<RunLogs> {
   return await controlFetch<RunLogs>(
     `${BASE}/runs/${encodeURIComponent(id)}/logs`,
   );
+}
+
+/**
+ * Reads a plan / destroy_plan Run's public cost projection (`GET
+ * /v1/control/runs/:id/cost`). Used by the Run view to surface, before apply,
+ * the estimated credits and any credit shortfall that would block the apply
+ * under `enforce` mode. The values are the ones the controller already computed
+ * at plan time; this never computes cost and returns no secret material.
+ */
+export async function getRunCostInfo(id: string): Promise<RunCostInfo> {
+  const body = await controlFetch<{ cost: RunCostInfo }>(
+    `${BASE}/runs/${encodeURIComponent(id)}/cost`,
+  );
+  return body.cost;
 }
 
 /**
