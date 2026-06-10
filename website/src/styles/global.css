@@ -771,6 +771,105 @@ section > .container {
   color: var(--tg-fg);
 }
 
+/* Pricing — self-host (free / OSS) vs managed (credit-based) */
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--tg-s-5);
+  margin-bottom: var(--tg-s-7);
+}
+@media (max-width: 880px) {
+  .plan-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.plan {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-5);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  padding: var(--tg-s-6);
+  background: var(--tg-bg-elev);
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+.plan:hover {
+  border-color: var(--tg-accent);
+  transform: translateY(-2px);
+}
+.plan.featured {
+  border-color: var(--tg-line-strong);
+  background: color-mix(in srgb, var(--tg-accent-soft) 40%, var(--tg-bg-elev));
+}
+.plan.featured:hover {
+  border-color: var(--tg-accent);
+}
+.plan-head h3 {
+  font-family: var(--tg-font-display);
+  margin: 0 0 var(--tg-s-2);
+  font-size: var(--tg-fs-xl);
+  letter-spacing: -0.015em;
+  font-weight: 800;
+}
+.plan-tagline {
+  margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.plan-price {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-1);
+  padding-bottom: var(--tg-s-5);
+  border-bottom: 1px solid var(--tg-line);
+}
+.plan-price-value {
+  font-family: var(--tg-font-display);
+  font-size: var(--tg-fs-3xl);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--tg-fg);
+}
+.plan-price-note {
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-subtle);
+}
+.plan-features {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+  flex: 1;
+}
+.plan-features li {
+  position: relative;
+  padding-left: var(--tg-s-5);
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg-muted);
+  line-height: var(--tg-lh-snug);
+}
+.plan-features li::before {
+  content: "→";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--tg-accent-text);
+  font-family: var(--tg-font-mono);
+}
+.plan .btn {
+  align-self: flex-start;
+}
+.plan-ownership {
+  margin-top: var(--tg-s-2);
+}
+.plan-footnote {
+  margin: var(--tg-s-5) 0 0;
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-subtle);
+}
+
 /* End CTA */
 .end-cta {
   text-align: center;

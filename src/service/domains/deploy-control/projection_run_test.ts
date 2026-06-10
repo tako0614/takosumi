@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   projectApplyRun,
   projectPlanRun,
+  projectPlanRunCost,
   projectSourceSyncRun,
 } from "./projection_run.ts";
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
@@ -169,4 +170,141 @@ test("projectSourceSyncRun maps the sync lifecycle and snapshot id", () => {
   const queued = projectSourceSyncRun({ ...base, status: "queued" });
   expect(queued.status).toBe("queued");
   expect(queued.sourceSnapshotId).toBeUndefined();
+});
+
+// --- projectPlanRunCost (public credit-shortfall surface) ------------------
+
+/** A `plan.policy_evaluated` audit event carrying the recorded billing audit. */
+function billingAuditEvent(
+  billing: Readonly<Record<string, unknown>>,
+): PlanRun["auditEvents"][number] {
+  return {
+    id: "evt_1",
+    type: "plan.policy_evaluated",
+    at: 1500,
+    data: { status: "blocked", billing } as never,
+  };
+}
+
+test("projectPlanRunCost surfaces an enforce-mode credit shortfall as blocked", () => {
+  const cost = projectPlanRunCost(
+    planRun({
+      status: "blocked",
+      policy: {
+        status: "blocked",
+        reasons: [
+          "credit reservation failed: 12 credits estimated but only 5 available",
+        ],
+        checkedAt: 1500,
+      },
+      auditEvents: [
+        billingAuditEvent({
+          mode: "enforce",
+          estimatedCredits: 12,
+          availableCredits: 5,
+          reservationStatus: "insufficient_credits",
+        }),
+      ],
+    }),
+  );
+  expect(cost.runId).toBe("plan_1");
+  expect(cost.billingMode).toBe("enforce");
+  expect(cost.estimatedCredits).toBe(12);
+  expect(cost.availableCredits).toBe(5);
+  expect(cost.reservationStatus).toBe("insufficient_credits");
+  expect(cost.creditShortfall).toBe(7);
+  expect(cost.blocked).toBe(true);
+  expect(cost.reasons).toEqual([
+    "credit reservation failed: 12 credits estimated but only 5 available",
+  ]);
+});
+
+test("projectPlanRunCost surfaces a reserved plan as non-blocked with no shortfall", () => {
+  const cost = projectPlanRunCost(
+    planRun({
+      status: "succeeded",
+      policy: { status: "passed", reasons: [], checkedAt: 1500 },
+      auditEvents: [
+        billingAuditEvent({
+          mode: "enforce",
+          estimatedCredits: 4,
+          availableCredits: 40,
+          reservationStatus: "reserved",
+          reservationId: "creditres_1",
+        }),
+      ],
+    }),
+  );
+  expect(cost.billingMode).toBe("enforce");
+  expect(cost.estimatedCredits).toBe(4);
+  expect(cost.availableCredits).toBe(40);
+  expect(cost.reservationStatus).toBe("reserved");
+  expect(cost.creditShortfall).toBeUndefined();
+  expect(cost.blocked).toBe(false);
+  expect(cost.reasons).toEqual([]);
+});
+
+test("projectPlanRunCost reports a billing-plan limit reason as blocked under enforce", () => {
+  const cost = projectPlanRunCost(
+    planRun({
+      status: "blocked",
+      policy: {
+        status: "blocked",
+        reasons: [
+          "billing plan free limits estimated credits per run to 5; plan estimated 9",
+        ],
+        checkedAt: 1500,
+      },
+      auditEvents: [
+        billingAuditEvent({
+          mode: "enforce",
+          estimatedCredits: 9,
+          planLimits: { maxEstimatedCreditsPerRun: 5 },
+        }),
+      ],
+    }),
+  );
+  expect(cost.blocked).toBe(true);
+  expect(cost.reasons).toEqual([
+    "billing plan free limits estimated credits per run to 5; plan estimated 9",
+  ]);
+  // No reservation was attempted, so available credits / shortfall are absent.
+  expect(cost.availableCredits).toBeUndefined();
+  expect(cost.creditShortfall).toBeUndefined();
+});
+
+test("projectPlanRunCost defaults to disabled/zero when no billing audit exists", () => {
+  const cost = projectPlanRunCost(planRun({ status: "queued" }));
+  expect(cost.billingMode).toBe("disabled");
+  expect(cost.estimatedCredits).toBe(0);
+  expect(cost.blocked).toBe(false);
+  expect(cost.reasons).toEqual([]);
+  expect(cost.reservationStatus).toBeUndefined();
+});
+
+test("projectPlanRunCost does not block a showback-mode plan even when policy blocked", () => {
+  // showback never blocks apply; a blocked plan in showback (e.g. a non-billing
+  // policy block) still reports blocked=false for the billing surface.
+  const cost = projectPlanRunCost(
+    planRun({
+      status: "blocked",
+      policy: {
+        status: "blocked",
+        reasons: [
+          "credit reservation failed: 8 credits estimated but only 2 available",
+        ],
+        checkedAt: 1500,
+      },
+      auditEvents: [
+        billingAuditEvent({
+          mode: "showback",
+          estimatedCredits: 8,
+          availableCredits: 2,
+        }),
+      ],
+    }),
+  );
+  expect(cost.billingMode).toBe("showback");
+  expect(cost.creditShortfall).toBe(6);
+  expect(cost.blocked).toBe(false);
 });

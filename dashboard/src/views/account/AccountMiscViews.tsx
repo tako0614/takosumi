@@ -1,10 +1,28 @@
-import { createEffect, createSignal, type JSX, onMount, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  For,
+  type JSX,
+  Match,
+  onMount,
+  Show,
+  Switch,
+} from "solid-js";
+import { createSignal } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 import AppShell from "./components/shell/AppShell.tsx";
 import Page from "./components/auth/Page.tsx";
 import InkdropMark from "./components/brand/InkdropMark.tsx";
 import { Icons } from "../../lib/Icons.tsx";
 import { ApiError, type InstallationPlanResponse, rpc } from "./lib/api.ts";
+import {
+  type ActivityEvent,
+  type ControlApiError,
+  listActivity,
+  listSpaces,
+  type Space,
+} from "../../lib/control-api.ts";
 import {
   readSession,
   refreshSession,
@@ -926,28 +944,337 @@ function SignedInAs(props: { name?: string; sub: string; email?: string }) {
   return <>Signed in as {props.sub}</>;
 }
 
-/** Notifications placeholder (delivery not yet implemented on this plane). */
+// ===========================================================================
+// Notifications — the in-app activity / notification feed
+// ===========================================================================
+
+/**
+ * Notifications view (`/notifications`). A plain-language activity feed for the
+ * signed-in person, aggregated across every Space they belong to. It reads the
+ * Space-scoped audit trail the control surface already exposes
+ * (`GET /v1/control/spaces/:id/activity`, via the `listActivity` client fn) for
+ * each of the visitor's Spaces, merges the events, and shows them newest-first.
+ *
+ * Unlike the operator-facing ControlActivityView (which shows raw action verbs
+ * and `targetType · targetId`), this feed translates each event into a single
+ * everyday-Japanese sentence and surfaces failures prominently: a failed run
+ * (`run.failed`) or detected drift gets a danger treatment so a non-expert
+ * notices "something needs my attention" without reading internal jargon.
+ *
+ * Honesty: the feed only renders values the backend already recorded as
+ * public-safe Activity metadata (names, ids, counts, a compact error CODE). It
+ * invents no prices, no credit-cost formula, and no message the server did not
+ * emit — failed events show the server's compact `errorCode`, never a raw
+ * diagnostic.
+ */
+
+/** Max events fetched per Space and rendered in the merged feed. */
+const NOTIF_PER_SPACE_LIMIT = 50;
+const NOTIF_FEED_LIMIT = 60;
+
+/** An ActivityEvent plus the Space it came from (for cross-Space labelling). */
+interface FeedEntry {
+  readonly event: ActivityEvent;
+  readonly spaceHandle: string;
+}
+
+/** Actions we treat as failures / needs-attention (danger styling). */
+function isFailureAction(action: string): boolean {
+  return (
+    action === "run.failed" ||
+    action === "installation.drift_detected" ||
+    action === "connection.revoked"
+  );
+}
+
+function metaString(
+  metadata: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const v = metadata[key];
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+function metaNumber(
+  metadata: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const v = metadata[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/**
+ * Translate an operation code (`plan` / `apply` / `destroy_apply` …) into a
+ * short everyday-Japanese noun. Falls back to the raw code so an unknown
+ * operation still renders truthfully rather than disappearing.
+ */
+function operationLabel(operation: string | undefined): string {
+  switch (operation) {
+    case "plan":
+      return "プラン作成";
+    case "apply":
+      return "適用";
+    case "destroy_plan":
+      return "削除プラン";
+    case "destroy_apply":
+      return "削除の適用";
+    case "drift_check":
+      return "ズレ確認";
+    case "source_sync":
+      return "ソース取得";
+    default:
+      return operation ?? "操作";
+  }
+}
+
+/**
+ * One plain-language sentence describing the event, using ONLY metadata the
+ * backend already recorded. Returns a title (the headline) and an optional
+ * detail line (extra context, never secrets).
+ */
+function describeEvent(event: ActivityEvent): {
+  readonly title: string;
+  readonly detail?: string;
+} {
+  const m = event.metadata ?? {};
+  switch (event.action) {
+    case "installation.created": {
+      const name = metaString(m, "name") ?? "アプリ";
+      const env = metaString(m, "environment");
+      return {
+        title: `アプリ「${name}」を追加しました`,
+        detail: env ? `環境: ${env}` : undefined,
+      };
+    }
+    case "run.plan_created": {
+      return {
+        title: `${operationLabel(metaString(m, "operation"))}の準備ができました`,
+        detail:
+          metaString(m, "policyStatus") === "blocked"
+            ? "ポリシーにより承認が止まっています"
+            : "内容を確認して承認できます",
+      };
+    }
+    case "run.approved": {
+      return {
+        title: `${operationLabel(metaString(m, "operation"))}を承認しました`,
+      };
+    }
+    case "run.applied": {
+      const outputs = metaNumber(m, "outputCount");
+      return {
+        title: "アプリの変更を反映しました",
+        detail:
+          outputs !== undefined ? `出力 ${outputs} 件を更新` : undefined,
+      };
+    }
+    case "run.destroyed": {
+      return { title: "アプリを削除しました" };
+    }
+    case "run.failed": {
+      const code = metaString(m, "errorCode");
+      return {
+        title: `${operationLabel(metaString(m, "phase"))}に失敗しました`,
+        detail: code ? `エラー: ${code}` : "詳細は実行ログを確認してください",
+      };
+    }
+    case "installation.drift_detected": {
+      return {
+        title: "アプリの実状態が記録とズレています",
+        detail: "再適用が必要かもしれません",
+      };
+    }
+    case "installation.stale": {
+      const producer = metaString(m, "producerInstallationName");
+      return {
+        title: "依存先の更新で再適用が必要になりました",
+        detail: producer ? `更新元: ${producer}` : undefined,
+      };
+    }
+    case "connection.created": {
+      const provider = metaString(m, "provider");
+      return {
+        title: provider
+          ? `接続「${provider}」を追加しました`
+          : "接続を追加しました",
+      };
+    }
+    case "connection.revoked": {
+      const provider = metaString(m, "provider");
+      return {
+        title: provider
+          ? `接続「${provider}」が無効になりました`
+          : "接続が無効になりました",
+      };
+    }
+    case "backup.created": {
+      return { title: "バックアップを作成しました" };
+    }
+    case "dependency.created": {
+      return { title: "アプリ間の連携を追加しました" };
+    }
+    case "dependency.deleted": {
+      return { title: "アプリ間の連携を解除しました" };
+    }
+    case "output_share.created": {
+      return { title: "出力の共有リクエストが届きました" };
+    }
+    case "output_share.approved": {
+      return { title: "出力の共有を承認しました" };
+    }
+    case "output_share.revoked": {
+      return { title: "出力の共有を取り消しました" };
+    }
+    case "run_group.created": {
+      return { title: "まとめての更新を開始しました" };
+    }
+    default: {
+      // Unknown action: stay truthful and show the raw verb rather than guess.
+      return { title: event.action };
+    }
+  }
+}
+
+/** Relative time in plain Japanese ("たった今" / "5分前" / a date for old items). */
+function relativeTime(iso: string): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return iso;
+  const diffSec = Math.round((Date.now() - then) / 1000);
+  if (diffSec < 45) return "たった今";
+  if (diffSec < 3600) return `${Math.round(diffSec / 60)}分前`;
+  if (diffSec < 86400) return `${Math.round(diffSec / 3600)}時間前`;
+  if (diffSec < 86400 * 7) return `${Math.round(diffSec / 86400)}日前`;
+  return new Date(then).toLocaleDateString("ja-JP", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/** Load every Space's recent activity and merge it into one newest-first feed. */
+async function loadNotificationFeed(
+  spaces: readonly Space[],
+): Promise<readonly FeedEntry[]> {
+  const perSpace = await Promise.all(
+    spaces.map(async (space): Promise<readonly FeedEntry[]> => {
+      const events = await listActivity(space.id, NOTIF_PER_SPACE_LIMIT);
+      return events.map((event) => ({
+        event,
+        spaceHandle: space.handle,
+      }));
+    }),
+  );
+  return perSpace
+    .flat()
+    .sort((a, b) => Date.parse(b.event.createdAt) - Date.parse(a.event.createdAt))
+    .slice(0, NOTIF_FEED_LIMIT);
+}
+
+function NotificationRow(props: { entry: FeedEntry }) {
+  const failure = () => isFailureAction(props.entry.event.action);
+  const description = () => describeEvent(props.entry.event);
+  return (
+    <li class={`notif-row${failure() ? " notif-row-failure" : ""}`}>
+      <span class="notif-icon" aria-hidden="true">
+        <Show when={failure()} fallback={<Icons.Bell />}>
+          <Icons.AlertTriangle />
+        </Show>
+      </span>
+      <div class="notif-body">
+        <p class="notif-title">
+          <Show when={failure()}>
+            <span class="notif-badge">要対応</span>
+          </Show>
+          {description().title}
+        </p>
+        <Show when={description().detail}>
+          {(detail) => <p class="notif-detail">{detail()}</p>}
+        </Show>
+        <p class="notif-meta muted">
+          <span>@{props.entry.spaceHandle}</span>
+          <span aria-hidden="true">·</span>
+          <time datetime={props.entry.event.createdAt}>
+            {relativeTime(props.entry.event.createdAt)}
+          </time>
+        </p>
+      </div>
+    </li>
+  );
+}
+
 export function NotificationsView() {
   return (
-    <Page title="Notifications">
-      {() => (
-        <AppShell>
-          <div class="page-header">
-            <h1>Notifications</h1>
-            <p class="page-sub">
-              billing アラート / アプリ追加イベント / invite の通知。
-            </p>
-          </div>
-          <section class="empty-state">
-            <Icons.Bell class="w-8 h-8" aria-hidden="true" />
-            <p>通知はまだ利用できません (coming soon)。</p>
-            <p class="muted">
-              billing アラート / アプリ追加イベント / invite
-              の通知配信は、このアカウントプレーンではまだ実装されていません。
-            </p>
-          </section>
-        </AppShell>
-      )}
+    <Page title="通知">
+      {() => {
+        const [spaces] = createResource(listSpaces);
+        const [feed] = createResource(
+          () => spaces(),
+          (list) => loadNotificationFeed(list),
+        );
+        const loading = () => spaces.loading || feed.loading;
+        const error = createMemo(
+          () =>
+            (spaces.error as ControlApiError | undefined) ??
+            (feed.error as ControlApiError | undefined),
+        );
+        const failureCount = () =>
+          (feed() ?? []).filter((e) => isFailureAction(e.event.action)).length;
+
+        return (
+          <AppShell>
+            <div class="page-header">
+              <h1>通知</h1>
+              <p class="page-sub">
+                追加・実行・承認・失敗など、あなたの Space
+                での出来事を新しい順に表示します。
+              </p>
+            </div>
+
+            <Switch>
+              <Match when={loading()}>
+                <div class="grid-skel">
+                  <div class="skel-block" />
+                  <div class="skel-block" />
+                </div>
+              </Match>
+              <Match when={error()}>
+                <section class="empty-state error-state">
+                  <Icons.AlertTriangle aria-hidden="true" />
+                  <p>通知を読み込めませんでした — {error()?.message}</p>
+                </section>
+              </Match>
+              <Match when={feed()}>
+                {(list) => (
+                  <Show
+                    when={list().length > 0}
+                    fallback={
+                      <section class="empty-state">
+                        <Icons.Bell aria-hidden="true" />
+                        <p>まだ通知はありません。</p>
+                        <p class="muted">
+                          アプリを追加したり実行したりすると、ここに出来事が並びます。
+                        </p>
+                      </section>
+                    }
+                  >
+                    <Show when={failureCount() > 0}>
+                      <p class="notif-summary">
+                        <Icons.AlertTriangle aria-hidden="true" />
+                        要対応の出来事が {failureCount()} 件あります。
+                      </p>
+                    </Show>
+                    <ul class="notif-list">
+                      <For each={list()}>
+                        {(entry) => <NotificationRow entry={entry} />}
+                      </For>
+                    </ul>
+                  </Show>
+                )}
+              </Match>
+            </Switch>
+          </AppShell>
+        );
+      }}
     </Page>
   );
 }

@@ -29,8 +29,10 @@ import {
   ControlApiError,
   createApplyRun,
   getRun,
+  getRunCostInfo,
   getRunLogs,
   type Run,
+  type RunCostInfo,
   type RunDiagnostic,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
@@ -71,6 +73,72 @@ function formatDateTime(value: string | undefined): string {
   const time = Date.parse(value);
   if (Number.isNaN(time)) return value;
   return new Date(time).toLocaleString("ja-JP");
+}
+
+/** Formats a backend-provided credit count for display (no invented units). */
+function formatCredits(value: number): string {
+  return value.toLocaleString("ja-JP");
+}
+
+/**
+ * True when the cost projection has anything worth showing the operator before
+ * apply: an estimate the backend computed, a reservation outcome, a shortfall,
+ * or a block reason. A `disabled`-mode plan with a zero estimate and nothing
+ * blocked carries no information, so we render nothing (don't clutter the page).
+ */
+function hasCostToShow(cost: RunCostInfo): boolean {
+  return (
+    cost.blocked ||
+    cost.estimatedCredits > 0 ||
+    cost.reservationStatus !== undefined ||
+    cost.creditShortfall !== undefined ||
+    cost.reasons.length > 0
+  );
+}
+
+/**
+ * Pre-apply cost / shortfall panel. Shows ONLY the values the backend computed
+ * at plan time (estimated credits, available balance, shortfall, block reasons)
+ * — it invents no amount and no formula. When the plan is `blocked` it states,
+ * in plain Japanese, that the deploy cannot run, and lists the backend's own
+ * reasons verbatim as supporting detail.
+ */
+function CostNotice(props: { readonly cost: RunCostInfo }) {
+  const cost = () => props.cost;
+  return (
+    <div
+      class={`run-cost-notice${cost().blocked ? " run-cost-notice-blocked" : ""}`}
+    >
+      <Show when={cost().estimatedCredits > 0}>
+        <p class="run-cost-line">
+          必要クレジット: 約 <strong>{formatCredits(cost().estimatedCredits)}</strong>
+        </p>
+      </Show>
+      <Show when={cost().availableCredits !== undefined}>
+        {(_) => (
+          <p class="run-cost-line muted">
+            残高: {formatCredits(cost().availableCredits ?? 0)}
+          </p>
+        )}
+      </Show>
+      <Show when={cost().blocked}>
+        <p class="sign-in-error run-cost-blocked-msg">
+          <Show
+            when={cost().creditShortfall !== undefined}
+            fallback={<>残高または上限の都合により、このまま実行できません。</>}
+          >
+            クレジット残高が約 {formatCredits(cost().creditShortfall ?? 0)}{" "}
+            不足しているため、このまま実行できません。
+          </Show>
+        </p>
+        <Show when={cost().reasons.length > 0}>
+          <ul class="run-cost-reasons muted">
+            <For each={cost().reasons}>{(reason) => <li>{reason}</li>}</For>
+          </ul>
+        </Show>
+      </Show>
+    </div>
+  );
 }
 
 /**
@@ -308,6 +376,16 @@ function Inner() {
 
   const [run, { refetch: refetchRun }] = createResource(runId, getRun);
   const [logs, { refetch: refetchLogs }] = createResource(runId, getRunLogs);
+  // Pre-apply cost / credit-shortfall projection (backend-computed values only;
+  // see CostNotice). Best-effort: if the route errors, the resource stays
+  // undefined and the deploy UI behaves exactly as before (never breaks apply).
+  const [cost] = createResource(runId, async (id) => {
+    try {
+      return await getRunCostInfo(id);
+    } catch {
+      return undefined;
+    }
+  });
 
   const inputs = createMemo(() =>
     inputNamesFromLogs(logs()?.auditEvents ?? []),
@@ -366,6 +444,11 @@ function Inner() {
     setApplied(true);
     await Promise.all([refetchRun(), refetchLogs()]);
   });
+
+  // Billing blocks apply (enforce-mode credit shortfall / plan limit). Only the
+  // backend's `blocked` flag gates the button; absence of cost info never does.
+  const costInfo = () => cost.latest;
+  const costBlocked = () => costInfo()?.blocked === true;
 
   return (
     <AppShell>
@@ -490,45 +573,62 @@ function Inner() {
                   </p>
                 </Show>
                 <Show when={!applied() && isDeployableRun(r())}>
-                  <div class="form-actions run-deploy">
+                  <div class="run-deploy-block">
+                    {/* Pre-apply cost / credit-shortfall (backend values only). */}
                     <Show
-                      when={needsConfirm()}
-                      fallback={
-                        <button
-                          class="btn btn-primary"
-                          type="button"
-                          disabled={deploy.busy()}
-                          onClick={() => void deploy.run(undefined)}
-                        >
-                          {deploy.busy() ? "実行中..." : "デプロイを実行"}
-                        </button>
-                      }
+                      when={(() => {
+                        const c = costInfo();
+                        return c && hasCostToShow(c) ? c : undefined;
+                      })()}
                     >
-                      <p class="run-deploy-warn">
-                        この変更には既存リソースの置き換え・削除が含まれます。
-                        実行するとデータが失われる場合があります。
-                      </p>
-                      <div class="form-actions">
-                        <button
-                          class="btn btn-secondary"
-                          type="button"
-                          disabled={deploy.busy()}
-                          onClick={() => setNeedsConfirm(false)}
-                        >
-                          やめる
-                        </button>
-                        <button
-                          class="btn btn-danger"
-                          type="button"
-                          disabled={deploy.busy()}
-                          onClick={() => void deploy.run(true)}
-                        >
-                          {deploy.busy()
-                            ? "実行中..."
-                            : "破壊的な変更を承知のうえで実行"}
-                        </button>
-                      </div>
+                      {(c) => <CostNotice cost={c()} />}
                     </Show>
+                    <div class="form-actions run-deploy">
+                      <Show
+                        when={needsConfirm()}
+                        fallback={
+                          <button
+                            class="btn btn-primary"
+                            type="button"
+                            disabled={deploy.busy() || costBlocked()}
+                            onClick={() => void deploy.run(undefined)}
+                          >
+                            {deploy.busy()
+                              ? "実行中..."
+                              : costBlocked()
+                                ? "残高不足のため実行できません"
+                                : "デプロイを実行"}
+                          </button>
+                        }
+                      >
+                        <p class="run-deploy-warn">
+                          この変更には既存リソースの置き換え・削除が含まれます。
+                          実行するとデータが失われる場合があります。
+                        </p>
+                        <div class="form-actions">
+                          <button
+                            class="btn btn-secondary"
+                            type="button"
+                            disabled={deploy.busy()}
+                            onClick={() => setNeedsConfirm(false)}
+                          >
+                            やめる
+                          </button>
+                          <button
+                            class="btn btn-danger"
+                            type="button"
+                            disabled={deploy.busy() || costBlocked()}
+                            onClick={() => void deploy.run(true)}
+                          >
+                            {deploy.busy()
+                              ? "実行中..."
+                              : costBlocked()
+                                ? "残高不足のため実行できません"
+                                : "破壊的な変更を承知のうえで実行"}
+                          </button>
+                        </div>
+                      </Show>
+                    </div>
                   </div>
                 </Show>
                 <Show when={deploy.error()}>

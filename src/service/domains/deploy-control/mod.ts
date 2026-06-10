@@ -183,6 +183,7 @@ import {
 import { downstreamClosure } from "takosumi-graph";
 import type {
   Run,
+  RunCostInfo,
   RunEventsResponse,
   RunLogsResponse,
 } from "takosumi-contract/runs";
@@ -199,8 +200,10 @@ import type {
   SealedDependencyValues,
 } from "takosumi-contract/dependencies";
 import {
+  compactErrorCode,
   projectApplyRun,
   projectPlanRun,
+  projectPlanRunCost,
   projectSourceSyncRun,
 } from "./projection_run.ts";
 import {
@@ -4390,6 +4393,34 @@ export class OpenTofuDeploymentController {
   }
 
   /**
+   * Public, non-secret cost projection for a `plan` / `destroy_plan` Run. It
+   * re-projects the billing reservation values the controller ALREADY computed
+   * at plan time (estimated credits / available credits / reservation status /
+   * the credit-shortfall + plan-limit reasons recorded on the run's policy
+   * decision), so a dashboard can explain, before apply, why an apply would be
+   * blocked under `enforce` mode. It computes no cost (never calls the credit
+   * estimator) and surfaces no secret material. Only a PlanRun (and the
+   * destroy_plan that is a PlanRun) carries billing; an ApplyRun / SourceSyncRun
+   * resolves to the PlanRun that produced it where possible, else `not_found`.
+   */
+  async getRunCost(id: string): Promise<RunCostInfo> {
+    requireNonEmptyString(id, "runId");
+    const planRun = await this.#store.getPlanRun(id);
+    if (planRun) return projectPlanRunCost(planRun);
+    // An apply / destroy_apply carries no billing of its own; resolve the
+    // PlanRun it was applied from so the cost view follows the same run lineage.
+    const applyRun = await this.#store.getApplyRun(id);
+    if (applyRun) {
+      const plan = await this.#store.getPlanRun(applyRun.planRunId);
+      if (plan) return projectPlanRunCost(plan);
+    }
+    throw new OpenTofuControllerError(
+      "not_found",
+      `cost not available for run ${id}`,
+    );
+  }
+
+  /**
    * Resolves a Run id to its underlying ledger record's `{ diagnostics,
    * auditEvents }`. PlanRun / ApplyRun carry both; a SourceSyncRun has neither,
    * so its `error` is projected to a single error diagnostic and its audit trail
@@ -4736,6 +4767,24 @@ export class OpenTofuDeploymentController {
       finishedAt: now,
     };
     await this.#store.putPlanRun(failed);
+    // Activity (§27 / §34): a plan / destroy_plan reached a failed terminal
+    // state. Public-safe metadata only — a compact error CODE (never the raw
+    // diagnostic message), the run phase, and the targeted Installation id.
+    await this.#recordActivity({
+      spaceId: failed.spaceId,
+      action: "run.failed",
+      targetType: "run",
+      targetId: failed.id,
+      runId: failed.id,
+      metadata: {
+        phase: failed.driftCheck === true ? "drift_check" : "plan",
+        operation: failed.operation,
+        errorCode: compactErrorCode(errorMessage(error)),
+        ...(failed.installationId
+          ? { installationId: failed.installationId }
+          : {}),
+      },
+    });
     return failed;
   }
 
@@ -4767,6 +4816,24 @@ export class OpenTofuDeploymentController {
       finishedAt: now,
     };
     await this.#store.putApplyRun(failed);
+    // Activity (§27 / §34): an apply / destroy_apply reached a failed terminal
+    // state. Public-safe metadata only — a compact error CODE (never the raw
+    // diagnostic message), the run phase, and the targeted Installation id.
+    await this.#recordActivity({
+      spaceId: failed.spaceId,
+      action: "run.failed",
+      targetType: "run",
+      targetId: failed.id,
+      runId: failed.id,
+      metadata: {
+        phase: eventType === "destroy.failed" ? "destroy_apply" : "apply",
+        operation: failed.operation,
+        errorCode: compactErrorCode(errorMessage(error)),
+        ...(failed.installationId
+          ? { installationId: failed.installationId }
+          : {}),
+      },
+    });
     return failed;
   }
 
