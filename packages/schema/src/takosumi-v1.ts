@@ -270,7 +270,6 @@ export interface CoreDescriptorDependency {
   fromDescriptorId: DescriptorId;
   toDescriptorId: DescriptorId;
   reason:
-    | "jsonld-context"
     | "schema"
     | "compatibility-rule"
     | "permission-scope"

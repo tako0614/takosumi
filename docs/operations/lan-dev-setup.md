@@ -172,7 +172,7 @@ LAN client が踏める dev hostname は production hostname を `.com/jp → .t
 
 | dev hostname (= production mirror) | 用途                                                                          |
 | ---------------------------------- | ----------------------------------------------------------------------------- |
-| `https://takosumi.test/`           | takosumi.com landing + `/docs/` VitePress + `/contexts/*` JSON-LD CDN         |
+| `https://takosumi.test/`           | takosumi.com landing + `/docs/` VitePress                                     |
 | `https://app.takosumi.test/`       | app.takosumi.com (single worker: dashboard SPA + accounts plane + control plane + runner) |
 | `https://takos.test/`              | takos.jp (admin / Takos product UI)                                           |
 | `https://road.takos.test/`         | road.takos.jp                                                                 |

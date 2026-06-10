@@ -1,18 +1,12 @@
 name: Deploy takosumi.com website to Cloudflare Pages
 
-# Wave M-G (= 2026-05-20) collapsed the previous 2-project split
-# (`takosumi-site` minimal HTML landing + `takosumi-docs` VitePress at
-# `docs.takosumi.com`) into a single `takosumi-website` Pages project
-# that serves the whole property:
+# The single `takosumi-website` Pages project serves the public property:
 #
 #   https://takosumi.com/                       (landing, Solid Start)
 #   https://takosumi.com/docs/                  (VitePress reference docs)
-#   https://takosumi.com/contexts/v1.jsonld     (JSON-LD vocab)
-#   https://takosumi.com/contexts/kinds/v1/<name>.jsonld
 #
-# `website/build.sh` runs `vinxi build` for the landing, `vitepress
-# build` for the docs (overlaid onto `.output/public/docs/`), and copies
-# `spec/contexts/` (overlaid onto `.output/public/contexts/`).
+# `website/build.sh` runs `vinxi build` for the landing and `vitepress
+# build` for the docs overlaid onto `.output/public/docs/`.
 
 on:
   push:
@@ -20,7 +14,6 @@ on:
     paths:
       - "website/**"
       - "docs/**"
-      - "spec/contexts/**"
       - ".github/workflows/website-deploy.yml"
       - "package.json"
       - "bun.lock"
@@ -31,7 +24,6 @@ on:
     paths:
       - "website/**"
       - "docs/**"
-      - "spec/contexts/**"
       - ".github/workflows/website-deploy.yml"
   workflow_dispatch:
 
@@ -67,7 +59,7 @@ jobs:
         working-directory: docs
         run: npm install --no-audit --no-fund
 
-      - name: Build merged Pages artifact (landing + /docs/ + /contexts/)
+      - name: Build merged Pages artifact (landing + /docs/)
         run: bash website/build.sh
 
       - name: Deploy to Cloudflare Pages

@@ -33,7 +33,6 @@ import {
   registerRequestCorrelation,
   type RegisterRequestCorrelationOptions,
 } from "./request_correlation.ts";
-import { DefaultGroupSummaryStatusProjector } from "../services/status/mod.ts";
 import {
   ROUTE_FAMILIES,
   type RouteFamilyFlag,
@@ -229,7 +228,6 @@ function defaultInternalServiceSecret(): string | undefined {
 }
 
 function createDefaultReadinessProbes(): ReadinessRouteProbes {
-  const projector = new DefaultGroupSummaryStatusProjector();
   return {
     ready: () => ({
       ok: true,
@@ -241,10 +239,5 @@ function createDefaultReadinessProbes(): ReadinessRouteProbes {
       service: "takosumi",
       checkedAt: new Date().toISOString(),
     }),
-    statusSummary: () =>
-      projector.project({
-        spaceId: "system",
-        groupId: "takosumi",
-      }),
   };
 }

@@ -20,11 +20,12 @@ import {
   Switch,
   type JSX,
 } from "solid-js";
-import { A, useLocation, useParams } from "@solidjs/router";
+import { useParams } from "@solidjs/router";
 import { Icons } from "../../lib/Icons.tsx";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import AppStatusPill from "../account/components/AppStatusPill.tsx";
+import AppDetailNav from "../account/components/AppDetailNav.tsx";
 import {
   ApiError,
   type ExportOperation,
@@ -208,41 +209,7 @@ function Inner() {
 }
 
 // ===========================================================================
-// AppDetailNav (ported from components/apps/AppDetailNav.tsx)
-// ===========================================================================
-
-const DETAIL_NAV_TABS = [
-  { suffix: "", label: "概要" },
-  { suffix: "/danger", label: "削除" },
-];
-
-function AppDetailNav(props: { installationId: string }) {
-  const loc = useLocation();
-  const base = `/apps/${encodeURIComponent(props.installationId)}`;
-  const isActive = (suffix: string) => {
-    const target = base + suffix;
-    if (suffix === "") {
-      return loc.pathname === target || loc.pathname === target + "/";
-    }
-    return loc.pathname === target;
-  };
-  return (
-    <nav class="detail-nav" aria-label="App sections">
-      {DETAIL_NAV_TABS.map((t) => (
-        <A
-          href={base + t.suffix}
-          class="detail-nav-link"
-          classList={{ active: isActive(t.suffix) }}
-        >
-          {t.label}
-        </A>
-      ))}
-    </nav>
-  );
-}
-
-// ===========================================================================
-// OutputValue (ported from components/apps/installation-detail/OutputValue.tsx)
+// OutputValue
 // ===========================================================================
 
 function OutputValue(props: { readonly value: unknown }): JSX.Element {

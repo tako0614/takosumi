@@ -63,4 +63,4 @@ substrate through operator config.
 
 ## Public site
 
-`takosumi/website/` is the landing page. `takosumi/docs/` is the docs site. `bun run website:build` combines the landing page, `/docs/`, and `/contexts/` into one Cloudflare Pages artifact.
+`takosumi/website/` is the landing page. `takosumi/docs/` is the docs site. `bun run website:build` combines the landing page and `/docs/` into one Cloudflare Pages artifact.

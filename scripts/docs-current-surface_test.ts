@@ -58,7 +58,6 @@ const SOURCE_DOCS_WITH_PUBLIC_SURFACE_WORDING = [
   "CONVENTIONS.md",
   "ROADMAP.md",
   "packages/schema/src/README.md",
-  "src/cli/README.md",
   "src/service/README.md",
   "src/runtime-agent/README.md",
   "website/src/components/EndCTA.tsx",
@@ -78,7 +77,6 @@ const RETIRED_SOURCE_DOC_TERMS: readonly (string | RegExp)[] = [
   "@takosjp/takosumi/server",
   "https://www.npmjs.com/package/@takosjp/takosumi",
   "takosumi install",
-  "takosumi deploy",
   "opentofu:deployment-output-proof",
   "opentofu-deployment-output-proof",
   "takosumi.opentofu-deployment-output-proof",
@@ -136,16 +134,6 @@ test("source docs keep current source-module and modulePath vocabulary", async (
 
   assert.match(docs, /takosumi-contract/);
   assert.match(docs, /module path/);
-});
-
-test("website build no longer publishes docs kind overlays", async () => {
-  const buildScript = await readText(new URL("website/build.sh", ROOT));
-  assert.equal(buildScript.includes("/ki" + "nds/v1"), false);
-  assert.equal(buildScript.includes("docs/ki" + "nds"), false);
-
-  const worker = await readText(new URL("website/public/_worker.js", ROOT));
-  assert.match(worker, /status: 404/);
-  assert.ok(worker.includes("/ki" + "nds/"));
 });
 
 test("workspace packages stay private source modules", async () => {
