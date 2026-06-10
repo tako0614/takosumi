@@ -24,8 +24,18 @@
  * through the shared {@link OpenTofuDeploymentStore} contract and bundled by the
  * worker build.
  */
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  ne,
+  type SQL,
+} from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
+import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import type {
   ApplyRun,
   Connection,
@@ -95,7 +105,6 @@ const RUN_KIND_APPLY = "apply" as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync" as const;
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
 const RUN_KIND_BACKUP = "backup" as const;
-const RUN_KIND_RESTORE = "restore" as const;
 
 export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   readonly #orm: DrizzleD1Database<typeof schema>;
@@ -279,28 +288,6 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
 
   async getBackupRun(id: string): Promise<Run | undefined> {
     return await this.#getRun<Run>(id, [RUN_KIND_BACKUP]);
-  }
-
-  async putRestoreRun(run: Run): Promise<Run> {
-    if (run.type !== RUN_KIND_RESTORE) {
-      throw new Error("putRestoreRun only accepts restore runs");
-    }
-    await this.#putRun({
-      id: run.id,
-      runGroupId: run.runGroupId ?? null,
-      spaceId: run.spaceId,
-      sourceId: run.sourceId ?? null,
-      installationId: run.installationId ?? null,
-      environment: run.environment ?? null,
-      type: RUN_KIND_RESTORE,
-      status: run.status,
-      runJson: JSON.stringify(run),
-    });
-    return run;
-  }
-
-  async getRestoreRun(id: string): Promise<Run | undefined> {
-    return await this.#getRun<Run>(id, [RUN_KIND_RESTORE]);
   }
 
   async listSourceSyncRuns(
@@ -765,12 +752,12 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     await this.#orm
       .delete(schema.operatorConnectionDefaults)
       .where(
+        // Clear any other row holding this provider (the unique-index
+        // capability cleanup) without deleting the row we re-upsert by id.
         and(
           eq(schema.operatorConnectionDefaults.provider, record.provider),
-          // Drizzle has no not-equal helper imported here; keeping this guarded
-          // delete as a capability unique-index cleanup is covered by the next
-          // idempotent upsert.
-        ) as never,
+          ne(schema.operatorConnectionDefaults.id, record.id),
+        ),
       )
       .run()
       .catch(() => undefined);
@@ -1762,25 +1749,22 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       .run();
   }
 
-  async #drizzleDelete(table: any, where: unknown): Promise<boolean> {
+  async #drizzleDelete(table: any, where: SQL | undefined): Promise<boolean> {
     await this.#ensureSchema();
-    const result = await this.#orm
-      .delete(table)
-      .where(where as never)
-      .run();
+    const result = await this.#orm.delete(table).where(where).run();
     return changes(result as D1Result) > 0;
   }
 
   async #drizzleFirstJson<T>(
     table: any,
     jsonColumn: any,
-    where: unknown,
+    where: SQL | undefined,
   ): Promise<T | undefined> {
     await this.#ensureSchema();
     const row = await this.#orm
       .select({ value: jsonColumn })
       .from(table)
-      .where(where as never)
+      .where(where)
       .get();
     return row?.value as T | undefined;
   }
@@ -1789,18 +1773,18 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     table: any,
     jsonColumn: any,
     input: {
-      readonly where?: unknown;
-      readonly orderBy?: readonly unknown[];
+      readonly where?: SQL | undefined;
+      readonly orderBy?: readonly (SQL | SQLiteColumn)[];
       readonly limit?: number;
     } = {},
   ): Promise<readonly T[]> {
     await this.#ensureSchema();
     let query = this.#orm.select({ value: jsonColumn }).from(table).$dynamic();
     if (input.where !== undefined) {
-      query = query.where(input.where as never);
+      query = query.where(input.where);
     }
     if (input.orderBy !== undefined) {
-      query = query.orderBy(...(input.orderBy as never[]));
+      query = query.orderBy(...input.orderBy);
     }
     if (input.limit !== undefined) {
       query = query.limit(input.limit);

@@ -158,7 +158,6 @@ import { evaluateTemplatePlanPolicy } from "./template_policy.ts";
 import {
   type ActionPolicyResult,
   evaluateActionPolicy,
-  evaluateProviderAllowlist,
   evaluateQuotaPolicy,
   evaluateResourceAllowlist,
   evaluateScopeBoundary,
@@ -209,6 +208,7 @@ import {
 import {
   type InstallationCoordination,
   withInstallationLease,
+  withPlanLease,
 } from "./installation_lease.ts";
 import {
   ConnectionsService,
@@ -217,6 +217,21 @@ import {
 } from "../connections/mod.ts";
 import { SourceManagement } from "./source_management.ts";
 import { ConnectionManagement } from "./connection_management.ts";
+import {
+  canonicalProviderAddress,
+  compactLayeredPolicy,
+  evaluateCompatibilityReportAgainstPolicy,
+  evaluateConfiguredProviderAllowlist,
+  evaluateProviderCredentialMintPolicy,
+  evaluateProviderInstallationPolicy,
+  evaluateProviderLockfilePolicy,
+  mergePolicyConfigs,
+  type ProviderInstallationPolicyResult,
+  type ProviderLockfilePolicyResult,
+  requiredProvidersFromCompatibilityReport,
+  withDefaultProviderSupplyChainPolicy,
+} from "./provider_policy.ts";
+import { classifyDriftResourceChanges } from "./drift.ts";
 
 // Re-export the shared error primitive and the four decomposed concerns so the
 // domain's public entry point stays `./mod.ts` for importers and tests.
@@ -642,28 +657,6 @@ function initialProviderTemplates(): readonly ProviderTemplate[] {
       updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
     },
   ];
-}
-
-function validateStringArray(
-  value: unknown,
-  field: string,
-  options: { readonly allowEmpty: boolean },
-): asserts value is readonly string[] {
-  if (!Array.isArray(value)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${field} must be an array`,
-    );
-  }
-  if (!options.allowEmpty && value.length === 0) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${field} must contain at least one value`,
-    );
-  }
-  for (const item of value) {
-    requireNonEmptyString(item, `${field}[]`);
-  }
 }
 
 export interface RecordMeteredUsageInput {
@@ -2209,18 +2202,6 @@ export class OpenTofuDeploymentController {
     );
   }
 
-  #mergePolicyReasons(
-    policy: PolicyDecision,
-    reasons: readonly string[],
-  ): PolicyDecision {
-    if (reasons.length === 0) return policy;
-    return {
-      status: "blocked",
-      reasons: [...policy.reasons, ...reasons],
-      checkedAt: policy.checkedAt,
-    };
-  }
-
   async #evaluateUserEnvSetProviderExecutionPolicy(input: {
     readonly profile: RunnerProfile;
     readonly installation?: Installation;
@@ -2617,39 +2598,6 @@ export class OpenTofuDeploymentController {
         ? { build: installConfigBuildSpec(installConfig.build) }
         : {}),
     };
-  }
-
-  async #inferInstallTypePlanForTemplateRequest(
-    installation: Installation,
-  ): Promise<InstallTypePlanContext> {
-    const installConfig = await this.#store.getInstallConfig(
-      installation.installConfigId,
-    );
-    if (!installConfig) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `install_config_not_found: ${installation.installConfigId}`,
-      );
-    }
-    if (installConfig.installType === "opentofu_root") {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `install config ${installConfig.id} is legacy opentofu_root; ` +
-          "template plans require a generated-root install type",
-      );
-    }
-    const templateBinding = installConfigTemplateBinding(installConfig);
-    const requiredProviders = templateBinding
-      ? this.#templateRegistry
-          .require(templateBinding.templateId, templateBinding.templateVersion)
-          .policy.allowedProviders.map(canonicalProviderAddress)
-      : (installConfig.policy.allowedProviders ?? []);
-    return await this.#resolveInstallTypePlan(
-      installation,
-      installConfig,
-      installConfig.installType,
-      requiredProviders,
-    );
   }
 
   async getPlanRun(id: string): Promise<PlanRunResponse> {
@@ -3255,6 +3203,20 @@ export class OpenTofuDeploymentController {
           environment,
           holderId: applyRun.id,
         },
+        runWork,
+      );
+    }
+    // SECURITY (apply-once / S5): a `create` plan has no installationId yet, so
+    // the installation lease above cannot cover it. Without a cross-isolate
+    // guard two concurrent create-applies of the SAME plan both observe
+    // `appliedApplyRunId` undefined and each allocate a brand-new Installation +
+    // Deployment (real duplicate cloud resources). Take the `plan:{planRunId}`
+    // lease so create-applies serialize; the inner #executeApply re-reads the
+    // persisted PlanRun and rejects a sibling that already marked it applied.
+    if (this.#installationCoordination) {
+      return await withPlanLease(
+        this.#installationCoordination,
+        { planRunId: planRun.id, holderId: applyRun.id },
         runWork,
       );
     }
@@ -4061,9 +4023,7 @@ export class OpenTofuDeploymentController {
           );
         }
       }
-      const sharedProviders = resolved
-        ? sharedProviderEnvProviders(planRun.requiredProviders, resolved)
-        : planRun.requiredProviders;
+      const sharedProviders = resolved ? [] : planRun.requiredProviders;
       const connectionIds =
         resolved && sharedProviders.length > 0
           ? mintableConnectionIds(resolved)
@@ -5408,13 +5368,6 @@ export class OpenTofuDeploymentController {
     });
   }
 
-  async #requireBillingSettingsForSpace(
-    spaceId: string,
-  ): Promise<BillingSettings> {
-    const space = await this.#requireSpace(spaceId);
-    return space.billingSettings ?? this.#defaultBillingSettings;
-  }
-
   async #requireSpace(spaceId: string) {
     const space = await this.#store.getSpace(spaceId);
     if (!space) {
@@ -6550,40 +6503,6 @@ function installConfigTemplateBinding(config: InstallConfig):
   };
 }
 
-function templateOutputAllowlist(
-  template: TemplateDefinition,
-): InstallConfig["outputAllowlist"] {
-  return Object.fromEntries(
-    Object.entries(template.outputs.public).map(([name, output]) => [
-      name,
-      {
-        from: output.from,
-        type: outputAllowlistType(output.type),
-        required: true,
-      },
-    ]),
-  );
-}
-
-function outputAllowlistType(
-  value: string,
-): InstallConfig["outputAllowlist"][string]["type"] {
-  if (
-    value === "string" ||
-    value === "url" ||
-    value === "hostname" ||
-    value === "number" ||
-    value === "boolean" ||
-    value === "json"
-  ) {
-    return value;
-  }
-  throw new OpenTofuControllerError(
-    "failed_precondition",
-    `template output type ${value} is not valid for InstallConfig.outputAllowlist`,
-  );
-}
-
 /** Derives generated-root provider bindings from resolved provider bindings. */
 function providerBindingsFromResolved(
   resolved: readonly ResolvedProviderBinding[],
@@ -6619,15 +6538,6 @@ function providerMintEntriesFromResolved(
     });
   }
   return entries;
-}
-
-function sharedProviderEnvProviders(
-  requiredProviders: readonly string[],
-  resolved: readonly ResolvedProviderBinding[],
-): readonly string[] {
-  void requiredProviders;
-  void resolved;
-  return [];
 }
 
 function missingRootOnlyCredentialProviders(
@@ -6943,18 +6853,6 @@ function normalizeGitUrlToHttps(url: string): string {
 }
 
 /**
- * Canonicalizes a provider rule to a fully-qualified OpenTofu registry address.
- * A bare `namespace/type` (the OpenTofu source form templates declare) is
- * prefixed with the default registry host; an already-qualified address (3+
- * segments) is returned unchanged.
- */
-function canonicalProviderAddress(rule: string): string {
-  const segments = rule.split("/").filter((part) => part.length > 0);
-  if (segments.length === 2) return `registry.opentofu.org/${rule}`;
-  return rule;
-}
-
-/**
  * Reads generated-root dispatch fields off the persisted plan-run-inputs
  * sidecar. Sidecars carry `generatedRoot` (+ optional build/output allowlist)
  * for built-in modules and generic Capsules. Defensive copies are not needed
@@ -7005,443 +6903,6 @@ function updatedTemplateBinding(
   return {
     ...binding,
     requiresConfirmation: templatePolicy.requiresConfirmation,
-  };
-}
-
-function mergePolicyConfigs(
-  spacePolicy: PolicyConfig | undefined,
-  installPolicy: PolicyConfig | undefined,
-): PolicyConfig | undefined {
-  if (!spacePolicy && !installPolicy) return undefined;
-  return {
-    allowedProviders: intersectOptionalLists(
-      spacePolicy?.allowedProviders,
-      installPolicy?.allowedProviders,
-    ),
-    allowedResourceTypes: intersectOptionalLists(
-      spacePolicy?.allowedResourceTypes,
-      installPolicy?.allowedResourceTypes,
-    ),
-    allowedDataSourceTypes: intersectOptionalLists(
-      spacePolicy?.allowedDataSourceTypes,
-      installPolicy?.allowedDataSourceTypes,
-    ),
-    allowedProvisionerTypes: intersectOptionalLists(
-      spacePolicy?.allowedProvisionerTypes,
-      installPolicy?.allowedProvisionerTypes,
-    ),
-    destructiveChanges:
-      installPolicy?.destructiveChanges ?? spacePolicy?.destructiveChanges,
-    providerLockfile: mergeProviderLockfilePolicy(
-      spacePolicy?.providerLockfile,
-      installPolicy?.providerLockfile,
-    ),
-    providerInstallation: mergeProviderInstallationPolicy(
-      spacePolicy?.providerInstallation,
-      installPolicy?.providerInstallation,
-    ),
-    providerCredentials: mergeProviderCredentialPolicy(
-      spacePolicy?.providerCredentials,
-      installPolicy?.providerCredentials,
-    ),
-    scopeBoundary: mergeScopeBoundary(
-      spacePolicy?.scopeBoundary,
-      installPolicy?.scopeBoundary,
-    ),
-    quota: mergeQuota(spacePolicy?.quota, installPolicy?.quota),
-  };
-}
-
-function evaluateConfiguredProviderAllowlist(
-  requiredProviders: readonly string[],
-  policy: PolicyConfig | undefined,
-  allowNoProviders: boolean,
-): ProviderAllowlistResult | undefined {
-  if (policy?.allowedProviders === undefined) return undefined;
-  return evaluateProviderAllowlist(requiredProviders, {
-    allowed: policy.allowedProviders,
-    ...(allowNoProviders ? { allowNoProviders: true } : {}),
-  });
-}
-
-function evaluateCompatibilityReportAgainstPolicy(
-  report: CapsuleCompatibilityReport,
-  policy: PolicyConfig | undefined,
-): { readonly runnable: boolean; readonly reasons: readonly string[] } {
-  const reasons: string[] = [];
-  const providerReasons = compatibilityProviderPolicyReasons(report, policy);
-  const resourceReasons = compatibilityResourcePolicyReasons(report, policy);
-  const dataSourceReasons = compatibilityDataSourcePolicyReasons(
-    report,
-    policy,
-  );
-  const provisionerReasons = compatibilityProvisionerPolicyReasons(
-    report,
-    policy,
-  );
-  reasons.push(
-    ...providerReasons,
-    ...resourceReasons,
-    ...dataSourceReasons,
-    ...provisionerReasons,
-  );
-  if (report.level === "ready" || report.level === "auto_capsulized") {
-    return { runnable: reasons.length === 0, reasons };
-  }
-  if (report.level === "needs_patch") {
-    return {
-      runnable: false,
-      reasons: [
-        `compatibility_report_not_runnable: report ${report.id} is ${report.level}`,
-        ...reasons,
-      ],
-    };
-  }
-  const fatalFindings = report.findings.filter((finding) => {
-    if (finding.severity !== "error") return false;
-    if (finding.code === "provider_not_allowed") {
-      return providerReasons.length > 0;
-    }
-    if (finding.code === "resource_type_not_allowed") {
-      return resourceReasons.length > 0;
-    }
-    if (finding.code === "external_data_source_unsupported") {
-      return dataSourceReasons.length > 0;
-    }
-    if (finding.code === "provisioner_unsupported") {
-      return provisionerReasons.length > 0;
-    }
-    return true;
-  });
-  if (fatalFindings.length === 0 && reasons.length === 0) {
-    return { runnable: true, reasons: [] };
-  }
-  return {
-    runnable: false,
-    reasons: [
-      `compatibility_report_not_runnable: report ${report.id} is ${report.level}`,
-      ...fatalFindings.map(
-        (finding) => `capsule_gate_${finding.code}: ${finding.message}`,
-      ),
-      ...reasons,
-    ],
-  };
-}
-
-function compatibilityProviderPolicyReasons(
-  report: CapsuleCompatibilityReport,
-  policy: PolicyConfig | undefined,
-): readonly string[] {
-  const allowed = policy?.allowedProviders;
-  const denied = report.providers.filter((provider) => {
-    if (allowed === undefined) return !provider.allowed;
-    const canonical = canonicalProviderAddress(provider.source);
-    return !allowed.some(
-      (entry) => entry === "*" || providerMatches(canonical, entry),
-    );
-  });
-  return denied.map(
-    (provider) =>
-      `capsule provider ${provider.source} is not allowed by Space/InstallConfig policy`,
-  );
-}
-
-function compatibilityResourcePolicyReasons(
-  report: CapsuleCompatibilityReport,
-  policy: PolicyConfig | undefined,
-): readonly string[] {
-  const allowed = policy?.allowedResourceTypes;
-  const denied = report.resources.filter((resource) => {
-    if (allowed === undefined) return !resource.allowed;
-    return !allowed.includes(resource.type);
-  });
-  return denied.map(
-    (resource) =>
-      `capsule resource type ${resource.type} is not allowed by Space/InstallConfig policy`,
-  );
-}
-
-function compatibilityDataSourcePolicyReasons(
-  report: CapsuleCompatibilityReport,
-  policy: PolicyConfig | undefined,
-): readonly string[] {
-  const allowed = policy?.allowedDataSourceTypes;
-  const denied = report.dataSources.filter((dataSource) => {
-    if (allowed === undefined) return !dataSource.allowed;
-    return !allowed.includes(dataSource.type);
-  });
-  return denied.map(
-    (dataSource) =>
-      `capsule data source ${dataSource.type} is not allowed by Space/InstallConfig policy`,
-  );
-}
-
-function compatibilityProvisionerPolicyReasons(
-  report: CapsuleCompatibilityReport,
-  policy: PolicyConfig | undefined,
-): readonly string[] {
-  const allowed = policy?.allowedProvisionerTypes;
-  const denied = report.provisioners.filter((provisioner) => {
-    if (allowed === undefined) return !provisioner.allowed;
-    return !allowed.includes(provisioner.type);
-  });
-  return denied.map(
-    (provisioner) =>
-      `capsule provisioner ${provisioner.type} is not allowed by Space/InstallConfig policy`,
-  );
-}
-
-function requiredProvidersFromCompatibilityReport(
-  report: CapsuleCompatibilityReport | undefined,
-  allowedProviders: readonly string[],
-): readonly string[] {
-  if (!report || report.providers.length === 0) return [];
-  return normalizeProviders(
-    report.providers
-      .filter((provider) => provider.allowed)
-      .map((provider) => provider.source)
-      .filter((source) => source.trim().length > 0)
-      .map(canonicalProviderAddress)
-      .filter((source) =>
-        allowedProviders.some(
-          (allowed) => allowed === "*" || providerMatches(source, allowed),
-        ),
-      ),
-  );
-}
-
-function mergeProviderLockfilePolicy(
-  ceiling: PolicyConfig["providerLockfile"] | undefined,
-  local: PolicyConfig["providerLockfile"] | undefined,
-): PolicyConfig["providerLockfile"] | undefined {
-  if (!ceiling) return local;
-  if (!local) return ceiling;
-  return {
-    requireDigest: ceiling.requireDigest || local.requireDigest,
-  };
-}
-
-function withDefaultProviderSupplyChainPolicy(
-  policy: PolicyConfig | undefined,
-): PolicyConfig {
-  return {
-    ...(policy ?? {}),
-    providerLockfile: mergeProviderLockfilePolicy(
-      { requireDigest: true },
-      policy?.providerLockfile,
-    ),
-    providerInstallation: mergeProviderInstallationPolicy(
-      { requireMirror: true },
-      policy?.providerInstallation,
-    ),
-    providerCredentials: mergeProviderCredentialPolicy(
-      {
-        requireTemporary: true,
-        requireTtlEnforced: true,
-      },
-      policy?.providerCredentials,
-    ),
-  };
-}
-
-function mergeProviderInstallationPolicy(
-  ceiling: PolicyConfig["providerInstallation"] | undefined,
-  local: PolicyConfig["providerInstallation"] | undefined,
-): PolicyConfig["providerInstallation"] | undefined {
-  if (!ceiling) return local;
-  if (!local) return ceiling;
-  return {
-    requireMirror: ceiling.requireMirror || local.requireMirror,
-  };
-}
-
-function mergeProviderCredentialPolicy(
-  ceiling: PolicyConfig["providerCredentials"] | undefined,
-  local: PolicyConfig["providerCredentials"] | undefined,
-): PolicyConfig["providerCredentials"] | undefined {
-  if (!ceiling) return local;
-  if (!local) return ceiling;
-  return {
-    requireTemporary:
-      ceiling.requireTemporary === true || local.requireTemporary === true,
-    requireTtlEnforced:
-      ceiling.requireTtlEnforced === true || local.requireTtlEnforced === true,
-    requireRootOnly:
-      ceiling.requireRootOnly === true || local.requireRootOnly === true,
-  };
-}
-
-interface ProviderLockfilePolicyResult {
-  readonly digestPresent: boolean;
-  readonly reasons: readonly string[];
-}
-
-interface ProviderInstallationPolicyResult {
-  readonly requireMirror: boolean;
-  readonly evidenceCount: number;
-  readonly missingEvidenceProviders: readonly string[];
-  readonly unmirroredProviders: readonly string[];
-  readonly reasons: readonly string[];
-}
-
-interface ProviderCredentialMintPolicyResult {
-  readonly reasons: readonly string[];
-}
-
-function evaluateProviderCredentialMintPolicy(
-  evidence: readonly ProviderCredentialMintEvidence[],
-  policy: PolicyConfig | undefined,
-  requiredProviders: readonly string[] = [],
-  expectedCredentialEvidenceCount = 0,
-): ProviderCredentialMintPolicyResult {
-  const credentialPolicy = policy?.providerCredentials;
-  if (!credentialPolicy) return { reasons: [] };
-  const reasons: string[] = [];
-  if (
-    expectedCredentialEvidenceCount > 0 &&
-    evidence.length < expectedCredentialEvidenceCount
-  ) {
-    reasons.push(
-      `provider credential policy requires mint evidence for providers: ${requiredProviders
-        .slice()
-        .sort()
-        .join(", ")}`,
-    );
-  }
-  if (expectedCredentialEvidenceCount > 0) {
-    const requiredProviderSet = Array.from(
-      new Set(requiredProviders.map(canonicalProviderAddress)),
-    );
-    const evidenceProviders = evidence.map((row) => row.provider);
-    const missingEvidenceProviders = requiredProviderSet
-      .filter(
-        (provider) =>
-          !evidenceProviders.some((evidenceProvider) =>
-            providerMatches(provider, evidenceProvider)
-          ),
-      )
-      .sort();
-    if (missingEvidenceProviders.length > 0) {
-      reasons.push(
-        `provider credential policy requires mint evidence for providers: ${missingEvidenceProviders.join(", ")}`,
-      );
-    }
-  }
-  const nonTemporary = evidence.filter((row) => row.temporary !== true);
-  if (credentialPolicy.requireTemporary === true && nonTemporary.length > 0) {
-    reasons.push(
-      `provider credential policy requires temporary credentials; non-temporary providers: ${credentialEvidenceProviderList(nonTemporary)}`,
-    );
-  }
-  const nonTtl = evidence.filter((row) => row.ttlEnforced !== true);
-  if (credentialPolicy.requireTtlEnforced === true && nonTtl.length > 0) {
-    reasons.push(
-      `provider credential policy requires ttl-enforced credentials; providers without ttl evidence: ${credentialEvidenceProviderList(nonTtl)}`,
-    );
-  }
-  const nonRootOnly = evidence.filter((row) => row.rootOnly !== true);
-  if (credentialPolicy.requireRootOnly === true && nonRootOnly.length > 0) {
-    reasons.push(
-      `provider credential policy requires generated-root-only delivery; non-root-only providers: ${credentialEvidenceProviderList(nonRootOnly)}`,
-    );
-  }
-  return { reasons };
-}
-
-function credentialEvidenceProviderList(
-  evidence: readonly ProviderCredentialMintEvidence[],
-): string {
-  return [
-    ...new Set(
-      evidence.map(
-        (row) =>
-          `${row.provider}:${row.issuer ?? "unknown"}:${row.delivery}:${
-            row.connectionId
-          }`,
-      ),
-    ),
-  ]
-    .sort()
-    .join(", ");
-}
-
-function evaluateProviderLockfilePolicy(
-  providerLockDigest: string | undefined,
-  policy: PolicyConfig | undefined,
-  requiredProviders: readonly string[],
-): ProviderLockfilePolicyResult | undefined {
-  if (policy?.providerLockfile?.requireDigest !== true) return undefined;
-  if (requiredProviders.length === 0) return undefined;
-  const digestPresent =
-    providerLockDigest !== undefined && providerLockDigest.trim().length > 0;
-  return {
-    digestPresent,
-    reasons: digestPresent
-      ? []
-      : [
-          "provider lockfile digest is required by policy but was not returned by the runner",
-        ],
-  };
-}
-
-function evaluateProviderInstallationPolicy(
-  evidence: readonly ProviderInstallationEvidence[] | undefined,
-  policy: PolicyConfig | undefined,
-  requiredProviders: readonly string[],
-): ProviderInstallationPolicyResult | undefined {
-  if (policy?.providerInstallation?.requireMirror !== true) return undefined;
-  if (requiredProviders.length === 0) {
-    return {
-      requireMirror: true,
-      evidenceCount: 0,
-      missingEvidenceProviders: [],
-      unmirroredProviders: [],
-      reasons: [],
-    };
-  }
-  const rows = evidence ?? [];
-  const requiredProviderSet = new Set(
-    requiredProviders.map(canonicalProviderAddress),
-  );
-  const evidenceByProvider = new Map(
-    rows.map((row) => [canonicalProviderAddress(row.provider), row]),
-  );
-  const requiredCanonicalProviders = Array.from(requiredProviderSet).sort();
-  const missingEvidenceProviders = requiredCanonicalProviders
-    .filter((provider) => !evidenceByProvider.has(provider))
-    .sort();
-  const unmirroredProviders = rows
-    .filter(
-      (row) =>
-        requiredProviderSet.has(canonicalProviderAddress(row.provider)) &&
-        (row.mirrored !== true ||
-          row.attested !== true ||
-          row.installationMethod !== "filesystem_mirror"),
-    )
-    .map((row) => canonicalProviderAddress(row.provider))
-    .sort();
-  const reasons: string[] = [];
-  if (rows.length === 0) {
-    reasons.push(
-      "provider installation attestation is required by policy but was not returned by the runner",
-    );
-  }
-  if (missingEvidenceProviders.length > 0) {
-    reasons.push(
-      `provider installation attestation is missing for required providers: ${missingEvidenceProviders.join(", ")}`,
-    );
-  }
-  if (unmirroredProviders.length > 0) {
-    reasons.push(
-      `provider mirror is required by policy but these providers were not attested as installed from the filesystem mirror: ${unmirroredProviders.join(", ")}`,
-    );
-  }
-  return {
-    requireMirror: true,
-    evidenceCount: rows.length,
-    missingEvidenceProviders,
-    unmirroredProviders,
-    reasons,
   };
 }
 
@@ -7694,18 +7155,6 @@ function stripeSpaceBillingSettings(status: string): BillingSettings {
   }
 }
 
-function unixSecondsToIso(value: number | undefined, fallback: string): string {
-  if (
-    value === undefined ||
-    !Number.isFinite(value) ||
-    !Number.isInteger(value) ||
-    value < 0
-  ) {
-    return fallback;
-  }
-  return new Date(value * 1000).toISOString();
-}
-
 function isBillingProvider(value: unknown): value is BillingProvider {
   return value === "stripe" || value === "manual" || value === "none";
 }
@@ -7773,26 +7222,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function compactLayeredPolicy(input: {
-  readonly provider?: ProviderAllowlistResult;
-  readonly providerLockfile?: ProviderLockfilePolicyResult;
-  readonly providerInstallation?: ProviderInstallationPolicyResult;
-}): {
-  readonly provider?: ProviderAllowlistResult;
-  readonly providerLockfile?: ProviderLockfilePolicyResult;
-  readonly providerInstallation?: ProviderInstallationPolicyResult;
-} {
-  return {
-    ...(input.provider ? { provider: input.provider } : {}),
-    ...(input.providerLockfile
-      ? { providerLockfile: input.providerLockfile }
-      : {}),
-    ...(input.providerInstallation
-      ? { providerInstallation: input.providerInstallation }
-      : {}),
-  };
-}
-
 function providerInstallationAuditEvents(
   ownerId: string,
   phase: "apply" | "destroy",
@@ -7831,64 +7260,6 @@ function providerInstallationAuditEvents(
   ];
 }
 
-function intersectOptionalLists(
-  ceiling: readonly string[] | undefined,
-  local: readonly string[] | undefined,
-): readonly string[] | undefined {
-  if (ceiling === undefined) return local;
-  if (local === undefined) return ceiling;
-  const allowed = new Set(ceiling);
-  return local.filter((entry) => allowed.has(entry)).sort();
-}
-
-function mergeScopeBoundary(
-  ceiling: PolicyConfig["scopeBoundary"] | undefined,
-  local: PolicyConfig["scopeBoundary"] | undefined,
-): PolicyConfig["scopeBoundary"] | undefined {
-  if (!ceiling) return local;
-  if (!local) return ceiling;
-  const cloudflare = mergeScopeProvider(ceiling.cloudflare, local.cloudflare);
-  const aws = mergeScopeProvider(ceiling.aws, local.aws);
-  return {
-    mode:
-      ceiling.mode === "strict" || local.mode === "strict"
-        ? "strict"
-        : (ceiling.mode ?? local.mode),
-    ...(cloudflare ? { cloudflare } : {}),
-    ...(aws ? { aws } : {}),
-  };
-}
-
-function mergeScopeProvider<
-  T extends Readonly<Record<string, readonly string[] | undefined>>,
->(ceiling: T | undefined, local: T | undefined): T | undefined {
-  if (!ceiling) return local;
-  if (!local) return ceiling;
-  const out: Record<string, readonly string[]> = {};
-  const keys = new Set([...Object.keys(ceiling), ...Object.keys(local)]);
-  for (const key of keys) {
-    const merged = intersectOptionalLists(ceiling[key], local[key]);
-    if (merged !== undefined) out[key] = merged;
-  }
-  return out as T;
-}
-
-function mergeQuota(
-  ceiling: Readonly<Record<string, number>> | undefined,
-  local: Readonly<Record<string, number>> | undefined,
-): Readonly<Record<string, number>> | undefined {
-  if (!ceiling) return local;
-  if (!local) return ceiling;
-  const out: Record<string, number> = {};
-  const keys = new Set([...Object.keys(ceiling), ...Object.keys(local)]);
-  for (const key of keys) {
-    const a = ceiling[key];
-    const b = local[key];
-    out[key] = a === undefined ? b! : b === undefined ? a : Math.min(a, b);
-  }
-  return out;
-}
-
 function changedOutputNamesBetween(
   previous: OutputSnapshot | undefined,
   next: OutputSnapshot,
@@ -7923,186 +7294,6 @@ function directChangedDependencyOutputs(input: {
     }
   }
   return [...direct].sort();
-}
-
-function classifyDriftResourceChanges(changes: readonly PlanResourceChange[]): {
-  readonly resourceTypes: Readonly<Record<string, number>>;
-  readonly providers: Readonly<Record<string, number>>;
-  readonly actions: Readonly<Record<string, number>>;
-  readonly remediationHints: readonly Readonly<Record<string, JsonValue>>[];
-} {
-  const resourceTypes: Record<string, number> = {};
-  const providers: Record<string, number> = {};
-  const actions: Record<string, number> = {};
-  const semanticTags = new Set<string>();
-  for (const change of changes) {
-    if (change.actions.includes("no-op")) continue;
-    const type = change.type.trim();
-    if (type.length > 0) {
-      resourceTypes[type] = (resourceTypes[type] ?? 0) + 1;
-    }
-    const provider = driftProviderForChange(change);
-    if (provider) {
-      providers[provider] = (providers[provider] ?? 0) + 1;
-    }
-    const actionKey = change.actions
-      .map((action) => action.trim())
-      .filter((action) => action.length > 0)
-      .join("+");
-    if (actionKey.length > 0) {
-      actions[actionKey] = (actions[actionKey] ?? 0) + 1;
-    }
-    for (const tag of driftSemanticTags(provider, type, actionKey)) {
-      semanticTags.add(tag);
-    }
-  }
-  const sortedProviders = Object.fromEntries(Object.entries(providers).sort());
-  const sortedActions = Object.fromEntries(Object.entries(actions).sort());
-  return {
-    resourceTypes: Object.fromEntries(Object.entries(resourceTypes).sort()),
-    providers: sortedProviders,
-    actions: sortedActions,
-    remediationHints: driftRemediationHints({
-      providers: sortedProviders,
-      actions: sortedActions,
-      semanticTags: [...semanticTags].sort(),
-    }),
-  };
-}
-
-function driftSemanticTags(
-  provider: string | undefined,
-  type: string,
-  actionKey: string,
-): string[] {
-  const tags: string[] = [];
-  if (actionKey.includes("delete")) tags.push("destructive");
-  if (actionKey === "delete+create" || actionKey === "create+delete") {
-    tags.push("replacement");
-  }
-  if (provider === "cloudflare") {
-    tags.push("cloudflare");
-    if (type === "cloudflare_dns_record") tags.push("cloudflare_dns");
-    if (type.startsWith("cloudflare_workers_")) tags.push("cloudflare_workers");
-    if (type === "cloudflare_r2_bucket") tags.push("cloudflare_storage");
-  }
-  if (provider === "aws") {
-    tags.push("aws");
-    if (type.startsWith("aws_s3_bucket")) tags.push("aws_storage");
-  }
-  if (provider === "random" || provider === "tls") {
-    tags.push("local_material");
-  }
-  return tags;
-}
-
-function driftRemediationHints(input: {
-  readonly providers: Readonly<Record<string, number>>;
-  readonly actions: Readonly<Record<string, number>>;
-  readonly semanticTags: readonly string[];
-}): readonly Readonly<Record<string, JsonValue>>[] {
-  const tags = new Set(input.semanticTags);
-  const hints: Record<string, JsonValue>[] = [];
-  if (tags.has("replacement")) {
-    hints.push({
-      code: "review_replacements",
-      severity: "warning",
-      category: "replacement",
-      action: "create a reviewed update plan before applying remediation",
-    });
-  } else if (tags.has("destructive")) {
-    hints.push({
-      code: "review_deletes",
-      severity: "warning",
-      category: "destructive",
-      action: "confirm deleted remote objects before planning remediation",
-    });
-  }
-  if (tags.has("cloudflare_dns")) {
-    hints.push({
-      code: "cloudflare_dns_drift",
-      severity: "info",
-      provider: "cloudflare",
-      category: "dns",
-      action: "compare zone records against the last reviewed plan",
-    });
-  }
-  if (tags.has("cloudflare_workers")) {
-    hints.push({
-      code: "cloudflare_workers_drift",
-      severity: "info",
-      provider: "cloudflare",
-      category: "compute",
-      action:
-        "compare Worker script and route settings against the last reviewed plan",
-    });
-  }
-  if (tags.has("cloudflare_storage")) {
-    hints.push({
-      code: "cloudflare_storage_drift",
-      severity: "info",
-      provider: "cloudflare",
-      category: "storage",
-      action: "compare R2 storage settings against the last reviewed plan",
-    });
-  }
-  if (tags.has("aws_storage")) {
-    hints.push({
-      code: "aws_storage_drift",
-      severity: "info",
-      provider: "aws",
-      category: "storage",
-      action: "compare bucket configuration against the last reviewed plan",
-    });
-  }
-  if (tags.has("local_material")) {
-    hints.push({
-      code: "local_material_drift",
-      severity: "info",
-      category: "local_material",
-      action: "verify generated local material is expected before replacing it",
-    });
-  }
-  if (hints.length === 0 && Object.keys(input.providers).length > 0) {
-    hints.push({
-      code: "provider_drift_detected",
-      severity: "info",
-      category: "provider",
-      providers: Object.keys(input.providers),
-      action: "create a reviewed update plan to reconcile provider drift",
-    });
-  } else if (hints.length === 0 && Object.keys(input.actions).length > 0) {
-    hints.push({
-      code: "drift_detected",
-      severity: "info",
-      category: "generic",
-      action: "create a reviewed update plan to reconcile drift",
-    });
-  }
-  return hints;
-}
-
-function driftProviderForChange(
-  change: PlanResourceChange,
-): string | undefined {
-  const type = change.type.trim();
-  if (type.startsWith("cloudflare_")) return "cloudflare";
-  if (type.startsWith("aws_")) return "aws";
-  if (type.startsWith("random_")) return "random";
-  if (type.startsWith("tls_")) return "tls";
-  if (
-    change.scope?.cloudflareAccountId !== undefined ||
-    change.scope?.cloudflareZoneId !== undefined
-  ) {
-    return "cloudflare";
-  }
-  if (
-    change.scope?.awsAccountId !== undefined ||
-    change.scope?.awsRegion !== undefined
-  ) {
-    return "aws";
-  }
-  return undefined;
 }
 
 function canonicalJson(value: unknown): string {

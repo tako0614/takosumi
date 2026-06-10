@@ -1061,7 +1061,7 @@ test("StateSnapshot store: put/latest/list keyed (installation, environment, gen
   }
 });
 
-test("runs table: plan/apply/source_sync/compatibility_check/backup/restore rows verify kind", async () => {
+test("runs table: plan/apply/source_sync/compatibility_check/backup rows verify kind", async () => {
   for (const [label, store] of bothStores()) {
     const plan = makePlanRun("run_plan_1");
     const drift = makePlanRun("run_drift_1", { driftCheck: true });
@@ -1107,19 +1107,6 @@ test("runs table: plan/apply/source_sync/compatibility_check/backup/restore rows
       startedAt: "2026-06-07T00:00:00.000Z",
       finishedAt: "2026-06-07T00:00:00.000Z",
     });
-    await store.putRestoreRun({
-      id: "restore_1",
-      spaceId: "space_1",
-      installationId: "inst_1",
-      environment: "production",
-      type: "restore",
-      status: "succeeded",
-      createdBy: "system",
-      createdAt: "2026-06-07T00:00:00.000Z",
-      startedAt: "2026-06-07T00:00:00.000Z",
-      finishedAt: "2026-06-07T00:00:00.000Z",
-    });
-
     expect((await store.getPlanRun("run_plan_1"))?.id, label).toBe(
       "run_plan_1",
     );
@@ -1150,10 +1137,6 @@ test("runs table: plan/apply/source_sync/compatibility_check/backup/restore rows
       label,
     ).toBeUndefined();
     expect(await store.getBackupRun("run_plan_1"), label).toBeUndefined();
-    expect(await store.getRestoreRun("restore_1"), label).toEqual(
-      expect.objectContaining({ type: "restore", installationId: "inst_1" }),
-    );
-    expect(await store.getRestoreRun("run_plan_1"), label).toBeUndefined();
 
     const forSource = await store.listSourceSyncRuns("src_1");
     expect(

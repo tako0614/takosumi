@@ -3328,9 +3328,7 @@ ${providerLines}
   }
 
   direct {
-    exclude = [
-${providerLines}
-    ]
+    exclude = ["*"]
   }
 }
 `;
