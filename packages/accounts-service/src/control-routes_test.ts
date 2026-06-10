@@ -1836,6 +1836,29 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   expect(operations.calls.createSourceCompatibilityCheck?.[1]).toEqual({
     sourceSnapshotId: "snap_1",
   });
+
+  // Catalog deep-link path: a curated `installConfigId` in the body must be
+  // threaded to the operations facade so a vetted first-party module is gated
+  // against its own bounded allowlist (without widening the global default).
+  const curated = request(
+    "POST",
+    "/v1/control/sources/src_x/compatibility-check",
+    {
+      cookie,
+      body: { sourceSnapshotId: "snap_1", installConfigId: "cfg-official-talk" },
+    },
+  );
+  const curatedResp = await handleControlRoute({
+    request: curated.request,
+    url: curated.url,
+    store,
+    operations,
+  });
+  expect(curatedResp?.status).toEqual(201);
+  expect(operations.calls.createSourceCompatibilityCheck?.[1]).toEqual({
+    sourceSnapshotId: "snap_1",
+    installConfigId: "cfg-official-talk",
+  });
 });
 
 test("Providers: templates are public to session", async () => {

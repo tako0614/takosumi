@@ -78,6 +78,16 @@ export interface CapsuleGateResult {
 export interface CreateSourceCompatibilityCheckRequest {
   readonly sourceSnapshotId?: string;
   readonly installationId?: string;
+  /**
+   * Curated InstallConfig to gate the pre-install compatibility check against,
+   * used when no Installation exists yet (e.g. the dashboard's "選んで入れる"
+   * catalog deep-link). Its bounded policy (`allowedResourceTypes` …) is merged
+   * with the Space policy as a ceiling and applied to the Capsule Gate, so a
+   * vetted first-party module is gated by its own minimal allowlist WITHOUT
+   * widening the instance-wide default allowlist. Ignored when `installationId`
+   * is also present (the Installation's own InstallConfig wins).
+   */
+  readonly installConfigId?: string;
 }
 
 export interface CapsuleCompatibilityReportResponse {

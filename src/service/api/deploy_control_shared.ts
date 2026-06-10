@@ -195,7 +195,11 @@ export const ALLOWED_KEYS: Record<
     "authConnectionId",
     "status",
   ]),
-  sourceCompatibilityCheck: new Set(["sourceSnapshotId", "installationId"]),
+  sourceCompatibilityCheck: new Set([
+    "sourceSnapshotId",
+    "installationId",
+    "installConfigId",
+  ]),
   operatorConnectionDefault: new Set(["provider", "connectionId"]),
   spaceCreate: new Set([
     "handle",
