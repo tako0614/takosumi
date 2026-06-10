@@ -142,6 +142,25 @@ test("POST /api/connections/cloudflare/token enforces space scope (403)", async 
   expect((await response.json()).error.code).toBe("permission_denied");
 });
 
+test("POST /api/connections/cloudflare/token rejects a space session asking scope:operator (403)", async () => {
+  const app = await makeApp();
+  // Privilege-escalation guard: a space session (scoped-token, spaceIds:
+  // [SPACE_ID]) supplies its OWN spaceId but asks for `scope: "operator"`. The
+  // spaceId alone would pass the space permission check, so the gate must
+  // additionally require the unrestricted bearer for any operator-scope request.
+  const response = await app.request(CF_PATH, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      spaceId: SPACE_ID,
+      scope: "operator",
+      values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
+    }),
+  });
+  expect(response.status).toBe(403);
+  expect((await response.json()).error.code).toBe("permission_denied");
+});
+
 test("POST /api/connections/cloudflare/token happy path returns 201 and never echoes values", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {

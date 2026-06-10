@@ -26,8 +26,20 @@ import type {
   StateSnapshot,
 } from "@takosumi/internal/deploy-control-api";
 import type { SqlClient } from "../../adapters/storage/sql.ts";
-import { and, asc, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  ne,
+  type SQL,
+  sql,
+} from "drizzle-orm";
 import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
+import type { PgColumn } from "drizzle-orm/pg-core";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
@@ -77,7 +89,6 @@ const RUN_KINDS_APPLY = ["apply", "destroy_apply"] as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync";
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check";
 const RUN_KIND_BACKUP = "backup";
-const RUN_KIND_RESTORE = "restore";
 
 export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   readonly #client: SqlClient;
@@ -260,24 +271,6 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
 
   async getBackupRun(id: string): Promise<Run | undefined> {
     return await this.#getRun<Run>(id, RUN_KIND_BACKUP);
-  }
-
-  async putRestoreRun(run: Run): Promise<Run> {
-    if (run.type !== "restore") {
-      throw new Error("putRestoreRun only accepts restore runs");
-    }
-    await this.#putRunDrizzle(RUN_KIND_RESTORE, {
-      id: run.id,
-      spaceId: run.spaceId,
-      installationId: run.installationId ?? null,
-      createdAt: run.createdAt,
-      json: run,
-    });
-    return run;
-  }
-
-  async getRestoreRun(id: string): Promise<Run | undefined> {
-    return await this.#getRun<Run>(id, RUN_KIND_RESTORE);
   }
 
   async listSourceSyncRuns(
@@ -1844,10 +1837,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       .onConflictDoUpdate({ target, set });
   }
 
-  async #pgDelete(table: any, where: unknown): Promise<boolean> {
+  async #pgDelete(table: any, where: SQL | undefined): Promise<boolean> {
     const rows = await this.#db
       .delete(table)
-      .where(where as never)
+      .where(where)
       .returning({ id: table.id });
     return rows.length > 0;
   }
@@ -1855,12 +1848,12 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async #pgFirstJson<T>(
     table: any,
     jsonColumn: any,
-    where: unknown,
+    where: SQL | undefined,
   ): Promise<T | undefined> {
     const rows = await this.#db
       .select({ json: jsonColumn })
       .from(table)
-      .where(where as never)
+      .where(where)
       .limit(1);
     return parseRow(rows[0]) as T | undefined;
   }
@@ -1869,17 +1862,17 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     table: any,
     jsonColumn: any,
     input: {
-      readonly where?: unknown;
-      readonly orderBy?: readonly unknown[];
+      readonly where?: SQL | undefined;
+      readonly orderBy?: readonly (SQL | PgColumn | SQL.Aliased)[];
       readonly limit?: number;
     } = {},
   ): Promise<readonly T[]> {
     let query = this.#db.select({ json: jsonColumn }).from(table).$dynamic();
     if (input.where !== undefined) {
-      query = query.where(input.where as never);
+      query = query.where(input.where);
     }
     if (input.orderBy !== undefined) {
-      query = query.orderBy(...(input.orderBy as never[]));
+      query = query.orderBy(...input.orderBy);
     }
     if (input.limit !== undefined) {
       query = query.limit(input.limit);

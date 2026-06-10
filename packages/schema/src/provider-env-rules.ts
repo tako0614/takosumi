@@ -200,6 +200,38 @@ export function providerEnvRule(
 }
 
 /**
+ * Hierarchical, one-directional provider match: a fully-qualified provider
+ * address (`registry/namespace/type`) matches a short allowlist rule (its
+ * trailing type), e.g. `registry.opentofu.org/cloudflare/cloudflare` matches
+ * rule `cloudflare`. The reverse must NOT hold — a specific fully-qualified
+ * RULE must not admit an ambiguous bare provider name (e.g. rule
+ * `registry.opentofu.org/hashicorp/aws` must not match provider `aws`), which
+ * would silently widen the allowlist (and inconsistently narrow the denylist).
+ *
+ * Used by the layered plan-policy provider allow/deny evaluators.
+ */
+export function providerMatches(provider: string, rule: string): boolean {
+  return provider === rule || provider.endsWith(`/${rule}`);
+}
+
+/**
+ * Bidirectional "same OpenTofu provider family" test: true when two provider
+ * identifiers name the same provider, matching a short name (`cloudflare`)
+ * against a canonical registry address
+ * (`registry.opentofu.org/cloudflare/cloudflare`) through this env-rule table.
+ * Unlike {@link providerMatches} this is symmetric — used by the Vault credential
+ * mint and the Connection operator-default fall-through, which must key the same
+ * way regardless of argument order. Returns `false` when either side is an
+ * unknown provider that is not an exact string match.
+ */
+export function sameProviderFamily(left: string, right: string): boolean {
+  if (left === right) return true;
+  const lrule = providerEnvRule(left);
+  const rrule = providerEnvRule(right);
+  return lrule !== undefined && lrule === rrule;
+}
+
+/**
  * Returns the sorted set of env names a provider may supply. An unknown
  * provider yields an empty list.
  */

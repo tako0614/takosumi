@@ -21,6 +21,17 @@ export function installationLeaseScope(
   return `installation:${installationId}:${environment}`;
 }
 
+/**
+ * The lease key for a `create` plan apply. A `create` plan carries NO
+ * installationId yet, so the `installation:{id}:{env}` lease cannot cover it;
+ * two concurrent create-applies would otherwise each allocate a brand-new
+ * Installation + Deployment (apply-once / S5). The apply consumer takes this
+ * `plan:{planRunId}` lease around the create-apply critical section instead.
+ */
+export function planLeaseScope(planRunId: string): string {
+  return `plan:${planRunId}`;
+}
+
 /** An acquired lease handle. `acquired=false` means the lease was busy. */
 export interface InstallationLease {
   readonly scope: string;
@@ -91,6 +102,42 @@ export async function withInstallationLease<T>(
   work: () => Promise<T>,
 ): Promise<T> {
   const scope = installationLeaseScope(input.installationId, input.environment);
+  const lease = await coordination.acquireLease({
+    scope,
+    holderId: input.holderId,
+    ttlMs: input.ttlMs ?? DEFAULT_INSTALLATION_LEASE_TTL_MS,
+  });
+  if (!lease.acquired) {
+    throw new InstallationLeaseBusyError(scope);
+  }
+  try {
+    return await work();
+  } finally {
+    await coordination.releaseLease({
+      scope,
+      holderId: input.holderId,
+      token: lease.token,
+    });
+  }
+}
+
+/**
+ * Acquires the `plan:{planRunId}` lease (create-apply critical section),
+ * runs `work`, and releases in `finally`. Used by the apply consumer for a
+ * `create` plan that has no installationId yet, so cross-isolate create-applies
+ * of the SAME plan are serialized (apply-once / S5). Throws
+ * {@link InstallationLeaseBusyError} when another holder holds it (redelivery).
+ */
+export async function withPlanLease<T>(
+  coordination: InstallationCoordination,
+  input: {
+    readonly planRunId: string;
+    readonly holderId: string;
+    readonly ttlMs?: number;
+  },
+  work: () => Promise<T>,
+): Promise<T> {
+  const scope = planLeaseScope(input.planRunId);
   const lease = await coordination.acquireLease({
     scope,
     holderId: input.holderId,

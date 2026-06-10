@@ -23,8 +23,8 @@ export type RunType =
   | "destroy_apply"
   | "drift_check"
   | "backup"
-  // `restore` is RESERVED but NOT YET IMPLEMENTED. It has store-level
-  // put/get accessors and an OpenAPI enum entry, but no producer, no queue
+  // `restore` is RESERVED but NOT YET IMPLEMENTED. It has an OpenAPI enum
+  // entry, but no producer, no store accessors, no queue
   // action, no controller handler, and no API route. Restore overwrites tfstate
   // from a Backup (a destructive operation) and is intentionally deferred until
   // a safe design (approval gate, state-generation rollback, stale propagation,
