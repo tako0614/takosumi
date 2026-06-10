@@ -53,7 +53,8 @@ function Inner() {
           <Match when={surface.error}>
             <section class="empty-state error-state">
               <p>
-                取得に失敗しました — {(surface.error as ControlApiError).message}
+                取得に失敗しました —{" "}
+                {(surface.error as ControlApiError).message}
               </p>
             </section>
           </Match>
@@ -63,8 +64,9 @@ function Inner() {
                 <Show when={!state().backendAvailable}>
                   <section class="empty-state provider-backend-note">
                     <p>
-                      Provider Template API はまだ backend に接続されていません。
-                      UI surface は先に有効化されています。
+                      Provider Template API はまだ backend
+                      に接続されていません。 UI surface
+                      は先に有効化されています。
                     </p>
                   </section>
                 </Show>
@@ -74,8 +76,8 @@ function Inner() {
                     <div>
                       <h2>Provider Templates</h2>
                       <p class="muted">
-                        Takosumi 提供と user env set の credential source、
-                        推奨 env 名、補助 flow を一覧します。
+                        Takosumi 提供と user env set の credential source、 推奨
+                        env 名、補助 flow を一覧します。
                       </p>
                     </div>
                   </div>
@@ -84,15 +86,15 @@ function Inner() {
                     when={state().providers.length > 0}
                     fallback={
                       <section class="empty-state">
-                        <p>Provider Template の backend response はまだ空です。</p>
+                        <p>
+                          Provider Template の backend response はまだ空です。
+                        </p>
                       </section>
                     }
                   >
                     <div class="provider-grid">
                       <For each={state().providers}>
-                        {(provider) => (
-                          <ProviderCard provider={provider} />
-                        )}
+                        {(provider) => <ProviderCard provider={provider} />}
                       </For>
                     </div>
                   </Show>
@@ -103,16 +105,19 @@ function Inner() {
                     <div>
                       <h2>Provider Env Sets</h2>
                       <p class="muted">
-                        Space-owned provider credentials は Connection として管理します。
-                        OAuth / AssumeRole / impersonation は env set 作成・更新の補助 flow です。
+                        Space-owned provider credentials は Connection
+                        として管理します。 OAuth / AssumeRole / impersonation は
+                        env set 作成・更新の補助 flow です。
                       </p>
                     </div>
                   </div>
 
                   <section class="empty-state">
                     <p>
-                      Provider Env Set は Connections で作成します。任意 provider は
-                      user_env_set credential source と custom runner class で実行されます。
+                      Provider Env Set は Connections の「その他のプロバイダー
+                      （Provider Env Set）」から作成します。任意 provider 名と
+                      環境変数 (NAME=value) を登録すると、user_env_set
+                      credential source と custom runner class で実行されます。
                     </p>
                   </section>
                 </section>
@@ -193,13 +198,17 @@ function InlineCodeList(props: { readonly items: readonly string[] }) {
   );
 }
 
-function providerSourceLabel(sources: readonly ProviderCredentialSource[]): string {
+function providerSourceLabel(
+  sources: readonly ProviderCredentialSource[],
+): string {
   return sources.includes("takosumi_managed")
     ? "takosumi managed"
     : "user env set";
 }
 
-function providerSourceClass(sources: readonly ProviderCredentialSource[]): string {
+function providerSourceClass(
+  sources: readonly ProviderCredentialSource[],
+): string {
   return sources.includes("takosumi_managed")
     ? "status-ready"
     : "status-installing";

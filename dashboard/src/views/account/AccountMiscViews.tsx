@@ -390,7 +390,7 @@ const PROVIDERS: ProviderInfo[] = [
     id: "passkey",
     label: "Passkey で続ける",
     sub: "WebAuthn",
-    disabledSub: "このアカウントではまだ利用できません",
+    disabledSub: "準備中",
     icon: () => (
       <svg
         width="20"
@@ -468,15 +468,17 @@ export function SignInPanel() {
       });
   });
 
-  const isEnabled = (p: Provider): boolean => enabled()[p] === true;
+  // Passkey is never clickable from this panel: the account-plane exposes the
+  // WebAuthn ceremony, but the dashboard ships no authenticate/enroll client,
+  // so even when the operator configures RP env vars (server reports it as
+  // enabled) the button would only error. Probe-gate it off here so it renders
+  // as a disabled "準備中" placeholder rather than a control that lies.
+  const isEnabled = (p: Provider): boolean =>
+    p !== "passkey" && enabled()[p] === true;
 
   const select = (p: Provider) => {
     setError(null);
-    if (!isEnabled(p)) return;
-    if (p === "passkey") {
-      setError("Passkey sign-in は、このアカウントではまだ利用できません。");
-      return;
-    }
+    if (!isEnabled(p) || p === "passkey") return;
     rpc.auth.startUpstreamOAuth(p);
   };
 
