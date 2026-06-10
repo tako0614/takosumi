@@ -236,3 +236,122 @@ test("managed-default status projects covered providers without credentials", as
   expect(JSON.stringify(status)).not.toContain("conn_op_cf");
   expect(JSON.stringify(status)).not.toContain("connectionId");
 });
+
+// --- resolveProviderBindingsForRun: the operator-default fall-through (§7.1) ---
+// The documented ProviderBinding contract: "an empty ProviderBindings list
+// ALWAYS resolves to `default` and falls through to the operator key." These
+// pin that contract so a no-config managed install actually mints the operator
+// credential (the panpii path) instead of running with no provider token.
+
+test("a required provider with no explicit binding falls through to the operator default", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(connection({ id: "conn_op_cf", scope: "operator" }));
+  await service.putOperatorConnectionDefault({
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+  });
+  // No DeploymentProfile at all (the no-config managed install path). The run's
+  // required provider arrives as a canonical registry address, while the
+  // operator default is registered under the short name — the fall-through must
+  // match across the two forms.
+  const resolved = await service.resolveProviderBindingsForRun(
+    model.installation,
+    ["registry.opentofu.org/cloudflare/cloudflare"],
+  );
+  expect(resolved).toEqual([
+    {
+      provider: "cloudflare",
+      mode: "default",
+      connection: await store.getConnection("conn_op_cf"),
+    },
+  ]);
+  // The operator default flows into the credential mint pool, so apply actually
+  // gets the operator key.
+  expect(mintableConnectionIds(resolved)).toEqual(["conn_op_cf"]);
+});
+
+test("the operator-default fall-through is fail-closed without an operator default", async () => {
+  const { model, service } = await setup();
+  const resolved = await service.resolveProviderBindingsForRun(
+    model.installation,
+    ["cloudflare"],
+  );
+  // No operator default for the provider -> nothing synthesized, no credential.
+  expect(resolved).toEqual([]);
+  expect(mintableConnectionIds(resolved)).toEqual([]);
+});
+
+test("an explicit disabled binding is not overridden by the fall-through", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(connection({ id: "conn_op_cf", scope: "operator" }));
+  await service.putOperatorConnectionDefault({
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+  });
+  await store.putDeploymentProfile({
+    id: "dp_1",
+    spaceId: model.space.id,
+    installationId: model.installation.id,
+    environment: model.installation.environment,
+    bindings: [{ provider: "cloudflare", mode: "disabled" }],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  const resolved = await service.resolveProviderBindingsForRun(
+    model.installation,
+    ["registry.opentofu.org/cloudflare/cloudflare"],
+  );
+  // The explicit disabled binding stands; no operator default is synthesized.
+  expect(resolved).toEqual([{ provider: "cloudflare", mode: "disabled" }]);
+  expect(mintableConnectionIds(resolved)).toEqual([]);
+});
+
+test("an explicit Space connection wins; the provider is not also defaulted", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(connection({ id: "conn_op_cf", scope: "operator" }));
+  await service.putOperatorConnectionDefault({
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+  });
+  await store.putConnection(
+    connection({ id: "conn_space_cf", scope: "space", spaceId: model.space.id }),
+  );
+  await store.putDeploymentProfile({
+    id: "dp_1",
+    spaceId: model.space.id,
+    installationId: model.installation.id,
+    environment: model.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        mode: "connection",
+        connectionId: "conn_space_cf",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  const resolved = await service.resolveProviderBindingsForRun(
+    model.installation,
+    ["cloudflare"],
+  );
+  // Exactly one binding: the user's own Space connection. No duplicate operator
+  // default for the same provider.
+  expect(resolved).toHaveLength(1);
+  expect(resolved[0]?.connection?.id).toBe("conn_space_cf");
+  expect(mintableConnectionIds(resolved)).toEqual(["conn_space_cf"]);
+});
+
+test("no required providers leaves the explicit bindings unchanged", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(connection({ id: "conn_op_cf", scope: "operator" }));
+  await service.putOperatorConnectionDefault({
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+  });
+  const resolved = await service.resolveProviderBindingsForRun(
+    model.installation,
+    [],
+  );
+  expect(resolved).toEqual([]);
+});

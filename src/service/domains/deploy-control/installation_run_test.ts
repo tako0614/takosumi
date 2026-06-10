@@ -728,6 +728,117 @@ test("generic Capsule installation plan derives pre-init requiredProviders from 
   ]);
 });
 
+test("a no-connection install mints the operator default for its required provider (managed by default §7.1)", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, { environment: "preview" });
+  // Operator default: the managed key a beginner install resolves to with NO
+  // Space connection and NO explicit provider binding (the panpii path).
+  await store.putConnection({
+    id: "conn_op_cf",
+    scope: "operator",
+    provider: "cloudflare",
+    kind: "cloudflare_api_token",
+    authMethod: "static_secret",
+    status: "verified",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+  await store.putOperatorConnectionDefault({
+    id: "ocd_cf",
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+  const report = {
+    id: "caprep_managed",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    level: "ready" as const,
+    findings: [],
+    providers: [{ source: "cloudflare/cloudflare", aliases: [], allowed: true }],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    normalizedObjectKey: seeded.snapshot.archiveObjectKey,
+    normalizedDigest: seeded.snapshot.archiveDigest,
+    createdAt: "2026-06-07T00:00:00.000Z",
+  };
+  await store.putCapsuleCompatibilityReport(report);
+  await store.putInstallation({
+    ...seeded.installation,
+    compatibilityReportId: report.id,
+    compatibilityStatus: "ready",
+  });
+  // NOTE: no DeploymentProfile is created, so the install configures NO bindings
+  // and NO Space connection — the operator-default fall-through is the only path
+  // that can supply a provider credential here.
+
+  // Recording vault: capture the per-binding mint entries so the test proves the
+  // operator default connection reached the credential mint.
+  const mintEntries: { provider: string; connectionId: string }[] = [];
+  const vault = {
+    register: () => Promise.reject(new Error("not used")),
+    test: () => Promise.resolve({ status: "verified" as const }),
+    revoke: () => Promise.resolve(true),
+    mint: () => Promise.resolve(new CredentialBundle({})),
+    mintForPhase: () => Promise.resolve(new PhaseMintBundle({ env: {} })),
+    mintForProviderBindings: (
+      _spaceId: string,
+      entries: readonly { provider: string; connectionId: string }[],
+    ) => {
+      for (const entry of entries) {
+        mintEntries.push({
+          provider: entry.provider,
+          connectionId: entry.connectionId,
+        });
+      }
+      return Promise.resolve(
+        new CredentialBundle(
+          { TF_VAR_cloudflare_api_token: "operator-key-token" },
+          [],
+          [
+            {
+              // The managed cloudflare default vends a TEMPORARY token (the
+              // cloudflare-default runner profile policy rejects static creds),
+              // so the evidence is temporary + ttl-enforced.
+              provider: "registry.opentofu.org/cloudflare/cloudflare",
+              connectionId: "conn_op_cf",
+              delivery: "generated_root_variable" as const,
+              rootOnly: true,
+              temporary: true,
+              ttlEnforced: true,
+              expiresAt: "2026-06-07T01:00:00.000Z",
+              ttlSeconds: 3600,
+              phase: "plan" as const,
+            },
+          ],
+        ),
+      );
+    },
+  };
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    vault: vault as never,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toEqual("succeeded");
+  // The managed default (operator key) was minted for the required provider,
+  // keyed by the operator default's own connection id, with NO Space connection
+  // and NO explicit binding — proving the documented "empty -> default" contract
+  // end-to-end through the controller.
+  expect(mintEntries).toEqual([
+    { provider: "cloudflare", connectionId: "conn_op_cf" },
+  ]);
+});
+
 test("generic Capsule plan creation blocks stale CompatibilityReport as policy", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
