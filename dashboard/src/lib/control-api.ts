@@ -561,10 +561,17 @@ export interface Connection {
   readonly expiresAt?: string;
 }
 
+/**
+ * Session-surface projection of an instance-wide operator default connection.
+ *
+ * The `GET /operator-connection-defaults` session route is reachable by any
+ * Space member, so it drops the operator-internal row `id` and the
+ * `connectionId` it points at (those stay on the bearer-gated §30 surface). It
+ * carries ONLY the provider a `default` binding covers plus its wiring
+ * timestamps — no connection id / value / secret material.
+ */
 export interface OperatorConnectionDefault {
-  readonly id: string;
   readonly provider: string;
-  readonly connectionId: string;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

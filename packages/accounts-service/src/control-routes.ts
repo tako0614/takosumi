@@ -2418,9 +2418,21 @@ async function listOperatorConnectionDefaults(
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
+  const defaults =
+    await operations.connections.listOperatorConnectionDefaults();
+  // Session surface (any Space member) must NOT see operator-internal fields:
+  // the operator-default row `id` and the `connectionId` it points at are
+  // bearer-gated (§30) — leaking the connectionId lets a Space member name an
+  // operator credential against the bearer connection surface. Project the row
+  // down to the non-secret signal the dashboard needs ("which provider does a
+  // `default` binding cover, and when was it wired?"), mirroring the
+  // credential-free managed-defaults projection (provider names only).
   return json({
-    operatorConnectionDefaults:
-      await operations.connections.listOperatorConnectionDefaults(),
+    operatorConnectionDefaults: defaults.map((record) => ({
+      provider: record.provider,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    })),
   });
 }
 

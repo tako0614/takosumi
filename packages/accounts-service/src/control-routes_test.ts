@@ -1372,6 +1372,58 @@ test("GET /v1/control/operator-connection-defaults rejects an inaccessible Space
   expect(operations.calls.listOperatorConnectionDefaults).toBeUndefined();
 });
 
+test("GET /v1/control/operator-connection-defaults never echoes a connection id (session surface)", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // The session surface is reachable by ANY Space member, so it must project
+  // OUT the operator-internal row `id` and the `connectionId` it points at
+  // (those stay on the bearer-gated §30 surface). Feed the facade a default
+  // carrying both and assert the wire body leaks neither, mirroring the
+  // credential-free managed-defaults projection.
+  const operations = fakeOperations({
+    connections: {
+      listOperatorConnectionDefaults: async () => [
+        {
+          id: "ocd_secret",
+          provider: "cloudflare",
+          connectionId: "conn_operator_secret",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-02T00:00:00Z",
+        },
+      ],
+      getManagedDefaultStatus: async () => ({
+        available: true,
+        providers: ["cloudflare"],
+      }),
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/operator-connection-defaults?spaceId=space_a",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const raw = await response!.text();
+  expect(raw.includes("conn_operator_secret")).toEqual(false);
+  expect(raw.includes("connectionId")).toEqual(false);
+  expect(raw.includes("ocd_secret")).toEqual(false);
+  const body = JSON.parse(raw) as {
+    operatorConnectionDefaults: readonly Record<string, unknown>[];
+  };
+  expect(body.operatorConnectionDefaults.length).toEqual(1);
+  expect(Object.keys(body.operatorConnectionDefaults[0]!).sort()).toEqual([
+    "createdAt",
+    "provider",
+    "updatedAt",
+  ]);
+});
+
 // --- Managed-default status (operator key availability) --------------------
 
 test("GET /v1/control/spaces/:id/managed-defaults reports available=true with covered providers", async () => {
