@@ -45,6 +45,54 @@ async function readInternalPlanRun(
   return (await response.json()) as PlanRunResponse;
 }
 
+test("bootstrap builds the ConnectionVault from secretCrypto alone (production worker wiring)", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  // NO explicit opentofuConnectionVault — only env-backed crypto, exactly the
+  // worker_service production wiring. Bootstrap must build the default
+  // StaticSecretConnectionVault over the shared store; otherwise connection
+  // register (and run credential mint) fail closed with "vault is not configured".
+  const { app } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: {
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
+    },
+    opentofuDeploymentStore: store,
+    secretCrypto: new MultiCloudSecretBoundaryCrypto({
+      globalPassphrase: "vault-wiring-e2e-passphrase-0123456789",
+    }),
+    startWorkerDaemon: false,
+  });
+
+  const spaceRes = await app.request("/api/spaces", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      handle: "vaultwire",
+      displayName: "vaultwire",
+      type: "personal",
+      ownerUserId: "user_test00000002",
+    }),
+  });
+  expect(spaceRes.status).toBe(201);
+  const spaceId = (await spaceRes.json()).space.id as string;
+
+  // Registering a Connection requires the vault to seal its secret values; a 201
+  // proves bootstrap wired a working vault from secretCrypto with no explicit
+  // vault injected.
+  const createEnvSetRes = await app.request(`/api/connections/provider-env-set`, {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      spaceId,
+      provider: "registry.opentofu.org/vercel/vercel",
+      displayName: "Vercel",
+      values: { VERCEL_API_TOKEN: "vercel_secret" },
+    }),
+  });
+  expect(createEnvSetRes.status).toBe(201);
+});
+
 test("provider templates and provider env set routes round-trip (§7 / §8)", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   let connectionCounter = 0;

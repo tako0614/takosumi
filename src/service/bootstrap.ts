@@ -60,6 +60,8 @@ import { DependenciesService } from "./domains/dependencies/mod.ts";
 import { OutputSharesService } from "./domains/output-shares/mod.ts";
 import type { SensitiveOutputResolver } from "./domains/output-shares/mod.ts";
 import type { ConnectionVault } from "./adapters/vault/mod.ts";
+import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
+import type { SecretBoundaryCrypto } from "./adapters/secret-store/memory.ts";
 import { RunGroupsService } from "./domains/run-groups/mod.ts";
 import { ActivityService } from "./domains/activity/mod.ts";
 import {
@@ -284,6 +286,15 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * the controller fails closed without it.
    */
   readonly opentofuConnectionVault?: ConnectionVault;
+  /**
+   * At-rest secret crypto for the built-in {@link StaticSecretConnectionVault}.
+   * When `opentofuConnectionVault` is not supplied but this IS, the bootstrap
+   * constructs the default vault over the shared OpenTofu store with this crypto
+   * — so a host only has to wire the env-backed crypto (via
+   * `selectSecretBoundaryCrypto`) to get a working provider-credential vault,
+   * instead of re-assembling the vault + store itself.
+   */
+  readonly secretCrypto?: SecretBoundaryCrypto;
   /**
    * Out-of-process run dispatch seam. The Workers adapter injects a producer
    * that enqueues onto `RUN_QUEUE`; when omitted the controller
@@ -683,6 +694,21 @@ export async function createTakosumiService(
   // the SourcesService backed by a different instance).
   const sharedOpenTofuStore =
     opentofuStore.store ?? new InMemoryOpenTofuDeploymentStore();
+  // Provider-credential Vault: an explicitly injected vault wins; otherwise, when
+  // the host supplied at-rest secret crypto, build the default
+  // StaticSecretConnectionVault over the SAME shared store the controller uses
+  // (so a Connection registered through the vault is visible to binding
+  // resolution + credential mint). Without either, the controller fails closed on
+  // every provider-using run (this is what the shipped worker was previously
+  // missing — provider plan/apply + private-git source_sync had no vault to mint).
+  const opentofuConnectionVault =
+    options.opentofuConnectionVault ??
+    (options.secretCrypto
+      ? new StaticSecretConnectionVault({
+          store: sharedOpenTofuStore,
+          crypto: options.secretCrypto,
+        })
+      : undefined);
   // Activity domain (Core Specification §27 / §34): the Space-scoped audit
   // trail. Constructed first so the controller + Installation / Dependency /
   // RunGroup services can emit through it (fire-and-forget; a failed audit write
@@ -744,9 +770,7 @@ export async function createTakosumiService(
     ...(options.userEnvSetProviderRunner
       ? { userEnvSetProviderRunner: options.userEnvSetProviderRunner }
       : {}),
-    ...(options.opentofuConnectionVault
-      ? { vault: options.opentofuConnectionVault }
-      : {}),
+    ...(opentofuConnectionVault ? { vault: opentofuConnectionVault } : {}),
     ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),
     sourcesService,
     ...(options.runnerProfiles
