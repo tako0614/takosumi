@@ -39,7 +39,10 @@ import {
   CredentialBundle,
   PhaseMintBundle,
 } from "../../adapters/vault/mod.ts";
-import type { PlanRun } from "@takosumi/internal/deploy-control-api";
+import type {
+  PlanRun,
+  PlanResourceChange,
+} from "@takosumi/internal/deploy-control-api";
 import {
   FIXTURE_ARCHIVE_DIGEST,
   seedInstallationModel,
@@ -1229,6 +1232,62 @@ test("showback billing records reservation and usage without blocking apply", as
       quantity: expect.any(Number),
     }),
   ]);
+});
+
+async function showbackEstimatedCreditsFor(
+  planResourceChanges: readonly PlanResourceChange[],
+): Promise<number> {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner({ planResourceChanges: [...planResourceChanges] });
+  await seedInstallationModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner);
+  const space = await store.getSpace("space_test");
+  await store.putSpace({
+    ...space!,
+    billingSettings: { mode: "showback", provider: "none" },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  expect(planRun.status).toBe("succeeded");
+  const reservation = await store.getCreditReservationForRun(planRun.id);
+  expect(reservation).toBeDefined();
+  return reservation!.estimatedCredits;
+}
+
+test("plan cost estimate falls back to BASE when the plan has no chargeable changes", async () => {
+  // no-op / read only -> Σ weight = 0 -> max(BASE=1, 0) = 1.
+  expect(
+    await showbackEstimatedCreditsFor([
+      { address: "a.one", type: "a", actions: ["no-op"] },
+      { address: "b.two", type: "b", actions: ["read"] },
+    ]),
+  ).toBe(1);
+  // Empty change set also pins to BASE.
+  expect(await showbackEstimatedCreditsFor([])).toBe(1);
+});
+
+test("plan cost estimate sums create weights (create x3 -> 6)", async () => {
+  expect(
+    await showbackEstimatedCreditsFor([
+      { address: "a.one", type: "a", actions: ["create"] },
+      { address: "a.two", type: "a", actions: ["create"] },
+      { address: "a.three", type: "a", actions: ["create"] },
+    ]),
+  ).toBe(6);
+});
+
+test("plan cost estimate weights a mixed plan and bills replace once as a create", async () => {
+  // create(2) + update(1) + delete(1) + replace as ["delete","create"] -> max(1,2)=2
+  // + no-op(0) = 6. Replace is NOT double-counted as create + delete.
+  expect(
+    await showbackEstimatedCreditsFor([
+      { address: "a.create", type: "a", actions: ["create"] },
+      { address: "a.update", type: "a", actions: ["update"] },
+      { address: "a.delete", type: "a", actions: ["delete"] },
+      { address: "a.replace", type: "a", actions: ["delete", "create"] },
+      { address: "a.noop", type: "a", actions: ["no-op"] },
+    ]),
+  ).toBe(6);
 });
 
 test("enforced billing blocks plan when credits are insufficient", async () => {

@@ -491,6 +491,61 @@ export interface ReconcileStripeSpaceSubscriptionInput {
 const BILLING_RESERVATION_TTL_MS = 24 * 60 * 60 * 1000;
 const PROVIDER_CATALOG_SEED_TIMESTAMP = "2026-06-08T00:00:00.000Z";
 
+/**
+ * Transparent, deterministic plan cost model (core-spec §32.3.1).
+ *
+ * `credits = max(PLAN_CREDIT_BASE, Σ per-change weight)` where each plan
+ * resource change contributes the weight of its heaviest OpenTofu action. A
+ * replacement (`["delete","create"]` / `["create","delete"]`) is therefore
+ * billed once as a create (`max(delete=1, create=2) = 2`) rather than
+ * double-counted as create + delete. `read` / `no-op` contribute nothing.
+ *
+ * Future runner-minute cost (`runner_minute` usage) is intentionally NOT folded
+ * in here; it is metered separately as a `UsageEvent` after the run and would be
+ * added to this estimate as a separate additive term when introduced.
+ */
+const PLAN_CREDIT_BASE = 1;
+const PLAN_CREDIT_WEIGHT_CREATE = 2;
+const PLAN_CREDIT_WEIGHT_REPLACE = 2;
+const PLAN_CREDIT_WEIGHT_UPDATE = 1;
+const PLAN_CREDIT_WEIGHT_DELETE = 1;
+const PLAN_CREDIT_WEIGHT_READ = 0;
+const PLAN_CREDIT_WEIGHT_NOOP = 0;
+
+/** Weight of a single OpenTofu plan action token. Unknown tokens cost nothing. */
+function planActionWeight(action: string): number {
+  switch (action.trim()) {
+    case "create":
+      return PLAN_CREDIT_WEIGHT_CREATE;
+    case "replace":
+      return PLAN_CREDIT_WEIGHT_REPLACE;
+    case "update":
+      return PLAN_CREDIT_WEIGHT_UPDATE;
+    case "delete":
+      return PLAN_CREDIT_WEIGHT_DELETE;
+    case "read":
+      return PLAN_CREDIT_WEIGHT_READ;
+    case "no-op":
+      return PLAN_CREDIT_WEIGHT_NOOP;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Weight of one plan resource change: the heaviest of its action tokens. Taking
+ * the max (rather than the sum) keeps a replacement, which OpenTofu emits as the
+ * two-token `["delete","create"]`, billed as a single create instead of
+ * create + delete.
+ */
+function planChangeWeight(change: PlanResourceChange): number {
+  let weight = 0;
+  for (const action of change.actions) {
+    weight = Math.max(weight, planActionWeight(action));
+  }
+  return weight;
+}
+
 function initialProviderTemplates(): readonly ProviderTemplate[] {
   return [
     {
@@ -7253,11 +7308,26 @@ function evaluateProviderInstallationPolicy(
   };
 }
 
+/**
+ * Transparent, deterministic credit estimate for a plan (core-spec §32.3.1):
+ * `credits = max(PLAN_CREDIT_BASE, Σ per-change weight)`. The per-change weight
+ * is the heaviest action token of that change (see {@link planChangeWeight}), so
+ * a replacement is billed once as a create. With no resource changes the
+ * estimate falls back to `PLAN_CREDIT_BASE` (minimum charge).
+ *
+ * `planRun` is unused today: cost depends only on the plan resource changes, but
+ * the signature keeps the run available for a future runner-minute term.
+ */
 function estimatePlanCredits(
   _planRun: PlanRun,
-  _result: OpenTofuPlanResult,
+  result: OpenTofuPlanResult,
 ): number {
-  return 1;
+  const changes = result.planResourceChanges ?? [];
+  let sum = 0;
+  for (const change of changes) {
+    sum += planChangeWeight(change);
+  }
+  return Math.max(PLAN_CREDIT_BASE, sum);
 }
 
 function normalizeBillingSettings(value: unknown): BillingSettings {
