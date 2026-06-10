@@ -109,6 +109,9 @@ const ControlOutputSharesView = lazy(() =>
 const ControlBackupsView = lazy(() =>
   import("./views/control/ControlBackupsView.tsx")
 );
+const ControlMembersView = lazy(() =>
+  import("./views/control/ControlMembersView.tsx")
+);
 const InstallFromGitView = lazy(() =>
   import("./views/control/InstallFromGitView.tsx")
 );
@@ -165,6 +168,7 @@ function App() {
       <Route path="/graph" component={ControlGraphView} />
       <Route path="/output-shares" component={ControlOutputSharesView} />
       <Route path="/backups" component={ControlBackupsView} />
+      <Route path="/members" component={ControlMembersView} />
       <Route path="/runs/:id" component={ControlRunView} />
       <Route path="/run-groups/:id" component={ControlRunGroupView} />
       <Route path="/activity" component={ControlActivityView} />
