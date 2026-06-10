@@ -72,6 +72,7 @@ import type {
   ProviderBindingMode,
   ProviderBindings,
   OperatorConnectionDefault,
+  ManagedDefaultStatus,
 } from "takosumi-contract/provider-bindings";
 import type {
   OutputShare,
@@ -316,6 +317,14 @@ export interface ControlPlaneOperations {
     listOperatorConnectionDefaults(): Promise<
       readonly OperatorConnectionDefault[]
     >;
+    /**
+     * Non-secret read of whether THIS instance's managed default (operator key)
+     * can cover an install with no Space connection (spec §7.1
+     * `takosumi_managed`). Returns ONLY a boolean + the covered provider names;
+     * it carries NO connection id / value / secret material, so it is safe on
+     * the session surface (operator defaults otherwise stay bearer-gated).
+     */
+    getManagedDefaultStatus(): Promise<ManagedDefaultStatus>;
   };
   // --- OutputShares (§18) ---
   readonly outputShares: {
@@ -743,6 +752,13 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (leaf === "plan-update" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       return await spacePlanUpdate(operations, spaceId);
+    }
+    if (leaf === "managed-defaults" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      // Non-secret "can the operator key cover a no-config install?" read. The
+      // Space is already namespace-gated above; the projection carries only a
+      // boolean + covered provider names (no connection id / value / secret).
+      return await spaceManagedDefaults(operations);
     }
   }
 
@@ -2405,6 +2421,34 @@ async function listOperatorConnectionDefaults(
   return json({
     operatorConnectionDefaults:
       await operations.connections.listOperatorConnectionDefaults(),
+  });
+}
+
+/**
+ * `GET /v1/control/spaces/:spaceId/managed-defaults` — the session-surface read
+ * that answers "can this instance's managed default (operator key) cover an
+ * install with NO Space connection configured?" (spec §7.1 `takosumi_managed`
+ * default). The dashboard uses it to decide whether to nudge the user to connect
+ * their own cloud first; when the managed default is available, the no-config
+ * install path already resolves `default` bindings to the operator key.
+ *
+ * The Space is already namespace-gated by `requireSpaceAccess` in the
+ * dispatcher. The body is a credential-free {@link ManagedDefaultStatus}: a
+ * boolean + the covered provider source names ONLY. It echoes NO operator-
+ * default connection id, NO connection value, and NO secret material — operator
+ * defaults otherwise stay on the bearer-gated §30 surface (this surface never
+ * exposes their id/values).
+ */
+async function spaceManagedDefaults(
+  operations: ControlPlaneOperations,
+): Promise<Response> {
+  const status: ManagedDefaultStatus =
+    await operations.connections.getManagedDefaultStatus();
+  // Re-project explicitly so this surface can never accidentally widen to carry
+  // a connection id / value even if the facade type changes.
+  return json({
+    available: status.available,
+    capabilities: status.providers,
   });
 }
 

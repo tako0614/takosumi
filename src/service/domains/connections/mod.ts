@@ -23,6 +23,7 @@ import type {
 import type {
   ProviderBinding,
   OperatorConnectionDefault,
+  ManagedDefaultStatus,
 } from "takosumi-contract/provider-bindings";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
@@ -97,6 +98,28 @@ export class ConnectionsService {
     readonly OperatorConnectionDefault[]
   > {
     return await this.#store.listOperatorConnectionDefaults();
+  }
+
+  /**
+   * Non-secret read of whether THIS instance's managed default (the operator
+   * key) can cover an install that configures NO Space connection (spec §7.1
+   * `takosumi_managed` default). An empty / `default`-mode ProviderBinding falls
+   * through to the operator default for its provider, so the dashboard uses this
+   * to decide whether to nudge the user to "connect your own cloud first" — it
+   * should only nudge when the managed default is NOT available.
+   *
+   * The projection is intentionally credential-free: it reads the operator
+   * defaults but returns ONLY a boolean and the covered provider source names.
+   * The operator default's id / connectionId / secret material NEVER leave this
+   * method — they stay on the bearer-gated §30 surface. Binding resolution
+   * (`resolveProviderBindings`) is unaffected.
+   */
+  async getManagedDefaultStatus(): Promise<ManagedDefaultStatus> {
+    const defaults = await this.#store.listOperatorConnectionDefaults();
+    const providers = [
+      ...new Set(defaults.map((entry) => entry.provider)),
+    ].sort((a, b) => a.localeCompare(b));
+    return { available: providers.length > 0, providers };
   }
 
   /**

@@ -56,6 +56,7 @@ import {
   type CapsuleCompatibilityLevel,
   type CapsuleCompatibilityResult,
   type InstallConfig,
+  getManagedDefaultStatus,
   listConnections,
   listInstallConfigs,
   listSpaces,
@@ -184,17 +185,41 @@ function Inner() {
     return match ? `@${match.handle}` : id;
   };
   const [configs] = createResource(spaceId, listInstallConfigs);
-  // Load the Space's connections so we can tell a beginner, BEFORE they run a
-  // plan that will fail at apply time, that they still need to connect a cloud
-  // provider — and link them straight to /connections. When the list cannot be
-  // loaded yet we say nothing (no false "接続がありません").
+  // The default install path is managed: the operator's `takosumi_managed` key
+  // (spec §7.1) covers an apply with NO Space connection, so a beginner can
+  // install → apply with zero credential setup. We read two signals:
+  //   - managed-defaults: does THIS instance's operator default cover an apply
+  //     with no Space connection? (credential-free { available, capabilities };
+  //     it carries no operator secret / connection id / value).
+  //   - connections: has the Space brought its OWN cloud credential (an opt-in
+  //     `user_env_set`)?
+  // and only nudge "connect your own cloud first" when NEITHER is present (the
+  // genuine "a credential is actually required" case).
+  const [managedDefaults] = createResource(spaceId, getManagedDefaultStatus);
   const [connections] = createResource(spaceId, listConnections);
-  const hasAnyUsableConnection = () => {
+  // True only when the managed default is confirmed available. While loading /
+  // on error we stay on the safe side and treat it as not-yet-confirmed so we
+  // never claim managed coverage we have not verified.
+  const managedAvailable = () => {
+    if (managedDefaults.loading || managedDefaults.error) return false;
+    return managedDefaults.latest?.available === true;
+  };
+  // True when the Space has its own usable (non-revoked) connection. While
+  // loading / on error we assume "yes" so we never show a false "no connection"
+  // nag before the list is known.
+  const hasSpaceConnection = () => {
     if (connections.loading || connections.error) return true;
     const list = connections.latest;
     if (list === undefined) return true;
     return list.some((connection) => connection.status !== "revoked");
   };
+  // The only time we must warn that a credential is required is when the managed
+  // default cannot cover the apply AND the Space has brought no connection of
+  // its own. managed available OR a Space connection → proceed with no warning.
+  // Both resources resolve to the safe side while loading / on error, so the
+  // warning is suppressed until we are certain a credential is genuinely needed.
+  const needsCloudCredential = () =>
+    !managedAvailable() && !hasSpaceConnection();
 
   // Select the first internal OpenTofu Capsule profile once configs load.
   const configList = createMemo<readonly InstallConfig[]>(
@@ -413,7 +438,18 @@ function Inner() {
       >
         <section class="detail-section">
           <h2>{cameFromDeepLink ? "入れるアプリ" : "OpenTofu Capsule"}</h2>
-          <Show when={!hasAnyUsableConnection()}>
+          {/* Default path is managed: the operator's cloud covers the apply, so
+              a beginner can install with no setup. We only warn about needing a
+              credential when the managed default is unavailable AND the Space
+              has brought no connection of its own. The "bring your own cloud"
+              link below is a quiet opt-in, never shown as required. */}
+          <Show when={managedAvailable() && !hasSpaceConnection()}>
+            <p class="muted" role="note">
+              このまま、運営のクラウド（managed）で入れられます。クラウドの接続を
+              自分で用意する必要はありません。
+            </p>
+          </Show>
+          <Show when={needsCloudCredential()}>
             <p class="muted" role="note">
               適用には Cloudflare や AWS などクラウドの接続が必要です。まだ接続が
               ないようです。{" "}
@@ -423,6 +459,17 @@ function Inner() {
               （接続のページが開きます）。
             </p>
           </Show>
+          <details class="connection-advanced">
+            <summary>自分のクラウドに出したい場合（任意）</summary>
+            <p class="muted">
+              既定では運営のクラウド（managed）で入りますが、自分の Cloudflare や
+              AWS など自分のクラウドに出したい場合は、Space に接続を設定できます。{" "}
+              <A href="/connections" class="link">
+                自分のクラウドの接続を設定する
+              </A>
+              （接続のページが開きます）。設定しなくても、このまま入れられます。
+            </p>
+          </details>
           <form
             class="install-form"
             onSubmit={(e) => {

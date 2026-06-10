@@ -334,6 +334,10 @@ function fakeOperations(
         record("listOperatorConnectionDefaults");
         return [];
       },
+      getManagedDefaultStatus: async () => {
+        record("getManagedDefaultStatus");
+        return { available: false, providers: [] };
+      },
     },
     outputShares: {
       createShare: async (req) => {
@@ -688,6 +692,7 @@ test("anonymous control requests are 401 across the family", async () => {
     ["GET", "/v1/control/run-groups/rg_1"],
     ["GET", "/v1/control/connections?spaceId=space_a"],
     ["GET", "/v1/control/operator-connection-defaults"],
+    ["GET", "/v1/control/spaces/space_a/managed-defaults"],
   ];
   for (const [method, path] of paths) {
     const { request: req, url } = request(method, path);
@@ -1365,6 +1370,181 @@ test("GET /v1/control/operator-connection-defaults rejects an inaccessible Space
   });
   expect(response?.status).toEqual(403);
   expect(operations.calls.listOperatorConnectionDefaults).toBeUndefined();
+});
+
+// --- Managed-default status (operator key availability) --------------------
+
+test("GET /v1/control/spaces/:id/managed-defaults reports available=true with covered providers", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    connections: {
+      listOperatorConnectionDefaults: async () => [],
+      getManagedDefaultStatus: async () => ({
+        available: true,
+        providers: ["cloudflare"],
+      }),
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_a/managed-defaults",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    available: boolean;
+    capabilities: string[];
+  };
+  expect(body.available).toEqual(true);
+  expect(body.capabilities).toEqual(["cloudflare"]);
+});
+
+test("GET /v1/control/spaces/:id/managed-defaults reaches the managed-default facade", async () => {
+  // The base fake records every facade call; with no `connections` override the
+  // recording `getManagedDefaultStatus` is in place, so a successful dispatch
+  // leaves its call recorded (and never touches the bearer-only
+  // listOperatorConnectionDefaults path).
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_a/managed-defaults",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  expect(operations.calls.getManagedDefaultStatus).toBeDefined();
+  expect(operations.calls.listOperatorConnectionDefaults).toBeUndefined();
+});
+
+test("GET /v1/control/spaces/:id/managed-defaults reports available=false when no operator default", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    connections: {
+      listOperatorConnectionDefaults: async () => [],
+      getManagedDefaultStatus: async () => ({
+        available: false,
+        providers: [],
+      }),
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_a/managed-defaults",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    available: boolean;
+    capabilities: string[];
+  };
+  expect(body.available).toEqual(false);
+  expect(body.capabilities).toEqual([]);
+});
+
+test("GET /v1/control/spaces/:id/managed-defaults never echoes a connection id or secret", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // The facade is the only thing that can see the operator default's
+  // connectionId; even if a buggy facade tried to leak one through the status
+  // shape, the route re-projects to { available, capabilities } only. Assert the
+  // wire body carries NEITHER a connection id NOR any secret-shaped field.
+  const operations = fakeOperations({
+    connections: {
+      listOperatorConnectionDefaults: async () => [
+        {
+          id: "ocd_secret",
+          provider: "cloudflare",
+          connectionId: "conn_operator_secret",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+      getManagedDefaultStatus: async () => ({
+        available: true,
+        providers: ["cloudflare"],
+      }),
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_a/managed-defaults",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const raw = await response!.text();
+  expect(raw.includes("conn_operator_secret")).toEqual(false);
+  expect(raw.includes("connectionId")).toEqual(false);
+  expect(raw.includes("ocd_secret")).toEqual(false);
+  const body = JSON.parse(raw) as Record<string, unknown>;
+  expect(Object.keys(body).sort()).toEqual(["available", "capabilities"]);
+});
+
+test("GET /v1/control/spaces/:id/managed-defaults rejects an inaccessible Space before dispatch", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      listSpaces: async () => [],
+      getSpace: async (id) => ({
+        id,
+        handle: "other",
+        displayName: "Other",
+        type: "personal" as const,
+        ownerUserId: "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      createSpace: async (req) => ({
+        id: "space_new",
+        handle: req.handle,
+        displayName: req.displayName,
+        type: req.type,
+        ownerUserId: req.ownerUserId,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_b/managed-defaults",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.getManagedDefaultStatus).toBeUndefined();
 });
 
 test("accounts-ledger Space owner can access a Space even when ownerUserId is not the session subject", async () => {
