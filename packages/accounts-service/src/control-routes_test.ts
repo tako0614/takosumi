@@ -458,6 +458,37 @@ function fakeOperations(
       record("getRunLogs", id);
       return { diagnostics: [], auditEvents: [] };
     },
+    getPlanRun: async (id) => {
+      record("getPlanRun", id);
+      return {
+        planRun: {
+          id,
+          spaceId: "space_a",
+          status: "succeeded",
+          operation: "create",
+          runnerProfileId: "rp_default",
+          sourceDigest: `sha256:${"a".repeat(64)}`,
+          variablesDigest: `sha256:${"b".repeat(64)}`,
+          policyDecisionDigest: `sha256:${"c".repeat(64)}`,
+          policy: { status: "passed" },
+          planDigest: `sha256:${"d".repeat(64)}`,
+          planArtifact: { kind: "object-storage", ref: "k", digest: "e" },
+        },
+      } as unknown as Awaited<ReturnType<ControlPlaneOperations["getPlanRun"]>>;
+    },
+    createApplyRun: async (req) => {
+      record("createApplyRun", req);
+      return {
+        applyRun: {
+          id: "apply_1",
+          planRunId: req.planRunId,
+          spaceId: "space_a",
+          status: "queued",
+        },
+      } as unknown as Awaited<
+        ReturnType<ControlPlaneOperations["createApplyRun"]>
+      >;
+    },
     createSource: async (req) => {
       record("createSource", req);
       return {
@@ -617,6 +648,7 @@ test("anonymous control requests are 401 across the family", async () => {
     ["GET", "/v1/control/install-configs"],
     ["GET", "/v1/control/providers"],
     ["POST", "/v1/control/sources/src_x/compatibility-check"],
+    ["POST", "/v1/control/plan-runs/plan_1/apply"],
     ["GET", "/v1/control/runs/plan_1"],
     ["GET", "/v1/control/run-groups/rg_1"],
     ["GET", "/v1/control/connections?spaceId=space_a"],
@@ -2157,6 +2189,198 @@ test("maybeEnsurePersonalSpaceForSession is a no-op without a session", async ()
   const { request: req } = request("GET", "/v1/account/session/me");
   await maybeEnsurePersonalSpaceForSession({ request: req, store, operations });
   expect(operations.calls.createSpace).toBeUndefined();
+});
+
+// --- POST /v1/control/plan-runs/:planRunId/apply (§31 GUI deploy) -----------
+
+test("POST /v1/control/plan-runs/:id/apply applies a succeeded plan for an owned Space", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/plan-runs/plan_1/apply",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  // The plan run is resolved (for the space gate) before the apply is created.
+  expect(operations.calls.getPlanRun).toEqual(["plan_1"]);
+  const applyArg = operations.calls.createApplyRun?.[0] as {
+    planRunId: string;
+    confirmDestructive?: boolean;
+    expected: { planRunId: string; planDigest: string };
+  };
+  expect(applyArg.planRunId).toEqual("plan_1");
+  // A non-destructive apply does not send the confirmation flag.
+  expect(applyArg.confirmDestructive).toBeUndefined();
+  // The expected guard is rebuilt server-side from the reviewed plan.
+  expect(applyArg.expected.planRunId).toEqual("plan_1");
+  expect(applyArg.expected.planDigest).toEqual(`sha256:${"d".repeat(64)}`);
+});
+
+test("POST /v1/control/plan-runs/:id/apply forwards confirmDestructive for a destructive plan", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/plan-runs/plan_1/apply",
+    { cookie, body: { confirmDestructive: true } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const applyArg = operations.calls.createApplyRun?.[0] as {
+    confirmDestructive?: boolean;
+  };
+  expect(applyArg.confirmDestructive).toEqual(true);
+});
+
+test("POST /v1/control/plan-runs/:id/apply rejects a plan from another inaccessible Space", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      listSpaces: async () => [],
+      // The plan's owning Space (space_b) is owned by a different subject.
+      getSpace: async (id) => ({
+        id,
+        handle: "other",
+        displayName: "Other",
+        type: "personal" as const,
+        ownerUserId: "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+    getPlanRun: async (id) =>
+      ({
+        planRun: {
+          id,
+          spaceId: "space_b",
+          status: "succeeded",
+          operation: "create",
+          runnerProfileId: "rp_default",
+          sourceDigest: `sha256:${"a".repeat(64)}`,
+          variablesDigest: `sha256:${"b".repeat(64)}`,
+          policyDecisionDigest: `sha256:${"c".repeat(64)}`,
+          policy: { status: "passed" },
+          planDigest: `sha256:${"d".repeat(64)}`,
+          planArtifact: { kind: "object-storage", ref: "k", digest: "e" },
+        },
+      }) as unknown as Awaited<
+        ReturnType<ControlPlaneOperations["getPlanRun"]>
+      >,
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/plan-runs/plan_other/apply",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  // The plan was resolved (to learn its Space, space_b) but the gate rejects
+  // before any apply is created.
+  expect(operations.calls.createApplyRun).toBeUndefined();
+});
+
+test("POST /v1/control/plan-runs/:id/apply surfaces the controller failed_precondition for an unfinished plan", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    createApplyRun: async () => {
+      throw Object.assign(
+        new Error("plan run plan_1 is running; apply requires a succeeded plan"),
+        { code: "failed_precondition" },
+      );
+    },
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/plan-runs/plan_1/apply",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(409);
+  const body = (await response?.json()) as { error?: string };
+  expect(body.error).toEqual("failed_precondition");
+});
+
+test("POST /v1/control/plan-runs/:id/apply surfaces failed_precondition when the plan was already applied", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    createApplyRun: async () => {
+      throw Object.assign(
+        new Error("plan run plan_1 has already been applied by apply run apply_1"),
+        { code: "failed_precondition" },
+      );
+    },
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/plan-runs/plan_1/apply",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(409);
+});
+
+test("POST /v1/control/plan-runs/:id rejects a non-apply leaf and the wrong method", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const notApply = request("POST", "/v1/control/plan-runs/plan_1/bogus", {
+    cookie,
+  });
+  expect(
+    (
+      await handleControlRoute({
+        request: notApply.request,
+        url: notApply.url,
+        store,
+        operations,
+      })
+    )?.status,
+  ).toEqual(404);
+  const wrongMethod = request("GET", "/v1/control/plan-runs/plan_1/apply", {
+    cookie,
+  });
+  expect(
+    (
+      await handleControlRoute({
+        request: wrongMethod.request,
+        url: wrongMethod.url,
+        store,
+        operations,
+      })
+    )?.status,
+  ).toEqual(405);
 });
 
 test("maybeEnsurePersonalSpaceForSession is a no-op without an operations facade", async () => {

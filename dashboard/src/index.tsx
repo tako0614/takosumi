@@ -1,7 +1,7 @@
 /* @refresh reload */
 import { lazy } from "solid-js";
 import { render } from "solid-js/web";
-import { Route, Router } from "@solidjs/router";
+import { Navigate, Route, Router } from "@solidjs/router";
 
 // Web fonts referenced by account.css (`--tg-font-body` / `--tg-font-mono`).
 import "@fontsource-variable/bricolage-grotesque";
@@ -132,6 +132,14 @@ function App() {
       <Route path="/sign-in" component={SignInView} />
       <Route path="/sign-in/callback" component={SignInCallbackView} />
 
+      {/* Marketing-site CTA aliases. The takosumi.com website links to
+          /signup and /login (common wording), but this dashboard only has a
+          single sign-in screen. Redirect both to /sign-in so a visitor who
+          clicks "始める" / "ログイン" lands on a real screen instead of a
+          blank page. The website is owned elsewhere and stays as-is. */}
+      <Route path="/signup" component={() => <Navigate href="/sign-in" />} />
+      <Route path="/login" component={() => <Navigate href="/sign-in" />} />
+
       {/* Self-gated (redirect to /sign-in when no account-plane session). */}
       <Route path="/home" component={HomeView} />
       <Route path="/notifications" component={NotificationsView} />
@@ -165,6 +173,14 @@ function App() {
       <Route path="/connections" component={ConnectionsView} />
 
       <Route path="/takos/start" component={TakosStartView} />
+
+      {/* Catch-all — any unknown path must render something, never a blank
+          screen. `AccountIndexView` resolves the session cookie and sends the
+          visitor to /home (signed in) or /sign-in (signed out), showing a
+          "読み込み中..." state in the meantime. Without this, an unmatched
+          route under the SPA 200 fallback would mount the bundle with no
+          matching <Route> and paint nothing. */}
+      <Route path="*" component={AccountIndexView} />
     </Router>
   );
 }

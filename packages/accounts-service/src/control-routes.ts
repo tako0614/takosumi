@@ -23,11 +23,15 @@
 
 import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
 import type {
+  ApplyExpectedGuard,
+  ApplyRunResponse,
   Connection,
+  CreateApplyRunRequest,
   DeployControlErrorCode,
   ListConnectionsResponse,
   ListRunnerProfilesResponse,
   PlanRunResponse,
+  PublicPlanRun,
 } from "@takosumi/internal/deploy-control-api";
 import type {
   Source,
@@ -250,6 +254,19 @@ export interface ControlPlaneOperations {
   createInstallationDestroyPlan(
     installationId: string,
   ): Promise<PlanRunResponse>;
+  /**
+   * Reads the internal PlanRun projection by id. The control surface uses it to
+   * resolve a plan run's owning Space (for the apply space-permission gate) and
+   * the reviewed plan fields the apply guard is built from.
+   */
+  getPlanRun(id: string): Promise<PlanRunResponse>;
+  /**
+   * Applies a reviewed PlanRun (§31 GUI deploy). The controller revalidates
+   * every apply precondition (plan succeeded / policy passed / immutable plan
+   * artifact present / not a drift_check / not already applied / destructive
+   * confirmation) and rejects with a typed `failed_precondition` otherwise.
+   */
+  createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   getRun(id: string): Promise<Run>;
   approveRun(
     id: string,
@@ -639,6 +656,20 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         201,
       );
     }
+  }
+
+  // /v1/control/plan-runs/:planRunId/apply — session-authed GUI deploy (§31).
+  if (segments[0] === "plan-runs" && segments.length === 3) {
+    const planRunId = decodeURIComponent(segments[1] ?? "");
+    if (segments[2] !== "apply") return json({ error: "not_found" }, 404);
+    if (method !== "POST") return methodNotAllowed("POST");
+    return await applyPlanRun(
+      request,
+      operations,
+      store,
+      input.session.subject,
+      planRunId,
+    );
   }
 
   // /v1/control/runs/:id ; .../approve ; .../logs
@@ -1297,6 +1328,72 @@ async function approveRun(
     ...(reason ? { reason } : {}),
   });
   return json({ run });
+}
+
+/**
+ * Applies a reviewed PlanRun on behalf of the dashboard session (§31 GUI
+ * deploy). The plan run is resolved first so the apply is space-permission gated
+ * via the plan's OWNING Space (a session may not apply another Space's plan);
+ * only then is the reviewed apply guard rebuilt server-side from that same plan
+ * and handed to the controller, which independently re-checks every apply
+ * precondition (succeeded plan / passed policy / immutable plan artifact / not a
+ * drift_check / apply-once / destructive confirmation).
+ */
+async function applyPlanRun(
+  request: Request,
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+  planRunId: string,
+): Promise<Response> {
+  const body = await readJsonObject(request.clone()).catch(() => null);
+  const confirmDestructive = body?.confirmDestructive === true;
+  const { planRun } = await operations.getPlanRun(planRunId);
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId: planRun.spaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
+  const applyRequest: CreateApplyRunRequest = {
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+    ...(confirmDestructive ? { confirmDestructive: true } : {}),
+  };
+  return jsonStatus(await operations.createApplyRun(applyRequest), 201);
+}
+
+/**
+ * Rebuilds the `ApplyExpectedGuard` from the reviewed PlanRun. Mirrors the
+ * service-side `applyExpectedGuardFromPlanRun` (deploy-control domain): the guard
+ * pins the apply to the exact reviewed plan (digests + artifact + state guard),
+ * and the controller structurally re-derives + compares it, so a tampered guard
+ * cannot widen what is applied. Missing plan digest / artifact surface as a typed
+ * `failed_precondition` from the controller (the plan has not completed).
+ */
+function applyExpectedGuardFromPlanRun(
+  planRun: PublicPlanRun,
+): ApplyExpectedGuard {
+  return {
+    planRunId: planRun.id,
+    ...(planRun.installationId
+      ? { installationId: planRun.installationId }
+      : {}),
+    ...(planRun.installationId
+      ? { currentDeploymentId: planRun.installationCurrentDeploymentId ?? null }
+      : {}),
+    runnerProfileId: planRun.runnerProfileId,
+    sourceDigest: planRun.sourceDigest,
+    variablesDigest: planRun.variablesDigest,
+    policyDecisionDigest: planRun.policyDecisionDigest,
+    planDigest: planRun.planDigest ?? "",
+    planArtifactDigest: planRun.planArtifact?.digest ?? "",
+    ...(planRun.sourceCommit ? { sourceCommit: planRun.sourceCommit } : {}),
+    ...(planRun.providerLockDigest
+      ? { providerLockDigest: planRun.providerLockDigest }
+      : {}),
+  };
 }
 
 // --- RunGroups -------------------------------------------------------------
