@@ -22,6 +22,16 @@
  * `/install?git=<url>&ref=<ref>&path=<path>`. The view also accepts the packed
  * `source=git::<url>//<path>?ref=<ref>` form directly for local previews and
  * keeps the older hash-query reader as a compatibility fallback.
+ *
+ * Two landing shapes, same flow:
+ *   - Arrived from a Git-URL button (prefill present): lead with a plain-Japanese
+ *     "<Capsule> を @space に入れます" summary and fold the raw Git URL / Ref /
+ *     Path into a 詳細 disclosure, so a non-engineer sees a readable summary +
+ *     a single progress button.
+ *   - Hand-typed (no prefill): keep the raw Git URL / Ref / Path form up front —
+ *     the developer power path is unchanged.
+ * Both shapes drive the identical createInstallation / plan flow, compatibility
+ * check, and InstallConfig resolution; only copy and disclosure differ.
  */
 import {
   createMemo,
@@ -48,6 +58,7 @@ import {
   type InstallConfig,
   listConnections,
   listInstallConfigs,
+  listSpaces,
   planInstallation,
   putDeploymentProfile,
   syncSource,
@@ -119,6 +130,12 @@ function Inner() {
   const navigate = useNavigate();
 
   const prefill = readPrefill();
+  // A deep-link landing (the `/install` redirect from a Git-URL button) carries
+  // the repo coordinates in the URL. When that is the case we lead with a plain
+  // "<Capsule> を @space に入れる" summary and fold the raw Git URL / Ref / Path
+  // fields into a 詳細 disclosure; a hand-typed entry (no prefill) keeps the raw
+  // form up front so the developer power path is unchanged.
+  const cameFromDeepLink = prefill.git.trim().length > 0;
   const [gitUrl, setGitUrl] = createSignal(prefill.git);
   const [ref, setRef] = createSignal(prefill.ref || "main");
   const [path, setPath] = createSignal(prefill.path || ".");
@@ -142,7 +159,30 @@ function Inner() {
     }
   });
 
+  // A friendly capsule label for the deep-link summary: the repo's last path
+  // segment when we can read it, otherwise the raw URL. Display only — identity
+  // and install resolution still use the Git URL / Ref / Path verbatim.
+  const capsuleDisplayName = () => {
+    const url = gitUrl().trim();
+    if (!url) return "";
+    const guess = url
+      .replace(/\.git$/, "")
+      .split("/")
+      .filter(Boolean)
+      .pop();
+    return guess || url;
+  };
+
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
+  // Resolve the selected Space's @handle for the deep-link summary line. Display
+  // only; falls back to the raw id while the list loads.
+  const [spaces] = createResource(listSpaces);
+  const spaceHandle = () => {
+    const id = spaceId();
+    if (!id) return "";
+    const match = (spaces() ?? []).find((s) => s.id === id);
+    return match ? `@${match.handle}` : id;
+  };
   const [configs] = createResource(spaceId, listInstallConfigs);
   // Load the Space's connections so we can tell a beginner, BEFORE they run a
   // plan that will fail at apply time, that they still need to connect a cloud
@@ -206,16 +246,19 @@ function Inner() {
     setError(null);
   };
 
+  // Plain-Japanese label for each compatibility level. The judgement and the
+  // level's meaning are unchanged — only the visible wording is localized so a
+  // non-engineer who arrived from an install button understands the verdict.
   const compatibilityLabel = (level: CapsuleCompatibilityLevel): string => {
     switch (level) {
       case "ready":
-        return "Ready";
+        return "このまま入れられます";
       case "auto_capsulized":
-        return "Auto-capsulized";
+        return "自動調整して入れられます";
       case "needs_patch":
-        return "Needs patch";
+        return "手直しが必要です";
       case "unsupported":
-        return "Unsupported";
+        return "今は入れられません";
     }
   };
 
@@ -260,7 +303,7 @@ function Inner() {
       return;
     }
     if (!canContinue()) {
-      setError("Compatibility result を確認してから Continue/Plan してください。");
+      setError("先に「中身を確認」してから進めてください。");
       return;
     }
     setBusy(true);
@@ -345,10 +388,11 @@ function Inner() {
   return (
     <AppShell>
       <div class="page-header">
-        <h1>Install from Git</h1>
+        <h1>{cameFromDeepLink ? "アプリを入れる" : "Git から入れる"}</h1>
         <p class="page-sub">
-          Git URL から OpenTofu Capsule を確認し、 Compatibility result を見てから
-          Continue/Plan します。
+          {cameFromDeepLink
+            ? "リンクから飛んできたアプリを、あなたの Space に入れます。中身を確認してから進めます。"
+            : "Git URL を入力してアプリの中身を確認し、問題なければあなたの Space に入れます。"}
         </p>
         <div class="page-actions">
           <a href="/installations" class="btn btn-secondary">
@@ -368,7 +412,7 @@ function Inner() {
         }
       >
         <section class="detail-section">
-          <h2>OpenTofu Capsule</h2>
+          <h2>{cameFromDeepLink ? "入れるアプリ" : "OpenTofu Capsule"}</h2>
           <Show when={!hasAnyUsableConnection()}>
             <p class="muted" role="note">
               適用には Cloudflare や AWS などクラウドの接続が必要です。まだ接続が
@@ -387,54 +431,122 @@ function Inner() {
               else void runCompatibilityCheck();
             }}
           >
-            <label class="form-field">
-              Git URL
-              <input
-                type="text"
-                value={gitUrl()}
-                onInput={(e) => {
-                  setGitUrl(e.currentTarget.value);
-                  resetCompatibility();
-                }}
-                placeholder="https://github.com/owner/repo.git"
-                autocomplete="off"
-                spellcheck={false}
-              />
-            </label>
+            <Show
+              when={cameFromDeepLink}
+              fallback={
+                <>
+                  <label class="form-field">
+                    Git URL
+                    <input
+                      type="text"
+                      value={gitUrl()}
+                      onInput={(e) => {
+                        setGitUrl(e.currentTarget.value);
+                        resetCompatibility();
+                      }}
+                      placeholder="https://github.com/owner/repo.git"
+                      autocomplete="off"
+                      spellcheck={false}
+                    />
+                  </label>
 
-            <div class="install-form-row">
-              <label class="form-field">
-                Ref
-                <input
-                  type="text"
-                  value={ref()}
-                  onInput={(e) => {
-                    setRef(e.currentTarget.value);
-                    resetCompatibility();
-                  }}
-                  placeholder="main"
-                  autocomplete="off"
-                  spellcheck={false}
-                />
-              </label>
-              <label class="form-field">
-                Path（モジュールパス）
-                <input
-                  type="text"
-                  value={path()}
-                  onInput={(e) => {
-                    setPath(e.currentTarget.value);
-                    resetCompatibility();
-                  }}
-                  placeholder="."
-                  autocomplete="off"
-                  spellcheck={false}
-                />
-              </label>
-            </div>
+                  <div class="install-form-row">
+                    <label class="form-field">
+                      Ref
+                      <input
+                        type="text"
+                        value={ref()}
+                        onInput={(e) => {
+                          setRef(e.currentTarget.value);
+                          resetCompatibility();
+                        }}
+                        placeholder="main"
+                        autocomplete="off"
+                        spellcheck={false}
+                      />
+                    </label>
+                    <label class="form-field">
+                      Path（モジュールパス）
+                      <input
+                        type="text"
+                        value={path()}
+                        onInput={(e) => {
+                          setPath(e.currentTarget.value);
+                          resetCompatibility();
+                        }}
+                        placeholder="."
+                        autocomplete="off"
+                        spellcheck={false}
+                      />
+                    </label>
+                  </div>
+                </>
+              }
+            >
+              {/* Deep-link landing: lead with a plain summary, then fold the
+                  raw Git URL / Ref / Path into a 詳細 disclosure so a power user
+                  can still edit them. Editing keeps the same setters, so the
+                  createInstallation / plan path is unchanged. */}
+              <div class="compatibility-result">
+                <p>
+                  <strong>{capsuleDisplayName()}</strong> を{" "}
+                  <strong>{spaceHandle()}</strong> に入れます。
+                </p>
+                <p class="muted">{gitUrl()}</p>
+              </div>
+
+              <details class="connection-advanced">
+                <summary>詳細（取得元の編集・上級者向け）</summary>
+                <label class="form-field">
+                  Git URL
+                  <input
+                    type="text"
+                    value={gitUrl()}
+                    onInput={(e) => {
+                      setGitUrl(e.currentTarget.value);
+                      resetCompatibility();
+                    }}
+                    placeholder="https://github.com/owner/repo.git"
+                    autocomplete="off"
+                    spellcheck={false}
+                  />
+                </label>
+
+                <div class="install-form-row">
+                  <label class="form-field">
+                    Ref
+                    <input
+                      type="text"
+                      value={ref()}
+                      onInput={(e) => {
+                        setRef(e.currentTarget.value);
+                        resetCompatibility();
+                      }}
+                      placeholder="main"
+                      autocomplete="off"
+                      spellcheck={false}
+                    />
+                  </label>
+                  <label class="form-field">
+                    Path（モジュールパス）
+                    <input
+                      type="text"
+                      value={path()}
+                      onInput={(e) => {
+                        setPath(e.currentTarget.value);
+                        resetCompatibility();
+                      }}
+                      placeholder="."
+                      autocomplete="off"
+                      spellcheck={false}
+                    />
+                  </label>
+                </div>
+              </details>
+            </Show>
 
             <label class="form-field">
-              Installation 名
+              {cameFromDeepLink ? "この導入の名前" : "Installation 名"}
               <input
                 type="text"
                 value={name()}
@@ -458,7 +570,7 @@ function Inner() {
               {(result) => (
                 <section class="compatibility-result">
                   <div class="compatibility-result-head">
-                    <h3>Compatibility result</h3>
+                    <h3>{cameFromDeepLink ? "入れられるか" : "Compatibility result"}</h3>
                     <span
                       class={`status-pill compatibility-${result().level.replaceAll("_", "-")}`}
                     >
@@ -493,14 +605,14 @@ function Inner() {
                 disabled={checkingCompatibility() || busy()}
                 onClick={() => void runCompatibilityCheck()}
               >
-                {checkingCompatibility() ? "Checking..." : "Check compatibility"}
+                {checkingCompatibility() ? "確認中..." : "中身を確認"}
               </button>
               <button
                 class="btn btn-primary"
                 type="submit"
                 disabled={busy() || !canContinue()}
               >
-                {busy() ? "Planning..." : "Continue/Plan"}
+                {busy() ? "準備中..." : "確認して入れる"}
               </button>
               <Show when={syncRequired() && !busy()}>
                 <button
