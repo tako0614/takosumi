@@ -491,6 +491,50 @@
   color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-xs);
 }
+.sidebar-link-label {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+.sidebar-link-spec {
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-xs);
+  font-weight: 400;
+}
+.sidebar-link.active .sidebar-link-spec {
+  color: var(--tg-accent);
+  opacity: 0.7;
+}
+.sidebar-advanced {
+  margin-top: var(--tg-s-3);
+  border-top: 1px solid var(--tg-line);
+  padding-top: var(--tg-s-3);
+}
+.sidebar-advanced-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-3) var(--tg-s-3);
+  border-radius: var(--tg-r-md);
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.sidebar-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+.sidebar-advanced-summary:hover {
+  background: var(--tg-bg-elev);
+  color: var(--tg-fg);
+}
+.sidebar-advanced-nav {
+  margin-top: 2px;
+}
 
 .topbar {
   height: var(--tg-topbar-h);
@@ -632,7 +676,7 @@
     right: 0;
     height: var(--tg-mobile-tab-h);
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     background: var(--tg-bg-elev);
     border-top: 1px solid var(--tg-line);
     z-index: 40;
@@ -719,6 +763,20 @@
   border-color: var(--tg-accent);
   transform: translateY(-1px);
   color: var(--tg-accent);
+}
+.account-nav-label {
+  display: block;
+}
+.account-nav-spec {
+  display: block;
+  margin-top: 2px;
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-xs);
+  font-weight: 400;
+}
+.account-nav a:hover .account-nav-spec {
+  color: var(--tg-accent);
+  opacity: 0.7;
 }
 
 /* ===== Apps grid + card ===== */
