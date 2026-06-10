@@ -25,6 +25,7 @@ import {
   type QueuePort,
 } from "../../src/service/adapters/queue/mod.ts";
 import { MemoryEncryptedSecretStore } from "../../src/service/adapters/secret-store/mod.ts";
+import { selectSecretBoundaryCrypto } from "../../src/service/adapters/secret-store/memory.ts";
 import { ImmutableSourceAdapter } from "../../src/service/adapters/source/mod.ts";
 import { InMemoryObservabilitySink } from "../../src/service/services/observability/mod.ts";
 import type { EnqueueRun } from "../../src/service/domains/deploy-control/mod.ts";
@@ -61,6 +62,14 @@ export async function createWorkerServiceApp(
   const enqueueSourceSync = openTofuSourceSyncEnqueuer(env);
   const installationCoordination = durableObjectInstallationCoordination(env);
   const opentofuRunner = new CloudflareContainerOpenTofuRunner(env);
+  // Provider-credential Vault crypto (spec §8): the same env-backed, fail-closed
+  // secret-boundary AES-GCM the secret store uses. Bootstrap builds the default
+  // StaticSecretConnectionVault from this over the shared OpenTofu store, so a
+  // Connection's secret values are sealed at register and minted per-phase at
+  // plan/apply. Without it the controller fails closed on every provider-using
+  // run — the previously-missing wiring that broke provider plan/apply in the
+  // deployed worker.
+  const secretCrypto = selectSecretBoundaryCrypto({ env: runtimeEnv });
   // Control backups (spec §33 / §26): seal the bundle with the at-rest crypto
   // and write to R2_BACKUPS. Absent binding -> backups stay disabled (501).
   const backupArtifactStore = backupArtifactStoreFromEnv(env.R2_BACKUPS, runtimeEnv);
@@ -88,6 +97,7 @@ export async function createWorkerServiceApp(
     ),
     opentofuRunner,
     userEnvSetProviderRunner: opentofuRunner,
+    secretCrypto,
     // Async run lifecycle: when the run queue is bound, the create path persists
     // the run `queued` and returns immediately; the `queue()` consumer in this
     // same worker drives execution. Without the binding, the controller's
