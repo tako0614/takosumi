@@ -368,7 +368,7 @@ function ConnectionsInner() {
             <thead>
               <tr>
                 <th>プロバイダー</th>
-                <th>接続</th>
+                <th>状態</th>
               </tr>
             </thead>
             <tbody>
@@ -378,9 +378,7 @@ function ConnectionsInner() {
                     <td>
                       <code>{d.provider}</code>
                     </td>
-                    <td>
-                      <code>{d.connectionId}</code>
-                    </td>
+                    <td>設定済み</td>
                   </tr>
                 )}
               </For>

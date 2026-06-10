@@ -7,10 +7,10 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { expect, test } from "bun:test";
 
-import { handleRunnerRequest } from "./entrypoint.ts";
+import { handleRunnerRequest, safeRunId } from "./entrypoint.ts";
 
 const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
 
@@ -131,6 +131,63 @@ esac
     if (previousCloudflareToken === undefined)
       delete Bun.env.CLOUDFLARE_API_TOKEN;
     else Bun.env.CLOUDFLARE_API_TOKEN = previousCloudflareToken;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("compatibility_check fails closed when the capsule exceeds the file cap", async () => {
+  const runId = `compat_cap_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, runId);
+  const sourceRoot = join(root, "source");
+  const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-compat-bin-"));
+  const previousPath = Bun.env.PATH;
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    // 257 OpenTofu source files (> CAPSULE_COMPATIBILITY_MAX_FILES = 256) must
+    // be REJECTED, not silently truncated: a file past the cap could carry a
+    // provisioner that escapes Capsule Gate analysis.
+    for (let i = 0; i < 257; i++) {
+      const name = `f${String(i).padStart(4, "0")}.tf`;
+      await writeFile(join(sourceRoot, name), "terraform {}\n");
+    }
+    const tofuPath = join(fakeBin, "tofu");
+    await writeFile(
+      tofuPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+echo "init ok"
+`,
+    );
+    await chmod(tofuPath, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+
+    const response = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "compatibility_check",
+          runId,
+          request: {},
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      runId,
+      action: "compatibility_check",
+      status: "failed",
+      exitCode: 1,
+    });
+    expect(body.stderr).toContain("exceed");
+    expect(body.files).toBeUndefined();
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
     await rm(root, { recursive: true, force: true });
     await rm(fakeBin, { recursive: true, force: true });
   }
@@ -792,5 +849,28 @@ esac
     await rm(sourceRoot, { recursive: true, force: true });
     await rm(fakeBin, { recursive: true, force: true });
     await rm(mirrorRoot, { recursive: true, force: true });
+  }
+});
+
+test("safeRunId neutralizes dot-segment runIds so the workspace stays jailed", () => {
+  // The allowed charset permits `.`, so a runId that sanitizes to exactly
+  // `.`/`..` would let join(RUN_ROOT, safeRunId(runId)) resolve outside
+  // RUN_ROOT. The charset step already collapses `/` (and every other
+  // disallowed char) to `_`, so an embedded `..` can never become its own path
+  // segment; the final dot-only guard closes the bare `.`/`..` case.
+  expect(safeRunId("..")).toBe("_");
+  expect(safeRunId(".")).toBe("_");
+  expect(safeRunId("../etc")).toBe(".._etc");
+  expect(safeRunId("a/../b")).toBe("a_.._b");
+  expect(safeRunId("a/./b")).toBe("a_._b");
+  // Ordinary dotted runIds are still preserved.
+  expect(safeRunId("run.123")).toBe("run.123");
+  expect(safeRunId("...")).toBe("...");
+
+  // Whatever the runId, the resolved workspace root never escapes RUN_ROOT.
+  const jail = resolve(RUN_ROOT);
+  for (const runId of ["..", ".", "../../escape", "a/../../b", "..%2f..%2f"]) {
+    const root = resolve(join(RUN_ROOT, safeRunId(runId)));
+    expect(root === jail || root.startsWith(`${jail}/`)).toBe(true);
   }
 });

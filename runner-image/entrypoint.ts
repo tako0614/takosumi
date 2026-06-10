@@ -1237,12 +1237,10 @@ async function readCapsuleCompatibilityFiles(
   let totalBytes = 0;
 
   async function walk(relativeDir: string): Promise<void> {
-    if (out.length >= CAPSULE_COMPATIBILITY_MAX_FILES) return;
     const absoluteDir = resolve(root, relativeDir);
     const entries = await readdir(absoluteDir, { withFileTypes: true });
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
-      if (out.length >= CAPSULE_COMPATIBILITY_MAX_FILES) return;
       if (
         entry.name === ".git" ||
         entry.name === ".terraform" ||
@@ -1263,6 +1261,11 @@ async function readCapsuleCompatibilityFiles(
         (!entry.name.endsWith(".tf") && entry.name !== ".terraform.lock.hcl")
       )
         continue;
+      if (out.length >= CAPSULE_COMPATIBILITY_MAX_FILES) {
+        throw new Error(
+          `compatibility source files exceed ${CAPSULE_COMPATIBILITY_MAX_FILES} files`,
+        );
+      }
       const info = await stat(absolutePath);
       if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) {
         throw new Error(
@@ -1546,6 +1549,16 @@ async function runSourceSync(
   const credentialDir = join(workspace.root, "source-credentials");
 
   try {
+    // SECURITY (SSRF): assertSourceUrlPolicy (run in parseSourceSyncSource) only
+    // rejects IP *literals*. Before the credentialed git phase touches the
+    // network, resolve the source host (DoH) and reject if ANY resolved address
+    // is private/loopback/link-local — the same DNS-rebinding protection the
+    // plan/apply git path gets via assertHttpsSourceUrl. Fails closed when the
+    // host cannot be resolved.
+    await assertResolvedHostNotBlocked(
+      sourceUrlHost(source.url),
+      "source URL host",
+    );
     const gitContext = await prepareSourceGitContext(
       source,
       credentials,
@@ -1687,6 +1700,17 @@ function sourceUrlScheme(url: string): "https" | "ssh" {
   // scp-like git@host:path is ssh transport.
   if (/^[^@/\s]+@[^:/\s]+:.+$/.test(url) && !url.includes("://")) return "ssh";
   return "https";
+}
+
+// Extract the host from an already-policy-validated source URL (https://, ssh://,
+// or scp-like git@host:path) so it can be DoH-resolved for SSRF validation. Uses
+// the same parsing assertSourceUrlPolicy applies.
+function sourceUrlHost(url: string): string {
+  const scpLike = /^([^@/\s]+)@([^:/\s]+):(.+)$/.exec(url);
+  if (scpLike && !url.includes("://")) {
+    return scpLike[2]!;
+  }
+  return new URL(url).hostname;
 }
 
 // Resolve the requested ref to a full commit sha. A full 40/64-hex ref is taken
@@ -3575,8 +3599,17 @@ function assertPathInsideRoot(root: string, path: string, label: string): void {
   }
 }
 
-function safeRunId(runId: string): string {
-  return runId.replace(/[^a-zA-Z0-9._-]+/g, "_");
+export function safeRunId(runId: string): string {
+  const sanitized = runId.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  // Defense-in-depth: the charset above permits `.`, so a runId that is exactly
+  // `.`/`..` or contains a `..` path segment could let the workspace path escape
+  // its RUN_ROOT jail. Neutralize any dot-only path segment so `join(RUN_ROOT, …)`
+  // can never resolve outside the jail.
+  const guarded = sanitized
+    .split("/")
+    .map((segment) => (segment === "." || segment === ".." ? "_" : segment))
+    .join("/");
+  return guarded === "." || guarded === ".." ? "_" : guarded;
 }
 
 function recordField(value: unknown, key: string): unknown {
