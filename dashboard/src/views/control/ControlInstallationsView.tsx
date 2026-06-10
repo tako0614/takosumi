@@ -24,7 +24,9 @@ import {
   type ActivityEvent,
   type ControlApiError,
   extractRunId,
+  getDeployment,
   getSpaceGraph,
+  type Installation,
   listActivity,
   listInstallations,
   planInstallation,
@@ -77,6 +79,32 @@ function Inner() {
       const reason = staleReasonFromActivity(event);
       if (reason) map.set(event.targetId, reason);
     }
+    return map;
+  });
+
+  // Resolve a per-Installation launch URL from its current Deployment's public
+  // outputs (the same allowlist-projected `outputsPublic` the detail view's 出力
+  // section surfaces). Fetched here so a row can offer a direct "開く" link
+  // without a detour through 詳細. Installations without a current deployment or
+  // a URL-shaped public output simply get no link.
+  const [launchUrls] = createResource(installations, async (list) => {
+    const map = new Map<string, string>();
+    await Promise.all(
+      list
+        .filter((inst): inst is Installation & { currentDeploymentId: string } =>
+          Boolean(inst.currentDeploymentId)
+        )
+        .map(async (inst) => {
+          try {
+            const deployment = await getDeployment(inst.currentDeploymentId);
+            const url = launchUrlFromOutputs(deployment.outputsPublic);
+            if (url) map.set(inst.id, url);
+          } catch {
+            // A single deployment read failing must not blank the whole list;
+            // the row just falls back to no launch link.
+          }
+        }),
+    );
     return map;
   });
 
@@ -210,6 +238,18 @@ function Inner() {
                             </Show>
                           </td>
                           <td class="installation-row-actions">
+                            <Show when={launchUrls()?.get(inst.id)}>
+                              {(url) => (
+                                <a
+                                  class="btn btn-primary btn-sm"
+                                  href={url()}
+                                  target="_blank"
+                                  rel="noreferrer noopener"
+                                >
+                                  開く
+                                </a>
+                              )}
+                            </Show>
                             <button
                               class="btn btn-secondary btn-sm"
                               type="button"
@@ -237,6 +277,29 @@ function Inner() {
       </Show>
     </AppShell>
   );
+}
+
+/**
+ * Pick a launch URL from a Deployment's public outputs. Prefers the well-known
+ * `launch_url` / `url` / `app_url` keys (the detail view's primary "目立たせ"
+ * outputs); otherwise falls back to the first http(s)-shaped value.
+ */
+function launchUrlFromOutputs(
+  outputs: Readonly<Record<string, unknown>>,
+): string | undefined {
+  for (const key of ["launch_url", "url", "app_url", "public_url"]) {
+    const value = outputs[key];
+    if (isUrlString(value)) return value;
+  }
+  for (const value of Object.values(outputs)) {
+    if (isUrlString(value)) return value;
+  }
+  return undefined;
+}
+
+/** True for a string value that looks like an http(s) address worth linking. */
+function isUrlString(value: unknown): value is string {
+  return typeof value === "string" && /^https?:\/\//i.test(value.trim());
 }
 
 function staleReasonFromActivity(event: ActivityEvent): string | undefined {

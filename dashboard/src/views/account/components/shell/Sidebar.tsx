@@ -21,13 +21,15 @@ type NavItem = { href: string; label: string; sub?: string; icon: typeof Home };
 
 /**
  * Primary nav: everyday wording, always visible. These six cover the whole
- * "git URL のボタン → 導入 → 使う" loop without any spec jargon. `/apps`
- * ("アプリ") is a real router route, so it lives here as a first-class entry
- * (previously the nav never pointed at it).
+ * "git URL のボタン → 導入 → 使う" loop without any spec jargon. `/installations`
+ * ("アプリ") is the CONTROL-plane Installation list — the plane that both
+ * bundled first-party apps and `/install` installs actually write — so a
+ * just-installed app shows up here (the legacy `/apps` list read a different,
+ * near-empty plane and never surfaced control-plane installs).
  */
 const PRIMARY: NavItem[] = [
   { href: "/home", label: "ホーム", icon: Home },
-  { href: "/apps", label: "アプリ", icon: LayoutGrid },
+  { href: "/installations", label: "アプリ", icon: LayoutGrid },
   { href: "/install", label: "導入", sub: "Git から", icon: GitBranch },
   { href: "/connections", label: "接続", icon: KeyRound },
   { href: "/activity", label: "アクティビティ", icon: Activity },
@@ -42,7 +44,6 @@ const PRIMARY: NavItem[] = [
  * developer recognize the surface.
  */
 const ADVANCED: NavItem[] = [
-  { href: "/installations", label: "導入の管理", sub: "Installations", icon: LayoutGrid },
   { href: "/sources", label: "ソース", sub: "Sources", icon: GitBranch },
   { href: "/providers", label: "プロバイダ", sub: "Providers", icon: PackageSearch },
   { href: "/graph", label: "依存グラフ", sub: "Dependency graph", icon: Network },
