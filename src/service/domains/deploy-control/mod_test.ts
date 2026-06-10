@@ -1345,6 +1345,8 @@ test("destroy is recorded as an ApplyRun when the runner succeeds", async () => 
     operation: "destroy",
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
+  // A destroy is always two-stage (spec §10.6): it must be approved before apply.
+  await controller.approveRun(destroyPlan.id, { approvedBy: "ops" });
   const destroyed = await controller.createApplyRun({
     planRunId: destroyPlan.id,
     expected: applyExpectedGuardFromPlanRun(destroyPlan),
@@ -1357,6 +1359,43 @@ test("destroy is recorded as an ApplyRun when the runner succeeds", async () => 
   expect(destroyed.applyRun.auditEvents.map((event) => event.type)).toContain(
     "destroy.completed",
   );
+});
+
+test("destroy apply is rejected until the plan is approved (always two-stage, spec §10.6)", async () => {
+  const { store, installationId } = await seedUpdatableInstallation();
+  const controller = new OpenTofuDeploymentController({
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(40),
+    newId: deterministicIds(),
+    runner: fakeRunner(),
+  });
+
+  const { planRun: destroyPlan } = await controller.createPlanRun({
+    spaceId: "space_test",
+    installationId,
+    source: SOURCE,
+    operation: "destroy",
+    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+  });
+  expect(destroyPlan.status).toEqual("succeeded");
+
+  // Without a recorded approval the destroy apply is refused — the approval is
+  // enforced at apply, not merely displayed.
+  await expect(
+    controller.createApplyRun({
+      planRunId: destroyPlan.id,
+      expected: applyExpectedGuardFromPlanRun(destroyPlan),
+    }),
+  ).rejects.toThrow(/awaiting approval/);
+
+  // After approval the same destroy applies.
+  await controller.approveRun(destroyPlan.id, { approvedBy: "ops" });
+  const destroyed = await controller.createApplyRun({
+    planRunId: destroyPlan.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan),
+  });
+  expect(destroyed.applyRun.status).toEqual("succeeded");
 });
 
 test("not found surfaces the closed controller error code", async () => {
