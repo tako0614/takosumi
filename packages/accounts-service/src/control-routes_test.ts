@@ -477,6 +477,21 @@ function fakeOperations(
       record("getRunLogs", id);
       return { diagnostics: [], auditEvents: [] };
     },
+    getRunCost: async (id) => {
+      record("getRunCost", id);
+      return {
+        runId: id,
+        billingMode: "enforce",
+        estimatedCredits: 12,
+        availableCredits: 5,
+        reservationStatus: "insufficient_credits",
+        creditShortfall: 7,
+        blocked: true,
+        reasons: [
+          "credit reservation failed: 12 credits estimated but only 5 available",
+        ],
+      };
+    },
     getPlanRun: async (id) => {
       record("getPlanRun", id);
       return {
@@ -669,6 +684,7 @@ test("anonymous control requests are 401 across the family", async () => {
     ["POST", "/v1/control/sources/src_x/compatibility-check"],
     ["POST", "/v1/control/plan-runs/plan_1/apply"],
     ["GET", "/v1/control/runs/plan_1"],
+    ["GET", "/v1/control/runs/plan_1/cost"],
     ["GET", "/v1/control/run-groups/rg_1"],
     ["GET", "/v1/control/connections?spaceId=space_a"],
     ["GET", "/v1/control/operator-connection-defaults"],
@@ -1920,6 +1936,60 @@ test("Runs: GET run, approve (session subject actor), logs", async () => {
     operations,
   });
   expect(logsResp?.status).toEqual(200);
+});
+
+test("Runs: GET cost surfaces the public credit-shortfall projection (space-gated)", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const cost = request("GET", "/v1/control/runs/plan_1/cost", { cookie });
+  const costResp = await handleControlRoute({
+    request: cost.request,
+    url: cost.url,
+    store,
+    operations,
+  });
+  expect(costResp?.status).toEqual(200);
+  // The Run was resolved (for the space gate) then its cost projected.
+  expect(operations.calls.getRun?.[0]).toEqual("plan_1");
+  expect(operations.calls.getRunCost?.[0]).toEqual("plan_1");
+  const body = (await costResp?.json()) as {
+    cost: {
+      runId: string;
+      billingMode: string;
+      estimatedCredits: number;
+      availableCredits?: number;
+      reservationStatus?: string;
+      creditShortfall?: number;
+      blocked: boolean;
+      reasons: readonly string[];
+    };
+  };
+  expect(body.cost.runId).toEqual("plan_1");
+  expect(body.cost.billingMode).toEqual("enforce");
+  expect(body.cost.estimatedCredits).toEqual(12);
+  expect(body.cost.availableCredits).toEqual(5);
+  expect(body.cost.reservationStatus).toEqual("insufficient_credits");
+  expect(body.cost.creditShortfall).toEqual(7);
+  expect(body.cost.blocked).toEqual(true);
+  expect(body.cost.reasons.length).toEqual(1);
+});
+
+test("Runs: GET cost is method-gated to GET", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const post = request("POST", "/v1/control/runs/plan_1/cost", { cookie });
+  const postResp = await handleControlRoute({
+    request: post.request,
+    url: post.url,
+    store,
+    operations,
+  });
+  expect(postResp?.status).toEqual(405);
+  expect(operations.calls.getRunCost).toBeUndefined();
 });
 
 test("RunGroups: plan-update, get, approve", async () => {

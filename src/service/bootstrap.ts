@@ -100,7 +100,7 @@ import type {
   PlanRunResponse,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
-import type { RunLogsResponse } from "takosumi-contract/runs";
+import type { RunCostInfo, RunLogsResponse } from "takosumi-contract/runs";
 import {
   InMemoryOpenTofuDeploymentStore,
   type OpenTofuDeploymentStore,
@@ -509,6 +509,13 @@ export interface TakosumiOperations {
   getRun(id: string): Promise<Run>;
   /** Reads a Run's structured diagnostics + redacted audit trail (spec §30). */
   getRunLogs(id: string): Promise<RunLogsResponse>;
+  /**
+   * Reads a plan / destroy_plan Run's public, non-secret cost projection (the
+   * billing reservation values the controller already computed at plan time, so
+   * a dashboard can explain a credit shortfall before apply). Never computes
+   * cost and never returns secret material.
+   */
+  getRunCost(id: string): Promise<RunCostInfo>;
   approveRun(
     id: string,
     input?: { readonly approvedBy?: string; readonly reason?: string },
@@ -933,6 +940,7 @@ export async function createTakosumiService(
       opentofuController.createDeploymentRollbackPlan(deploymentId),
     getRun: (id) => opentofuController.getRun(id),
     getRunLogs: (id) => opentofuController.getRunLogs(id),
+    getRunCost: (id) => opentofuController.getRunCost(id),
     approveRun: (id, input) => opentofuController.approveRun(id, input ?? {}),
     cancelRun: (id) => opentofuController.cancelRun(id),
     listConnections: (spaceId) => opentofuController.listConnections(spaceId),
