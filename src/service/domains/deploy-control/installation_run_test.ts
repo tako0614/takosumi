@@ -1281,6 +1281,215 @@ test("mirror-required policy is dispatched to plan and apply runner jobs", async
   });
 });
 
+/**
+ * Seeds the operator-default (managed key) path: an operator-scoped Cloudflare
+ * Connection registered as the instance-wide default for `cloudflare`, with NO
+ * Space DeploymentProfile, so a run's required cloudflare provider falls through
+ * to the operator default (§7.1). Returns a controller carrying the given
+ * managed-default apply cap.
+ */
+async function seededManagedDefaultController(options: {
+  readonly managedDefaultApplyCap?: number;
+}): Promise<{
+  store: InMemoryOpenTofuDeploymentStore;
+  controller: OpenTofuDeploymentController;
+}> {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, { environment: "preview" });
+  await store.putConnection({
+    id: "conn_op_cf",
+    scope: "operator",
+    provider: "cloudflare",
+    kind: "cloudflare_api_token",
+    authMethod: "static_secret",
+    status: "verified",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  } as never);
+  await store.putOperatorConnectionDefault({
+    id: "ocd_cf",
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+  const report = {
+    id: "caprep_managed",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    level: "ready" as const,
+    findings: [],
+    providers: [{ source: "cloudflare/cloudflare", aliases: [], allowed: true }],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    normalizedObjectKey: seeded.snapshot.archiveObjectKey,
+    normalizedDigest: seeded.snapshot.archiveDigest,
+    createdAt: "2026-06-07T00:00:00.000Z",
+  };
+  await store.putCapsuleCompatibilityReport(report);
+  await store.putInstallation({
+    ...seeded.installation,
+    compatibilityReportId: report.id,
+    compatibilityStatus: "ready",
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    vault: fakeProviderVault() as never,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+    ...(options.managedDefaultApplyCap !== undefined
+      ? { managedDefaultApplyCap: options.managedDefaultApplyCap }
+      : {}),
+  });
+  return { store, controller };
+}
+
+test("managed-default apply cap rejects apply once a Space reaches the operator-key ceiling (P2)", async () => {
+  const { store, controller } = await seededManagedDefaultController({
+    managedDefaultApplyCap: 2,
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  expect(planRun.status).toBe("succeeded");
+
+  // Simulate two prior successful write-applies on the operator key: each apply
+  // bumps the Installation's currentStateGeneration by one, so a cumulative
+  // generation of 2 means the Space has already used its 2-apply ceiling.
+  const installation = await store.getInstallation("inst_fixture");
+  await store.putInstallation({ ...installation!, currentStateGeneration: 2 });
+
+  await expect(
+    controller.createApplyRun({
+      planRunId: planRun.id,
+      expected: applyExpectedGuardFromPlanRun(planRun),
+    }),
+  ).rejects.toThrow("managed_apply_cap_reached");
+});
+
+test("managed-default apply cap never blocks a destroy — teardown stops spend (P2)", async () => {
+  const { controller } = await seededManagedDefaultController({
+    managedDefaultApplyCap: 1,
+  });
+
+  // First create-apply on the operator key is admitted (cumulative 0 < cap 1)
+  // and brings the Space to the cap (generation 1).
+  const create = await controller.createInstallationPlan("inst_fixture");
+  const created = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  expect(created.applyRun.status).toBe("succeeded");
+
+  // At the cap a further create/update apply would be rejected — but a destroy
+  // is the way to STOP spending on the operator key, so it must still apply
+  // (after the mandatory approval). Capping teardown would trap the Space.
+  const destroy = await controller.createInstallationDestroyPlan("inst_fixture");
+  await controller.approveRun(destroy.planRun.id);
+  const torn = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+  expect(torn.applyRun.status).toBe("succeeded");
+});
+
+test("managed-default apply cap admits apply while the Space is below the ceiling", async () => {
+  const { store, controller } = await seededManagedDefaultController({
+    managedDefaultApplyCap: 5,
+  });
+
+  // A sibling Installation in the SAME Space carries one prior apply
+  // (generation 1). The cumulative count (1) is still below the cap of 5, so the
+  // apply of inst_fixture (itself at generation 0, consistent with its plan)
+  // proceeds. Counting a sibling proves the cap sums across the whole Space.
+  const inst = await store.getInstallation("inst_fixture");
+  await store.putInstallation({
+    ...inst!,
+    id: "inst_sibling",
+    slug: "sibling",
+    name: "sibling",
+    currentStateGeneration: 1,
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  expect(planRun.status).toBe("succeeded");
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(applyRun.status).toBe("succeeded");
+});
+
+test("managed-default apply cap never caps a Space applying on its OWN Connection (self-host)", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, { environment: "preview" });
+  // A Space-owned (self-host style) Connection bound explicitly: the run resolves
+  // to mode "connection" with a SPACE-scoped Connection, never the operator key,
+  // so even far past the cap the apply is admitted.
+  await store.putConnection({
+    id: "conn_self_cf",
+    scope: "space",
+    spaceId: seeded.installation.spaceId,
+    provider: "cloudflare",
+    kind: "cloudflare_api_token",
+    displayName: "Self-host Cloudflare",
+    status: "verified",
+    scopeJson: {},
+    secretRef: "sec_self_cf",
+    createdAt: "2026-06-07T00:00:00.000Z",
+  } as never);
+  await store.putDeploymentProfile({
+    id: "profile_self",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        mode: "connection",
+        connectionId: "conn_self_cf",
+      },
+    ],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    vault: fakeProviderVault() as never,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+    managedDefaultApplyCap: 1,
+  });
+
+  // A sibling Installation carries a cumulative count (generation 10) far past
+  // the cap of 1, but inst_fixture's run binds the Space's OWN Connection (never
+  // the operator key), so the cap does not apply and the apply is admitted.
+  const inst = await store.getInstallation("inst_fixture");
+  await store.putInstallation({
+    ...inst!,
+    id: "inst_sibling",
+    slug: "sibling",
+    name: "sibling",
+    currentStateGeneration: 10,
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  expect(planRun.status).toBe("succeeded");
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(applyRun.status).toBe("succeeded");
+});
+
 test("showback billing records reservation and usage without blocking apply", async () => {
   const { store, controller } = await seededController();
   const space = await store.getSpace("space_test");

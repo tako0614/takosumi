@@ -764,6 +764,11 @@ export async function createTakosumiService(
     ...(options.dependencyValueSealer
       ? { dependencyValueSealer: options.dependencyValueSealer }
       : {}),
+    // Operator-economic guard (P2): a per-Space cumulative apply ceiling for runs
+    // on the managed (operator-key) default while billing is not `enforce`. Set
+    // by the hosted platform worker via env; absent on self-host (uncapped, since
+    // a self-hoster applies on their own infrastructure/Connection).
+    ...managedDefaultApplyCapFromEnv(runtimeEnv),
   });
   // RunGroups domain (Core Specification §19 / §24): space_update re-plans
   // stale Installations and space_drift_check groups read-only drift checks.
@@ -1026,6 +1031,16 @@ async function seedOfficialInstallConfigsOrWarn(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function managedDefaultApplyCapFromEnv(
+  env: Record<string, string | undefined>,
+): { managedDefaultApplyCap: number } | Record<string, never> {
+  const raw = env.TAKOSUMI_MANAGED_APPLY_CAP?.trim();
+  if (!raw) return {};
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return {};
+  return { managedDefaultApplyCap: Math.floor(parsed) };
 }
 
 function shouldEmitHttpRequestLogs(
