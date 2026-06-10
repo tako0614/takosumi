@@ -198,3 +198,41 @@ test("connection mode without a connectionId is rejected", async () => {
   await expect(service.resolveProviderBindings(model.installation)).rejects
     .toThrow(/without a connectionId/);
 });
+
+test("managed-default status is unavailable with no operator default", async () => {
+  const { service } = await setup();
+  const status = await service.getManagedDefaultStatus();
+  expect(status).toEqual({ available: false, providers: [] });
+});
+
+test("managed-default status projects covered providers without credentials", async () => {
+  const { store } = await setup();
+  // Distinct ids per default (the shared setup pins newId to `ocd_1`, which
+  // would otherwise collide the two defaults onto one row).
+  let n = 0;
+  const service = new ConnectionsService({
+    store,
+    newId: (prefix) => `${prefix}_${++n}`,
+    now: () => NOW,
+  });
+  await store.putConnection(connection({ id: "conn_op_cf", scope: "operator" }));
+  await store.putConnection(
+    connection({ id: "conn_op_aws", scope: "operator", provider: "aws" }),
+  );
+  await service.putOperatorConnectionDefault({
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+  });
+  await service.putOperatorConnectionDefault({
+    provider: "aws",
+    connectionId: "conn_op_aws",
+  });
+
+  const status = await service.getManagedDefaultStatus();
+  // Sorted, de-duplicated provider names; available true; and — crucially — the
+  // projection carries NO connection id / value field (no `connectionId`, no
+  // `id`), so the operator key never leaks through this signal.
+  expect(status).toEqual({ available: true, providers: ["aws", "cloudflare"] });
+  expect(JSON.stringify(status)).not.toContain("conn_op_cf");
+  expect(JSON.stringify(status)).not.toContain("connectionId");
+});

@@ -569,6 +569,19 @@ export interface OperatorConnectionDefault {
   readonly updatedAt: string;
 }
 
+/**
+ * Non-secret projection of "can this instance's managed default (operator key)
+ * cover an install with NO Space connection configured?" (spec §7.1
+ * `takosumi_managed` default). `available` is true when the operator has wired
+ * at least one default connection; `capabilities` lists ONLY the covered
+ * provider source names. It carries NO connection id / value / secret — mirror
+ * of the backend `ManagedDefaultStatus` (packages/schema/src/provider-bindings).
+ */
+export interface ManagedDefaultStatus {
+  readonly available: boolean;
+  readonly capabilities: readonly string[];
+}
+
 export type ProviderCredentialSource = "takosumi_managed" | "user_env_set";
 
 export interface ProviderTemplate {
@@ -1269,6 +1282,31 @@ export async function listOperatorConnectionDefaults(
     operatorConnectionDefaults?: readonly OperatorConnectionDefault[];
   }>(`${BASE}/operator-connection-defaults${query({ spaceId })}`);
   return body.operatorConnectionDefaults ?? [];
+}
+
+/**
+ * Reads whether THIS instance's managed default (operator key) can cover an
+ * install with NO Space connection (`GET
+ * /v1/control/spaces/:id/managed-defaults`, spec §7.1 `takosumi_managed`). The
+ * install view uses it so a user is only nudged to "connect your own cloud
+ * first" when the managed default is NOT available — by default `panpii` can
+ * install → apply on the operator key with zero connection setup, and bringing
+ * their own cloud (a Space connection / Provider Env Set) is an opt-in.
+ *
+ * The response is a credential-free `{ available, capabilities }` projection: it
+ * carries NO operator-default connection id / value / secret material.
+ */
+export async function getManagedDefaultStatus(
+  spaceId: string,
+): Promise<ManagedDefaultStatus> {
+  const body = await controlFetch<{
+    available?: boolean;
+    capabilities?: readonly string[];
+  }>(`${BASE}/spaces/${encodeURIComponent(spaceId)}/managed-defaults`);
+  return {
+    available: body.available === true,
+    capabilities: body.capabilities ?? [],
+  };
 }
 
 /**
