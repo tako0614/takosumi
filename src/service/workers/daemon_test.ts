@@ -1,10 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  createOutboxDispatcherTask,
-  createRegistrySyncWorkerTask,
   createRevokeDebtCleanupWorkerTask,
-  createRuntimeAgentStaleDetectionTask,
   WorkerDaemon,
 } from "./daemon.ts";
 
@@ -72,43 +69,8 @@ test("WorkerDaemon applies backoff after failed ticks and stops on cancellation"
   assert.equal(results[0].nextDelayMs, 25);
 });
 
-test("worker task factories adapt outbox, registry, runtime-agent, and cleanup workers", async () => {
+test("createRevokeDebtCleanupWorkerTask adapts the cleanup worker", async () => {
   const calls: string[] = [];
-  const outboxTask = createOutboxDispatcherTask({
-    intervalMs: 1,
-    limit: 2,
-    dispatcher: {
-      dispatchPending: (options) => {
-        calls.push(`outbox:${options?.limit}`);
-        return Promise.resolve();
-      },
-    },
-  });
-  const registryTask = createRegistrySyncWorkerTask({
-    intervalMs: 1,
-    refs: [{ kind: "backend-implementation", ref: "demo@1.0.0" }],
-    syncProviderSupport: true,
-    worker: {
-      syncPackages: (refs) => {
-        calls.push(`registry:${refs.length}`);
-        return Promise.resolve();
-      },
-      syncProviderSupport: () => {
-        calls.push("registry-support");
-        return Promise.resolve();
-      },
-    },
-  });
-  const runtimeAgentTask = createRuntimeAgentStaleDetectionTask({
-    intervalMs: 1,
-    ttlMs: 60_000,
-    registry: {
-      detectStaleAgents: (input) => {
-        calls.push(`runtime-agent:${input.ttlMs}:${input.now}`);
-        return Promise.resolve({ stale: [], requeuedWork: [] });
-      },
-    },
-  });
   const revokeDebtTask = createRevokeDebtCleanupWorkerTask({
     intervalMs: 1,
     limit: 3,
@@ -132,12 +94,7 @@ test("worker task factories adapt outbox, registry, runtime-agent, and cleanup w
   });
 
   const results = await new WorkerDaemon({
-    tasks: [
-      outboxTask,
-      registryTask,
-      runtimeAgentTask,
-      revokeDebtTask,
-    ],
+    tasks: [revokeDebtTask],
     now: () => new Date("2026-04-30T00:00:00.000Z"),
   }).runOnce();
 
@@ -145,12 +102,8 @@ test("worker task factories adapt outbox, registry, runtime-agent, and cleanup w
   assert.deepEqual(
     calls.sort(),
     [
-      "outbox:2",
-      "registry-support",
-      "registry:1",
       "revoke-debt:space:one:3",
       "revoke-debt:space:two:3",
-      "runtime-agent:60000:2026-04-30T00:00:00.000Z",
     ].sort(),
   );
 });

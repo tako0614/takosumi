@@ -18,10 +18,7 @@ import type {
   ListConnectionsResponse,
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
-import type {
-  ConnectionVault,
-  CredentialBundle,
-} from "../../adapters/vault/mod.ts";
+import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import {
   mapVaultError,
@@ -98,23 +95,6 @@ export class ConnectionManagement {
     requireNonEmptyString(connectionId, "connectionId");
     try {
       return await vault.revoke(connectionId);
-    } catch (error) {
-      throw mapVaultError(error);
-    }
-  }
-
-  /**
-   * Mints a credential bundle for a space + providers. Exposed for Phase 1B
-   * dispatch; NOT wired into plan/apply here. Returns an opaque
-   * {@link CredentialBundle} that never serializes its values.
-   */
-  async mintCredentialBundle(
-    spaceId: string,
-    providers: readonly string[],
-  ): Promise<CredentialBundle> {
-    const vault = this.#requireVault();
-    try {
-      return await vault.mint(spaceId, providers);
     } catch (error) {
       throw mapVaultError(error);
     }

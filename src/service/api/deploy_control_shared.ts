@@ -109,9 +109,8 @@ function mountByMethod(
 const ID_PATTERNS = {
   planRunId: /^plan_[0-9a-zA-Z]{8,64}$/,
   applyRunId: /^apply_[0-9a-zA-Z]{8,64}$/,
-  // The InstallationsService mints `inst_...`; the legacy ledger fixtures used
-  // `ins_...`. Accept either prefix so both shapes validate.
-  installationId: /^inst?_[0-9a-zA-Z]{8,64}$/,
+  // The InstallationsService mints `inst_...`.
+  installationId: /^inst_[0-9a-zA-Z]{8,64}$/,
 } as const;
 
 const UUID_PATTERN =

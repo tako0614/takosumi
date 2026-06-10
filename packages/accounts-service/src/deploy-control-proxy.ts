@@ -259,45 +259,6 @@ export async function requestRollback(input: {
   return applied;
 }
 
-export async function requestDestroy(input: {
-  deployControl: DeployControlProxyOptions;
-  installationId: string;
-  body: Record<string, unknown>;
-}): Promise<{ status: number; contentType: string; payload: unknown }> {
-  const plan = await resolveReviewedPlanRunForFacadeApply({
-    deployControl: input.deployControl,
-    body: input.body,
-    operation: "destroy",
-    installationId: input.installationId,
-  });
-  if (plan.status < 200 || plan.status >= 300) return plan;
-  const planRun = planRunFromPayload(plan.payload);
-  if (!planRun) return plan;
-  if (planRun.status !== "succeeded") {
-    return {
-      status: 409,
-      contentType: "application/json; charset=utf-8",
-      payload: {
-        error: "failed_precondition",
-        error_description: `PlanRun ${planRun.id} is ${planRun.status}`,
-        planRun,
-      },
-    };
-  }
-  const applyBody = applyRequestFromExpectedGuardResult({
-    planRun,
-    expected: isRecord(input.body.expected) ? input.body.expected : undefined,
-  });
-  if (!applyBody.ok) return applyBody.result;
-  const apply = await requestDeployControlJson({
-    deployControl: input.deployControl,
-    method: "POST",
-    path: APPLY_RUNS_PATH,
-    body: applyBody.request,
-  });
-  return adaptApplyRunResult(apply);
-}
-
 async function resolveReviewedPlanRunForFacadeApply(input: {
   deployControl: DeployControlProxyOptions;
   body: Record<string, unknown>;

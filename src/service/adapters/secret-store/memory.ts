@@ -413,57 +413,6 @@ export class PlaceholderSecretBoundaryCrypto implements SecretBoundaryCrypto {
 }
 
 /**
- * Single-key AES-GCM crypto. Does NOT enforce per-cloud isolation; production
- * deployments should use {@link MultiCloudSecretBoundaryCrypto}.
- */
-export class WebCryptoAesGcmSecretBoundaryCrypto
-  implements SecretBoundaryCrypto {
-  readonly #passphrase: string;
-  #keyPromise: Promise<CryptoKey> | undefined;
-
-  constructor(passphrase: string) {
-    this.#passphrase = passphrase;
-  }
-
-  async seal(
-    plaintext: string,
-    _cloudPartition: CloudPartition,
-  ): Promise<Uint8Array> {
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encrypted = new Uint8Array(
-      await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv },
-        await this.#key(),
-        toArrayBuffer(new TextEncoder().encode(plaintext)),
-      ),
-    );
-    const out = new Uint8Array(iv.length + encrypted.length);
-    out.set(iv);
-    out.set(encrypted, iv.length);
-    return out;
-  }
-
-  async open(
-    ciphertext: Uint8Array,
-    _cloudPartition: CloudPartition,
-  ): Promise<string> {
-    const iv = ciphertext.slice(0, 12);
-    const payload = ciphertext.slice(12);
-    const plaintext = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv },
-      await this.#key(),
-      toArrayBuffer(payload),
-    );
-    return new TextDecoder().decode(plaintext);
-  }
-
-  #key(): Promise<CryptoKey> {
-    this.#keyPromise ??= deriveAesKey(this.#passphrase);
-    return this.#keyPromise;
-  }
-}
-
-/**
  * AES-GCM crypto that derives an INDEPENDENT key per cloud partition.
  *
  * Construction takes a map `partition -> passphrase`. The `global`

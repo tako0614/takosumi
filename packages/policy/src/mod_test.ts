@@ -13,12 +13,7 @@ import {
   evaluateScopeBoundary,
   type PlanResourceChange,
   providerMatches,
-  TAKOSUMI_POLICY_PACKAGE,
 } from "./mod.ts";
-
-test("package identity", () => {
-  expect(TAKOSUMI_POLICY_PACKAGE).toBe("takosumi-policy");
-});
 
 // --- §25 layer 4: provider allowlist ---------------------------------------
 
