@@ -25,6 +25,7 @@ import type {
   OperatorConnectionDefault,
   ManagedDefaultStatus,
 } from "takosumi-contract/provider-bindings";
+import { providerEnvRule } from "takosumi-contract/provider-env-rules";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 
@@ -123,9 +124,10 @@ export class ConnectionsService {
   }
 
   /**
-   * Resolves provider bindings for an Installation. Unbound providers are not
-   * synthesized here; plan creation derives provider needs from templates and
-   * OpenTofu metadata.
+   * Resolves the EXPLICIT provider bindings recorded in an Installation's
+   * DeploymentProfile. Unbound required providers are NOT synthesized here; the
+   * run-scoped {@link resolveProviderBindingsForRun} adds the operator-default
+   * fall-through once the run's required providers are known.
    */
   async resolveProviderBindings(
     installation: Installation,
@@ -139,6 +141,60 @@ export class ConnectionsService {
         this.#resolveBinding(installation, binding)
       ),
     );
+  }
+
+  /**
+   * Run-scoped provider binding resolution: the EXPLICIT DeploymentProfile
+   * bindings PLUS the documented operator-default fall-through (spec §7.1
+   * `takosumi_managed`, ProviderBinding contract: "an empty ProviderBindings
+   * list ALWAYS resolves to `default` and falls through to the operator key").
+   *
+   * For every provider the run requires that has NO explicit binding of any
+   * mode, this synthesizes a `default` binding so the managed default (the
+   * operator key) covers an install that configured no Space connection. The
+   * synthesis is keyed by the operator default's OWN provider name so the
+   * subsequent exact-match lookup succeeds even when `requiredProviders` carries
+   * canonical registry addresses (e.g. `registry.opentofu.org/cloudflare/
+   * cloudflare`) while the operator default is registered under the short name
+   * (`cloudflare`). It is fail-closed: a required provider with no operator
+   * default (and no explicit binding) contributes nothing, so no credential is
+   * minted for it.
+   *
+   * Both the generated-root provider blocks and the per-alias credential mint
+   * derive from this same resolution, so the rootgen `TF_VAR_<provider>_<arg>`
+   * variables and the minted values line up byte-for-byte.
+   */
+  async resolveProviderBindingsForRun(
+    installation: Installation,
+    requiredProviders: readonly string[],
+  ): Promise<readonly ResolvedProviderBinding[]> {
+    const explicit = await this.resolveProviderBindings(installation);
+    if (requiredProviders.length === 0) return explicit;
+    const operatorDefaults = await this.#store.listOperatorConnectionDefaults();
+    const synthesized: ResolvedProviderBinding[] = [];
+    const seen = new Set<string>();
+    for (const required of requiredProviders) {
+      // Respect any explicit binding for the provider (default / connection /
+      // manual / disabled): the user's configuration wins over the fall-through.
+      if (explicit.some((entry) => providersMatch(required, entry.provider))) {
+        continue;
+      }
+      const match = operatorDefaults.find((entry) =>
+        providersMatch(required, entry.provider)
+      );
+      // Fail closed: no operator default for this provider -> no credential.
+      if (!match) continue;
+      // Synthesize at most one default binding per operator-default provider.
+      if (seen.has(match.provider)) continue;
+      seen.add(match.provider);
+      synthesized.push(
+        await this.#resolveBinding(installation, {
+          provider: match.provider,
+          mode: "default",
+        }),
+      );
+    }
+    return synthesized.length === 0 ? explicit : [...explicit, ...synthesized];
   }
 
   async #resolveBinding(
@@ -231,6 +287,20 @@ export function mintableConnectionIds(
     if (entry.connection) ids.add(entry.connection.id);
   }
   return [...ids];
+}
+
+/**
+ * True when two provider identifiers name the same OpenTofu provider, matching
+ * a short name (`cloudflare`) against a canonical registry address
+ * (`registry.opentofu.org/cloudflare/cloudflare`) through the shared
+ * provider-env-rule table. Mirrors the vault's `providerMatches` so the
+ * operator-default fall-through keys consistently with credential mint.
+ */
+function providersMatch(left: string, right: string): boolean {
+  if (left === right) return true;
+  const lrule = providerEnvRule(left);
+  const rrule = providerEnvRule(right);
+  return lrule !== undefined && lrule === rrule;
 }
 
 export function createConnectionsService(
