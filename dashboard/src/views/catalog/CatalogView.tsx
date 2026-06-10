@@ -1,13 +1,17 @@
 /**
- * Capsule Catalog view — the "選んで入れる" (browse & install) front door.
+ * Capsule Store view — the "選んで入れる" (browse & install) shelf.
  *
- * Root bottleneck this fixes: the dashboard's first required input used to be a
- * raw Git URL, an immediate wall for non-engineers. This view lists curated,
- * genuinely-installable entries as cards; each install button deep-links into
- * the existing `/install` flow with `git` / `ref` / `path` pre-filled (the
- * InstallFromGitView `readPrefill()` reader picks them up). Coming-soon entries
- * render WITHOUT an install button so we never ship a dead button (see the
- * honesty contract in `catalog-data.ts`).
+ * This is a STORE, not an "official catalog": every entry is an ordinary Git-URL
+ * Capsule with no privileged tier, and the real entry point is "install any
+ * Capsule from any Git URL" (the "Git の URL を指定して入れる" action below) —
+ * anyone can publish a Capsule and anyone can install it. The shelf only saves a
+ * non-engineer from typing a Git
+ * URL by hand, fixing the old bottleneck where the dashboard's first required
+ * input was a raw URL. Each install button deep-links into the existing
+ * `/install` flow with `git` / `ref` / `path` pre-filled (the InstallFromGitView
+ * `readPrefill()` reader picks them up). Coming-soon entries render WITHOUT an
+ * install button so we never ship a dead button (see the honesty contract in
+ * `catalog-data.ts`).
  *
  * Reuses existing dashboard CSS (`provider-grid` / `provider-card` /
  * `status-pill` / `btn-*`) so it matches the rest of the SPA with no new CSS.
@@ -70,7 +74,7 @@ const ICONS: Record<CatalogIconKey, Component<LucideProps>> = {
 };
 
 export default function CatalogView() {
-  return <Page title="アプリを選ぶ">{() => <Inner />}</Page>;
+  return <Page title="ストアから入れる">{() => <Inner />}</Page>;
 }
 
 /**
@@ -114,14 +118,14 @@ function Inner() {
   return (
     <AppShell>
       <div class="page-header">
-        <h1>アプリを選ぶ</h1>
+        <h1>ストアから入れる</h1>
         <p class="page-sub">
-          一覧から選んで「インストール」を押すだけで導入できます。Git の URL
-          を入力する必要はありません。
+          ここはアプリの「ストア」です。下の一覧から選んで「インストール」を押すだけで入れられます。
+          一覧に無いものも、Git の URL を入れれば誰のものでも入れられます（特別な「公式」枠はありません）。
         </p>
         <div class="page-actions">
-          <A href="/install" class="btn btn-secondary">
-            URL を指定して導入
+          <A href="/install" class="btn btn-primary">
+            Git の URL を指定して入れる
           </A>
         </div>
       </div>

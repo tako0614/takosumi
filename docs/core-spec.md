@@ -2102,14 +2102,20 @@ plan/apply pre-mint runnable decision
 は Space / InstallConfig policy が明示許可した場合にだけ runnable として再評価できる。`needs_patch`、
 filesystem escape、missing local module、credential-in-source などの module safety finding は allowlist では上書きしない。
 
-Resource allowlist。
+Resource allowlist。managed Takosumi default は **標準で無害な (tenant-scoped / data-plane の) Cloudflare resource type**
+を既定で許可し、素の Cloudflare Capsule (Worker + その Pages / D1 / KV / Queues / R2 data plane) を curated bounded
+InstallConfig なしで installable にする。Workers の static assets は provider v5 では `cloudflare_workers_script` に内包
+されるため、別途 assets resource type は不要。
 
 ```json
 {
   "allowedResourceTypes": [
     "cloudflare_workers_script",
-    "cloudflare_workers_route",
-    "cloudflare_dns_record",
+    "cloudflare_workers_script_subdomain",
+    "cloudflare_pages_project",
+    "cloudflare_d1_database",
+    "cloudflare_queue",
+    "cloudflare_workers_kv_namespace",
     "cloudflare_r2_bucket",
     "aws_s3_bucket",
     "aws_s3_bucket_public_access_block",
@@ -2118,6 +2124,22 @@ Resource allowlist。
   ]
 }
 ```
+
+**既定から意図的に除外する type** (= Capsule の自前 data plane を越えて他ドメイン / 他テナントに到達しうるもの。明示的な
+Space / InstallConfig allowlist がなければ実行できない):
+
+- `cloudflare_dns_record` — 任意の hostname / record を repoint でき、token が書き込めるあらゆる zone で record / domain
+  takeover が成立する。
+- `cloudflare_workers_route` — Worker を zone 上の任意 hostname / route pattern に bind でき、token が触れるあらゆる zone
+  で production traffic hijack が成立する。
+- `cloudflare_zone` / `cloudflare_account` / `*_member` / zone・account レベルの設定 type — account / zone 設定や他テナント
+  影響系であり、managed default には決して入れない。
+
+これは **resource-type layer のみの security 境界拡張** である。他の policy layer — Capsule Gate (provisioner 禁止 /
+filesystem-sensitive expression 検査)、provider allowlist (managed default は cloudflare のみ)、billing / credit
+reservation (実コスト式)、scope / action policy、quota — は変更せず引き続き適用される。policy 拡張で他の layer を緩めない。
+DNS record / Worker route / zone・account 設定のような除外 type は、vetted な curated bounded InstallConfig が `cloudflare_dns_record`
+等を明示 allowlist した場合にのみ runnable になる (`resource_type_not_allowed` の policy 再評価; module safety finding は上書き不可)。
 
 Action policy。
 

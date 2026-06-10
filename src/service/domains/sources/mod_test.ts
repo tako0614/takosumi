@@ -475,7 +475,10 @@ test("createCompatibilityCheck lifts unsupported -> ready via a curated bounded 
   // resource type is OUTSIDE the instance-wide DEFAULT allowlist becomes
   // installable when its curated bounded InstallConfig is supplied, WITHOUT an
   // Installation and WITHOUT widening the default allowlist.
-  const staticSiteHcl = `
+  // cloudflare_dns_record stays OUTSIDE the managed default allowlist (it can
+  // repoint arbitrary hostnames), so it is the right type to demonstrate that a
+  // curated bounded InstallConfig lifts a type the default rejects.
+  const curatedHcl = `
 terraform {
   required_providers {
     cloudflare = {
@@ -484,18 +487,19 @@ terraform {
   }
 }
 
-resource "cloudflare_pages_project" "this" {
-  account_id        = var.accountId
-  name              = var.projectName
-  production_branch = var.productionBranch
+resource "cloudflare_dns_record" "this" {
+  zone_id = var.zoneId
+  name    = var.recordName
+  type    = "CNAME"
+  content = var.recordContent
 }
 
 output "url" {
-  value = "https://example.pages.dev"
+  value = "https://example.com"
 }
 `;
   const { store, service } = makeService({
-    readCapsuleSourceFiles: async () => [{ path: "main.tf", text: staticSiteHcl }],
+    readCapsuleSourceFiles: async () => [{ path: "main.tf", text: curatedHcl }],
   });
   await store.putSpace({
     id: "space_1",
@@ -508,9 +512,8 @@ output "url" {
   });
   const { source } = await service.createSource({
     spaceId: "space_1",
-    name: "static-site",
-    url: "https://github.com/tako0614/takosumi.git",
-    defaultPath: "opentofu-modules/cloudflare-static-site/module",
+    name: "dns-capsule",
+    url: "https://github.com/acme/dns-capsule.git",
   });
   const { run } = await service.createSync(source.id);
   await store.putSourceSnapshot({
@@ -519,7 +522,7 @@ output "url" {
     url: source.url,
     ref: "main",
     resolvedCommit: "abc123",
-    path: "opentofu-modules/cloudflare-static-site/module",
+    path: ".",
     archiveObjectKey: run.archiveObjectKey,
     archiveDigest: "sha256:source",
     archiveSizeBytes: 100,
@@ -529,14 +532,14 @@ output "url" {
   // A built-in `official` InstallConfig has no spaceId and is usable from any
   // Space; its policy is the BOUNDED minimal allowlist for this module only.
   await store.putInstallConfig({
-    id: "cfg-official-cloudflare-static-site",
-    name: "cloudflare-static-site",
+    id: "cfg-official-dns-capsule",
+    name: "dns-capsule",
     trustLevel: "official",
     variableMapping: {},
     outputAllowlist: {},
     policy: {
       allowedProviders: ["cloudflare/cloudflare"],
-      allowedResourceTypes: ["cloudflare_pages_project"],
+      allowedResourceTypes: ["cloudflare_dns_record"],
     },
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
@@ -558,7 +561,7 @@ output "url" {
   // above still rejects it).
   const curated = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
-    installConfigId: "cfg-official-cloudflare-static-site",
+    installConfigId: "cfg-official-dns-capsule",
   });
   expect(curated.report.level).toBe("ready");
   expect(
