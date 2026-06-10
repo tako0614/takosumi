@@ -12,3 +12,4 @@ node_modules/
 .fix_commit.sh
 .fix_result.txt
 .gitignore_addition.txt
+.env.smoke
