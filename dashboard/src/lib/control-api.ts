@@ -976,6 +976,26 @@ export async function getRunLogs(id: string): Promise<RunLogs> {
   );
 }
 
+/**
+ * Applies a reviewed plan run (§31 GUI deploy). `planRunId` is the id of the
+ * `plan` Run shown in the Run detail view. The backend rebuilds the apply guard
+ * from the reviewed plan and re-checks every precondition; pass
+ * `confirmDestructive: true` only after the operator has confirmed a destructive
+ * plan. Returns the queued apply Run wrapper.
+ */
+export async function createApplyRun(
+  planRunId: string,
+  input: { readonly confirmDestructive?: boolean } = {},
+): Promise<{ readonly applyRun: { readonly id: string } }> {
+  return await controlFetch<{ applyRun: { id: string } }>(
+    `${BASE}/plan-runs/${encodeURIComponent(planRunId)}/apply`,
+    {
+      method: "POST",
+      body: input.confirmDestructive ? { confirmDestructive: true } : {},
+    },
+  );
+}
+
 // --- RunGroups -------------------------------------------------------------
 
 export async function createSpacePlanUpdate(

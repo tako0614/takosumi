@@ -11,14 +11,23 @@
  *   - an approve button when the run is `waiting_approval`
  *     (`POST /v1/control/runs/:id/approve`).
  */
-import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
+import {
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Match,
+  Show,
+  Switch,
+} from "solid-js";
 import { useParams } from "@solidjs/router";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import StatusPill from "../account/components/StatusPill.tsx";
 import {
   approveRun,
-  type ControlApiError,
+  ControlApiError,
+  createApplyRun,
   getRun,
   getRunLogs,
   type Run,
@@ -62,6 +71,19 @@ function formatDateTime(value: string | undefined): string {
   const time = Date.parse(value);
   if (Number.isNaN(time)) return value;
   return new Date(time).toLocaleString("ja-JP");
+}
+
+/**
+ * True when an apply rejection means the plan is destructive and the backend is
+ * asking for an explicit confirmation (the controller's
+ * `confirmDestructive=true` precondition). Matched on the message so the UI does
+ * not depend on a separate destructiveness field on the public Run.
+ */
+function isDestructiveConfirmationRequired(error: ControlApiError): boolean {
+  const message = (error.message ?? "").toLowerCase();
+  return (
+    message.includes("confirmdestructive") || message.includes("destructive")
+  );
 }
 
 function changesFromLogs(
@@ -308,6 +330,43 @@ function Inner() {
     await Promise.all([refetchRun(), refetchLogs()]);
   });
 
+  // --- Deploy (apply a reviewed plan) --------------------------------------
+  // Only a finished, policy-passed `plan` Run is deployable. `drift_check` is a
+  // read-only signal and is never applyable; `apply`/`destroy_*` Runs are not
+  // re-applied from here. `applied` flips once the apply has been kicked off so
+  // the success notice stays visible after the Run resource refetches.
+  const [applied, setApplied] = createSignal(false);
+  // Set when the backend reports the plan is destructive and needs an explicit
+  // confirmation before it will apply.
+  const [needsConfirm, setNeedsConfirm] = createSignal(false);
+
+  const isDeployableRun = (r: Run): boolean =>
+    r.type === "plan" &&
+    r.status === "succeeded" &&
+    r.policyStatus === "pass" &&
+    !applied();
+
+  const deploy = createAction(async (confirmDestructive?: boolean) => {
+    try {
+      await createApplyRun(runId(), { confirmDestructive });
+    } catch (error) {
+      // A destructive plan needs an explicit confirmation: surface the
+      // confirmation step instead of a raw error, then let the operator retry.
+      if (
+        error instanceof ControlApiError &&
+        error.status === 409 &&
+        isDestructiveConfirmationRequired(error)
+      ) {
+        setNeedsConfirm(true);
+        return;
+      }
+      throw error;
+    }
+    setNeedsConfirm(false);
+    setApplied(true);
+    await Promise.all([refetchRun(), refetchLogs()]);
+  });
+
   return (
     <AppShell>
       <div class="page-header">
@@ -420,6 +479,59 @@ function Inner() {
                   </div>
                 </Show>
                 <Show when={approve.error()}>
+                  {(m) => <p class="sign-in-error">{m()}</p>}
+                </Show>
+
+                {/* Deploy: apply this reviewed plan. Shown only for a finished,
+                    問題のない plan。破壊的な変更がある場合は確認してから実行。 */}
+                <Show when={applied()}>
+                  <p class="run-apply-done">
+                    デプロイを開始しました。反映までしばらくお待ちください。
+                  </p>
+                </Show>
+                <Show when={!applied() && isDeployableRun(r())}>
+                  <div class="form-actions run-deploy">
+                    <Show
+                      when={needsConfirm()}
+                      fallback={
+                        <button
+                          class="btn btn-primary"
+                          type="button"
+                          disabled={deploy.busy()}
+                          onClick={() => void deploy.run(undefined)}
+                        >
+                          {deploy.busy() ? "実行中..." : "デプロイを実行"}
+                        </button>
+                      }
+                    >
+                      <p class="run-deploy-warn">
+                        この変更には既存リソースの置き換え・削除が含まれます。
+                        実行するとデータが失われる場合があります。
+                      </p>
+                      <div class="form-actions">
+                        <button
+                          class="btn btn-secondary"
+                          type="button"
+                          disabled={deploy.busy()}
+                          onClick={() => setNeedsConfirm(false)}
+                        >
+                          やめる
+                        </button>
+                        <button
+                          class="btn btn-danger"
+                          type="button"
+                          disabled={deploy.busy()}
+                          onClick={() => void deploy.run(true)}
+                        >
+                          {deploy.busy()
+                            ? "実行中..."
+                            : "破壊的な変更を承知のうえで実行"}
+                        </button>
+                      </div>
+                    </Show>
+                  </div>
+                </Show>
+                <Show when={deploy.error()}>
                   {(m) => <p class="sign-in-error">{m()}</p>}
                 </Show>
               </section>
