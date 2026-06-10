@@ -24,6 +24,7 @@
     "test:scripts": "bun test ./scripts/",
     "opentofu:output-snapshot-proof": "bun scripts/prove-opentofu-output-snapshot.ts",
     "opentofu:live-local-proof": "bun scripts/prove-live-opentofu-plan-apply.ts",
+    "smoke:cloudflare": "bun scripts/smoke-cloudflare.ts",
     "production-hardening:evidence": "bun scripts/validate-production-hardening-evidence.ts",
     "production-hardening:gates": "bun scripts/verify-production-hardening-gates.ts",
     "db:migrate": "bun src/service/scripts/db-migrate.ts",
