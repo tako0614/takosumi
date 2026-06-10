@@ -20,8 +20,19 @@ import type {
   ListDeploymentsResponse,
   ListDeploymentOutputsResponse,
 } from "@takosumi/internal/deploy-control-api";
+import type { PublicInstallation } from "takosumi-contract/installations";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
+
+/**
+ * Projects a stored {@link Installation} to its public shape (stripping the
+ * internal `installType` seam). Injected by the controller so the projection
+ * stays owned in exactly one place; `getApplyRun` / `getInstallation` apply it
+ * to match the `PublicInstallation`-typed response contracts.
+ */
+export type PublicInstallationProjector = (
+  installation: Installation,
+) => PublicInstallation;
 
 /**
  * Resolves an Installation by id or throws a typed `not_found`. Shared by the
@@ -46,9 +57,14 @@ export async function requireInstallation(
 /** Read-only Deployment / Installation projections over the store. */
 export class DeploymentQuery {
   readonly #store: OpenTofuDeploymentStore;
+  readonly #publicInstallation: PublicInstallationProjector;
 
-  constructor(store: OpenTofuDeploymentStore) {
+  constructor(
+    store: OpenTofuDeploymentStore,
+    publicInstallation: PublicInstallationProjector,
+  ) {
     this.#store = store;
+    this.#publicInstallation = publicInstallation;
   }
 
   async getApplyRun(id: string): Promise<ApplyRunResponse> {
@@ -65,13 +81,19 @@ export class DeploymentQuery {
       : undefined;
     return {
       applyRun,
-      ...(installation ? { installation } : {}),
+      ...(installation
+        ? { installation: this.#publicInstallation(installation) }
+        : {}),
       ...(deployment ? { deployment } : {}),
     };
   }
 
   async getInstallation(id: string): Promise<GetInstallationResponse> {
-    return { installation: await requireInstallation(this.#store, id) };
+    return {
+      installation: this.#publicInstallation(
+        await requireInstallation(this.#store, id),
+      ),
+    };
   }
 
   /**
