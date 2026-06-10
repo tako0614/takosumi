@@ -18,9 +18,6 @@ export interface GraphEdge {
   readonly to: string;
 }
 
-/** Placeholder seam so the package has a stable import surface from M1. */
-export const TAKOSUMI_GRAPH_PACKAGE = "takosumi-graph" as const;
-
 /** Build a producer -> consumers adjacency map from the edge list. */
 function buildAdjacency(edges: readonly GraphEdge[]): Map<string, Set<string>> {
   const adjacency = new Map<string, Set<string>>();

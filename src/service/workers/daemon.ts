@@ -1,10 +1,4 @@
 import type {
-  RuntimeAgentRegistry,
-  StaleAgentDetection,
-} from "../agents/mod.ts";
-import type { DispatchOutboxOptions } from "./outbox_dispatcher.ts";
-import type { RegistryPackageRef } from "./registry_sync_worker.ts";
-import type {
   RevokeDebtCleanupOwnerInput,
   RevokeDebtCleanupResult,
 } from "../domains/deploy-records/revoke_debt_cleanup_worker.ts";
@@ -208,55 +202,6 @@ export function runWorkerDaemonOnce(
   return new WorkerDaemon(options).runOnce();
 }
 
-export interface OutboxDispatcherLike {
-  dispatchPending(options?: DispatchOutboxOptions): Promise<unknown>;
-}
-
-export interface OutboxDispatcherDaemonTaskOptions
-  extends WorkerDaemonTaskTiming {
-  readonly dispatcher: OutboxDispatcherLike;
-  readonly limit?: number;
-  readonly name?: string;
-}
-
-export function createOutboxDispatcherTask(
-  options: OutboxDispatcherDaemonTaskOptions,
-): WorkerDaemonTask {
-  return {
-    ...taskTiming(options),
-    name: options.name ?? "outbox",
-    tick() {
-      return options.dispatcher.dispatchPending({ limit: options.limit });
-    },
-  };
-}
-
-export interface RuntimeAgentStaleDetectionTaskOptions
-  extends WorkerDaemonTaskTiming {
-  readonly registry: Pick<RuntimeAgentRegistry, "detectStaleAgents">;
-  readonly ttlMs: number;
-  readonly name?: string;
-  readonly onDetection?: (
-    detection: StaleAgentDetection,
-  ) => MaybePromise<unknown>;
-}
-
-export function createRuntimeAgentStaleDetectionTask(
-  options: RuntimeAgentStaleDetectionTaskOptions,
-): WorkerDaemonTask {
-  return {
-    ...taskTiming(options),
-    name: options.name ?? "runtime-agent-stale-detection",
-    async tick(context) {
-      const detection = await options.registry.detectStaleAgents({
-        ttlMs: options.ttlMs,
-        now: context.now().toISOString(),
-      });
-      await options.onDetection?.(detection);
-    },
-  };
-}
-
 export interface RevokeDebtCleanupWorkerLike {
   processOwnerSpace(
     input: RevokeDebtCleanupOwnerInput,
@@ -289,38 +234,6 @@ export function createRevokeDebtCleanupWorkerTask(
           ownerSpaceId,
           ...(options.limit !== undefined ? { limit: options.limit } : {}),
         });
-      }
-    },
-  };
-}
-
-export interface RegistrySyncWorkerLike {
-  syncPackages(refs: readonly RegistryPackageRef[]): Promise<unknown>;
-  syncProviderSupport?(): Promise<unknown>;
-}
-
-export interface RegistrySyncDaemonTaskOptions extends WorkerDaemonTaskTiming {
-  readonly worker: RegistrySyncWorkerLike;
-  readonly refs:
-    | readonly RegistryPackageRef[]
-    | (() => MaybePromise<readonly RegistryPackageRef[]>);
-  readonly syncProviderSupport?: boolean;
-  readonly name?: string;
-}
-
-export function createRegistrySyncWorkerTask(
-  options: RegistrySyncDaemonTaskOptions,
-): WorkerDaemonTask {
-  return {
-    ...taskTiming(options),
-    name: options.name ?? "registry-sync",
-    async tick() {
-      const refs = typeof options.refs === "function"
-        ? await options.refs()
-        : options.refs;
-      await options.worker.syncPackages(refs);
-      if (options.syncProviderSupport) {
-        await options.worker.syncProviderSupport?.();
       }
     },
   };

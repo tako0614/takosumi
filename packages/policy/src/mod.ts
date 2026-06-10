@@ -44,9 +44,6 @@ export interface PlanResourceChange {
   };
 }
 
-/** Stable package identity for an import-surface smoke. */
-export const TAKOSUMI_POLICY_PACKAGE = "takosumi-policy" as const;
-
 const NON_MUTATING_ACTIONS = new Set(["no-op", "read"]);
 
 // ---------------------------------------------------------------------------

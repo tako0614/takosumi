@@ -2423,6 +2423,7 @@ async function migrateD1OpenTofuLedgerSchema(db: D1Database): Promise<void> {
   await ensureD1Column(db, "runs", "installation_id", "text");
   await ensureD1Column(db, "runs", "environment", "text");
   await rebuildRunsTableIfNeeded(db);
+  await backfillD1SourceScopedRuns(db);
   await ensureD1Column(db, "credential_mint_events", "source_id", "text");
   await ensureD1Column(
     db,
@@ -2633,4 +2634,35 @@ async function rebuildRunsTableIfNeeded(db: D1Database): Promise<void> {
   ).run();
   await db.prepare(`drop table runs`).run();
   await db.prepare(`alter table runs__takosumi_migrate rename to runs`).run();
+}
+
+/**
+ * Back-fill source-scoped `source_sync` runs into the `runs.source_id` column,
+ * matching the Postgres ledger migration v42 step
+ * (`deploy.takosumi_d1_schema_projection_columns.create`).
+ *
+ * Before the Source-scoped ledger split, `source_sync` rows were written with
+ * the source id stored in `installation_id` (and `run_json.sourceId`). The D1
+ * column-add path (`ensureD1Column` / `rebuildRunsTableIfNeeded`) only
+ * materializes the `source_id` column; it never normalizes those legacy rows.
+ * Without this back-fill the only reader of historical rows would be the legacy
+ * dual-read branch in {@link CloudflareD1OpenTofuDeploymentStore.listSourceSyncRuns}
+ * (`installation_id == sourceId`), so dropping that branch later would silently
+ * drop history. This normalizes the rows so `source_id` is the canonical key,
+ * exactly like Postgres v42; the dual-read branch is intentionally kept for
+ * backward compatibility until a separate change verifies a live DB.
+ *
+ * Idempotent: the `source_id is null` guard means re-running is a no-op once a
+ * row has been normalized. Mirrors the Postgres
+ * `set source_id = coalesce(run_json->>'sourceId', installation_id), installation_id = null`
+ * semantics with the SQLite `json_extract(run_json, '$.sourceId')` accessor.
+ */
+async function backfillD1SourceScopedRuns(db: D1Database): Promise<void> {
+  await db.prepare(
+    `update runs
+      set source_id = coalesce(json_extract(run_json, '$.sourceId'), installation_id),
+          installation_id = null
+      where type = ?
+        and source_id is null`,
+  ).bind(RUN_KIND_SOURCE_SYNC).run();
 }
