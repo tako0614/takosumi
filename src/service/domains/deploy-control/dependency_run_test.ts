@@ -22,12 +22,14 @@ import type {
 } from "./mod.ts";
 import {
   applyExpectedGuardFromPlanRun,
+  type DependencyValueSealer,
   OpenTofuDeploymentController,
 } from "./mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import { DependenciesService } from "../dependencies/mod.ts";
 import type { SensitiveOutputResolver } from "../output-shares/mod.ts";
+import type { JsonValue } from "takosumi-contract";
 import { CredentialBundle } from "../../adapters/vault/mod.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
@@ -137,10 +139,53 @@ function staticSensitiveResolver(): SensitiveOutputResolver {
   };
 }
 
+/**
+ * In-test stand-in for the worker's at-rest value sealer. It does NOT exercise
+ * the real AES-GCM envelope (that round-trip + tamper behavior is covered in
+ * worker/src/dependency_value_sealer_test.ts); it base64-wraps a JSON blob plus
+ * a content digest so the controller integration tests stay deterministic. open()
+ * verifies the digest, so a mutated ciphertext fails closed exactly like the
+ * real sealer's AES-GCM auth tag.
+ */
+function fakeValueSealer(): DependencyValueSealer {
+  const digest = (text: string): string => {
+    let hash = 0;
+    for (let i = 0; i < text.length; i += 1) {
+      hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+    }
+    return `fake:${hash.toString(16)}`;
+  };
+  return {
+    seal: (values) => {
+      const json = JSON.stringify(values);
+      return Promise.resolve({
+        ciphertext: btoa(json),
+        contentDigest: digest(json),
+        names: Object.keys(values),
+      });
+    },
+    open: (sealed) => {
+      let json: string;
+      try {
+        json = atob(sealed.ciphertext);
+      } catch {
+        throw new Error("sealed dependency values ciphertext is not valid base64");
+      }
+      if (digest(json) !== sealed.contentDigest) {
+        throw new Error("sealed dependency values content digest mismatch");
+      }
+      return Promise.resolve(JSON.parse(json) as Record<string, JsonValue>);
+    },
+  };
+}
+
 function controllerWith(
   store: OpenTofuDeploymentStore,
   runner: OpenTofuRunner,
-  options: { readonly sensitiveOutputResolver?: SensitiveOutputResolver } = {},
+  options: {
+    readonly sensitiveOutputResolver?: SensitiveOutputResolver;
+    readonly dependencyValueSealer?: DependencyValueSealer;
+  } = {},
 ): OpenTofuDeploymentController {
   return new OpenTofuDeploymentController({
     store,
@@ -150,6 +195,9 @@ function controllerWith(
     newId: deterministicIds(),
     ...(options.sensitiveOutputResolver
       ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
+      : {}),
+    ...(options.dependencyValueSealer
+      ? { dependencyValueSealer: options.dependencyValueSealer }
       : {}),
   });
 }
@@ -594,6 +642,7 @@ test("sensitive published_output injects only through explicit share resolver an
   });
   const controller = controllerWith(store, runner, {
     sensitiveOutputResolver: staticSensitiveResolver(),
+    dependencyValueSealer: fakeValueSealer(),
   });
 
   const producerPlan = await controller.createInstallationPlan("inst_producer");
@@ -620,6 +669,127 @@ test("sensitive published_output injects only through explicit share resolver an
   expect(
     JSON.stringify(await store.listActivityEvents("space_consumer")),
   ).not.toContain("super-secret-token");
+
+  // At-rest: the persisted DependencySnapshot row must NOT carry the sensitive
+  // value in cleartext anywhere (it lives sealed in `sealedValues`).
+  const snap = await store.getDependencySnapshot(
+    consumerPlan.planRun.dependencySnapshotId!,
+  );
+  expect(JSON.stringify(snap)).not.toContain("super-secret-token");
+  const sealedEntry = snap!.dependencies[0];
+  expect(sealedEntry.values).not.toHaveProperty("admin_token");
+  expect(sealedEntry.sealedValues?.names).toEqual(["admin_token"]);
+  expect(sealedEntry.sealedValues?.ciphertext).toBeTruthy();
+
+  // At-rest residual: the runs_inputs sidecar ALSO carries the injected value —
+  // both in `variables` and baked as a literal into the generated `main.tf` — so
+  // a SUCCEEDED generated-root plan that retains the sidecar must NOT round-trip
+  // the secret in cleartext (spec §11 / §18). The whole payload is sealed.
+  const sidecar = await store.getPlanRunInputs(consumerPlan.planRun.id);
+  expect(sidecar).toBeTruthy();
+  expect(JSON.stringify(sidecar)).not.toContain("super-secret-token");
+  expect(sidecar?.sealed?.ciphertext).toBeTruthy();
+  expect(sidecar?.variables).not.toHaveProperty("admin_token");
+  // The consumer apply still succeeds: the sealed value round-trips at verify.
+  const consumerApply = await controller.createApplyRun({
+    planRunId: consumerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+  });
+  expect(consumerApply.applyRun.status).toBe("succeeded");
+});
+
+test("sensitive published_output fails closed when no value sealer is configured", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = sensitiveOutputRunner();
+  const { consumer } = await seedCrossSpaceGraph(store, "preview");
+  const producerConfig = await store.getInstallConfig("cfg_producer");
+  await store.putInstallConfig({ ...producerConfig!, outputAllowlist: {} });
+  const share = await store.getOutputShare("oshare_1");
+  await store.putOutputShare({
+    ...share!,
+    outputs: [{ name: "admin_token", sensitive: true }],
+  });
+  const dependency = await store.getDependency("dep_edge0001");
+  await store.putDependency({
+    ...dependency!,
+    outputs: {
+      admin_token: { from: "admin_token", to: "admin_token", required: true },
+    },
+  });
+  // Resolver present (so the value resolves) but NO sealer: cleartext would leak,
+  // so the plan must fail closed rather than persist it.
+  const controller = controllerWith(store, runner, {
+    sensitiveOutputResolver: staticSensitiveResolver(),
+  });
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+  await expect(controller.createInstallationPlan(consumer)).rejects.toThrow(
+    /dependency_value_sealer_unavailable/,
+  );
+});
+
+test("tampered sealed dependency values fail the apply closed", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = sensitiveOutputRunner();
+  const { consumer } = await seedCrossSpaceGraph(store, "preview");
+  const producerConfig = await store.getInstallConfig("cfg_producer");
+  await store.putInstallConfig({ ...producerConfig!, outputAllowlist: {} });
+  const share = await store.getOutputShare("oshare_1");
+  await store.putOutputShare({
+    ...share!,
+    outputs: [{ name: "admin_token", sensitive: true }],
+  });
+  const dependency = await store.getDependency("dep_edge0001");
+  await store.putDependency({
+    ...dependency!,
+    outputs: {
+      admin_token: { from: "admin_token", to: "admin_token", required: true },
+    },
+  });
+  const controller = controllerWith(store, runner, {
+    sensitiveOutputResolver: staticSensitiveResolver(),
+    dependencyValueSealer: fakeValueSealer(),
+  });
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+  const consumerPlan = await controller.createInstallationPlan(consumer);
+  // Tamper the persisted sealed ciphertext: the sealer's open() must fail closed
+  // (AES-GCM auth-tag / content-digest analogue), and the apply must reject.
+  const snap = await store.getDependencySnapshot(
+    consumerPlan.planRun.dependencySnapshotId!,
+  );
+  const entry = snap!.dependencies[0];
+  await store.putDependencySnapshot({
+    ...snap!,
+    dependencies: [
+      {
+        ...entry,
+        sealedValues: {
+          ...entry.sealedValues!,
+          ciphertext: `${entry.sealedValues!.ciphertext}TAMPER`,
+        },
+      },
+    ],
+  });
+  const tamperedApply = await controller.createApplyRun({
+    planRunId: consumerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+  });
+  // Fail-closed: the apply must NOT succeed once the sealed values are tampered.
+  expect(tamperedApply.applyRun.status).not.toBe("succeeded");
+  expect(tamperedApply.applyRun.status).toBe("failed");
+  // And the failure comes from opening the sealed blob (the AES-GCM auth-tag /
+  // content-digest layer rejects the tampered ciphertext before the values are
+  // ever recovered), not from some unrelated guard.
+  expect(
+    JSON.stringify(tamperedApply.applyRun.diagnostics).toLowerCase(),
+  ).toContain("digest mismatch");
 });
 
 test("sensitive published_output fails closed when controller has no resolver", async () => {

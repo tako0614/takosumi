@@ -136,6 +136,15 @@ export interface CatalogEntry {
    * button. Kept honest so the user is not surprised at the credential step.
    */
   readonly note?: string;
+  /**
+   * Set when applying this entry requires a cloud-provider connection the user
+   * may not have yet. The view turns this into an actionable `<A href="/connections">`
+   * link ("先に <label> に接続する") so a non-engineer is not left wondering WHERE
+   * to connect. `provider` is the {@link Connection} `provider` key used to
+   * detect whether such a connection already exists; `label` is the plain
+   * display name shown in the link text.
+   */
+  readonly requiresConnection?: { readonly provider: string; readonly label: string };
 }
 
 const TAKOS_GIT = "https://github.com/tako0614/takos.git";
@@ -190,6 +199,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     path: "opentofu-modules/cloudflare-r2-storage/module",
     installable: true,
     note: "適用には Cloudflare の接続が必要です。",
+    requiresConnection: { provider: "cloudflare", label: "Cloudflare" },
   },
   // HONESTY: this module uses `cloudflare_pages_project`, which is NOT in the
   // instance-wide DEFAULT allowlist (so the default-policy check returns
@@ -212,6 +222,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     installable: true,
     installConfigId: "cfg-official-cloudflare-static-site",
     note: "適用には Cloudflare の接続が必要です。",
+    requiresConnection: { provider: "cloudflare", label: "Cloudflare" },
   },
   // HONESTY: this module uses `cloudflare_workers_script` (in the default
   // allowlist) AND `cloudflare_workers_script_subdomain` (NOT in the default
@@ -236,6 +247,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     installable: true,
     installConfigId: "cfg-official-talk",
     note: "適用には Cloudflare の接続が必要です。",
+    requiresConnection: { provider: "cloudflare", label: "Cloudflare" },
   },
   {
     id: "aws-s3-storage",
@@ -248,6 +260,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     path: "opentofu-modules/aws-s3-storage/module",
     installable: true,
     note: "適用には AWS の接続が必要です。",
+    requiresConnection: { provider: "aws", label: "AWS" },
   },
 
   // ---- Coming-soon apps (Takos product apps, not yet standalone Capsules) --

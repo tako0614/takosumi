@@ -71,7 +71,10 @@ import type {
   ProviderBindingMintEntry,
   ConnectionVault,
 } from "../../adapters/vault/mod.ts";
-import type { PublicInstallation } from "takosumi-contract/installations";
+import type {
+  OutputAllowlistEntry,
+  PublicInstallation,
+} from "takosumi-contract/installations";
 import type {
   BillingAccount,
   BillingMode,
@@ -117,6 +120,7 @@ import {
   InMemoryOpenTofuDeploymentStore,
   InstallationPatchGuardConflict,
   type OpenTofuDeploymentStore,
+  type PlanRunInputs,
 } from "./store.ts";
 import {
   mapVaultError,
@@ -192,6 +196,7 @@ import type {
   DependencySnapshot,
   DependencySnapshotEntry,
   DependencySnapshotMode,
+  SealedDependencyValues,
 } from "takosumi-contract/dependencies";
 import {
   projectApplyRun,
@@ -628,6 +633,24 @@ export interface ReconcileInvoiceUsageInput {
   readonly createdAt?: string;
 }
 
+/**
+ * At-rest sealer for the SENSITIVE pinned values of a DependencySnapshot entry
+ * (spec §11 / §18). The host wires this with the SAME AES-GCM envelope used for
+ * state / plan / raw-output artifacts (no new key management). `seal` takes the
+ * `{ name: value }` map of an edge's sensitive values and returns the sealed
+ * blob persisted onto {@link SealedDependencyValues}; `open` reverses it at
+ * apply time. When absent, an edge that resolves a sensitive value fails closed
+ * (`dependency_value_sealer_unavailable`) rather than persisting cleartext.
+ */
+export interface DependencyValueSealer {
+  seal(
+    values: Readonly<Record<string, JsonValue>>,
+  ): Promise<SealedDependencyValues>;
+  open(
+    sealed: SealedDependencyValues,
+  ): Promise<Readonly<Record<string, JsonValue>>>;
+}
+
 export interface OpenTofuDeploymentControllerDependencies {
   readonly store?: OpenTofuDeploymentStore;
   readonly runner?: OpenTofuRunner;
@@ -691,6 +714,15 @@ export interface OpenTofuDeploymentControllerDependencies {
    * dependency injection; values are never persisted outside DependencySnapshot.
    */
   readonly sensitiveOutputResolver?: SensitiveOutputResolver;
+  /**
+   * Host-injected at-rest sealer for the sensitive pinned values of a
+   * DependencySnapshot entry (spec §11 / §18). Required whenever a
+   * `published_output` edge resolves a sensitive output: the controller seals
+   * the value into {@link SealedDependencyValues} instead of persisting it as a
+   * cleartext ledger value, and unseals it at apply. Absent ⇒ a sensitive edge
+   * fails closed.
+   */
+  readonly dependencyValueSealer?: DependencyValueSealer;
   /**
    * Operator/self-host billing default (§28). Space.billingSettings overrides
    * this. Omitted means self-host style `disabled`.
@@ -789,6 +821,15 @@ interface PlanRunInternalContext {
  */
 interface ResolvedDependencies {
   readonly injectedValues: Readonly<Record<string, JsonValue>>;
+  /**
+   * `true` when at least one injected value came from a SENSITIVE producer
+   * output. Such a value is sealed into the DependencySnapshot, but it ALSO flows
+   * into the plan `variables` and (for a generic Capsule) is baked as a literal
+   * into the generated root's `main.tf`. Both land in the runs_inputs sidecar, so
+   * when this is set the sidecar MUST be sealed at rest (spec §11 / §18: secret
+   * outputs are never stored as cleartext ledger values).
+   */
+  readonly hasSensitiveInjected: boolean;
   readonly entries: readonly DependencySnapshotEntry[];
   readonly mode: DependencySnapshotMode;
 }
@@ -854,6 +895,7 @@ export class OpenTofuDeploymentController {
   readonly #installationCoordination?: InstallationCoordination;
   readonly #activity: ActivityRecorder;
   readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
+  readonly #dependencyValueSealer?: DependencyValueSealer;
   readonly #defaultBillingSettings: BillingSettings;
   readonly #seededProfiles: Promise<void>;
   readonly #seededProviderTemplates: Promise<void>;
@@ -873,6 +915,7 @@ export class OpenTofuDeploymentController {
     this.#installationCoordination = dependencies.installationCoordination;
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
+    this.#dependencyValueSealer = dependencies.dependencyValueSealer;
     this.#defaultBillingSettings =
       dependencies.defaultBillingSettings ?? DISABLED_BILLING_SETTINGS;
     this.#defaultRunnerProfileId =
@@ -1407,13 +1450,24 @@ export class OpenTofuDeploymentController {
       outputAllowlist !== undefined ||
       build !== undefined
     ) {
-      await this.#store.putPlanRunInputs({
-        planRunId: planRun.id,
-        variables,
-        ...(generatedRoot ? { generatedRoot } : {}),
-        ...(outputAllowlist ? { outputAllowlist } : {}),
-        ...(build ? { build } : {}),
-      });
+      // A sensitive dependency-injected value flows into `variables` AND (for a
+      // generic Capsule) is baked as a literal into the generated root's
+      // `main.tf`. Both would persist in cleartext in the runs_inputs sidecar, so
+      // seal the WHOLE sidecar at rest when any sensitive value was injected (spec
+      // §11 / §18: secret outputs are never stored as cleartext ledger values).
+      // The controller unseals it transparently at plan/apply dispatch.
+      const sealSidecar =
+        internal.resolvedDependencies?.hasSensitiveInjected === true;
+      await this.#putPlanRunInputs(
+        {
+          planRunId: planRun.id,
+          variables,
+          ...(generatedRoot ? { generatedRoot } : {}),
+          ...(outputAllowlist ? { outputAllowlist } : {}),
+          ...(build ? { build } : {}),
+        },
+        sealSidecar,
+      );
     }
     if (policy.status === "passed" && this.#hasRunnerForProfile(profile)) {
       await this.#enqueueRun({
@@ -1664,6 +1718,7 @@ export class OpenTofuDeploymentController {
     );
     if (dependencies.length === 0) return undefined;
     const injectedValues: Record<string, JsonValue> = {};
+    let hasSensitiveInjected = false;
     const entries: DependencySnapshotEntry[] = [];
     for (const dependency of dependencies) {
       const producer = await this.#store.getInstallation(
@@ -1713,7 +1768,11 @@ export class OpenTofuDeploymentController {
       const outputSnapshot = producer.currentOutputSnapshotId
         ? await this.#store.getOutputSnapshot(producer.currentOutputSnapshotId)
         : undefined;
+      // Full plaintext value map for this edge (drives the digest). Sensitive
+      // keys are tracked separately so they can be sealed out of `values`
+      // before the snapshot is persisted (the digest stays over the FULL map).
       const values: Record<string, JsonValue> = {};
+      const sensitiveValues: Record<string, JsonValue> = {};
       for (const mapping of Object.values(dependency.outputs)) {
         // For published_output the mapping `from` is the SHARED name the grant
         // exposes; resolve it to the producer output name (and fail
@@ -1757,11 +1816,39 @@ export class OpenTofuDeploymentController {
         const value = resolvedValue.value;
         values[mapping.to] = value;
         injectedValues[mapping.to] = value;
+        if (sensitive) sensitiveValues[mapping.to] = value;
       }
       // Pin the snapshot entry even when no producer output existed yet so the
-      // apply-time tamper check has the full edge set; the values digest is over
-      // exactly what was injected for this edge.
+      // apply-time tamper check has the full edge set. The values digest is over
+      // the FULL plaintext value map (sensitive + non-sensitive) so it is
+      // independent of at-rest sealing.
       const valuesDigest = await stableJsonDigest(values);
+      // Seal the sensitive subset OUT of the cleartext `values` map: a resolved
+      // `published_output` secret must never land as a cleartext ledger value
+      // (spec §11 / §18). The digest above already covered the full plaintext.
+      const sensitiveNames = Object.keys(sensitiveValues);
+      let cleartextValues: Record<string, JsonValue> = values;
+      let sealedValues: SealedDependencyValues | undefined;
+      if (sensitiveNames.length > 0) {
+        hasSensitiveInjected = true;
+        if (!this.#dependencyValueSealer) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `dependency_value_sealer_unavailable: dependency ${dependency.id} ` +
+              `resolved sensitive output(s) ${sensitiveNames.join(", ")} but no ` +
+              `at-rest value sealer is configured`,
+          );
+        }
+        sealedValues = await this.#dependencyValueSealer.seal(sensitiveValues);
+        cleartextValues = Object.fromEntries(
+          Object.entries(values).filter(
+            ([key]) => !Object.prototype.hasOwnProperty.call(
+              sensitiveValues,
+              key,
+            ),
+          ),
+        );
+      }
       entries.push({
         dependencyId: dependency.id,
         producerInstallationId: producer.id,
@@ -1769,14 +1856,20 @@ export class OpenTofuDeploymentController {
         producerOutputSnapshotId: outputSnapshot?.id ?? "",
         producerOutputDigest: outputSnapshot?.outputDigest ?? "",
         valuesDigest,
-        values,
+        values: cleartextValues,
+        ...(sealedValues ? { sealedValues } : {}),
       });
     }
     const mode: DependencySnapshotMode =
       consumer.environment.trim().toLowerCase() === "production"
         ? "strict"
         : "pinned";
-    return { injectedValues, entries, mode };
+    return {
+      injectedValues,
+      hasSensitiveInjected,
+      entries,
+      mode,
+    };
   }
 
   /**
@@ -2891,7 +2984,10 @@ export class OpenTofuDeploymentController {
     }
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
     if (!this.#hasRunnerForProfile(profile)) return planRun;
-    const inputs = await this.#store.getPlanRunInputs(runId);
+    // The sidecar is sealed at rest when a sensitive dependency value was
+    // injected; #getPlanRunInputs unseals it transparently here so the plan runs
+    // against the same inputs / generated root it was created with.
+    const inputs = await this.#getPlanRunInputs(runId);
     const variables = normalizeVariables(inputs?.variables);
     const dispatch = templateDispatchFromInputs(inputs);
     try {
@@ -3005,7 +3101,8 @@ export class OpenTofuDeploymentController {
     if (!this.#hasRunnerForProfile(profile)) return { applyRun };
     // Generated-root dispatch for apply: re-read the retained inputs sidecar so
     // apply runs tofu in the SAME generated root the plan reviewed.
-    const inputs = await this.#store.getPlanRunInputs(planRun.id);
+    // #getPlanRunInputs unseals a sealed (sensitive-bearing) sidecar.
+    const inputs = await this.#getPlanRunInputs(planRun.id);
     const dispatch = templateDispatchFromInputs(inputs);
     const key = planRun.installationId ?? planRun.id;
     // Installation lease (spec §22 / §23): when a DO-backed coordination seam is
@@ -3407,8 +3504,12 @@ export class OpenTofuDeploymentController {
     }
     for (const entry of snapshot.dependencies) {
       // Tamper check (both modes): the pinned values must still hash to the
-      // pinned digest. A re-put that mutated the frozen values trips this.
-      const recomputed = await stableJsonDigest(entry.values);
+      // pinned digest. A re-put that mutated the frozen values — OR a tampered
+      // sealed-values blob (the AES-GCM auth tag and the post-decrypt content
+      // digest both fail closed) — trips this. The digest is over the FULL
+      // plaintext value map, so sealed sensitive values are recovered first.
+      const fullValues = await this.#recoverEntryValues(planRun, entry);
+      const recomputed = await stableJsonDigest(fullValues);
       if (recomputed !== entry.valuesDigest) {
         throw new OpenTofuControllerError(
           "failed_precondition",
@@ -3438,6 +3539,124 @@ export class OpenTofuDeploymentController {
         );
       }
     }
+  }
+
+  /**
+   * Recovers the FULL plaintext value map of a DependencySnapshot entry: the
+   * cleartext non-sensitive `values` merged with the unsealed sensitive values
+   * (spec §11 / §18). A sealed entry with no configured sealer fails closed
+   * (`dependency_value_sealer_unavailable`); a tampered/wrong-key blob fails
+   * closed at the AES-GCM auth tag (and the post-decrypt content digest) inside
+   * {@link DependencyValueSealer.open}. Used by the apply-time tamper check so
+   * the recomputed `valuesDigest` is over the same full plaintext that was
+   * digested at plan time.
+   */
+  async #recoverEntryValues(
+    planRun: PlanRun,
+    entry: DependencySnapshotEntry,
+  ): Promise<Readonly<Record<string, unknown>>> {
+    if (!entry.sealedValues) return entry.values;
+    if (!this.#dependencyValueSealer) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `dependency_value_sealer_unavailable: plan run ${planRun.id} dependency ` +
+          `${entry.dependencyId} pinned sealed values but no at-rest value ` +
+          `sealer is configured to open them`,
+      );
+    }
+    const unsealed = await this.#dependencyValueSealer.open(entry.sealedValues);
+    return { ...entry.values, ...unsealed };
+  }
+
+  /**
+   * Persists the runs_inputs sidecar (spec §11 / §18). When `seal` is set, the
+   * sidecar carries at least one SENSITIVE dependency-injected value — in
+   * `variables` and (for a generic Capsule) baked as a literal into the generated
+   * `main.tf` — so the WHOLE sealable payload (`variables` / `generatedRoot` /
+   * `outputAllowlist` / `build`) is encrypted into {@link PlanRunInputs.sealed}
+   * with the SAME at-rest envelope used for state / plan / dependency-value
+   * artifacts, and the cleartext fields are dropped from the row. The store only
+   * ever sees ciphertext. A sealer is REQUIRED in that case: missing ⇒ fail closed
+   * (the dependency-snapshot seal would already have failed closed upstream, but
+   * this never persists a cleartext credential under any path). When `seal` is
+   * unset the sidecar is plain (no sensitive value to protect).
+   */
+  async #putPlanRunInputs(
+    inputs: PlanRunInputs,
+    seal: boolean,
+  ): Promise<void> {
+    if (!seal) {
+      await this.#store.putPlanRunInputs(inputs);
+      return;
+    }
+    if (!this.#dependencyValueSealer) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `dependency_value_sealer_unavailable: plan run ${inputs.planRunId} ` +
+          `carries a sensitive dependency-injected value but no at-rest value ` +
+          `sealer is configured to protect the runs_inputs sidecar`,
+      );
+    }
+    const payload: Record<string, JsonValue> = {
+      variables: inputs.variables as JsonValue,
+      ...(inputs.generatedRoot
+        ? { generatedRoot: inputs.generatedRoot as unknown as JsonValue }
+        : {}),
+      ...(inputs.outputAllowlist
+        ? { outputAllowlist: inputs.outputAllowlist as unknown as JsonValue }
+        : {}),
+      ...(inputs.build
+        ? { build: inputs.build as unknown as JsonValue }
+        : {}),
+    };
+    const sealed = await this.#dependencyValueSealer.seal(payload);
+    // Cleartext sealable fields are dropped; only `planRunId` + `sealed` persist.
+    await this.#store.putPlanRunInputs({
+      planRunId: inputs.planRunId,
+      variables: {},
+      sealed,
+    });
+  }
+
+  /**
+   * Reads the runs_inputs sidecar, transparently unsealing a sensitive-bearing
+   * row (spec §11 / §18) back into the full {@link PlanRunInputs} shape so plan /
+   * apply dispatch sees the same inputs / generated root the plan was created
+   * with. A sealed row with no configured sealer fails closed; a tampered/wrong
+   * key blob fails closed at the AES-GCM auth tag + content digest inside the
+   * sealer. A plain row is returned unchanged.
+   */
+  async #getPlanRunInputs(
+    planRunId: string,
+  ): Promise<PlanRunInputs | undefined> {
+    const row = await this.#store.getPlanRunInputs(planRunId);
+    if (!row?.sealed) return row;
+    if (!this.#dependencyValueSealer) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `dependency_value_sealer_unavailable: plan run ${planRunId} sealed its ` +
+          `runs_inputs sidecar but no at-rest value sealer is configured to ` +
+          `open it`,
+      );
+    }
+    const payload = await this.#dependencyValueSealer.open(row.sealed);
+    const variables = (payload.variables ?? {}) as Readonly<
+      Record<string, JsonValue>
+    >;
+    const generatedRoot = payload.generatedRoot as unknown as
+      | DispatchGeneratedRoot
+      | undefined;
+    const outputAllowlist = payload.outputAllowlist as unknown as
+      | Readonly<Record<string, OutputAllowlistEntry>>
+      | undefined;
+    const build = payload.build as unknown as DispatchBuildSpec | undefined;
+    return {
+      planRunId,
+      variables,
+      ...(generatedRoot ? { generatedRoot } : {}),
+      ...(outputAllowlist ? { outputAllowlist } : {}),
+      ...(build ? { build } : {}),
+    };
   }
 
   /**
