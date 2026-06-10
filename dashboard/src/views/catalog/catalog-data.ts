@@ -9,24 +9,37 @@
  * user never types a Git URL by hand.
  *
  * HONESTY CONTRACT (load-bearing — each installable claim was VERIFIED by
- * running the real default-policy compatibility analyzer
+ * running the real compatibility analyzer
  * `src/service/domains/sources/capsule_compatibility.ts` against the exact git
- * path, NOT by assumption):
- *   - `installable: true` is set ONLY when that analyzer returns a level other
+ * path with the exact policy that flows at install time, NOT by assumption):
+ *   - `installable: true` is set ONLY when the analyzer returns a level other
  *     than `unsupported` (ready / auto_capsulized / needs_patch), so `/install`'s
- *     `canContinue()` actually enables. Today that is exactly TWO entries:
- *       · cloudflare-r2-storage -> `ready`            (cloudflare_r2_bucket)
- *       · aws-s3-storage        -> `auto_capsulized`  (aws_s3_bucket)
- *     Both use only providers/resources in the default allowlist and plan
- *     credential-free, so the install button is live, not dead.
+ *     `canContinue()` actually enables. Today that is FOUR entries:
+ *       · cloudflare-r2-storage     -> `ready`            (cloudflare_r2_bucket)
+ *       · aws-s3-storage            -> `auto_capsulized`  (aws_s3_bucket)
+ *         Both pass under the instance-wide DEFAULT policy (no installConfigId).
+ *       · cloudflare-static-site    -> `ready`       under the curated, BOUNDED
+ *         InstallConfig `cfg-official-cloudflare-static-site`
+ *         (allowedResourceTypes: ["cloudflare_pages_project"]).
+ *       · cloudflare-worker-service -> `needs_patch` under the curated, BOUNDED
+ *         InstallConfig `cfg-official-talk`
+ *         (allowedResourceTypes: ["cloudflare_workers_script",
+ *         "cloudflare_workers_script_subdomain"]); the only finding is a `file()`
+ *         build-artifact warning, NOT an error, so `canContinue()` enables.
+ *     The last two need a resource type that is NOT in the instance-wide DEFAULT
+ *     allowlist, so they carry an `installConfigId` and the deep link pins it.
+ *     CRITICAL: the global default allowlist (DEFAULT_ALLOWED_RESOURCE_TYPES) is
+ *     NEVER widened — each curated config's bounded `allowedResourceTypes` is
+ *     UNIONed with the default only while THAT config is in effect, scoped to
+ *     exactly that vetted first-party module, and is re-enforced at plan/apply.
  *   - `installable: false` entries render as "準備中" (coming-soon) cards with NO
  *     install button. Two honest reasons:
- *       (a) The Capsule is real but the DEFAULT install policy returns
- *           `unsupported` for it (would be a dead button). Verified cases:
- *             · takos                     (cloudflare_d1_database/_queue/_workers_kv_namespace)
- *             · cloudflare-static-site    (cloudflare_pages_project)
- *             · cloudflare-worker-service (cloudflare_workers_script_subdomain)
- *           Self-host via `tofu apply` is the supported path for takos today.
+ *       (a) The Capsule is real but no SAFE bounded curated InstallConfig exists
+ *           that makes it one-click installable. Verified case:
+ *             · takos  (cloudflare_d1_database/_queue/_workers_kv_namespace, plus
+ *               it needs a separate wrangler step after `tofu apply`, so a single
+ *               Takosumi apply is not enough). Self-host via `tofu apply` + one
+ *               wrangler step is the supported path for takos today.
  *       (b) It is NOT yet a standalone Takosumi Capsule at all — the bundled
  *           Takos apps (yurucommu / road-to-me / takos-docs / -slide / -excel /
  *           -computer) ship only a `takos_app_manifest` `outputs.tf` with no
@@ -96,6 +109,23 @@ export interface CatalogEntry {
    */
   readonly installable: boolean;
   /**
+   * Curated, service-side InstallConfig id this entry installs through. Present
+   * ONLY for installable entries whose module needs a resource type outside the
+   * instance-wide DEFAULT allowlist but is a vetted first-party Capsule: the
+   * compatibility check (and later plan/apply) is gated against this config's
+   * BOUNDED `allowedResourceTypes`, scoped to exactly this module. The default
+   * allowlist is never widened — see the honesty/security contract above. When
+   * absent (e.g. r2/s3, which already pass under the default policy) the install
+   * flow just uses the Space's first available InstallConfig profile.
+   *
+   * These ids are seeded by `officialInstallConfigs()` (official_seed.ts):
+   *   · cfg-official-cloudflare-static-site -> allowedResourceTypes
+   *       ["cloudflare_pages_project"]
+   *   · cfg-official-talk (the worker-service template alias) -> allowedResourceTypes
+   *       ["cloudflare_workers_script", "cloudflare_workers_script_subdomain"]
+   */
+  readonly installConfigId?: string;
+  /**
    * Shown on coming-soon cards to explain (plainly) why it is not yet
    * one-click installable. Omitted for installable entries.
    */
@@ -161,9 +191,14 @@ export const CATALOG: readonly CatalogEntry[] = [
     installable: true,
     note: "適用には Cloudflare の接続が必要です。",
   },
-  // HONESTY: verified `unsupported` under the default policy — the Pages module
-  // uses `cloudflare_pages_project`, not in the default allowedResourceTypes.
-  // Coming-soon (no install button) until the default policy allows it.
+  // HONESTY: this module uses `cloudflare_pages_project`, which is NOT in the
+  // instance-wide DEFAULT allowlist (so the default-policy check returns
+  // `unsupported`). It IS a vetted first-party Capsule, so it installs through
+  // the curated, BOUNDED InstallConfig `cfg-official-cloudflare-static-site`
+  // (allowedResourceTypes: ["cloudflare_pages_project"]). VERIFIED by running
+  // the real analyzer with that bounded policy -> `ready` (no errors). The
+  // global default allowlist is unchanged; the allowance is scoped to this one
+  // config and re-enforced at plan/apply.
   {
     id: "cloudflare-static-site",
     title: "静的サイト公開（Cloudflare Pages）",
@@ -174,12 +209,20 @@ export const CATALOG: readonly CatalogEntry[] = [
     gitUrl: TAKOSUMI_GIT,
     ref: "main",
     path: "opentofu-modules/cloudflare-static-site/module",
-    installable: false,
-    comingSoonReason:
-      "Cloudflare Pages の部品は、ワンクリック導入の対応が準備中です。",
+    installable: true,
+    installConfigId: "cfg-official-cloudflare-static-site",
+    note: "適用には Cloudflare の接続が必要です。",
   },
-  // HONESTY: verified `unsupported` under the default policy — uses
-  // `cloudflare_workers_script_subdomain`, not in the default allowlist.
+  // HONESTY: this module uses `cloudflare_workers_script` (in the default
+  // allowlist) AND `cloudflare_workers_script_subdomain` (NOT in the default
+  // allowlist), so the default-policy check returns `unsupported`. It IS a
+  // vetted first-party Capsule, so it installs through the curated, BOUNDED
+  // InstallConfig `cfg-official-talk` (the worker-service template alias;
+  // allowedResourceTypes: ["cloudflare_workers_script",
+  // "cloudflare_workers_script_subdomain"]). VERIFIED by running the real
+  // analyzer with that bounded policy -> `needs_patch` (only a `file()` build-
+  // artifact warning, NOT `unsupported`), so `canContinue()` enables. The
+  // global default allowlist is unchanged.
   {
     id: "cloudflare-worker-service",
     title: "小さなサーバー（Cloudflare Worker）",
@@ -190,9 +233,9 @@ export const CATALOG: readonly CatalogEntry[] = [
     gitUrl: TAKOSUMI_GIT,
     ref: "main",
     path: "opentofu-modules/cloudflare-worker-service/module",
-    installable: false,
-    comingSoonReason:
-      "Cloudflare Worker の部品は、ワンクリック導入の対応が準備中です。",
+    installable: true,
+    installConfigId: "cfg-official-talk",
+    note: "適用には Cloudflare の接続が必要です。",
   },
   {
     id: "aws-s3-storage",
@@ -325,5 +368,12 @@ export function installHref(entry: CatalogEntry): string {
   params.set("git", entry.gitUrl);
   params.set("ref", entry.ref);
   params.set("path", entry.path);
+  // Curated entries pin their bounded InstallConfig so the compatibility check
+  // (and plan/apply) is gated against that module's minimal allowlist instead of
+  // only the instance-wide default. Omitted when the module already passes under
+  // the default policy (r2/s3).
+  if (entry.installConfigId) {
+    params.set("installConfig", entry.installConfigId);
+  }
   return `/install?${params.toString()}`;
 }
