@@ -428,11 +428,47 @@ function collectSchemaRefs(value: unknown, output: Set<string>): void {
   for (const item of Object.values(record)) collectSchemaRefs(item, output);
 }
 
+/**
+ * Open JSON object schema (`{ type: "object", additionalProperties: true }`)
+ * shared by several fragments. Hoisted to module scope so the per-domain
+ * fragment functions below can reuse the identical shape.
+ */
+const jsonObject = {
+  type: "object",
+  additionalProperties: true,
+};
+
+/**
+ * Composes the OpenAPI `components.schemas` map from cohesive per-domain
+ * fragment functions. The order of fragments is cosmetic only —
+ * {@link filterReferencedSchemas} re-sorts schema names before emission, so the
+ * produced document is byte-identical regardless of fragment order.
+ */
 function createSchemas(): Record<string, Record<string, unknown>> {
-  const jsonObject = {
-    type: "object",
-    additionalProperties: true,
+  return {
+    ...processSchemas(),
+    ...runnerSchemas(),
+    ...installationSchemas(),
+    ...capsuleSchemas(),
+    ...providerTemplateSchemas(),
+    ...outputSchemas(),
+    ...connectionSchemas(),
+    ...sourceSchemas(),
+    ...artifactSchemas(),
+    ...billingSchemas(),
+    ...dependencySchemas(),
+    ...spaceSchemas(),
+    ...runSchemas(),
+    ...activitySchemas(),
+    ...backupSchemas(),
+    ...outputShareSchemas(),
+    ...runtimeAgentSchemas(),
+    ...errorSchemas(),
   };
+}
+
+/** Process inventory, health, capabilities, and the shared Condition shape. */
+function processSchemas(): Record<string, Record<string, unknown>> {
   const condition = {
     type: "object",
     required: ["type", "status"],
@@ -530,6 +566,15 @@ function createSchemas(): Record<string, Record<string, unknown>> {
         ],
       },
     },
+  };
+}
+
+/**
+ * OpenTofu module source variants plus the runner contract shapes (state
+ * backend, credential references, execution targets, policy, plan artifacts).
+ */
+function runnerSchemas(): Record<string, Record<string, unknown>> {
+  return {
     OpenTofuGitModuleSource: {
       type: "object",
       required: ["kind", "url"],
@@ -737,6 +782,12 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/** Installation records and their service-side InstallConfig. */
+function installationSchemas(): Record<string, Record<string, unknown>> {
+  return {
     Installation: {
       type: "object",
       required: [
@@ -873,6 +924,15 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/**
+ * Capsule Gate / Compatibility Report shapes: findings, provider / resource /
+ * data-source / provisioner requirements, and the aggregate report.
+ */
+function capsuleSchemas(): Record<string, Record<string, unknown>> {
+  return {
     CapsuleCompatibilityFinding: {
       type: "object",
       required: ["severity", "code", "message"],
@@ -975,6 +1035,15 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/**
+ * Provider Templates catalog (credential sources / helpers / template records)
+ * plus the compatibility-check request/response wrappers that bind to it.
+ */
+function providerTemplateSchemas(): Record<string, Record<string, unknown>> {
+  return {
     ProviderCredentialSource: {
       enum: ["takosumi_managed", "user_env_set"],
     },
@@ -1056,6 +1125,12 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/** OutputSnapshot / Deployment projections and their read wrappers. */
+function outputSchemas(): Record<string, Record<string, unknown>> {
+  return {
     OutputSnapshot: {
       type: "object",
       description:
@@ -1134,6 +1209,15 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/**
+ * Connection records, operator default bindings, and the credential creation /
+ * OAuth / impersonation / test helper request+response shapes.
+ */
+function connectionSchemas(): Record<string, Record<string, unknown>> {
+  return {
     ConnectionScope: {
       type: "object",
       properties: {
@@ -1421,6 +1505,12 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/** Git Source registrations, SourceSnapshots, and source-sync run shapes. */
+function sourceSchemas(): Record<string, Record<string, unknown>> {
+  return {
     Source: {
       type: "object",
       required: [
@@ -1578,6 +1668,12 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/** Artifact store shapes plus the shared binary / empty response stubs. */
+function artifactSchemas(): Record<string, Record<string, unknown>> {
+  return {
     ArtifactStored: {
       type: "object",
       required: ["hash", "kind", "size", "uploadedAt"],
@@ -1639,6 +1735,15 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     EmptyResponse: {
       description: "No response body.",
     },
+  };
+}
+
+/**
+ * Space-scoped billing ledger: settings, credit balance/usage/reservation,
+ * account/subscription/plan records, and the billing request+response wrappers.
+ */
+function billingSchemas(): Record<string, Record<string, unknown>> {
+  return {
     BillingSettings: {
       oneOf: [
         {
@@ -1903,6 +2008,12 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/** Dependency DAG edge shapes and their request/response wrappers. */
+function dependencySchemas(): Record<string, Record<string, unknown>> {
+  return {
     DependencyOutputMapping: {
       type: "object",
       required: ["from", "to", "required"],
@@ -1975,6 +2086,15 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/**
+ * Space records plus the Installation create/patch/read wrappers and
+ * InstallConfig list/read responses that hang off a Space.
+ */
+function spaceSchemas(): Record<string, Record<string, unknown>> {
+  return {
     Space: {
       type: "object",
       required: [
@@ -2077,6 +2197,12 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/** Run + RunGroup ledger shapes and their log/event/read wrappers. */
+function runSchemas(): Record<string, Record<string, unknown>> {
+  return {
     Run: {
       type: "object",
       required: ["id", "spaceId", "type", "status", "createdBy", "createdAt"],
@@ -2189,6 +2315,12 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       properties: { runGroup: ref("RunGroup") },
       additionalProperties: false,
     },
+  };
+}
+
+/** Space-scoped Activity audit-trail shapes. */
+function activitySchemas(): Record<string, Record<string, unknown>> {
+  return {
     ActivityEvent: {
       type: "object",
       required: [
@@ -2221,6 +2353,15 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/**
+ * Backup record / artifact-pointer shapes, plus the co-located PatchSpace and
+ * Deployment read wrappers.
+ */
+function backupSchemas(): Record<string, Record<string, unknown>> {
+  return {
     BackupArtifactPointer: {
       type: "object",
       required: ["objectKey", "digest", "sizeBytes"],
@@ -2306,6 +2447,14 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       properties: { deployment: ref("Deployment") },
       additionalProperties: false,
     },
+  };
+}
+
+/**
+ * Cross-Space OutputShare shapes plus the co-located ApproveRun request body.
+ */
+function outputShareSchemas(): Record<string, Record<string, unknown>> {
+  return {
     OutputShareEntry: {
       type: "object",
       required: ["name", "sensitive"],
@@ -2398,6 +2547,15 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/**
+ * Runtime-agent enrollment / lease / heartbeat / report shapes and the gateway
+ * manifest contract for external (non-managed) runners.
+ */
+function runtimeAgentSchemas(): Record<string, Record<string, unknown>> {
+  return {
     RuntimeAgentCapabilities: {
       type: "object",
       required: ["providers"],
@@ -2665,6 +2823,12 @@ function createSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+  };
+}
+
+/** Canonical RFC-7807-ish error envelope referenced by every error response. */
+function errorSchemas(): Record<string, Record<string, unknown>> {
+  return {
     ErrorResponse: {
       type: "object",
       required: ["error"],

@@ -212,10 +212,16 @@ export async function handleUpstreamCallbackRequest(input: {
       }),
       { status: 200, headers },
     );
-  } catch (error) {
+  } catch {
+    // Do not reflect the thrown error's message to the (unauthenticated)
+    // browser: it can carry upstream token/userinfo endpoint detail, a failed
+    // status line, or — for a network failure — an internal host/IP. This
+    // matches the Cloudflare credential-OAuth callback (which never surfaces
+    // upstream/state failure detail) and the `upstreamOAuthNotConfigured`
+    // posture. The typed `upstream_oauth_failed` code is preserved for callers.
     return json({
       error: "upstream_oauth_failed",
-      error_description: error instanceof Error ? error.message : String(error),
+      error_description: "Sign-in could not be completed. Please try again.",
     }, 502);
   }
 }

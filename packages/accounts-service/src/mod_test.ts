@@ -2167,6 +2167,50 @@ test("accounts handler rejects upstream OAuth callback state mismatches", async 
   expect(upstreamFetchCalled).toEqual(false);
 });
 
+test("accounts handler does not leak upstream failure detail on a failed OAuth callback", async () => {
+  // A thrown exchange error can carry the upstream token/userinfo endpoint, a
+  // failed status line, or an internal host/IP from a network failure. The
+  // (unauthenticated) callback must reflect only the typed code + a generic
+  // description, never the thrown message.
+  const secretDetail =
+    "token exchange failed: connect ECONNREFUSED 10.0.0.7:443 oauth-internal.example";
+  const handler = createAccountsHandler({
+    upstreamOAuth: {
+      subjectSecret: "subject-secret",
+      fetch: () => Promise.reject(new Error(secretDetail)),
+      providers: [
+        {
+          providerId: "github",
+          clientId: "github-client",
+          clientSecret: "github-secret",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+        },
+      ],
+    },
+  });
+  const authorizeResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/auth/upstream/authorize?provider=github&state=state-fail",
+    ),
+  );
+  const stateCookie = authorizeResponse.headers.get("set-cookie") ?? "";
+  expect(stateCookie).toContain("takosumi_oauth_state=state-fail");
+
+  const response = await handler(
+    new Request(
+      "https://accounts.example.test/v1/auth/upstream/callback?provider=github&code=code-1&state=state-fail",
+      { headers: { cookie: stateCookie } },
+    ),
+  );
+  expect(response.status).toEqual(502);
+  const text = await response.text();
+  expect(JSON.parse(text).error).toEqual("upstream_oauth_failed");
+  expect(text).not.toContain(secretDetail);
+  expect(text).not.toContain("10.0.0.7");
+  expect(text).not.toContain("oauth-internal.example");
+});
+
 test("accounts handler does not launch-gate upstream OAuth authorize and callback when managed offering access is closed", async () => {
   // Upstream OAuth is generic sign-in surface, not a managed-offering surface:
   // the launch gate no longer applies. Authorize issues the provider redirect
