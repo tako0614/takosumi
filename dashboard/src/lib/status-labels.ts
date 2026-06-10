@@ -217,6 +217,40 @@ export function controlRunStatusClass(status: string | undefined): string {
   return CONTROL_RUN_STATUS_CLASSES[status] ?? "";
 }
 
+/**
+ * Deployment status (spec §21): `active` / `superseded` / `rolled_back` /
+ * `destroyed`. The dashboard speaks「現在」/「過去」for the deployment history,
+ * so these are short plain-Japanese state labels.
+ */
+const CONTROL_DEPLOYMENT_STATUS_LABELS: Record<string, string> = {
+  active: "稼働中",
+  superseded: "置き換え済み",
+  rolled_back: "巻き戻し済み",
+  destroyed: "削除済み",
+};
+
+export function controlDeploymentStatusLabel(
+  status: string | undefined,
+): string {
+  if (!status) return UNKNOWN_LABEL;
+  return CONTROL_DEPLOYMENT_STATUS_LABELS[status] ?? status;
+}
+
+/** Deployment status → `.status-*` pill modifier class. */
+const CONTROL_DEPLOYMENT_STATUS_CLASSES: Record<string, string> = {
+  active: "status-ready",
+  superseded: "status-suspended",
+  rolled_back: "status-suspended",
+  destroyed: "status-suspended",
+};
+
+export function controlDeploymentStatusClass(
+  status: string | undefined,
+): string {
+  if (!status) return "";
+  return CONTROL_DEPLOYMENT_STATUS_CLASSES[status] ?? "";
+}
+
 /** Run policy status (spec §25): `pass` / `warn` / `deny`. */
 const CONTROL_POLICY_STATUS_LABELS: Record<string, string> = {
   pass: "問題なし",

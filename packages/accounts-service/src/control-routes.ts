@@ -32,7 +32,9 @@ import type {
   CreateApplyRunRequest,
   CreateConnectionRequest,
   DeployControlErrorCode,
+  Deployment,
   ListConnectionsResponse,
+  ListDeploymentsResponse,
   ListRunnerProfilesResponse,
   PlanRunResponse,
   PublicPlanRun,
@@ -111,6 +113,22 @@ function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
   } = config;
   return publicRecord;
 }
+
+/**
+ * Public projection of a Deployment for the account-plane session surface. It
+ * keeps the allowlist-projected `outputsPublic` map (sensitive outputs never
+ * enter the ledger row) and drops the `outputSnapshotId` pointer to the raw
+ * encrypted OutputSnapshot, so the dashboard read never exposes a handle to the
+ * un-projected output envelope. The raw envelope is reachable only through the
+ * explicit OutputShare flow, not this read.
+ */
+function publicDeployment(deployment: Deployment): PublicDeployment {
+  const { outputSnapshotId: _outputSnapshotId, ...rest } = deployment;
+  return rest;
+}
+
+/** Deployment row with the raw OutputSnapshot pointer projected out. */
+type PublicDeployment = Omit<Deployment, "outputSnapshotId">;
 
 /**
  * Structural subset of the host's `TakosumiOperations` facade the control
@@ -316,6 +334,31 @@ export interface ControlPlaneOperations {
    * confirmation) and rejects with a typed `failed_precondition` otherwise.
    */
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
+  // --- Deployments (§21 / §30) ---
+  /**
+   * Lists an Installation's Deployment ledger (§30 `GET
+   * /api/installations/:id/deployments`). The control surface resolves the
+   * Installation's owning Space first and space-permission gates before calling
+   * this; the returned `Deployment` rows only carry the allowlist-projected
+   * `outputsPublic` map (sensitive outputs never enter the ledger row).
+   */
+  listDeployments(installationId: string): Promise<ListDeploymentsResponse>;
+  /**
+   * Reads one Deployment ledger record by id (§30 `GET /api/deployments/:id`).
+   * Used by the control surface to resolve a Deployment's owning Space (for the
+   * space-permission gate) and to project its public fields. A missing id is a
+   * typed `not_found`.
+   */
+  getDeployment(id: string): Promise<Deployment>;
+  /**
+   * Creates a rollback PLAN run for a Deployment (§30 `POST
+   * /api/deployments/:id/rollback-plan`): re-plans the Deployment's Installation
+   * pinned to that Deployment's source snapshot. The plan then flows through the
+   * normal approve/apply path, so the response is a `PlanRunResponse`.
+   */
+  createDeploymentRollbackPlan(
+    deploymentId: string,
+  ): Promise<PlanRunResponse>;
   getRun(id: string): Promise<Run>;
   approveRun(
     id: string,
@@ -620,6 +663,10 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       });
       return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
     }
+    if (leaf === "deployments" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return await listInstallationDeployments(operations, installationId);
+    }
     if (leaf === "dependencies" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       return await createDependency(
@@ -762,6 +809,35 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       input.session.subject,
       planRunId,
     );
+  }
+
+  // /v1/control/deployments/:deploymentId ; .../rollback-plan — session-authed
+  // deployment read + rollback (§30 GUI deploy). Each resolves the Deployment to
+  // learn its owning Space, then space-permission gates before projecting /
+  // mutating. The read returns ONLY the allowlist-projected outputsPublic (no
+  // raw output envelope, no outputSnapshotId pointer, no sensitive values).
+  if (segments[0] === "deployments" && segments.length >= 2) {
+    const deploymentId = decodeURIComponent(segments[1] ?? "");
+    const deployment = await operations.getDeployment(deploymentId);
+    const auth = await requireSpaceAccess({
+      operations,
+      store,
+      spaceId: deployment.spaceId,
+      subject: input.session.subject,
+    });
+    if (!auth.ok) return auth.response;
+    if (segments.length === 2) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return json({ deployment: publicDeployment(deployment) });
+    }
+    if (segments[2] === "rollback-plan" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      return jsonStatus(
+        await operations.createDeploymentRollbackPlan(deploymentId),
+        201,
+      );
+    }
+    return json({ error: "not_found" }, 404);
   }
 
   // /v1/control/runs/:id ; .../approve ; .../logs
@@ -1034,6 +1110,20 @@ async function listSpaceInstallations(
   return json({
     installations: records.map(publicInstallation),
   });
+}
+
+/**
+ * Lists an Installation's Deployment ledger for the dashboard session. The
+ * caller has already resolved the Installation and space-permission gated on its
+ * Space (see dispatch); each row is projected to drop the raw OutputSnapshot
+ * pointer and carries only the allowlist-projected `outputsPublic`.
+ */
+async function listInstallationDeployments(
+  operations: ControlPlaneOperations,
+  installationId: string,
+): Promise<Response> {
+  const { deployments } = await operations.listDeployments(installationId);
+  return json({ deployments: deployments.map(publicDeployment) });
 }
 
 async function getInstallation(

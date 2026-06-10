@@ -4,6 +4,7 @@ import {
   createResource,
   createSignal,
   For,
+  type JSX,
   Match,
   Show,
   Switch,
@@ -19,6 +20,7 @@ import {
   type ProviderBinding,
   type ProviderBindingMode,
   type ProviderBindings,
+  createDeploymentRollbackPlan,
   createInstallationBackup,
   destroyPlanInstallation,
   extractRunId,
@@ -26,6 +28,7 @@ import {
   getInstallation,
   getSpaceGraph,
   listConnections,
+  listDeployments,
   listInstallConfigs,
   listOperatorConnectionDefaults,
   listSources,
@@ -34,6 +37,8 @@ import {
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
+  controlDeploymentStatusClass,
+  controlDeploymentStatusLabel,
   controlInstallationStatusClass,
   controlInstallationStatusLabel,
 } from "../../lib/status-labels.ts";
@@ -58,6 +63,7 @@ function Inner() {
   );
   const [sources] = createResource(spaceId, listSources);
   const [configs] = createResource(spaceId, listInstallConfigs);
+  const [deployments] = createResource(installationId, listDeployments);
   const [graph] = createResource(spaceId, getSpaceGraph);
   const [connections] = createResource(spaceId, listConnections);
   const [operatorDefaults] = createResource(spaceId, async (id) =>
@@ -115,6 +121,28 @@ function Inner() {
         outputs: Object.values(edge.outputs),
       }));
   });
+  // Deployment history sorted newest-first (the backend already returns newest
+  // first, but re-sort defensively so the "現在" deployment is always row 0).
+  const deploymentHistory = createMemo(() =>
+    [...(deployments() ?? [])].sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt),
+    ),
+  );
+  // The deployment whose outputs we surface: the Installation's current one if
+  // present, else the newest in the ledger.
+  const currentDeployment = createMemo(() => {
+    const list = deploymentHistory();
+    const currentId = installation()?.currentDeploymentId;
+    return (
+      (currentId && list.find((d) => d.id === currentId)) || list[0] || undefined
+    );
+  });
+  // Public outputs (launch_url etc.) of the current deployment. Sensitive
+  // outputs never reach this map — the backend projects only the allowlist.
+  const publicOutputs = createMemo(() =>
+    Object.entries(currentDeployment()?.outputsPublic ?? {}),
+  );
+
   const defaultByProvider = createMemo(() => {
     const map = new Map<string, string>();
     for (const item of operatorDefaults() ?? []) {
@@ -135,6 +163,13 @@ function Inner() {
   });
   const backup = createAction(async (): Promise<BackupRecord> => {
     return await createInstallationBackup(installationId());
+  });
+  // "この状態に戻す": kick a rollback PLAN run for a past Deployment, then send
+  // the operator into the normal 変更を確認 → 承認 → 公開 flow on the Run screen.
+  const rollback = createAction(async (deploymentId: string) => {
+    const envelope = await createDeploymentRollbackPlan(deploymentId);
+    const runId = extractRunId(envelope);
+    if (runId) navigate(`/runs/${runId}`);
   });
   const saveProfile = createAction(async () => {
     setFormError(null);
@@ -212,6 +247,9 @@ function Inner() {
               <Show when={backup.error()}>
                 {(m) => <p class="sign-in-error">{m()}</p>}
               </Show>
+              <Show when={rollback.error()}>
+                {(m) => <p class="sign-in-error">{m()}</p>}
+              </Show>
               <Show when={backup.result()}>
                 {(record) => (
                   <p class="muted backup-progress">
@@ -286,6 +324,107 @@ function Inner() {
                     </dl>
                   )}
                 </Show>
+              </section>
+
+              <section class="detail-section">
+                <h2>出力</h2>
+                <p class="page-sub">
+                  アプリが公開しているアドレスや値です。秘密情報は表示されません。
+                </p>
+                <Switch>
+                  <Match when={deployments.loading}>
+                    <p class="muted">読み込み中です。</p>
+                  </Match>
+                  <Match when={publicOutputs().length === 0}>
+                    <p class="muted">
+                      まだ公開された出力はありません。変更を反映すると表示されます。
+                    </p>
+                  </Match>
+                  <Match when={publicOutputs().length > 0}>
+                    <dl class="kv-list">
+                      <For each={publicOutputs()}>
+                        {([name, value]) => (
+                          <>
+                            <dt>{outputLabel(name)}</dt>
+                            <dd>
+                              <OutputValue value={value} />
+                            </dd>
+                          </>
+                        )}
+                      </For>
+                    </dl>
+                  </Match>
+                </Switch>
+              </section>
+
+              <section class="detail-section">
+                <h2>デプロイ履歴</h2>
+                <p class="page-sub">
+                  これまでに反映された状態の記録です。過去の状態を選ぶと、その内容に戻す変更を確認できます。
+                </p>
+                <Switch>
+                  <Match when={deployments.loading}>
+                    <p class="muted">読み込み中です。</p>
+                  </Match>
+                  <Match when={deployments.error}>
+                    <p class="sign-in-error">
+                      履歴の取得に失敗しました —{" "}
+                      {(deployments.error as ControlApiError).message}
+                    </p>
+                  </Match>
+                  <Match when={deploymentHistory().length === 0}>
+                    <p class="muted">まだデプロイ履歴はありません。</p>
+                  </Match>
+                  <Match when={deploymentHistory().length > 0}>
+                    <ul class="deployment-history">
+                      <For each={deploymentHistory()}>
+                        {(deployment) => {
+                          const isCurrent = () =>
+                            deployment.id === currentDeployment()?.id;
+                          return (
+                            <li class="deployment-history-row">
+                              <div class="deployment-history-main">
+                                <span class="deployment-history-when">
+                                  {formatTimestamp(deployment.createdAt)}
+                                </span>
+                                <Show when={isCurrent()}>
+                                  <StatusPill class="status-ready">
+                                    現在
+                                  </StatusPill>
+                                </Show>
+                                <StatusPill
+                                  class={controlDeploymentStatusClass(
+                                    deployment.status,
+                                  )}
+                                >
+                                  {controlDeploymentStatusLabel(
+                                    deployment.status,
+                                  )}
+                                </StatusPill>
+                              </div>
+                              <div class="deployment-history-meta muted">
+                                世代 {deployment.stateGeneration} ·{" "}
+                                <code>{deployment.id}</code>
+                              </div>
+                              <Show when={!isCurrent()}>
+                                <button
+                                  class="btn btn-secondary"
+                                  type="button"
+                                  disabled={rollback.busy()}
+                                  onClick={() =>
+                                    void rollback.run(deployment.id)
+                                  }
+                                >
+                                  この状態に戻す
+                                </button>
+                              </Show>
+                            </li>
+                          );
+                        }}
+                      </For>
+                    </ul>
+                  </Match>
+                </Switch>
               </section>
 
               <section class="detail-section">
@@ -493,6 +632,73 @@ function DependencyList(props: {
       </Show>
     </div>
   );
+}
+
+/**
+ * Friendly label for a public output key. `launch_url` / `url` / endpoints are
+ * the ones a non-developer cares about, so give the common ones plain Japanese;
+ * anything else shows its raw key.
+ */
+function outputLabel(name: string): string {
+  return OUTPUT_LABELS[name] ?? name;
+}
+
+const OUTPUT_LABELS: Record<string, string> = {
+  launch_url: "アプリのアドレス",
+  url: "アドレス",
+  app_url: "アプリのアドレス",
+  public_url: "公開アドレス",
+  endpoint: "エンドポイント",
+  hostname: "ホスト名",
+};
+
+/** True for a string value that looks like an http(s) address worth linking. */
+function isUrlString(value: unknown): value is string {
+  return typeof value === "string" && /^https?:\/\//i.test(value.trim());
+}
+
+/**
+ * Renders a single public output value. http(s) values become a prominent,
+ * clickable link (the "目立たせ" launch_url case); everything else renders as
+ * monospace text. Non-primitive values fall back to compact JSON.
+ */
+function OutputValue(props: { readonly value: unknown }): JSX.Element {
+  return (
+    <Switch
+      fallback={<code>{stringifyOutput(props.value)}</code>}
+    >
+      <Match when={isUrlString(props.value)}>
+        <a
+          class="btn btn-primary output-launch"
+          href={props.value as string}
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          {props.value as string}
+        </a>
+      </Match>
+      <Match when={typeof props.value === "string"}>
+        <code>{props.value as string}</code>
+      </Match>
+    </Switch>
+  );
+}
+
+function stringifyOutput(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/** Format an ISO timestamp for the history list, falling back to the raw value. */
+function formatTimestamp(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString();
 }
 
 interface ProviderBindingRow {

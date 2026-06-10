@@ -452,6 +452,36 @@ export interface SourceSnapshot {
   readonly fetchedAt: string;
 }
 
+export type DeploymentStatus =
+  | "active"
+  | "superseded"
+  | "rolled_back"
+  | "destroyed";
+
+/**
+ * Public projection of a Deployment as returned by the session control surface
+ * (`GET /v1/control/installations/:id/deployments` and
+ * `GET /v1/control/deployments/:id`). The backend intentionally drops the raw
+ * `outputSnapshotId` pointer and returns ONLY the allowlist-projected
+ * `outputsPublic` map (sensitive outputs never enter the ledger row), so the
+ * dashboard read never exposes a handle to the un-projected output envelope.
+ * Mirror of the deploy-control `PublicDeployment` (Omit<Deployment,
+ * "outputSnapshotId">) — keep in sync with packages/schema/src/deployments.ts.
+ */
+export interface PublicDeployment {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly installationId: string;
+  readonly environment: string;
+  readonly applyRunId: string;
+  readonly sourceSnapshotId: string;
+  readonly dependencySnapshotId?: string;
+  readonly stateGeneration: number;
+  readonly outputsPublic: Readonly<Record<string, unknown>>;
+  readonly status: DeploymentStatus;
+  readonly createdAt: string;
+}
+
 export interface OutputShareEntry {
   readonly name: string;
   readonly alias?: string;
@@ -1001,6 +1031,56 @@ export async function createApplyRun(
       method: "POST",
       body: input.confirmDestructive ? { confirmDestructive: true } : {},
     },
+  );
+}
+
+// --- Deployments -----------------------------------------------------------
+
+/**
+ * Lists an Installation's Deployment ledger (current + past) for the dashboard
+ * session (`GET /v1/control/installations/:id/deployments`). The backend
+ * resolves the Installation's owning Space and space-permission gates first;
+ * each row carries only the allowlist-projected `outputsPublic` (no sensitive
+ * outputs, no raw output-snapshot pointer). Rows arrive newest-first.
+ */
+export async function listDeployments(
+  installationId: string,
+): Promise<readonly PublicDeployment[]> {
+  const body = await controlFetch<{ deployments?: readonly PublicDeployment[] }>(
+    `${BASE}/installations/${encodeURIComponent(installationId)}/deployments`,
+  );
+  return body.deployments ?? [];
+}
+
+/**
+ * Reads one Deployment ledger record by id (`GET
+ * /v1/control/deployments/:id`). Space-permission gated server-side; the
+ * returned record is the public projection (outputsPublic only, no
+ * outputSnapshotId, no sensitive values).
+ */
+export async function getDeployment(
+  deploymentId: string,
+): Promise<PublicDeployment> {
+  const body = await controlFetch<{ deployment: PublicDeployment }>(
+    `${BASE}/deployments/${encodeURIComponent(deploymentId)}`,
+  );
+  return body.deployment;
+}
+
+/**
+ * Creates a rollback PLAN run for a Deployment ("この状態に戻す" —
+ * `POST /v1/control/deployments/:id/rollback-plan`): re-plans the Deployment's
+ * Installation pinned to that Deployment's source snapshot. The plan then flows
+ * through the normal approve → apply path, so the response is the plan-run
+ * envelope (`{ planRun: { id, ... } }`) and the caller navigates to the Run
+ * screen (extract the id with {@link extractRunId}).
+ */
+export async function createDeploymentRollbackPlan(
+  deploymentId: string,
+): Promise<unknown> {
+  return await controlFetch<unknown>(
+    `${BASE}/deployments/${encodeURIComponent(deploymentId)}/rollback-plan`,
+    { method: "POST" },
   );
 }
 
