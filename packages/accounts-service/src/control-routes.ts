@@ -130,6 +130,43 @@ function publicDeployment(deployment: Deployment): PublicDeployment {
 /** Deployment row with the raw OutputSnapshot pointer projected out. */
 type PublicDeployment = Omit<Deployment, "outputSnapshotId">;
 
+// --- Membership (Space members / roles) ------------------------------------
+//
+// Structural mirror of the in-process membership domain
+// (`src/service/domains/membership`). The control routes describe the membership
+// shapes structurally (like the rest of `ControlPlaneOperations`) so the
+// `packages/` layer never imports back into `src/service/`; the host's wired
+// `TakosumiOperations` facade supplies the concrete service.
+
+/** A Space member's role. Mirrors the membership domain's `SpaceRole`. */
+export type ControlSpaceRole = "owner" | "admin" | "member" | "viewer";
+
+/** A member's lifecycle status. Mirrors the membership domain's `MembershipStatus`. */
+export type ControlMembershipStatus = "active" | "invited" | "suspended";
+
+/**
+ * Public projection of one Space membership for the dashboard session surface.
+ * It carries the member's account id, roles, status, and timestamps — no
+ * credential, email, or other PII beyond the account handle the caller already
+ * addresses.
+ */
+export interface PublicSpaceMember {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly accountId: string;
+  readonly roles: readonly ControlSpaceRole[];
+  readonly status: ControlMembershipStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** The mutation actor the control surface passes to the membership service. */
+interface MembershipActor {
+  readonly actorAccountId: string;
+  readonly roles: readonly string[];
+  readonly requestId: string;
+}
+
 /**
  * Structural subset of the host's `TakosumiOperations` facade the control
  * routes call. `TakosumiOperations` (wired in `src/service/bootstrap.ts`)
@@ -156,6 +193,35 @@ export interface ControlPlaneOperations {
         readonly policy?: PolicyConfig;
       },
     ): Promise<Space>;
+  };
+  // --- Members (membership domain: Space members + roles) ---
+  //
+  // Backed in-process by the membership domain's
+  // `MembershipRoleEntitlementService` (`listSpaceMemberships` /
+  // `upsertSpaceMembership`). The control surface resolves the Space server-side
+  // and enforces the role gate BEFORE calling these; the service's own
+  // owner/admin gate is a defense-in-depth backstop. The membership domain has
+  // no hard-delete and no invitation/notification machinery, so:
+  //   - `addMember` upserts (handle/subject is added directly as an active or
+  //     invited member; there is no email invite or notification side-channel),
+  //   - `removeMember` is a SOFT remove (`status: "suspended"`), since the
+  //     membership store exposes no delete.
+  readonly members?: {
+    /** Lists a Space's memberships (membership domain `listSpaceMemberships`). */
+    listMembers(spaceId: string): Promise<readonly PublicSpaceMember[]>;
+    /**
+     * Adds or updates one Space membership (membership domain
+     * `upsertSpaceMembership`). Used for invite/add and for role changes; a
+     * `status: "suspended"` upsert is the soft-remove path. Returns the upserted
+     * membership projection.
+     */
+    upsertMember(input: {
+      readonly spaceId: string;
+      readonly accountId: string;
+      readonly roles?: readonly ControlSpaceRole[];
+      readonly status?: ControlMembershipStatus;
+      readonly actor: MembershipActor;
+    }): Promise<PublicSpaceMember>;
   };
   // --- Installations + InstallConfigs (§5 / §11) ---
   readonly installations: {
@@ -558,6 +624,51 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       return methodNotAllowed("GET, PATCH");
     }
     const leaf = segments[2];
+    if (leaf === "members") {
+      // /v1/control/spaces/:spaceId/members[/:subject]. The Space is already
+      // resolved server-side and namespace-gated above; the member handlers add
+      // the membership-ROLE gate (list = any member; mutate = owner/admin;
+      // role-change + remove = owner-only with a last-owner guard).
+      if (segments.length === 3) {
+        if (method === "GET") {
+          return await listSpaceMembers(
+            operations,
+            spaceId,
+            input.session.subject,
+          );
+        }
+        if (method === "POST") {
+          return await addSpaceMember(
+            request,
+            operations,
+            spaceId,
+            input.session.subject,
+          );
+        }
+        return methodNotAllowed("GET, POST");
+      }
+      if (segments.length === 4) {
+        const targetSubject = decodeURIComponent(segments[3] ?? "");
+        if (method === "PATCH") {
+          return await changeSpaceMemberRole(
+            request,
+            operations,
+            spaceId,
+            input.session.subject,
+            targetSubject,
+          );
+        }
+        if (method === "DELETE") {
+          return await removeSpaceMember(
+            operations,
+            spaceId,
+            input.session.subject,
+            targetSubject,
+          );
+        }
+        return methodNotAllowed("PATCH, DELETE");
+      }
+    }
     if (leaf === "installations" && segments.length === 3) {
       if (method === "GET")
         return await listSpaceInstallations(operations, spaceId);
@@ -1042,7 +1153,9 @@ async function createSpace(
     );
   }
   // ownerUserId is the session account id (the authenticated subject); the
-  // dashboard never supplies it. Space-membership reconciliation is post-MVP.
+  // dashboard never supplies it. The membership ledger seeds no row here; the
+  // member handlers grant the namespace owner an implicit active-owner row (see
+  // `effectiveMembers`) so they can bootstrap the first membership.
   const space = await operations.spaces.createSpace({
     handle,
     displayName: displayName ?? handle,
@@ -1098,6 +1211,359 @@ async function updateSpace(
     );
   }
   return json({ space: await operations.spaces.updateSpace(spaceId, patch) });
+}
+
+// --- Members (Space membership / roles) ------------------------------------
+//
+// The Space is resolved server-side and namespace-gated by `requireSpaceAccess`
+// in dispatch BEFORE these run. On top of that namespace gate, every member
+// handler enforces the membership-ROLE gate from the membership ledger itself:
+//
+//   - list:        any active member of the Space (member 可),
+//   - add/invite:  owner or admin only; a POST that overwrites an EXISTING
+//                  active owner is owner-only and last-owner-guarded (same as
+//                  the PATCH path) so POST cannot escalate or orphan,
+//   - role change: owner only,
+//   - remove:      owner only, and the LAST remaining owner can never be removed
+//                  or demoted (last-owner guard) so a Space is never left
+//                  unmanaged.
+//
+// The spaces domain seeds NO membership row when a Space is created, so the
+// roster starts empty. To keep the mutation gate aligned with the namespace
+// gate (which already trusts `Space.ownerUserId`) and to let the namespace owner
+// bootstrap the first membership, every handler reads the roster via
+// `effectiveMembers`, which adds an IMPLICIT active owner row for the namespace
+// owner whenever the ledger has no active row for them. The first real
+// `upsertMember` the owner performs persists a concrete row.
+//
+// `targetSubject` / the session subject are matched against the membership
+// ledger's `accountId`; the spaceId is never taken from the client body.
+
+const MEMBER_ROLES: readonly ControlSpaceRole[] = [
+  "owner",
+  "admin",
+  "member",
+  "viewer",
+];
+
+function controlRoleValue(value: unknown): ControlSpaceRole | undefined {
+  return typeof value === "string" &&
+    (MEMBER_ROLES as readonly string[]).includes(value)
+    ? (value as ControlSpaceRole)
+    : undefined;
+}
+
+function membersUnavailable(): Response {
+  return json(
+    {
+      error: "feature_unavailable",
+      error_description: "Space membership management is not available.",
+    },
+    503,
+  );
+}
+
+function memberForbidden(description: string): Response {
+  return json({ error: "forbidden", error_description: description }, 403);
+}
+
+/** True when the membership has an active owner role. */
+function isActiveOwner(member: PublicSpaceMember): boolean {
+  return member.status === "active" && member.roles.includes("owner");
+}
+
+/** The caller's membership in the Space, matched by session subject. */
+function findCaller(
+  members: readonly PublicSpaceMember[],
+  subject: string,
+): PublicSpaceMember | undefined {
+  return members.find((member) => member.accountId === subject);
+}
+
+/**
+ * The membership ledger does not seed a row when a Space is created (the spaces
+ * domain records only `Space.ownerUserId`), so a brand-new Space starts with an
+ * EMPTY roster. To let the namespace owner bootstrap the first membership and to
+ * keep the mutation gate aligned with the namespace gate (`canAccessSpace`,
+ * which already trusts `Space.ownerUserId`), synthesize an implicit ACTIVE owner
+ * row for the namespace owner whenever the ledger has no active row for them.
+ *
+ * This is read-only: it does not write to the ledger. The first real
+ * `upsertMember` the owner performs persists a concrete row; once any active
+ * owner row exists for the namespace owner, the synthetic row is not added.
+ */
+function withImplicitNamespaceOwner(
+  members: readonly PublicSpaceMember[],
+  spaceId: string,
+  ownerUserId: string,
+): readonly PublicSpaceMember[] {
+  const existing = members.find(
+    (member) => member.accountId === ownerUserId,
+  );
+  // Only synthesize when the namespace owner has NO active row. A suspended /
+  // invited row for the owner is left as-is (the owner explicitly changed it),
+  // and an existing active row already grants them management.
+  if (existing && existing.status === "active") return members;
+  if (existing) {
+    // Replace a non-active owner row with the implicit active-owner view so the
+    // namespace owner is never locked out of their own Space.
+    return members.map((member) =>
+      member.accountId === ownerUserId ? implicitOwner(spaceId, ownerUserId) : member,
+    );
+  }
+  return [implicitOwner(spaceId, ownerUserId), ...members];
+}
+
+/** The synthetic active-owner projection for a namespace owner with no row. */
+function implicitOwner(
+  spaceId: string,
+  ownerUserId: string,
+): PublicSpaceMember {
+  const now = new Date(0).toISOString();
+  return {
+    id: `implicit-owner:${ownerUserId}`,
+    spaceId,
+    accountId: ownerUserId,
+    roles: ["owner"],
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
+ * Resolves the Space's namespace owner (`Space.ownerUserId`) server-side and
+ * returns the effective member roster (ledger rows + the implicit namespace
+ * owner). The Space is already namespace-gated by `requireSpaceAccess` in
+ * dispatch; we re-read it here only to learn the owner subject, never from the
+ * client body.
+ */
+async function effectiveMembers(
+  operations: ControlPlaneOperations,
+  spaceId: string,
+): Promise<readonly PublicSpaceMember[]> {
+  const members = await operations.members!.listMembers(spaceId);
+  const space = await operations.spaces.getSpace(spaceId);
+  return withImplicitNamespaceOwner(members, spaceId, space.ownerUserId);
+}
+
+async function listSpaceMembers(
+  operations: ControlPlaneOperations,
+  spaceId: string,
+  subject: string,
+): Promise<Response> {
+  if (!operations.members) return membersUnavailable();
+  const members = await effectiveMembers(operations, spaceId);
+  // List is member-visible: the caller must be an active member of THIS Space.
+  // The namespace gate (requireSpaceAccess) already passed, but membership is a
+  // separate ledger — a namespace owner who is not a recorded member still sees
+  // the roster (they own the Space via the implicit owner row), otherwise an
+  // active member must be present.
+  const caller = findCaller(members, subject);
+  if (caller && caller.status !== "active") {
+    return memberForbidden("Your membership in this Space is not active.");
+  }
+  return json({ members });
+}
+
+async function addSpaceMember(
+  request: Request,
+  operations: ControlPlaneOperations,
+  spaceId: string,
+  subject: string,
+): Promise<Response> {
+  if (!operations.members) return membersUnavailable();
+  const body = await readJsonObject(request);
+  if (!body) return json({ error: "invalid_request" }, 400);
+  const accountId = stringValue(body.accountId) ?? stringValue(body.subject);
+  if (!accountId) {
+    return json(
+      {
+        error: "invalid_argument",
+        error_description: "accountId is required",
+      },
+      400,
+    );
+  }
+  const role = body.role === undefined ? "member" : controlRoleValue(body.role);
+  if (!role) {
+    return json(
+      {
+        error: "invalid_argument",
+        error_description: "role must be one of owner, admin, member, viewer",
+      },
+      400,
+    );
+  }
+  // Mutation gate: only an active owner/admin of this Space may add members. The
+  // roster includes the implicit namespace-owner row so the Space owner can
+  // always bootstrap the first membership.
+  const members = await effectiveMembers(operations, spaceId);
+  const caller = findCaller(members, subject);
+  if (!caller || caller.status !== "active") {
+    return memberForbidden("Only an active member can manage members.");
+  }
+  if (!caller.roles.includes("owner") && !caller.roles.includes("admin")) {
+    return memberForbidden("Only an owner or admin can add members.");
+  }
+  // Only an owner may grant the owner role (admins cannot escalate).
+  if (role === "owner" && !caller.roles.includes("owner")) {
+    return memberForbidden("Only an owner can grant the owner role.");
+  }
+  // The membership store is keyed by `spaceId:accountId` and `upsertMember`
+  // OVERWRITES, so a POST against an EXISTING member is a role change in
+  // disguise. Route an existing-active-owner upsert through the SAME gates the
+  // dedicated PATCH path (`changeSpaceMemberRole`) enforces, otherwise an admin
+  // could demote a sitting owner and either role could strip the last owner —
+  // privilege escalation / Space orphaning straight through POST. This also
+  // covers the implicit namespace-owner row (active owner), so a POST can never
+  // silently strip the namespace owner who has no ledger row yet.
+  const target = findCaller(members, accountId);
+  if (target && isActiveOwner(target)) {
+    // Changing an existing active OWNER's role is owner-only (admins cannot
+    // touch an owner), matching `changeSpaceMemberRole`.
+    if (!caller.roles.includes("owner")) {
+      return memberForbidden(
+        "Only an owner can change an existing owner's role.",
+      );
+    }
+    // Last-owner guard: never let a POST drop the sole remaining owner.
+    if (role !== "owner" && activeOwnerCount(members) <= 1) {
+      return memberForbidden(
+        "Cannot demote the last owner; promote another owner first.",
+      );
+    }
+  }
+  const member = await operations.members.upsertMember({
+    spaceId,
+    accountId,
+    roles: [role],
+    status: "active",
+    actor: actorFor(caller),
+  });
+  return jsonStatus({ member }, 201);
+}
+
+async function changeSpaceMemberRole(
+  request: Request,
+  operations: ControlPlaneOperations,
+  spaceId: string,
+  subject: string,
+  targetSubject: string,
+): Promise<Response> {
+  if (!operations.members) return membersUnavailable();
+  const body = await readJsonObject(request);
+  if (!body) return json({ error: "invalid_request" }, 400);
+  const roles = parseRolesField(body.roles ?? body.role);
+  if (!roles) {
+    return json(
+      {
+        error: "invalid_argument",
+        error_description:
+          "roles must be one or more of owner, admin, member, viewer",
+      },
+      400,
+    );
+  }
+  const members = await effectiveMembers(operations, spaceId);
+  const caller = findCaller(members, subject);
+  // Role change is owner-only.
+  if (!caller || !isActiveOwner(caller)) {
+    return memberForbidden("Only an owner can change member roles.");
+  }
+  const target = findCaller(members, targetSubject);
+  if (!target) {
+    return json({ error: "not_found", error_description: "member not found" }, 404);
+  }
+  // Last-owner guard: demoting the sole remaining owner would leave the Space
+  // unmanaged. Reject if the target is currently the only active owner and the
+  // new role set drops the owner role.
+  if (
+    isActiveOwner(target) &&
+    !roles.includes("owner") &&
+    activeOwnerCount(members) <= 1
+  ) {
+    return memberForbidden(
+      "Cannot demote the last owner; promote another owner first.",
+    );
+  }
+  const member = await operations.members.upsertMember({
+    spaceId,
+    accountId: targetSubject,
+    roles,
+    status: "active",
+    actor: actorFor(caller),
+  });
+  return json({ member });
+}
+
+async function removeSpaceMember(
+  operations: ControlPlaneOperations,
+  spaceId: string,
+  subject: string,
+  targetSubject: string,
+): Promise<Response> {
+  if (!operations.members) return membersUnavailable();
+  const members = await effectiveMembers(operations, spaceId);
+  const caller = findCaller(members, subject);
+  // Remove is owner-only.
+  if (!caller || !isActiveOwner(caller)) {
+    return memberForbidden("Only an owner can remove members.");
+  }
+  const target = findCaller(members, targetSubject);
+  if (!target) {
+    return json({ error: "not_found", error_description: "member not found" }, 404);
+  }
+  // Last-owner guard: never remove the sole remaining owner.
+  if (isActiveOwner(target) && activeOwnerCount(members) <= 1) {
+    return memberForbidden(
+      "Cannot remove the last owner; promote another owner first.",
+    );
+  }
+  // The membership store has no hard-delete, so removal is a soft-remove: the
+  // membership is suspended (its roles are preserved for audit but it no longer
+  // grants access).
+  const member = await operations.members.upsertMember({
+    spaceId,
+    accountId: targetSubject,
+    roles: target.roles,
+    status: "suspended",
+    actor: actorFor(caller),
+  });
+  return json({ member });
+}
+
+/** Active owners in the Space (used by the last-owner guard). */
+function activeOwnerCount(members: readonly PublicSpaceMember[]): number {
+  return members.filter(isActiveOwner).length;
+}
+
+/**
+ * Parses a `roles` field that may be a single role string or an array. Returns
+ * a de-duplicated, non-empty role list, or `undefined` when any entry is not a
+ * known role.
+ */
+function parseRolesField(
+  value: unknown,
+): readonly ControlSpaceRole[] | undefined {
+  const raw = Array.isArray(value) ? value : value === undefined ? [] : [value];
+  if (raw.length === 0) return undefined;
+  const roles: ControlSpaceRole[] = [];
+  for (const entry of raw) {
+    const role = controlRoleValue(entry);
+    if (!role) return undefined;
+    if (!roles.includes(role)) roles.push(role);
+  }
+  return roles;
+}
+
+/** Builds the membership-service actor from the caller's membership. */
+function actorFor(caller: PublicSpaceMember): MembershipActor {
+  return {
+    actorAccountId: caller.accountId,
+    roles: [...caller.roles],
+    requestId: `ctrl-${caller.accountId}-${Date.now()}`,
+  };
 }
 
 // --- Installations ---------------------------------------------------------

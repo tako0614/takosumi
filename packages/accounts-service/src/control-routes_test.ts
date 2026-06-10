@@ -3106,3 +3106,694 @@ test("POST /v1/control/deployments/:id/rollback-plan rejects an unknown leaf and
     )?.status,
   ).toEqual(405);
 });
+
+// --- Members (Space membership / roles) ------------------------------------
+
+type MemberRow = {
+  id: string;
+  spaceId: string;
+  accountId: string;
+  roles: string[];
+  status: "active" | "invited" | "suspended";
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * A `fakeOperations` whose `members` facade is backed by an in-memory roster.
+ * `spaceOwner` controls the namespace gate (`requireSpaceAccess`): when it
+ * equals the session subject the namespace gate passes, so a 403 there isolates
+ * the membership ROLE gate. The roster seeds the per-account roles the route
+ * reads to decide the role/last-owner gate.
+ */
+function memberOperations(options: {
+  spaceId: string;
+  spaceOwner: string;
+  roster: MemberRow[];
+}): ControlPlaneOperations & {
+  calls: Record<string, unknown[]>;
+  roster: MemberRow[];
+} {
+  const roster = options.roster;
+  const base = fakeOperations({
+    spaces: {
+      getSpace: async (id) => ({
+        id,
+        handle: "team",
+        displayName: "Team",
+        type: "personal" as const,
+        ownerUserId: options.spaceOwner,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+  });
+  const members: NonNullable<ControlPlaneOperations["members"]> = {
+    listMembers: async (spaceId) => {
+      base.calls.listMembers = [spaceId];
+      return roster.filter((member) => member.spaceId === spaceId);
+    },
+    upsertMember: async (input) => {
+      base.calls.upsertMember = [input];
+      const now = "2026-02-02T00:00:00Z";
+      const existing = roster.find(
+        (member) =>
+          member.spaceId === input.spaceId &&
+          member.accountId === input.accountId,
+      );
+      const next: MemberRow = {
+        id: existing?.id ?? `mem_${input.accountId}`,
+        spaceId: input.spaceId,
+        accountId: input.accountId,
+        roles: [...(input.roles ?? existing?.roles ?? ["member"])],
+        status: input.status ?? existing?.status ?? "active",
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      if (existing) {
+        roster[roster.indexOf(existing)] = next;
+      } else {
+        roster.push(next);
+      }
+      return next;
+    },
+  };
+  return Object.assign(base, { members, roster });
+}
+
+function memberRow(
+  accountId: string,
+  roles: string[],
+  status: "active" | "invited" | "suspended" = "active",
+  spaceId = "space_a",
+): MemberRow {
+  return {
+    id: `mem_${accountId}`,
+    spaceId,
+    accountId,
+    roles,
+    status,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+}
+
+test("GET /v1/control/spaces/:id/members lists members for an active member", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // The session subject is a plain MEMBER (not owner/admin); list is still
+  // visible to any active member.
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_owner", ["owner"]),
+      memberRow("tsub_ctrl", ["member"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_a/members",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { members: MemberRow[] };
+  expect(body.members.length).toEqual(2);
+  // The spaceId was resolved server-side for the membership read.
+  expect(operations.calls.listMembers).toEqual(["space_a"]);
+});
+
+test("POST /v1/control/spaces/:id/members lets an owner add a member", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [memberRow("tsub_ctrl", ["owner"])],
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/members",
+    { cookie, body: { accountId: "tsub_new", role: "member" } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const body = (await response!.json()) as { member: MemberRow };
+  expect(body.member.accountId).toEqual("tsub_new");
+  expect(body.member.roles).toEqual(["member"]);
+  expect(body.member.status).toEqual("active");
+  // The spaceId in the upsert is the server-resolved path value, never client body.
+  const upsertArg = (operations.calls.upsertMember as [Record<string, unknown>])[0];
+  expect(upsertArg.spaceId).toEqual("space_a");
+  expect(upsertArg.accountId).toEqual("tsub_new");
+});
+
+test("POST /v1/control/spaces/:id/members lets an admin add a member", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_owner", ["owner"]),
+      memberRow("tsub_ctrl", ["admin"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/members",
+    { cookie, body: { accountId: "tsub_new", role: "viewer" } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+});
+
+test("POST /v1/control/spaces/:id/members forbids a non-owner/admin member with 403", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // Namespace gate passes (the session subject owns the namespace Space), so a
+  // 403 here isolates the membership ROLE gate: a plain member cannot add.
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_owner", ["owner"]),
+      memberRow("tsub_ctrl", ["member"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/members",
+    { cookie, body: { accountId: "tsub_new", role: "member" } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  // No member was upserted behind the role gate.
+  expect(operations.calls.upsertMember).toBeUndefined();
+});
+
+test("POST /v1/control/spaces/:id/members forbids an admin granting owner with 403", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_owner", ["owner"]),
+      memberRow("tsub_ctrl", ["admin"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/members",
+    { cookie, body: { accountId: "tsub_new", role: "owner" } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.upsertMember).toBeUndefined();
+});
+
+test("members routes reject a session in another Space with 403 (namespace gate)", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // The namespace Space is owned by a DIFFERENT subject; the namespace gate
+  // (requireSpaceAccess) rejects before any membership read.
+  const operations = memberOperations({
+    spaceId: "space_b",
+    spaceOwner: "tsub_other",
+    roster: [memberRow("tsub_other", ["owner"], "active", "space_b")],
+  });
+  for (const [method, body] of [
+    ["GET", undefined],
+    ["POST", { accountId: "tsub_x", role: "member" }],
+  ] as const) {
+    const { request: req, url } = request(
+      method,
+      "/v1/control/spaces/space_b/members",
+      { cookie, ...(body ? { body } : {}) },
+    );
+    const response = await handleControlRoute({
+      request: req,
+      url,
+      store,
+      operations,
+    });
+    expect(response?.status, method).toEqual(403);
+  }
+  // The membership facade was never reached behind the namespace gate.
+  expect(operations.calls.listMembers).toBeUndefined();
+  expect(operations.calls.upsertMember).toBeUndefined();
+});
+
+test("members routes are 401 for an anonymous session", async () => {
+  const store = new InMemoryAccountsStore();
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [memberRow("tsub_ctrl", ["owner"])],
+  });
+  const paths: Array<[string, string]> = [
+    ["GET", "/v1/control/spaces/space_a/members"],
+    ["POST", "/v1/control/spaces/space_a/members"],
+    ["PATCH", "/v1/control/spaces/space_a/members/tsub_x"],
+    ["DELETE", "/v1/control/spaces/space_a/members/tsub_x"],
+  ];
+  for (const [method, path] of paths) {
+    const { request: req, url } = request(method, path);
+    const response = await handleControlRoute({
+      request: req,
+      url,
+      store,
+      operations,
+    });
+    expect(response?.status, `${method} ${path}`).toEqual(401);
+    await response?.body?.cancel();
+  }
+  expect(operations.calls.listMembers).toBeUndefined();
+  expect(operations.calls.upsertMember).toBeUndefined();
+});
+
+test("PATCH /v1/control/spaces/:id/members/:subject lets an owner change a role", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_ctrl", ["owner"]),
+      memberRow("tsub_member", ["member"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "PATCH",
+    "/v1/control/spaces/space_a/members/tsub_member",
+    { cookie, body: { roles: ["admin"] } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { member: MemberRow };
+  expect(body.member.roles).toEqual(["admin"]);
+  const upsertArg = (operations.calls.upsertMember as [Record<string, unknown>])[0];
+  expect(upsertArg.accountId).toEqual("tsub_member");
+});
+
+test("PATCH /v1/control/spaces/:id/members/:subject forbids an admin (owner-only) with 403", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_owner", ["owner"]),
+      memberRow("tsub_ctrl", ["admin"]),
+      memberRow("tsub_member", ["member"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "PATCH",
+    "/v1/control/spaces/space_a/members/tsub_member",
+    { cookie, body: { roles: ["admin"] } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.upsertMember).toBeUndefined();
+});
+
+test("PATCH /v1/control/spaces/:id/members/:subject refuses to demote the last owner", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // The owner tries to demote themselves while they are the SOLE owner.
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_ctrl", ["owner"]),
+      memberRow("tsub_member", ["member"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "PATCH",
+    "/v1/control/spaces/space_a/members/tsub_ctrl",
+    { cookie, body: { roles: ["member"] } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  // The last-owner guard blocks before any upsert.
+  expect(operations.calls.upsertMember).toBeUndefined();
+});
+
+test("PATCH /v1/control/spaces/:id/members/:subject can demote an owner when another owner remains", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_ctrl", ["owner"]),
+      memberRow("tsub_owner2", ["owner"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "PATCH",
+    "/v1/control/spaces/space_a/members/tsub_owner2",
+    { cookie, body: { roles: ["admin"] } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { member: MemberRow };
+  expect(body.member.roles).toEqual(["admin"]);
+});
+
+test("DELETE /v1/control/spaces/:id/members/:subject lets an owner soft-remove a member", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_ctrl", ["owner"]),
+      memberRow("tsub_member", ["member"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "DELETE",
+    "/v1/control/spaces/space_a/members/tsub_member",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { member: MemberRow };
+  // Soft-remove: the membership is suspended (the store has no hard delete).
+  expect(body.member.status).toEqual("suspended");
+  const upsertArg = (operations.calls.upsertMember as [Record<string, unknown>])[0];
+  expect(upsertArg.status).toEqual("suspended");
+  expect(upsertArg.accountId).toEqual("tsub_member");
+});
+
+test("DELETE /v1/control/spaces/:id/members/:subject forbids a non-owner with 403", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_owner", ["owner"]),
+      memberRow("tsub_ctrl", ["admin"]),
+      memberRow("tsub_member", ["member"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "DELETE",
+    "/v1/control/spaces/space_a/members/tsub_member",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.upsertMember).toBeUndefined();
+});
+
+test("DELETE /v1/control/spaces/:id/members/:subject refuses to remove the last owner", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_ctrl", ["owner"]),
+      memberRow("tsub_member", ["member"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "DELETE",
+    "/v1/control/spaces/space_a/members/tsub_ctrl",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.upsertMember).toBeUndefined();
+});
+
+test("members routes 503 when no membership facade is wired", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // A facade WITHOUT the optional `members` field (the namespace gate still
+  // passes because the session subject owns the namespace Space).
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_a/members",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(503);
+});
+
+// --- ADD-path gate parity (privilege escalation / orphaning via POST) -------
+
+test("POST /v1/control/spaces/:id/members forbids an admin from demoting an existing owner", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // The caller is an ADMIN; the target is an existing active OWNER. A POST that
+  // overwrites the owner's role to `member` must be rejected (owner-only), the
+  // same way the PATCH path restricts it.
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_owner", ["owner"]),
+      memberRow("tsub_other_owner", ["owner"]),
+      memberRow("tsub_ctrl", ["admin"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/members",
+    { cookie, body: { accountId: "tsub_owner", role: "member" } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  // No demotion was persisted behind the owner-only gate.
+  expect(operations.calls.upsertMember).toBeUndefined();
+  expect(
+    operations.roster.find((m) => m.accountId === "tsub_owner")?.roles,
+  ).toEqual(["owner"]);
+});
+
+test("POST /v1/control/spaces/:id/members refuses to strip the last owner", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // The caller is the SOLE owner and POSTs their own subject with a lower role.
+  // The last-owner guard must block this on the ADD path too, otherwise the
+  // Space is orphaned.
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_ctrl", ["owner"]),
+      memberRow("tsub_member", ["member"]),
+    ],
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/members",
+    { cookie, body: { accountId: "tsub_ctrl", role: "member" } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.upsertMember).toBeUndefined();
+  expect(
+    operations.roster.find((m) => m.accountId === "tsub_ctrl")?.roles,
+  ).toEqual(["owner"]);
+});
+
+test("POST /v1/control/spaces/:id/members lets an owner re-add a co-owner with a lower role when another owner remains", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [
+      memberRow("tsub_ctrl", ["owner"]),
+      memberRow("tsub_owner2", ["owner"]),
+    ],
+  });
+  // Owner caller demotes a co-owner via POST; another owner remains, so the
+  // last-owner guard does not fire and the owner-only gate is satisfied.
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/members",
+    { cookie, body: { accountId: "tsub_owner2", role: "admin" } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const body = (await response!.json()) as { member: MemberRow };
+  expect(body.member.roles).toEqual(["admin"]);
+});
+
+// --- Namespace-owner bootstrap (empty ledger) ------------------------------
+
+test("namespace owner can bootstrap the first member when the ledger is empty", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // No membership rows exist yet (the spaces domain seeds none). The session
+  // subject IS the namespace owner (`spaceOwner`), so the implicit owner row
+  // lets them add the first real member.
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [],
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/members",
+    { cookie, body: { accountId: "tsub_first", role: "member" } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const body = (await response!.json()) as { member: MemberRow };
+  expect(body.member.accountId).toEqual("tsub_first");
+  expect(body.member.roles).toEqual(["member"]);
+});
+
+test("namespace owner sees the implicit owner row when the ledger is empty", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [],
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/spaces/space_a/members",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { members: MemberRow[] };
+  const owner = body.members.find((m) => m.accountId === "tsub_ctrl");
+  expect(owner?.roles).toEqual(["owner"]);
+  expect(owner?.status).toEqual("active");
+});
+
+test("a non-owner namespace member cannot bootstrap members against an empty ledger", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // The session subject is NOT the namespace owner; the namespace gate passes
+  // only because the accounts-ledger owner matches. With an empty membership
+  // ledger and no implicit row for THIS subject, the mutation gate forbids them.
+  seedLedgerSpace(store, {
+    subject: "tsub_ctrl",
+    accountId: "acct_a",
+    spaceId: "space_a",
+  });
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_namespace_owner",
+    roster: [],
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/spaces/space_a/members",
+    { cookie, body: { accountId: "tsub_first", role: "member" } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  expect(operations.calls.upsertMember).toBeUndefined();
+});

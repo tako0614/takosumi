@@ -13,6 +13,7 @@ import {
   Share2,
   GitBranch,
   Store,
+  Users,
   UserCircle2,
 } from "lucide-solid";
 import Wordmark from "../brand/Wordmark.tsx";
@@ -26,6 +27,7 @@ const ITEMS = [
   { href: "/graph", label: "依存グラフ", icon: Network },
   { href: "/output-shares", label: "Output shares", icon: Share2 },
   { href: "/backups", label: "Backups", icon: Archive },
+  { href: "/members", label: "メンバー", icon: Users },
   { href: "/connections", label: "接続", icon: KeyRound },
   { href: "/activity", label: "アクティビティ", icon: Activity },
   { href: "/account", label: "アカウント", icon: UserCircle2 },
