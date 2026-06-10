@@ -85,6 +85,7 @@ import type {
   CreateApplyRunRequest,
   CreateConnectionRequest,
   CreatePlanRunRequest,
+  Deployment,
   GetInstallationResponse,
   ListConnectionsResponse,
   ListDeploymentOutputsResponse,
@@ -468,6 +469,15 @@ export interface TakosumiOperations {
   listDeploymentOutputs(
     installationId: string,
   ): Promise<ListDeploymentOutputsResponse>;
+  /** Reads one Deployment ledger record by id (§30 `GET /api/deployments/:id`). */
+  getDeployment(id: string): Promise<Deployment>;
+  /**
+   * Creates a rollback PLAN run for a Deployment (§30 `POST
+   * /api/deployments/:id/rollback-plan`): re-plans the Deployment's Installation
+   * pinned to that Deployment's source snapshot. Flows through the normal
+   * approve/apply path.
+   */
+  createDeploymentRollbackPlan(deploymentId: string): Promise<PlanRunResponse>;
   /** Unified Run facade (§6.8): read / approve / cancel by run id. */
   getRun(id: string): Promise<Run>;
   /** Reads a Run's structured diagnostics + redacted audit trail (spec §30). */
@@ -868,6 +878,9 @@ export async function createTakosumiService(
       opentofuController.listDeployments(installationId),
     listDeploymentOutputs: (installationId) =>
       opentofuController.listDeploymentOutputs(installationId),
+    getDeployment: (id) => opentofuController.getDeployment(id),
+    createDeploymentRollbackPlan: (deploymentId) =>
+      opentofuController.createDeploymentRollbackPlan(deploymentId),
     getRun: (id) => opentofuController.getRun(id),
     getRunLogs: (id) => opentofuController.getRunLogs(id),
     approveRun: (id, input) => opentofuController.approveRun(id, input ?? {}),

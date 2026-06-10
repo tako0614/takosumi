@@ -2796,3 +2796,313 @@ test("maybeEnsurePersonalSpaceForSession is a no-op without an operations facade
   // No operations -> returns quietly.
   await maybeEnsurePersonalSpaceForSession({ request: req, store });
 });
+
+// --- Deployments / outputs / rollback (§30 GUI deploy) ---------------------
+
+/**
+ * A Deployment ledger row whose `outputsPublic` is the allowlist projection.
+ * `outputSnapshotId` points at the raw (un-projected) encrypted OutputSnapshot
+ * and MUST be projected out of every session-surface read.
+ */
+function deploymentRow(
+  id: string,
+  spaceId: string,
+  installationId = "inst_1",
+): Record<string, unknown> {
+  return {
+    id,
+    spaceId,
+    installationId,
+    environment: "production",
+    applyRunId: "apply_1",
+    sourceSnapshotId: "snap_1",
+    stateGeneration: 3,
+    outputSnapshotId: "osnap_secret_1",
+    outputsPublic: { launch_url: "https://app.example.test" },
+    status: "active",
+    createdAt: "2026-01-01T00:00:00Z",
+  };
+}
+
+/**
+ * `fakeOperations` does not carry the deployment methods in its base fixture, so
+ * we attach recording implementations here. Each records into the same
+ * `operations.calls` map the base uses, so the gate-ordering assertions can read
+ * which facade method was reached.
+ */
+function deploymentOperations(
+  spaceId: string,
+  overrides: Parameters<typeof fakeOperations>[0] = {},
+): ReturnType<typeof fakeOperations> {
+  const operations = fakeOperations(overrides);
+  const calls = operations.calls;
+  operations.listDeployments = async (installationId: string) => {
+    calls.listDeployments = [installationId];
+    return {
+      deployments: [deploymentRow("dep_1", spaceId, installationId)],
+    } as unknown as Awaited<
+      ReturnType<ControlPlaneOperations["listDeployments"]>
+    >;
+  };
+  operations.getDeployment = async (id: string) => {
+    calls.getDeployment = [id];
+    return deploymentRow(id, spaceId) as unknown as Awaited<
+      ReturnType<ControlPlaneOperations["getDeployment"]>
+    >;
+  };
+  operations.createDeploymentRollbackPlan = async (deploymentId: string) => {
+    calls.createDeploymentRollbackPlan = [deploymentId];
+    return {
+      planRun: {
+        id: "plan_rollback",
+        spaceId,
+        status: "queued",
+        operation: "update",
+        installationId: "inst_1",
+        rolledBackFromDeploymentId: deploymentId,
+      },
+    } as unknown as Awaited<
+      ReturnType<ControlPlaneOperations["createDeploymentRollbackPlan"]>
+    >;
+  };
+  return operations;
+}
+
+function otherSpaceSpaces(): NonNullable<
+  Parameters<typeof fakeOperations>[0]
+>["spaces"] {
+  return {
+    getSpace: async (id) => ({
+      id,
+      handle: "other",
+      displayName: "Other",
+      type: "personal" as const,
+      ownerUserId: "tsub_other",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    }),
+  };
+}
+
+test("GET /v1/control/installations/:id/deployments lists deployments for an owned Space", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = deploymentOperations("space_a");
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/installations/inst_1/deployments",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    deployments: Array<Record<string, unknown>>;
+  };
+  expect(body.deployments.length).toEqual(1);
+  // The Installation's Space was resolved server-side for the gate.
+  expect(operations.calls.getInstallation).toEqual(["inst_1"]);
+  expect(operations.calls.listDeployments).toEqual(["inst_1"]);
+  // The raw OutputSnapshot pointer is projected out of every row.
+  expect(body.deployments[0]!.outputSnapshotId).toBeUndefined();
+  expect(body.deployments[0]!.outputsPublic).toEqual({
+    launch_url: "https://app.example.test",
+  });
+});
+
+test("GET /v1/control/installations/:id/deployments rejects a non-member session with 403", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // The Installation belongs to space_b, owned by a different subject.
+  const operations = deploymentOperations("space_b", {
+    spaces: otherSpaceSpaces(),
+    installations: {
+      getInstallation: async (id) => ({
+        id,
+        spaceId: "space_b",
+        name: "inst",
+        environment: "production",
+        sourceId: "src_1",
+        installConfigId: "ic_1",
+        status: "ready" as const,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/installations/inst_b/deployments",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  // The gate rejects before any deployment listing.
+  expect(operations.calls.listDeployments).toBeUndefined();
+});
+
+test("GET /v1/control/deployments/:id returns only the public outputs projection", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = deploymentOperations("space_a");
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/deployments/dep_1",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  // The Deployment was resolved server-side to learn its Space for the gate.
+  expect(operations.calls.getDeployment).toEqual(["dep_1"]);
+  const body = (await response!.json()) as {
+    deployment: Record<string, unknown>;
+  };
+  // Public outputsPublic is present; the raw OutputSnapshot pointer is gone.
+  expect(body.deployment.outputsPublic).toEqual({
+    launch_url: "https://app.example.test",
+  });
+  expect(body.deployment.outputSnapshotId).toBeUndefined();
+  // No raw OutputSnapshot handle leaks into the serialized response.
+  expect(JSON.stringify(body)).not.toContain("osnap_secret_1");
+});
+
+test("GET /v1/control/deployments/:id rejects a deployment in another Space with 403", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // The Deployment belongs to space_b, owned by a different subject.
+  const operations = deploymentOperations("space_b", {
+    spaces: otherSpaceSpaces(),
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/v1/control/deployments/dep_other",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  // The Deployment was resolved (to learn its Space) but the gate rejects; no
+  // projection is returned, so nothing could leak.
+  expect(operations.calls.getDeployment).toEqual(["dep_other"]);
+});
+
+test("POST /v1/control/deployments/:id/rollback-plan creates a rollback plan for an owned Space", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = deploymentOperations("space_a");
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/deployments/dep_1/rollback-plan",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  // The Deployment's Space was resolved server-side for the gate first.
+  expect(operations.calls.getDeployment).toEqual(["dep_1"]);
+  expect(operations.calls.createDeploymentRollbackPlan).toEqual(["dep_1"]);
+  const body = (await response!.json()) as { planRun: { id: string } };
+  // The response carries the plan run that flows through approve -> apply.
+  expect(body.planRun.id).toEqual("plan_rollback");
+});
+
+test("POST /v1/control/deployments/:id/rollback-plan rejects a deployment in another Space with 403", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = deploymentOperations("space_b", {
+    spaces: otherSpaceSpaces(),
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/v1/control/deployments/dep_other/rollback-plan",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  // The gate rejects before any rollback plan is created.
+  expect(operations.calls.createDeploymentRollbackPlan).toBeUndefined();
+});
+
+test("deployments routes are 401 for anonymous sessions", async () => {
+  const store = new InMemoryAccountsStore();
+  const operations = deploymentOperations("space_a");
+  const paths: Array<[string, string]> = [
+    ["GET", "/v1/control/installations/inst_1/deployments"],
+    ["GET", "/v1/control/deployments/dep_1"],
+    ["POST", "/v1/control/deployments/dep_1/rollback-plan"],
+  ];
+  for (const [method, path] of paths) {
+    const { request: req, url } = request(method, path);
+    const response = await handleControlRoute({
+      request: req,
+      url,
+      store,
+      operations,
+    });
+    expect(response?.status, `${method} ${path}`).toEqual(401);
+    await response?.body?.cancel();
+  }
+  // No facade method was reached behind the auth gate.
+  expect(operations.calls.getDeployment).toBeUndefined();
+  expect(operations.calls.listDeployments).toBeUndefined();
+  expect(operations.calls.createDeploymentRollbackPlan).toBeUndefined();
+});
+
+test("POST /v1/control/deployments/:id/rollback-plan rejects an unknown leaf and the wrong method", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = deploymentOperations("space_a");
+  const bogus = request("POST", "/v1/control/deployments/dep_1/bogus", {
+    cookie,
+  });
+  expect(
+    (
+      await handleControlRoute({
+        request: bogus.request,
+        url: bogus.url,
+        store,
+        operations,
+      })
+    )?.status,
+  ).toEqual(404);
+  const wrongMethod = request("DELETE", "/v1/control/deployments/dep_1", {
+    cookie,
+  });
+  expect(
+    (
+      await handleControlRoute({
+        request: wrongMethod.request,
+        url: wrongMethod.url,
+        store,
+        operations,
+      })
+    )?.status,
+  ).toEqual(405);
+});
