@@ -40,7 +40,6 @@ test("createApiApp does not mount retired public deployment routes", async () =>
     ["POST", "/v1/apply-runs"],
     ["GET", "/v1/runner-profiles"],
     ["GET", "/v1/installations/inst_abcdef12/deployment-outputs"],
-    ["GET", "/status/summary"],
   ] as const) {
     const response = await app.request(path, { method });
     assert.equal(response.status, 404, path);
@@ -80,7 +79,6 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   assert.equal(openapi.paths["/api/public/v1/deployments"], undefined);
   assert.equal(openapi.paths["/v1/deployments"], undefined);
   assert.equal(openapi.paths["/v1/artifacts/kinds"], undefined);
-  assert.equal(openapi.paths["/status/summary"], undefined);
   assert.equal(
     openapi.paths["/api/operator-connection-defaults"]?.get?.operationId,
     "listOperatorConnectionDefaults",
@@ -89,7 +87,6 @@ test("createApiApp does not mount retired public deployment routes", async () =>
     openapi.paths["/api/operator-connection-defaults"]?.put?.operationId,
     "putOperatorConnectionDefault",
   );
-  assert.equal(openapi.components.schemas.StatusSummaryResponse, undefined);
   assert.equal(
     openapi.components.schemas.ErrorResponse.properties.error.required.includes(
       "requestId",

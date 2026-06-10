@@ -40,8 +40,6 @@ website/.output/public/
 │   ├── index.html
 │   ├── getting-started/
 │   └── reference/
-└── contexts/
-    └── v1.jsonld
 ```
 
 One-time setup:
@@ -67,7 +65,6 @@ Smoke:
 curl -I https://takosumi.com/
 curl -I https://takosumi.com/docs/
 curl -I https://takosumi.com/docs/reference/model
-curl https://takosumi.com/contexts/v1.jsonld | jq '.["@context"]["@vocab"]'
 ```
 
 ## Account plane (in-process)

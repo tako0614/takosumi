@@ -196,7 +196,6 @@ Service runtime primitives go through `src/service/shared/runtime/`.
 bun run check
 bun test
 bun run test:scripts
-bun run lint:json-ld
 ```
 
 ## Work Rules

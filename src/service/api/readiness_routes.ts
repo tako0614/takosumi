@@ -1,21 +1,16 @@
 import type { Context, Hono as HonoApp } from "hono";
-import type { GroupSummaryStatusProjection } from "../services/status/mod.ts";
-import { findNonCatalogConditionReasons } from "./condition_reasons.ts";
 import { apiError, registerApiErrorHandler } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 
 export const TAKOSUMI_SERVICE_READINESS_PATHS = {
   ready: "/readyz",
   live: "/livez",
-  statusSummary: "/status/summary",
 } as const;
 
 /**
  * Endpoint inventory for the `readiness` family, co-located with the mount
  * calls below. Consumed by `route_families.ts` to derive `/capabilities` and
- * `/openapi.json`. The status-summary endpoint is an operator-internal
- * readiness projection and intentionally stays out of this endpoint inventory
- * so it is not exposed through public capabilities or OpenAPI schemas.
+ * `/openapi.json`.
  * Keep in lockstep with {@link registerReadinessRoutes}.
  */
 export const READINESS_ENDPOINTS: readonly ApiEndpoint[] = [
@@ -48,19 +43,13 @@ export interface HealthProbeResult {
 
 export type HealthProbe = () => HealthProbeResult | Promise<HealthProbeResult>;
 
-export type StatusSummaryProbe = () =>
-  | GroupSummaryStatusProjection
-  | Promise<GroupSummaryStatusProjection>;
-
 export interface ReadinessRouteProbes {
   readonly ready: HealthProbe;
   readonly live: HealthProbe;
-  readonly statusSummary: StatusSummaryProbe;
 }
 
 export interface RegisterReadinessRoutesOptions {
   readonly probes: ReadinessRouteProbes;
-  readonly includeStatusSummary?: boolean;
 }
 
 export function registerReadinessRoutes(
@@ -76,20 +65,6 @@ export function registerReadinessRoutes(
     return await healthResponse(c, options.probes.live);
   });
 
-  if (!options.includeStatusSummary) return;
-
-  app.get(TAKOSUMI_SERVICE_READINESS_PATHS.statusSummary, async (c) => {
-    try {
-      const summary = await options.probes.statusSummary();
-      assertCatalogConditionReasons(summary, "status summary");
-      return c.json(summary);
-    } catch (error) {
-      c.status(503);
-      return c.json(
-        apiError("readiness_probe_failed", errorMessage(error)),
-      );
-    }
-  });
 }
 
 async function healthResponse(
@@ -116,16 +91,6 @@ async function healthResponse(
     c.status(503);
     return c.json(apiError("readiness_probe_failed", errorMessage(error)));
   }
-}
-
-function assertCatalogConditionReasons(value: unknown, surface: string): void {
-  const errors = findNonCatalogConditionReasons(value);
-  if (errors.length === 0) return;
-  throw new TypeError(
-    `${surface} emitted non-catalog condition reason at ${errors[0].path}: ${
-      errors[0].reason
-    }`,
-  );
 }
 
 function statusCodeForProbe(result: HealthProbeResult): 200 | 503 {

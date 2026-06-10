@@ -1,7 +1,5 @@
 import { freezeClone } from "../../shared/freeze.ts";
 import type {
-  EgressReport,
-  EgressReportId,
   RuntimeNetworkPolicy,
   RuntimeNetworkPolicyId,
   ServiceGrant,
@@ -35,15 +33,6 @@ export interface ServiceGrantStore {
   listByIdentity(
     identityId: WorkloadIdentityId,
   ): Promise<readonly ServiceGrant[]>;
-}
-
-export interface EgressReportStore {
-  put(report: EgressReport): Promise<EgressReport>;
-  get(id: EgressReportId): Promise<EgressReport | undefined>;
-  latestForGroup(
-    spaceId: string,
-    groupId: string,
-  ): Promise<EgressReport | undefined>;
 }
 
 export class InMemoryRuntimeNetworkPolicyStore
@@ -112,28 +101,5 @@ export class InMemoryServiceGrantStore implements ServiceGrantStore {
         grant.fromIdentityId === identityId
       ),
     );
-  }
-}
-
-export class InMemoryEgressReportStore implements EgressReportStore {
-  readonly #reports = new Map<EgressReportId, EgressReport>();
-  put(report: EgressReport): Promise<EgressReport> {
-    const frozen = freezeClone(report);
-    this.#reports.set(frozen.id, frozen);
-    return Promise.resolve(frozen);
-  }
-  get(id: EgressReportId): Promise<EgressReport | undefined> {
-    return Promise.resolve(this.#reports.get(id));
-  }
-  latestForGroup(
-    spaceId: string,
-    groupId: string,
-  ): Promise<EgressReport | undefined> {
-    const reports = [...this.#reports.values()]
-      .filter((report) =>
-        report.spaceId === spaceId && report.groupId === groupId
-      )
-      .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt));
-    return Promise.resolve(reports[0]);
   }
 }

@@ -6,7 +6,6 @@ The build is a single Pages artifact:
 
 1. Solid Start landing from `website/`.
 2. VitePress docs from `docs/`, served under `/docs/`.
-3. JSON-LD contexts from `spec/contexts/`, served under `/contexts/`.
 
 ## Build
 

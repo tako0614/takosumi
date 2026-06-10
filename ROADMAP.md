@@ -110,7 +110,6 @@ RunGroup, Deployment, OutputSnapshot, Backup, policy decisions, state evidence, 
 - [x] `bun run opentofu:output-snapshot-proof`
 - [x] `bun run opentofu:live-local-proof`
 - [x] `bun run test:scripts`
-- [x] `bun run lint:json-ld`
 - [x] `bun run docs:build`
 - [x] `bun run website:deploy`
 

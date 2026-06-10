@@ -22,7 +22,6 @@
     "test:service": "bun test ./src/",
     "test:accounts": "bun test ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src",
     "test:scripts": "bun test ./scripts/",
-    "lint:json-ld": "bun scripts/lint-json-ld.ts",
     "opentofu:output-snapshot-proof": "bun scripts/prove-opentofu-output-snapshot.ts",
     "opentofu:live-local-proof": "bun scripts/prove-live-opentofu-plan-apply.ts",
     "production-hardening:evidence": "bun scripts/validate-production-hardening-evidence.ts",

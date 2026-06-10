@@ -1,12 +1,10 @@
 # Cloudflare Pages project configuration for the takosumi.com property.
 #
 # This is the SINGLE Pages project that serves the entire takosumi.com
-# property — landing at `/`, VitePress docs at `/docs/*`, and the
-# JSON-LD contexts at `/contexts/*`.
+# property — landing at `/` and VitePress docs at `/docs/*`.
 #
 # `website/build.sh` produces the merged `.output/public/` artifact
-# (Solid Start landing + VitePress dist overlaid under `/docs/` +
-# spec/contexts/ overlaid under `/contexts/`). Cloudflare Pages serves
+# (Solid Start landing + VitePress dist overlaid under `/docs/`). Cloudflare Pages serves
 # them on the apex `takosumi.com` (and `www.takosumi.com` if attached).
 # Custom domains are wired via the Cloudflare Pages dashboard — `wrangler
 # pages` does not own DNS.
@@ -21,7 +19,6 @@
 # Once active, the property is reachable at:
 #   - https://takosumi.com/                      (landing)
 #   - https://takosumi.com/docs/                 (VitePress docs)
-#   - https://takosumi.com/contexts/v1.jsonld    (JSON-LD vocab)
 # The default `takosumi-website.pages.dev` host stays available for
 # preview deploys.
 name = "takosumi-website"

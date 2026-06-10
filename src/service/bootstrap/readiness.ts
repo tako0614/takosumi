@@ -108,36 +108,6 @@ export function createRoleReadinessProbes(
       role: options.role,
       checkedAt: new Date().toISOString(),
     }),
-    statusSummary: () => ({
-      spaceId: "system",
-      groupId: "takosumi",
-      activationId: `${options.role}:process`,
-      status: "active",
-      projectedAt: new Date().toISOString(),
-      desired: {
-        status: "committed",
-        conditions: [{ type: "ActivationCommitted", status: "true" }],
-      },
-      serving: {
-        status: "converged",
-        conditions: [{ type: "RuntimeConverged", status: "true" }],
-      },
-      dependencies: {
-        status: "ready",
-        conditions: [{ type: "DependenciesReady", status: "true" }],
-      },
-      security: {
-        status: "trusted",
-        conditions: [{ type: "SecurityTrusted", status: "true" }],
-      },
-      providers: [],
-      conditions: [
-        { type: "ActivationCommitted", status: "true" },
-        { type: "ServingConverged", status: "true" },
-        { type: "DependenciesReady", status: "true" },
-        { type: "SecurityTrusted", status: "true" },
-      ],
-    }),
   };
 }
 
