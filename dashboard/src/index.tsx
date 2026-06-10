@@ -115,7 +115,6 @@ const ControlMembersView = lazy(() =>
 const InstallFromGitView = lazy(() =>
   import("./views/control/InstallFromGitView.tsx")
 );
-const CatalogView = lazy(() => import("./views/catalog/CatalogView.tsx"));
 const ControlRunView = lazy(() =>
   import("./views/control/ControlRunView.tsx")
 );
@@ -156,10 +155,6 @@ function App() {
       {/* Control-plane surface (spec §31). `/install` and `/installations` map
           to the control views; the legacy account-plane install-by-URL wizard
           and installation detail/danger screens stay reachable under /apps/*. */}
-      {/* Browse-and-install catalog — the "選んで入れる" front door that
-          deep-links into /install with git/ref/path pre-filled, so a
-          non-engineer never starts from a raw Git URL. */}
-      <Route path="/catalog" component={CatalogView} />
       <Route path="/install" component={InstallFromGitView} />
       <Route path="/installations" component={ControlInstallationsView} />
       <Route path="/installations/:id" component={ControlInstallationDetailView} />

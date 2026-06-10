@@ -55,27 +55,24 @@ import {
 } from "../../lib/control-api.ts";
 
 /**
- * Reads `git` / `ref` / `path` (and the optional curated `installConfig`) from
- * the path-route search OR the M9 hash link. `installConfig` is the catalog's
- * bounded InstallConfig id (`cfg-official-…`); when present the compatibility
- * check is gated against that config's minimal allowlist instead of only the
- * instance-wide default policy, which is what makes the curated first-party
- * catalog entries genuinely installable without widening the global default.
+ * Reads `git` / `ref` / `path` from the path-route search OR the M9 hash link.
+ * This is the generic raw-Git-URL install primitive: a deep link only carries
+ * the repo coordinates, and the InstallConfig profile is resolved service-side
+ * from the Space's available configs (see `ensureConfigSelected`), never from
+ * the URL.
  */
 function readPrefill(): {
   git: string;
   ref: string;
   path: string;
-  installConfig: string;
 } {
-  const out = { git: "", ref: "", path: "", installConfig: "" };
+  const out = { git: "", ref: "", path: "" };
   if (typeof location === "undefined") return out;
   const apply = (params: URLSearchParams) => {
     const packed = parsePackedInstallSource(params.get("source"));
     out.git = params.get("git") ?? packed?.git ?? out.git;
     out.ref = params.get("ref") ?? packed?.ref ?? out.ref;
     out.path = params.get("path") ?? packed?.path ?? out.path;
-    out.installConfig = params.get("installConfig") ?? out.installConfig;
   };
   // Path-route form: /install?git=...
   apply(new URLSearchParams(location.search));
@@ -126,12 +123,9 @@ function Inner() {
   const [ref, setRef] = createSignal(prefill.ref || "main");
   const [path, setPath] = createSignal(prefill.path || ".");
   const [name, setName] = createSignal("");
-  // Seed from the catalog's curated bounded InstallConfig (if any). It is
-  // confirmed against the loaded config list below so a stale/unknown id falls
-  // back to the first available profile rather than failing the install.
-  const [installConfigId, setInstallConfigId] = createSignal(
-    prefill.installConfig,
-  );
+  // Resolved from the Space's available InstallConfig profiles once they load
+  // (see `ensureConfigSelected`); the URL never carries an InstallConfig id.
+  const [installConfigId, setInstallConfigId] = createSignal("");
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
   const [checkingCompatibility, setCheckingCompatibility] = createSignal(false);
@@ -170,9 +164,9 @@ function Inner() {
     const list = configList();
     if (list.length === 0) return list;
     const current = installConfigId();
-    // Keep the curated/selected config only if the loaded list actually has it;
-    // otherwise (empty or an unknown prefilled id) fall back to the first
-    // available profile so the install button never depends on a stale id.
+    // Keep the current selection only if the loaded list actually has it;
+    // otherwise (empty or an unknown id) fall back to the first available
+    // profile so the install button never depends on a stale id.
     if (!current || !list.some((config) => config.id === current)) {
       setInstallConfigId(list[0]!.id);
     }

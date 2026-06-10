@@ -12,7 +12,6 @@ import {
   Settings,
   Share2,
   GitBranch,
-  Store,
   Users,
   UserCircle2,
 } from "lucide-solid";
@@ -20,7 +19,7 @@ import Wordmark from "../brand/Wordmark.tsx";
 
 const ITEMS = [
   { href: "/home", label: "ホーム", icon: Home },
-  { href: "/catalog", label: "アプリを選ぶ", icon: Store },
+  { href: "/install", label: "Git から導入", icon: GitBranch },
   { href: "/installations", label: "Installations", icon: LayoutGrid },
   { href: "/sources", label: "Sources", icon: GitBranch },
   { href: "/providers", label: "Providers", icon: PackageSearch },
