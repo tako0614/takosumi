@@ -916,9 +916,9 @@ export async function checkCapsuleCompatibility(input: {
     method: "POST",
     body: {
       sourceSnapshotId: snapshot.id,
-      // Gate the pre-install check against the curated InstallConfig's bounded
-      // policy (catalog deep-link path) so a vetted first-party module is judged
-      // by its own minimal allowlist, not only the instance-wide default.
+      // Gate the pre-install check against the selected InstallConfig's policy
+      // when one is supplied (the install view passes the Space's resolved
+      // profile), otherwise fall back to the instance-wide default policy.
       ...(input.installConfigId
         ? { installConfigId: input.installConfigId }
         : {}),
