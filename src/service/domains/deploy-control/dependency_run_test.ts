@@ -792,6 +792,77 @@ test("tampered sealed dependency values fail the apply closed", async () => {
   ).toContain("digest mismatch");
 });
 
+test("tampered sealed runs_inputs sidecar fails the apply closed", async () => {
+  // Sibling of the dependency-snapshot tamper test above, but targeting the
+  // OTHER at-rest sensitive surface: the runs_inputs sidecar. A sensitive
+  // dependency value flows into `variables` AND is baked as a literal into the
+  // generated root, so the controller seals the WHOLE sidecar payload at rest
+  // (spec §11 / §18) and unseals it transparently at apply dispatch via
+  // #getPlanRunInputs. Here we leave the DependencySnapshot intact and tamper
+  // ONLY the persisted `runs_inputs.sealed.ciphertext`; the apply must fail
+  // closed at the sidecar open() (the same AES-GCM auth-tag / content-digest
+  // layer) before any plaintext is recovered or dispatched.
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = sensitiveOutputRunner();
+  const { consumer } = await seedCrossSpaceGraph(store, "preview");
+  const producerConfig = await store.getInstallConfig("cfg_producer");
+  await store.putInstallConfig({ ...producerConfig!, outputAllowlist: {} });
+  const share = await store.getOutputShare("oshare_1");
+  await store.putOutputShare({
+    ...share!,
+    outputs: [{ name: "admin_token", sensitive: true }],
+  });
+  const dependency = await store.getDependency("dep_edge0001");
+  await store.putDependency({
+    ...dependency!,
+    outputs: {
+      admin_token: { from: "admin_token", to: "admin_token", required: true },
+    },
+  });
+  const controller = controllerWith(store, runner, {
+    sensitiveOutputResolver: staticSensitiveResolver(),
+    dependencyValueSealer: fakeValueSealer(),
+  });
+  const producerPlan = await controller.createInstallationPlan("inst_producer");
+  await controller.createApplyRun({
+    planRunId: producerPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
+  });
+  const consumerPlan = await controller.createInstallationPlan(consumer);
+
+  // The retained sidecar of the succeeded generated-root plan is sealed: confirm
+  // the at-rest precondition, then tamper ONLY its ciphertext.
+  const sidecar = await store.getPlanRunInputs(consumerPlan.planRun.id);
+  expect(sidecar?.sealed?.ciphertext).toBeTruthy();
+  await store.putPlanRunInputs({
+    planRunId: consumerPlan.planRun.id,
+    variables: {},
+    sealed: {
+      ...sidecar!.sealed!,
+      ciphertext: `${sidecar!.sealed!.ciphertext}TAMPER`,
+    },
+  });
+
+  // Fail-closed: the sidecar is unsealed at apply DISPATCH (#getPlanRunInputs,
+  // before any tofu runs), so a tampered blob throws at the content-digest /
+  // auth-tag layer and the apply dispatch rejects — no cleartext is ever
+  // recovered or handed to the runner. (This differs from the dependency-snapshot
+  // tamper above, which fails inside the runner execution and records a `failed`
+  // run; the sidecar guard fires earlier, at dispatch.)
+  await expect(
+    controller.createApplyRun({
+      planRunId: consumerPlan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+    }),
+  ).rejects.toThrow(/digest mismatch/i);
+  // The apply never reached a successful generation.
+  const consumerInstallation = (await controller.getInstallation(consumer))
+    .installation;
+  expect(consumerInstallation.currentStateGeneration ?? 0).toBe(0);
+  // The runner was never handed the secret on the tampered dispatch.
+  expect(JSON.stringify(runner.applyJobs)).not.toContain("super-secret-token");
+});
+
 test("sensitive published_output fails closed when controller has no resolver", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = sensitiveOutputRunner();
