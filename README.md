@@ -80,11 +80,10 @@ annotated tree (single source of truth to avoid drift).
 bun run check
 bun test
 bun run test:scripts
-bun run lint:json-ld
 bun run docs:build
 bun run website:build
 ```
 
 ## Docs and website
 
-`docs/` is the VitePress docs site served under `/docs/`. `website/` is the landing page. `bun run website:build` produces one Cloudflare Pages artifact containing the landing page, `/docs/`, and `/contexts/`.
+`docs/` is the VitePress docs site served under `/docs/`. `website/` is the landing page. `bun run website:build` produces one Cloudflare Pages artifact containing the landing page and `/docs/`.

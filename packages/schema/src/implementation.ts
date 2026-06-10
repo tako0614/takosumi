@@ -63,7 +63,7 @@ export interface OperatorImplementation {
    * Operator-resolved kind URIs this implementation can materialize.
    * The deployControl resolves `Component.kind` through the operator alias map
    * and matches the resulting URI against `provides[]` during `apply`.
-   * JSON-LD is the takosumi.com reference descriptor metadata format, not a
+   * takosumi.com reference descriptors are one source of these URIs, not a
    * required authority for every implementation.
    *
    * Examples:
@@ -220,8 +220,7 @@ export interface InlineMaterializer {
  *
  * Treated as opaque by the service; consumers (= input-binding handlers)
  * interpret the payload through the source material contract,
- * operator descriptor metadata, and implementation binding. JSON-LD is the
- * takosumi.com reference metadata form when an operator chooses to use it.
+ * operator descriptor metadata, and implementation binding.
  */
 export type OutputMaterial = Readonly<
   Record<string, JsonValue | { readonly secretRef: string }>

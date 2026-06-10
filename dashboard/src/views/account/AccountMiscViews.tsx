@@ -38,7 +38,7 @@ import {
  * uncertainty screens.
  *
  * Named exports:
- *  - InstallWizard / InstallByUrlView / AppsInstallView — install-by-URL
+ *  - InstallWizard / InstallByUrlView                  — install-by-URL
  *  - SignInView / SignInCallbackView / SignInPanel       — upstream OAuth sign-in
  *  - TakosStartView                                       — Takos product launch
  *  - HomeView / NotificationsView / AccountIndexView      — landing / placeholders
@@ -342,15 +342,6 @@ export function InstallWizard() {
  * and the wizard pre-fills + creates the plan run.
  */
 export function InstallByUrlView() {
-  return <Page title="アプリを追加">{() => <InstallWizard />}</Page>;
-}
-
-/**
- * In-dashboard install entry (the "+ Install" button). Renders the same wizard
- * as the canonical `/install` route. Kept so existing `/apps/install`
- * links/bookmarks keep working.
- */
-export function AppsInstallView() {
   return <Page title="アプリを追加">{() => <InstallWizard />}</Page>;
 }
 

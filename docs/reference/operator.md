@@ -62,4 +62,4 @@ Production では `TAKOSUMI_DEV_MODE` を使わず、persistent storage、manage
 
 ## Public site
 
-`takosumi/website/` は landing page、`takosumi/docs/` は docs site です。`bun run website:build` は landing と `/docs/` と `/contexts/` を単一 Cloudflare Pages artifact にまとめます。
+`takosumi/website/` は landing page、`takosumi/docs/` は docs site です。`bun run website:build` は landing と `/docs/` を単一 Cloudflare Pages artifact にまとめます。
