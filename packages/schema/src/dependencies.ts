@@ -52,6 +52,31 @@ export interface Dependency {
 }
 
 /**
+ * At-rest sealed blob for the SENSITIVE subset of a {@link
+ * DependencySnapshotEntry}'s pinned values (spec §11 / §18 invariant: secret
+ * outputs are never stored as cleartext ledger values).
+ *
+ * A `published_output` edge may inline a producer's *sensitive* output value
+ * into the consumer's pinned inputs. That value MUST NOT sit in cleartext in
+ * the `dependency_snapshots` ledger row. When the host injects a value sealer,
+ * the controller moves every sensitive value off the cleartext `values` map and
+ * into this blob, sealed with the SAME AES-GCM at-rest envelope used for state /
+ * plan / raw-output artifacts (no new key management). The blob carries the
+ * sealed `names` (cleartext metadata, never the values) so apply can recover the
+ * full plaintext value map and re-verify the per-entry `valuesDigest`, which is
+ * always computed over the FULL plaintext value map (sensitive + non-sensitive)
+ * exactly as it would be without sealing.
+ */
+export interface SealedDependencyValues {
+  /** Base64 of the AES-GCM ciphertext (iv || ciphertext+tag) of `{ name: value }`. */
+  readonly ciphertext: string;
+  /** `sha256:<hex>` over the sealed plaintext bytes (tamper check after decrypt). */
+  readonly contentDigest: string;
+  /** The value keys carried inside the sealed blob. Cleartext metadata, no values. */
+  readonly names: readonly string[];
+}
+
+/**
  * Plan-time pin of one dependency's inputs. Apply verifies the
  * snapshot (invariant 9); `strict` mode additionally fails when the producer
  * state generation moved since plan.
@@ -70,8 +95,25 @@ export interface DependencySnapshotEntry {
   readonly producerStateDigest?: string;
   readonly producerOutputSnapshotId: string;
   readonly producerOutputDigest: string;
+  /**
+   * `sha256:<hex>` over the FULL plaintext value map — the non-sensitive entries
+   * in {@link values} PLUS the sensitive entries that live sealed in {@link
+   * sealedValues}. Apply recomputes it over the recovered full plaintext, so the
+   * digest is independent of whether the entry's secrets are sealed at rest.
+   */
   readonly valuesDigest: string;
+  /**
+   * The plaintext, NON-SENSITIVE pinned values keyed by the consumer input name.
+   * A sensitive value (resolved from a `published_output` share) is NEVER stored
+   * here; it lives sealed in {@link sealedValues}.
+   */
   readonly values: Readonly<Record<string, unknown>>;
+  /**
+   * Sealed sensitive values for this edge (omitted when the edge pinned no
+   * sensitive value). The cleartext sensitive values are recovered from here at
+   * apply time and never persisted to {@link values}.
+   */
+  readonly sealedValues?: SealedDependencyValues;
 }
 
 /** `strict` is the production default; `pinned` the preview/dev default. */

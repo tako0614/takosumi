@@ -34,6 +34,7 @@ import { SqlRevokeDebtStore } from "./domains/deploy-records/revoke_debt_store_s
 import { InMemoryTakosumiDeploymentRecordStore } from "./domains/deploy-records/deployment_record_store.ts";
 import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy-records/deployment_record_store_sql.ts";
 import {
+  type DependencyValueSealer,
   type EnqueueRun,
   OpenTofuDeploymentController,
   type ReconcileInvoiceUsageInput,
@@ -327,6 +328,14 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * fails closed for sensitive grants.
    */
   readonly sensitiveOutputResolver?: SensitiveOutputResolver;
+  /**
+   * Host-injected at-rest sealer for the sensitive pinned values of a
+   * DependencySnapshot entry (spec §11 / §18). Required whenever a sensitive
+   * cross-Space published_output is injected: the controller seals the resolved
+   * secret instead of persisting it as a cleartext ledger value, and unseals it
+   * at apply. Omitted ⇒ a sensitive published_output edge fails closed.
+   */
+  readonly dependencyValueSealer?: DependencyValueSealer;
   /**
    * Internal compatibility seam for accounts-plane / CLI in-process callers.
    * Internet-facing platform hosts must leave this false so legacy `/v1/*`
@@ -707,6 +716,9 @@ export async function createTakosumiService(
       : {}),
     ...(options.sensitiveOutputResolver
       ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
+      : {}),
+    ...(options.dependencyValueSealer
+      ? { dependencyValueSealer: options.dependencyValueSealer }
       : {}),
   });
   // RunGroups domain (Core Specification §19 / §24): space_update re-plans
