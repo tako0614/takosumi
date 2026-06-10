@@ -897,8 +897,11 @@ export function HomeView() {
           </div>
           <section class="empty-state">
             <p>まだアプリがありません。</p>
-            <a href="/install" class="btn btn-primary">
-              最初のアプリを追加 →
+            <a href="/catalog" class="btn btn-primary">
+              アプリを選んで追加 →
+            </a>
+            <a href="/install" class="btn btn-secondary">
+              URL を指定して追加
             </a>
           </section>
         </AppShell>

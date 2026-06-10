@@ -428,6 +428,25 @@ function fakeOperations(
         ReturnType<ControlPlaneOperations["getConnection"]>
       >;
     },
+    createConnection: async (request) => {
+      record("createConnection", request);
+      return {
+        connection: {
+          id: "conn_new",
+          spaceId: request.spaceId ?? "space_a",
+          provider: request.provider,
+          kind: request.kind ?? "provider_env_set",
+          authMethod: request.authMethod,
+          scope: request.scope ?? "space",
+          status: "pending",
+          // The public projection NEVER carries secret `values`.
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      } as unknown as Awaited<
+        ReturnType<ControlPlaneOperations["createConnection"]>
+      >;
+    },
     createInstallationPlan: async (installationId) => {
       record("createInstallationPlan", installationId);
       return { planRun: { id: "plan_1" } } as unknown as Awaited<
@@ -1972,6 +1991,370 @@ test("Connections: requires spaceId; operator-connection-defaults is Space-gated
   });
   expect(defaultsResp?.status).toEqual(200);
   expect(operations.calls.listOperatorConnectionDefaults).toBeDefined();
+});
+
+test("Connections create: registers a Space-owned connection; token never echoed", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const create = request("POST", "/v1/control/connections", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      provider: "cloudflare",
+      displayName: "本番 Cloudflare",
+      // caller tries to widen to an operator default — must be ignored.
+      scope: "operator",
+      values: { CLOUDFLARE_API_TOKEN: "super-secret-token-value" },
+    },
+  });
+  const response = await handleControlRoute({
+    request: create.request,
+    url: create.url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+
+  // The facade was called with a Space-scoped cloudflare_api_token request.
+  const passed = operations.calls.createConnection?.[0] as {
+    spaceId?: string;
+    provider?: string;
+    kind?: string;
+    scope?: string;
+    values?: Record<string, string>;
+  };
+  expect(passed.spaceId).toEqual("space_a");
+  expect(passed.provider).toEqual("cloudflare");
+  expect(passed.kind).toEqual("cloudflare_api_token");
+  // Forced Space scope regardless of the caller-supplied `scope: "operator"`.
+  expect(passed.scope).toEqual("space");
+  // The write-only token reaches the facade…
+  expect(passed.values?.CLOUDFLARE_API_TOKEN).toEqual(
+    "super-secret-token-value",
+  );
+
+  // …but is NEVER present in the HTTP response body.
+  const text = await response!.text();
+  expect(text).not.toContain("super-secret-token-value");
+  expect(text).not.toContain("CLOUDFLARE_API_TOKEN");
+});
+
+test("Connections create: requires spaceId and values", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const noSpace = request("POST", "/v1/control/connections", {
+    cookie,
+    body: { provider: "cloudflare", values: { CLOUDFLARE_API_TOKEN: "t" } },
+  });
+  const noSpaceResp = await handleControlRoute({
+    request: noSpace.request,
+    url: noSpace.url,
+    store,
+    operations,
+  });
+  expect(noSpaceResp?.status).toEqual(400);
+
+  const noValues = request("POST", "/v1/control/connections", {
+    cookie,
+    body: { spaceId: "space_a", provider: "cloudflare", values: {} },
+  });
+  const noValuesResp = await handleControlRoute({
+    request: noValues.request,
+    url: noValues.url,
+    store,
+    operations,
+  });
+  expect(noValuesResp?.status).toEqual(400);
+  // Neither malformed request reached the facade.
+  expect(operations.calls.createConnection).toBeUndefined();
+});
+
+test("Connections create: another Space is forbidden (no connection minted)", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      getSpace: async (id) => ({
+        id,
+        handle: "other",
+        displayName: "Other",
+        type: "personal" as const,
+        ownerUserId: "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+  });
+  const create = request("POST", "/v1/control/connections", {
+    cookie,
+    body: {
+      spaceId: "space_b",
+      provider: "cloudflare",
+      values: { CLOUDFLARE_API_TOKEN: "secret" },
+    },
+  });
+  const response = await handleControlRoute({
+    request: create.request,
+    url: create.url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  // The space gate runs BEFORE any create — no secret ever reaches the facade.
+  expect(operations.calls.createConnection).toBeUndefined();
+});
+
+test("Cloudflare OAuth: 501 when the operator has not wired the helper", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const start = request(
+    "POST",
+    "/v1/control/connections/cloudflare/oauth/start",
+    { cookie, body: { spaceId: "space_a" } },
+  );
+  const startResp = await handleControlRoute({
+    request: start.request,
+    url: start.url,
+    store,
+    operations,
+  });
+  expect(startResp?.status).toEqual(501);
+
+  const callback = request(
+    "GET",
+    "/v1/control/connections/cloudflare/oauth/callback?code=c&state=s",
+    { cookie },
+  );
+  const callbackResp = await handleControlRoute({
+    request: callback.request,
+    url: callback.url,
+    store,
+    operations,
+  });
+  expect(callbackResp?.status).toEqual(501);
+});
+
+test("Cloudflare OAuth: start authorizes and callback redirects to /connections, minting a Space-owned connection", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store);
+  // Record the subject the cookie-gated start signed into the state, then the
+  // cross-site callback replays it back through `complete` (mirroring the real
+  // HMAC-signed state, which carries the subject across the redirect).
+  let signedSubject: string | undefined;
+  const operations = fakeOperations({
+    connectionOAuth: {
+      cloudflare: {
+        start: async (input) => {
+          signedSubject = input.subject;
+          return {
+            authorizationUrl:
+              "https://dash.cloudflare.com/oauth2/auth?client_id=cf&state=signed&space=" +
+              encodeURIComponent(input.spaceId),
+            state: "signed",
+          };
+        },
+        complete: async () => ({
+          request: {
+            spaceId: "space_a",
+            provider: "cloudflare",
+            kind: "provider_env_set" as const,
+            authMethod: "static_secret" as const,
+            values: { CLOUDFLARE_API_TOKEN: "minted-oauth-token" },
+          },
+          subject: signedSubject,
+        }),
+      },
+    },
+  });
+
+  const start = request(
+    "POST",
+    "/v1/control/connections/cloudflare/oauth/start",
+    { cookie, body: { spaceId: "space_a" } },
+  );
+  const startResp = await handleControlRoute({
+    request: start.request,
+    url: start.url,
+    store,
+    operations,
+  });
+  expect(startResp?.status).toEqual(200);
+  const startBody = (await startResp!.json()) as { authorizationUrl: string };
+  expect(startBody.authorizationUrl).toContain("dash.cloudflare.com");
+  // The authenticated subject is bound into the OAuth state at start time.
+  expect(signedSubject).toEqual(subject);
+
+  // The callback arrives via a top-level CROSS-SITE redirect: NO session cookie
+  // (SameSite=Strict does not ride it) and NO Authorization header. The flow
+  // must still complete by authorizing from the signed state's subject.
+  const callback = request(
+    "GET",
+    "/v1/control/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
+  );
+  const callbackResp = await handleControlRoute({
+    request: callback.request,
+    url: callback.url,
+    store,
+    operations,
+  });
+  // Backend route redirects to the dashboard /connections screen (no SPA route).
+  expect(callbackResp?.status).toEqual(303);
+  const location = callbackResp!.headers.get("location") ?? "";
+  expect(location).toContain("/connections");
+  expect(location).toContain("connected=1");
+  // The minted token never rides the redirect query.
+  expect(location).not.toContain("minted-oauth-token");
+
+  // A Space-owned connection was created from the OAuth result.
+  const passed = operations.calls.createConnection?.[0] as {
+    spaceId?: string;
+    scope?: string;
+  };
+  expect(passed.spaceId).toEqual("space_a");
+  expect(passed.scope).toEqual("space");
+});
+
+test("Cloudflare OAuth callback without the session cookie still completes (cross-site redirect)", async () => {
+  // Regression guard for the SameSite=Strict gap: a browser following the
+  // dash.cloudflare.com -> worker redirect sends neither header nor cookie.
+  // Before the fix the up-front requireAccountSession returned 401 JSON and the
+  // user never reached /connections. The callback must authorize from the
+  // signed state subject alone.
+  const store = new InMemoryAccountsStore();
+  // The owning account exists, but we deliberately present NO cookie.
+  seedSession(store, { subject: "tsub_ctrl" });
+  const operations = fakeOperations({
+    connectionOAuth: {
+      cloudflare: {
+        start: async () => ({ authorizationUrl: "https://x", state: "signed" }),
+        complete: async () => ({
+          request: {
+            spaceId: "space_a",
+            provider: "cloudflare",
+            kind: "provider_env_set" as const,
+            authMethod: "static_secret" as const,
+            values: { CLOUDFLARE_API_TOKEN: "minted" },
+          },
+          subject: "tsub_ctrl",
+        }),
+      },
+    },
+  });
+  const callback = request(
+    "GET",
+    "/v1/control/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
+    // NO cookie header on purpose: this is the cross-site case.
+  );
+  const response = await handleControlRoute({
+    request: callback.request,
+    url: callback.url,
+    store,
+    operations,
+  });
+  // NOT a 401 JSON — a real 303 redirect back to the dashboard.
+  expect(response?.status).toEqual(303);
+  const location = response!.headers.get("location") ?? "";
+  expect(location).toContain("/connections");
+  expect(location).toContain("connected=1");
+  const passed = operations.calls.createConnection?.[0] as { scope?: string };
+  expect(passed.scope).toEqual("space");
+});
+
+test("Cloudflare OAuth callback: an unsigned state (no subject) is refused", async () => {
+  // A forged/legacy callback whose state carries no signed subject must not be
+  // trusted to mint a Connection, even though the spaceId looks owned.
+  const store = new InMemoryAccountsStore();
+  seedSession(store, { subject: "tsub_ctrl" });
+  const operations = fakeOperations({
+    connectionOAuth: {
+      cloudflare: {
+        start: async () => ({ authorizationUrl: "https://x", state: "signed" }),
+        complete: async () => ({
+          request: {
+            spaceId: "space_a",
+            provider: "cloudflare",
+            kind: "provider_env_set" as const,
+            authMethod: "static_secret" as const,
+            values: { CLOUDFLARE_API_TOKEN: "minted" },
+          },
+          // subject intentionally absent (unsigned/legacy state).
+        }),
+      },
+    },
+  });
+  const callback = request(
+    "GET",
+    "/v1/control/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
+  );
+  const response = await handleControlRoute({
+    request: callback.request,
+    url: callback.url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(303);
+  const location = response!.headers.get("location") ?? "";
+  expect(location).toContain("connection_error=oauth_failed");
+  expect(operations.calls.createConnection).toBeUndefined();
+});
+
+test("Cloudflare OAuth callback: a Space the signed subject does not own is not minted", async () => {
+  const store = new InMemoryAccountsStore();
+  // Present a cookie too, to prove the gate is the SIGNED subject, not the
+  // cookie: the signed subject does not own the Space, so the mint is refused.
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      getSpace: async (id) => ({
+        id,
+        handle: "other",
+        displayName: "Other",
+        type: "personal" as const,
+        ownerUserId: "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+    connectionOAuth: {
+      cloudflare: {
+        start: async () => ({ authorizationUrl: "https://x", state: "s" }),
+        complete: async () => ({
+          request: {
+            // The signed state resolves to a Space owned by someone else.
+            spaceId: "space_b",
+            provider: "cloudflare",
+            kind: "provider_env_set" as const,
+            authMethod: "static_secret" as const,
+            values: { CLOUDFLARE_API_TOKEN: "minted" },
+          },
+          // The signed subject is the session subject, who does NOT own space_b.
+          subject: "tsub_ctrl",
+        }),
+      },
+    },
+  });
+  const callback = request(
+    "GET",
+    "/v1/control/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: callback.request,
+    url: callback.url,
+    store,
+    operations,
+  });
+  // Redirect carries an opaque error; no connection is minted cross-tenant.
+  expect(response?.status).toEqual(303);
+  const location = response!.headers.get("location") ?? "";
+  expect(location).toContain("connection_error=forbidden");
+  expect(operations.calls.createConnection).toBeUndefined();
 });
 
 test("OutputShares: list, create, approve, and revoke are Space-gated", async () => {
