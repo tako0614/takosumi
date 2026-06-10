@@ -46,3 +46,30 @@ export interface OperatorConnectionDefault {
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+
+/**
+ * Non-secret projection of "can this instance's managed default (operator key)
+ * cover an install with NO Space connection configured?".
+ *
+ * A `default`-mode ProviderBinding resolves to the instance-wide operator
+ * default connection for that provider (spec §7.1 `takosumi_managed`), so an
+ * empty ProviderBindings list (the no-config install path) ALWAYS resolves to
+ * `default` and falls through to the operator key. This projection answers the
+ * dashboard's "do I need to connect my own cloud first?" question without
+ * touching binding resolution.
+ *
+ * It is a DELIBERATELY narrow, credential-free signal: `available` is true when
+ * the instance has at least one operator default connection, and `providers`
+ * lists ONLY the provider source names those defaults cover. It carries NO
+ * connection id, NO connection value, and NO secret material — the operator
+ * default's id / connectionId stay on the bearer-gated §30 surface.
+ */
+export interface ManagedDefaultStatus {
+  /** True when the instance has at least one operator default connection. */
+  readonly available: boolean;
+  /**
+   * The OpenTofu provider source names the managed default covers (one per
+   * operator default), sorted and de-duplicated. Never a credential.
+   */
+  readonly providers: readonly string[];
+}
