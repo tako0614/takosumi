@@ -12,6 +12,12 @@ import {
   type AppRuntimeConfig,
   createAppContext,
 } from "./app_context.ts";
+import type {
+  MembershipStatus as SpaceMemberStatus,
+  SpaceMembership as SpaceMember,
+  SpaceRole as SpaceMemberRole,
+} from "./domains/membership/mod.ts";
+import { createMembershipControlFacade } from "./domains/membership/control_facade.ts";
 import { loadRuntimeConfigFromEnv } from "./config/mod.ts";
 import {
   isTakosumiProcessRole,
@@ -365,6 +371,27 @@ export interface TakosumiOperations {
    * InstallConfig / DeploymentProfile over the same shared ledger.
    */
   readonly installations: InstallationsService;
+  /**
+   * Space membership facade backing the account-plane `/v1/control/spaces/:id/
+   * members` surface. Delegates to the membership domain's
+   * `MembershipRoleEntitlementService` (`listSpaceMemberships` /
+   * `upsertSpaceMembership`); the control routes enforce the role/last-owner
+   * gate before calling, and the soft-remove path is a `suspended` upsert.
+   */
+  readonly members: {
+    listMembers(spaceId: string): Promise<readonly SpaceMember[]>;
+    upsertMember(input: {
+      readonly spaceId: string;
+      readonly accountId: string;
+      readonly roles?: readonly SpaceMemberRole[];
+      readonly status?: SpaceMemberStatus;
+      readonly actor: {
+        readonly actorAccountId: string;
+        readonly roles: readonly string[];
+        readonly requestId: string;
+      };
+    }): Promise<SpaceMember>;
+  };
   readonly connections: ConnectionsService;
   /**
    * Dependencies domain service (Core Specification §14 / §15): the Space
@@ -834,10 +861,33 @@ export async function createTakosumiService(
   });
   // Typed in-process operate facade. Delegates to the wired OpenTofu
   // controller; does not duplicate controller logic.
+  //
+  // The membership domain keeps its OWN `MembershipSpace` store and membership
+  // ledger, distinct from the Core-Spec `Space` (owner namespace) owned by
+  // `spacesService`. A Core-Spec Space is created with NO bridge into the
+  // membership domain, so `upsertSpaceMembership`'s two preconditions
+  // (`requireMembershipSpace` + `canManageSpace`) can never be satisfied for a
+  // fresh Space. `createMembershipControlFacade` self-bootstraps the membership
+  // domain (idempotently, for the NAMESPACE owner resolved server-side) before
+  // each mutation so the real domain path matches what the route layer assumes.
+  const members = createMembershipControlFacade({
+    membership: context.services.space,
+    membershipSpaceStore: context.stores.space.spaces,
+    membershipLedgerStore: context.stores.space.memberships,
+    resolveSpace: async (spaceId) => {
+      const space = await spacesService.getSpace(spaceId);
+      return {
+        ownerUserId: space.ownerUserId,
+        displayName: space.displayName,
+        handle: space.handle,
+      };
+    },
+  });
   const operations: TakosumiOperations = {
     controller: opentofuController,
     spaces: spacesService,
     installations: installationsService,
+    members,
     connections: connectionsService,
     dependencies: dependenciesService,
     listDependenciesBySpace: (spaceId) =>

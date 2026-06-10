@@ -681,6 +681,110 @@ export async function changeSpaceSubscription(
   return body.billing;
 }
 
+// --- Members (Space membership / roles) ------------------------------------
+//
+// Backs the Members screen over the session-authed
+// `/v1/control/spaces/:id/members[/:subject]` routes (see
+// packages/accounts-service/src/control-routes.ts). The Space is resolved
+// server-side and the membership-ROLE gate is enforced by the backend
+// (list = any active member; add/invite = owner/admin; role change + remove =
+// owner-only with a last-owner guard). These client fns never send the spaceId
+// in a body — it is always a path segment the server re-resolves and gates.
+
+export type ControlSpaceRole = "owner" | "admin" | "member" | "viewer";
+export type ControlMembershipStatus = "active" | "invited" | "suspended";
+
+/**
+ * Public projection of one Space membership (mirror of the deploy-control
+ * `PublicSpaceMember`). `accountId` is the member's account subject — the same
+ * value the session `/v1/account/session/me` returns for the signed-in caller —
+ * so the view can match the caller against the roster to decide which mutation
+ * controls to show. Carries no credential / email / PII beyond the handle.
+ */
+export interface PublicSpaceMember {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly accountId: string;
+  readonly roles: readonly ControlSpaceRole[];
+  readonly status: ControlMembershipStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/**
+ * Lists a Space's members (`GET /v1/control/spaces/:id/members`). Any active
+ * member of the Space may read the roster; the backend gates this server-side.
+ */
+export async function listMembers(
+  spaceId: string,
+): Promise<readonly PublicSpaceMember[]> {
+  const body = await controlFetch<{ members?: readonly PublicSpaceMember[] }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}/members`,
+  );
+  return body.members ?? [];
+}
+
+/**
+ * Adds (or re-activates) a member by account subject
+ * (`POST /v1/control/spaces/:id/members`). The membership domain has no email
+ * invite / notification side-channel, so this adds an EXISTING account handle /
+ * subject directly as an active member. Owner/admin only; only an owner may
+ * grant `role: "owner"` (the backend rejects an admin doing so with 403).
+ */
+export async function inviteMember(
+  spaceId: string,
+  input: {
+    readonly accountId: string;
+    readonly role?: ControlSpaceRole;
+  },
+): Promise<PublicSpaceMember> {
+  const body = await controlFetch<{ member: PublicSpaceMember }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}/members`,
+    {
+      method: "POST",
+      body: {
+        accountId: input.accountId,
+        ...(input.role ? { role: input.role } : {}),
+      },
+    },
+  );
+  return body.member;
+}
+
+/**
+ * Changes a member's role set (`PATCH /v1/control/spaces/:id/members/:subject`).
+ * Owner-only. The backend's last-owner guard rejects demoting the sole
+ * remaining owner with 403, so a Space is never left unmanaged.
+ */
+export async function setMemberRole(
+  spaceId: string,
+  subject: string,
+  roles: ControlSpaceRole | readonly ControlSpaceRole[],
+): Promise<PublicSpaceMember> {
+  const body = await controlFetch<{ member: PublicSpaceMember }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}/members/${encodeURIComponent(subject)}`,
+    { method: "PATCH", body: { roles } },
+  );
+  return body.member;
+}
+
+/**
+ * Removes a member (`DELETE /v1/control/spaces/:id/members/:subject`).
+ * Owner-only. The membership store has no hard delete, so the backend soft-
+ * removes (sets `status: "suspended"`) and returns the updated projection. The
+ * last-owner guard rejects removing the sole remaining owner with 403.
+ */
+export async function removeMember(
+  spaceId: string,
+  subject: string,
+): Promise<PublicSpaceMember> {
+  const body = await controlFetch<{ member: PublicSpaceMember }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}/members/${encodeURIComponent(subject)}`,
+    { method: "DELETE" },
+  );
+  return body.member;
+}
+
 // --- Installations ---------------------------------------------------------
 
 export async function listInstallations(
