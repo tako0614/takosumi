@@ -2366,10 +2366,23 @@ export class OpenTofuDeploymentController {
       // template plan path. The config's variableMapping supplies the template
       // inputs (public, never secret); the user source archive is a build input
       // only. The install-type context drives the §13 generated root.
+      //
+      // The required providers MUST match what the dispatch path stores on the
+      // plan run (`#resolveTemplatePlan`: the template's allowed providers
+      // canonicalized) so the operator-default fall-through resolves the same
+      // set for rootgen here and for credential mint at run time.
+      const template = this.#templateRegistry.require(
+        templateBinding.templateId,
+        templateBinding.templateVersion,
+      );
+      const requiredProviders = template.policy.allowedProviders.map(
+        canonicalProviderAddress,
+      );
       const installTypePlan = await this.#resolveInstallTypePlan(
         input.installation,
         input.installConfig,
         installType,
+        requiredProviders,
       );
       return {
         request: {
@@ -2424,6 +2437,7 @@ export class OpenTofuDeploymentController {
       input.installation,
       input.installConfig,
       input.installConfig.installType,
+      requiredProviders,
     );
     const variables = normalizeVariables(
       mergeJsonVariables(
@@ -2559,12 +2573,19 @@ export class OpenTofuDeploymentController {
     installation: Installation,
     installConfig: InstallConfig,
     installType: InstallType,
+    requiredProviders: readonly string[],
   ): Promise<InstallTypePlanContext> {
     this.#connectionsService ??= new ConnectionsService({ store: this.#store });
+    // Run-scoped resolution so the generated-root provider blocks include the
+    // operator-default fall-through (spec §7.1) for unbound required providers.
+    // `requiredProviders` MUST equal the value stored on the plan run so the
+    // mint path (#resolveRunProviderBindings) resolves the identical set.
     const resolved =
-      await this.#connectionsService.resolveProviderBindings(installation);
+      await this.#connectionsService.resolveProviderBindingsForRun(
+        installation,
+        requiredProviders,
+      );
     const providerBindings = providerBindingsFromResolved(resolved);
-    const requiredProviders = installConfig.policy.allowedProviders ?? [];
     const manualValues = manualValuesFromResolved(resolved);
     return {
       // opentofu_root never reaches here (asserted in #installationPlanRequest);
@@ -2597,10 +2618,17 @@ export class OpenTofuDeploymentController {
           "template plans require a generated-root install type",
       );
     }
+    const templateBinding = installConfigTemplateBinding(installConfig);
+    const requiredProviders = templateBinding
+      ? this.#templateRegistry
+          .require(templateBinding.templateId, templateBinding.templateVersion)
+          .policy.allowedProviders.map(canonicalProviderAddress)
+      : (installConfig.policy.allowedProviders ?? []);
     return await this.#resolveInstallTypePlan(
       installation,
       installConfig,
       installConfig.installType,
+      requiredProviders,
     );
   }
 
@@ -4155,7 +4183,13 @@ export class OpenTofuDeploymentController {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
     });
-    return await this.#connectionsService.resolveProviderBindings(installation);
+    // Run-scoped: explicit bindings + the operator-default fall-through for the
+    // run's required providers (spec §7.1). The same resolution feeds rootgen, so
+    // the minted TF_VAR credentials line up with the generated provider blocks.
+    return await this.#connectionsService.resolveProviderBindingsForRun(
+      installation,
+      planRun.requiredProviders,
+    );
   }
 
   async getApplyRun(id: string): Promise<ApplyRunResponse> {
