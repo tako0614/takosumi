@@ -369,6 +369,14 @@ export interface ConnectionOAuthStartBody {
   readonly expiresAt?: string;
   readonly redirectUri?: string;
   readonly successRedirectUri?: string;
+  /**
+   * Authenticated account subject of the cookie-gated caller that started the
+   * flow. The helper signs it INTO the HMAC OAuth state so the cross-site
+   * callback (which carries no session cookie) can authorize from the signed
+   * state alone, instead of from a `SameSite=Strict` session cookie that does
+   * not ride a top-level cross-site redirect.
+   */
+  readonly subject?: string;
 }
 
 export interface ConnectionOAuthStartResponse {
@@ -393,13 +401,25 @@ export interface ConnectionOAuthCallbackInput {
   readonly query: Readonly<Record<string, string>>;
 }
 
+/**
+ * Result of completing an OAuth helper callback: the connection-create request
+ * plus the authenticated `subject` that was signed into the OAuth state at
+ * `start` time. The dashboard control surface authorizes the cross-site
+ * callback against this `subject` (it carries no session cookie); `subject` is
+ * absent only for legacy/unsigned states.
+ */
+export interface ConnectionOAuthCompletion {
+  readonly request: CreateConnectionRequest;
+  readonly subject?: string;
+}
+
 export interface ConnectionOAuthHelper {
   start(
     input: ConnectionOAuthStartInput,
   ): Promise<ConnectionOAuthStartResponse>;
   complete(
     input: ConnectionOAuthCallbackInput,
-  ): Promise<CreateConnectionRequest>;
+  ): Promise<ConnectionOAuthCompletion>;
 }
 
 export interface DeployControlBearerAuthorizationInput {

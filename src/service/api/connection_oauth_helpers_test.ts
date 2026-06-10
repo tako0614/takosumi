@@ -46,6 +46,8 @@ test("Cloudflare OAuth helper signs state and returns a provider env-set request
       spaceId: "space_1",
       displayName: "Cloudflare OAuth",
       scopeHints: { accountId: "acct_cf" },
+      // The cookie-gated start binds the authenticated subject into the state.
+      subject: "tsub_owner",
     },
   });
   expect(started).toBeDefined();
@@ -56,7 +58,7 @@ test("Cloudflare OAuth helper signs state and returns a provider env-set request
   expect(authUrl.searchParams.get("client_id")).toBe("cf-client");
   expect(authUrl.searchParams.get("scope")).toBe("account:read zone:read");
 
-  const request = await helpers!.cloudflare!.complete({
+  const completion = await helpers!.cloudflare!.complete({
     provider: "cloudflare",
     request: new Request("https://app.example.test/callback"),
     principal: PRINCIPAL,
@@ -66,7 +68,7 @@ test("Cloudflare OAuth helper signs state and returns a provider env-set request
   });
   expect(tokenRequest?.url).toBe("https://api.cloudflare.test/oauth2/token");
   expect(tokenRequest?.body).toContain("code=cf-code");
-  expect(request).toEqual({
+  expect(completion.request).toEqual({
     spaceId: "space_1",
     provider: "cloudflare",
     kind: "provider_env_set",
@@ -75,6 +77,57 @@ test("Cloudflare OAuth helper signs state and returns a provider env-set request
     scopeHints: { accountId: "acct_cf" },
     values: { CLOUDFLARE_API_TOKEN: "cf-access-token" },
   });
+  // The HMAC-signed subject rides the state so the cross-site callback can
+  // authorize without a session cookie.
+  expect(completion.subject).toBe("tsub_owner");
+});
+
+test("Cloudflare OAuth state binds the subject under the HMAC: tampering fails verification", async () => {
+  const helpers = createConnectionOAuthHelpersFromEnv(
+    {
+      TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET: "state-secret",
+      TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID: "cf-client",
+      TAKOSUMI_CLOUDFLARE_OAUTH_REDIRECT_URI:
+        "https://app.example.test/api/connections/cloudflare/oauth/callback",
+      TAKOSUMI_CLOUDFLARE_OAUTH_AUTHORIZATION_URL:
+        "https://dash.cloudflare.test/oauth2/auth",
+      TAKOSUMI_CLOUDFLARE_OAUTH_TOKEN_URL:
+        "https://api.cloudflare.test/oauth2/token",
+    },
+    (async () => Response.json({ access_token: "cf-access-token" })) as
+      typeof fetch,
+  );
+  const started = await helpers!.cloudflare!.start({
+    provider: "cloudflare",
+    request: new Request("https://app.example.test/start"),
+    principal: PRINCIPAL,
+    body: { spaceId: "space_1", subject: "tsub_owner" },
+  });
+  // Re-sign would be needed to change the subject; flipping the payload alone
+  // breaks the signature, so verifyState (and thus complete) rejects it.
+  const [payload, signature] = started!.state.split(".");
+  const forgedPayloadJson = JSON.stringify({
+    provider: "cloudflare",
+    expiresAt: Date.now() + 60_000,
+    body: { spaceId: "space_1", subject: "tsub_attacker" },
+    subject: "tsub_attacker",
+  });
+  const forgedPayload = btoa(forgedPayloadJson)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+  expect(forgedPayload).not.toBe(payload);
+  const forgedState = `${forgedPayload}.${signature}`;
+  await expect(
+    helpers!.cloudflare!.complete({
+      provider: "cloudflare",
+      request: new Request("https://app.example.test/callback"),
+      principal: PRINCIPAL,
+      code: "cf-code",
+      state: forgedState,
+      query: { code: "cf-code", state: forgedState },
+    }),
+  ).rejects.toThrow();
 });
 
 test("GCP OAuth helper creates authorized_user GOOGLE_CREDENTIALS", async () => {
@@ -104,7 +157,7 @@ test("GCP OAuth helper creates authorized_user GOOGLE_CREDENTIALS", async () => 
   expect(authUrl.searchParams.get("access_type")).toBe("offline");
   expect(authUrl.searchParams.get("prompt")).toBe("consent");
 
-  const request = await helpers!.gcp!.complete({
+  const completion = await helpers!.gcp!.complete({
     provider: "gcp",
     request: new Request("https://app.example.test/callback"),
     principal: PRINCIPAL,
@@ -112,6 +165,7 @@ test("GCP OAuth helper creates authorized_user GOOGLE_CREDENTIALS", async () => 
     state: started!.state,
     query: { code: "gcp-code", state: started!.state },
   });
+  const request = completion.request;
   expect(request.provider).toBe("google");
   expect(request.kind).toBe("provider_env_set");
   const credentials = JSON.parse(request.values.GOOGLE_CREDENTIALS);

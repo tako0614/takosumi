@@ -26,7 +26,11 @@ import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
   Connection,
+  ConnectionOAuthStartResponse,
+  ConnectionResponse,
+  ConnectionScopeHints,
   CreateApplyRunRequest,
+  CreateConnectionRequest,
   DeployControlErrorCode,
   ListConnectionsResponse,
   ListRunnerProfilesResponse,
@@ -249,6 +253,51 @@ export interface ControlPlaneOperations {
   listConnections(spaceId: string): Promise<ListConnectionsResponse>;
   listOperatorConnections(): Promise<ListConnectionsResponse>;
   getConnection(connectionId: string): Promise<Connection>;
+  /**
+   * Registers a Space-owned provider-credential Connection (§9 / §8 Provider
+   * Env Set). The control surface only ever builds Space-scoped requests here
+   * (the guided-token / OAuth credential-helper paths); the response is the
+   * public {@link Connection} projection, which carries NO secret `values`.
+   */
+  createConnection(request: CreateConnectionRequest): Promise<ConnectionResponse>;
+  /**
+   * OPTIONAL Cloudflare credential OAuth helper. Present only when the operator
+   * has wired the upstream OAuth client (the `TAKOSUMI_CLOUDFLARE_OAUTH_*`
+   * env set); absent otherwise, so the dashboard falls back to the guided-token
+   * deep-link path and never shows a dead OAuth button. `start` returns the
+   * provider authorize URL + signed state; `complete` exchanges the callback
+   * code and yields a Space-owned `provider_env_set` create request.
+   */
+  readonly connectionOAuth?: {
+    readonly cloudflare?: {
+      /**
+       * `subject` is the authenticated account subject of the cookie-gated
+       * caller. The helper signs it INTO the OAuth state so the cross-site
+       * callback (which carries no session cookie) can authorize from the
+       * signed state alone. See {@link handleControlRoute}.
+       */
+      start(input: {
+        readonly subject: string;
+        readonly spaceId: string;
+        readonly displayName?: string;
+        readonly successRedirectUri?: string;
+      }): Promise<ConnectionOAuthStartResponse>;
+      /**
+       * Verifies the signed state and returns BOTH the connection-create
+       * request and the `subject` that was signed in at `start` time. The
+       * callback authorizes the Space against that `subject`; `subject` is
+       * absent only for legacy/unsigned states, which the callback rejects.
+       */
+      complete(input: {
+        readonly code: string;
+        readonly state: string;
+        readonly query: Readonly<Record<string, string>>;
+      }): Promise<{
+        readonly request: CreateConnectionRequest;
+        readonly subject?: string;
+      }>;
+    };
+  };
   // --- Runs (§6.8 / §19 / §23) ---
   createInstallationPlan(installationId: string): Promise<PlanRunResponse>;
   createInstallationDestroyPlan(
@@ -369,7 +418,26 @@ export async function handleControlRoute(
   const { request, url, store } = context;
   if (!isControlRoutePath(url.pathname)) return undefined;
 
-  // Authn gate: every control route requires a live account session. The
+  // The credential-OAuth callback is the ONE control route reached by a
+  // top-level CROSS-SITE redirect (dash.cloudflare.com -> this origin). The
+  // browser sends no Authorization header and, because the `takosumi_session`
+  // cookie is `SameSite=Strict`, does NOT send the session cookie either, so
+  // `requireAccountSession` here would always 401 and the user would land on a
+  // raw 401 JSON instead of being redirected back to /connections. The callback
+  // therefore authenticates from the authenticated subject embedded in the
+  // HMAC-signed OAuth state (minted by the cookie-authenticated `start`), not
+  // from the session cookie. Route it BEFORE the session gate.
+  if (isCloudflareOAuthCallbackPath(url.pathname, request.method)) {
+    const operations = context.operations;
+    if (!operations) return controlPlaneUnavailable();
+    try {
+      return await completeCloudflareOAuth(operations, store, url);
+    } catch (error) {
+      return controllerErrorResponse(error);
+    }
+  }
+
+  // Authn gate: every other control route requires a live account session. The
   // dashboard presents the HttpOnly `takosumi_session` cookie; PAT/header
   // callers are accepted by `requireAccountSession` too. Space authorization is
   // enforced per route below after the target Space is known.
@@ -385,6 +453,23 @@ export async function handleControlRoute(
   } catch (error) {
     return controllerErrorResponse(error);
   }
+}
+
+/**
+ * True for `GET /v1/control/connections/cloudflare/oauth/callback`. This is the
+ * only control route reached cross-site, so it is dispatched before the
+ * `SameSite=Strict` session-cookie gate and authorizes from the signed OAuth
+ * state instead (see {@link handleControlRoute}).
+ */
+function isCloudflareOAuthCallbackPath(
+  pathname: string,
+  method: string,
+): boolean {
+  return (
+    method === "GET" &&
+    pathname ===
+      `${CONTROL_PREFIX}/connections/cloudflare/oauth/callback`
+  );
 }
 
 interface DispatchInput {
@@ -725,15 +810,49 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /v1/control/connections?spaceId=
+  // /v1/control/connections?spaceId=  (GET list / POST create)
   if (segments.length === 1 && segments[0] === "connections") {
-    if (method !== "GET") return methodNotAllowed("GET");
-    return await listControlConnections(
-      operations,
-      store,
-      input.session.subject,
-      url,
-    );
+    if (method === "GET") {
+      return await listControlConnections(
+        operations,
+        store,
+        input.session.subject,
+        url,
+      );
+    }
+    if (method === "POST") {
+      return await createControlConnection(
+        request,
+        operations,
+        store,
+        input.session.subject,
+      );
+    }
+    return methodNotAllowed("GET, POST");
+  }
+
+  // /v1/control/connections/cloudflare/oauth/start — credential OAuth helper
+  // (present only when the operator wired the upstream client). The cookie-
+  // authenticated `start` embeds the authenticated subject into the signed
+  // OAuth state. The matching `callback` is handled BEFORE the session gate in
+  // `handleControlRoute` (cross-site redirect, no strict cookie), so it never
+  // reaches this dispatcher.
+  if (
+    segments[0] === "connections" &&
+    segments[1] === "cloudflare" &&
+    segments[2] === "oauth" &&
+    segments.length === 4
+  ) {
+    if (segments[3] === "start") {
+      if (method !== "POST") return methodNotAllowed("POST");
+      return await startCloudflareOAuth(
+        request,
+        operations,
+        store,
+        input.session.subject,
+        url,
+      );
+    }
   }
 
   // /v1/control/output-shares ; /v1/control/output-shares/:id/{approve,revoke}
@@ -1457,6 +1576,227 @@ async function listControlConnections(
   return json(await operations.listConnections(spaceId));
 }
 
+/**
+ * Registers a Space-owned provider-credential Connection from the dashboard
+ * session (§9 / §8 Provider Env Set). This is the credential-helper write path
+ * the §31 connections screen calls same-origin: the guided-token paste and the
+ * raw-token "詳細設定" fallback both POST here.
+ *
+ * Invariants enforced here (independent of any client coercion):
+ *   - the session subject must own the target Space (space-permission gate);
+ *   - the created Connection is ALWAYS `scope: "space"` — this surface can never
+ *     create an operator-default connection (operator defaults stay on the
+ *     bearer-gated §30 surface), so we force `scope` server-side;
+ *   - the secret `values` are write-only: they are forwarded to the controller
+ *     and NEVER read, logged, or echoed; the response is the public
+ *     {@link Connection} projection, which has no `values` field.
+ */
+async function createControlConnection(
+  request: Request,
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+): Promise<Response> {
+  const body = await readJsonObject(request);
+  if (!body) return json({ error: "invalid_request" }, 400);
+  const spaceId = stringValue(body.spaceId) ?? stringValue(body.space_id);
+  if (!spaceId) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "spaceId is required",
+      },
+      400,
+    );
+  }
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
+  const provider = stringValue(body.provider) ?? "cloudflare";
+  const values = stringRecord(body.values);
+  if (!values || Object.keys(values).length === 0) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "values is required",
+      },
+      400,
+    );
+  }
+  const createRequest: CreateConnectionRequest = {
+    spaceId,
+    provider,
+    // Cloudflare gets the dedicated api-token kind; anything else is a generic
+    // user provider env set. Both are Space-scoped Provider Env Sets.
+    kind: provider === "cloudflare" ? "cloudflare_api_token" : "provider_env_set",
+    authMethod: "static_secret",
+    // Force Space scope: the dashboard session surface never mints an operator
+    // default. Any caller-supplied `scope` is ignored.
+    scope: "space",
+    ...(stringValue(body.displayName)
+      ? { displayName: stringValue(body.displayName) }
+      : {}),
+    ...(connectionScopeHints(body.scopeHints)
+      ? { scopeHints: connectionScopeHints(body.scopeHints) }
+      : {}),
+    values,
+  };
+  const response = await operations.createConnection(createRequest);
+  // `response.connection` is the public projection (no secret values).
+  return jsonStatus(response, 201);
+}
+
+/**
+ * Begins the optional Cloudflare credential OAuth helper flow. Returns the
+ * provider authorize URL the dashboard sends the user to. When the operator has
+ * NOT wired the upstream OAuth client, the helper is absent and we return a
+ * typed `feature_unavailable` (501) so the dashboard hides the OAuth button and
+ * keeps the guided-token path; the dashboard never renders a dead OAuth button.
+ */
+async function startCloudflareOAuth(
+  request: Request,
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+  url: URL,
+): Promise<Response> {
+  const helper = operations.connectionOAuth?.cloudflare;
+  if (!helper) return connectionOAuthUnavailable();
+  const body = (await readJsonObject(request)) ?? {};
+  const spaceId =
+    stringValue(body.spaceId) ??
+    stringValue(body.space_id) ??
+    stringValue(url.searchParams.get("spaceId") ?? undefined);
+  if (!spaceId) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "spaceId is required",
+      },
+      400,
+    );
+  }
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
+  const started = await helper.start({
+    // Bind the OAuth state to the authenticated subject so the cross-site
+    // callback can authorize without the SameSite=Strict session cookie.
+    subject: sessionSubject,
+    spaceId,
+    ...(stringValue(body.displayName)
+      ? { displayName: stringValue(body.displayName) }
+      : {}),
+  });
+  return json(started);
+}
+
+/**
+ * Completes the Cloudflare OAuth helper flow. This is the BACKEND callback the
+ * upstream redirects to via a top-level CROSS-SITE redirect, so the browser
+ * sends no Authorization header and (because the session cookie is
+ * `SameSite=Strict`) no session cookie either. This handler therefore does NOT
+ * call `requireAccountSession`; it authorizes from the authenticated subject
+ * that the cookie-gated `start` signed INTO the HMAC OAuth state. It exchanges
+ * the code, registers the resulting Space-owned `provider_env_set` Connection,
+ * and then REDIRECTS the browser back to the dashboard `/connections` screen
+ * with a result query (never a JSON body, never the token). No new SPA route is
+ * introduced — the dashboard owns `/connections` already and reads the
+ * `connected` / `connection_error` query.
+ *
+ * Called directly by {@link handleControlRoute} BEFORE the session gate (it is
+ * the one cross-site control route); it is never reached through `dispatch`.
+ */
+async function completeCloudflareOAuth(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  url: URL,
+): Promise<Response> {
+  const helper = operations.connectionOAuth?.cloudflare;
+  if (!helper) return connectionOAuthUnavailable();
+  const code = stringValue(url.searchParams.get("code") ?? undefined);
+  const state = stringValue(url.searchParams.get("state") ?? undefined);
+  if (!code || !state) {
+    return redirectToConnections(url, { error: "missing_code" });
+  }
+  const query: Record<string, string> = {};
+  for (const [key, value] of url.searchParams.entries()) query[key] = value;
+  let completed: {
+    readonly request: CreateConnectionRequest;
+    readonly subject?: string;
+  };
+  try {
+    completed = await helper.complete({ code, state, query });
+  } catch {
+    // Do not surface upstream/state failure detail in the redirect query. This
+    // also covers a bad HMAC signature on the state (forged/stolen callback).
+    return redirectToConnections(url, { error: "oauth_failed" });
+  }
+  const createRequest = completed.request;
+  const spaceId = createRequest.spaceId;
+  // The subject is the account that initiated `start` (signed into the state).
+  // Its absence means an unsigned/legacy state we will not trust for a mint.
+  const subject = completed.subject;
+  if (!spaceId || !subject) {
+    return redirectToConnections(url, { error: "oauth_failed" });
+  }
+  // Re-check Space ownership against the SIGNED state's subject + spaceId so a
+  // stolen or forged callback cannot mint a Connection into a Space the
+  // authenticated initiator does not own. This is the callback's only authz —
+  // there is no session cookie on a cross-site redirect.
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId,
+    subject,
+  });
+  if (!auth.ok) return redirectToConnections(url, { error: "forbidden" });
+  try {
+    // Force Space scope regardless of what the helper produced.
+    await operations.createConnection({ ...createRequest, scope: "space" });
+  } catch {
+    return redirectToConnections(url, { error: "oauth_failed" });
+  }
+  return redirectToConnections(url, { connected: spaceId });
+}
+
+function connectionOAuthUnavailable(): Response {
+  return json(
+    {
+      error: "feature_unavailable",
+      error_description:
+        "Cloudflare OAuth is not configured on this deployment.",
+    },
+    501,
+  );
+}
+
+/**
+ * Same-origin redirect back to the dashboard connections screen. Only opaque
+ * status keys (`connected` / `connection_error`) ride the query — never the
+ * token or any error detail.
+ */
+function redirectToConnections(
+  url: URL,
+  result: { readonly connected?: string; readonly error?: string },
+): Response {
+  const target = new URL("/connections", url.origin);
+  if (result.connected) target.searchParams.set("connected", "1");
+  if (result.error) target.searchParams.set("connection_error", result.error);
+  return new Response(null, {
+    status: 303,
+    headers: { location: target.toString() },
+  });
+}
+
 async function listOperatorConnectionDefaults(
   operations: ControlPlaneOperations,
   store: AccountsStore,
@@ -1764,6 +2104,40 @@ function isPlainJsonObject(
   value: unknown,
 ): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Coerces a JSON object of write-only credential `values` into a string map.
+ * Non-string entries are dropped. NOTE: never log the returned map — it holds
+ * secret credential material.
+ */
+function stringRecord(
+  value: unknown,
+): Readonly<Record<string, string>> | undefined {
+  if (!isPlainJsonObject(value)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw === "string") out[key] = raw;
+  }
+  return out;
+}
+
+/**
+ * Extracts the non-secret connection scope hints (account/zone ids) the UI may
+ * pass. Only the well-known string fields are forwarded.
+ */
+function connectionScopeHints(
+  value: unknown,
+): ConnectionScopeHints | undefined {
+  if (!isPlainJsonObject(value)) return undefined;
+  const hints: Record<string, string> = {};
+  for (const key of ["accountId", "zoneId"] as const) {
+    const v = stringValue(value[key]);
+    if (v) hints[key] = v;
+  }
+  return Object.keys(hints).length > 0
+    ? (hints as ConnectionScopeHints)
+    : undefined;
 }
 
 function spaceTypeValue(value: unknown): SpaceType | undefined {

@@ -509,9 +509,10 @@ export function mountDeployControlConnectionRoutes(
       return await runHandler(c, async () => {
         const helper = requireOAuthHelper(provider);
         const callback = oauthCallbackInput(provider, c, auth.principal);
+        const completion = await helper.complete(callback);
         const request = normalizeOAuthConnectionRequest(
           provider,
-          await helper.complete(callback),
+          completion.request,
         );
         ensureConnectionPermission(auth.principal, request.spaceId);
         const response = await controller.createConnection(request);

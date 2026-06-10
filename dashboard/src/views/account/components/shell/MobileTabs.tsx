@@ -7,10 +7,12 @@ import {
   LayoutGrid,
   Network,
   PackageSearch,
+  Store,
 } from "lucide-solid";
 
 const TABS = [
   { href: "/home", label: "ホーム", icon: Home },
+  { href: "/catalog", label: "選ぶ", icon: Store },
   { href: "/installations", label: "Installs", icon: LayoutGrid },
   { href: "/sources", label: "Sources", icon: GitBranch },
   { href: "/providers", label: "Providers", icon: PackageSearch },
