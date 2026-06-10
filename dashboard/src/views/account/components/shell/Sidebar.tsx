@@ -17,22 +17,41 @@ import {
 } from "lucide-solid";
 import Wordmark from "../brand/Wordmark.tsx";
 
-const ITEMS = [
+type NavItem = { href: string; label: string; sub?: string; icon: typeof Home };
+
+/**
+ * Primary nav: everyday wording, always visible. These six cover the whole
+ * "git URL のボタン → 導入 → 使う" loop without any spec jargon. `/apps`
+ * ("アプリ") is a real router route, so it lives here as a first-class entry
+ * (previously the nav never pointed at it).
+ */
+const PRIMARY: NavItem[] = [
   { href: "/home", label: "ホーム", icon: Home },
-  { href: "/install", label: "Git から導入", icon: GitBranch },
-  { href: "/installations", label: "Installations", icon: LayoutGrid },
-  { href: "/sources", label: "Sources", icon: GitBranch },
-  { href: "/providers", label: "Providers", icon: PackageSearch },
-  { href: "/graph", label: "依存グラフ", icon: Network },
-  { href: "/output-shares", label: "Output shares", icon: Share2 },
-  { href: "/backups", label: "Backups", icon: Archive },
-  { href: "/members", label: "メンバー", icon: Users },
+  { href: "/apps", label: "アプリ", icon: LayoutGrid },
+  { href: "/install", label: "導入", sub: "Git から", icon: GitBranch },
   { href: "/connections", label: "接続", icon: KeyRound },
   { href: "/activity", label: "アクティビティ", icon: Activity },
   { href: "/account", label: "アカウント", icon: UserCircle2 },
-  { href: "/account/settings", label: "Settings", icon: Settings },
-  { href: "/account/billing", label: "Billing", icon: CreditCard },
+];
+
+/**
+ * Advanced nav: every remaining spec-vocab surface, collapsed by default but
+ * fully reachable once expanded. Nothing is removed — this only folds the
+ * developer-facing detail screens out of the everyday line of sight. Plain
+ * Japanese leads; the spec term rides along as a sub-label where it helps a
+ * developer recognize the surface.
+ */
+const ADVANCED: NavItem[] = [
+  { href: "/installations", label: "導入の管理", sub: "Installations", icon: LayoutGrid },
+  { href: "/sources", label: "ソース", sub: "Sources", icon: GitBranch },
+  { href: "/providers", label: "プロバイダ", sub: "Providers", icon: PackageSearch },
+  { href: "/graph", label: "依存グラフ", sub: "Dependency graph", icon: Network },
+  { href: "/output-shares", label: "出力の共有", sub: "Output shares", icon: Share2 },
+  { href: "/backups", label: "バックアップ", sub: "Backups", icon: Archive },
+  { href: "/members", label: "メンバー", sub: "Members", icon: Users },
   { href: "/notifications", label: "通知", icon: Bell },
+  { href: "/account/settings", label: "設定", sub: "Settings", icon: Settings },
+  { href: "/account/billing", label: "お支払い", sub: "Billing", icon: CreditCard },
 ];
 
 /** Ported from takosumi dashboard-ui/src/components/shell/Sidebar.tsx. */
@@ -40,23 +59,39 @@ export default function Sidebar() {
   const loc = useLocation();
   const isActive = (href: string) =>
     loc.pathname === href || loc.pathname.startsWith(href + "/");
+  /** Keep the advanced section open if the current route lives inside it, so a
+   * deep-link to e.g. /providers doesn't hide its own nav entry. */
+  const advancedActive = () => ADVANCED.some((it) => isActive(it.href));
+  const renderLink = (it: NavItem) => (
+    <A
+      href={it.href}
+      class="sidebar-link"
+      classList={{ active: isActive(it.href) }}
+    >
+      <it.icon size={18} />
+      <span class="sidebar-link-label">
+        {it.label}
+        {it.sub ? <span class="sidebar-link-spec">{it.sub}</span> : null}
+      </span>
+    </A>
+  );
   return (
     <aside class="sidebar">
       <div class="sidebar-brand">
         <Wordmark href="/home" size={22} />
       </div>
       <nav class="sidebar-nav" aria-label="Primary">
-        {ITEMS.map((it) => (
-          <A
-            href={it.href}
-            class="sidebar-link"
-            classList={{ active: isActive(it.href) }}
-          >
-            <it.icon size={18} />
-            <span>{it.label}</span>
-          </A>
-        ))}
+        {PRIMARY.map(renderLink)}
       </nav>
+      <details class="sidebar-advanced" open={advancedActive()}>
+        <summary class="sidebar-advanced-summary">
+          <Settings size={16} />
+          <span>詳細・上級設定</span>
+        </summary>
+        <nav class="sidebar-nav sidebar-advanced-nav" aria-label="Advanced">
+          {ADVANCED.map(renderLink)}
+        </nav>
+      </details>
       <div class="sidebar-footer">
         <a
           href="https://docs.takos.jp/"

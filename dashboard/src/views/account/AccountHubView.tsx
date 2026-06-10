@@ -53,26 +53,77 @@ import { currentSpaceId, setCurrentSpaceId } from "../control/space-state.ts";
  * sign-out DELETE /v1/account/session/me (via clearSession).
  */
 
-/** /account — hub nav links to the per-area account screens. */
+/**
+ * Plain-Japanese label + recognition sub-label for each management surface, kept
+ * identical to the desktop Sidebar's ADVANCED set so the same words describe the
+ * same screen everywhere (no second, divergent copy). On phones the sidebar is
+ * hidden, so this hub is the only chrome that lists these screens — without it
+ * they would be URL-typing-only on mobile.
+ */
+// Only routes that actually exist in the router are listed here. `/account/
+// security` and `/account/tokens` have no registered route or view yet, so they
+// are intentionally omitted — linking to them would silently bounce the visitor
+// to /home via the catch-all, which reads as a broken button.
+const ACCOUNT_LINKS: ReadonlyArray<{ href: string; label: string }> = [
+  { href: "/account/profile", label: "プロフィール" },
+  { href: "/account/settings", label: "設定" },
+  { href: "/account/billing", label: "お支払い" },
+  { href: "/account/sessions", label: "サインイン中の端末" },
+];
+
+const MANAGE_LINKS: ReadonlyArray<{
+  href: string;
+  label: string;
+  sub?: string;
+}> = [
+  { href: "/apps", label: "アプリ一覧" },
+  { href: "/installations", label: "導入の管理", sub: "Installations" },
+  { href: "/sources", label: "ソース", sub: "Sources" },
+  { href: "/providers", label: "プロバイダ", sub: "Providers" },
+  { href: "/graph", label: "依存グラフ", sub: "Dependency graph" },
+  { href: "/output-shares", label: "出力の共有", sub: "Output shares" },
+  { href: "/backups", label: "バックアップ", sub: "Backups" },
+  { href: "/members", label: "メンバー", sub: "Members" },
+];
+
+/** /account — hub nav links to the per-area account + management screens. */
 export function AccountHubView() {
   return (
     <Page title="Account">
       {() => (
         <AppShell>
           <div class="page-header">
-            <h1>Account</h1>
+            <h1>アカウント</h1>
             <p class="page-sub">
-              プロフィール、 セキュリティ、 トークン、 サブスクリプション。
+              プロフィール、 設定、 お支払い、 アプリの管理。
             </p>
           </div>
-          <div class="account-nav">
-            <a href="/account/profile">プロフィール</a>
-            <a href="/account/security">セキュリティ (passkey / 連携)</a>
-            <a href="/account/tokens">Personal access tokens</a>
-            <a href="/account/settings">Settings</a>
-            <a href="/account/billing">Billing</a>
-            <a href="/account/sessions">Sessions</a>
-          </div>
+
+          <section class="detail-section">
+            <h2>アカウント設定</h2>
+            <div class="account-nav">
+              {ACCOUNT_LINKS.map((link) => (
+                <a href={link.href}>{link.label}</a>
+              ))}
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <h2>アプリの管理</h2>
+            <p class="page-sub">
+              導入したアプリ、 接続元、 連携、 バックアップなどの詳細管理。
+            </p>
+            <div class="account-nav">
+              {MANAGE_LINKS.map((link) => (
+                <a href={link.href}>
+                  <span class="account-nav-label">{link.label}</span>
+                  {link.sub
+                    ? <span class="account-nav-spec">{link.sub}</span>
+                    : null}
+                </a>
+              ))}
+            </div>
+          </section>
         </AppShell>
       )}
     </Page>
@@ -184,14 +235,8 @@ function SettingsInner(props: { readonly session: SessionRecord }) {
           <a class="btn btn-secondary btn-sm" href="/account/profile">
             プロフィール
           </a>
-          <a class="btn btn-secondary btn-sm" href="/account/security">
-            セキュリティ
-          </a>
-          <a class="btn btn-secondary btn-sm" href="/account/tokens">
-            Tokens
-          </a>
           <a class="btn btn-secondary btn-sm" href="/account/sessions">
-            Sessions
+            サインイン中の端末
           </a>
         </div>
       </section>
