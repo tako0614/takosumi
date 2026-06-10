@@ -34,6 +34,23 @@ import {
 import SpaceSelector from "../control/SpaceSelector.tsx";
 import { currentSpaceId } from "../control/space-state.ts";
 
+/**
+ * Sentinel `<select>` value for the generic Provider Env Set path. The
+ * descriptor catalog (PROVIDERS) only ships guided providers (Cloudflare today);
+ * picking this offers a plain "provider name + NAME=value env pairs" form that
+ * posts the same `createControlConnection` shape, so any non-Cloudflare provider
+ * is reachable from the UI instead of only via hand-crafted POST JSON. The
+ * backend stores `provider !== "cloudflare"` submissions as a `provider_env_set`
+ * Connection.
+ */
+const PROVIDER_ENV_SET_OPTION = "__provider_env_set__";
+
+/** A single NAME=value row in the generic Provider Env Set editor. */
+interface EnvPair {
+  readonly name: string;
+  readonly value: string;
+}
+
 /** Connection status badge — reuses the shared `.status-pill` styling. */
 function ConnectionStatusPill(props: { status: Connection["status"] }) {
   return (
@@ -69,7 +86,7 @@ function ConnectionsInner() {
   );
   const [operatorDefaults] = createResource(
     () => (spaceId() ? spaceId() : null),
-    async (id) => id ? await listOperatorConnectionDefaults(id) : [],
+    async (id) => (id ? await listOperatorConnectionDefaults(id) : []),
   );
 
   // connectionId -> scope, from the control listing, so each registered row can
@@ -93,7 +110,18 @@ function ConnectionsInner() {
   // separate from the advanced field map and cleared the moment it is consumed.
   const [helperToken, setHelperToken] = createSignal("");
 
-  const descriptor = createMemo(() => providerDescriptor(provider()));
+  // Generic Provider Env Set editor state (the PROVIDER_ENV_SET_OPTION path):
+  // a free-form provider name + NAME=value env pairs. Like `values`, these are
+  // cleared on successful submit so secret material never lingers.
+  const [envSetProvider, setEnvSetProvider] = createSignal("");
+  const [envPairs, setEnvPairs] = createSignal<readonly EnvPair[]>([
+    { name: "", value: "" },
+  ]);
+  const isEnvSet = () => provider() === PROVIDER_ENV_SET_OPTION;
+
+  const descriptor = createMemo(() =>
+    isEnvSet() ? undefined : providerDescriptor(provider()),
+  );
   const fields = createMemo(() => descriptor()?.fields ?? []);
   const tokenHelper = createMemo(() => descriptor()?.tokenHelper);
 
@@ -101,10 +129,24 @@ function ConnectionsInner() {
     setValues((prev) => ({ ...prev, [envName]: value }));
   };
 
+  const setEnvPair = (index: number, patch: Partial<EnvPair>) => {
+    setEnvPairs((prev) =>
+      prev.map((p, i) => (i === index ? { ...p, ...patch } : p)),
+    );
+  };
+  const addEnvPair = () =>
+    setEnvPairs((prev) => [...prev, { name: "", value: "" }]);
+  const removeEnvPair = (index: number) =>
+    setEnvPairs((prev) =>
+      prev.length > 1 ? prev.filter((_, i) => i !== index) : prev,
+    );
+
   const clearForm = () => {
     setValues({});
     setHelperToken("");
     setDisplayName("");
+    setEnvSetProvider("");
+    setEnvPairs([{ name: "", value: "" }]);
   };
 
   // ----- one-time URL result banner (set by the OAuth backend callback) -----
@@ -180,6 +222,44 @@ function ConnectionsInner() {
     await refetch();
   });
 
+  // Generic Provider Env Set submit — a free-form provider name plus NAME=value
+  // env pairs. The backend stores a non-Cloudflare `provider` as a
+  // `provider_env_set` Connection, so this is the UI for "any provider via
+  // Provider Env Set" without hand-crafting POST JSON.
+  const createEnvSet = createAction(async () => {
+    const space = spaceId();
+    if (!space) throw new Error("Space を選んでください。");
+    const name = envSetProvider().trim();
+    if (!name) throw new Error("プロバイダー名を入力してください。");
+    if (name === "cloudflare") {
+      throw new Error(
+        "Cloudflare は上の Provider から登録してください（専用フローがあります）。",
+      );
+    }
+    const submitValues: Record<string, string> = {};
+    for (const pair of envPairs()) {
+      const envName = pair.name.trim();
+      const value = pair.value.trim();
+      if (envName.length === 0 && value.length === 0) continue;
+      if (envName.length === 0) {
+        throw new Error("値のある行には環境変数名が必要です。");
+      }
+      submitValues[envName] = value;
+    }
+    if (Object.keys(submitValues).length === 0) {
+      throw new Error("環境変数を 1 つ以上入力してください。");
+    }
+    await createControlConnection({
+      spaceId: space,
+      provider: name,
+      displayName: displayName().trim() || undefined,
+      values: submitValues,
+    });
+    // Clear secrets from memory the moment the submit resolves.
+    clearForm();
+    await refetch();
+  });
+
   // ----- optional Cloudflare OAuth (operator-wired only) --------------------
   // We PROBE the backend before ever showing an OAuth button: the start route
   // is side-effect-free (it only signs state and returns an authorize URL), so
@@ -204,9 +284,7 @@ function ConnectionsInner() {
       return { authorizationUrl: null };
     }
   });
-  const oauthAvailable = createMemo(
-    () => !!oauthProbe()?.authorizationUrl,
-  );
+  const oauthAvailable = createMemo(() => !!oauthProbe()?.authorizationUrl);
 
   const startOAuth = () => {
     const url = oauthProbe()?.authorizationUrl;
@@ -241,7 +319,8 @@ function ConnectionsInner() {
   const confirmRemove = async (c: Connection) => {
     const ok = await confirm({
       title: "接続を削除",
-      message: `本当に ${c.displayName ?? c.id} を削除しますか？ ` +
+      message:
+        `本当に ${c.displayName ?? c.id} を削除しますか？ ` +
         "保存された認証情報も削除され、 取り消せません。",
       confirmText: "削除",
       danger: true,
@@ -296,8 +375,12 @@ function ConnectionsInner() {
               <For each={operatorDefaults() ?? []}>
                 {(d) => (
                   <tr>
-                    <td><code>{d.provider}</code></td>
-                    <td><code>{d.connectionId}</code></td>
+                    <td>
+                      <code>{d.provider}</code>
+                    </td>
+                    <td>
+                      <code>{d.connectionId}</code>
+                    </td>
                   </tr>
                 )}
               </For>
@@ -335,11 +418,16 @@ function ConnectionsInner() {
                 // Switching provider drops any half-entered secret values.
                 setValues({});
                 setHelperToken("");
+                setEnvSetProvider("");
+                setEnvPairs([{ name: "", value: "" }]);
               }}
             >
               <For each={PROVIDERS}>
                 {(p) => <option value={p.provider}>{p.label}</option>}
               </For>
+              <option value={PROVIDER_ENV_SET_OPTION}>
+                その他のプロバイダー（Provider Env Set）
+              </option>
             </select>
           </label>
 
@@ -355,122 +443,12 @@ function ConnectionsInner() {
           </label>
 
           <Show
-            when={tokenHelper()}
+            when={isEnvSet()}
             fallback={
-              /* No guided helper for this provider — raw fields are the path. */
-              <form
-                class="connection-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void create.run();
-                }}
-              >
-                <Index each={fields()}>
-                  {(field) => (
-                    <label class="form-field">
-                      {field().label}
-                      <Show when={field().required}>
-                        <span class="form-required" aria-hidden="true">
-                          *
-                        </span>
-                      </Show>
-                      <input
-                        type={field().secret ? "password" : "text"}
-                        value={values()[field().envName] ?? ""}
-                        onInput={(e) =>
-                          setFieldValue(field().envName, e.currentTarget.value)}
-                        placeholder={field().placeholder}
-                        autocomplete="off"
-                        spellcheck={false}
-                      />
-                    </label>
-                  )}
-                </Index>
-                <div class="form-actions">
-                  <button
-                    class="btn btn-primary"
-                    type="submit"
-                    disabled={create.busy()}
-                  >
-                    {create.busy() ? "登録中..." : "接続を登録"}
-                  </button>
-                </div>
-                <ActionError error={create.error} />
-              </form>
-            }
-          >
-            {(helper) => (
-              <>
-                {/* Primary guided-token flow: open the provider's OWN token
-                    screen → create there → paste back. */}
-                <div class="connection-guided">
-                  <p class="page-sub">
-                    {descriptor()?.label}{" "}
-                    に接続します。 トークンは {descriptor()?.label}{" "}
-                    の画面で作成し、 貼り付けるだけです。
-                  </p>
-                  <ol class="connection-steps">
-                    <For each={helper().steps}>{(s) => <li>{s}</li>}</For>
-                  </ol>
-
-                  <div class="form-actions">
-                    <a
-                      class="btn btn-primary"
-                      href={helper().createTokenUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      {descriptor()?.label} を開いてトークンを作成
-                    </a>
-                    {/* OAuth button appears ONLY when the operator wired the
-                        upstream client (probed). Otherwise it never renders, so
-                        there is no dead button. */}
-                    <Show when={oauthAvailable()}>
-                      <button
-                        class="btn btn-secondary"
-                        type="button"
-                        onClick={() => startOAuth()}
-                      >
-                        {descriptor()?.label} で自動接続
-                      </button>
-                    </Show>
-                  </div>
-
-                  <form
-                    class="connection-form"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      void createFromHelper.run();
-                    }}
-                  >
-                    <label class="form-field">
-                      作成したトークンを貼り付け
-                      <span class="form-required" aria-hidden="true">*</span>
-                      <input
-                        type="password"
-                        value={helperToken()}
-                        onInput={(e) => setHelperToken(e.currentTarget.value)}
-                        placeholder="ここにトークンを貼り付け"
-                        autocomplete="off"
-                        spellcheck={false}
-                      />
-                    </label>
-                    <div class="form-actions">
-                      <button
-                        class="btn btn-primary"
-                        type="submit"
-                        disabled={createFromHelper.busy()}
-                      >
-                        {createFromHelper.busy() ? "接続中..." : "接続する"}
-                      </button>
-                    </div>
-                    <ActionError error={createFromHelper.error} />
-                  </form>
-                </div>
-
-                {/* Advanced fallback: the raw multi-field form, demoted. */}
-                <details class="connection-advanced">
-                  <summary>詳細設定（上級者向け）</summary>
+              <Show
+                when={tokenHelper()}
+                fallback={
+                  /* No guided helper for this provider — raw fields are the path. */
                   <form
                     class="connection-form"
                     onSubmit={(e) => {
@@ -494,7 +472,8 @@ function ConnectionsInner() {
                               setFieldValue(
                                 field().envName,
                                 e.currentTarget.value,
-                              )}
+                              )
+                            }
                             placeholder={field().placeholder}
                             autocomplete="off"
                             spellcheck={false}
@@ -504,18 +483,236 @@ function ConnectionsInner() {
                     </Index>
                     <div class="form-actions">
                       <button
-                        class="btn btn-secondary"
+                        class="btn btn-primary"
                         type="submit"
                         disabled={create.busy()}
                       >
-                        {create.busy() ? "登録中..." : "値を直接登録"}
+                        {create.busy() ? "登録中..." : "接続を登録"}
                       </button>
                     </div>
                     <ActionError error={create.error} />
                   </form>
-                </details>
-              </>
-            )}
+                }
+              >
+                {(helper) => (
+                  <>
+                    {/* Primary guided-token flow: open the provider's OWN token
+                    screen → create there → paste back. */}
+                    <div class="connection-guided">
+                      <p class="page-sub">
+                        {descriptor()?.label} に接続します。 トークンは{" "}
+                        {descriptor()?.label} の画面で作成し、
+                        貼り付けるだけです。
+                      </p>
+                      <ol class="connection-steps">
+                        <For each={helper().steps}>{(s) => <li>{s}</li>}</For>
+                      </ol>
+
+                      <div class="form-actions">
+                        <a
+                          class="btn btn-primary"
+                          href={helper().createTokenUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {descriptor()?.label} を開いてトークンを作成
+                        </a>
+                        {/* OAuth button appears ONLY when the operator wired the
+                        upstream client (probed). Otherwise it never renders, so
+                        there is no dead button. */}
+                        <Show when={oauthAvailable()}>
+                          <button
+                            class="btn btn-secondary"
+                            type="button"
+                            onClick={() => startOAuth()}
+                          >
+                            {descriptor()?.label} で自動接続
+                          </button>
+                        </Show>
+                      </div>
+
+                      <form
+                        class="connection-form"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          void createFromHelper.run();
+                        }}
+                      >
+                        <label class="form-field">
+                          作成したトークンを貼り付け
+                          <span class="form-required" aria-hidden="true">
+                            *
+                          </span>
+                          <input
+                            type="password"
+                            value={helperToken()}
+                            onInput={(e) =>
+                              setHelperToken(e.currentTarget.value)
+                            }
+                            placeholder="ここにトークンを貼り付け"
+                            autocomplete="off"
+                            spellcheck={false}
+                          />
+                        </label>
+                        <div class="form-actions">
+                          <button
+                            class="btn btn-primary"
+                            type="submit"
+                            disabled={createFromHelper.busy()}
+                          >
+                            {createFromHelper.busy() ? "接続中..." : "接続する"}
+                          </button>
+                        </div>
+                        <ActionError error={createFromHelper.error} />
+                      </form>
+                    </div>
+
+                    {/* Advanced fallback: the raw multi-field form, demoted. */}
+                    <details class="connection-advanced">
+                      <summary>詳細設定（上級者向け）</summary>
+                      <form
+                        class="connection-form"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          void create.run();
+                        }}
+                      >
+                        <Index each={fields()}>
+                          {(field) => (
+                            <label class="form-field">
+                              {field().label}
+                              <Show when={field().required}>
+                                <span class="form-required" aria-hidden="true">
+                                  *
+                                </span>
+                              </Show>
+                              <input
+                                type={field().secret ? "password" : "text"}
+                                value={values()[field().envName] ?? ""}
+                                onInput={(e) =>
+                                  setFieldValue(
+                                    field().envName,
+                                    e.currentTarget.value,
+                                  )
+                                }
+                                placeholder={field().placeholder}
+                                autocomplete="off"
+                                spellcheck={false}
+                              />
+                            </label>
+                          )}
+                        </Index>
+                        <div class="form-actions">
+                          <button
+                            class="btn btn-secondary"
+                            type="submit"
+                            disabled={create.busy()}
+                          >
+                            {create.busy() ? "登録中..." : "値を直接登録"}
+                          </button>
+                        </div>
+                        <ActionError error={create.error} />
+                      </form>
+                    </details>
+                  </>
+                )}
+              </Show>
+            }
+          >
+            {/* Generic Provider Env Set: a free-form provider name + NAME=value
+                env pairs. This makes "any provider via Provider Env Set"
+                reachable from the UI; the backend stores a non-Cloudflare
+                provider as a `provider_env_set` Connection. */}
+            <div class="connection-guided">
+              <p class="page-sub">
+                AWS / GCP / Kubernetes など任意の OpenTofu provider
+                の認証情報を、 環境変数 (NAME=value) として登録します。
+                値は書き込み専用で、 保存後は env 名のみ表示されます。
+              </p>
+
+              <form
+                class="connection-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void createEnvSet.run();
+                }}
+              >
+                <label class="form-field">
+                  プロバイダー名
+                  <span class="form-required" aria-hidden="true">
+                    *
+                  </span>
+                  <input
+                    type="text"
+                    value={envSetProvider()}
+                    onInput={(e) => setEnvSetProvider(e.currentTarget.value)}
+                    placeholder="aws / google / kubernetes / …"
+                    autocomplete="off"
+                    spellcheck={false}
+                  />
+                </label>
+
+                <Index each={envPairs()}>
+                  {(pair, index) => (
+                    <div class="env-pair-row">
+                      <label class="form-field">
+                        環境変数名
+                        <input
+                          type="text"
+                          value={pair().name}
+                          onInput={(e) =>
+                            setEnvPair(index, { name: e.currentTarget.value })
+                          }
+                          placeholder="AWS_ACCESS_KEY_ID"
+                          autocomplete="off"
+                          spellcheck={false}
+                        />
+                      </label>
+                      <label class="form-field">
+                        値
+                        <input
+                          type="password"
+                          value={pair().value}
+                          onInput={(e) =>
+                            setEnvPair(index, { value: e.currentTarget.value })
+                          }
+                          placeholder="値を貼り付け"
+                          autocomplete="off"
+                          spellcheck={false}
+                        />
+                      </label>
+                      <Show when={envPairs().length > 1}>
+                        <button
+                          class="btn btn-secondary"
+                          type="button"
+                          onClick={() => removeEnvPair(index)}
+                        >
+                          削除
+                        </button>
+                      </Show>
+                    </div>
+                  )}
+                </Index>
+
+                <div class="form-actions">
+                  <button
+                    class="btn btn-secondary"
+                    type="button"
+                    onClick={() => addEnvPair()}
+                  >
+                    環境変数を追加
+                  </button>
+                  <button
+                    class="btn btn-primary"
+                    type="submit"
+                    disabled={createEnvSet.busy()}
+                  >
+                    {createEnvSet.busy() ? "登録中..." : "接続を登録"}
+                  </button>
+                </div>
+                <ActionError error={createEnvSet.error} />
+              </form>
+            </div>
           </Show>
         </section>
 
@@ -564,7 +761,9 @@ function ConnectionsInner() {
                             <span>{c.provider}</span>
                             <span>·</span>
                             <span class="connection-scope">
-                              {connectionScopeLabel(scopeById().get(c.id) ?? "space")}
+                              {connectionScopeLabel(
+                                scopeById().get(c.id) ?? "space",
+                              )}
                             </span>
                             <span>·</span>
                             <code>{c.envNames.join(", ")}</code>
@@ -576,7 +775,9 @@ function ConnectionsInner() {
                               onClick={() => void runTest(c.id)}
                               disabled={testBusyId() === c.id}
                             >
-                              {testBusyId() === c.id ? "確認中..." : "接続テスト"}
+                              {testBusyId() === c.id
+                                ? "確認中..."
+                                : "接続テスト"}
                             </button>
                             <button
                               class="btn btn-danger"

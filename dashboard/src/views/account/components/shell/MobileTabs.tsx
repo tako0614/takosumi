@@ -19,7 +19,7 @@ import {
  */
 const TABS = [
   { href: "/home", label: "ホーム", icon: Home },
-  { href: "/apps", label: "アプリ", icon: LayoutGrid },
+  { href: "/installations", label: "アプリ", icon: LayoutGrid },
   { href: "/install", label: "導入", icon: GitBranch },
   { href: "/connections", label: "接続", icon: KeyRound },
   { href: "/activity", label: "履歴", icon: Activity },

@@ -12,11 +12,13 @@
  *     (`POST /v1/control/runs/:id/approve`).
  */
 import {
+  createEffect,
   createMemo,
   createResource,
   createSignal,
   For,
   Match,
+  onCleanup,
   Show,
   Switch,
 } from "solid-js";
@@ -66,6 +68,20 @@ function inputNamesFromLogs(
 interface ChangeItem {
   readonly action: "create" | "update" | "delete";
   readonly label: string;
+}
+
+/**
+ * A Run is terminal once it has reached a final status; while it is non-terminal
+ * (`queued` / `running` / `waiting_approval`) the run screen polls so a panpii who
+ * lands on `/runs/:id` right after install sees it advance without a refresh.
+ */
+function isTerminalRunStatus(status: Run["status"]): boolean {
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "expired"
+  );
 }
 
 function formatDateTime(value: string | undefined): string {
@@ -385,6 +401,20 @@ function Inner() {
     } catch {
       return undefined;
     }
+  });
+
+  // Poll while the run is non-terminal so the screen advances on its own. The
+  // effect re-runs whenever the run status changes; each run schedules a single
+  // refetch and onCleanup clears it (on the next status change and on teardown),
+  // so once the run reaches a terminal status no further poll is scheduled.
+  createEffect(() => {
+    const current = run.latest;
+    if (!current || isTerminalRunStatus(current.status)) return;
+    const timer = setTimeout(() => {
+      void refetchRun();
+      void refetchLogs();
+    }, 3000);
+    onCleanup(() => clearTimeout(timer));
   });
 
   const inputs = createMemo(() =>
