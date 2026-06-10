@@ -1339,6 +1339,85 @@
 .connection-form .form-actions {
   display: flex;
   gap: var(--tg-s-3);
+  flex-wrap: wrap;
+}
+
+/* Shared Provider / display-name fields rendered above the guided + advanced
+   forms (so they sit outside .connection-form). */
+.detail-section > .form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+  max-width: 480px;
+  margin-bottom: var(--tg-s-4);
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+  color: var(--tg-fg-muted);
+}
+.detail-section > .form-field input,
+.detail-section > .form-field select {
+  padding: 8px 10px;
+  border-radius: var(--tg-r-sm);
+  border: 1px solid var(--tg-line);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+  font-family: var(--tg-font-body);
+  font-weight: 400;
+}
+
+/* Success banner mirroring .sign-in-error, in the success accent. */
+.sign-in-notice {
+  margin: var(--tg-s-4) 0 0;
+  padding: var(--tg-s-3) var(--tg-s-4);
+  background: color-mix(in srgb, var(--tg-success) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tg-success) 32%, transparent);
+  border-radius: var(--tg-r-md);
+  color: var(--tg-fg);
+  font-size: var(--tg-fs-sm);
+}
+
+/* Guided-token card: the primary "connect" flow. */
+.connection-guided {
+  max-width: 560px;
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+}
+.connection-guided .connection-form {
+  margin-top: var(--tg-s-4);
+}
+.connection-guided .form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-3);
+  margin-top: var(--tg-s-3);
+}
+.connection-steps {
+  margin: var(--tg-s-3) 0;
+  padding-left: var(--tg-s-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg-muted);
+}
+
+/* Advanced raw-field fallback, collapsed by default. */
+.connection-advanced {
+  margin-top: var(--tg-s-5);
+  max-width: 560px;
+}
+.connection-advanced > summary {
+  cursor: pointer;
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+  color: var(--tg-fg-subtle);
+  padding: var(--tg-s-2) 0;
+}
+.connection-advanced[open] > summary {
+  color: var(--tg-fg-muted);
+  margin-bottom: var(--tg-s-3);
 }
 
 .connection-list {
@@ -1992,4 +2071,66 @@
   .install-form-row {
     grid-template-columns: 1fr;
   }
+}
+
+/* ----- Capsule Catalog ("選んで入れる" front door) ----- */
+.catalog-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+}
+.catalog-card {
+  display: flex;
+  flex-direction: column;
+}
+.catalog-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  min-width: 0;
+}
+.catalog-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg-muted);
+  flex: none;
+}
+.catalog-card-summary {
+  margin: var(--tg-s-3) 0 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.catalog-card-footer {
+  margin-top: var(--tg-s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.catalog-card-note {
+  margin: 0;
+  font-size: var(--tg-fs-xs);
+}
+.catalog-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+  flex-wrap: wrap;
+}
+.catalog-card-detail {
+  font-size: var(--tg-fs-xs);
+}
+.catalog-card-detail summary {
+  cursor: pointer;
+  color: var(--tg-fg-subtle);
+}
+.catalog-card-kv {
+  margin-top: var(--tg-s-2);
+}
+.catalog-card-kv code {
+  overflow-wrap: anywhere;
 }

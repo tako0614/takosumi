@@ -79,7 +79,10 @@ import type {
 import type {
   ApplyRunResponse,
   Connection,
+  ConnectionOAuthStartResponse,
+  ConnectionResponse,
   CreateApplyRunRequest,
+  CreateConnectionRequest,
   CreatePlanRunRequest,
   GetInstallationResponse,
   ListConnectionsResponse,
@@ -472,6 +475,39 @@ export interface TakosumiOperations {
   /** Reads a Connection projection by id (no secret values). */
   getConnection(connectionId: string): Promise<Connection>;
   /**
+   * Registers a provider-credential Connection (§9). The dashboard control
+   * surface only ever builds Space-scoped `provider_env_set` /
+   * `cloudflare_api_token` requests here; `values` are write-only and the
+   * response is the public projection (no secret values).
+   */
+  createConnection(
+    request: CreateConnectionRequest,
+  ): Promise<ConnectionResponse>;
+  /**
+   * OPTIONAL Cloudflare credential OAuth helper, present only when the operator
+   * wired the upstream OAuth client via env. Used by the dashboard
+   * credential-helper flow; absent otherwise so the dashboard falls back to the
+   * guided-token deep-link path.
+   */
+  readonly connectionOAuth?: {
+    readonly cloudflare?: {
+      start(input: {
+        readonly subject: string;
+        readonly spaceId: string;
+        readonly displayName?: string;
+        readonly successRedirectUri?: string;
+      }): Promise<ConnectionOAuthStartResponse>;
+      complete(input: {
+        readonly code: string;
+        readonly state: string;
+        readonly query: Readonly<Record<string, string>>;
+      }): Promise<{
+        readonly request: CreateConnectionRequest;
+        readonly subject?: string;
+      }>;
+    };
+  };
+  /**
    * Queue-consumer entry point. The Workers `queue()` consumer calls this for
    * each dispatched run message (plan/apply); it loads the run, applies the
    * idempotency guard, mints credentials, and drives the container dispatch.
@@ -828,6 +864,50 @@ export async function createTakosumiService(
     listOperatorConnections: () => opentofuController.listOperatorConnections(),
     getConnection: (connectionId) =>
       opentofuController.getConnection(connectionId),
+    createConnection: (request) =>
+      opentofuController.createConnection(request),
+    // Only present when the operator wired the upstream Cloudflare OAuth client.
+    // The control-routes layer enforces session auth + Space ownership BEFORE
+    // calling these, so the principal passed to the helper is a thin in-process
+    // actor (the helper itself does not re-authorize; it only signs/verifies
+    // the OAuth state and exchanges the code).
+    ...(connectionOAuthHelpers?.cloudflare
+      ? {
+          connectionOAuth: {
+            cloudflare: {
+              start: (input) =>
+                connectionOAuthHelpers.cloudflare!.start({
+                  provider: "cloudflare",
+                  request: new Request("https://connection-oauth.internal/start"),
+                  principal: { actor: "dashboard-session" },
+                  body: {
+                    spaceId: input.spaceId,
+                    // Sign the authenticated subject INTO the OAuth state so the
+                    // cross-site callback can authorize without a session cookie.
+                    subject: input.subject,
+                    ...(input.displayName
+                      ? { displayName: input.displayName }
+                      : {}),
+                    ...(input.successRedirectUri
+                      ? { successRedirectUri: input.successRedirectUri }
+                      : {}),
+                  },
+                }),
+              complete: (input) =>
+                connectionOAuthHelpers.cloudflare!.complete({
+                  provider: "cloudflare",
+                  request: new Request(
+                    "https://connection-oauth.internal/callback",
+                  ),
+                  principal: { actor: "dashboard-session" },
+                  code: input.code,
+                  state: input.state,
+                  query: input.query,
+                }),
+            },
+          },
+        }
+      : {}),
     dispatchQueuedRun: (dispatch) =>
       opentofuController.dispatchQueuedRun(dispatch),
     createSource: (request) => opentofuController.createSource(request),

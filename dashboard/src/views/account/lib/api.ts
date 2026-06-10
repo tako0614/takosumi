@@ -74,7 +74,11 @@ export const rpc = {
 
 export { ApiError } from "./http.ts";
 
-export { PROVIDERS, providerDescriptor } from "./connections.ts";
+export {
+  CLOUDFLARE_CREATE_TOKEN_URL,
+  PROVIDERS,
+  providerDescriptor,
+} from "./connections.ts";
 export type {
   Connection,
   ConnectionAuthMethod,
@@ -85,6 +89,7 @@ export type {
   CreateConnectionInput,
   ProviderDescriptor,
   ProviderEnvField,
+  ProviderTokenHelper,
 } from "./connections.ts";
 
 export type {

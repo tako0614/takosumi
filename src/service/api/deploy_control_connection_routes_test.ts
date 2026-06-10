@@ -321,13 +321,15 @@ test("Cloudflare OAuth helper starts and completes as a write-only env-set Conne
           ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}),
         }),
         complete: async ({ code, state }) => ({
-          spaceId: SPACE_ID,
-          provider: "cloudflare",
-          kind: "provider_env_set",
-          authMethod: "static_secret",
-          displayName: "cf oauth",
-          values: {
-            CLOUDFLARE_API_TOKEN: `oauth-token-${code}-${state}`,
+          request: {
+            spaceId: SPACE_ID,
+            provider: "cloudflare",
+            kind: "provider_env_set",
+            authMethod: "static_secret",
+            displayName: "cf oauth",
+            values: {
+              CLOUDFLARE_API_TOKEN: `oauth-token-${code}-${state}`,
+            },
           },
         }),
       },
@@ -374,11 +376,13 @@ test("OAuth callback requires code and state once helper is configured", async (
           state: "state_gcp",
         }),
         complete: async () => ({
-          spaceId: SPACE_ID,
-          provider: "google",
-          kind: "provider_env_set",
-          authMethod: "static_secret",
-          values: { GOOGLE_CREDENTIALS: "{}" },
+          request: {
+            spaceId: SPACE_ID,
+            provider: "google",
+            kind: "provider_env_set",
+            authMethod: "static_secret",
+            values: { GOOGLE_CREDENTIALS: "{}" },
+          },
         }),
       },
     },

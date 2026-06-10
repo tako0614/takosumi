@@ -2,6 +2,7 @@ import type { CreateConnectionRequest } from "@takosumi/internal/deploy-control-
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import type {
   ConnectionOAuthCallbackInput,
+  ConnectionOAuthCompletion,
   ConnectionOAuthHelper,
   ConnectionOAuthHelpers,
   ConnectionOAuthStartInput,
@@ -24,6 +25,14 @@ interface SignedOAuthState {
   readonly provider: "cloudflare" | "gcp";
   readonly expiresAt: number;
   readonly body: ConnectionOAuthStartInput["body"];
+  /**
+   * Authenticated account subject of the caller that started the flow,
+   * captured at `start` time and protected by the state HMAC. The cross-site
+   * callback authorizes against this (it has no session cookie). Optional so a
+   * previously-issued (legacy) state still verifies, but the dashboard callback
+   * refuses to mint when it is absent.
+   */
+  readonly subject?: string;
 }
 
 export function createConnectionOAuthHelpersFromEnv(
@@ -122,6 +131,9 @@ async function startOAuth(
       provider: config.provider,
       expiresAt,
       body: input.body,
+      // Bind the OAuth state to the authenticated subject so the cross-site
+      // callback can authorize from the signed state alone (no session cookie).
+      ...(input.body.subject ? { subject: input.body.subject } : {}),
     },
     config.stateSecret,
   );
@@ -148,7 +160,7 @@ async function completeOAuth(
   config: OAuthProviderConfig,
   input: ConnectionOAuthCallbackInput,
   fetchImpl: typeof fetch,
-): Promise<CreateConnectionRequest> {
+): Promise<ConnectionOAuthCompletion> {
   const state = await verifyState(input.state, config.stateSecret);
   if (state.provider !== config.provider) {
     throw new OpenTofuControllerError(
@@ -170,7 +182,7 @@ async function completeOAuth(
     fetchImpl,
   );
   const values = valuesFromTokenResponse(config, tokenResponse);
-  return {
+  const request: CreateConnectionRequest = {
     ...(state.body.spaceId ? { spaceId: state.body.spaceId } : {}),
     provider: config.provider === "gcp" ? "google" : "cloudflare",
     kind: "provider_env_set",
@@ -181,6 +193,12 @@ async function completeOAuth(
     ...(state.body.expiresAt ? { expiresAt: state.body.expiresAt } : {}),
     values,
   };
+  // Surface the HMAC-signed subject so the cross-site callback can authorize
+  // the mint against the account that actually started the flow. Prefer the
+  // top-level signed `subject`; fall back to a subject the caller threaded
+  // through `body` for older states.
+  const subject = state.subject ?? state.body.subject;
+  return subject ? { request, subject } : { request };
 }
 
 async function exchangeCode(

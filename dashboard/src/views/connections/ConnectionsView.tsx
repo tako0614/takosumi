@@ -25,8 +25,11 @@ import {
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
   type ControlApiError,
+  createConnection as createControlConnection,
+  isOAuthUnavailable,
   listConnections as listControlConnections,
   listOperatorConnectionDefaults,
+  startCloudflareOAuth,
 } from "../../lib/control-api.ts";
 
 // Reuse the apps screen's space-id memory so a previously-selected space
@@ -96,8 +99,13 @@ function ConnectionsInner() {
   // immediately after a successful submit (see clearForm) so secret material
   // never lingers in component state.
   const [values, setValues] = createSignal<Record<string, string>>({});
+  // Guided-token paste field (the primary "<provider> に接続" path). Kept
+  // separate from the advanced field map and cleared the moment it is consumed.
+  const [helperToken, setHelperToken] = createSignal("");
 
-  const fields = createMemo(() => providerDescriptor(provider())?.fields ?? []);
+  const descriptor = createMemo(() => providerDescriptor(provider()));
+  const fields = createMemo(() => descriptor()?.fields ?? []);
+  const tokenHelper = createMemo(() => descriptor()?.tokenHelper);
 
   const setFieldValue = (envName: string, value: string) => {
     setValues((prev) => ({ ...prev, [envName]: value }));
@@ -105,25 +113,75 @@ function ConnectionsInner() {
 
   const clearForm = () => {
     setValues({});
+    setHelperToken("");
     setDisplayName("");
   };
 
+  // ----- one-time URL result banner (set by the OAuth backend callback) -----
+  // The Cloudflare OAuth callback is a backend route that redirects here with
+  // ?connected=1 or ?connection_error=<code>. We surface it, then strip the
+  // query so a reload does not re-show it. No SPA route is added for this.
+  const [oauthNotice, setOauthNotice] = createSignal<
+    { kind: "ok" } | { kind: "error"; code: string } | null
+  >(null);
+  if (typeof window !== "undefined") {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("connected")) setOauthNotice({ kind: "ok" });
+    else {
+      const err = params.get("connection_error");
+      if (err) setOauthNotice({ kind: "error", code: err });
+    }
+    if (params.has("connected") || params.has("connection_error")) {
+      params.delete("connected");
+      params.delete("connection_error");
+      const next = params.toString();
+      window.history.replaceState(
+        {},
+        "",
+        window.location.pathname + (next ? `?${next}` : ""),
+      );
+    }
+  }
+
+  // Primary guided-token submit: paste the provider-issued token, register a
+  // Space-owned Connection through the session-authed control surface.
+  const createFromHelper = createAction(async () => {
+    const space = spaceId();
+    if (!space) throw new Error("space を指定してください。");
+    const helper = tokenHelper();
+    const d = descriptor();
+    if (!helper || !d) throw new Error("provider が不正です。");
+    const token = helperToken().trim();
+    if (!token) throw new Error("トークンを貼り付けてください。");
+    await createControlConnection({
+      spaceId: space,
+      provider: d.provider,
+      displayName: displayName().trim() || undefined,
+      values: { [helper.envName]: token },
+    });
+    // Clear the token from memory the moment the submit resolves.
+    clearForm();
+    await refetch();
+  });
+
+  // Advanced (raw field) submit — the "詳細設定" fallback for power users and
+  // for providers without a guided helper.
   const create = createAction(async () => {
     const space = spaceId();
     if (!space) throw new Error("space を指定してください。");
-    const descriptor = providerDescriptor(provider());
-    if (!descriptor) throw new Error("provider が不正です。");
+    const d = descriptor();
+    if (!d) throw new Error("provider が不正です。");
     const submitValues: Record<string, string> = {};
-    for (const field of descriptor.fields) {
+    for (const field of d.fields) {
       const raw = (values()[field.envName] ?? "").trim();
       if (field.required && raw.length === 0) {
         throw new Error(`${field.label} は必須です。`);
       }
       if (raw.length > 0) submitValues[field.envName] = raw;
     }
-    await rpc.connections.create({
+    await createControlConnection({
       spaceId: space,
-      provider: descriptor.provider,
+      provider: d.provider,
       displayName: displayName().trim() || undefined,
       values: submitValues,
     });
@@ -131,6 +189,42 @@ function ConnectionsInner() {
     clearForm();
     await refetch();
   });
+
+  // ----- optional Cloudflare OAuth (operator-wired only) --------------------
+  // We PROBE the backend before ever showing an OAuth button: the start route
+  // is side-effect-free (it only signs state and returns an authorize URL), so
+  // calling it tells us whether the operator wired the upstream client. A 501
+  // (feature_unavailable) means "not configured" → we keep the button hidden,
+  // so there is never a dead OAuth button. On success we keep the authorize URL
+  // ready, and the button just navigates the browser to it.
+  const oauthProbeKey = createMemo(() => {
+    const space = spaceId();
+    const d = descriptor();
+    if (!space || !d?.oauthCandidate) return null;
+    return { spaceId: space, provider: d.provider };
+  });
+  const [oauthProbe] = createResource(oauthProbeKey, async (key) => {
+    try {
+      const started = await startCloudflareOAuth({ spaceId: key.spaceId });
+      return { authorizationUrl: started.authorizationUrl };
+    } catch (e) {
+      if (isOAuthUnavailable(e)) return { authorizationUrl: null };
+      // Other errors (e.g. transient) also hide the button; the guided-token
+      // path always remains available, so this never blocks the user.
+      return { authorizationUrl: null };
+    }
+  });
+  const oauthAvailable = createMemo(
+    () => !!oauthProbe()?.authorizationUrl,
+  );
+
+  const startOAuth = () => {
+    const url = oauthProbe()?.authorizationUrl;
+    if (!url) return;
+    // Hand off to Cloudflare's own consent screen; the backend callback
+    // redirects back to /connections with the result query.
+    window.location.assign(url);
+  };
 
   // Per-connection test action. Keyed display of the last result/error.
   const [testBusyId, setTestBusyId] = createSignal<string | null>(null);
@@ -175,6 +269,22 @@ function ConnectionsInner() {
           一度保存すると再表示されません。
         </p>
       </div>
+
+      {/* Result banner from the Cloudflare OAuth backend callback redirect. */}
+      <Show when={oauthNotice()}>
+        {(notice) => (
+          <Switch>
+            <Match when={notice().kind === "ok"}>
+              <p class="sign-in-notice">Cloudflare に接続しました。</p>
+            </Match>
+            <Match when={notice().kind === "error"}>
+              <p class="sign-in-error">
+                接続に失敗しました。 もう一度お試しください。
+              </p>
+            </Match>
+          </Switch>
+        )}
+      </Show>
 
       {/* Operator default connections (spec §9 / §31) — instance-wide defaults
           a ProviderBinding of `default` resolves to. Read-only here. */}
@@ -241,71 +351,198 @@ function ConnectionsInner() {
         {/* ----- register form ----- */}
         <section class="detail-section">
           <h2>接続を追加</h2>
-          <form
-            class="connection-form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void create.run();
-            }}
-          >
-            <label class="form-field">
-              Provider
-              <select
-                value={provider()}
-                onChange={(e) => {
-                  setProvider(e.currentTarget.value);
-                  // Switching provider drops any half-entered secret values.
-                  setValues({});
+
+          <label class="form-field">
+            Provider
+            <select
+              value={provider()}
+              onChange={(e) => {
+                setProvider(e.currentTarget.value);
+                // Switching provider drops any half-entered secret values.
+                setValues({});
+                setHelperToken("");
+              }}
+            >
+              <For each={PROVIDERS}>
+                {(p) => <option value={p.provider}>{p.label}</option>}
+              </For>
+            </select>
+          </label>
+
+          <label class="form-field">
+            表示名（任意）
+            <input
+              type="text"
+              value={displayName()}
+              onInput={(e) => setDisplayName(e.currentTarget.value)}
+              placeholder="本番 Cloudflare"
+              autocomplete="off"
+            />
+          </label>
+
+          <Show
+            when={tokenHelper()}
+            fallback={
+              /* No guided helper for this provider — raw fields are the path. */
+              <form
+                class="connection-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void create.run();
                 }}
               >
-                <For each={PROVIDERS}>
-                  {(p) => <option value={p.provider}>{p.label}</option>}
-                </For>
-              </select>
-            </label>
+                <Index each={fields()}>
+                  {(field) => (
+                    <label class="form-field">
+                      {field().label}
+                      <Show when={field().required}>
+                        <span class="form-required" aria-hidden="true">
+                          *
+                        </span>
+                      </Show>
+                      <input
+                        type={field().secret ? "password" : "text"}
+                        value={values()[field().envName] ?? ""}
+                        onInput={(e) =>
+                          setFieldValue(field().envName, e.currentTarget.value)}
+                        placeholder={field().placeholder}
+                        autocomplete="off"
+                        spellcheck={false}
+                      />
+                    </label>
+                  )}
+                </Index>
+                <div class="form-actions">
+                  <button
+                    class="btn btn-primary"
+                    type="submit"
+                    disabled={create.busy()}
+                  >
+                    {create.busy() ? "登録中..." : "接続を登録"}
+                  </button>
+                </div>
+                <ActionError error={create.error} />
+              </form>
+            }
+          >
+            {(helper) => (
+              <>
+                {/* Primary guided-token flow: open the provider's OWN token
+                    screen → create there → paste back. */}
+                <div class="connection-guided">
+                  <p class="page-sub">
+                    {descriptor()?.label}{" "}
+                    に接続します。 トークンは {descriptor()?.label}{" "}
+                    の画面で作成し、 貼り付けるだけです。
+                  </p>
+                  <ol class="connection-steps">
+                    <For each={helper().steps}>{(s) => <li>{s}</li>}</For>
+                  </ol>
 
-            <label class="form-field">
-              表示名（任意）
-              <input
-                type="text"
-                value={displayName()}
-                onInput={(e) => setDisplayName(e.currentTarget.value)}
-                placeholder="本番 Cloudflare"
-                autocomplete="off"
-              />
-            </label>
+                  <div class="form-actions">
+                    <a
+                      class="btn btn-primary"
+                      href={helper().createTokenUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {descriptor()?.label} を開いてトークンを作成
+                    </a>
+                    {/* OAuth button appears ONLY when the operator wired the
+                        upstream client (probed). Otherwise it never renders, so
+                        there is no dead button. */}
+                    <Show when={oauthAvailable()}>
+                      <button
+                        class="btn btn-secondary"
+                        type="button"
+                        onClick={() => startOAuth()}
+                      >
+                        {descriptor()?.label} で自動接続
+                      </button>
+                    </Show>
+                  </div>
 
-            <Index each={fields()}>
-              {(field) => (
-                <label class="form-field">
-                  {field().label}
-                  <Show when={field().required}>
-                    <span class="form-required" aria-hidden="true">*</span>
-                  </Show>
-                  <input
-                    type={field().secret ? "password" : "text"}
-                    value={values()[field().envName] ?? ""}
-                    onInput={(e) =>
-                      setFieldValue(field().envName, e.currentTarget.value)}
-                    placeholder={field().placeholder}
-                    autocomplete="off"
-                    spellcheck={false}
-                  />
-                </label>
-              )}
-            </Index>
+                  <form
+                    class="connection-form"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void createFromHelper.run();
+                    }}
+                  >
+                    <label class="form-field">
+                      作成したトークンを貼り付け
+                      <span class="form-required" aria-hidden="true">*</span>
+                      <input
+                        type="password"
+                        value={helperToken()}
+                        onInput={(e) => setHelperToken(e.currentTarget.value)}
+                        placeholder="ここにトークンを貼り付け"
+                        autocomplete="off"
+                        spellcheck={false}
+                      />
+                    </label>
+                    <div class="form-actions">
+                      <button
+                        class="btn btn-primary"
+                        type="submit"
+                        disabled={createFromHelper.busy()}
+                      >
+                        {createFromHelper.busy() ? "接続中..." : "接続する"}
+                      </button>
+                    </div>
+                    <ActionError error={createFromHelper.error} />
+                  </form>
+                </div>
 
-            <div class="form-actions">
-              <button
-                class="btn btn-primary"
-                type="submit"
-                disabled={create.busy()}
-              >
-                {create.busy() ? "登録中..." : "接続を登録"}
-              </button>
-            </div>
-            <ActionError error={create.error} />
-          </form>
+                {/* Advanced fallback: the raw multi-field form, demoted. */}
+                <details class="connection-advanced">
+                  <summary>詳細設定（上級者向け）</summary>
+                  <form
+                    class="connection-form"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void create.run();
+                    }}
+                  >
+                    <Index each={fields()}>
+                      {(field) => (
+                        <label class="form-field">
+                          {field().label}
+                          <Show when={field().required}>
+                            <span class="form-required" aria-hidden="true">
+                              *
+                            </span>
+                          </Show>
+                          <input
+                            type={field().secret ? "password" : "text"}
+                            value={values()[field().envName] ?? ""}
+                            onInput={(e) =>
+                              setFieldValue(
+                                field().envName,
+                                e.currentTarget.value,
+                              )}
+                            placeholder={field().placeholder}
+                            autocomplete="off"
+                            spellcheck={false}
+                          />
+                        </label>
+                      )}
+                    </Index>
+                    <div class="form-actions">
+                      <button
+                        class="btn btn-secondary"
+                        type="submit"
+                        disabled={create.busy()}
+                      >
+                        {create.busy() ? "登録中..." : "値を直接登録"}
+                      </button>
+                    </div>
+                    <ActionError error={create.error} />
+                  </form>
+                </details>
+              </>
+            )}
+          </Show>
         </section>
 
         {/* ----- list ----- */}

@@ -1040,6 +1040,74 @@ export async function listOperatorConnectionDefaults(
   return body.operatorConnectionDefaults ?? [];
 }
 
+/**
+ * Registers a Space-owned provider-credential Connection. `values` are
+ * write-only credential material (e.g. `{ CLOUDFLARE_API_TOKEN }`) and must be
+ * cleared from caller memory immediately after this resolves; the returned
+ * {@link Connection} projection carries no secret values. The backend forces
+ * `scope: "space"`, so this can never create an operator-default connection.
+ */
+export async function createConnection(input: {
+  readonly spaceId: string;
+  readonly provider: string;
+  readonly displayName?: string;
+  readonly scopeHints?: { readonly accountId?: string };
+  readonly values: Readonly<Record<string, string>>;
+}): Promise<Connection> {
+  const body = await controlFetch<{ connection: Connection }>(
+    `${BASE}/connections`,
+    {
+      method: "POST",
+      body: {
+        spaceId: input.spaceId,
+        provider: input.provider,
+        ...(input.displayName ? { displayName: input.displayName } : {}),
+        ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
+        values: input.values,
+      },
+    },
+  );
+  return body.connection;
+}
+
+export interface CloudflareOAuthStart {
+  readonly authorizationUrl: string;
+  readonly state: string;
+  readonly expiresAt?: string;
+}
+
+/**
+ * Begins the OPTIONAL Cloudflare credential OAuth helper flow. Resolves with the
+ * provider authorize URL the browser is sent to; the backend callback then
+ * mints the Connection and redirects back to `/connections`. When the operator
+ * has NOT wired the upstream OAuth client, the backend answers 501 — callers
+ * detect this via {@link isOAuthUnavailable} and fall back to the guided-token
+ * deep-link path (so no dead OAuth button is ever shown).
+ */
+export async function startCloudflareOAuth(input: {
+  readonly spaceId: string;
+  readonly displayName?: string;
+}): Promise<CloudflareOAuthStart> {
+  return await controlFetch<CloudflareOAuthStart>(
+    `${BASE}/connections/cloudflare/oauth/start`,
+    {
+      method: "POST",
+      body: {
+        spaceId: input.spaceId,
+        ...(input.displayName ? { displayName: input.displayName } : {}),
+      },
+    },
+  );
+}
+
+/** True when a control error means the OAuth helper is not configured (501). */
+export function isOAuthUnavailable(error: unknown): boolean {
+  return (
+    error instanceof ControlApiError &&
+    (error.status === 501 || error.code === "feature_unavailable")
+  );
+}
+
 // --- Providers -------------------------------------------------------------
 
 export async function listProviderTemplates(): Promise<
