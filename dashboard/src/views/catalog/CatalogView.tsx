@@ -12,7 +12,7 @@
  * Reuses existing dashboard CSS (`provider-grid` / `provider-card` /
  * `status-pill` / `btn-*`) so it matches the rest of the SPA with no new CSS.
  */
-import { type Component, For, Show } from "solid-js";
+import { type Component, createMemo, createResource, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import {
   Boxes,
@@ -33,6 +33,8 @@ import {
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import StatusPill from "../account/components/StatusPill.tsx";
+import { listConnections } from "../../lib/control-api.ts";
+import { currentSpaceId } from "../control/space-state.ts";
 import {
   CATALOG,
   type CatalogCategory,
@@ -71,15 +73,43 @@ export default function CatalogView() {
   return <Page title="アプリを選ぶ">{() => <Inner />}</Page>;
 }
 
+/**
+ * Whether the current Space already has a (usable) connection for a provider.
+ * `"unknown"` means we could not load the list (no Space selected yet, or the
+ * request failed), so the view shows the connect link unconditionally rather
+ * than guessing the user is already set up.
+ */
+type ConnectionPresence = (provider: string) => boolean | "unknown";
+
 function Inner() {
-  const grouped = (): readonly {
-    category: CatalogCategory;
-    entries: readonly CatalogEntry[];
-  }[] =>
+  // Load the current Space's connections so install cards can tell a beginner
+  // whether they STILL need to connect a cloud provider, or are already set up.
+  // Keyed on the shared current-Space id; when no Space is picked the resource
+  // stays unresolved and `hasConnection` returns "unknown" (link always shown).
+  const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
+  const [connections] = createResource(spaceId, listConnections);
+
+  const hasConnection: ConnectionPresence = (provider) => {
+    if (connections.loading || connections.error) return "unknown";
+    const list = connections.latest;
+    if (list === undefined) return "unknown";
+    return list.some(
+      (connection) =>
+        connection.provider === provider && connection.status !== "revoked",
+    );
+  };
+
+  const grouped = createMemo<
+    readonly {
+      category: CatalogCategory;
+      entries: readonly CatalogEntry[];
+    }[]
+  >(() =>
     CATEGORY_ORDER.map((category) => ({
       category,
       entries: CATALOG.filter((entry) => entry.category === category),
-    })).filter((group) => group.entries.length > 0);
+    })).filter((group) => group.entries.length > 0),
+  );
 
   return (
     <AppShell>
@@ -107,7 +137,9 @@ function Inner() {
             </div>
             <div class="provider-grid">
               <For each={group.entries}>
-                {(entry) => <CatalogCard entry={entry} />}
+                {(entry) => (
+                  <CatalogCard entry={entry} hasConnection={hasConnection} />
+                )}
               </For>
             </div>
           </section>
@@ -122,7 +154,10 @@ function CategoryIcon(props: { category: CatalogCategory }) {
   return <Icon size={18} aria-hidden="true" />;
 }
 
-function CatalogCard(props: { entry: CatalogEntry }) {
+function CatalogCard(props: {
+  entry: CatalogEntry;
+  hasConnection: ConnectionPresence;
+}) {
   const entry = () => props.entry;
   const Icon = ICONS[props.entry.icon];
   return (
@@ -147,18 +182,29 @@ function CatalogCard(props: { entry: CatalogEntry }) {
       <p class="catalog-card-summary">{entry().summary}</p>
 
       <Show when={entry().installable} fallback={<ComingSoonFooter entry={entry()} />}>
-        <InstallableFooter entry={entry()} />
+        <InstallableFooter entry={entry()} hasConnection={props.hasConnection} />
       </Show>
     </article>
   );
 }
 
-function InstallableFooter(props: { entry: CatalogEntry }) {
+function InstallableFooter(props: {
+  entry: CatalogEntry;
+  hasConnection: ConnectionPresence;
+}) {
   const entry = () => props.entry;
   return (
     <div class="catalog-card-footer">
       <Show when={entry().note}>
         {(note) => <p class="muted catalog-card-note">{note()}</p>}
+      </Show>
+      <Show when={entry().requiresConnection}>
+        {(needed) => (
+          <ConnectNote
+            label={needed().label}
+            connected={props.hasConnection(needed().provider)}
+          />
+        )}
       </Show>
       <div class="catalog-card-actions">
         <A
@@ -171,6 +217,39 @@ function InstallableFooter(props: { entry: CatalogEntry }) {
         <CapsuleDetails entry={entry()} />
       </div>
     </div>
+  );
+}
+
+/**
+ * The actionable "where do I connect?" line. The root UX gap was that cards
+ * told a beginner a cloud connection is required but never linked to where it
+ * happens. This always renders a real `<A href="/connections">` link; when we
+ * can see the Space already has that provider's connection we soften it to a
+ * reassurance, otherwise we lead with "先に <label> に接続する".
+ */
+function ConnectNote(props: {
+  label: string;
+  connected: boolean | "unknown";
+}) {
+  return (
+    <p class="muted catalog-card-note">
+      <Show
+        when={props.connected === true}
+        fallback={
+          <>
+            <A href="/connections" class="link">
+              先に {props.label} に接続する
+            </A>
+            <span> （接続のページが開きます）</span>
+          </>
+        }
+      >
+        <span>{props.label} に接続済みです。</span>{" "}
+        <A href="/connections" class="link">
+          接続を確認する
+        </A>
+      </Show>
+    </p>
   );
 }
 

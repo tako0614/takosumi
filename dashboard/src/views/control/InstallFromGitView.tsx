@@ -31,7 +31,7 @@ import {
   onMount,
   Show,
 } from "solid-js";
-import { useNavigate } from "@solidjs/router";
+import { A, useNavigate } from "@solidjs/router";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
@@ -46,6 +46,7 @@ import {
   type CapsuleCompatibilityLevel,
   type CapsuleCompatibilityResult,
   type InstallConfig,
+  listConnections,
   listInstallConfigs,
   planInstallation,
   putDeploymentProfile,
@@ -149,6 +150,17 @@ function Inner() {
 
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
   const [configs] = createResource(spaceId, listInstallConfigs);
+  // Load the Space's connections so we can tell a beginner, BEFORE they run a
+  // plan that will fail at apply time, that they still need to connect a cloud
+  // provider — and link them straight to /connections. When the list cannot be
+  // loaded yet we say nothing (no false "接続がありません").
+  const [connections] = createResource(spaceId, listConnections);
+  const hasAnyUsableConnection = () => {
+    if (connections.loading || connections.error) return true;
+    const list = connections.latest;
+    if (list === undefined) return true;
+    return list.some((connection) => connection.status !== "revoked");
+  };
 
   // Select the first internal OpenTofu Capsule profile once configs load.
   const configList = createMemo<readonly InstallConfig[]>(
@@ -363,6 +375,16 @@ function Inner() {
       >
         <section class="detail-section">
           <h2>OpenTofu Capsule</h2>
+          <Show when={!hasAnyUsableConnection()}>
+            <p class="muted" role="note">
+              適用には Cloudflare や AWS などクラウドの接続が必要です。まだ接続が
+              ないようです。{" "}
+              <A href="/connections" class="link">
+                先にクラウドに接続する
+              </A>
+              （接続のページが開きます）。
+            </p>
+          </Show>
           <form
             class="install-form"
             onSubmit={(e) => {
