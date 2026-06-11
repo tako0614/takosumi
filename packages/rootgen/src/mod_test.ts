@@ -252,6 +252,38 @@ test("generateInstallationRoot golden provider-aliased main.tf", () => {
   );
 });
 
+test("generateInstallationRoot renders base_url in the provider block when set (managed cf-proxy)", () => {
+  const baseUrl =
+    "https://app.takosumi.com/internal/cf-proxy/takosumi-tenants/app/client/v4";
+  const { files } = generateInstallationRoot({
+    template: R2_TEMPLATE,
+    inputs: { bucketName: "my-bucket", accountId: "acct_123", location: "weur" },
+    installType: "opentofu_module",
+    providerBindings: [{ provider: "cloudflare/cloudflare", alias: "main", baseUrl }],
+  });
+  const mainTf = files["main.tf"]!;
+  // base_url sits inside the cloudflare provider block, after the alias.
+  expect(mainTf).toContain(
+    [
+      'provider "cloudflare" {',
+      '  alias = "main"',
+      `  base_url = "${baseUrl}"`,
+      "  api_token = var.cloudflare_main_api_token",
+      "}",
+    ].join("\n"),
+  );
+});
+
+test("generateInstallationRoot omits base_url when the binding has none (self-host)", () => {
+  const { files } = generateInstallationRoot({
+    template: R2_TEMPLATE,
+    inputs: { bucketName: "my-bucket", accountId: "acct_123", location: "weur" },
+    installType: "opentofu_module",
+    providerBindings: [{ provider: "cloudflare/cloudflare", alias: "main" }],
+  });
+  expect(files["main.tf"]).not.toContain("base_url");
+});
+
 test("generateInstallationRoot app_source threads a generated artifact_path variable", () => {
   const APP_TEMPLATE: TemplateDefinition = {
     ...R2_TEMPLATE,

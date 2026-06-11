@@ -1822,6 +1822,16 @@ takosumi-dispatch Worker
       └─ user Worker: @company/chat
 ```
 
+managed (takosumi-hosted) な Cloudflare Worker capsule は **plain OpenTofu** のまま namespace に入る。capsule は普通の
+`cloudflare_workers_script` (+ 普通の KV / D1 / R2 + 普通の `bindings`) を書くだけで WfP 固有の HCL を持たない。pin した
+cloudflare provider (v5) は script を namespace に置けないため、control plane は managed run (operator-default credential、
+§7.1) でのみ cloudflare provider の `base_url` を **cf-proxy** (`<origin>/internal/cf-proxy/<ns>/<installSlug>/client/v4`) に
+向ける。cf-proxy は `…/workers/scripts/{n}` を `…/workers/dispatch/namespaces/{ns}/scripts/{installSlug}-{n}` に書き換え、
+その他 (KV / D1 / R2) は素通しする。`{installSlug}` prefix で namespace 内 script 名が install 間で一意になる。capsule は
+`base_url` を上書きできない (generated root が `providers = {}` を child に渡すので capsule の provider block は tofu plan で
+落ちる、fail-closed)。self-host / 非 Worker capsule は `base_url` を受け取らず byte-identical。provider token は
+`TF_VAR_cloudflare<_alias>_api_token` で、token-vending Connection policy に Workers Scripts: Edit が必要。
+
 ## 27. Run lifecycle
 
 ### 27.1 Source sync
