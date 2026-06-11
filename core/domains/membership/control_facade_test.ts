@@ -3,7 +3,7 @@
  * domain (`createMembershipDomainServices`), not the in-memory roster fake the
  * accounts-service control-routes test uses.
  *
- * It drives the account-plane `/v1/control/spaces/:id/members` surface
+ * It drives the account-plane `/api/v1/spaces/:id/members` surface
  * (`handleControlRoute`) against a `ControlPlaneOperations` whose `members` is
  * `createMembershipControlFacade` over the real
  * `MembershipRoleEntitlementService`. This proves the two preconditions that the
@@ -148,7 +148,7 @@ test("real path: owner bootstraps the first member on a brand-new Space", async 
 
   // Pre-bootstrap, the ledger is EMPTY but the list still shows the implicit
   // owner (route projection), so the owner is not locked out.
-  const list0 = await h.call("GET", `/v1/control/spaces/${SPACE}/members`, {
+  const list0 = await h.call("GET", `/api/v1/spaces/${SPACE}/members`, {
     subject: OWNER,
   });
   expect(list0.status).toEqual(200);
@@ -158,7 +158,7 @@ test("real path: owner bootstraps the first member on a brand-new Space", async 
 
   // The owner's FIRST add must SUCCEED on the real path (this is exactly the
   // case that previously 404'd then 403'd through the real domain).
-  const add = await h.call("POST", `/v1/control/spaces/${SPACE}/members`, {
+  const add = await h.call("POST", `/api/v1/spaces/${SPACE}/members`, {
     subject: OWNER,
     body: { accountId: "tsub_alice", role: "member" },
   });
@@ -169,7 +169,7 @@ test("real path: owner bootstraps the first member on a brand-new Space", async 
 
   // The persisted roster now contains a CONCRETE owner row (seeded by the
   // bootstrap bridge) plus the new member — proving the real ledger was written.
-  const list1 = await h.call("GET", `/v1/control/spaces/${SPACE}/members`, {
+  const list1 = await h.call("GET", `/api/v1/spaces/${SPACE}/members`, {
     subject: OWNER,
   });
   const accounts = list1.body.members.map((m: any) => m.accountId).sort();
@@ -184,7 +184,7 @@ test("real path: add then role-change then remove all succeed", async () => {
 
   expect(
     (
-      await h.call("POST", `/v1/control/spaces/${SPACE}/members`, {
+      await h.call("POST", `/api/v1/spaces/${SPACE}/members`, {
         subject: OWNER,
         body: { accountId: "tsub_bob", role: "member" },
       })
@@ -193,7 +193,7 @@ test("real path: add then role-change then remove all succeed", async () => {
 
   const promote = await h.call(
     "PATCH",
-    `/v1/control/spaces/${SPACE}/members/tsub_bob`,
+    `/api/v1/spaces/${SPACE}/members/tsub_bob`,
     { subject: OWNER, body: { roles: ["admin"] } },
   );
   expect(promote.status).toEqual(200);
@@ -201,14 +201,14 @@ test("real path: add then role-change then remove all succeed", async () => {
 
   const remove = await h.call(
     "DELETE",
-    `/v1/control/spaces/${SPACE}/members/tsub_bob`,
+    `/api/v1/spaces/${SPACE}/members/tsub_bob`,
     { subject: OWNER },
   );
   expect(remove.status).toEqual(200);
   expect(remove.body.member.status).toEqual("suspended");
 
   // A suspended member no longer appears as active in the roster's active set.
-  const list = await h.call("GET", `/v1/control/spaces/${SPACE}/members`, {
+  const list = await h.call("GET", `/api/v1/spaces/${SPACE}/members`, {
     subject: OWNER,
   });
   const bob = list.body.members.find((m: any) => m.accountId === "tsub_bob");
@@ -219,7 +219,7 @@ test("access control: a non-owner non-member cannot mutate on the real path", as
   const h = harness({ spaceId: SPACE, spaceOwner: OWNER });
 
   // Owner seeds a plain member first (so the member has an account/session).
-  await h.call("POST", `/v1/control/spaces/${SPACE}/members`, {
+  await h.call("POST", `/api/v1/spaces/${SPACE}/members`, {
     subject: OWNER,
     body: { accountId: "tsub_carol", role: "member" },
   });
@@ -230,7 +230,7 @@ test("access control: a non-owner non-member cannot mutate on the real path", as
   // 403 from the namespace gate OR the role gate. Either way: not 2xx.
   const memberAdd = await h.call(
     "POST",
-    `/v1/control/spaces/${SPACE}/members`,
+    `/api/v1/spaces/${SPACE}/members`,
     { subject: "tsub_carol", body: { accountId: "tsub_dave", role: "member" } },
   );
   expect(memberAdd.status).toEqual(403);
@@ -240,7 +240,7 @@ test("access control: last-owner cannot be demoted or removed on the real path",
   const h = harness({ spaceId: SPACE, spaceOwner: OWNER });
 
   // Bootstrap by adding a member so the owner row is persisted.
-  await h.call("POST", `/v1/control/spaces/${SPACE}/members`, {
+  await h.call("POST", `/api/v1/spaces/${SPACE}/members`, {
     subject: OWNER,
     body: { accountId: "tsub_eve", role: "member" },
   });
@@ -248,7 +248,7 @@ test("access control: last-owner cannot be demoted or removed on the real path",
   // The owner is the SOLE owner: demoting self must be rejected.
   const demote = await h.call(
     "PATCH",
-    `/v1/control/spaces/${SPACE}/members/${OWNER}`,
+    `/api/v1/spaces/${SPACE}/members/${OWNER}`,
     { subject: OWNER, body: { roles: ["member"] } },
   );
   expect(demote.status).toEqual(403);
@@ -257,7 +257,7 @@ test("access control: last-owner cannot be demoted or removed on the real path",
   // Removing the sole owner must be rejected too.
   const remove = await h.call(
     "DELETE",
-    `/v1/control/spaces/${SPACE}/members/${OWNER}`,
+    `/api/v1/spaces/${SPACE}/members/${OWNER}`,
     { subject: OWNER },
   );
   expect(remove.status).toEqual(403);
@@ -270,7 +270,7 @@ test("access control: spaceId is server-resolved, not taken from the body", asyn
   // Even if the client tries to smuggle a different spaceId in the body, the
   // route uses the PATH spaceId (server-resolved). The added member lands in
   // SPACE, never in the smuggled one.
-  const add = await h.call("POST", `/v1/control/spaces/${SPACE}/members`, {
+  const add = await h.call("POST", `/api/v1/spaces/${SPACE}/members`, {
     subject: OWNER,
     body: { accountId: "tsub_frank", role: "member", spaceId: "space_other" },
   });
@@ -280,7 +280,7 @@ test("access control: spaceId is server-resolved, not taken from the body", asyn
 
 test("access control: role injection is rejected (unknown role -> 400)", async () => {
   const h = harness({ spaceId: SPACE, spaceOwner: OWNER });
-  const add = await h.call("POST", `/v1/control/spaces/${SPACE}/members`, {
+  const add = await h.call("POST", `/api/v1/spaces/${SPACE}/members`, {
     subject: OWNER,
     body: { accountId: "tsub_grace", role: "superadmin" },
   });

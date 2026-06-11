@@ -1,7 +1,7 @@
 /**
  * Members view — Space メンバー管理 (spec §4 / membership domain).
  *
- * Backs the session-authed `/v1/control/spaces/:id/members[/:subject]` routes
+ * Backs the session-authed `/api/v1/spaces/:id/members[/:subject]` routes
  * (see packages/accounts-service/src/control-routes.ts). The Space is resolved
  * server-side from the path and the membership-ROLE gate is enforced by the
  * backend; this view mirrors that gate in the UI so a non-owner never sees a

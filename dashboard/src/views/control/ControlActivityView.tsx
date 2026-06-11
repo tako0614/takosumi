@@ -2,7 +2,7 @@
  * Activity view (spec §31) — the Space-scoped audit trail.
  *
  * Lists recent {@link ActivityEvent}s for the current Space via
- * `GET /v1/control/spaces/:id/activity?limit=`. Each row shows the action verb,
+ * `GET /api/v1/spaces/:id/activity?limit=`. Each row shows the action verb,
  * the targeted entity, the actor, and the timestamp. Activity records WHAT
  * happened (names / ids / counts) and never secrets, so metadata is rendered as
  * compact key=value chips.

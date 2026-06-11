@@ -383,7 +383,7 @@ export interface TakosumiOperations {
    */
   readonly installations: InstallationsService;
   /**
-   * Space membership facade backing the account-plane `/v1/control/spaces/:id/
+   * Space membership facade backing the account-plane `/api/v1/spaces/:id/
    * members` surface. Delegates to the membership domain's
    * `MembershipRoleEntitlementService` (`listSpaceMemberships` /
    * `upsertSpaceMembership`); the control routes enforce the role/last-owner
@@ -411,7 +411,7 @@ export interface TakosumiOperations {
   readonly dependencies: DependenciesService;
   /**
    * Lists every Dependency edge in a Space (spec §14). Backs the account-plane
-   * `/v1/control/spaces/:id/graph` projection; delegates to
+   * `/api/v1/spaces/:id/graph` projection; delegates to
    * `dependencies.listBySpace`.
    */
   listDependenciesBySpace(spaceId: string): Promise<readonly Dependency[]>;

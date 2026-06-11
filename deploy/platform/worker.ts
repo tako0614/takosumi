@@ -80,7 +80,7 @@ async function controlPlaneOperationsFor(
 const accountsWorker = createCloudflareWorker({
   deployControlFetch: (env) => deployControlSeam(env).fetch,
   deployControlOperations: (env) => deployControlSeam(env).operations(),
-  // The session-authed `/v1/control/*` dashboard surface (M10) reads the SAME
+  // The session-authed `/api/v1/*` dashboard surface (M10) reads the SAME
   // in-process operations facade the deploy-control proxy uses, adapted to the
   // `ControlPlaneOperations` shape (see `controlPlaneOperationsFor`).
   controlPlaneOperations: (env) => controlPlaneOperationsFor(env),

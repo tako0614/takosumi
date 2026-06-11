@@ -9,10 +9,10 @@
  *
  * The flow runs as four ordered steps, each surfaced so a mid-flow failure is
  * recoverable without restarting from scratch:
- *   1. createSource   -> POST /v1/control/sources
- *   2. syncSource     -> POST /v1/control/sources/:id/sync   (resolves a snapshot)
- *   3. createInstall  -> POST /v1/control/spaces/:id/installations
- *   4. plan           -> POST /v1/control/installations/:id/plan  -> /runs/:id
+ *   1. createSource   -> POST /api/v1/sources
+ *   2. syncSource     -> POST /api/v1/sources/:id/sync   (resolves a snapshot)
+ *   3. createInstall  -> POST /api/v1/spaces/:id/installations
+ *   4. plan           -> POST /api/v1/installations/:id/plan  -> /runs/:id
  *
  * A `source_sync_required` / 409 from createInstallation or plan (the snapshot
  * is not ready yet) is surfaced humanely with a "再同期" retry rather than a raw

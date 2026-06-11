@@ -3,10 +3,10 @@
  * backing surface, conformance M10).
  *
  * The dashboard SPA (served by the platform worker) authenticates with the
- * ACCOUNTS-plane session cookie, not the operator deploy-control bearer. The
- * §30 `/api` deploy-control surface stays operator-bearer-gated; this NEW
- * `/v1/control/*` family is the account-plane namespace the dashboard calls
- * same-origin. Each handler:
+ * ACCOUNTS-plane session cookie, not the operator deploy-control bearer. This
+ * is the edge-public `/api/v1/*` deploy-control surface the dashboard calls
+ * same-origin; the operator-bearer-gated contract is served in-process under
+ * the `/internal/v1` seam. Each handler:
  *
  *   1. requires an authenticated account session (anonymous -> 401), and
  *   2. calls the in-process deploy-control operations facade directly (the same
@@ -443,7 +443,7 @@ export interface ControlPlaneOperations {
   getRunLogs(id: string): Promise<unknown>;
   /**
    * Reads a plan / destroy_plan Run's public cost projection (`GET
-   * /v1/control/runs/:id/cost`). The control surface resolves the Run's owning
+   * /api/v1/runs/:id/cost`). The control surface resolves the Run's owning
    * Space first and space-permission gates before calling this. The returned
    * {@link RunCostInfo} carries only the billing reservation values the
    * controller already computed at plan time (estimated / available credits,
@@ -476,30 +476,13 @@ export interface RunGroupWithRunsLike {
   readonly runs: readonly Run[];
 }
 
-const CONTROL_PREFIX = "/v1/control";
-
 /**
- * True for any path the legacy `/v1/control` dashboard family owns. Retained so
- * `mod.ts` keeps routing the (still-live) `/v1/control/*` surface into
- * {@link handleControlRoute} during the additive `/api/v1` migration window.
+ * True for any path this session-authed control surface owns: the edge-public
+ * {@link API_V1_PREFIX} (`/api/v1`). Used by `mod.ts` to route into
+ * {@link handleControlRoute} before the generic 404.
  */
 export function isControlRoutePath(pathname: string): boolean {
-  return (
-    pathname === CONTROL_PREFIX || pathname.startsWith(`${CONTROL_PREFIX}/`)
-  );
-}
-
-/**
- * The control-surface prefix a path is addressed under, or `undefined` if the
- * path is owned by neither. This dispatcher serves the SAME session-authed
- * surface under two prefixes during the migration: the canonical edge-public
- * {@link API_V1_PREFIX} (`/api/v1`) and the legacy `/v1/control`. The caller
- * slices this prefix off to compute the route `tail`.
- */
-export function controlSurfacePrefix(pathname: string): string | undefined {
-  if (isApiV1Path(pathname)) return API_V1_PREFIX;
-  if (isControlRoutePath(pathname)) return CONTROL_PREFIX;
-  return undefined;
+  return isApiV1Path(pathname);
 }
 
 interface ControlRouteContext {
@@ -550,7 +533,7 @@ function controlPlaneUnavailable(): Response {
 }
 
 /**
- * Single entry point for the `/v1/control/*` family. Authenticates the account
+ * Single entry point for the `/api/v1/*` family. Authenticates the account
  * session ONCE (anonymous -> 401), then dispatches to the matched sub-route.
  * Returns `undefined` only when the path is not owned by this family (so the
  * caller can fall through to its own 404).
@@ -559,8 +542,8 @@ export async function handleControlRoute(
   context: ControlRouteContext,
 ): Promise<Response | undefined> {
   const { request, url, store } = context;
-  const prefix = controlSurfacePrefix(url.pathname);
-  if (!prefix) return undefined;
+  if (!isApiV1Path(url.pathname)) return undefined;
+  const prefix = API_V1_PREFIX;
 
   // The credential-OAuth callback is the ONE control route reached by a
   // top-level CROSS-SITE redirect (dash.cloudflare.com -> this origin). The
@@ -600,7 +583,7 @@ export async function handleControlRoute(
 }
 
 /**
- * True for `GET /v1/control/connections/cloudflare/oauth/callback`. This is the
+ * True for `GET /api/v1/connections/cloudflare/oauth/callback`. This is the
  * only control route reached cross-site, so it is dispatched before the
  * `SameSite=Strict` session-cookie gate and authorizes from the signed OAuth
  * state instead (see {@link handleControlRoute}).
@@ -630,7 +613,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   const method = request.method;
   const segments = tail.split("/").filter(Boolean); // ["spaces", ":id", ...]
 
-  // GET/POST /v1/control/spaces
+  // GET/POST /api/v1/spaces
   if (segments.length === 1 && segments[0] === "spaces") {
     if (method === "GET") {
       return await listSpaces(operations, store, input.session.subject);
@@ -641,7 +624,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     return methodNotAllowed("GET, POST");
   }
 
-  // /v1/control/spaces/:spaceId ; /v1/control/spaces/:spaceId/...
+  // /api/v1/spaces/:spaceId ; /api/v1/spaces/:spaceId/...
   if (segments[0] === "spaces" && segments.length >= 2) {
     const spaceId = decodeURIComponent(segments[1] ?? "");
     const auth = await requireSpaceAccess({
@@ -660,7 +643,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
     const leaf = segments[2];
     if (leaf === "members") {
-      // /v1/control/spaces/:spaceId/members[/:subject]. The Space is already
+      // /api/v1/spaces/:spaceId/members[/:subject]. The Space is already
       // resolved server-side and namespace-gated above; the member handlers add
       // the membership-ROLE gate (list = any member; mutate = owner/admin;
       // role-change + remove = owner-only with a last-owner guard).
@@ -778,7 +761,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /v1/control/installations/:id ; .../plan ; .../destroy-plan ; .../dependencies
+  // /api/v1/installations/:id ; .../plan ; .../destroy-plan ; .../dependencies
   if (segments[0] === "installations" && segments.length >= 2) {
     const installationId = decodeURIComponent(segments[1] ?? "");
     const installation =
@@ -841,7 +824,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /v1/control/install-configs
+  // /api/v1/install-configs
   if (segments.length === 1 && segments[0] === "install-configs") {
     if (method !== "GET") return methodNotAllowed("GET");
     return await listInstallConfigs(
@@ -852,13 +835,13 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     );
   }
 
-  // /v1/control/providers
+  // /api/v1/providers
   if (segments.length === 1 && segments[0] === "providers") {
     if (method !== "GET") return methodNotAllowed("GET");
     return json(await operations.listProviderTemplates());
   }
 
-  // /v1/control/dependencies/:id
+  // /api/v1/dependencies/:id
   if (segments[0] === "dependencies" && segments.length === 2) {
     const dependencyId = decodeURIComponent(segments[1] ?? "");
     if (method !== "DELETE") return methodNotAllowed("DELETE");
@@ -870,7 +853,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     );
   }
 
-  // /v1/control/sources ; /v1/control/sources/:id/sync ; .../snapshots ; .../compatibility-check
+  // /api/v1/sources ; /api/v1/sources/:id/sync ; .../snapshots ; .../compatibility-check
   if (segments[0] === "sources") {
     if (segments.length === 1) {
       if (method === "GET") {
@@ -950,7 +933,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /v1/control/plan-runs/:planRunId/apply — session-authed GUI deploy (§31).
+  // /api/v1/plan-runs/:planRunId/apply — session-authed GUI deploy (§31).
   if (segments[0] === "plan-runs" && segments.length === 3) {
     const planRunId = decodeURIComponent(segments[1] ?? "");
     if (segments[2] !== "apply") return json({ error: "not_found" }, 404);
@@ -964,7 +947,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     );
   }
 
-  // /v1/control/deployments/:deploymentId ; .../rollback-plan — session-authed
+  // /api/v1/deployments/:deploymentId ; .../rollback-plan — session-authed
   // deployment read + rollback (§30 GUI deploy). Each resolves the Deployment to
   // learn its owning Space, then space-permission gates before projecting /
   // mutating. The read returns ONLY the allowlist-projected outputsPublic (no
@@ -993,7 +976,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     return json({ error: "not_found" }, 404);
   }
 
-  // /v1/control/runs/:id ; .../approve ; .../logs ; .../cost
+  // /api/v1/runs/:id ; .../approve ; .../logs ; .../cost
   if (segments[0] === "runs" && segments.length >= 2) {
     const runId = decodeURIComponent(segments[1] ?? "");
     const run = await operations.getRun(runId);
@@ -1031,7 +1014,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /v1/control/run-groups/:id ; .../approve
+  // /api/v1/run-groups/:id ; .../approve
   if (segments[0] === "run-groups" && segments.length >= 2) {
     const runGroupId = decodeURIComponent(segments[1] ?? "");
     const existing = await operations.runGroups.getRunGroup(runGroupId);
@@ -1053,7 +1036,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /v1/control/connections?spaceId=  (GET list / POST create)
+  // /api/v1/connections?spaceId=  (GET list / POST create)
   if (segments.length === 1 && segments[0] === "connections") {
     if (method === "GET") {
       return await listControlConnections(
@@ -1074,7 +1057,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     return methodNotAllowed("GET, POST");
   }
 
-  // /v1/control/connections/cloudflare/oauth/start — credential OAuth helper
+  // /api/v1/connections/cloudflare/oauth/start — credential OAuth helper
   // (present only when the operator wired the upstream client). The cookie-
   // authenticated `start` embeds the authenticated subject into the signed
   // OAuth state. The matching `callback` is handled BEFORE the session gate in
@@ -1098,7 +1081,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /v1/control/output-shares ; /v1/control/output-shares/:id/{approve,revoke}
+  // /api/v1/output-shares ; /api/v1/output-shares/:id/{approve,revoke}
   if (segments[0] === "output-shares") {
     if (segments.length === 1) {
       if (method === "GET") {
@@ -1143,7 +1126,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /v1/control/operator-connection-defaults?spaceId=
+  // /api/v1/operator-connection-defaults?spaceId=
   if (segments.length === 1 && segments[0] === "operator-connection-defaults") {
     if (method !== "GET") return methodNotAllowed("GET");
     return await listOperatorConnectionDefaults(
@@ -2453,7 +2436,7 @@ async function listOperatorConnectionDefaults(
 }
 
 /**
- * `GET /v1/control/spaces/:spaceId/managed-defaults` — the session-surface read
+ * `GET /api/v1/spaces/:spaceId/managed-defaults` — the session-surface read
  * that answers "can this instance's managed default (operator key) cover an
  * install with NO Space connection configured?" (spec §7.1 `takosumi_managed`
  * default). The dashboard uses it to decide whether to nudge the user to connect
