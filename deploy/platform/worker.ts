@@ -30,7 +30,7 @@ import {
   driftSweep,
   type DriftSweepOperations,
 } from "../../worker/src/scheduled/drift.ts";
-import { handleCfProxyRequest } from "../../worker/src/cf_proxy_worker.ts";
+import { handleCfProxyRequest } from "../../providers/cloudflare/hosting/cf_proxy_worker.ts";
 import { constantTimeEqualsString } from "../../src/service/shared/constant_time.ts";
 
 export { CoordinationObject, OpenTofuRunnerObject };

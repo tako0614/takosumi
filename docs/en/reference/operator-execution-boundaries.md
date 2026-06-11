@@ -132,7 +132,7 @@ Workers for Platforms is not the OpenTofu runner. It is the tenant / user Worker
 The outbound Worker is where tenant Worker egress passes through operator policy. When an execution boundary has a
 `networkPolicy`, the outbound Worker must enforce the same allowlist.
 
-`worker/src/wfp_dispatch_worker.ts` is the ingress dispatch scaffold and does not implement egress allowlist enforcement. Treat `outboundWorker.enforceNetworkPolicy: true` as satisfied only when the operator can show live evidence that the dispatch namespace has an outbound Worker configured and that the outbound Worker enforces the allowlist.
+`providers/cloudflare/hosting/wfp_dispatch_worker.ts` is the ingress dispatch scaffold and does not implement egress allowlist enforcement. Treat `outboundWorker.enforceNetworkPolicy: true` as satisfied only when the operator can show live evidence that the dispatch namespace has an outbound Worker configured and that the outbound Worker enforces the allowlist.
 
 ## Cloudflare Containers
 
