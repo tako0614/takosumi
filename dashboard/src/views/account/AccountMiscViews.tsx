@@ -942,7 +942,7 @@ function SignedInAs(props: { name?: string; sub: string; email?: string }) {
  * Notifications view (`/notifications`). A plain-language activity feed for the
  * signed-in person, aggregated across every Space they belong to. It reads the
  * Space-scoped audit trail the control surface already exposes
- * (`GET /v1/control/spaces/:id/activity`, via the `listActivity` client fn) for
+ * (`GET /api/v1/spaces/:id/activity`, via the `listActivity` client fn) for
  * each of the visitor's Spaces, merges the events, and shows them newest-first.
  *
  * Unlike the operator-facing ControlActivityView (which shows raw action verbs

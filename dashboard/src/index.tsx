@@ -87,7 +87,7 @@ const ConnectionsView = lazy(() =>
 );
 
 // Control-plane views (spec §31, conformance M10) — session-authed dashboard
-// over the `/v1/control/*` account-plane pass-through routes.
+// over the `/api/v1/*` account-plane pass-through routes.
 const ControlInstallationsView = lazy(() =>
   import("./views/control/ControlInstallationsView.tsx")
 );

@@ -1,9 +1,9 @@
 /**
  * Space selector (spec §31) — the header control listing deploy-control Spaces.
  *
- * Lists Spaces via `GET /v1/control/spaces`, reflects the shared current-space
+ * Lists Spaces via `GET /api/v1/spaces`, reflects the shared current-space
  * state (space-state.ts, persisted in localStorage like the rest of the
- * dashboard), and offers "+ New Space" (`POST /v1/control/spaces`). Rendered at
+ * dashboard), and offers "+ New Space" (`POST /api/v1/spaces`). Rendered at
  * the top of every control view so the operator can switch Spaces from anywhere
  * in the §31 surface.
  */

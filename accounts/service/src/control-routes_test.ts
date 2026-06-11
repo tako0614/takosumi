@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 
 import {
   type ControlPlaneOperations,
-  controlSurfacePrefix,
   handleControlRoute,
   isControlRoutePath,
 } from "./control-routes.ts";
@@ -651,29 +650,18 @@ function request(
   };
 }
 
-// --- isControlRoutePath ----------------------------------------------------
+// --- /api/v1 edge surface ownership + session dispatcher -------------------
 
-test("isControlRoutePath owns /v1/control and its subtree only", () => {
-  expect(isControlRoutePath("/v1/control")).toEqual(true);
-  expect(isControlRoutePath("/v1/control/spaces")).toEqual(true);
-  expect(isControlRoutePath("/v1/control/runs/plan_1/logs")).toEqual(true);
-  expect(isControlRoutePath("/v1/controlx")).toEqual(false);
+test("isControlRoutePath owns /api/v1 and its subtree only", () => {
+  expect(isControlRoutePath("/api/v1")).toEqual(true);
+  expect(isControlRoutePath("/api/v1/spaces")).toEqual(true);
+  expect(isControlRoutePath("/api/v1/runs/plan_1/logs")).toEqual(true);
+  expect(isControlRoutePath("/api/v1x")).toEqual(false);
   expect(isControlRoutePath("/v1/installations")).toEqual(false);
+  expect(isControlRoutePath("/v1/account/session/me")).toEqual(false);
 });
 
-// --- /api/v1 edge surface (additive; same session dispatcher) --------------
-
-test("controlSurfacePrefix resolves both the edge /api/v1 and legacy /v1/control", () => {
-  expect(controlSurfacePrefix("/api/v1/spaces")).toEqual("/api/v1");
-  expect(controlSurfacePrefix("/api/v1")).toEqual("/api/v1");
-  expect(controlSurfacePrefix("/v1/control/spaces")).toEqual("/v1/control");
-  expect(controlSurfacePrefix("/v1/control")).toEqual("/v1/control");
-  expect(controlSurfacePrefix("/api/v1x")).toBeUndefined();
-  expect(controlSurfacePrefix("/v1/installations")).toBeUndefined();
-  expect(controlSurfacePrefix("/v1/account/session/me")).toBeUndefined();
-});
-
-test("GET /api/v1/spaces serves the same session surface as /v1/control/spaces", async () => {
+test("GET /api/v1/spaces serves the session control surface", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -690,7 +678,7 @@ test("GET /api/v1/spaces serves the same session surface as /v1/control/spaces",
   expect(operations.calls.listSpaces).toBeDefined();
 });
 
-test("anonymous /api/v1 requests are 401 (same gate as /v1/control)", async () => {
+test("anonymous /api/v1 requests are 401", async () => {
   const store = new InMemoryAccountsStore();
   const operations = fakeOperations();
   const { request: req, url } = request("GET", "/api/v1/spaces");
@@ -729,33 +717,33 @@ test("anonymous control requests are 401 across the family", async () => {
   const store = new InMemoryAccountsStore();
   const operations = fakeOperations();
   const paths: Array<[string, string]> = [
-    ["GET", "/v1/control/spaces"],
-    ["POST", "/v1/control/spaces"],
-    ["GET", "/v1/control/spaces/space_a/installations"],
-    ["GET", "/v1/control/spaces/space_a/graph"],
-    ["GET", "/v1/control/spaces/space_a/activity"],
-    ["GET", "/v1/control/spaces/space_a/backups"],
-    ["POST", "/v1/control/spaces/space_a/backups"],
-    ["GET", "/v1/control/spaces/space_a/billing"],
-    ["GET", "/v1/control/spaces/space_a/usage"],
-    ["GET", "/v1/control/spaces/space_a/credit-reservations"],
-    ["POST", "/v1/control/spaces/space_a/credits/top-up"],
-    ["POST", "/v1/control/spaces/space_a/subscription/change"],
-    ["POST", "/v1/control/spaces/space_a/plan-update"],
-    ["GET", "/v1/control/installations/inst_1"],
-    ["GET", "/v1/control/installations/inst_1/deployment-profile"],
-    ["POST", "/v1/control/installations/inst_1/plan"],
-    ["POST", "/v1/control/installations/inst_1/backups"],
-    ["GET", "/v1/control/install-configs"],
-    ["GET", "/v1/control/providers"],
-    ["POST", "/v1/control/sources/src_x/compatibility-check"],
-    ["POST", "/v1/control/plan-runs/plan_1/apply"],
-    ["GET", "/v1/control/runs/plan_1"],
-    ["GET", "/v1/control/runs/plan_1/cost"],
-    ["GET", "/v1/control/run-groups/rg_1"],
-    ["GET", "/v1/control/connections?spaceId=space_a"],
-    ["GET", "/v1/control/operator-connection-defaults"],
-    ["GET", "/v1/control/spaces/space_a/managed-defaults"],
+    ["GET", "/api/v1/spaces"],
+    ["POST", "/api/v1/spaces"],
+    ["GET", "/api/v1/spaces/space_a/installations"],
+    ["GET", "/api/v1/spaces/space_a/graph"],
+    ["GET", "/api/v1/spaces/space_a/activity"],
+    ["GET", "/api/v1/spaces/space_a/backups"],
+    ["POST", "/api/v1/spaces/space_a/backups"],
+    ["GET", "/api/v1/spaces/space_a/billing"],
+    ["GET", "/api/v1/spaces/space_a/usage"],
+    ["GET", "/api/v1/spaces/space_a/credit-reservations"],
+    ["POST", "/api/v1/spaces/space_a/credits/top-up"],
+    ["POST", "/api/v1/spaces/space_a/subscription/change"],
+    ["POST", "/api/v1/spaces/space_a/plan-update"],
+    ["GET", "/api/v1/installations/inst_1"],
+    ["GET", "/api/v1/installations/inst_1/deployment-profile"],
+    ["POST", "/api/v1/installations/inst_1/plan"],
+    ["POST", "/api/v1/installations/inst_1/backups"],
+    ["GET", "/api/v1/install-configs"],
+    ["GET", "/api/v1/providers"],
+    ["POST", "/api/v1/sources/src_x/compatibility-check"],
+    ["POST", "/api/v1/plan-runs/plan_1/apply"],
+    ["GET", "/api/v1/runs/plan_1"],
+    ["GET", "/api/v1/runs/plan_1/cost"],
+    ["GET", "/api/v1/run-groups/rg_1"],
+    ["GET", "/api/v1/connections?spaceId=space_a"],
+    ["GET", "/api/v1/operator-connection-defaults"],
+    ["GET", "/api/v1/spaces/space_a/managed-defaults"],
   ];
   for (const [method, path] of paths) {
     const { request: req, url } = request(method, path);
@@ -777,7 +765,7 @@ test("anonymous control requests are 401 across the family", async () => {
 test("control routes 503 when no operations facade is wired", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  const { request: req, url } = request("GET", "/v1/control/spaces", {
+  const { request: req, url } = request("GET", "/api/v1/spaces", {
     cookie,
   });
   const response = await handleControlRoute({ request: req, url, store });
@@ -786,11 +774,11 @@ test("control routes 503 when no operations facade is wired", async () => {
 
 // --- Session happy paths ---------------------------------------------------
 
-test("GET /v1/control/spaces returns spaces for a session", async () => {
+test("GET /api/v1/spaces returns spaces for a session", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const { request: req, url } = request("GET", "/v1/control/spaces", {
+  const { request: req, url } = request("GET", "/api/v1/spaces", {
     cookie,
   });
   const response = await handleControlRoute({
@@ -805,13 +793,13 @@ test("GET /v1/control/spaces returns spaces for a session", async () => {
   expect(operations.calls.listSpaces).toBeDefined();
 });
 
-test("GET /v1/control/spaces/:id/billing returns billing settings and balance", async () => {
+test("GET /api/v1/spaces/:id/billing returns billing settings and balance", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/billing",
+    "/api/v1/spaces/space_a/billing",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -833,13 +821,13 @@ test("GET /v1/control/spaces/:id/billing returns billing settings and balance", 
   expect(operations.calls.getSpaceBilling).toEqual(["space_a"]);
 });
 
-test("GET /v1/control/spaces/:id/usage returns usage events", async () => {
+test("GET /api/v1/spaces/:id/usage returns usage events", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/usage",
+    "/api/v1/spaces/space_a/usage",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -854,13 +842,13 @@ test("GET /v1/control/spaces/:id/usage returns usage events", async () => {
   expect(operations.calls.listSpaceUsage).toEqual(["space_a"]);
 });
 
-test("GET /v1/control/spaces/:id/credit-reservations returns reservation history", async () => {
+test("GET /api/v1/spaces/:id/credit-reservations returns reservation history", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/credit-reservations",
+    "/api/v1/spaces/space_a/credit-reservations",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -875,13 +863,13 @@ test("GET /v1/control/spaces/:id/credit-reservations returns reservation history
   expect(operations.calls.listSpaceCreditReservations).toEqual(["space_a"]);
 });
 
-test("GET /v1/control/spaces/:id/backups lists Space backups", async () => {
+test("GET /api/v1/spaces/:id/backups lists Space backups", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/backups",
+    "/api/v1/spaces/space_a/backups",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -896,13 +884,13 @@ test("GET /v1/control/spaces/:id/backups lists Space backups", async () => {
   expect(operations.calls.listBackups).toEqual(["space_a"]);
 });
 
-test("POST /v1/control/spaces/:id/backups creates a Space backup", async () => {
+test("POST /api/v1/spaces/:id/backups creates a Space backup", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/backups",
+    "/api/v1/spaces/space_a/backups",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -917,13 +905,13 @@ test("POST /v1/control/spaces/:id/backups creates a Space backup", async () => {
   expect(operations.calls.createBackup).toEqual([{ spaceId: "space_a" }]);
 });
 
-test("POST /v1/control/spaces/:id/credits/top-up forwards credit amount", async () => {
+test("POST /api/v1/spaces/:id/credits/top-up forwards credit amount", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/credits/top-up",
+    "/api/v1/spaces/space_a/credits/top-up",
     { cookie, body: { credits: 50 } },
   );
   const response = await handleControlRoute({
@@ -943,7 +931,7 @@ test("POST /v1/control/spaces/:id/credits/top-up forwards credit amount", async 
   ]);
 });
 
-test("POST /v1/control/spaces/:id/subscription/change forwards billing settings", async () => {
+test("POST /api/v1/spaces/:id/subscription/change forwards billing settings", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -954,7 +942,7 @@ test("POST /v1/control/spaces/:id/subscription/change forwards billing settings"
   };
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/subscription/change",
+    "/api/v1/spaces/space_a/subscription/change",
     { cookie, body: { billingSettings } },
   );
   const response = await handleControlRoute({
@@ -974,7 +962,7 @@ test("POST /v1/control/spaces/:id/subscription/change forwards billing settings"
   ]);
 });
 
-test("GET /v1/control/spaces filters out spaces the session cannot access", async () => {
+test("GET /api/v1/spaces filters out spaces the session cannot access", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const visible = {
@@ -1007,7 +995,7 @@ test("GET /v1/control/spaces filters out spaces the session cannot access", asyn
       }),
     },
   });
-  const { request: req, url } = request("GET", "/v1/control/spaces", {
+  const { request: req, url } = request("GET", "/api/v1/spaces", {
     cookie,
   });
   const response = await handleControlRoute({
@@ -1021,11 +1009,11 @@ test("GET /v1/control/spaces filters out spaces the session cannot access", asyn
   expect(body.spaces.map((space) => space.id)).toEqual(["space_a"]);
 });
 
-test("PATCH /v1/control/spaces/:id updates display name and policy after Space access", async () => {
+test("PATCH /api/v1/spaces/:id updates display name and policy after Space access", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const { request: req, url } = request("PATCH", "/v1/control/spaces/space_a", {
+  const { request: req, url } = request("PATCH", "/api/v1/spaces/space_a", {
     cookie,
     body: {
       displayName: "Shota Lab",
@@ -1056,11 +1044,11 @@ test("PATCH /v1/control/spaces/:id updates display name and policy after Space a
   ]);
 });
 
-test("PATCH /v1/control/spaces/:id rejects policy that is not a JSON object", async () => {
+test("PATCH /api/v1/spaces/:id rejects policy that is not a JSON object", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const { request: req, url } = request("PATCH", "/v1/control/spaces/space_a", {
+  const { request: req, url } = request("PATCH", "/api/v1/spaces/space_a", {
     cookie,
     body: { policy: [] },
   });
@@ -1102,7 +1090,7 @@ test("space-scoped control route rejects a non-member session before dispatch", 
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_b/installations",
+    "/api/v1/spaces/space_b/installations",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1115,7 +1103,7 @@ test("space-scoped control route rejects a non-member session before dispatch", 
   expect(operations.calls.listInstallations).toBeUndefined();
 });
 
-test("PATCH /v1/control/spaces/:id rejects a non-member session before dispatch", async () => {
+test("PATCH /api/v1/spaces/:id rejects a non-member session before dispatch", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -1131,7 +1119,7 @@ test("PATCH /v1/control/spaces/:id rejects a non-member session before dispatch"
       }),
     },
   });
-  const { request: req, url } = request("PATCH", "/v1/control/spaces/space_b", {
+  const { request: req, url } = request("PATCH", "/api/v1/spaces/space_b", {
     cookie,
     body: { displayName: "Nope" },
   });
@@ -1196,7 +1184,7 @@ test("installation-scoped control route rejects when its Space is inaccessible",
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/installations/inst_other/plan",
+    "/api/v1/installations/inst_other/plan",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1209,7 +1197,7 @@ test("installation-scoped control route rejects when its Space is inaccessible",
   expect(operations.calls.createInstallationPlan).toBeUndefined();
 });
 
-test("POST /v1/control/spaces/:id/installations rejects a Source from another inaccessible Space", async () => {
+test("POST /api/v1/spaces/:id/installations rejects a Source from another inaccessible Space", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -1248,7 +1236,7 @@ test("POST /v1/control/spaces/:id/installations rejects a Source from another in
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/installations",
+    "/api/v1/spaces/space_a/installations",
     {
       cookie,
       body: {
@@ -1269,7 +1257,7 @@ test("POST /v1/control/spaces/:id/installations rejects a Source from another in
   expect(operations.calls.createInstallation).toBeUndefined();
 });
 
-test("POST /v1/control/sources rejects an authConnectionId from another inaccessible Space", async () => {
+test("POST /api/v1/sources rejects an authConnectionId from another inaccessible Space", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -1307,7 +1295,7 @@ test("POST /v1/control/sources rejects an authConnectionId from another inaccess
       updatedAt: "2026-01-01T00:00:00Z",
     }),
   });
-  const { request: req, url } = request("POST", "/v1/control/sources", {
+  const { request: req, url } = request("POST", "/api/v1/sources", {
     cookie,
     body: {
       spaceId: "space_a",
@@ -1326,7 +1314,7 @@ test("POST /v1/control/sources rejects an authConnectionId from another inaccess
   expect(operations.calls.createSource).toBeUndefined();
 });
 
-test("POST /v1/control/output-shares rejects a producer from another inaccessible Space", async () => {
+test("POST /api/v1/output-shares rejects a producer from another inaccessible Space", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -1375,7 +1363,7 @@ test("POST /v1/control/output-shares rejects a producer from another inaccessibl
       getDeploymentProfileByInstallation: async () => undefined,
     },
   });
-  const { request: req, url } = request("POST", "/v1/control/output-shares", {
+  const { request: req, url } = request("POST", "/api/v1/output-shares", {
     cookie,
     body: {
       fromSpaceId: "space_a",
@@ -1394,7 +1382,7 @@ test("POST /v1/control/output-shares rejects a producer from another inaccessibl
   expect(operations.calls.createOutputShare).toBeUndefined();
 });
 
-test("GET /v1/control/operator-connection-defaults rejects an inaccessible Space before dispatch", async () => {
+test("GET /api/v1/operator-connection-defaults rejects an inaccessible Space before dispatch", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -1422,7 +1410,7 @@ test("GET /v1/control/operator-connection-defaults rejects an inaccessible Space
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/operator-connection-defaults?spaceId=space_b",
+    "/api/v1/operator-connection-defaults?spaceId=space_b",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1435,7 +1423,7 @@ test("GET /v1/control/operator-connection-defaults rejects an inaccessible Space
   expect(operations.calls.listOperatorConnectionDefaults).toBeUndefined();
 });
 
-test("GET /v1/control/operator-connection-defaults never echoes a connection id (session surface)", async () => {
+test("GET /api/v1/operator-connection-defaults never echoes a connection id (session surface)", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // The session surface is reachable by ANY Space member, so it must project
@@ -1462,7 +1450,7 @@ test("GET /v1/control/operator-connection-defaults never echoes a connection id 
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/operator-connection-defaults?spaceId=space_a",
+    "/api/v1/operator-connection-defaults?spaceId=space_a",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1489,7 +1477,7 @@ test("GET /v1/control/operator-connection-defaults never echoes a connection id 
 
 // --- Managed-default status (operator key availability) --------------------
 
-test("GET /v1/control/spaces/:id/managed-defaults reports available=true with covered providers", async () => {
+test("GET /api/v1/spaces/:id/managed-defaults reports available=true with covered providers", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -1503,7 +1491,7 @@ test("GET /v1/control/spaces/:id/managed-defaults reports available=true with co
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/managed-defaults",
+    "/api/v1/spaces/space_a/managed-defaults",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1521,7 +1509,7 @@ test("GET /v1/control/spaces/:id/managed-defaults reports available=true with co
   expect(body.capabilities).toEqual(["cloudflare"]);
 });
 
-test("GET /v1/control/spaces/:id/managed-defaults reaches the managed-default facade", async () => {
+test("GET /api/v1/spaces/:id/managed-defaults reaches the managed-default facade", async () => {
   // The base fake records every facade call; with no `connections` override the
   // recording `getManagedDefaultStatus` is in place, so a successful dispatch
   // leaves its call recorded (and never touches the bearer-only
@@ -1531,7 +1519,7 @@ test("GET /v1/control/spaces/:id/managed-defaults reaches the managed-default fa
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/managed-defaults",
+    "/api/v1/spaces/space_a/managed-defaults",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1545,7 +1533,7 @@ test("GET /v1/control/spaces/:id/managed-defaults reaches the managed-default fa
   expect(operations.calls.listOperatorConnectionDefaults).toBeUndefined();
 });
 
-test("GET /v1/control/spaces/:id/managed-defaults reports available=false when no operator default", async () => {
+test("GET /api/v1/spaces/:id/managed-defaults reports available=false when no operator default", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -1559,7 +1547,7 @@ test("GET /v1/control/spaces/:id/managed-defaults reports available=false when n
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/managed-defaults",
+    "/api/v1/spaces/space_a/managed-defaults",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1577,7 +1565,7 @@ test("GET /v1/control/spaces/:id/managed-defaults reports available=false when n
   expect(body.capabilities).toEqual([]);
 });
 
-test("GET /v1/control/spaces/:id/managed-defaults never echoes a connection id or secret", async () => {
+test("GET /api/v1/spaces/:id/managed-defaults never echoes a connection id or secret", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // The facade is the only thing that can see the operator default's
@@ -1603,7 +1591,7 @@ test("GET /v1/control/spaces/:id/managed-defaults never echoes a connection id o
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/managed-defaults",
+    "/api/v1/spaces/space_a/managed-defaults",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1621,7 +1609,7 @@ test("GET /v1/control/spaces/:id/managed-defaults never echoes a connection id o
   expect(Object.keys(body).sort()).toEqual(["available", "capabilities"]);
 });
 
-test("GET /v1/control/spaces/:id/managed-defaults rejects an inaccessible Space before dispatch", async () => {
+test("GET /api/v1/spaces/:id/managed-defaults rejects an inaccessible Space before dispatch", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -1649,7 +1637,7 @@ test("GET /v1/control/spaces/:id/managed-defaults rejects an inaccessible Space 
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_b/managed-defaults",
+    "/api/v1/spaces/space_b/managed-defaults",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1695,7 +1683,7 @@ test("accounts-ledger Space owner can access a Space even when ownerUserId is no
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_ledger/installations",
+    "/api/v1/spaces/space_ledger/installations",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1708,11 +1696,11 @@ test("accounts-ledger Space owner can access a Space even when ownerUserId is no
   expect(operations.calls.listInstallations?.[0]).toEqual("space_ledger");
 });
 
-test("POST /v1/control/spaces uses the session subject as ownerUserId", async () => {
+test("POST /api/v1/spaces uses the session subject as ownerUserId", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie, subject } = seedSession(store);
   const operations = fakeOperations();
-  const { request: req, url } = request("POST", "/v1/control/spaces", {
+  const { request: req, url } = request("POST", "/api/v1/spaces", {
     cookie,
     body: { handle: "myspace", displayName: "My Space", type: "personal" },
   });
@@ -1731,13 +1719,13 @@ test("POST /v1/control/spaces uses the session subject as ownerUserId", async ()
   expect(createCall.handle).toEqual("myspace");
 });
 
-test("GET /v1/control/spaces/:id/installations lists installations", async () => {
+test("GET /api/v1/spaces/:id/installations lists installations", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/installations",
+    "/api/v1/spaces/space_a/installations",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1754,13 +1742,13 @@ test("GET /v1/control/spaces/:id/installations lists installations", async () =>
   expect(operations.calls.listInstallations?.[0]).toEqual("space_a");
 });
 
-test("POST /v1/control/spaces/:id/installations creates an installation", async () => {
+test("POST /api/v1/spaces/:id/installations creates an installation", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/installations",
+    "/api/v1/spaces/space_a/installations",
     {
       cookie,
       body: {
@@ -1788,13 +1776,13 @@ test("POST /v1/control/spaces/:id/installations creates an installation", async 
   expect(createCall.spaceId).toEqual("space_a");
 });
 
-test("GET /v1/control/spaces/:id/graph projects nodes + edges", async () => {
+test("GET /api/v1/spaces/:id/graph projects nodes + edges", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/graph",
+    "/api/v1/spaces/space_a/graph",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1818,13 +1806,13 @@ test("GET /v1/control/spaces/:id/graph projects nodes + edges", async () => {
   expect(body.edges[0]?.producerInstallationId).toEqual("inst_1");
 });
 
-test("GET /v1/control/installations/:id reads one installation", async () => {
+test("GET /api/v1/installations/:id reads one installation", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/v1/control/installations/inst_1",
+    "/api/v1/installations/inst_1",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1841,13 +1829,13 @@ test("GET /v1/control/installations/:id reads one installation", async () => {
   expect(operations.calls.getInstallation?.[0]).toEqual("inst_1");
 });
 
-test("POST /v1/control/installations/:id/backups creates a backup for the Installation Space", async () => {
+test("POST /api/v1/installations/:id/backups creates a backup for the Installation Space", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "POST",
-    "/v1/control/installations/inst_1/backups",
+    "/api/v1/installations/inst_1/backups",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1863,13 +1851,13 @@ test("POST /v1/control/installations/:id/backups creates a backup for the Instal
   expect(operations.calls.createBackup).toEqual([{ spaceId: "space_a" }]);
 });
 
-test("GET /v1/control/installations/:id/deployment-profile reads bindings", async () => {
+test("GET /api/v1/installations/:id/deployment-profile reads bindings", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/v1/control/installations/inst_1/deployment-profile",
+    "/api/v1/installations/inst_1/deployment-profile",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1889,13 +1877,13 @@ test("GET /v1/control/installations/:id/deployment-profile reads bindings", asyn
   ]);
 });
 
-test("PUT /v1/control/installations/:id/deployment-profile saves bindings", async () => {
+test("PUT /api/v1/installations/:id/deployment-profile saves bindings", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "PUT",
-    "/v1/control/installations/inst_1/deployment-profile",
+    "/api/v1/installations/inst_1/deployment-profile",
     {
       cookie,
       body: {
@@ -1941,13 +1929,13 @@ test("PUT /v1/control/installations/:id/deployment-profile saves bindings", asyn
   expect(saved.bindings[1]?.values?.bucket).toEqual("manual-bucket");
 });
 
-test("POST /v1/control/installations/:id/plan returns 201", async () => {
+test("POST /api/v1/installations/:id/plan returns 201", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "POST",
-    "/v1/control/installations/inst_1/plan",
+    "/api/v1/installations/inst_1/plan",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1960,13 +1948,13 @@ test("POST /v1/control/installations/:id/plan returns 201", async () => {
   expect(operations.calls.createInstallationPlan?.[0]).toEqual("inst_1");
 });
 
-test("POST /v1/control/installations/:id/destroy-plan returns 201", async () => {
+test("POST /api/v1/installations/:id/destroy-plan returns 201", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "POST",
-    "/v1/control/installations/inst_1/destroy-plan",
+    "/api/v1/installations/inst_1/destroy-plan",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1979,13 +1967,13 @@ test("POST /v1/control/installations/:id/destroy-plan returns 201", async () => 
   expect(operations.calls.createInstallationDestroyPlan?.[0]).toEqual("inst_1");
 });
 
-test("POST /v1/control/installations/:id/dependencies derives spaceId from the consumer", async () => {
+test("POST /api/v1/installations/:id/dependencies derives spaceId from the consumer", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "POST",
-    "/v1/control/installations/inst_2/dependencies",
+    "/api/v1/installations/inst_2/dependencies",
     {
       cookie,
       body: {
@@ -2013,13 +2001,13 @@ test("POST /v1/control/installations/:id/dependencies derives spaceId from the c
   expect(dep.visibility).toEqual("space");
 });
 
-test("DELETE /v1/control/dependencies/:id returns 204", async () => {
+test("DELETE /api/v1/dependencies/:id returns 204", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "DELETE",
-    "/v1/control/dependencies/dep_1",
+    "/api/v1/dependencies/dep_1",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -2032,13 +2020,13 @@ test("DELETE /v1/control/dependencies/:id returns 204", async () => {
   expect(operations.calls.deleteDependency?.[0]).toEqual("dep_1");
 });
 
-test("GET /v1/control/install-configs merges official + scoped", async () => {
+test("GET /api/v1/install-configs merges official + scoped", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/v1/control/install-configs?spaceId=space_a",
+    "/api/v1/install-configs?spaceId=space_a",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -2064,7 +2052,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
 
-  const missing = request("GET", "/v1/control/sources", { cookie });
+  const missing = request("GET", "/api/v1/sources", { cookie });
   const missingResp = await handleControlRoute({
     request: missing.request,
     url: missing.url,
@@ -2073,7 +2061,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   });
   expect(missingResp?.status).toEqual(400);
 
-  const list = request("GET", "/v1/control/sources?spaceId=space_a", {
+  const list = request("GET", "/api/v1/sources?spaceId=space_a", {
     cookie,
   });
   const listResp = await handleControlRoute({
@@ -2085,7 +2073,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   expect(listResp?.status).toEqual(200);
   expect(operations.calls.listSources?.[0]).toEqual("space_a");
 
-  const create = request("POST", "/v1/control/sources", {
+  const create = request("POST", "/api/v1/sources", {
     cookie,
     body: {
       spaceId: "space_a",
@@ -2106,7 +2094,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
       .authConnectionId,
   ).toEqual("conn_git");
 
-  const sync = request("POST", "/v1/control/sources/src_x/sync", { cookie });
+  const sync = request("POST", "/api/v1/sources/src_x/sync", { cookie });
   const syncResp = await handleControlRoute({
     request: sync.request,
     url: sync.url,
@@ -2116,7 +2104,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   expect(syncResp?.status).toEqual(201);
   expect(operations.calls.createSourceSync?.[0]).toEqual("src_x");
 
-  const snapshots = request("GET", "/v1/control/sources/src_x/snapshots", {
+  const snapshots = request("GET", "/api/v1/sources/src_x/snapshots", {
     cookie,
   });
   const snapshotsResp = await handleControlRoute({
@@ -2130,7 +2118,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
 
   const compatibility = request(
     "POST",
-    "/v1/control/sources/src_x/compatibility-check",
+    "/api/v1/sources/src_x/compatibility-check",
     {
       cookie,
       body: { sourceSnapshotId: "snap_1" },
@@ -2153,7 +2141,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   // against its own bounded allowlist (without widening the global default).
   const curated = request(
     "POST",
-    "/v1/control/sources/src_x/compatibility-check",
+    "/api/v1/sources/src_x/compatibility-check",
     {
       cookie,
       body: { sourceSnapshotId: "snap_1", installConfigId: "cfg-official-talk" },
@@ -2177,7 +2165,7 @@ test("Providers: templates are public to session", async () => {
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
 
-  const providers = request("GET", "/v1/control/providers", { cookie });
+  const providers = request("GET", "/api/v1/providers", { cookie });
   const providersResp = await handleControlRoute({
     request: providers.request,
     url: providers.url,
@@ -2194,7 +2182,7 @@ test("Runs: GET run, approve (session subject actor), logs", async () => {
   const { cookie, subject } = seedSession(store);
   const operations = fakeOperations();
 
-  const get = request("GET", "/v1/control/runs/plan_1", { cookie });
+  const get = request("GET", "/api/v1/runs/plan_1", { cookie });
   const getResp = await handleControlRoute({
     request: get.request,
     url: get.url,
@@ -2203,7 +2191,7 @@ test("Runs: GET run, approve (session subject actor), logs", async () => {
   });
   expect(getResp?.status).toEqual(200);
 
-  const approve = request("POST", "/v1/control/runs/plan_1/approve", {
+  const approve = request("POST", "/api/v1/runs/plan_1/approve", {
     cookie,
     body: { approvedBy: "spoofed_actor", reason: "reviewed plan" },
   });
@@ -2223,7 +2211,7 @@ test("Runs: GET run, approve (session subject actor), logs", async () => {
     reason: "reviewed plan",
   });
 
-  const logs = request("GET", "/v1/control/runs/plan_1/logs", { cookie });
+  const logs = request("GET", "/api/v1/runs/plan_1/logs", { cookie });
   const logsResp = await handleControlRoute({
     request: logs.request,
     url: logs.url,
@@ -2238,7 +2226,7 @@ test("Runs: GET cost surfaces the public credit-shortfall projection (space-gate
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
 
-  const cost = request("GET", "/v1/control/runs/plan_1/cost", { cookie });
+  const cost = request("GET", "/api/v1/runs/plan_1/cost", { cookie });
   const costResp = await handleControlRoute({
     request: cost.request,
     url: cost.url,
@@ -2276,7 +2264,7 @@ test("Runs: GET cost is method-gated to GET", async () => {
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
 
-  const post = request("POST", "/v1/control/runs/plan_1/cost", { cookie });
+  const post = request("POST", "/api/v1/runs/plan_1/cost", { cookie });
   const postResp = await handleControlRoute({
     request: post.request,
     url: post.url,
@@ -2292,7 +2280,7 @@ test("RunGroups: plan-update, get, approve", async () => {
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
 
-  const update = request("POST", "/v1/control/spaces/space_a/plan-update", {
+  const update = request("POST", "/api/v1/spaces/space_a/plan-update", {
     cookie,
   });
   const updateResp = await handleControlRoute({
@@ -2304,7 +2292,7 @@ test("RunGroups: plan-update, get, approve", async () => {
   expect(updateResp?.status).toEqual(201);
   expect(operations.calls.createSpaceUpdate?.[0]).toEqual("space_a");
 
-  const get = request("GET", "/v1/control/run-groups/rg_1", { cookie });
+  const get = request("GET", "/api/v1/run-groups/rg_1", { cookie });
   const getResp = await handleControlRoute({
     request: get.request,
     url: get.url,
@@ -2313,7 +2301,7 @@ test("RunGroups: plan-update, get, approve", async () => {
   });
   expect(getResp?.status).toEqual(200);
 
-  const approve = request("POST", "/v1/control/run-groups/rg_1/approve", {
+  const approve = request("POST", "/api/v1/run-groups/rg_1/approve", {
     cookie,
   });
   const approveResp = await handleControlRoute({
@@ -2330,7 +2318,7 @@ test("Connections: requires spaceId; operator-connection-defaults is Space-gated
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
 
-  const missing = request("GET", "/v1/control/connections", { cookie });
+  const missing = request("GET", "/api/v1/connections", { cookie });
   const missingResp = await handleControlRoute({
     request: missing.request,
     url: missing.url,
@@ -2339,7 +2327,7 @@ test("Connections: requires spaceId; operator-connection-defaults is Space-gated
   });
   expect(missingResp?.status).toEqual(400);
 
-  const scoped = request("GET", "/v1/control/connections?spaceId=space_a", {
+  const scoped = request("GET", "/api/v1/connections?spaceId=space_a", {
     cookie,
   });
   const scopedResp = await handleControlRoute({
@@ -2353,7 +2341,7 @@ test("Connections: requires spaceId; operator-connection-defaults is Space-gated
 
   const defaultsMissing = request(
     "GET",
-    "/v1/control/operator-connection-defaults",
+    "/api/v1/operator-connection-defaults",
     {
       cookie,
     },
@@ -2368,7 +2356,7 @@ test("Connections: requires spaceId; operator-connection-defaults is Space-gated
 
   const defaults = request(
     "GET",
-    "/v1/control/operator-connection-defaults?spaceId=space_a",
+    "/api/v1/operator-connection-defaults?spaceId=space_a",
     { cookie },
   );
   const defaultsResp = await handleControlRoute({
@@ -2386,7 +2374,7 @@ test("Connections create: registers a Space-owned connection; token never echoed
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
 
-  const create = request("POST", "/v1/control/connections", {
+  const create = request("POST", "/api/v1/connections", {
     cookie,
     body: {
       spaceId: "space_a",
@@ -2434,7 +2422,7 @@ test("Connections create: requires spaceId and values", async () => {
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
 
-  const noSpace = request("POST", "/v1/control/connections", {
+  const noSpace = request("POST", "/api/v1/connections", {
     cookie,
     body: { provider: "cloudflare", values: { CLOUDFLARE_API_TOKEN: "t" } },
   });
@@ -2446,7 +2434,7 @@ test("Connections create: requires spaceId and values", async () => {
   });
   expect(noSpaceResp?.status).toEqual(400);
 
-  const noValues = request("POST", "/v1/control/connections", {
+  const noValues = request("POST", "/api/v1/connections", {
     cookie,
     body: { spaceId: "space_a", provider: "cloudflare", values: {} },
   });
@@ -2477,7 +2465,7 @@ test("Connections create: another Space is forbidden (no connection minted)", as
       }),
     },
   });
-  const create = request("POST", "/v1/control/connections", {
+  const create = request("POST", "/api/v1/connections", {
     cookie,
     body: {
       spaceId: "space_b",
@@ -2503,7 +2491,7 @@ test("Cloudflare OAuth: 501 when the operator has not wired the helper", async (
 
   const start = request(
     "POST",
-    "/v1/control/connections/cloudflare/oauth/start",
+    "/api/v1/connections/cloudflare/oauth/start",
     { cookie, body: { spaceId: "space_a" } },
   );
   const startResp = await handleControlRoute({
@@ -2516,7 +2504,7 @@ test("Cloudflare OAuth: 501 when the operator has not wired the helper", async (
 
   const callback = request(
     "GET",
-    "/v1/control/connections/cloudflare/oauth/callback?code=c&state=s",
+    "/api/v1/connections/cloudflare/oauth/callback?code=c&state=s",
     { cookie },
   );
   const callbackResp = await handleControlRoute({
@@ -2563,7 +2551,7 @@ test("Cloudflare OAuth: start authorizes and callback redirects to /connections,
 
   const start = request(
     "POST",
-    "/v1/control/connections/cloudflare/oauth/start",
+    "/api/v1/connections/cloudflare/oauth/start",
     { cookie, body: { spaceId: "space_a" } },
   );
   const startResp = await handleControlRoute({
@@ -2583,7 +2571,7 @@ test("Cloudflare OAuth: start authorizes and callback redirects to /connections,
   // must still complete by authorizing from the signed state's subject.
   const callback = request(
     "GET",
-    "/v1/control/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
+    "/api/v1/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
   );
   const callbackResp = await handleControlRoute({
     request: callback.request,
@@ -2636,7 +2624,7 @@ test("Cloudflare OAuth callback without the session cookie still completes (cros
   });
   const callback = request(
     "GET",
-    "/v1/control/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
+    "/api/v1/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
     // NO cookie header on purpose: this is the cross-site case.
   );
   const response = await handleControlRoute({
@@ -2678,7 +2666,7 @@ test("Cloudflare OAuth callback: an unsigned state (no subject) is refused", asy
   });
   const callback = request(
     "GET",
-    "/v1/control/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
+    "/api/v1/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
   );
   const response = await handleControlRoute({
     request: callback.request,
@@ -2729,7 +2717,7 @@ test("Cloudflare OAuth callback: a Space the signed subject does not own is not 
   });
   const callback = request(
     "GET",
-    "/v1/control/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
+    "/api/v1/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -2755,7 +2743,7 @@ test("OutputShares: list, create, approve, and revoke are Space-gated", async ()
   });
   const operations = fakeOperations();
 
-  const list = request("GET", "/v1/control/output-shares?spaceId=space_a", {
+  const list = request("GET", "/api/v1/output-shares?spaceId=space_a", {
     cookie,
   });
   const listResp = await handleControlRoute({
@@ -2767,7 +2755,7 @@ test("OutputShares: list, create, approve, and revoke are Space-gated", async ()
   expect(listResp?.status).toEqual(200);
   expect(operations.calls.listOutputShares?.[0]).toEqual("space_a");
 
-  const create = request("POST", "/v1/control/output-shares", {
+  const create = request("POST", "/api/v1/output-shares", {
     cookie,
     body: {
       fromSpaceId: "space_a",
@@ -2811,7 +2799,7 @@ test("OutputShares: list, create, approve, and revoke are Space-gated", async ()
 
   const approve = request(
     "POST",
-    "/v1/control/output-shares/oshare_1/approve",
+    "/api/v1/output-shares/oshare_1/approve",
     {
       cookie,
     },
@@ -2825,7 +2813,7 @@ test("OutputShares: list, create, approve, and revoke are Space-gated", async ()
   expect(approveResp?.status).toEqual(200);
   expect(operations.calls.approveOutputShare?.[0]).toEqual("oshare_1");
 
-  const revoke = request("POST", "/v1/control/output-shares/oshare_1/revoke", {
+  const revoke = request("POST", "/api/v1/output-shares/oshare_1/revoke", {
     cookie,
   });
   const revokeResp = await handleControlRoute({
@@ -2857,7 +2845,7 @@ test("controller errors map to their HTTP status (not_found -> 404)", async () =
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/installations/inst_missing",
+    "/api/v1/installations/inst_missing",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -2875,7 +2863,7 @@ test("unknown control subpath is 404 after the session gate", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const { request: req, url } = request("GET", "/v1/control/nope", { cookie });
+  const { request: req, url } = request("GET", "/api/v1/nope", { cookie });
   const response = await handleControlRoute({
     request: req,
     url,
@@ -2962,15 +2950,15 @@ test("maybeEnsurePersonalSpaceForSession is a no-op without a session", async ()
   expect(operations.calls.createSpace).toBeUndefined();
 });
 
-// --- POST /v1/control/plan-runs/:planRunId/apply (§31 GUI deploy) -----------
+// --- POST /api/v1/plan-runs/:planRunId/apply (§31 GUI deploy) -----------
 
-test("POST /v1/control/plan-runs/:id/apply applies a succeeded plan for an owned Space", async () => {
+test("POST /api/v1/plan-runs/:id/apply applies a succeeded plan for an owned Space", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "POST",
-    "/v1/control/plan-runs/plan_1/apply",
+    "/api/v1/plan-runs/plan_1/apply",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -2995,13 +2983,13 @@ test("POST /v1/control/plan-runs/:id/apply applies a succeeded plan for an owned
   expect(applyArg.expected.planDigest).toEqual(`sha256:${"d".repeat(64)}`);
 });
 
-test("POST /v1/control/plan-runs/:id/apply forwards confirmDestructive for a destructive plan", async () => {
+test("POST /api/v1/plan-runs/:id/apply forwards confirmDestructive for a destructive plan", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   const { request: req, url } = request(
     "POST",
-    "/v1/control/plan-runs/plan_1/apply",
+    "/api/v1/plan-runs/plan_1/apply",
     { cookie, body: { confirmDestructive: true } },
   );
   const response = await handleControlRoute({
@@ -3017,7 +3005,7 @@ test("POST /v1/control/plan-runs/:id/apply forwards confirmDestructive for a des
   expect(applyArg.confirmDestructive).toEqual(true);
 });
 
-test("POST /v1/control/plan-runs/:id/apply rejects a plan from another inaccessible Space", async () => {
+test("POST /api/v1/plan-runs/:id/apply rejects a plan from another inaccessible Space", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -3055,7 +3043,7 @@ test("POST /v1/control/plan-runs/:id/apply rejects a plan from another inaccessi
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/plan-runs/plan_other/apply",
+    "/api/v1/plan-runs/plan_other/apply",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3070,7 +3058,7 @@ test("POST /v1/control/plan-runs/:id/apply rejects a plan from another inaccessi
   expect(operations.calls.createApplyRun).toBeUndefined();
 });
 
-test("POST /v1/control/plan-runs/:id/apply surfaces the controller failed_precondition for an unfinished plan", async () => {
+test("POST /api/v1/plan-runs/:id/apply surfaces the controller failed_precondition for an unfinished plan", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -3083,7 +3071,7 @@ test("POST /v1/control/plan-runs/:id/apply surfaces the controller failed_precon
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/plan-runs/plan_1/apply",
+    "/api/v1/plan-runs/plan_1/apply",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3097,7 +3085,7 @@ test("POST /v1/control/plan-runs/:id/apply surfaces the controller failed_precon
   expect(body.error).toEqual("failed_precondition");
 });
 
-test("POST /v1/control/plan-runs/:id/apply surfaces failed_precondition when the plan was already applied", async () => {
+test("POST /api/v1/plan-runs/:id/apply surfaces failed_precondition when the plan was already applied", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -3110,7 +3098,7 @@ test("POST /v1/control/plan-runs/:id/apply surfaces failed_precondition when the
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/plan-runs/plan_1/apply",
+    "/api/v1/plan-runs/plan_1/apply",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3122,11 +3110,11 @@ test("POST /v1/control/plan-runs/:id/apply surfaces failed_precondition when the
   expect(response?.status).toEqual(409);
 });
 
-test("POST /v1/control/plan-runs/:id rejects a non-apply leaf and the wrong method", async () => {
+test("POST /api/v1/plan-runs/:id rejects a non-apply leaf and the wrong method", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const notApply = request("POST", "/v1/control/plan-runs/plan_1/bogus", {
+  const notApply = request("POST", "/api/v1/plan-runs/plan_1/bogus", {
     cookie,
   });
   expect(
@@ -3139,7 +3127,7 @@ test("POST /v1/control/plan-runs/:id rejects a non-apply leaf and the wrong meth
       })
     )?.status,
   ).toEqual(404);
-  const wrongMethod = request("GET", "/v1/control/plan-runs/plan_1/apply", {
+  const wrongMethod = request("GET", "/api/v1/plan-runs/plan_1/apply", {
     cookie,
   });
   expect(
@@ -3249,13 +3237,13 @@ function otherSpaceSpaces(): NonNullable<
   };
 }
 
-test("GET /v1/control/installations/:id/deployments lists deployments for an owned Space", async () => {
+test("GET /api/v1/installations/:id/deployments lists deployments for an owned Space", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = deploymentOperations("space_a");
   const { request: req, url } = request(
     "GET",
-    "/v1/control/installations/inst_1/deployments",
+    "/api/v1/installations/inst_1/deployments",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3279,7 +3267,7 @@ test("GET /v1/control/installations/:id/deployments lists deployments for an own
   });
 });
 
-test("GET /v1/control/installations/:id/deployments rejects a non-member session with 403", async () => {
+test("GET /api/v1/installations/:id/deployments rejects a non-member session with 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // The Installation belongs to space_b, owned by a different subject.
@@ -3301,7 +3289,7 @@ test("GET /v1/control/installations/:id/deployments rejects a non-member session
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/installations/inst_b/deployments",
+    "/api/v1/installations/inst_b/deployments",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3315,13 +3303,13 @@ test("GET /v1/control/installations/:id/deployments rejects a non-member session
   expect(operations.calls.listDeployments).toBeUndefined();
 });
 
-test("GET /v1/control/deployments/:id returns only the public outputs projection", async () => {
+test("GET /api/v1/deployments/:id returns only the public outputs projection", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = deploymentOperations("space_a");
   const { request: req, url } = request(
     "GET",
-    "/v1/control/deployments/dep_1",
+    "/api/v1/deployments/dep_1",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3345,7 +3333,7 @@ test("GET /v1/control/deployments/:id returns only the public outputs projection
   expect(JSON.stringify(body)).not.toContain("osnap_secret_1");
 });
 
-test("GET /v1/control/deployments/:id rejects a deployment in another Space with 403", async () => {
+test("GET /api/v1/deployments/:id rejects a deployment in another Space with 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // The Deployment belongs to space_b, owned by a different subject.
@@ -3354,7 +3342,7 @@ test("GET /v1/control/deployments/:id rejects a deployment in another Space with
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/deployments/dep_other",
+    "/api/v1/deployments/dep_other",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3369,13 +3357,13 @@ test("GET /v1/control/deployments/:id rejects a deployment in another Space with
   expect(operations.calls.getDeployment).toEqual(["dep_other"]);
 });
 
-test("POST /v1/control/deployments/:id/rollback-plan creates a rollback plan for an owned Space", async () => {
+test("POST /api/v1/deployments/:id/rollback-plan creates a rollback plan for an owned Space", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = deploymentOperations("space_a");
   const { request: req, url } = request(
     "POST",
-    "/v1/control/deployments/dep_1/rollback-plan",
+    "/api/v1/deployments/dep_1/rollback-plan",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3393,7 +3381,7 @@ test("POST /v1/control/deployments/:id/rollback-plan creates a rollback plan for
   expect(body.planRun.id).toEqual("plan_rollback");
 });
 
-test("POST /v1/control/deployments/:id/rollback-plan rejects a deployment in another Space with 403", async () => {
+test("POST /api/v1/deployments/:id/rollback-plan rejects a deployment in another Space with 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = deploymentOperations("space_b", {
@@ -3401,7 +3389,7 @@ test("POST /v1/control/deployments/:id/rollback-plan rejects a deployment in ano
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/deployments/dep_other/rollback-plan",
+    "/api/v1/deployments/dep_other/rollback-plan",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3419,9 +3407,9 @@ test("deployments routes are 401 for anonymous sessions", async () => {
   const store = new InMemoryAccountsStore();
   const operations = deploymentOperations("space_a");
   const paths: Array<[string, string]> = [
-    ["GET", "/v1/control/installations/inst_1/deployments"],
-    ["GET", "/v1/control/deployments/dep_1"],
-    ["POST", "/v1/control/deployments/dep_1/rollback-plan"],
+    ["GET", "/api/v1/installations/inst_1/deployments"],
+    ["GET", "/api/v1/deployments/dep_1"],
+    ["POST", "/api/v1/deployments/dep_1/rollback-plan"],
   ];
   for (const [method, path] of paths) {
     const { request: req, url } = request(method, path);
@@ -3440,11 +3428,11 @@ test("deployments routes are 401 for anonymous sessions", async () => {
   expect(operations.calls.createDeploymentRollbackPlan).toBeUndefined();
 });
 
-test("POST /v1/control/deployments/:id/rollback-plan rejects an unknown leaf and the wrong method", async () => {
+test("POST /api/v1/deployments/:id/rollback-plan rejects an unknown leaf and the wrong method", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = deploymentOperations("space_a");
-  const bogus = request("POST", "/v1/control/deployments/dep_1/bogus", {
+  const bogus = request("POST", "/api/v1/deployments/dep_1/bogus", {
     cookie,
   });
   expect(
@@ -3457,7 +3445,7 @@ test("POST /v1/control/deployments/:id/rollback-plan rejects an unknown leaf and
       })
     )?.status,
   ).toEqual(404);
-  const wrongMethod = request("DELETE", "/v1/control/deployments/dep_1", {
+  const wrongMethod = request("DELETE", "/api/v1/deployments/dep_1", {
     cookie,
   });
   expect(
@@ -3563,7 +3551,7 @@ function memberRow(
   };
 }
 
-test("GET /v1/control/spaces/:id/members lists members for an active member", async () => {
+test("GET /api/v1/spaces/:id/members lists members for an active member", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // The session subject is a plain MEMBER (not owner/admin); list is still
@@ -3578,7 +3566,7 @@ test("GET /v1/control/spaces/:id/members lists members for an active member", as
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3594,7 +3582,7 @@ test("GET /v1/control/spaces/:id/members lists members for an active member", as
   expect(operations.calls.listMembers).toEqual(["space_a"]);
 });
 
-test("POST /v1/control/spaces/:id/members lets an owner add a member", async () => {
+test("POST /api/v1/spaces/:id/members lets an owner add a member", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
@@ -3604,7 +3592,7 @@ test("POST /v1/control/spaces/:id/members lets an owner add a member", async () 
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie, body: { accountId: "tsub_new", role: "member" } },
   );
   const response = await handleControlRoute({
@@ -3624,7 +3612,7 @@ test("POST /v1/control/spaces/:id/members lets an owner add a member", async () 
   expect(upsertArg.accountId).toEqual("tsub_new");
 });
 
-test("POST /v1/control/spaces/:id/members lets an admin add a member", async () => {
+test("POST /api/v1/spaces/:id/members lets an admin add a member", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
@@ -3637,7 +3625,7 @@ test("POST /v1/control/spaces/:id/members lets an admin add a member", async () 
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie, body: { accountId: "tsub_new", role: "viewer" } },
   );
   const response = await handleControlRoute({
@@ -3649,7 +3637,7 @@ test("POST /v1/control/spaces/:id/members lets an admin add a member", async () 
   expect(response?.status).toEqual(201);
 });
 
-test("POST /v1/control/spaces/:id/members forbids a non-owner/admin member with 403", async () => {
+test("POST /api/v1/spaces/:id/members forbids a non-owner/admin member with 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // Namespace gate passes (the session subject owns the namespace Space), so a
@@ -3664,7 +3652,7 @@ test("POST /v1/control/spaces/:id/members forbids a non-owner/admin member with 
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie, body: { accountId: "tsub_new", role: "member" } },
   );
   const response = await handleControlRoute({
@@ -3678,7 +3666,7 @@ test("POST /v1/control/spaces/:id/members forbids a non-owner/admin member with 
   expect(operations.calls.upsertMember).toBeUndefined();
 });
 
-test("POST /v1/control/spaces/:id/members forbids an admin granting owner with 403", async () => {
+test("POST /api/v1/spaces/:id/members forbids an admin granting owner with 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
@@ -3691,7 +3679,7 @@ test("POST /v1/control/spaces/:id/members forbids an admin granting owner with 4
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie, body: { accountId: "tsub_new", role: "owner" } },
   );
   const response = await handleControlRoute({
@@ -3720,7 +3708,7 @@ test("members routes reject a session in another Space with 403 (namespace gate)
   ] as const) {
     const { request: req, url } = request(
       method,
-      "/v1/control/spaces/space_b/members",
+      "/api/v1/spaces/space_b/members",
       { cookie, ...(body ? { body } : {}) },
     );
     const response = await handleControlRoute({
@@ -3744,10 +3732,10 @@ test("members routes are 401 for an anonymous session", async () => {
     roster: [memberRow("tsub_ctrl", ["owner"])],
   });
   const paths: Array<[string, string]> = [
-    ["GET", "/v1/control/spaces/space_a/members"],
-    ["POST", "/v1/control/spaces/space_a/members"],
-    ["PATCH", "/v1/control/spaces/space_a/members/tsub_x"],
-    ["DELETE", "/v1/control/spaces/space_a/members/tsub_x"],
+    ["GET", "/api/v1/spaces/space_a/members"],
+    ["POST", "/api/v1/spaces/space_a/members"],
+    ["PATCH", "/api/v1/spaces/space_a/members/tsub_x"],
+    ["DELETE", "/api/v1/spaces/space_a/members/tsub_x"],
   ];
   for (const [method, path] of paths) {
     const { request: req, url } = request(method, path);
@@ -3764,7 +3752,7 @@ test("members routes are 401 for an anonymous session", async () => {
   expect(operations.calls.upsertMember).toBeUndefined();
 });
 
-test("PATCH /v1/control/spaces/:id/members/:subject lets an owner change a role", async () => {
+test("PATCH /api/v1/spaces/:id/members/:subject lets an owner change a role", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
@@ -3777,7 +3765,7 @@ test("PATCH /v1/control/spaces/:id/members/:subject lets an owner change a role"
   });
   const { request: req, url } = request(
     "PATCH",
-    "/v1/control/spaces/space_a/members/tsub_member",
+    "/api/v1/spaces/space_a/members/tsub_member",
     { cookie, body: { roles: ["admin"] } },
   );
   const response = await handleControlRoute({
@@ -3793,7 +3781,7 @@ test("PATCH /v1/control/spaces/:id/members/:subject lets an owner change a role"
   expect(upsertArg.accountId).toEqual("tsub_member");
 });
 
-test("PATCH /v1/control/spaces/:id/members/:subject forbids an admin (owner-only) with 403", async () => {
+test("PATCH /api/v1/spaces/:id/members/:subject forbids an admin (owner-only) with 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
@@ -3807,7 +3795,7 @@ test("PATCH /v1/control/spaces/:id/members/:subject forbids an admin (owner-only
   });
   const { request: req, url } = request(
     "PATCH",
-    "/v1/control/spaces/space_a/members/tsub_member",
+    "/api/v1/spaces/space_a/members/tsub_member",
     { cookie, body: { roles: ["admin"] } },
   );
   const response = await handleControlRoute({
@@ -3820,7 +3808,7 @@ test("PATCH /v1/control/spaces/:id/members/:subject forbids an admin (owner-only
   expect(operations.calls.upsertMember).toBeUndefined();
 });
 
-test("PATCH /v1/control/spaces/:id/members/:subject refuses to demote the last owner", async () => {
+test("PATCH /api/v1/spaces/:id/members/:subject refuses to demote the last owner", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // The owner tries to demote themselves while they are the SOLE owner.
@@ -3834,7 +3822,7 @@ test("PATCH /v1/control/spaces/:id/members/:subject refuses to demote the last o
   });
   const { request: req, url } = request(
     "PATCH",
-    "/v1/control/spaces/space_a/members/tsub_ctrl",
+    "/api/v1/spaces/space_a/members/tsub_ctrl",
     { cookie, body: { roles: ["member"] } },
   );
   const response = await handleControlRoute({
@@ -3848,7 +3836,7 @@ test("PATCH /v1/control/spaces/:id/members/:subject refuses to demote the last o
   expect(operations.calls.upsertMember).toBeUndefined();
 });
 
-test("PATCH /v1/control/spaces/:id/members/:subject can demote an owner when another owner remains", async () => {
+test("PATCH /api/v1/spaces/:id/members/:subject can demote an owner when another owner remains", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
@@ -3861,7 +3849,7 @@ test("PATCH /v1/control/spaces/:id/members/:subject can demote an owner when ano
   });
   const { request: req, url } = request(
     "PATCH",
-    "/v1/control/spaces/space_a/members/tsub_owner2",
+    "/api/v1/spaces/space_a/members/tsub_owner2",
     { cookie, body: { roles: ["admin"] } },
   );
   const response = await handleControlRoute({
@@ -3875,7 +3863,7 @@ test("PATCH /v1/control/spaces/:id/members/:subject can demote an owner when ano
   expect(body.member.roles).toEqual(["admin"]);
 });
 
-test("DELETE /v1/control/spaces/:id/members/:subject lets an owner soft-remove a member", async () => {
+test("DELETE /api/v1/spaces/:id/members/:subject lets an owner soft-remove a member", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
@@ -3888,7 +3876,7 @@ test("DELETE /v1/control/spaces/:id/members/:subject lets an owner soft-remove a
   });
   const { request: req, url } = request(
     "DELETE",
-    "/v1/control/spaces/space_a/members/tsub_member",
+    "/api/v1/spaces/space_a/members/tsub_member",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3906,7 +3894,7 @@ test("DELETE /v1/control/spaces/:id/members/:subject lets an owner soft-remove a
   expect(upsertArg.accountId).toEqual("tsub_member");
 });
 
-test("DELETE /v1/control/spaces/:id/members/:subject forbids a non-owner with 403", async () => {
+test("DELETE /api/v1/spaces/:id/members/:subject forbids a non-owner with 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
@@ -3920,7 +3908,7 @@ test("DELETE /v1/control/spaces/:id/members/:subject forbids a non-owner with 40
   });
   const { request: req, url } = request(
     "DELETE",
-    "/v1/control/spaces/space_a/members/tsub_member",
+    "/api/v1/spaces/space_a/members/tsub_member",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3933,7 +3921,7 @@ test("DELETE /v1/control/spaces/:id/members/:subject forbids a non-owner with 40
   expect(operations.calls.upsertMember).toBeUndefined();
 });
 
-test("DELETE /v1/control/spaces/:id/members/:subject refuses to remove the last owner", async () => {
+test("DELETE /api/v1/spaces/:id/members/:subject refuses to remove the last owner", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
@@ -3946,7 +3934,7 @@ test("DELETE /v1/control/spaces/:id/members/:subject refuses to remove the last 
   });
   const { request: req, url } = request(
     "DELETE",
-    "/v1/control/spaces/space_a/members/tsub_ctrl",
+    "/api/v1/spaces/space_a/members/tsub_ctrl",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3967,7 +3955,7 @@ test("members routes 503 when no membership facade is wired", async () => {
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -3981,7 +3969,7 @@ test("members routes 503 when no membership facade is wired", async () => {
 
 // --- ADD-path gate parity (privilege escalation / orphaning via POST) -------
 
-test("POST /v1/control/spaces/:id/members forbids an admin from demoting an existing owner", async () => {
+test("POST /api/v1/spaces/:id/members forbids an admin from demoting an existing owner", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // The caller is an ADMIN; the target is an existing active OWNER. A POST that
@@ -3998,7 +3986,7 @@ test("POST /v1/control/spaces/:id/members forbids an admin from demoting an exis
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie, body: { accountId: "tsub_owner", role: "member" } },
   );
   const response = await handleControlRoute({
@@ -4015,7 +4003,7 @@ test("POST /v1/control/spaces/:id/members forbids an admin from demoting an exis
   ).toEqual(["owner"]);
 });
 
-test("POST /v1/control/spaces/:id/members refuses to strip the last owner", async () => {
+test("POST /api/v1/spaces/:id/members refuses to strip the last owner", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // The caller is the SOLE owner and POSTs their own subject with a lower role.
@@ -4031,7 +4019,7 @@ test("POST /v1/control/spaces/:id/members refuses to strip the last owner", asyn
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie, body: { accountId: "tsub_ctrl", role: "member" } },
   );
   const response = await handleControlRoute({
@@ -4047,7 +4035,7 @@ test("POST /v1/control/spaces/:id/members refuses to strip the last owner", asyn
   ).toEqual(["owner"]);
 });
 
-test("POST /v1/control/spaces/:id/members lets an owner re-add a co-owner with a lower role when another owner remains", async () => {
+test("POST /api/v1/spaces/:id/members lets an owner re-add a co-owner with a lower role when another owner remains", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
@@ -4062,7 +4050,7 @@ test("POST /v1/control/spaces/:id/members lets an owner re-add a co-owner with a
   // last-owner guard does not fire and the owner-only gate is satisfied.
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie, body: { accountId: "tsub_owner2", role: "admin" } },
   );
   const response = await handleControlRoute({
@@ -4091,7 +4079,7 @@ test("namespace owner can bootstrap the first member when the ledger is empty", 
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie, body: { accountId: "tsub_first", role: "member" } },
   );
   const response = await handleControlRoute({
@@ -4116,7 +4104,7 @@ test("namespace owner sees the implicit owner row when the ledger is empty", asy
   });
   const { request: req, url } = request(
     "GET",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -4150,7 +4138,7 @@ test("a non-owner namespace member cannot bootstrap members against an empty led
   });
   const { request: req, url } = request(
     "POST",
-    "/v1/control/spaces/space_a/members",
+    "/api/v1/spaces/space_a/members",
     { cookie, body: { accountId: "tsub_first", role: "member" } },
   );
   const response = await handleControlRoute({

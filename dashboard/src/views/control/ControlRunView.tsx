@@ -1,15 +1,15 @@
 /**
  * Plan summary view (spec §31) — a single Run.
  *
- * Shows, for one Run (`GET /v1/control/runs/:id`):
+ * Shows, for one Run (`GET /api/v1/runs/:id`):
  *   - the run header (type / status / policy status),
  *   - the §19 changes summary + diagnostics from the run logs
- *     (`GET /v1/control/runs/:id/logs`: diagnostics + run-level audit trail),
+ *     (`GET /api/v1/runs/:id/logs`: diagnostics + run-level audit trail),
  *   - inputs (the dependency-injected names) on a best-effort basis (read from
  *     the run logs audit metadata when present — the control surface does not
  *     expose resolved input VALUES), and
  *   - an approve button when the run is `waiting_approval`
- *     (`POST /v1/control/runs/:id/approve`).
+ *     (`POST /api/v1/runs/:id/approve`).
  */
 import {
   createEffect,

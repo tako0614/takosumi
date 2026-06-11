@@ -145,7 +145,7 @@ export interface CreateCloudflareWorkerOptions {
   ) => Promise<DeployControlOperations | undefined>;
   /**
    * In-process control-plane operations facade backing the session-authed
-   * `/v1/control/*` account-plane routes the dashboard SPA calls (M10). The
+   * `/api/v1/*` account-plane routes the dashboard SPA calls (M10). The
    * platform worker passes the embedded deploy-control service's typed
    * `operations` facade here; it structurally satisfies {@link
    * ControlPlaneOperations}. When omitted the control routes 503 after the

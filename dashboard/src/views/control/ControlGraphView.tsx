@@ -1,7 +1,7 @@
 /**
  * Graph view (spec §31) — the Space dependency DAG.
  *
- * Reads `GET /v1/control/spaces/:id/graph` ({nodes, edges}) and renders the DAG
+ * Reads `GET /api/v1/spaces/:id/graph` ({nodes, edges}) and renders the DAG
  * structurally as topological LAYERS (producers above consumers): layer 0 is the
  * roots (no dependencies), each subsequent layer depends only on earlier ones.
  * Edges are listed under each consumer node ("depends on ..."). This is
