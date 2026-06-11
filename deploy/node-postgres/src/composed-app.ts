@@ -25,7 +25,7 @@ import type {
 import {
   createTakosumiService,
   type CreatedTakosumiService,
-} from "../../../src/service/bootstrap.ts";
+} from "../../../core/bootstrap.ts";
 import { Hono } from "hono";
 import type { PostgresAccountsStore } from "@takosjp/takosumi-accounts-service";
 import type { NodeAccountsServerConfig } from "./handler.ts";

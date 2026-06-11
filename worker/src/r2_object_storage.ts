@@ -1,7 +1,7 @@
 import {
   objectBodyBytes,
   verifyObjectDigest,
-} from "../../src/service/adapters/object-storage/digest.ts";
+} from "../../core/adapters/object-storage/digest.ts";
 import {
   type ObjectStorageDeleteInput,
   type ObjectStorageDigest,
@@ -14,7 +14,7 @@ import {
   type ObjectStorageObjectHead,
   type ObjectStoragePort,
   type ObjectStoragePutInput,
-} from "../../src/service/adapters/object-storage/mod.ts";
+} from "../../core/adapters/object-storage/mod.ts";
 import type { R2Bucket, R2Object } from "./bindings.ts";
 
 const DIGEST_METADATA_KEY = "takosumi-digest";

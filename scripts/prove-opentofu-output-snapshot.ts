@@ -14,15 +14,15 @@ import {
   extractDeploymentOutputs as extractOutputSnapshotProjection,
   parseOpenTofuOutputs,
   toDeployControlOutputEnvelope,
-} from "../packages/platform-services/src/opentofu-output-resolver.ts";
+} from "../accounts/platform-services/src/opentofu-output-resolver.ts";
 import {
   applyExpectedGuardFromPlanRun,
   OpenTofuDeploymentController,
   type OpenTofuApplyJob,
   type OpenTofuPlanJob,
   type OpenTofuRunner,
-} from "../src/service/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../src/service/domains/deploy-control/store.ts";
+} from "../core/domains/deploy-control/mod.ts";
+import { InMemoryOpenTofuDeploymentStore } from "../core/domains/deploy-control/store.ts";
 import {
   FIXTURE_AWS_MIRROR_EVIDENCE,
   FIXTURE_AWS_PROVIDER,
@@ -30,7 +30,7 @@ import {
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
   seedInstallationModel,
-} from "../src/service/domains/deploy-control/test_model_fixture.ts";
+} from "../core/domains/deploy-control/test_model_fixture.ts";
 
 const DEFAULT_INPUT =
   "fixtures/opentofu-output-snapshot-proof/proof-input.json";

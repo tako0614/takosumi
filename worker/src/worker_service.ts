@@ -1,18 +1,18 @@
 import {
   type CreatedTakosumiService,
   createTakosumiService,
-} from "../../src/service/bootstrap.ts";
-import type { AppAdapters } from "../../src/service/app_context.ts";
+} from "../../core/bootstrap.ts";
+import type { AppAdapters } from "../../core/app_context.ts";
 import {
   InMemoryRuntimeAgentRegistry,
   StorageBackedWorkLedger,
-} from "../../src/service/agents/mod.ts";
-import { LocalActorAdapter } from "../../src/service/adapters/auth/mod.ts";
-import { MemoryCoordinationAdapter } from "../../src/service/adapters/coordination/mod.ts";
-import { NoopTestKms } from "../../src/service/adapters/kms/mod.ts";
-import { MemoryNotificationSink } from "../../src/service/adapters/notification/mod.ts";
-import { LocalOperatorConfig } from "../../src/service/adapters/operator-config/mod.ts";
-import { NoopProviderMaterializer } from "../../src/service/adapters/provider/mod.ts";
+} from "../../core/agents/mod.ts";
+import { LocalActorAdapter } from "../../core/adapters/auth/mod.ts";
+import { MemoryCoordinationAdapter } from "../../core/adapters/coordination/mod.ts";
+import { NoopTestKms } from "../../core/adapters/kms/mod.ts";
+import { MemoryNotificationSink } from "../../core/adapters/notification/mod.ts";
+import { LocalOperatorConfig } from "../../core/adapters/operator-config/mod.ts";
+import { NoopProviderMaterializer } from "../../core/adapters/provider/mod.ts";
 import {
   type AckInput,
   type DeadLetterInput,
@@ -23,14 +23,14 @@ import {
   type QueueLease,
   type QueueMessage,
   type QueuePort,
-} from "../../src/service/adapters/queue/mod.ts";
-import { MemoryEncryptedSecretStore } from "../../src/service/adapters/secret-store/mod.ts";
-import { selectSecretBoundaryCrypto } from "../../src/service/adapters/secret-store/memory.ts";
-import { ImmutableSourceAdapter } from "../../src/service/adapters/source/mod.ts";
-import { InMemoryObservabilitySink } from "../../src/service/services/observability/mod.ts";
-import type { EnqueueRun } from "../../src/service/domains/deploy-control/mod.ts";
-import type { EnqueueSourceSync } from "../../src/service/domains/sources/mod.ts";
-import type { InstallationCoordination } from "../../src/service/domains/deploy-control/installation_lease.ts";
+} from "../../core/adapters/queue/mod.ts";
+import { MemoryEncryptedSecretStore } from "../../core/adapters/secret-store/mod.ts";
+import { selectSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
+import { ImmutableSourceAdapter } from "../../core/adapters/source/mod.ts";
+import { InMemoryObservabilitySink } from "../../core/services/observability/mod.ts";
+import type { EnqueueRun } from "../../core/domains/deploy-control/mod.ts";
+import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
+import type { InstallationCoordination } from "../../core/domains/deploy-control/installation_lease.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import type { CloudflareWorkerEnv, Queue } from "./bindings.ts";
 import { createCloudflareD1DeployStores } from "./d1_deploy_stores.ts";

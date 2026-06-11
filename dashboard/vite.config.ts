@@ -17,7 +17,7 @@ export default defineConfig({
       // the worker uses; const/type imports are browser-safe.
       "@takosjp/takosumi-accounts-contract": resolve(
         __dirname,
-        "../packages/accounts-contract/src/mod.ts",
+        "../accounts/contract/src/mod.ts",
       ),
     },
   },

@@ -1,4 +1,4 @@
-import { constantTimeEqualsString } from "../../src/service/shared/constant_time.ts";
+import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import type { CloudflareWorkerEnv, QueueBatch } from "./bindings.ts";
 import {
   createServiceWorkerRequest,

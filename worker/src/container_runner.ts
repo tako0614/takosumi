@@ -3,7 +3,7 @@ import type {
   ServiceDataBackupRunner,
   ServiceDataBackupRunnerInput,
   ServiceDataBackupRunnerResult,
-} from "../../src/service/domains/backups/mod.ts";
+} from "../../core/domains/backups/mod.ts";
 import type {
   OpenTofuApplyJob,
   OpenTofuApplyResult,
@@ -16,12 +16,12 @@ import type {
   OpenTofuRunner,
   OpenTofuSourceSyncJob,
   OpenTofuSourceSyncResult,
-} from "../../src/service/domains/deploy-control/mod.ts";
+} from "../../core/domains/deploy-control/mod.ts";
 import type {
   CloudflareWorkerEnv,
   OpenTofuRunQueueMessage,
 } from "./bindings.ts";
-import { redactString } from "../../src/service/services/observability/redaction.ts";
+import { redactString } from "../../core/services/observability/redaction.ts";
 
 /**
  * Implements {@link OpenTofuRunner} over the RUNNER Durable Object: each

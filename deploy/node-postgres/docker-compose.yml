@@ -38,8 +38,8 @@ services:
   migrations:
     # Runs `takosumi accounts migrate` once against Postgres before
     # the accounts service is allowed to start. See
-    # ../../packages/cli/src/cli-accounts-commands.ts and
-    # ../../packages/cli/src/cli-accounts-db.ts for the migration entry
+    # ../../accounts/cli/src/cli-accounts-commands.ts and
+    # ../../accounts/cli/src/cli-accounts-db.ts for the migration entry
     # point. The container exits 0 on success, after which compose
     # promotes `accounts` from waiting to running.
     #
@@ -57,7 +57,7 @@ services:
       TAKOSUMI_ACCOUNTS_DATABASE_URL: postgres://takosumi:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/takosumi_accounts
     entrypoint: ["bun"]
     command:
-      - "/app/packages/cli/src/main.ts"
+      - "/app/accounts/cli/src/main.ts"
       - "accounts"
       - "migrate"
 

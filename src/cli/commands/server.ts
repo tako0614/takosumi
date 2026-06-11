@@ -1,5 +1,5 @@
 import { Command } from "../command.ts";
-import { currentRuntime } from "../../service/shared/runtime/index.ts";
+import { currentRuntime } from "../../../core/shared/runtime/index.ts";
 
 function createServerCommand(): Command {
   return new Command("server")
@@ -23,7 +23,7 @@ function createServerCommand(): Command {
       }
       const runtime = currentRuntime();
       runtime.env.set("PORT", String(port));
-      await import("../../service/index.ts");
+      await import("../../../core/index.ts");
     });
 }
 

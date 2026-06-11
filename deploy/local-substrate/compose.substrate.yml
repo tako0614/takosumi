@@ -120,7 +120,7 @@ services:
       - sh
       - -c
       - |
-          bun packages/cli/src/main.ts accounts migrate \
+          bun accounts/cli/src/main.ts accounts migrate \
             --database-url "$$TAKOSUMI_ACCOUNTS_DATABASE_URL"
     env_file:
       - env/cloud.env
