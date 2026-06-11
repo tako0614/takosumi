@@ -84,6 +84,9 @@
       "takosumi-rootgen": ["./packages/rootgen/src/mod.ts"],
       "takosumi-graph": ["./packages/graph/src/mod.ts"],
       "takosumi-policy": ["./packages/policy/src/mod.ts"],
+      "@takosumi/providers": ["./providers/registry.ts"],
+      "@takosumi/providers/types": ["./providers/types.ts"],
+      "@takosumi/providers/*": ["./providers/*"],
 
       "takosumi-runtime-agent/prepared-source-reader": [
         "./src/runtime-agent/prepared_source_reader.ts"
@@ -92,6 +95,7 @@
   },
   "include": [
     "src",
+    "providers",
     "opentofu-modules",
     "packages/schema",
     "packages/rootgen",

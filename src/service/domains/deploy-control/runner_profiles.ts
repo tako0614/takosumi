@@ -7,7 +7,19 @@
  */
 
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
+import { providerById } from "@takosumi/providers";
 import { log } from "../../shared/log.ts";
+
+// Per-provider egress policy is owned by the managed-provider registry (single
+// source of truth); a runner profile owns only its presentation + runtime. `id`
+// is the provider id (e.g. "cloudflare"), not the runner profile id.
+function networkFor(id: string): NonNullable<RunnerProfile["networkPolicy"]> {
+  const provider = providerById(id);
+  if (!provider) {
+    throw new Error(`no managed provider registered for "${id}"`);
+  }
+  return provider.network;
+}
 
 /**
  * Resolve the operator-curated set of enabled runner profiles from a CSV env
@@ -109,12 +121,9 @@ export function createDefaultRunnerProfiles(
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use Cloudflare resources.",
       allowedProviders: [cloudflareProvider],
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: ["registry.opentofu.org", "api.cloudflare.com"],
-      },
+      networkPolicy: networkFor("cloudflare"),
       cloudflareWorkersForPlatforms: {
-        dispatchNamespace: "takosumi-tenants",
+        dispatchNamespace: providerById("cloudflare")!.hosting!.dispatchNamespace,
         dispatchWorkerBinding: "TAKOSUMI_TENANT_DISPATCH",
         outboundWorker: {
           serviceBinding: "TAKOSUMI_OUTBOUND_WORKER",
@@ -130,10 +139,7 @@ export function createDefaultRunnerProfiles(
             "d1_database",
           ],
         },
-        apiProxy: {
-          origin: "https://app.takosumi.com",
-          route: "/internal/cf-proxy",
-        },
+        apiProxy: providerById("cloudflare")!.hosting!.apiProxy,
       },
     }),
     defaultProviderRunnerProfile(now, {
@@ -143,16 +149,7 @@ export function createDefaultRunnerProfiles(
         "Reference Cloudflare Container runner for OpenTofu modules that use AWS resources.",
       allowedProviders: [awsProvider],
       labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "sts.amazonaws.com",
-          "iam.amazonaws.com",
-          "route53.amazonaws.com",
-        ],
-        allowedHostPatterns: ["*.amazonaws.com", "*.api.aws"],
-      },
+      networkPolicy: networkFor("aws"),
     }),
     defaultProviderRunnerProfile(now, {
       id: "gcp-template",
@@ -161,17 +158,7 @@ export function createDefaultRunnerProfiles(
         "Reference Cloudflare Container runner for OpenTofu modules that use Google Cloud resources.",
       allowedProviders: [gcpProvider],
       labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "oauth2.googleapis.com",
-          "cloudresourcemanager.googleapis.com",
-          "serviceusage.googleapis.com",
-          "iam.googleapis.com",
-        ],
-        allowedHostPatterns: ["*.googleapis.com"],
-      },
+      networkPolicy: networkFor("gcp"),
     }),
     defaultProviderRunnerProfile(now, {
       id: "azure-template",
@@ -180,20 +167,7 @@ export function createDefaultRunnerProfiles(
         "Future/custom reference Cloudflare Container runner for OpenTofu modules that use Azure resources.",
       allowedProviders: [azureProvider],
       labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "login.microsoftonline.com",
-          "management.azure.com",
-          "graph.microsoft.com",
-        ],
-        allowedHostPatterns: [
-          "*.azure.com",
-          "*.windows.net",
-          "*.microsoftonline.com",
-        ],
-      },
+      networkPolicy: networkFor("azure"),
     }),
     defaultProviderRunnerProfile(now, {
       id: "kubernetes-template",
@@ -202,11 +176,7 @@ export function createDefaultRunnerProfiles(
         "Operator-managed OpenTofu runner for Kubernetes and Helm modules.",
       allowedProviders: [kubernetesProvider, helmProvider],
       labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "operator-managed",
-        allowedHosts: ["registry.opentofu.org", "kubernetes.default.svc"],
-        allowedHostPatterns: ["*.svc", "*.cluster.local"],
-      },
+      networkPolicy: networkFor("kubernetes"),
     }),
     defaultProviderRunnerProfile(now, {
       id: "github-template",
@@ -215,15 +185,7 @@ export function createDefaultRunnerProfiles(
         "Reference Cloudflare Container runner for OpenTofu modules that use GitHub resources.",
       allowedProviders: [githubProvider],
       labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: [
-          "registry.opentofu.org",
-          "api.github.com",
-          "uploads.github.com",
-        ],
-        allowedHostPatterns: ["*.githubusercontent.com"],
-      },
+      networkPolicy: networkFor("github"),
     }),
     defaultProviderRunnerProfile(now, {
       id: "digitalocean-template",
@@ -232,10 +194,7 @@ export function createDefaultRunnerProfiles(
         "Future/custom reference Cloudflare Container runner for OpenTofu modules that use DigitalOcean resources.",
       allowedProviders: [digitalOceanProvider],
       labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "egress-allowlist",
-        allowedHosts: ["registry.opentofu.org", "api.digitalocean.com"],
-      },
+      networkPolicy: networkFor("digitalocean"),
     }),
     defaultProviderRunnerProfile(now, {
       id: "docker-custom-example",
@@ -247,10 +206,7 @@ export function createDefaultRunnerProfiles(
       credentialRefs: [],
       cloudflareContainer: false,
       labels: templateRunnerProfileLabels(),
-      networkPolicy: {
-        mode: "operator-managed",
-        allowedHosts: ["registry.opentofu.org"],
-      },
+      networkPolicy: networkFor("docker"),
     }),
   ];
 }
