@@ -3337,25 +3337,27 @@ Current physical source layout:
 
 ```txt
 takosumi/
+  contract/                     public control-plane vocabulary (wire shape)
+
+  core/                         provider-AGNOSTIC control plane
+    api/
+    adapters/
+    domains/
+      activity/ backups/ billing/ connections/ dependencies/ deploy-control/
+      installations/ output-shares/ sources/ templates/   (templates/registry.ts = id+version Capsule registry)
+    shared/
+
+  providers/                    per-provider managed-resource impls + single-source registry
+    registry.ts                 MANAGED_PROVIDERS (alias @takosumi/providers); types.ts
+    cloudflare/                 connection + credentials drivers, hosting (WfP/cf-proxy), modules/<id>/
+    aws/                        connection + credentials drivers, modules/<id>/
+    git/                        git credential driver
+    provider-env-set/           Space-owned env-set credential driver
+
+  accounts/                     account-plane (contract / service / platform-services / cli)
+
   src/
-    service/
-      api/
-      adapters/
-      agents/
-      config/
-      db/
-      domains/
-        activity/
-        backups/
-        billing/
-        connections/
-        dependencies/
-        deploy-control/
-        installations/
-        output-shares/
-        sources/
-        templates/
-      shared/
+    service/                    legacy code being folded into core/ per conformance M1
     runtime-agent/
     cli/
 
@@ -3389,22 +3391,13 @@ takosumi/
     entrypoint.ts
     tofu.rc.template
 
-  packages/
-    schema/
-    accounts-contract/
-    accounts-service/
-    cli/
+  lib/
     graph/
-    platform-services/
     policy/
     rootgen/
 
-  opentofu-modules/
-    core/
-    cloudflare-worker-service/
-    cloudflare-static-site/
-    cloudflare-r2-storage/
-    aws-s3-storage/
+  opentofu-modules/             provider-agnostic `core` module + shared bundled-HCL catalog (module-files.ts).
+    core/                       Provider-specific Capsule modules live under providers/<provider>/modules/<id>/.
 ```
 
 ## 37. wrangler shape

@@ -26,6 +26,8 @@ resource limit、provider allowlist seed を持ちます。
 
 Cloudflare 上の reference topology では、OpenTofu の `plan/apply` は Cloudflare Container runner が実行します。Workers for Platforms は tenant / user Worker の dispatch runtime としてだけ使い、provider credential を持つ runner とは分けます。
 
+**source 境界**: `core/` は provider-agnostic な control plane で、provider 固有 data (identity / connection kind / network policy / managed hosting / capsule module / runner profile / credential env 名) は `@takosumi/providers` registry (`providers/registry.ts`) 越しにだけ読み、literal を inline しません。provider ごとの managed-resource 実装 (credential mint/verify driver、hosting worker、OpenTofu Capsule module `providers/<provider>/modules/<id>/`) は `providers/<id>/` に置きます。provider-agnostic な `core` base-installation module と shared bundled-HCL catalog だけが `opentofu-modules/` に残ります。`contract/` は wire vocabulary、`lib/` は graph/policy/rootgen、`accounts/` は account-plane です。
+
 ## Shape
 
 これは operator 内部の **resolved execution view** の例です。`stateBackend` は operator-managed state/lock の参照です。
