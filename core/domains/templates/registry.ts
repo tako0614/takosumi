@@ -15,10 +15,10 @@
 import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 import type { DispatchGeneratedRoot } from "@takosumi/internal/deploy-control-api";
 import { firstPartyModuleFilesByTemplateId } from "../../../opentofu-modules/module-files.ts";
-import { awsS3StorageTemplate } from "../../../opentofu-modules/aws-s3-storage/template.ts";
-import { cloudflareR2StorageTemplate } from "../../../opentofu-modules/cloudflare-r2-storage/template.ts";
-import { cloudflareStaticSiteTemplate } from "../../../opentofu-modules/cloudflare-static-site/template.ts";
-import { cloudflareWorkerServiceTemplate } from "../../../opentofu-modules/cloudflare-worker-service/template.ts";
+import { awsS3StorageTemplate } from "../../../providers/aws/modules/aws-s3-storage/template.ts";
+import { cloudflareR2StorageTemplate } from "../../../providers/cloudflare/modules/cloudflare-r2-storage/template.ts";
+import { cloudflareStaticSiteTemplate } from "../../../providers/cloudflare/modules/cloudflare-static-site/template.ts";
+import { cloudflareWorkerServiceTemplate } from "../../../providers/cloudflare/modules/cloudflare-worker-service/template.ts";
 import { coreTemplate } from "../../../opentofu-modules/core/template.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import { assertValidTemplate } from "./validation.ts";

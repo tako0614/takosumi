@@ -46,6 +46,19 @@ test("built-in registry resolves bundled module files for every first-party modu
   }
 });
 
+// On-disk home of each first-party module's human-readable OpenTofu surface.
+// `core` stays under `opentofu-modules/`; provider-specific modules live under
+// `providers/<provider>/modules/<id>/`.
+const MODULE_DIRS: Readonly<Record<string, string>> = {
+  core: "opentofu-modules/core",
+  "cloudflare-r2-storage": "providers/cloudflare/modules/cloudflare-r2-storage",
+  "cloudflare-static-site":
+    "providers/cloudflare/modules/cloudflare-static-site",
+  "cloudflare-worker-service":
+    "providers/cloudflare/modules/cloudflare-worker-service",
+  "aws-s3-storage": "providers/aws/modules/aws-s3-storage",
+};
+
 test("bundled module files match the first-party module sources", async () => {
   for (const template of defaultTemplateRegistry.list()) {
     const files = defaultTemplateRegistry.requireModuleFiles(
@@ -54,13 +67,10 @@ test("bundled module files match the first-party module sources", async () => {
     );
     const main = files.find((file) => file.path === "main.tf");
     expect(main).toBeDefined();
+    const moduleDir = MODULE_DIRS[template.id];
+    expect(moduleDir, `on-disk module dir for ${template.id}`).toBeDefined();
     const source = await readFile(
-      join(
-        import.meta.dir,
-        "../../../opentofu-modules",
-        template.id,
-        "module/main.tf",
-      ),
+      join(import.meta.dir, "../../..", moduleDir!, "module/main.tf"),
       "utf8",
     );
     expect(main?.text).toEqual(source);

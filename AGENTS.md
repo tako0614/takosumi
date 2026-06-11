@@ -145,23 +145,30 @@ takosumi/
 ├── worker/
 │   └── src/            single-Worker entry (index.ts / handler.ts / routes.ts), durable/ (CoordinationObject,
 │                       OpenTofuRunnerObject), state crypto, D1 stores — the worker shell
-├── contract/           public control-plane DTOs / contracts (formerly src/contract)
+├── contract/           public control-plane vocabulary: DTOs / contracts (the wire shape)
+├── core/               provider-AGNOSTIC control plane: api/ + domains/* (sources, installations, runs,
+│                       deploy-control, policy) + adapters/. Reads per-provider data only through the
+│                       @takosumi/providers registry boundary, never inlined literals.
+├── providers/          per-provider managed-resource implementations + the single-source registry:
+│   ├── registry.ts     MANAGED_PROVIDERS (identity / connection kinds / network policy / hosting /
+│   │                   capsule module ids / runner profile) + types.ts (alias @takosumi/providers)
+│   ├── cloudflare/      connection + credential drivers, WfP/cf-proxy hosting worker, modules/<id>/
+│   ├── aws/             connection + credential drivers, modules/<id>/
+│   ├── git/             git credential driver
+│   └── provider-env-set/  Space-owned env-set credential driver
 ├── lib/
 │   ├── graph/          dependency-DAG topo / cycle rejection
 │   ├── policy/         provider / resource / action policy layers
 │   └── rootgen/        generated OpenTofu root module
-├── packages/
-│   ├── accounts-contract/
-│   ├── accounts-service/
-│   ├── platform-services/
-│   └── cli/
+├── accounts/           account-plane (contract / service / platform-services / cli)
 ├── runner/             Dockerfile + entrypoint.ts + tofu.rc + provider mirror (Container runner image)
-├── opentofu-modules/   official modules: core / cloudflare-worker-service / cloudflare-r2-storage /
-│                       cloudflare-static-site / aws-s3-storage
+├── opentofu-modules/   provider-agnostic `core` base-installation module + the shared bundled-HCL catalog
+│                       (module-files.ts). Provider-specific Capsule modules live under
+│                       providers/<provider>/modules/<id>/; the id+version registry is
+│                       core/domains/templates/registry.ts.
 ├── dashboard/          dashboard SPA (SolidJS) build
 ├── src/
-│   ├── service/        service implementation consumed in-process by the platform / product workers
-│   │                   (domains/* still being consolidated into worker/src/modules/* per conformance M1)
+│   ├── service/        legacy service code being consolidated into core/ / worker/src/modules/ per conformance M1
 │   ├── runtime-agent/  internal compatibility code, not a public subpath
 │   ├── shared/         shared runtime primitives (subprocess)
 │   └── cli/            CLI implementation

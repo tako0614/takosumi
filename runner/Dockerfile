@@ -60,15 +60,21 @@ RUN set -eux; \
     rm -rf /opt/opentofu/mirror-build; \
     ls -R "${OPENTOFU_PROVIDER_MIRROR}" | head -40
 
-# Bundled first-party Capsule modules baked from the repo-root module set
+# Bundled first-party Capsule modules baked into a flat in-image layout
 # (templates/<id>/module + template.ts metadata; the .ts files are inert in the
-# image). The `template.localModulePath` points at a directory under here (e.g.
-# /app/templates/cloudflare-r2-storage/module); the runner copies it to
-# /work/generated-root/template-module at plan/apply time. Template-less Capsule
-# runs copy their SourceSnapshot/normalized module into the same generated-root
-# child-module slot.
+# image). The provider-agnostic `core` module lives under `opentofu-modules/`;
+# the provider-specific modules live under `providers/<provider>/modules/<id>/`.
+# Each is copied to `/app/templates/<id>/` so `template.localModulePath` (e.g.
+# /app/templates/cloudflare-r2-storage/module) stays a stable in-image path; the
+# runner copies it to /work/generated-root/template-module at plan/apply time.
+# Template-less Capsule runs copy their SourceSnapshot/normalized module into the
+# same generated-root child-module slot.
 WORKDIR /app
-COPY opentofu-modules/ ./templates/
+COPY opentofu-modules/core/ ./templates/core/
+COPY providers/cloudflare/modules/cloudflare-r2-storage/ ./templates/cloudflare-r2-storage/
+COPY providers/cloudflare/modules/cloudflare-static-site/ ./templates/cloudflare-static-site/
+COPY providers/cloudflare/modules/cloudflare-worker-service/ ./templates/cloudflare-worker-service/
+COPY providers/aws/modules/aws-s3-storage/ ./templates/aws-s3-storage/
 
 # The runner server imports the dependency-free shared provider->env-name table
 # from the contract layer via a relative path. The build context is the repo root
