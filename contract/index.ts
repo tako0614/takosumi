@@ -1,3 +1,4 @@
+export * from "./api-surface.ts";
 export * from "./sources.ts";
 export * from "./spaces.ts";
 export type {
