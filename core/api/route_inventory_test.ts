@@ -168,7 +168,7 @@ test("all-mounted public inventory keeps retired internal ledger routes hidden",
 
 test("openapi version follows package version", () => {
   const pkg = JSON.parse(
-    readFileSync(join(import.meta.dir, "../../../package.json"), "utf8"),
+    readFileSync(join(import.meta.dir, "../../package.json"), "utf8"),
   ) as { version: string };
 
   assert.equal(TAKOSUMI_OPENAPI_VERSION, pkg.version);

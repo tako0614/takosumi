@@ -23,7 +23,7 @@ import {
   type SecretBoundaryCrypto,
   selectSecretBoundaryCrypto,
   type SecretCryptoEnvLike,
-} from "../../src/service/adapters/secret-store/memory.ts";
+} from "../../core/adapters/secret-store/memory.ts";
 
 // State/plan artifacts are operator-managed and not cloud-partition-scoped; use
 // the `global` partition (whose key is the bare TAKOSUMI_SECRET_STORE_PASSPHRASE

@@ -7,10 +7,10 @@
 FROM oven/bun:1 AS deps
 WORKDIR /work
 COPY package.json bun.lock tsconfig.json bunfig.toml /work/
-COPY packages/accounts-contract /work/packages/accounts-contract
-COPY packages/accounts-service /work/packages/accounts-service
-COPY packages/cli /work/packages/cli
-COPY packages/platform-services /work/packages/platform-services
+COPY accounts/contract /work/accounts/contract
+COPY accounts/service /work/accounts/service
+COPY accounts/cli /work/accounts/cli
+COPY accounts/platform-services /work/accounts/platform-services
 COPY deploy/node-postgres/package.json /work/deploy/node-postgres/package.json
 COPY deploy/node-postgres/src /work/deploy/node-postgres/src
 RUN bun install --frozen-lockfile

@@ -14,10 +14,10 @@ import {
   type OpenTofuApplyJob,
   type OpenTofuPlanJob,
   type OpenTofuRunner,
-} from "../src/service/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../src/service/domains/deploy-control/store.ts";
-import { seedInstallationModel } from "../src/service/domains/deploy-control/test_model_fixture.ts";
-import { parseOpenTofuOutputs } from "../packages/platform-services/src/opentofu-output-resolver.ts";
+} from "../core/domains/deploy-control/mod.ts";
+import { InMemoryOpenTofuDeploymentStore } from "../core/domains/deploy-control/store.ts";
+import { seedInstallationModel } from "../core/domains/deploy-control/test_model_fixture.ts";
+import { parseOpenTofuOutputs } from "../accounts/platform-services/src/opentofu-output-resolver.ts";
 
 const FIXTURE_SOURCE = "fixtures/opentofu-output-snapshot-proof/source";
 const PROOF_KIND = "takosumi.live-local-opentofu-plan-apply-proof@v1";

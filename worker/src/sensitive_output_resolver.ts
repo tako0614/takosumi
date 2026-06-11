@@ -3,8 +3,8 @@ import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import type {
   SensitiveOutputResolver,
   SensitiveOutputValue,
-} from "../../src/service/domains/output-shares/mod.ts";
-import type { SecretCryptoEnvLike } from "../../src/service/adapters/secret-store/memory.ts";
+} from "../../core/domains/output-shares/mod.ts";
+import type { SecretCryptoEnvLike } from "../../core/adapters/secret-store/memory.ts";
 import type { R2Bucket } from "./bindings.ts";
 import { StateArtifactCrypto } from "./state_crypto.ts";
 

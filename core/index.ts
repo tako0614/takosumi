@@ -114,7 +114,7 @@ export async function startTakosumiService(): Promise<StartedTakosumiService> {
 // import this module, which forced `await loadRuntimeConfigFromEnv(...)`
 // to fire inside the isolate. The service now exposes `startTakosumiService()` and
 // only runs it when the module is executed as the program entrypoint (e.g.
-// `bun run src/service/index.ts` on long-running servers).
+// `bun run core/index.ts` on long-running servers).
 
 if (import.meta.main) {
   const started = await startTakosumiService();

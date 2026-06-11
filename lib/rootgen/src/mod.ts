@@ -37,8 +37,8 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { OutputAllowlistEntry } from "takosumi-contract/installations";
 import { providerCredentialArgs } from "takosumi-contract/provider-env-rules";
-import type { TemplateInputValue } from "../../../src/service/domains/templates/mod.ts";
-import { OpenTofuControllerError } from "../../../src/service/domains/deploy-control/errors.ts";
+import type { TemplateInputValue } from "../../../core/domains/templates/mod.ts";
+import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
 
 const TEMPLATE_MODULE_SOURCE = "./template-module";
 

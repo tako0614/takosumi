@@ -16,14 +16,14 @@
         "./contract/deploy-control-api.ts"
       ],
       "@takosjp/takosumi-accounts-contract": [
-        "./packages/accounts-contract/src/mod.ts"
+        "./accounts/contract/src/mod.ts"
       ],
       "@takosjp/takosumi-accounts-service": [
-        "./packages/accounts-service/src/mod.ts"
+        "./accounts/service/src/mod.ts"
       ],
-      "@takosjp/takosumi-accounts-cli": ["./packages/cli/src/main.ts"],
+      "@takosjp/takosumi-accounts-cli": ["./accounts/cli/src/main.ts"],
       "@takosjp/takosumi-platform-services": [
-        "./packages/platform-services/src/mod.ts"
+        "./accounts/platform-services/src/mod.ts"
       ],
       "takosumi-contract": ["./contract/index.ts"],
       "takosumi-contract/deploy-control-api": ["./contract/deploy-control-api.ts"],
@@ -95,15 +95,16 @@
   },
   "include": [
     "src",
+    "core",
     "providers",
     "opentofu-modules",
     "contract",
     "lib/rootgen",
     "lib/graph",
-    "packages/accounts-contract",
-    "packages/accounts-service",
-    "packages/cli",
-    "packages/platform-services",
+    "accounts/contract",
+    "accounts/service",
+    "accounts/cli",
+    "accounts/platform-services",
     "deploy/accounts-cloudflare",
     "deploy/node-postgres",
     "shims"
@@ -111,7 +112,7 @@
   "exclude": [
     "**/*_test.ts",
     "src/cli/tests",
-    "src/service/scripts",
+    "core/scripts",
     "providers/cloudflare/hosting"
   ]
 }
