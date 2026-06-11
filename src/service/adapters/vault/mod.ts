@@ -39,6 +39,22 @@ import {
   sameProviderFamily,
 } from "takosumi-contract/provider-env-rules";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
+import { providerForAddress } from "@takosumi/providers";
+import { cloudflareCredentialDriver } from "@takosumi/providers/cloudflare/connection.ts";
+import { CloudflareCredentialError } from "@takosumi/providers/cloudflare/credentials.ts";
+import {
+  AwsConnectionError,
+  mintAwsAssumeRoleCredentials,
+  verifyAwsAssumeRole,
+} from "@takosumi/providers/aws/credentials.ts";
+import {
+  GitCredentialMintError,
+  mintGitSourceCredential,
+} from "@takosumi/providers/git/credentials.ts";
+import {
+  mintProviderEnvSetVariables,
+  ProviderEnvSetDriverError,
+} from "@takosumi/providers/provider-env-set/credentials.ts";
 import type {
   OpenTofuDeploymentStore,
   StoredSecretBlob,
@@ -276,30 +292,6 @@ interface MintedFileInternal {
   readonly path: string;
   readonly mode: number;
   readonly content: string;
-}
-
-interface AssumeAwsRoleInput {
-  readonly accessKeyId: string;
-  readonly secretAccessKey: string;
-  readonly sessionToken?: string;
-  readonly roleArn: string;
-  readonly externalId?: string;
-  readonly region: string;
-  readonly sessionName: string;
-}
-
-interface AssumedAwsCredentials {
-  readonly accessKeyId: string;
-  readonly secretAccessKey: string;
-  readonly sessionToken: string;
-  readonly expiresAt: string;
-  readonly ttlSeconds: number;
-}
-
-interface MintedCloudflareToken {
-  readonly token: string;
-  readonly expiresAt: string;
-  readonly ttlSeconds: number;
 }
 
 interface MintedProviderValues {
@@ -690,9 +682,15 @@ export class StaticSecretConnectionVault implements ConnectionVault {
             "no cloudflare api token to verify (CLOUDFLARE_API_TOKEN / CF_API_TOKEN)",
         };
       }
-      verified = await this.#verifyCloudflareToken(token);
+      verified = await cloudflareCredentialDriver.verify({
+        token,
+        fetch: this.#fetch,
+      });
     } else if (isAwsProvider(connection.provider)) {
-      verified = await this.#verifyAwsAssumeRole(connection, values);
+      verified = await verifyAwsAssumeRole(connection, values, {
+        fetch: this.#fetch,
+        now: this.#now,
+      });
     } else {
       return {
         status: "pending",
@@ -857,32 +855,20 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       }
     | undefined
   > {
-    void alias;
+    // A non-env-set connection contributes nothing and never needs its blob
+    // opened (the driver's own `undefined` branch is structural-only). Gate the
+    // crypto here so the open happens only for a real Provider Env Set.
     if (connection.kind !== "provider_env_set") return undefined;
-    if (connection.scope !== "space") {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `provider env set connection ${connection.id} must be Space-scoped`,
-      );
-    }
     const values = await this.#openValues(connection);
-    const env: Record<string, string> = {};
-    for (const [name, value] of Object.entries(values)) {
-      if (typeof value !== "string") continue;
-      env[`TF_VAR_${name}`] = value;
+    // The Provider Env Set driver (`@takosumi/providers/provider-env-set`) maps
+    // the opened values to root-only `TF_VAR_<name>` entries + mint evidence.
+    // Its scope-precondition error is re-wrapped to the vault's surface so the
+    // message text stays byte-identical for callers/tests.
+    try {
+      return mintProviderEnvSetVariables(connection, values, alias);
+    } catch (error) {
+      throw wrapDriverError(error);
     }
-    return {
-      env,
-      evidence: {
-        provider: connection.provider,
-        connectionId: connection.id,
-        delivery: "generated_root_variable",
-        rootOnly: true,
-        temporary: false,
-        ttlEnforced: false,
-        issuer: "static_secret",
-      },
-    };
   }
 
   /**
@@ -1034,70 +1020,26 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     assertConnectionVerified(connection);
     const values = await this.#openValues(connection);
 
-    if (connection.kind === "source_git_https_token") {
-      const token = values[GIT_HTTPS_TOKEN_ENV];
-      if (!token) {
-        throw new ConnectionVaultError(
-          "failed_precondition",
-          `connection ${connectionId} has no ${GIT_HTTPS_TOKEN_ENV}`,
-        );
-      }
-      const username = connection.scopeHints?.username ?? "x-access-token";
-      const askpass = gitAskpassScript(username, token);
-      return new PhaseMintBundle(
-        {
-          env: {
-            GIT_TERMINAL_PROMPT: "0",
-          },
-          files: [
-            {
-              path: "askpass.sh",
-              mode: 0o700,
-              content: askpass,
-            },
-          ],
-        },
-        [],
-      );
+    // The git source driver (`@takosumi/providers/git`) turns the opened secret
+    // values + the connection context into the runner-facing askpass / ssh key
+    // files. Crypto / connection-state validation stayed in core above; the
+    // driver's typed error is re-wrapped so its byte-identical message text keeps
+    // the same `failed_precondition` surface for callers/tests.
+    try {
+      const response = mintGitSourceCredential(values, {
+        connectionId,
+        kind: connection.kind,
+        ...(connection.scopeHints?.username
+          ? { username: connection.scopeHints.username }
+          : {}),
+        ...(connection.scopeHints?.knownHostsEntry
+          ? { knownHostsEntry: connection.scopeHints.knownHostsEntry }
+          : {}),
+      });
+      return new PhaseMintBundle(response, []);
+    } catch (error) {
+      throw wrapDriverError(error);
     }
-
-    // source_git_ssh_key
-    const key = values[GIT_SSH_PRIVATE_KEY_ENV];
-    if (!key) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `connection ${connectionId} has no ${GIT_SSH_PRIVATE_KEY_ENV}`,
-      );
-    }
-    const knownHosts = connection.scopeHints?.knownHostsEntry;
-    if (!knownHosts) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `connection ${connectionId} is missing its known_hosts entry`,
-      );
-    }
-    const keyContent = key.endsWith("\n") ? key : `${key}\n`;
-    const knownHostsContent = knownHosts.endsWith("\n")
-      ? knownHosts
-      : `${knownHosts}\n`;
-    return new PhaseMintBundle(
-      {
-        env: {},
-        files: [
-          {
-            path: "id_source",
-            mode: 0o600,
-            content: keyContent,
-          },
-          {
-            path: "known_hosts",
-            mode: 0o600,
-            content: knownHostsContent,
-          },
-        ],
-      },
-      [],
-    );
   }
 
   async #requireConnection(id: string): Promise<Connection> {
@@ -1174,372 +1116,48 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         issuer: "static_secret",
       };
     };
+    // Cloudflare token-vending: the driver mints a short-lived scoped token from
+    // the opened bootstrap token (`@takosumi/providers/cloudflare`). Crypto /
+    // opening stayed in core above; the driver only talks to the CF API. Its
+    // typed error is re-wrapped into the vault's `failed_precondition` surface
+    // so the message text stays byte-identical for callers/tests.
     if (
-      isCloudflareProvider(connection.provider) &&
-      connection.scopeHints?.cloudflareTokenVending
+      cloudflareCredentialDriver.isProvider(connection.provider) &&
+      cloudflareCredentialDriver.isTokenVending(connection)
     ) {
-      const bootstrapToken =
-        values.CLOUDFLARE_API_TOKEN ?? values.CF_API_TOKEN ?? "";
-      if (!bootstrapToken) {
-        throw new ConnectionVaultError(
-          "failed_precondition",
-          `cloudflare token-vending connection ${connection.id} requires CLOUDFLARE_API_TOKEN or CF_API_TOKEN as the bootstrap credential`,
-        );
-      }
-      const minted = await this.#mintCloudflareApiToken(
-        connection,
-        bootstrapToken,
-      );
-      return {
-        values: {
-          ...values,
-          CLOUDFLARE_API_TOKEN: minted.token,
-        },
-        evidence: {
-          connectionId: connection.id,
-          provider: connection.provider,
+      try {
+        return await cloudflareCredentialDriver.mint({
+          connection,
+          values,
           delivery,
-          rootOnly: delivery === "generated_root_variable",
-          temporary: true,
-          ttlEnforced: true,
-          expiresAt: minted.expiresAt,
-          ttlSeconds: minted.ttlSeconds,
-          issuer: "cloudflare_api_token_vending",
-        },
-      };
+          fetch: this.#fetch,
+          now: this.#now,
+        });
+      } catch (error) {
+        throw wrapDriverError(error);
+      }
     }
-    if (
-      !isAwsProvider(connection.provider) ||
-      !connection.scopeHints?.awsRoleArn
-    ) {
-      return { values, evidence: staticEvidence() };
-    }
-    if (values.AWS_WEB_IDENTITY_TOKEN_FILE && values.AWS_ROLE_ARN) {
-      // Web-identity token files are runner-local files. The vault cannot safely
-      // materialize them from sealed provider env today, so pass through the
-      // explicit file-based contract when an operator has arranged the file in
-      // the runner environment.
-      return {
-        values: {
-          ...values,
-          AWS_ROLE_ARN: values.AWS_ROLE_ARN || connection.scopeHints.awsRoleArn,
-        },
-        evidence: staticEvidence(),
-      };
-    }
-    const accessKeyId = values.AWS_ACCESS_KEY_ID;
-    const secretAccessKey = values.AWS_SECRET_ACCESS_KEY;
-    if (!accessKeyId || !secretAccessKey) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `aws assume-role connection ${connection.id} requires AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY as source credentials`,
-      );
-    }
-    const region =
-      connection.scopeHints.awsRegion ??
-      values.AWS_REGION ??
-      values.AWS_DEFAULT_REGION ??
-      "us-east-1";
-    const assumed = await this.#assumeAwsRole({
-      accessKeyId,
-      secretAccessKey,
-      sessionToken: values.AWS_SESSION_TOKEN,
-      roleArn: connection.scopeHints.awsRoleArn,
-      externalId: connection.scopeHints.awsExternalId,
-      region,
-      sessionName: awsRoleSessionName(connection.id),
-    });
-    return {
-      values: {
-        AWS_ACCESS_KEY_ID: assumed.accessKeyId,
-        AWS_SECRET_ACCESS_KEY: assumed.secretAccessKey,
-        AWS_SESSION_TOKEN: assumed.sessionToken,
-        AWS_REGION: region,
-        AWS_DEFAULT_REGION: values.AWS_DEFAULT_REGION ?? region,
-      },
-      evidence: {
-        connectionId: connection.id,
-        provider: connection.provider,
+    // AWS AssumeRole: the driver mints temporary STS credentials from the opened
+    // source credentials + the connection's AWS scope hints
+    // (`@takosumi/providers/aws`). It returns `undefined` when AssumeRole does
+    // not apply (non-AWS provider or no `awsRoleArn`), so the vault falls through
+    // to the static-secret path unchanged.
+    let awsMinted: MintedProviderValues | undefined;
+    try {
+      awsMinted = await mintAwsAssumeRoleCredentials(
+        connection,
+        values,
         delivery,
-        rootOnly: delivery === "generated_root_variable",
-        temporary: true,
-        ttlEnforced: true,
-        expiresAt: assumed.expiresAt,
-        ttlSeconds: assumed.ttlSeconds,
-        issuer: "aws_sts_assume_role",
-      },
-    };
-  }
-
-  async #mintCloudflareApiToken(
-    connection: Connection,
-    bootstrapToken: string,
-  ): Promise<MintedCloudflareToken> {
-    const vending = connection.scopeHints?.cloudflareTokenVending;
-    if (!vending || !Array.isArray(vending.policies)) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `cloudflare token-vending connection ${connection.id} requires scopeHints.cloudflareTokenVending.policies`,
-      );
-    }
-    const now = this.#now();
-    const ttlSeconds = cloudflareTokenTtlSeconds(vending.ttlSeconds);
-    const expiresAt = new Date(now.getTime() + ttlSeconds * 1000).toISOString();
-    const body = {
-      name: cloudflareTokenName(connection, now, vending.namePrefix),
-      policies: vending.policies,
-      expires_on: expiresAt,
-      ...(vending.condition ? { condition: vending.condition } : {}),
-    };
-    let response: Response;
-    try {
-      response = await this.#fetch(
-        "https://api.cloudflare.com/client/v4/user/tokens",
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${bootstrapToken}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(body),
-        },
+        staticEvidence,
+        { fetch: this.#fetch, now: this.#now },
       );
     } catch (error) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `cloudflare api token create request failed: ${errorMessage(error)}`,
-      );
+      throw wrapDriverError(error);
     }
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `cloudflare api token create returned http ${response.status} with non-JSON body`,
-      );
-    }
-    if (!response.ok || !isRecord(payload) || payload.success !== true) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `cloudflare api token create returned http ${response.status}: ${cloudflareApiErrorCode(payload)}`,
-      );
-    }
-    const result = isRecord(payload.result) ? payload.result : undefined;
-    const token = typeof result?.value === "string" ? result.value : undefined;
-    const returnedExpiresAt =
-      typeof result?.expires_on === "string" ? result.expires_on : undefined;
-    if (!token) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        "cloudflare api token create response did not include a token value",
-      );
-    }
-    if (!returnedExpiresAt) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        "cloudflare api token create response did not include expires_on",
-      );
-    }
-    const returnedExpiresAtMs = Date.parse(returnedExpiresAt);
-    if (
-      !Number.isFinite(returnedExpiresAtMs) ||
-      returnedExpiresAtMs <= now.getTime()
-    ) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        "cloudflare api token create response included an invalid expires_on",
-      );
-    }
-    return {
-      token,
-      expiresAt: new Date(returnedExpiresAtMs).toISOString(),
-      ttlSeconds: Math.floor((returnedExpiresAtMs - now.getTime()) / 1000),
-    };
+    if (awsMinted) return awsMinted;
+    return { values, evidence: staticEvidence() };
   }
 
-  async #assumeAwsRole(
-    input: AssumeAwsRoleInput,
-  ): Promise<AssumedAwsCredentials> {
-    const payload = formEncode({
-      Action: "AssumeRole",
-      Version: "2011-06-15",
-      RoleArn: input.roleArn,
-      RoleSessionName: input.sessionName,
-      DurationSeconds: "3600",
-      ...(input.externalId ? { ExternalId: input.externalId } : {}),
-    });
-    const host = `sts.${input.region}.amazonaws.com`;
-    const url = `https://${host}/`;
-    const now = this.#now();
-    const amzDate = toAmzDate(now);
-    const dateStamp = amzDate.slice(0, 8);
-    const headers: Record<string, string> = {
-      "content-type": "application/x-www-form-urlencoded; charset=utf-8",
-      host,
-      "x-amz-date": amzDate,
-      ...(input.sessionToken
-        ? { "x-amz-security-token": input.sessionToken }
-        : {}),
-    };
-    const authorization = await awsSigV4Authorization({
-      method: "POST",
-      path: "/",
-      query: "",
-      headers,
-      payload,
-      accessKeyId: input.accessKeyId,
-      secretAccessKey: input.secretAccessKey,
-      dateStamp,
-      region: input.region,
-      service: "sts",
-    });
-    let response: Response;
-    try {
-      response = await this.#fetch(url, {
-        method: "POST",
-        headers: {
-          ...headers,
-          authorization,
-        },
-        body: payload,
-      });
-    } catch (error) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `aws sts AssumeRole request failed: ${errorMessage(error)}`,
-      );
-    }
-    const text = await response.text();
-    if (!response.ok) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `aws sts AssumeRole returned http ${response.status}: ${awsXmlTag(text, "Code") ?? "unknown_error"}`,
-      );
-    }
-    const credentials = {
-      accessKeyId: awsXmlTag(text, "AccessKeyId"),
-      secretAccessKey: awsXmlTag(text, "SecretAccessKey"),
-      sessionToken: awsXmlTag(text, "SessionToken"),
-      expiration: awsXmlTag(text, "Expiration"),
-    };
-    if (
-      !credentials.accessKeyId ||
-      !credentials.secretAccessKey ||
-      !credentials.sessionToken ||
-      !credentials.expiration
-    ) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        "aws sts AssumeRole response did not include complete temporary credentials",
-      );
-    }
-    const expirationMs = Date.parse(credentials.expiration);
-    if (!Number.isFinite(expirationMs)) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        "aws sts AssumeRole response included an invalid Expiration",
-      );
-    }
-    const ttlSeconds = Math.floor((expirationMs - now.getTime()) / 1000);
-    if (ttlSeconds <= 0) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        "aws sts AssumeRole response returned already-expired credentials",
-      );
-    }
-    return {
-      accessKeyId: credentials.accessKeyId,
-      secretAccessKey: credentials.secretAccessKey,
-      sessionToken: credentials.sessionToken,
-      expiresAt: new Date(expirationMs).toISOString(),
-      ttlSeconds,
-    };
-  }
-
-  async #verifyCloudflareToken(
-    token: string,
-  ): Promise<{ readonly ok: boolean; readonly detail?: string }> {
-    let response: Response;
-    try {
-      response = await this.#fetch(
-        "https://api.cloudflare.com/client/v4/user/tokens/verify",
-        {
-          method: "GET",
-          headers: {
-            authorization: `Bearer ${token}`,
-            "content-type": "application/json",
-          },
-        },
-      );
-    } catch (error) {
-      return {
-        ok: false,
-        detail: `token verify request failed: ${errorMessage(error)}`,
-      };
-    }
-    if (!response.ok) {
-      return {
-        ok: false,
-        detail: `token verify returned http ${response.status}`,
-      };
-    }
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch {
-      return { ok: false, detail: "token verify returned non-JSON body" };
-    }
-    if (isCloudflareVerifyOk(body)) return { ok: true };
-    return {
-      ok: false,
-      detail: "token verify reported the token is not active",
-    };
-  }
-
-  async #verifyAwsAssumeRole(
-    connection: Connection,
-    values: Record<string, string>,
-  ): Promise<{ readonly ok: boolean; readonly detail?: string }> {
-    if (!connection.scopeHints?.awsRoleArn) {
-      return {
-        ok: false,
-        detail:
-          "aws verification requires scopeHints.awsRoleArn for AssumeRole",
-      };
-    }
-    const accessKeyId = values.AWS_ACCESS_KEY_ID;
-    const secretAccessKey = values.AWS_SECRET_ACCESS_KEY;
-    if (!accessKeyId || !secretAccessKey) {
-      return {
-        ok: false,
-        detail:
-          "aws verification requires AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY as source credentials",
-      };
-    }
-    const region =
-      connection.scopeHints.awsRegion ??
-      values.AWS_REGION ??
-      values.AWS_DEFAULT_REGION ??
-      "us-east-1";
-    try {
-      await this.#assumeAwsRole({
-        accessKeyId,
-        secretAccessKey,
-        sessionToken: values.AWS_SESSION_TOKEN,
-        roleArn: connection.scopeHints.awsRoleArn,
-        externalId: connection.scopeHints.awsExternalId,
-        region,
-        sessionName: awsRoleSessionName(connection.id),
-      });
-      return { ok: true };
-    } catch (error) {
-      return {
-        ok: false,
-        detail: errorMessage(error),
-      };
-    }
-  }
 }
 
 /**
@@ -1590,20 +1208,11 @@ function assertConnectionVerified(connection: Connection): void {
 }
 
 function isAwsProvider(provider: string): boolean {
-  return providerEnvRule(provider)?.shortName === "aws";
+  return providerForAddress(provider)?.id === "aws";
 }
 
 function isCloudflareProvider(provider: string): boolean {
-  return providerEnvRule(provider)?.shortName === "cloudflare";
-}
-
-function isCloudflareVerifyOk(body: unknown): boolean {
-  if (body === null || typeof body !== "object") return false;
-  const record = body as { success?: unknown; result?: unknown };
-  if (record.success !== true) return false;
-  const result = record.result;
-  if (result === null || typeof result !== "object") return false;
-  return (result as { status?: unknown }).status === "active";
+  return providerForAddress(provider)?.id === "cloudflare";
 }
 
 function normalizeConnectionExpiresAt(
@@ -1805,33 +1414,6 @@ function cloudflareTokenTtlSeconds(value: unknown): number {
   return value;
 }
 
-function cloudflareTokenName(
-  connection: Connection,
-  now: Date,
-  prefix?: string,
-): string {
-  const safePrefix =
-    prefix && prefix.trim().length > 0
-      ? prefix
-          .trim()
-          .replace(/[^A-Za-z0-9_.:-]+/g, "-")
-          .slice(0, 80)
-      : "takosumi-run";
-  const stamp = now.toISOString().replace(/[:.]/g, "-");
-  return `${safePrefix}-${connection.id}-${stamp}`.slice(0, 120);
-}
-
-function cloudflareApiErrorCode(payload: unknown): string {
-  if (!isRecord(payload)) return "unknown_error";
-  const errors = payload.errors;
-  if (!Array.isArray(errors) || errors.length === 0) return "unknown_error";
-  const first = errors[0];
-  if (!isRecord(first)) return "unknown_error";
-  const code = typeof first.code === "number" ? String(first.code) : undefined;
-  const message = typeof first.message === "string" ? first.message : undefined;
-  return [code, message].filter(Boolean).join(": ") || "unknown_error";
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -1859,184 +1441,29 @@ function requireNonEmpty(
   }
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function awsRoleSessionName(connectionId: string): string {
-  const suffix = connectionId.replace(/[^A-Za-z0-9+=,.@-]/g, "-").slice(0, 32);
-  return `takosumi-${suffix}`.slice(0, 64);
-}
-
-function toAmzDate(date: Date): string {
-  return date
-    .toISOString()
-    .replace(/[:-]/g, "")
-    .replace(/\.\d{3}Z$/, "Z");
-}
-
-function formEncode(values: Readonly<Record<string, string>>): string {
-  return Object.entries(values)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(
-      ([key, value]) =>
-        `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
-    )
-    .join("&");
-}
-
-async function awsSigV4Authorization(input: {
-  readonly method: string;
-  readonly path: string;
-  readonly query: string;
-  readonly headers: Readonly<Record<string, string>>;
-  readonly payload: string;
-  readonly accessKeyId: string;
-  readonly secretAccessKey: string;
-  readonly dateStamp: string;
-  readonly region: string;
-  readonly service: string;
-}): Promise<string> {
-  const canonicalHeaderEntries = Object.entries(input.headers)
-    .map(
-      ([name, value]) =>
-        [name.toLowerCase(), value.trim().replace(/\s+/g, " ")] as const,
-    )
-    .sort(([a], [b]) => a.localeCompare(b));
-  const signedHeaders = canonicalHeaderEntries.map(([name]) => name).join(";");
-  const canonicalHeaders = canonicalHeaderEntries
-    .map(([name, value]) => `${name}:${value}\n`)
-    .join("");
-  const payloadHash = await sha256Hex(input.payload);
-  const canonicalRequest = [
-    input.method,
-    input.path,
-    input.query,
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash,
-  ].join("\n");
-  const amzDate = input.headers["x-amz-date"] ?? input.headers["X-Amz-Date"];
-  if (!amzDate) {
-    throw new ConnectionVaultError(
-      "failed_precondition",
-      "aws sts signing requires x-amz-date",
-    );
-  }
-  const credentialScope = `${input.dateStamp}/${input.region}/${input.service}/aws4_request`;
-  const stringToSign = [
-    "AWS4-HMAC-SHA256",
-    amzDate,
-    credentialScope,
-    await sha256Hex(canonicalRequest),
-  ].join("\n");
-  const signingKey = await awsSigV4SigningKey(
-    input.secretAccessKey,
-    input.dateStamp,
-    input.region,
-    input.service,
-  );
-  const signature = bytesToHex(await hmacSha256(signingKey, stringToSign));
-  return [
-    `AWS4-HMAC-SHA256 Credential=${input.accessKeyId}/${credentialScope}`,
-    `SignedHeaders=${signedHeaders}`,
-    `Signature=${signature}`,
-  ].join(", ");
-}
-
-async function awsSigV4SigningKey(
-  secretAccessKey: string,
-  dateStamp: string,
-  region: string,
-  service: string,
-): Promise<Uint8Array> {
-  const kDate = await hmacSha256(utf8(`AWS4${secretAccessKey}`), dateStamp);
-  const kRegion = await hmacSha256(kDate, region);
-  const kService = await hmacSha256(kRegion, service);
-  return await hmacSha256(kService, "aws4_request");
-}
-
-async function hmacSha256(
-  keyBytes: Uint8Array,
-  data: string,
-): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    arrayBufferFromBytes(keyBytes),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  return new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, arrayBufferFromBytes(utf8(data))),
-  );
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    arrayBufferFromBytes(utf8(value)),
-  );
-  return bytesToHex(new Uint8Array(digest));
-}
-
-function utf8(value: string): Uint8Array {
-  return new TextEncoder().encode(value);
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
-  const buffer = new ArrayBuffer(bytes.byteLength);
-  const copy = new Uint8Array(buffer);
-  copy.set(bytes);
-  return buffer;
-}
-
-function awsXmlTag(xml: string, tag: string): string | undefined {
-  const match = new RegExp(`<${tag}>([^<]+)</${tag}>`).exec(xml);
-  return match ? decodeXmlEntities(match[1]) : undefined;
-}
-
-function decodeXmlEntities(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+function defaultConnectionId(): string {
+  return `conn_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
 
 /**
- * Builds a GIT_ASKPASS script that echoes the username on the first prompt and
- * the token on the password prompt. Git invokes the script with the prompt text
- * as `$1`; a prompt containing "Username" yields the user, anything else (the
- * password prompt) yields the token. Single quotes in the values are escaped so
- * the script cannot break out of the quoting.
+ * Re-wraps a per-provider credential driver error into the vault's own
+ * {@link ConnectionVaultError} surface. Each driver
+ * (`@takosumi/providers/{cloudflare,aws,git,provider-env-set}`) raises its own
+ * typed error whose `message` text is byte-identical to the formerly-inline
+ * vault message; all of them map to `failed_precondition` (the same code the
+ * inline paths threw). Any other error is rethrown unchanged so unexpected
+ * failures are not masked.
  */
-function gitAskpassScript(username: string, token: string): string {
-  const u = shellSingleQuote(username);
-  const t = shellSingleQuote(token);
-  return [
-    "#!/bin/sh",
-    `case "$1" in`,
-    `  *sername*) printf '%s' ${u} ;;`,
-    `  *) printf '%s' ${t} ;;`,
-    "esac",
-    "",
-  ].join("\n");
-}
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function defaultConnectionId(): string {
-  return `conn_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+function wrapDriverError(error: unknown): unknown {
+  if (
+    error instanceof CloudflareCredentialError ||
+    error instanceof AwsConnectionError ||
+    error instanceof GitCredentialMintError ||
+    error instanceof ProviderEnvSetDriverError
+  ) {
+    return new ConnectionVaultError("failed_precondition", error.message);
+  }
+  return error;
 }
 
 /**
