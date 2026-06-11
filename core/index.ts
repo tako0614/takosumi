@@ -22,14 +22,14 @@ import {
   assertDatabaseEncryptionAtRest,
   DatabaseEncryptionConfigurationError,
 } from "./adapters/storage/encryption.ts";
-import { SqlObservabilitySink } from "./services/observability/mod.ts";
+import { SqlObservabilitySink } from "./domains/observability/mod.ts";
 import {
   type AuditExternalReplicationSink,
   AuditReplicationConfigurationError,
   resolveAuditRetention,
   selectAuditExternalReplicationSink,
   verifyAuditReplicationConsistency,
-} from "./services/audit-replication/mod.ts";
+} from "./domains/audit-replication/mod.ts";
 import type {
   SqlClient,
   SqlParameters,

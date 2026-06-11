@@ -3,7 +3,7 @@ import type {
   MigrationCheckpoint,
   MigrationLedgerEntry,
   ResourceInstanceId,
-} from "../../domains/resources/mod.ts";
+} from "./mod.ts";
 import { conflict } from "../../shared/errors.ts";
 import type { IsoTimestamp } from "../../shared/time.ts";
 

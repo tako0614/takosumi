@@ -10,8 +10,8 @@ import { MemoryObjectStorage } from "./adapters/object-storage/mod.ts";
 import {
   InMemoryObservabilitySink,
   OtlpObservabilitySink,
-} from "./services/observability/mod.ts";
-import { EntitlementPolicyService } from "./services/entitlements/mod.ts";
+} from "./domains/observability/mod.ts";
+import { EntitlementPolicyService } from "./domains/entitlements/mod.ts";
 
 test("createInMemoryAppContext exposes full optional composition fields", async () => {
   const context = createInMemoryAppContext({

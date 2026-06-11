@@ -4,7 +4,7 @@ import type {
   ResourceBindingRole,
   ResourceInstance,
   SecretBindingRef,
-} from "../../domains/resources/mod.ts";
+} from "./mod.ts";
 import type {
   SecretRecord,
   SecretStorePort,

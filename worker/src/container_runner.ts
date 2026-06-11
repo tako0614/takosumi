@@ -21,7 +21,7 @@ import type {
   CloudflareWorkerEnv,
   OpenTofuRunQueueMessage,
 } from "./bindings.ts";
-import { redactString } from "../../core/services/observability/redaction.ts";
+import { redactString } from "../../core/domains/observability/redaction.ts";
 
 /**
  * Implements {@link OpenTofuRunner} over the RUNNER Durable Object: each

@@ -2,7 +2,7 @@ import type { Context, Hono as HonoApp } from "hono";
 import type {
   ObservabilitySink,
   TraceSpanEvent,
-} from "../services/observability/mod.ts";
+} from "../domains/observability/mod.ts";
 import { log } from "../shared/log.ts";
 
 export const TAKOSUMI_REQUEST_ID_HEADER = "x-request-id" as const;

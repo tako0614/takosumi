@@ -14,8 +14,8 @@ import type {
   RuntimeAgentHeartbeatInput,
   RuntimeAgentRegistry,
 } from "../agents/types.ts";
-import type { MutationBoundaryOperation } from "../services/entitlements/mod.ts";
-import type { WorkerAuthzService } from "../services/security/mod.ts";
+import type { MutationBoundaryOperation } from "../domains/entitlements/mod.ts";
+import type { WorkerAuthzService } from "../domains/security/mod.ts";
 import { DomainError } from "../shared/errors.ts";
 import { apiError, readJsonObject, registerApiErrorHandler } from "./errors.ts";
 import { readInternalAuth } from "./internal_auth.ts";

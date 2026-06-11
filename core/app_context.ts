@@ -82,11 +82,11 @@ import {
   InMemoryObservabilitySink,
   type ObservabilitySink,
   wrapObservabilitySinkWithOtlpMetrics,
-} from "./services/observability/mod.ts";
+} from "./domains/observability/mod.ts";
 import {
   type EntitlementPolicyPort,
   EntitlementPolicyService,
-} from "./services/entitlements/mod.ts";
+} from "./domains/entitlements/mod.ts";
 import {
   createOperatorImplementationRegistry,
   type OperatorImplementationRegistry,

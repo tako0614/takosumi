@@ -1,6 +1,6 @@
 import type { Hono as HonoApp } from "hono";
-import type { ObservabilitySink } from "../services/observability/mod.ts";
-import type { MetricEvent } from "../services/observability/types.ts";
+import type { ObservabilitySink } from "../domains/observability/mod.ts";
+import type { MetricEvent } from "../domains/observability/types.ts";
 import { apiError, registerApiErrorHandler } from "./errors.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
 import type { ApiEndpoint } from "./route_families.ts";

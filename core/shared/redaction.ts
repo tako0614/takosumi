@@ -9,7 +9,7 @@ import {
   isSecretKey,
   redactString,
   REDACTED_VALUE,
-} from "../services/observability/redaction.ts";
+} from "../domains/observability/redaction.ts";
 
 export { REDACTED_VALUE, redactString };
 

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { Hono } from "hono";
-import { InMemoryObservabilitySink } from "../services/observability/mod.ts";
+import { InMemoryObservabilitySink } from "../domains/observability/mod.ts";
 import {
   type ApiRequestLogLine,
   createConsoleApiRequestLogger,

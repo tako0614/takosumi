@@ -21,7 +21,7 @@ import type {
   ResourceSharingMode,
   SecretBindingRef,
   SecretResolutionPolicy,
-} from "../../domains/resources/mod.ts";
+} from "./mod.ts";
 import type { SecretStorePort } from "../../adapters/secret-store/mod.ts";
 import { conflict, notFound } from "../../shared/errors.ts";
 import type { IsoTimestamp } from "../../shared/time.ts";

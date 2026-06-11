@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { Hono, type Hono as HonoApp } from "hono";
-import { InMemoryObservabilitySink } from "../services/observability/mod.ts";
+import { InMemoryObservabilitySink } from "../domains/observability/mod.ts";
 import {
   PROMETHEUS_CONTENT_TYPE,
   registerMetricsRoutes,
