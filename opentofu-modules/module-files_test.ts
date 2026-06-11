@@ -20,10 +20,10 @@
 
 import { test, expect } from "bun:test";
 import { firstPartyModuleFilesByTemplateId } from "./module-files.ts";
-import { awsS3StorageTemplate } from "./aws-s3-storage/template.ts";
-import { cloudflareR2StorageTemplate } from "./cloudflare-r2-storage/template.ts";
-import { cloudflareStaticSiteTemplate } from "./cloudflare-static-site/template.ts";
-import { cloudflareWorkerServiceTemplate } from "./cloudflare-worker-service/template.ts";
+import { awsS3StorageTemplate } from "../providers/aws/modules/aws-s3-storage/template.ts";
+import { cloudflareR2StorageTemplate } from "../providers/cloudflare/modules/cloudflare-r2-storage/template.ts";
+import { cloudflareStaticSiteTemplate } from "../providers/cloudflare/modules/cloudflare-static-site/template.ts";
+import { cloudflareWorkerServiceTemplate } from "../providers/cloudflare/modules/cloudflare-worker-service/template.ts";
 import { coreTemplate } from "./core/template.ts";
 
 const TEMPLATES = [

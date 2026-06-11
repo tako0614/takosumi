@@ -30,7 +30,10 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const MODULE_TF = join(HERE, "../opentofu-modules/cloudflare-r2-storage/module/main.tf");
+const MODULE_TF = join(
+  HERE,
+  "../providers/cloudflare/modules/cloudflare-r2-storage/module/main.tf",
+);
 const CF_API = "https://api.cloudflare.com/client/v4";
 
 function loadDotEnvSmoke(): void {

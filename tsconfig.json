@@ -12,9 +12,6 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@takosjp/takosumi/contract/deploy-control-api": [
-        "./contract/deploy-control-api.ts"
-      ],
       "@takosjp/takosumi-accounts-contract": [
         "./accounts/contract/src/mod.ts"
       ],
