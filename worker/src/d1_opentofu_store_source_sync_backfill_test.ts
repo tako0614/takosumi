@@ -17,7 +17,7 @@ import {
   CloudflareD1OpenTofuDeploymentStore,
   ensureD1OpenTofuLedgerSchema,
 } from "./d1_opentofu_store.ts";
-import { SqliteFakeD1 } from "../../src/service/domains/deploy-control/sqlite_fake_d1.ts";
+import { SqliteFakeD1 } from "../../core/domains/deploy-control/sqlite_fake_d1.ts";
 import type { D1Database } from "./bindings.ts";
 import type { SourceSyncRun } from "takosumi-contract/sources";
 

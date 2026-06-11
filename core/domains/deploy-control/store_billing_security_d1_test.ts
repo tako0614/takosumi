@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { CloudflareD1OpenTofuDeploymentStore } from "../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "./sqlite_fake_d1.ts";
 
 test("d1 store persists security findings and billing ledger rows", async () => {

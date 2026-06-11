@@ -152,7 +152,7 @@ export async function loadAccountsMigrations(): Promise<
   readonly AccountsMigration[]
 > {
   const migrationsDir = new URL(
-    "../../accounts-service/migrations/",
+    "../../service/migrations/",
     import.meta.url,
   );
   const entries = [];

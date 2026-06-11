@@ -3,7 +3,7 @@ import {
   type MemoryStorageSnapshot,
   type StorageDriver,
   type StorageTransaction,
-} from "../../src/service/adapters/storage/mod.ts";
+} from "../../core/adapters/storage/mod.ts";
 import { eq } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import { sqliteTable, text } from "drizzle-orm/sqlite-core";

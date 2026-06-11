@@ -18,12 +18,12 @@ import {
   revokeDebtSourceKey,
   type RevokeDebtStore,
   type RevokeDebtTransitionInput,
-} from "../../src/service/domains/deploy-records/revoke_debt_store.ts";
+} from "../../core/domains/deploy-records/revoke_debt_store.ts";
 import type {
   TakosumiDeploymentRecord,
   TakosumiDeploymentRecordStore,
   TakosumiDeploymentUpsertInput,
-} from "../../src/service/domains/deploy-records/deployment_record_store.ts";
+} from "../../core/domains/deploy-records/deployment_record_store.ts";
 import type { D1Database } from "./bindings.ts";
 
 const cfRecords = sqliteTable(

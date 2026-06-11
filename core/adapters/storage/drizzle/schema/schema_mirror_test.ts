@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { getTableColumns, getTableName } from "drizzle-orm";
 import { getTableConfig as getPgTableConfig } from "drizzle-orm/pg-core";
 import { getTableConfig as getSqliteTableConfig } from "drizzle-orm/sqlite-core";
-import { ensureD1OpenTofuLedgerSchema } from "../../../../../../worker/src/d1_opentofu_store.ts";
+import { ensureD1OpenTofuLedgerSchema } from "../../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../../domains/deploy-control/sqlite_fake_d1.ts";
 import * as d1Schema from "./d1.ts";
 import { deployControlLogicalTables } from "./logical.ts";

@@ -8,7 +8,7 @@
  * runtime-neutral boundary.
  */
 
-import { currentRuntime } from "../../service/shared/runtime/index.ts";
+import { currentRuntime } from "../../../core/shared/runtime/index.ts";
 
 export async function spawnMigrate(
   cmd: string,

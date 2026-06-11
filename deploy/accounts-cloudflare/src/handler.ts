@@ -29,7 +29,7 @@ import {
   assertHostNotBlocked,
   BlockedHostError,
 } from "takosumi-contract/reference/host-blocklist";
-import { evaluateSourceUrl } from "../../../src/service/domains/sources/url-policy.ts";
+import { evaluateSourceUrl } from "../../../core/domains/sources/url-policy.ts";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 
 export interface CloudflareWorkerEnv {

@@ -9,7 +9,7 @@ import {
   type OpenTofuDeploymentStore,
   type StoredSecretBlob,
 } from "./store.ts";
-import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { CloudflareD1OpenTofuDeploymentStore } from "../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "./sqlite_fake_d1.ts";
 import type { Connection } from "@takosumi/internal/deploy-control-api";
 import type { ActivityEvent } from "takosumi-contract/activity";

@@ -57,7 +57,7 @@ test("bundled module files match the first-party module sources", async () => {
     const source = await readFile(
       join(
         import.meta.dir,
-        "../../../../opentofu-modules",
+        "../../../opentofu-modules",
         template.id,
         "module/main.tf",
       ),

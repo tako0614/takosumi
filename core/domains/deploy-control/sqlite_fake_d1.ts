@@ -14,7 +14,7 @@ import type {
   D1Database,
   D1PreparedStatement,
   D1Result,
-} from "../../../../worker/src/bindings.ts";
+} from "../../../worker/src/bindings.ts";
 
 export class SqliteFakeD1 implements D1Database {
   readonly #db = new Database(":memory:");

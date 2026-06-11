@@ -3,7 +3,7 @@ FROM oven/bun:1
 WORKDIR /workspace/takosumi
 
 # Build this Dockerfile from the takosumi repository root:
-#   docker build -f src/service/Dockerfile.local .
+#   docker build -f core/Dockerfile.local .
 COPY . .
 RUN bun install --frozen-lockfile --production
 
@@ -12,4 +12,4 @@ ENV PORT=8788
 
 EXPOSE 8788
 
-CMD ["bun", "run", "src/service/index.ts"]
+CMD ["bun", "run", "core/index.ts"]

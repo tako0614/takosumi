@@ -23,7 +23,7 @@ import { InMemoryAccountsStore } from "@takosjp/takosumi-accounts-service";
 import {
   type ControlPlaneOperations,
   handleControlRoute,
-} from "../../../../packages/accounts-service/src/control-routes.ts";
+} from "../../../accounts/service/src/control-routes.ts";
 import type { Space } from "takosumi-contract/spaces";
 
 import {

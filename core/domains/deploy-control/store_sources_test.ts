@@ -8,7 +8,7 @@ import {
   InMemoryOpenTofuDeploymentStore,
   type StoredSource,
 } from "./store.ts";
-import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { CloudflareD1OpenTofuDeploymentStore } from "../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "./sqlite_fake_d1.ts";
 import type {
   SourceSnapshot,

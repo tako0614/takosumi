@@ -17,7 +17,7 @@
     "baseUrl": ".",
     "paths": {
       "@takosjp/takosumi-accounts-contract": [
-        "../packages/accounts-contract/src/mod.ts"
+        "../accounts/contract/src/mod.ts"
       ]
     }
   },

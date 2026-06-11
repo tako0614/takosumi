@@ -86,12 +86,12 @@ import type {
   PlanRunInputs,
   StoredSecretBlob,
   StoredSource,
-} from "../../src/service/domains/deploy-control/store.ts";
+} from "../../core/domains/deploy-control/store.ts";
 import {
   clampActivityLimit,
   InstallationPatchGuardConflict,
-} from "../../src/service/domains/deploy-control/store.ts";
-import * as schema from "../../src/service/adapters/storage/drizzle/schema/d1.ts";
+} from "../../core/domains/deploy-control/store.ts";
+import * as schema from "../../core/adapters/storage/drizzle/schema/d1.ts";
 import type { D1Database, D1Result } from "./bindings.ts";
 
 /**

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { test } from "bun:test";
-import { deployControlD1TableNames } from "../src/service/adapters/storage/drizzle/schema/logical.ts";
+import { deployControlD1TableNames } from "../core/adapters/storage/drizzle/schema/logical.ts";
 
 const ROOT = new URL("../", import.meta.url);
 
@@ -58,7 +58,7 @@ const SOURCE_DOCS_WITH_PUBLIC_SURFACE_WORDING = [
   "CONVENTIONS.md",
   "ROADMAP.md",
   "contract/README.md",
-  "src/service/README.md",
+  "core/README.md",
   "src/runtime-agent/README.md",
   "website/src/components/EndCTA.tsx",
   "website/src/components/Showcase.tsx",
@@ -139,10 +139,10 @@ test("source docs keep current source-module and modulePath vocabulary", async (
 test("workspace packages stay private source modules", async () => {
   for (const path of [
     "package.json",
-    "packages/accounts-contract/package.json",
-    "packages/accounts-service/package.json",
-    "packages/cli/package.json",
-    "packages/platform-services/package.json",
+    "accounts/contract/package.json",
+    "accounts/service/package.json",
+    "accounts/cli/package.json",
+    "accounts/platform-services/package.json",
     "deploy/node-postgres/package.json",
   ]) {
     const manifest = JSON.parse(await readText(new URL(path, ROOT))) as {

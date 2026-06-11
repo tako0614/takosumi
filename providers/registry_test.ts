@@ -6,7 +6,7 @@ import {
   providerForAddress,
   providerForConnectionKind,
 } from "./registry.ts";
-import { createDefaultRunnerProfiles } from "../src/service/domains/deploy-control/runner_profiles.ts";
+import { createDefaultRunnerProfiles } from "../core/domains/deploy-control/runner_profiles.ts";
 
 test("every managed provider has a unique id, runner profile id, and provider address", () => {
   const ids = new Set<string>();

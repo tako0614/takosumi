@@ -12,8 +12,8 @@
 
 import type { JsonValue } from "takosumi-contract";
 import type { SealedDependencyValues } from "takosumi-contract/dependencies";
-import type { DependencyValueSealer } from "../../src/service/domains/deploy-control/mod.ts";
-import type { SecretCryptoEnvLike } from "../../src/service/adapters/secret-store/memory.ts";
+import type { DependencyValueSealer } from "../../core/domains/deploy-control/mod.ts";
+import type { SecretCryptoEnvLike } from "../../core/adapters/secret-store/memory.ts";
 import { StateArtifactCrypto } from "./state_crypto.ts";
 
 const textEncoder = new TextEncoder();
