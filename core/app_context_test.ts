@@ -20,7 +20,7 @@ import { MemoryEncryptedSecretStore } from "./adapters/secret-store/mod.ts";
 import { ImmutableSourceAdapter } from "./adapters/source/mod.ts";
 import { MemoryStorageDriver } from "./adapters/storage/mod.ts";
 import { InMemoryRuntimeAgentRegistry } from "./agents/mod.ts";
-import { InMemoryObservabilitySink } from "./services/observability/mod.ts";
+import { InMemoryObservabilitySink } from "./domains/observability/mod.ts";
 
 test("createInMemoryAppContext keeps default in-memory skeleton wiring", () => {
   const context = createInMemoryAppContext();

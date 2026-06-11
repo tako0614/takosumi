@@ -27,7 +27,7 @@ import {
 import { MemoryEncryptedSecretStore } from "../../core/adapters/secret-store/mod.ts";
 import { selectSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
 import { ImmutableSourceAdapter } from "../../core/adapters/source/mod.ts";
-import { InMemoryObservabilitySink } from "../../core/services/observability/mod.ts";
+import { InMemoryObservabilitySink } from "../../core/domains/observability/mod.ts";
 import type { EnqueueRun } from "../../core/domains/deploy-control/mod.ts";
 import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
 import type { InstallationCoordination } from "../../core/domains/deploy-control/installation_lease.ts";

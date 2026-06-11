@@ -20,7 +20,7 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import type { OutputAllowlistEntry } from "takosumi-contract/installations";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
-import { redactString } from "../../services/observability/redaction.ts";
+import { redactString } from "../../domains/observability/redaction.ts";
 
 export function deploymentOutputsFromOpenTofu(
   outputs: OpenTofuOutputEnvelope,

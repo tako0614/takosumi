@@ -22,7 +22,7 @@ import {
 import {
   WorkerAuthzService,
   type WorkerAuthzStores,
-} from "../services/security/mod.ts";
+} from "../domains/security/mod.ts";
 import {
   registerRuntimeAgentRoutes,
   type RuntimeAgentAuthResult,
