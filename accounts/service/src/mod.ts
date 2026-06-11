@@ -140,8 +140,8 @@ import {
 } from "./deploy-control-proxy.ts";
 import {
   type ControlPlaneOperations,
-  controlSurfacePrefix,
   handleControlRoute,
+  isControlRoutePath,
 } from "./control-routes.ts";
 import { maybeEnsurePersonalSpaceForSession } from "./control-personal-space.ts";
 import {
@@ -264,7 +264,7 @@ export interface AccountsHandlerOptions {
   deployControl?: DeployControlProxyOptions;
   /**
    * In-process deploy-control operations facade backing the session-authed
-   * `/v1/control/*` account-plane routes the dashboard SPA calls (M10). The
+   * `/api/v1/*` account-plane routes the dashboard SPA calls (M10). The
    * platform worker passes its wired `TakosumiOperations` here; it structurally
    * satisfies {@link ControlPlaneOperations}. When omitted the control routes
    * respond 503 after the session gate.
@@ -1281,11 +1281,11 @@ export function createAccountsHandler(
     }
 
     // Account-plane session-authed deploy-control surface. Owns the edge-public
-    // `/api/v1/*` namespace AND the legacy `/v1/control/*` alias the dashboard
-    // SPA calls same-origin with its account session (NOT the operator
-    // deploy-control bearer). Dispatched here before the generic 404;
-    // `handleControlRoute` returns `undefined` only for paths it does not own.
-    if (controlSurfacePrefix(url.pathname)) {
+    // `/api/v1/*` namespace the dashboard SPA calls same-origin with its account
+    // session (NOT the operator deploy-control bearer). Dispatched here before
+    // the generic 404; `handleControlRoute` returns `undefined` only for paths
+    // it does not own.
+    if (isControlRoutePath(url.pathname)) {
       const controlResponse = await handleControlRoute({
         request,
         url,

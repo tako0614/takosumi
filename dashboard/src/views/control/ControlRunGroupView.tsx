@@ -2,9 +2,9 @@
  * RunGroup summary view (spec §31) — a Space-update RunGroup.
  *
  * A RunGroup orders multiple Runs across the dependency DAG (e.g. a Space update
- * after stale propagation). This view reads `GET /v1/control/run-groups/:id`
+ * after stale propagation). This view reads `GET /api/v1/run-groups/:id`
  * ({runGroup, runs}), shows the group status + ordered member list, and offers
- * "全て承認" (`POST /v1/control/run-groups/:id/approve`) to approve the group.
+ * "全て承認" (`POST /api/v1/run-groups/:id/approve`) to approve the group.
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useParams } from "@solidjs/router";

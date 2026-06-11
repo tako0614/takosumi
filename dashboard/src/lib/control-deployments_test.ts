@@ -1,5 +1,5 @@
 /**
- * Tests for the Deployment client functions on the session `/v1/control/*`
+ * Tests for the Deployment client functions on the session `/api/v1/*`
  * surface (TASK Y — Installation 詳細 GUI). Pure-logic tests in the same style
  * as `router-fallbacks_test.ts` / `views/control/graph-layering_test.ts`,
  * runnable under `bun test`. They lock in the EXACT path + method each client fn
@@ -7,9 +7,9 @@
  * packages/accounts-service/src/control-routes.ts fails loudly) and the
  * public-only projection the read returns.
  *
- *   GET  /v1/control/installations/:id/deployments  -> { deployments: [...] }
- *   GET  /v1/control/deployments/:id                -> { deployment: {...} }
- *   POST /v1/control/deployments/:id/rollback-plan  -> { planRun: { id } }
+ *   GET  /api/v1/installations/:id/deployments  -> { deployments: [...] }
+ *   GET  /api/v1/deployments/:id                -> { deployment: {...} }
+ *   POST /api/v1/deployments/:id/rollback-plan  -> { planRun: { id } }
  *
  * The rollback envelope is the plan-run wrapper the existing `extractRunId`
  * reads, so the view can navigate to /runs/:id through the normal approve/apply
@@ -74,7 +74,7 @@ describe("listDeployments", () => {
     const req = captured();
     expect(req.method).toBe("GET");
     // The installation id is URL-encoded into the path.
-    expect(req.url).toBe("/v1/control/installations/inst%201/deployments");
+    expect(req.url).toBe("/api/v1/installations/inst%201/deployments");
     expect(rows).toEqual([DEPLOYMENT]);
   });
 
@@ -99,7 +99,7 @@ describe("getDeployment", () => {
     const got = await getDeployment("dep 1");
     const req = captured();
     expect(req.method).toBe("GET");
-    expect(req.url).toBe("/v1/control/deployments/dep%201");
+    expect(req.url).toBe("/api/v1/deployments/dep%201");
     expect(got).toEqual(DEPLOYMENT);
   });
 });
@@ -110,7 +110,7 @@ describe("createDeploymentRollbackPlan", () => {
     const envelope = await createDeploymentRollbackPlan("dep 1");
     const req = captured();
     expect(req.method).toBe("POST");
-    expect(req.url).toBe("/v1/control/deployments/dep%201/rollback-plan");
+    expect(req.url).toBe("/api/v1/deployments/dep%201/rollback-plan");
     // The envelope is the plan-run wrapper the run-id extractor understands, so
     // the view can navigate into the normal 変更を確認 → 承認 → 公開 flow.
     expect(extractRunId(envelope)).toBe("run_plan_rollback");

@@ -1,16 +1,16 @@
 /**
- * Typed client for the account-plane `/v1/control/*` route family (spec §31 UI
+ * Typed client for the account-plane `/api/v1/*` route family (spec §31 UI
  * backing surface, conformance M10).
  *
  * The dashboard SPA authenticates with the ACCOUNTS-plane HttpOnly
  * `takosumi_session` cookie, NOT the operator deploy-control bearer. The §30
  * `/api` deploy-control surface stays operator-bearer-gated; this client talks
- * same-origin to the NEW session-authed `/v1/control/*` pass-through routes
+ * same-origin to the NEW session-authed `/api/v1/*` pass-through routes
  * (see packages/accounts-service/src/control-routes.ts), which call the
  * in-process operations facade and render the deploy-control contract types.
  *
  * Unlike the legacy account-plane `/v1/installations` routes (snake_case wire
- * shape — see views/account/lib/installations.ts), the `/v1/control/*` routes
+ * shape — see views/account/lib/installations.ts), the `/api/v1/*` routes
  * pass the deploy-control contract types through `JSON.stringify` UNCHANGED, so
  * the wire shape is the camelCase contract shape. The type mirrors below are a
  * local copy of the relevant contract fields: the dashboard build only aliases
@@ -119,7 +119,7 @@ function query(params: Record<string, string | number | undefined>): string {
   return s ? "?" + s : "";
 }
 
-const BASE = "/v1/control";
+const BASE = "/api/v1";
 
 // ===========================================================================
 // Wire shapes (local mirror of the deploy-control contract — see module header)
@@ -323,7 +323,7 @@ export interface Dependency {
   readonly createdAt: string;
 }
 
-/** `GET /v1/control/spaces/:id/graph` projection. */
+/** `GET /api/v1/spaces/:id/graph` projection. */
 export interface SpaceGraph {
   readonly nodes: readonly GraphNode[];
   readonly edges: readonly GraphEdge[];
@@ -400,14 +400,14 @@ export interface RunAuditEvent {
   readonly [key: string]: unknown;
 }
 
-/** `GET /v1/control/runs/:id/logs` body (RunLogsResponse). */
+/** `GET /api/v1/runs/:id/logs` body (RunLogsResponse). */
 export interface RunLogs {
   readonly diagnostics: readonly RunDiagnostic[];
   readonly auditEvents: readonly RunAuditEvent[];
 }
 
 /**
- * `GET /v1/control/runs/:id/cost` projection (RunCostInfo). The public,
+ * `GET /api/v1/runs/:id/cost` projection (RunCostInfo). The public,
  * non-secret billing reservation values the controller already computed at plan
  * time, so the Run view can explain — BEFORE apply — why an apply would be
  * blocked under `enforce` mode (a credit shortfall or a billing-plan limit). It
@@ -439,7 +439,7 @@ export type RunGroupStatus =
   | "failed"
   | "cancelled";
 
-/** `GET|POST /v1/control/run-groups/:id` body (RunGroupWithRuns projection). */
+/** `GET|POST /api/v1/run-groups/:id` body (RunGroupWithRuns projection). */
 export interface RunGroupWithRuns {
   readonly runGroup: {
     readonly id: string;
@@ -485,8 +485,8 @@ export type DeploymentStatus =
 
 /**
  * Public projection of a Deployment as returned by the session control surface
- * (`GET /v1/control/installations/:id/deployments` and
- * `GET /v1/control/deployments/:id`). The backend intentionally drops the raw
+ * (`GET /api/v1/installations/:id/deployments` and
+ * `GET /api/v1/deployments/:id`). The backend intentionally drops the raw
  * `outputSnapshotId` pointer and returns ONLY the allowlist-projected
  * `outputsPublic` map (sensitive outputs never enter the ledger row), so the
  * dashboard read never exposes a handle to the un-projected output envelope.
@@ -729,7 +729,7 @@ export async function changeSpaceSubscription(
 // --- Members (Space membership / roles) ------------------------------------
 //
 // Backs the Members screen over the session-authed
-// `/v1/control/spaces/:id/members[/:subject]` routes (see
+// `/api/v1/spaces/:id/members[/:subject]` routes (see
 // packages/accounts-service/src/control-routes.ts). The Space is resolved
 // server-side and the membership-ROLE gate is enforced by the backend
 // (list = any active member; add/invite = owner/admin; role change + remove =
@@ -757,7 +757,7 @@ export interface PublicSpaceMember {
 }
 
 /**
- * Lists a Space's members (`GET /v1/control/spaces/:id/members`). Any active
+ * Lists a Space's members (`GET /api/v1/spaces/:id/members`). Any active
  * member of the Space may read the roster; the backend gates this server-side.
  */
 export async function listMembers(
@@ -771,7 +771,7 @@ export async function listMembers(
 
 /**
  * Adds (or re-activates) a member by account subject
- * (`POST /v1/control/spaces/:id/members`). The membership domain has no email
+ * (`POST /api/v1/spaces/:id/members`). The membership domain has no email
  * invite / notification side-channel, so this adds an EXISTING account handle /
  * subject directly as an active member. Owner/admin only; only an owner may
  * grant `role: "owner"` (the backend rejects an admin doing so with 403).
@@ -797,7 +797,7 @@ export async function inviteMember(
 }
 
 /**
- * Changes a member's role set (`PATCH /v1/control/spaces/:id/members/:subject`).
+ * Changes a member's role set (`PATCH /api/v1/spaces/:id/members/:subject`).
  * Owner-only. The backend's last-owner guard rejects demoting the sole
  * remaining owner with 403, so a Space is never left unmanaged.
  */
@@ -814,7 +814,7 @@ export async function setMemberRole(
 }
 
 /**
- * Removes a member (`DELETE /v1/control/spaces/:id/members/:subject`).
+ * Removes a member (`DELETE /api/v1/spaces/:id/members/:subject`).
  * Owner-only. The membership store has no hard delete, so the backend soft-
  * removes (sets `status: "suspended"`) and returns the updated projection. The
  * last-owner guard rejects removing the sole remaining owner with 403.
@@ -1165,7 +1165,7 @@ export async function getRunLogs(id: string): Promise<RunLogs> {
 
 /**
  * Reads a plan / destroy_plan Run's public cost projection (`GET
- * /v1/control/runs/:id/cost`). Used by the Run view to surface, before apply,
+ * /api/v1/runs/:id/cost`). Used by the Run view to surface, before apply,
  * the estimated credits and any credit shortfall that would block the apply
  * under `enforce` mode. The values are the ones the controller already computed
  * at plan time; this never computes cost and returns no secret material.
@@ -1201,7 +1201,7 @@ export async function createApplyRun(
 
 /**
  * Lists an Installation's Deployment ledger (current + past) for the dashboard
- * session (`GET /v1/control/installations/:id/deployments`). The backend
+ * session (`GET /api/v1/installations/:id/deployments`). The backend
  * resolves the Installation's owning Space and space-permission gates first;
  * each row carries only the allowlist-projected `outputsPublic` (no sensitive
  * outputs, no raw output-snapshot pointer). Rows arrive newest-first.
@@ -1217,7 +1217,7 @@ export async function listDeployments(
 
 /**
  * Reads one Deployment ledger record by id (`GET
- * /v1/control/deployments/:id`). Space-permission gated server-side; the
+ * /api/v1/deployments/:id`). Space-permission gated server-side; the
  * returned record is the public projection (outputsPublic only, no
  * outputSnapshotId, no sensitive values).
  */
@@ -1232,7 +1232,7 @@ export async function getDeployment(
 
 /**
  * Creates a rollback PLAN run for a Deployment ("この状態に戻す" —
- * `POST /v1/control/deployments/:id/rollback-plan`): re-plans the Deployment's
+ * `POST /api/v1/deployments/:id/rollback-plan`): re-plans the Deployment's
  * Installation pinned to that Deployment's source snapshot. The plan then flows
  * through the normal approve → apply path, so the response is the plan-run
  * envelope (`{ planRun: { id, ... } }`) and the caller navigates to the Run
@@ -1294,7 +1294,7 @@ export async function listOperatorConnectionDefaults(
 /**
  * Reads whether THIS instance's managed default (operator key) can cover an
  * install with NO Space connection (`GET
- * /v1/control/spaces/:id/managed-defaults`, spec §7.1 `takosumi_managed`). The
+ * /api/v1/spaces/:id/managed-defaults`, spec §7.1 `takosumi_managed`). The
  * install view uses it so a user is only nudged to "connect your own cloud
  * first" when the managed default is NOT available — by default `panpii` can
  * install → apply on the operator key with zero connection setup, and bringing

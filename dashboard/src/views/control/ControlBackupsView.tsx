@@ -1,7 +1,7 @@
 /**
  * Backups view (spec §29) — Space-scoped control backup ledger.
  *
- * The route uses the session-authed `/v1/control/spaces/:id/backups` pass-through
+ * The route uses the session-authed `/api/v1/spaces/:id/backups` pass-through
  * so operators can create and inspect backup artifacts from the same dashboard
  * surface as Installations, Sources, Graph, Output shares, and Activity.
  */

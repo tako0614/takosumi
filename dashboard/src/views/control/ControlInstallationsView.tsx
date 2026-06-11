@@ -2,8 +2,8 @@
  * Installations view (spec §31) — per-Space Installation list.
  *
  * For the current Space (space-state.ts), lists Installations via
- * `GET /v1/control/spaces/:id/installations` and the dependency DAG via
- * `GET /v1/control/spaces/:id/graph`, then renders each Installation with:
+ * `GET /api/v1/spaces/:id/installations` and the dependency DAG via
+ * `GET /api/v1/spaces/:id/graph`, then renders each Installation with:
  *   - name / environment / status (with a `stale` badge),
  *   - depends-on (producer Installations from the graph edges), and
  *   - current generation + output-snapshot presence (MVP — the control routes

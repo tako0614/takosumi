@@ -1,6 +1,6 @@
 /**
  * The membership facade that backs the account-plane
- * `/v1/control/spaces/:id/members` surface (`ControlPlaneOperations.members`).
+ * `/api/v1/spaces/:id/members` surface (`ControlPlaneOperations.members`).
  *
  * It bridges two stores that the rest of the system keeps deliberately separate:
  *
