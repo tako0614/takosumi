@@ -9,8 +9,8 @@ workers_dev = false
 no_bundle = true
 
 [build]
-command = 'ROOT=.; if [ ! -f "$ROOT/deploy/cloudflare/wrangler.dispatch.toml" ]; then ROOT=../..; fi; mkdir -p "$ROOT/deploy/cloudflare/.wrangler/dist" && bun build --target browser --format esm "$ROOT/worker/src/wfp_dispatch_worker.ts" --outfile "$ROOT/deploy/cloudflare/.wrangler/dist/takosumi-wfp-dispatch-worker.mjs"'
-watch_dir = "worker/src"
+command = 'ROOT=.; if [ ! -f "$ROOT/deploy/cloudflare/wrangler.dispatch.toml" ]; then ROOT=../..; fi; mkdir -p "$ROOT/deploy/cloudflare/.wrangler/dist" && bun build --target browser --format esm "$ROOT/providers/cloudflare/hosting/wfp_dispatch_worker.ts" --outfile "$ROOT/deploy/cloudflare/.wrangler/dist/takosumi-wfp-dispatch-worker.mjs"'
+watch_dir = "providers/cloudflare/hosting"
 
 [observability]
 enabled = true

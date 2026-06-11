@@ -2,7 +2,7 @@
  * Workers-for-Platforms tenant script name = the dispatch routing key.
  *
  * One source of truth for the rule, shared by:
- *  - the WfP ingress dispatcher (`worker/src/wfp_dispatch_worker.ts`), which
+ *  - the WfP ingress dispatcher (`providers/cloudflare/hosting/wfp_dispatch_worker.ts`), which
  *    routes a request to `env.TAKOSUMI_TENANT_DISPATCH.get(scriptName)` by the
  *    first URL path segment, and
  *  - the control plane (`deploy-control/mod.ts`), which validates the minted

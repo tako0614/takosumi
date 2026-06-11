@@ -167,7 +167,7 @@ Workers for Platforms は OpenTofu runner ではありません。tenant / user 
 
 outbound Worker は tenant Worker からの外向き通信を operator policy に通すための場所です。`networkPolicy` がある execution boundary では、outbound Worker でも同じ allowlist を enforce する必要があります。
 
-`worker/src/wfp_dispatch_worker.ts` は ingress dispatch の scaffold であり、egress allowlist enforcement を実装しません。`outboundWorker.enforceNetworkPolicy: true` は、operator が dispatch namespace の outbound Worker 設定と allowlist enforcement の live evidence を示したときだけ満たされたものとして扱います。
+`providers/cloudflare/hosting/wfp_dispatch_worker.ts` は ingress dispatch の scaffold であり、egress allowlist enforcement を実装しません。`outboundWorker.enforceNetworkPolicy: true` は、operator が dispatch namespace の outbound Worker 設定と allowlist enforcement の live evidence を示したときだけ満たされたものとして扱います。
 
 ### Managed Worker hosting via the cf-proxy (transparent, plain capsule)
 
@@ -177,7 +177,7 @@ managed (takosumi-hosted) な Cloudflare Worker capsule は **plain OpenTofu の
 <apiProxy.origin><apiProxy.route>/<dispatchNamespace>/<installSlug>/client/v4
 ```
 
-cf-proxy (`worker/src/cf_proxy_worker.ts`、platform worker の `/internal/cf-proxy/*` route) は worker-script の API path を namespace 版に書き換え、それ以外 (KV / D1 / R2 等) は素通しします:
+cf-proxy (`providers/cloudflare/hosting/cf_proxy_worker.ts`、platform worker の `/internal/cf-proxy/*` route) は worker-script の API path を namespace 版に書き換え、それ以外 (KV / D1 / R2 等) は素通しします:
 
 ```
 /client/v4/accounts/{id}/workers/scripts/{name}[/sub]

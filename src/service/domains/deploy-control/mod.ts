@@ -106,7 +106,7 @@ import type {
 } from "takosumi-contract/sources";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { log } from "../../shared/log.ts";
-import { isValidTenantScriptName } from "../../shared/wfp_script_name.ts";
+import { isValidTenantScriptName } from "../../../../providers/cloudflare/hosting/wfp_script_name.ts";
 import {
   InMemoryOpenTofuDeploymentStore,
   InstallationPatchGuardConflict,
