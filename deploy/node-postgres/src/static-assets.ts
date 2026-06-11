@@ -22,6 +22,7 @@
 // owns the dashboard UI now that the former server-HTML dashboard has been
 // removed from accounts-service.
 export const ACCOUNTS_API_PREFIXES = [
+  "/api/v1",
   "/v1",
   "/oauth",
   "/.well-known",

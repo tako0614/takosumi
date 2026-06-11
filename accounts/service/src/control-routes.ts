@@ -90,6 +90,7 @@ import type {
   UsageEvent,
 } from "takosumi-contract/billing";
 import type { Run, RunCostInfo } from "takosumi-contract/runs";
+import { API_V1_PREFIX, isApiV1Path } from "takosumi-contract";
 import {
   json,
   methodNotAllowed,
@@ -478,13 +479,27 @@ export interface RunGroupWithRunsLike {
 const CONTROL_PREFIX = "/v1/control";
 
 /**
- * True for any path the control-routes family owns. Used by the dispatcher in
- * `mod.ts` to route into {@link handleControlRoute} before the generic 404.
+ * True for any path the legacy `/v1/control` dashboard family owns. Retained so
+ * `mod.ts` keeps routing the (still-live) `/v1/control/*` surface into
+ * {@link handleControlRoute} during the additive `/api/v1` migration window.
  */
 export function isControlRoutePath(pathname: string): boolean {
   return (
     pathname === CONTROL_PREFIX || pathname.startsWith(`${CONTROL_PREFIX}/`)
   );
+}
+
+/**
+ * The control-surface prefix a path is addressed under, or `undefined` if the
+ * path is owned by neither. This dispatcher serves the SAME session-authed
+ * surface under two prefixes during the migration: the canonical edge-public
+ * {@link API_V1_PREFIX} (`/api/v1`) and the legacy `/v1/control`. The caller
+ * slices this prefix off to compute the route `tail`.
+ */
+export function controlSurfacePrefix(pathname: string): string | undefined {
+  if (isApiV1Path(pathname)) return API_V1_PREFIX;
+  if (isControlRoutePath(pathname)) return CONTROL_PREFIX;
+  return undefined;
 }
 
 interface ControlRouteContext {
@@ -544,7 +559,8 @@ export async function handleControlRoute(
   context: ControlRouteContext,
 ): Promise<Response | undefined> {
   const { request, url, store } = context;
-  if (!isControlRoutePath(url.pathname)) return undefined;
+  const prefix = controlSurfacePrefix(url.pathname);
+  if (!prefix) return undefined;
 
   // The credential-OAuth callback is the ONE control route reached by a
   // top-level CROSS-SITE redirect (dash.cloudflare.com -> this origin). The
@@ -555,7 +571,7 @@ export async function handleControlRoute(
   // therefore authenticates from the authenticated subject embedded in the
   // HMAC-signed OAuth state (minted by the cookie-authenticated `start`), not
   // from the session cookie. Route it BEFORE the session gate.
-  if (isCloudflareOAuthCallbackPath(url.pathname, request.method)) {
+  if (isCloudflareOAuthCallbackPath(url.pathname, request.method, prefix)) {
     const operations = context.operations;
     if (!operations) return controlPlaneUnavailable();
     try {
@@ -575,7 +591,7 @@ export async function handleControlRoute(
   const operations = context.operations;
   if (!operations) return controlPlaneUnavailable();
 
-  const tail = url.pathname.slice(CONTROL_PREFIX.length); // e.g. "/spaces"
+  const tail = url.pathname.slice(prefix.length); // e.g. "/spaces"
   try {
     return await dispatch({ request, url, tail, operations, store, session });
   } catch (error) {
@@ -592,11 +608,11 @@ export async function handleControlRoute(
 function isCloudflareOAuthCallbackPath(
   pathname: string,
   method: string,
+  prefix: string,
 ): boolean {
   return (
     method === "GET" &&
-    pathname ===
-      `${CONTROL_PREFIX}/connections/cloudflare/oauth/callback`
+    pathname === `${prefix}/connections/cloudflare/oauth/callback`
   );
 }
 
