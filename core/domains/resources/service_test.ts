@@ -5,7 +5,7 @@ import {
   InMemoryMigrationLedgerStore,
   InMemoryResourceBindingStore,
   InMemoryResourceInstanceStore,
-} from "../../domains/resources/mod.ts";
+} from "./mod.ts";
 import { MemoryEncryptedSecretStore } from "../../adapters/secret-store/mod.ts";
 import { DomainError } from "../../shared/errors.ts";
 import {

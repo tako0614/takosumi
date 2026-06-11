@@ -14,11 +14,11 @@ import {
 import {
   ResourceOperationService,
   type ResourceOperationStores,
-} from "../../services/resources/mod.ts";
+} from "../../domains/resources/mod.ts";
 import {
   WorkerAuthzService,
   type WorkerAuthzStores,
-} from "../../services/security/mod.ts";
+} from "../../domains/security/mod.ts";
 import { DomainError } from "../../shared/errors.ts";
 
 test("acceptance P3: internal service call without WorkloadIdentity is rejected", async () => {
