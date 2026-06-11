@@ -145,16 +145,17 @@ takosumi/
 ├── worker/
 │   └── src/            single-Worker entry (index.ts / handler.ts / routes.ts), durable/ (CoordinationObject,
 │                       OpenTofuRunnerObject), state crypto, D1 stores — the worker shell
-├── packages/
-│   ├── schema/         public control-plane DTOs / contracts (formerly src/contract)
+├── contract/           public control-plane DTOs / contracts (formerly src/contract)
+├── lib/
 │   ├── graph/          dependency-DAG topo / cycle rejection
 │   ├── policy/         provider / resource / action policy layers
-│   ├── rootgen/        generated OpenTofu root module
+│   └── rootgen/        generated OpenTofu root module
+├── packages/
 │   ├── accounts-contract/
 │   ├── accounts-service/
 │   ├── platform-services/
 │   └── cli/
-├── runner-image/       Dockerfile + entrypoint.ts + tofu.rc + provider mirror (Container runner image)
+├── runner/             Dockerfile + entrypoint.ts + tofu.rc + provider mirror (Container runner image)
 ├── opentofu-modules/   official modules: core / cloudflare-worker-service / cloudflare-r2-storage /
 │                       cloudflare-static-site / aws-s3-storage
 ├── dashboard/          dashboard SPA (SolidJS) build
@@ -200,7 +201,7 @@ bun run test:scripts
 
 ## Work Rules
 
-- Keep public contract changes in the contract layer (`packages/schema/`) and update docs/tests in the
+- Keep public contract changes in the contract layer (`contract/`) and update docs/tests in the
   same change.
 - Keep service-specific changes in the service layer (`src/service/`, consolidating into `worker/src/modules/` per
   conformance M1).

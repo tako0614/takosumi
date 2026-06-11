@@ -26,7 +26,7 @@ const OPENTOFU = "registry.opentofu.org";
  * reads) and folded into each {@link ManagedProvider} below, so per-provider
  * credential data keeps a single source. The registry imports `provider-env-rules`
  * rather than the reverse because that table must stay import-free to resolve in
- * the slim runner-image build.
+ * the slim runner build.
  */
 type ManagedProviderBase = Omit<
   ManagedProvider,

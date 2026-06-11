@@ -3,7 +3,7 @@
  *
  * Two honest tiers:
  *  - Self-host: free & open source. The control plane ships a billing
- *    "disabled" mode (BillingMode = "disabled" in packages/schema/src/billing.ts),
+ *    "disabled" mode (BillingMode = "disabled" in contract/billing.ts),
  *    so there is no charging machinery at all — you `tofu apply` onto your own
  *    infrastructure and own it.
  *  - Managed: credit-based. The model exists (showback / enforce modes, managed

@@ -86,10 +86,10 @@ new_sqlite_classes = ["OpenTofuRunnerObject"]
 [[containers]]
 class_name = "OpenTofuRunnerObject"
 # Build context is the repo root so the runner can COPY the dependency-free
-# shared provider->env-name table (packages/schema/src/provider-env-rules.ts) it
-# imports. The Dockerfile copies only that file plus runner-image/entrypoint.ts; no other
+# shared provider->env-name table (contract/provider-env-rules.ts) it
+# imports. The Dockerfile copies only that file plus runner/entrypoint.ts; no other
 # repo source is included in the image.
-image = "runner-image/Dockerfile"
+image = "runner/Dockerfile"
 image_build_context = "../.."
 # Custom sizing: the runner image bakes an OpenTofu provider filesystem mirror
 # and each run materializes a per-run workspace (source checkout + build

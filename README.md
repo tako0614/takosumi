@@ -70,7 +70,7 @@ bun src/cli/main.ts server --port 8788
 ## Workspace
 
 The current layout is `packages/*` (schema / graph / policy / rootgen / accounts-contract / accounts-service /
-platform-services / cli), `worker/`, `runner-image/`, `opentofu-modules/`, `dashboard/`, `src/`
+platform-services / cli), `worker/`, `runner/`, `opentofu-modules/`, `dashboard/`, `src/`
 (service / runtime-agent / shared / cli), and `deploy/`. See the [AGENTS.md](AGENTS.md) "Workspace" section for the
 annotated tree (single source of truth to avoid drift).
 

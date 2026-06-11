@@ -5,7 +5,7 @@ import { test } from "bun:test";
 const repoRoot = new URL("../../", import.meta.url);
 const cloudflareRoot = new URL("deploy/cloudflare/", repoRoot);
 const platformRoot = new URL("deploy/platform/", repoRoot);
-const runnerImageRoot = new URL("runner-image/", repoRoot);
+const runnerImageRoot = new URL("runner/", repoRoot);
 const workerSrcRoot = new URL("./", import.meta.url);
 
 test("Cloudflare scaffold wires D1/R2 and the OpenTofu runner container", async () => {
@@ -30,7 +30,7 @@ test("Cloudflare scaffold wires D1/R2 and the OpenTofu runner container", async 
   assert.match(wrangler, /name = "RUNNER"/);
   assert.match(wrangler, /class_name = "OpenTofuRunnerObject"/);
   assert.match(wrangler, /\[\[containers\]\]/);
-  assert.match(wrangler, /image = "runner-image\/Dockerfile"/);
+  assert.match(wrangler, /image = "runner\/Dockerfile"/);
   assert.match(wrangler, /image_build_context = "\.\.\/\.\."/);
   assert.match(wrangler, /new_sqlite_classes = \["CoordinationObject"\]/);
   assert.match(wrangler, /new_sqlite_classes = \["OpenTofuRunnerObject"\]/);

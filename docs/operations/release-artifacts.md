@@ -15,7 +15,7 @@
 | --- | --- | --- | --- |
 | Platform worker script | `takosumi/deploy/platform/worker.ts`, `takosumi/worker`, `takosumi/src/service` | built by Wrangler deploy from source | commit SHA, wrangler dry-run/deploy output, worker version id |
 | Dashboard SPA | `takosumi/dashboard` | `bun run build`; served through worker `ASSETS` | dashboard build output, asset digest / deploy log |
-| Runner container | `takosumi/runner-image/Dockerfile` | built by Cloudflare Containers during deploy | image digest / Cloudflare Container smoke evidence |
+| Runner container | `takosumi/runner/Dockerfile` | built by Cloudflare Containers during deploy | image digest / Cloudflare Container smoke evidence |
 | D1 migrations / schema | `takosumi/src/service/adapters/storage` | applied by platform deploy / migration runner | migration transcript, schema mirror test |
 | Provider Template seed / policy packs | schema/store/policy packages and `docs/core-spec.md` | shipped with platform worker and DB seed/migration | provider template seed diff, provider-template policy evidence |
 | Custom provider runner policy | runner image / operator boundary policy | shipped with runner and policy code | provider env set policy / egress / custom runner class evidence |

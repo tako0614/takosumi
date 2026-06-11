@@ -2,7 +2,7 @@
 #
 # prove-runner-docker.sh
 #
-# End-to-end proof that the OpenTofu runner container image (runner-image/
+# End-to-end proof that the OpenTofu runner container image (runner/
 # Dockerfile) works through REAL docker: build the image, run the container, and
 # drive a real `tofu init/plan/apply` through the container's HTTP server using
 # the SAME `takosumi.opentofu-run@v1` request envelope the production Durable
@@ -65,7 +65,7 @@ echo "==================================================================="
 BUILD_START="$(date +%s)"
 build_image() {
   docker build \
-    -f "${REPO_ROOT}/runner-image/Dockerfile" \
+    -f "${REPO_ROOT}/runner/Dockerfile" \
     -t "${IMAGE_TAG}" \
     "${REPO_ROOT}"
 }

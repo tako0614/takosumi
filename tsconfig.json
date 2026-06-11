@@ -13,7 +13,7 @@
     "baseUrl": ".",
     "paths": {
       "@takosjp/takosumi/contract/deploy-control-api": [
-        "./packages/schema/src/deploy-control-api.ts"
+        "./contract/deploy-control-api.ts"
       ],
       "@takosjp/takosumi-accounts-contract": [
         "./packages/accounts-contract/src/mod.ts"
@@ -25,65 +25,65 @@
       "@takosjp/takosumi-platform-services": [
         "./packages/platform-services/src/mod.ts"
       ],
-      "takosumi-contract": ["./packages/schema/src/index.ts"],
-      "takosumi-contract/deploy-control-api": ["./packages/schema/src/deploy-control-api.ts"],
+      "takosumi-contract": ["./contract/index.ts"],
+      "takosumi-contract/deploy-control-api": ["./contract/deploy-control-api.ts"],
       "@takosumi/internal/deploy-control-api": [
-        "./packages/schema/src/internal-deploy-control-api.ts"
+        "./contract/internal-deploy-control-api.ts"
       ],
-      "takosumi-contract/sources": ["./packages/schema/src/sources.ts"],
-      "takosumi-contract/provider-env-rules": ["./packages/schema/src/provider-env-rules.ts"],
+      "takosumi-contract/sources": ["./contract/sources.ts"],
+      "takosumi-contract/provider-env-rules": ["./contract/provider-env-rules.ts"],
       "takosumi-contract/reference/compat": [
-        "./packages/schema/src/reference-compat.ts"
+        "./contract/reference-compat.ts"
       ],
-      "takosumi-contract/reference/catalog": ["./packages/schema/src/catalog.ts"],
-      "takosumi-contract/reference/implementation": ["./packages/schema/src/implementation.ts"],
+      "takosumi-contract/reference/catalog": ["./contract/catalog.ts"],
+      "takosumi-contract/reference/implementation": ["./contract/implementation.ts"],
       "takosumi-contract/reference/runtime-agent": [
-        "./packages/schema/src/runtime-agent.ts"
+        "./contract/runtime-agent.ts"
       ],
       "takosumi-contract/reference/runtime-agent-lifecycle": [
-        "./packages/schema/src/runtime-agent-lifecycle.ts"
+        "./contract/runtime-agent-lifecycle.ts"
       ],
       "takosumi-contract/reference/runtime-capability": [
-        "./packages/schema/src/runtime-capability.ts"
+        "./contract/runtime-capability.ts"
       ],
       "takosumi-contract/reference/host-blocklist": [
-        "./packages/schema/src/reference/host-blocklist.ts"
+        "./contract/reference/host-blocklist.ts"
       ],
       "takosumi-contract/reference/ip-classification": [
-        "./packages/schema/src/reference/ip-classification.ts"
+        "./contract/reference/ip-classification.ts"
       ],
       "takosumi-contract/reference/prepared-source-core": [
-        "./packages/schema/src/reference/prepared-source-core.ts"
+        "./contract/reference/prepared-source-core.ts"
       ],
-      "takosumi-contract/reference/types": ["./packages/schema/src/types.ts"],
-      "takosumi-contract/internal/api": ["./packages/schema/src/internal-api.ts"],
+      "takosumi-contract/reference/types": ["./contract/types.ts"],
+      "takosumi-contract/internal/api": ["./contract/internal-api.ts"],
       "takosumi-contract/internal/provider-adapter": [
-        "./packages/schema/src/provider-adapter.ts"
+        "./contract/provider-adapter.ts"
       ],
-      "takosumi-contract/internal/rpc": ["./packages/schema/src/internal-rpc.ts"],
-      "takosumi-contract/internal/crypto": ["./packages/schema/src/internal-crypto.ts"],
-      "takosumi-contract/spaces": ["./packages/schema/src/spaces.ts"],
-      "takosumi-contract/installations": ["./packages/schema/src/installations.ts"],
-      "takosumi-contract/deploy": ["./packages/schema/src/deploy.ts"],
-      "takosumi-contract/capsules": ["./packages/schema/src/capsules.ts"],
-      "takosumi-contract/provider-bindings": ["./packages/schema/src/provider-bindings.ts"],
-      "takosumi-contract/connections": ["./packages/schema/src/connections.ts"],
-      "takosumi-contract/dependencies": ["./packages/schema/src/dependencies.ts"],
+      "takosumi-contract/internal/rpc": ["./contract/internal-rpc.ts"],
+      "takosumi-contract/internal/crypto": ["./contract/internal-crypto.ts"],
+      "takosumi-contract/spaces": ["./contract/spaces.ts"],
+      "takosumi-contract/installations": ["./contract/installations.ts"],
+      "takosumi-contract/deploy": ["./contract/deploy.ts"],
+      "takosumi-contract/capsules": ["./contract/capsules.ts"],
+      "takosumi-contract/provider-bindings": ["./contract/provider-bindings.ts"],
+      "takosumi-contract/connections": ["./contract/connections.ts"],
+      "takosumi-contract/dependencies": ["./contract/dependencies.ts"],
       "takosumi-contract/deploy-control-errors": [
-        "./packages/schema/src/deploy-control-errors.ts"
+        "./contract/deploy-control-errors.ts"
       ],
-      "takosumi-contract/activity": ["./packages/schema/src/activity.ts"],
-      "takosumi-contract/output-snapshots": ["./packages/schema/src/output-snapshots.ts"],
-      "takosumi-contract/runs": ["./packages/schema/src/runs.ts"],
-      "takosumi-contract/deployments": ["./packages/schema/src/deployments.ts"],
-      "takosumi-contract/install-link": ["./packages/schema/src/install-link.ts"],
-      "takosumi-contract/backups": ["./packages/schema/src/backups.ts"],
-      "takosumi-contract/billing": ["./packages/schema/src/billing.ts"],
-      "takosumi-contract/security": ["./packages/schema/src/security.ts"],
-      "takosumi-contract/providers": ["./packages/schema/src/providers.ts"],
-      "takosumi-rootgen": ["./packages/rootgen/src/mod.ts"],
-      "takosumi-graph": ["./packages/graph/src/mod.ts"],
-      "takosumi-policy": ["./packages/policy/src/mod.ts"],
+      "takosumi-contract/activity": ["./contract/activity.ts"],
+      "takosumi-contract/output-snapshots": ["./contract/output-snapshots.ts"],
+      "takosumi-contract/runs": ["./contract/runs.ts"],
+      "takosumi-contract/deployments": ["./contract/deployments.ts"],
+      "takosumi-contract/install-link": ["./contract/install-link.ts"],
+      "takosumi-contract/backups": ["./contract/backups.ts"],
+      "takosumi-contract/billing": ["./contract/billing.ts"],
+      "takosumi-contract/security": ["./contract/security.ts"],
+      "takosumi-contract/providers": ["./contract/providers.ts"],
+      "takosumi-rootgen": ["./lib/rootgen/src/mod.ts"],
+      "takosumi-graph": ["./lib/graph/src/mod.ts"],
+      "takosumi-policy": ["./lib/policy/src/mod.ts"],
       "@takosumi/providers": ["./providers/registry.ts"],
       "@takosumi/providers/types": ["./providers/types.ts"],
       "@takosumi/providers/*": ["./providers/*"],
@@ -97,9 +97,9 @@
     "src",
     "providers",
     "opentofu-modules",
-    "packages/schema",
-    "packages/rootgen",
-    "packages/graph",
+    "contract",
+    "lib/rootgen",
+    "lib/graph",
     "packages/accounts-contract",
     "packages/accounts-service",
     "packages/cli",

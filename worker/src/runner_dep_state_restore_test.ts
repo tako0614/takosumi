@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "bun:test";
-import { handleDepStateRestoreRequest } from "../../runner-image/entrypoint.ts";
+import { handleDepStateRestoreRequest } from "../../runner/entrypoint.ts";
 
 // The runner workspace deps dir is a SIBLING of the per-run root so the restored
 // producer state survives the plan/apply workspace prep (which wipes root). The

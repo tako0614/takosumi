@@ -2,7 +2,7 @@
  * Single source of truth for provider -> credential env-name rules.
  *
  * Two consumers share this table:
- *   - the OpenTofu runner (`runner-image/entrypoint.ts`), which uses it
+ *   - the OpenTofu runner (`runner/entrypoint.ts`), which uses it
  *     to decide which env names a credential ref maps to and which required
  *     groups must be present before `tofu init`;
  *   - the Connection / Vault credential core (Phase 1A), which validates the env
@@ -16,7 +16,7 @@
  * short form. Both forms resolve to the same rule.
  *
  * IMPORTANT (runner container isolation): this module is imported by
- * `runner-image/entrypoint.ts`, which is copied into the OpenTofu runner container image.
+ * `runner/entrypoint.ts`, which is copied into the OpenTofu runner container image.
  * Keep it dependency-free (no imports from elsewhere in the repo) so the
  * relative import resolves in the slim container build.
  */

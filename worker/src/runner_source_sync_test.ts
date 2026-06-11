@@ -6,7 +6,7 @@ import {
   parseLsRemoteCommit,
   parseSourceCredentials,
   parseSourceSyncSource,
-} from "../../runner-image/entrypoint.ts";
+} from "../../runner/entrypoint.ts";
 
 // ---------------------------------------------------------------------------
 // URL policy (spec 7.1) — defense-in-depth re-check inside the runner.

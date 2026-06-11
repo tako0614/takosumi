@@ -15,9 +15,9 @@ patch gate はそれぞれの product docs が所有します。
 | --- | --- | --- |
 | Platform worker source | `takosumi/worker` / `takosumi/src/service` | Takosumi service checks + platform deploy |
 | Dashboard SPA | `takosumi/dashboard` | dashboard typecheck / build |
-| Runner image | `takosumi/runner-image/Dockerfile` | image rebuild + Cloudflare Container smoke |
+| Runner image | `takosumi/runner/Dockerfile` | image rebuild + Cloudflare Container smoke |
 | Provider Template / policy packs | `takosumi/docs/core-spec.md`, schema/store/policy packages | provider template route/schema tests + custom provider policy evidence |
-| Custom runner policy | `takosumi/runner-image`, operator boundary policy | custom runner smoke + egress policy evidence |
+| Custom runner policy | `takosumi/runner`, operator boundary policy | custom runner smoke + egress policy evidence |
 | Provider mirror/cache policy | runner tofu CLI config / provider mirror | provider install attestation tests |
 | OpenTofu modules | `takosumi/opentofu-modules` | module tests / fixture plan where available |
 | Bun/npm dependencies | each Takosumi package root | `bun outdated`, `bun update`, checks |
