@@ -18,6 +18,10 @@ export function isWorkerLocalPath(pathname: string): boolean {
 //   authorize/callback), /v1/installations*, and
 //   /internal/workload-platform-services/resolve.
 export const ACCOUNTS_API_PREFIXES = [
+  // The edge-public deploy-control surface. Must be matched here or the SPA
+  // `not_found_handling = single-page-application` fallback would shadow it
+  // with index.html. NOTE `/api/v1` is NOT under `/v1`, so it needs its own entry.
+  "/api/v1",
   "/v1",
   "/oauth",
   "/.well-known",

@@ -13,6 +13,8 @@ describe("isAccountsApiPath", () => {
   test("claims every API namespace the handler owns", () => {
     const apiPaths = [
       "/.well-known/openid-configuration",
+      "/api/v1/spaces",
+      "/api/v1/installations/inst_1/plan",
       "/oauth/authorize",
       "/oauth/token",
       "/oauth/jwks",
@@ -62,7 +64,7 @@ describe("isAccountsApiPath", () => {
 
   test("the prefix set is exactly the documented surface", () => {
     expect([...ACCOUNTS_API_PREFIXES].sort()).toEqual(
-      ["/.well-known", "/internal", "/oauth", "/start", "/v1"],
+      ["/.well-known", "/api/v1", "/internal", "/oauth", "/start", "/v1"],
     );
   });
 

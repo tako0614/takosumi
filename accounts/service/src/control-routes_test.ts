@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import {
   type ControlPlaneOperations,
+  controlSurfacePrefix,
   handleControlRoute,
   isControlRoutePath,
 } from "./control-routes.ts";
@@ -658,6 +659,68 @@ test("isControlRoutePath owns /v1/control and its subtree only", () => {
   expect(isControlRoutePath("/v1/control/runs/plan_1/logs")).toEqual(true);
   expect(isControlRoutePath("/v1/controlx")).toEqual(false);
   expect(isControlRoutePath("/v1/installations")).toEqual(false);
+});
+
+// --- /api/v1 edge surface (additive; same session dispatcher) --------------
+
+test("controlSurfacePrefix resolves both the edge /api/v1 and legacy /v1/control", () => {
+  expect(controlSurfacePrefix("/api/v1/spaces")).toEqual("/api/v1");
+  expect(controlSurfacePrefix("/api/v1")).toEqual("/api/v1");
+  expect(controlSurfacePrefix("/v1/control/spaces")).toEqual("/v1/control");
+  expect(controlSurfacePrefix("/v1/control")).toEqual("/v1/control");
+  expect(controlSurfacePrefix("/api/v1x")).toBeUndefined();
+  expect(controlSurfacePrefix("/v1/installations")).toBeUndefined();
+  expect(controlSurfacePrefix("/v1/account/session/me")).toBeUndefined();
+});
+
+test("GET /api/v1/spaces serves the same session surface as /v1/control/spaces", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request("GET", "/api/v1/spaces", { cookie });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { spaces: unknown[] };
+  expect(body.spaces.length).toEqual(1);
+  expect(operations.calls.listSpaces).toBeDefined();
+});
+
+test("anonymous /api/v1 requests are 401 (same gate as /v1/control)", async () => {
+  const store = new InMemoryAccountsStore();
+  const operations = fakeOperations();
+  const { request: req, url } = request("GET", "/api/v1/spaces");
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(401);
+  await response?.body?.cancel();
+  expect(operations.calls.listSpaces).toBeUndefined();
+});
+
+test("GET /api/v1/spaces/:id a session cannot access is 403", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store, { subject: "tsub_outsider" });
+  // The Space is owned by a DIFFERENT subject; the outsider session is denied.
+  const operations = fakeOperations();
+  const { request: req, url } = request("GET", "/api/v1/spaces/space_other", {
+    cookie,
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  await response?.body?.cancel();
 });
 
 // --- Anonymous = 401 -------------------------------------------------------
