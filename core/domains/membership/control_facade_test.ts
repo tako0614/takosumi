@@ -19,7 +19,7 @@ import { InMemoryAccountsStore } from "@takosjp/takosumi-accounts-service";
 // `handleControlRoute` is the account-plane control surface entry. It is not on
 // the package barrel (the public entry is the composed accounts handler), so the
 // test reaches it through its source module — the same allowed direction the
-// host worker wiring uses (src/service consumes packages/, never the reverse).
+// host worker wiring uses (core consumes contract/lib, never the reverse).
 import {
   type ControlPlaneOperations,
   handleControlRoute,

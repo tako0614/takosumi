@@ -59,7 +59,7 @@ const SOURCE_DOCS_WITH_PUBLIC_SURFACE_WORDING = [
   "ROADMAP.md",
   "contract/README.md",
   "core/README.md",
-  "src/runtime-agent/README.md",
+  "core/runtime-agent/README.md",
   "website/src/components/EndCTA.tsx",
   "website/src/components/Showcase.tsx",
   "website/src/components/Footer.tsx",
