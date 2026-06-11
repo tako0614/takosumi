@@ -353,6 +353,126 @@ test("opentofu_module install emits provider aliases from resolved provider bind
   expect(mainTf).toContain('appName = "my-worker"');
 });
 
+test("managed worker install (operator-default credential) redirects the cloudflare provider base_url to the cf-proxy; self-host does not", async () => {
+  // SELF-HOST: a Space connection binds the cloudflare provider -> NOT the
+  // operator default -> no base_url redirect, so the generated root renders the
+  // plain provider block byte-identically (no `base_url`).
+  const selfHost = await installTypeFixture({
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "my-worker", accountId: "acct_123" },
+      policy: {},
+    },
+    connections: [connection("conn_cf", "cloudflare")],
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        mode: "connection",
+        connectionId: "conn_cf",
+      },
+    ],
+  });
+  const { planRun: selfHostPlan } =
+    await selfHost.controller.createInstallationPlan("inst_fixture");
+  expect(selfHostPlan.status).toEqual("succeeded");
+  const selfHostMainTf =
+    selfHost.runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(selfHostMainTf).not.toContain("base_url");
+
+  // MANAGED: no Space connection and no explicit binding -> the cloudflare
+  // provider falls through to the operator default (§7.1, the managed key) ->
+  // the control plane redirects the provider base_url to the cf-proxy so a plain
+  // worker script lands in the operator's dispatch namespace.
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putConnection({
+    id: "conn_op_cf",
+    scope: "operator",
+    provider: "cloudflare",
+    kind: "cloudflare_api_token",
+    authMethod: "static_secret",
+    status: "verified",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  } as Connection);
+  await store.putOperatorConnectionDefault({
+    id: "ocd_cf",
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+  await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "my-worker", accountId: "acct_123" },
+      policy: {},
+    },
+  });
+  // Minimal vault: mints a temporary per-alias token for the operator-default
+  // cloudflare binding (the cloudflare-default profile rejects static creds).
+  const operatorDefaultVault = {
+    register: () => Promise.reject(new Error("not used")),
+    test: () => Promise.resolve({ status: "verified" as const }),
+    revoke: () => Promise.resolve(true),
+    mint: () => Promise.resolve(new CredentialBundle({})),
+    mintForProviderBindings: (
+      _spaceId: string,
+      entries: readonly { provider: string; connectionId: string; alias?: string }[],
+    ) =>
+      Promise.resolve(
+        new CredentialBundle(
+          Object.fromEntries(
+            entries.map((entry) => [
+              `TF_VAR_cloudflare${entry.alias ? `_${entry.alias}` : ""}_api_token`,
+              "operator-key-token",
+            ]),
+          ),
+          [],
+          entries.map((entry) => ({
+            provider: FIXTURE_CLOUDFLARE_PROVIDER,
+            connectionId: entry.connectionId,
+            delivery: "generated_root_variable" as const,
+            rootOnly: true,
+            temporary: true,
+            ttlEnforced: true,
+            expiresAt: "2026-06-07T01:00:00.000Z",
+            ttlSeconds: 3600,
+            phase: "plan" as const,
+          })),
+        ),
+      ),
+  };
+  const managedRunner = recordingRunner({});
+  const managedController = new OpenTofuDeploymentController({
+    store,
+    runner: managedRunner,
+    vault: operatorDefaultVault as never,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+  const { planRun: managedPlan } =
+    await managedController.createInstallationPlan("inst_fixture");
+  expect(managedPlan.status).toEqual("succeeded");
+  const managedMainTf =
+    managedRunner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  // The cloudflare provider block carries the cf-proxy base_url scoped to the
+  // dispatch namespace + the install slug ("app"); a capsule cannot override it.
+  expect(managedMainTf).toContain(
+    'base_url = "https://app.takosumi.com/internal/cf-proxy/takosumi-tenants/app/client/v4"',
+  );
+});
+
 test("provider-using installation fails closed when the connection vault is absent", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const conn = connection("conn_cf", "cloudflare");

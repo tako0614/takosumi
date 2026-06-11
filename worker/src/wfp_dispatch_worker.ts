@@ -1,4 +1,5 @@
 import type { WorkersForPlatformsDispatchNamespace } from "./bindings.ts";
+import { TENANT_SCRIPT_NAME } from "../../src/service/shared/wfp_script_name.ts";
 
 export interface CloudflareWfpDispatchEnv extends Record<string, unknown> {
   readonly TAKOSUMI_TENANT_DISPATCH: WorkersForPlatformsDispatchNamespace;
@@ -13,7 +14,6 @@ export interface CloudflareWfpDispatchWorker {
  * egress allowlist enforcement requires an operator-configured WfP outbound
  * Worker on the dispatch namespace, not a binding or secret in this Worker.
  */
-const TENANT_SCRIPT_NAME = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const BLOCKED_FORWARD_HEADERS = [
   "x-takosumi-internal-auth",
   "x-takosumi-deploy-control-token",

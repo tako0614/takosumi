@@ -71,6 +71,10 @@ const runnerProfile = {
         "d1_database",
       ],
     },
+    apiProxy: {
+      origin: "https://app.takosumi.com",
+      route: "/internal/cf-proxy",
+    },
   },
   secretExposurePolicy: {
     providerCredentials: "runner-only",

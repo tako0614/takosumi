@@ -1023,6 +1023,10 @@ test("default Cloudflare runner keeps Workers for Platforms separate from OpenTo
         "d1_database",
       ],
     },
+    apiProxy: {
+      origin: "https://app.takosumi.com",
+      route: "/internal/cf-proxy",
+    },
   });
   expect(cloudflare?.secretExposurePolicy).toEqual({
     providerCredentials: "runner-only",

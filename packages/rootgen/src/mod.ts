@@ -80,6 +80,15 @@ export interface RootProviderBinding {
   readonly provider: string;
   /** Optional OpenTofu provider alias required by the child module. */
   readonly alias?: string;
+  /**
+   * Optional provider API base URL. The control plane sets this for a managed
+   * (takosumi-hosted) cloudflare run so the provider talks to the Takosumi
+   * cf-proxy (which lands worker scripts in the WfP dispatch namespace) instead
+   * of api.cloudflare.com directly. Rendered as `base_url = "…"` in the provider
+   * block. A capsule cannot override it: the generated root passes providers in,
+   * so a capsule's own provider block fails tofu plan (fail-closed redirect).
+   */
+  readonly baseUrl?: string;
 }
 
 export interface GenerateInstallationRootInput {
@@ -327,6 +336,9 @@ function appendProviderSections(
       const aliasLines = [`provider ${hclString(localProvider)} {`];
       if (binding.alias) {
         aliasLines.push(`  alias = ${hclString(binding.alias)}`);
+      }
+      if (binding.baseUrl) {
+        aliasLines.push(`  base_url = ${hclString(binding.baseUrl)}`);
       }
       for (const credArg of credArgs) {
         const varName = aliasCredentialVarName(

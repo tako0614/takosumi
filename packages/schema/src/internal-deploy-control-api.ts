@@ -130,6 +130,22 @@ export interface CloudflareWorkersForPlatformsExecution {
   readonly dispatchWorkerBinding?: string;
   readonly outboundWorker?: CloudflareOutboundWorkerPolicy;
   readonly userWorkerBindings?: CloudflareUserWorkerBindingPolicy;
+  /**
+   * Managed cf-proxy: when present, a managed (operator-default credential)
+   * cloudflare run gets its provider `base_url` redirected to
+   * `<origin><route>/<dispatchNamespace>/<installSlug>/client/v4`. The proxy
+   * rewrites worker-script API paths into the dispatch namespace (the provider
+   * cannot place a script in a namespace) and passes other calls through. Absent
+   * => no redirect (the worker-count-limit-free hosting is unavailable).
+   */
+  readonly apiProxy?: CloudflareApiProxyConfig;
+}
+
+export interface CloudflareApiProxyConfig {
+  /** Public origin of the platform worker hosting the cf-proxy route. */
+  readonly origin: string;
+  /** Path prefix the cf-proxy is mounted at (e.g. `/internal/cf-proxy`). */
+  readonly route: string;
 }
 
 export interface CloudflareOutboundWorkerPolicy {

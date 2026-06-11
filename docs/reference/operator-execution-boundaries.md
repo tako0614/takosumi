@@ -81,6 +81,10 @@ credential value や credential 所有権を持ちません。
         "r2_bucket",
         "d1_database"
       ]
+    },
+    "apiProxy": {
+      "origin": "https://app.takosumi.com",
+      "route": "/internal/cf-proxy"
     }
   },
   "secretExposurePolicy": {
@@ -164,6 +168,27 @@ Workers for Platforms は OpenTofu runner ではありません。tenant / user 
 outbound Worker は tenant Worker からの外向き通信を operator policy に通すための場所です。`networkPolicy` がある execution boundary では、outbound Worker でも同じ allowlist を enforce する必要があります。
 
 `worker/src/wfp_dispatch_worker.ts` は ingress dispatch の scaffold であり、egress allowlist enforcement を実装しません。`outboundWorker.enforceNetworkPolicy: true` は、operator が dispatch namespace の outbound Worker 設定と allowlist enforcement の live evidence を示したときだけ満たされたものとして扱います。
+
+### Managed Worker hosting via the cf-proxy (transparent, plain capsule)
+
+managed (takosumi-hosted) な Cloudflare Worker capsule は **plain OpenTofu のまま** です。capsule は普通の `cloudflare_workers_script` (+ 普通の KV / D1 / R2 + 普通の `bindings` block) を書くだけで、WfP 固有の HCL を一切持ちません。pin している cloudflare provider (v5) は script を dispatch namespace に置けないため、control plane が managed run (= 必須 provider が operator-default credential に fall-through した run、§7.1) でのみ cloudflare provider の `base_url` を **cf-proxy** に向けます:
+
+```
+<apiProxy.origin><apiProxy.route>/<dispatchNamespace>/<installSlug>/client/v4
+```
+
+cf-proxy (`worker/src/cf_proxy_worker.ts`、platform worker の `/internal/cf-proxy/*` route) は worker-script の API path を namespace 版に書き換え、それ以外 (KV / D1 / R2 等) は素通しします:
+
+```
+/client/v4/accounts/{id}/workers/scripts/{name}[/sub]
+  -> /client/v4/accounts/{id}/workers/dispatch/namespaces/{ns}/scripts/{installSlug}-{name}[/sub]
+```
+
+`{installSlug}` prefix で namespace 内の script 名が install 間で一意になります。`/subdomain` sub-resource は namespace script に存在しないため no-op success にします (ingress は dispatcher)。script の binding map は素通しで作られた実 KV / D1 / R2 resource を参照するので、bindings に特別扱いは要りません。
+
+**redirect の integrity**: namespace / slug は base_url の **path** から来ます。base_url は control plane が設定し、capsule は上書きできません (generated root が `providers = {}` を child に渡すため、capsule が provider block を持つと tofu plan が落ちる、fail-closed)。self-host (= 自分の Connection) と非 cloudflare / 非 Worker capsule は `base_url` を受け取らず、generated root は byte-identical のままです。
+
+**operator credential / v1 posture**: provider API token は `TF_VAR_cloudflare<_alias>_api_token` として runner に届き、cf-proxy は request の `Authorization` をそのまま `api.cloudflare.com` へ forward します (= 既存と同じ posture)。token-vending Connection の `policies` には **Workers Scripts: Edit** (dispatch namespace を含む) が必要です。**gated hardening** (本 mechanism の手前で managed を開放するまでに満たすもの): cf-proxy 自身が operator token を保持し runner には scoped capability だけを渡す / managed run の egress を cf-proxy のみに絞る (outbound Worker enforcement)。`apiProxy` が無い profile では managed hosting は無効です。
 
 ## Secret exposure policy
 
