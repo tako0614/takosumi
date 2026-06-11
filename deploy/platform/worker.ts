@@ -30,6 +30,7 @@ import {
   driftSweep,
   type DriftSweepOperations,
 } from "../../worker/src/scheduled/drift.ts";
+import { handleCfProxyRequest } from "../../worker/src/cf_proxy_worker.ts";
 import { constantTimeEqualsString } from "../../src/service/shared/constant_time.ts";
 
 export { CoordinationObject, OpenTofuRunnerObject };
@@ -96,6 +97,12 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/internal/platform/hardening-gates") {
       return handleHardeningGatesRequest(request, env);
+    }
+    // Managed cf-proxy: the cloudflare provider base_url for a managed run points
+    // here so a plain `cloudflare_workers_script` is redirected into the WfP
+    // dispatch namespace (the provider cannot place a script in a namespace).
+    if (url.pathname.startsWith("/internal/cf-proxy/")) {
+      return handleCfProxyRequest(request, url);
     }
     // Source webhook surface (Core Specification §6). This is a NEW top-level
     // prefix the accounts handler does not own; handle it here via the

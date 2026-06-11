@@ -130,6 +130,10 @@ export function createDefaultRunnerProfiles(
             "d1_database",
           ],
         },
+        apiProxy: {
+          origin: "https://app.takosumi.com",
+          route: "/internal/cf-proxy",
+        },
       },
     }),
     defaultProviderRunnerProfile(now, {

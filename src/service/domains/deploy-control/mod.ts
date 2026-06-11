@@ -41,6 +41,7 @@ import type {
   PlanRunInstallationContext,
   StateSnapshot,
   ListConnectionsResponse,
+  CloudflareApiProxyConfig,
   ListDeploymentsResponse,
   ListDeploymentOutputsResponse,
   ListRunnerProfilesResponse,
@@ -105,6 +106,7 @@ import type {
 } from "takosumi-contract/sources";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { log } from "../../shared/log.ts";
+import { isValidTenantScriptName } from "../../shared/wfp_script_name.ts";
 import {
   InMemoryOpenTofuDeploymentStore,
   InstallationPatchGuardConflict,
@@ -744,6 +746,15 @@ interface InstallTypePlanContext {
   readonly manualValues: Readonly<Record<string, JsonValue>>;
   /** InstallConfig.build, when enabled (overrides the template build). */
   readonly build?: DispatchBuildSpec;
+  /**
+   * True when this run resolved a required provider to the operator-default
+   * connection (spec §7.1 fall-through) — i.e. the managed (takosumi-hosted)
+   * case. The control plane uses this to host a Cloudflare Worker capsule in the
+   * operator's Workers-for-Platforms dispatch namespace instead of as a
+   * standalone account-level Worker. Mirrors
+   * `billing_service.#runUsesOperatorDefaultCredential`.
+   */
+  readonly usesOperatorDefaultCredential: boolean;
 }
 
 interface GenericRootPlanContext {
@@ -1318,10 +1329,14 @@ export class OpenTofuDeploymentController {
     validateSourceAllowedByProfile(request.source, profile);
     const now = this.#now();
     const variables = normalizeVariables(request.variables);
-    const templatePlan = this.#resolveTemplatePlan(
-      request,
+    // Managed hosting: redirect the cloudflare provider base_url to the cf-proxy
+    // when this run resolved the operator-default credential (no-op otherwise).
+    const installTypePlan = this.#applyManagedProxyBaseUrl(
       internal.installTypePlan,
+      profile,
+      installation,
     );
+    const templatePlan = this.#resolveTemplatePlan(request, installTypePlan);
     const declaredProviders = templatePlan
       ? normalizeProviders(templatePlan.requiredProviders)
       : normalizeProviders(request.requiredProviders ?? []);
@@ -2527,12 +2542,20 @@ export class OpenTofuDeploymentController {
       );
     const providerBindings = providerBindingsFromResolved(resolved);
     const manualValues = manualValuesFromResolved(resolved);
+    // Managed signal: a required provider fell through to the operator-default
+    // connection (§7.1). Same predicate as the billing path so a managed run is
+    // detected identically for hosting and for spend accounting.
+    const usesOperatorDefaultCredential = resolved.some(
+      (entry) =>
+        entry.mode === "default" && entry.connection?.scope === "operator",
+    );
     return {
       // opentofu_root never reaches here (asserted in #installationPlanRequest);
       // core / opentofu_module / app_source map 1:1 to the generated-root types.
       installType: installType as GeneratedRootInstallType,
       providerBindings,
       manualValues,
+      usesOperatorDefaultCredential,
       ...(installConfig.build?.enabled
         ? { build: installConfigBuildSpec(installConfig.build) }
         : {}),
@@ -2549,6 +2572,49 @@ export class OpenTofuDeploymentController {
       );
     }
     return { planRun: publicPlanRun(planRun) };
+  }
+
+  /**
+   * Managed (takosumi-hosted) Worker hosting. When this run resolved the
+   * cloudflare provider to the operator-default credential (managed) AND the
+   * runner profile carries a cf-proxy config, redirect the cloudflare provider's
+   * `base_url` to the Takosumi cf-proxy so a PLAIN `cloudflare_workers_script`
+   * lands in the WfP dispatch namespace (the provider cannot place a script in a
+   * namespace itself). The base_url path carries the namespace + the install
+   * slug as the script-name prefix; the proxy rewrites + enforces both. The
+   * capsule cannot override the redirect — the generated root passes providers
+   * in, so a capsule's own provider block fails tofu plan (fail-closed).
+   *
+   * Self-host (an owned connection) and non-cloudflare/non-Worker runs are
+   * returned unchanged, so their generated root is byte-identical.
+   */
+  #applyManagedProxyBaseUrl(
+    installTypePlan: InstallTypePlanContext | undefined,
+    profile: RunnerProfile,
+    installation: Installation,
+  ): InstallTypePlanContext | undefined {
+    if (!installTypePlan?.usesOperatorDefaultCredential) return installTypePlan;
+    const wfp = profile.cloudflareWorkersForPlatforms;
+    if (!wfp?.apiProxy) return installTypePlan;
+    const slug = installation.name;
+    if (!isValidTenantScriptName(slug)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `managed install slug ${JSON.stringify(slug)} is not a valid ` +
+          `Workers-for-Platforms script-name prefix (1-63 char DNS label)`,
+      );
+    }
+    const baseUrl = managedCloudflareProxyBaseUrl(
+      wfp.apiProxy,
+      wfp.dispatchNamespace,
+      slug,
+    );
+    const providerBindings = installTypePlan.providerBindings.map((binding) =>
+      isCloudflareProvider(binding.provider)
+        ? { ...binding, baseUrl }
+        : binding,
+    );
+    return { ...installTypePlan, providerBindings };
   }
 
   /**
@@ -6193,6 +6259,31 @@ function mergeManualInputs(
     return configInputs;
   }
   return { ...(configInputs ?? {}), ...manualForTemplate };
+}
+
+// Managed cf-proxy: the cloudflare provider local name (a binding's `provider`
+// may be short `cloudflare`, `cloudflare/cloudflare`, or fully-qualified).
+function isCloudflareProvider(provider: string): boolean {
+  return provider.split("/").pop() === "cloudflare";
+}
+
+// Builds the cf-proxy provider base_url for a managed run. The path carries the
+// dispatch namespace + the install slug (the script-name prefix) so the proxy
+// rewrites `…/workers/scripts/{n}` -> `…/dispatch/namespaces/{ns}/scripts/{slug}-{n}`
+// and passes other calls through. The capsule cannot override it (root-only
+// provider config), so the redirect's integrity does not depend on signing it.
+function managedCloudflareProxyBaseUrl(
+  proxy: CloudflareApiProxyConfig,
+  namespace: string,
+  slug: string,
+): string {
+  const origin = proxy.origin.replace(/\/+$/, "");
+  const route = (proxy.route.startsWith("/") ? proxy.route : `/${proxy.route}`)
+    .replace(/\/+$/, "");
+  return (
+    `${origin}${route}/${encodeURIComponent(namespace)}/` +
+    `${encodeURIComponent(slug)}/client/v4`
+  );
 }
 
 function isJsonScalar(value: unknown): value is string | number | boolean {
