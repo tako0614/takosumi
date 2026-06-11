@@ -86,12 +86,12 @@
       "@takosumi/providers/*": ["./providers/*"],
 
       "takosumi-runtime-agent/prepared-source-reader": [
-        "./src/runtime-agent/prepared_source_reader.ts"
+        "./core/runtime-agent/prepared_source_reader.ts"
       ]
     }
   },
   "include": [
-    "src",
+    "cli",
     "core",
     "providers",
     "opentofu-modules",
@@ -108,7 +108,7 @@
   ],
   "exclude": [
     "**/*_test.ts",
-    "src/cli/tests",
+    "cli/tests",
     "core/scripts",
     "providers/cloudflare/hosting"
   ]
