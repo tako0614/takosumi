@@ -1,5 +1,5 @@
-import type { WorkersForPlatformsDispatchNamespace } from "./bindings.ts";
-import { TENANT_SCRIPT_NAME } from "../../src/service/shared/wfp_script_name.ts";
+import type { WorkersForPlatformsDispatchNamespace } from "../../../worker/src/bindings.ts";
+import { TENANT_SCRIPT_NAME } from "./wfp_script_name.ts";
 
 export interface CloudflareWfpDispatchEnv extends Record<string, unknown> {
   readonly TAKOSUMI_TENANT_DISPATCH: WorkersForPlatformsDispatchNamespace;

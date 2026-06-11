@@ -5,7 +5,7 @@ import type {
   WorkersForPlatformsDispatchNamespace,
   WorkersForPlatformsDispatchOptions,
   WorkersForPlatformsUserWorker,
-} from "./bindings.ts";
+} from "../../../worker/src/bindings.ts";
 import {
   createCloudflareWfpDispatchWorker,
   requestForUserWorker,

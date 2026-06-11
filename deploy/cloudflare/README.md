@@ -11,7 +11,7 @@ DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment / OutputSnapsho
 - `wrangler.toml`: control-plane Worker, D1, R2, Queue, coordination Durable Object, and OpenTofu runner container binding template. Wrangler runs a Bun custom build and uploads the bundled Worker without a second esbuild pass.
 - `wrangler.dispatch.toml`: Workers for Platforms dynamic dispatch Worker template. It has only the dispatch namespace binding and non-secret vars.
 - `../../worker/src/index.ts`: Worker entrypoint.
-- `../../worker/src/wfp_dispatch_worker.ts`: tenant / user Worker dynamic dispatch entrypoint. It resolves the user Worker from the first URL path segment and strips operator-only headers before dispatch. It does not enforce tenant egress allowlists.
+- `../../providers/cloudflare/hosting/wfp_dispatch_worker.ts`: tenant / user Worker dynamic dispatch entrypoint. It resolves the user Worker from the first URL path segment and strips operator-only headers before dispatch. It does not enforce tenant egress allowlists.
 - `../../worker/src/handler.ts`: route dispatcher that keeps edge-local health/storage probes local, forwards canonical Takosumi API requests to the service app, and dispatches OpenTofu execution to the runner container binding.
 - `../../worker/src/d1_storage.ts`: D1-backed snapshot storage driver for service stores.
 - `../../worker/src/d1_deploy_stores.ts`: D1-backed deployment record and revoke-debt stores.

@@ -1,4 +1,4 @@
-import { TENANT_SCRIPT_NAME } from "../../src/service/shared/wfp_script_name.ts";
+import { TENANT_SCRIPT_NAME } from "./wfp_script_name.ts";
 
 /**
  * Managed cf-proxy (runner-side worker-script redirect).
