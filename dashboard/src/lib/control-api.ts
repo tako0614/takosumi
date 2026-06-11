@@ -16,7 +16,7 @@
  * local copy of the relevant contract fields: the dashboard build only aliases
  * `@takosjp/takosumi-accounts-contract`, not `takosumi-contract/*`, so we cannot
  * import the deploy-control contract types directly here. Keep these in sync
- * with packages/schema/src/{spaces,installations,dependencies,runs,sources,
+ * with contract/{spaces,installations,dependencies,runs,sources,
  * activity,deploy-control-api,provider-bindings}.ts.
  */
 
@@ -491,7 +491,7 @@ export type DeploymentStatus =
  * `outputsPublic` map (sensitive outputs never enter the ledger row), so the
  * dashboard read never exposes a handle to the un-projected output envelope.
  * Mirror of the deploy-control `PublicDeployment` (Omit<Deployment,
- * "outputSnapshotId">) — keep in sync with packages/schema/src/deployments.ts.
+ * "outputSnapshotId">) — keep in sync with contract/deployments.ts.
  */
 export interface PublicDeployment {
   readonly id: string;
@@ -582,7 +582,7 @@ export interface OperatorConnectionDefault {
  * `takosumi_managed` default). `available` is true when the operator has wired
  * at least one default connection; `capabilities` lists ONLY the covered
  * provider source names. It carries NO connection id / value / secret — mirror
- * of the backend `ManagedDefaultStatus` (packages/schema/src/provider-bindings).
+ * of the backend `ManagedDefaultStatus` (contract/provider-bindings).
  */
 export interface ManagedDefaultStatus {
   readonly available: boolean;

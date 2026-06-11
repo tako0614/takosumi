@@ -6,7 +6,7 @@ import { beforeAll, test } from "bun:test";
 import {
   assertSafeZstdTarArchive,
   type CommandContext,
-} from "../../runner-image/entrypoint.ts";
+} from "../../runner/entrypoint.ts";
 
 // Real tar.zst extraction-safety proof. This exercises the SAME hardened
 // validator the source-archive restore route runs before `tar -x --zstd`,

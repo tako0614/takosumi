@@ -44,11 +44,11 @@ ENV TF_CLI_CONFIG_FILE=/opt/opentofu/tofu.rc
 # The baked CLI config. plugin_cache_dir speeds warm re-inits; the
 # provider_installation filesystem_mirror serves the mirrored providers from
 # disk and `direct { exclude }` keeps tofu from going to the network for them.
-COPY runner-image/tofu.rc ${TF_CLI_CONFIG_FILE}
+COPY runner/tofu.rc ${TF_CLI_CONFIG_FILE}
 
 # Minimal build-time config that pins the provider set to mirror. Lives in its
 # own dir so `tofu providers mirror` resolves only this config.
-COPY runner-image/mirror-providers.tf /opt/opentofu/mirror-build/providers.tf
+COPY runner/mirror-providers.tf /opt/opentofu/mirror-build/providers.tf
 
 RUN set -eux; \
     mkdir -p "${OPENTOFU_PROVIDER_MIRROR}" "${OPENTOFU_PROVIDER_CACHE}"; \
@@ -71,17 +71,17 @@ WORKDIR /app
 COPY opentofu-modules/ ./templates/
 
 # The runner server imports the dependency-free shared provider->env-name table
-# from src/contract via a relative path. The build context is the repo root
+# from the contract layer via a relative path. The build context is the repo root
 # (image_build_context = "../.."), so we copy both files preserving the
-# entrypoint.ts -> ../packages/schema/src/provider-env-rules.ts relative layout. No
+# entrypoint.ts -> ../contract/provider-env-rules.ts relative layout. No
 # other repo source (or the Worker browser bundle) is copied into the image.
-COPY packages/schema/src/provider-env-rules.ts ./packages/schema/src/provider-env-rules.ts
-COPY packages/schema/src/reference/ip-classification.ts ./packages/schema/src/reference/ip-classification.ts
-COPY packages/schema/src/reference/host-blocklist.ts ./packages/schema/src/reference/host-blocklist.ts
-COPY runner-image/entrypoint.ts ./runner-image/entrypoint.ts
+COPY contract/provider-env-rules.ts ./contract/provider-env-rules.ts
+COPY contract/reference/ip-classification.ts ./contract/reference/ip-classification.ts
+COPY contract/reference/host-blocklist.ts ./contract/reference/host-blocklist.ts
+COPY runner/entrypoint.ts ./runner/entrypoint.ts
 
 ENV PORT=8080
 ENV TOFU_WORK_DIR=/workspace
 
 EXPOSE 8080
-CMD ["bun", "run", "./runner-image/entrypoint.ts"]
+CMD ["bun", "run", "./runner/entrypoint.ts"]

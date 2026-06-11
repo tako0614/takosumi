@@ -12,16 +12,16 @@ import {
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 // Shared provider -> credential env-name table. This module is dependency-free
 // and is copied into the runner container image alongside this file so the
-// relative import resolves at container runtime (see runner-image/Dockerfile).
+// relative import resolves at container runtime (see runner/Dockerfile).
 import {
   PROVIDER_CREDENTIAL_ENV_RULES,
   type ProviderCredentialEnvRule,
   providerEnvRule,
-} from "../packages/schema/src/provider-env-rules.ts";
+} from "../contract/provider-env-rules.ts";
 import {
   assertHostNotBlocked,
   BlockedHostError,
-} from "../packages/schema/src/reference/host-blocklist.ts";
+} from "../contract/reference/host-blocklist.ts";
 
 type OpenTofuRunAction =
   | "plan"
@@ -2309,7 +2309,7 @@ async function assertSafeTarArchive(
   // first line and silently skip the dangerous fragment while `tar -x` still
   // extracts the real entry. Escape quoting renders control chars as backslash
   // sequences so a name can never span lines. This matches the hardened shared
-  // core (packages/schema/src/reference/prepared-source-core.ts).
+  // core (contract/reference/prepared-source-core.ts).
   const verbose = await runCommand(
     ["tar", "-t", "-v", "--quoting-style=escape", "-z", "-f", archivePath],
     {

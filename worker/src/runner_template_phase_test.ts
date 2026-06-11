@@ -4,7 +4,7 @@ import {
   parseBuild,
   parseGeneratedRoot,
   resourceChangesFromPlanJson,
-} from "../../runner-image/entrypoint.ts";
+} from "../../runner/entrypoint.ts";
 import { PROVIDER_CREDENTIAL_ENV_RULES } from "takosumi-contract/provider-env-rules";
 
 // The BUILD phase runs untrusted user commands BEFORE the credentialed tofu

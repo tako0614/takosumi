@@ -16,8 +16,8 @@ DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment / OutputSnapsho
 - `../../worker/src/d1_storage.ts`: D1-backed snapshot storage driver for service stores.
 - `../../worker/src/d1_deploy_stores.ts`: D1-backed deployment record and revoke-debt stores.
 - `../../worker/src/r2_object_storage.ts`: R2-backed object storage port for operator-internal extensions.
-- `../../runner-image/Dockerfile`: Cloudflare Container image scaffold for a Bun HTTP runner with the OpenTofu CLI installed.
-- `../../runner-image/entrypoint.ts`: container-only Bun server that receives run messages from the container Durable Object and invokes `tofu`.
+- `../../runner/Dockerfile`: Cloudflare Container image scaffold for a Bun HTTP runner with the OpenTofu CLI installed.
+- `../../runner/entrypoint.ts`: container-only Bun server that receives run messages from the container Durable Object and invokes `tofu`.
 
 ## Routing Shape
 

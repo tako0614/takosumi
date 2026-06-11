@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { commandContextFromRequest } from "../../runner-image/entrypoint.ts";
+import { commandContextFromRequest } from "../../runner/entrypoint.ts";
 
 // Runner profile that requires a cloudflare credential ref by env://.
 const CLOUDFLARE_PROFILE = {

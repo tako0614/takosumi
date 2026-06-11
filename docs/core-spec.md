@@ -3306,7 +3306,7 @@ takosumi/
   dashboard/
     src/
 
-  runner-image/
+  runner/
     Dockerfile
     entrypoint.ts
     tofu.rc.template
@@ -3384,7 +3384,7 @@ takosumi/
   dashboard/
     src/
 
-  runner-image/
+  runner/
     Dockerfile
     entrypoint.ts
     tofu.rc.template
@@ -3474,7 +3474,7 @@ class_name = "OpenTofuRunnerObject"
 
 [[containers]]
 class_name = "OpenTofuRunnerObject"
-image = "../../runner-image/Dockerfile"
+image = "../../runner/Dockerfile"
 image_build_context = "../.."
 
 [triggers]
