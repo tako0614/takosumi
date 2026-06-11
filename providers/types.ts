@@ -15,6 +15,7 @@
  * depend on the registry without a cycle.
  */
 import type { ConnectionKind } from "takosumi-contract/connections";
+import type { ProviderCredentialArg } from "takosumi-contract/provider-env-rules";
 
 export interface ProviderNetworkPolicy {
   readonly mode: "egress-allowlist" | "operator-managed";
@@ -53,4 +54,19 @@ export interface ManagedProvider {
   readonly capsuleModuleIds?: readonly string[];
   /** Seeded runner profile id (stable, must not change). */
   readonly runnerProfileId: string;
+  /**
+   * Per-alias credential env-name -> OpenTofu provider-argument mapping for the
+   * per-alias credential split (e.g. Cloudflare `CLOUDFLARE_API_TOKEN` ->
+   * `api_token`). Empty for a provider that keeps a credential-free shared-env
+   * alias. Sourced byte-for-byte from `PROVIDER_CREDENTIAL_ARG_MAP` in
+   * `provider-env-rules` (the dependency-free table the runner container also
+   * reads); the registry imports it so per-provider credential data has a single
+   * source.
+   */
+  readonly credentialArgs: readonly ProviderCredentialArg[];
+  /**
+   * Every credential env name this provider may supply, from the
+   * `provider-env-rules` table. Empty for a provider with no env-rule entry.
+   */
+  readonly credentialEnvNames: readonly string[];
 }
