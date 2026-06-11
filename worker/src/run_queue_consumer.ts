@@ -99,7 +99,7 @@ async function dispatchOpenTofuRun(
       return;
     default:
       // Fail-closed against any action the controller does not implement. The
-      // `restore` Run type is schema-reserved (packages/schema runs.ts) but has
+      // `restore` Run type is schema-reserved (contract runs.ts) but has
       // no producer, no queue action, and no handler, so it never reaches here
       // through the parser. This exhaustive default keeps the consumer
       // fail-closed if a future change ever wires a destructive (e.g. state

@@ -93,11 +93,11 @@ new_sqlite_classes = ["CoordinationObject", "OpenTofuRunnerObject"]
 # OpenTofu run executor container. The embedded deploy-control service reaches
 # this through its OpenTofu runner adapter (idFromName(runId) -> .fetch). Build
 # context is the takosumi repo root: the runner Dockerfile copies
-# packages/schema/src/provider-env-rules.ts (shared provider->env table) alongside
-# runner-image/entrypoint.ts.
+# contract/provider-env-rules.ts (shared provider->env table) alongside
+# runner/entrypoint.ts.
 [[containers]]
 class_name = "OpenTofuRunnerObject"
-image = "../../runner-image/Dockerfile"
+image = "../../runner/Dockerfile"
 image_build_context = "../.."
 # Custom sizing: the runner image bakes an OpenTofu provider filesystem mirror
 # and each run materializes a per-run workspace (source checkout + build

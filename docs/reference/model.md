@@ -1,7 +1,7 @@
 # Model
 
 Takosumi の data model は **Space 直下の OpenTofu Capsule DAG** です。正本は
-[`core-spec.md`](../core-spec.md)。`packages/schema/src/*.ts` は現実装の public contract subset を表し、正本 spec との差は
+[`core-spec.md`](../core-spec.md)。`contract/*.ts` は現実装の public contract subset を表し、正本 spec との差は
 [`core-conformance.md`](../core-conformance.md) に implementation gap として記録します。
 
 ```text

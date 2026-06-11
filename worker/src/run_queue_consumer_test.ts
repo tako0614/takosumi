@@ -25,7 +25,7 @@ test("destroy / backup / compatibility_check parse as ok (handled before dispatc
 });
 
 test("schema-reserved-but-unimplemented restore action is rejected fail-closed", () => {
-  // `restore` is a reserved Run type in packages/schema/src/runs.ts with no
+  // `restore` is a reserved Run type in contract/runs.ts with no
   // producer, no queue action, and no handler. A message claiming action
   // "restore" must be treated as an invalid (poison) message so it is acked and
   // dropped, never dispatched to a non-existent destructive restore handler.

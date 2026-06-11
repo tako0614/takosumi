@@ -1,7 +1,7 @@
 # Model
 
 Takosumi's data model is the **OpenTofu Capsule DAG directly under a Space**. The canonical source is
-[`core-spec.md`](../../core-spec.md). `packages/schema/src/*.ts` represents the currently implemented public contract
+[`core-spec.md`](../../core-spec.md). `contract/*.ts` represents the currently implemented public contract
 subset; differences from the canonical spec are tracked as implementation gaps in
 [`core-conformance.md`](../../core-conformance.md).
 

@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { handleRunnerRequest } from "../../runner-image/entrypoint.ts";
+import { handleRunnerRequest } from "../../runner/entrypoint.ts";
 
 test("runner redacts plan stdout and stderr on success", async () => {
   const fixture = await createFakeTofuFixture();

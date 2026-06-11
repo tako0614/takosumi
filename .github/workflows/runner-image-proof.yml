@@ -1,9 +1,9 @@
-name: runner-image proof
+name: runner proof
 
 # Highest-risk uncovered component gate: the OpenTofu runner container image
-# (runner-image/Dockerfile) was only ever exercised by scripts/prove-runner-docker.sh
+# (runner/Dockerfile) was only ever exercised by scripts/prove-runner-docker.sh
 # run by hand — no workflow built it, so a regression in the Dockerfile, the baked
-# provider mirror, or the container HTTP server (runner-image/entrypoint.ts) could
+# provider mirror, or the container HTTP server (runner/entrypoint.ts) could
 # ship undetected.
 #
 # This job runs the existing end-to-end proof through REAL docker: it builds the
@@ -13,7 +13,7 @@ name: runner-image proof
 # The proof uses the baked-in provider-free `core` template, so it needs NO cloud
 # credentials or repository secrets.
 #
-# Triggers are scoped to changes that can break the image (runner-image sources,
+# Triggers are scoped to changes that can break the image (runner sources,
 # the first-party modules baked into it, the schema files copied into it, and the
 # proof script itself) plus a weekly schedule so upstream base-image / OpenTofu /
 # provider drift is caught even when nobody touches these paths.
@@ -22,24 +22,24 @@ on:
   push:
     branches: [master, main]
     paths:
-      - "runner-image/**"
+      - "runner/**"
       - "opentofu-modules/**"
-      - "packages/schema/src/provider-env-rules.ts"
-      - "packages/schema/src/reference/ip-classification.ts"
-      - "packages/schema/src/reference/host-blocklist.ts"
+      - "contract/provider-env-rules.ts"
+      - "contract/reference/ip-classification.ts"
+      - "contract/reference/host-blocklist.ts"
       - "scripts/prove-runner-docker.sh"
       - "scripts/prove-runner-docker-payload.ts"
-      - ".github/workflows/runner-image-proof.yml"
+      - ".github/workflows/runner-proof.yml"
   pull_request:
     paths:
-      - "runner-image/**"
+      - "runner/**"
       - "opentofu-modules/**"
-      - "packages/schema/src/provider-env-rules.ts"
-      - "packages/schema/src/reference/ip-classification.ts"
-      - "packages/schema/src/reference/host-blocklist.ts"
+      - "contract/provider-env-rules.ts"
+      - "contract/reference/ip-classification.ts"
+      - "contract/reference/host-blocklist.ts"
       - "scripts/prove-runner-docker.sh"
       - "scripts/prove-runner-docker-payload.ts"
-      - ".github/workflows/runner-image-proof.yml"
+      - ".github/workflows/runner-proof.yml"
   schedule:
     # Weekly (Monday 06:00 UTC) to catch base-image / OpenTofu / provider drift.
     - cron: "0 6 * * 1"
@@ -49,7 +49,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: runner-image-proof-${{ github.ref }}
+  group: runner-proof-${{ github.ref }}
   cancel-in-progress: true
 
 env:
