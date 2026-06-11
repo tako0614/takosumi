@@ -1,4 +1,4 @@
-import { currentRuntime, type Signal } from "../../core/shared/runtime/index.ts";
+import { currentRuntime, type Signal } from "../core/shared/runtime/index.ts";
 
 export function readEnv(name: string): string | undefined {
   return currentRuntime().env.get(name);
