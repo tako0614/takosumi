@@ -18,7 +18,7 @@
     "check": "tsc --noEmit && bun run check:worker-types && bun run check:cloudflare-worker-build",
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",
     "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers worker/src/index.ts --outfile /tmp/takosumi-cf-worker-check.mjs && bun build --target browser --format esm worker/src/wfp_dispatch_worker.ts --outfile /tmp/takosumi-wfp-dispatch-worker-check.mjs",
-    "test": "bun test ./src/ ./packages/schema/src ./packages/rootgen/src ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./packages/platform-services/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src ./worker/src ./deploy/platform ./scripts/",
+    "test": "bun test ./src/ ./providers ./packages/schema/src ./packages/rootgen/src ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./packages/platform-services/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src ./worker/src ./deploy/platform ./scripts/",
     "test:service": "bun test ./src/",
     "test:accounts": "bun test ./packages/accounts-contract/src ./packages/accounts-service ./packages/cli/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src",
     "test:scripts": "bun test ./scripts/",
