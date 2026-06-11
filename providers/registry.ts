@@ -10,11 +10,30 @@
  * here as each piece is extracted.
  */
 import type { ConnectionKind } from "takosumi-contract/connections";
+import {
+  allowedEnvNamesForProvider,
+  providerCredentialArgs,
+  type ProviderCredentialArg,
+} from "takosumi-contract/provider-env-rules";
 import type { ManagedProvider } from "./types.ts";
 
 const OPENTOFU = "registry.opentofu.org";
 
-export const MANAGED_PROVIDERS: readonly ManagedProvider[] = [
+/**
+ * Per-provider records WITHOUT the credential fields. The credential
+ * (`credentialArgs` / `credentialEnvNames`) data is sourced from the
+ * dependency-free `provider-env-rules` table (which the runner container also
+ * reads) and folded into each {@link ManagedProvider} below, so per-provider
+ * credential data keeps a single source. The registry imports `provider-env-rules`
+ * rather than the reverse because that table must stay import-free to resolve in
+ * the slim runner-image build.
+ */
+type ManagedProviderBase = Omit<
+  ManagedProvider,
+  "credentialArgs" | "credentialEnvNames"
+>;
+
+const MANAGED_PROVIDER_BASES: readonly ManagedProviderBase[] = [
   {
     id: "cloudflare",
     displayName: "Cloudflare",
@@ -149,6 +168,30 @@ export const MANAGED_PROVIDERS: readonly ManagedProvider[] = [
   },
 ];
 
+/**
+ * Resolve the credential env-name / arg data for a provider base from the
+ * `provider-env-rules` table, keyed by its canonical OpenTofu provider address
+ * (which `provider-env-rules` resolves through its short-name / registry-path
+ * match). A provider whose address has no env-rule entry gets empty credential
+ * data, preserving the credential-free behavior for providers without a mapping.
+ */
+function resolveProviderCredentials(base: ManagedProviderBase): {
+  credentialArgs: readonly ProviderCredentialArg[];
+  credentialEnvNames: readonly string[];
+} {
+  const address = base.providerAddresses[0] ?? base.id;
+  return {
+    credentialArgs: providerCredentialArgs(address),
+    credentialEnvNames: allowedEnvNamesForProvider(address),
+  };
+}
+
+export const MANAGED_PROVIDERS: readonly ManagedProvider[] =
+  MANAGED_PROVIDER_BASES.map((base) => ({
+    ...base,
+    ...resolveProviderCredentials(base),
+  }));
+
 const BY_ID = new Map(MANAGED_PROVIDERS.map((p) => [p.id, p]));
 const BY_ADDRESS = new Map<string, ManagedProvider>();
 for (const provider of MANAGED_PROVIDERS) {
@@ -185,4 +228,21 @@ export function providerForConnectionKind(
   kind: ConnectionKind,
 ): ManagedProvider | undefined {
   return BY_CONNECTION_KIND.get(kind);
+}
+
+/**
+ * Per-alias credential env-name -> OpenTofu provider-argument mapping for a
+ * provider, resolved through the registry by OpenTofu provider address (fully
+ * qualified, short, or local name) or provider id. An unknown provider yields an
+ * empty list. This is the registry-facing view of the `provider-env-rules`
+ * credential-arg table (the single source the registry records also fold in).
+ */
+export function providerCredentialArgsFromRegistry(
+  provider: string,
+): readonly ProviderCredentialArg[] {
+  return (
+    providerForAddress(provider)?.credentialArgs ??
+    providerById(provider)?.credentialArgs ??
+    []
+  );
 }
