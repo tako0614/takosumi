@@ -1980,6 +1980,69 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return await this.getCreditBalance(spaceId);
   }
 
+  async addCredits(
+    spaceId: string,
+    input: { readonly credits: number; readonly updatedAt: string },
+  ): Promise<CreditBalance> {
+    await this.#ensureSchema();
+    // Seed a zero row so the first grant lands (INSERT OR IGNORE).
+    await this.db
+      .prepare(
+        `insert or ignore into credit_balances
+           (space_id, available_credits, reserved_credits,
+            monthly_included_credits, purchased_credits, updated_at)
+         values (?, 0, 0, 0, 0, ?)`,
+      )
+      .bind(spaceId, input.updatedAt)
+      .run();
+    await this.db
+      .prepare(
+        `update credit_balances
+         set available_credits = available_credits + ?,
+             purchased_credits = purchased_credits + ?,
+             updated_at = ?
+         where space_id = ?`,
+      )
+      .bind(input.credits, input.credits, input.updatedAt, spaceId)
+      .run();
+    // The seed + update guarantees a row exists.
+    return (await this.getCreditBalance(spaceId))!;
+  }
+
+  async reconcileMonthlyCredits(
+    spaceId: string,
+    input: {
+      readonly newMonthly: number;
+      readonly periodStartIso: string;
+      readonly updatedAt: string;
+    },
+  ): Promise<CreditBalance | undefined> {
+    await this.#ensureSchema();
+    // Monthly RESET: carry over purchased credits, reset monthly to full.
+    // Column-relative, no read: available = max(0, available - oldMonthly) + new.
+    const result = await this.db
+      .prepare(
+        `update credit_balances
+         set available_credits =
+               max(0, available_credits - monthly_included_credits) + ?,
+             monthly_included_credits = ?,
+             updated_at = ?
+         where space_id = ?
+           and (monthly_included_credits != ? or updated_at < ?)`,
+      )
+      .bind(
+        input.newMonthly,
+        input.newMonthly,
+        input.updatedAt,
+        spaceId,
+        input.newMonthly,
+        input.periodStartIso,
+      )
+      .run();
+    if (changes(result) <= 0) return undefined;
+    return await this.getCreditBalance(spaceId);
+  }
+
   async putCreditReservation(
     reservation: CreditReservation,
   ): Promise<CreditReservation> {

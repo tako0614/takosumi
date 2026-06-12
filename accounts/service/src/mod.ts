@@ -929,6 +929,9 @@ export function createAccountsHandler(
         sessionSubject: session.subject,
         billingRedirectAllowlist: options.billingRedirectAllowlist,
         billingPlans: options.billingPlans,
+        ...(options.controlPlaneOperations
+          ? { controlPlaneOperations: options.controlPlaneOperations }
+          : {}),
       });
     }
 

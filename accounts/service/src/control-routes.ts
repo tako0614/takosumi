@@ -2680,7 +2680,7 @@ async function requireSpaceAccess(input: {
   };
 }
 
-async function canAccessSpace(input: {
+export async function canAccessSpace(input: {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly subject: string;
