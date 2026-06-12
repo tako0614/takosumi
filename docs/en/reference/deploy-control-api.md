@@ -369,8 +369,18 @@ shape) or freshly minted when absent.
 | `not_implemented`     | 501  | The 501 surfaces above                               |
 | `internal_error`      | 500  | Unclassified server error                            |
 
-## External install link (removed)
+## External install link (client-handled)
 
-The external install link (`GET /install?...` — a URL redirect from another site that started an install with
-the source pre-filled) has been **removed**. Installs start inside the dashboard at `/new` (catalog + Git URL
-form). `/install` is now a plain SPA path; its query is never read.
+External sites can deep-link a Git URL into the install flow. There is no server-side handling
+(`/install` is a plain SPA path): the dashboard client parses the query and pre-fills the Git form on
+`/new`. A link only **pre-fills** — the provenance is stated in a summary line, and the compatibility
+check plus an explicit add action are always required.
+
+```txt
+GET /install?source=git::https://git.example.com/takos/talk.git//deploy?ref=main
+GET /install?git=https://git.example.com/takos/talk.git&ref=main&path=deploy
+```
+
+The client parser accepts `https://` only and rejects embedded credentials. The effective Source URL
+policy (private/loopback/metadata host rejection etc.) is enforced server-side at Source registration /
+compatibility check.

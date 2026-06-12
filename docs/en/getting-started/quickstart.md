@@ -139,7 +139,7 @@ curl -s "$BASE/api/v1/spaces/<spaceId>/billing" -H "$AUTH"
 curl -s "$BASE/api/v1/spaces/<spaceId>/usage" -H "$AUTH"
 ```
 
-The dashboard's add flow (`/new`: catalog + Git URL form) drives the same steps from the UI. Installs start inside the dashboard — there is no external install-link entry that starts an install from a URL redirect.
+The dashboard's add flow (`/new`: catalog + Git URL form) drives the same steps from the UI. External install links (`/install?git=...&ref=...&path=...`) forward their query to `/new`, landing with the source pre-filled (pre-fill only — adding always requires explicit confirmation).
 
 ## Next
 

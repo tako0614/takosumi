@@ -40,11 +40,11 @@ test("Cloudflare Accounts Worker keeps edge health local", async () => {
   });
 });
 
-test("the dashboard SPA owns /install (no external install-link redirect)", async () => {
-  // The external install-link entry (302 from `/install?git=…` into a
-  // prefilled install flow) was removed: installs start inside the dashboard
-  // (`/new` catalog / Git URL form). Any `/install` URL is now just an SPA
-  // path served by ASSETS — no redirect, no special handling.
+test("the dashboard SPA owns /install (external install link is client-handled)", async () => {
+  // The external install link has NO server-side handling: `/install?git=…`
+  // is served as a plain SPA path by ASSETS (no 302, no param parsing here).
+  // The dashboard client reads the query and pre-fills `/new` — pre-fill
+  // only, with an explicit confirmation before anything installs.
   const worker = createCloudflareWorker();
   const response = await worker.fetch(
     new Request(

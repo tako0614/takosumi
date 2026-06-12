@@ -362,8 +362,18 @@ AWS assume-role route は Connection 登録 surface です。STS による短期
 | `not_implemented`     | 501  | 上記 501 surface                                   |
 | `internal_error`      | 500  | 未分類 server error                                |
 
-## External install link（廃止）
+## External install link (client-handled)
 
-外部サイトからの URL リダイレクトで install を開始する `GET /install?...` の external install link は
-**廃止**されました。インストールは dashboard の `/new`（カタログ + Git URL フォーム）から開始します。
-`/install` はただの SPA パスで、query は読まれません。
+外部サイトは Git URL を渡して install flow に deep-link できます。server 側の特別処理はなく
+（`/install` はただの SPA パス）、dashboard client が query を parse して `/new` の Git フォームを
+pre-fill します。link は **pre-fill のみ** — 出所がサマリで明示され、互換性チェック（中身を確認）と
+明示的な追加操作を必ず挟みます。
+
+```txt
+GET /install?source=git::https://git.example.com/takos/talk.git//deploy?ref=main
+GET /install?git=https://git.example.com/takos/talk.git&ref=main&path=deploy
+```
+
+client parser は `https://` のみを受け付け、credential 埋め込みを拒否します。実効的な Source URL
+policy（private/loopback/metadata host 拒否など）は Source 登録 / compatibility check の server 境界で
+強制されます。
