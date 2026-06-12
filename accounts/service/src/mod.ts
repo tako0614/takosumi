@@ -97,6 +97,14 @@ import {
   type StripeSpaceBillingReconciler,
   type StripeSpaceCreditReconciler,
 } from "./billing-routes.ts";
+import type { BillingPlan } from "./billing-plans.ts";
+export {
+  type BillingPlan,
+  type BillingPlanText,
+  parseBillingPlans,
+  type PublicBillingPlan,
+  publicBillingPlans,
+} from "./billing-plans.ts";
 import {
   handleAuthorize,
   handleIntrospect,
@@ -275,6 +283,14 @@ export interface AccountsHandlerOptions {
    */
   billingRedirectAllowlist?: readonly string[];
   /**
+   * Operator billing plan catalog (spec §32): the subscription plans / credit
+   * packs the dashboard offers, each bound server-side to a Stripe price.
+   * When omitted the handler falls back to the `TAKOSUMI_BILLING_PLANS` env
+   * var (a JSON array); with neither, the catalog is empty and the dashboard
+   * shows "no plans offered".
+   */
+  billingPlans?: readonly BillingPlan[];
+  /**
    * HMAC secret used to sign installation export download redirects. When
    * omitted the handler falls back to the
    * `TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET` env var; if both are
@@ -306,6 +322,7 @@ export interface EphemeralAccountsHandlerOptions {
   managedOfferingAccess?: ManagedOfferingAccessPolicy;
   workloadPlatformServices?: WorkloadPlatformServiceResolverHttpOptions;
   billingRedirectAllowlist?: readonly string[];
+  billingPlans?: readonly BillingPlan[];
   exportDownloadSigningSecret?: string | Uint8Array;
   /**
    * Escape hatch for the fail-closed ephemeral-key guard. The ephemeral
@@ -911,6 +928,7 @@ export function createAccountsHandler(
         stripe: options.stripeBilling,
         sessionSubject: session.subject,
         billingRedirectAllowlist: options.billingRedirectAllowlist,
+        billingPlans: options.billingPlans,
       });
     }
 
@@ -1246,6 +1264,7 @@ export function createAccountsHandler(
         url,
         store,
         operations: options.controlPlaneOperations,
+        billingPlans: options.billingPlans,
       });
       if (controlResponse) return controlResponse;
     }

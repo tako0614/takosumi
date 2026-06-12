@@ -543,6 +543,9 @@ export const ja = {
   "billing.portalOpening": "開いています...",
   "billing.checkout.starting": "チェックアウトへ移動中...",
   "billing.checkout.failed": "チェックアウトを開始できませんでした — {message}",
+  "billing.checkout.success":
+    "購入が完了しました。クレジットへの反映まで少しかかる場合があります。",
+  "billing.checkout.cancelled": "購入をキャンセルしました。",
   "billing.usage.title": "使用量",
   "billing.usage.empty": "使用量はまだありません。",
   "billing.usage.kind": "種別",

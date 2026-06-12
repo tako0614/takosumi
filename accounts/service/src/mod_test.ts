@@ -1268,6 +1268,16 @@ test("accounts reference operator distribution exposes Accounts, OIDC, and billi
       stripeApiBase: "https://api.stripe.test/v1",
     },
     billingRedirectAllowlist: ["https://dashboard.example.test"],
+    billingPlans: [
+      {
+        id: "operator-plan",
+        kind: "subscription",
+        stripePriceId: "price_operator",
+        credits: 1000,
+        name: { ja: "オペレーター", en: "Operator" },
+        priceDisplay: { ja: "¥1,000 / 月", en: "$7 / mo" },
+      },
+    ],
   });
 
   const health = await handler(new Request(`${testIssuer}/healthz`));
@@ -1289,8 +1299,8 @@ test("accounts reference operator distribution exposes Accounts, OIDC, and billi
       },
       body: JSON.stringify({
         subject: "tsub_operator",
-        priceId: "price_operator",
-        mode: "subscription",
+        planId: "operator-plan",
+        spaceId: "space_operator",
         successUrl: "https://dashboard.example.test/billing/success",
         cancelUrl: "https://dashboard.example.test/billing/cancel",
       }),
@@ -2754,6 +2764,16 @@ test("accounts handler starts Stripe checkout sessions", async () => {
       fetch: fetchImpl,
     },
     billingRedirectAllowlist: ["https://accounts.example.test"],
+    billingPlans: [
+      {
+        id: "plus",
+        kind: "subscription",
+        stripePriceId: "price_1",
+        credits: 1000,
+        name: { ja: "プラス", en: "Plus" },
+        priceDisplay: { ja: "¥1,500 / 月", en: "$10 / mo" },
+      },
+    ],
   });
 
   const response = await handler(
@@ -2762,11 +2782,10 @@ test("accounts handler starts Stripe checkout sessions", async () => {
       headers: accountSessionHeaders(checkoutSession),
       body: JSON.stringify({
         subject: "tsub_account",
-        priceId: "price_1",
-        mode: "subscription",
+        planId: "plus",
+        spaceId: "space_a",
         successUrl: "https://accounts.example.test/success",
         cancelUrl: "https://accounts.example.test/cancel",
-        metadata: { purchase_kind: "plus_subscription" },
       }),
     }),
   );
@@ -2779,7 +2798,55 @@ test("accounts handler starts Stripe checkout sessions", async () => {
   const params = new URLSearchParams(requestBody);
   expect(params.get("customer_email")).toEqual("user@example.test");
   expect(params.get("metadata[takosumi_subject]")).toEqual("tsub_account");
-  expect(params.get("metadata[purchase_kind]")).toEqual("plus_subscription");
+  // The SERVER resolved the plan: Stripe price + mode + grant metadata come
+  // from the operator catalog, never from the client body (spec §32).
+  expect(params.get("mode")).toEqual("subscription");
+  expect(params.get("line_items[0][price]")).toEqual("price_1");
+  expect(params.get("metadata[space_id]")).toEqual("space_a");
+  expect(params.get("metadata[plan_code]")).toEqual("plus");
+  expect(params.get("metadata[credits]")).toEqual("1000");
+  // Subscription plans mirror the grant metadata onto the subscription so
+  // every paid invoice carries it (the monthly credit-grant path).
+  expect(params.get("subscription_data[metadata][space_id]")).toEqual(
+    "space_a",
+  );
+  expect(params.get("subscription_data[metadata][credits]")).toEqual("1000");
+});
+
+test("checkout rejects an unknown planId (catalog is server-side)", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_account",
+    email: "user@example.test",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  const checkoutSession = seedAccountSession(store, "tsub_account");
+  const handler = createAccountsHandler({
+    store,
+    stripeBilling: {
+      secretKey: "sk_test",
+      webhookSecret: "whsec_test",
+    },
+    billingRedirectAllowlist: ["https://accounts.example.test"],
+    billingPlans: [],
+  });
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: accountSessionHeaders(checkoutSession),
+      body: JSON.stringify({
+        subject: "tsub_account",
+        planId: "nope",
+        spaceId: "space_a",
+        successUrl: "https://accounts.example.test/success",
+        cancelUrl: "https://accounts.example.test/cancel",
+      }),
+    }),
+  );
+  expect(response.status).toEqual(404);
+  const body = (await response.json()) as { error: { code: string } };
+  expect(body.error.code).toEqual("plan_not_found");
 });
 
 test("accounts handler starts Stripe Customer Portal sessions for linked customers", async () => {
