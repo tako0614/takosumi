@@ -77,14 +77,6 @@ export async function createApiApp(
     registerRequestCorrelation(app, options.requestCorrelation ?? {});
   }
 
-  app.get("/health", (c) => {
-    return c.json({
-      ok: true,
-      service: "takosumi",
-      domains: ["space", "deploy-control"],
-    });
-  });
-
   const mounted = resolveMountedRouteFamilies(role, options);
   const runtimeAgentRoutesMounted = mounted.runtimeAgentRoutesMounted;
   const openApiRouteMounted = mounted.openApiRouteMounted;

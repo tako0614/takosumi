@@ -43,7 +43,7 @@ Internal/service paths are also forwarded to the embedded service app:
 
 - `/api/internal/v1/*` for operator/internal APIs.
 - `/api/internal/v1/runtime/agents/*` for private compatibility fleet ledgers when an operator distribution enables them.
-- `/health`, `/capabilities`, `/readyz`, `/livez`, `/openapi.json`, and `/metrics`.
+- `/capabilities`, `/readyz`, `/livez`, `/openapi.json`, and `/metrics`.
 
 The Worker-local routes remain at the edge:
 

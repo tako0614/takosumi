@@ -10,7 +10,7 @@
  *   POST /internal/v1/lifecycle/destroy
  *   POST /internal/v1/lifecycle/compensate
  *   POST /internal/v1/lifecycle/describe
- *   GET  /internal/v1/health
+ *   GET  /healthz
  *
  * Auth: bearer token shared between service and runtime-agent.
  */
@@ -288,7 +288,12 @@ export const LIFECYCLE_COMPENSATE_PATH =
   `${INTERNAL_V1_PREFIX}/lifecycle/compensate` as const;
 export const LIFECYCLE_DESCRIBE_PATH =
   `${INTERNAL_V1_PREFIX}/lifecycle/describe` as const;
-export const LIFECYCLE_HEALTH_PATH = `${INTERNAL_V1_PREFIX}/health` as const;
+/**
+ * Runtime-agent liveness probe. Unified with the worker-level `/healthz`
+ * convention used everywhere else (worker shells, accounts handler,
+ * node-postgres, runner) instead of a runtime-agent-specific `/internal/v1/health`.
+ */
+export const LIFECYCLE_HEALTH_PATH = "/healthz" as const;
 
 /** Optional operator DataAsset/artifact extension endpoint base path. */
 export const ARTIFACTS_BASE_PATH = `${INTERNAL_V1_PREFIX}/artifacts` as const;
