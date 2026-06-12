@@ -440,6 +440,25 @@ function OverviewTab(props: {
         </Switch>
       </Card>
 
+      {/* Post-apply next-step guidance: a deployed capsule that produced no
+          public output (infra-only) would otherwise dead-end on a green
+          "Deployed" with nothing to open. Tell the user the launch is a
+          separate step instead of implying the flow is complete. */}
+      <Show when={props.hasDeployment && props.publicOutputs.length === 0}>
+        <Card>
+          <CardHeader title={t("app.nextSteps.title")} />
+          <p>{t("app.nextSteps.infraOnly")}</p>
+          <a
+            href="https://takosumi.com/docs"
+            target="_blank"
+            rel="external noopener"
+            class="link"
+          >
+            {t("app.nextSteps.docs")}
+          </a>
+        </Card>
+      </Show>
+
       <Show when={props.producers.length > 0 || props.consumers.length > 0}>
         <Card>
           <CardHeader title={t("app.deps.title")} />

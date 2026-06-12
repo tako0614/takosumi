@@ -78,7 +78,9 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- status labels ----------------------------------------------------
   "status.installation.pending": "Setting up",
-  "status.installation.active": "Running",
+  // `active` = the last apply succeeded and the state generation advanced; it
+  // is NOT a verified-reachable signal, so say "Deployed", not "Running".
+  "status.installation.active": "Deployed",
   "status.installation.stale": "Redeploy needed",
   "status.installation.error": "Error",
   "status.installation.disabled": "Disabled",
@@ -143,6 +145,10 @@ export const en: Record<keyof typeof ja, string> = {
   "app.outputs.empty": "No public outputs yet. They appear after a deploy.",
   "app.outputs.none":
     "This app exposes no public addresses or outputs (infra-only modules, for example, may not emit a URL).",
+  "app.nextSteps.title": "Next steps",
+  "app.nextSteps.infraOnly":
+    "The infrastructure (D1 / KV / R2 / Queues, …) is provisioned. Launching the app itself may need a separate step (e.g. a wrangler deploy). See the docs for the procedure.",
+  "app.nextSteps.docs": "Open the docs →",
   "app.output.launchUrl": "App URL",
   "app.output.url": "URL",
   "app.output.publicUrl": "Public URL",

@@ -81,7 +81,9 @@ export const ja = {
 
   // --- status labels ----------------------------------------------------
   "status.installation.pending": "準備中",
-  "status.installation.active": "稼働中",
+  // `active` = 直近の apply が成功し state generation が前進した状態。readiness
+  // 検証ではない（health probe は別）ので「稼働中」とは言わず実態どおりにする。
+  "status.installation.active": "デプロイ済み",
   "status.installation.stale": "再デプロイが必要",
   "status.installation.error": "エラー",
   "status.installation.disabled": "無効",
@@ -147,6 +149,10 @@ export const ja = {
     "まだ公開された出力はありません。デプロイすると表示されます。",
   "app.outputs.none":
     "このアプリは公開アドレス・出力を持ちません（インフラのみのモジュールなどではアドレスが出ないことがあります）。",
+  "app.nextSteps.title": "次にやること",
+  "app.nextSteps.infraOnly":
+    "インフラの作成（D1 / KV / R2 / Queues など）は完了しました。アプリ本体の起動は別の手順（例: wrangler でのデプロイ）が必要な場合があります。手順はドキュメントを参照してください。",
+  "app.nextSteps.docs": "ドキュメントを開く →",
   "app.output.launchUrl": "アプリのアドレス",
   "app.output.url": "アドレス",
   "app.output.publicUrl": "公開アドレス",
