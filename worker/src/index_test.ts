@@ -31,7 +31,6 @@ test("Cloudflare Worker dispatches service control-plane routes in-process", asy
   const env = createEnv();
 
   for (const path of [
-    "/health",
     "/capabilities",
     "/openapi.json",
     "/livez",

@@ -19,7 +19,10 @@ test("createApiApp exposes /openapi.json when enabled", async () => {
   const body = await response.json();
   assert.equal(body.openapi, "3.1.0");
   assert.equal(body.info.title, "Takosumi API");
-  assert.ok(body.paths["/health"]);
+  assert.ok(body.paths["/capabilities"]);
+  // `/health` was removed in favor of worker-level `/healthz` liveness; the
+  // in-process API app no longer exposes a process health route.
+  assert.equal(body.paths["/health"], undefined);
 });
 
 test("createApiApp does not mount retired public deployment routes", async () => {

@@ -124,19 +124,13 @@ export type RouteFamilyFlag =
 export type RouteFamilyMountedFlags = Record<RouteFamilyFlag, boolean>;
 
 /**
- * Endpoints that are always mounted regardless of family flags (`/health`,
- * `/capabilities`). Tagged `process`; surfaced by both capabilities + OpenAPI.
+ * Endpoints that are always mounted regardless of family flags
+ * (`/capabilities`). Tagged `process`; surfaced by both capabilities + OpenAPI.
+ * Liveness probes (`/healthz` / `/readyz` / `/livez`) are worker-level concerns
+ * (`HEALTH_PATHS` in `takosumi-contract/api-surface`), handled by the host
+ * worker shells, not the in-process API app.
  */
 export const ALWAYS_MOUNTED_ENDPOINTS: readonly ApiEndpoint[] = [
-  {
-    method: "GET",
-    path: "/health",
-    summary: "Process-local health probe for the current Takosumi role.",
-    auth: "none",
-    operationId: "getHealth",
-    tag: "process",
-    openapi: { okSchema: "HealthResponse" },
-  },
   {
     method: "GET",
     path: "/capabilities",
