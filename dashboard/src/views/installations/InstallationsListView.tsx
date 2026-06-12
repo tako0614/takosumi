@@ -21,7 +21,7 @@ const STORAGE_KEY = "tg_apps_space_id";
  *
  * Ported from takosumi dashboard-ui `routes/apps/index.tsx`. A space-id picker
  * plus a grid of {@link AppCard}, listing the installed apps for the selected
- * space via `GET /v1/installations?space_id=<id>` (the same-origin account
+ * space via `GET /v1/app-installations?space_id=<id>` (the same-origin account
  * plane mounted in-process). Ported as-is to avoid behaviour change; in the
  * single-operator world the manual picker may later be replaced by
  * `useAuth().spaces`.

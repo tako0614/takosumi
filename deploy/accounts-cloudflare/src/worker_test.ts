@@ -426,7 +426,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
   };
 
   const createResponse = await routeWorker.fetch(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       headers: authHeaders,
       body: JSON.stringify({
@@ -453,7 +453,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
   const exportStartedAt = Date.now();
   const exportResponse = await routeWorker.fetch(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_route_export/export",
+      "https://accounts.example.test/v1/app-installations/inst_route_export/export",
       {
         method: "POST",
         headers: {
@@ -499,7 +499,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
 
   const operationDownloadResponse = await routeWorker.fetch(
     new Request(
-      `https://accounts.example.test/v1/installations/inst_route_export/exports/${exported.operationId}/download`,
+      `https://accounts.example.test/v1/app-installations/inst_route_export/exports/${exported.operationId}/download`,
       { headers: { authorization: `Bearer ${sessionId}` } },
     ),
     routeEnv,
@@ -757,7 +757,7 @@ test("Cloudflare Accounts Worker seeds local-substrate account session and space
 
   const response = await worker.fetch(
     new Request(
-      "https://app.takosumi.test/v1/installations?space_id=space_local",
+      "https://app.takosumi.test/v1/app-installations?space_id=space_local",
       {
         headers: { authorization: "Bearer sess_local_substrate" },
       },

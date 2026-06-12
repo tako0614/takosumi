@@ -104,22 +104,22 @@ test("export bundle kind is stable for portable AppInstallation exports", () => 
 });
 
 test("AppInstallation path helpers expose the Accounts route surface", () => {
-  expect(takosumiAccountsInstallationPlanRunsPath()).toEqual("/v1/installations/plan-runs");
-  expect(takosumiAccountsInstallationPath("inst_1")).toEqual("/v1/installations/inst_1");
-  expect(takosumiAccountsInstallationsImportPath()).toEqual("/v1/installations/import");
-  expect(takosumiAccountsInstallationStatusPath("inst_1")).toEqual("/v1/installations/inst_1/status");
-  expect(takosumiAccountsInstallationDeploymentsPath("inst_1")).toEqual("/v1/installations/inst_1/deployments");
-  expect(takosumiAccountsInstallationDeploymentPlanRunsPath("inst_1")).toEqual("/v1/installations/inst_1/deployments/plan-runs");
-  expect(takosumiAccountsInstallationRollbackPath("inst_1")).toEqual("/v1/installations/inst_1/rollback");
-  expect(takosumiAccountsInstallationMaterializePath("inst_1")).toEqual("/v1/installations/inst_1/materialize");
-  expect(takosumiAccountsInstallationExportPath("inst_1")).toEqual("/v1/installations/inst_1/export");
-  expect(takosumiAccountsInstallationExportOperationPath("inst_1", "op_1")).toEqual("/v1/installations/inst_1/exports/op_1");
-  expect(takosumiAccountsInstallationExportDownloadPath("inst_1", "op_1")).toEqual("/v1/installations/inst_1/exports/op_1/download");
-  expect(takosumiAccountsInstallationEventsPath("inst_1")).toEqual("/v1/installations/inst_1/events");
-  expect(takosumiAccountsInstallationBillingUsageReportsPath("inst_1")).toEqual("/v1/installations/inst_1/billing/usage-reports");
-  expect(takosumiAccountsInstallationPath("inst/one")).toEqual("/v1/installations/inst%2Fone");
-  expect(takosumiAccountsInstallationExportOperationPath("inst/one", "op/one")).toEqual("/v1/installations/inst%2Fone/exports/op%2Fone");
-  expect(takosumiAccountsInstallationExportDownloadPath("inst/one", "op/one")).toEqual("/v1/installations/inst%2Fone/exports/op%2Fone/download");
+  expect(takosumiAccountsInstallationPlanRunsPath()).toEqual("/v1/app-installations/plan-runs");
+  expect(takosumiAccountsInstallationPath("inst_1")).toEqual("/v1/app-installations/inst_1");
+  expect(takosumiAccountsInstallationsImportPath()).toEqual("/v1/app-installations/import");
+  expect(takosumiAccountsInstallationStatusPath("inst_1")).toEqual("/v1/app-installations/inst_1/status");
+  expect(takosumiAccountsInstallationDeploymentsPath("inst_1")).toEqual("/v1/app-installations/inst_1/deployments");
+  expect(takosumiAccountsInstallationDeploymentPlanRunsPath("inst_1")).toEqual("/v1/app-installations/inst_1/deployments/plan-runs");
+  expect(takosumiAccountsInstallationRollbackPath("inst_1")).toEqual("/v1/app-installations/inst_1/rollback");
+  expect(takosumiAccountsInstallationMaterializePath("inst_1")).toEqual("/v1/app-installations/inst_1/materialize");
+  expect(takosumiAccountsInstallationExportPath("inst_1")).toEqual("/v1/app-installations/inst_1/export");
+  expect(takosumiAccountsInstallationExportOperationPath("inst_1", "op_1")).toEqual("/v1/app-installations/inst_1/exports/op_1");
+  expect(takosumiAccountsInstallationExportDownloadPath("inst_1", "op_1")).toEqual("/v1/app-installations/inst_1/exports/op_1/download");
+  expect(takosumiAccountsInstallationEventsPath("inst_1")).toEqual("/v1/app-installations/inst_1/events");
+  expect(takosumiAccountsInstallationBillingUsageReportsPath("inst_1")).toEqual("/v1/app-installations/inst_1/billing/usage-reports");
+  expect(takosumiAccountsInstallationPath("inst/one")).toEqual("/v1/app-installations/inst%2Fone");
+  expect(takosumiAccountsInstallationExportOperationPath("inst/one", "op/one")).toEqual("/v1/app-installations/inst%2Fone/exports/op%2Fone");
+  expect(takosumiAccountsInstallationExportDownloadPath("inst/one", "op/one")).toEqual("/v1/app-installations/inst%2Fone/exports/op%2Fone/download");
   assertThrows(
     () => takosumiAccountsInstallationPath(""),
     TypeError,

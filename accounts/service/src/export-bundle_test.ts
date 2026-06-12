@@ -140,7 +140,7 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
   );
   expect(authBinding).toBeTruthy();
   expect(authBinding.secretRefs).toEqual([]);
-  expect(authBinding.declaration.exportTemplate.configRef).toEqual(`${targetIssuer}/v1/installations/inst_source/use-edges/auth/oidc-client/toc_source`);
+  expect(authBinding.declaration.exportTemplate.configRef).toEqual(`${targetIssuer}/v1/app-installations/inst_source/use-edges/auth/oidc-client/toc_source`);
   expect(!JSON.stringify(request).includes(sourceIssuer)).toBeTruthy();
 });
 
@@ -236,9 +236,9 @@ test("installation export archive writer emits canonical bundle payload", async 
       name: "auth",
       kind: "identity.oidc@v1",
       configRef:
-        `${sourceIssuer}/v1/installations/inst_source/use-edges/auth/oidc-client/toc_source`,
+        `${sourceIssuer}/v1/app-installations/inst_source/use-edges/auth/oidc-client/toc_source`,
       secretRefs: [
-        `${sourceIssuer}/v1/installations/inst_source/use-edges/auth/secrets/client-secret`,
+        `${sourceIssuer}/v1/app-installations/inst_source/use-edges/auth/secrets/client-secret`,
       ],
     },
   });
@@ -878,9 +878,9 @@ function sampleExportBundle(sourceIssuer: string) {
       name: "auth",
       kind: "identity.oidc@v1",
       configRef:
-        `${sourceIssuer}/v1/installations/inst_source/use-edges/auth/oidc-client/toc_source`,
+        `${sourceIssuer}/v1/app-installations/inst_source/use-edges/auth/oidc-client/toc_source`,
       secretRefs: [
-        `${sourceIssuer}/v1/installations/inst_source/use-edges/auth/secrets/client-secret`,
+        `${sourceIssuer}/v1/app-installations/inst_source/use-edges/auth/secrets/client-secret`,
       ],
       createdAt: 1778284800000,
       updatedAt: 1778284800000,

@@ -34,7 +34,7 @@ Spaces, Sources, Connections, Installations, Dependencies, Runs, RunGroups, Depl
 
 The `/internal/v1/plan-runs`, `/internal/v1/apply-runs`, `/internal/v1/runner-profiles`, and
 `/internal/v1/installations/*` ledger routes are part of the same internal seam dialed by the accounts plane / CLI. They
-are not surfaced through `/capabilities` or `/openapi.json`. (The account-plane product surface `/v1/installations` and
+are not surfaced through `/capabilities` or `/openapi.json`. (The account-plane product surface `/v1/app-installations` and
 the session-authed control surface `/api/v1/connections` are a distinct edge API, owned by the accounts plane, not this
 seam. Connections are served only under `/api/v1/connections`; there is no `/v1/connections` edge.)
 

@@ -31,7 +31,7 @@ export interface Installation {
   readonly status?: TakosumiAppInstallationStatus;
   readonly launchUrl?: string;
   readonly installationOutputs?: readonly InstallationOutput[];
-  /** Present on the detail envelope (GET /v1/installations/:id), not on list. */
+  /** Present on the detail envelope (GET /v1/app-installations/:id), not on list. */
   readonly oidcClient?: OidcClientConfig;
   readonly createdBySubject?: string;
   readonly createdAt?: string;

@@ -73,7 +73,7 @@ type Mode = "shared-cell" | "dedicated" | "self-hosted";
  * landing pages can deep-link straight into install with the source already
  * filled in, and `autoplan=1` creates a plan run on mount.
  *
- * API: POST /v1/installations/plan-runs, POST /v1/installations.
+ * API: POST /v1/app-installations/plan-runs, POST /v1/app-installations.
  */
 export function InstallWizard() {
   const nav = useNavigate();

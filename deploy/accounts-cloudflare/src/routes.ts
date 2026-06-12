@@ -20,7 +20,7 @@ export function isWorkerLocalPath(pathname: string): boolean {
 //     NOTE it is NOT under `/v1`, so it needs its own entry or the SPA
 //     `not_found_handling = single-page-application` fallback would shadow it.
 //   - `ACCOUNTS_IDENTITY_PREFIX` ("/v1") — covers /v1/account, /v1/auth,
-//     /v1/billing, /v1/installations. (Connections are served under
+//     /v1/billing, /v1/app-installations. (Connections are served under
 //     `/api/v1/connections`, the control surface — there is no /v1/connections.)
 //   - the OIDC issuer surfaces (/oauth, /.well-known, /start). `/install` and
 //     `/hooks` stay SPA-owned / platform-worker-owned and are intentionally
