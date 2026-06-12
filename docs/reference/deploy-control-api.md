@@ -293,10 +293,9 @@ Billing は Space 単位の公開 surface です。実装適合状況は [`core-
 | Method | Path                                        | 用途                                                  |
 | ------ | ------------------------------------------- | ----------------------------------------------------- |
 | GET    | `/api/v1/spaces/{spaceId}/billing`             | Space billing mode / plan / credit balance projection |
+| GET    | `/api/v1/billing/plans`                        | operator プランカタログの public projection（plan/pack、Stripe price id は含まない） |
 | GET    | `/api/v1/spaces/{spaceId}/credit-reservations` | Space credit reservations                             |
-| POST   | `/api/v1/spaces/{spaceId}/credits/top-up`      | hosted/operator billing adapter 経由の credit top-up  |
 | GET    | `/api/v1/spaces/{spaceId}/usage`               | Space usage events                                    |
-| POST   | `/api/v1/spaces/{spaceId}/subscription/change` | hosted/operator billing adapter 経由の plan 変更      |
 
 ### Backups
 
