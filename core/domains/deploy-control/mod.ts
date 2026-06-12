@@ -3824,24 +3824,25 @@ export class OpenTofuDeploymentController {
   }
 
   /**
-   * Records the §6.9 StateSnapshot metadata after a successful env-driven apply /
+   * Builds the §6.9 StateSnapshot metadata for a successful env-driven apply /
    * destroy state persist. The object key mirrors the DO's R2_STATE key formula
    * (`spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/{NNNNNNNN}.tfstate.enc`)
    * so the ledger pointer matches the encrypted object the DO wrote at the same
-   * generation. No-ops for a run without environment context. The digest is the
-   * plaintext digest the runner DO echoed back, when present.
+   * generation. Returns `undefined` for a run without environment context. The
+   * digest is the plaintext digest the runner DO echoed back, when present. The
+   * record is PERSISTED atomically with the Deployment / OutputSnapshot /
+   * Installation advance by {@link OpenTofuDeploymentStore.commitAppliedDeployment}.
    */
-  async #recordStateSnapshot(input: {
-    readonly planRun: PlanRun;
+  #buildStateSnapshot(input: {
     readonly envDispatch: RunInstallationDispatch;
     readonly generation: number;
     readonly stateDigest: string | undefined;
     readonly runId: string;
     readonly now: number;
-  }): Promise<void> {
+  }): StateSnapshot | undefined {
     const scope = input.envDispatch.stateScope;
-    if (!scope) return;
-    const snapshot: StateSnapshot = {
+    if (!scope) return undefined;
+    return {
       id: this.#newId("state"),
       spaceId: scope.spaceId,
       installationId: scope.installationId,
@@ -3852,11 +3853,10 @@ export class OpenTofuDeploymentController {
       createdByRunId: input.runId,
       createdAt: new Date(input.now).toISOString(),
     };
-    await this.#store.putStateSnapshot(snapshot);
   }
 
   /**
-   * Records the §16 OutputSnapshot after a successful (non-destroy) apply.
+   * Builds the §16 OutputSnapshot for a successful (non-destroy) apply.
    *
    *   - `spaceOutputs` = InstallConfig.outputAllowlist projection (or template
    *     public projection for template-backed runs), after sensitive filtering
@@ -3870,9 +3870,11 @@ export class OpenTofuDeploymentController {
    *     envelope to (echoed as `result.rawOutputsKey`); falls back to the derived
    *     key when the runner did not echo one (e.g. runs without env context).
    *
-   * The raw envelope itself never enters the ledger — only the projection.
+   * The raw envelope itself never enters the ledger — only the projection. The
+   * record is PERSISTED atomically with the Deployment / StateSnapshot /
+   * Installation advance by {@link OpenTofuDeploymentStore.commitAppliedDeployment}.
    */
-  async #recordOutputSnapshot(input: {
+  async #buildOutputSnapshot(input: {
     readonly installation: Installation;
     readonly applyRun: ApplyRun;
     readonly result: OpenTofuApplyResult;
@@ -3913,7 +3915,6 @@ export class OpenTofuDeploymentController {
       outputDigest,
       createdAt: new Date(input.now).toISOString(),
     };
-    await this.#store.putOutputSnapshot(snapshot);
     return snapshot;
   }
 
@@ -5301,20 +5302,26 @@ export class OpenTofuDeploymentController {
         dispatch,
         now,
       });
-      const deployment = await this.#recordApplyDeployment({
-        planRun,
-        applyRun,
-        installation: projected.installation,
-        outputs: projected.outputs,
-        outputSnapshot: projected.outputSnapshot,
-        nextStateGeneration: projected.nextStateGeneration,
-        now,
-      });
-      const patched = await this.#persistApplyStateGeneration({
+      const { deployment, supersededDeployment } =
+        await this.#buildApplyDeployment({
+          planRun,
+          applyRun,
+          installation: projected.installation,
+          outputs: projected.outputs,
+          outputSnapshot: projected.outputSnapshot,
+          nextStateGeneration: projected.nextStateGeneration,
+          now,
+        });
+      // ATOMIC ledger commit (spec §20 / §21 / §16): the new (+ superseded)
+      // Deployment, the StateSnapshot, the OutputSnapshot, and the guarded
+      // Installation advance land all-or-nothing. A crash mid-write can no
+      // longer leave torn state.
+      const patched = await this.#commitApplyLedger({
         planRun,
         plannedInstallation,
         installation: projected.installation,
         deployment,
+        ...(supersededDeployment ? { supersededDeployment } : {}),
         outputSnapshot: projected.outputSnapshot,
         envDispatch,
         persistGeneration,
@@ -5526,10 +5533,10 @@ export class OpenTofuDeploymentController {
   }
 
   /**
-   * Projects the apply outputs and captures the §16 OutputSnapshot. Returns the
-   * resolved Installation, the bumped state generation, the new OutputSnapshot,
-   * and the Installation's PREVIOUS OutputSnapshot (which drives §24 stale
-   * propagation).
+   * Projects the apply outputs and BUILDS the §16 OutputSnapshot (persisted
+   * later, atomically, by `commitAppliedDeployment`). Returns the resolved
+   * Installation, the bumped state generation, the new OutputSnapshot, and the
+   * Installation's PREVIOUS OutputSnapshot (which drives §24 stale propagation).
    */
   async #projectAndRecordApplyOutputs(input: {
     readonly planRun: PlanRun;
@@ -5568,7 +5575,7 @@ export class OpenTofuDeploymentController {
           installation.currentOutputSnapshotId,
         )
       : undefined;
-    const outputSnapshot = await this.#recordOutputSnapshot({
+    const outputSnapshot = await this.#buildOutputSnapshot({
       installation,
       applyRun,
       result,
@@ -5589,10 +5596,13 @@ export class OpenTofuDeploymentController {
   }
 
   /**
-   * Records the §21 Deployment for a successful apply and supersedes the
-   * Installation's previously-current Deployment.
+   * Builds the §21 Deployment for a successful apply AND the superseded
+   * transition for the Installation's previously-current Deployment. READS the
+   * previous Deployment (so the superseded record carries its full row), but
+   * writes NOTHING: both records are persisted atomically with the StateSnapshot
+   * / OutputSnapshot / Installation advance by `commitAppliedDeployment`.
    */
-  async #recordApplyDeployment(input: {
+  async #buildApplyDeployment(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
     readonly installation: Installation;
@@ -5600,7 +5610,10 @@ export class OpenTofuDeploymentController {
     readonly outputSnapshot: OutputSnapshot;
     readonly nextStateGeneration: number;
     readonly now: number;
-  }): Promise<Deployment> {
+  }): Promise<{
+    readonly deployment: Deployment;
+    readonly supersededDeployment?: Deployment;
+  }> {
     const { planRun, applyRun, installation, outputs, now } = input;
     if (!planRun.sourceSnapshotId) {
       throw new Error(
@@ -5625,34 +5638,37 @@ export class OpenTofuDeploymentController {
       status: "active",
       createdAt: new Date(now).toISOString(),
     };
-    await this.#store.putDeployment(deployment);
-    // §21 status transition: the previously-current Deployment is superseded
-    // by the new active one.
+    // §21 status transition: the previously-current Deployment is superseded by
+    // the new active one. Only an `active` previous is flipped (matches the
+    // pre-atomic behavior); the read is done now so the write can be batched.
     if (installation.currentDeploymentId) {
       const previous = await this.#store.getDeployment(
         installation.currentDeploymentId,
       );
       if (previous && previous.status === "active") {
-        await this.#store.putDeployment({
-          ...previous,
-          status: "superseded",
-        });
+        return {
+          deployment,
+          supersededDeployment: { ...previous, status: "superseded" },
+        };
       }
     }
-    return deployment;
+    return { deployment };
   }
 
   /**
-   * Records the StateSnapshot for the persisted generation and advances the
-   * Installation's currentDeployment / state generation / OutputSnapshot
-   * pointers. Returns the patched Installation (or undefined when the guarded
-   * patch did not apply).
+   * Atomically commits the ledger writes that finalize a successful apply:
+   * the new (and superseded) Deployment, the StateSnapshot at `persistGeneration`,
+   * the OutputSnapshot, and the GUARDED Installation advance — as ONE all-or-
+   * nothing unit (spec §20 / §21 / §16) so a crash mid-write cannot leave torn
+   * state. Returns the patched Installation (or undefined when the guarded patch
+   * did not apply), exactly as the prior scattered-awaits sequence.
    */
-  async #persistApplyStateGeneration(input: {
+  async #commitApplyLedger(input: {
     readonly planRun: PlanRun;
     readonly plannedInstallation: Installation | undefined;
     readonly installation: Installation;
     readonly deployment: Deployment;
+    readonly supersededDeployment?: Deployment;
     readonly outputSnapshot: OutputSnapshot;
     readonly envDispatch: RunInstallationDispatch;
     readonly persistGeneration: number;
@@ -5662,34 +5678,69 @@ export class OpenTofuDeploymentController {
     readonly now: number;
   }): Promise<Installation | undefined> {
     const { planRun, installation, deployment, outputSnapshot, now } = input;
-    // Record the StateSnapshot metadata aligned to the SAME generation
-    // written to R2_STATE (persistGeneration). The DO wrote the encrypted
-    // object + current.json at this key; only metadata enters the ledger.
-    // Recorded BEFORE the installation generation bump so the two advance
-    // together.
-    await this.#recordStateSnapshot({
-      planRun,
+    // StateSnapshot metadata aligned to the SAME generation written to R2_STATE
+    // (persistGeneration); the DO wrote the encrypted object + current.json at
+    // this key, only metadata enters the ledger. Built (not yet persisted) so it
+    // commits together with the installation generation bump.
+    const stateSnapshot = this.#buildStateSnapshot({
       envDispatch: input.envDispatch,
       generation: input.persistGeneration,
       stateDigest: input.stateDigest,
       runId: input.runId,
       now,
     });
-    return await this.#store.patchInstallation(
-      installation.id,
-      {
-        currentDeploymentId: deployment.id,
-        status: "active",
-        updatedAt: new Date(now).toISOString(),
-        currentStateGeneration: input.nextStateGeneration,
-        currentOutputSnapshotId: outputSnapshot.id,
+    if (!stateSnapshot) {
+      // No environment context => no StateSnapshot, so there is no atomic unit
+      // to commit beyond the guarded installation patch. Preserve the prior
+      // behavior: patch the installation (deployment/outputSnapshot were already
+      // built and are recorded via the patch's pointers) directly. In practice
+      // an apply that reaches here always has a state scope; this branch only
+      // guards the type.
+      await this.#store.putDeployment(deployment);
+      if (input.supersededDeployment) {
+        await this.#store.putDeployment(input.supersededDeployment);
+      }
+      await this.#store.putOutputSnapshot(outputSnapshot);
+      return await this.#store.patchInstallation(
+        installation.id,
+        {
+          currentDeploymentId: deployment.id,
+          status: "active",
+          updatedAt: new Date(now).toISOString(),
+          currentStateGeneration: input.nextStateGeneration,
+          currentOutputSnapshotId: outputSnapshot.id,
+        },
+        {
+          currentDeploymentId:
+            planRun.installationCurrentDeploymentId ?? undefined,
+          status: input.plannedInstallation?.status,
+        },
+      );
+    }
+    const committed = await this.#store.commitAppliedDeployment({
+      newDeployment: deployment,
+      ...(input.supersededDeployment
+        ? { supersededDeployment: input.supersededDeployment }
+        : {}),
+      stateSnapshot,
+      outputSnapshot,
+      installationPatch: {
+        id: installation.id,
+        patch: {
+          currentDeploymentId: deployment.id,
+          status: "active",
+          updatedAt: new Date(now).toISOString(),
+          currentStateGeneration: input.nextStateGeneration,
+          currentOutputSnapshotId: outputSnapshot.id,
+        },
+        guard: {
+          currentDeploymentId:
+            planRun.installationCurrentDeploymentId ?? undefined,
+          status: input.plannedInstallation?.status,
+        },
       },
-      {
-        currentDeploymentId:
-          planRun.installationCurrentDeploymentId ?? undefined,
-        status: input.plannedInstallation?.status,
-      },
-    );
+    });
+    return committed.installation;
   }
 
   /**
@@ -5890,40 +5941,65 @@ export class OpenTofuDeploymentController {
         ...(credentials ? { credentials } : {}),
       });
       const now = this.#now();
-      // Record the post-teardown StateSnapshot at the SAME generation the DO
-      // wrote to R2_STATE, then advance the Installation generation so a stale
-      // plan created against the pre-destroy generation cannot re-apply.
-      await this.#recordStateSnapshot({
-        planRun,
+      // Build the post-teardown StateSnapshot at the SAME generation the DO
+      // wrote to R2_STATE, plus the destroyed-Deployment transition, then commit
+      // them ATOMICALLY with the Installation generation advance so a stale plan
+      // created against the pre-destroy generation cannot re-apply and a crash
+      // mid-write cannot leave torn state (spec §20 / §21).
+      const stateSnapshot = this.#buildStateSnapshot({
         envDispatch,
         generation: persistGeneration,
         stateDigest: undefined,
         runId: running.id,
         now,
       });
+      let destroyedDeployment: Deployment | undefined;
       if (installation.currentDeploymentId) {
         const previous = await this.#store.getDeployment(
           installation.currentDeploymentId,
         );
         if (previous && previous.status !== "destroyed") {
-          await this.#store.putDeployment({ ...previous, status: "destroyed" });
+          destroyedDeployment = { ...previous, status: "destroyed" };
         }
       }
       const nextStateGeneration = installation.currentStateGeneration + 1;
-      const patched = await this.#store.patchInstallation(
-        installation.id,
-        {
+      const destroyPatch = {
+        id: installation.id,
+        patch: {
           currentDeploymentId: undefined,
-          status: "destroyed",
+          status: "destroyed" as const,
           updatedAt: new Date(now).toISOString(),
           currentStateGeneration: nextStateGeneration,
         },
-        {
+        guard: {
           currentDeploymentId:
             planRun.installationCurrentDeploymentId ?? undefined,
           status: installation.status,
         },
-      );
+      };
+      let patched: Installation | undefined;
+      if (stateSnapshot) {
+        const committed = await this.#store.commitAppliedDeployment({
+          ...(destroyedDeployment
+            ? { supersededDeployment: destroyedDeployment }
+            : {}),
+          stateSnapshot,
+          installationPatch: destroyPatch,
+        });
+        patched = committed.installation;
+      } else {
+        // No environment context => no StateSnapshot. Preserve the prior
+        // (deployment flip + guarded patch) sequence; only the type guard hits
+        // this branch in practice.
+        if (destroyedDeployment) {
+          await this.#store.putDeployment(destroyedDeployment);
+        }
+        patched = await this.#store.patchInstallation(
+          destroyPatch.id,
+          destroyPatch.patch,
+          destroyPatch.guard,
+        );
+      }
       const diagnostics = redactRunDiagnostics(result?.diagnostics);
       const completed: ApplyRun = {
         ...running,

@@ -169,6 +169,109 @@ test("d1 store persists security findings and billing ledger rows", async () => 
   ]);
 });
 
+test("d1 commitAppliedDeployment writes the unit atomically and rolls back a guard conflict", async () => {
+  const store = new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1());
+  const TS = "2026-06-07T00:00:00.000Z";
+  await store.putInstallation({
+    id: "inst_1",
+    spaceId: "space_1",
+    name: "shop",
+    slug: "shop",
+    sourceId: "src_1",
+    installType: "opentofu_module",
+    installConfigId: "cfg_1",
+    environment: "production",
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: TS,
+    updatedAt: TS,
+  });
+  const stateSnapshot = (gen: number, id: string) => ({
+    id,
+    spaceId: "space_1",
+    installationId: "inst_1",
+    environment: "production",
+    generation: gen,
+    objectKey: `spaces/space_1/installations/inst_1/envs/production/states/0000000${gen}.tfstate.enc`,
+    digest: "sha256:abc",
+    createdByRunId: "run_apply_1",
+    createdAt: TS,
+  });
+  const deployment = (id: string, gen: number, out: string) => ({
+    id,
+    spaceId: "space_1",
+    installationId: "inst_1",
+    environment: "production",
+    applyRunId: "run_apply_1",
+    sourceSnapshotId: "snap_1",
+    stateGeneration: gen,
+    outputSnapshotId: out,
+    outputsPublic: { launch_url: "https://x.example" },
+    status: "active" as const,
+    createdAt: TS,
+  });
+  const outputSnapshot = (id: string, gen: number) => ({
+    id,
+    spaceId: "space_1",
+    installationId: "inst_1",
+    stateGeneration: gen,
+    rawOutputArtifactKey: "spaces/space_1/installations/inst_1/runs/run_apply_1/outputs.raw.json.enc",
+    publicOutputs: { launch_url: "https://x.example" },
+    spaceOutputs: { launch_url: "https://x.example" },
+    outputDigest: "sha256:out",
+    createdAt: TS,
+  });
+
+  // Successful atomic commit: every record lands and the installation advances.
+  const ok = await store.commitAppliedDeployment({
+    newDeployment: deployment("dep_ok", 1, "out_ok"),
+    stateSnapshot: stateSnapshot(1, "state_ok"),
+    outputSnapshot: outputSnapshot("out_ok", 1),
+    installationPatch: {
+      id: "inst_1",
+      patch: {
+        currentDeploymentId: "dep_ok",
+        status: "active",
+        currentStateGeneration: 1,
+        currentOutputSnapshotId: "out_ok",
+        updatedAt: TS,
+      },
+      guard: { currentDeploymentId: undefined, status: "pending" },
+    },
+  });
+  expect(ok.installation?.currentDeploymentId).toBe("dep_ok");
+  expect((await store.getDeployment("dep_ok"))?.status).toBe("active");
+  expect(
+    (await store.getLatestStateSnapshot("inst_1", "production"))?.generation,
+  ).toBe(1);
+  expect((await store.getOutputSnapshot("out_ok"))?.stateGeneration).toBe(1);
+
+  // Guard conflict: the cursor is now `dep_ok`, so a stale `undefined` guard
+  // loses. D1 evaluates the guard against a pre-batch read and throws BEFORE the
+  // batch, so NO deployment / state / output record is ever written (atomic: the
+  // whole unit either commits in one batch or not at all).
+  await expect(
+    store.commitAppliedDeployment({
+      newDeployment: deployment("dep_torn", 2, "out_torn"),
+      stateSnapshot: stateSnapshot(2, "state_torn"),
+      outputSnapshot: outputSnapshot("out_torn", 2),
+      installationPatch: {
+        id: "inst_1",
+        patch: { currentDeploymentId: "dep_torn", updatedAt: TS },
+        guard: { currentDeploymentId: undefined },
+      },
+    }),
+  ).rejects.toThrow();
+  expect(await store.getDeployment("dep_torn")).toBeUndefined();
+  expect(await store.getOutputSnapshot("out_torn")).toBeUndefined();
+  expect(
+    (await store.getLatestStateSnapshot("inst_1", "production"))?.generation,
+  ).toBe(1);
+  expect((await store.getInstallation("inst_1"))?.currentDeploymentId).toBe(
+    "dep_ok",
+  );
+});
+
 test("d1 store accepts operator-scoped connections without a space id", async () => {
   const store = new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1());
 

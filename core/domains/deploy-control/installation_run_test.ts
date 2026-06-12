@@ -2275,6 +2275,59 @@ test("installation apply records an OutputSnapshot and links it on the Deploymen
   expect(latest?.id).toEqual(snapshot?.id);
 });
 
+test("installation apply: a failing ledger commit leaves NO torn state (all-or-nothing)", async () => {
+  // Regression guard for the atomic apply-commit (spec §20 / §21 / §16). Every
+  // successful-apply ledger write — new Deployment, StateSnapshot, OutputSnapshot,
+  // and the guarded Installation advance — is funneled through the single
+  // `commitAppliedDeployment` store method. If that method fails (a crash /
+  // error mid-write), the controller must NOT have persisted ANY of those
+  // records: the run fails and the Installation stays at its pre-apply
+  // generation. (The in-memory store cannot truly roll back without a
+  // transaction, so the controller's guarantee is that the WHOLE atomic unit is
+  // a single call which here throws before writing anything; the SQL/D1 backends
+  // additionally roll back / batch — see store_model_test.ts.)
+  const inner = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  await seedInstallationModel(inner, { environment: "preview" });
+  // Wrap the store so the atomic commit explodes; everything else delegates.
+  const store = new Proxy(inner, {
+    get(target, prop, receiver) {
+      if (prop === "commitAppliedDeployment") {
+        return () =>
+          Promise.reject(new Error("injected: ledger commit crashed mid-write"));
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as OpenTofuDeploymentStore;
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  expect(planRun.status).toBe("succeeded");
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  // The apply surfaces the failure rather than reporting a torn success.
+  expect(applyRun.status).toBe("failed");
+
+  // The ledger is intact: no Deployment, no new-generation StateSnapshot, no
+  // OutputSnapshot, and the Installation is NOT advanced (still pending at gen 0
+  // with no current deployment/output pointers).
+  expect(await inner.listDeployments("inst_fixture")).toHaveLength(0);
+  expect(
+    await inner.getLatestStateSnapshot("inst_fixture", "preview"),
+  ).toBeUndefined();
+  expect(await inner.getLatestOutputSnapshot("inst_fixture")).toBeUndefined();
+  const installation = await inner.getInstallation("inst_fixture");
+  expect(installation?.status).toBe("pending");
+  expect(installation?.currentStateGeneration).toBe(0);
+  expect(installation?.currentDeploymentId).toBeUndefined();
+  expect(installation?.currentOutputSnapshotId).toBeUndefined();
+});
+
 test("generic Capsule apply projects InstallConfig outputAllowlist outputs", async () => {
   const { store, controller } = await seededController({
     installConfig: {
