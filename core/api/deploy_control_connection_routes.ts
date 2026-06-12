@@ -25,6 +25,7 @@ import {
   ensureConnectionPermission,
   ensureSpacePermission,
   nonEmptyString,
+  parsePageParams,
   readJsonBody,
   runHandler,
   CONNECTION_ID_PATTERN,
@@ -572,9 +573,11 @@ export function mountDeployControlConnectionRoutes(
         return c.json(await controller.listOperatorConnections(), 200);
       });
     }
+    const page = parsePageParams(c);
+    if (page.kind === "invalid") return page.response;
     return await runHandler(c, async () => {
       ensureSpacePermission(auth.principal, spaceId);
-      return c.json(await controller.listConnections(spaceId), 200);
+      return c.json(await controller.listConnections(spaceId, page.value), 200);
     });
   });
 

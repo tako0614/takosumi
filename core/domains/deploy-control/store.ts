@@ -46,6 +46,11 @@ import {
   ACTIVITY_MAX_LIMIT,
   type ActivityEvent,
 } from "takosumi-contract/activity";
+import {
+  type Page,
+  type PageParams,
+  pageSorted,
+} from "takosumi-contract/pagination";
 import type {
   OutputShare,
   OutputSnapshot,
@@ -262,6 +267,15 @@ export interface OpenTofuDeploymentStore {
     environment: string,
   ): Promise<Installation | undefined>;
   listInstallations(spaceId?: string): Promise<readonly Installation[]>;
+  /**
+   * Keyset-paged Installation listing (spec §30 list route). Pages by the
+   * existing `(createdAt, id)` sort; returns at most `params.limit` (default /
+   * cap {@link MAX_PAGE_LIMIT}) rows plus an opaque `nextCursor` when more exist.
+   */
+  listInstallationsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<Installation>>;
   patchInstallation(
     id: string,
     patch: InstallationPatch,
@@ -271,6 +285,11 @@ export interface OpenTofuDeploymentStore {
   putDeployment(deployment: Deployment): Promise<Deployment>;
   getDeployment(id: string): Promise<Deployment | undefined>;
   listDeployments(installationId: string): Promise<readonly Deployment[]>;
+  /** Keyset-paged Deployment listing for an Installation (spec §30). */
+  listDeploymentsPage(
+    installationId: string,
+    params: PageParams,
+  ): Promise<Page<Deployment>>;
 
   // Connection records (public fields) + their sealed secret blobs. The blob is
   // stored in a separate namespace so the public Connection can be listed
@@ -278,6 +297,11 @@ export interface OpenTofuDeploymentStore {
   putConnection(connection: Connection): Promise<Connection>;
   getConnection(id: string): Promise<Connection | undefined>;
   listConnections(spaceId: string): Promise<readonly Connection[]>;
+  /** Keyset-paged Space Connection listing (spec §30 connection list route). */
+  listConnectionsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<Connection>>;
   /**
    * Lists instance-wide `operator`-scoped Connections (no owning Space). Backs
    * the §30 operator-scope `GET /api/connections` listing for the unrestricted
@@ -310,6 +334,11 @@ export interface OpenTofuDeploymentStore {
   putSource(source: StoredSource): Promise<StoredSource>;
   getSource(id: string): Promise<StoredSource | undefined>;
   listSources(spaceId?: string): Promise<readonly StoredSource[]>;
+  /** Keyset-paged Source listing for a Space (spec §30 source list route). */
+  listSourcesPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<StoredSource>>;
   deleteSource(id: string): Promise<boolean>;
 
   // SourceSnapshot records (immutable archive snapshots).
@@ -739,6 +768,13 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
+  async listInstallationsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<Installation>> {
+    return pageSorted(await this.listInstallations(spaceId), params);
+  }
+
   patchInstallation(
     id: string,
     patch: InstallationPatch,
@@ -786,6 +822,13 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
+  async listDeploymentsPage(
+    installationId: string,
+    params: PageParams,
+  ): Promise<Page<Deployment>> {
+    return pageSorted(await this.listDeployments(installationId), params);
+  }
+
   putConnection(connection: Connection): Promise<Connection> {
     this.#connections.set(connection.id, connection);
     return Promise.resolve(connection);
@@ -804,6 +847,13 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         ),
     );
+  }
+
+  async listConnectionsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<Connection>> {
+    return pageSorted(await this.listConnections(spaceId), params);
   }
 
   listOperatorConnections(): Promise<readonly Connection[]> {
@@ -908,6 +958,13 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
           a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
       ),
     );
+  }
+
+  async listSourcesPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<StoredSource>> {
+    return pageSorted(await this.listSources(spaceId), params);
   }
 
   deleteSource(id: string): Promise<boolean> {

@@ -755,6 +755,12 @@ export interface GetInstallationResponse {
 
 export interface ListDeploymentsResponse {
   readonly deployments: readonly Deployment[];
+  /**
+   * Opaque keyset cursor for the next page when the listing was capped (spec §30
+   * pagination). Absent on the last page. Additive: readers that ignore it are
+   * unaffected.
+   */
+  readonly nextCursor?: string;
 }
 
 export interface ListDeploymentOutputsResponse {

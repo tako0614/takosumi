@@ -71,6 +71,7 @@
         "./contract/deploy-control-errors.ts"
       ],
       "takosumi-contract/activity": ["./contract/activity.ts"],
+      "takosumi-contract/pagination": ["./contract/pagination.ts"],
       "takosumi-contract/output-snapshots": ["./contract/output-snapshots.ts"],
       "takosumi-contract/runs": ["./contract/runs.ts"],
       "takosumi-contract/deployments": ["./contract/deployments.ts"],

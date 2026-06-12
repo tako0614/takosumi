@@ -22,6 +22,7 @@ import {
   type DeployControlRouteContext,
   ensureSpacePermission,
   errorEnvelope,
+  parsePageParams,
   readJsonBody,
   DEPLOYMENT_ID_PATTERN,
   SPACE_ID_PATTERN,
@@ -283,9 +284,19 @@ export function mountDeployControlInstallationRoutes(
       param: SPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
-        const records = await installations!.listInstallations(id);
+        const page = parsePageParams(c);
+        if (page.kind === "invalid") return page.response;
+        const result = await installations!.listInstallationsPage(
+          id,
+          page.value,
+        );
         return c.json(
-          { installations: records.map(publicInstallation) },
+          {
+            installations: result.items.map(publicInstallation),
+            ...(result.nextCursor !== undefined
+              ? { nextCursor: result.nextCursor }
+              : {}),
+          },
           200,
         );
       },
@@ -375,7 +386,9 @@ export function mountDeployControlInstallationRoutes(
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
         ensureSpacePermission(principal, installation.installation.spaceId);
-        return c.json(await controller.listDeployments(id), 200);
+        const page = parsePageParams(c);
+        if (page.kind === "invalid") return page.response;
+        return c.json(await controller.listDeployments(id, page.value), 200);
       },
     }),
   );

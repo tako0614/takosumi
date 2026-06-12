@@ -25,6 +25,11 @@ import type {
   OpenTofuOperation,
 } from "@takosumi/internal/deploy-control-api";
 import type { CreatePlanRunRequest } from "@takosumi/internal/deploy-control-api";
+import {
+  clampPageLimit,
+  decodeCursor,
+  type PageParams,
+} from "takosumi-contract/pagination";
 import type { SpacesService } from "../domains/spaces/mod.ts";
 import type { InstallationsService } from "../domains/installations/mod.ts";
 import type { ConnectionsService } from "../domains/connections/mod.ts";
@@ -951,6 +956,67 @@ export function ensureValidParam(
     };
   }
   return { kind: "ok", value: raw };
+}
+
+/**
+ * Parses the shared `?limit=` / `?cursor=` keyset-pagination query for a list
+ * route, generalizing the Activity `parseActivityLimit`: `limit` must be a
+ * positive integer (clamped to {@link MAX_PAGE_LIMIT}); `cursor` must be an
+ * opaque token previously emitted as a `nextCursor` (it must decode to a
+ * `{ createdAt, id }` keyset). A malformed limit or cursor is a 400; both absent
+ * yields `{ limit: undefined, cursor: undefined }` so the store applies the
+ * default cap.
+ */
+export function parsePageParams(
+  c: Context,
+):
+  | { readonly kind: "ok"; readonly value: PageParams }
+  | { readonly kind: "invalid"; readonly response: Response } {
+  const rawLimit = c.req.query("limit");
+  let limit: number | undefined;
+  if (rawLimit !== undefined && rawLimit !== "") {
+    if (!/^\d+$/.test(rawLimit)) {
+      return {
+        kind: "invalid",
+        response: c.json(
+          errorEnvelope(c, "invalid_argument", "limit must be a positive integer"),
+          400,
+        ),
+      };
+    }
+    const parsed = Number(rawLimit);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      return {
+        kind: "invalid",
+        response: c.json(
+          errorEnvelope(c, "invalid_argument", "limit must be a positive integer"),
+          400,
+        ),
+      };
+    }
+    limit = clampPageLimit(parsed);
+  }
+  const rawCursor = c.req.query("cursor");
+  if (rawCursor !== undefined && rawCursor !== "") {
+    if (decodeCursor(rawCursor) === undefined) {
+      return {
+        kind: "invalid",
+        response: c.json(
+          errorEnvelope(c, "invalid_argument", "cursor is malformed"),
+          400,
+        ),
+      };
+    }
+  }
+  return {
+    kind: "ok",
+    value: {
+      ...(limit !== undefined ? { limit } : {}),
+      ...(rawCursor !== undefined && rawCursor !== ""
+        ? { cursor: rawCursor }
+        : {}),
+    },
+  };
 }
 
 function controllerHttpStatus(

@@ -260,6 +260,12 @@ export interface SourceResponse {
 
 export interface ListSourcesResponse {
   readonly sources: readonly Source[];
+  /**
+   * Opaque keyset cursor for the next page when the listing was capped (spec §30
+   * pagination). Absent on the last page. Additive: readers that ignore it are
+   * unaffected.
+   */
+  readonly nextCursor?: string;
 }
 
 export interface PatchSourceRequest {
