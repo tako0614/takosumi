@@ -5737,7 +5737,7 @@ test("installations list calls Takosumi Accounts with the target space", async (
 
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual("http://accounts.local/v1/installations?space_id=space_1");
+    expect(requests[0]?.url).toEqual("http://accounts.local/v1/app-installations?space_id=space_1");
     expect(requests[0]?.headers.get("authorization")).toEqual("Bearer sess_accounts");
     expect(JSON.parse(stdout.join("\n")).installations[0].id).toEqual("inst_1");
   } finally {
@@ -5806,7 +5806,7 @@ test("installations inspect prints use edges and permission scopes", async () =>
 
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual("http://accounts.local/v1/installations/inst_1");
+    expect(requests[0]?.url).toEqual("http://accounts.local/v1/app-installations/inst_1");
     expect(requests[0]?.headers.get("authorization")).toEqual("Bearer sess_accounts");
     const output = stdout.join("\n");
     expect(output.includes("Installation inst_1")).toEqual(true);
@@ -5864,7 +5864,7 @@ test("installations uninstall deletes through ledger-retained Accounts route", a
 
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual("http://accounts.local/v1/installations/inst_1");
+    expect(requests[0]?.url).toEqual("http://accounts.local/v1/app-installations/inst_1");
     expect(requests[0]?.method).toEqual("DELETE");
     expect(requests[0]?.headers.get("authorization")).toEqual("Bearer accounts-token");
     expect(requests[0]?.headers.get("content-type")).toEqual("application/json");
@@ -5916,7 +5916,7 @@ test("installations status patches the target installation", async () => {
 
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual("http://accounts.local/v1/installations/inst_1/status");
+    expect(requests[0]?.url).toEqual("http://accounts.local/v1/app-installations/inst_1/status");
     expect(requests[0]?.method).toEqual("PATCH");
     expect(requests[0]?.headers.get("authorization")).toEqual("Bearer accounts-token");
     expect(requests[0]?.headers.get("content-type")).toEqual("application/json");
@@ -6097,7 +6097,7 @@ test("installations materialize posts a dedicated request", async () => {
       fromMode: "shared-cell",
       toMode: "dedicated",
       trackingUrl:
-        "/v1/installations/inst_1/events?types=installation.materialize-requested",
+        "/v1/app-installations/inst_1/events?types=installation.materialize-requested",
     }));
   }) as typeof fetch;
 
@@ -6134,7 +6134,7 @@ test("installations materialize posts a dedicated request", async () => {
 
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual("http://accounts.local/v1/installations/inst_1/materialize");
+    expect(requests[0]?.url).toEqual("http://accounts.local/v1/app-installations/inst_1/materialize");
     expect(requests[0]?.method).toEqual("POST");
     expect(requests[0]?.headers.get("authorization")).toEqual("Bearer accounts-token");
     expect(requests[0]?.headers.get("idempotency-key")).toEqual("idem-materialize");
@@ -6173,7 +6173,7 @@ test("installations materialize posts a dedicated request", async () => {
         "Materialize operation op_materialize",
         "  installation: inst_1",
         "  mode: shared-cell -> dedicated",
-        "  tracking: /v1/installations/inst_1/events?types=installation.materialize-requested",
+        "  tracking: /v1/app-installations/inst_1/events?types=installation.materialize-requested",
       ].join("\n"));
   } finally {
     globalThis.fetch = originalFetch;
@@ -6233,7 +6233,7 @@ test("installations export posts a pending bundle request", async () => {
       operationId: "op_export",
       status: "preparing",
       trackingUrl:
-        "/v1/installations/inst_1/events?types=installation.export-requested",
+        "/v1/app-installations/inst_1/events?types=installation.export-requested",
       downloadUrl: null,
       downloadExpiresAt: null,
     }));
@@ -6266,7 +6266,7 @@ test("installations export posts a pending bundle request", async () => {
 
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual("http://accounts.local/v1/installations/inst_1/export");
+    expect(requests[0]?.url).toEqual("http://accounts.local/v1/app-installations/inst_1/export");
     expect(requests[0]?.method).toEqual("POST");
     expect(requests[0]?.headers.get("idempotency-key")).toEqual("idem-export");
     expect(await requests[0]?.json()).toEqual({
@@ -6284,7 +6284,7 @@ test("installations export posts a pending bundle request", async () => {
     expect(stdout.join("\n")).toEqual([
         "Export operation op_export",
         "  status: preparing",
-        "  tracking: /v1/installations/inst_1/events?types=installation.export-requested",
+        "  tracking: /v1/app-installations/inst_1/events?types=installation.export-requested",
       ].join("\n"));
   } finally {
     globalThis.fetch = originalFetch;

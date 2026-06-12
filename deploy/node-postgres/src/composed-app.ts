@@ -26,6 +26,7 @@ import {
   createTakosumiService,
   type CreatedTakosumiService,
 } from "../../../core/bootstrap.ts";
+import { TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH } from "@takosjp/takosumi-accounts-contract";
 import { Hono } from "hono";
 import type { PostgresAccountsStore } from "@takosjp/takosumi-accounts-service";
 import type { NodeAccountsServerConfig } from "./handler.ts";
@@ -91,7 +92,7 @@ type CreateTakosumiServiceArg = NonNullable<
 
 /**
  * Build the one composed Hono app this distribution serves. Returns an outer
- * `app` that gives the account-plane `/v1/installations/*` projection precedence
+ * `app` that gives the account-plane `/v1/app-installations/*` projection precedence
  * over the embedded service Deploy Control API (see the route-shadowing fix below) and
  * delegates everything else to the embedded service app, plus the `operations`
  * operate facade so the caller can drive install / deploy / rollback / status in
@@ -140,19 +141,19 @@ export async function buildComposedApp(
   const mountedAccountsHandler = accountsHandler;
 
   // Route-shadowing fix. `createTakosumiService` registers the service Deploy Control API
-  // (`POST /v1/installations`, `/plan-runs`, `/:id/deployments[/plan-runs]`,
+  // (`POST /v1/app-installations`, `/plan-runs`, `/:id/deployments[/plan-runs]`,
   // `/:id/rollback`) on the service app FIRST. Hono composes matched handlers in
   // registration order, so a later-registered handler on the same app can never
   // preempt those service routes. That permanently shadowed this operator
   // distribution's account-facing Installation projection — the account plane
   // mints `inst_<uuid>` ids and serves the ownership ledger at the SAME
-  // `/v1/installations/*` paths, but every account-plane mutation hit the service
+  // `/v1/app-installations/*` paths, but every account-plane mutation hit the service
   // routes instead (and the service's `^ins_[0-9a-zA-Z]{16,32}$` id guard rejects
   // `inst_<uuid>` with 400, or 404s entirely when no deploy control token is set), so
   // the projection was unreachable.
   //
   // The account-plane routes remain externally canonical for
-  // `/v1/installations/*`, but the handler is now wired with an in-process
+  // `/v1/app-installations/*`, but the handler is now wired with an in-process
   // DeployControl proxy, so create/deploy/rollback operations delegate into the
   // embedded service instead of bypassing the Deploy Control API apply flow.
   const app = new Hono();
@@ -176,8 +177,14 @@ export async function buildComposedApp(
       await next();
     });
   }
-  app.all("/v1/installations", (c) => mountedAccountsHandler(c.req.raw));
-  app.all("/v1/installations/*", (c) => mountedAccountsHandler(c.req.raw));
+  app.all(
+    TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
+    (c) => mountedAccountsHandler(c.req.raw),
+  );
+  app.all(
+    `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}/*`,
+    (c) => mountedAccountsHandler(c.req.raw),
+  );
   app.all("*", (c) => serviceApp.fetch(c.req.raw));
 
   // The dev seam may resolve Hono's type from the sibling framework checkout

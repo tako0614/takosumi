@@ -24,8 +24,8 @@ describe("isAccountsApiPath", () => {
       "/v1/billing/stripe/webhook",
       "/v1/auth/upstream/callback",
       "/v1/auth/passkeys/register/options",
-      "/v1/installations",
-      "/v1/installations/plan-runs",
+      "/v1/app-installations",
+      "/v1/app-installations/plan-runs",
       "/internal/workload-platform-services/resolve",
     ];
     for (const path of apiPaths) {
@@ -82,6 +82,6 @@ describe("isWorkerLocalPath", () => {
     expect(isWorkerLocalPath("/healthz")).toBe(true);
     expect(isWorkerLocalPath("/healthz/")).toBe(true);
     expect(isWorkerLocalPath("/")).toBe(false);
-    expect(isWorkerLocalPath("/v1/installations")).toBe(false);
+    expect(isWorkerLocalPath("/v1/app-installations")).toBe(false);
   });
 });

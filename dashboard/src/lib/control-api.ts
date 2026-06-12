@@ -9,7 +9,7 @@
  * (see packages/accounts-service/src/control-routes.ts), which call the
  * in-process operations facade and render the deploy-control contract types.
  *
- * Unlike the legacy account-plane `/v1/installations` routes (snake_case wire
+ * Unlike the legacy account-plane `/v1/app-installations` routes (snake_case wire
  * shape — see views/account/lib/installations.ts), the `/api/v1/*` routes
  * pass the deploy-control contract types through `JSON.stringify` UNCHANGED, so
  * the wire shape is the camelCase contract shape. The type mirrors below are a

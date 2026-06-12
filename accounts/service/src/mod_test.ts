@@ -164,12 +164,12 @@ async function appInstallationAuthSubjectForTest(
   store: AccountsStore,
 ): Promise<TakosumiSubject | undefined> {
   const url = new URL(request.url);
-  if (url.pathname === "/v1/installations" && request.method === "POST") {
+  if (url.pathname === "/v1/app-installations" && request.method === "POST") {
     const body = await jsonRecordForTest(request.clone());
     return testSubjectValue(body?.createdBySubject);
   }
   if (
-    url.pathname === "/v1/installations/import" &&
+    url.pathname === "/v1/app-installations/import" &&
     request.method === "POST"
   ) {
     const body = await jsonRecordForTest(request.clone());
@@ -474,7 +474,7 @@ test("accounts handler proxies installation PlanRun to deployControl", async () 
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations/plan-runs", {
+    new Request("https://accounts.example.test/v1/app-installations/plan-runs", {
       method: "POST",
       headers: {
         ...accountSessionHeaders(sessionId),
@@ -592,7 +592,7 @@ test("accounts handler applies installation through space deployControl when con
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         accountId: "acct_core_apply",
@@ -622,7 +622,7 @@ test("accounts handler applies installation through space deployControl when con
 
   expect(response.status).toEqual(202);
   expect(response.headers.get("location")).toEqual(
-    "/v1/installations/inst_core_apply",
+    "/v1/app-installations/inst_core_apply",
   );
   const body = await response.json();
   expect(body.installation.id).toEqual("inst_core_apply");
@@ -641,7 +641,7 @@ test("accounts handler applies installation through space deployControl when con
   );
   const detailResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_core_apply",
+      "https://accounts.example.test/v1/app-installations/inst_core_apply",
       { headers: accountSessionHeaders(ownerSession) },
     ),
   );
@@ -693,7 +693,7 @@ test("accounts handler validates installation facade request before space deploy
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         accountId: "acct_core_preflight",
@@ -789,7 +789,7 @@ test("accounts handler applies local source through space deployControl with loc
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         accountId: "acct_core_local",
@@ -914,7 +914,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
   });
 
   const unauthenticated = await handler(
-    new Request(`${testIssuer}/v1/installations/plan-runs`, {
+    new Request(`${testIssuer}/v1/app-installations/plan-runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body,
@@ -923,7 +923,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
   expect(unauthenticated.status).toEqual(401);
 
   const readPat = await handler(
-    new Request(`${testIssuer}/v1/installations/plan-runs`, {
+    new Request(`${testIssuer}/v1/app-installations/plan-runs`, {
       method: "POST",
       headers: {
         authorization: "Bearer takpat_read_dry_run",
@@ -935,7 +935,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
   expect(readPat.status).toEqual(403);
 
   const crossOwner = await handler(
-    new Request(`${testIssuer}/v1/installations/plan-runs`, {
+    new Request(`${testIssuer}/v1/app-installations/plan-runs`, {
       method: "POST",
       headers: {
         ...accountSessionHeaders(otherSession),
@@ -948,7 +948,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
   expect((await crossOwner.json()).error.code).toEqual("space_not_found");
 
   const owner = await handler(
-    new Request(`${testIssuer}/v1/installations/plan-runs`, {
+    new Request(`${testIssuer}/v1/app-installations/plan-runs`, {
       method: "POST",
       headers: {
         ...accountSessionHeaders(ownerSession),
@@ -968,7 +968,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
   // Previously this 404'd, dead-ending the /install?git=... funnel for cold
   // visitors who have no space.
   const freshSpace = await handler(
-    new Request(`${testIssuer}/v1/installations/plan-runs`, {
+    new Request(`${testIssuer}/v1/app-installations/plan-runs`, {
       method: "POST",
       headers: {
         ...accountSessionHeaders(ownerSession),
@@ -1004,7 +1004,7 @@ test("accounts handler does not launch-gate installation PlanRun when managed of
   });
 
   const rawPlanRunResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations/plan-runs", {
+    new Request("https://accounts.example.test/v1/app-installations/plan-runs", {
       method: "POST",
       body: JSON.stringify({
         spaceId: "space_1",
@@ -1130,7 +1130,7 @@ test("raw accounts handler defaults managed offering access to closed", async ()
   // with the default-closed policy: it proceeds to normal request validation
   // (an empty body is rejected for missing ownership fields, not launch-gated).
   const installResponse = await handler(
-    new Request(`${testIssuer}/v1/installations`, {
+    new Request(`${testIssuer}/v1/app-installations`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
@@ -1178,13 +1178,13 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
     ],
     [
       "uninstall",
-      new Request(`${testIssuer}/v1/installations/inst_1`, {
+      new Request(`${testIssuer}/v1/app-installations/inst_1`, {
         method: "DELETE",
       }),
     ],
     [
       "failed status completion",
-      new Request(`${testIssuer}/v1/installations/inst_1/status`, {
+      new Request(`${testIssuer}/v1/app-installations/inst_1/status`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ status: "failed" }),
@@ -1192,7 +1192,7 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
     ],
     [
       "exported status completion",
-      new Request(`${testIssuer}/v1/installations/inst_1/status`, {
+      new Request(`${testIssuer}/v1/app-installations/inst_1/status`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ status: "exported" }),
@@ -1201,7 +1201,7 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
     [
       "billing usage report",
       new Request(
-        `${testIssuer}/v1/installations/inst_1/billing/usage-reports`,
+        `${testIssuer}/v1/app-installations/inst_1/billing/usage-reports`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1327,7 +1327,7 @@ test("accounts handler rejects installation PlanRun when deployControl is not co
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations/plan-runs", {
+    new Request("https://accounts.example.test/v1/app-installations/plan-runs", {
       method: "POST",
       headers: {
         ...accountSessionHeaders(sessionId),
@@ -3167,7 +3167,7 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
   });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_1",
@@ -3233,7 +3233,7 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
   );
   expect(createResponse.status).toEqual(202);
   expect(createResponse.headers.get("location")).toEqual(
-    "/v1/installations/inst_1",
+    "/v1/app-installations/inst_1",
   );
   const created = await createResponse.json();
   expect(created.installation.status).toEqual("installing");
@@ -3273,7 +3273,7 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
 
   const updateResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_1/status",
+      "https://accounts.example.test/v1/app-installations/inst_1/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready", reason: "healthcheck passed" }),
@@ -3284,7 +3284,7 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
   expect((await updateResponse.json()).installation.status).toEqual("ready");
 
   const inspectResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations/inst_1", {
+    new Request("https://accounts.example.test/v1/app-installations/inst_1", {
       headers: accountSessionHeaders(ownerSession),
     }),
   );
@@ -3303,7 +3303,7 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
   expect(store.listAppGrantsForInstallation("inst_1").length).toEqual(1);
 
   const eventsResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations/inst_1/events"),
+    new Request("https://accounts.example.test/v1/app-installations/inst_1/events"),
   );
   expect(eventsResponse.status).toEqual(200);
   const eventsBody = await eventsResponse.json();
@@ -3328,7 +3328,7 @@ test("accounts handler validates install approval confirmation", async () => {
   });
 
   const costResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_confirm_cost",
@@ -3363,7 +3363,7 @@ test("accounts handler validates install approval confirmation", async () => {
   expect((await costResponse.json()).error.code).toEqual("cost_ack_required");
 
   const mismatchResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_confirm_mismatch",
@@ -3405,7 +3405,7 @@ test("accounts handler requires account-session ownership for installation reads
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_tenant_read",
@@ -3438,14 +3438,14 @@ test("accounts handler requires account-session ownership for installation reads
 
   const unauthenticated = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_tenant_read",
+      "https://accounts.example.test/v1/app-installations/inst_tenant_read",
     ),
   );
   expect(unauthenticated.status).toEqual(401);
 
   const ownerDetail = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_tenant_read",
+      "https://accounts.example.test/v1/app-installations/inst_tenant_read",
       { headers: accountSessionHeaders(ownerSession) },
     ),
   );
@@ -3453,7 +3453,7 @@ test("accounts handler requires account-session ownership for installation reads
 
   const crossDetail = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_tenant_read",
+      "https://accounts.example.test/v1/app-installations/inst_tenant_read",
       { headers: accountSessionHeaders(otherSession) },
     ),
   );
@@ -3464,7 +3464,7 @@ test("accounts handler requires account-session ownership for installation reads
 
   const ownerList = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations?space_id=space_tenant_read",
+      "https://accounts.example.test/v1/app-installations?space_id=space_tenant_read",
       { headers: accountSessionHeaders(ownerSession) },
     ),
   );
@@ -3473,7 +3473,7 @@ test("accounts handler requires account-session ownership for installation reads
 
   const crossList = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations?space_id=space_tenant_read",
+      "https://accounts.example.test/v1/app-installations?space_id=space_tenant_read",
       { headers: accountSessionHeaders(otherSession) },
     ),
   );
@@ -3515,7 +3515,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
   };
 
   const unauthenticatedCreate = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify(createBody),
     }),
@@ -3523,7 +3523,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
   expect(unauthenticatedCreate.status).toEqual(401);
 
   const crossCreate = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       headers: accountSessionHeaders(otherSession),
       body: JSON.stringify(createBody),
@@ -3533,7 +3533,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
   expect((await crossCreate.json()).error.code).toEqual("account_not_found");
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       headers: accountSessionHeaders(ownerSession),
       body: JSON.stringify(createBody),
@@ -3543,7 +3543,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
 
   const unauthenticatedStatus = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_auth_write/status",
+      "https://accounts.example.test/v1/app-installations/inst_auth_write/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready" }),
@@ -3562,7 +3562,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
   });
   const readPatStatus = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_auth_write/status",
+      "https://accounts.example.test/v1/app-installations/inst_auth_write/status",
       {
         method: "PATCH",
         headers: { authorization: "Bearer takpat_read_auth" },
@@ -3583,7 +3583,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
   });
   const writePatStatus = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_auth_write/status",
+      "https://accounts.example.test/v1/app-installations/inst_auth_write/status",
       {
         method: "PATCH",
         headers: { authorization: "Bearer takpat_write_auth" },
@@ -3598,7 +3598,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
 
   const crossStatus = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_auth_write/status",
+      "https://accounts.example.test/v1/app-installations/inst_auth_write/status",
       {
         method: "PATCH",
         headers: accountSessionHeaders(otherSession),
@@ -3613,14 +3613,14 @@ test("raw accounts handler requires account bearer for installation writes", asy
 
   const unauthenticatedEvents = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_auth_write/events",
+      "https://accounts.example.test/v1/app-installations/inst_auth_write/events",
     ),
   );
   expect(unauthenticatedEvents.status).toEqual(401);
 
   const readPatEvents = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_auth_write/events",
+      "https://accounts.example.test/v1/app-installations/inst_auth_write/events",
       { headers: { authorization: "Bearer takpat_read_auth" } },
     ),
   );
@@ -3635,7 +3635,7 @@ test("accounts handler rejects removed serviceId aliases in install OIDC client 
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_oidc_alias_create",
@@ -3725,7 +3725,7 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_usage/billing/usage-reports",
+      "https://accounts.example.test/v1/app-installations/inst_usage/billing/usage-reports",
       {
         method: "POST",
         headers: { authorization: "Bearer access-usage" },
@@ -3759,7 +3759,7 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
 
   const duplicate = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_usage/billing/usage-reports",
+      "https://accounts.example.test/v1/app-installations/inst_usage/billing/usage-reports",
       {
         method: "POST",
         headers: { authorization: "Bearer access-usage" },
@@ -3790,7 +3790,7 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
 
   const conflictingIdempotency = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_usage/billing/usage-reports",
+      "https://accounts.example.test/v1/app-installations/inst_usage/billing/usage-reports",
       {
         method: "POST",
         headers: { authorization: "Bearer access-usage" },
@@ -3855,7 +3855,7 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
   });
   const crossInstallationReportId = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_usage_2/billing/usage-reports",
+      "https://accounts.example.test/v1/app-installations/inst_usage_2/billing/usage-reports",
       {
         method: "POST",
         headers: { authorization: "Bearer access-usage-2" },
@@ -3933,7 +3933,7 @@ test("accounts handler no longer gates installation access tokens on AppGrant re
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_usage/billing/usage-reports",
+      "https://accounts.example.test/v1/app-installations/inst_usage/billing/usage-reports",
       {
         method: "POST",
         headers: { authorization: "Bearer access-usage" },
@@ -4005,7 +4005,7 @@ test("accounts handler exposes workload services and rotates event ingest tokens
   expect(eventsBefore.status).toEqual("not_configured");
   expect(eventsBefore.secret_ref).toEqual(undefined);
   expect(eventsBefore.rotate_token_url).toContain(
-    "/v1/installations/inst_services/services/events.webhook.default/rotate-token",
+    "/v1/app-installations/inst_services/services/events.webhook.default/rotate-token",
   );
 
   const rotate = await handler(
@@ -4291,7 +4291,7 @@ test("accounts handler accepts same-space workload control tokens for scoped ope
   const controlHeaders = { authorization: `Bearer ${rotated.token}` };
 
   const list = await handler(
-    new Request(`${testIssuer}/v1/installations?space_id=space_1`, {
+    new Request(`${testIssuer}/v1/app-installations?space_id=space_1`, {
       headers: controlHeaders,
     }),
   );
@@ -4393,7 +4393,7 @@ test("accounts handler accepts same-space workload control tokens for scoped ope
   expect(secondRotate.status).toEqual(200);
 
   const staleList = await handler(
-    new Request(`${testIssuer}/v1/installations?space_id=space_1`, {
+    new Request(`${testIssuer}/v1/app-installations?space_id=space_1`, {
       headers: controlHeaders,
     }),
   );
@@ -4412,7 +4412,7 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
   });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_shared_auto",
@@ -4452,7 +4452,7 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
   ).toEqual(["installation.created", "runtime_target.assigned"]);
 
   const exhausted = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_shared_exhausted",
@@ -4481,7 +4481,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_revision",
@@ -4503,7 +4503,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   expect(createResponse.status).toEqual(202);
   const readyResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision/status",
+      "https://accounts.example.test/v1/app-installations/inst_revision/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready" }),
@@ -4540,7 +4540,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   });
   const deploymentPlanRunResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision/deployments/plan-runs",
+      "https://accounts.example.test/v1/app-installations/inst_revision/deployments/plan-runs",
       {
         method: "POST",
         body: JSON.stringify({
@@ -4570,7 +4570,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   );
   const deploymentResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision/deployments",
+      "https://accounts.example.test/v1/app-installations/inst_revision/deployments",
       {
         method: "POST",
         body: JSON.stringify({
@@ -4617,7 +4617,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   });
   const rollbackResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision/rollback",
+      "https://accounts.example.test/v1/app-installations/inst_revision/rollback",
       {
         method: "POST",
         body: JSON.stringify({
@@ -4644,7 +4644,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
 
   const eventsResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision/events",
+      "https://accounts.example.test/v1/app-installations/inst_revision/events",
     ),
   );
   expect(eventsResponse.status).toEqual(200);
@@ -4905,7 +4905,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
 
   const planRunResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_core_revision/deployments/plan-runs",
+      "https://accounts.example.test/v1/app-installations/inst_core_revision/deployments/plan-runs",
       {
         method: "POST",
         body: JSON.stringify({
@@ -4928,7 +4928,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
 
   const deployResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_core_revision/deployments",
+      "https://accounts.example.test/v1/app-installations/inst_core_revision/deployments",
       {
         method: "POST",
         body: JSON.stringify({
@@ -4968,7 +4968,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
 
   const rollbackResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_core_revision/rollback",
+      "https://accounts.example.test/v1/app-installations/inst_core_revision/rollback",
       {
         method: "POST",
         body: JSON.stringify({
@@ -5018,7 +5018,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_revision_guard",
@@ -5040,7 +5040,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
 
   const pendingDeployment = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision_guard/deployments",
+      "https://accounts.example.test/v1/app-installations/inst_revision_guard/deployments",
       {
         method: "POST",
         body: JSON.stringify({
@@ -5058,7 +5058,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
 
   const readyResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision_guard/status",
+      "https://accounts.example.test/v1/app-installations/inst_revision_guard/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready" }),
@@ -5069,7 +5069,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
 
   const missingConfirm = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision_guard/deployments",
+      "https://accounts.example.test/v1/app-installations/inst_revision_guard/deployments",
       {
         method: "POST",
         body: JSON.stringify({
@@ -5087,7 +5087,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
 
   const digestMismatch = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision_guard/deployments",
+      "https://accounts.example.test/v1/app-installations/inst_revision_guard/deployments",
       {
         method: "POST",
         body: JSON.stringify({
@@ -5129,7 +5129,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
   });
   const missingCostAck = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision_guard/deployments",
+      "https://accounts.example.test/v1/app-installations/inst_revision_guard/deployments",
       {
         method: "POST",
         body: JSON.stringify({
@@ -5151,7 +5151,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
 
   const sourceMismatch = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision_guard/deployments",
+      "https://accounts.example.test/v1/app-installations/inst_revision_guard/deployments",
       {
         method: "POST",
         body: JSON.stringify({
@@ -5170,7 +5170,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
 
   const appMismatch = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_revision_guard/rollback",
+      "https://accounts.example.test/v1/app-installations/inst_revision_guard/rollback",
       {
         method: "POST",
         body: JSON.stringify({
@@ -5200,7 +5200,7 @@ test("accounts handler does not launch-gate AppInstallation creation when manage
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_open_platform",
@@ -5239,7 +5239,7 @@ test("accounts handler does not launch-gate AppInstallation import when managed 
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations/import", {
+    new Request("https://accounts.example.test/v1/app-installations/import", {
       method: "POST",
       body: JSON.stringify({
         bundle: { kind: "takosumi.accounts.export-bundle@v1" },
@@ -5264,26 +5264,26 @@ test("accounts handler keeps generic installation mutations un-launch-gated but 
   // launch gate no longer applies, so they proceed to ownership auth (401).
   const ungatedRequests = [
     new Request(
-      "https://accounts.example.test/v1/installations/inst_1/deployments",
+      "https://accounts.example.test/v1/app-installations/inst_1/deployments",
       {
         method: "POST",
       },
     ),
     new Request(
-      "https://accounts.example.test/v1/installations/inst_1/rollback",
+      "https://accounts.example.test/v1/app-installations/inst_1/rollback",
       {
         method: "POST",
       },
     ),
     new Request(
-      "https://accounts.example.test/v1/installations/inst_1/status",
+      "https://accounts.example.test/v1/app-installations/inst_1/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready" }),
       },
     ),
     new Request(
-      "https://accounts.example.test/v1/installations/inst_1/status",
+      "https://accounts.example.test/v1/app-installations/inst_1/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "installing" }),
@@ -5301,13 +5301,13 @@ test("accounts handler keeps generic installation mutations un-launch-gated but 
   // stay launch-gated while the offering is closed.
   const gatedRequests = [
     new Request(
-      "https://accounts.example.test/v1/installations/inst_1/materialize",
+      "https://accounts.example.test/v1/app-installations/inst_1/materialize",
       {
         method: "POST",
       },
     ),
     new Request(
-      "https://accounts.example.test/v1/installations/inst_1/export",
+      "https://accounts.example.test/v1/app-installations/inst_1/export",
       {
         method: "POST",
       },
@@ -5392,7 +5392,7 @@ test("accounts handler completes AppInstallation ready suspended exported lifecy
   const handler = createAccountsHandler({ store });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_lifecycle",
@@ -5423,7 +5423,7 @@ test("accounts handler completes AppInstallation ready suspended exported lifecy
   ] as const) {
     const response = await handler(
       new Request(
-        "https://accounts.example.test/v1/installations/inst_lifecycle/status",
+        "https://accounts.example.test/v1/app-installations/inst_lifecycle/status",
         {
           method: "PATCH",
           body: JSON.stringify({ status, reason }),
@@ -5436,7 +5436,7 @@ test("accounts handler completes AppInstallation ready suspended exported lifecy
 
   const exportedToReadyResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_lifecycle/status",
+      "https://accounts.example.test/v1/app-installations/inst_lifecycle/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready" }),
@@ -5448,7 +5448,7 @@ test("accounts handler completes AppInstallation ready suspended exported lifecy
 
   const inspectResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_lifecycle",
+      "https://accounts.example.test/v1/app-installations/inst_lifecycle",
       { headers: accountSessionHeaders(ownerSession) },
     ),
   );
@@ -5459,7 +5459,7 @@ test("accounts handler completes AppInstallation ready suspended exported lifecy
 
   const eventsResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_lifecycle/events",
+      "https://accounts.example.test/v1/app-installations/inst_lifecycle/events",
     ),
   );
   expect(eventsResponse.status).toEqual(200);
@@ -5479,7 +5479,7 @@ test("accounts handler records uninstall for already terminal installations", as
   const handler = createAccountsHandler({ store });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_failed_uninstall",
@@ -5502,7 +5502,7 @@ test("accounts handler records uninstall for already terminal installations", as
 
   const uninstallResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_failed_uninstall",
+      "https://accounts.example.test/v1/app-installations/inst_failed_uninstall",
       { method: "DELETE" },
     ),
   );
@@ -5520,7 +5520,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
   const handler = createAccountsHandler({ store });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_materialize_request",
@@ -5585,7 +5585,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
 
   const missingKeyResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_request/materialize",
       {
         method: "POST",
         body: JSON.stringify({
@@ -5600,7 +5600,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
 
   const missingPermissionDigestResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_request/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-missing-digest" },
@@ -5619,7 +5619,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
 
   const mismatchedPermissionDigestResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_request/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-bad-digest" },
@@ -5653,7 +5653,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     cutover: materializeCutover,
   });
   const request = new Request(
-    "https://accounts.example.test/v1/installations/inst_materialize_request/materialize",
+    "https://accounts.example.test/v1/app-installations/inst_materialize_request/materialize",
     {
       method: "POST",
       headers: { "Idempotency-Key": "idem-materialize-1" },
@@ -5696,7 +5696,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
 
   const repeatedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_request/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-1" },
@@ -5720,7 +5720,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
 
   const bodyMismatchResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_request/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-1" },
@@ -5745,7 +5745,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
 
   const conflictingResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_request/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-2" },
@@ -5780,7 +5780,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
 
   const filteredEventsResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_request/events?types=installation.materialize-requested",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_request/events?types=installation.materialize-requested",
     ),
   );
   expect(filteredEventsResponse.status).toEqual(200);
@@ -5795,7 +5795,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
 
   const mismatchedCompleteResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_request/status",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_request/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -5819,7 +5819,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
 
   const completeResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_request/status",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_request/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -5850,7 +5850,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
 
   const repeatedCompleteResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_request/status",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_request/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -5870,7 +5870,7 @@ test("accounts handler records AppInstallation materialize operation failures", 
   const handler = createAccountsHandler({ store });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_materialize_failure",
@@ -5893,7 +5893,7 @@ test("accounts handler records AppInstallation materialize operation failures", 
 
   const materializeResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_failure/materialize",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_failure/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-failure" },
@@ -5916,7 +5916,7 @@ test("accounts handler records AppInstallation materialize operation failures", 
 
   const failedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_failure/status",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_failure/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -6013,7 +6013,7 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
   });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_materialize_worker",
@@ -6072,7 +6072,7 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_worker/materialize",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_worker/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-worker" },
@@ -6143,7 +6143,7 @@ test("accounts handler rejects materialize worker continuity mismatch before cut
   });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_materialize_mismatch",
@@ -6172,7 +6172,7 @@ test("accounts handler rejects materialize worker continuity mismatch before cut
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_mismatch/materialize",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_mismatch/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-mismatch" },
@@ -6218,7 +6218,7 @@ test("accounts handler keeps shared-cell runtime ready when materialize worker f
   });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_materialize_worker_failure",
@@ -6247,7 +6247,7 @@ test("accounts handler keeps shared-cell runtime ready when materialize worker f
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_materialize_worker_failure/materialize",
+      "https://accounts.example.test/v1/app-installations/inst_materialize_worker_failure/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-worker-failure" },
@@ -6291,7 +6291,7 @@ test("accounts handler rejects operation completion without request event", asyn
   const handler = createAccountsHandler({ store });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_missing_operation",
@@ -6314,7 +6314,7 @@ test("accounts handler rejects operation completion without request event", asyn
 
   const exportedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_missing_operation/status",
+      "https://accounts.example.test/v1/app-installations/inst_missing_operation/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -6334,7 +6334,7 @@ test("accounts handler rejects operation completion without request event", asyn
 
   const failedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_missing_operation/status",
+      "https://accounts.example.test/v1/app-installations/inst_missing_operation/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -6362,7 +6362,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
   });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_export_request",
@@ -6385,7 +6385,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
 
   const acceptedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_export_request/export",
+      "https://accounts.example.test/v1/app-installations/inst_export_request/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-1" },
@@ -6410,12 +6410,12 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
   expect(accepted.status).toEqual("preparing");
   expect(accepted.downloadUrl).toEqual(null);
   expect(acceptedResponse.headers.get("location") ?? "").toContain(
-    `/v1/installations/inst_export_request/exports/${accepted.operationId}`,
+    `/v1/app-installations/inst_export_request/exports/${accepted.operationId}`,
   );
 
   const operationResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installations/inst_export_request/exports/${accepted.operationId}`,
+      `https://accounts.example.test/v1/app-installations/inst_export_request/exports/${accepted.operationId}`,
     ),
   );
   expect(operationResponse.status).toEqual(200);
@@ -6425,7 +6425,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
 
   const pendingDownloadResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installations/inst_export_request/exports/${accepted.operationId}/download`,
+      `https://accounts.example.test/v1/app-installations/inst_export_request/exports/${accepted.operationId}/download`,
     ),
   );
   expect(pendingDownloadResponse.status).toEqual(409);
@@ -6435,7 +6435,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
 
   const repeatedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_export_request/export",
+      "https://accounts.example.test/v1/app-installations/inst_export_request/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-1" },
@@ -6461,7 +6461,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
 
   const bodyMismatchResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_export_request/export",
+      "https://accounts.example.test/v1/app-installations/inst_export_request/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-1" },
@@ -6480,7 +6480,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
 
   const exportedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_export_request/status",
+      "https://accounts.example.test/v1/app-installations/inst_export_request/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -6500,7 +6500,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
 
   const completedOperationResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installations/inst_export_request/exports/${accepted.operationId}`,
+      `https://accounts.example.test/v1/app-installations/inst_export_request/exports/${accepted.operationId}`,
     ),
   );
   expect(completedOperationResponse.status).toEqual(200);
@@ -6512,7 +6512,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
 
   const downloadResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installations/inst_export_request/exports/${accepted.operationId}/download`,
+      `https://accounts.example.test/v1/app-installations/inst_export_request/exports/${accepted.operationId}/download`,
     ),
   );
   // The handler now resigns the redirect target with HMAC-SHA256 against the
@@ -6528,7 +6528,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
 
   const repeatedExportedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_export_request/status",
+      "https://accounts.example.test/v1/app-installations/inst_export_request/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -6589,7 +6589,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
   });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_export_worker",
@@ -6637,7 +6637,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
 
   const exportResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_export_worker/export",
+      "https://accounts.example.test/v1/app-installations/inst_export_worker/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-worker" },
@@ -6678,7 +6678,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
 
   const operationResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installations/inst_export_worker/exports/${exported.operationId}`,
+      `https://accounts.example.test/v1/app-installations/inst_export_worker/exports/${exported.operationId}`,
     ),
   );
   expect(operationResponse.status).toEqual(200);
@@ -6686,7 +6686,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
 
   const repeatedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_export_worker/export",
+      "https://accounts.example.test/v1/app-installations/inst_export_worker/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-worker" },
@@ -6704,7 +6704,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
 
   const downloadResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installations/inst_export_worker/exports/${exported.operationId}/download`,
+      `https://accounts.example.test/v1/app-installations/inst_export_worker/exports/${exported.operationId}/download`,
     ),
   );
   // Round 2: download endpoint signs the redirect target with HMAC. The
@@ -6727,7 +6727,7 @@ test("accounts handler records configured export worker failures", async () => {
   });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_export_worker_failure",
@@ -6750,7 +6750,7 @@ test("accounts handler records configured export worker failures", async () => {
 
   const exportResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_export_worker_failure/export",
+      "https://accounts.example.test/v1/app-installations/inst_export_worker_failure/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-worker-failure" },
@@ -6773,7 +6773,7 @@ test("accounts handler records configured export worker failures", async () => {
 
   const operationResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installations/inst_export_worker_failure/exports/${body.operationId}`,
+      `https://accounts.example.test/v1/app-installations/inst_export_worker_failure/exports/${body.operationId}`,
     ),
   );
   expect(operationResponse.status).toEqual(200);
@@ -6841,9 +6841,9 @@ test("accounts handler imports export bundle with target OIDC issuer", async () 
         name: "auth",
         kind: "identity.oidc@v1",
         configRef:
-          "https://accounts.source.test/v1/installations/inst_source/use-edges/auth/oidc-client/toc_source",
+          "https://accounts.source.test/v1/app-installations/inst_source/use-edges/auth/oidc-client/toc_source",
         secretRefs: [
-          "https://accounts.source.test/v1/installations/inst_source/use-edges/auth/secrets/client-secret",
+          "https://accounts.source.test/v1/app-installations/inst_source/use-edges/auth/secrets/client-secret",
         ],
         createdAt: 1778284800000,
         updatedAt: 1778284800000,
@@ -6869,7 +6869,7 @@ test("accounts handler imports export bundle with target OIDC issuer", async () 
   });
 
   const response = await handler(
-    new Request("https://accounts.target.test/v1/installations/import", {
+    new Request("https://accounts.target.test/v1/app-installations/import", {
       method: "POST",
       body: JSON.stringify({
         bundle,
@@ -6919,7 +6919,7 @@ test("accounts handler imports export bundle with target OIDC issuer", async () 
   expect(restoredData.length).toEqual(0);
 
   const dataResponse = await handler(
-    new Request("https://accounts.target.test/v1/installations/import", {
+    new Request("https://accounts.target.test/v1/app-installations/import", {
       method: "POST",
       body: JSON.stringify({
         bundle,
@@ -7055,7 +7055,7 @@ test("accounts handler moves AppInstallation through materialize export import l
   });
 
   const createResponse = await sourceHandler(
-    new Request("https://accounts.source.test/v1/installations", {
+    new Request("https://accounts.source.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_lifecycle",
@@ -7105,7 +7105,7 @@ test("accounts handler moves AppInstallation through materialize export import l
 
   const materializeResponse = await sourceHandler(
     new Request(
-      "https://accounts.source.test/v1/installations/inst_lifecycle/materialize",
+      "https://accounts.source.test/v1/app-installations/inst_lifecycle/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-lifecycle-materialize" },
@@ -7151,7 +7151,7 @@ test("accounts handler moves AppInstallation through materialize export import l
 
   const exportResponse = await sourceHandler(
     new Request(
-      "https://accounts.source.test/v1/installations/inst_lifecycle/export",
+      "https://accounts.source.test/v1/app-installations/inst_lifecycle/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-lifecycle-export" },
@@ -7198,7 +7198,7 @@ test("accounts handler moves AppInstallation through materialize export import l
     store: targetStore,
   });
   const importResponse = await targetHandler(
-    new Request("https://accounts.target.test/v1/installations/import", {
+    new Request("https://accounts.target.test/v1/app-installations/import", {
       method: "POST",
       body: JSON.stringify({
         bundle: exportedBundle,
@@ -7262,7 +7262,7 @@ test("accounts handler records AppInstallation export operation failures", async
   const handler = createAccountsHandler({ store });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_export_failure",
@@ -7285,7 +7285,7 @@ test("accounts handler records AppInstallation export operation failures", async
 
   const exportResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_export_failure/export",
+      "https://accounts.example.test/v1/app-installations/inst_export_failure/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-failure" },
@@ -7302,7 +7302,7 @@ test("accounts handler records AppInstallation export operation failures", async
 
   const failedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_export_failure/status",
+      "https://accounts.example.test/v1/app-installations/inst_export_failure/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -7321,7 +7321,7 @@ test("accounts handler records AppInstallation export operation failures", async
 
   const operationResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installations/inst_export_failure/exports/${operationId}`,
+      `https://accounts.example.test/v1/app-installations/inst_export_failure/exports/${operationId}`,
     ),
   );
   expect(operationResponse.status).toEqual(200);
@@ -7341,7 +7341,7 @@ test("accounts handler materializes launch token binding config", async () => {
   });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_launch_binding",
@@ -7407,7 +7407,7 @@ test("accounts handler connects shared-cell runtime binding to launch token boot
   });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_shared_launch",
@@ -7671,7 +7671,7 @@ test("accounts handler Use Takos start validates redirect and existing installat
 
   const otherSession = seedAccountSession(store, "tsub_other");
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       headers: accountSessionHeaders(otherSession),
       body: JSON.stringify({
@@ -7729,7 +7729,7 @@ test("accounts handler isolates shared-cell namespaces and launch tokens", async
   });
   async function createSharedInstall(installationId: string): Promise<unknown> {
     const response = await handler(
-      new Request("https://accounts.example.test/v1/installations", {
+      new Request("https://accounts.example.test/v1/app-installations", {
         method: "POST",
         body: JSON.stringify({
           installationId,
@@ -7870,7 +7870,7 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
     }[];
   }> {
     const response = await handler(
-      new Request("https://accounts.example.test/v1/installations", {
+      new Request("https://accounts.example.test/v1/app-installations", {
         method: "POST",
         body: JSON.stringify({
           installationId: input.installationId,
@@ -8073,7 +8073,7 @@ test("accounts handler materializes configured provider bindings", async () => {
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_materialized",
@@ -8154,7 +8154,7 @@ test("accounts handler materializes configured provider bindings", async () => {
 test("accounts handler rejects AppBinding records outside the catalog contract", async () => {
   const handler = createAccountsHandler();
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_bad",
@@ -8188,7 +8188,7 @@ test("accounts handler rejects AppBinding records outside the catalog contract",
 test("accounts handler rejects AppGrant records outside the catalog contract", async () => {
   const handler = createAccountsHandler();
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_bad_grant",
@@ -8290,7 +8290,7 @@ test("accounts handler paginates AppInstallation list via cursor and limit", asy
   const handler = createAccountsHandler({ store });
   const firstPage = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations?space_id=space_page&limit=2",
+      "https://accounts.example.test/v1/app-installations?space_id=space_page&limit=2",
       { headers: accountSessionHeaders(session) },
     ),
   );
@@ -8301,7 +8301,7 @@ test("accounts handler paginates AppInstallation list via cursor and limit", asy
 
   const secondPage = await handler(
     new Request(
-      `https://accounts.example.test/v1/installations?space_id=space_page&limit=2&cursor=${encodeURIComponent(
+      `https://accounts.example.test/v1/app-installations?space_id=space_page&limit=2&cursor=${encodeURIComponent(
         firstBody.next_cursor,
       )}`,
       { headers: accountSessionHeaders(session) },
@@ -8316,7 +8316,7 @@ test("accounts handler paginates AppInstallation list via cursor and limit", asy
 
   const malformedCursor = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations?space_id=space_page&cursor=%21%21%21",
+      "https://accounts.example.test/v1/app-installations?space_id=space_page&cursor=%21%21%21",
       { headers: accountSessionHeaders(session) },
     ),
   );
@@ -8324,7 +8324,7 @@ test("accounts handler paginates AppInstallation list via cursor and limit", asy
 
   const overlimit = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations?space_id=space_page&limit=-3",
+      "https://accounts.example.test/v1/app-installations?space_id=space_page&limit=-3",
       { headers: accountSessionHeaders(session) },
     ),
   );
@@ -8342,7 +8342,7 @@ test("accounts handler signs export download redirects", async () => {
     }),
   });
   await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId: "inst_signed_download",
@@ -8363,7 +8363,7 @@ test("accounts handler signs export download redirects", async () => {
   );
   const exportResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installations/inst_signed_download/export",
+      "https://accounts.example.test/v1/app-installations/inst_signed_download/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-signed-export" },
@@ -8381,7 +8381,7 @@ test("accounts handler signs export download redirects", async () => {
 
   const downloadResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installations/inst_signed_download/exports/${exported.operationId}/download`,
+      `https://accounts.example.test/v1/app-installations/inst_signed_download/exports/${exported.operationId}/download`,
     ),
   );
   expect(downloadResponse.status).toEqual(302);
@@ -8399,7 +8399,7 @@ test("accounts handler signs export download redirects", async () => {
   });
   const noSecretDownload = await noSecretHandler(
     new Request(
-      `https://accounts.example.test/v1/installations/inst_signed_download/exports/${exported.operationId}/download`,
+      `https://accounts.example.test/v1/app-installations/inst_signed_download/exports/${exported.operationId}/download`,
     ),
   );
   expect(noSecretDownload.status).toEqual(503);
@@ -8448,7 +8448,7 @@ async function createReadyLaunchInstallation(
   installationId: string,
 ): Promise<void> {
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installations", {
+    new Request("https://accounts.example.test/v1/app-installations", {
       method: "POST",
       body: JSON.stringify({
         installationId,

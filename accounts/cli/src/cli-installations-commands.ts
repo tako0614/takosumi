@@ -1,5 +1,6 @@
 import process from "node:process";
 import {
+ TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
  takosumiAccountsInstallationExportPath,
  takosumiAccountsInstallationMaterializePath,
  takosumiAccountsInstallationPath,
@@ -61,7 +62,9 @@ export async function runInstallationsList(
   }
   try {
     const response = await requestAccountsApi({
-      path: `/v1/installations?space_id=${encodeURIComponent(spaceId)}`,
+      path: `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}?space_id=${
+        encodeURIComponent(spaceId)
+      }`,
       options,
     });
     io.stdout(
@@ -90,7 +93,7 @@ export async function runInstallationsInspect(
   }
   try {
     const response = await requestAccountsApi({
-      path: `/v1/installations/${encodeURIComponent(installationId)}`,
+      path: takosumiAccountsInstallationPath(installationId),
       options,
     });
     io.stdout(

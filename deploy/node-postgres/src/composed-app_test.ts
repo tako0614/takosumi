@@ -21,7 +21,7 @@ process.env.TAKOSUMI_DEV_MODE = "1";
 /**
  * Regression coverage for the composed-app route-shadowing bug. The embedded
  * service (`createTakosumiService`) registers the Deploy Control API on the SAME
- * `/v1/installations/*` paths the account-plane projection owns, and Hono
+ * `/v1/app-installations/*` paths the account-plane projection owns, and Hono
  * composes matched handlers in registration order, so the service routes used to
  * permanently shadow the account-plane (account-plane mints `inst_<uuid>` ids,
  * which the service's `^ins_[0-9a-zA-Z]{16,32}$` guard rejects with 400, or 401s
@@ -97,10 +97,10 @@ async function buildTestApp() {
   return { app: created.app, spy };
 }
 
-test("composed app routes POST /v1/installations to the account plane, not the service", async () => {
+test("composed app routes POST /v1/app-installations to the account plane, not the service", async () => {
   const { app, spy } = await buildTestApp();
   const res = await app.fetch(
-    new Request("http://localhost/v1/installations", {
+    new Request("http://localhost/v1/app-installations", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ spaceId: "space_1" }),
@@ -111,7 +111,7 @@ test("composed app routes POST /v1/installations to the account plane, not the s
   assert.equal(res.headers.get("x-handled-by"), "accounts");
   assert.deepEqual(spy.calls, [{
     method: "POST",
-    pathname: "/v1/installations",
+    pathname: "/v1/app-installations",
   }]);
 });
 
@@ -145,7 +145,7 @@ test("composed app routes per-installation deployment mutation to the account pl
   // `inst_<uuid>` is the account-plane id shape; the service id guard rejects it.
   const res = await app.fetch(
     new Request(
-      "http://localhost/v1/installations/inst_abc123/deployments",
+      "http://localhost/v1/app-installations/inst_abc123/deployments",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -156,18 +156,18 @@ test("composed app routes per-installation deployment mutation to the account pl
   assert.equal(res.headers.get("x-handled-by"), "accounts");
   assert.deepEqual(spy.calls, [{
     method: "POST",
-    pathname: "/v1/installations/inst_abc123/deployments",
+    pathname: "/v1/app-installations/inst_abc123/deployments",
   }]);
 });
 
-test("composed app routes GET /v1/installations list to the account plane", async () => {
+test("composed app routes GET /v1/app-installations list to the account plane", async () => {
   const { app, spy } = await buildTestApp();
   const res = await app.fetch(
-    new Request("http://localhost/v1/installations?space_id=space_1"),
+    new Request("http://localhost/v1/app-installations?space_id=space_1"),
   );
   assert.equal(res.headers.get("x-handled-by"), "accounts");
   assert.equal(spy.calls.length, 1);
-  assert.equal(spy.calls[0].pathname, "/v1/installations");
+  assert.equal(spy.calls[0].pathname, "/v1/app-installations");
 });
 
 test("composed app still serves an embedded service process route", async () => {

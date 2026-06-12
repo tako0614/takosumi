@@ -145,7 +145,7 @@ export interface AppGrantRecord {
 /**
  * @internal v1 contract reset (Wave 6): event records are an internal
  * ledger detail; the public surface exposes events via the
- * `/v1/installations/{id}/events` view envelope, not this row shape.
+ * `/v1/app-installations/{id}/events` view envelope, not this row shape.
  */
 export interface InstallationEventRecord {
   eventId: string;
