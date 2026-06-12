@@ -235,6 +235,66 @@ test("computeGroupStatus precedence: active dominates, then waiting, failed, can
   );
 });
 
+test("createSpaceUpdate maps a wedged (cyclic) dependency graph to failed_precondition, not an uncaught 500", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  // Seed two installations in one Space and mark BOTH stale so they enter the
+  // space_update member set.
+  for (const name of ["alpha", "beta"]) {
+    const { installation } = await seedInstallationModel(store, {
+      environment: "preview",
+      sourceId: `src_${name}`,
+      snapshotId: `snap_${name}`,
+      installConfigId: `cfg_${name}`,
+      installationId: `inst_${name}`,
+      name,
+    });
+    await store.putInstallation({ ...installation, status: "stale" });
+  }
+  // Inject an inverse-edge cycle directly (the create path prevents cycles, so a
+  // wedge can only pre-exist). alpha -> beta AND beta -> alpha.
+  await store.putDependency({
+    id: "dep_cycle_1",
+    spaceId: "space_test",
+    producerInstallationId: "inst_alpha",
+    consumerInstallationId: "inst_beta",
+    mode: "variable_injection",
+    visibility: "space",
+    outputs: {
+      base_domain: { from: "base_domain", to: "base_domain", required: true },
+    },
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putDependency({
+    id: "dep_cycle_2",
+    spaceId: "space_test",
+    producerInstallationId: "inst_beta",
+    consumerInstallationId: "inst_alpha",
+    mode: "variable_injection",
+    visibility: "space",
+    outputs: {
+      base_domain: { from: "base_domain", to: "base_domain", required: true },
+    },
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  const controller = controllerWith(store, recordingRunner(new Map()));
+  const runGroups = new RunGroupsService({
+    store,
+    controller,
+    newId: deterministicIds(),
+    now: () => "2026-06-06T00:00:00.000Z",
+  });
+
+  // The wedged DAG would make `topologicalLayers` throw a GraphCycleError; the
+  // service must translate it into a typed failed_precondition (not a bare 500).
+  await expect(runGroups.createSpaceUpdate("space_test")).rejects.toMatchObject({
+    code: "failed_precondition",
+  });
+  await expect(runGroups.createSpaceUpdate("space_test")).rejects.toThrow(
+    /dependency_cycle/,
+  );
+});
+
 test("createSpaceUpdate with no stale installations is failed_precondition nothing_to_update", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner(new Map());

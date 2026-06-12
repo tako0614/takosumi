@@ -32,6 +32,18 @@ export function planLeaseScope(planRunId: string): string {
   return `plan:${planRunId}`;
 }
 
+/**
+ * The lease key for a Space's dependency-graph mutation. Dependency creation is
+ * a check-then-write (`list edges → detectCycle → put edge`) over the Space's
+ * existing edges, so two concurrent creates of the inverse edges (A→B and B→A)
+ * could each see an acyclic graph and both persist, wedging the DAG with a
+ * cycle. This `space-graph:{spaceId}` lease serializes the critical section per
+ * Space so at most one of the racing edges is committed.
+ */
+export function spaceLeaseScope(spaceId: string): string {
+  return `space-graph:${spaceId}`;
+}
+
 /** An acquired lease handle. `acquired=false` means the lease was busy. */
 export interface InstallationLease {
   readonly scope: string;
@@ -138,6 +150,43 @@ export async function withPlanLease<T>(
   work: () => Promise<T>,
 ): Promise<T> {
   const scope = planLeaseScope(input.planRunId);
+  const lease = await coordination.acquireLease({
+    scope,
+    holderId: input.holderId,
+    ttlMs: input.ttlMs ?? DEFAULT_INSTALLATION_LEASE_TTL_MS,
+  });
+  if (!lease.acquired) {
+    throw new InstallationLeaseBusyError(scope);
+  }
+  try {
+    return await work();
+  } finally {
+    await coordination.releaseLease({
+      scope,
+      holderId: input.holderId,
+      token: lease.token,
+    });
+  }
+}
+
+/**
+ * Acquires the `space-graph:{spaceId}` lease (dependency-graph mutation
+ * critical section), runs `work`, and releases in `finally`. Serializes the
+ * (list edges → detectCycle → put edge) check-then-write per Space so two
+ * concurrent inverse-edge creates cannot both pass the acyclic check and wedge
+ * the DAG. Throws {@link InstallationLeaseBusyError} when another holder holds
+ * it so the caller can retry rather than racing.
+ */
+export async function withSpaceLease<T>(
+  coordination: InstallationCoordination,
+  input: {
+    readonly spaceId: string;
+    readonly holderId: string;
+    readonly ttlMs?: number;
+  },
+  work: () => Promise<T>,
+): Promise<T> {
+  const scope = spaceLeaseScope(input.spaceId);
   const lease = await coordination.acquireLease({
     scope,
     holderId: input.holderId,

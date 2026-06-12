@@ -99,6 +99,8 @@ import type {
   PlanRunInputs,
   StoredSecretBlob,
   StoredSource,
+  TransitionRunInput,
+  TransitionRunResult,
 } from "../../core/domains/deploy-control/store.ts";
 import {
   clampActivityLimit,
@@ -275,6 +277,65 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
 
   async getApplyRun(id: string): Promise<ApplyRun | undefined> {
     return await this.#getRun<ApplyRun>(id, [RUN_KIND_APPLY, "destroy_apply"]);
+  }
+
+  /**
+   * Status-conditional, lease-fenced compare-and-set transition (same {won, run}
+   * contract as the SQL store). A single conditional UPDATE fences on `id`,
+   * `type` (the run family), `status ∈ expectFrom`, and — when set —
+   * `lease_token = expectLeaseToken`, so a concurrent claimer that already moved
+   * the row loses deterministically. On a win the status / run_json advance to
+   * `input.run`; `setLeaseToken` / `clearLeaseToken` / `heartbeatAt` write the
+   * lease and heartbeat columns. A lost race (0 rows changed) re-reads the
+   * current row and returns it with `won: false`.
+   */
+  async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
+    await this.#ensureSchema();
+    const types =
+      input.kind === "plan"
+        ? [RUN_KIND_PLAN, "destroy_plan", "drift_check"]
+        : [RUN_KIND_APPLY, "destroy_apply"];
+    // Resolve the heartbeat (input override wins over the value on `run`) and
+    // bake it into the persisted run JSON so the column and run_json agree.
+    const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
+    const persisted: PlanRun | ApplyRun =
+      heartbeatAt === undefined
+        ? input.run
+        : ({ ...input.run, heartbeatAt } as PlanRun | ApplyRun);
+    const leaseSet: { leaseToken?: string | null } = input.clearLeaseToken
+      ? { leaseToken: null }
+      : input.setLeaseToken !== undefined
+        ? { leaseToken: input.setLeaseToken }
+        : {};
+    const result = await this.#orm
+      .update(schema.runs)
+      .set({
+        status: persisted.status,
+        runJson: persisted as unknown,
+        ...(heartbeatAt === undefined ? {} : { heartbeatAt }),
+        ...leaseSet,
+      })
+      .where(
+        and(
+          eq(schema.runs.id, input.id),
+          inArray(schema.runs.type, types),
+          inArray(schema.runs.status, [...input.expectFrom]),
+          input.expectLeaseToken === undefined
+            ? undefined
+            : eq(schema.runs.leaseToken, input.expectLeaseToken),
+        ),
+      )
+      .run();
+    if (changes(result as D1Result) > 0) {
+      return { won: true, run: persisted };
+    }
+    // Lost the CAS race (or the row vanished): re-read the now-current row so
+    // callers observe the winning transition instead of clobbering it.
+    const current =
+      input.kind === "plan"
+        ? await this.getPlanRun(input.id)
+        : await this.getApplyRun(input.id);
+    return { won: false, ...(current ? { run: current } : {}) };
   }
 
   async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {

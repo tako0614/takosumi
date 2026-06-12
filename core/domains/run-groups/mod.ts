@@ -25,7 +25,7 @@
  */
 
 import type { Run, RunGroup, RunGroupStatus } from "takosumi-contract/runs";
-import { topologicalLayers } from "takosumi-graph";
+import { GraphCycleError, topologicalLayers } from "takosumi-graph";
 import {
   OpenTofuControllerError,
   requireNonEmptyString,
@@ -135,7 +135,11 @@ export class RunGroupsService {
     const memberEdges = edges.filter(
       (edge) => members.has(edge.from) && members.has(edge.to),
     );
-    const layers = topologicalLayers([...members], memberEdges);
+    const layers = topologicalLayersOrPrecondition(
+      [...members],
+      memberEdges,
+      spaceId,
+    );
     // Create one plan Run per member, layer by layer (producers first). The
     // member must still exist; a member missing from the ledger is a precondition
     // error (the snapshot raced a delete).
@@ -225,7 +229,11 @@ export class RunGroupsService {
           installationIds.includes(edge.from) &&
           installationIds.includes(edge.to),
       );
-    const layers = topologicalLayers(installationIds, dependencyEdges);
+    const layers = topologicalLayersOrPrecondition(
+      installationIds,
+      dependencyEdges,
+      spaceId,
+    );
     const runs: Record<string, string> = {};
     const memberRuns: Run[] = [];
     const runGroupId = this.#newId("rg");
@@ -331,6 +339,35 @@ function normalizePositiveLimit(limit: number | undefined): number {
   if (limit === undefined) return Number.POSITIVE_INFINITY;
   if (!Number.isFinite(limit) || limit <= 0) return 0;
   return Math.floor(limit);
+}
+
+/**
+ * Builds the topological layers for a RunGroup member set, translating a
+ * {@link GraphCycleError} (the member edges contain a cycle — the Space's
+ * dependency DAG is wedged) into a typed `failed_precondition` instead of
+ * letting it escape as an uncaught 500. The cycle is normally prevented at
+ * Dependency creation, so a cycle here means a pre-existing wedge that the
+ * operator must repair (delete one of the offending edges) before a RunGroup
+ * can order the affected Installations.
+ */
+function topologicalLayersOrPrecondition(
+  nodes: readonly string[],
+  edges: readonly { readonly from: string; readonly to: string }[],
+  spaceId: string,
+): string[][] {
+  try {
+    return topologicalLayers(nodes, edges);
+  } catch (error) {
+    if (error instanceof GraphCycleError) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `dependency_cycle: space ${spaceId} dependency graph contains a cycle ` +
+          `(${error.cycle.join(" -> ")}); resolve the cycle before running a ` +
+          `RunGroup`,
+      );
+    }
+    throw error;
+  }
 }
 
 /**

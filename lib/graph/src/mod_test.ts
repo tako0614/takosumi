@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type GraphEdge,
+  GraphCycleError,
   detectCycle,
   downstreamClosure,
   topologicalLayers,
@@ -122,6 +123,21 @@ describe("topologicalLayers", () => {
   test("throws on a cycle", () => {
     const edges = [edge("a", "b"), edge("b", "a")];
     expect(() => topologicalLayers(["a", "b"], edges)).toThrow(/cycle/);
+  });
+
+  test("throws a typed GraphCycleError carrying the cycle path", () => {
+    const edges = [edge("a", "b"), edge("b", "c"), edge("c", "a")];
+    let thrown: unknown;
+    try {
+      topologicalLayers(["a", "b", "c"], edges);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(GraphCycleError);
+    const cycle = (thrown as GraphCycleError).cycle;
+    // The cycle path starts and ends on the same node and covers a/b/c.
+    expect(cycle[0]).toBe(cycle[cycle.length - 1] ?? "");
+    expect(new Set(cycle)).toEqual(new Set(["a", "b", "c"]));
   });
 
   test("layering is stable across equivalent edge orderings", () => {

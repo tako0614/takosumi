@@ -26,8 +26,10 @@
  *     controller for the dispatch path);
  *   - `now` — mirrors the controller's clock so the cf-proxy signature expiry
  *     lines up;
- *   - `cfProxySigningSecret` — the control-plane secret the proxy verifies; a
- *     managed Cloudflare run fails closed when it is absent;
+ *   - `cfProxySigningSecret` — the PRIMARY control-plane secret the proxy
+ *     verifies (a dedicated `TAKOSUMI_CF_PROXY_SIGNING_SECRET`, decoupled from
+ *     the deploy-control bearer); a managed Cloudflare run fails closed when it
+ *     is absent;
  *   - `resolveProviderBindingsForRun` — delegates to the controller's lazily
  *     constructed {@link ConnectionsService} so the SAME instance resolves the
  *     run-scoped bindings (operator-default fall-through) for rootgen here and for
@@ -226,12 +228,14 @@ export class PlanResolutionService {
     }
     // Fail closed: a managed run requires the cf-proxy signing secret so the
     // proxy can verify the scope. Without it the run cannot proceed (the proxy
-    // would reject every forward anyway).
+    // would reject every forward anyway). The control plane signs with the
+    // PRIMARY signing secret; the proxy accepts the primary or any rotation
+    // secret (see {@link verifyCfProxyScope}).
     if (!this.#cfProxySigningSecret) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "managed cf-proxy signing secret is not configured " +
-          "(TAKOSUMI_DEPLOY_CONTROL_TOKEN); managed Cloudflare runs are disabled",
+          "(TAKOSUMI_CF_PROXY_SIGNING_SECRET); managed Cloudflare runs are disabled",
       );
     }
     const signature = await signCfProxyScope(this.#cfProxySigningSecret, {

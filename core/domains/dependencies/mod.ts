@@ -44,6 +44,10 @@ import {
 } from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import {
+  type InstallationCoordination,
+  withSpaceLease,
+} from "../deploy-control/installation_lease.ts";
+import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
 } from "../activity/mod.ts";
@@ -75,6 +79,16 @@ export interface DependenciesServiceDependencies {
   readonly now?: () => string;
   /** Space-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder;
+  /**
+   * Coordination seam used to serialize a Space's dependency-graph mutation
+   * (the cycle check-then-write critical section) across isolates. When
+   * injected, {@link DependenciesService.createDependency} takes the
+   * `space-graph:{spaceId}` lease around `list edges → detectCycle → put edge`
+   * so two concurrent inverse-edge creates (A→B and B→A) cannot both pass the
+   * acyclic check and wedge the DAG. When omitted, creation is single-isolate
+   * safe (JS run-to-completion serializes the in-process critical section).
+   */
+  readonly coordination?: InstallationCoordination;
 }
 
 export class DependenciesService {
@@ -82,6 +96,7 @@ export class DependenciesService {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
   readonly #activity: ActivityRecorder;
+  readonly #coordination?: InstallationCoordination;
 
   constructor(dependencies: DependenciesServiceDependencies) {
     this.#store = dependencies.store;
@@ -91,6 +106,7 @@ export class DependenciesService {
         `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`);
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
+    this.#coordination = dependencies.coordination;
   }
 
   /**
@@ -199,9 +215,57 @@ export class DependenciesService {
       await this.#assertActiveShareCovers(producer, consumer, request.outputs);
     }
 
-    // Cycle prevention: would adding producer -> consumer create a cycle in the
-    // Space's existing dependency graph? `detectCycle` answers with the
-    // candidate edge appended.
+    // Cycle prevention is a check-then-write: list the Space's existing edges,
+    // ask `detectCycle` whether the candidate would close a cycle, and (if not)
+    // persist the edge. Two concurrent creates of the inverse edges (A→B and
+    // B→A) could each observe an acyclic graph and BOTH persist, wedging the DAG
+    // with a cycle. Serialize this critical section per Space under the
+    // `space-graph:{spaceId}` lease when a coordination seam is injected; when
+    // omitted, JS run-to-completion serializes it within a single isolate.
+    const created = await this.#withSpaceGraphLease(request.spaceId, () =>
+      this.#commitEdge(request),
+    );
+    // Activity (§27 / §34): a Dependency edge was added. Edge ids + output
+    // mapping names only — no values.
+    await this.#activity.record({
+      spaceId: created.spaceId,
+      action: "dependency.created",
+      targetType: "dependency",
+      targetId: created.id,
+      metadata: {
+        producerInstallationId: created.producerInstallationId,
+        consumerInstallationId: created.consumerInstallationId,
+        mode: created.mode,
+        outputNames: Object.keys(created.outputs),
+      },
+    });
+    return created;
+  }
+
+  /**
+   * Runs `work` under the Space's dependency-graph lease when coordination is
+   * wired, else inline. Centralizes the serialization boundary so the
+   * check-then-write in {@link DependenciesService.createDependency} cannot be
+   * interleaved across isolates.
+   */
+  #withSpaceGraphLease<T>(
+    spaceId: string,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    if (!this.#coordination) return work();
+    return withSpaceLease(
+      this.#coordination,
+      { spaceId, holderId: `dependencies:${this.#newId("hold")}` },
+      work,
+    );
+  }
+
+  /**
+   * The serialized critical section: re-read the Space's edges, reject a
+   * cycle-creating candidate with a typed `failed_precondition`, and persist the
+   * new edge. Runs inside {@link DependenciesService.#withSpaceGraphLease}.
+   */
+  async #commitEdge(request: CreateDependencyRequest): Promise<Dependency> {
     const existing = await this.#store.listDependenciesBySpace(request.spaceId);
     const edges: readonly GraphEdge[] = existing.map((dep) => ({
       from: dep.producerInstallationId,
@@ -230,22 +294,7 @@ export class DependenciesService {
       visibility: request.visibility,
       createdAt: this.#now(),
     };
-    const created = await this.#store.putDependency(dependency);
-    // Activity (§27 / §34): a Dependency edge was added. Edge ids + output
-    // mapping names only — no values.
-    await this.#activity.record({
-      spaceId: created.spaceId,
-      action: "dependency.created",
-      targetType: "dependency",
-      targetId: created.id,
-      metadata: {
-        producerInstallationId: created.producerInstallationId,
-        consumerInstallationId: created.consumerInstallationId,
-        mode: created.mode,
-        outputNames: Object.keys(created.outputs),
-      },
-    });
-    return created;
+    return await this.#store.putDependency(dependency);
   }
 
   /**
