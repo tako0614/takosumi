@@ -4,9 +4,10 @@ import TopBar from "./TopBar.tsx";
 import MobileTabs from "./MobileTabs.tsx";
 import { ConfirmDialogRenderer } from "../../../../components/ConfirmDialogRenderer.tsx";
 import InkBackdrop from "../../../../components/ui/InkBackdrop.tsx";
+import { t } from "../../../../i18n/index.ts";
 // Dark design system (tokens → base → components → shell → views). Imported once
-// here so every account/installations screen wrapped in <AppShell> gets the
-// styles even when the dashboard is consumed via the in-process takos-web alias.
+// here so every screen wrapped in <AppShell> gets the styles even when the
+// dashboard is consumed via the in-process takos-web alias.
 import "../../../../styles/tokens.css";
 import "../../../../styles/base.css";
 import "../../../../styles/components.css";
@@ -18,14 +19,13 @@ interface Props {
 }
 
 /**
- * Dashboard chrome (sidebar + topbar + mobile tabs) for the account /
- * installations screens. Ported from
- * takosumi dashboard-ui/src/components/shell/AppShell.tsx.
+ * Dashboard chrome: sidebar (primary nav) + topbar (Space switcher / bell /
+ * user menu) + mobile tabs.
  */
 export default function AppShell(props: Props) {
   return (
     <div class="app-shell">
-      <a href="#main" class="skip-link">本文へスキップ</a>
+      <a href="#main" class="skip-link">{t("shell.skipToContent")}</a>
       <Sidebar />
       <div class="app-shell-main">
         <TopBar />
