@@ -27,6 +27,7 @@ import {
   DEPLOYMENT_ID_PATTERN,
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
+import { pageSorted } from "takosumi-contract/pagination";
 import {
   TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE,
   TAKOSUMI_API_INSTALLATION_ROUTE,
@@ -444,16 +445,29 @@ export function mountDeployControlInstallationRoutes(
           }
           ensureSpacePermission(principal, spaceId);
         }
+        const page = parsePageParams(c);
+        if (page.kind === "invalid") return page.response;
         // Without a spaceId only built-in shared configs (spaceId-less configs)
-        // are returned; with one, built-ins plus that Space's own configs.
+        // are returned; with one, built-ins plus that Space's own configs. The
+        // official + scoped union is a small set, so it is materialized, merge-
+        // sorted by (createdAt, id), and bounded with the in-memory keyset pager
+        // (a keyset across a UNION query would be unsound).
         const official = (await installations!.listInstallConfigs()).filter(
           (config) => config.spaceId === undefined,
         );
         const scoped = spaceId === undefined
           ? []
           : await installations!.listInstallConfigs(spaceId);
+        const merged = [...official, ...scoped].sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        );
+        const { items, nextCursor } = pageSorted(merged, page.value);
         return c.json(
-          { installConfigs: [...official, ...scoped].map(publicInstallConfig) },
+          {
+            installConfigs: items.map(publicInstallConfig),
+            ...(nextCursor !== undefined ? { nextCursor } : {}),
+          },
           200,
         );
       },

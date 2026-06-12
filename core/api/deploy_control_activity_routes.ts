@@ -15,6 +15,7 @@ import {
   ensureValidParam,
   errorEnvelope,
   notImplemented,
+  parsePageParams,
   runHandler,
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
@@ -177,8 +178,12 @@ export function mountDeployControlActivityRoutes(
       param: SPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
-        const backups = await dependencies.backupsService!.listBackups(id);
-        return c.json({ backups }, 200);
+        const page = parsePageParams(c);
+        if (page.kind === "invalid") return page.response;
+        return c.json(
+          await dependencies.backupsService!.listBackups(id, page.value),
+          200,
+        );
       },
     }),
   );

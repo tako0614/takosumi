@@ -13,6 +13,7 @@ import {
   type DeployControlEndpoint,
   type DeployControlRouteContext,
   ensureSpacePermission,
+  parsePageParams,
   readJsonBody,
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
@@ -109,7 +110,9 @@ export function mountDeployControlBillingRoutes(
       param: SPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
-        return c.json(await controller.listSpaceUsage(id), 200);
+        const page = parsePageParams(c);
+        if (page.kind === "invalid") return page.response;
+        return c.json(await controller.listSpaceUsage(id, page.value), 200);
       },
     }),
   );

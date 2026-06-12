@@ -72,6 +72,7 @@ import {
   decodeCursor,
   type Page,
   type PageParams,
+  pageSorted,
 } from "takosumi-contract/pagination";
 import type {
   ProviderBinding,
@@ -292,7 +293,10 @@ export interface ControlPlaneOperations {
       readonly spaceId: string;
       readonly createdByRunId?: string;
     }): Promise<BackupRecord>;
-    listBackups(spaceId: string): Promise<readonly BackupRecord[]>;
+    listBackups(
+      spaceId: string,
+      params?: PageParams,
+    ): Promise<ListBackupsResponse>;
   };
   // --- Billing (§28) ---
   getSpaceBilling(spaceId: string): Promise<{
@@ -301,8 +305,12 @@ export interface ControlPlaneOperations {
       readonly balance?: CreditBalance;
     };
   }>;
-  listSpaceUsage(spaceId: string): Promise<{
+  listSpaceUsage(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<{
     readonly usageEvents: readonly UsageEvent[];
+    readonly nextCursor?: string;
   }>;
   listSpaceCreditReservations(spaceId: string): Promise<{
     readonly creditReservations: readonly CreditReservation[];
@@ -353,6 +361,10 @@ export interface ControlPlaneOperations {
       }[];
     }): Promise<OutputShare>;
     listForSpace(spaceId: string): Promise<readonly OutputShare[]>;
+    listForSpacePage(
+      spaceId: string,
+      params: PageParams,
+    ): Promise<Page<OutputShare>>;
     getShare(id: string): Promise<OutputShare | undefined>;
     approveShare(id: string): Promise<OutputShare>;
     revokeShare(id: string): Promise<OutputShare>;
@@ -496,7 +508,10 @@ export interface ControlPlaneOperations {
     sourceId: string,
     options?: { readonly dedupe?: boolean },
   ): Promise<unknown>;
-  listSourceSnapshots(sourceId: string): Promise<ListSourceSnapshotsResponse>;
+  listSourceSnapshots(
+    sourceId: string,
+    params?: PageParams,
+  ): Promise<ListSourceSnapshotsResponse>;
   createSourceCompatibilityCheck(
     sourceId: string,
     request?: CreateSourceCompatibilityCheckRequest,
@@ -743,8 +758,14 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
     if (leaf === "backups" && segments.length === 3) {
       if (method === "GET") {
-        const backups = await operations.backups.listBackups(spaceId);
-        return json({ backups } satisfies ListBackupsResponse);
+        const page = parseControlPageParams(url);
+        if (!page.ok) return page.response;
+        return json(
+          (await operations.backups.listBackups(
+            spaceId,
+            page.params,
+          )) satisfies ListBackupsResponse,
+        );
       }
       if (method === "POST") {
         const backup = await operations.backups.createBackup({ spaceId });
@@ -758,7 +779,9 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
     if (leaf === "usage" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return json(await operations.listSpaceUsage(spaceId));
+      const page = parseControlPageParams(url);
+      if (!page.ok) return page.response;
+      return json(await operations.listSpaceUsage(spaceId, page.params));
     }
     if (leaf === "credit-reservations" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -925,7 +948,9 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         subject: input.session.subject,
       });
       if (!auth.ok) return auth.response;
-      return json(await operations.listSourceSnapshots(sourceId));
+      const page = parseControlPageParams(url);
+      if (!page.ok) return page.response;
+      return json(await operations.listSourceSnapshots(sourceId, page.params));
     }
     if (segments.length === 3 && segments[2] === "compatibility-check") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
@@ -1804,9 +1829,13 @@ async function listInstallConfigs(
   const spaceId =
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
+  const page = parseControlPageParams(url);
+  if (!page.ok) return page.response;
   // Without a spaceId only built-in shared configs (spaceId-less configs) are
   // returned; with one, built-ins plus that Space's own configs —
-  // mirroring the §30 `/api/install-configs` projection.
+  // mirroring the §30 `/api/install-configs` projection. The official + scoped
+  // union is a small set, so it is materialized, merge-sorted by (createdAt,
+  // id), and bounded with the in-memory keyset pager.
   const official = (await operations.installations.listInstallConfigs()).filter(
     (config) => config.spaceId === undefined,
   );
@@ -1823,8 +1852,14 @@ async function listInstallConfigs(
     spaceId === undefined
       ? []
       : await operations.installations.listInstallConfigs(spaceId);
+  const merged = [...official, ...scoped].sort(
+    (a, b) =>
+      a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+  );
+  const { items, nextCursor } = pageSorted(merged, page.params);
   return json({
-    installConfigs: [...official, ...scoped].map(publicInstallConfig),
+    installConfigs: items.map(publicInstallConfig),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
   });
 }
 
@@ -2525,7 +2560,16 @@ async function listOutputShares(
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
-  return json({ shares: await operations.outputShares.listForSpace(spaceId) });
+  const page = parseControlPageParams(url);
+  if (!page.ok) return page.response;
+  const { items, nextCursor } = await operations.outputShares.listForSpacePage(
+    spaceId,
+    page.params,
+  );
+  return json({
+    shares: items,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+  });
 }
 
 async function createOutputShare(

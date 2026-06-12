@@ -282,6 +282,12 @@ export interface CreateSourceSyncResponse {
 
 export interface ListSourceSnapshotsResponse {
   readonly snapshots: readonly SourceSnapshot[];
+  /**
+   * Opaque keyset cursor for the next page when the listing was capped (spec §30
+   * pagination; keyset column is `fetchedAt`). Absent on the last page.
+   * Additive: readers that ignore it are unaffected.
+   */
+  readonly nextCursor?: string;
 }
 
 /**

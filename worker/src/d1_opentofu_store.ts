@@ -32,6 +32,7 @@ import {
   gt,
   inArray,
   isNull,
+  lt,
   ne,
   or,
   type SQL,
@@ -74,6 +75,7 @@ import {
   type Page,
   type PageParams,
   pageFromProbe,
+  pageFromProbeBy,
 } from "takosumi-contract/pagination";
 import type { BackupRecord } from "takosumi-contract/backups";
 import type {
@@ -132,6 +134,25 @@ function d1KeysetWhere(
   const keyset = or(
     gt(createdAtCol, cursor.createdAt),
     and(eq(createdAtCol, cursor.createdAt), gt(idCol, cursor.id)),
+  );
+  return filter === undefined ? keyset : and(filter, keyset);
+}
+
+/**
+ * Descending counterpart of {@link d1KeysetWhere} for a newest-first list
+ * (`ORDER BY createdAt DESC, id DESC`, e.g. control backups): a row qualifies
+ * when its keyset is strictly BEFORE the cursor position.
+ */
+function d1KeysetWhereDesc(
+  filter: SQL | undefined,
+  createdAtCol: SQLiteColumn,
+  idCol: SQLiteColumn,
+  cursor: { readonly createdAt: string; readonly id: string } | undefined,
+): SQL | undefined {
+  if (cursor === undefined) return filter;
+  const keyset = or(
+    lt(createdAtCol, cursor.createdAt),
+    and(eq(createdAtCol, cursor.createdAt), lt(idCol, cursor.id)),
   );
   return filter === undefined ? keyset : and(filter, keyset);
 }
@@ -1001,6 +1022,34 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
+  async listSourceSnapshotsPage(
+    sourceId: string,
+    params: PageParams,
+  ): Promise<Page<SourceSnapshot>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#drizzleManyJson<SourceSnapshot>(
+      schema.sourceSnapshots,
+      schema.sourceSnapshots.recordJson,
+      {
+        where: d1KeysetWhere(
+          eq(schema.sourceSnapshots.sourceId, sourceId),
+          schema.sourceSnapshots.fetchedAt,
+          schema.sourceSnapshots.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          asc(schema.sourceSnapshots.fetchedAt),
+          asc(schema.sourceSnapshots.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbeBy(rows, limit, (s) => ({
+      createdAt: s.fetchedAt,
+      id: s.id,
+    }));
+  }
+
   async putCapsuleCompatibilityReport(
     report: CapsuleCompatibilityReport,
   ): Promise<CapsuleCompatibilityReport> {
@@ -1795,6 +1844,28 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return rows.map(usageEventFromRow);
   }
 
+  async listUsageEventsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>> {
+    await this.#ensureSchema();
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#orm
+      .select()
+      .from(schema.usageEvents)
+      .where(
+        d1KeysetWhere(
+          eq(schema.usageEvents.spaceId, spaceId),
+          schema.usageEvents.createdAt,
+          schema.usageEvents.id,
+          decodeCursor(params.cursor),
+        ),
+      )
+      .orderBy(asc(schema.usageEvents.createdAt), asc(schema.usageEvents.id))
+      .limit(limit + 1);
+    return pageFromProbe(rows.map(usageEventFromRow), limit);
+  }
+
   async #usageEventByIdempotencyKey(
     idempotencyKey: string,
   ): Promise<UsageEvent | undefined> {
@@ -1835,6 +1906,29 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         orderBy: [desc(schema.backups.createdAt), desc(schema.backups.id)],
       },
     );
+  }
+
+  async listBackupRecordsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<BackupRecord>> {
+    const limit = clampPageLimit(params.limit);
+    // Newest-first listing ⇒ descending keyset.
+    const rows = await this.#drizzleManyJson<BackupRecord>(
+      schema.backups,
+      schema.backups.recordJson,
+      {
+        where: d1KeysetWhereDesc(
+          eq(schema.backups.spaceId, spaceId),
+          schema.backups.createdAt,
+          schema.backups.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [desc(schema.backups.createdAt), desc(schema.backups.id)],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
   }
 
   // -- shared D1 helpers ------------------------------------------------------
