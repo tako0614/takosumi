@@ -82,6 +82,7 @@ import type {
 } from "takosumi-contract/security";
 import type { ProviderTemplate } from "takosumi-contract/providers";
 import type {
+  CommitAppliedDeploymentInput,
   InstallationPatch,
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
@@ -90,6 +91,7 @@ import type {
   StoredSource,
 } from "./store.ts";
 import { clampActivityLimit, InstallationPatchGuardConflict } from "./store.ts";
+import type { SqlTransaction } from "../../adapters/storage/sql.ts";
 
 /** Discriminator stored in the single `runs` table (§27). */
 // §27 runs.type values. Destroy runs persist their own discriminator
@@ -730,23 +732,165 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     });
   }
 
+  /**
+   * Atomic apply / destroy-apply ledger commit (spec §20 / §21 / §16). All
+   * writes — new/superseded Deployment(s), StateSnapshot, (apply) OutputSnapshot,
+   * and the guarded Installation advance — run inside ONE Postgres interactive
+   * transaction so a mid-sequence failure rolls the whole unit back instead of
+   * leaving torn state. The transaction is opened through the {@link SqlClient}
+   * `transaction` seam (a pinned connection); when the configured client does not
+   * expose one (e.g. a bare pool wrapper), the writes fall back to the previous
+   * non-transactional sequence on `this.#db` — identical to the pre-atomic
+   * behavior, never worse.
+   *
+   * The guard is fenced in the UPDATE predicate exactly as
+   * {@link patchInstallation}: a guard miss (no row updated) re-reads to decide
+   * between `{ installation: undefined }` (row gone) and a thrown
+   * {@link InstallationPatchGuardConflict} (row moved). A thrown conflict aborts
+   * the transaction and rolls back every preceding write.
+   */
+  async commitAppliedDeployment(
+    input: CommitAppliedDeploymentInput,
+  ): Promise<{ readonly installation: Installation | undefined }> {
+    if (!this.#client.transaction) {
+      // No pinned-connection transaction available: replay the writes on the
+      // shared (pool) connection. This is the exact pre-atomic sequence, so no
+      // regression versus today; only the substrate that wires a real
+      // transaction gains all-or-nothing.
+      return await this.#commitAppliedDeploymentWrites(this.#db, input);
+    }
+    return await this.#client.transaction(
+      async (transaction: SqlTransaction) => {
+        const txDb = this.#drizzleForClient(transaction);
+        return await this.#commitAppliedDeploymentWrites(txDb, input);
+      },
+    );
+  }
+
+  /**
+   * Runs the apply-commit write set against the given drizzle handle (the shared
+   * `#db` or a transaction-bound one). Returns `{ installation }` patched, or
+   * `{ installation: undefined }` on a guard miss whose installation row is gone;
+   * throws {@link InstallationPatchGuardConflict} on a guard conflict.
+   */
+  async #commitAppliedDeploymentWrites(
+    db: PgRemoteDatabase<typeof pgSchema>,
+    input: CommitAppliedDeploymentInput,
+  ): Promise<{ readonly installation: Installation | undefined }> {
+    const { installationPatch } = input;
+    if (input.newDeployment) {
+      await pgUpsertDeployment(db, input.newDeployment);
+    }
+    if (input.supersededDeployment) {
+      await pgUpsertDeployment(db, input.supersededDeployment);
+    }
+    await pgUpsertStateSnapshot(db, input.stateSnapshot);
+    if (input.outputSnapshot) {
+      await pgUpsertOutputSnapshot(db, input.outputSnapshot);
+    }
+    // Guarded Installation advance, fenced on current_deployment_id (and
+    // optionally status) so the patch lands atomically with the writes above.
+    const guard = installationPatch.guard;
+    const current = await this.#getInstallationOn(db, installationPatch.id);
+    if (!current) return { installation: undefined };
+    if (
+      current.currentDeploymentId !== guard.currentDeploymentId ||
+      (guard.status !== undefined && current.status !== guard.status)
+    ) {
+      throw new InstallationPatchGuardConflict({
+        id: installationPatch.id,
+        expectedCurrentDeploymentId: guard.currentDeploymentId,
+        actualCurrentDeploymentId: current.currentDeploymentId,
+        expectedStatus: guard.status,
+        actualStatus: current.status,
+      });
+    }
+    const updated: Installation = { ...current, ...installationPatch.patch };
+    const values = installationValues(updated);
+    const guardedCurrentDeployment =
+      guard.currentDeploymentId === undefined ||
+      guard.currentDeploymentId === null
+        ? isNull(pgSchema.installations.currentDeploymentId)
+        : eq(
+            pgSchema.installations.currentDeploymentId,
+            guard.currentDeploymentId,
+          );
+    const rows = await db
+      .update(pgSchema.installations)
+      .set({
+        spaceId: values.spaceId,
+        name: values.name,
+        environment: values.environment,
+        sourceId: values.sourceId,
+        installConfigId: values.installConfigId,
+        currentDeploymentId: values.currentDeploymentId,
+        status: values.status,
+        installationJson: values.installationJson,
+        updatedAt: values.updatedAt,
+      })
+      .where(
+        and(
+          eq(pgSchema.installations.id, updated.id),
+          guardedCurrentDeployment,
+          guard.status === undefined
+            ? sql`true`
+            : eq(pgSchema.installations.status, guard.status),
+        ),
+      )
+      .returning({ json: pgSchema.installations.installationJson });
+    const patched = parseRow(rows[0]) as Installation | undefined;
+    if (patched) return { installation: patched };
+    const actual = await this.#getInstallationOn(db, installationPatch.id);
+    if (!actual) return { installation: undefined };
+    throw new InstallationPatchGuardConflict({
+      id: installationPatch.id,
+      expectedCurrentDeploymentId: guard.currentDeploymentId,
+      actualCurrentDeploymentId: actual.currentDeploymentId,
+      expectedStatus: guard.status,
+      actualStatus: actual.status,
+    });
+  }
+
+  /** Reads one Installation by id on the given drizzle handle (tx-aware). */
+  async #getInstallationOn(
+    db: PgRemoteDatabase<typeof pgSchema>,
+    id: string,
+  ): Promise<Installation | undefined> {
+    const rows = await db
+      .select({ json: pgSchema.installations.installationJson })
+      .from(pgSchema.installations)
+      .where(eq(pgSchema.installations.id, id))
+      .limit(1);
+    return parseRow(rows[0]) as Installation | undefined;
+  }
+
+  /**
+   * Builds a drizzle handle whose query callback proxies to the given pinned
+   * {@link SqlTransaction}, so the same column-mapped builders run inside the
+   * transaction's connection. Mirrors the constructor's `#db` wiring.
+   */
+  #drizzleForClient(
+    client: SqlClient,
+  ): PgRemoteDatabase<typeof pgSchema> {
+    return drizzle(
+      async (query, params, method) => {
+        const result = await client.query(query, params);
+        if (method !== "all") return { rows: [...result.rows] };
+        const columns = selectedDriverColumns(query);
+        return {
+          rows: result.rows.map((row) =>
+            columns.map((column) => (row as Record<string, unknown>)[column]),
+          ),
+        };
+      },
+      { schema: pgSchema },
+    );
+  }
+
   // --- deployments (§21, new shape) -----------------------------------------
 
   async putDeployment(deployment: Deployment): Promise<Deployment> {
-    await this.#pgUpsert(pgSchema.deployments, {
-      id: deployment.id,
-      spaceId: deployment.spaceId,
-      installationId: deployment.installationId,
-      environment: deployment.environment,
-      applyRunId: deployment.applyRunId,
-      sourceSnapshotId: deployment.sourceSnapshotId,
-      dependencySnapshotId: deployment.dependencySnapshotId ?? null,
-      stateGeneration: deployment.stateGeneration,
-      outputSnapshotId: deployment.outputSnapshotId,
-      status: deployment.status,
-      deploymentJson: deployment,
-      createdAt: deployment.createdAt,
-    });
+    await pgUpsertDeployment(this.#db, deployment);
     return deployment;
   }
 
@@ -1253,29 +1397,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   // --- state_snapshots (§20, keyed (installation_id, environment, generation)) -
 
   async putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot> {
-    await this.#pgUpsert(
-      pgSchema.stateSnapshots,
-      {
-        id: snapshot.id,
-        spaceId: snapshot.spaceId,
-        installationId: snapshot.installationId,
-        environment: snapshot.environment,
-        generation: snapshot.generation,
-        snapshotJson: snapshot,
-        createdAt: snapshot.createdAt,
-      },
-      {
-        id: snapshot.id,
-        spaceId: snapshot.spaceId,
-        snapshotJson: snapshot,
-        createdAt: snapshot.createdAt,
-      },
-      [
-        pgSchema.stateSnapshots.installationId,
-        pgSchema.stateSnapshots.environment,
-        pgSchema.stateSnapshots.generation,
-      ],
-    );
+    await pgUpsertStateSnapshot(this.#db, snapshot);
     return snapshot;
   }
 
@@ -1438,14 +1560,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   // --- output_snapshots (§16) -----------------------------------------------
 
   async putOutputSnapshot(snapshot: OutputSnapshot): Promise<OutputSnapshot> {
-    await this.#pgUpsert(pgSchema.outputSnapshots, {
-      id: snapshot.id,
-      spaceId: snapshot.spaceId,
-      installationId: snapshot.installationId,
-      stateGeneration: snapshot.stateGeneration,
-      snapshotJson: snapshot,
-      createdAt: snapshot.createdAt,
-    });
+    await pgUpsertOutputSnapshot(this.#db, snapshot);
     return snapshot;
   }
 
@@ -2259,6 +2374,111 @@ function installationValues(installation: Installation) {
     createdAt: installation.createdAt,
     updatedAt: installation.updatedAt,
   };
+}
+
+// --- tx-aware upserts -------------------------------------------------------
+//
+// These mirror the `#pgUpsert(...)` payloads in putDeployment / putStateSnapshot
+// / putOutputSnapshot but take an explicit drizzle handle so the SAME insert can
+// run on either the shared `#db` (the put* methods) or a transaction-bound
+// drizzle handle (the atomic commitAppliedDeployment path). Keeping ONE column
+// payload per entity means the transactional and non-transactional writes stay
+// byte-for-byte identical.
+
+async function pgUpsertDeployment(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  deployment: Deployment,
+): Promise<void> {
+  await db
+    .insert(pgSchema.deployments)
+    .values({
+      id: deployment.id,
+      spaceId: deployment.spaceId,
+      installationId: deployment.installationId,
+      environment: deployment.environment,
+      applyRunId: deployment.applyRunId,
+      sourceSnapshotId: deployment.sourceSnapshotId,
+      dependencySnapshotId: deployment.dependencySnapshotId ?? null,
+      stateGeneration: deployment.stateGeneration,
+      outputSnapshotId: deployment.outputSnapshotId,
+      status: deployment.status,
+      deploymentJson: deployment,
+      createdAt: deployment.createdAt,
+    })
+    .onConflictDoUpdate({
+      target: pgSchema.deployments.id,
+      set: {
+        id: deployment.id,
+        spaceId: deployment.spaceId,
+        installationId: deployment.installationId,
+        environment: deployment.environment,
+        applyRunId: deployment.applyRunId,
+        sourceSnapshotId: deployment.sourceSnapshotId,
+        dependencySnapshotId: deployment.dependencySnapshotId ?? null,
+        stateGeneration: deployment.stateGeneration,
+        outputSnapshotId: deployment.outputSnapshotId,
+        status: deployment.status,
+        deploymentJson: deployment,
+        createdAt: deployment.createdAt,
+      },
+    });
+}
+
+async function pgUpsertStateSnapshot(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  snapshot: StateSnapshot,
+): Promise<void> {
+  await db
+    .insert(pgSchema.stateSnapshots)
+    .values({
+      id: snapshot.id,
+      spaceId: snapshot.spaceId,
+      installationId: snapshot.installationId,
+      environment: snapshot.environment,
+      generation: snapshot.generation,
+      snapshotJson: snapshot,
+      createdAt: snapshot.createdAt,
+    })
+    .onConflictDoUpdate({
+      target: [
+        pgSchema.stateSnapshots.installationId,
+        pgSchema.stateSnapshots.environment,
+        pgSchema.stateSnapshots.generation,
+      ],
+      set: {
+        id: snapshot.id,
+        spaceId: snapshot.spaceId,
+        snapshotJson: snapshot,
+        createdAt: snapshot.createdAt,
+      },
+    });
+}
+
+async function pgUpsertOutputSnapshot(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  snapshot: OutputSnapshot,
+): Promise<void> {
+  await db
+    .insert(pgSchema.outputSnapshots)
+    .values({
+      id: snapshot.id,
+      spaceId: snapshot.spaceId,
+      installationId: snapshot.installationId,
+      stateGeneration: snapshot.stateGeneration,
+      snapshotJson: snapshot,
+      createdAt: snapshot.createdAt,
+    })
+    .onConflictDoUpdate({
+      target: pgSchema.outputSnapshots.id,
+      set: {
+        id: snapshot.id,
+        spaceId: snapshot.spaceId,
+        installationId: snapshot.installationId,
+        stateGeneration: snapshot.stateGeneration,
+        snapshotJson: snapshot,
+        createdAt: snapshot.createdAt,
+      },
+    });
 }
 
 function selectedDriverColumns(query: string): readonly string[] {

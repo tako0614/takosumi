@@ -22,6 +22,29 @@ export class SqliteFakeD1 implements D1Database {
   prepare(query: string): D1PreparedStatement {
     return new SqliteFakeStatement(this.#db, query);
   }
+
+  /**
+   * Atomic multi-statement batch, mirroring D1's `batch()`. Runs every statement
+   * inside ONE SQLite transaction (BEGIN / COMMIT, ROLLBACK on any error) so the
+   * store's atomic `commitAppliedDeployment` path gets real all-or-nothing
+   * semantics under test.
+   */
+  async batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    this.#db.run("BEGIN");
+    try {
+      const results: D1Result<T>[] = [];
+      for (const statement of statements) {
+        results.push((await statement.run<T>()) as D1Result<T>);
+      }
+      this.#db.run("COMMIT");
+      return results;
+    } catch (error) {
+      this.#db.run("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 class SqliteFakeStatement implements D1PreparedStatement {

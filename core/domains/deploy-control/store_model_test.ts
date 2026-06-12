@@ -10,6 +10,7 @@ import type {
   SqlClient,
   SqlParameters,
   SqlQueryResult,
+  SqlTransaction,
 } from "../../adapters/storage/sql.ts";
 import type {
   Deployment,
@@ -232,6 +233,56 @@ class ModelSqlClient implements SqlClient {
       this.#tables.set(name, table);
     }
     return table;
+  }
+
+  /** Deep-copies all rows so a transaction wrapper can roll back to this point. */
+  snapshot(): Map<string, Map<string, StoredRow>> {
+    const copy = new Map<string, Map<string, StoredRow>>();
+    for (const [name, table] of this.#tables) {
+      copy.set(name, new Map(table));
+    }
+    return copy;
+  }
+
+  /** Restores rows captured by {@link snapshot} (transaction rollback). */
+  restore(snapshot: Map<string, Map<string, StoredRow>>): void {
+    this.#tables.clear();
+    for (const [name, table] of snapshot) {
+      this.#tables.set(name, new Map(table));
+    }
+  }
+}
+
+/**
+ * Wraps a {@link ModelSqlClient} with the {@link SqlClient.transaction} seam so
+ * the SqlOpenTofuDeploymentStore's atomic `commitAppliedDeployment` exercises its
+ * transactional path. `transaction(fn)` snapshots the inner rows, runs `fn`
+ * against the inner client, and restores the snapshot if `fn` throws — a faithful
+ * stand-in for a Postgres BEGIN / COMMIT / ROLLBACK. `entered` records that the
+ * seam was used.
+ */
+class TransactionalModelSqlClient implements SqlClient {
+  readonly inner = new ModelSqlClient();
+  entered = 0;
+  rolledBack = 0;
+
+  query<Row extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    parameters?: SqlParameters,
+  ): Promise<SqlQueryResult<Row>> {
+    return this.inner.query<Row>(sql, parameters);
+  }
+
+  async transaction<T>(fn: (tx: SqlTransaction) => T | Promise<T>): Promise<T> {
+    this.entered += 1;
+    const snapshot = this.inner.snapshot();
+    try {
+      return await fn(this);
+    } catch (error) {
+      this.rolledBack += 1;
+      this.inner.restore(snapshot);
+      throw error;
+    }
   }
 }
 
@@ -979,6 +1030,172 @@ test("Deployment store: put/get/list-by-installation are symmetric", async () =>
       label,
     ).toEqual(["dep_a", "dep_b"]);
   }
+});
+
+test("commitAppliedDeployment: writes the atomic unit + supersedes the prior deployment", async () => {
+  for (const [label, store] of bothStores()) {
+    // Seed an installation that already has a current (active) deployment +
+    // outputSnapshot at generation 1, so the commit must supersede it.
+    await store.putInstallation(
+      installation({
+        id: "inst_1",
+        status: "active",
+        currentStateGeneration: 1,
+        currentDeploymentId: "dep_old",
+        currentOutputSnapshotId: "out_old",
+      }),
+    );
+    await store.putDeployment(
+      deployment({ id: "dep_old", outputSnapshotId: "out_old", status: "active" }),
+    );
+
+    const committed = await store.commitAppliedDeployment({
+      newDeployment: deployment({
+        id: "dep_new",
+        stateGeneration: 2,
+        outputSnapshotId: "out_new",
+        status: "active",
+        createdAt: "2026-06-07T00:00:00.000Z",
+      }),
+      supersededDeployment: {
+        ...deployment({ id: "dep_old", outputSnapshotId: "out_old" }),
+        status: "superseded",
+      },
+      stateSnapshot: stateSnapshot({ id: "state_2", generation: 2 }),
+      outputSnapshot: outputSnapshot({ id: "out_new", stateGeneration: 2 }),
+      installationPatch: {
+        id: "inst_1",
+        patch: {
+          currentDeploymentId: "dep_new",
+          status: "active",
+          currentStateGeneration: 2,
+          currentOutputSnapshotId: "out_new",
+          updatedAt: "2026-06-07T00:00:00.000Z",
+        },
+        guard: { currentDeploymentId: "dep_old", status: "active" },
+      },
+    });
+
+    // The guarded patch landed and is returned.
+    expect(committed.installation?.currentDeploymentId, label).toBe("dep_new");
+    expect(committed.installation?.currentStateGeneration, label).toBe(2);
+    expect(committed.installation?.currentOutputSnapshotId, label).toBe(
+      "out_new",
+    );
+
+    // Every record in the unit is persisted.
+    expect((await store.getDeployment("dep_new"))?.status, label).toBe("active");
+    expect((await store.getDeployment("dep_old"))?.status, label).toBe(
+      "superseded",
+    );
+    expect(
+      (await store.getLatestStateSnapshot("inst_1", "production"))?.generation,
+      label,
+    ).toBe(2);
+    expect((await store.getOutputSnapshot("out_new"))?.stateGeneration, label).toBe(
+      2,
+    );
+    const reread = await store.getInstallation("inst_1");
+    expect(reread?.currentDeploymentId, label).toBe("dep_new");
+    expect(reread?.currentStateGeneration, label).toBe(2);
+  }
+});
+
+test("commitAppliedDeployment: guard miss on a missing installation returns undefined", async () => {
+  for (const [label, store] of bothStores()) {
+    const committed = await store.commitAppliedDeployment({
+      newDeployment: deployment({ id: "dep_x" }),
+      stateSnapshot: stateSnapshot({ id: "state_x" }),
+      outputSnapshot: outputSnapshot({ id: "out_x" }),
+      installationPatch: {
+        id: "inst_missing",
+        patch: { status: "active", updatedAt: TS },
+        guard: { currentDeploymentId: undefined },
+      },
+    });
+    expect(committed.installation, label).toBeUndefined();
+  }
+});
+
+test("commitAppliedDeployment: guard conflict throws InstallationPatchGuardConflict", async () => {
+  for (const [label, store] of bothStores()) {
+    await store.putInstallation(
+      installation({ id: "inst_1", currentDeploymentId: "dep_current" }),
+    );
+    await expect(
+      store.commitAppliedDeployment({
+        newDeployment: deployment({ id: "dep_new" }),
+        stateSnapshot: stateSnapshot({ id: "state_new" }),
+        outputSnapshot: outputSnapshot({ id: "out_new" }),
+        installationPatch: {
+          id: "inst_1",
+          patch: { currentDeploymentId: "dep_new", updatedAt: TS },
+          // Stale cursor: the row's current deployment is `dep_current`.
+          guard: { currentDeploymentId: undefined },
+        },
+      }),
+      label,
+    ).rejects.toBeInstanceOf(InstallationPatchGuardConflict);
+  }
+});
+
+test("commitAppliedDeployment (SQL): runs inside the SqlClient transaction seam and rolls back on a mid-commit throw", async () => {
+  const client = new TransactionalModelSqlClient();
+  const store = new SqlOpenTofuDeploymentStore({ client });
+  await store.putInstallation(
+    installation({ id: "inst_1", status: "pending", currentStateGeneration: 0 }),
+  );
+
+  // A successful commit goes THROUGH the transaction seam.
+  await store.commitAppliedDeployment({
+    newDeployment: deployment({ id: "dep_ok", outputSnapshotId: "out_ok" }),
+    stateSnapshot: stateSnapshot({ id: "state_ok" }),
+    outputSnapshot: outputSnapshot({ id: "out_ok" }),
+    installationPatch: {
+      id: "inst_1",
+      patch: {
+        currentDeploymentId: "dep_ok",
+        status: "active",
+        currentStateGeneration: 1,
+        currentOutputSnapshotId: "out_ok",
+        updatedAt: TS,
+      },
+      guard: { currentDeploymentId: undefined, status: "pending" },
+    },
+  });
+  expect(client.entered).toBe(1);
+  expect(client.rolledBack).toBe(0);
+  expect((await store.getDeployment("dep_ok"))?.status).toBe("active");
+  expect((await store.getInstallation("inst_1"))?.currentDeploymentId).toBe(
+    "dep_ok",
+  );
+
+  // A guard CONFLICT mid-commit throws and rolls the whole unit back: the
+  // deployment/state/output writes that ran before the guarded UPDATE must NOT
+  // survive (the cursor is now `dep_ok`, so the stale `undefined` guard loses).
+  await expect(
+    store.commitAppliedDeployment({
+      newDeployment: deployment({ id: "dep_torn", outputSnapshotId: "out_torn" }),
+      stateSnapshot: stateSnapshot({ id: "state_torn", generation: 2 }),
+      outputSnapshot: outputSnapshot({ id: "out_torn", stateGeneration: 2 }),
+      installationPatch: {
+        id: "inst_1",
+        patch: { currentDeploymentId: "dep_torn", updatedAt: TS },
+        guard: { currentDeploymentId: undefined },
+      },
+    }),
+  ).rejects.toBeInstanceOf(InstallationPatchGuardConflict);
+  expect(client.entered).toBe(2);
+  expect(client.rolledBack).toBe(1);
+  // Rolled back: the torn records never landed and the installation is unmoved.
+  expect(await store.getDeployment("dep_torn")).toBeUndefined();
+  expect(await store.getOutputSnapshot("out_torn")).toBeUndefined();
+  expect(
+    (await store.getLatestStateSnapshot("inst_1", "production"))?.generation,
+  ).toBe(1);
+  expect((await store.getInstallation("inst_1"))?.currentDeploymentId).toBe(
+    "dep_ok",
+  );
 });
 
 test("DeploymentProfile store: upsert keyed (installation, environment)", async () => {

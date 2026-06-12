@@ -207,6 +207,44 @@ export type InstallationPatch = Partial<
   >
 >;
 
+/**
+ * The all-or-nothing set of ledger writes that finalize a successful apply or
+ * destroy-apply (core-spec.md §20 / §21 / §16). The controller READS the
+ * previous-current Deployment (for the superseded / destroyed status flip) and
+ * BUILDS every record up front, then hands the bundle to
+ * {@link OpenTofuDeploymentStore.commitAppliedDeployment} so a crash mid-write
+ * can no longer leave a Deployment without its StateSnapshot/OutputSnapshot, or
+ * a state generation advanced without its Deployment.
+ *
+ * The unit is:
+ *   - `newDeployment` — the new `active` Deployment (apply); absent for a
+ *     destroy-apply, which records no new Deployment.
+ *   - `supersededDeployment` — the previously-current Deployment with its status
+ *     already flipped (apply → `superseded`, destroy → `destroyed`); absent when
+ *     there was no prior current Deployment, or it was not in a flippable state.
+ *   - `stateSnapshot` — the §20 StateSnapshot metadata for the persisted
+ *     generation.
+ *   - `outputSnapshot` — the §16 OutputSnapshot (apply only; absent for destroy).
+ *   - `installationPatch` — the GUARDED Installation advance (currentDeploymentId
+ *     / status / currentStateGeneration / currentOutputSnapshotId). When the
+ *     guard would not match the current row, the installation patch is NOT
+ *     applied and the result `installation` is `undefined` — the SAME
+ *     guard-miss semantics as {@link OpenTofuDeploymentStore.patchInstallation}.
+ *     A guard *conflict* (row moved out from under the writer) still throws
+ *     {@link InstallationPatchGuardConflict}.
+ */
+export interface CommitAppliedDeploymentInput {
+  readonly newDeployment?: Deployment;
+  readonly supersededDeployment?: Deployment;
+  readonly stateSnapshot: StateSnapshot;
+  readonly outputSnapshot?: OutputSnapshot;
+  readonly installationPatch: {
+    readonly id: string;
+    readonly patch: InstallationPatch;
+    readonly guard: InstallationPatchGuard;
+  };
+}
+
 export interface OpenTofuDeploymentStore {
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile>;
   getRunnerProfile(id: string): Promise<RunnerProfile | undefined>;
@@ -283,6 +321,21 @@ export interface OpenTofuDeploymentStore {
     patch: InstallationPatch,
     guard?: InstallationPatchGuard,
   ): Promise<Installation | undefined>;
+
+  /**
+   * Atomically commits the ledger writes that finalize a successful apply /
+   * destroy-apply (spec §20 / §21 / §16): the new/superseded Deployment(s), the
+   * StateSnapshot, the (apply-only) OutputSnapshot, and the GUARDED Installation
+   * advance — all-or-nothing so a mid-sequence failure can never leave torn
+   * state. Returns the patched Installation, or `{ installation: undefined }`
+   * when the guard would not match (same guard-miss semantics as
+   * {@link patchInstallation}); throws {@link InstallationPatchGuardConflict}
+   * when the row moved out from under the writer. See
+   * {@link CommitAppliedDeploymentInput} for how the controller builds the unit.
+   */
+  commitAppliedDeployment(
+    input: CommitAppliedDeploymentInput,
+  ): Promise<{ readonly installation: Installation | undefined }>;
 
   putDeployment(deployment: Deployment): Promise<Deployment>;
   getDeployment(id: string): Promise<Deployment | undefined>;
@@ -860,6 +913,59 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     const updated: Installation = { ...existing, ...patch };
     this.#installations.set(id, updated);
     return Promise.resolve(updated);
+  }
+
+  /**
+   * In-memory commit. The store is single-threaded, so the sequential writes are
+   * already atomic with respect to other awaits — there is no concurrent writer
+   * to interleave. There is, however, NO rollback: if a write throws partway
+   * (e.g. the guarded patch hits a conflict), the Deployment / StateSnapshot /
+   * OutputSnapshot already set into the maps stay set. The SQL and D1 backends
+   * roll back / batch for true all-or-nothing; the in-memory store is dev/test
+   * only and surfaces the error to the caller, which fails the run. To keep the
+   * guard-conflict case torn-free even here, the GUARDED installation patch is
+   * evaluated FIRST so a guard miss/conflict short-circuits before any
+   * Deployment / snapshot write lands.
+   */
+  commitAppliedDeployment(
+    input: CommitAppliedDeploymentInput,
+  ): Promise<{ readonly installation: Installation | undefined }> {
+    const { installationPatch } = input;
+    const existing = this.#installations.get(installationPatch.id);
+    if (!existing) {
+      return Promise.resolve({ installation: undefined });
+    }
+    const guard = installationPatch.guard;
+    if (
+      existing.currentDeploymentId !== guard.currentDeploymentId ||
+      (guard.status !== undefined && existing.status !== guard.status)
+    ) {
+      return Promise.reject(
+        new InstallationPatchGuardConflict({
+          id: installationPatch.id,
+          expectedCurrentDeploymentId: guard.currentDeploymentId,
+          actualCurrentDeploymentId: existing.currentDeploymentId,
+          expectedStatus: guard.status,
+          actualStatus: existing.status,
+        }),
+      );
+    }
+    if (input.newDeployment) {
+      this.#deployments.set(input.newDeployment.id, input.newDeployment);
+    }
+    if (input.supersededDeployment) {
+      this.#deployments.set(
+        input.supersededDeployment.id,
+        input.supersededDeployment,
+      );
+    }
+    this.#stateSnapshots.set(input.stateSnapshot.id, input.stateSnapshot);
+    if (input.outputSnapshot) {
+      this.#outputSnapshots.set(input.outputSnapshot.id, input.outputSnapshot);
+    }
+    const updated: Installation = { ...existing, ...installationPatch.patch };
+    this.#installations.set(installationPatch.id, updated);
+    return Promise.resolve({ installation: updated });
   }
 
   putDeployment(deployment: Deployment): Promise<Deployment> {
