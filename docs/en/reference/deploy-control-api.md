@@ -1,7 +1,7 @@
 # Control Plane API
 
 Takosumi's control plane is an HTTP API that manages the OpenTofu Capsule DAG directly under a Space. The
-canonical source is [`docs/core-spec.md`](../../core-spec.md): the public surface and external install link are defined
+canonical source is [`docs/core-spec.md`](../../core-spec.md): the public surface is defined
 there, and the error codes are owned by the service contract. When this document conflicts with the spec, the spec wins.
 
 The public vocabulary is **Space / Source / Connection / Provider Template / Provider Env Set /
@@ -369,19 +369,8 @@ shape) or freshly minted when absent.
 | `not_implemented`     | 501  | The 501 surfaces above                               |
 | `internal_error`      | 500  | Unclassified server error                            |
 
-## External install link
+## External install link (removed)
 
-External sites pass a Git URL to deep-link into the install flow. The platform worker (accounts handler) parses and
-URL-policy-checks the link, then 302s into the dashboard's Install OpenTofu Capsule flow (no bearer; the session gate is on the
-dashboard side).
-
-```txt
-GET /install?source=git::https://git.example.com/takos/talk.git//deploy?ref=main
-GET /install?git=https://git.example.com/takos/talk.git&ref=main&path=deploy
-```
-
-`source=` is a Terraform/OpenTofu module address (`git::https://...//path?ref=`); the short form uses separate `git` /
-`ref` / `path` queries. The public `/install` deep link accepts only `https://` Git URLs, rejects embedded
-credentials, and rejects literal private / loopback / metadata IP hosts. The Source registration API can handle Git
-Sources using `https://`, `ssh://`, or scp-like `git@host:path/repo.git`, but external install links are limited to
-browser-safe HTTPS.
+The external install link (`GET /install?...` — a URL redirect from another site that started an install with
+the source pre-filled) has been **removed**. Installs start inside the dashboard at `/new` (catalog + Git URL
+form). `/install` is now a plain SPA path; its query is never read.

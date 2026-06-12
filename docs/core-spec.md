@@ -47,11 +47,9 @@ Talk / Files / Blog / Calls のような機能は Takosumi に内蔵しない。
 @company/internal-chat
 ```
 
-外部サイトは `Install to Takosumi` 導線を置ける。
-
-```txt
-https://app.takosumi.com/install?source=git::https://git.example.com/takos/talk.git//deploy?ref=main
-```
+インストールは dashboard の中で始める（`/new`: カタログ + Git URL フォーム）。外部サイトからの
+URL リダイレクトで install を開始する external install link は提供しない（URL パラメータが
+install フォームを seed する入り口は持たない）。
 
 ### 2.1 すべては Capsule
 
@@ -3477,8 +3475,8 @@ crons = ["*/5 * * * *"]
 ## 38. API
 
 公開 edge surface は versioned で `/api/v1` にまとめる。in-process の deploy-control 実装は `/internal/v1` seam に閉じ
-(edge から到達不可)、`/api/v1` edge router がそこへ委譲する。`/install` は public deep link で、dashboard session gate へ
-渡す。`/hooks/*` は inbound webhook seam であり、operator bearer の `/api/v1` surface ではない。
+(edge から到達不可)、`/api/v1` edge router がそこへ委譲する。`/hooks/*` は inbound webhook seam であり、
+operator bearer の `/api/v1` surface ではない。(external install link は廃止済み — `/install` はただの SPA パス。)
 
 ### Spaces
 
@@ -3619,13 +3617,6 @@ POST /api/v1/spaces/:spaceId/subscription/change
 POST /api/v1/installations/:installationId/backups
 POST /api/v1/spaces/:spaceId/backups
 GET  /api/v1/spaces/:spaceId/backups
-```
-
-### Install link
-
-```txt
-GET /install?source=git::https://...
-GET /install?git=https://...&ref=...&path=...
 ```
 
 ## 39. UI
@@ -3817,7 +3808,6 @@ Compatibility Report
 Capsule Gate basic
 Generated Root
 OpenTofu Capsule Installation
-External install link
 Connection: Cloudflare token
 Connection: Git HTTPS token
 Connection: Git SSH key
@@ -3920,7 +3910,6 @@ Git URL validation
 Source record
 SourceSnapshot
 R2_SOURCE
-External install link
 Generic webhook
 ```
 

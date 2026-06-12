@@ -136,7 +136,7 @@ curl -s "$BASE/api/v1/spaces/<spaceId>/billing" -H "$AUTH"
 curl -s "$BASE/api/v1/spaces/<spaceId>/usage" -H "$AUTH"
 ```
 
-dashboard を使う場合は `/new`（カタログ + Git URL からの追加）が同じ手順を UI で実行します。external install link の `/install?git=...&ref=...&path=...` は query を保持したまま `/new` に redirect され、取得元が入力済みの状態で開きます。
+dashboard を使う場合は `/new`（カタログ + Git URL からの追加）が同じ手順を UI で実行します。インストールは dashboard の中で始めます — 外部サイトからの URL リダイレクトで install を開始する入り口（external install link）はありません。
 
 ## 次
 

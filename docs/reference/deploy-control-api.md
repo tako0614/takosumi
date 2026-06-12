@@ -362,17 +362,8 @@ AWS assume-role route は Connection 登録 surface です。STS による短期
 | `not_implemented`     | 501  | 上記 501 surface                                   |
 | `internal_error`      | 500  | 未分類 server error                                |
 
-## External install link
+## External install link（廃止）
 
-外部サイトは Git URL を渡して install flow に deep-link します。link は platform worker (accounts handler) が parse +
-URL policy 検証し、dashboard の Install OpenTofu Capsule flow へ 302 します (bearer 不要、session gate は dashboard 側)。
-
-```txt
-GET /install?source=git::https://git.example.com/takos/talk.git//deploy?ref=main
-GET /install?git=https://git.example.com/takos/talk.git&ref=main&path=deploy
-```
-
-`source=` は Terraform/OpenTofu module address 形 (`git::https://...//path?ref=`)、簡易形は `git` / `ref` / `path` の
-個別 query です。public `/install` deep link は `https://` Git URL のみを受け付け、credential 埋め込み禁止、
-literal private / loopback / metadata IP host は拒否されます。Source 登録 API は Git Source として `https://` /
-`ssh://` / scp-like `git@host:path/repo.git` を扱えますが、external install link では browser-safe な HTTPS に限定します。
+外部サイトからの URL リダイレクトで install を開始する `GET /install?...` の external install link は
+**廃止**されました。インストールは dashboard の `/new`（カタログ + Git URL フォーム）から開始します。
+`/install` はただの SPA パスで、query は読まれません。
