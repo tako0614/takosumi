@@ -34,12 +34,12 @@ export const TAKOSUMI_PLAN_RUN_ROUTE =
 export const TAKOSUMI_APPLY_RUNS_ROUTE = APPLY_RUNS_PATH;
 export const TAKOSUMI_APPLY_RUN_ROUTE =
   `${INTERNAL_V1_PREFIX}/apply-runs/:applyRunId` as const;
-/** INTERNAL Installation read used by the accounts plane. */
-export const TAKOSUMI_INSTALLATION_ROUTE =
-  `${INTERNAL_V1_PREFIX}/installations/:installationId` as const;
-/** INTERNAL Deployment list read used by the accounts plane. */
-export const TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE =
-  `${INTERNAL_V1_PREFIX}/installations/:installationId/deployments` as const;
+// The Installation read (`/internal/v1/installations/:installationId`) and the
+// Deployment list (`.../deployments`) are owned by the installation route group
+// (TAKOSUMI_API_INSTALLATION_ROUTE / TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE);
+// the former separate ledger-seam duplicates were removed once both collapsed
+// onto /internal/v1. Only the DeploymentOutput read (no installation-group
+// equivalent) keeps a dedicated ledger constant.
 /** INTERNAL DeploymentOutput read used by the accounts plane. */
 export const TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE =
   `${INTERNAL_V1_PREFIX}/installations/:installationId/deployment-outputs` as const;

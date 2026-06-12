@@ -1,8 +1,12 @@
 /**
  * Plan / Apply run ledger + operator execution boundary routes and the INTERNAL
- * `/v1` Installation / Deployment / DeploymentOutput reads consumed by the
- * accounts plane + CLI (spec §30 binding: NOT part of the public `/api`
- * vocabulary).
+ * `/internal/v1` DeploymentOutput read consumed by the accounts plane + CLI.
+ * The Installation + Deployment reads (`/internal/v1/installations/:id` and
+ * `.../deployments`) are owned solely by the installation route group
+ * (`mountDeployControlInstallationRoutes`); they used to be duplicated here as a
+ * separate `/v1` seam, but once both groups collapsed onto `/internal/v1` the
+ * registrations became byte-identical, so the duplicate is removed and only the
+ * DeploymentOutput read (no installation-group equivalent) remains.
  * This group owns its handlers and an internal descriptor slice used only for
  * route metadata; it is intentionally excluded from the public descriptor
  * inventory surfaced by `/capabilities` and `/openapi.json`.
@@ -26,8 +30,6 @@ import {
   TAKOSUMI_APPLY_RUN_ROUTE,
   TAKOSUMI_APPLY_RUNS_ROUTE,
   TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
-  TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE,
-  TAKOSUMI_INSTALLATION_ROUTE,
   TAKOSUMI_PLAN_RUN_ROUTE,
   TAKOSUMI_PLAN_RUNS_ROUTE,
   TAKOSUMI_RUNNER_PROFILES_ROUTE,
@@ -90,32 +92,6 @@ export const DEPLOY_CONTROL_LEDGER_ENDPOINTS: readonly DeployControlEndpoint[] =
       operationId: "getApplyRun",
       openapi: { pathParams: ["applyRunId"], okSchema: "ApplyRunResponse" },
       notImplementedMessage: "apply runs not wired",
-    },
-    {
-      method: "GET",
-      path: TAKOSUMI_INSTALLATION_ROUTE,
-      summary:
-        "INTERNAL seam: reads an Installation ledger record (accounts-plane consumer; not part of the §30 public surface).",
-      auth: "deploy-control-token",
-      operationId: "getInstallation",
-      openapi: {
-        pathParams: ["installationId"],
-        okSchema: "GetInstallationResponse",
-      },
-      notImplementedMessage: "installations not wired",
-    },
-    {
-      method: "GET",
-      path: TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE,
-      summary:
-        "INTERNAL seam: lists Deployment records for an Installation (accounts-plane consumer; not part of the §30 public surface).",
-      auth: "deploy-control-token",
-      operationId: "listInstallationDeployments",
-      openapi: {
-        pathParams: ["installationId"],
-        okSchema: "ListDeploymentsResponse",
-      },
-      notImplementedMessage: "deployment ledger not wired",
     },
     {
       method: "GET",
@@ -215,32 +191,6 @@ export function mountDeployControlLedgerRoutes(
         const response = await controller.getApplyRun(id);
         ensureSpacePermission(principal, response.applyRun.spaceId);
         return c.json(response, 200);
-      },
-    }),
-  );
-
-  app.get(
-    TAKOSUMI_INSTALLATION_ROUTE,
-    defineRoute({
-      ctx,
-      param: { id: "installationId" },
-      handler: async ({ c, principal, id }) => {
-        const response = await controller.getInstallation(id);
-        ensureSpacePermission(principal, response.installation.spaceId);
-        return c.json(response, 200);
-      },
-    }),
-  );
-
-  app.get(
-    TAKOSUMI_INSTALLATION_DEPLOYMENTS_ROUTE,
-    defineRoute({
-      ctx,
-      param: { id: "installationId" },
-      handler: async ({ c, principal, id }) => {
-        const installation = await controller.getInstallation(id);
-        ensureSpacePermission(principal, installation.installation.spaceId);
-        return c.json(await controller.listDeployments(id), 200);
       },
     }),
   );
