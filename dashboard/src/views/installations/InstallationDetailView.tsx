@@ -11,6 +11,7 @@
  * takos `Icons` set, and the dashboard chrome comes from the shared
  * `views/account` shell.
  */
+import "../../styles/wave-d.css";
 import {
   createResource,
   createSignal,
@@ -30,6 +31,7 @@ import {
   ApiError,
   type ExportOperation,
   type Installation,
+  type InstallationEvent,
   type OidcClientConfig,
   rpc,
   type RotateWorkloadServiceTokenResult,
@@ -40,6 +42,24 @@ import {
   exportStatusLabel,
   serviceStatusLabel,
 } from "../../lib/status-labels.ts";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  CardSection,
+  Checkbox,
+  type Column,
+  DataTable,
+  FormField,
+  Input,
+  KVList,
+  type KVItem,
+  PageHeader,
+  Select,
+  Skeleton,
+  Textarea,
+} from "../../components/ui/index.ts";
 
 export default function InstallationDetailView() {
   return <Page>{() => <Inner />}</Page>;
@@ -59,147 +79,192 @@ function Inner() {
     <AppShell>
       <Switch>
         <Match when={app.loading}>
-          <div class="skel-block tall" />
+          <Skeleton variant="block" style="height: 200px;" />
         </Match>
         <Match when={app.error}>
-          <div class="page-header">
-            <h1>取得に失敗しました</h1>
-          </div>
+          <PageHeader title="取得に失敗しました" />
           <p>{(app.error as ApiError).message}</p>
-          <a
-            href="/apps"
-            class="btn btn-secondary"
-            style="margin-top: 16px;"
-          >
-            アプリ一覧へ戻る
-          </a>
+          <div class="wave-d-actions" style="margin-top: 16px;">
+            <Button href="/apps" variant="secondary">
+              アプリ一覧へ戻る
+            </Button>
+          </div>
         </Match>
         <Match when={app()}>
           {(a) => (
             <>
-              <div class="page-header">
-                <h1>
-                  {a().appId} <AppStatusPill status={a().status} />
-                </h1>
-                <p class="page-sub">
-                  installation id: <code>{a().installationId}</code>
-                </p>
-              </div>
+              <PageHeader
+                eyebrow="Installation"
+                title={a().appId}
+                subtitle={
+                  <>
+                    installation id:{" "}
+                    <code class="wave-d-mono">{a().installationId}</code>
+                  </>
+                }
+                actions={<AppStatusPill status={a().status} />}
+              />
               <AppDetailNav installationId={a().installationId} />
 
-              {(() => {
-                const launch = appDetailLaunchState(a(), {
-                  origin:
-                    typeof location === "undefined"
-                      ? "https://app.takosumi.com"
-                      : location.origin,
-                  hostname:
-                    typeof location === "undefined"
-                      ? "app.takosumi.com"
-                      : location.hostname,
-                });
-                return (
-                  <section class="detail-section">
-                    <h2>Launch</h2>
-                    <p class="muted">{launch.description}</p>
-                    <Show when={launch.href}>
-                      {(href) => (
-                        <a href={href()} class="btn btn-primary">
-                          <Icons.Play class="w-4 h-4" /> {launch.label}
-                        </a>
-                      )}
+              <div class="wave-d-stack">
+                {(() => {
+                  const launch = appDetailLaunchState(a(), {
+                    origin:
+                      typeof location === "undefined"
+                        ? "https://app.takosumi.com"
+                        : location.origin,
+                    hostname:
+                      typeof location === "undefined"
+                        ? "app.takosumi.com"
+                        : location.hostname,
+                  });
+                  return (
+                    <Card>
+                      <CardHeader
+                        title="Launch"
+                        subtitle={launch.description}
+                      />
+                      <Show when={launch.href}>
+                        {(href) => (
+                          <CardSection>
+                            <Button
+                              href={href()}
+                              variant="primary"
+                              icon={<Icons.Play class="w-4 h-4" />}
+                            >
+                              {launch.label}
+                            </Button>
+                          </CardSection>
+                        )}
+                      </Show>
+                    </Card>
+                  );
+                })()}
+
+                <Card>
+                  <CardHeader title="Source" />
+                  <CardSection>
+                    <KVList
+                      items={[
+                        {
+                          label: "Git URL",
+                          value: (
+                            <code class="wave-d-mono">
+                              {a().sourceGitUrl ?? "—"}
+                            </code>
+                          ),
+                        },
+                        {
+                          label: "Ref",
+                          value: (
+                            <code class="wave-d-mono">
+                              {a().sourceRef ?? "—"}
+                            </code>
+                          ),
+                        },
+                        {
+                          label: "Commit",
+                          value: (
+                            <code class="wave-d-mono">
+                              {a().sourceCommit ?? "—"}
+                            </code>
+                          ),
+                        },
+                        {
+                          label: "Plan digest",
+                          value: (
+                            <code class="wave-d-mono">
+                              {a().planDigest ?? "—"}
+                            </code>
+                          ),
+                        },
+                        {
+                          label: "Artifact digest",
+                          value: (
+                            <code class="wave-d-mono">
+                              {a().artifactDigest ?? "—"}
+                            </code>
+                          ),
+                        },
+                        { label: "Mode", value: a().mode ?? "—" },
+                        { label: "Space", value: a().spaceId ?? "—" },
+                        {
+                          label: "Installed by",
+                          value: (
+                            <code class="wave-d-mono">
+                              {a().createdBySubject ?? "—"}
+                            </code>
+                          ),
+                        },
+                        { label: "Installed at", value: a().createdAt ?? "—" },
+                      ]}
+                    />
+                  </CardSection>
+                </Card>
+
+                <Card>
+                  <CardHeader title="Installation outputs" />
+                  <CardSection>
+                    <Show
+                      when={(a().installationOutputs ?? []).length > 0}
+                      fallback={<p class="tg-card-subtitle">—</p>}
+                    >
+                      <KVList
+                        items={(a().installationOutputs ?? []).map(
+                          (output): KVItem => ({
+                            label: output.name,
+                            value: (
+                              <>
+                                <code class="wave-d-mono">{output.kind}</code>
+                                {" "}
+                                <OutputValue value={output.value} />
+                              </>
+                            ),
+                          }),
+                        )}
+                      />
                     </Show>
-                  </section>
-                );
-              })()}
+                  </CardSection>
+                </Card>
 
-              <section class="detail-section">
-                <h2>Source</h2>
-                <dl class="kv-list">
-                  <dt>Git URL</dt>
-                  <dd>
-                    <code>{a().sourceGitUrl ?? "—"}</code>
-                  </dd>
-                  <dt>Ref</dt>
-                  <dd>
-                    <code>{a().sourceRef ?? "—"}</code>
-                  </dd>
-                  <dt>Commit</dt>
-                  <dd>
-                    <code>{a().sourceCommit ?? "—"}</code>
-                  </dd>
-                  <dt>Plan digest</dt>
-                  <dd>
-                    <code>{a().planDigest ?? "—"}</code>
-                  </dd>
-                  <dt>Artifact digest</dt>
-                  <dd>
-                    <code>{a().artifactDigest ?? "—"}</code>
-                  </dd>
-                  <dt>Mode</dt>
-                  <dd>{a().mode ?? "—"}</dd>
-                  <dt>Space</dt>
-                  <dd>{a().spaceId ?? "—"}</dd>
-                  <dt>Installed by</dt>
-                  <dd>
-                    <code>{a().createdBySubject ?? "—"}</code>
-                  </dd>
-                  <dt>Installed at</dt>
-                  <dd>{a().createdAt ?? "—"}</dd>
-                </dl>
-              </section>
-
-              <section class="detail-section">
-                <h2>Installation outputs</h2>
-                <Show
-                  when={(a().installationOutputs ?? []).length > 0}
-                  fallback={<p class="muted">—</p>}
-                >
-                  <dl class="kv-list">
-                    <For each={a().installationOutputs ?? []}>
-                      {(output) => (
-                        <>
-                          <dt>{output.name}</dt>
-                          <dd>
-                            <code>{output.kind}</code>{" "}
-                            <OutputValue value={output.value} />
-                          </dd>
-                        </>
-                      )}
-                    </For>
-                  </dl>
-                </Show>
-              </section>
-
-              <WorkloadServicesSection
-                installationId={a().installationId}
-                services={services()}
-                loading={services.loading}
-                error={services.error}
-                onRotated={() => void refetchServices()}
-              />
-
-              <OidcClientSection client={a().oidcClient} />
-
-              <section class="detail-section">
-                <h2>Operations</h2>
-                <MaterializeForm
-                  installation={a()}
-                  onDone={() => void refetch()}
+                <WorkloadServicesSection
+                  installationId={a().installationId}
+                  services={services()}
+                  loading={services.loading}
+                  error={services.error}
+                  onRotated={() => void refetchServices()}
                 />
-                <ExportForm installationId={a().installationId} />
-              </section>
 
-              <EventsSection installationId={a().installationId} />
+                <OidcClientSection client={a().oidcClient} />
 
-              <section class="detail-section">
-                <p class="muted">
-                  アプリの削除は Danger zone から実行できます。
-                </p>
-                <a href="/apps" class="btn btn-secondary">
-                  ← アプリ一覧へ戻る
-                </a>
-              </section>
+                <Card>
+                  <CardHeader title="Operations" />
+                  <CardSection>
+                    <MaterializeForm
+                      installation={a()}
+                      onDone={() => void refetch()}
+                    />
+                  </CardSection>
+                  <CardSection>
+                    <ExportForm installationId={a().installationId} />
+                  </CardSection>
+                </Card>
+
+                <EventsSection installationId={a().installationId} />
+
+                <Card>
+                  <CardSection>
+                    <p class="tg-card-subtitle">
+                      アプリの削除は Danger zone から実行できます。
+                    </p>
+                    <div class="wave-d-actions">
+                      <Button href="/apps" variant="secondary">
+                        ← アプリ一覧へ戻る
+                      </Button>
+                    </div>
+                  </CardSection>
+                </Card>
+              </div>
             </>
           )}
         </Match>
@@ -217,12 +282,12 @@ function OutputValue(props: { readonly value: unknown }): JSX.Element {
   return (
     <Show
       when={typeof value() === "string" ? (value() as string) : undefined}
-      fallback={<code>{JSON.stringify(value())}</code>}
+      fallback={<code class="wave-d-mono">{JSON.stringify(value())}</code>}
     >
       {(text) => (
         <Show
           when={text().startsWith("https://") || text().startsWith("http://")}
-          fallback={<code>{text()}</code>}
+          fallback={<code class="wave-d-mono">{text()}</code>}
         >
           <a href={text()}>{text()}</a>
         </Show>
@@ -265,114 +330,118 @@ function WorkloadServicesSection(props: {
     }
   };
 
-  return (
-    <section class="detail-section">
-      <h2>Services</h2>
-      <Switch>
-        <Match when={props.loading}>
-          <div class="skel-block" />
-        </Match>
-        <Match when={props.error}>
-          <p class="muted">サービスを取得できませんでした。</p>
-        </Match>
-        <Match when={props.services}>
-          {(services) => (
-            <Show
-              when={services().length > 0}
-              fallback={<p class="muted">—</p>}
-            >
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Service</th>
-                    <th>Status</th>
-                    <th>Endpoint</th>
-                    <th>Secret</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <For each={services()}>
-                    {(service) => (
-                      <tr>
-                        <td>
-                          <code>{service.id}</code>
-                          <div class="muted">{service.materialKind}</div>
-                        </td>
-                        <td>{serviceStatusLabel(service.status)}</td>
-                        <td>
-                          <Show when={service.endpoint} fallback={<>—</>}>
-                            {(endpoint) => <OutputValue value={endpoint()} />}
-                          </Show>
-                        </td>
-                        <td>
-                          <Show when={service.secretRef} fallback={<>—</>}>
-                            {(secretRef) => (
-                              <>
-                                <code>{secretRef()}</code>
-                                <Show when={service.tokenExpiresAt}>
-                                  {(expiresAt) => (
-                                    <div class="muted">
-                                      expires {expiresAt()}
-                                    </div>
-                                  )}
-                                </Show>
-                              </>
-                            )}
-                          </Show>
-                        </td>
-                        <td>
-                          <Show when={service.rotateTokenUrl}>
-                            <button
-                              class="btn btn-secondary"
-                              type="button"
-                              disabled={busyService() === service.id}
-                              onClick={() => void rotate(service)}
-                            >
-                              <Icons.RefreshCw class="w-4 h-4" />{" "}
-                              {busyService() === service.id
-                                ? "Rotating"
-                                : "Rotate"}
-                            </button>
-                          </Show>
-                        </td>
-                      </tr>
-                    )}
-                  </For>
-                </tbody>
-              </table>
-            </Show>
+  const columns: readonly Column<WorkloadService>[] = [
+    {
+      header: "Service",
+      cell: (service) => (
+        <>
+          <code class="wave-d-mono">{service.id}</code>
+          <div class="tg-card-subtitle">{service.materialKind}</div>
+        </>
+      ),
+    },
+    {
+      header: "Status",
+      cell: (service) => (
+        <Badge tone="neutral">{serviceStatusLabel(service.status)}</Badge>
+      ),
+    },
+    {
+      header: "Endpoint",
+      cell: (service) => (
+        <Show when={service.endpoint} fallback={<>—</>}>
+          {(endpoint) => <OutputValue value={endpoint()} />}
+        </Show>
+      ),
+    },
+    {
+      header: "Secret",
+      cell: (service) => (
+        <Show when={service.secretRef} fallback={<>—</>}>
+          {(secretRef) => (
+            <>
+              <code class="wave-d-mono">{secretRef()}</code>
+              <Show when={service.tokenExpiresAt}>
+                {(expiresAt) => (
+                  <div class="tg-card-subtitle">expires {expiresAt()}</div>
+                )}
+              </Show>
+            </>
           )}
-        </Match>
-      </Switch>
-      <Show when={rotation()}>
-        {(result) => (
-          <div class="op-card" style="margin-top: 16px;">
-            <h3>
-              <Icons.Key class="w-4 h-4" /> {result().service.id}
-            </h3>
-            <dl class="kv-list">
-              <dt>Token</dt>
-              <dd>
-                <textarea
-                  readOnly
-                  rows={3}
-                  value={result().token}
-                  style="width: 100%;"
-                />
-              </dd>
-              <dt>Secret ref</dt>
-              <dd>
-                <code>{result().service.secretRef ?? "—"}</code>
-              </dd>
-              <dt>Expires</dt>
-              <dd>{result().expiresAt}</dd>
-            </dl>
-          </div>
-        )}
-      </Show>
-      <Show when={err()}>{(m) => <p class="sign-in-error">{m()}</p>}</Show>
-    </section>
+        </Show>
+      ),
+    },
+    {
+      header: "",
+      align: "right",
+      cell: (service) => (
+        <Show when={service.rotateTokenUrl}>
+          <Button
+            variant="secondary"
+            size="sm"
+            type="button"
+            disabled={busyService() === service.id}
+            busy={busyService() === service.id}
+            icon={<Icons.RefreshCw class="w-4 h-4" />}
+            onClick={() => void rotate(service)}
+          >
+            {busyService() === service.id ? "Rotating" : "Rotate"}
+          </Button>
+        </Show>
+      ),
+    },
+  ];
+
+  return (
+    <Card>
+      <CardHeader title="Services" />
+      <CardSection>
+        <DataTable
+          columns={columns}
+          rows={props.services}
+          rowKey={(service) => service.id}
+          loading={props.loading}
+          error={
+            props.error ? "サービスを取得できませんでした。" : undefined
+          }
+          empty="—"
+        />
+        <Show when={rotation()}>
+          {(result) => (
+            <div class="wave-d-callout">
+              <h3 class="wave-d-callout-title">
+                <Icons.Key class="w-4 h-4" /> {result().service.id}
+              </h3>
+              <KVList
+                items={[
+                  {
+                    label: "Token",
+                    value: (
+                      <Textarea
+                        readOnly
+                        rows={3}
+                        value={result().token}
+                        style="width: 100%;"
+                      />
+                    ),
+                  },
+                  {
+                    label: "Secret ref",
+                    value: (
+                      <code class="wave-d-mono">
+                        {result().service.secretRef ?? "—"}
+                      </code>
+                    ),
+                  },
+                  { label: "Expires", value: result().expiresAt },
+                ]}
+              />
+            </div>
+          )}
+        </Show>
+        <Show when={err()}>{(m) => <p class="wave-d-error">{m()}</p>}</Show>
+      </CardSection>
+    </Card>
   );
 }
 
@@ -382,53 +451,72 @@ function WorkloadServicesSection(props: {
 
 function OidcClientSection(props: { client: OidcClientConfig | undefined }) {
   return (
-    <section class="detail-section">
-      <h2>OIDC Client</h2>
-      <Show
-        when={props.client}
-        fallback={
-          <p class="muted">この installation には OIDC client がありません。</p>
-        }
-      >
-        {(client) => (
-          <dl class="kv-list">
-            <dt>Client ID</dt>
-            <dd>
-              <code>{client().clientId}</code>
-            </dd>
-            <dt>Issuer</dt>
-            <dd>
-              <code>{client().issuerUrl ?? "—"}</code>
-            </dd>
-            <dt>Service path</dt>
-            <dd>
-              <code>{client().servicePath ?? "—"}</code>
-            </dd>
-            <dt>Redirect URIs</dt>
-            <dd>
-              <Show
-                when={(client().redirectUris ?? []).length > 0}
-                fallback={<>—</>}
-              >
-                <For each={client().redirectUris ?? []}>
-                  {(uri) => (
-                    <div>
-                      <code>{uri}</code>
-                    </div>
-                  )}
-                </For>
-              </Show>
-            </dd>
-            <dt>Allowed scopes</dt>
-            <dd>{(client().allowedScopes ?? []).join(", ") || "—"}</dd>
-            <dt>Subject mode</dt>
-            <dd>{client().subjectMode ?? "—"}</dd>
-            <dt>Token endpoint auth</dt>
-            <dd>{client().tokenEndpointAuthMethod ?? "—"}</dd>
-          </dl>
-        )}
-      </Show>
-    </section>
+    <Card>
+      <CardHeader title="OIDC Client" />
+      <CardSection>
+        <Show
+          when={props.client}
+          fallback={
+            <p class="tg-card-subtitle">
+              この installation には OIDC client がありません。
+            </p>
+          }
+        >
+          {(client) => (
+            <KVList
+              items={[
+                {
+                  label: "Client ID",
+                  value: <code class="wave-d-mono">{client().clientId}</code>,
+                },
+                {
+                  label: "Issuer",
+                  value: (
+                    <code class="wave-d-mono">
+                      {client().issuerUrl ?? "—"}
+                    </code>
+                  ),
+                },
+                {
+                  label: "Service path",
+                  value: (
+                    <code class="wave-d-mono">
+                      {client().servicePath ?? "—"}
+                    </code>
+                  ),
+                },
+                {
+                  label: "Redirect URIs",
+                  value: (
+                    <Show
+                      when={(client().redirectUris ?? []).length > 0}
+                      fallback={<>—</>}
+                    >
+                      <For each={client().redirectUris ?? []}>
+                        {(uri) => (
+                          <div>
+                            <code class="wave-d-mono">{uri}</code>
+                          </div>
+                        )}
+                      </For>
+                    </Show>
+                  ),
+                },
+                {
+                  label: "Allowed scopes",
+                  value: (client().allowedScopes ?? []).join(", ") || "—",
+                },
+                { label: "Subject mode", value: client().subjectMode ?? "—" },
+                {
+                  label: "Token endpoint auth",
+                  value: client().tokenEndpointAuthMethod ?? "—",
+                },
+              ]}
+            />
+          )}
+        </Show>
+      </CardSection>
+    </Card>
   );
 }
 
@@ -460,44 +548,43 @@ function MaterializeForm(props: {
   };
 
   return (
-    <div class="op-card">
-      <h3>
+    <div>
+      <h3 class="wave-d-callout-title">
         <Icons.Server class="w-4 h-4" /> Materialize (dedicated)
       </h3>
-      <p class="muted">
+      <p class="tg-card-subtitle">
         shared-cell の installation を専用セルへ昇格します。コストが発生するため
         確認が必要です。
       </p>
-      <form class="install-form" onSubmit={run}>
-        <label>
-          Region
-          <input
+      <form class="wave-d-field-stack" onSubmit={run}>
+        <FormField label="Region">
+          <Input
             type="text"
             value={region()}
             onInput={(e) => setRegion(e.currentTarget.value)}
             placeholder="default"
           />
-        </label>
-        <label class="op-checkbox">
-          <input
-            type="checkbox"
-            checked={costAck()}
-            onChange={(e) => setCostAck(e.currentTarget.checked)}
-          />
-          コスト発生を承認する (cost acknowledgement)
-        </label>
-        <button
-          class="btn btn-primary"
-          type="submit"
-          disabled={materialize.busy() || !costAck()}
-        >
-          <Icons.Server class="w-4 h-4" />{" "}
-          {materialize.busy() ? "Materialize 中..." : "Materialize"}
-        </button>
+        </FormField>
+        <Checkbox
+          checked={costAck()}
+          onChange={(e) => setCostAck(e.currentTarget.checked)}
+          label="コスト発生を承認する (cost acknowledgement)"
+        />
+        <div class="wave-d-actions">
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={materialize.busy() || !costAck()}
+            busy={materialize.busy()}
+            icon={<Icons.Server class="w-4 h-4" />}
+          >
+            {materialize.busy() ? "Materialize 中..." : "Materialize"}
+          </Button>
+        </div>
       </form>
       <Show when={status()}>
         {(m) => (
-          <p class="muted" style="margin-top: 8px;">
+          <p class="tg-card-subtitle" style="margin-top: 8px;">
             {m()}
           </p>
         )}
@@ -575,64 +662,73 @@ function ExportForm(props: { installationId: string }) {
   };
 
   return (
-    <div class="op-card">
-      <h3>
+    <div>
+      <h3 class="wave-d-callout-title">
         <Icons.Download class="w-4 h-4" /> Export
       </h3>
-      <p class="muted">
+      <p class="tg-card-subtitle">
         installation のエクスポートバンドルを作成します。完了するとダウンロード
         リンクが表示されます。
       </p>
-      <form class="install-form" onSubmit={run}>
-        <label class="op-checkbox">
-          <input
-            type="checkbox"
-            checked={includeData()}
-            onChange={(e) => setIncludeData(e.currentTarget.checked)}
-          />
-          データを含める (include data)
-        </label>
-        <label>
-          Encryption
-          <select
+      <form class="wave-d-field-stack" onSubmit={run}>
+        <Checkbox
+          checked={includeData()}
+          onChange={(e) => setIncludeData(e.currentTarget.checked)}
+          label="データを含める (include data)"
+        />
+        <FormField label="Encryption">
+          <Select
             value={encryptionMethod()}
             onChange={(e) => setEncryptionMethod(e.currentTarget.value)}
           >
             <option value="none">none</option>
             <option value="age">age</option>
-          </select>
-        </label>
+          </Select>
+        </FormField>
         <Show when={encryptionMethod() !== "none"}>
-          <label>
-            Recipients (1 行に 1 つ / カンマ区切り)
-            <textarea
+          <FormField label="Recipients (1 行に 1 つ / カンマ区切り)">
+            <Textarea
               value={recipients()}
               onInput={(e) => setRecipients(e.currentTarget.value)}
               placeholder="age1..."
               rows={3}
             />
-          </label>
+          </FormField>
         </Show>
-        <button class="btn btn-secondary" type="submit" disabled={busy()}>
-          <Icons.Download class="w-4 h-4" /> {busy() ? "Export 中..." : "Export"}
-        </button>
+        <div class="wave-d-actions">
+          <Button
+            variant="secondary"
+            type="submit"
+            disabled={busy()}
+            busy={busy()}
+            icon={<Icons.Download class="w-4 h-4" />}
+          >
+            {busy() ? "Export 中..." : "Export"}
+          </Button>
+        </div>
       </form>
       <Show when={operation()}>
         {(op) => (
-          <p class="muted" style="margin-top: 8px;">
-            操作 <code>{op().operationId}</code> — 状態:{" "}
+          <p class="tg-card-subtitle" style="margin-top: 8px;">
+            操作 <code class="wave-d-mono">{op().operationId}</code> — 状態:{" "}
             <strong>{exportStatusLabel(op().status)}</strong>
           </p>
         )}
       </Show>
       <Show when={downloadHref()}>
         {(href) => (
-          <a class="btn btn-primary" href={href()} style="margin-top: 8px;">
-            <Icons.Download class="w-4 h-4" /> ダウンロード
-          </a>
+          <div class="wave-d-actions" style="margin-top: 8px;">
+            <Button
+              href={href()}
+              variant="primary"
+              icon={<Icons.Download class="w-4 h-4" />}
+            >
+              ダウンロード
+            </Button>
+          </div>
         )}
       </Show>
-      <Show when={err()}>{(m) => <p class="sign-in-error">{m()}</p>}</Show>
+      <Show when={err()}>{(m) => <p class="wave-d-error">{m()}</p>}</Show>
     </div>
   );
 }
@@ -652,53 +748,54 @@ function EventsSection(props: { installationId: string }) {
     () => props.installationId,
     (id) => rpc.installations.events(id, { limit: 50 }),
   );
+
+  const columns: readonly Column<InstallationEvent>[] = [
+    { header: "Type", cell: (event) => event.type },
+    { header: "Created", cell: (event) => event.createdAt ?? "—" },
+    {
+      header: "Event hash",
+      cell: (event) => (
+        <code class="wave-d-mono">{shortHash(event.eventHash)}</code>
+      ),
+    },
+  ];
+
   return (
-    <section class="detail-section">
-      <h2>Events</h2>
-      <Switch>
-        <Match when={events.loading}>
-          <div class="skel-block" />
-        </Match>
-        <Match when={events.error}>
-          <p class="muted">イベントを取得できませんでした。</p>
-        </Match>
-        <Match when={events()}>
-          {(result) => (
-            <Show
-              when={result().events.length > 0}
-              fallback={<p class="muted">まだイベントはありません。</p>}
-            >
-              <p class="muted">
-                hash chain:{" "}
-                <strong>{result().hashChainValid ? "valid" : "invalid"}</strong>
-              </p>
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Type</th>
-                    <th>Created</th>
-                    <th>Event hash</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <For each={result().events}>
-                    {(event) => (
-                      <tr>
-                        <td>{event.type}</td>
-                        <td>{event.createdAt ?? "—"}</td>
-                        <td>
-                          <code>{shortHash(event.eventHash)}</code>
-                        </td>
-                      </tr>
-                    )}
-                  </For>
-                </tbody>
-              </table>
-            </Show>
-          )}
-        </Match>
-      </Switch>
-    </section>
+    <Card>
+      <CardHeader title="Events" />
+      <CardSection>
+        <Switch>
+          <Match when={events.loading}>
+            <Skeleton variant="block" />
+          </Match>
+          <Match when={events.error}>
+            <p class="tg-card-subtitle">イベントを取得できませんでした。</p>
+          </Match>
+          <Match when={events()}>
+            {(result) => (
+              <Show
+                when={result().events.length > 0}
+                fallback={
+                  <p class="tg-card-subtitle">まだイベントはありません。</p>
+                }
+              >
+                <p class="tg-card-subtitle">
+                  hash chain:{" "}
+                  <Badge tone={result().hashChainValid ? "ok" : "danger"}>
+                    {result().hashChainValid ? "valid" : "invalid"}
+                  </Badge>
+                </p>
+                <DataTable
+                  columns={columns}
+                  rows={result().events}
+                  rowKey={(event, index) => event.eventHash ?? index}
+                />
+              </Show>
+            )}
+          </Match>
+        </Switch>
+      </CardSection>
+    </Card>
   );
 }
 

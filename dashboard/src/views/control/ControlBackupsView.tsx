@@ -5,8 +5,9 @@
  * so operators can create and inspect backup artifacts from the same dashboard
  * surface as Installations, Sources, Graph, Output shares, and Activity.
  */
-import { createResource, For, Match, Show, Switch } from "solid-js";
-import { Archive, RefreshCw } from "lucide-solid";
+import "../../styles/wave-b.css";
+import { createResource, Match, Show, Switch } from "solid-js";
+import { Archive } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
@@ -18,6 +19,14 @@ import {
   listSpaceBackups,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
+import {
+  Button,
+  type Column,
+  DataTable,
+  EmptyState,
+  PageHeader,
+  Spinner,
+} from "../../components/ui/index.ts";
 
 export default function ControlBackupsView() {
   return <Page title="Backups">{() => <Inner />}</Page>;
@@ -34,136 +43,145 @@ function Inner() {
     await refetch();
   });
 
+  const columns: readonly Column<BackupRecord>[] = [
+    {
+      header: "作成日時",
+      cell: (backup) => (
+        <>
+          <time>{backup.createdAt}</time>
+          <div class="wb-subline">
+            <code>{backup.id}</code>
+          </div>
+        </>
+      ),
+    },
+    {
+      header: "Control artifact",
+      cell: (backup) => (
+        <>
+          <code class="wb-mono">{backup.objectKey}</code>
+          <div class="wb-subline">
+            {formatBytes(backup.sizeBytes)} · {shortDigest(backup.digest)}
+          </div>
+        </>
+      ),
+    },
+    {
+      header: "Service data",
+      cell: (backup) => (
+        <Show when={backup.serviceData} fallback={<span class="muted">none</span>}>
+          {(data) => (
+            <span>
+              <code class="wb-mono">{data().objectKey}</code>
+              <div class="wb-subline">
+                exported {data().exportedCount} · unsupported{" "}
+                {data().unsupportedCount} · missing {data().missingCount}
+              </div>
+            </span>
+          )}
+        </Show>
+      ),
+    },
+    {
+      header: "Run",
+      cell: (backup) => (
+        <Show
+          when={backup.createdByRunId}
+          fallback={<span class="muted">manual</span>}
+        >
+          {(runId) => <code class="wb-mono">{runId()}</code>}
+        </Show>
+      ),
+    },
+  ];
+
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>Backups</h1>
-        <p class="page-sub">
-          Space の control backup と service-data archive を管理します。
-        </p>
-        <div class="page-actions">
-          <button
-            class="btn btn-primary"
-            type="button"
+      <PageHeader
+        eyebrow="CONTROL"
+        title="Backups"
+        subtitle="Space の control backup と service-data archive を管理します。"
+        actions={
+          <Button
+            variant="primary"
+            icon={<Archive size={16} />}
+            busy={create.busy()}
             disabled={create.busy() || !spaceId()}
             onClick={() => void create.run()}
           >
-            <Archive size={16} />
             Backup 作成
-          </button>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
       <SpaceSelector />
 
       <Show
         when={spaceId()}
         fallback={
-          <section class="empty-state">
-            <p>Space を選択すると Backup 一覧を表示します。</p>
-          </section>
+          <EmptyState
+            ink
+            icon={<Archive size={28} />}
+            title="Space を選択"
+            message="Space を選択すると Backup 一覧を表示します。"
+          />
         }
       >
-        <Show when={create.error()}>
-          {(m) => <p class="sign-in-error">{m()}</p>}
-        </Show>
-        <Switch>
-          <Match when={backups.loading}>
-            <div class="grid-skel"><div class="skel-block" /></div>
-          </Match>
-          <Match when={backups.error}>
-            <section class="empty-state error-state">
-              <p>取得に失敗しました — {(backups.error as ControlApiError).message}</p>
-            </section>
-          </Match>
-          <Match when={backups()}>
-            {(list) => (
+        <div class="wb-stack">
+          <Show when={create.error()}>
+            {(m) => <p class="wb-error" role="alert">{m()}</p>}
+          </Show>
+          <Switch>
+            <Match when={backups.error}>
+              <EmptyState
+                icon={<Archive size={28} />}
+                title="取得に失敗しました"
+                message={(backups.error as ControlApiError).message}
+              />
+            </Match>
+            <Match when={!backups.error}>
               <Show
-                when={list().length > 0}
+                when={backups.loading || (backups()?.length ?? 0) > 0}
                 fallback={
-                  <section class="empty-state">
-                    <p>まだ Backup がありません。</p>
-                    <button
-                      class="btn btn-primary"
-                      type="button"
-                      disabled={create.busy()}
-                      onClick={() => void create.run()}
-                    >
-                      <Archive size={16} />
-                      Backup 作成
-                    </button>
-                  </section>
+                  <EmptyState
+                    ink
+                    icon={<Archive size={28} />}
+                    title="まだ Backup がありません"
+                    message="この Space の最初のバックアップを作成できます。"
+                    action={
+                      <Button
+                        variant="primary"
+                        icon={<Archive size={16} />}
+                        busy={create.busy()}
+                        disabled={create.busy()}
+                        onClick={() => void create.run()}
+                      >
+                        Backup 作成
+                      </Button>
+                    }
+                  />
                 }
               >
-                <table class="data-table backups-table">
-                  <thead>
-                    <tr>
-                      <th>作成日時</th>
-                      <th>Control artifact</th>
-                      <th>Service data</th>
-                      <th>Run</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <For each={list()}>
-                      {(backup) => <BackupRow backup={backup} />}
-                    </For>
-                  </tbody>
-                </table>
+                <DataTable
+                  columns={columns}
+                  rows={backups()}
+                  rowKey={(backup) => backup.id}
+                  loading={backups.loading}
+                  skeletonRows={3}
+                />
               </Show>
-            )}
-          </Match>
-        </Switch>
+            </Match>
+          </Switch>
 
-        <Show when={create.busy()}>
-          <p class="muted backup-progress">
-            <RefreshCw size={14} />
-            Backup を作成しています。
-          </p>
-        </Show>
+          <Show when={create.busy()}>
+            <p class="wb-progress">
+              <Spinner size={14} />
+              Backup を作成しています。
+            </p>
+          </Show>
+        </div>
       </Show>
     </AppShell>
-  );
-}
-
-function BackupRow(props: { readonly backup: BackupRecord }) {
-  const serviceData = () => props.backup.serviceData;
-  return (
-    <tr>
-      <td>
-        <time>{props.backup.createdAt}</time>
-        <div class="muted installation-type">
-          <code>{props.backup.id}</code>
-        </div>
-      </td>
-      <td>
-        <code>{props.backup.objectKey}</code>
-        <div class="muted installation-type">
-          {formatBytes(props.backup.sizeBytes)} · {shortDigest(props.backup.digest)}
-        </div>
-      </td>
-      <td>
-        <Show when={serviceData()} fallback={<span class="muted">none</span>}>
-          {(data) => (
-            <span>
-              <code>{data().objectKey}</code>
-              <div class="muted installation-type">
-                exported {data().exportedCount} · unsupported {data().unsupportedCount}
-                {" "}· missing {data().missingCount}
-              </div>
-            </span>
-          )}
-        </Show>
-      </td>
-      <td>
-        <Show
-          when={props.backup.createdByRunId}
-          fallback={<span class="muted">manual</span>}
-        >
-          {(runId) => <code>{runId()}</code>}
-        </Show>
-      </td>
-    </tr>
   );
 }
 

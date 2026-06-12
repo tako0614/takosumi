@@ -11,6 +11,7 @@
  *   - an approve button when the run is `waiting_approval`
  *     (`POST /api/v1/runs/:id/approve`).
  */
+import "../../styles/wave-a.css";
 import {
   createEffect,
   createMemo,
@@ -23,9 +24,9 @@ import {
   Switch,
 } from "solid-js";
 import { useParams } from "@solidjs/router";
+import { Activity } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import StatusPill from "../account/components/StatusPill.tsx";
 import {
   approveRun,
   ControlApiError,
@@ -40,9 +41,16 @@ import {
 import { createAction } from "../account/lib/action.tsx";
 import {
   controlPolicyStatusLabel,
-  controlRunStatusClass,
   controlRunStatusLabel,
 } from "../../lib/status-labels.ts";
+import { policyTone, runTone } from "./run-tone.ts";
+import PageHeader from "../../components/ui/PageHeader.tsx";
+import Button from "../../components/ui/Button.tsx";
+import { Card, CardHeader } from "../../components/ui/Card.tsx";
+import { Badge, StatusBadge } from "../../components/ui/Badge.tsx";
+import KVList, { type KVItem } from "../../components/ui/KVList.tsx";
+import EmptyState from "../../components/ui/EmptyState.tsx";
+import Skeleton from "../../components/ui/Skeleton.tsx";
 
 export default function ControlRunView() {
   return <Page title="Plan の確認">{() => <Inner />}</Page>;
@@ -122,23 +130,21 @@ function hasCostToShow(cost: RunCostInfo): boolean {
 function CostNotice(props: { readonly cost: RunCostInfo }) {
   const cost = () => props.cost;
   return (
-    <div
-      class={`run-cost-notice${cost().blocked ? " run-cost-notice-blocked" : ""}`}
-    >
+    <div class={`wa-cost${cost().blocked ? " wa-cost-blocked" : ""}`}>
       <Show when={cost().estimatedCredits > 0}>
-        <p class="run-cost-line">
+        <p class="wa-cost-line">
           必要クレジット: 約 <strong>{formatCredits(cost().estimatedCredits)}</strong>
         </p>
       </Show>
       <Show when={cost().availableCredits !== undefined}>
         {(_) => (
-          <p class="run-cost-line muted">
+          <p class="wa-cost-line muted">
             残高: {formatCredits(cost().availableCredits ?? 0)}
           </p>
         )}
       </Show>
       <Show when={cost().blocked}>
-        <p class="sign-in-error run-cost-blocked-msg">
+        <p class="wa-error">
           <Show
             when={cost().creditShortfall !== undefined}
             fallback={<>残高または上限の都合により、このまま実行できません。</>}
@@ -148,7 +154,7 @@ function CostNotice(props: { readonly cost: RunCostInfo }) {
           </Show>
         </p>
         <Show when={cost().reasons.length > 0}>
-          <ul class="run-cost-reasons muted">
+          <ul class="wa-cost-reasons">
             <For each={cost().reasons}>{(reason) => <li>{reason}</li>}</For>
           </ul>
         </Show>
@@ -283,15 +289,15 @@ function connectionNamesFromLogs(
   return [...names];
 }
 
-function ChangesList(props: {
+function ChangesColumn(props: {
   readonly title: string;
   readonly items: readonly ChangeItem[];
 }) {
   return (
-    <div class="run-change-column">
-      <h3>{props.title}</h3>
+    <div class="wa-change-col">
+      <h4>{props.title}</h4>
       <Show when={props.items.length > 0} fallback={<p class="muted">none</p>}>
-        <ul class="run-change-list">
+        <ul>
           <For each={props.items}>
             {(item) => (
               <li>
@@ -305,46 +311,27 @@ function ChangesList(props: {
   );
 }
 
-function PolicySection(props: { readonly run: Run }) {
+function NameList(props: { readonly names: readonly string[] }) {
   return (
-    <section class="detail-section">
-      <h2>Policy</h2>
-      <dl class="kv-list">
-        <dt>Status</dt>
-        <dd>
-          <Show
-            when={props.run.policyStatus}
-            fallback={<span class="muted">not evaluated</span>}
-          >
-            <span class={`status-pill policy-${props.run.policyStatus}`}>
-              {controlPolicyStatusLabel(props.run.policyStatus)}
-            </span>
-          </Show>
-        </dd>
-        <Show when={props.run.planDigest}>
-          <dt>Plan digest</dt>
-          <dd>
-            <code>{props.run.planDigest}</code>
-          </dd>
-        </Show>
-        <Show when={props.run.errorCode}>
-          <dt>Error</dt>
-          <dd>
-            <code>{props.run.errorCode}</code>
-          </dd>
-        </Show>
-      </dl>
-    </section>
+    <ul class="wa-list">
+      <For each={props.names}>
+        {(n) => (
+          <li>
+            <code>{n}</code>
+          </li>
+        )}
+      </For>
+    </ul>
   );
 }
 
 function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
   return (
-    <li class={`run-diagnostic run-diagnostic-${props.diagnostic.severity}`}>
-      <span class="run-diagnostic-sev">{props.diagnostic.severity}</span>
-      <span class="run-diagnostic-msg">{props.diagnostic.message}</span>
+    <li class={`wa-diag wa-diag-${props.diagnostic.severity}`}>
+      <span class="wa-diag-sev">{props.diagnostic.severity}</span>
+      <span class="wa-diag-msg">{props.diagnostic.message}</span>
       <Show when={props.diagnostic.detail}>
-        <pre class="run-diagnostic-detail">{props.diagnostic.detail}</pre>
+        <pre class="wa-pre">{props.diagnostic.detail}</pre>
       </Show>
     </li>
   );
@@ -372,15 +359,15 @@ function AuditEventRow(props: { event: Record<string, unknown> }) {
   };
 
   return (
-    <li class="run-audit-row">
-      <div class="run-audit-head">
+    <li class="wa-audit-row">
+      <div class="wa-audit-head">
         <code>{eventType()}</code>
         <Show when={at()}>
           {(value) => <span class="muted">{value()}</span>}
         </Show>
       </div>
       <Show when={detail()}>
-        {(value) => <pre class="run-diagnostic-detail">{value()}</pre>}
+        {(value) => <pre class="wa-pre">{value()}</pre>}
       </Show>
     </li>
   );
@@ -480,130 +467,145 @@ function Inner() {
   const costInfo = () => cost.latest;
   const costBlocked = () => costInfo()?.blocked === true;
 
+  const runItems = (r: Run): readonly KVItem[] => {
+    const out: KVItem[] = [
+      { label: "Run ID", value: <code>{r.id}</code> },
+      { label: "種別", value: <code>{r.type}</code> },
+      {
+        label: "ポリシー",
+        value: r.policyStatus
+          ? (
+            <StatusBadge
+              status={r.policyStatus}
+              label={controlPolicyStatusLabel}
+              tone={policyTone}
+            />
+          )
+          : <span class="muted">—</span>,
+      },
+    ];
+    if (r.installationId) {
+      out.push({ label: "Installation", value: <code>{r.installationId}</code> });
+    }
+    if (r.sourceSnapshotId) {
+      out.push({ label: "Source snapshot", value: <code>{r.sourceSnapshotId}</code> });
+    }
+    if (r.dependencySnapshotId) {
+      out.push({
+        label: "Dependency snapshot",
+        value: <code>{r.dependencySnapshotId}</code>,
+      });
+    }
+    if (r.baseStateGeneration !== undefined) {
+      out.push({
+        label: "Base state generation",
+        value: <code>{r.baseStateGeneration}</code>,
+      });
+    }
+    if (r.planDigest) {
+      out.push({ label: "Plan digest", value: <code>{r.planDigest}</code> });
+    }
+    out.push({ label: "Created", value: formatDateTime(r.createdAt) });
+    out.push({ label: "Started", value: formatDateTime(r.startedAt) });
+    out.push({ label: "Finished", value: formatDateTime(r.finishedAt) });
+    if (r.errorCode) {
+      out.push({ label: "エラー", value: <code>{r.errorCode}</code> });
+    }
+    return out;
+  };
+
+  const policyItems = (r: Run): readonly KVItem[] => {
+    const out: KVItem[] = [
+      {
+        label: "Status",
+        value: r.policyStatus
+          ? (
+            <StatusBadge
+              status={r.policyStatus}
+              label={controlPolicyStatusLabel}
+              tone={policyTone}
+            />
+          )
+          : <span class="muted">not evaluated</span>,
+      },
+    ];
+    if (r.planDigest) {
+      out.push({ label: "Plan digest", value: <code>{r.planDigest}</code> });
+    }
+    if (r.errorCode) {
+      out.push({ label: "Error", value: <code>{r.errorCode}</code> });
+    }
+    return out;
+  };
+
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>Plan の確認</h1>
-        <p class="page-sub">
-          Run の変更内容・診断・ポリシー結果を確認し、 承認します。
-        </p>
-        <div class="page-actions">
-          <a href="/installations" class="btn btn-secondary">
+      <PageHeader
+        eyebrow="Run"
+        title="Plan の確認"
+        subtitle="Run の変更内容・診断・ポリシー結果を確認し、承認します。"
+        actions={
+          <Button variant="secondary" href="/installations">
             一覧へ
-          </a>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
       <Switch>
         <Match when={run.loading}>
-          <div class="grid-skel">
-            <div class="skel-block tall" />
-          </div>
+          <Card>
+            <Skeleton variant="block" />
+          </Card>
         </Match>
         <Match when={run.error}>
-          <section class="empty-state error-state">
-            <p>取得に失敗しました — {(run.error as ControlApiError).message}</p>
-          </section>
+          <EmptyState
+            icon={<Activity size={28} />}
+            title="取得に失敗しました"
+            message={(run.error as ControlApiError).message}
+          />
         </Match>
         <Match when={run()}>
           {(r) => (
-            <>
-              <section class="detail-section">
-                <h2>
-                  Run
-                  <StatusPill class={controlRunStatusClass(r().status)}>
-                    {controlRunStatusLabel(r().status)}
-                  </StatusPill>
-                </h2>
-                <dl class="kv-list">
-                  <dt>Run ID</dt>
-                  <dd>
-                    <code>{r().id}</code>
-                  </dd>
-                  <dt>種別</dt>
-                  <dd>
-                    <code>{r().type}</code>
-                  </dd>
-                  <dt>ポリシー</dt>
-                  <dd>
-                    <Show
-                      when={r().policyStatus}
-                      fallback={<span class="muted">—</span>}
-                    >
-                      <span class={`status-pill policy-${r().policyStatus}`}>
-                        {controlPolicyStatusLabel(r().policyStatus)}
-                      </span>
+            <div class="wa-stack">
+              <Card>
+                <CardHeader
+                  title={
+                    <span class="wa-title-row">
+                      Run
+                      <StatusBadge
+                        status={r().status}
+                        label={controlRunStatusLabel}
+                        tone={runTone}
+                      />
+                    </span>
+                  }
+                  actions={
+                    <Show when={r().status === "waiting_approval"}>
+                      <Button
+                        variant="primary"
+                        type="button"
+                        busy={approve.busy()}
+                        onClick={() => void approve.run()}
+                      >
+                        {approve.busy() ? "承認中..." : "この Run を承認"}
+                      </Button>
                     </Show>
-                  </dd>
-                  <Show when={r().installationId}>
-                    <dt>Installation</dt>
-                    <dd>
-                      <code>{r().installationId}</code>
-                    </dd>
-                  </Show>
-                  <Show when={r().sourceSnapshotId}>
-                    <dt>Source snapshot</dt>
-                    <dd>
-                      <code>{r().sourceSnapshotId}</code>
-                    </dd>
-                  </Show>
-                  <Show when={r().dependencySnapshotId}>
-                    <dt>Dependency snapshot</dt>
-                    <dd>
-                      <code>{r().dependencySnapshotId}</code>
-                    </dd>
-                  </Show>
-                  <Show when={r().baseStateGeneration !== undefined}>
-                    <dt>Base state generation</dt>
-                    <dd>
-                      <code>{r().baseStateGeneration}</code>
-                    </dd>
-                  </Show>
-                  <Show when={r().planDigest}>
-                    <dt>Plan digest</dt>
-                    <dd>
-                      <code>{r().planDigest}</code>
-                    </dd>
-                  </Show>
-                  <dt>Created</dt>
-                  <dd>{formatDateTime(r().createdAt)}</dd>
-                  <dt>Started</dt>
-                  <dd>{formatDateTime(r().startedAt)}</dd>
-                  <dt>Finished</dt>
-                  <dd>{formatDateTime(r().finishedAt)}</dd>
-                  <Show when={r().errorCode}>
-                    <dt>エラー</dt>
-                    <dd>
-                      <code>{r().errorCode}</code>
-                    </dd>
-                  </Show>
-                </dl>
-
-                <Show when={r().status === "waiting_approval"}>
-                  <div class="form-actions run-approve">
-                    <button
-                      class="btn btn-primary"
-                      type="button"
-                      disabled={approve.busy()}
-                      onClick={() => void approve.run()}
-                    >
-                      {approve.busy() ? "承認中..." : "この Run を承認"}
-                    </button>
-                  </div>
-                </Show>
+                  }
+                />
+                <KVList items={runItems(r())} />
                 <Show when={approve.error()}>
-                  {(m) => <p class="sign-in-error">{m()}</p>}
+                  {(m) => <p class="wa-error">{m()}</p>}
                 </Show>
 
                 {/* Deploy: apply this reviewed plan. Shown only for a finished,
                     問題のない plan。破壊的な変更がある場合は確認してから実行。 */}
                 <Show when={applied()}>
-                  <p class="run-apply-done">
+                  <p class="wa-apply-done">
                     デプロイを開始しました。反映までしばらくお待ちください。
                   </p>
                 </Show>
                 <Show when={!applied() && isDeployableRun(r())}>
-                  <div class="run-deploy-block">
+                  <div class="wa-deploy">
                     {/* Pre-apply cost / credit-shortfall (backend values only). */}
                     <Show
                       when={(() => {
@@ -613,14 +615,15 @@ function Inner() {
                     >
                       {(c) => <CostNotice cost={c()} />}
                     </Show>
-                    <div class="form-actions run-deploy">
-                      <Show
-                        when={needsConfirm()}
-                        fallback={
-                          <button
-                            class="btn btn-primary"
+                    <Show
+                      when={needsConfirm()}
+                      fallback={
+                        <div class="wa-form-actions">
+                          <Button
+                            variant="primary"
                             type="button"
                             disabled={deploy.busy() || costBlocked()}
+                            busy={deploy.busy()}
                             onClick={() => void deploy.run(undefined)}
                           >
                             {deploy.busy()
@@ -628,127 +631,111 @@ function Inner() {
                               : costBlocked()
                                 ? "残高不足のため実行できません"
                                 : "デプロイを実行"}
-                          </button>
-                        }
-                      >
-                        <p class="run-deploy-warn">
-                          この変更には既存リソースの置き換え・削除が含まれます。
-                          実行するとデータが失われる場合があります。
-                        </p>
-                        <div class="form-actions">
-                          <button
-                            class="btn btn-secondary"
-                            type="button"
-                            disabled={deploy.busy()}
-                            onClick={() => setNeedsConfirm(false)}
-                          >
-                            やめる
-                          </button>
-                          <button
-                            class="btn btn-danger"
-                            type="button"
-                            disabled={deploy.busy() || costBlocked()}
-                            onClick={() => void deploy.run(true)}
-                          >
-                            {deploy.busy()
-                              ? "実行中..."
-                              : costBlocked()
-                                ? "残高不足のため実行できません"
-                                : "破壊的な変更を承知のうえで実行"}
-                          </button>
+                          </Button>
                         </div>
-                      </Show>
-                    </div>
+                      }
+                    >
+                      <p class="wa-deploy-warn">
+                        この変更には既存リソースの置き換え・削除が含まれます。
+                        実行するとデータが失われる場合があります。
+                      </p>
+                      <div class="wa-form-actions">
+                        <Button
+                          variant="secondary"
+                          type="button"
+                          disabled={deploy.busy()}
+                          onClick={() => setNeedsConfirm(false)}
+                        >
+                          やめる
+                        </Button>
+                        <Button
+                          variant="danger"
+                          type="button"
+                          disabled={deploy.busy() || costBlocked()}
+                          busy={deploy.busy()}
+                          onClick={() => void deploy.run(true)}
+                        >
+                          {deploy.busy()
+                            ? "実行中..."
+                            : costBlocked()
+                              ? "残高不足のため実行できません"
+                              : "破壊的な変更を承知のうえで実行"}
+                        </Button>
+                      </div>
+                    </Show>
                   </div>
                 </Show>
                 <Show when={deploy.error()}>
-                  {(m) => <p class="sign-in-error">{m()}</p>}
+                  {(m) => <p class="wa-error">{m()}</p>}
                 </Show>
-              </section>
+              </Card>
 
-              {/* Inputs (dependency-injected names; best-effort from logs). */}
-              <section class="detail-section">
-                <h2>Changes</h2>
-                <div class="run-summary-strip">
-                  <span>
+              {/* Changes summary (best-effort from logs). */}
+              <Card>
+                <CardHeader title="Changes" />
+                <div class="wa-change-strip">
+                  <span class="wa-change-stat wa-change-create">
                     Create <strong>{changeCounts().create}</strong>
                   </span>
-                  <span>
+                  <span class="wa-change-stat wa-change-update">
                     Update <strong>{changeCounts().update}</strong>
                   </span>
-                  <span>
+                  <span class="wa-change-stat wa-change-delete">
                     Delete <strong>{changeCounts().delete}</strong>
                   </span>
                 </div>
-                <div class="run-change-grid">
-                  <ChangesList
+                <div class="wa-change-grid">
+                  <ChangesColumn
                     title="Create"
                     items={changes().filter((item) => item.action === "create")}
                   />
-                  <ChangesList
+                  <ChangesColumn
                     title="Update"
                     items={changes().filter((item) => item.action === "update")}
                   />
-                  <ChangesList
+                  <ChangesColumn
                     title="Delete"
                     items={changes().filter((item) => item.action === "delete")}
                   />
                 </div>
-              </section>
+              </Card>
 
-              <section class="detail-section">
-                <h2>Inputs</h2>
+              <Card>
+                <CardHeader title="Inputs" />
                 <Show
                   when={inputs().length > 0}
                   fallback={
-                    <p class="muted">
-                      依存からの注入入力は検出されませんでした。
-                    </p>
+                    <p class="muted">依存からの注入入力は検出されませんでした。</p>
                   }
                 >
-                  <ul class="run-inputs">
-                    <For each={inputs()}>
-                      {(n) => (
-                        <li>
-                          <code>{n}</code>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
+                  <NameList names={inputs()} />
                 </Show>
-              </section>
+              </Card>
 
-              <section class="detail-section">
-                <h2>Connections</h2>
+              <Card>
+                <CardHeader title="Connections" />
                 <Show
                   when={connections().length > 0}
                   fallback={<p class="muted">接続解決情報はありません。</p>}
                 >
-                  <ul class="run-inputs">
-                    <For each={connections()}>
-                      {(n) => (
-                        <li>
-                          <code>{n}</code>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
+                  <NameList names={connections()} />
                 </Show>
-              </section>
+              </Card>
 
-              <PolicySection run={r()} />
+              <Card>
+                <CardHeader title="Policy" />
+                <KVList items={policyItems(r())} />
+              </Card>
 
-              {/* Changes summary + diagnostics. */}
-              <section class="detail-section">
-                <h2>Diagnostics</h2>
+              {/* Diagnostics. */}
+              <Card>
+                <CardHeader title="Diagnostics" />
                 <Switch>
                   <Match when={logs.loading}>
-                    <div class="grid-skel">
-                      <div class="skel-block" />
-                    </div>
+                    <Skeleton variant="row" count={2} />
                   </Match>
                   <Match when={logs.error}>
-                    <p class="sign-in-error">
+                    <p class="wa-error">
                       ログ取得に失敗しました —{" "}
                       {(logs.error as ControlApiError).message}
                     </p>
@@ -759,7 +746,7 @@ function Inner() {
                         when={l().diagnostics.length > 0}
                         fallback={<p class="muted">診断はありません。</p>}
                       >
-                        <ul class="run-diagnostics">
+                        <ul class="wa-diags">
                           <For each={l().diagnostics}>
                             {(d) => <DiagnosticRow diagnostic={d} />}
                           </For>
@@ -768,22 +755,31 @@ function Inner() {
                     )}
                   </Match>
                 </Switch>
-              </section>
+              </Card>
 
-              <section class="detail-section">
-                <h2>Audit trail</h2>
+              <Card>
+                <CardHeader
+                  title={
+                    <span class="wa-title-row">
+                      Audit trail
+                      <Badge tone="muted">
+                        {(logs()?.auditEvents ?? []).length}
+                      </Badge>
+                    </span>
+                  }
+                />
                 <Show
                   when={(logs()?.auditEvents ?? []).length > 0}
                   fallback={<p class="muted">audit event はありません。</p>}
                 >
-                  <ul class="run-audit-list">
+                  <ul class="wa-audit">
                     <For each={logs()?.auditEvents ?? []}>
                       {(event) => <AuditEventRow event={event} />}
                     </For>
                   </ul>
                 </Show>
-              </section>
-            </>
+              </Card>
+            </div>
           )}
         </Match>
       </Switch>

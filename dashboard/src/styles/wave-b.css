@@ -1,0 +1,337 @@
+/*
+ * wave-b.css — view-local rules for the Wave B control views
+ * (Sources / Providers / Graph / OutputShares / Backups / Members /
+ * InstallFromGit). Imported locally at the top of each Wave B view file, NOT
+ * via the shared index.tsx. These rules layer on top of the canonical dark
+ * tokens + the shared component classes (tg-*) and never redefine them.
+ *
+ * Everything here is namespaced under `wb-` (wave-b) to avoid colliding with the
+ * shared component classes or the other concurrently-edited waves.
+ */
+
+/* ===== Generic section stack used across the wave-b views ===== */
+.wb-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-5);
+}
+.wb-stack-tight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+}
+
+/* Inline error banner above tables/forms (replaces the bare .sign-in-error). */
+.wb-error {
+  margin: 0;
+  padding: var(--tg-s-3) var(--tg-s-4);
+  border-radius: var(--tg-r-md);
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-danger);
+  background: color-mix(in srgb, var(--tg-danger) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tg-danger) 30%, transparent);
+}
+
+/* Monospace id / secondary line under a primary cell value. */
+.wb-subline {
+  margin-top: 2px;
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-subtle);
+}
+.wb-subline code,
+.wb-mono {
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+}
+.wb-url {
+  display: inline-block;
+  max-width: 360px;
+  overflow-wrap: anywhere;
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+}
+
+/* Row-action cell: right-aligned, never wraps its buttons. */
+.wb-row-actions {
+  display: inline-flex;
+  gap: var(--tg-s-2);
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+/* Tag chip list (depends-on, outputs, env names). */
+.wb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.wb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--tg-r-full);
+  border: 1px solid var(--tg-line);
+  background: var(--tg-bg-subtle);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-muted);
+}
+
+/* ===== Providers: catalog card meta grid ===== */
+.wb-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--tg-s-4);
+}
+.wb-provider-meta {
+  display: grid;
+  gap: var(--tg-s-3);
+}
+.wb-provider-meta-row {
+  display: grid;
+  gap: var(--tg-s-1);
+}
+.wb-provider-meta-row dt {
+  margin: 0;
+  font-size: var(--tg-fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--tg-fg-subtle);
+}
+.wb-provider-meta-row dd {
+  margin: 0;
+}
+
+/* ===== Graph: layered DAG board ===== */
+.wb-graph {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-5);
+}
+.wb-graph-layer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+}
+.wb-graph-layer-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  font-size: var(--tg-fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-family: var(--tg-font-mono);
+  color: var(--tg-fg-subtle);
+}
+.wb-graph-layer-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--tg-line);
+}
+.wb-graph-nodes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-3);
+}
+.wb-graph-node {
+  min-width: 220px;
+  flex: 0 1 260px;
+}
+.wb-graph-node-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-2);
+}
+.wb-graph-node-name {
+  font-weight: 600;
+}
+.wb-graph-node-deps {
+  margin-top: var(--tg-s-2);
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-subtle);
+  font-family: var(--tg-font-mono);
+  overflow-wrap: anywhere;
+}
+.wb-graph-cyclic .wb-graph-node {
+  border-color: color-mix(in srgb, var(--tg-status-error) 40%, var(--tg-line));
+}
+
+/* ===== Install-from-Git: stepper + compatibility ===== */
+.wb-install-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-4);
+  max-width: 720px;
+}
+.wb-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--tg-s-4);
+}
+.wb-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-3);
+}
+.wb-note {
+  margin: 0;
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg-muted);
+  line-height: 1.5;
+}
+.wb-summary-line {
+  font-size: var(--tg-fs-base);
+  line-height: 1.5;
+}
+.wb-disclosure > summary {
+  cursor: pointer;
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+  color: var(--tg-fg-subtle);
+  padding: var(--tg-s-2) 0;
+}
+.wb-disclosure[open] > summary {
+  color: var(--tg-fg-muted);
+  margin-bottom: var(--tg-s-3);
+}
+.wb-disclosure .tg-field {
+  margin-bottom: var(--tg-s-3);
+}
+
+.wb-compat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-3);
+  margin-bottom: var(--tg-s-2);
+}
+.wb-compat-summary {
+  margin: 0;
+  color: var(--tg-fg-muted);
+}
+.wb-diagnostics {
+  list-style: none;
+  margin: var(--tg-s-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.wb-diagnostic {
+  padding: var(--tg-s-2) var(--tg-s-3);
+  border-radius: var(--tg-r-sm);
+  border: 1px solid var(--tg-line);
+  background: var(--tg-bg-subtle);
+  font-size: var(--tg-fs-sm);
+}
+.wb-diagnostic-error {
+  border-color: color-mix(in srgb, var(--tg-status-error) 35%, transparent);
+}
+.wb-diagnostic-warning {
+  border-color: color-mix(in srgb, var(--tg-status-installing) 35%, transparent);
+}
+
+.wb-steps {
+  list-style: none;
+  margin: var(--tg-s-4) 0 0;
+  padding: var(--tg-s-4) 0 0;
+  border-top: 1px solid var(--tg-line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.wb-step {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.wb-step.is-active {
+  color: var(--tg-fg);
+  font-weight: 600;
+}
+.wb-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: var(--tg-r-full);
+  border: 1px solid var(--tg-line);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-sm);
+}
+.wb-step.is-done .wb-step-icon {
+  color: var(--tg-status-ready);
+  border-color: color-mix(in srgb, var(--tg-status-ready) 40%, transparent);
+}
+.wb-step.is-error .wb-step-icon {
+  color: var(--tg-status-error);
+  border-color: color-mix(in srgb, var(--tg-status-error) 40%, transparent);
+}
+
+/* ===== Output shares: draft editor rows ===== */
+.wb-output-editor {
+  display: grid;
+  gap: var(--tg-s-2);
+}
+.wb-output-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 0.8fr) auto auto;
+  gap: var(--tg-s-2);
+  align-items: center;
+}
+@media (max-width: 720px) {
+  .wb-output-row {
+    grid-template-columns: 1fr;
+  }
+  .wb-form-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== Members: invite form + action cell ===== */
+.wb-members-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  white-space: nowrap;
+}
+.wb-role-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  color: var(--tg-fg-muted);
+}
+.wb-invite-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(140px, 0.6fr) auto;
+  gap: var(--tg-s-3);
+  align-items: end;
+}
+@media (max-width: 640px) {
+  .wb-invite-form {
+    grid-template-columns: 1fr;
+  }
+}
+.wb-you-tag {
+  margin-left: var(--tg-s-2);
+}
+
+/* Backup-in-progress hint. */
+.wb-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  margin-top: var(--tg-s-3);
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg-muted);
+}
