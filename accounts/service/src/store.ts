@@ -787,6 +787,18 @@ export class InMemoryAccountsStore implements AccountsStore {
     );
   }
 
+  listSpacesForOwner(subject: TakosumiSubject): readonly SpaceRecord[] {
+    const ownedAccountIds = new Set<string>();
+    for (const account of this.#ledgerAccounts.values()) {
+      if (account.legalOwnerSubject === subject) {
+        ownedAccountIds.add(account.accountId);
+      }
+    }
+    return [...this.#spaces.values()].filter((space) =>
+      ownedAccountIds.has(space.accountId)
+    );
+  }
+
   saveAppInstallation(record: InstallationRecord): void {
     this.#installations.set(record.installationId, record);
   }

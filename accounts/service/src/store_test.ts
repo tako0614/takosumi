@@ -283,6 +283,55 @@ test("InMemoryAccountsStore persists AppInstallation ledger records", () => {
   expect(store.listAppGrantsForInstallation("inst_1")[0]?.capability).toEqual("deploy.intent.write");
 });
 
+test("InMemoryAccountsStore lists spaces by legal owner across accounts", () => {
+  const store = new InMemoryAccountsStore();
+  store.saveLedgerAccount({
+    accountId: "acct_owned_a",
+    legalOwnerSubject: "tsub_owner",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  store.saveLedgerAccount({
+    accountId: "acct_owned_b",
+    legalOwnerSubject: "tsub_owner",
+    createdAt: 1001,
+    updatedAt: 1001,
+  });
+  store.saveLedgerAccount({
+    accountId: "acct_foreign",
+    legalOwnerSubject: "tsub_other",
+    createdAt: 1002,
+    updatedAt: 1002,
+  });
+  store.saveSpace({
+    spaceId: "space_a",
+    accountId: "acct_owned_a",
+    kind: "personal",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  store.saveSpace({
+    spaceId: "space_b",
+    accountId: "acct_owned_b",
+    kind: "org",
+    createdAt: 1001,
+    updatedAt: 1001,
+  });
+  store.saveSpace({
+    spaceId: "space_foreign",
+    accountId: "acct_foreign",
+    kind: "org",
+    createdAt: 1002,
+    updatedAt: 1002,
+  });
+
+  const owned = store.listSpacesForOwner("tsub_owner");
+  const ids = [...owned].map((s) => s.spaceId).sort();
+  expect(ids).toEqual(["space_a", "space_b"]);
+  expect(ids).not.toContain("space_foreign");
+  expect(store.listSpacesForOwner("tsub_nobody")).toEqual([]);
+});
+
 test("InMemoryAccountsStore appends InstallationEvent records in order", () => {
   const store = new InMemoryAccountsStore();
   store.appendInstallationEvent({

@@ -1254,7 +1254,13 @@ export class D1AccountsStore implements AccountsStore {
         record.legalOwnerSubject,
       );
     }
-    await this.#put("ledger_accounts", record.accountId, record);
+    await this.#put("ledger_accounts", record.accountId, record, [
+      {
+        name: "ledger_accounts_by_owner",
+        key: record.legalOwnerSubject,
+        sortKey: record.createdAt,
+      },
+    ]);
   }
 
   findLedgerAccount(
@@ -1279,6 +1285,32 @@ export class D1AccountsStore implements AccountsStore {
 
   listSpacesForAccount(accountId: string): Promise<readonly SpaceRecord[]> {
     return this.#listByIndex("spaces_by_account", accountId);
+  }
+
+  async listSpacesForOwner(
+    subject: TakosumiSubject,
+  ): Promise<readonly SpaceRecord[]> {
+    // KV-index store: resolve the subject's legally-owned ledger accounts via
+    // the `ledger_accounts_by_owner` index, then collect each account's spaces
+    // via `spaces_by_account`, deduplicating by spaceId. The owner index
+    // self-populates on the next `saveLedgerAccount`, so legacy accounts not
+    // re-saved since this index was added are absent (the session list then
+    // degrades to spaces the caller directly owns for those org accounts).
+    const ownedAccounts = await this.#listByIndex<LedgerAccountRecord>(
+      "ledger_accounts_by_owner",
+      subject,
+    );
+    const byId = new Map<string, SpaceRecord>();
+    for (const account of ownedAccounts) {
+      const spaces = await this.#listByIndex<SpaceRecord>(
+        "spaces_by_account",
+        account.accountId,
+      );
+      for (const space of spaces) {
+        byId.set(space.spaceId, space);
+      }
+    }
+    return [...byId.values()];
   }
 
   saveAppInstallation(record: InstallationRecord): Promise<void> {

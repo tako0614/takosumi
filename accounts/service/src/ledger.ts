@@ -172,6 +172,15 @@ export interface AppInstallationLedgerStore {
   listSpacesForAccount(
     accountId: string,
   ): readonly SpaceRecord[] | Promise<readonly SpaceRecord[]>;
+  /**
+   * Lists the Spaces whose owning ledger account is legally owned by `subject`
+   * (i.e. `LedgerAccountRecord.legalOwnerSubject === subject`). Used by the
+   * dashboard session `GET /api/v1/spaces` to scope the legal-owner branch of
+   * Space visibility without scanning every Space.
+   */
+  listSpacesForOwner(
+    subject: TakosumiSubject,
+  ): readonly SpaceRecord[] | Promise<readonly SpaceRecord[]>;
   saveAppInstallation(
     record: InstallationRecord,
   ): void | Promise<void>;

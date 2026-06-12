@@ -33,6 +33,7 @@ import {
   isNull,
   ne,
   type SQL,
+  sql,
 } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
@@ -417,6 +418,17 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       schema.spaces,
       schema.spaces.recordJson,
       { orderBy: [asc(schema.spaces.createdAt), asc(schema.spaces.id)] },
+    );
+  }
+
+  async listSpacesByOwner(ownerUserId: string): Promise<readonly Space[]> {
+    return await this.#drizzleManyJson<Space>(
+      schema.spaces,
+      schema.spaces.recordJson,
+      {
+        where: sql`${schema.spaces.recordJson} ->> 'ownerUserId' = ${ownerUserId}`,
+        orderBy: [asc(schema.spaces.createdAt), asc(schema.spaces.id)],
+      },
     );
   }
 
