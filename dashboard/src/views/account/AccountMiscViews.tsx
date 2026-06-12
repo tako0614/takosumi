@@ -1,3 +1,4 @@
+import "../../styles/wave-c.css";
 import {
   createEffect,
   createMemo,
@@ -15,6 +16,31 @@ import AppShell from "./components/shell/AppShell.tsx";
 import Page from "./components/auth/Page.tsx";
 import InkdropMark from "./components/brand/InkdropMark.tsx";
 import InkBackdrop from "../../components/ui/InkBackdrop.tsx";
+import {
+  Badge,
+  Button,
+  EmptyState,
+  PageHeader,
+  Skeleton,
+  Toast,
+} from "../../components/ui/index.ts";
+// wave-d: legacy install-flow views (InstallWizard / InstallByUrlView /
+// TakosStartView) use these shared components. Imported under a dedicated,
+// aliased block so it does not collide with the account/home (wave-c) imports
+// above in this shared file.
+import "../../styles/wave-d.css";
+import {
+  Button as DButton,
+  Card as DCard,
+  CardHeader as DCardHeader,
+  CardSection as DCardSection,
+  Checkbox as DCheckbox,
+  FormField as DFormField,
+  Input as DInput,
+  KVList as DKVList,
+  PageHeader as DPageHeader,
+  Select as DSelect,
+} from "../../components/ui/index.ts";
 import { Icons } from "../../lib/Icons.tsx";
 import { ApiError, type InstallationPlanResponse, rpc } from "./lib/api.ts";
 import {
@@ -202,137 +228,161 @@ export function InstallWizard() {
 
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>アプリを追加</h1>
-        <p class="page-sub">
-          Git リポジトリから takosumi 上にアプリを追加します。
-        </p>
+      <DPageHeader
+        eyebrow="Install"
+        title="アプリを追加"
+        subtitle="Git リポジトリから takosumi 上にアプリを追加します。"
+      />
+
+      <div class="wave-d-stack">
+        <DCard>
+          <DCardHeader title="Source" />
+          <DCardSection>
+            <form class="wave-d-field-stack" onSubmit={runPlanPreview}>
+              <DFormField label="Git URL" required>
+                <DInput
+                  type="url"
+                  value={gitUrl()}
+                  onInput={(e) => setGitUrl(e.currentTarget.value)}
+                  placeholder="https://github.com/owner/repo.git"
+                  required
+                />
+              </DFormField>
+              <DFormField label="Ref" required>
+                <DInput
+                  type="text"
+                  value={ref()}
+                  onInput={(e) => setRef(e.currentTarget.value)}
+                  placeholder="main"
+                  required
+                />
+              </DFormField>
+              <div class="wave-d-actions">
+                <DButton
+                  variant="secondary"
+                  type="submit"
+                  disabled={planChecking() || !gitUrl() || !spaceId()}
+                  busy={planChecking()}
+                  icon={<Icons.GitBranch class="w-4 h-4" />}
+                >
+                  {planChecking() ? "変更を確認中..." : "変更を確認"}
+                </DButton>
+              </div>
+            </form>
+          </DCardSection>
+        </DCard>
+
+        <Show when={planPreview()}>
+          {(p) => (
+            <DCard>
+              <DCardHeader title="変更内容の確認" />
+              <DCardSection>
+                <DKVList
+                  items={[
+                    {
+                      label: "App ID",
+                      value:
+                        pickString(p(), [
+                          "repo.id",
+                          "source.repositoryUrl",
+                          "source.url",
+                        ]) ?? "—",
+                    },
+                    {
+                      label: "Commit",
+                      value: (
+                        <code class="wave-d-mono">
+                          {pickString(p(), [
+                            "source.commit",
+                            "expected.sourceCommit",
+                          ]) ?? "—"}
+                        </code>
+                      ),
+                    },
+                    {
+                      label: "Plan digest",
+                      value: (
+                        <code class="wave-d-mono">
+                          {pickString(p(), ["planDigest"]) ?? "—"}
+                        </code>
+                      ),
+                    },
+                    {
+                      label: "Expected plan digest",
+                      value: (
+                        <code class="wave-d-mono">
+                          {pickString(p(), ["expected.planDigest"]) ?? "—"}
+                        </code>
+                      ),
+                    },
+                  ]}
+                />
+              </DCardSection>
+            </DCard>
+          )}
+        </Show>
+
+        <DCard>
+          <DCardHeader title="Target" />
+          <DCardSection>
+            <div class="wave-d-field-grid">
+              <DFormField label="Account ID">
+                <DInput
+                  type="text"
+                  value={accountId()}
+                  onInput={(e) => setAccountId(e.currentTarget.value)}
+                  placeholder="acct_xxxxx"
+                />
+              </DFormField>
+              <DFormField label="Space ID">
+                <DInput
+                  type="text"
+                  value={spaceId()}
+                  onInput={(e) => setSpaceId(e.currentTarget.value)}
+                  placeholder="space_xxxxx"
+                />
+              </DFormField>
+              <DFormField label="Mode">
+                <DSelect
+                  value={mode()}
+                  onChange={(e) => setMode(e.currentTarget.value as Mode)}
+                >
+                  <option value="shared-cell">shared-cell</option>
+                  <option value="dedicated">dedicated</option>
+                  <option value="self-hosted">self-hosted</option>
+                </DSelect>
+              </DFormField>
+            </div>
+          </DCardSection>
+        </DCard>
+
+        <Show when={err()}>{(m) => <p class="wave-d-error">{m()}</p>}</Show>
+
+        <DCard>
+          <DCardSection>
+            <div class="wave-d-actions">
+              <DButton
+                variant="primary"
+                type="button"
+                onClick={runInstall}
+                disabled={
+                  installing() || !planPreview() || !accountId() || !spaceId()
+                }
+                busy={installing()}
+                icon={<Icons.Server class="w-4 h-4" />}
+              >
+                {installing() ? "公開中..." : "公開"}
+              </DButton>
+              <DButton href="/apps" variant="secondary">
+                キャンセル
+              </DButton>
+            </div>
+            <p class="tg-card-subtitle" style="margin-top: 12px;">
+              公開先の account と space を確認してから実行してください。
+            </p>
+          </DCardSection>
+        </DCard>
       </div>
-
-      <section class="detail-section">
-        <h2>Source</h2>
-        <form class="install-form" onSubmit={runPlanPreview}>
-          <label>
-            Git URL
-            <input
-              type="url"
-              value={gitUrl()}
-              onInput={(e) => setGitUrl(e.currentTarget.value)}
-              placeholder="https://github.com/owner/repo.git"
-              required
-            />
-          </label>
-          <label>
-            Ref
-            <input
-              type="text"
-              value={ref()}
-              onInput={(e) => setRef(e.currentTarget.value)}
-              placeholder="main"
-              required
-            />
-          </label>
-          <button
-            class="btn btn-secondary"
-            type="submit"
-            disabled={planChecking() || !gitUrl() || !spaceId()}
-          >
-            <Icons.GitBranch class="w-4 h-4" />{" "}
-            {planChecking() ? "変更を確認中..." : "変更を確認"}
-          </button>
-        </form>
-      </section>
-
-      <Show when={planPreview()}>
-        {(p) => (
-          <section class="detail-section">
-            <h2>変更内容の確認</h2>
-            <dl class="kv-list">
-              <dt>App ID</dt>
-              <dd>
-                {pickString(p(), [
-                  "repo.id",
-                  "source.repositoryUrl",
-                  "source.url",
-                ]) ?? "—"}
-              </dd>
-              <dt>Commit</dt>
-              <dd>
-                <code>
-                  {pickString(p(), [
-                    "source.commit",
-                    "expected.sourceCommit",
-                  ]) ?? "—"}
-                </code>
-              </dd>
-              <dt>Plan digest</dt>
-              <dd>
-                <code>{pickString(p(), ["planDigest"]) ?? "—"}</code>
-              </dd>
-              <dt>Expected plan digest</dt>
-              <dd>
-                <code>{pickString(p(), ["expected.planDigest"]) ?? "—"}</code>
-              </dd>
-            </dl>
-          </section>
-        )}
-      </Show>
-
-      <section class="detail-section">
-        <h2>Target</h2>
-        <div class="install-grid">
-          <label>
-            Account ID
-            <input
-              type="text"
-              value={accountId()}
-              onInput={(e) => setAccountId(e.currentTarget.value)}
-              placeholder="acct_xxxxx"
-            />
-          </label>
-          <label>
-            Space ID
-            <input
-              type="text"
-              value={spaceId()}
-              onInput={(e) => setSpaceId(e.currentTarget.value)}
-              placeholder="space_xxxxx"
-            />
-          </label>
-          <label>
-            Mode
-            <select
-              value={mode()}
-              onChange={(e) => setMode(e.currentTarget.value as Mode)}
-            >
-              <option value="shared-cell">shared-cell</option>
-              <option value="dedicated">dedicated</option>
-              <option value="self-hosted">self-hosted</option>
-            </select>
-          </label>
-        </div>
-      </section>
-
-      <Show when={err()}>{(m) => <p class="sign-in-error">{m()}</p>}</Show>
-
-      <section class="detail-section">
-        <button
-          class="btn btn-primary"
-          type="button"
-          onClick={runInstall}
-          disabled={
-            installing() || !planPreview() || !accountId() || !spaceId()
-          }
-        >
-          <Icons.Server class="w-4 h-4" /> {installing() ? "公開中..." : "公開"}
-        </button>
-        <a href="/apps" class="btn btn-secondary" style="margin-left: 8px;">
-          キャンセル
-        </a>
-        <p class="muted" style="margin-top: 12px;">
-          公開先の account と space を確認してから実行してください。
-        </p>
-      </section>
     </AppShell>
   );
 }
@@ -798,91 +848,92 @@ function TakosStartInner(props: { subject: string }) {
 
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>Use Takos</h1>
-        <p class="page-sub">
-          Account と Space を確認して、Takos を開始します。
-        </p>
-      </div>
+      <DPageHeader
+        eyebrow="Launch"
+        title="Use Takos"
+        subtitle="Account と Space を確認して、Takos を開始します。"
+      />
 
-      <form onSubmit={submit}>
-        <section class="detail-section">
-          <h2>Takos launch</h2>
-          <div class="install-grid">
-            <label>
-              Takos URL
-              <input
-                type="url"
-                value={takosUrl()}
-                onInput={(e) => setTakosUrl(e.currentTarget.value)}
-                required
-              />
-            </label>
-            <label>
-              Terms version
-              <input
-                type="text"
-                value={termsVersion()}
-                onInput={(e) => setTermsVersion(e.currentTarget.value)}
-                required
-              />
-            </label>
-          </div>
-        </section>
+      <form class="wave-d-stack" onSubmit={submit}>
+        <DCard>
+          <DCardHeader title="Takos launch" />
+          <DCardSection>
+            <div class="wave-d-field-grid">
+              <DFormField label="Takos URL" required>
+                <DInput
+                  type="url"
+                  value={takosUrl()}
+                  onInput={(e) => setTakosUrl(e.currentTarget.value)}
+                  required
+                />
+              </DFormField>
+              <DFormField label="Terms version" required>
+                <DInput
+                  type="text"
+                  value={termsVersion()}
+                  onInput={(e) => setTermsVersion(e.currentTarget.value)}
+                  required
+                />
+              </DFormField>
+            </div>
+          </DCardSection>
+        </DCard>
 
-        <section class="detail-section">
-          <h2>Account and Space</h2>
-          <div class="install-grid">
-            <label>
-              Account ID
-              <input
-                type="text"
-                value={accountId()}
-                onInput={(e) => setAccountId(e.currentTarget.value)}
-                placeholder="acct_xxxxx"
-                required
-              />
-            </label>
-            <label>
-              Space ID
-              <input
-                type="text"
-                value={spaceId()}
-                onInput={(e) => setSpaceId(e.currentTarget.value)}
-                placeholder="space_xxxxx"
-                required
-              />
-            </label>
-          </div>
-        </section>
+        <DCard>
+          <DCardHeader title="Account and Space" />
+          <DCardSection>
+            <div class="wave-d-field-grid">
+              <DFormField label="Account ID" required>
+                <DInput
+                  type="text"
+                  value={accountId()}
+                  onInput={(e) => setAccountId(e.currentTarget.value)}
+                  placeholder="acct_xxxxx"
+                  required
+                />
+              </DFormField>
+              <DFormField label="Space ID" required>
+                <DInput
+                  type="text"
+                  value={spaceId()}
+                  onInput={(e) => setSpaceId(e.currentTarget.value)}
+                  placeholder="space_xxxxx"
+                  required
+                />
+              </DFormField>
+            </div>
+          </DCardSection>
+        </DCard>
 
-        <section class="detail-section">
-          <h2>Terms</h2>
-          <label class="check">
-            <input
-              type="checkbox"
+        <DCard>
+          <DCardHeader title="Terms" />
+          <DCardSection>
+            <DCheckbox
               checked={termsAccepted()}
               onChange={(e) => setTermsAccepted(e.currentTarget.checked)}
+              label="Takosumi の利用規約に同意します。"
             />
-            <span>Takosumi の利用規約に同意します。</span>
-          </label>
-          <Show when={err()}>
-            {(m) => (
-              <p class="sign-in-error" role="alert">
-                {m()}
-              </p>
-            )}
-          </Show>
-          <button
-            class="btn btn-primary"
-            type="submit"
-            disabled={
-              !accountId() || !spaceId() || !takosUrl() || !termsAccepted()
-            }
-          >
-            <Icons.Play class="w-4 h-4" /> Launch Takos
-          </button>
-        </section>
+            <Show when={err()}>
+              {(m) => (
+                <p class="wave-d-error" role="alert">
+                  {m()}
+                </p>
+              )}
+            </Show>
+            <div class="wave-d-actions">
+              <DButton
+                variant="primary"
+                type="submit"
+                disabled={
+                  !accountId() || !spaceId() || !takosUrl() || !termsAccepted()
+                }
+                icon={<Icons.Play class="w-4 h-4" />}
+              >
+                Launch Takos
+              </DButton>
+            </div>
+          </DCardSection>
+        </DCard>
       </form>
     </AppShell>
   );
@@ -898,22 +949,28 @@ export function HomeView() {
     <Page title="Home">
       {(session: SessionRecord) => (
         <AppShell>
-          <div class="page-header">
-            <h1>Welcome back.</h1>
-            <p class="page-sub">
+          <PageHeader
+            eyebrow="Home"
+            title="おかえりなさい"
+            subtitle={
               <SignedInAs
                 name={session.displayName}
                 sub={session.subject}
                 email={session.email}
               />
-            </p>
-          </div>
-          <section class="empty-state">
-            <p>まだアプリがありません。</p>
-            <a href="/install" class="btn btn-primary">
-              Git URL から導入 →
-            </a>
-          </section>
+            }
+          />
+          <EmptyState
+            ink
+            icon={<Icons.Package />}
+            title="まだアプリがありません"
+            message="Git URL から OpenTofu Capsule を導入すると、ここに表示されます。"
+            action={
+              <Button variant="primary" href="/install" icon={<Icons.Plus />}>
+                Git URL から導入
+              </Button>
+            }
+          />
         </AppShell>
       )}
     </Page>
@@ -1166,23 +1223,23 @@ function NotificationRow(props: { entry: FeedEntry }) {
   const failure = () => isFailureAction(props.entry.event.action);
   const description = () => describeEvent(props.entry.event);
   return (
-    <li class={`notif-row${failure() ? " notif-row-failure" : ""}`}>
-      <span class="notif-icon" aria-hidden="true">
+    <li class={`wc-notif-row${failure() ? " wc-notif-row-failure" : ""}`}>
+      <span class="wc-notif-icon" aria-hidden="true">
         <Show when={failure()} fallback={<Icons.Bell />}>
           <Icons.AlertTriangle />
         </Show>
       </span>
-      <div class="notif-body">
-        <p class="notif-title">
+      <div class="wc-notif-body">
+        <p class="wc-notif-title">
           <Show when={failure()}>
-            <span class="notif-badge">要対応</span>
+            <Badge tone="danger">要対応</Badge>
           </Show>
           {description().title}
         </p>
         <Show when={description().detail}>
-          {(detail) => <p class="notif-detail">{detail()}</p>}
+          {(detail) => <p class="wc-notif-detail">{detail()}</p>}
         </Show>
-        <p class="notif-meta muted">
+        <p class="wc-notif-foot">
           <span>@{props.entry.spaceHandle}</span>
           <span aria-hidden="true">·</span>
           <time datetime={props.entry.event.createdAt}>
@@ -1214,52 +1271,47 @@ export function NotificationsView() {
 
         return (
           <AppShell>
-            <div class="page-header">
-              <h1>通知</h1>
-              <p class="page-sub">
-                追加・実行・承認・失敗など、あなたの Space
-                での出来事を新しい順に表示します。
-              </p>
-            </div>
+            <PageHeader
+              eyebrow="Notifications"
+              title="通知"
+              subtitle="追加・実行・承認・失敗など、あなたの Space での出来事を新しい順に表示します。"
+            />
 
             <Switch>
               <Match when={loading()}>
-                <div class="grid-skel">
-                  <div class="skel-block" />
-                  <div class="skel-block" />
-                </div>
+                <Skeleton variant="card" count={3} />
               </Match>
               <Match when={error()}>
-                <section class="empty-state error-state">
-                  <Icons.AlertTriangle aria-hidden="true" />
-                  <p>通知を読み込めませんでした — {error()?.message}</p>
-                </section>
+                <Toast tone="error">
+                  通知を読み込めませんでした — {error()?.message}
+                </Toast>
               </Match>
               <Match when={feed()}>
                 {(list) => (
                   <Show
                     when={list().length > 0}
                     fallback={
-                      <section class="empty-state">
-                        <Icons.Bell aria-hidden="true" />
-                        <p>まだ通知はありません。</p>
-                        <p class="muted">
-                          アプリを追加したり実行したりすると、ここに出来事が並びます。
-                        </p>
-                      </section>
+                      <EmptyState
+                        ink
+                        icon={<Icons.Bell />}
+                        title="まだ通知はありません"
+                        message="アプリを追加したり実行したりすると、ここに出来事が並びます。"
+                      />
                     }
                   >
-                    <Show when={failureCount() > 0}>
-                      <p class="notif-summary">
-                        <Icons.AlertTriangle aria-hidden="true" />
-                        要対応の出来事が {failureCount()} 件あります。
-                      </p>
-                    </Show>
-                    <ul class="notif-list">
-                      <For each={list()}>
-                        {(entry) => <NotificationRow entry={entry} />}
-                      </For>
-                    </ul>
+                    <div class="wc-stack-sm">
+                      <Show when={failureCount() > 0}>
+                        <p class="wc-notif-summary">
+                          <Icons.AlertTriangle aria-hidden="true" />
+                          要対応の出来事が {failureCount()} 件あります。
+                        </p>
+                      </Show>
+                      <ul class="wc-notif-list">
+                        <For each={list()}>
+                          {(entry) => <NotificationRow entry={entry} />}
+                        </For>
+                      </ul>
+                    </div>
                   </Show>
                 )}
               </Match>

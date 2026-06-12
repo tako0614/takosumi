@@ -1,3 +1,4 @@
+import "../../styles/wave-a.css";
 import {
   createEffect,
   createMemo,
@@ -13,7 +14,6 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { Archive } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import StatusPill from "../account/components/StatusPill.tsx";
 import {
   type BackupRecord,
   type ControlApiError,
@@ -37,11 +37,18 @@ import {
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
-  controlDeploymentStatusClass,
   controlDeploymentStatusLabel,
-  controlInstallationStatusClass,
   controlInstallationStatusLabel,
 } from "../../lib/status-labels.ts";
+import { deploymentTone, installationTone } from "./run-tone.ts";
+import PageHeader from "../../components/ui/PageHeader.tsx";
+import Button from "../../components/ui/Button.tsx";
+import { Card, CardHeader } from "../../components/ui/Card.tsx";
+import { Badge, StatusBadge } from "../../components/ui/Badge.tsx";
+import KVList from "../../components/ui/KVList.tsx";
+import { Input, Select, Textarea } from "../../components/ui/Form.tsx";
+import EmptyState from "../../components/ui/EmptyState.tsx";
+import Skeleton from "../../components/ui/Skeleton.tsx";
 
 export default function ControlInstallationDetailView() {
   return <Page title="Installation">{() => <Inner />}</Page>;
@@ -184,153 +191,156 @@ function Inner() {
 
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>Installation</h1>
-        <p class="page-sub">
-          Capsule + generated root + tfstate 単位の詳細と binding を確認します。
-        </p>
-        <div class="page-actions">
-          <a href="/installations" class="btn btn-secondary">
-            一覧へ
-          </a>
-          <button
-            class="btn btn-secondary"
-            type="button"
-            disabled={backup.busy()}
-            onClick={() => void backup.run()}
-          >
-            <Archive size={16} />
-            Backup
-          </button>
-          <button
-            class="btn btn-primary"
-            type="button"
-            disabled={plan.busy()}
-            onClick={() => void plan.run()}
-          >
-            Plan
-          </button>
-          <button
-            class="btn btn-danger"
-            type="button"
-            disabled={destroyPlan.busy()}
-            onClick={() => void destroyPlan.run()}
-          >
-            Destroy plan
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="Installation"
+        title="Installation"
+        subtitle="Capsule + generated root + tfstate 単位の詳細と binding を確認します。"
+        actions={
+          <div class="wa-actions">
+            <Button variant="secondary" href="/installations">
+              一覧へ
+            </Button>
+            <Button
+              variant="secondary"
+              type="button"
+              icon={<Archive size={16} />}
+              disabled={backup.busy()}
+              busy={backup.busy()}
+              onClick={() => void backup.run()}
+            >
+              Backup
+            </Button>
+            <Button
+              variant="primary"
+              type="button"
+              disabled={plan.busy()}
+              busy={plan.busy()}
+              onClick={() => void plan.run()}
+            >
+              Plan
+            </Button>
+            <Button
+              variant="danger"
+              type="button"
+              disabled={destroyPlan.busy()}
+              busy={destroyPlan.busy()}
+              onClick={() => void destroyPlan.run()}
+            >
+              Destroy plan
+            </Button>
+          </div>
+        }
+      />
 
       <Switch>
         <Match when={installation.loading}>
-          <div class="grid-skel">
-            <div class="skel-block tall" />
-          </div>
+          <Card>
+            <Skeleton variant="block" />
+          </Card>
         </Match>
         <Match when={installation.error}>
-          <section class="empty-state error-state">
-            <p>
-              取得に失敗しました —{" "}
-              {(installation.error as ControlApiError).message}
-            </p>
-          </section>
+          <EmptyState
+            title="取得に失敗しました"
+            message={(installation.error as ControlApiError).message}
+          />
         </Match>
         <Match when={installation()}>
           {(inst) => (
-            <>
+            <div class="wa-stack">
               <Show when={plan.error()}>
-                {(m) => <p class="sign-in-error">{m()}</p>}
+                {(m) => <p class="wa-error">{m()}</p>}
               </Show>
               <Show when={destroyPlan.error()}>
-                {(m) => <p class="sign-in-error">{m()}</p>}
+                {(m) => <p class="wa-error">{m()}</p>}
               </Show>
               <Show when={backup.error()}>
-                {(m) => <p class="sign-in-error">{m()}</p>}
+                {(m) => <p class="wa-error">{m()}</p>}
               </Show>
               <Show when={rollback.error()}>
-                {(m) => <p class="sign-in-error">{m()}</p>}
+                {(m) => <p class="wa-error">{m()}</p>}
               </Show>
               <Show when={backup.result()}>
                 {(record) => (
-                  <p class="muted backup-progress">
+                  <p class="wa-notice">
                     Backup created: <code>{record().id}</code>
                   </p>
                 )}
               </Show>
 
-              <section class="detail-section">
-                <h2>
-                  {inst().name}
-                  <StatusPill
-                    class={controlInstallationStatusClass(inst().status)}
-                  >
-                    {controlInstallationStatusLabel(inst().status)}
-                  </StatusPill>
-                </h2>
-                <dl class="kv-list">
-                  <dt>ID</dt>
-                  <dd>
-                    <code>{inst().id}</code>
-                  </dd>
-                  <dt>State generation</dt>
-                  <dd>{inst().currentStateGeneration}</dd>
-                  <dt>Output snapshot</dt>
-                  <dd>
-                    <Show
-                      when={inst().currentOutputSnapshotId}
-                      fallback={<span class="muted">none</span>}
-                    >
-                      {(id) => <code>{id()}</code>}
-                    </Show>
-                  </dd>
-                  <dt>InstallConfig</dt>
-                  <dd>
-                    <Show
-                      when={installConfig()}
-                      fallback={<code>{inst().installConfigId}</code>}
-                    >
-                      {(config) => (
-                        <>
-                          {config().name} · <code>{config().trustLevel}</code>
-                        </>
-                      )}
-                    </Show>
-                  </dd>
-                </dl>
-              </section>
+              <Card>
+                <CardHeader
+                  title={
+                    <span class="wa-title-row">
+                      {inst().name}
+                      <StatusBadge
+                        status={inst().status}
+                        label={controlInstallationStatusLabel}
+                        tone={installationTone}
+                      />
+                    </span>
+                  }
+                />
+                <KVList
+                  items={[
+                    { label: "ID", value: <code>{inst().id}</code> },
+                    {
+                      label: "State generation",
+                      value: inst().currentStateGeneration,
+                    },
+                    {
+                      label: "Output snapshot",
+                      value: inst().currentOutputSnapshotId
+                        ? <code>{inst().currentOutputSnapshotId}</code>
+                        : <span class="muted">none</span>,
+                    },
+                    {
+                      label: "InstallConfig",
+                      value: installConfig()
+                        ? (
+                          <>
+                            {installConfig()!.name} ·{" "}
+                            <code>{installConfig()!.trustLevel}</code>
+                          </>
+                        )
+                        : <code>{inst().installConfigId}</code>,
+                    },
+                  ]}
+                />
+              </Card>
 
-              <section class="detail-section">
-                <h2>Source</h2>
+              <Card>
+                <CardHeader title="Source" />
                 <Show
                   when={source()}
                   fallback={<p class="muted">Source 情報を読み込み中です。</p>}
                 >
                   {(src) => (
-                    <dl class="kv-list">
-                      <dt>Name</dt>
-                      <dd>{src().name}</dd>
-                      <dt>Git URL</dt>
-                      <dd>
-                        <code>{src().url}</code>
-                      </dd>
-                      <dt>Ref / Path</dt>
-                      <dd>
-                        <code>{src().defaultRef}</code>
-                        <span class="muted"> / </span>
-                        <code>{src().defaultPath}</code>
-                      </dd>
-                      <dt>Status</dt>
-                      <dd>{src().status}</dd>
-                    </dl>
+                    <KVList
+                      items={[
+                        { label: "Name", value: src().name },
+                        { label: "Git URL", value: <code>{src().url}</code> },
+                        {
+                          label: "Ref / Path",
+                          value: (
+                            <>
+                              <code>{src().defaultRef}</code>
+                              <span class="muted"> / </span>
+                              <code>{src().defaultPath}</code>
+                            </>
+                          ),
+                        },
+                        { label: "Status", value: src().status },
+                      ]}
+                    />
                   )}
                 </Show>
-              </section>
+              </Card>
 
-              <section class="detail-section">
-                <h2>出力</h2>
-                <p class="page-sub">
-                  アプリが公開しているアドレスや値です。秘密情報は表示されません。
-                </p>
+              <Card>
+                <CardHeader
+                  title="出力"
+                  subtitle="アプリが公開しているアドレスや値です。秘密情報は表示されません。"
+                />
                 <Switch>
                   <Match when={deployments.loading}>
                     <p class="muted">読み込み中です。</p>
@@ -341,33 +351,27 @@ function Inner() {
                     </p>
                   </Match>
                   <Match when={publicOutputs().length > 0}>
-                    <dl class="kv-list">
-                      <For each={publicOutputs()}>
-                        {([name, value]) => (
-                          <>
-                            <dt>{outputLabel(name)}</dt>
-                            <dd>
-                              <OutputValue value={value} />
-                            </dd>
-                          </>
-                        )}
-                      </For>
-                    </dl>
+                    <KVList
+                      items={publicOutputs().map(([name, value]) => ({
+                        label: outputLabel(name),
+                        value: <OutputValue value={value} />,
+                      }))}
+                    />
                   </Match>
                 </Switch>
-              </section>
+              </Card>
 
-              <section class="detail-section">
-                <h2>デプロイ履歴</h2>
-                <p class="page-sub">
-                  これまでに反映された状態の記録です。過去の状態を選ぶと、その内容に戻す変更を確認できます。
-                </p>
+              <Card>
+                <CardHeader
+                  title="デプロイ履歴"
+                  subtitle="これまでに反映された状態の記録です。過去の状態を選ぶと、その内容に戻す変更を確認できます。"
+                />
                 <Switch>
                   <Match when={deployments.loading}>
                     <p class="muted">読み込み中です。</p>
                   </Match>
                   <Match when={deployments.error}>
-                    <p class="sign-in-error">
+                    <p class="wa-error">
                       履歴の取得に失敗しました —{" "}
                       {(deployments.error as ControlApiError).message}
                     </p>
@@ -376,39 +380,32 @@ function Inner() {
                     <p class="muted">まだデプロイ履歴はありません。</p>
                   </Match>
                   <Match when={deploymentHistory().length > 0}>
-                    <ul class="deployment-history">
+                    <ul class="wa-deploy-history">
                       <For each={deploymentHistory()}>
                         {(deployment) => {
                           const isCurrent = () =>
                             deployment.id === currentDeployment()?.id;
                           return (
-                            <li class="deployment-history-row">
-                              <div class="deployment-history-main">
-                                <span class="deployment-history-when">
-                                  {formatTimestamp(deployment.createdAt)}
-                                </span>
-                                <Show when={isCurrent()}>
-                                  <StatusPill class="status-ready">
-                                    現在
-                                  </StatusPill>
-                                </Show>
-                                <StatusPill
-                                  class={controlDeploymentStatusClass(
-                                    deployment.status,
-                                  )}
-                                >
-                                  {controlDeploymentStatusLabel(
-                                    deployment.status,
-                                  )}
-                                </StatusPill>
-                              </div>
-                              <div class="deployment-history-meta muted">
+                            <li class="wa-deploy-row">
+                              <span class="wa-deploy-when">
+                                {formatTimestamp(deployment.createdAt)}
+                              </span>
+                              <Show when={isCurrent()}>
+                                <Badge tone="ok">現在</Badge>
+                              </Show>
+                              <StatusBadge
+                                status={deployment.status}
+                                label={controlDeploymentStatusLabel}
+                                tone={deploymentTone}
+                              />
+                              <span class="wa-deploy-meta">
                                 世代 {deployment.stateGeneration} ·{" "}
                                 <code>{deployment.id}</code>
-                              </div>
+                              </span>
                               <Show when={!isCurrent()}>
-                                <button
-                                  class="btn btn-secondary"
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
                                   type="button"
                                   disabled={rollback.busy()}
                                   onClick={() =>
@@ -416,7 +413,7 @@ function Inner() {
                                   }
                                 >
                                   この状態に戻す
-                                </button>
+                                </Button>
                               </Show>
                             </li>
                           );
@@ -425,31 +422,30 @@ function Inner() {
                     </ul>
                   </Match>
                 </Switch>
-              </section>
+              </Card>
 
-              <section class="detail-section">
-                <h2>Dependencies</h2>
-                <div class="dependency-columns">
+              <Card>
+                <CardHeader title="Dependencies" />
+                <div class="wa-dep-columns">
                   <DependencyList title="Depends on" rows={producers()} />
                   <DependencyList title="Used by" rows={consumers()} />
                 </div>
-              </section>
+              </Card>
 
-              <section class="detail-section">
-                <h2>Provider bindings</h2>
+              <Card>
+                <CardHeader title="Provider bindings" />
                 <form
-                  class="install-form"
                   onSubmit={(e) => {
                     e.preventDefault();
                     void saveProfile.run();
                   }}
                 >
-                  <div class="capability-grid">
+                  <div class="wa-binding-grid">
                     <For each={bindingRows()}>
                       {(row, index) => (
-                        <div class="capability-row">
-                          <div class="capability-head">
-                            <input
+                        <div class="wa-binding-row">
+                          <div class="wa-binding-head">
+                            <Input
                               value={row.provider}
                               onInput={(e) =>
                                 updateProviderBindingRow(
@@ -460,7 +456,7 @@ function Inner() {
                               }
                               placeholder="registry.opentofu.org/cloudflare/cloudflare"
                             />
-                            <input
+                            <Input
                               value={row.alias}
                               onInput={(e) =>
                                 updateProviderBindingRow(
@@ -482,8 +478,8 @@ function Inner() {
                               )}
                             </Show>
                           </div>
-                          <div class="capability-controls">
-                            <select
+                          <div class="wa-binding-controls">
+                            <Select
                               value={row.mode}
                               onChange={(e) =>
                                 updateProviderBindingRow(
@@ -500,11 +496,9 @@ function Inner() {
                               <option value="connection">connection</option>
                               <option value="manual">manual</option>
                               <option value="disabled">disabled</option>
-                            </select>
-                            <Show
-                              when={row.mode === "connection"}
-                            >
-                              <select
+                            </Select>
+                            <Show when={row.mode === "connection"}>
+                              <Select
                                 value={row.connectionId}
                                 onChange={(e) =>
                                   updateProviderBindingRow(
@@ -524,10 +518,10 @@ function Inner() {
                                     </option>
                                   )}
                                 </For>
-                              </select>
+                              </Select>
                             </Show>
                             <Show when={row.mode === "manual"}>
-                              <textarea
+                              <Textarea
                                 rows={3}
                                 value={row.manualValues}
                                 onInput={(e) =>
@@ -541,8 +535,9 @@ function Inner() {
                                 spellcheck={false}
                               />
                             </Show>
-                            <button
-                              class="btn btn-secondary"
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               type="button"
                               onClick={() =>
                                 setBindingRows((prev) =>
@@ -551,15 +546,15 @@ function Inner() {
                               }
                             >
                               Remove
-                            </button>
+                            </Button>
                           </div>
                         </div>
                       )}
                     </For>
                   </div>
-                  <div class="form-actions">
-                    <button
-                      class="btn btn-secondary"
+                  <div class="wa-form-actions">
+                    <Button
+                      variant="secondary"
                       type="button"
                       onClick={() =>
                         setBindingRows((prev) => [
@@ -575,24 +570,25 @@ function Inner() {
                       }
                     >
                       Add provider
-                    </button>
-                    <button
-                      class="btn btn-primary"
+                    </Button>
+                    <Button
+                      variant="primary"
                       type="submit"
                       disabled={saveProfile.busy()}
+                      busy={saveProfile.busy()}
                     >
                       {saveProfile.busy() ? "保存中..." : "保存"}
-                    </button>
+                    </Button>
                   </div>
                   <Show when={formError()}>
-                    {(m) => <p class="sign-in-error">{m()}</p>}
+                    {(m) => <p class="wa-error">{m()}</p>}
                   </Show>
                   <Show when={saveProfile.error()}>
-                    {(m) => <p class="sign-in-error">{m()}</p>}
+                    {(m) => <p class="wa-error">{m()}</p>}
                   </Show>
                 </form>
-              </section>
-            </>
+              </Card>
+            </div>
           )}
         </Match>
       </Switch>
@@ -610,15 +606,15 @@ function DependencyList(props: {
 }) {
   return (
     <div>
-      <h3>{props.title}</h3>
+      <h4>{props.title}</h4>
       <Show when={props.rows.length > 0} fallback={<p class="muted">none</p>}>
-        <ul class="depends-on-list">
+        <ul class="wa-dep-list">
           <For each={props.rows}>
             {(row) => (
               <li>
                 <code>{row.name}</code>
                 <Show when={row.outputs.length > 0}>
-                  <span class="muted">
+                  <span class="wa-dep-edge">
                     {" "}
                     {row.outputs
                       .map((output) => `${output.from}→${output.to}`)
@@ -668,14 +664,15 @@ function OutputValue(props: { readonly value: unknown }): JSX.Element {
       fallback={<code>{stringifyOutput(props.value)}</code>}
     >
       <Match when={isUrlString(props.value)}>
-        <a
-          class="btn btn-primary output-launch"
+        <Button
+          variant="primary"
+          size="sm"
           href={props.value as string}
           target="_blank"
           rel="noreferrer noopener"
         >
           {props.value as string}
-        </a>
+        </Button>
       </Match>
       <Match when={typeof props.value === "string"}>
         <code>{props.value as string}</code>

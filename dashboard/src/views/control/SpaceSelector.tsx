@@ -7,6 +7,7 @@
  * the top of every control view so the operator can switch Spaces from anywhere
  * in the §31 surface.
  */
+import "../../styles/wave-a.css";
 import { createResource, createSignal, For, Show } from "solid-js";
 import {
   type ControlApiError,
@@ -18,6 +19,8 @@ import {
   currentSpaceId,
   setCurrentSpaceId,
 } from "./space-state.ts";
+import Button from "../../components/ui/Button.tsx";
+import { FormField, Input, Select } from "../../components/ui/Form.tsx";
 
 export default function SpaceSelector() {
   const [spaces, { refetch }] = createResource(listSpaces);
@@ -58,21 +61,20 @@ export default function SpaceSelector() {
   };
 
   return (
-    <section class="space-selector">
-      <div class="space-selector-row">
-        <label class="space-selector-field">
-          <span class="space-selector-label">Space</span>
+    <section class="wa-space-selector">
+      <div class="wa-space-row">
+        <FormField class="wa-space-field" label="Space">
           <Show
             when={!spaces.loading && (spaces() ?? []).length > 0}
             fallback={
-              <select disabled>
+              <Select disabled>
                 <option>
                   {spaces.loading ? "読み込み中..." : "Space がありません"}
                 </option>
-              </select>
+              </Select>
             }
           >
-            <select
+            <Select
               value={currentSpaceId()}
               onChange={(e) => setCurrentSpaceId(e.currentTarget.value)}
             >
@@ -83,30 +85,30 @@ export default function SpaceSelector() {
                   </option>
                 )}
               </For>
-            </select>
+            </Select>
           </Show>
-        </label>
+        </FormField>
 
-        <button
-          class="btn btn-secondary btn-sm"
+        <Button
+          variant="secondary"
+          size="sm"
           type="button"
           onClick={() => setCreating((v) => !v)}
         >
           {creating() ? "キャンセル" : "+ 新しい Space"}
-        </button>
+        </Button>
       </div>
 
       <Show when={spaces.error}>
-        <p class="sign-in-error">
+        <p class="wa-error">
           Space の取得に失敗しました — {(spaces.error as ControlApiError).message}
         </p>
       </Show>
 
       <Show when={creating()}>
-        <form class="space-selector-create" onSubmit={submitNew}>
-          <label class="form-field">
-            ハンドル（@なし）
-            <input
+        <form class="wa-space-create" onSubmit={submitNew}>
+          <FormField label="ハンドル（@なし）">
+            <Input
               type="text"
               value={handle()}
               onInput={(e) => setHandle(e.currentTarget.value)}
@@ -114,12 +116,12 @@ export default function SpaceSelector() {
               autocomplete="off"
               spellcheck={false}
             />
-          </label>
-          <button class="btn btn-primary btn-sm" type="submit" disabled={busy()}>
+          </FormField>
+          <Button variant="primary" size="sm" type="submit" busy={busy()}>
             {busy() ? "作成中..." : "作成"}
-          </button>
+          </Button>
           <Show when={error()}>
-            {(m) => <p class="sign-in-error">{m()}</p>}
+            {(m) => <p class="wa-error">{m()}</p>}
           </Show>
         </form>
       </Show>

@@ -1,7 +1,8 @@
+import "../../styles/wave-b.css";
 import { createResource, For, Match, Show, Switch } from "solid-js";
+import { KeyRound, Boxes } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import StatusPill from "../account/components/StatusPill.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
 import { currentSpaceId } from "./space-state.ts";
 import {
@@ -10,6 +11,16 @@ import {
   type ProviderCredentialSource,
   type ProviderTemplate,
 } from "../../lib/control-api.ts";
+import {
+  Badge,
+  Card,
+  CardHeader,
+  CardSection,
+  EmptyState,
+  Eyebrow,
+  PageHeader,
+  Skeleton,
+} from "../../components/ui/index.ts";
 
 interface ProviderSurface {
   readonly backendAvailable: boolean;
@@ -26,73 +37,72 @@ function Inner() {
 
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>Providers</h1>
-        <p class="page-sub">
-          Provider Template と Provider Env Set の導入面を確認します。
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="CONTROL"
+        title="Providers"
+        subtitle="Provider Template と Provider Env Set の導入面を確認します。"
+      />
 
       <SpaceSelector />
 
       <Show
         when={spaceId()}
         fallback={
-          <section class="empty-state">
-            <p>Space を選択すると provider surface を表示します。</p>
-          </section>
+          <EmptyState
+            ink
+            icon={<Boxes size={28} />}
+            title="Space を選択"
+            message="Space を選択すると provider surface を表示します。"
+          />
         }
       >
         <Switch>
           <Match when={surface.loading}>
-            <div class="grid-skel">
-              <div class="skel-card" />
-              <div class="skel-card" />
+            <div class="wb-provider-grid">
+              <Skeleton variant="card" count={3} />
             </div>
           </Match>
           <Match when={surface.error}>
-            <section class="empty-state error-state">
-              <p>
-                取得に失敗しました —{" "}
-                {(surface.error as ControlApiError).message}
-              </p>
-            </section>
+            <EmptyState
+              icon={<Boxes size={28} />}
+              title="取得に失敗しました"
+              message={(surface.error as ControlApiError).message}
+            />
           </Match>
           <Match when={surface()}>
             {(state) => (
-              <>
+              <div class="wb-stack">
                 <Show when={!state().backendAvailable}>
-                  <section class="empty-state provider-backend-note">
-                    <p>
-                      Provider Template API はまだ backend
-                      に接続されていません。 UI surface
-                      は先に有効化されています。
-                    </p>
-                  </section>
+                  <Card>
+                    <CardSection>
+                      <p class="wb-note">
+                        Provider Template API はまだ backend
+                        に接続されていません。 UI surface は先に有効化されています。
+                      </p>
+                    </CardSection>
+                  </Card>
                 </Show>
 
-                <section class="detail-section">
-                  <div class="section-heading-row">
-                    <div>
-                      <h2>Provider Templates</h2>
-                      <p class="muted">
-                        Takosumi 提供と user env set の credential source、 推奨
-                        env 名、補助 flow を一覧します。
-                      </p>
-                    </div>
+                <section class="wb-stack-tight">
+                  <div>
+                    <Eyebrow>Provider Templates</Eyebrow>
+                    <p class="wb-note">
+                      Takosumi 提供と user env set の credential source、 推奨
+                      env 名、補助 flow を一覧します。
+                    </p>
                   </div>
 
                   <Show
                     when={state().providers.length > 0}
                     fallback={
-                      <section class="empty-state">
-                        <p>
-                          Provider Template の backend response はまだ空です。
-                        </p>
-                      </section>
+                      <EmptyState
+                        icon={<Boxes size={28} />}
+                        title="Provider Template はまだ空です"
+                        message="Provider Template の backend response はまだ空です。"
+                      />
                     }
                   >
-                    <div class="provider-grid">
+                    <div class="wb-provider-grid">
                       <For each={state().providers}>
                         {(provider) => <ProviderCard provider={provider} />}
                       </For>
@@ -100,28 +110,28 @@ function Inner() {
                   </Show>
                 </section>
 
-                <section class="detail-section">
-                  <div class="section-heading-row">
-                    <div>
-                      <h2>Provider Env Sets</h2>
-                      <p class="muted">
-                        Space-owned provider credentials は Connection
-                        として管理します。 OAuth / AssumeRole / impersonation は
-                        env set 作成・更新の補助 flow です。
-                      </p>
-                    </div>
+                <section class="wb-stack-tight">
+                  <div>
+                    <Eyebrow>Provider Env Sets</Eyebrow>
+                    <p class="wb-note">
+                      Space-owned provider credentials は Connection
+                      として管理します。 OAuth / AssumeRole / impersonation は
+                      env set 作成・更新の補助 flow です。
+                    </p>
                   </div>
 
-                  <section class="empty-state">
-                    <p>
-                      Provider Env Set は Connections の「その他のプロバイダー
-                      （Provider Env Set）」から作成します。任意 provider 名と
-                      環境変数 (NAME=value) を登録すると、user_env_set
-                      credential source と custom runner class で実行されます。
-                    </p>
-                  </section>
+                  <Card>
+                    <CardSection>
+                      <p class="wb-note">
+                        Provider Env Set は Connections の「その他のプロバイダー
+                        （Provider Env Set）」から作成します。任意 provider 名と
+                        環境変数 (NAME=value) を登録すると、user_env_set
+                        credential source と custom runner class で実行されます。
+                      </p>
+                    </CardSection>
+                  </Card>
                 </section>
-              </>
+              </div>
             )}
           </Match>
         </Switch>
@@ -153,47 +163,55 @@ async function loadProviderSurface(spaceId: string): Promise<ProviderSurface> {
 function ProviderCard(props: { readonly provider: ProviderTemplate }) {
   const provider = () => props.provider;
   return (
-    <article class="provider-card">
-      <div class="provider-card-head">
-        <div>
-          <h3>{provider().displayName}</h3>
-          <code>{provider().providerSource}</code>
-        </div>
-        <StatusPill class={providerSourceClass(provider().credentialSources)}>
-          {providerSourceLabel(provider().credentialSources)}
-        </StatusPill>
-      </div>
-
-      <dl class="provider-meta">
-        <div>
-          <dt>Helpers</dt>
-          <dd>
-            <InlineCodeList items={provider().helpers} />
-          </dd>
-        </div>
-        <div>
-          <dt>Env</dt>
-          <dd>
-            <InlineCodeList items={provider().recommendedEnvNames} />
-          </dd>
-        </div>
-        <div>
-          <dt>Credential</dt>
-          <dd>
-            <InlineCodeList items={provider().credentialSources} />
-          </dd>
-        </div>
-      </dl>
-    </article>
+    <Card hover>
+      <CardHeader
+        title={provider().displayName}
+        subtitle={<code class="wb-mono">{provider().providerSource}</code>}
+        actions={
+          <Badge tone={providerSourceTone(provider().credentialSources)}>
+            {providerSourceLabel(provider().credentialSources)}
+          </Badge>
+        }
+      />
+      <CardSection>
+        <dl class="wb-provider-meta">
+          <div class="wb-provider-meta-row">
+            <dt>Helpers</dt>
+            <dd>
+              <InlineCodeList items={provider().helpers} />
+            </dd>
+          </div>
+          <div class="wb-provider-meta-row">
+            <dt>Env</dt>
+            <dd>
+              <InlineCodeList items={provider().recommendedEnvNames} />
+            </dd>
+          </div>
+          <div class="wb-provider-meta-row">
+            <dt>Credential</dt>
+            <dd>
+              <InlineCodeList items={provider().credentialSources} />
+            </dd>
+          </div>
+        </dl>
+      </CardSection>
+    </Card>
   );
 }
 
 function InlineCodeList(props: { readonly items: readonly string[] }) {
   return (
     <Show when={props.items.length > 0} fallback={<span class="muted">—</span>}>
-      <span class="inline-code-list">
-        <For each={props.items}>{(item) => <code>{item}</code>}</For>
-      </span>
+      <ul class="wb-chips">
+        <For each={props.items}>
+          {(item) => (
+            <li class="wb-chip">
+              <KeyRound size={11} />
+              {item}
+            </li>
+          )}
+        </For>
+      </ul>
     </Show>
   );
 }
@@ -206,10 +224,8 @@ function providerSourceLabel(
     : "user env set";
 }
 
-function providerSourceClass(
+function providerSourceTone(
   sources: readonly ProviderCredentialSource[],
-): string {
-  return sources.includes("takosumi_managed")
-    ? "status-ready"
-    : "status-installing";
+): "ok" | "info" {
+  return sources.includes("takosumi_managed") ? "ok" : "info";
 }

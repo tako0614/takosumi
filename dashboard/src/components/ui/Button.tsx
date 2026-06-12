@@ -16,6 +16,10 @@ interface Props extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
   icon?: JSX.Element;
   /** Render as an anchor when an href is given (keeps button styling). */
   href?: string;
+  /** Anchor target (only meaningful with `href`). */
+  target?: string;
+  /** Anchor rel (only meaningful with `href`). */
+  rel?: string;
 }
 
 const VARIANT_CLASS: Record<Variant, string> = {

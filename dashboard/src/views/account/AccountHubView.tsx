@@ -1,3 +1,4 @@
+import "../../styles/wave-c.css";
 import {
   CreditCard,
   ExternalLink,
@@ -5,6 +6,7 @@ import {
   Monitor,
   Save,
   Settings,
+  User,
 } from "lucide-solid";
 import {
   createEffect,
@@ -17,6 +19,21 @@ import {
 import { useNavigate } from "@solidjs/router";
 import AppShell from "./components/shell/AppShell.tsx";
 import Page from "./components/auth/Page.tsx";
+import {
+  Button,
+  Card,
+  CardHeader,
+  CardSection,
+  type Column,
+  DataTable,
+  FormField,
+  Input,
+  KVList,
+  PageHeader,
+  Select,
+  Textarea,
+  Toast,
+} from "../../components/ui/index.ts";
 import { clearSession, type SessionRecord } from "./lib/session.ts";
 import { rpc, ApiError } from "./lib/api.ts";
 import {
@@ -92,38 +109,41 @@ export function AccountHubView() {
     <Page title="Account">
       {() => (
         <AppShell>
-          <div class="page-header">
-            <h1>アカウント</h1>
-            <p class="page-sub">
-              プロフィール、 設定、 お支払い、 アプリの管理。
-            </p>
+          <PageHeader
+            eyebrow="Account"
+            title="アカウント"
+            subtitle="プロフィール、設定、お支払い、アプリの管理。"
+          />
+
+          <div class="wc-stack">
+            <Card>
+              <CardHeader title="アカウント設定" />
+              <div class="wc-nav-grid">
+                {ACCOUNT_LINKS.map((link) => (
+                  <a class="wc-nav-card" href={link.href}>
+                    {link.label}
+                  </a>
+                ))}
+              </div>
+            </Card>
+
+            <Card>
+              <CardHeader
+                title="アプリの管理"
+                subtitle="導入したアプリ、接続元、連携、バックアップなどの詳細管理。"
+              />
+              <div class="wc-nav-grid">
+                {MANAGE_LINKS.map((link) => (
+                  <a class="wc-nav-card" href={link.href}>
+                    <span>{link.label}</span>
+                    {link.sub
+                      ? <span class="wc-nav-card-spec">{link.sub}</span>
+                      : null}
+                  </a>
+                ))}
+              </div>
+            </Card>
           </div>
-
-          <section class="detail-section">
-            <h2>アカウント設定</h2>
-            <div class="account-nav">
-              {ACCOUNT_LINKS.map((link) => (
-                <a href={link.href}>{link.label}</a>
-              ))}
-            </div>
-          </section>
-
-          <section class="detail-section">
-            <h2>アプリの管理</h2>
-            <p class="page-sub">
-              導入したアプリ、 接続元、 連携、 バックアップなどの詳細管理。
-            </p>
-            <div class="account-nav">
-              {MANAGE_LINKS.map((link) => (
-                <a href={link.href}>
-                  <span class="account-nav-label">{link.label}</span>
-                  {link.sub
-                    ? <span class="account-nav-spec">{link.sub}</span>
-                    : null}
-                </a>
-              ))}
-            </div>
-          </section>
         </AppShell>
       )}
     </Page>
@@ -201,90 +221,98 @@ function SettingsInner(props: { readonly session: SessionRecord }) {
 
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>Settings</h1>
-        <p class="page-sub">
-          Account identity と現在の Space 設定を管理します。
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Settings"
+        title="設定"
+        subtitle="Account identity と現在の Space 設定を管理します。"
+      />
 
-      <section class="detail-section">
-        <h2>
-          <Settings size={18} /> Account
-        </h2>
-        <dl class="kv-list">
-          <dt>Subject</dt>
-          <dd>
-            <code>{props.session.subject}</code>
-          </dd>
-          <dt>Display name</dt>
-          <dd>{props.session.displayName ?? "—"}</dd>
-          <dt>Email</dt>
-          <dd>{props.session.email ?? "—"}</dd>
-          <dt>Primary account</dt>
-          <dd>
-            <Show
-              when={props.session.primaryAccountId}
-              fallback={<span class="muted">—</span>}
-            >
-              {(id) => <code>{id()}</code>}
+      <div class="wc-stack">
+        <Card>
+          <CardHeader
+            title={
+              <span style="display:inline-flex;align-items:center;gap:8px">
+                <Settings size={18} /> Account
+              </span>
+            }
+          />
+          <KVList
+            items={[
+              {
+                label: "Subject",
+                value: <code class="wc-code">{props.session.subject}</code>,
+              },
+              { label: "Display name", value: props.session.displayName ?? "—" },
+              { label: "Email", value: props.session.email ?? "—" },
+              {
+                label: "Primary account",
+                value: (
+                  <Show
+                    when={props.session.primaryAccountId}
+                    fallback={<span class="muted">—</span>}
+                  >
+                    {(id) => <code class="wc-code">{id()}</code>}
+                  </Show>
+                ),
+              },
+            ]}
+          />
+          <CardSection>
+            <div class="wc-form-actions">
+              <Button variant="secondary" size="sm" href="/account/profile">
+                プロフィール
+              </Button>
+              <Button variant="secondary" size="sm" href="/account/sessions">
+                サインイン中の端末
+              </Button>
+            </div>
+          </CardSection>
+        </Card>
+
+        <Card>
+          <CardHeader title="Current Space" />
+          <Show
+            when={!spaces.loading && (spaces() ?? []).length > 0}
+            fallback={
+              <p class="muted">
+                {spaces.loading
+                  ? "Space を読み込み中..."
+                  : "Space はまだありません。"}
+              </p>
+            }
+          >
+            <FormField label="Space" class="settings-space-picker">
+              <Select
+                value={selectedSpace()?.id ?? ""}
+                onChange={(e) => setCurrentSpaceId(e.currentTarget.value)}
+              >
+                <For each={spaces() ?? []}>
+                  {(space) => (
+                    <option value={space.id}>
+                      @{space.handle} — {space.displayName}
+                    </option>
+                  )}
+                </For>
+              </Select>
+            </FormField>
+            <Show when={selectedSpace()}>
+              {(space) => (
+                <SpaceDetails
+                  space={space()}
+                  displayNameDraft={displayNameDraft()}
+                  policyDraft={policyDraft()}
+                  saving={saving()}
+                  saveError={saveError()}
+                  saveMessage={saveMessage()}
+                  onDisplayNameInput={setDisplayNameDraft}
+                  onPolicyInput={setPolicyDraft}
+                  onSubmit={saveSpace}
+                />
+              )}
             </Show>
-          </dd>
-        </dl>
-        <div class="form-actions">
-          <a class="btn btn-secondary btn-sm" href="/account/profile">
-            プロフィール
-          </a>
-          <a class="btn btn-secondary btn-sm" href="/account/sessions">
-            サインイン中の端末
-          </a>
-        </div>
-      </section>
-
-      <section class="detail-section">
-        <h2>Current Space</h2>
-        <Show
-          when={!spaces.loading && (spaces() ?? []).length > 0}
-          fallback={
-            <p class="muted">
-              {spaces.loading
-                ? "Space を読み込み中..."
-                : "Space はまだありません。"}
-            </p>
-          }
-        >
-          <label class="form-field settings-space-picker">
-            Space
-            <select
-              value={selectedSpace()?.id ?? ""}
-              onChange={(e) => setCurrentSpaceId(e.currentTarget.value)}
-            >
-              <For each={spaces() ?? []}>
-                {(space) => (
-                  <option value={space.id}>
-                    @{space.handle} — {space.displayName}
-                  </option>
-                )}
-              </For>
-            </select>
-          </label>
-          <Show when={selectedSpace()}>
-            {(space) => (
-              <SpaceDetails
-                space={space()}
-                displayNameDraft={displayNameDraft()}
-                policyDraft={policyDraft()}
-                saving={saving()}
-                saveError={saveError()}
-                saveMessage={saveMessage()}
-                onDisplayNameInput={setDisplayNameDraft}
-                onPolicyInput={setPolicyDraft}
-                onSubmit={saveSpace}
-              />
-            )}
           </Show>
-        </Show>
-      </section>
+        </Card>
+      </div>
     </AppShell>
   );
 }
@@ -301,67 +329,72 @@ function SpaceDetails(props: {
   readonly onSubmit: (event: Event) => void;
 }) {
   return (
-    <div class="settings-space-detail">
-      <dl class="kv-list">
-        <dt>Handle</dt>
-        <dd>
-          <code>@{props.space.handle}</code>
-        </dd>
-        <dt>Type</dt>
-        <dd>
-          <code>{props.space.type}</code>
-        </dd>
-        <dt>Owner</dt>
-        <dd>
-          <code>{props.space.ownerUserId}</code>
-        </dd>
-        <dt>Billing account</dt>
-        <dd>
-          <Show
-            when={props.space.billingAccountId}
-            fallback={<span class="muted">not linked</span>}
-          >
-            {(id) => <code>{id()}</code>}
-          </Show>
-        </dd>
-        <dt>Updated</dt>
-        <dd>{new Date(props.space.updatedAt).toLocaleString("ja-JP")}</dd>
-      </dl>
+    <CardSection class="settings-space-detail">
+      <KVList
+        items={[
+          {
+            label: "Handle",
+            value: <code class="wc-code">@{props.space.handle}</code>,
+          },
+          {
+            label: "Type",
+            value: <code class="wc-code">{props.space.type}</code>,
+          },
+          {
+            label: "Owner",
+            value: <code class="wc-code">{props.space.ownerUserId}</code>,
+          },
+          {
+            label: "Billing account",
+            value: (
+              <Show
+                when={props.space.billingAccountId}
+                fallback={<span class="muted">not linked</span>}
+              >
+                {(id) => <code class="wc-code">{id()}</code>}
+              </Show>
+            ),
+          },
+          {
+            label: "Updated",
+            value: new Date(props.space.updatedAt).toLocaleString("ja-JP"),
+          },
+        ]}
+      />
 
-      <form class="settings-space-form" onSubmit={props.onSubmit}>
-        <label class="form-field">
-          Display name
-          <input
+      <form class="wc-form settings-space-form" onSubmit={props.onSubmit}>
+        <FormField label="Display name">
+          <Input
             value={props.displayNameDraft}
             onInput={(e) => props.onDisplayNameInput(e.currentTarget.value)}
           />
-        </label>
-        <label class="form-field">
-          Space policy JSON
-          <textarea
-            class="settings-policy-editor"
+        </FormField>
+        <FormField label="Space policy JSON">
+          <Textarea
+            class="wc-policy-editor"
             spellcheck={false}
             value={props.policyDraft}
             onInput={(e) => props.onPolicyInput(e.currentTarget.value)}
           />
-        </label>
-        <div class="form-actions">
-          <button class="btn btn-primary" type="submit" disabled={props.saving}>
-            <Save size={16} /> {props.saving ? "保存中..." : "保存"}
-          </button>
+        </FormField>
+        <div class="wc-form-actions">
+          <Button
+            variant="primary"
+            type="submit"
+            busy={props.saving}
+            icon={<Save size={16} />}
+          >
+            {props.saving ? "保存中..." : "保存"}
+          </Button>
         </div>
         <Show when={props.saveError}>
-          {(message) => (
-            <p class="sign-in-error" role="alert">
-              {message()}
-            </p>
-          )}
+          {(message) => <Toast tone="error">{message()}</Toast>}
         </Show>
         <Show when={props.saveMessage}>
-          {(message) => <p class="success-note">{message()}</p>}
+          {(message) => <Toast tone="success">{message()}</Toast>}
         </Show>
       </form>
-    </div>
+    </CardSection>
   );
 }
 
@@ -538,272 +571,291 @@ function BillingInner(props: { readonly session: SessionRecord }) {
     }
   };
 
+  const reservationColumns: readonly Column<CreditReservation>[] = [
+    { header: "Status", cell: (r) => <code class="wc-code">{r.status}</code> },
+    { header: "Credits", cell: (r) => r.estimatedCredits },
+    { header: "Mode", cell: (r) => r.mode },
+    { header: "Run", cell: (r) => <code class="wc-code">{r.runId}</code> },
+    { header: "Expires", cell: (r) => formatDateTime(r.expiresAt) },
+  ];
+
+  const usageColumns: readonly Column<UsageEvent>[] = [
+    { header: "Kind", cell: (e) => <code class="wc-code">{e.kind}</code> },
+    { header: "Quantity", cell: (e) => e.quantity },
+    { header: "Credits", cell: (e) => e.credits },
+    {
+      header: "Run",
+      cell: (e) => (
+        <Show when={e.runId} fallback={<span class="muted">—</span>}>
+          {(runId) => <code class="wc-code">{runId()}</code>}
+        </Show>
+      ),
+    },
+    { header: "Created", cell: (e) => formatDateTime(e.createdAt) },
+  ];
+
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>Billing</h1>
-        <p class="page-sub">
-          Space billing mode は disabled / showback / enforce のいずれかです。
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Billing"
+        title="お支払い"
+        subtitle="Space billing mode は disabled / showback / enforce のいずれかです。"
+      />
 
-      <section class="detail-section">
-        <h2>
-          <CreditCard size={18} /> Billing context
-        </h2>
-        <dl class="kv-list">
-          <dt>Account subject</dt>
-          <dd>
-            <code>{props.session.subject}</code>
-          </dd>
-          <dt>Email</dt>
-          <dd>{props.session.email ?? "—"}</dd>
-          <dt>Current Space</dt>
-          <dd>
-            <Show
-              when={selectedSpace()}
-              fallback={<span class="muted">Space 未選択</span>}
-            >
-              {(space) => (
-                <>
-                  <code>@{space().handle}</code>{" "}
-                  <span class="muted">({space().id})</span>
-                </>
+      <div class="wc-stack">
+        <Card>
+          <CardHeader
+            title={
+              <span style="display:inline-flex;align-items:center;gap:8px">
+                <CreditCard size={18} /> Billing context
+              </span>
+            }
+          />
+          <KVList
+            items={[
+              {
+                label: "Account subject",
+                value: <code class="wc-code">{props.session.subject}</code>,
+              },
+              { label: "Email", value: props.session.email ?? "—" },
+              {
+                label: "Current Space",
+                value: (
+                  <Show
+                    when={selectedSpace()}
+                    fallback={<span class="muted">Space 未選択</span>}
+                  >
+                    {(space) => (
+                      <>
+                        <code class="wc-code">@{space().handle}</code>{" "}
+                        <span class="muted">({space().id})</span>
+                      </>
+                    )}
+                  </Show>
+                ),
+              },
+              {
+                label: "Billing mode",
+                value: (
+                  <code class="wc-code">
+                    {currentSettings()?.mode ?? "disabled"}
+                  </code>
+                ),
+              },
+              {
+                label: "Billing provider",
+                value: (
+                  <code class="wc-code">
+                    {currentSettings()?.provider ?? "none"}
+                  </code>
+                ),
+              },
+              {
+                label: "Billing account",
+                value: (
+                  <Show
+                    when={selectedSpace()?.billingAccountId}
+                    fallback={<span class="muted">not linked</span>}
+                  >
+                    {(id) => <code class="wc-code">{id()}</code>}
+                  </Show>
+                ),
+              },
+              {
+                label: "Available credits",
+                value: currentBalance()?.availableCredits ?? 0,
+              },
+              {
+                label: "Reserved credits",
+                value: currentBalance()?.reservedCredits ?? 0,
+              },
+            ]}
+          />
+        </Card>
+
+        <Card>
+          <CardHeader title="Space billing settings" />
+          <div class="wc-card-stack">
+            <form class="wc-form" onSubmit={saveBillingSettings}>
+              <FormField label="Mode">
+                <Select
+                  value={billingMode()}
+                  onChange={(e) => {
+                    const next = e.currentTarget.value as BillingMode;
+                    setBillingMode(next);
+                    if (next === "disabled") setBillingProvider("none");
+                    if (next === "enforce" && billingProvider() === "none") {
+                      setBillingProvider("manual");
+                    }
+                  }}
+                >
+                  <option value="disabled">disabled</option>
+                  <option value="showback">showback</option>
+                  <option value="enforce">enforce</option>
+                </Select>
+              </FormField>
+              <FormField label="Provider">
+                <Select
+                  value={billingProvider()}
+                  disabled={billingMode() === "disabled"}
+                  onChange={(e) =>
+                    setBillingProvider(e.currentTarget.value as BillingProvider)
+                  }
+                >
+                  <option value="none">none</option>
+                  <option value="manual">manual</option>
+                  <option value="stripe">stripe</option>
+                </Select>
+              </FormField>
+              <div class="wc-form-actions">
+                <Button
+                  variant="primary"
+                  type="submit"
+                  busy={billingBusy()}
+                  icon={<Save size={16} />}
+                >
+                  {billingBusy() ? "保存中..." : "保存"}
+                </Button>
+              </div>
+            </form>
+            <form class="wc-form" onSubmit={submitTopUp}>
+              <FormField label="Top-up credits">
+                <Input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={topUpCredits()}
+                  onInput={(e) => setTopUpCredits(e.currentTarget.value)}
+                />
+              </FormField>
+              <div class="wc-form-actions">
+                <Button variant="secondary" type="submit" busy={topUpBusy()}>
+                  {topUpBusy() ? "追加中..." : "Credits を追加"}
+                </Button>
+              </div>
+            </form>
+            <Show when={billingError()}>
+              {(m) => <Toast tone="error">{m()}</Toast>}
+            </Show>
+            <Show when={billingMessage()}>
+              {(m) => <Toast tone="success">{m()}</Toast>}
+            </Show>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader title="Credit reservations" />
+          <Show
+            when={(reservations() ?? []).length > 0}
+            fallback={
+              <p class="muted">credit reservation はまだありません。</p>
+            }
+          >
+            <DataTable
+              columns={reservationColumns}
+              rows={reservations() ?? []}
+              rowKey={(r) => r.runId}
+            />
+          </Show>
+        </Card>
+
+        <Card>
+          <CardHeader title="Usage" />
+          <Show
+            when={(usage() ?? []).length > 0}
+            fallback={<p class="muted">usage event はまだありません。</p>}
+          >
+            <DataTable
+              columns={usageColumns}
+              rows={usage() ?? []}
+              rowKey={(_e, i) => i}
+            />
+          </Show>
+        </Card>
+
+        <Card>
+          <CardHeader title="Hosted billing" />
+          <div class="wc-card-stack">
+            <div class="wc-form-actions">
+              <Button
+                variant="secondary"
+                type="button"
+                busy={portalBusy()}
+                onClick={openBillingPortal}
+                icon={<ExternalLink size={16} />}
+              >
+                {portalBusy() ? "Portal 作成中..." : "Customer Portal を開く"}
+              </Button>
+            </div>
+            <Show when={portalError()}>
+              {(m) => <Toast tone="error">{m()}</Toast>}
+            </Show>
+            <Show when={portalUrl()}>
+              {(url) => (
+                <p class="muted">
+                  Redirecting to{" "}
+                  <a href={url()} rel="noreferrer">
+                    Stripe Customer Portal <ExternalLink size={14} />
+                  </a>
+                </p>
               )}
             </Show>
-          </dd>
-          <dt>Billing mode</dt>
-          <dd>
-            <code>{currentSettings()?.mode ?? "disabled"}</code>
-          </dd>
-          <dt>Billing provider</dt>
-          <dd>
-            <code>{currentSettings()?.provider ?? "none"}</code>
-          </dd>
-          <dt>Billing account</dt>
-          <dd>
-            <Show
-              when={selectedSpace()?.billingAccountId}
-              fallback={<span class="muted">not linked</span>}
-            >
-              {(id) => <code>{id()}</code>}
-            </Show>
-          </dd>
-          <dt>Available credits</dt>
-          <dd>{currentBalance()?.availableCredits ?? 0}</dd>
-          <dt>Reserved credits</dt>
-          <dd>{currentBalance()?.reservedCredits ?? 0}</dd>
-        </dl>
-      </section>
 
-      <section class="detail-section">
-        <h2>Space billing settings</h2>
-        <form class="billing-settings-form" onSubmit={saveBillingSettings}>
-          <label class="form-field">
-            Mode
-            <select
-              value={billingMode()}
-              onChange={(e) => {
-                const next = e.currentTarget.value as BillingMode;
-                setBillingMode(next);
-                if (next === "disabled") setBillingProvider("none");
-                if (next === "enforce" && billingProvider() === "none") {
-                  setBillingProvider("manual");
-                }
-              }}
-            >
-              <option value="disabled">disabled</option>
-              <option value="showback">showback</option>
-              <option value="enforce">enforce</option>
-            </select>
-          </label>
-          <label class="form-field">
-            Provider
-            <select
-              value={billingProvider()}
-              disabled={billingMode() === "disabled"}
-              onChange={(e) =>
-                setBillingProvider(e.currentTarget.value as BillingProvider)
-              }
-            >
-              <option value="none">none</option>
-              <option value="manual">manual</option>
-              <option value="stripe">stripe</option>
-            </select>
-          </label>
-          <button
-            class="btn btn-primary"
-            type="submit"
-            disabled={billingBusy()}
-          >
-            <Save size={16} />
-            {billingBusy() ? "保存中..." : "保存"}
-          </button>
-        </form>
-        <form class="billing-settings-form" onSubmit={submitTopUp}>
-          <label class="form-field">
-            Top-up credits
-            <input
-              type="number"
-              min="1"
-              step="1"
-              value={topUpCredits()}
-              onInput={(e) => setTopUpCredits(e.currentTarget.value)}
-            />
-          </label>
-          <button class="btn" type="submit" disabled={topUpBusy()}>
-            {topUpBusy() ? "追加中..." : "Credits を追加"}
-          </button>
-        </form>
-        <Show when={billingError()}>
-          {(m) => (
-            <p class="sign-in-error" role="alert">
-              {m()}
-            </p>
-          )}
-        </Show>
-        <Show when={billingMessage()}>
-          {(m) => <p class="success-note">{m()}</p>}
-        </Show>
-      </section>
-
-      <section class="detail-section">
-        <h2>Credit reservations</h2>
-        <Show
-          when={(reservations() ?? []).length > 0}
-          fallback={<p class="muted">credit reservation はまだありません。</p>}
-        >
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Status</th>
-                <th>Credits</th>
-                <th>Mode</th>
-                <th>Run</th>
-                <th>Expires</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={reservations() ?? []}>
-                {(reservation) => (
-                  <BillingReservationRow reservation={reservation} />
+            <CardSection>
+              <CardHeader title="Hosted checkout" />
+              <form class="wc-form" onSubmit={startCheckout}>
+                <FormField label="Price ID">
+                  <Input
+                    type="text"
+                    value={priceId()}
+                    onInput={(e) => setPriceId(e.currentTarget.value)}
+                    placeholder="price_..."
+                    autocomplete="off"
+                    spellcheck={false}
+                  />
+                </FormField>
+                <FormField label="Mode">
+                  <Select
+                    value={checkoutMode()}
+                    onChange={(e) =>
+                      setCheckoutMode(
+                        e.currentTarget.value === "payment"
+                          ? "payment"
+                          : "subscription",
+                      )
+                    }
+                  >
+                    <option value="subscription">subscription</option>
+                    <option value="payment">payment</option>
+                  </Select>
+                </FormField>
+                <div class="wc-form-actions">
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    busy={checkoutBusy()}
+                  >
+                    {checkoutBusy() ? "Checkout 作成中..." : "Checkout を開始"}
+                  </Button>
+                </div>
+              </form>
+              <Show when={checkoutError()}>
+                {(m) => <Toast tone="error">{m()}</Toast>}
+              </Show>
+              <Show when={checkoutUrl()}>
+                {(url) => (
+                  <p class="muted">
+                    Redirecting to{" "}
+                    <a href={url()} rel="noreferrer">
+                      Stripe Checkout <ExternalLink size={14} />
+                    </a>
+                  </p>
                 )}
-              </For>
-            </tbody>
-          </table>
-        </Show>
-      </section>
-
-      <section class="detail-section">
-        <h2>Usage</h2>
-        <Show
-          when={(usage() ?? []).length > 0}
-          fallback={<p class="muted">usage event はまだありません。</p>}
-        >
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Kind</th>
-                <th>Quantity</th>
-                <th>Credits</th>
-                <th>Run</th>
-                <th>Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={usage() ?? []}>
-                {(event) => <BillingUsageRow event={event} />}
-              </For>
-            </tbody>
-          </table>
-        </Show>
-      </section>
-
-      <section class="detail-section">
-        <h2>Hosted billing</h2>
-        <div class="billing-settings-form">
-          <button
-            class="btn"
-            type="button"
-            disabled={portalBusy()}
-            onClick={openBillingPortal}
-          >
-            <ExternalLink size={16} />
-            {portalBusy() ? "Portal 作成中..." : "Customer Portal を開く"}
-          </button>
-        </div>
-        <Show when={portalError()}>
-          {(m) => (
-            <p class="sign-in-error" role="alert">
-              {m()}
-            </p>
-          )}
-        </Show>
-        <Show when={portalUrl()}>
-          {(url) => (
-            <p class="muted">
-              Redirecting to{" "}
-              <a href={url()} rel="noreferrer">
-                Stripe Customer Portal <ExternalLink size={14} />
-              </a>
-            </p>
-          )}
-        </Show>
-        <h2>Hosted checkout</h2>
-        <form class="billing-checkout-form" onSubmit={startCheckout}>
-          <label class="form-field">
-            Price ID
-            <input
-              type="text"
-              value={priceId()}
-              onInput={(e) => setPriceId(e.currentTarget.value)}
-              placeholder="price_..."
-              autocomplete="off"
-              spellcheck={false}
-            />
-          </label>
-          <label class="form-field">
-            Mode
-            <select
-              value={checkoutMode()}
-              onChange={(e) =>
-                setCheckoutMode(
-                  e.currentTarget.value === "payment"
-                    ? "payment"
-                    : "subscription",
-                )
-              }
-            >
-              <option value="subscription">subscription</option>
-              <option value="payment">payment</option>
-            </select>
-          </label>
-          <button
-            class="btn btn-primary"
-            type="submit"
-            disabled={checkoutBusy()}
-          >
-            {checkoutBusy() ? "Checkout 作成中..." : "Checkout を開始"}
-          </button>
-        </form>
-        <Show when={checkoutError()}>
-          {(m) => (
-            <p class="sign-in-error" role="alert">
-              {m()}
-            </p>
-          )}
-        </Show>
-        <Show when={checkoutUrl()}>
-          {(url) => (
-            <p class="muted">
-              Redirecting to{" "}
-              <a href={url()} rel="noreferrer">
-                Stripe Checkout <ExternalLink size={14} />
-              </a>
-            </p>
-          )}
-        </Show>
-      </section>
+              </Show>
+            </CardSection>
+          </div>
+        </Card>
+      </div>
     </AppShell>
   );
 }
@@ -820,45 +872,6 @@ function buildBillingSettings(
   }
   if (provider === "none") return null;
   return { mode: "enforce", provider, reservationRequired: true };
-}
-
-function BillingUsageRow(props: { readonly event: UsageEvent }) {
-  return (
-    <tr>
-      <td>
-        <code>{props.event.kind}</code>
-      </td>
-      <td>{props.event.quantity}</td>
-      <td>{props.event.credits}</td>
-      <td>
-        <Show
-          when={props.event.runId}
-          fallback={<span class="muted">—</span>}
-        >
-          {(runId) => <code>{runId()}</code>}
-        </Show>
-      </td>
-      <td>{formatDateTime(props.event.createdAt)}</td>
-    </tr>
-  );
-}
-
-function BillingReservationRow(props: {
-  readonly reservation: CreditReservation;
-}) {
-  return (
-    <tr>
-      <td>
-        <code>{props.reservation.status}</code>
-      </td>
-      <td>{props.reservation.estimatedCredits}</td>
-      <td>{props.reservation.mode}</td>
-      <td>
-        <code>{props.reservation.runId}</code>
-      </td>
-      <td>{formatDateTime(props.reservation.expiresAt)}</td>
-    </tr>
-  );
 }
 
 function formatDateTime(value: string | undefined): string {
@@ -879,26 +892,35 @@ export function AccountProfileView() {
     <Page title="プロフィール">
       {(session) => (
         <AppShell>
-          <div class="page-header">
-            <h1>プロフィール</h1>
-            <p class="page-sub">現在のサインイン情報。</p>
-          </div>
-          <section class="detail-section">
-            <dl class="kv-list">
-              <dt>Subject</dt>
-              <dd>
-                <code>{session.subject}</code>
-              </dd>
-              <dt>Display name</dt>
-              <dd>{session.displayName ?? "—"}</dd>
-              <dt>Email</dt>
-              <dd>{session.email ?? "—"}</dd>
-              <dt>Provider</dt>
-              <dd>{session.provider ?? "—"}</dd>
-              <dt>Session expires</dt>
-              <dd>{new Date(session.expiresAt).toLocaleString("ja-JP")}</dd>
-            </dl>
-          </section>
+          <PageHeader
+            eyebrow="Profile"
+            title="プロフィール"
+            subtitle="現在のサインイン情報。"
+          />
+          <Card>
+            <CardHeader
+              title={
+                <span style="display:inline-flex;align-items:center;gap:8px">
+                  <User size={18} /> サインイン情報
+                </span>
+              }
+            />
+            <KVList
+              items={[
+                {
+                  label: "Subject",
+                  value: <code class="wc-code">{session.subject}</code>,
+                },
+                { label: "Display name", value: session.displayName ?? "—" },
+                { label: "Email", value: session.email ?? "—" },
+                { label: "Provider", value: session.provider ?? "—" },
+                {
+                  label: "Session expires",
+                  value: new Date(session.expiresAt).toLocaleString("ja-JP"),
+                },
+              ]}
+            />
+          </Card>
         </AppShell>
       )}
     </Page>
@@ -928,75 +950,96 @@ function SessionsInner(props: { session: SessionRecord }) {
 
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>Sessions</h1>
-        <p class="page-sub">アクティブなブラウザセッションの管理。</p>
+      <PageHeader
+        eyebrow="Sessions"
+        title="サインイン中の端末"
+        subtitle="アクティブなブラウザセッションの管理。"
+      />
+
+      <div class="wc-stack">
+        <Card>
+          <CardHeader
+            title={
+              <span style="display:inline-flex;align-items:center;gap:8px">
+                <Monitor size={18} /> 現在のセッション
+              </span>
+            }
+          />
+          <KVList
+            items={[
+              {
+                label: "Session ID",
+                value: <code class="wc-code">{props.session.sessionId}</code>,
+              },
+              {
+                label: "Subject",
+                value: <code class="wc-code">{props.session.subject}</code>,
+              },
+              { label: "Provider", value: props.session.provider ?? "—" },
+              {
+                label: "Expires",
+                value: new Date(props.session.expiresAt).toLocaleString(
+                  "ja-JP",
+                ),
+              },
+              {
+                label: "User-Agent",
+                value: <span class="muted">{navigator.userAgent}</span>,
+              },
+            ]}
+          />
+          <CardSection>
+            <Show
+              when={confirming()}
+              fallback={
+                <Button
+                  variant="danger"
+                  type="button"
+                  onClick={() => setConfirming(true)}
+                  disabled={busy()}
+                  icon={<LogOut size={16} />}
+                >
+                  このブラウザからサインアウト
+                </Button>
+              }
+            >
+              <div class="wc-form-actions">
+                <span class="muted">
+                  このブラウザからサインアウトしますか？
+                </span>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  type="button"
+                  onClick={signOutThisBrowser}
+                  disabled={busy()}
+                  icon={<LogOut size={14} />}
+                >
+                  サインアウト
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={() => setConfirming(false)}
+                  disabled={busy()}
+                >
+                  取消
+                </Button>
+              </div>
+            </Show>
+          </CardSection>
+        </Card>
+
+        <Card>
+          <CardHeader title="他デバイスのセッション" />
+          <p class="muted">
+            他デバイスのセッション一覧とリモートサインアウト (coming soon):
+            現在この account-plane は subject ごとのセッション列挙 API
+            を持たないため、ここで管理できるのは上記の現在のブラウザのみです。
+          </p>
+        </Card>
       </div>
-
-      <section class="detail-section">
-        <h2>
-          <Monitor size={18} /> 現在のセッション
-        </h2>
-        <dl class="kv-list">
-          <dt>Session ID</dt>
-          <dd>
-            <code>{props.session.sessionId}</code>
-          </dd>
-          <dt>Subject</dt>
-          <dd>
-            <code>{props.session.subject}</code>
-          </dd>
-          <dt>Provider</dt>
-          <dd>{props.session.provider ?? "—"}</dd>
-          <dt>Expires</dt>
-          <dd>{new Date(props.session.expiresAt).toLocaleString("ja-JP")}</dd>
-          <dt>User-Agent</dt>
-          <dd class="muted">{navigator.userAgent}</dd>
-        </dl>
-        <Show
-          when={confirming()}
-          fallback={
-            <button
-              class="btn btn-danger"
-              type="button"
-              onClick={() => setConfirming(true)}
-              disabled={busy()}
-              style="margin-top: 16px;"
-            >
-              <LogOut size={16} /> このブラウザからサインアウト
-            </button>
-          }
-        >
-          <div class="revoke-confirm" style="margin-top: 16px;">
-            <span class="muted">このブラウザからサインアウトしますか？</span>
-            <button
-              class="btn btn-danger btn-sm"
-              type="button"
-              onClick={signOutThisBrowser}
-              disabled={busy()}
-            >
-              <LogOut size={14} /> サインアウト
-            </button>
-            <button
-              class="btn btn-secondary btn-sm"
-              type="button"
-              onClick={() => setConfirming(false)}
-              disabled={busy()}
-            >
-              取消
-            </button>
-          </div>
-        </Show>
-      </section>
-
-      <section class="detail-section">
-        <h2>他デバイスのセッション</h2>
-        <p class="muted">
-          他デバイスのセッション一覧とリモートサインアウト (coming soon):
-          現在この account-plane は subject ごとのセッション列挙 API
-          を持たないため、ここで管理できるのは上記の現在のブラウザのみです。
-        </p>
-      </section>
     </AppShell>
   );
 }

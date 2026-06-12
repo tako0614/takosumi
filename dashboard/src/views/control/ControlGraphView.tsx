@@ -10,7 +10,9 @@
  * a layout engine. A cycle (which the backend forbids) is surfaced as a
  * remaining-nodes block rather than hanging.
  */
+import "../../styles/wave-b.css";
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
+import { Network } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
@@ -22,9 +24,35 @@ import {
 } from "../../lib/control-api.ts";
 import { layerGraph } from "./graph-layering.ts";
 import { controlInstallationStatusLabel } from "../../lib/status-labels.ts";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  PageHeader,
+  Skeleton,
+  type Tone,
+} from "../../components/ui/index.ts";
 
 export default function ControlGraphView() {
   return <Page title="依存グラフ">{() => <Inner />}</Page>;
+}
+
+function nodeTone(status: string): Tone {
+  switch (status) {
+    case "active":
+      return "ok";
+    case "error":
+      return "danger";
+    case "stale":
+    case "pending":
+      return "warn";
+    case "disabled":
+    case "destroyed":
+      return "muted";
+    default:
+      return "neutral";
+  }
 }
 
 function NodeBox(props: {
@@ -33,21 +61,17 @@ function NodeBox(props: {
 }) {
   const deps = () => props.producers.get(props.node.installationId) ?? [];
   return (
-    <div class="graph-node">
-      <div class="graph-node-head">
-        <span class="graph-node-name">{props.node.name}</span>
-        <span
-          class={`graph-node-status graph-node-status-${props.node.status}`}
-        >
+    <Card hover class="wb-graph-node">
+      <div class="wb-graph-node-head">
+        <span class="wb-graph-node-name">{props.node.name}</span>
+        <Badge tone={nodeTone(props.node.status)}>
           {controlInstallationStatusLabel(props.node.status)}
-        </span>
+        </Badge>
       </div>
       <Show when={deps().length > 0}>
-        <div class="graph-node-deps muted">
-          ↑ depends on {deps().join(", ")}
-        </div>
+        <div class="wb-graph-node-deps">↑ depends on {deps().join(", ")}</div>
       </Show>
-    </div>
+    </Card>
   );
 }
 
@@ -61,58 +85,63 @@ function Inner() {
 
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>依存グラフ</h1>
-        <p class="page-sub">
-          Installation の依存 DAG。 上の層が producer、 下の層が consumer です。
-        </p>
-        <div class="page-actions">
-          <a href="/installations" class="btn btn-secondary">
+      <PageHeader
+        eyebrow="CONTROL"
+        title="依存グラフ"
+        subtitle="Installation の依存 DAG。 上の層が producer、 下の層が consumer です。"
+        actions={
+          <Button variant="secondary" href="/installations">
             一覧へ
-          </a>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
       <SpaceSelector />
 
       <Show
         when={spaceId()}
         fallback={
-          <section class="empty-state">
-            <p>Space を選択すると依存グラフを表示します。</p>
-          </section>
+          <EmptyState
+            ink
+            icon={<Network size={28} />}
+            title="Space を選択"
+            message="Space を選択すると依存グラフを表示します。"
+          />
         }
       >
         <Switch>
           <Match when={graph.loading}>
-            <div class="grid-skel">
-              <div class="skel-card" />
-              <div class="skel-card" />
-            </div>
+            <Skeleton variant="card" count={2} />
           </Match>
           <Match when={graph.error}>
-            <section class="empty-state error-state">
-              <p>
-                取得に失敗しました — {(graph.error as ControlApiError).message}
-              </p>
-            </section>
+            <EmptyState
+              icon={<Network size={28} />}
+              title="取得に失敗しました"
+              message={(graph.error as ControlApiError).message}
+            />
           </Match>
           <Match when={layered()}>
             {(g) => (
               <Show
                 when={g().layers.length > 0 || g().cyclic.length > 0}
                 fallback={
-                  <section class="empty-state">
-                    <p>この Space にはまだ Installation がありません。</p>
-                  </section>
+                  <EmptyState
+                    ink
+                    icon={<Network size={28} />}
+                    title="Installation がありません"
+                    message="この Space にはまだ Installation がありません。"
+                  />
                 }
               >
-                <section class="graph-board">
+                <section class="wb-graph">
                   <For each={g().layers}>
                     {(layer, i) => (
-                      <div class="graph-layer">
-                        <div class="graph-layer-label muted">層 {i()}</div>
-                        <div class="graph-layer-nodes">
+                      <div class="wb-graph-layer">
+                        <div class="wb-graph-layer-label">
+                          層 {i()}
+                          <span class="wb-graph-layer-rule" aria-hidden="true" />
+                        </div>
+                        <div class="wb-graph-nodes">
                           <For each={layer}>
                             {(node) => (
                               <NodeBox
@@ -126,11 +155,12 @@ function Inner() {
                     )}
                   </For>
                   <Show when={g().cyclic.length > 0}>
-                    <div class="graph-layer">
-                      <div class="graph-layer-label muted">
+                    <div class="wb-graph-layer wb-graph-cyclic">
+                      <div class="wb-graph-layer-label">
                         循環（解決不能）
+                        <span class="wb-graph-layer-rule" aria-hidden="true" />
                       </div>
-                      <div class="graph-layer-nodes">
+                      <div class="wb-graph-nodes">
                         <For each={g().cyclic}>
                           {(node) => (
                             <NodeBox

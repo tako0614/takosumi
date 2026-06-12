@@ -1,3 +1,4 @@
+import "../../styles/wave-b.css";
 import {
   createMemo,
   createResource,
@@ -7,9 +8,9 @@ import {
   Show,
   Switch,
 } from "solid-js";
+import { Share2 } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import StatusPill from "../account/components/StatusPill.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
 import { currentSpaceId } from "./space-state.ts";
 import {
@@ -19,9 +20,26 @@ import {
   listInstallations,
   listOutputShares,
   listSpaces,
+  type OutputShare,
   revokeOutputShare,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  CardSection,
+  Checkbox,
+  type Column,
+  DataTable,
+  EmptyState,
+  FormField,
+  Input,
+  PageHeader,
+  Select,
+  Textarea,
+} from "../../components/ui/index.ts";
 
 type OutputDraft = {
   readonly id: string;
@@ -32,6 +50,12 @@ type OutputDraft = {
 
 export default function ControlOutputSharesView() {
   return <Page title="Output shares">{() => <Inner />}</Page>;
+}
+
+function shareTone(status: OutputShare["status"]): "ok" | "warn" | "muted" {
+  if (status === "active") return "ok";
+  if (status === "revoked") return "muted";
+  return "warn";
 }
 
 function Inner() {
@@ -124,288 +148,281 @@ function Inner() {
     outputs().some((output) => output.sensitive)
   );
 
+  const columns: readonly Column<OutputShare>[] = [
+    {
+      header: "方向",
+      cell: (share) => (
+        <span class="wb-mono">
+          <code>{spaceName().get(share.fromSpaceId) ?? share.fromSpaceId}</code>
+          <span class="muted"> → </span>
+          <code>{spaceName().get(share.toSpaceId) ?? share.toSpaceId}</code>
+        </span>
+      ),
+    },
+    {
+      header: "Installation",
+      cell: (share) =>
+        installationName().get(share.producerInstallationId) ??
+        share.producerInstallationId,
+    },
+    {
+      header: "Outputs",
+      cell: (share) => (
+        <ul class="wb-chips">
+          <For each={share.outputs}>
+            {(output) => (
+              <li class="wb-chip">
+                {output.name}
+                <Show when={output.alias}>
+                  {(alias) => <span class="muted"> as {alias()}</span>}
+                </Show>
+                <Show when={output.sensitive}>
+                  <Badge tone="warn" class="wb-you-tag">sensitive</Badge>
+                </Show>
+              </li>
+            )}
+          </For>
+        </ul>
+      ),
+    },
+    {
+      header: "状態",
+      cell: (share) => <Badge tone={shareTone(share.status)}>{share.status}</Badge>,
+    },
+    {
+      header: "",
+      align: "right",
+      cell: (share) => (
+        <div class="wb-row-actions">
+          <Show
+            when={share.status === "pending" && share.toSpaceId === spaceId()}
+          >
+            <Button
+              variant="primary"
+              size="sm"
+              busy={approve.busy()}
+              disabled={approve.busy()}
+              onClick={() => void approve.run(share.id)}
+            >
+              approve
+            </Button>
+          </Show>
+          <Show when={share.status !== "revoked"}>
+            <Button
+              variant="danger"
+              size="sm"
+              busy={revoke.busy()}
+              disabled={revoke.busy()}
+              onClick={() => void revoke.run(share.id)}
+            >
+              revoke
+            </Button>
+          </Show>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>Output shares</h1>
-        <p class="page-sub">
-          Space 間で Installation の projected output を明示的に共有します。
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="CONTROL"
+        title="Output shares"
+        subtitle="Space 間で Installation の projected output を明示的に共有します。"
+      />
 
       <SpaceSelector />
 
       <Show
         when={spaceId()}
         fallback={
-          <section class="empty-state">
-            <p>Space を選択すると OutputShare を表示します。</p>
-          </section>
+          <EmptyState
+            ink
+            icon={<Share2 size={28} />}
+            title="Space を選択"
+            message="Space を選択すると OutputShare を表示します。"
+          />
         }
       >
-        <section class="detail-section">
-          <h2>共有を作成</h2>
-          <form
-            class="install-form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void create.run();
-            }}
-          >
-            <div class="install-form-row">
-              <label class="form-field">
-                共有先 Space
-                <select
-                  value={toSpaceId()}
-                  onChange={(e) => setToSpaceId(e.currentTarget.value)}
-                >
-                  <option value="">選択してください</option>
-                  <For each={(spaces() ?? []).filter((s) => s.id !== spaceId())}>
-                    {(space) => (
-                      <option value={space.id}>
-                        @{space.handle} — {space.displayName}
-                      </option>
-                    )}
-                  </For>
-                </select>
-              </label>
-              <label class="form-field">
-                Producer Installation
-                <select
-                  value={producerInstallationId()}
-                  onChange={(e) =>
-                    setProducerInstallationId(e.currentTarget.value)}
-                >
-                  <option value="">選択してください</option>
-                  <For each={installations() ?? []}>
-                    {(inst) => (
-                      <option value={inst.id}>
-                        {inst.name} ({inst.environment})
-                      </option>
-                    )}
-                  </For>
-                </select>
-              </label>
-            </div>
-
-            <div class="form-field">
-              Outputs
-              <div class="output-share-editor">
-                <For each={outputs()}>
-                  {(output) => (
-                    <div class="output-share-row">
-                      <input
-                        type="text"
-                        value={output.name}
-                        onInput={(e) =>
-                          updateOutput(output.id, {
-                            name: e.currentTarget.value,
-                          })}
-                        placeholder="base_domain"
-                        autocomplete="off"
-                        spellcheck={false}
-                        aria-label="Output name"
-                      />
-                      <input
-                        type="text"
-                        value={output.alias}
-                        onInput={(e) =>
-                          updateOutput(output.id, {
-                            alias: e.currentTarget.value,
-                          })}
-                        placeholder="alias"
-                        autocomplete="off"
-                        spellcheck={false}
-                        aria-label="Output alias"
-                      />
-                      <label class="output-share-sensitive">
-                        <input
-                          type="checkbox"
-                          checked={output.sensitive}
-                          onChange={(e) =>
-                            updateOutput(output.id, {
-                              sensitive: e.currentTarget.checked,
-                            })}
-                        />
-                        sensitive
-                      </label>
-                      <button
-                        class="btn btn-secondary btn-sm"
-                        type="button"
-                        onClick={() => removeOutput(output.id)}
+        <div class="wb-stack">
+          <Card>
+            <CardHeader title="共有を作成" />
+            <CardSection>
+              <form
+                class="wb-install-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void create.run();
+                }}
+              >
+                <div class="wb-form-row">
+                  <FormField label="共有先 Space">
+                    <Select
+                      value={toSpaceId()}
+                      onChange={(e) => setToSpaceId(e.currentTarget.value)}
+                    >
+                      <option value="">選択してください</option>
+                      <For
+                        each={(spaces() ?? []).filter((s) => s.id !== spaceId())}
                       >
-                        remove
-                      </button>
-                    </div>
-                  )}
-                </For>
-              </div>
-              <button
-                class="btn btn-secondary btn-sm"
-                type="button"
-                onClick={() =>
-                  setOutputs((rows) => [...rows, emptyOutputDraft()])}
-              >
-                output を追加
-              </button>
-            </div>
-
-            <Show when={sensitiveSelected()}>
-              <label class="form-field">
-                Sensitive sharing reason
-                <textarea
-                  value={sensitiveReason()}
-                  onInput={(e) => setSensitiveReason(e.currentTarget.value)}
-                  rows={3}
-                  placeholder="ticket / approval reason"
-                  spellcheck={false}
-                />
-              </label>
-            </Show>
-
-            <div class="form-actions">
-              <button
-                class="btn btn-primary"
-                type="submit"
-                disabled={create.busy()}
-              >
-                {create.busy() ? "作成中..." : "共有を作成"}
-              </button>
-            </div>
-            <Show when={formError()}>
-              {(m) => <p class="sign-in-error">{m()}</p>}
-            </Show>
-            <Show when={create.error()}>
-              {(m) => <p class="sign-in-error">{m()}</p>}
-            </Show>
-            <Show when={approve.error()}>
-              {(m) => <p class="sign-in-error">{m()}</p>}
-            </Show>
-            <Show when={revoke.error()}>
-              {(m) => <p class="sign-in-error">{m()}</p>}
-            </Show>
-          </form>
-        </section>
-
-        <Switch>
-          <Match when={shares.loading}>
-            <div class="grid-skel"><div class="skel-card" /></div>
-          </Match>
-          <Match when={shares.error}>
-            <section class="empty-state error-state">
-              <p>取得に失敗しました — {(shares.error as ControlApiError).message}</p>
-            </section>
-          </Match>
-          <Match when={shares()}>
-            {(list) => (
-              <section class="detail-section">
-                <h2>共有一覧</h2>
-                <Show
-                  when={list().length > 0}
-                  fallback={<p class="muted">OutputShare はまだありません。</p>}
-                >
-                  <table class="data-table">
-                    <thead>
-                      <tr>
-                        <th>方向</th>
-                        <th>Installation</th>
-                        <th>Outputs</th>
-                        <th>状態</th>
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <For each={list()}>
-                        {(share) => (
-                          <tr>
-                            <td>
-                              <code>
-                                {spaceName().get(share.fromSpaceId) ??
-                                  share.fromSpaceId}
-                              </code>
-                              <span class="muted"> → </span>
-                              <code>
-                                {spaceName().get(share.toSpaceId) ??
-                                  share.toSpaceId}
-                              </code>
-                            </td>
-                            <td>
-                              {installationName().get(
-                                share.producerInstallationId,
-                              ) ?? share.producerInstallationId}
-                            </td>
-                            <td>
-                              <ul class="depends-on-list">
-                                <For each={share.outputs}>
-                                  {(output) => (
-                                    <li>
-                                      <code>{output.name}</code>
-                                      <Show when={output.alias}>
-                                        {(alias) => (
-                                          <span class="muted">
-                                            {" "}as <code>{alias()}</code>
-                                          </span>
-                                        )}
-                                      </Show>
-                                      <Show when={output.sensitive}>
-                                        <span
-                                          class="output-badge"
-                                          title="sensitive output value is never displayed"
-                                        >
-                                          sensitive
-                                        </span>
-                                      </Show>
-                                    </li>
-                                  )}
-                                </For>
-                              </ul>
-                            </td>
-                            <td>
-                              <StatusPill
-                                class={share.status === "active"
-                                  ? "status-ready"
-                                  : share.status === "revoked"
-                                  ? "status-suspended"
-                                  : "status-installing"}
-                              >
-                                {share.status}
-                              </StatusPill>
-                            </td>
-                            <td class="installation-row-actions">
-                              <Show
-                                when={share.status === "pending" &&
-                                  share.toSpaceId === spaceId()}
-                              >
-                                <button
-                                  class="btn btn-primary btn-sm"
-                                  type="button"
-                                  disabled={approve.busy()}
-                                  onClick={() => void approve.run(share.id)}
-                                >
-                                  approve
-                                </button>
-                              </Show>
-                              <Show when={share.status !== "revoked"}>
-                                <button
-                                  class="btn btn-danger btn-sm"
-                                  type="button"
-                                  disabled={revoke.busy()}
-                                  onClick={() => void revoke.run(share.id)}
-                                >
-                                  revoke
-                                </button>
-                              </Show>
-                            </td>
-                          </tr>
+                        {(space) => (
+                          <option value={space.id}>
+                            @{space.handle} — {space.displayName}
+                          </option>
                         )}
                       </For>
-                    </tbody>
-                  </table>
+                    </Select>
+                  </FormField>
+                  <FormField label="Producer Installation">
+                    <Select
+                      value={producerInstallationId()}
+                      onChange={(e) =>
+                        setProducerInstallationId(e.currentTarget.value)}
+                    >
+                      <option value="">選択してください</option>
+                      <For each={installations() ?? []}>
+                        {(inst) => (
+                          <option value={inst.id}>
+                            {inst.name} ({inst.environment})
+                          </option>
+                        )}
+                      </For>
+                    </Select>
+                  </FormField>
+                </div>
+
+                <FormField label="Outputs">
+                  <div class="wb-output-editor">
+                    <For each={outputs()}>
+                      {(output) => (
+                        <div class="wb-output-row">
+                          <Input
+                            type="text"
+                            value={output.name}
+                            onInput={(e) =>
+                              updateOutput(output.id, {
+                                name: e.currentTarget.value,
+                              })}
+                            placeholder="base_domain"
+                            autocomplete="off"
+                            spellcheck={false}
+                            aria-label="Output name"
+                          />
+                          <Input
+                            type="text"
+                            value={output.alias}
+                            onInput={(e) =>
+                              updateOutput(output.id, {
+                                alias: e.currentTarget.value,
+                              })}
+                            placeholder="alias"
+                            autocomplete="off"
+                            spellcheck={false}
+                            aria-label="Output alias"
+                          />
+                          <Checkbox
+                            label="sensitive"
+                            checked={output.sensitive}
+                            onChange={(e) =>
+                              updateOutput(output.id, {
+                                sensitive: e.currentTarget.checked,
+                              })}
+                          />
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            type="button"
+                            onClick={() => removeOutput(output.id)}
+                          >
+                            remove
+                          </Button>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    onClick={() =>
+                      setOutputs((rows) => [...rows, emptyOutputDraft()])}
+                  >
+                    output を追加
+                  </Button>
+                </FormField>
+
+                <Show when={sensitiveSelected()}>
+                  <FormField label="Sensitive sharing reason">
+                    <Textarea
+                      value={sensitiveReason()}
+                      onInput={(e) => setSensitiveReason(e.currentTarget.value)}
+                      rows={3}
+                      placeholder="ticket / approval reason"
+                      spellcheck={false}
+                    />
+                  </FormField>
                 </Show>
-              </section>
-            )}
-          </Match>
-        </Switch>
+
+                <div class="wb-form-actions">
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    busy={create.busy()}
+                    disabled={create.busy()}
+                  >
+                    共有を作成
+                  </Button>
+                </div>
+                <Show when={formError()}>
+                  {(m) => <p class="wb-error" role="alert">{m()}</p>}
+                </Show>
+                <Show when={create.error()}>
+                  {(m) => <p class="wb-error" role="alert">{m()}</p>}
+                </Show>
+                <Show when={approve.error()}>
+                  {(m) => <p class="wb-error" role="alert">{m()}</p>}
+                </Show>
+                <Show when={revoke.error()}>
+                  {(m) => <p class="wb-error" role="alert">{m()}</p>}
+                </Show>
+              </form>
+            </CardSection>
+          </Card>
+
+          <section class="wb-stack-tight">
+            <h2 class="tg-card-title">共有一覧</h2>
+            <Switch>
+              <Match when={shares.error}>
+                <EmptyState
+                  icon={<Share2 size={28} />}
+                  title="取得に失敗しました"
+                  message={(shares.error as ControlApiError).message}
+                />
+              </Match>
+              <Match when={!shares.error}>
+                <Show
+                  when={shares.loading || (shares()?.length ?? 0) > 0}
+                  fallback={
+                    <EmptyState
+                      ink
+                      icon={<Share2 size={28} />}
+                      title="共有はまだありません"
+                      message="OutputShare はまだありません。"
+                    />
+                  }
+                >
+                  <DataTable
+                    columns={columns}
+                    rows={shares()}
+                    rowKey={(share) => share.id}
+                    loading={shares.loading}
+                    skeletonRows={3}
+                  />
+                </Show>
+              </Match>
+            </Switch>
+          </section>
+        </div>
       </Show>
     </AppShell>
   );

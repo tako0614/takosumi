@@ -16,8 +16,10 @@ const source = readFileSync(
 
 describe("ControlInstallationDetailView deployment surface", () => {
   test("renders the 出力 and デプロイ履歴 sections in plain Japanese", () => {
-    expect(source).toContain("<h2>出力</h2>");
-    expect(source).toContain("<h2>デプロイ履歴</h2>");
+    // The sections are now rendered as titled Cards (the dark UI rebuild moved
+    // the headings into the shared Card `title` prop); the surface must still exist.
+    expect(source).toContain('title="出力"');
+    expect(source).toContain('title="デプロイ履歴"');
   });
 
   test("reads the Deployment ledger through the session client fn", () => {
