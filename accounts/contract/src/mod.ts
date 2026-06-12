@@ -41,7 +41,6 @@ export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH =
   "/v1/installations/import";
 export const TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH =
   "/v1/workload-services";
-export const TAKOSUMI_ACCOUNTS_CONNECTIONS_PATH = "/v1/connections";
 export const TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND =
   "takosumi.accounts.installation-export-bundle@v1";
 
@@ -185,16 +184,6 @@ export function takosumiAccountsInstallationsImportPath(): string {
 
 export function takosumiAccountsWorkloadServicesPath(): string {
   return TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH;
-}
-
-export function takosumiAccountsConnectionPath(connectionId: string): string {
-  return `${TAKOSUMI_ACCOUNTS_CONNECTIONS_PATH}/${
-    pathSegment(connectionId, "connectionId")
-  }`;
-}
-
-export function takosumiAccountsConnectionTestPath(connectionId: string): string {
-  return `${takosumiAccountsConnectionPath(connectionId)}/test`;
 }
 
 export function takosumiAccountsInstallationStatusPath(

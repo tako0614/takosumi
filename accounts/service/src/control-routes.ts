@@ -38,6 +38,7 @@ import type {
   ListRunnerProfilesResponse,
   PlanRunResponse,
   PublicPlanRun,
+  TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
   Source,
@@ -369,6 +370,21 @@ export interface ControlPlaneOperations {
    * public {@link Connection} projection, which carries NO secret `values`.
    */
   createConnection(request: CreateConnectionRequest): Promise<ConnectionResponse>;
+  /**
+   * Re-verifies a Connection's stored credential with the provider (§30
+   * `POST /internal/v1/connections/:id/test`). The control surface resolves the
+   * Connection's owning Space (via {@link getConnection}) and space-permission
+   * gates BEFORE calling this; the response carries no secret values.
+   */
+  testConnection(connectionId: string): Promise<TestConnectionResponse>;
+  /**
+   * Revokes a Connection and deletes its sealed secret blob (§30
+   * `POST /internal/v1/connections/:id/revoke`). The control surface resolves the
+   * Connection's owning Space (via {@link getConnection}) and space-permission
+   * gates BEFORE calling this. The wiring records the §27 / §34
+   * `connection.revoked` Space activity, mirroring the deploy-control route.
+   */
+  revokeConnection(connectionId: string): Promise<void>;
   /**
    * OPTIONAL Cloudflare credential OAuth helper. Present only when the operator
    * has wired the upstream OAuth client (the `TAKOSUMI_CLOUDFLARE_OAUTH_*`
@@ -1071,6 +1087,26 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       );
     }
     return methodNotAllowed("GET, POST");
+  }
+
+  // /api/v1/connections/:id/test ; /api/v1/connections/:id/revoke
+  // (the item surface consolidated from the former /v1/connections edge). The
+  // cloudflare/oauth subroutes are `segments.length === 4` (handled below), so
+  // a 3-segment connections path is always one of these two item ops.
+  if (
+    segments.length === 3 &&
+    segments[0] === "connections" &&
+    (segments[2] === "test" || segments[2] === "revoke")
+  ) {
+    if (method !== "POST") return methodNotAllowed("POST");
+    const connectionId = decodeURIComponent(segments[1] ?? "");
+    return await connectionItemOp(
+      operations,
+      store,
+      input.session.subject,
+      connectionId,
+      segments[2],
+    );
   }
 
   // /api/v1/connections/cloudflare/oauth/start — credential OAuth helper
@@ -2211,6 +2247,62 @@ async function createControlConnection(
   const response = await operations.createConnection(createRequest);
   // `response.connection` is the public projection (no secret values).
   return jsonStatus(response, 201);
+}
+
+/**
+ * Connection item op (test / revoke) from the dashboard session
+ * (`POST /api/v1/connections/:id/{test,revoke}`). This is the consolidated
+ * surface that replaced the former account-plane `/v1/connections/:id` edge.
+ *
+ * The request only names the connection id, so space ownership is enforced by
+ * first reading the Connection (a non-secret projection — the public Connection
+ * type carries no values) to learn its `spaceId`, then checking the session
+ * subject owns that Space. To prevent cross-tenant probing of connection ids, a
+ * missing connection, an absent `spaceId`, and a space-ownership failure all
+ * answer a non-disclosing `connection_not_found` (404).
+ */
+async function connectionItemOp(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+  connectionId: string,
+  op: "test" | "revoke",
+): Promise<Response> {
+  if (!connectionId) {
+    return errorJson("connection_not_found", "connection not found", 404);
+  }
+  // Resolve the Connection's owning Space for the ownership gate. A missing
+  // connection (typed `not_found`) is mapped to the same non-disclosing 404.
+  let connection: Connection;
+  try {
+    connection = await operations.getConnection(connectionId);
+  } catch (error) {
+    if (controllerErrorCode(error) === "not_found") {
+      return errorJson("connection_not_found", "connection not found", 404);
+    }
+    throw error;
+  }
+  const spaceId = connection.spaceId;
+  if (!spaceId) {
+    return errorJson("connection_not_found", "connection not found", 404);
+  }
+  // Both test (re-verify) and revoke (delete the sealed blob) are write-scoped
+  // mutations; the ownership failure must not disclose the connection's
+  // existence, so a 403 from the gate is surfaced as a 404 here.
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) {
+    return errorJson("connection_not_found", "connection not found", 404);
+  }
+  if (op === "test") {
+    return json(await operations.testConnection(connectionId));
+  }
+  await operations.revokeConnection(connectionId);
+  return new Response(null, { status: 204 });
 }
 
 /**

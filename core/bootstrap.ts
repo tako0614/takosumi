@@ -101,6 +101,7 @@ import type {
   ListRunnerProfilesResponse,
   PlanRunResponse,
   RunnerProfile,
+  TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type { RunCostInfo, RunLogsResponse } from "takosumi-contract/runs";
 import type { PageParams } from "takosumi-contract/pagination";
@@ -554,6 +555,13 @@ export interface TakosumiOperations {
   createConnection(
     request: CreateConnectionRequest,
   ): Promise<ConnectionResponse>;
+  /** Re-verifies a Connection's stored credential with the provider (§30). */
+  testConnection(connectionId: string): Promise<TestConnectionResponse>;
+  /**
+   * Revokes a Connection and deletes its sealed secret blob (§30), recording the
+   * §27 / §34 `connection.revoked` Space activity.
+   */
+  revokeConnection(connectionId: string): Promise<void>;
   /**
    * OPTIONAL Cloudflare credential OAuth helper, present only when the operator
    * wired the upstream OAuth client via env. Used by the dashboard
@@ -992,6 +1000,31 @@ export async function createTakosumiService(
       opentofuController.getConnection(connectionId),
     createConnection: (request) =>
       opentofuController.createConnection(request),
+    testConnection: (connectionId) =>
+      opentofuController.testConnection(connectionId),
+    // Revoke + delete the sealed blob, mirroring the §30
+    // `POST /internal/v1/connections/:id/revoke` route: read the non-secret
+    // Connection projection first (for the activity context captured before the
+    // blob is gone), delete, then record the space-scoped `connection.revoked`
+    // activity. The control-routes layer has already space-permission gated.
+    revokeConnection: async (connectionId) => {
+      const connection = await opentofuController.getConnection(connectionId);
+      await opentofuController.deleteConnection(connectionId);
+      if (connection.spaceId) {
+        await activityService.record({
+          spaceId: connection.spaceId,
+          actorId: "dashboard-session",
+          action: "connection.revoked",
+          targetType: "connection",
+          targetId: connection.id,
+          metadata: {
+            provider: connection.provider,
+            ...(connection.kind ? { kind: connection.kind } : {}),
+            scope: connection.scope,
+          },
+        });
+      }
+    },
     // Only present when the operator wired the upstream Cloudflare OAuth client.
     // The control-routes layer enforces session auth + Space ownership BEFORE
     // calling these, so the principal passed to the helper is a thin in-process

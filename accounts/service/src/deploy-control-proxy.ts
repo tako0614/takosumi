@@ -27,11 +27,11 @@ import type {
 /**
  * In-process typed deploy-control operations the facade depends on. This is the
  * contract-DTO subset of the host's `TakosumiOperations` facade (the wired
- * OpenTofu controller); when injected it lets the proxy call the deploy-control
- * service directly instead of building a synthetic Request and dialing it back
- * through the embedded Hono router inside the same worker. Genuine remote
- * deploy-control (a separate origin) is still reached through {@link
- * DeployControlProxyOptions.fetch}.
+ * OpenTofu controller); the proxy calls these typed operations directly instead
+ * of building a synthetic Request and dialing it back through the embedded Hono
+ * router inside the same worker. Per AGENTS.md the control-plane and
+ * account-plane handlers are composed in-process by both build targets, so this
+ * is the only transport — there is no remote deploy-control origin.
  */
 export interface DeployControlOperations {
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
@@ -54,19 +54,12 @@ export interface DeployControlOperations {
 }
 
 export interface DeployControlProxyOptions {
-  url: string;
-  token?: string;
-  fetch?: typeof fetch;
   /**
-   * In-process deploy-control facade. When present the proxy calls these typed
-   * operations directly (no self-issued Bearer handshake, no JSON
-   * serialize/parse round-trip through the embedded router) — the single-worker
-   * default. When absent the proxy falls back to {@link
-   * DeployControlProxyOptions.fetch} (or the global `fetch`) against {@link
-   * DeployControlProxyOptions.url}, which remains the path for a genuine remote
-   * deploy-control origin.
+   * In-process deploy-control facade. The proxy calls these typed operations
+   * directly (no self-issued Bearer handshake, no JSON serialize/parse round-trip
+   * through the embedded router) — the single-worker default and only transport.
    */
-  operations?: DeployControlOperations;
+  operations: DeployControlOperations;
 }
 
 export async function handleInstallationPlanRunProxy(input: {
@@ -704,40 +697,12 @@ async function requestDeployControlJson<TPayload = unknown>(input: {
   path: string;
   body?: unknown;
 }): Promise<{ status: number; contentType: string; payload: TPayload | unknown }> {
-  if (input.deployControl.operations) {
-    return await requestDeployControlInProcess({
-      operations: input.deployControl.operations,
-      method: input.method,
-      path: input.path,
-      body: input.body,
-    });
-  }
-  const response = await (input.deployControl.fetch ?? fetch)(
-    new URL(input.path, input.deployControl.url),
-    {
-      method: input.method,
-      headers: {
-        "accept": "application/json",
-        ...(input.method === "POST" ? { "content-type": "application/json" } : {}),
-        ...(input.deployControl.token
-          ? { authorization: `Bearer ${input.deployControl.token}` }
-          : {}),
-      },
-      ...(input.method === "POST"
-        ? { body: JSON.stringify(stripUndefined(input.body ?? {})) }
-        : {}),
-    },
-  );
-  const contentType = response.headers.get("content-type") ??
-    "application/json; charset=utf-8";
-  const text = await response.text();
-  let payload: unknown = text;
-  try {
-    payload = text.length > 0 ? JSON.parse(text) : {};
-  } catch {
-    payload = text;
-  }
-  return { status: response.status, contentType, payload };
+  return await requestDeployControlInProcess({
+    operations: input.deployControl.operations,
+    method: input.method,
+    path: input.path,
+    body: input.body,
+  });
 }
 
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
@@ -874,16 +839,6 @@ function responseFromProxyResult(input: {
     status: input.status,
     headers: { "content-type": input.contentType },
   });
-}
-
-function stripUndefined(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripUndefined);
-  if (!isRecord(value)) return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .map(([key, entry]) => [key, stripUndefined(entry)]),
-  );
 }
 
 function stringValue(value: unknown): string | undefined {
