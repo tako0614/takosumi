@@ -60,7 +60,6 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.signInSub": "Continue with your Takosumi account.",
   "auth.continueWith": "Continue with {provider}",
   "auth.notConfigured": "Not configured by the operator",
-  "auth.comingSoon": "Coming soon",
   "auth.termsPrefix": "By continuing, you agree to the ",
   "auth.termsOfService": "Terms of Service",
   "auth.and": " and ",
@@ -142,6 +141,8 @@ export const en: Record<keyof typeof ja, string> = {
   "app.outputs.subtitle":
     "Addresses and values this app exposes. Secrets are never shown.",
   "app.outputs.empty": "No public outputs yet. They appear after a deploy.",
+  "app.outputs.none":
+    "This app exposes no public addresses or outputs (infra-only modules, for example, may not emit a URL).",
   "app.output.launchUrl": "App URL",
   "app.output.url": "URL",
   "app.output.publicUrl": "Public URL",

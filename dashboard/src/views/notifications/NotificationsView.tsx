@@ -179,10 +179,13 @@ function describeEvent(event: ActivityEvent): {
   }
 }
 
-/** A run.* event links to its Run page (targetId is the run id). */
+/** Links an activity event to the page for its target (run / run-group / app). */
 function eventHref(event: ActivityEvent): string | undefined {
   if (event.targetType === "run") {
     return `/runs/${encodeURIComponent(event.targetId)}`;
+  }
+  if (event.targetType === "run_group") {
+    return `/run-groups/${encodeURIComponent(event.targetId)}`;
   }
   if (event.targetType === "installation") {
     return `/apps/${encodeURIComponent(event.targetId)}`;

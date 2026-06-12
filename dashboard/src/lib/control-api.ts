@@ -1525,9 +1525,9 @@ export async function revokeOutputShare(id: string): Promise<OutputShare> {
 export function extractRunId(envelope: unknown): string | undefined {
   if (typeof envelope !== "object" || envelope === null) return undefined;
   const obj = envelope as Record<string, unknown>;
-  // Plan response: { planRun: { id } }; source sync: { run: { id } }; or a
-  // bare { id }.
-  for (const wrap of ["planRun", "planPreview", "run"] as const) {
+  // Plan response: { planRun: { id } }; apply response: { applyRun: { id } };
+  // source sync: { run: { id } }; or a bare { id }.
+  for (const wrap of ["planRun", "applyRun", "planPreview", "run"] as const) {
     const nested = obj[wrap];
     if (nested && typeof nested === "object") {
       const id = (nested as Record<string, unknown>).id;
