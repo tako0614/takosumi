@@ -717,6 +717,18 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return rows.map(deploymentFromDrizzleRow);
   }
 
+  async listDeploymentsBySpace(
+    spaceId: string,
+  ): Promise<readonly Deployment[]> {
+    await this.#ensureSchema();
+    const rows = await this.#orm
+      .select()
+      .from(schema.deployments)
+      .where(eq(schema.deployments.spaceId, spaceId))
+      .orderBy(asc(schema.deployments.createdAt), asc(schema.deployments.id));
+    return rows.map(deploymentFromDrizzleRow);
+  }
+
   async listDeploymentsPage(
     installationId: string,
     params: PageParams,
@@ -1022,6 +1034,23 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
+  async listSourceSnapshotsBySourceIds(
+    sourceIds: readonly string[],
+  ): Promise<readonly SourceSnapshot[]> {
+    if (sourceIds.length === 0) return [];
+    return await this.#drizzleManyJson<SourceSnapshot>(
+      schema.sourceSnapshots,
+      schema.sourceSnapshots.recordJson,
+      {
+        where: inArray(schema.sourceSnapshots.sourceId, [...sourceIds]),
+        orderBy: [
+          asc(schema.sourceSnapshots.fetchedAt),
+          asc(schema.sourceSnapshots.id),
+        ],
+      },
+    );
+  }
+
   async listSourceSnapshotsPage(
     sourceId: string,
     params: PageParams,
@@ -1227,6 +1256,18 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return rows.map(stateSnapshotFromDrizzleRow);
   }
 
+  async listStateSnapshotsBySpace(
+    spaceId: string,
+  ): Promise<readonly StateSnapshot[]> {
+    await this.#ensureSchema();
+    const rows = await this.#orm
+      .select()
+      .from(schema.stateSnapshots)
+      .where(eq(schema.stateSnapshots.spaceId, spaceId))
+      .orderBy(asc(schema.stateSnapshots.generation));
+    return rows.map(stateSnapshotFromDrizzleRow);
+  }
+
   // -- Dependency DAG (§14 / §15 / §27 installation_dependencies) --------------
 
   async putDependency(dependency: Dependency): Promise<Dependency> {
@@ -1383,6 +1424,23 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       schema.outputSnapshots.recordJson,
       {
         where: eq(schema.outputSnapshots.installationId, installationId),
+        orderBy: [
+          schema.outputSnapshots.stateGeneration,
+          schema.outputSnapshots.createdAt,
+          schema.outputSnapshots.id,
+        ],
+      },
+    );
+  }
+
+  async listOutputSnapshotsBySpace(
+    spaceId: string,
+  ): Promise<readonly OutputSnapshot[]> {
+    return await this.#drizzleManyJson<OutputSnapshot>(
+      schema.outputSnapshots,
+      schema.outputSnapshots.recordJson,
+      {
+        where: eq(schema.outputSnapshots.spaceId, spaceId),
         orderBy: [
           schema.outputSnapshots.stateGeneration,
           schema.outputSnapshots.createdAt,

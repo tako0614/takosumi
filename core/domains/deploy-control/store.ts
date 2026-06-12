@@ -287,6 +287,13 @@ export interface OpenTofuDeploymentStore {
   putDeployment(deployment: Deployment): Promise<Deployment>;
   getDeployment(id: string): Promise<Deployment | undefined>;
   listDeployments(installationId: string): Promise<readonly Deployment[]>;
+  /**
+   * Lists ALL Deployments for a Space in one query (space-scoped read used by
+   * the control-backup bundle to avoid a per-Installation round-trip). Backed by
+   * the `space_id` column/index; the in-memory store filters. Order is not
+   * contractual — callers that need per-Installation grouping/order re-group.
+   */
+  listDeploymentsBySpace(spaceId: string): Promise<readonly Deployment[]>;
   /** Keyset-paged Deployment listing for an Installation (spec §30). */
   listDeploymentsPage(
     installationId: string,
@@ -348,6 +355,17 @@ export interface OpenTofuDeploymentStore {
   getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined>;
   listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]>;
   /**
+   * Lists SourceSnapshots for a batch of Source ids in ONE query (used by the
+   * control-backup bundle to replace a per-Source round-trip). SourceSnapshots
+   * have no `space_id` column, so this batches by the already-loaded id list
+   * rather than space-scoping; upload-origin snapshots (no `sourceId`) are not
+   * returned. An empty `sourceIds` yields an empty result. Order is not
+   * contractual — callers re-group/sort per Source.
+   */
+  listSourceSnapshotsBySourceIds(
+    sourceIds: readonly string[],
+  ): Promise<readonly SourceSnapshot[]>;
+  /**
    * Keyset-paged SourceSnapshot listing for a Source (spec §30 pagination). The
    * keyset column is `fetchedAt` (not `createdAt`); the opaque cursor carries it
    * in the `createdAt` slot.
@@ -387,6 +405,15 @@ export interface OpenTofuDeploymentStore {
     installationId: string,
     environment: string,
   ): Promise<readonly StateSnapshot[]>;
+  /**
+   * Lists ALL StateSnapshots for a Space in one query (space-scoped read used by
+   * the control-backup bundle to avoid a per-Installation round-trip). Backed by
+   * the `space_id` column; the in-memory store filters. Spans all environments —
+   * callers that need per-(installation, environment) grouping/order re-group.
+   */
+  listStateSnapshotsBySpace(
+    spaceId: string,
+  ): Promise<readonly StateSnapshot[]>;
 
   // Dependency DAG edges (spec §14 / §15 / §27 installation_dependencies). A
   // Dependency connects a producer Installation's outputs to a consumer
@@ -420,6 +447,15 @@ export interface OpenTofuDeploymentStore {
   ): Promise<OutputSnapshot | undefined>;
   listOutputSnapshots(
     installationId: string,
+  ): Promise<readonly OutputSnapshot[]>;
+  /**
+   * Lists ALL OutputSnapshots for a Space in one query (space-scoped read used by
+   * the control-backup bundle to avoid a per-Installation round-trip). Backed by
+   * the `space_id` column; the in-memory store filters. Order is not
+   * contractual — callers that need per-Installation grouping/order re-group.
+   */
+  listOutputSnapshotsBySpace(
+    spaceId: string,
   ): Promise<readonly OutputSnapshot[]>;
 
   // OutputShare records (spec §18 / §27 output_shares). A cross-Space grant from
@@ -846,6 +882,14 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
+  listDeploymentsBySpace(spaceId: string): Promise<readonly Deployment[]> {
+    return Promise.resolve(
+      Array.from(this.#deployments.values()).filter(
+        (row) => row.spaceId === spaceId,
+      ),
+    );
+  }
+
   async listDeploymentsPage(
     installationId: string,
     params: PageParams,
@@ -1015,6 +1059,18 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
+  listSourceSnapshotsBySourceIds(
+    sourceIds: readonly string[],
+  ): Promise<readonly SourceSnapshot[]> {
+    if (sourceIds.length === 0) return Promise.resolve([]);
+    const ids = new Set(sourceIds);
+    return Promise.resolve(
+      Array.from(this.#sourceSnapshots.values()).filter(
+        (row) => row.sourceId !== undefined && ids.has(row.sourceId),
+      ),
+    );
+  }
+
   async listSourceSnapshotsPage(
     sourceId: string,
     params: PageParams,
@@ -1084,6 +1140,16 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
             row.environment === environment,
         )
         .sort((a, b) => a.generation - b.generation),
+    );
+  }
+
+  listStateSnapshotsBySpace(
+    spaceId: string,
+  ): Promise<readonly StateSnapshot[]> {
+    return Promise.resolve(
+      Array.from(this.#stateSnapshots.values()).filter(
+        (row) => row.spaceId === spaceId,
+      ),
     );
   }
 
@@ -1203,6 +1269,16 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
             a.createdAt.localeCompare(b.createdAt) ||
             a.id.localeCompare(b.id),
         ),
+    );
+  }
+
+  listOutputSnapshotsBySpace(
+    spaceId: string,
+  ): Promise<readonly OutputSnapshot[]> {
+    return Promise.resolve(
+      Array.from(this.#outputSnapshots.values()).filter(
+        (row) => row.spaceId === spaceId,
+      ),
     );
   }
 
