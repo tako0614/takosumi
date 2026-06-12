@@ -33,15 +33,12 @@ import type {
   DispatchSourceArchive,
   DispatchStateScope,
   GetInstallationResponse,
-  InstallBuildConfig,
   InstallConfig,
   Installation,
-  InstallType,
   OpenTofuModuleSource,
   PlanRunInstallationContext,
   StateSnapshot,
   ListConnectionsResponse,
-  CloudflareApiProxyConfig,
   ListDeploymentsResponse,
   ListDeploymentOutputsResponse,
   ListRunnerProfilesResponse,
@@ -59,7 +56,6 @@ import type {
   RunnerStateLockEvidence,
   RunDiagnostic,
   RunStatus,
-  TemplateDefinition,
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
@@ -104,8 +100,6 @@ import type {
 import type { PageParams } from "takosumi-contract/pagination";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { log } from "../../shared/log.ts";
-import { isValidTenantScriptName } from "../../../providers/cloudflare/hosting/wfp_script_name.ts";
-import { signCfProxyScope } from "../../../providers/cloudflare/hosting/cf_proxy_signature.ts";
 import {
   InMemoryOpenTofuDeploymentStore,
   InstallationPatchGuardConflict,
@@ -158,16 +152,11 @@ import {
 } from "takosumi-policy";
 import {
   defaultTemplateRegistry,
-  type TemplateInputValue,
   type TemplateRegistry,
-  validateTemplateInputs,
 } from "../templates/mod.ts";
 import {
   type RootProviderBinding,
   generateGenericCapsuleRoot,
-  generateInstallationRoot,
-  type GeneratedRootInstallType,
-  generateRootModule,
 } from "takosumi-rootgen";
 import { downstreamClosure } from "takosumi-graph";
 import type {
@@ -240,6 +229,12 @@ import {
   DependencyResolutionService,
   type ResolvedDependencies,
 } from "./dependency_resolution.ts";
+import {
+  installConfigBuildSpec,
+  type InstallTypePlanContext,
+  PlanResolutionService,
+  type ResolvedTemplatePlan,
+} from "./plan_resolution.ts";
 
 // Re-export the shared error primitive and the four decomposed concerns so the
 // domain's public entry point stays `./mod.ts` for importers and tests.
@@ -284,15 +279,6 @@ export type RunCredentials = Readonly<Record<string, string>>;
 export interface RunTemplateDispatch {
   readonly generatedRoot?: DispatchGeneratedRoot;
   readonly outputAllowlist?: InstallConfig["outputAllowlist"];
-  readonly build?: DispatchBuildSpec;
-}
-
-/** Internal resolution of a template-backed plan request (never persisted as-is). */
-interface ResolvedTemplatePlan {
-  readonly template: TemplateDefinition;
-  readonly inputs: Readonly<Record<string, TemplateInputValue>>;
-  readonly generatedRoot: DispatchGeneratedRoot;
-  readonly requiredProviders: readonly string[];
   readonly build?: DispatchBuildSpec;
 }
 
@@ -719,38 +705,6 @@ export interface DeployControlActorContext {
   readonly actor?: string;
 }
 
-/**
- * Install-type wiring for an installation-driven template plan (§13). Carried
- * through {@link PlanRunInternalContext} so {@link
- * OpenTofuDeploymentController.createPlanRun} can drive `generateInstallationRoot`
- * (installType-aware generated root + provider aliases + the
- * `app_source` build) instead of the raw {@link generateRootModule}. Public
- * `/api` calls always target an Installation; the low-level compatibility path
- * backfills this context from the Installation row when callers omit it.
- */
-interface InstallTypePlanContext {
-  /** §13 generated-root install type (core / opentofu_module / app_source). */
-  readonly installType: GeneratedRootInstallType;
-  /** Provider mapping derived from the resolved provider bindings. */
-  readonly providerBindings: readonly RootProviderBinding[];
-  /**
-   * Manual-mode provider values flattened into module input overrides (§13
-   * decision: manual values override the InstallConfig variableMapping).
-   */
-  readonly manualValues: Readonly<Record<string, JsonValue>>;
-  /** InstallConfig.build, when enabled (overrides the template build). */
-  readonly build?: DispatchBuildSpec;
-  /**
-   * True when this run resolved a required provider to the operator-default
-   * connection (spec §7.1 fall-through) — i.e. the managed (takosumi-hosted)
-   * case. The control plane uses this to host a Cloudflare Worker capsule in the
-   * operator's Workers-for-Platforms dispatch namespace instead of as a
-   * standalone account-level Worker. Mirrors
-   * `billing_service.#runUsesOperatorDefaultCredential`.
-   */
-  readonly usesOperatorDefaultCredential: boolean;
-}
-
 interface GenericRootPlanContext {
   readonly providerBindings: readonly RootProviderBinding[];
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
@@ -916,6 +870,7 @@ export class OpenTofuDeploymentController {
   readonly #drift: DriftService;
   readonly #credentials: RunCredentialBroker;
   readonly #dependencies: DependencyResolutionService;
+  readonly #planResolution: PlanResolutionService;
   #connectionsService?: ConnectionsService;
 
   constructor(dependencies: OpenTofuDeploymentControllerDependencies = {}) {
@@ -998,6 +953,15 @@ export class OpenTofuDeploymentController {
       ((dispatch) => this.dispatchQueuedRun(dispatch));
     this.#templateRegistry =
       dependencies.templateRegistry ?? defaultTemplateRegistry;
+    this.#planResolution = new PlanResolutionService({
+      templateRegistry: this.#templateRegistry,
+      now: this.#now,
+      ...(this.#cfProxySigningSecret !== undefined
+        ? { cfProxySigningSecret: this.#cfProxySigningSecret }
+        : {}),
+      resolveProviderBindingsForRun: (installation, requiredProviders) =>
+        this.#resolveProviderBindingsForRun(installation, requiredProviders),
+    });
     this.#seededProfiles = this.#seedRunnerProfiles(
       dependencies.runnerProfiles ?? createDefaultRunnerProfiles(this.#now()),
     );
@@ -1154,12 +1118,15 @@ export class OpenTofuDeploymentController {
     const variables = normalizeVariables(request.variables);
     // Managed hosting: redirect the cloudflare provider base_url to the cf-proxy
     // when this run resolved the operator-default credential (no-op otherwise).
-    const installTypePlan = await this.#applyManagedProxyBaseUrl(
+    const installTypePlan = await this.#planResolution.applyManagedProxyBaseUrl(
       internal.installTypePlan,
       profile,
       installation,
     );
-    const templatePlan = this.#resolveTemplatePlan(request, installTypePlan);
+    const templatePlan = this.#planResolution.resolveTemplatePlan(
+      request,
+      installTypePlan,
+    );
     const declaredProviders = templatePlan
       ? normalizeProviders(templatePlan.requiredProviders)
       : normalizeProviders(request.requiredProviders ?? []);
@@ -1904,7 +1871,7 @@ export class OpenTofuDeploymentController {
       const requiredProviders = template.policy.allowedProviders.map(
         canonicalProviderAddress,
       );
-      const installTypePlan = await this.#resolveInstallTypePlan(
+      const installTypePlan = await this.#planResolution.resolveInstallTypePlan(
         input.installation,
         input.installConfig,
         installType,
@@ -1959,7 +1926,7 @@ export class OpenTofuDeploymentController {
       compatibilityProviders.length > 0
         ? compatibilityProviders
         : [...profile.allowedProviders];
-    const installTypePlan = await this.#resolveInstallTypePlan(
+    const installTypePlan = await this.#planResolution.resolveInstallTypePlan(
       input.installation,
       input.installConfig,
       input.installConfig.installType,
@@ -2087,50 +2054,21 @@ export class OpenTofuDeploymentController {
   }
 
   /**
-   * Derives the §13 install-type plan context for a template-bound installation
-   * config: the generated-root install type, the provider aliases
-   * (from the installation's resolved provider bindings), the flattened manual-mode
-   * values, and the build override. Provider bindings resolve through the
-   * {@link ConnectionsService} so binding changes take effect on the next plan.
-   * `disabled` provider bindings (and `manual`, which contributes values not a
-   * provider credential) are skipped for provider-alias derivation.
+   * Run-scoped provider binding resolution (explicit bindings + the
+   * operator-default fall-through for the run's required providers, spec §7.1).
+   * Lazily constructs the shared {@link ConnectionsService} so the SAME instance
+   * resolves bindings for rootgen (via {@link PlanResolutionService}) and for the
+   * mint path (`#resolveRunProviderBindings`).
    */
-  async #resolveInstallTypePlan(
+  #resolveProviderBindingsForRun(
     installation: Installation,
-    installConfig: InstallConfig,
-    installType: InstallType,
     requiredProviders: readonly string[],
-  ): Promise<InstallTypePlanContext> {
+  ): Promise<readonly ResolvedProviderBinding[]> {
     this.#connectionsService ??= new ConnectionsService({ store: this.#store });
-    // Run-scoped resolution so the generated-root provider blocks include the
-    // operator-default fall-through (spec §7.1) for unbound required providers.
-    // `requiredProviders` MUST equal the value stored on the plan run so the
-    // mint path (#resolveRunProviderBindings) resolves the identical set.
-    const resolved =
-      await this.#connectionsService.resolveProviderBindingsForRun(
-        installation,
-        requiredProviders,
-      );
-    const providerBindings = providerBindingsFromResolved(resolved);
-    const manualValues = manualValuesFromResolved(resolved);
-    // Managed signal: a required provider fell through to the operator-default
-    // connection (§7.1). Same predicate as the billing path so a managed run is
-    // detected identically for hosting and for spend accounting.
-    const usesOperatorDefaultCredential = resolved.some(
-      (entry) =>
-        entry.mode === "default" && entry.connection?.scope === "operator",
+    return this.#connectionsService.resolveProviderBindingsForRun(
+      installation,
+      requiredProviders,
     );
-    return {
-      // opentofu_root never reaches here (asserted in #installationPlanRequest);
-      // core / opentofu_module / app_source map 1:1 to the generated-root types.
-      installType: installType as GeneratedRootInstallType,
-      providerBindings,
-      manualValues,
-      usesOperatorDefaultCredential,
-      ...(installConfig.build?.enabled
-        ? { build: installConfigBuildSpec(installConfig.build) }
-        : {}),
-    };
   }
 
   async getPlanRun(id: string): Promise<PlanRunResponse> {
@@ -2143,165 +2081,6 @@ export class OpenTofuDeploymentController {
       );
     }
     return { planRun: publicPlanRun(planRun) };
-  }
-
-  /**
-   * Managed (takosumi-hosted) Worker hosting. When this run resolved the
-   * cloudflare provider to the operator-default credential (managed) AND the
-   * runner profile carries a cf-proxy config, redirect the cloudflare provider's
-   * `base_url` to the Takosumi cf-proxy so a PLAIN `cloudflare_workers_script`
-   * lands in the WfP dispatch namespace (the provider cannot place a script in a
-   * namespace itself). The base_url path carries the namespace + the install
-   * slug as the script-name prefix; the proxy rewrites + enforces both. The
-   * capsule cannot override the redirect — the generated root passes providers
-   * in, so a capsule's own provider block fails tofu plan (fail-closed).
-   *
-   * Self-host (an owned connection) and non-cloudflare/non-Worker runs are
-   * returned unchanged, so their generated root is byte-identical.
-   */
-  async #applyManagedProxyBaseUrl(
-    installTypePlan: InstallTypePlanContext | undefined,
-    profile: RunnerProfile,
-    installation: Installation,
-  ): Promise<InstallTypePlanContext | undefined> {
-    if (!installTypePlan?.usesOperatorDefaultCredential) return installTypePlan;
-    const wfp = profile.cloudflareWorkersForPlatforms;
-    if (!wfp?.apiProxy) return installTypePlan;
-    const slug = installation.name;
-    if (!isValidTenantScriptName(slug)) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `managed install slug ${JSON.stringify(slug)} is not a valid ` +
-          `Workers-for-Platforms script-name prefix (1-63 char DNS label)`,
-      );
-    }
-    // Fail closed: a managed run requires the cf-proxy signing secret so the
-    // proxy can verify the scope. Without it the run cannot proceed (the proxy
-    // would reject every forward anyway).
-    if (!this.#cfProxySigningSecret) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "managed cf-proxy signing secret is not configured " +
-          "(TAKOSUMI_DEPLOY_CONTROL_TOKEN); managed Cloudflare runs are disabled",
-      );
-    }
-    const signature = await signCfProxyScope(this.#cfProxySigningSecret, {
-      namespace: wfp.dispatchNamespace,
-      slug,
-      expMs: this.#now() + CF_PROXY_SIGNATURE_TTL_MS,
-    });
-    const baseUrl = managedCloudflareProxyBaseUrl(
-      wfp.apiProxy,
-      wfp.dispatchNamespace,
-      slug,
-      signature,
-    );
-    const providerBindings = installTypePlan.providerBindings.map((binding) =>
-      isCloudflareProvider(binding.provider)
-        ? { ...binding, baseUrl }
-        : binding,
-    );
-    return { ...installTypePlan, providerBindings };
-  }
-
-  /**
-   * Resolves a template-backed plan request into its resolved template, derived
-   * required providers, generated root module, and optional build phase. Returns
-   * `undefined` only when the caller should use the generic Capsule generated
-   * root path. Throws on a malformed template request
-   * (missing version, conflicting requiredProviders, unknown template, invalid
-   * inputs).
-   *
-   * `installTypePlan` is present only for an installation-driven plan (§13). When
-   * present the generated root comes from {@link generateInstallationRoot}
-   * (installType-aware, provider aliases, the `app_source` build);
-   * the manual-mode provider values are merged into the template inputs with
-   * manual values overriding the InstallConfig variableMapping (§13 decision:
-   * manual values are per-installation overrides). When absent (the raw
-   * `/v1/plan-runs` template path, no installation context = no provider bindings) the
-   * generated root stays on {@link generateRootModule} byte-for-byte.
-   */
-  #resolveTemplatePlan(
-    request: CreatePlanRunRequest,
-    installTypePlan?: InstallTypePlanContext,
-  ): ResolvedTemplatePlan | undefined {
-    if (request.templateId === undefined) {
-      // A bare inputs/templateVersion without templateId is a request error: it
-      // would otherwise silently fall back to a generic Capsule plan that ignores
-      // template-only fields.
-      if (
-        request.templateVersion !== undefined ||
-        request.inputs !== undefined
-      ) {
-        throw new OpenTofuControllerError(
-          "invalid_argument",
-          "templateVersion/inputs require templateId",
-        );
-      }
-      return undefined;
-    }
-    requireNonEmptyString(request.templateId, "templateId");
-    requireNonEmptyString(request.templateVersion, "templateVersion");
-    if (request.requiredProviders !== undefined) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "requiredProviders is derived from the template; do not pass it with templateId",
-      );
-    }
-    const template = this.#templateRegistry.require(
-      request.templateId,
-      request.templateVersion!,
-    );
-    // Manual-mode provider values are per-installation overrides: they win on a
-    // key collision with the InstallConfig variableMapping (which flows in via
-    // request.inputs). Unknown keys fail closed instead of being silently
-    // dropped, so manual inputs remain auditable and match the template contract.
-    const mergedInputs = installTypePlan
-      ? mergeManualInputs(
-          template,
-          request.inputs,
-          installTypePlan.manualValues,
-        )
-      : request.inputs;
-    const inputs = validateTemplateInputs(template, mergedInputs);
-    // Installation-driven (§13): installType-aware generated root with
-    // provider aliases + the app_source artifact_path wiring.
-    // Raw template path (no installation context): the byte-stable wrapper.
-    const baseGeneratedRoot = installTypePlan
-      ? generateInstallationRoot({
-          template,
-          inputs,
-          installType: installTypePlan.installType,
-          ...(installTypePlan.providerBindings.length > 0
-            ? { providerBindings: installTypePlan.providerBindings }
-            : {}),
-        })
-      : generateRootModule(template, inputs);
-    const generatedRoot: DispatchGeneratedRoot = {
-      ...baseGeneratedRoot,
-      moduleFiles: this.#templateRegistry.requireModuleFiles(
-        template.id,
-        template.version,
-      ),
-    };
-    // Build phase precedence: an installation-driven app_source InstallConfig.build
-    // (when enabled) overrides the template's own build; otherwise the template
-    // build is used (§13 / M5 decision: InstallConfig.build takes precedence).
-    const build = installTypePlan?.build ?? templateBuildSpec(template);
-    return {
-      template,
-      inputs,
-      generatedRoot,
-      // Canonicalize the template's provider rules (OpenTofu source form, e.g.
-      // `cloudflare/cloudflare`) to fully-qualified registry addresses so they
-      // satisfy a runner profile allowlist (whose rules are fully-qualified or
-      // short — `providerMatches` admits a fully-qualified provider against
-      // either form, but not a short provider against a fully-qualified rule).
-      requiredProviders: template.policy.allowedProviders.map(
-        canonicalProviderAddress,
-      ),
-      ...(build ? { build } : {}),
-    };
   }
 
   async createApplyRun(
@@ -5800,110 +5579,6 @@ function installConfigTemplateBinding(config: InstallConfig):
   };
 }
 
-/** Derives generated-root provider bindings from resolved provider bindings. */
-function providerBindingsFromResolved(
-  resolved: readonly ResolvedProviderBinding[],
-): readonly RootProviderBinding[] {
-  const providers: RootProviderBinding[] = [];
-  for (const entry of resolved) {
-    const provider = entry.connection?.provider;
-    if (!provider) continue;
-    providers.push({
-      provider,
-      ...(entry.alias ? { alias: entry.alias } : {}),
-    });
-  }
-  return providers;
-}
-
-/**
- * Flattens an installation's manual-mode provider binding values into module input
- * overrides (§13 decision). Manual values are per-installation overrides; only
- * JSON-scalar values flow through (the template input validator rejects unknown
- * keys downstream, and rootgen renders scalars only). Later bindings win on a
- * key collision in profile order.
- */
-function manualValuesFromResolved(
-  resolved: readonly ResolvedProviderBinding[],
-): Readonly<Record<string, JsonValue>> {
-  const merged: Record<string, JsonValue> = {};
-  for (const entry of resolved) {
-    if (entry.mode !== "manual" || !entry.values) continue;
-    for (const [key, value] of Object.entries(entry.values)) {
-      if (isJsonScalar(value)) merged[key] = value;
-    }
-  }
-  return merged;
-}
-
-/**
- * Merges the manual-mode provider values OVER the InstallConfig variableMapping
- * (§13 decision: manual values are per-installation overrides and win on a key
- * collision). Returns `undefined` when neither side contributes a key so the
- * caller passes `undefined` (byte-identical to no inputs).
- */
-function mergeManualInputs(
-  template: TemplateDefinition,
-  configInputs: Readonly<Record<string, JsonValue>> | undefined,
-  manualValues: Readonly<Record<string, JsonValue>>,
-): Readonly<Record<string, JsonValue>> | undefined {
-  const manualForTemplate: Record<string, JsonValue> = {};
-  for (const [key, value] of Object.entries(manualValues)) {
-    if (!(key in template.inputs)) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        `manual provider value '${key}' is not declared by template ${template.id}`,
-      );
-    }
-    manualForTemplate[key] = value;
-  }
-  if (
-    (!configInputs || Object.keys(configInputs).length === 0) &&
-    Object.keys(manualForTemplate).length === 0
-  ) {
-    return configInputs;
-  }
-  return { ...(configInputs ?? {}), ...manualForTemplate };
-}
-
-// Managed cf-proxy: the cloudflare provider local name (a binding's `provider`
-// may be short `cloudflare`, `cloudflare/cloudflare`, or fully-qualified).
-function isCloudflareProvider(provider: string): boolean {
-  return provider.split("/").pop() === "cloudflare";
-}
-
-// cf-proxy signature lifetime. Covers the longest realistic plan+apply run (the
-// signature is minted fresh per run, so this only needs to outlast one run's
-// provider calls, not be long-lived).
-const CF_PROXY_SIGNATURE_TTL_MS = 12 * 60 * 60 * 1000;
-
-// Builds the cf-proxy provider base_url for a managed run. The path carries a
-// control-plane signature segment + the dispatch namespace + the install slug
-// (the script-name prefix) so the proxy verifies the scope, then rewrites
-// `…/workers/scripts/{n}` -> `…/dispatch/namespaces/{ns}/scripts/{slug}-{n}` and
-// passes other calls through. The signature stops the edge route being an
-// unauthenticated open relay; the capsule cannot override the base_url (root-only
-// provider config), and cannot forge the signature (control-plane secret only).
-function managedCloudflareProxyBaseUrl(
-  proxy: CloudflareApiProxyConfig,
-  namespace: string,
-  slug: string,
-  signature: string,
-): string {
-  const origin = proxy.origin.replace(/\/+$/, "");
-  const route = (proxy.route.startsWith("/") ? proxy.route : `/${proxy.route}`)
-    .replace(/\/+$/, "");
-  return (
-    `${origin}${route}/${signature}/${encodeURIComponent(namespace)}/` +
-    `${encodeURIComponent(slug)}/client/v4`
-  );
-}
-
-function isJsonScalar(value: unknown): value is string | number | boolean {
-  const t = typeof value;
-  return t === "string" || t === "number" || t === "boolean";
-}
-
 function mergeJsonVariables(
   ...records: readonly Readonly<Record<string, unknown>>[]
 ): Readonly<Record<string, JsonValue>> {
@@ -5930,32 +5605,6 @@ function isJsonValue(value: unknown): value is JsonValue {
   if (Array.isArray(value)) return value.every(isJsonValue);
   if (type !== "object") return false;
   return Object.values(value as Record<string, unknown>).every(isJsonValue);
-}
-
-/** Maps a TemplateDefinition's optional build into a DispatchBuildSpec. */
-function templateBuildSpec(
-  template: TemplateDefinition,
-): DispatchBuildSpec | undefined {
-  if (!template.build) return undefined;
-  return {
-    runtime: template.build.runtime,
-    commands: [...template.build.commands],
-    artifactPath: template.build.artifactPath,
-  };
-}
-
-/**
- * Maps an enabled InstallConfig.build into the DispatchBuildSpec the runner build
- * phase consumes (M5 decision: same DispatchBuildSpec threading the template
- * build uses; the build runs in the Container with ZERO credentials — invariant
- * 3). `artifactPath` defaults to `dist` when the config omits it.
- */
-function installConfigBuildSpec(build: InstallBuildConfig): DispatchBuildSpec {
-  return {
-    runtime: "bun",
-    commands: [...build.commands],
-    artifactPath: build.artifactPath ?? "dist",
-  };
 }
 
 /**
