@@ -1292,14 +1292,31 @@ export class D1AccountsStore implements AccountsStore {
   ): Promise<readonly SpaceRecord[]> {
     // KV-index store: resolve the subject's legally-owned ledger accounts via
     // the `ledger_accounts_by_owner` index, then collect each account's spaces
-    // via `spaces_by_account`, deduplicating by spaceId. The owner index
-    // self-populates on the next `saveLedgerAccount`, so legacy accounts not
-    // re-saved since this index was added are absent (the session list then
-    // degrades to spaces the caller directly owns for those org accounts).
-    const ownedAccounts = await this.#listByIndex<LedgerAccountRecord>(
+    // via `spaces_by_account`, deduplicating by spaceId.
+    let ownedAccounts = await this.#listByIndex<LedgerAccountRecord>(
       "ledger_accounts_by_owner",
       subject,
     );
+    if (ownedAccounts.length === 0) {
+      // Lazy backfill: the `ledger_accounts_by_owner` index is written only on
+      // `saveLedgerAccount`, so ledger accounts persisted BEFORE this index
+      // existed have no index entry and the lookup above returns empty. An
+      // empty result is ambiguous — the subject may genuinely own nothing, or
+      // their (legacy) ledger accounts may simply be un-indexed. Resolve the
+      // ambiguity by scanning `ledger_accounts` and (re)writing the by-owner
+      // index entries for every row found, then re-reading the index. This is
+      // idempotent and self-healing: once the index is populated this branch
+      // is not re-entered for an owning subject, and the happy path (a
+      // non-empty index) is never touched. The in-memory + Postgres stores
+      // already return all legal-owner spaces; this keeps D1 in parity.
+      const reindexed = await this.#backfillLedgerAccountsByOwnerIndex();
+      if (reindexed) {
+        ownedAccounts = await this.#listByIndex<LedgerAccountRecord>(
+          "ledger_accounts_by_owner",
+          subject,
+        );
+      }
+    }
     const byId = new Map<string, SpaceRecord>();
     for (const account of ownedAccounts) {
       const spaces = await this.#listByIndex<SpaceRecord>(
@@ -1311,6 +1328,33 @@ export class D1AccountsStore implements AccountsStore {
       }
     }
     return [...byId.values()];
+  }
+
+  /**
+   * Reindex helper for the `ledger_accounts_by_owner` secondary index. Scans
+   * every `ledger_accounts` document and (re)writes its by-owner index entry
+   * keyed on `legalOwnerSubject`. Needed because the index is written only on
+   * `saveLedgerAccount`, so ledger accounts persisted before the index existed
+   * have no entry; `listSpacesForOwner` invokes this lazily when its by-owner
+   * lookup is empty so legacy org owners no longer degrade to direct-owner
+   * spaces. Idempotent: `#refreshIndexEntries` deletes and rewrites the
+   * document's index rows, so re-running it on an already-indexed store is a
+   * no-op beyond rewriting the same rows. Returns whether any rows were found
+   * (false ⇒ the bucket is empty, so re-reading the index would be wasted).
+   */
+  async #backfillLedgerAccountsByOwnerIndex(): Promise<boolean> {
+    const accounts =
+      await this.#listBucket<LedgerAccountRecord>("ledger_accounts");
+    for (const account of accounts) {
+      await this.#refreshIndexEntries("ledger_accounts", account.accountId, [
+        {
+          name: "ledger_accounts_by_owner",
+          key: account.legalOwnerSubject,
+          sortKey: account.createdAt,
+        },
+      ]);
+    }
+    return accounts.length > 0;
   }
 
   saveAppInstallation(record: InstallationRecord): Promise<void> {
