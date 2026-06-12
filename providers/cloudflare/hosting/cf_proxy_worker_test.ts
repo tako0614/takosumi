@@ -5,31 +5,61 @@ import {
   parseCfProxyPath,
   rewriteCfProxyApiPath,
 } from "./cf_proxy_worker.ts";
+import { signCfProxyScope } from "./cf_proxy_signature.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
+const SECRET = "test-cf-proxy-secret";
+const NOW = 1_900_000_000_000;
+const EXP = NOW + 60 * 60 * 1000;
+
 const SCOPE = {
+  signature: "sig",
   namespace: "takosumi-tenants",
   slug: "app",
   apiPath: "/client/v4/accounts/acct123/workers/scripts/api",
 } as const;
 
-test("parseCfProxyPath: extracts namespace/slug/apiPath", () => {
+/** A `/internal/cf-proxy/<sig>/<ns>/<slug>/client/v4<suffix>` URL with a real signature. */
+async function signedProxyUrl(
+  suffix: string,
+  opts: { namespace?: string; slug?: string; expMs?: number } = {},
+): Promise<URL> {
+  const namespace = opts.namespace ?? "takosumi-tenants";
+  const slug = opts.slug ?? "app";
+  const sig = await signCfProxyScope(SECRET, {
+    namespace,
+    slug,
+    expMs: opts.expMs ?? EXP,
+  });
+  return new URL(
+    `https://app.takosumi.com/internal/cf-proxy/${sig}/${namespace}/${slug}/client/v4${suffix}`,
+  );
+}
+
+test("parseCfProxyPath: extracts signature/namespace/slug/apiPath", () => {
   expect(
     parseCfProxyPath(
-      "/internal/cf-proxy/takosumi-tenants/app/client/v4/accounts/acct123/workers/scripts/api",
+      "/internal/cf-proxy/123.mac/takosumi-tenants/app/client/v4/accounts/acct123/workers/scripts/api",
     ),
   ).toEqual({
+    signature: "123.mac",
     namespace: "takosumi-tenants",
     slug: "app",
     apiPath: "/client/v4/accounts/acct123/workers/scripts/api",
   });
-  // Not the cf-proxy prefix, or missing the client/v4 marker.
+  // Not the cf-proxy prefix, or missing the signature / client/v4 marker.
   expect(parseCfProxyPath("/internal/other/x")).toBeUndefined();
-  expect(parseCfProxyPath("/internal/cf-proxy/ns/slug/v4/accounts")).toBeUndefined();
+  // Pre-signature 4-segment form (ns/slug/client/v4) no longer parses.
+  expect(
+    parseCfProxyPath("/internal/cf-proxy/takosumi-tenants/app/client/v4"),
+  ).toBeUndefined();
+  expect(
+    parseCfProxyPath("/internal/cf-proxy/sig/ns/slug/v4/accounts"),
+  ).toBeUndefined();
 });
 
 test("rewriteCfProxyApiPath: worker script -> dispatch namespace with slug prefix", () => {
@@ -68,23 +98,25 @@ test("rewriteCfProxyApiPath: an invalid derived script name is rejected", () => 
   expect("error" in r).toBe(true);
 });
 
-test("handleCfProxyRequest: forwards the rewritten script PUT to api.cloudflare.com with Authorization + body", async () => {
+test("handleCfProxyRequest: a signed request forwards the rewritten script PUT to api.cloudflare.com with Authorization + body", async () => {
   let captured: Request | undefined;
   globalThis.fetch = (async (req: Request) => {
     captured = req;
     return new Response('{"success":true}', { status: 200 });
   }) as typeof fetch;
 
-  const url = new URL(
-    "https://app.takosumi.com/internal/cf-proxy/takosumi-tenants/app/client/v4/accounts/acct123/workers/scripts/api",
-  );
+  const url = await signedProxyUrl("/accounts/acct123/workers/scripts/api");
   const res = await handleCfProxyRequest(
     new Request(url, {
       method: "PUT",
-      headers: { authorization: "Bearer op-token", "content-type": "multipart/form-data" },
+      headers: {
+        authorization: "Bearer op-token",
+        "content-type": "multipart/form-data",
+      },
       body: "bundle-bytes",
     }),
     url,
+    { signingSecret: SECRET, nowMs: NOW },
   );
   expect(res.status).toBe(200);
   expect(captured).toBeDefined();
@@ -102,12 +134,13 @@ test("handleCfProxyRequest: subdomain no-op returns success without an upstream 
     return new Response("", { status: 500 });
   }) as typeof fetch;
 
-  const url = new URL(
-    "https://app.takosumi.com/internal/cf-proxy/takosumi-tenants/app/client/v4/accounts/acct123/workers/scripts/api/subdomain",
+  const url = await signedProxyUrl(
+    "/accounts/acct123/workers/scripts/api/subdomain",
   );
   const res = await handleCfProxyRequest(
     new Request(url, { method: "PUT", body: '{"enabled":true}' }),
     url,
+    { signingSecret: SECRET, nowMs: NOW },
   );
   expect(called).toBe(false);
   expect(res.status).toBe(200);
@@ -122,10 +155,11 @@ test("handleCfProxyRequest: passthrough for KV/D1/R2 hits api.cloudflare.com unc
     return new Response("{}", { status: 200 });
   }) as typeof fetch;
 
-  const url = new URL(
-    "https://app.takosumi.com/internal/cf-proxy/takosumi-tenants/app/client/v4/accounts/acct123/d1/database",
-  );
-  await handleCfProxyRequest(new Request(url, { method: "GET" }), url);
+  const url = await signedProxyUrl("/accounts/acct123/d1/database");
+  await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
+    signingSecret: SECRET,
+    nowMs: NOW,
+  });
   expect(captured!.url).toBe(
     "https://api.cloudflare.com/client/v4/accounts/acct123/d1/database",
   );
@@ -133,6 +167,83 @@ test("handleCfProxyRequest: passthrough for KV/D1/R2 hits api.cloudflare.com unc
 
 test("handleCfProxyRequest: an invalid cf-proxy path is 404", async () => {
   const url = new URL("https://app.takosumi.com/internal/cf-proxy/onlyns");
-  const res = await handleCfProxyRequest(new Request(url), url);
+  const res = await handleCfProxyRequest(new Request(url), url, {
+    signingSecret: SECRET,
+    nowMs: NOW,
+  });
   expect(res.status).toBe(404);
+});
+
+// --- signature gate (the open-relay fix) -----------------------------------
+
+test("handleCfProxyRequest: no configured secret disables the proxy (404), no upstream call", async () => {
+  let called = false;
+  globalThis.fetch = (async () => {
+    called = true;
+    return new Response("", { status: 200 });
+  }) as typeof fetch;
+  const url = await signedProxyUrl("/accounts/acct123/d1/database");
+  const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
+    nowMs: NOW,
+  });
+  expect(res.status).toBe(404);
+  expect(called).toBe(false);
+});
+
+test("handleCfProxyRequest: an unsigned / tampered signature is rejected 403 before any upstream call", async () => {
+  let called = false;
+  globalThis.fetch = (async () => {
+    called = true;
+    return new Response("", { status: 200 });
+  }) as typeof fetch;
+  // A made-up signature segment that was never minted by the control plane.
+  const url = new URL(
+    `https://app.takosumi.com/internal/cf-proxy/${EXP}.forged/takosumi-tenants/app/client/v4/accounts/acct123/d1/database`,
+  );
+  const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
+    signingSecret: SECRET,
+    nowMs: NOW,
+  });
+  expect(res.status).toBe(403);
+  expect(called).toBe(false);
+});
+
+test("handleCfProxyRequest: an expired signature is rejected 403", async () => {
+  let called = false;
+  globalThis.fetch = (async () => {
+    called = true;
+    return new Response("", { status: 200 });
+  }) as typeof fetch;
+  const url = await signedProxyUrl("/accounts/acct123/d1/database", {
+    expMs: NOW - 1,
+  });
+  const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
+    signingSecret: SECRET,
+    nowMs: NOW,
+  });
+  expect(res.status).toBe(403);
+  expect(called).toBe(false);
+});
+
+test("handleCfProxyRequest: a signature minted for a DIFFERENT namespace/slug is rejected 403", async () => {
+  let called = false;
+  globalThis.fetch = (async () => {
+    called = true;
+    return new Response("", { status: 200 });
+  }) as typeof fetch;
+  // Sign for namespace "other", but address "takosumi-tenants" in the path.
+  const sig = await signCfProxyScope(SECRET, {
+    namespace: "other",
+    slug: "app",
+    expMs: EXP,
+  });
+  const url = new URL(
+    `https://app.takosumi.com/internal/cf-proxy/${sig}/takosumi-tenants/app/client/v4/accounts/acct123/d1/database`,
+  );
+  const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
+    signingSecret: SECRET,
+    nowMs: NOW,
+  });
+  expect(res.status).toBe(403);
+  expect(called).toBe(false);
 });

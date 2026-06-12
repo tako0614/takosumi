@@ -1,4 +1,5 @@
 import { TENANT_SCRIPT_NAME } from "./wfp_script_name.ts";
+import { verifyCfProxyScope } from "./cf_proxy_signature.ts";
 
 /**
  * Managed cf-proxy (runner-side worker-script redirect).
@@ -27,9 +28,11 @@ import { TENANT_SCRIPT_NAME } from "./wfp_script_name.ts";
  * Integrity: the namespace + slug come from the base_url PATH, which the control
  * plane sets and a capsule cannot override (the generated root passes providers
  * in -> a capsule provider block fails tofu plan). The operator API token rides
- * the request `Authorization` and is forwarded as-is. v1 is a pass-through
- * rewriter (same posture as the runner already holding the token); signing the
- * scope + the proxy holding the token are gated hardening.
+ * the request `Authorization` and is forwarded as-is. To stop the edge route
+ * being an unauthenticated open relay, the control plane signs the scope at
+ * run-dispatch time (`cf_proxy_signature.ts`) and embeds the signature as the
+ * FIRST path segment; the proxy verifies it (constant-time, unexpired) BEFORE
+ * forwarding. The runner cannot forge it — only the control plane holds the secret.
  */
 
 const CF_PROXY_PREFIX = "/internal/cf-proxy";
@@ -39,26 +42,36 @@ const WORKER_SCRIPT_PATH =
   /^\/client\/v4\/accounts\/([^/]+)\/workers\/scripts\/([^/]+)(\/.*)?$/;
 
 export interface CfProxyScope {
+  /** Control-plane signature segment `<expMs>.<mac>` binding ns+slug+expiry. */
+  readonly signature: string;
   readonly namespace: string;
   readonly slug: string;
   /** API path beginning at `/client/v4/...`. */
   readonly apiPath: string;
 }
 
-/** Parses `/internal/cf-proxy/<namespace>/<slug>/client/v4/<rest>`. */
+/** Parses `/internal/cf-proxy/<sig>/<namespace>/<slug>/client/v4/<rest>`. */
 export function parseCfProxyPath(pathname: string): CfProxyScope | undefined {
   if (pathname !== CF_PROXY_PREFIX && !pathname.startsWith(`${CF_PROXY_PREFIX}/`)) {
     return undefined;
   }
   const parts = pathname.slice(CF_PROXY_PREFIX.length + 1).split("/");
-  // parts = [<namespace>, <slug>, "client", "v4", ...rest]
-  if (parts.length < 4 || parts[2] !== "client" || parts[3] !== "v4") {
+  // parts = [<sig>, <namespace>, <slug>, "client", "v4", ...rest]
+  if (parts.length < 5 || parts[3] !== "client" || parts[4] !== "v4") {
     return undefined;
   }
-  const namespace = decodeURIComponent(parts[0]!);
-  const slug = decodeURIComponent(parts[1]!);
-  if (!namespace || !slug) return undefined;
-  return { namespace, slug, apiPath: `/${parts.slice(2).join("/")}` };
+  const signature = parts[0]!;
+  const namespace = decodeURIComponent(parts[1]!);
+  const slug = decodeURIComponent(parts[2]!);
+  if (!signature || !namespace || !slug) return undefined;
+  return { signature, namespace, slug, apiPath: `/${parts.slice(3).join("/")}` };
+}
+
+export interface CfProxyRequestOptions {
+  /** HMAC secret the control plane signed the scope with. Absent -> disabled. */
+  readonly signingSecret?: string;
+  /** Clock for expiry checks; defaults to `Date.now()`. */
+  readonly nowMs?: number;
 }
 
 /**
@@ -90,9 +103,29 @@ export function rewriteCfProxyApiPath(
 export async function handleCfProxyRequest(
   request: Request,
   url: URL,
+  options: CfProxyRequestOptions = {},
 ): Promise<Response> {
   const scope = parseCfProxyPath(url.pathname);
   if (!scope) return cfErrorResponse(404, "cf_proxy_path_invalid");
+  // Fail closed: the managed cf-proxy only forwards when the control plane
+  // signed this exact (namespace, slug) scope and it has not expired. Without a
+  // configured secret the proxy is disabled; an invalid/expired/tampered
+  // signature is rejected BEFORE any upstream fetch.
+  if (!options.signingSecret) {
+    return cfErrorResponse(404, "cf_proxy_disabled");
+  }
+  const signatureOk = await verifyCfProxyScope(
+    options.signingSecret,
+    scope.signature,
+    {
+      namespace: scope.namespace,
+      slug: scope.slug,
+      nowMs: options.nowMs ?? Date.now(),
+    },
+  );
+  if (!signatureOk) {
+    return cfErrorResponse(403, "cf_proxy_signature_invalid");
+  }
   const rewritten = rewriteCfProxyApiPath(scope);
   if ("error" in rewritten) return cfErrorResponse(400, rewritten.error);
   if ("noop" in rewritten) {
