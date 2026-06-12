@@ -34,11 +34,19 @@ export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH =
   "/v1/auth/passkeys/authenticate/options";
 export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH =
   "/v1/auth/passkeys/authenticate/complete";
+/**
+ * Base path of the takos-product AppInstallation surface. Renamed from
+ * `/v1/installations` to `/v1/app-installations` to end the same-name
+ * confusion with the DIFFERENT deploy-control Installation resource served at
+ * `/api/v1/installations`. All AppInstallation sub-paths build from this const.
+ */
+const TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH = "/v1/app-installations";
 export const TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH =
-  "/v1/installations/plan-runs";
-export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH = "/v1/installations";
+  `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH}/plan-runs`;
+export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH =
+  TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH;
 export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH =
-  "/v1/installations/import";
+  `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH}/import`;
 export const TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH =
   "/v1/workload-services";
 export const TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND =

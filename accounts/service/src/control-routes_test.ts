@@ -676,7 +676,7 @@ test("isControlRoutePath owns /api/v1 and its subtree only", () => {
   expect(isControlRoutePath("/api/v1/spaces")).toEqual(true);
   expect(isControlRoutePath("/api/v1/runs/plan_1/logs")).toEqual(true);
   expect(isControlRoutePath("/api/v1x")).toEqual(false);
-  expect(isControlRoutePath("/v1/installations")).toEqual(false);
+  expect(isControlRoutePath("/v1/app-installations")).toEqual(false);
   expect(isControlRoutePath("/v1/account/session/me")).toEqual(false);
 });
 

@@ -365,7 +365,7 @@ test("Accounts workload platform service resolver projects BillingPort material"
   );
 
   expect(material.materialKind).toEqual(TAKOSUMI_ACCOUNTS_MATERIAL_BILLING_PORT_V1);
-  expect(material.usageReportEndpoint).toEqual("https://cloud.example.test/v1/installations/inst_billing/billing/usage-reports");
+  expect(material.usageReportEndpoint).toEqual("https://cloud.example.test/v1/app-installations/inst_billing/billing/usage-reports");
   expect(material.billingSubjectRef).toEqual("takosumi-accounts://billing-accounts/billing_1");
   expect(material.portalUrl).toEqual("https://dashboard.example.test/account/billing");
   expect(material.meteringCredentialRef).toEqual(undefined);

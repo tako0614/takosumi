@@ -68,7 +68,7 @@ describe("createStaticAssetResponder", () => {
       const serve = createStaticAssetResponder(dir);
       const apiPaths = [
         "/v1/account/session/me",
-        "/v1/installations",
+        "/v1/app-installations",
         "/v1/billing/stripe/webhook",
         "/v1/auth/upstream/callback",
         "/oauth/authorize",
