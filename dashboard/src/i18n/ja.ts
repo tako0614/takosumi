@@ -63,7 +63,6 @@ export const ja = {
   "auth.signInSub": "Takosumi のアカウントで続けます。",
   "auth.continueWith": "{provider} で続ける",
   "auth.notConfigured": "オペレーターが未設定です",
-  "auth.comingSoon": "準備中",
   "auth.termsPrefix": "続行することで",
   "auth.termsOfService": "利用規約",
   "auth.and": "と",
@@ -146,6 +145,8 @@ export const ja = {
     "アプリが公開しているアドレスや値です。秘密情報は表示されません。",
   "app.outputs.empty":
     "まだ公開された出力はありません。デプロイすると表示されます。",
+  "app.outputs.none":
+    "このアプリは公開アドレス・出力を持ちません（インフラのみのモジュールなどではアドレスが出ないことがあります）。",
   "app.output.launchUrl": "アプリのアドレス",
   "app.output.url": "アドレス",
   "app.output.publicUrl": "公開アドレス",

@@ -259,6 +259,7 @@ function Inner() {
                   <Match when={tab() === "overview"}>
                     <OverviewTab
                       publicOutputs={publicOutputs()}
+                      hasDeployment={currentDeployment() !== undefined}
                       outputsLoading={deployments.loading}
                       producers={producers()}
                       consumers={consumers()}
@@ -387,6 +388,7 @@ function dependencyRows(
 
 function OverviewTab(props: {
   readonly publicOutputs: readonly [string, unknown][];
+  readonly hasDeployment: boolean;
   readonly outputsLoading: boolean;
   readonly producers: readonly DependencyRow[];
   readonly consumers: readonly DependencyRow[];
@@ -418,7 +420,14 @@ function OverviewTab(props: {
             <p class="muted">{t("common.loading")}</p>
           </Match>
           <Match when={props.publicOutputs.length === 0}>
-            <p class="muted">{t("app.outputs.empty")}</p>
+            {/* Distinguish "not deployed yet" from "deployed but this capsule
+                exposes no public outputs" — the old single message implied
+                outputs were still coming even for infra-only capsules. */}
+            <p class="muted">
+              {props.hasDeployment
+                ? t("app.outputs.none")
+                : t("app.outputs.empty")}
+            </p>
           </Match>
           <Match when={props.publicOutputs.length > 0}>
             <KVList
