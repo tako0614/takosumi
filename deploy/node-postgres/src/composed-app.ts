@@ -100,9 +100,7 @@ type CreateTakosumiServiceArg = NonNullable<
 export async function buildComposedApp(
   input: ComposedAppInput,
 ): Promise<CreatedTakosumiService> {
-  const { runtimeEnv, deployControlToken } = embeddedServiceRuntimeEnv(
-    input.runtimeEnv,
-  );
+  const { runtimeEnv } = embeddedServiceRuntimeEnv(input.runtimeEnv);
   const created = await createTakosumiService({
     // Operators add native adapter implementation bindings (Docker Compose / systemd / etc.)
     // here; the reference Bun profile ships none by default but forwards
@@ -130,11 +128,7 @@ export async function buildComposedApp(
     return await accountsHandler(c.req.raw);
   });
 
-  const deployControl = inProcessDeployControlProxy(
-    serviceApp,
-    deployControlToken,
-    created.operations,
-  );
+  const deployControl = inProcessDeployControlProxy(created.operations);
   accountsHandler ??= input.createAccountsHandler
     ? await input.createAccountsHandler(deployControl)
     : undefined;
@@ -193,41 +187,12 @@ export async function buildComposedApp(
 }
 
 function inProcessDeployControlProxy(
-  serviceApp: CreatedTakosumiService["app"],
-  token: string,
   operations: CreatedTakosumiService["operations"],
 ): DeployControlProxyOptions {
-  const url = "http://takosumi-service.internal";
   // The proxy calls the embedded service's typed `operations` facade directly
-  // (no Bearer handshake, no JSON round-trip). The URL-rewriting `fetch` into
-  // the service Hono app is kept as the transport fallback.
-  const fetchThroughService = async (
-    input: RequestInfo | URL,
-    init?: RequestInit,
-  ) => {
-    const request = new Request(input, init);
-    const sourceUrl = new URL(request.url);
-    const rewrittenUrl = new URL(
-      `${sourceUrl.pathname}${sourceUrl.search}`,
-      url,
-    );
-    const rewritten = new Request(rewrittenUrl, {
-      method: request.method,
-      headers: request.headers,
-      body: request.method === "GET" || request.method === "HEAD"
-        ? undefined
-        : request.body,
-      redirect: request.redirect,
-      signal: request.signal,
-    });
-    return await serviceApp.fetch(rewritten);
-  };
-  return {
-    url,
-    token,
-    fetch: fetchThroughService as typeof fetch,
-    operations,
-  };
+  // (no Bearer handshake, no JSON round-trip). This is the only transport —
+  // the account-plane deploy-control proxy is in-process only (per AGENTS.md).
+  return { operations };
 }
 
 function embeddedServiceRuntimeEnv(

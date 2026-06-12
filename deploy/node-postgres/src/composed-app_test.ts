@@ -117,29 +117,23 @@ test("composed app routes POST /v1/installations to the account plane, not the s
 
 test("composed app builds accounts handler with an in-process service deploy control proxy", async () => {
   const spy = accountsHandlerSpy();
-  let deployControlEndpointReached = false;
+  let operationsWired = false;
   const { buildComposedApp } = await import("./composed-app.ts");
   const created = await buildComposedApp({
     config: testConfig(),
     store: new PostgresAccountsStore(stubQueryClient()),
     createAccountsHandler: async (deployControl) => {
-      assert.equal(typeof deployControl.token, "string");
-      const res = await deployControl.fetch!(
-        new Request(`${deployControl.url}/internal/v1/runner-profiles`, {
-          method: "GET",
-          headers: {
-            "authorization": `Bearer ${deployControl.token}`,
-          },
-        }),
-      );
-      const body = await res.json();
-      deployControlEndpointReached = res.status === 200 &&
-        Array.isArray(body.runnerProfiles);
+      // The account-plane deploy-control proxy is in-process only: it dispatches
+      // through the injected typed `operations` facade (no HTTP `fetch` seam, no
+      // Bearer handshake). Assert the embedded service's facade is wired in.
+      operationsWired = typeof deployControl.operations.createPlanRun ===
+          "function" &&
+        typeof deployControl.operations.getInstallation === "function";
       return spy.handler;
     },
   });
 
-  assert.equal(deployControlEndpointReached, true);
+  assert.equal(operationsWired, true);
   const res = await created.app.fetch(
     new Request("http://localhost/dashboard"),
   );

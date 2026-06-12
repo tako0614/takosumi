@@ -24,10 +24,11 @@ The in-process deploy-control implementation lives behind the **`/internal/v1/*`
 | `/hooks/*`       | inbound forge webhook            | hook secret, not operator bearer                                              |
 | `/internal/v1/*` | in-process deploy-control seam   | internal (operator bearer); not reachable from the edge                       |
 
-> **Distinct from the account-plane product surfaces**: the account plane also exposes **`/v1/installations`** (the
-> takos-product AppInstallation app-distribution API) and **`/v1/connections`** (account-plane connections) as separate
-> resources. They are NOT the `/api/v1` deploy-control Installation / Connection — they intentionally coexist under a
-> different prefix. This document covers the `/api/v1` deploy-control surface.
+> **Distinct from the account-plane product surface**: the account plane also exposes **`/v1/installations`** (the
+> takos-product AppInstallation app-distribution API) as a separate resource. It is NOT the `/api/v1` deploy-control
+> Installation — it intentionally coexists under a different prefix. Connections are the SAME resource under both
+> prefixes, so they are consolidated onto **`/api/v1/connections`** (the session-authed control surface); there is no
+> `/v1/connections` edge. This document covers the `/api/v1` deploy-control surface.
 
 ### `/api/v1` scoped principal
 

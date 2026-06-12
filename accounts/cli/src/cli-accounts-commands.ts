@@ -633,7 +633,10 @@ export async function runAccountsServe(
       stripeBilling,
       upstreamOAuth,
       passkeys,
-      deployControl,
+      // The account-plane deploy-control proxy is in-process only (it dispatches
+      // through the injected typed `operations` facade). The standalone CLI serve
+      // has no operations to inject, so it wires no live proxy; the parsed
+      // `--deploy-control-*` config is used only for the dry-run diagnostic.
       bindingMaterializer: composeBindingMaterializers([
         ...(staticBindingMaterializerConfig
           ? [

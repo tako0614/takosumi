@@ -7,8 +7,8 @@
 // routes are still the canonical Takosumi Space / Source / Connection /
 // Installation / Dependency / SourceSnapshot / DependencySnapshot /
 // StateSnapshot / Run / RunGroup / Deployment / OutputSnapshot / Backup surface, but this platform worker reaches the
-// deploy-control implementation in-process through the `deployControlFetch` /
-// operations seam injected below. There is no separate control-plane worker.
+// deploy-control implementation in-process through the typed `operations` seam
+// injected below. There is no separate control-plane worker.
 // The two Durable Object classes (coordination leases/alarms + the OpenTofu
 // Container runner) are re-exported so the wrangler bindings/migrations can
 // name them.
@@ -78,7 +78,6 @@ async function controlPlaneOperationsFor(
 }
 
 const accountsWorker = createCloudflareWorker({
-  deployControlFetch: (env) => deployControlSeam(env).fetch,
   deployControlOperations: (env) => deployControlSeam(env).operations(),
   // The session-authed `/api/v1/*` dashboard surface (M10) reads the SAME
   // in-process operations facade the deploy-control proxy uses, adapted to the

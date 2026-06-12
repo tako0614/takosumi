@@ -23,8 +23,15 @@ import {
   createEphemeralAccountsHandler,
   createOpenManagedOfferingAccessPolicy,
   customOidcOAuthProvider,
+  type DeployControlOperations,
   InMemorySharedCellWarmPool,
 } from "./mod.ts";
+import type {
+  ApplyRunResponse,
+  GetInstallationResponse,
+  ListDeploymentsResponse,
+  PlanRunResponse,
+} from "@takosumi/internal/deploy-control-api";
 import { type AccountsStore, InMemoryAccountsStore } from "./store.ts";
 import { handleUserInfo } from "./oidc-routes.ts";
 import {
@@ -62,6 +69,35 @@ function createAccountsHandler(options: TestAccountsHandlerOptions = {}) {
   });
   return async (request: Request): Promise<Response> =>
     await handler(await withTestAppInstallationAuth(request, store));
+}
+
+/**
+ * In-process deploy-control `operations` stub for the installation proxy tests.
+ * The account-plane deploy-control proxy dispatches through this typed facade
+ * (the HTTP `fetch` seam was removed); each test overrides only the methods its
+ * flow reaches. Unspecified methods reject so an unexpected dispatch fails loud.
+ */
+function deployControlOperationsStub(
+  overrides: Partial<DeployControlOperations> = {},
+): DeployControlOperations {
+  const reject = (name: string) => () =>
+    Promise.reject(new Error(`unexpected deploy-control ${name} call`));
+  return {
+    createPlanRun: reject("createPlanRun") as DeployControlOperations[
+      "createPlanRun"
+    ],
+    getPlanRun: reject("getPlanRun") as DeployControlOperations["getPlanRun"],
+    createApplyRun: reject("createApplyRun") as DeployControlOperations[
+      "createApplyRun"
+    ],
+    getInstallation: reject("getInstallation") as DeployControlOperations[
+      "getInstallation"
+    ],
+    listDeployments: reject("listDeployments") as DeployControlOperations[
+      "listDeployments"
+    ],
+    ...overrides,
+  };
 }
 
 function seedAccountSession(
@@ -390,69 +426,50 @@ test("accounts handler does not expose a service descriptor anchor", async () =>
 });
 
 test("accounts handler proxies installation PlanRun to deployControl", async () => {
-  const proxiedRequests: Request[] = [];
+  const createPlanRunCalls: unknown[] = [];
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(store, "tsub_owner", "acct_space_1", "space_1");
   const sessionId = seedAccountSession(store, "tsub_owner");
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
+    // The in-process deploy-control transport: the proxy dispatches through the
+    // typed `operations` facade (no HTTP seam, no Bearer handshake).
     deployControl: {
-      url: "http://takosumi.internal:8788",
-      token: "deploy-control-secret",
-      fetch: (input, init) => {
-        const request = new Request(input, init);
-        proxiedRequests.push(request);
-        if (new URL(request.url).pathname === "/internal/v1/plan-runs/plan_core_apply") {
-          return Promise.resolve(
-            Response.json({
-              planRun: {
-                id: "plan_core_apply",
-                spaceId: "space_core",
-                source: {
-                  kind: "git",
-                  url: "https://github.com/example/hello",
-                  ref: "main",
-                },
-                operation: "create",
-                runnerProfileId: "cloudflare-default",
-                sourceDigest: "sha256:source-core-apply",
-                variablesDigest: "sha256:variables-core-apply",
-                policyDecisionDigest: "sha256:policy-core-apply",
-                planDigest: "sha256:abc",
-                planArtifact: {
-                  kind: "runner-local",
-                  ref: "runner-local://plan_core_apply/tfplan",
-                  digest: "sha256:abc",
-                },
-                sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-                status: "succeeded",
-                requiredProviders: [],
-                policy: { status: "passed", reasons: [], checkedAt: 1 },
-                createdAt: 1,
-                updatedAt: 1,
-                finishedAt: 1,
+      operations: deployControlOperationsStub({
+        createPlanRun: (request) => {
+          createPlanRunCalls.push(request);
+          return Promise.resolve({
+            planRun: {
+              id: "plan_core_apply",
+              spaceId: "space_core",
+              source: {
+                kind: "git",
+                url: "https://github.com/example/hello",
+                ref: "main",
               },
-            }),
-          );
-        }
-        return Promise.resolve(
-          Response.json({
-            source: {
-              kind: "git",
-              url: "https://github.com/example/hello",
-              ref: "v1.2.3",
-              commit: "0123456789abcdef0123456789abcdef01234567",
-            },
-            planDigest: "sha256:abc",
-            changes: [],
-            expected: {
-              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+              operation: "create",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: "sha256:source-core-apply",
+              variablesDigest: "sha256:variables-core-apply",
+              policyDecisionDigest: "sha256:policy-core-apply",
               planDigest: "sha256:abc",
+              planArtifact: {
+                kind: "runner-local",
+                ref: "runner-local://plan_core_apply/tfplan",
+                digest: "sha256:abc",
+              },
+              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+              status: "succeeded",
+              requiredProviders: [],
+              policy: { status: "passed", reasons: [], checkedAt: 1 },
+              createdAt: 1,
+              updatedAt: 1,
+              finishedAt: 1,
             },
-          }),
-        );
-      },
+          } as unknown as PlanRunResponse);
+        },
+      }),
     },
   });
 
@@ -474,16 +491,14 @@ test("accounts handler proxies installation PlanRun to deployControl", async () 
     }),
   );
 
-  expect(response.status).toEqual(200);
+  // The in-process create-PlanRun dispatch returns the canonical 201 create
+  // status (the former HTTP-mock returned an arbitrary 200; the shipped platform
+  // worker always injects `operations`, so 201 is the production status).
+  expect(response.status).toEqual(201);
   expect((await response.json()).planDigest).toEqual("sha256:abc");
-  expect(proxiedRequests.length).toEqual(1);
-  expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/internal/v1/plan-runs",
-  );
-  expect(proxiedRequests[0].headers.get("authorization")).toEqual(
-    "Bearer deploy-control-secret",
-  );
-  expect(await proxiedRequests[0].json()).toEqual({
+  // The proxy calls the typed createPlanRun with the normalized request body.
+  expect(createPlanRunCalls.length).toEqual(1);
+  expect(createPlanRunCalls[0]).toEqual({
     spaceId: "space_1",
     source: {
       kind: "git",
@@ -495,90 +510,84 @@ test("accounts handler proxies installation PlanRun to deployControl", async () 
 });
 
 test("accounts handler applies installation through space deployControl when configured", async () => {
-  const proxiedRequests: Request[] = [];
+  const getPlanRunCalls: string[] = [];
+  const createApplyRunCalls: unknown[] = [];
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(store, "tsub_core_apply", "acct_core_apply", "space_core");
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
     deployControl: {
-      url: "http://takosumi.internal:8788",
-      token: "deploy-control-secret",
-      fetch: (input, init) => {
-        const request = new Request(input, init);
-        proxiedRequests.push(request);
-        if (new URL(request.url).pathname === "/internal/v1/plan-runs/plan_core_apply") {
-          return Promise.resolve(
-            Response.json({
-              planRun: {
-                id: "plan_core_apply",
-                spaceId: "space_core",
-                source: {
-                  kind: "git",
-                  url: "https://github.com/example/hello",
-                  ref: "main",
-                },
-                operation: "create",
-                runnerProfileId: "cloudflare-default",
-                sourceDigest: "sha256:source-core-apply",
-                variablesDigest: "sha256:variables-core-apply",
-                policyDecisionDigest: "sha256:policy-core-apply",
-                planDigest: "sha256:abc",
-                planArtifact: {
-                  kind: "runner-local",
-                  ref: "runner-local://plan_core_apply/tfplan",
-                  digest: "sha256:abc",
-                },
-                sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-                status: "succeeded",
-                requiredProviders: [],
-                policy: { status: "passed", reasons: [], checkedAt: 1 },
-                createdAt: 1,
-                updatedAt: 1,
-                finishedAt: 1,
+      operations: deployControlOperationsStub({
+        getPlanRun: (id) => {
+          getPlanRunCalls.push(id);
+          return Promise.resolve({
+            planRun: {
+              id: "plan_core_apply",
+              spaceId: "space_core",
+              source: {
+                kind: "git",
+                url: "https://github.com/example/hello",
+                ref: "main",
               },
-            }),
-          );
-        }
-        return Promise.resolve(
-          Response.json(
-            {
-              installation: {
-                id: "inst_core_apply",
-                spaceId: "space_core",
-                appId: "example.hello",
-                currentDeploymentId: "dep_core_apply",
-                status: "ready",
-                createdAt: 1,
+              operation: "create",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: "sha256:source-core-apply",
+              variablesDigest: "sha256:variables-core-apply",
+              policyDecisionDigest: "sha256:policy-core-apply",
+              planDigest: "sha256:abc",
+              planArtifact: {
+                kind: "runner-local",
+                ref: "runner-local://plan_core_apply/tfplan",
+                digest: "sha256:abc",
               },
-              deployment: {
-                id: "dep_core_apply",
-                installationId: "inst_core_apply",
-                source: {
-                  kind: "git",
-                  url: "https://github.com/example/hello",
-                  ref: "main",
-                  commit: "0123456789abcdef0123456789abcdef01234567",
-                },
-                planDigest: "sha256:abc",
-                status: "succeeded",
-                outputs: {
-                  components: {
-                    public: {
-                      url: "https://hello.example.test",
-                      host: "hello.example.test",
-                      scheme: "https",
-                      listener: "public",
-                    },
+              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+              status: "succeeded",
+              requiredProviders: [],
+              policy: { status: "passed", reasons: [], checkedAt: 1 },
+              createdAt: 1,
+              updatedAt: 1,
+              finishedAt: 1,
+            },
+          } as unknown as PlanRunResponse);
+        },
+        createApplyRun: (request) => {
+          createApplyRunCalls.push(request);
+          return Promise.resolve({
+            installation: {
+              id: "inst_core_apply",
+              spaceId: "space_core",
+              appId: "example.hello",
+              currentDeploymentId: "dep_core_apply",
+              status: "ready",
+              createdAt: 1,
+            },
+            deployment: {
+              id: "dep_core_apply",
+              installationId: "inst_core_apply",
+              source: {
+                kind: "git",
+                url: "https://github.com/example/hello",
+                ref: "main",
+                commit: "0123456789abcdef0123456789abcdef01234567",
+              },
+              planDigest: "sha256:abc",
+              status: "succeeded",
+              outputs: {
+                components: {
+                  public: {
+                    url: "https://hello.example.test",
+                    host: "hello.example.test",
+                    scheme: "https",
+                    listener: "public",
                   },
                 },
-                createdAt: 1,
               },
+              createdAt: 1,
             },
-            { status: 201 },
-          ),
-        );
-      },
+          } as unknown as ApplyRunResponse);
+        },
+      }),
     },
   });
 
@@ -646,23 +655,17 @@ test("accounts handler applies installation through space deployControl when con
       .listInstallationEvents("inst_core_apply")
       .map((event) => event.eventType),
   ).toEqual(["installation.created", "installation.activated-http-domain"]);
-  expect(proxiedRequests.length).toEqual(2);
-  expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/internal/v1/plan-runs/plan_core_apply",
-  );
-  expect(proxiedRequests[0].headers.get("authorization")).toEqual(
-    "Bearer deploy-control-secret",
-  );
-  expect(proxiedRequests[1].url).toEqual(
-    "http://takosumi.internal:8788/internal/v1/apply-runs",
-  );
-  expect((await proxiedRequests[1].json()).planRunId).toEqual(
+  // The proxy reviews the reviewed PlanRun then applies it through the typed
+  // operations facade (the in-process transport — no HTTP seam).
+  expect(getPlanRunCalls).toEqual(["plan_core_apply"]);
+  expect(createApplyRunCalls.length).toEqual(1);
+  expect((createApplyRunCalls[0] as { planRunId?: string }).planRunId).toEqual(
     "plan_core_apply",
   );
 });
 
 test("accounts handler validates installation facade request before space deployControl apply", async () => {
-  const proxiedRequests: Request[] = [];
+  let dispatched = false;
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(
     store,
@@ -674,12 +677,18 @@ test("accounts handler validates installation facade request before space deploy
     issuer: "https://accounts.example.test",
     store,
     deployControl: {
-      url: "http://takosumi.internal:8788",
-      token: "deploy-control-secret",
-      fetch: (input, init) => {
-        proxiedRequests.push(new Request(input, init));
-        return Promise.resolve(Response.json({}, { status: 500 }));
-      },
+      // Any dispatch through the in-process facade flips the flag; the request
+      // must be rejected (400) by request validation BEFORE the proxy runs.
+      operations: deployControlOperationsStub({
+        getPlanRun: () => {
+          dispatched = true;
+          return Promise.reject(new Error("should not dispatch"));
+        },
+        createApplyRun: () => {
+          dispatched = true;
+          return Promise.reject(new Error("should not dispatch"));
+        },
+      }),
     },
   });
 
@@ -702,86 +711,80 @@ test("accounts handler validates installation facade request before space deploy
   );
 
   expect(response.status).toEqual(400);
-  expect(proxiedRequests.length).toEqual(0);
+  expect(dispatched).toEqual(false);
 });
 
 test("accounts handler applies local source through space deployControl with local expected guard", async () => {
-  const proxiedRequests: Request[] = [];
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(store, "tsub_core_local", "acct_core_local", "space_core");
+  const getPlanRunCalls: string[] = [];
+  const createApplyRunCalls: unknown[] = [];
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
     deployControl: {
-      url: "http://takosumi.internal:8788",
-      token: "deploy-control-secret",
-      fetch: (input, init) => {
-        const request = new Request(input, init);
-        proxiedRequests.push(request);
-        if (new URL(request.url).pathname === "/internal/v1/plan-runs/plan_core_local") {
-          return Promise.resolve(
-            Response.json({
-              planRun: {
-                id: "plan_core_local",
-                spaceId: "space_core",
-                source: {
-                  kind: "local",
-                  path: "/workspace/example-local",
-                },
-                operation: "create",
-                runnerProfileId: "cloudflare-default",
-                sourceDigest: "sha256:source-core-local",
-                variablesDigest: "sha256:variables-core-local",
-                policyDecisionDigest: "sha256:policy-core-local",
-                planDigest:
+      operations: deployControlOperationsStub({
+        getPlanRun: (id) => {
+          getPlanRunCalls.push(id);
+          return Promise.resolve({
+            planRun: {
+              id: "plan_core_local",
+              spaceId: "space_core",
+              source: {
+                kind: "local",
+                path: "/workspace/example-local",
+              },
+              operation: "create",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: "sha256:source-core-local",
+              variablesDigest: "sha256:variables-core-local",
+              policyDecisionDigest: "sha256:policy-core-local",
+              planDigest:
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              planArtifact: {
+                kind: "runner-local",
+                ref: "runner-local://plan_core_local/tfplan",
+                digest:
                   "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                planArtifact: {
-                  kind: "runner-local",
-                  ref: "runner-local://plan_core_local/tfplan",
-                  digest:
-                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                },
-                sourceCommit: "working-tree",
-                status: "succeeded",
-                requiredProviders: [],
-                policy: { status: "passed", reasons: [], checkedAt: 1 },
-                createdAt: 1,
-                updatedAt: 1,
-                finishedAt: 1,
               },
-            }),
-          );
-        }
-        return Promise.resolve(
-          Response.json(
-            {
-              installation: {
-                id: "inst_core_local",
-                spaceId: "space_core",
-                appId: "example.local",
-                currentDeploymentId: "dep_core_local",
-                status: "ready",
-                createdAt: 1,
-              },
-              deployment: {
-                id: "dep_core_local",
-                installationId: "inst_core_local",
-                source: {
-                  kind: "local",
-                  url: "/workspace/example-local",
-                },
-                sourceCommit: "working-tree",
-                planDigest:
-                  "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                status: "succeeded",
-                outputs: {},
-                createdAt: 1,
-              },
+              sourceCommit: "working-tree",
+              status: "succeeded",
+              requiredProviders: [],
+              policy: { status: "passed", reasons: [], checkedAt: 1 },
+              createdAt: 1,
+              updatedAt: 1,
+              finishedAt: 1,
             },
-            { status: 201 },
-          ),
-        );
-      },
+          } as unknown as PlanRunResponse);
+        },
+        createApplyRun: (request) => {
+          createApplyRunCalls.push(request);
+          return Promise.resolve({
+            installation: {
+              id: "inst_core_local",
+              spaceId: "space_core",
+              appId: "example.local",
+              currentDeploymentId: "dep_core_local",
+              status: "ready",
+              createdAt: 1,
+            },
+            deployment: {
+              id: "dep_core_local",
+              installationId: "inst_core_local",
+              source: {
+                kind: "local",
+                url: "/workspace/example-local",
+              },
+              sourceCommit: "working-tree",
+              planDigest:
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              status: "succeeded",
+              outputs: {},
+              createdAt: 1,
+            },
+          } as unknown as ApplyRunResponse);
+        },
+      }),
     },
   });
 
@@ -830,14 +833,9 @@ test("accounts handler applies local source through space deployControl with loc
   expect(store.findAppInstallation("inst_core_local")?.sourceCommit).toEqual(
     "working-tree",
   );
-  expect(proxiedRequests.length).toEqual(2);
-  expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/internal/v1/plan-runs/plan_core_local",
-  );
-  expect(proxiedRequests[1].url).toEqual(
-    "http://takosumi.internal:8788/internal/v1/apply-runs",
-  );
-  expect((await proxiedRequests[1].json()).planRunId).toEqual(
+  expect(getPlanRunCalls).toEqual(["plan_core_local"]);
+  expect(createApplyRunCalls.length).toEqual(1);
+  expect((createApplyRunCalls[0] as { planRunId?: string }).planRunId).toEqual(
     "plan_core_local",
   );
 });
@@ -864,68 +862,46 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
     scopes: ["read"],
     createdAt: now,
   });
-  const proxiedRequests: Request[] = [];
+  let createPlanRunCount = 0;
   const handler = createRawAccountsHandler({
     issuer: testIssuer,
     managedOfferingAccess: testManagedOfferingOpenAccess,
     store,
     deployControl: {
-      url: "http://takosumi.internal:8788",
-      fetch: (input, init) => {
-        const request = new Request(input, init);
-        proxiedRequests.push(request);
-        if (
-          new URL(request.url).pathname === "/internal/v1/plan-runs/plan_dashboard_apply"
-        ) {
-          return Promise.resolve(
-            Response.json({
-              planRun: {
-                id: "plan_dashboard_apply",
-                spaceId: "space_dashboard",
-                source: {
-                  kind: "git",
-                  url: "https://github.com/takos/takos",
-                  ref: "v1.2.3",
-                },
-                operation: "create",
-                runnerProfileId: "cloudflare-default",
-                sourceDigest: "sha256:source-dashboard-apply",
-                variablesDigest: "sha256:variables-dashboard-apply",
-                policyDecisionDigest: "sha256:policy-dashboard-apply",
-                planDigest: "sha256:app",
-                planArtifact: {
-                  kind: "runner-local",
-                  ref: "runner-local://plan_dashboard_apply/tfplan",
-                  digest: "sha256:app",
-                },
-                sourceCommit: "abc123",
-                status: "succeeded",
-                requiredProviders: [],
-                policy: { status: "passed", reasons: [], checkedAt: 1 },
-                createdAt: 1,
-                updatedAt: 1,
-                finishedAt: 1,
+      operations: deployControlOperationsStub({
+        createPlanRun: (request) => {
+          createPlanRunCount += 1;
+          return Promise.resolve({
+            planRun: {
+              id: "plan_dashboard_apply",
+              spaceId: request.spaceId,
+              source: {
+                kind: "git",
+                url: "https://github.com/example/hello",
+                ref: "main",
               },
-            }),
-          );
-        }
-        return Promise.resolve(
-          Response.json({
-            source: {
-              kind: "git",
-              url: "https://github.com/example/hello",
-              ref: "main",
-              commit: "0123456789abcdef0123456789abcdef01234567",
-            },
-            planDigest: "sha256:abc",
-            changes: [],
-            expected: {
-              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+              operation: "create",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: "sha256:source-dashboard-apply",
+              variablesDigest: "sha256:variables-dashboard-apply",
+              policyDecisionDigest: "sha256:policy-dashboard-apply",
               planDigest: "sha256:abc",
+              planArtifact: {
+                kind: "runner-local",
+                ref: "runner-local://plan_dashboard_apply/tfplan",
+                digest: "sha256:abc",
+              },
+              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+              status: "succeeded",
+              requiredProviders: [],
+              policy: { status: "passed", reasons: [], checkedAt: 1 },
+              createdAt: 1,
+              updatedAt: 1,
+              finishedAt: 1,
             },
-          }),
-        );
-      },
+          } as unknown as PlanRunResponse);
+        },
+      }),
     },
   });
   const body = JSON.stringify({
@@ -981,9 +957,11 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
       body,
     }),
   );
-  expect(owner.status).toEqual(200);
+  // 201: in-process create-PlanRun returns the canonical create status (the
+  // shipped platform worker always injects the typed `operations` facade).
+  expect(owner.status).toEqual(201);
   expect((await owner.json()).planDigest).toEqual("sha256:abc");
-  expect(proxiedRequests.length).toEqual(1);
+  expect(createPlanRunCount).toEqual(1);
 
   // New-user one-click install: a write-scoped owner can PlanRun a space that
   // does NOT exist yet (it is created later at install time with this spaceId).
@@ -1006,7 +984,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
       }),
     }),
   );
-  expect(freshSpace.status).toEqual(200);
+  expect(freshSpace.status).toEqual(201);
 });
 
 test("accounts handler does not launch-gate installation PlanRun when managed offering access is closed", async () => {
@@ -4700,58 +4678,49 @@ test("accounts handler brokers deployment and rollback through space deployContr
     createdAt: now,
     updatedAt: now,
   });
-  const upstreamCalls: Array<{
-    path: string;
-    authorization: string | null;
-    body: Record<string, unknown>;
+  // Records each in-process deploy-control dispatch the proxy makes, in order,
+  // as `{ op, id?, body? }` — the operations-facade equivalent of the former
+  // ordered HTTP-path/bearer assertion.
+  const dispatchLog: Array<{
+    op: string;
+    id?: string;
+    body?: Record<string, unknown>;
   }> = [];
   const handler = createAccountsHandler({
     store,
     deployControl: {
-      url: "http://takosumi.internal:8788",
-      token: "deploy-control-secret",
-      fetch: (url, init) => {
-        const path = new URL(String(url)).pathname;
-        const requestInit = init as
-          | { body?: unknown; headers?: HeadersInit }
-          | undefined;
-        const body = JSON.parse(String(requestInit?.body ?? "{}")) as Record<
-          string,
-          unknown
-        >;
-        upstreamCalls.push({
-          path,
-          authorization: new Headers(requestInit?.headers).get("authorization"),
-          body,
-        });
-        if (path === "/internal/v1/installations/inst_core_revision") {
-          return Promise.resolve(
-            Response.json({
-              installation: {
-                id: "inst_core_revision",
-                spaceId: "space_1",
-                appId: "takos.chat",
-                source: {
-                  kind: "git",
-                  url: "https://github.com/takos/takos.git",
-                  ref: "v1.2.3",
-                  commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                },
-                runnerProfileId: "cloudflare-default",
-                currentDeploymentId: "dep_old",
-                status: "ready",
-                createdAt: now,
-                updatedAt: now,
+      operations: deployControlOperationsStub({
+        getInstallation: (id) => {
+          dispatchLog.push({ op: "getInstallation", id });
+          return Promise.resolve({
+            installation: {
+              id: "inst_core_revision",
+              spaceId: "space_1",
+              appId: "takos.chat",
+              source: {
+                kind: "git",
+                url: "https://github.com/takos/takos.git",
+                ref: "v1.2.3",
+                commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               },
-            }),
-          );
-        }
-        if (path === "/internal/v1/plan-runs") {
+              runnerProfileId: "cloudflare-default",
+              currentDeploymentId: "dep_old",
+              status: "ready",
+              createdAt: now,
+              updatedAt: now,
+            },
+          } as unknown as GetInstallationResponse);
+        },
+        createPlanRun: (request) => {
+          dispatchLog.push({
+            op: "createPlanRun",
+            body: request as unknown as Record<string, unknown>,
+          });
           const source =
-            typeof body.source === "object" &&
-            body.source !== null &&
-            !Array.isArray(body.source)
-              ? body.source
+            typeof request.source === "object" &&
+            request.source !== null &&
+            !Array.isArray(request.source)
+              ? (request.source as Record<string, unknown>)
               : {
                   kind: "git",
                   url: "https://github.com/takos/takos.git",
@@ -4764,87 +4733,87 @@ test("accounts handler brokers deployment and rollback through space deployContr
               : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
           const digest =
             ref === "v1.2.3" ? "sha256:app-v123" : "sha256:app-v124";
-          return Promise.resolve(
-            Response.json({
-              planRun: {
-                id: `plan_${ref.replace(/[^0-9a-z]/gi, "")}`,
-                spaceId: "space_1",
-                installationId: "inst_core_revision",
-                installationCurrentDeploymentId: "dep_old",
-                source,
-                operation: "update",
-                runnerProfileId: "cloudflare-default",
-                sourceDigest: `sha256:source-${ref.replace(/[^0-9a-z]/gi, "")}`,
-                variablesDigest: `sha256:variables-${ref.replace(/[^0-9a-z]/gi, "")}`,
-                policyDecisionDigest: `sha256:policy-${ref.replace(/[^0-9a-z]/gi, "")}`,
-                variables: {},
-                requiredProviders: [],
-                status: "succeeded",
-                policy: { status: "passed", reasons: [], checkedAt: now },
-                planDigest: digest,
-                planArtifact: {
-                  kind: "runner-local",
-                  ref: `runner-local://plan_${ref.replace(/[^0-9a-z]/gi, "")}/tfplan`,
-                  digest,
-                },
-                sourceCommit: commit,
-                providerLockDigest: `sha256:lock-${ref}`,
-                createdAt: now,
-                updatedAt: now,
-                finishedAt: now,
+          return Promise.resolve({
+            planRun: {
+              id: `plan_${ref.replace(/[^0-9a-z]/gi, "")}`,
+              spaceId: "space_1",
+              installationId: "inst_core_revision",
+              installationCurrentDeploymentId: "dep_old",
+              source,
+              operation: "update",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: `sha256:source-${ref.replace(/[^0-9a-z]/gi, "")}`,
+              variablesDigest: `sha256:variables-${ref.replace(/[^0-9a-z]/gi, "")}`,
+              policyDecisionDigest: `sha256:policy-${ref.replace(/[^0-9a-z]/gi, "")}`,
+              variables: {},
+              requiredProviders: [],
+              status: "succeeded",
+              policy: { status: "passed", reasons: [], checkedAt: now },
+              planDigest: digest,
+              planArtifact: {
+                kind: "runner-local",
+                ref: `runner-local://plan_${ref.replace(/[^0-9a-z]/gi, "")}/tfplan`,
+                digest,
               },
-              currentDeploymentId: "dep_old",
-            }),
-          );
-        }
-        if (path.startsWith("/internal/v1/plan-runs/")) {
-          const planRunId = decodeURIComponent(path.split("/").pop() ?? "");
+              sourceCommit: commit,
+              providerLockDigest: `sha256:lock-${ref}`,
+              createdAt: now,
+              updatedAt: now,
+              finishedAt: now,
+            },
+            currentDeploymentId: "dep_old",
+          } as unknown as PlanRunResponse);
+        },
+        getPlanRun: (planRunId) => {
+          dispatchLog.push({ op: "getPlanRun", id: planRunId });
           const rollbackPlan = planRunId.includes("v123");
           const ref = rollbackPlan ? "v1.2.3" : "v1.2.4";
           const commit = rollbackPlan
             ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
           const digest = rollbackPlan ? "sha256:app-v123" : "sha256:app-v124";
-          return Promise.resolve(
-            Response.json({
-              planRun: {
-                id: planRunId,
-                spaceId: "space_1",
-                installationId: "inst_core_revision",
-                installationCurrentDeploymentId: rollbackPlan
-                  ? "dep_new"
-                  : "dep_old",
-                source: {
-                  kind: "git",
-                  url: "https://github.com/takos/takos.git",
-                  ref,
-                },
-                operation: "update",
-                runnerProfileId: "cloudflare-default",
-                sourceDigest: `sha256:source-${planRunId}`,
-                variablesDigest: `sha256:variables-${planRunId}`,
-                policyDecisionDigest: `sha256:policy-${planRunId}`,
-                requiredProviders: [],
-                status: "succeeded",
-                policy: { status: "passed", reasons: [], checkedAt: now },
-                planDigest: digest,
-                planArtifact: {
-                  kind: "runner-local",
-                  ref: `runner-local://${planRunId}/tfplan`,
-                  digest,
-                },
-                sourceCommit: commit,
-                providerLockDigest: `sha256:lock-${ref}`,
-                createdAt: now,
-                updatedAt: now,
-                finishedAt: now,
+          return Promise.resolve({
+            planRun: {
+              id: planRunId,
+              spaceId: "space_1",
+              installationId: "inst_core_revision",
+              installationCurrentDeploymentId: rollbackPlan
+                ? "dep_new"
+                : "dep_old",
+              source: {
+                kind: "git",
+                url: "https://github.com/takos/takos.git",
+                ref,
               },
-            }),
-          );
-        }
-        if (path === "/internal/v1/apply-runs") {
+              operation: "update",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: `sha256:source-${planRunId}`,
+              variablesDigest: `sha256:variables-${planRunId}`,
+              policyDecisionDigest: `sha256:policy-${planRunId}`,
+              requiredProviders: [],
+              status: "succeeded",
+              policy: { status: "passed", reasons: [], checkedAt: now },
+              planDigest: digest,
+              planArtifact: {
+                kind: "runner-local",
+                ref: `runner-local://${planRunId}/tfplan`,
+                digest,
+              },
+              sourceCommit: commit,
+              providerLockDigest: `sha256:lock-${ref}`,
+              createdAt: now,
+              updatedAt: now,
+              finishedAt: now,
+            },
+          } as unknown as PlanRunResponse);
+        },
+        createApplyRun: (request) => {
+          dispatchLog.push({
+            op: "createApplyRun",
+            body: request as unknown as Record<string, unknown>,
+          });
           const planRunId =
-            typeof body.planRunId === "string" ? body.planRunId : "";
+            typeof request.planRunId === "string" ? request.planRunId : "";
           const rollbackApply = planRunId.includes("v123");
           const source = rollbackApply
             ? {
@@ -4862,89 +4831,75 @@ test("accounts handler brokers deployment and rollback through space deployContr
             ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
           const digest = rollbackApply ? "sha256:app-v123" : "sha256:app-v124";
-          return Promise.resolve(
-            Response.json(
-              {
-                applyRun: {
-                  id: rollbackApply ? "apply_rollback" : "apply_new",
-                  planRunId,
-                  spaceId: "space_1",
-                  installationId: "inst_core_revision",
-                  deploymentId,
-                  operation: "update",
-                  runnerProfileId: "cloudflare-default",
-                  status: "succeeded",
-                  createdAt: now + 1,
-                  updatedAt: now + 1,
-                  finishedAt: now + 1,
-                },
-                installation: {
-                  id: "inst_core_revision",
-                  spaceId: "space_1",
-                  appId: "takos.chat",
-                  currentDeploymentId: deploymentId,
-                  status: "ready",
-                  createdAt: now,
-                  updatedAt: now + 1,
-                },
-                deployment: {
-                  id: deploymentId,
-                  installationId: "inst_core_revision",
-                  source,
-                  planDigest: digest,
-                  sourceCommit: commit,
-                  status: "succeeded",
-                  outputs: rollbackApply
-                    ? []
-                    : [
-                        {
-                          name: "takosumi_launch_url",
-                          kind: "launch_url",
-                          value: "https://takos-new.example.test",
-                          sensitive: false,
-                        },
-                      ],
-                  createdAt: now + 1,
-                },
-              },
-              { status: 201 },
-            ),
-          );
-        }
-        if (path === "/internal/v1/installations/inst_core_revision/deployments") {
-          return Promise.resolve(
-            Response.json({
-              deployments: [
-                {
-                  id: "dep_old",
-                  installationId: "inst_core_revision",
-                  planRunId: "plan_v123",
-                  applyRunId: "apply_old",
-                  source: {
-                    kind: "git",
-                    url: "https://github.com/takos/takos.git",
-                    ref: "v1.2.3",
-                  },
-                  planDigest: "sha256:app-v123",
-                  sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                  runnerProfileId: "cloudflare-default",
-                  status: "succeeded",
-                  outputs: {},
-                  createdAt: now,
-                },
-              ],
-            }),
-          );
-        }
-        return Promise.resolve(
-          Response.json(
-            { error: "unexpected_upstream_path" },
-            {
-              status: 500,
+          return Promise.resolve({
+            applyRun: {
+              id: rollbackApply ? "apply_rollback" : "apply_new",
+              planRunId,
+              spaceId: "space_1",
+              installationId: "inst_core_revision",
+              deploymentId,
+              operation: "update",
+              runnerProfileId: "cloudflare-default",
+              status: "succeeded",
+              createdAt: now + 1,
+              updatedAt: now + 1,
+              finishedAt: now + 1,
             },
-          ),
-        );
-      },
+            installation: {
+              id: "inst_core_revision",
+              spaceId: "space_1",
+              appId: "takos.chat",
+              currentDeploymentId: deploymentId,
+              status: "ready",
+              createdAt: now,
+              updatedAt: now + 1,
+            },
+            deployment: {
+              id: deploymentId,
+              installationId: "inst_core_revision",
+              source,
+              planDigest: digest,
+              sourceCommit: commit,
+              status: "succeeded",
+              outputs: rollbackApply
+                ? []
+                : [
+                    {
+                      name: "takosumi_launch_url",
+                      kind: "launch_url",
+                      value: "https://takos-new.example.test",
+                      sensitive: false,
+                    },
+                  ],
+              createdAt: now + 1,
+            },
+          } as unknown as ApplyRunResponse);
+        },
+        listDeployments: (installationId) => {
+          dispatchLog.push({ op: "listDeployments", id: installationId });
+          return Promise.resolve({
+            deployments: [
+              {
+                id: "dep_old",
+                installationId: "inst_core_revision",
+                planRunId: "plan_v123",
+                applyRunId: "apply_old",
+                source: {
+                  kind: "git",
+                  url: "https://github.com/takos/takos.git",
+                  ref: "v1.2.3",
+                },
+                planDigest: "sha256:app-v123",
+                sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                runnerProfileId: "cloudflare-default",
+                status: "succeeded",
+                outputs: {},
+                createdAt: now,
+              },
+            ],
+          } as unknown as ListDeploymentsResponse);
+        },
+      }),
     },
   });
 
@@ -5044,28 +4999,19 @@ test("accounts handler brokers deployment and rollback through space deployContr
   expect(
     rolledBack.event.payload.coreDeployment.rollback.targetDeploymentId,
   ).toEqual("dep_old");
-  expect(upstreamCalls.map((call) => call.path)).toEqual([
-    "/internal/v1/installations/inst_core_revision",
-    "/internal/v1/plan-runs",
-    "/internal/v1/plan-runs/plan_v124",
-    "/internal/v1/apply-runs",
-    "/internal/v1/installations/inst_core_revision/deployments",
-    "/internal/v1/plan-runs/plan_v123",
-    "/internal/v1/apply-runs",
+  expect(
+    dispatchLog.map((call) => (call.id ? `${call.op}:${call.id}` : call.op)),
+  ).toEqual([
+    "getInstallation:inst_core_revision",
+    "createPlanRun",
+    "getPlanRun:plan_v124",
+    "createApplyRun",
+    "listDeployments:inst_core_revision",
+    "getPlanRun:plan_v123",
+    "createApplyRun",
   ]);
-  expect(upstreamCalls.map((call) => call.authorization)).toEqual([
-    "Bearer deploy-control-secret",
-    "Bearer deploy-control-secret",
-    "Bearer deploy-control-secret",
-    "Bearer deploy-control-secret",
-    "Bearer deploy-control-secret",
-    "Bearer deploy-control-secret",
-    "Bearer deploy-control-secret",
-  ]);
-  expect(upstreamCalls[2].body).toEqual({});
-  expect(upstreamCalls[3].body.planRunId).toEqual("plan_v124");
-  expect(upstreamCalls[5].body).toEqual({});
-  expect(upstreamCalls[6].body.planRunId).toEqual("plan_v123");
+  expect(dispatchLog[3].body?.planRunId).toEqual("plan_v124");
+  expect(dispatchLog[6].body?.planRunId).toEqual("plan_v123");
 });
 
 test("accounts handler rejects invalid AppInstallation revision mutations", async () => {
@@ -8772,227 +8718,33 @@ test("handleUserInfo emits a flat space_memberships claim from the token's space
   expect(body.takosumi.installation_id).toEqual("inst-membership");
 });
 
-test("accounts handler proxies Connection create to deployControl with space ownership", async () => {
-  const proxiedRequests: Request[] = [];
+test("the consolidated /v1/connections edge is gone (Connections are /api/v1/connections only)", async () => {
   const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_conn_owner", "acct_conn_1", "space_conn_1");
-  const sessionId = seedAccountSession(store, "tsub_conn_owner");
+  const sessionId = seedAccountSession(store, "tsub_conn_gone");
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
-    deployControl: {
-      url: "http://takosumi.internal:8788",
-      token: "deploy-control-secret",
-      fetch: (input, init) => {
-        const request = new Request(input, init);
-        proxiedRequests.push(request);
-        return Promise.resolve(
-          Response.json(
-            {
-              id: "conn_new",
-              spaceId: "space_conn_1",
-              provider: "cloudflare",
-              owner: "customer",
-              authMethod: "static_secret",
-              status: "pending",
-              envNames: ["CLOUDFLARE_API_TOKEN"],
-              createdAt: "2026-06-05T00:00:00.000Z",
-              updatedAt: "2026-06-05T00:00:00.000Z",
-            },
-            { status: 201 },
-          ),
-        );
-      },
-    },
   });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/connections", {
-      method: "POST",
-      headers: {
-        ...accountSessionHeaders(sessionId),
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        spaceId: "space_conn_1",
-        provider: "cloudflare",
-        authMethod: "static_secret",
-        values: { CLOUDFLARE_API_TOKEN: "secret-token-never-echoed" },
+  // The former account-plane connections edge no longer exists; every method on
+  // `/v1/connections` (and item subroutes) falls through to the generic 404.
+  for (
+    const [method, path] of [
+      ["GET", "/v1/connections?spaceId=space_conn_gone"],
+      ["POST", "/v1/connections"],
+      ["POST", "/v1/connections/conn_x/test"],
+      ["DELETE", "/v1/connections/conn_x"],
+    ] as const
+  ) {
+    const response = await handler(
+      new Request(`https://accounts.example.test${path}`, {
+        method,
+        headers: {
+          ...accountSessionHeaders(sessionId),
+          ...(method === "POST" ? { "content-type": "application/json" } : {}),
+        },
+        ...(method === "POST" ? { body: JSON.stringify({}) } : {}),
       }),
-    }),
-  );
-
-  expect(response.status).toEqual(201);
-  expect(proxiedRequests.length).toEqual(1);
-  expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/internal/v1/connections/cloudflare/token",
-  );
-  expect(proxiedRequests[0].headers.get("authorization")).toEqual(
-    "Bearer deploy-control-secret",
-  );
-  // The write-only values reach deploy-control verbatim...
-  expect(await proxiedRequests[0].clone().text()).toContain(
-    "secret-token-never-echoed",
-  );
-  // ...but the response (the public Connection) never echoes them.
-  const text = await response.text();
-  expect(text).not.toContain("secret-token-never-echoed");
-  expect(text).toContain("conn_new");
-});
-
-test("accounts handler rejects Connection create for a space the caller does not own", async () => {
-  let proxied = false;
-  const store = new InMemoryAccountsStore();
-  // Space owned by someone else.
-  seedOwnedSpace(store, "tsub_conn_owner", "acct_conn_1", "space_conn_1");
-  const otherSession = seedAccountSession(store, "tsub_conn_intruder");
-  const handler = createAccountsHandler({
-    issuer: "https://accounts.example.test",
-    store,
-    deployControl: {
-      url: "http://takosumi.internal:8788",
-      token: "deploy-control-secret",
-      fetch: () => {
-        proxied = true;
-        return Promise.resolve(Response.json({}, { status: 201 }));
-      },
-    },
-  });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/connections", {
-      method: "POST",
-      headers: {
-        ...accountSessionHeaders(otherSession),
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        spaceId: "space_conn_1",
-        provider: "cloudflare",
-        authMethod: "static_secret",
-        values: { CLOUDFLARE_API_TOKEN: "should-not-reach-upstream" },
-      }),
-    }),
-  );
-
-  expect(response.status).toEqual(404);
-  expect((await response.json()).error.code).toEqual("space_not_found");
-  // The secret-bearing body must never have been forwarded.
-  expect(proxied).toEqual(false);
-});
-
-test("accounts handler proxies Connection list with the spaceId query", async () => {
-  const proxiedRequests: Request[] = [];
-  const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_conn_owner", "acct_conn_1", "space_conn_1");
-  const sessionId = seedAccountSession(store, "tsub_conn_owner");
-  const handler = createAccountsHandler({
-    issuer: "https://accounts.example.test",
-    store,
-    deployControl: {
-      url: "http://takosumi.internal:8788",
-      token: "deploy-control-secret",
-      fetch: (input, init) => {
-        const request = new Request(input, init);
-        proxiedRequests.push(request);
-        return Promise.resolve(
-          Response.json({ connections: [] }, { status: 200 }),
-        );
-      },
-    },
-  });
-
-  const response = await handler(
-    new Request(
-      "https://accounts.example.test/v1/connections?spaceId=space_conn_1",
-      { method: "GET", headers: accountSessionHeaders(sessionId) },
-    ),
-  );
-
-  expect(response.status).toEqual(200);
-  expect(proxiedRequests.length).toEqual(1);
-  expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/internal/v1/connections?spaceId=space_conn_1",
-  );
-});
-
-test("accounts handler resolves Connection spaceId before forwarding delete", async () => {
-  const proxiedPaths: string[] = [];
-  const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_conn_owner", "acct_conn_1", "space_conn_1");
-  const sessionId = seedAccountSession(store, "tsub_conn_owner");
-  const handler = createAccountsHandler({
-    issuer: "https://accounts.example.test",
-    store,
-    deployControl: {
-      url: "http://takosumi.internal:8788",
-      token: "deploy-control-secret",
-      fetch: (input, init) => {
-        const request = new Request(input, init);
-        const path = new URL(request.url).pathname;
-        proxiedPaths.push(`${request.method} ${path}`);
-        if (request.method === "GET") {
-          // The ownership-resolution read of the Connection projection.
-          return Promise.resolve(
-            Response.json(
-              {
-                id: "conn_del",
-                spaceId: "space_conn_1",
-                provider: "cloudflare",
-                owner: "customer",
-                authMethod: "static_secret",
-                status: "verified",
-                envNames: ["CLOUDFLARE_API_TOKEN"],
-                createdAt: "2026-06-05T00:00:00.000Z",
-                updatedAt: "2026-06-05T00:00:00.000Z",
-              },
-              { status: 200 },
-            ),
-          );
-        }
-        return Promise.resolve(new Response(null, { status: 204 }));
-      },
-    },
-  });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/connections/conn_del", {
-      method: "DELETE",
-      headers: accountSessionHeaders(sessionId),
-    }),
-  );
-
-  expect(response.status).toEqual(204);
-  expect(proxiedPaths).toEqual([
-    "GET /internal/v1/connections/conn_del",
-    "POST /internal/v1/connections/conn_del/revoke",
-  ]);
-});
-
-test("accounts handler rejects unauthenticated Connection delete before any deploy-control read", async () => {
-  let dialed = false;
-  const store = new InMemoryAccountsStore();
-  const handler = createAccountsHandler({
-    issuer: "https://accounts.example.test",
-    store,
-    deployControl: {
-      url: "http://takosumi.internal:8788",
-      token: "deploy-control-secret",
-      fetch: () => {
-        dialed = true;
-        return Promise.resolve(new Response(null, { status: 204 }));
-      },
-    },
-  });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/connections/conn_del", {
-      method: "DELETE",
-    }),
-  );
-
-  expect(response.status).toEqual(401);
-  // The unauthenticated request must never reach deploy-control (no probe of
-  // connection existence across tenants).
-  expect(dialed).toEqual(false);
+    );
+    expect(response.status, `${method} ${path}`).toEqual(404);
+  }
 });
