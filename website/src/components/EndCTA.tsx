@@ -12,8 +12,8 @@ export default function EndCTA() {
           のどれでも、同じ台帳で。
         </p>
         <CodeBlock terminal class="terminal">
-          <span class="k">$</span> open
-          https://app.takosumi.com/install?git=https://git.example.com/acme/api.git
+          <span class="k">$</span> open https://app.takosumi.com/new{"\n"}
+          <span class="c">{"  "}→ カタログから選ぶ or Git URL を貼る</span>
           {"\n"}
           <span class="k">$</span> POST /api/installations/ins_api/plan{"\n"}
           <span class="k">$</span> POST /api/runs/run_plan/approve{"\n"}

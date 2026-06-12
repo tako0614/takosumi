@@ -4,16 +4,17 @@
  * Two entry shapes, identical install path:
  *   - カタログ: curated first-party / official capsules (src/catalog.ts).
  *     Picking one pre-fills the Git tab.
- *   - Git URL: the raw source form (the developer power path), also the
- *     landing target of the worker's external `/install?git=…` link (redirected
- *     here query-intact) and the packed `source=git::…` form.
+ *   - Git URL: the raw source form (the developer power path).
  *
- * The flow (ported from the legacy InstallFromGitView) runs four resumable
- * steps — createSource → syncSource → createInstallation → plan — and lands on
- * `/runs/:id`. A 409 source_sync_required surfaces a humane retry instead of a
- * raw error. The managed-default nudge logic is unchanged: only warn about
- * credentials when the operator default CANNOT cover the apply AND the Space
- * has no connection of its own.
+ * Installs start HERE, in the dashboard, on purpose: the former external
+ * install-link entry (a URL redirect from another site arriving with the
+ * source pre-filled) was removed, so no URL parameter ever seeds this form.
+ *
+ * The flow runs four resumable steps — createSource → syncSource →
+ * createInstallation → plan — and lands on `/runs/:id`. A 409
+ * source_sync_required surfaces a humane retry instead of a raw error. The
+ * managed-default nudge only warns about credentials when the operator default
+ * CANNOT cover the apply AND the Space has no connection of its own.
  */
 import "../../styles/wave-b.css";
 import {
@@ -21,7 +22,6 @@ import {
   createResource,
   createSignal,
   For,
-  onMount,
   Show,
 } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
@@ -43,7 +43,6 @@ import {
   getManagedDefaultStatus,
   listConnections,
   listInstallConfigs,
-  listSpaces,
   planInstallation,
   putDeploymentProfile,
   syncSource,
@@ -62,54 +61,6 @@ import {
   PageHeader,
   type Tone,
 } from "../../components/ui/index.ts";
-
-/** Reads `git` / `ref` / `path` deep-link prefill (query, packed, or hash). */
-function readPrefill(): {
-  git: string;
-  ref: string;
-  path: string;
-} {
-  const out = { git: "", ref: "", path: "" };
-  if (typeof location === "undefined") return out;
-  const apply = (params: URLSearchParams) => {
-    const packed = parsePackedInstallSource(params.get("source"));
-    out.git = params.get("git") ?? packed?.git ?? out.git;
-    out.ref = params.get("ref") ?? packed?.ref ?? out.ref;
-    out.path = params.get("path") ?? packed?.path ?? out.path;
-  };
-  apply(new URLSearchParams(location.search));
-  // Legacy hash deep-link form: /#/install?git=…
-  const hash = location.hash;
-  const q = hash.indexOf("?");
-  if (q !== -1) apply(new URLSearchParams(hash.slice(q + 1)));
-  return out;
-}
-
-function parsePackedInstallSource(
-  source: string | null,
-): { git: string; ref: string; path: string } | undefined {
-  const prefix = "git::";
-  if (!source?.startsWith(prefix)) return undefined;
-  const body = source.slice(prefix.length);
-  const queryStart = body.indexOf("?");
-  const beforeQuery = queryStart === -1 ? body : body.slice(0, queryStart);
-  const query = queryStart === -1 ? "" : body.slice(queryStart + 1);
-  const marker = findModulePathMarker(beforeQuery);
-  const git = marker === -1 ? beforeQuery : beforeQuery.slice(0, marker);
-  const path = marker === -1 ? "" : beforeQuery.slice(marker + 2);
-  const params = new URLSearchParams(query);
-  return {
-    git,
-    ref: params.get("ref") ?? "",
-    path,
-  };
-}
-
-function findModulePathMarker(value: string): number {
-  const scheme = value.indexOf("://");
-  const start = scheme === -1 ? 0 : scheme + "://".length;
-  return value.indexOf("//", start);
-}
 
 type StepState = "idle" | "running" | "done" | "error";
 
@@ -145,41 +96,17 @@ export default function NewAppView() {
 function Inner() {
   const navigate = useNavigate();
 
-  const prefill = readPrefill();
-  const cameFromDeepLink = prefill.git.trim().length > 0;
-  const [activeTab, setActiveTab] = createSignal<"catalog" | "git">(
-    cameFromDeepLink ? "git" : "catalog",
-  );
-  const [gitUrl, setGitUrl] = createSignal(prefill.git);
-  const [ref, setRef] = createSignal(prefill.ref || "main");
-  const [path, setPath] = createSignal(prefill.path || ".");
+  const [activeTab, setActiveTab] = createSignal<"catalog" | "git">("catalog");
+  const [gitUrl, setGitUrl] = createSignal("");
+  const [ref, setRef] = createSignal("main");
+  const [path, setPath] = createSignal(".");
   const [name, setName] = createSignal("");
   const [installConfigId, setInstallConfigId] = createSignal("");
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
   const [checkingCompatibility, setCheckingCompatibility] = createSignal(false);
 
-  onMount(() => {
-    if (!name() && prefill.git) {
-      const guess = guessNameFromUrl(prefill.git);
-      if (guess) setName(guess);
-    }
-  });
-
-  const capsuleDisplayName = () => {
-    const url = gitUrl().trim();
-    if (!url) return "";
-    return guessNameFromUrl(url) || url;
-  };
-
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
-  const [spaces] = createResource(listSpaces);
-  const spaceHandle = () => {
-    const id = spaceId();
-    if (!id) return "";
-    const match = (spaces() ?? []).find((s) => s.id === id);
-    return match ? `@${match.handle}` : id;
-  };
   const [configs] = createResource(spaceId, listInstallConfigs);
   const [managedDefaults] = createResource(spaceId, getManagedDefaultStatus);
   const [connections] = createResource(spaceId, listConnections);
@@ -495,9 +422,7 @@ function Inner() {
 
         <Show when={activeTab() === "git"}>
           <Card>
-            <CardHeader
-              title={cameFromDeepLink ? t("new.title") : t("new.tab.git")}
-            />
+            <CardHeader title={t("new.tab.git")} />
             <CardSection>
               <Show when={managedAvailable() && !hasSpaceConnection()}>
                 <p class="wb-note" role="note">
@@ -530,24 +455,7 @@ function Inner() {
                   else void runCompatibilityCheck();
                 }}
               >
-                <Show when={cameFromDeepLink} fallback={gitFields()}>
-                  <Card>
-                    <CardSection>
-                      <p class="wb-summary-line">
-                        {t("new.deeplink.summary", {
-                          capsule: capsuleDisplayName(),
-                          space: spaceHandle(),
-                        })}
-                      </p>
-                      <p class="wb-note">{gitUrl()}</p>
-                    </CardSection>
-                  </Card>
-
-                  <details class="wb-disclosure">
-                    <summary>{t("new.deeplink.editSource")}</summary>
-                    {gitFields()}
-                  </details>
-                </Show>
+                {gitFields()}
 
                 <FormField label={t("new.name")}>
                   <Input
@@ -667,10 +575,3 @@ function Inner() {
   );
 }
 
-function guessNameFromUrl(url: string): string | undefined {
-  return url
-    .replace(/\.git$/, "")
-    .split("/")
-    .filter(Boolean)
-    .pop();
-}

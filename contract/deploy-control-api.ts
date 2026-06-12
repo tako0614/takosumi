@@ -25,7 +25,6 @@ export type {
   TakosumiApiErrorHttpStatus,
 } from "./deploy-control-errors.ts";
 export * from "./deployments.ts";
-export * from "./install-link.ts";
 export type {
   BackupConfig,
   DeploymentProfile,
