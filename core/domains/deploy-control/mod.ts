@@ -107,7 +107,6 @@ import {
   type PlanRunInputs,
 } from "./store.ts";
 import {
-  mapVaultError,
   OpenTofuControllerError,
   requireNonEmptyString,
 } from "./errors.ts";
@@ -190,6 +189,7 @@ import {
   type ResolvedProviderBinding,
 } from "../connections/mod.ts";
 import { SourceManagement } from "./source_management.ts";
+import { SourceLifecycleService } from "./source_lifecycle.ts";
 import { ConnectionManagement } from "./connection_management.ts";
 import { DeploymentQuery, requireInstallation } from "./deployment_query.ts";
 import {
@@ -863,6 +863,7 @@ export class OpenTofuDeploymentController {
   readonly #seededProviderTemplates: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
   readonly #sources: SourceManagement;
+  readonly #sourceLifecycle: SourceLifecycleService;
   readonly #connections: ConnectionManagement;
   readonly #deployments: DeploymentQuery;
   readonly #billing: BillingService;
@@ -899,6 +900,18 @@ export class OpenTofuDeploymentController {
       dependencies.defaultRunnerProfileId ?? "cloudflare-default";
     this.#newId = dependencies.newId ?? newId;
     this.#now = dependencies.now ?? (() => Date.now());
+    this.#sourceLifecycle = new SourceLifecycleService({
+      store: this.#store,
+      now: this.#now,
+      newId: this.#newId,
+      ...(dependencies.sourcesService
+        ? { sourcesService: dependencies.sourcesService }
+        : {}),
+      ...(this.#runner ? { runner: this.#runner } : {}),
+      requireVault: () => this.#requireVault(),
+      shouldProcessRun: (status, heartbeatAt) =>
+        this.#shouldProcessRun(status, heartbeatAt),
+    });
     this.#billing = new BillingService({
       store: this.#store,
       newId: this.#newId,
@@ -2242,141 +2255,12 @@ export class OpenTofuDeploymentController {
    * Source-sync consumer (Core Specification §6). Idempotency guard, transition
    * to `running`, mint source-phase credentials NOW (git-only; never provider),
    * dispatch to the runner, and on success record the SourceSnapshot + update the
-   * Source's `lastSeenCommit`. Never logs credential material.
+   * Source's `lastSeenCommit`. Never logs credential material. Delegates to
+   * {@link SourceLifecycleService}; kept on the controller surface so the queue
+   * consumer and the inline dispatcher keep calling it unchanged.
    */
   async runQueuedSourceSync(runId: string): Promise<SourceSyncRun | undefined> {
-    const sources = this.#sourcesService;
-    if (!sources || !this.#runner?.sourceSync) {
-      return await this.#store.getSourceSyncRun(runId);
-    }
-    const run = await this.#store.getSourceSyncRun(runId);
-    if (!run) {
-      throw new OpenTofuControllerError(
-        "not_found",
-        `source sync run ${runId} not found`,
-      );
-    }
-    if (!this.#shouldProcessRun(run.status, run.heartbeatAt)) {
-      return run;
-    }
-    const startedAtMs = this.#now();
-    const running: SourceSyncRun = {
-      ...run,
-      status: "running",
-      startedAt: new Date(startedAtMs).toISOString(),
-      heartbeatAt: startedAtMs,
-      updatedAt: new Date(startedAtMs).toISOString(),
-    };
-    await this.#store.putSourceSyncRun(running);
-
-    let stored;
-    try {
-      stored = await sources.getStoredSource(run.sourceId);
-    } catch (error) {
-      await this.#failSourceSyncRun(running, error);
-      return await this.#store.getSourceSyncRun(runId);
-    }
-
-    let credentials;
-    try {
-      if (stored.authConnectionId) {
-        const bundle = await this.#requireVault().mintForPhase({
-          spaceId: run.spaceId,
-          phase: "source",
-          sourceConnectionId: stored.authConnectionId,
-        });
-        await this.#recordSourceCredentialMintEvent({
-          runId: run.id,
-          spaceId: run.spaceId,
-          sourceId: run.sourceId,
-          connectionId: stored.authConnectionId,
-        });
-        credentials = bundle.toMintResponse();
-      }
-    } catch (error) {
-      await this.#failSourceSyncRun(running, mapVaultError(error));
-      return await this.#store.getSourceSyncRun(runId);
-    }
-
-    try {
-      const result = await this.#runner.sourceSync({
-        runId: run.id,
-        spaceId: run.spaceId,
-        sourceId: run.sourceId,
-        source: { url: run.url, ref: run.ref, path: run.path },
-        archiveObjectKey: run.archiveObjectKey,
-        ...(credentials ? { credentials } : {}),
-      });
-      return await this.#succeedSourceSyncRun(running, result);
-    } catch (error) {
-      await this.#failSourceSyncRun(running, error);
-      return await this.#store.getSourceSyncRun(runId);
-    }
-  }
-
-  async #succeedSourceSyncRun(
-    running: SourceSyncRun,
-    result: OpenTofuSourceSyncResult,
-  ): Promise<SourceSyncRun> {
-    const finishedAtMs = this.#now();
-    const finishedAtIso = new Date(finishedAtMs).toISOString();
-    const snapshotId = running.snapshotId ?? this.#newId("snap");
-    const snapshot: SourceSnapshot = {
-      id: snapshotId,
-      origin: "git",
-      spaceId: running.spaceId,
-      sourceId: running.sourceId,
-      url: running.url,
-      ref: running.ref,
-      resolvedCommit: result.resolvedCommit,
-      path: running.path,
-      archiveObjectKey: running.archiveObjectKey,
-      archiveDigest: result.archiveDigest,
-      archiveSizeBytes: result.archiveSizeBytes,
-      fetchedByRunId: running.id,
-      fetchedAt: finishedAtIso,
-    };
-    await this.#store.putSourceSnapshot(snapshot);
-    // Record lastSeenCommit on the Source so the scheduler can skip an unchanged
-    // ref. Read-modify-write through the store (internal field, never projected).
-    const stored = await this.#store.getSource(running.sourceId);
-    if (stored) {
-      await this.#store.putSource({
-        ...stored,
-        lastSeenCommit: result.resolvedCommit,
-        updatedAt: finishedAtIso,
-      });
-    }
-    const succeeded: SourceSyncRun = {
-      ...running,
-      status: "succeeded",
-      heartbeatAt: finishedAtMs,
-      finishedAt: finishedAtIso,
-      updatedAt: finishedAtIso,
-      resolvedCommit: result.resolvedCommit,
-      archiveDigest: result.archiveDigest,
-      archiveSizeBytes: result.archiveSizeBytes,
-      snapshotId,
-    };
-    await this.#store.putSourceSyncRun(succeeded);
-    return succeeded;
-  }
-
-  async #failSourceSyncRun(
-    running: SourceSyncRun,
-    error: unknown,
-  ): Promise<void> {
-    const finishedAtMs = this.#now();
-    const finishedAtIso = new Date(finishedAtMs).toISOString();
-    const failed: SourceSyncRun = {
-      ...running,
-      status: "failed",
-      heartbeatAt: finishedAtMs,
-      finishedAt: finishedAtIso,
-      updatedAt: finishedAtIso,
-      error: errorMessage(error),
-    };
-    await this.#store.putSourceSyncRun(failed);
+    return await this.#sourceLifecycle.runQueuedSourceSync(runId);
   }
 
   /**
@@ -3279,24 +3163,6 @@ export class OpenTofuDeploymentController {
         error,
       });
     }
-  }
-
-  async #recordSourceCredentialMintEvent(input: {
-    readonly runId: string;
-    readonly spaceId: string;
-    readonly sourceId: string;
-    readonly connectionId: string;
-  }): Promise<void> {
-    await this.#store.putCredentialMintEvent({
-      id: this.#newId("credmint"),
-      runId: input.runId,
-      spaceId: input.spaceId,
-      sourceId: input.sourceId,
-      connectionId: input.connectionId,
-      phase: "source",
-      capabilities: ["source"],
-      createdAt: new Date(this.#now()).toISOString(),
-    });
   }
 
   /**
