@@ -176,15 +176,18 @@ test("composed app routes GET /v1/installations list to the account plane", asyn
   assert.equal(spy.calls[0].pathname, "/v1/installations");
 });
 
-test("composed app still serves the embedded service /health route", async () => {
+test("composed app still serves an embedded service process route", async () => {
   const { app, spy } = await buildTestApp();
-  const res = await app.fetch(new Request("http://localhost/health"));
+  // `/health` was removed in the health-dedup stage; `/capabilities` is the
+  // always-mounted service process route that proves the embedded service app
+  // is still reachable and not shadowed by the account-plane fallback.
+  const res = await app.fetch(new Request("http://localhost/capabilities"));
   assert.equal(res.status, 200);
-  // Service health, not the account-plane sentinel.
+  // Service-owned route, not the account-plane sentinel.
   assert.equal(res.headers.get("x-handled-by"), null);
   const body = await res.json();
   assert.equal(body.service, "takosumi");
-  // The account-plane handler must NOT have seen the service health probe.
+  // The account-plane handler must NOT have seen the service process probe.
   assert.equal(spy.calls.length, 0);
 });
 

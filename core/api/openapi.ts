@@ -489,15 +489,6 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         "Canonical condition reason catalog exported by takosumi-contract. CLI, app UI, API clients, controllers, and status projections must use these values for condition.reason.",
     },
     Condition: condition,
-    HealthResponse: {
-      type: "object",
-      required: ["ok", "service", "domains"],
-      properties: {
-        ok: { type: "boolean" },
-        service: { const: "takosumi" },
-        domains: { type: "array", items: { type: "string" } },
-      },
-    },
     ApiEndpointDescription: {
       type: "object",
       required: ["method", "path", "summary", "auth"],

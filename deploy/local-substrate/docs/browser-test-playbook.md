@@ -24,8 +24,8 @@ After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warni
 
 ## Smoke flow B — service admin probe
 
-1. Navigate: `https://service.takosumi.test/health`
-2. Expect with `--profile postgres`: 200 with `{"ok":true,"service":"takosumi","domains":["space","deploy"]}`
+1. Navigate: `https://service.takosumi.test/healthz`
+2. Expect with `--profile postgres`: 200 with `{"ok":true,"database":"ok"}`
 3. Expect with `--profile workers`: 200 from the Takosumi service Worker routed through Cloudflare Worker bindings
 
 ## Smoke flow C — Takosumi service Worker probe
