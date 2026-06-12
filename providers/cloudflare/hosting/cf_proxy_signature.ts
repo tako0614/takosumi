@@ -61,7 +61,12 @@ export interface CfProxySignatureInput {
   readonly expMs: number;
 }
 
-/** Returns the `<expMs>.<mac>` path segment for the managed `base_url`. */
+/**
+ * Returns the `<expMs>.<mac>` path segment for the managed `base_url`, signed
+ * with the PRIMARY signing secret. The control plane always signs with the
+ * primary; {@link verifyCfProxyScope} accepts the primary OR any rotation
+ * secret so an in-flight key change does not break already-dispatched runs.
+ */
 export async function signCfProxyScope(
   secret: string,
   input: CfProxySignatureInput,
@@ -79,13 +84,18 @@ export async function signCfProxyScope(
 
 /**
  * Verifies that `signature` binds to `(namespace, slug)` and is unexpired at
- * `nowMs`. Returns false on any malformed / tampered / expired input.
+ * `nowMs`. `secrets` is the set of currently-accepted signing keys (the primary
+ * plus any rotation/previous secret); the signature verifies when it matches
+ * ANY of them. Every candidate secret is checked (no early return on the first
+ * match) so the accept/reject time does not reveal which key matched. Returns
+ * false on any malformed / tampered / expired input, or when `secrets` is empty.
  */
 export async function verifyCfProxyScope(
-  secret: string,
+  secrets: readonly string[],
   signature: string,
   input: { readonly namespace: string; readonly slug: string; readonly nowMs: number },
 ): Promise<boolean> {
+  if (secrets.length === 0) return false;
   const dot = signature.indexOf(".");
   if (dot <= 0) return false;
   const expStr = signature.slice(0, dot);
@@ -95,11 +105,19 @@ export async function verifyCfProxyScope(
   if (!Number.isSafeInteger(expMs) || expMs <= input.nowMs) return false;
   const mac = base64UrlDecode(macStr);
   if (!mac) return false;
-  const key = await hmacKey(secret);
-  return await crypto.subtle.verify(
-    "HMAC",
-    key,
-    mac as BufferSource,
-    scopePayload(input.namespace, input.slug, expMs),
-  );
+  const payload = scopePayload(input.namespace, input.slug, expMs);
+  let ok = false;
+  for (const secret of secrets) {
+    const key = await hmacKey(secret);
+    // Verify against every candidate (no short-circuit) so a match on a
+    // rotation secret takes the same path as a match on the primary.
+    const matched = await crypto.subtle.verify(
+      "HMAC",
+      key,
+      mac as BufferSource,
+      payload,
+    );
+    ok = ok || matched;
+  }
+  return ok;
 }

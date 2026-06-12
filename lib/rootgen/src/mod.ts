@@ -102,6 +102,10 @@ export interface GenerateInstallationRootInput {
    * {@link generateRootModule}.
    */
   readonly providerBindings?: ReadonlyArray<RootProviderBinding>;
+  /**
+   * Provider Env Set delivered TF_VAR names (see {@link GenerateGenericCapsuleRootInput}).
+   */
+  readonly envSetVarNames?: readonly string[];
 }
 
 export interface GenerateGenericCapsuleRootInput {
@@ -109,6 +113,19 @@ export interface GenerateGenericCapsuleRootInput {
   readonly inputs: Readonly<Record<string, JsonValue>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly providerBindings?: ReadonlyArray<RootProviderBinding>;
+  /**
+   * Provider Env Set delivered TF_VAR names. A `provider_env_set` Connection
+   * delivers each of its `envNames` to the runner as a `TF_VAR_<NAME>` env var,
+   * but OpenTofu SILENTLY DROPS a `TF_VAR_<NAME>` for which the root declares no
+   * `variable "<NAME>"`. So the generated root MUST declare a matching
+   * `variable "<NAME>" { type = string sensitive = true }` for every delivered
+   * name; otherwise the env-set credential never reaches the provider/child
+   * module (the value is dropped). These are generic passthrough variables — NOT
+   * wired into a provider block (the env-set provider reads its own env / process
+   * `TF_VAR_<NAME>`), distinct from the per-alias provider-credential split. Each
+   * name is declared exactly once; an empty/omitted list emits nothing.
+   */
+  readonly envSetVarNames?: readonly string[];
 }
 
 /** Module input name an `app_source` template reads the built artifact path from. */
@@ -147,6 +164,7 @@ export function generateInstallationRoot(
 ): GeneratedRootModule {
   const { template, inputs, installType } = input;
   const providerBindings = input.providerBindings ?? [];
+  const envSetVarNames = input.envSetVarNames ?? [];
   const wantsArtifact =
     installType === "app_source" && ARTIFACT_PATH_INPUT in template.inputs;
   return {
@@ -156,6 +174,7 @@ export function generateInstallationRoot(
         template,
         inputs,
         providerBindings,
+        envSetVarNames,
         wantsArtifact,
       ),
       "outputs.tf": renderOutputsTf(template),
@@ -174,12 +193,14 @@ export function generateGenericCapsuleRoot(
   input: GenerateGenericCapsuleRootInput,
 ): GeneratedRootModule {
   const providerBindings = input.providerBindings ?? [];
+  const envSetVarNames = input.envSetVarNames ?? [];
   return {
     files: {
       "versions.tf": renderProviderVersionsTf(input.requiredProviders),
       "main.tf": renderGenericMainTf(
         input.inputs,
         providerBindings,
+        envSetVarNames,
       ),
       "outputs.tf": renderGenericOutputsTf(input.outputAllowlist),
     },
@@ -261,11 +282,13 @@ function renderInstallationMainTf(
   template: TemplateDefinition,
   inputs: Readonly<Record<string, TemplateInputValue>>,
   providerBindings: ReadonlyArray<RootProviderBinding>,
+  envSetVarNames: readonly string[],
   wantsArtifact: boolean,
 ): string {
   const sections: string[] = [];
 
   appendProviderSections(sections, providerBindings);
+  appendEnvSetVariableSections(sections, envSetVarNames);
 
   // Generated artifact_path variable for app_source installs.
   if (wantsArtifact) {
@@ -354,6 +377,40 @@ function appendProviderSections(
   }
 }
 
+/**
+ * Declares a root `variable "<NAME>"` for each Provider Env Set delivered name.
+ *
+ * The Vault delivers a `provider_env_set` Connection's values to the runner as
+ * `TF_VAR_<NAME>` env vars, but OpenTofu SILENTLY DROPS any `TF_VAR_<NAME>` for
+ * which the root declares no `variable "<NAME>"` — so without this the env-set
+ * credential never reaches the provider / child module. Each block is emitted as
+ * a sensitive string variable (matching the file's `hclString` + `sensitive`
+ * style); env-set values are static secrets, so unlike the per-alias credential
+ * split they are NOT marked `ephemeral`. Names are deduped (declared once) and
+ * emitted in first-seen order for deterministic golden output. The values are
+ * generic passthrough — not wired into any provider block — so the env-set
+ * provider reads them through its own env / `var.<NAME>` in the child module.
+ */
+function appendEnvSetVariableSections(
+  sections: string[],
+  envSetVarNames: readonly string[],
+): void {
+  const seen = new Set<string>();
+  for (const name of envSetVarNames) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    assertIdentifier(name, "rootgen: provider env set variable name");
+    sections.push(
+      [
+        `variable ${hclString(name)} {`,
+        "  type      = string",
+        "  sensitive = true",
+        "}",
+      ].join("\n"),
+    );
+  }
+}
+
 function renderOutputsTf(template: TemplateDefinition): string {
   const blocks = Object.entries(template.outputs.public).map(([name, spec]) => {
     return [
@@ -368,9 +425,11 @@ function renderOutputsTf(template: TemplateDefinition): string {
 function renderGenericMainTf(
   inputs: Readonly<Record<string, JsonValue>>,
   providerBindings: ReadonlyArray<RootProviderBinding>,
+  envSetVarNames: readonly string[],
 ): string {
   const sections: string[] = [];
   appendProviderSections(sections, providerBindings);
+  appendEnvSetVariableSections(sections, envSetVarNames);
 
   const moduleLines = [
     'module "app" {',

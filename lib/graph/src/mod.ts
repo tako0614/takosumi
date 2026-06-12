@@ -18,6 +18,22 @@ export interface GraphEdge {
   readonly to: string;
 }
 
+/**
+ * Raised when a graph operation that requires a DAG (e.g.
+ * {@link topologicalLayers}) is given a graph that contains a cycle. The
+ * offending `cycle` is the ordered node path that starts and ends on the same
+ * node (e.g. `["a", "b", "a"]`).
+ *
+ * Callers that surface this to an API should map it to a typed
+ * `failed_precondition` rather than letting it escape as a bare 500.
+ */
+export class GraphCycleError extends Error {
+  constructor(readonly cycle: string[]) {
+    super(`graph contains a cycle: ${cycle.join(" -> ")}`);
+    this.name = "GraphCycleError";
+  }
+}
+
 /** Build a producer -> consumers adjacency map from the edge list. */
 function buildAdjacency(edges: readonly GraphEdge[]): Map<string, Set<string>> {
   const adjacency = new Map<string, Set<string>>();
@@ -136,9 +152,7 @@ export function topologicalLayers(
 ): string[][] {
   const cycle = detectCycle(edges);
   if (cycle !== undefined) {
-    throw new Error(
-      `topologicalLayers: graph contains a cycle: ${cycle.join(" -> ")}`,
-    );
+    throw new GraphCycleError(cycle);
   }
 
   const adjacency = buildAdjacency(edges);
@@ -185,7 +199,9 @@ export function topologicalLayers(
 
   if (processed !== universe.size) {
     // Should be unreachable because detectCycle already ran, but guard anyway.
-    throw new Error("topologicalLayers: graph contains a cycle");
+    // detectCycle did not surface a path here, so report the best-available
+    // cycle (re-run to recover the path; empty when none can be reconstructed).
+    throw new GraphCycleError(detectCycle(edges) ?? []);
   }
 
   return layers;

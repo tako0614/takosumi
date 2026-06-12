@@ -313,6 +313,46 @@ test("test() verifies a cloudflare token via injected fetch and persists verifie
   expect(persisted?.verifiedAt).toBeDefined();
 });
 
+test("test() reaches verified for a provider env set (was permanently pending)", async () => {
+  // Before the per-kind verify drivers, a provider_env_set Connection fell
+  // through to a `pending` "no verification driver" result and could NEVER
+  // reach verified, so every mint for it failed permanently. It now verifies
+  // structurally when all declared env names are present.
+  const { store, vault } = makeVault();
+  const connection = await vault.register({
+    spaceId: "space_1",
+    provider: "datadog",
+    authMethod: "static_secret",
+    values: { DD_API_KEY: "a", DD_APP_KEY: "b" },
+  });
+  expect(connection.kind).toBe("provider_env_set");
+
+  const result = await vault.test(connection.id);
+  expect(result.status).toBe("verified");
+
+  const persisted = await store.getConnection(connection.id);
+  expect(persisted?.status).toBe("verified");
+  expect(persisted?.verifiedAt).toBeDefined();
+});
+
+test("test() reaches verified for a git https source connection", async () => {
+  // A git source Connection (no live probe URL configured) verifies
+  // structurally once its token is present, so the source phase can mint it.
+  const { store, vault } = makeVault();
+  const connection = await vault.register({
+    spaceId: "space_1",
+    provider: "source_git_https_token",
+    kind: "source_git_https_token",
+    authMethod: "static_secret",
+    values: { GIT_HTTPS_TOKEN: "ghp_token" },
+  });
+
+  const result = await vault.test(connection.id);
+  expect(result.status).toBe("verified");
+  const persisted = await store.getConnection(connection.id);
+  expect(persisted?.status).toBe("verified");
+});
+
 test("test() stays pending when the provider reports the token is inactive", async () => {
   const fakeFetch = (): Promise<Response> =>
     Promise.resolve(

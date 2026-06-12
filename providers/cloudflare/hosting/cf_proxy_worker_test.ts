@@ -13,6 +13,9 @@ afterEach(() => {
 });
 
 const SECRET = "test-cf-proxy-secret";
+// Rotation companion: the previously-active signing secret an operator keeps
+// accepting for one window after promoting a new primary.
+const PREVIOUS_SECRET = "test-cf-proxy-secret-previous";
 const NOW = 1_900_000_000_000;
 const EXP = NOW + 60 * 60 * 1000;
 
@@ -35,6 +38,19 @@ async function signedProxyUrl(
     slug,
     expMs: opts.expMs ?? EXP,
   });
+  return new URL(
+    `https://app.takosumi.com/internal/cf-proxy/${sig}/${namespace}/${slug}/client/v4${suffix}`,
+  );
+}
+
+/** Like {@link signedProxyUrl} but signs with an explicit (e.g. rotation) secret. */
+async function signedProxyUrlWithSecret(
+  secret: string,
+  suffix: string,
+): Promise<URL> {
+  const namespace = "takosumi-tenants";
+  const slug = "app";
+  const sig = await signCfProxyScope(secret, { namespace, slug, expMs: EXP });
   return new URL(
     `https://app.takosumi.com/internal/cf-proxy/${sig}/${namespace}/${slug}/client/v4${suffix}`,
   );
@@ -116,7 +132,7 @@ test("handleCfProxyRequest: a signed request forwards the rewritten script PUT t
       body: "bundle-bytes",
     }),
     url,
-    { signingSecret: SECRET, nowMs: NOW },
+    { signingSecrets: [SECRET], nowMs: NOW },
   );
   expect(res.status).toBe(200);
   expect(captured).toBeDefined();
@@ -140,7 +156,7 @@ test("handleCfProxyRequest: subdomain no-op returns success without an upstream 
   const res = await handleCfProxyRequest(
     new Request(url, { method: "PUT", body: '{"enabled":true}' }),
     url,
-    { signingSecret: SECRET, nowMs: NOW },
+    { signingSecrets: [SECRET], nowMs: NOW },
   );
   expect(called).toBe(false);
   expect(res.status).toBe(200);
@@ -157,7 +173,7 @@ test("handleCfProxyRequest: passthrough for KV/D1/R2 hits api.cloudflare.com unc
 
   const url = await signedProxyUrl("/accounts/acct123/d1/database");
   await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
-    signingSecret: SECRET,
+    signingSecrets: [SECRET],
     nowMs: NOW,
   });
   expect(captured!.url).toBe(
@@ -168,7 +184,7 @@ test("handleCfProxyRequest: passthrough for KV/D1/R2 hits api.cloudflare.com unc
 test("handleCfProxyRequest: an invalid cf-proxy path is 404", async () => {
   const url = new URL("https://app.takosumi.com/internal/cf-proxy/onlyns");
   const res = await handleCfProxyRequest(new Request(url), url, {
-    signingSecret: SECRET,
+    signingSecrets: [SECRET],
     nowMs: NOW,
   });
   expect(res.status).toBe(404);
@@ -201,7 +217,7 @@ test("handleCfProxyRequest: an unsigned / tampered signature is rejected 403 bef
     `https://app.takosumi.com/internal/cf-proxy/${EXP}.forged/takosumi-tenants/app/client/v4/accounts/acct123/d1/database`,
   );
   const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
-    signingSecret: SECRET,
+    signingSecrets: [SECRET],
     nowMs: NOW,
   });
   expect(res.status).toBe(403);
@@ -218,7 +234,7 @@ test("handleCfProxyRequest: an expired signature is rejected 403", async () => {
     expMs: NOW - 1,
   });
   const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
-    signingSecret: SECRET,
+    signingSecrets: [SECRET],
     nowMs: NOW,
   });
   expect(res.status).toBe(403);
@@ -241,9 +257,96 @@ test("handleCfProxyRequest: a signature minted for a DIFFERENT namespace/slug is
     `https://app.takosumi.com/internal/cf-proxy/${sig}/takosumi-tenants/app/client/v4/accounts/acct123/d1/database`,
   );
   const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
-    signingSecret: SECRET,
+    signingSecrets: [SECRET],
     nowMs: NOW,
   });
   expect(res.status).toBe(403);
+  expect(called).toBe(false);
+});
+
+// --- dual-key rotation (the dedicated-secret + rotation companion) ----------
+
+test("handleCfProxyRequest: a signature minted by the PRIMARY secret verifies against the accepted set", async () => {
+  let captured: Request | undefined;
+  globalThis.fetch = (async (req: Request) => {
+    captured = req;
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  // Accepted set = [primary, previous]; signed with the primary.
+  const url = await signedProxyUrlWithSecret(SECRET, "/accounts/acct123/d1/database");
+  const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
+    signingSecrets: [SECRET, PREVIOUS_SECRET],
+    nowMs: NOW,
+  });
+  expect(res.status).toBe(200);
+  expect(captured).toBeDefined();
+});
+
+test("handleCfProxyRequest: a signature minted by the PREVIOUS (rotation) secret still verifies", async () => {
+  let captured: Request | undefined;
+  globalThis.fetch = (async (req: Request) => {
+    captured = req;
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  // A run dispatched before rotation signed with the now-previous secret; the
+  // proxy admits it because it is still in the accepted set (no hard break).
+  const url = await signedProxyUrlWithSecret(
+    PREVIOUS_SECRET,
+    "/accounts/acct123/d1/database",
+  );
+  const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
+    signingSecrets: [SECRET, PREVIOUS_SECRET],
+    nowMs: NOW,
+  });
+  expect(res.status).toBe(200);
+  expect(captured).toBeDefined();
+});
+
+test("handleCfProxyRequest: a signature minted by a secret NOT in the accepted set is rejected 403", async () => {
+  let called = false;
+  globalThis.fetch = (async () => {
+    called = true;
+    return new Response("", { status: 200 });
+  }) as typeof fetch;
+  // Signed with an unknown key; the accepted set is [primary, previous].
+  const url = await signedProxyUrlWithSecret(
+    "rotated-out-secret",
+    "/accounts/acct123/d1/database",
+  );
+  const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
+    signingSecrets: [SECRET, PREVIOUS_SECRET],
+    nowMs: NOW,
+  });
+  expect(res.status).toBe(403);
+  expect(called).toBe(false);
+});
+
+test("handleCfProxyRequest: an empty accepted set disables the proxy (404), no upstream call", async () => {
+  let called = false;
+  globalThis.fetch = (async () => {
+    called = true;
+    return new Response("", { status: 200 });
+  }) as typeof fetch;
+  const url = await signedProxyUrl("/accounts/acct123/d1/database");
+  const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
+    signingSecrets: [],
+    nowMs: NOW,
+  });
+  expect(res.status).toBe(404);
+  expect(called).toBe(false);
+});
+
+test("handleCfProxyRequest: blank entries in the accepted set are ignored (fail closed when all blank)", async () => {
+  let called = false;
+  globalThis.fetch = (async () => {
+    called = true;
+    return new Response("", { status: 200 });
+  }) as typeof fetch;
+  const url = await signedProxyUrl("/accounts/acct123/d1/database");
+  const res = await handleCfProxyRequest(new Request(url, { method: "GET" }), url, {
+    signingSecrets: ["", ""],
+    nowMs: NOW,
+  });
+  expect(res.status).toBe(404);
   expect(called).toBe(false);
 });

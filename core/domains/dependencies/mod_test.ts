@@ -13,6 +13,10 @@ import { expect, test } from "bun:test";
 import { InMemoryOpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
+import {
+  InMemoryInstallationCoordination,
+  InstallationLeaseBusyError,
+} from "../deploy-control/installation_lease.ts";
 import { seedInstallationModel } from "../deploy-control/test_model_fixture.ts";
 import type { OutputShare, OutputSnapshot } from "takosumi-contract/output-snapshots";
 import {
@@ -205,6 +209,45 @@ test("a cycle-creating edge is rejected failed_precondition (dependency_cycle)",
   await expect(
     svc.createDependency(baseRequest(consumer, producer)),
   ).rejects.toThrow(/dependency_cycle/);
+});
+
+test("concurrent inverse-edge creates under a space lease: at most one persists (no DAG wedge)", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const { producer, consumer } = await seedPair(store);
+  // A coordination-injected service serializes the per-Space cycle
+  // check-then-write. Two concurrent inverse-edge creates (A→B and B→A) must NOT
+  // both pass the acyclic check and persist (which would wedge the DAG with a
+  // cycle); the lease lets at most one through.
+  const svc = new DependenciesService({
+    store,
+    newId: deterministicIds(),
+    now: () => "2026-06-06T00:00:00.000Z",
+    coordination: new InMemoryInstallationCoordination(),
+  });
+
+  const results = await Promise.allSettled([
+    svc.createDependency(baseRequest(producer, consumer)),
+    svc.createDependency(baseRequest(consumer, producer)),
+  ]);
+
+  const fulfilled = results.filter((r) => r.status === "fulfilled");
+  const rejected = results.filter(
+    (r): r is PromiseRejectedResult => r.status === "rejected",
+  );
+  // At most one create persisted (the lease prevents the double-insert).
+  expect(fulfilled.length).toBeLessThanOrEqual(1);
+  // The Space holds at most one edge -> the graph is still a DAG (acyclic).
+  const persisted = await store.listDependenciesBySpace("space_test");
+  expect(persisted.length).toBeLessThanOrEqual(1);
+  // Any loser rejects with a TYPED error (lease-busy or the cycle precondition),
+  // never an uncaught bare Error.
+  for (const r of rejected) {
+    const reason = r.reason;
+    const typed =
+      reason instanceof InstallationLeaseBusyError ||
+      reason instanceof OpenTofuControllerError;
+    expect(typed).toBe(true);
+  }
 });
 
 test("createDependency surfaces OpenTofuControllerError instances", async () => {

@@ -55,6 +55,7 @@ import {
   mintProviderEnvSetVariables,
   ProviderEnvSetDriverError,
 } from "@takosumi/providers/provider-env-set/credentials.ts";
+import { verifyDriverForKind } from "./verify_drivers.ts";
 import type {
   OpenTofuDeploymentStore,
   StoredSecretBlob,
@@ -692,10 +693,19 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         now: this.#now,
       });
     } else {
-      return {
-        status: "pending",
-        detail: `no verification driver is configured for provider ${connection.provider}`,
-      };
+      // Per-ConnectionKind verify driver (git_https smart-HTTP probe,
+      // provider_env_set structural, git_ssh / gcp reserved-structural). This is
+      // what lets a git / Provider Env Set / GCP Connection reach `verified` and
+      // unblock mint; without it those kinds fell through to a permanent
+      // `pending` and could never mint.
+      const driver = verifyDriverForKind(connection.kind);
+      if (!driver) {
+        return {
+          status: "pending",
+          detail: `no verification driver is configured for connection kind ${connection.kind ?? "(unknown)"} (provider ${connection.provider})`,
+        };
+      }
+      verified = await driver({ connection, values, fetch: this.#fetch });
     }
     if (!verified.ok) {
       return { status: "pending", detail: verified.detail };
