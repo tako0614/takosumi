@@ -102,11 +102,16 @@ import {
   errorJson,
   json,
   methodNotAllowed,
-  numberValue,
   readJsonObject,
   readOptionalJsonObject,
   stringValue,
 } from "./http-helpers.ts";
+import {
+  type BillingPlan,
+  parseBillingPlans,
+  publicBillingPlans,
+} from "./billing-plans.ts";
+import { readEnvVar } from "./read-env.ts";
 import { requireAccountSession } from "./account-session.ts";
 import type { AccountsStore } from "./store.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
@@ -542,6 +547,11 @@ interface ControlRouteContext {
   readonly url: URL;
   readonly store: AccountsStore;
   readonly operations?: ControlPlaneOperations;
+  /**
+   * Operator billing plan catalog (spec §32) for `GET /api/v1/billing/plans`.
+   * Falls back to the `TAKOSUMI_BILLING_PLANS` env var when omitted.
+   */
+  readonly billingPlans?: readonly BillingPlan[];
 }
 
 /**
@@ -623,7 +633,15 @@ export async function handleControlRoute(
 
   const tail = url.pathname.slice(prefix.length); // e.g. "/spaces"
   try {
-    return await dispatch({ request, url, tail, operations, store, session });
+    return await dispatch({
+      request,
+      url,
+      tail,
+      operations,
+      store,
+      session,
+      billingPlans: context.billingPlans,
+    });
   } catch (error) {
     return controllerErrorResponse(error);
   }
@@ -653,12 +671,31 @@ interface DispatchInput {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly session: { readonly subject: string };
+  readonly billingPlans?: readonly BillingPlan[];
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
   const { request, url, tail, operations, store } = input;
   const method = request.method;
   const segments = tail.split("/").filter(Boolean); // ["spaces", ":id", ...]
+
+  // GET /api/v1/billing/plans — the instance-wide operator plan catalog
+  // (spec §32), public projection (no Stripe price ids). Session-authed but
+  // not Space-scoped: the catalog is the same for every Space.
+  if (
+    segments.length === 2 &&
+    segments[0] === "billing" &&
+    segments[1] === "plans"
+  ) {
+    if (method !== "GET") return methodNotAllowed("GET");
+    return json({
+      plans: publicBillingPlans(
+        input.billingPlans && input.billingPlans.length > 0
+          ? input.billingPlans
+          : parseBillingPlans(readEnvVar("TAKOSUMI_BILLING_PLANS")),
+      ),
+    });
+  }
 
   // GET/POST /api/v1/spaces
   if (segments.length === 1 && segments[0] === "spaces") {
@@ -787,22 +824,11 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       if (method !== "GET") return methodNotAllowed("GET");
       return json(await operations.listSpaceCreditReservations(spaceId));
     }
-    if (
-      leaf === "credits" &&
-      segments.length === 4 &&
-      segments[3] === "top-up"
-    ) {
-      if (method !== "POST") return methodNotAllowed("POST");
-      return await topUpSpaceCredits(request, operations, spaceId);
-    }
-    if (
-      leaf === "subscription" &&
-      segments.length === 4 &&
-      segments[3] === "change"
-    ) {
-      if (method !== "POST") return methodNotAllowed("POST");
-      return await changeSpaceSubscription(request, operations, spaceId);
-    }
+    // NOTE: `credits/top-up` and `subscription/change` are intentionally NOT
+    // on this session surface. Billing mode is operator-selected and credits
+    // enter through paid Stripe checkout (spec §32); the operator mutations
+    // live on the bearer-gated `/internal/v1` surface
+    // (core/api/deploy_control_billing_routes.ts).
     if (leaf === "plan-update" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       return await spacePlanUpdate(operations, spaceId);
@@ -1968,39 +1994,6 @@ async function spaceActivity(
   }
   const events = await operations.activity.list(spaceId, limit);
   return json({ events });
-}
-
-// --- Billing ---------------------------------------------------------------
-
-async function topUpSpaceCredits(
-  request: Request,
-  operations: ControlPlaneOperations,
-  spaceId: string,
-): Promise<Response> {
-  const body = await readJsonObject(request);
-  if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const credits = numberValue(body.credits);
-  if (credits === undefined || credits <= 0) {
-    return errorJson("invalid_argument", "credits must be a positive integer", 400);
-  }
-  return json(await operations.topUpSpaceCredits(spaceId, { credits }));
-}
-
-async function changeSpaceSubscription(
-  request: Request,
-  operations: ControlPlaneOperations,
-  spaceId: string,
-): Promise<Response> {
-  const body = await readJsonObject(request);
-  if (!body) return errorJson("invalid_request", "invalid request", 400);
-  if (!isPlainJsonObject(body.billingSettings)) {
-    return errorJson("invalid_argument", "billingSettings must be an object", 400);
-  }
-  return json(
-    await operations.changeSpaceSubscription(spaceId, {
-      billingSettings: body.billingSettings as BillingSettings,
-    }),
-  );
 }
 
 // --- Sources ---------------------------------------------------------------

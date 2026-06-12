@@ -3,6 +3,46 @@
  * Successor of the wave-* per-cluster files, which disappear with the legacy
  * views they styled. */
 
+/* ===== billing plans ===== */
+.av-plan-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--tg-s-4);
+}
+.av-plan-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-elev);
+}
+.av-plan-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.av-plan-name {
+  font-weight: 700;
+}
+.av-plan-price {
+  font-size: var(--tg-fs-lg);
+  font-weight: 700;
+  color: var(--tg-accent);
+}
+.av-plan-credits {
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg-muted);
+}
+.av-plan-section {
+  margin-top: var(--tg-s-4);
+}
+
 /* ===== shared ===== */
 .av-actions {
   display: flex;

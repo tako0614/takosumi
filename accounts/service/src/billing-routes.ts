@@ -4,6 +4,11 @@ import {
   createStripeCheckoutSession,
   handleStripeWebhook,
 } from "./billing.ts";
+import {
+  type BillingPlan,
+  findBillingPlan,
+  parseBillingPlans,
+} from "./billing-plans.ts";
 import type { AccountsStore } from "./store.ts";
 import type { StripeBillingOptions } from "./mod.ts";
 import {
@@ -33,23 +38,33 @@ export async function handleStripeCheckoutRequest(input: {
    * `TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST` env var.
    */
   billingRedirectAllowlist?: readonly string[];
+  /**
+   * Operator plan catalog (spec §32). Checkout is plan-id based: the client
+   * names a `planId` + target `spaceId` and the SERVER resolves the Stripe
+   * price, checkout mode, and metadata, so a client can never check out an
+   * arbitrary price or mint credit metadata. Falls back to the
+   * `TAKOSUMI_BILLING_PLANS` env var when omitted.
+   */
+  billingPlans?: readonly BillingPlan[];
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
 
   const subject = takosumiSubjectValue(body.subject);
-  const priceId = stringValue(body.priceId);
-  const mode =
-    body.mode === "payment" || body.mode === "subscription"
-      ? body.mode
-      : undefined;
+  const planId = stringValue(body.planId);
+  const spaceId = stringValue(body.spaceId);
   const successUrl = stringValue(body.successUrl);
   const cancelUrl = stringValue(body.cancelUrl);
-  if (!subject || !priceId || !mode || !successUrl || !cancelUrl) {
-    return errorJson("invalid_request", "subject, priceId, mode, successUrl, and cancelUrl are required", 400);
+  if (!subject || !planId || !spaceId || !successUrl || !cancelUrl) {
+    return errorJson("invalid_request", "subject, planId, spaceId, successUrl, and cancelUrl are required", 400);
   }
   if (subject !== input.sessionSubject) {
     return errorJson("subject_mismatch", "checkout body subject does not match the authenticated session", 403);
+  }
+  const plans = resolveBillingPlans(input.billingPlans);
+  const plan = findBillingPlan(plans, planId);
+  if (!plan) {
+    return errorJson("plan_not_found", "unknown billing plan", 404);
   }
   const allowlist = resolveBillingRedirectAllowlist(
     input.billingRedirectAllowlist,
@@ -66,24 +81,33 @@ export async function handleStripeCheckoutRequest(input: {
 
   const account = await input.store.findAccount(subject);
   if (!account) return errorJson("account_not_found", "account not found", 404);
-  const metadata = stringRecordValue(body.metadata);
-  if (body.metadata !== undefined && !metadata) {
-    return errorJson("invalid_request", "invalid request", 400);
-  }
   const existingBilling =
     await input.store.findBillingAccountForSubject(subject);
+
+  // Server-resolved metadata. `space_id` routes the webhook's grant to the
+  // right Space; `credits` is the grant amount the PLAN defines (a pack grants
+  // once on payment, a subscription grants per paid invoice via the
+  // subscription metadata mirror below).
+  const planMetadata: Record<string, string> = {
+    space_id: spaceId,
+    plan_code: plan.id,
+    credits: String(plan.credits),
+  };
 
   try {
     const result = await createStripeCheckoutSession({
       secretKey: input.stripe.secretKey,
-      priceId,
-      mode,
+      priceId: plan.stripePriceId,
+      mode: plan.kind === "pack" ? "payment" : "subscription",
       subject,
       successUrl,
       cancelUrl,
       stripeCustomerId: existingBilling?.stripeCustomerId,
       customerEmail: stringValue(body.customerEmail) ?? account.email,
-      metadata,
+      metadata: planMetadata,
+      ...(plan.kind === "subscription"
+        ? { subscriptionMetadata: planMetadata }
+        : {}),
       fetch: input.stripe.fetch,
       stripeApiBase: input.stripe.stripeApiBase,
     });
@@ -157,6 +181,13 @@ export async function handleStripeBillingPortalRequest(input: {
     );
     return errorJson("portal_failed", "billing portal failed", 502);
   }
+}
+
+function resolveBillingPlans(
+  configured: readonly BillingPlan[] | undefined,
+): readonly BillingPlan[] {
+  if (configured && configured.length > 0) return configured;
+  return parseBillingPlans(readEnvVar("TAKOSUMI_BILLING_PLANS"));
 }
 
 function resolveBillingRedirectAllowlist(
@@ -261,6 +292,18 @@ export async function handleStripeWebhookRequest(input: {
                   creditReconciliation.stripeCheckoutSessionId,
               }
             : {}),
+        });
+      }
+      // Subscription plans grant their credits per PAID INVOICE: checkout
+      // stamped the plan metadata onto the subscription
+      // (`subscription_data[metadata]`), so every invoice carries it under
+      // `subscription_details.metadata`. The webhook idempotency claim above
+      // already guarantees one grant per Stripe event.
+      const invoiceCredit = stripeInvoiceCreditReconciliationInput(payload);
+      if (invoiceCredit) {
+        await input.billingCreditReconciler?.(invoiceCredit.spaceId, {
+          credits: invoiceCredit.credits,
+          stripeEventId: invoiceCredit.stripeEventId,
         });
       }
     }
@@ -384,6 +427,42 @@ function stripeSpaceCreditReconciliationInput(payload: string):
   };
 }
 
+/**
+ * Monthly subscription credit grant: a paid invoice whose parent subscription
+ * carries the plan metadata (`space_id` + `credits`, stamped at checkout via
+ * `subscription_data[metadata]`). Exported for tests.
+ */
+export function stripeInvoiceCreditReconciliationInput(payload: string):
+  | {
+      readonly spaceId: string;
+      readonly credits: number;
+      readonly stripeEventId: string;
+    }
+  | undefined {
+  const event = safeJsonRecord(payload);
+  const type = stringValue(event?.type);
+  if (type !== "invoice.paid" && type !== "invoice.payment_succeeded") {
+    return undefined;
+  }
+  const object =
+    isRecord(event?.data) && isRecord(event.data.object)
+      ? event.data.object
+      : undefined;
+  const subscriptionDetails = isRecord(object?.subscription_details)
+    ? object.subscription_details
+    : undefined;
+  const metadata = isRecord(subscriptionDetails?.metadata)
+    ? subscriptionDetails.metadata
+    : undefined;
+  const spaceId = stringValue(metadata?.space_id ?? metadata?.spaceId);
+  const credits = positiveIntegerValue(
+    metadata?.credits ?? metadata?.takosumi_credits,
+  );
+  const stripeEventId = stringValue(event?.id);
+  if (!spaceId || !credits || !stripeEventId) return undefined;
+  return { spaceId, credits, stripeEventId };
+}
+
 function positiveIntegerValue(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isInteger(value) && value > 0) {
     return value;
@@ -404,12 +483,3 @@ function safeJsonRecord(payload: string): Record<string, unknown> | undefined {
   }
 }
 
-function stringRecordValue(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) return undefined;
-  const output: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "string") return undefined;
-    output[key] = entry;
-  }
-  return output;
-}

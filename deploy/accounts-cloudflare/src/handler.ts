@@ -17,6 +17,7 @@ import {
   type ManagedOfferingAccessPolicy,
   type OidcClientAuthMethod,
   type OidcClientRegistration,
+  parseBillingPlans,
   type PasskeyHttpOptions,
   signEs256Jwt,
   type StripeBillingOptions,
@@ -58,6 +59,13 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_STRIPE_API_BASE?: string;
   readonly TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_TOLERANCE_SECONDS?: string;
+  /**
+   * Operator billing plan catalog (spec §32): JSON array of
+   * `{ id, kind: "subscription"|"pack", stripePriceId, credits,
+   *    name: {ja,en}, priceDisplay: {ja,en} }`.
+   * Empty/absent → no plans offered (dashboard shows the empty catalog).
+   */
+  readonly TAKOSUMI_BILLING_PLANS?: string;
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_RP_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_RP_NAME?: string;
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_ORIGIN?: string;
@@ -320,6 +328,9 @@ async function buildAccountsHandler(
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
       env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET,
+    ),
+    billingPlans: parseBillingPlans(
+      optionalString(env.TAKOSUMI_BILLING_PLANS),
     ),
   };
   const stableOidc = await parseStableOidcFlow(env);

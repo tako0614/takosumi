@@ -1,0 +1,36 @@
+/**
+ * Locale-parity tests. The TypeScript constraint (`en: Record<keyof typeof ja,
+ * string>`) already forces the KEY sets to match at compile time; these tests
+ * additionally lock in that every `{param}` placeholder used by one locale is
+ * present in the other, so an interpolation can never silently render a raw
+ * `{name}` in one language only.
+ */
+import { describe, expect, test } from "bun:test";
+import { ja } from "./ja.ts";
+import { en } from "./en.ts";
+
+function placeholders(message: string): readonly string[] {
+  return [...message.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!).sort();
+}
+
+describe("i18n dictionaries", () => {
+  test("ja and en share the same key set", () => {
+    expect(Object.keys(en).sort()).toEqual(Object.keys(ja).sort());
+  });
+
+  test("every key uses the same placeholders in both locales", () => {
+    for (const key of Object.keys(ja) as (keyof typeof ja)[]) {
+      expect({ key, params: placeholders(en[key]) }).toEqual({
+        key,
+        params: placeholders(ja[key]),
+      });
+    }
+  });
+
+  test("no empty messages", () => {
+    for (const key of Object.keys(ja) as (keyof typeof ja)[]) {
+      expect(ja[key].length).toBeGreaterThan(0);
+      expect(en[key].length).toBeGreaterThan(0);
+    }
+  });
+});

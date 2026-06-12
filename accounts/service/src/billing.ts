@@ -84,6 +84,13 @@ export interface CreateStripeCheckoutSessionInput {
   stripeCustomerId?: string;
   customerEmail?: string;
   metadata?: Record<string, string>;
+  /**
+   * Metadata stamped onto the CREATED SUBSCRIPTION (subscription mode only,
+   * via `subscription_data[metadata]`). Every subsequent invoice then carries
+   * it under `subscription_details.metadata`, which is how the webhook grants
+   * the Space its monthly plan credits without a store lookup.
+   */
+  subscriptionMetadata?: Record<string, string>;
   automaticTax?: boolean;
   taxIdCollection?: boolean;
   fetch?: typeof fetch;
@@ -243,6 +250,13 @@ export function stripeCheckoutSessionParams(
   params.set("metadata[takosumi_subject]", input.subject);
   for (const [key, value] of Object.entries(input.metadata ?? {})) {
     params.set(`metadata[${key}]`, value);
+  }
+  if (input.mode === "subscription") {
+    for (const [key, value] of Object.entries(
+      input.subscriptionMetadata ?? {},
+    )) {
+      params.set(`subscription_data[metadata][${key}]`, value);
+    }
   }
   if (input.automaticTax) {
     params.set("automatic_tax[enabled]", "true");

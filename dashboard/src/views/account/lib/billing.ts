@@ -1,6 +1,10 @@
 /**
- * Billing RPC for the account plane.
- * Ported from takosumi dashboard-ui/src/lib/rpc/billing.ts.
+ * Billing RPC for the account plane (Stripe checkout / customer portal).
+ *
+ * Checkout is plan-id based (spec §32): the client names an operator-offered
+ * `planId` (from `GET /api/v1/billing/plans`) plus the target `spaceId`; the
+ * SERVER resolves the Stripe price, checkout mode, and credit metadata. The
+ * redirect URLs land back on the Space billing tab.
  */
 import { apiFetch } from "./http.ts";
 import * as paths from "./paths.ts";
@@ -15,33 +19,39 @@ export interface StripePortalResult {
   readonly sessionId?: string;
 }
 
+const BILLING_RETURN_PATH = "/space/settings/billing";
+
 export async function startStripeCheckout(input: {
   readonly subject: string;
-  readonly priceId: string;
-  readonly mode: "subscription" | "payment";
+  readonly planId: string;
+  readonly spaceId: string;
   readonly successUrl?: string;
   readonly cancelUrl?: string;
   readonly customerEmail?: string;
-  readonly metadata?: Readonly<Record<string, string>>;
 }): Promise<StripeCheckoutResult> {
   const successUrl =
     input.successUrl ??
-    new URL("/account/billing?checkout=success", location.origin).toString();
+    new URL(
+      `${BILLING_RETURN_PATH}?checkout=success`,
+      location.origin,
+    ).toString();
   const cancelUrl =
     input.cancelUrl ??
-    new URL("/account/billing?checkout=cancelled", location.origin).toString();
+    new URL(
+      `${BILLING_RETURN_PATH}?checkout=cancelled`,
+      location.origin,
+    ).toString();
   const body = await apiFetch<
     StripeCheckoutResult & { readonly session_id?: string }
   >(paths.STRIPE_CHECKOUT, {
     method: "POST",
     body: {
       subject: input.subject,
-      priceId: input.priceId,
-      mode: input.mode,
+      planId: input.planId,
+      spaceId: input.spaceId,
       successUrl,
       cancelUrl,
       ...(input.customerEmail ? { customerEmail: input.customerEmail } : {}),
-      ...(input.metadata ? { metadata: input.metadata } : {}),
     },
   });
   return {
@@ -56,7 +66,7 @@ export async function startStripePortal(input: {
 }): Promise<StripePortalResult> {
   const returnUrl =
     input.returnUrl ??
-    new URL("/account/billing?portal=return", location.origin).toString();
+    new URL(`${BILLING_RETURN_PATH}?portal=return`, location.origin).toString();
   const body = await apiFetch<
     StripePortalResult & { readonly session_id?: string }
   >(paths.STRIPE_PORTAL, {

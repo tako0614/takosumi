@@ -286,6 +286,15 @@ export interface Installation {
   readonly currentStateGeneration: number;
   readonly currentOutputSnapshotId?: string;
   readonly status: InstallationStatus;
+  /**
+   * Read-time DERIVED freshness relative to producer Dependencies (spec §24).
+   * Newer backends stop STORING `status: "stale"` and surface this field
+   * instead; older backends omit it. Views must treat
+   * `status === "stale" || freshness === "stale"` as the stale presentation
+   * (see `effectiveInstallationStatus` in installations-ui.ts) so the
+   * dashboard renders correctly against both.
+   */
+  readonly freshness?: "fresh" | "stale";
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -733,26 +742,33 @@ export async function listSpaceCreditReservations(
   return body.creditReservations ?? [];
 }
 
-export async function topUpSpaceCredits(
-  spaceId: string,
-  credits: number,
-): Promise<CreditBalance> {
-  const body = await controlFetch<{ balance: CreditBalance }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/credits/top-up`,
-    { method: "POST", body: { credits } },
-  );
-  return body.balance;
+// NOTE: top-up / subscription-change are operator mutations on the bearer-gated
+// `/internal/v1` surface (spec §32: billing mode is operator-selected and
+// credits enter through paid checkout). The session surface has no client fns
+// for them on purpose.
+
+/**
+ * Public projection of one operator-offered billing plan
+ * (`GET /api/v1/billing/plans`, spec §32). `kind: "subscription"` grants
+ * `credits` per paid invoice; `kind: "pack"` grants once per purchase. Carries
+ * no Stripe price id — checkout is started by `planId` and the server resolves
+ * the price.
+ */
+export interface PublicBillingPlan {
+  readonly id: string;
+  readonly kind: "subscription" | "pack";
+  readonly credits: number;
+  readonly name: { readonly ja: string; readonly en: string };
+  readonly priceDisplay: { readonly ja: string; readonly en: string };
 }
 
-export async function changeSpaceSubscription(
-  spaceId: string,
-  billingSettings: BillingSettings,
-): Promise<SpaceBilling> {
-  const body = await controlFetch<{ billing: SpaceBilling }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/subscription/change`,
-    { method: "POST", body: { billingSettings } },
-  );
-  return body.billing;
+export async function listBillingPlans(): Promise<
+  readonly PublicBillingPlan[]
+> {
+  const body = await controlFetch<{
+    plans?: readonly PublicBillingPlan[];
+  }>(`${BASE}/billing/plans`);
+  return body.plans ?? [];
 }
 
 // --- Members (Space membership / roles) ------------------------------------

@@ -57,7 +57,11 @@ import {
   runStatusLabel,
   runTone,
 } from "../../lib/labels.ts";
-import { isUrlString, outputLabel } from "../../lib/installations-ui.ts";
+import {
+  effectiveInstallationStatus,
+  isUrlString,
+  outputLabel,
+} from "../../lib/installations-ui.ts";
 import { formatDateTime, t } from "../../i18n/index.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
@@ -220,7 +224,7 @@ function Inner() {
                   <span class="wa-title-row">
                     {inst().name}
                     <StatusBadge
-                      status={inst().status}
+                      status={effectiveInstallationStatus(inst())}
                       label={installationStatusLabel}
                       tone={installationTone}
                     />

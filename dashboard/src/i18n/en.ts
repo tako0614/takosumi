@@ -549,6 +549,9 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.portalOpening": "Opening...",
   "billing.checkout.starting": "Redirecting to checkout...",
   "billing.checkout.failed": "Could not start checkout — {message}",
+  "billing.checkout.success":
+    "Purchase complete. Credits may take a moment to arrive.",
+  "billing.checkout.cancelled": "Checkout cancelled.",
   "billing.usage.title": "Usage",
   "billing.usage.empty": "No usage yet.",
   "billing.usage.kind": "Kind",

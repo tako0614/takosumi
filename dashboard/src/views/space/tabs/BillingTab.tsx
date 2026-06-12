@@ -1,25 +1,40 @@
 /**
- * Space settings — お支払い. The user-facing billing surface:
- * balance, billing-mode explanation, usage / reservation history, and the
- * Stripe customer portal. (The old debug controls — billing-mode select, free
- * top-up input, paste-a-price-ID checkout — are gone: per spec §32 the billing
- * mode is operator-selected and credits enter through paid checkout only.)
+ * Space settings — お支払い. The real user-facing billing surface (spec §32):
+ *   - plan / credit-pack cards from the operator catalog
+ *     (`GET /api/v1/billing/plans`) → Stripe Checkout by `planId`
+ *   - balance + billing-mode explanation
+ *   - Stripe customer portal (payment methods / invoices)
+ *   - usage events + credit reservations (read-only history)
  *
- * Plan / credit-pack purchase cards are added by the billing milestone on top
- * of the operator-configured plan catalog (`GET /api/v1/billing/plans`).
+ * The old debug controls (billing-mode select, free top-up input,
+ * paste-a-price-ID checkout) are gone: billing mode is operator-selected and
+ * credits enter through paid checkout only.
  */
-import { createMemo, createResource, createSignal, Show } from "solid-js";
+import {
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Show,
+} from "solid-js";
 import { ExternalLink } from "lucide-solid";
 import {
   type CreditReservation,
   getSpaceBilling,
+  listBillingPlans,
   listSpaceCreditReservations,
   listSpaceUsage,
+  type PublicBillingPlan,
   type UsageEvent,
 } from "../../../lib/control-api.ts";
 import { rpc } from "../../account/lib/api.ts";
 import { readSession } from "../../account/lib/session.ts";
-import { formatDateTime, type MessageKey, t } from "../../../i18n/index.ts";
+import {
+  formatDateTime,
+  locale,
+  type MessageKey,
+  t,
+} from "../../../i18n/index.ts";
 import {
   Button,
   Card,
@@ -38,16 +53,74 @@ const MODE_KEY: Record<string, MessageKey> = {
 
 export default function BillingTab(props: { readonly spaceId: string }) {
   const [billing] = createResource(() => props.spaceId, getSpaceBilling);
+  const [plans] = createResource(listBillingPlans);
   const [usage] = createResource(() => props.spaceId, listSpaceUsage);
   const [reservations] = createResource(
     () => props.spaceId,
     listSpaceCreditReservations,
   );
 
-  const mode = createMemo(
-    () => billing()?.settings?.mode ?? "disabled",
-  );
+  const mode = createMemo(() => billing()?.settings?.mode ?? "disabled");
   const balance = createMemo(() => billing()?.balance);
+  const subscriptions = createMemo(() =>
+    (plans() ?? []).filter((plan) => plan.kind === "subscription"),
+  );
+  const packs = createMemo(() =>
+    (plans() ?? []).filter((plan) => plan.kind === "pack"),
+  );
+
+  // One-time checkout-result banner (the Stripe redirect lands back here with
+  // ?checkout=success|cancelled). Read once, then strip from the URL.
+  const [checkoutNotice, setCheckoutNotice] = createSignal<
+    "success" | "cancelled" | null
+  >(null);
+  if (typeof window !== "undefined") {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("checkout");
+    if (result === "success" || result === "cancelled") {
+      setCheckoutNotice(result);
+    }
+    if (params.has("checkout") || params.has("portal")) {
+      params.delete("checkout");
+      params.delete("portal");
+      const next = params.toString();
+      window.history.replaceState(
+        {},
+        "",
+        window.location.pathname + (next ? `?${next}` : ""),
+      );
+    }
+  }
+
+  const [checkoutBusyId, setCheckoutBusyId] = createSignal<string | null>(null);
+  const [checkoutError, setCheckoutError] = createSignal<string | null>(null);
+
+  const startCheckout = async (plan: PublicBillingPlan) => {
+    const session = readSession();
+    if (!session) return;
+    setCheckoutBusyId(plan.id);
+    setCheckoutError(null);
+    try {
+      const result = await rpc.billing.checkout({
+        subject: session.subject,
+        planId: plan.id,
+        spaceId: props.spaceId,
+      });
+      if (result.url) {
+        location.assign(result.url);
+      } else {
+        setCheckoutError(t("billing.checkout.failed", { message: "no url" }));
+      }
+    } catch (err) {
+      setCheckoutError(
+        t("billing.checkout.failed", {
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    } finally {
+      setCheckoutBusyId(null);
+    }
+  };
 
   const [portalBusy, setPortalBusy] = createSignal(false);
   const [portalError, setPortalError] = createSignal<string | null>(null);
@@ -112,8 +185,46 @@ export default function BillingTab(props: { readonly spaceId: string }) {
     },
   ];
 
+  const planCard = (plan: PublicBillingPlan) => (
+    <li class="av-plan-card">
+      <div class="av-plan-text">
+        <span class="av-plan-name">{plan.name[locale()]}</span>
+        <span class="av-plan-price">{plan.priceDisplay[locale()]}</span>
+        <span class="av-plan-credits">
+          {plan.kind === "subscription"
+            ? t("billing.plans.perMonth", { n: plan.credits })
+            : t("billing.packs.credits", { n: plan.credits })}
+        </span>
+      </div>
+      <Button
+        variant="primary"
+        size="sm"
+        type="button"
+        busy={checkoutBusyId() === plan.id}
+        disabled={checkoutBusyId() !== null}
+        onClick={() => void startCheckout(plan)}
+      >
+        {checkoutBusyId() === plan.id
+          ? t("billing.checkout.starting")
+          : plan.kind === "subscription"
+            ? t("billing.plans.subscribe")
+            : t("billing.packs.buy")}
+      </Button>
+    </li>
+  );
+
   return (
     <div class="wc-stack">
+      <Show when={checkoutNotice()}>
+        {(notice) => (
+          <Toast tone={notice() === "success" ? "success" : "error"}>
+            {notice() === "success"
+              ? t("billing.checkout.success")
+              : t("billing.checkout.cancelled")}
+          </Toast>
+        )}
+      </Show>
+
       <Card>
         <CardHeader
           title={t("billing.balance.title")}
@@ -143,6 +254,31 @@ export default function BillingTab(props: { readonly spaceId: string }) {
           </Button>
         </div>
         <Show when={portalError()}>
+          {(m) => <Toast tone="error">{m()}</Toast>}
+        </Show>
+      </Card>
+
+      <Card>
+        <CardHeader title={t("billing.plans.title")} />
+        <Show
+          when={(plans() ?? []).length > 0}
+          fallback={<p class="muted">{t("billing.plans.none")}</p>}
+        >
+          <Show when={subscriptions().length > 0}>
+            <ul class="av-plan-list">
+              <For each={subscriptions()}>{planCard}</For>
+            </ul>
+          </Show>
+          <Show when={packs().length > 0}>
+            <h3 class="tg-card-title av-plan-section">
+              {t("billing.packs.title")}
+            </h3>
+            <ul class="av-plan-list">
+              <For each={packs()}>{planCard}</For>
+            </ul>
+          </Show>
+        </Show>
+        <Show when={checkoutError()}>
           {(m) => <Toast tone="error">{m()}</Toast>}
         </Show>
       </Card>
