@@ -969,7 +969,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
     }),
   );
   expect(crossOwner.status).toEqual(404);
-  expect((await crossOwner.json()).error).toEqual("space_not_found");
+  expect((await crossOwner.json()).error.code).toEqual("space_not_found");
 
   const owner = await handler(
     new Request(`${testIssuer}/v1/installations/plan-runs`, {
@@ -1070,7 +1070,7 @@ test("accounts handler blocks open managed offering policy without evidence meta
   );
 
   expect(response.status).toEqual(503);
-  expect((await response.json()).error).toEqual(
+  expect((await response.json()).error.code).toEqual(
     "launch_readiness_not_complete",
   );
   expect(store.findAccount("tsub_owner")).toEqual(undefined);
@@ -1121,7 +1121,7 @@ test("accounts handler rejects weak open managed offering policy metadata", asyn
     );
 
     expect(response.status).toEqual(503);
-    expect((await response.json()).error).toEqual(
+    expect((await response.json()).error.code).toEqual(
       "launch_readiness_not_complete",
     );
     expect(store.findAccount("tsub_owner")).toEqual(undefined);
@@ -1144,7 +1144,7 @@ test("raw accounts handler defaults managed offering access to closed", async ()
     const response = await handler(request);
     expect(response.status).toEqual(503);
     const body = await response.json();
-    expect(body.error).toEqual("launch_readiness_not_complete");
+    expect(body.error.code).toEqual("launch_readiness_not_complete");
     expect(body.managed_offering_access).toEqual("closed");
   }
 
@@ -1159,7 +1159,7 @@ test("raw accounts handler defaults managed offering access to closed", async ()
     }),
   );
   expect(installResponse.status).toEqual(400);
-  expect((await installResponse.json()).error).toEqual("missing_field");
+  expect((await installResponse.json()).error.code).toEqual("missing_field");
 });
 
 test("ephemeral accounts handler defaults managed offering access to closed", async () => {
@@ -1171,7 +1171,7 @@ test("ephemeral accounts handler defaults managed offering access to closed", as
 
   expect(response.status).toEqual(503);
   const body = await response.json();
-  expect(body.error).toEqual("launch_readiness_not_complete");
+  expect(body.error.code).toEqual("launch_readiness_not_complete");
   expect(body.managed_offering_access).toEqual("closed");
 });
 
@@ -1361,8 +1361,8 @@ test("accounts handler rejects installation PlanRun when deployControl is not co
 
   expect(response.status).toEqual(503);
   const body = await response.json();
-  expect(body.error).toEqual("feature_unavailable");
-  expect(body.error_description).toEqual(
+  expect(body.error.code).toEqual("feature_unavailable");
+  expect(body.error.message).toEqual(
     "Installation PlanRun is temporarily unavailable.",
   );
 });
@@ -1378,8 +1378,8 @@ test("reserved OIDC endpoints return public-safe unavailable response", async ()
   );
   expect(response.status).toEqual(503);
   const body = await response.json();
-  expect(body.error).toEqual("feature_unavailable");
-  expect(body.error_description).toEqual("Sign-in is temporarily unavailable.");
+  expect(body.error.code).toEqual("feature_unavailable");
+  expect(body.error.message).toEqual("Sign-in is temporarily unavailable.");
 });
 
 test("ephemeral accounts handler completes authorization code flow", async () => {
@@ -1488,6 +1488,78 @@ test("ephemeral accounts handler rejects unregistered redirect URIs", async () =
   expect(response.status).toEqual(400);
   const body = await response.json();
   expect(body.error).toEqual("invalid_request");
+});
+
+test("non-OIDC account-plane errors use the canonical {error:{code,message,requestId}} envelope", async () => {
+  const handler = createAccountsHandler();
+
+  // A generic non-OIDC error path (unknown route -> 404) returns the canonical
+  // envelope: error is an object with code, message, and requestId.
+  const notFound = await handler(
+    new Request("https://accounts.example.test/v1/does-not-exist"),
+  );
+  expect(notFound.status).toEqual(404);
+  const body = await notFound.json() as {
+    error: { code: string; message: string; requestId: string };
+  };
+  expect(typeof body.error).toEqual("object");
+  expect(body.error.code).toEqual("not_found");
+  expect(typeof body.error.message).toEqual("string");
+  expect(typeof body.error.requestId).toEqual("string");
+  expect(body.error.requestId.length).toBeGreaterThan(0);
+
+  // An inbound x-request-id (well-shaped UUID) is echoed into the envelope.
+  const correlationId = "123e4567-e89b-42d3-a456-426614174000";
+  const withCorrelation = await handler(
+    new Request("https://accounts.example.test/v1/does-not-exist", {
+      headers: { "x-request-id": correlationId },
+    }),
+  );
+  const correlated = await withCorrelation.json() as {
+    error: { requestId: string };
+  };
+  expect(correlated.error.requestId).toEqual(correlationId);
+});
+
+test("OIDC/OAuth errors keep the RFC 6749 {error,error_description} shape", async () => {
+  const handler = await createEphemeralAccountsHandler({
+    issuer: "https://accounts.example.test",
+    allowEphemeralKeyOnHttpsIssuer: true,
+    managedOfferingAccess: testManagedOfferingOpenAccess,
+    clients: [
+      {
+        clientId: "takos-test",
+        redirectUris: ["http://localhost:3000/callback"],
+      },
+    ],
+  });
+
+  // RFC 6749 authorize error: `error` is a bare string, NOT the canonical
+  // {code,message,requestId} envelope.
+  const authorizeUrl = new URL("https://accounts.example.test/oauth/authorize");
+  authorizeUrl.searchParams.set("response_type", "code");
+  authorizeUrl.searchParams.set("client_id", "takos-test");
+  authorizeUrl.searchParams.set("redirect_uri", "http://localhost:4000/callback");
+  const authorize = await handler(new Request(authorizeUrl));
+  expect(authorize.status).toEqual(400);
+  const authorizeBody = await authorize.json() as {
+    error: unknown;
+  };
+  expect(typeof authorizeBody.error).toEqual("string");
+  expect(authorizeBody.error).toEqual("invalid_request");
+
+  // RFC 6749 token error: bare `error` string + `error_description`.
+  const token = await handler(
+    new Request("https://accounts.example.test/oauth/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "client_credentials" }),
+    }),
+  );
+  const tokenBody = await token.json() as {
+    error: unknown;
+  };
+  expect(typeof tokenBody.error).toEqual("string");
 });
 
 test("accounts handler rejects UserInfo without a bearer token", async () => {
@@ -2561,7 +2633,7 @@ test("passkey register/complete fails closed when ceremony fields are omitted", 
     ),
   );
   expect(missingFields.status).toEqual(400);
-  expect((await missingFields.json()).error).toEqual("invalid_request");
+  expect((await missingFields.json()).error.code).toEqual("invalid_request");
   expect(store.findPasskeyCredential("attacker-key")).toEqual(undefined);
 
   // Sending only the challenge (no clientDataJSON/attestationObject) is also
@@ -2582,7 +2654,7 @@ test("passkey register/complete fails closed when ceremony fields are omitted", 
     ),
   );
   expect(challengeOnly.status).toEqual(400);
-  expect((await challengeOnly.json()).error).toEqual("invalid_request");
+  expect((await challengeOnly.json()).error.code).toEqual("invalid_request");
   expect(store.findPasskeyCredential("attacker-key")).toEqual(undefined);
 });
 
@@ -2836,11 +2908,11 @@ test("accounts handler rejects Stripe Customer Portal without a linked customer"
 
   expect(response.status).toEqual(409);
   expect(portalCalled).toEqual(false);
-  expect(await response.json()).toEqual({
-    error: "billing_account_not_linked",
-    error_description:
-      "Stripe Customer Portal requires an existing Stripe customer.",
-  });
+  const portalBody = await response.json();
+  expect(portalBody.error.code).toEqual("billing_account_not_linked");
+  expect(portalBody.error.message).toEqual(
+    "Stripe Customer Portal requires an existing Stripe customer.",
+  );
 });
 
 test("accounts handler blocks Stripe checkout when managed offering access is closed", async () => {
@@ -2886,12 +2958,12 @@ test("accounts handler blocks Stripe checkout when managed offering access is cl
 
   expect(response.status).toEqual(503);
   expect(checkoutCalled).toEqual(false);
-  expect(await response.json()).toEqual({
-    error: "launch_readiness_not_complete",
-    error_description:
-      "Public managed Takos signup, install, and paid access are blocked until launch readiness evidence is approved",
-    managed_offering_access: "closed",
-  });
+  const portalDenied = await response.json();
+  expect(portalDenied.error.code).toEqual("launch_readiness_not_complete");
+  expect(portalDenied.error.message).toEqual(
+    "Public managed Takos signup, install, and paid access are blocked until launch readiness evidence is approved",
+  );
+  expect(portalDenied.managed_offering_access).toEqual("closed");
 });
 
 test("accounts handler receives Stripe webhooks into billing state", async () => {
@@ -3310,7 +3382,7 @@ test("accounts handler validates install approval confirmation", async () => {
     }),
   );
   expect(costResponse.status).toEqual(400);
-  expect((await costResponse.json()).error).toEqual("cost_ack_required");
+  expect((await costResponse.json()).error.code).toEqual("cost_ack_required");
 
   const mismatchResponse = await handler(
     new Request("https://accounts.example.test/v1/installations", {
@@ -3346,7 +3418,7 @@ test("accounts handler validates install approval confirmation", async () => {
     }),
   );
   expect(mismatchResponse.status).toEqual(409);
-  expect((await mismatchResponse.json()).error).toEqual(
+  expect((await mismatchResponse.json()).error.code).toEqual(
     "approval_digest_mismatch",
   );
 });
@@ -3408,7 +3480,9 @@ test("accounts handler requires account-session ownership for installation reads
     ),
   );
   expect(crossDetail.status).toEqual(404);
-  expect((await crossDetail.json()).error).toEqual("installation_not_found");
+  expect((await crossDetail.json()).error.code).toEqual(
+    "installation_not_found",
+  );
 
   const ownerList = await handler(
     new Request(
@@ -3426,7 +3500,7 @@ test("accounts handler requires account-session ownership for installation reads
     ),
   );
   expect(crossList.status).toEqual(404);
-  expect((await crossList.json()).error).toEqual("installation_not_found");
+  expect((await crossList.json()).error.code).toEqual("installation_not_found");
 });
 
 test("raw accounts handler requires account bearer for installation writes", async () => {
@@ -3478,7 +3552,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
     }),
   );
   expect(crossCreate.status).toEqual(404);
-  expect((await crossCreate.json()).error).toEqual("account_not_found");
+  expect((await crossCreate.json()).error.code).toEqual("account_not_found");
 
   const createResponse = await handler(
     new Request("https://accounts.example.test/v1/installations", {
@@ -3519,7 +3593,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
     ),
   );
   expect(readPatStatus.status).toEqual(403);
-  expect((await readPatStatus.json()).error).toEqual("insufficient_scope");
+  expect((await readPatStatus.json()).error.code).toEqual("insufficient_scope");
 
   await store.savePersonalAccessToken("takpat_write_auth", {
     tokenId: "pat_write_auth",
@@ -3555,7 +3629,9 @@ test("raw accounts handler requires account bearer for installation writes", asy
     ),
   );
   expect(crossStatus.status).toEqual(404);
-  expect((await crossStatus.json()).error).toEqual("installation_not_found");
+  expect((await crossStatus.json()).error.code).toEqual(
+    "installation_not_found",
+  );
 
   const unauthenticatedEvents = await handler(
     new Request(
@@ -3608,8 +3684,8 @@ test("accounts handler rejects removed serviceId aliases in install OIDC client 
   const body = await response.json();
 
   expect(response.status).toEqual(400);
-  expect(body.error).toEqual("invalid_oidc_clients");
-  expect(body.error_description).toEqual(
+  expect(body.error.code).toEqual("invalid_oidc_clients");
+  expect(body.error.message).toEqual(
     "oidcClients entries use servicePath; serviceId/service_id are not accepted",
   );
   expect(store.findAppInstallation("inst_oidc_alias_create")).toEqual(
@@ -3753,7 +3829,7 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
   );
 
   expect(conflictingIdempotency.status).toEqual(409);
-  expect((await conflictingIdempotency.json()).error).toEqual(
+  expect((await conflictingIdempotency.json()).error.code).toEqual(
     "idempotency_key_conflict",
   );
 
@@ -3817,7 +3893,7 @@ test("accounts handler accepts billing usage reports with active AppGrant scope"
   );
 
   expect(crossInstallationReportId.status).toEqual(409);
-  expect((await crossInstallationReportId.json()).error).toEqual(
+  expect((await crossInstallationReportId.json()).error.code).toEqual(
     "usage_report_id_conflict",
   );
 });
@@ -4321,7 +4397,7 @@ test("accounts handler accepts same-space workload control tokens for scoped ope
     ),
   );
   expect(crossSpace.status).toEqual(404);
-  expect((await crossSpace.json()).error).toEqual("installation_not_found");
+  expect((await crossSpace.json()).error.code).toEqual("installation_not_found");
 
   const secondRotate = await handler(
     new Request(
@@ -4418,7 +4494,7 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
     }),
   );
   expect(exhausted.status).toEqual(503);
-  expect((await exhausted.json()).error).toEqual(
+  expect((await exhausted.json()).error.code).toEqual(
     "shared_cell_capacity_unavailable",
   );
 });
@@ -5032,7 +5108,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
     ),
   );
   expect(pendingDeployment.status).toEqual(409);
-  expect((await pendingDeployment.json()).error).toEqual("state_conflict");
+  expect((await pendingDeployment.json()).error.code).toEqual("state_conflict");
 
   const readyResponse = await handler(
     new Request(
@@ -5061,7 +5137,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
     ),
   );
   expect(missingConfirm.status).toEqual(400);
-  expect((await missingConfirm.json()).error).toEqual("invalid_confirm");
+  expect((await missingConfirm.json()).error.code).toEqual("invalid_confirm");
 
   const digestMismatch = await handler(
     new Request(
@@ -5083,7 +5159,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
     ),
   );
   expect(digestMismatch.status).toEqual(409);
-  expect((await digestMismatch.json()).error).toEqual(
+  expect((await digestMismatch.json()).error.code).toEqual(
     "approval_digest_mismatch",
   );
 
@@ -5125,7 +5201,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
     ),
   );
   expect(missingCostAck.status).toEqual(400);
-  expect((await missingCostAck.json()).error).toEqual("cost_ack_required");
+  expect((await missingCostAck.json()).error.code).toEqual("cost_ack_required");
 
   const sourceMismatch = await handler(
     new Request(
@@ -5144,7 +5220,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
     ),
   );
   expect(sourceMismatch.status).toEqual(409);
-  expect((await sourceMismatch.json()).error).toEqual("source_mismatch");
+  expect((await sourceMismatch.json()).error.code).toEqual("source_mismatch");
 
   const appMismatch = await handler(
     new Request(
@@ -5163,7 +5239,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
     ),
   );
   expect(appMismatch.status).toEqual(409);
-  expect((await appMismatch.json()).error).toEqual("app_mismatch");
+  expect((await appMismatch.json()).error.code).toEqual("app_mismatch");
 });
 
 test("accounts handler does not launch-gate AppInstallation creation when managed offering access is closed", async () => {
@@ -5227,7 +5303,7 @@ test("accounts handler does not launch-gate AppInstallation import when managed 
   );
 
   expect(response.status).toEqual(400);
-  expect((await response.json()).error).toEqual("missing_field");
+  expect((await response.json()).error.code).toEqual("missing_field");
 });
 
 test("accounts handler keeps generic installation mutations un-launch-gated but gates managed materialize/export when offering access is closed", async () => {
@@ -5295,7 +5371,7 @@ test("accounts handler keeps generic installation mutations un-launch-gated but 
   for (const request of gatedRequests) {
     const response = await handler(request);
     expect(response.status).toEqual(503);
-    expect((await response.json()).error).toEqual(
+    expect((await response.json()).error.code).toEqual(
       "launch_readiness_not_complete",
     );
   }
@@ -5310,39 +5386,58 @@ test("accounts handler does not launch-gate core OAuth and PAT issuance when man
     managedOfferingAccess: { status: "closed" },
   });
 
-  const cases: { request: Request; status: number; error: string }[] = [
-    {
-      request: new Request(
-        "https://accounts.example.test/oauth/authorize?client_id=takos&redirect_uri=https%3A%2F%2Ftakos.example.test%2Fcallback&response_type=code&scope=openid",
-      ),
-      status: 503,
-      error: "feature_unavailable",
-    },
-    {
-      request: new Request("https://accounts.example.test/oauth/token", {
-        method: "POST",
-        body: new URLSearchParams({
-          grant_type: "authorization_code",
-          code: "code",
-        }),
-      }),
-      status: 503,
-      error: "feature_unavailable",
-    },
-    {
-      request: new Request("https://accounts.example.test/v1/account/tokens", {
-        method: "POST",
-        body: JSON.stringify({ subject: "tsub_owner", label: "operator" }),
-      }),
-      status: 401,
-      error: "invalid_session",
-    },
-  ];
+  const cases:
+    { request: Request; status: number; error: string; envelope?: boolean }[] =
+      [
+        {
+          request: new Request(
+            "https://accounts.example.test/oauth/authorize?client_id=takos&redirect_uri=https%3A%2F%2Ftakos.example.test%2Fcallback&response_type=code&scope=openid",
+          ),
+          status: 503,
+          error: "feature_unavailable",
+          // mod.ts reserved-unavailable gate emits the canonical envelope.
+          envelope: true,
+        },
+        {
+          request: new Request("https://accounts.example.test/oauth/token", {
+            method: "POST",
+            body: new URLSearchParams({
+              grant_type: "authorization_code",
+              code: "code",
+            }),
+          }),
+          status: 503,
+          error: "feature_unavailable",
+          envelope: true,
+        },
+        {
+          request: new Request(
+            "https://accounts.example.test/v1/account/tokens",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                subject: "tsub_owner",
+                label: "operator",
+              }),
+            },
+          ),
+          status: 401,
+          // bearerChallenge (RFC 6750 WWW-Authenticate) keeps the bare shape.
+          error: "invalid_session",
+        },
+      ];
 
-  for (const { request, status, error } of cases) {
+  for (const { request, status, error, envelope } of cases) {
     const response = await handler(request);
     expect(response.status).toEqual(status);
-    expect((await response.json()).error).toEqual(error);
+    const body = (await response.json()) as
+      | { error: string }
+      | { error: { code: string } };
+    if (envelope) {
+      expect((body as { error: { code: string } }).error.code).toEqual(error);
+    } else {
+      expect((body as { error: string }).error).toEqual(error);
+    }
   }
 });
 
@@ -5572,7 +5667,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     ),
   );
   expect(missingPermissionDigestResponse.status).toEqual(400);
-  expect((await missingPermissionDigestResponse.json()).error).toEqual(
+  expect((await missingPermissionDigestResponse.json()).error.code).toEqual(
     "invalid_confirm",
   );
 
@@ -5595,7 +5690,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     ),
   );
   expect(mismatchedPermissionDigestResponse.status).toEqual(409);
-  expect((await mismatchedPermissionDigestResponse.json()).error).toEqual(
+  expect((await mismatchedPermissionDigestResponse.json()).error.code).toEqual(
     "approval_digest_mismatch",
   );
 
@@ -5698,7 +5793,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     ),
   );
   expect(bodyMismatchResponse.status).toEqual(409);
-  expect((await bodyMismatchResponse.json()).error).toEqual(
+  expect((await bodyMismatchResponse.json()).error.code).toEqual(
     "idempotency_key_conflict",
   );
 
@@ -5772,7 +5867,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     ),
   );
   expect(mismatchedCompleteResponse.status).toEqual(409);
-  expect((await mismatchedCompleteResponse.json()).error).toEqual(
+  expect((await mismatchedCompleteResponse.json()).error.code).toEqual(
     "preservation_mismatch",
   );
 
@@ -6284,7 +6379,9 @@ test("accounts handler rejects operation completion without request event", asyn
     ),
   );
   expect(exportedResponse.status).toEqual(409);
-  expect((await exportedResponse.json()).error).toEqual("operation_not_found");
+  expect((await exportedResponse.json()).error.code).toEqual(
+    "operation_not_found",
+  );
   expect(store.findAppInstallation("inst_missing_operation")?.status).toEqual(
     "ready",
   );
@@ -6303,7 +6400,9 @@ test("accounts handler rejects operation completion without request event", asyn
     ),
   );
   expect(failedResponse.status).toEqual(409);
-  expect((await failedResponse.json()).error).toEqual("operation_not_found");
+  expect((await failedResponse.json()).error.code).toEqual(
+    "operation_not_found",
+  );
   expect(store.findAppInstallation("inst_missing_operation")?.status).toEqual(
     "ready",
   );
@@ -6384,7 +6483,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
     ),
   );
   expect(pendingDownloadResponse.status).toEqual(409);
-  expect((await pendingDownloadResponse.json()).error).toEqual(
+  expect((await pendingDownloadResponse.json()).error.code).toEqual(
     "export_not_ready",
   );
 
@@ -6429,7 +6528,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
     ),
   );
   expect(bodyMismatchResponse.status).toEqual(409);
-  expect((await bodyMismatchResponse.json()).error).toEqual(
+  expect((await bodyMismatchResponse.json()).error.code).toEqual(
     "idempotency_key_conflict",
   );
 
@@ -6494,7 +6593,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
     ),
   );
   expect(repeatedExportedResponse.status).toEqual(409);
-  expect((await repeatedExportedResponse.json()).error).toEqual(
+  expect((await repeatedExportedResponse.json()).error.code).toEqual(
     "operation_already_closed",
   );
 
@@ -7536,7 +7635,7 @@ test("accounts handler blocks Use Takos start when managed offering access is cl
   );
 
   expect(response.status).toEqual(503);
-  expect((await response.json()).error).toEqual(
+  expect((await response.json()).error.code).toEqual(
     "launch_readiness_not_complete",
   );
 
@@ -7569,7 +7668,7 @@ test("accounts handler Use Takos start validates redirect and existing installat
     }),
   );
   expect(missingRedirect.status).toEqual(400);
-  expect((await missingRedirect.json()).error).toEqual("invalid_request");
+  expect((await missingRedirect.json()).error.code).toEqual("invalid_request");
 
   const missingTerms = await handler(
     new Request(
@@ -7585,7 +7684,7 @@ test("accounts handler Use Takos start validates redirect and existing installat
     ),
   );
   expect(missingTerms.status).toEqual(400);
-  expect((await missingTerms.json()).error).toEqual("invalid_request");
+  expect((await missingTerms.json()).error.code).toEqual("invalid_request");
 
   const notAcceptedTerms = await handler(
     new Request(
@@ -7602,7 +7701,7 @@ test("accounts handler Use Takos start validates redirect and existing installat
     ),
   );
   expect(notAcceptedTerms.status).toEqual(400);
-  expect((await notAcceptedTerms.json()).error).toEqual(
+  expect((await notAcceptedTerms.json()).error.code).toEqual(
     "terms_acceptance_required",
   );
 
@@ -7622,7 +7721,7 @@ test("accounts handler Use Takos start validates redirect and existing installat
     ),
   );
   expect(missingRuntime.status).toEqual(503);
-  expect((await missingRuntime.json()).error).toEqual("feature_unavailable");
+  expect((await missingRuntime.json()).error.code).toEqual("feature_unavailable");
 
   const otherSession = seedAccountSession(store, "tsub_other");
   const createResponse = await handler(
@@ -7664,7 +7763,7 @@ test("accounts handler Use Takos start validates redirect and existing installat
     ),
   );
   expect(conflict.status).toEqual(409);
-  expect((await conflict.json()).error).toEqual(
+  expect((await conflict.json()).error.code).toEqual(
     "use_takos_installation_mismatch",
   );
 });
@@ -8137,7 +8236,7 @@ test("accounts handler rejects AppBinding records outside the catalog contract",
   );
 
   expect(response.status).toEqual(422);
-  expect((await response.json()).error).toEqual("invalid_use_edges");
+  expect((await response.json()).error.code).toEqual("invalid_use_edges");
 });
 
 test("accounts handler rejects AppGrant records outside the catalog contract", async () => {
@@ -8170,7 +8269,9 @@ test("accounts handler rejects AppGrant records outside the catalog contract", a
   );
 
   expect(response.status).toEqual(422);
-  expect((await response.json()).error).toEqual("invalid_permission_scopes");
+  expect((await response.json()).error.code).toEqual(
+    "invalid_permission_scopes",
+  );
 });
 
 test("accounts handler emits baseline browser security headers", async () => {
@@ -8775,7 +8876,7 @@ test("accounts handler rejects Connection create for a space the caller does not
   );
 
   expect(response.status).toEqual(404);
-  expect((await response.json()).error).toEqual("space_not_found");
+  expect((await response.json()).error.code).toEqual("space_not_found");
   // The secret-bearing body must never have been forwarded.
   expect(proxied).toEqual(false);
 });

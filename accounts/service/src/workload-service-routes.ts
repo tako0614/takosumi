@@ -28,6 +28,7 @@ import {
   serializeOidcClient,
 } from "./installation-helpers.ts";
 import {
+  errorJson,
   isPlainRecord,
   json,
   numberValue,
@@ -134,13 +135,10 @@ export async function handleRotateInstallationWorkloadServiceToken(input: {
   readonly issuer: string;
 }): Promise<Response> {
   const serviceId = workloadServiceIdValue(input.serviceId);
-  if (!serviceId) return json({ error: "workload_service_not_found" }, 404);
+  if (!serviceId) return errorJson("workload_service_not_found", "workload service not found", 404);
   const capability = workloadServiceTokenCapability(serviceId);
   if (!capability) {
-    return json({
-      error: "service_not_secret_backed",
-      error_description: "this workload service does not issue tokens",
-    }, 400);
+    return errorJson("service_not_secret_backed", "this workload service does not issue tokens", 400);
   }
   const access = await requireInstallationOwnerAccess({
     request: input.request,
@@ -151,16 +149,12 @@ export async function handleRotateInstallationWorkloadServiceToken(input: {
   if (!access.ok) return access.response;
 
   const body = await readOptionalJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const ttlSeconds = workloadServiceTokenTtlSeconds(
     body.ttlSeconds ?? body.ttl_seconds,
   );
   if (ttlSeconds === "invalid") {
-    return json({
-      error: "invalid_request",
-      error_description:
-        `ttlSeconds must be between ${WORKLOAD_SERVICE_TOKEN_MIN_TTL_SECONDS} and ${WORKLOAD_SERVICE_TOKEN_MAX_TTL_SECONDS}`,
-    }, 400);
+    return errorJson("invalid_request", `ttlSeconds must be between ${WORKLOAD_SERVICE_TOKEN_MIN_TTL_SECONDS} and ${WORKLOAD_SERVICE_TOKEN_MAX_TTL_SECONDS}`, 400);
   }
 
   const now = Date.now();
@@ -219,7 +213,7 @@ export async function handleIngestInstallationWorkloadEvent(input: {
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
   const auth = await requireWorkloadServiceToken({
     request: input.request,
     store: input.store,
@@ -230,7 +224,7 @@ export async function handleIngestInstallationWorkloadEvent(input: {
   if (!auth.ok) return auth.response;
 
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const type = stringValue(body.type);
   const workloadPayload = body.payload === undefined ? {} : body.payload;
   if (
@@ -238,11 +232,7 @@ export async function handleIngestInstallationWorkloadEvent(input: {
     !/^[a-z][a-z0-9_.:-]{0,95}$/.test(type) ||
     !isJsonValue(workloadPayload)
   ) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "type must be a workload event token and payload must be JSON",
-    }, 400);
+    return errorJson("invalid_request", "type must be a workload event token and payload must be JSON", 400);
   }
 
   const now = Date.now();
@@ -480,10 +470,10 @@ async function requireInstallationOwnerAccess(input: {
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return { ok: false, response: json({ error: "installation_not_found" }, 404) };
+  if (!installation) return { ok: false, response: errorJson("installation_not_found", "installation not found", 404) };
   const account = await input.store.findLedgerAccount(installation.accountId);
   if (account?.legalOwnerSubject !== bearer.auth.subject) {
-    return { ok: false, response: json({ error: "installation_not_found" }, 404) };
+    return { ok: false, response: errorJson("installation_not_found", "installation not found", 404) };
   }
   return {
     ok: true,

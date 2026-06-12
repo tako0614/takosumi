@@ -12,6 +12,7 @@ import {
 } from "./installation-routes-internal.ts";
 import type { AppBindingMaterializer, LaunchTokenOptions } from "./mod.ts";
 import {
+  errorJson,
   isRecord,
   json,
   stringValue,
@@ -50,19 +51,12 @@ export async function handleUseTakosStart(input: {
       existingInstallation.createdBySubject !== start.subject ||
       existingInstallation.sourceGitUrl !== "takos-product://managed/takos";
     if (mismatch) {
-      return json({
-        error: "use_takos_installation_mismatch",
-        error_description:
-          "existing installation does not match the Use Takos start request",
-      }, 409);
+      return errorJson("use_takos_installation_mismatch", "existing installation does not match the Use Takos start request", 409);
     }
   }
 
   if (!existingInstallation && !input.sharedCellRuntime) {
-    return json({
-      error: "feature_unavailable",
-      error_description: "Use Takos is temporarily unavailable.",
-    }, 503);
+    return errorJson("feature_unavailable", "Use Takos is temporarily unavailable.", 503);
   }
 
   const existingAccount = await input.store.findAccount(start.subject);
@@ -131,10 +125,7 @@ export async function handleUseTakosStart(input: {
   const launchBody = await launchResponse.json().catch(() => null) as unknown;
   const launchUrl = isRecord(launchBody) ? stringValue(launchBody.url) : "";
   if (!launchUrl) {
-    return json({
-      error: "invalid_launch_response",
-      error_description: "launch token response did not include a URL",
-    }, 502);
+    return errorJson("invalid_launch_response", "launch token response did not include a URL", 502);
   }
   return new Response(null, {
     status: 303,
@@ -173,18 +164,10 @@ function useTakosStartRequest(
   if (subjectParam) {
     const parsed = takosumiSubjectValue(subjectParam);
     if (!parsed) {
-      return json({
-        error: "invalid_request",
-        error_description:
-          "subject must be a Takosumi subject starting with tsub_",
-      }, 400);
+      return errorJson("invalid_request", "subject must be a Takosumi subject starting with tsub_", 400);
     }
     if (parsed !== sessionSubject) {
-      return json({
-        error: "subject_mismatch",
-        error_description:
-          "subject query parameter does not match the authenticated session",
-      }, 403);
+      return errorJson("subject_mismatch", "subject query parameter does not match the authenticated session", 403);
     }
   }
   const subject = sessionSubject;
@@ -197,34 +180,19 @@ function useTakosStartRequest(
   const appId = startParam(url, "app_id", "appId") ?? "takos.chat";
   const redirectUri = useTakosRedirectUri(url);
   if (!redirectUri) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "Use Takos requires redirect_uri or takos_url pointing to /_takosumi/launch",
-    }, 400);
+    return errorJson("invalid_request", "Use Takos requires redirect_uri or takos_url pointing to /_takosumi/launch", 400);
   }
   const returnTo = startParam(url, "return_to", "returnTo") ??
     `/spaces/${spaceId}/threads`;
   if (!returnTo.startsWith("/") || returnTo.startsWith("//")) {
-    return json({
-      error: "invalid_request",
-      error_description: "return_to must be a local absolute path",
-    }, 400);
+    return errorJson("invalid_request", "return_to must be a local absolute path", 400);
   }
   const termsVersion = startParam(url, "terms_version", "termsVersion");
   if (!termsVersion || !validTermsVersion(termsVersion)) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "Use Takos requires a current terms_version such as terms-2026-05-13",
-    }, 400);
+    return errorJson("invalid_request", "Use Takos requires a current terms_version such as terms-2026-05-13", 400);
   }
   if (!startBooleanParam(url, "terms_accepted", "termsAccepted")) {
-    return json({
-      error: "terms_acceptance_required",
-      error_description:
-        "Use Takos requires terms_accepted=true before public managed signup can continue",
-    }, 400);
+    return errorJson("terms_acceptance_required", "Use Takos requires terms_accepted=true before public managed signup can continue", 400);
   }
   return {
     subject,

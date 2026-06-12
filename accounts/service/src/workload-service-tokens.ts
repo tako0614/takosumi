@@ -7,7 +7,7 @@ import {
 import type { InstallationRecord } from "./ledger.ts";
 import type { AccountsStore, TokenRecord } from "./store.ts";
 import { base64UrlEncodeBytes, sha256Text } from "./encoding.ts";
-import { bearerChallenge, bearerToken, json } from "./http-helpers.ts";
+import { errorJson, bearerChallenge, bearerToken, json } from "./http-helpers.ts";
 
 export const WORKLOAD_SERVICE_TOKEN_ROTATED_EVENT =
   "workload_service.token_rotated";
@@ -185,7 +185,7 @@ export async function requireWorkloadServiceToken(input: {
   if (!scopeIncludes(record.scope, input.capability)) {
     return {
       ok: false,
-      response: json({ error: "insufficient_scope" }, 403, {
+      response: errorJson("insufficient_scope", "insufficient scope", 403, undefined, {
         "www-authenticate":
           `Bearer error="insufficient_scope", scope="${input.capability}"`,
       }),
@@ -217,7 +217,7 @@ export async function requireSameSpaceWorkloadControlToken(input: {
   if (!auth.ok) return auth;
   const { record } = auth;
   if (record.spaceId !== input.targetSpaceId) {
-    return { ok: false, response: json({ error: "installation_not_found" }, 404) };
+    return { ok: false, response: errorJson("installation_not_found", "installation not found", 404) };
   }
   return { ok: true, record };
 }
@@ -240,10 +240,10 @@ export async function requireSameSpaceWorkloadControlForInstallation(input: {
     input.targetInstallationId,
   );
   if (!installation) {
-    return { ok: false, response: json({ error: "installation_not_found" }, 404) };
+    return { ok: false, response: errorJson("installation_not_found", "installation not found", 404) };
   }
   if (auth.record.spaceId !== installation.spaceId) {
-    return { ok: false, response: json({ error: "installation_not_found" }, 404) };
+    return { ok: false, response: errorJson("installation_not_found", "installation not found", 404) };
   }
   return { ok: true, record: auth.record, installation };
 }
@@ -267,7 +267,7 @@ async function requireCurrentWorkloadControlToken(input: {
   if (!scopeIncludes(record.scope, "takosumi.control.space")) {
     return {
       ok: false,
-      response: json({ error: "insufficient_scope" }, 403, {
+      response: errorJson("insufficient_scope", "insufficient scope", 403, undefined, {
         "www-authenticate":
           `Bearer error="insufficient_scope", scope="takosumi.control.space"`,
       }),

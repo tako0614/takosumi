@@ -5,7 +5,7 @@ import {
 } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore, PersonalAccessTokenRecord } from "./store.ts";
 import { base64UrlEncodeBytes } from "./encoding.ts";
-import { json, readJsonObject, stringValue } from "./http-helpers.ts";
+import { errorJson, json, readJsonObject, stringValue } from "./http-helpers.ts";
 import { requireAccountSession } from "./account-session.ts";
 import {
   decodePageCursor,
@@ -32,17 +32,11 @@ export async function handleListPersonalAccessTokens(input: {
   if (!session.ok) return session.response;
   const limit = parsePageLimit(input.url.searchParams.get("limit"));
   if (limit === "invalid") {
-    return json({
-      error: "invalid_request",
-      error_description: "limit must be a positive integer",
-    }, 400);
+    return errorJson("invalid_request", "limit must be a positive integer", 400);
   }
   const afterId = decodePageCursor(input.url.searchParams.get("cursor"));
   if (afterId === "invalid") {
-    return json({
-      error: "invalid_request",
-      error_description: "cursor is malformed",
-    }, 400);
+    return errorJson("invalid_request", "cursor is malformed", 400);
   }
   const tokens = await input.store.listPersonalAccessTokensForSubject(
     session.subject,
@@ -67,7 +61,7 @@ export async function handleCreatePersonalAccessToken(input: {
 
   const body = await readJsonObject(input.request);
   if (!body || Array.isArray(body)) {
-    return json({ error: "invalid_request" }, 400);
+    return errorJson("invalid_request", "invalid request", 400);
   }
   const name = stringValue(body.name)?.trim();
   const scopes = personalAccessTokenScopesValue(body.scopes);
@@ -82,11 +76,7 @@ export async function handleCreatePersonalAccessToken(input: {
     !scopes ||
     expiresAtResult === "invalid"
   ) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "name, one or more scopes, and optional future expires_at are required",
-    }, 400);
+    return errorJson("invalid_request", "name, one or more scopes, and optional future expires_at are required", 400);
   }
 
   const token = generatePersonalAccessToken();
@@ -118,7 +108,7 @@ export async function handleRevokePersonalAccessToken(input: {
     tokenId: input.tokenId,
     revokedAt: Date.now(),
   });
-  if (!record) return json({ error: "token_not_found" }, 404);
+  if (!record) return errorJson("token_not_found", "token not found", 404);
   return json({ token: personalAccessTokenMetadata(record) });
 }
 

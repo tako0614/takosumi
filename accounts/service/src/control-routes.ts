@@ -97,6 +97,7 @@ import type {
 import type { Run, RunCostInfo } from "takosumi-contract/runs";
 import { API_V1_PREFIX, isApiV1Path } from "takosumi-contract";
 import {
+  errorJson,
   json,
   methodNotAllowed,
   numberValue,
@@ -519,16 +520,13 @@ interface ControlRouteContext {
 function controllerErrorResponse(error: unknown): Response {
   const code = controllerErrorCode(error);
   if (code) {
-    return json(
-      {
-        error: code,
-        error_description:
-          error instanceof Error ? error.message : String(error),
-      },
+    return errorJson(
+      code,
+      error instanceof Error ? error.message : String(error),
       DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE[code],
     );
   }
-  return json({ error: "internal_error" }, 500);
+  return errorJson("internal_error", "internal error", 500);
 }
 
 function controllerErrorCode(
@@ -543,11 +541,9 @@ function controllerErrorCode(
 }
 
 function controlPlaneUnavailable(): Response {
-  return json(
-    {
-      error: "feature_unavailable",
-      error_description: "The control plane is temporarily unavailable.",
-    },
+  return errorJson(
+    "feature_unavailable",
+    "The control plane is temporarily unavailable.",
     503,
   );
 }
@@ -928,7 +924,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       if (!auth.ok) return auth.response;
       const body = await readOptionalJsonObject(request);
       if (body === null) {
-        return json({ error: "invalid_json" }, 400);
+        return errorJson("invalid_json", "invalid json body", 400);
       }
       const sourceSnapshotId = stringValue(body.sourceSnapshotId);
       const installationId = stringValue(body.installationId);
@@ -956,7 +952,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   // /api/v1/plan-runs/:planRunId/apply — session-authed GUI deploy (§31).
   if (segments[0] === "plan-runs" && segments.length === 3) {
     const planRunId = decodeURIComponent(segments[1] ?? "");
-    if (segments[2] !== "apply") return json({ error: "not_found" }, 404);
+    if (segments[2] !== "apply") return errorJson("not_found", "not found", 404);
     if (method !== "POST") return methodNotAllowed("POST");
     return await applyPlanRun(
       request,
@@ -993,7 +989,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         201,
       );
     }
-    return json({ error: "not_found" }, 404);
+    return errorJson("not_found", "not found", 404);
   }
 
   // /api/v1/runs/:id ; .../approve ; .../logs ; .../cost
@@ -1038,7 +1034,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   if (segments[0] === "run-groups" && segments.length >= 2) {
     const runGroupId = decodeURIComponent(segments[1] ?? "");
     const existing = await operations.runGroups.getRunGroup(runGroupId);
-    if (!existing) return json({ error: "not_found" }, 404);
+    if (!existing) return errorJson("not_found", "not found", 404);
     const auth = await requireSpaceAccess({
       operations,
       store,
@@ -1157,7 +1153,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     );
   }
 
-  return json({ error: "not_found" }, 404);
+  return errorJson("not_found", "not found", 404);
 }
 
 // --- Spaces ----------------------------------------------------------------
@@ -1208,18 +1204,12 @@ async function createSpace(
   sessionSubject: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const handle = stringValue(body.handle);
   const displayName = stringValue(body.displayName) ?? handle;
   const type = spaceTypeValue(body.type) ?? "personal";
   if (!handle) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "handle is required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "handle is required", 400);
   }
   // ownerUserId is the session account id (the authenticated subject); the
   // dashboard never supplies it. The membership ledger seeds no row here; the
@@ -1240,7 +1230,7 @@ async function updateSpace(
   spaceId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const patch: {
     displayName?: string;
     policy?: PolicyConfig;
@@ -1248,36 +1238,18 @@ async function updateSpace(
   if (body.displayName !== undefined) {
     const displayName = stringValue(body.displayName)?.trim();
     if (!displayName) {
-      return json(
-        {
-          error: "invalid_argument",
-          error_description: "displayName is required",
-        },
-        400,
-      );
+      return errorJson("invalid_argument", "displayName is required", 400);
     }
     patch.displayName = displayName;
   }
   if (body.policy !== undefined) {
     if (!isPlainJsonObject(body.policy)) {
-      return json(
-        {
-          error: "invalid_argument",
-          error_description: "policy must be an object",
-        },
-        400,
-      );
+      return errorJson("invalid_argument", "policy must be an object", 400);
     }
     patch.policy = body.policy as PolicyConfig;
   }
   if (patch.displayName === undefined && patch.policy === undefined) {
-    return json(
-      {
-        error: "invalid_argument",
-        error_description: "displayName or policy is required",
-      },
-      400,
-    );
+    return errorJson("invalid_argument", "displayName or policy is required", 400);
   }
   return json({ space: await operations.spaces.updateSpace(spaceId, patch) });
 }
@@ -1323,17 +1295,15 @@ function controlRoleValue(value: unknown): ControlSpaceRole | undefined {
 }
 
 function membersUnavailable(): Response {
-  return json(
-    {
-      error: "feature_unavailable",
-      error_description: "Space membership management is not available.",
-    },
+  return errorJson(
+    "feature_unavailable",
+    "Space membership management is not available.",
     503,
   );
 }
 
 function memberForbidden(description: string): Response {
-  return json({ error: "forbidden", error_description: description }, 403);
+  return errorJson("forbidden", description, 403);
 }
 
 /** True when the membership has an active owner role. */
@@ -1443,26 +1413,14 @@ async function addSpaceMember(
 ): Promise<Response> {
   if (!operations.members) return membersUnavailable();
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const accountId = stringValue(body.accountId) ?? stringValue(body.subject);
   if (!accountId) {
-    return json(
-      {
-        error: "invalid_argument",
-        error_description: "accountId is required",
-      },
-      400,
-    );
+    return errorJson("invalid_argument", "accountId is required", 400);
   }
   const role = body.role === undefined ? "member" : controlRoleValue(body.role);
   if (!role) {
-    return json(
-      {
-        error: "invalid_argument",
-        error_description: "role must be one of owner, admin, member, viewer",
-      },
-      400,
-    );
+    return errorJson("invalid_argument", "role must be one of owner, admin, member, viewer", 400);
   }
   // Mutation gate: only an active owner/admin of this Space may add members. The
   // roster includes the implicit namespace-owner row so the Space owner can
@@ -1522,17 +1480,10 @@ async function changeSpaceMemberRole(
 ): Promise<Response> {
   if (!operations.members) return membersUnavailable();
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const roles = parseRolesField(body.roles ?? body.role);
   if (!roles) {
-    return json(
-      {
-        error: "invalid_argument",
-        error_description:
-          "roles must be one or more of owner, admin, member, viewer",
-      },
-      400,
-    );
+    return errorJson("invalid_argument", "roles must be one or more of owner, admin, member, viewer", 400);
   }
   const members = await effectiveMembers(operations, spaceId);
   const caller = findCaller(members, subject);
@@ -1542,7 +1493,7 @@ async function changeSpaceMemberRole(
   }
   const target = findCaller(members, targetSubject);
   if (!target) {
-    return json({ error: "not_found", error_description: "member not found" }, 404);
+    return errorJson("not_found", "member not found", 404);
   }
   // Last-owner guard: demoting the sole remaining owner would leave the Space
   // unmanaged. Reject if the target is currently the only active owner and the
@@ -1581,7 +1532,7 @@ async function removeSpaceMember(
   }
   const target = findCaller(members, targetSubject);
   if (!target) {
-    return json({ error: "not_found", error_description: "member not found" }, 404);
+    return errorJson("not_found", "member not found", 404);
   }
   // Last-owner guard: never remove the sole remaining owner.
   if (isActiveOwner(target) && activeOwnerCount(members) <= 1) {
@@ -1652,13 +1603,7 @@ function parseControlPageParams(
     if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1) {
       return {
         ok: false,
-        response: json(
-          {
-            error: "invalid_request",
-            error_description: "limit must be a positive integer",
-          },
-          400,
-        ),
+        response: errorJson("invalid_request", "limit must be a positive integer", 400),
       };
     }
     limit = Number(rawLimit);
@@ -1668,10 +1613,7 @@ function parseControlPageParams(
     if (decodeCursor(rawCursor) === undefined) {
       return {
         ok: false,
-        response: json(
-          { error: "invalid_request", error_description: "cursor is malformed" },
-          400,
-        ),
+        response: errorJson("invalid_request", "cursor is malformed", 400),
       };
     }
   }
@@ -1745,20 +1687,13 @@ async function createInstallation(
   spaceId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const name = stringValue(body.name);
   const environment = stringValue(body.environment);
   const sourceId = stringValue(body.sourceId);
   const installConfigId = stringValue(body.installConfigId);
   if (!name || !environment || !sourceId || !installConfigId) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description:
-          "name, environment, sourceId, and installConfigId are required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "name, environment, sourceId, and installConfigId are required", 400);
   }
   const source = await operations.getSource(sourceId);
   if (source.spaceId !== spaceId) {
@@ -1769,13 +1704,7 @@ async function createInstallation(
       subject: sessionSubject,
     });
     if (!auth.ok) return auth.response;
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "sourceId must belong to the target Space.",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "sourceId must belong to the target Space.", 400);
   }
   const installation = await operations.installations.createInstallation({
     spaceId,
@@ -1805,16 +1734,10 @@ async function putDeploymentProfile(
   installation: Installation,
 ): Promise<Response> {
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const parsed = parseProviderBindings(body.bindings);
   if (!parsed.ok) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: parsed.message,
-      },
-      400,
-    );
+    return errorJson("invalid_request", parsed.message, 400);
   }
   const existing =
     await operations.installations.getDeploymentProfileByInstallation(
@@ -1904,16 +1827,10 @@ async function createDependency(
   consumerInstallationId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const producerInstallationId = stringValue(body.producerInstallationId);
   if (!producerInstallationId) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "producerInstallationId is required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "producerInstallationId is required", 400);
   }
   // The consumer is the path Installation; resolve its Space so the edge is
   // created in the right Space (mirrors the §30 dependency-create handler).
@@ -1955,7 +1872,7 @@ async function deleteDependency(
   dependencyId: string,
 ): Promise<Response> {
   const existing = await operations.dependencies.getDependency(dependencyId);
-  if (!existing) return json({ error: "not_found" }, 404);
+  if (!existing) return errorJson("not_found", "not found", 404);
   const auth = await requireSpaceAccess({
     operations,
     store,
@@ -1976,13 +1893,7 @@ async function spaceActivity(
 ): Promise<Response> {
   const limit = parseLimit(url.searchParams.get("limit"));
   if (limit === "invalid") {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "limit must be a positive integer",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "limit must be a positive integer", 400);
   }
   const events = await operations.activity.list(spaceId, limit);
   return json({ events });
@@ -1996,16 +1907,10 @@ async function topUpSpaceCredits(
   spaceId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const credits = numberValue(body.credits);
   if (credits === undefined || credits <= 0) {
-    return json(
-      {
-        error: "invalid_argument",
-        error_description: "credits must be a positive integer",
-      },
-      400,
-    );
+    return errorJson("invalid_argument", "credits must be a positive integer", 400);
   }
   return json(await operations.topUpSpaceCredits(spaceId, { credits }));
 }
@@ -2016,15 +1921,9 @@ async function changeSpaceSubscription(
   spaceId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   if (!isPlainJsonObject(body.billingSettings)) {
-    return json(
-      {
-        error: "invalid_argument",
-        error_description: "billingSettings must be an object",
-      },
-      400,
-    );
+    return errorJson("invalid_argument", "billingSettings must be an object", 400);
   }
   return json(
     await operations.changeSpaceSubscription(spaceId, {
@@ -2045,13 +1944,7 @@ async function listSources(
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   if (!spaceId) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "spaceId query parameter is required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "spaceId query parameter is required", 400);
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2072,18 +1965,12 @@ async function createSource(
   sessionSubject: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const spaceId = stringValue(body.spaceId);
   const name = stringValue(body.name);
   const sourceUrl = stringValue(body.url);
   if (!spaceId || !name || !sourceUrl) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "spaceId, name, and url are required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "spaceId, name, and url are required", 400);
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2106,14 +1993,7 @@ async function createSource(
         });
         if (!connectionAuth.ok) return connectionAuth.response;
       }
-      return json(
-        {
-          error: "invalid_request",
-          error_description:
-            "authConnectionId must belong to the target Space.",
-        },
-        400,
-      );
+      return errorJson("invalid_request", "authConnectionId must belong to the target Space.", 400);
     }
   }
   const requestBody: CreateSourceRequest = {
@@ -2228,7 +2108,7 @@ async function getRunGroup(
   runGroupId: string,
 ): Promise<Response> {
   const result = await operations.runGroups.getRunGroup(runGroupId);
-  if (!result) return json({ error: "not_found" }, 404);
+  if (!result) return errorJson("not_found", "not found", 404);
   return json(result);
 }
 
@@ -2237,7 +2117,7 @@ async function approveRunGroup(
   runGroupId: string,
 ): Promise<Response> {
   const result = await operations.runGroups.approveRunGroup(runGroupId);
-  if (!result) return json({ error: "not_found" }, 404);
+  if (!result) return errorJson("not_found", "not found", 404);
   return json(result);
 }
 
@@ -2257,13 +2137,7 @@ async function listControlConnections(
   // operator-bearer §30 surface. (If/when the accounts plane grows an admin
   // role, this can branch to listOperatorConnections.)
   if (!spaceId) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "spaceId query parameter is required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "spaceId query parameter is required", 400);
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2299,16 +2173,10 @@ async function createControlConnection(
   sessionSubject: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const spaceId = stringValue(body.spaceId) ?? stringValue(body.space_id);
   if (!spaceId) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "spaceId is required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "spaceId is required", 400);
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2320,13 +2188,7 @@ async function createControlConnection(
   const provider = stringValue(body.provider) ?? "cloudflare";
   const values = stringRecord(body.values);
   if (!values || Object.keys(values).length === 0) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "values is required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "values is required", 400);
   }
   const createRequest: CreateConnectionRequest = {
     spaceId,
@@ -2373,13 +2235,7 @@ async function startCloudflareOAuth(
     stringValue(body.space_id) ??
     stringValue(url.searchParams.get("spaceId") ?? undefined);
   if (!spaceId) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "spaceId is required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "spaceId is required", 400);
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2470,14 +2326,7 @@ async function completeCloudflareOAuth(
 }
 
 function connectionOAuthUnavailable(): Response {
-  return json(
-    {
-      error: "feature_unavailable",
-      error_description:
-        "Cloudflare OAuth is not configured on this deployment.",
-    },
-    501,
-  );
+  return errorJson("feature_unavailable", "Cloudflare OAuth is not configured on this deployment.", 501);
 }
 
 /**
@@ -2508,13 +2357,7 @@ async function listOperatorConnectionDefaults(
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   if (!spaceId) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "spaceId query parameter is required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "spaceId query parameter is required", 400);
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2581,13 +2424,7 @@ async function listOutputShares(
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   if (!spaceId) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "spaceId query parameter is required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "spaceId query parameter is required", 400);
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2606,21 +2443,14 @@ async function createOutputShare(
   sessionSubject: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const fromSpaceId = stringValue(body.fromSpaceId);
   const toSpaceId = stringValue(body.toSpaceId);
   const producerInstallationId = stringValue(body.producerInstallationId);
   const outputs = outputShareEntries(body.outputs);
   const sensitivePolicy = outputShareSensitivePolicy(body.sensitivePolicy);
   if (!fromSpaceId || !toSpaceId || !producerInstallationId || !outputs) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description:
-          "fromSpaceId, toSpaceId, producerInstallationId, and outputs are required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "fromSpaceId, toSpaceId, producerInstallationId, and outputs are required", 400);
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2640,14 +2470,7 @@ async function createOutputShare(
       subject: sessionSubject,
     });
     if (!producerAuth.ok) return producerAuth.response;
-    return json(
-      {
-        error: "invalid_request",
-        error_description:
-          "producerInstallationId must belong to the source Space.",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "producerInstallationId must belong to the source Space.", 400);
   }
   const share = await operations.outputShares.createShare({
     fromSpaceId,
@@ -2666,7 +2489,7 @@ async function approveOutputShare(
   shareId: string,
 ): Promise<Response> {
   const existing = await operations.outputShares.getShare(shareId);
-  if (!existing) return json({ error: "not_found" }, 404);
+  if (!existing) return errorJson("not_found", "not found", 404);
   const auth = await requireSpaceAccess({
     operations,
     store,
@@ -2684,7 +2507,7 @@ async function revokeOutputShare(
   shareId: string,
 ): Promise<Response> {
   const existing = await operations.outputShares.getShare(shareId);
-  if (!existing) return json({ error: "not_found" }, 404);
+  if (!existing) return errorJson("not_found", "not found", 404);
   const auth = await requireSpaceAccess({
     operations,
     store,
@@ -2724,14 +2547,7 @@ async function requireSpaceAccess(input: {
   }
   return {
     ok: false,
-    response: json(
-      {
-        error: "forbidden",
-        error_description:
-          "The authenticated session cannot access this Space.",
-      },
-      403,
-    ),
+    response: errorJson("forbidden", "The authenticated session cannot access this Space.", 403),
   };
 }
 

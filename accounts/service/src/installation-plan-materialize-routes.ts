@@ -41,6 +41,7 @@ import {
   requireInstallationAccessTokenCapability,
 } from "./installation-routes-internal.ts";
 import {
+  errorJson,
   isPlainRecord,
   isRecord,
   json,
@@ -75,16 +76,13 @@ export async function handlePlanAppInstallationDeployment(input: {
   deployControl?: DeployControlProxyOptions;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
-    return json({
-      error: "state_conflict",
-      error_description: "deployment PlanRun requires a ready AppInstallation",
-    }, 409);
+    return errorJson("state_conflict", "deployment PlanRun requires a ready AppInstallation", 409);
   }
   if (input.deployControl) {
     const source = isRecord(body.source) ? body.source : undefined;
@@ -117,19 +115,11 @@ export async function handlePlanAppInstallationDeployment(input: {
       normalizeSourceGitUrl(sourceGitUrl) !==
         normalizeSourceGitUrl(installation.sourceGitUrl)
     ) {
-      return json({
-        error: "source_mismatch",
-        error_description:
-          "deployment PlanRun must keep the installation source git URL",
-      }, 409);
+      return errorJson("source_mismatch", "deployment PlanRun must keep the installation source git URL", 409);
     }
     const appId = stringValue(body.appId);
     if (appId && appId !== installation.appId) {
-      return json({
-        error: "app_mismatch",
-        error_description:
-          "deployment PlanRun must keep the installation appId",
-      }, 409);
+      return errorJson("app_mismatch", "deployment PlanRun must keep the installation appId", 409);
     }
 
     const now = Date.now();
@@ -197,28 +187,17 @@ export async function handlePlanAppInstallationDeployment(input: {
   const artifactDigest = stringValue(source.artifactDigest) ??
     stringValue(body.artifactDigest);
   if (!sourceRef || !sourceCommit || !planDigest) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "source.ref, source.commit, and source.planDigest are required",
-    }, 400);
+    return errorJson("invalid_request", "source.ref, source.commit, and source.planDigest are required", 400);
   }
   if (
     normalizeSourceGitUrl(sourceGitUrl) !==
       normalizeSourceGitUrl(installation.sourceGitUrl)
   ) {
-    return json({
-      error: "source_mismatch",
-      error_description:
-        "deployment PlanRun must keep the installation source git URL",
-    }, 409);
+    return errorJson("source_mismatch", "deployment PlanRun must keep the installation source git URL", 409);
   }
   const appId = stringValue(body.appId);
   if (appId && appId !== installation.appId) {
-    return json({
-      error: "app_mismatch",
-      error_description: "deployment PlanRun must keep the installation appId",
-    }, 409);
+    return errorJson("app_mismatch", "deployment PlanRun must keep the installation appId", 409);
   }
 
   const now = Date.now();
@@ -278,7 +257,7 @@ export async function handleRequestAppInstallationMaterialize(input: {
   const idempotencyKey = requiredIdempotencyKey(input.request);
   if (idempotencyKey instanceof Response) return idempotencyKey;
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
 
   const region = stringValue(body.region);
   const plan = body.plan === undefined
@@ -299,11 +278,7 @@ export async function handleRequestAppInstallationMaterialize(input: {
     !cutover ||
     confirm?.costAck !== true
   ) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "materialize requires mode=dedicated, region, object plan/cutover, and confirm.costAck=true",
-    }, 400);
+    return errorJson("invalid_request", "materialize requires mode=dedicated, region, object plan/cutover, and confirm.costAck=true", 400);
   }
   const permissionDigest = stringValue(
     confirm.permissionDigest ?? confirm.permission_digest,
@@ -316,18 +291,10 @@ export async function handleRequestAppInstallationMaterialize(input: {
     cutover,
   });
   if (!permissionDigest || !isSha256HexDigest(permissionDigest)) {
-    return json({
-      error: "invalid_confirm",
-      error_description:
-        "materialize confirm.permissionDigest=sha256:<64-hex> is required",
-    }, 400);
+    return errorJson("invalid_confirm", "materialize confirm.permissionDigest=sha256:<64-hex> is required", 400);
   }
   if (!constantTimeEqual(permissionDigest, expectedPermissionDigest)) {
-    return json({
-      error: "approval_digest_mismatch",
-      error_description:
-        "confirm.permissionDigest does not match materialize request",
-    }, 409);
+    return errorJson("approval_digest_mismatch", "confirm.permissionDigest does not match materialize request", 409);
   }
   const requestPayload: AppInstallationMaterializeRequest = {
     mode: "dedicated",
@@ -346,7 +313,7 @@ export async function handleRequestAppInstallationMaterialize(input: {
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
   const preserve = await materializePreservationSnapshot({
     store: input.store,
     installation,
@@ -388,18 +355,10 @@ export async function handleRequestAppInstallationMaterialize(input: {
   }
   const inFlight = findInFlightInstallationOperation(events);
   if (inFlight) {
-    return json({
-      error: "installation_locked",
-      error_description:
-        `installation already has an in-flight ${inFlight.eventType} operation`,
-    }, 409);
+    return errorJson("installation_locked", `installation already has an in-flight ${inFlight.eventType} operation`, 409);
   }
   if (installation.status !== "ready" || installation.mode !== "shared-cell") {
-    return json({
-      error: "state_conflict",
-      error_description:
-        "materialize requires a ready shared-cell AppInstallation",
-    }, 409);
+    return errorJson("state_conflict", "materialize requires a ready shared-cell AppInstallation", 409);
   }
 
   const now = Date.now();
@@ -474,34 +433,23 @@ export async function handleReportInstallationBillingUsage(input: {
     authRecord = workloadControl.record;
     installation = workloadControl.installation;
   }
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
-    return json({
-      error: "state_conflict",
-      error_description: "usage reports require a ready AppInstallation",
-    }, 409);
+    return errorJson("state_conflict", "usage reports require a ready AppInstallation", 409);
   }
   if (!installation.billingAccountId) {
-    return json({
-      error: "billing_account_not_configured",
-      error_description:
-        "usage reports require an AppInstallation billingAccountId",
-    }, 409);
+    return errorJson("billing_account_not_configured", "usage reports require an AppInstallation billingAccountId", 409);
   }
 
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const explicitBillingAccountId = stringValue(body.billingAccountId) ??
     stringValue(body.billing_account_id);
   if (
     explicitBillingAccountId &&
     explicitBillingAccountId !== installation.billingAccountId
   ) {
-    return json({
-      error: "billing_account_mismatch",
-      error_description:
-        "usage report billing account must match the AppInstallation",
-    }, 409);
+    return errorJson("billing_account_mismatch", "usage report billing account must match the AppInstallation", 409);
   }
 
   const meter = stringValue(body.meter);
@@ -552,11 +500,7 @@ export async function handleReportInstallationBillingUsage(input: {
     (idempotencyKey !== undefined && idempotencyKey.length > 160) ||
     !/^usage_[A-Za-z0-9_-]{8,160}$/.test(usageReportId)
   ) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "reportId, meter, positive quantity, unit, optional period, idempotencyKey, and JSON metadata are required",
-    }, 400);
+    return errorJson("invalid_request", "reportId, meter, positive quantity, unit, optional period, idempotencyKey, and JSON metadata are required", 400);
   }
 
   const now = Date.now();
@@ -579,18 +523,10 @@ export async function handleReportInstallationBillingUsage(input: {
       existingUsageReport.installationId !== input.installationId ||
       existingUsageReport.billingAccountId !== installation.billingAccountId
     ) {
-      return json({
-        error: "usage_report_id_conflict",
-        error_description:
-          "usage report id is already owned by another AppInstallation",
-      }, 409);
+      return errorJson("usage_report_id_conflict", "usage report id is already owned by another AppInstallation", 409);
     }
     if (existingUsageReport.requestDigest !== requestDigest) {
-      return json({
-        error: "usage_report_id_conflict",
-        error_description:
-          "usage report id was already used with a different request body",
-      }, 409);
+      return errorJson("usage_report_id_conflict", "usage report id was already used with a different request body", 409);
     }
     return json({
       usage_report: serializeBillingUsageRecord(existingUsageReport),
@@ -614,11 +550,7 @@ export async function handleReportInstallationBillingUsage(input: {
       );
   if (existingIdempotentReport) {
     if (existingIdempotentReport.requestDigest !== requestDigest) {
-      return json({
-        error: "idempotency_key_conflict",
-        error_description:
-          "idempotencyKey was already used with a different request body",
-      }, 409);
+      return errorJson("idempotency_key_conflict", "idempotencyKey was already used with a different request body", 409);
     }
     return json({
       usage_report: serializeBillingUsageRecord(existingIdempotentReport),

@@ -5,6 +5,7 @@ export interface ApiErrorEnvelope {
   readonly error: {
     readonly code: string;
     readonly message: string;
+    readonly requestId: string;
     readonly details?: unknown;
   };
 }
@@ -20,10 +21,32 @@ export function apiError(
   code: string,
   message: string,
   details?: unknown,
+  requestId: string = crypto.randomUUID(),
 ): ApiErrorEnvelope {
   return details === undefined
-    ? { error: { code, message } }
-    : { error: { code, message, details } };
+    ? { error: { code, message, requestId } }
+    : { error: { code, message, requestId, details } };
+}
+
+const REQUEST_ID_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const REQUEST_ID_ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+
+/**
+ * Resolves a request id for {@link apiError} from a Hono Context, mirroring
+ * {@link core/api/deploy_control_shared.ts resolveRequestId}: echo a well-shaped
+ * inbound `x-request-id` / `x-correlation-id` header, otherwise mint a UUID.
+ */
+export function requestIdFromContext(c: Context): string {
+  const header = c.req.header("x-request-id") ?? c.req.header("x-correlation-id");
+  if (header && isValidRequestIdShape(header)) return header;
+  return crypto.randomUUID();
+}
+
+function isValidRequestIdShape(value: string): boolean {
+  if (value.length === 0 || value.length > 64) return false;
+  return REQUEST_ID_UUID_PATTERN.test(value) ||
+    REQUEST_ID_ULID_PATTERN.test(value);
 }
 
 export function registerApiErrorHandler(app: HonoApp): void {
@@ -34,17 +57,18 @@ export function registerApiErrorHandler(app: HonoApp): void {
 }
 
 export function apiExceptionResponse(c: Context, error: unknown): Response {
+  const requestId = requestIdFromContext(c);
   if (error instanceof MalformedJsonRequestError) {
-    return c.json(apiError("invalid_json", error.message), 400);
+    return c.json(apiError("invalid_json", error.message, undefined, requestId), 400);
   }
   if (error instanceof DomainError) {
     return c.json(
-      apiError(error.code, error.message, error.details),
+      apiError(error.code, error.message, error.details, requestId),
       httpStatusForDomainErrorCode(error.code),
     );
   }
   return c.json(
-    apiError("internal_error", "Internal server error"),
+    apiError("internal_error", "Internal server error", undefined, requestId),
     500,
   );
 }

@@ -106,6 +106,7 @@ import {
   handleUserInfo,
 } from "./oidc-routes.ts";
 import {
+  errorJson,
   json,
   methodNotAllowed,
   readJsonObject,
@@ -694,7 +695,7 @@ export function createAccountsHandler(
     ) {
       if (request.method !== "POST") return methodNotAllowed("POST");
       if (!options.workloadPlatformServices) {
-        return json({ error: "not_found" }, 404);
+        return errorJson("not_found", "not found", 404);
       }
       const authBlocked = requireWorkloadPlatformServiceResolverAccess({
         request,
@@ -703,14 +704,7 @@ export function createAccountsHandler(
       if (authBlocked) return authBlocked;
       const body = await readJsonObject(request);
       if (!isWorkloadPlatformServiceResolveContext(body)) {
-        return json(
-          {
-            error: "invalid_request",
-            error_description:
-              "request body must contain installationId plus sourceRef or kind",
-          },
-          400,
-        );
+        return errorJson("invalid_request", "request body must contain installationId plus sourceRef or kind", 400);
       }
       const material = await resolveTakosumiWorkloadPlatformService({
         store,
@@ -725,7 +719,7 @@ export function createAccountsHandler(
         return json({ materials: material });
       }
       if (!material) {
-        return json({ error: "platform_service_not_found" }, 404);
+        return errorJson("platform_service_not_found", "platform service not found", 404);
       }
       return json({ material });
     }
@@ -983,14 +977,7 @@ export function createAccountsHandler(
       });
       if (authBlocked) return authBlocked;
       if (!options.deployControl) {
-        return json(
-          {
-            error: "feature_unavailable",
-            error_description:
-              "Installation PlanRun is temporarily unavailable.",
-          },
-          503,
-        );
+        return errorJson("feature_unavailable", "Installation PlanRun is temporarily unavailable.", 503);
       }
       return await handleInstallationPlanRunProxy({
         request,
@@ -1295,7 +1282,7 @@ export function createAccountsHandler(
       if (controlResponse) return controlResponse;
     }
 
-    return json({ error: "not_found" }, 404);
+    return errorJson("not_found", "not found", 404, request);
   };
 
   return async (request: Request): Promise<Response> => {
@@ -1305,13 +1292,7 @@ export function createAccountsHandler(
 }
 
 function connectionsNotConfigured(): Response {
-  return json(
-    {
-      error: "feature_unavailable",
-      error_description: "Connections are temporarily unavailable.",
-    },
-    503,
-  );
+  return errorJson("feature_unavailable", "Connections are temporarily unavailable.", 503);
 }
 
 /**
@@ -1342,23 +1323,11 @@ async function handleConnectionsCollection(input: {
     // logged.
     const body = await readJsonObject(request);
     if (!body) {
-      return json(
-        {
-          error: "invalid_request",
-          error_description: "request body is required",
-        },
-        400,
-      );
+      return errorJson("invalid_request", "request body is required", 400);
     }
     const spaceId = stringValue(body.spaceId) ?? stringValue(body.space_id);
     if (!spaceId) {
-      return json(
-        {
-          error: "invalid_request",
-          error_description: "spaceId is required",
-        },
-        400,
-      );
+      return errorJson("invalid_request", "spaceId is required", 400);
     }
     // The bearer auth helper reads only headers/cookies (not the body), so the
     // already-consumed request is fine to authorize against.
@@ -1378,13 +1347,7 @@ async function handleConnectionsCollection(input: {
       stringValue(url.searchParams.get("spaceId") ?? undefined) ??
       stringValue(url.searchParams.get("space_id") ?? undefined);
     if (!spaceId) {
-      return json(
-        {
-          error: "invalid_request",
-          error_description: "spaceId query parameter is required",
-        },
-        400,
-      );
+      return errorJson("invalid_request", "spaceId query parameter is required", 400);
     }
     const authBlocked = await requireConnectionSpaceAccess({
       request,
@@ -1445,11 +1408,11 @@ async function handleConnectionItem(input: {
   if (connection.status < 200 || connection.status >= 300) {
     // Surface the upstream not_found/etc. as a non-disclosing 404 so callers
     // cannot probe connection ids across tenants.
-    return json({ error: "connection_not_found" }, 404);
+    return errorJson("connection_not_found", "connection not found", 404);
   }
   const spaceId = connectionSpaceId(connection.payload);
   if (!spaceId) {
-    return json({ error: "connection_not_found" }, 404);
+    return errorJson("connection_not_found", "connection not found", 404);
   }
   // Both test (re-verify against the provider) and delete (revoke) are
   // write-scoped mutations of the Connection.
@@ -1462,7 +1425,7 @@ async function handleConnectionItem(input: {
   if (authBlocked) {
     // The space-ownership failure must not disclose the connection's existence.
     return authBlocked.status === 404
-      ? json({ error: "connection_not_found" }, 404)
+      ? errorJson("connection_not_found", "connection not found", 404)
       : authBlocked;
   }
   if (route.kind === "connection-test") {
@@ -1638,12 +1601,11 @@ function createInMemoryRateLimiter(maxPerMinute: number): InMemoryRateLimiter {
         const oldest = recent[0] ?? now;
         const retryAfterMs = Math.max(0, RATE_LIMIT_WINDOW_MS - (now - oldest));
         const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
-        return json(
-          {
-            error: "rate_limited",
-            error_description: `rate limit exceeded (${maxPerMinute}/min per source)`,
-          },
+        return errorJson(
+          "rate_limited",
+          `rate limit exceeded (${maxPerMinute}/min per source)`,
           429,
+          undefined,
           { "retry-after": `${retryAfterSeconds}` },
         );
       }
@@ -1686,43 +1648,19 @@ function clientIpFromRequest(request: Request): string {
 }
 
 function reservedOidcEndpoint(): Response {
-  return json(
-    {
-      error: "feature_unavailable",
-      error_description: "Sign-in is temporarily unavailable.",
-    },
-    503,
-  );
+  return errorJson("feature_unavailable", "Sign-in is temporarily unavailable.", 503);
 }
 
 function billingNotConfigured(): Response {
-  return json(
-    {
-      error: "feature_unavailable",
-      error_description: "Billing is temporarily unavailable.",
-    },
-    503,
-  );
+  return errorJson("feature_unavailable", "Billing is temporarily unavailable.", 503);
 }
 
 function passkeysNotConfigured(): Response {
-  return json(
-    {
-      error: "feature_unavailable",
-      error_description: "Passkeys are temporarily unavailable.",
-    },
-    503,
-  );
+  return errorJson("feature_unavailable", "Passkeys are temporarily unavailable.", 503);
 }
 
 function launchTokensNotConfigured(): Response {
-  return json(
-    {
-      error: "feature_unavailable",
-      error_description: "App launch is temporarily unavailable.",
-    },
-    503,
-  );
+  return errorJson("feature_unavailable", "App launch is temporarily unavailable.", 503);
 }
 
 function requireWorkloadPlatformServiceResolverAccess(input: {
@@ -1737,12 +1675,11 @@ function requireWorkloadPlatformServiceResolverAccess(input: {
   if (constantTimeEqual(header, `Bearer ${input.token}`)) {
     return undefined;
   }
-  return json(
-    {
-      error: "unauthorized",
-      error_description: "workload platform service resolver token is required",
-    },
+  return errorJson(
+    "unauthorized",
+    "workload platform service resolver token is required",
     401,
+    undefined,
     { "www-authenticate": "Bearer" },
   );
 }
