@@ -87,6 +87,38 @@ test("approveRun rejects a plan that is not awaiting approval", async () => {
   ).rejects.toMatchObject({ code: "failed_precondition" });
 });
 
+test("concurrent approveRun cannot double-approve a modern waiting_approval plan", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  // A modern row parks in the persisted `waiting_approval` status (not the
+  // legacy `succeeded`). Two concurrent approves both read waiting_approval;
+  // the fenced CAS (expectFrom scoped to the read status) must let exactly one
+  // win so the approval record + audit trail are not duplicated.
+  const seeded = await seedWaitingApprovalPlan(store, "plan_modern");
+  await store.putPlanRun({ ...seeded, status: "waiting_approval" });
+  const ctrl = controller(store);
+
+  const results = await Promise.allSettled([
+    ctrl.approveRun("plan_modern", { approvedBy: "alice" }),
+    ctrl.approveRun("plan_modern", { approvedBy: "bob" }),
+  ]);
+  const fulfilled = results.filter((r) => r.status === "fulfilled");
+  const rejected = results.filter((r) => r.status === "rejected");
+  // Exactly one approve wins; the other loses the CAS (failed_precondition).
+  expect(fulfilled.length).toBe(1);
+  expect(rejected.length).toBe(1);
+  expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+    code: "failed_precondition",
+  });
+
+  // The persisted plan carries exactly ONE approval and ONE plan.approved
+  // audit event (no duplicate from the loser).
+  const persisted = await store.getPlanRun("plan_modern");
+  expect(persisted?.approval).toBeDefined();
+  expect(
+    persisted?.auditEvents.filter((e) => e.type === "plan.approved").length,
+  ).toBe(1);
+});
+
 test("approveRun throws not_found for an unknown id", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   await expect(
