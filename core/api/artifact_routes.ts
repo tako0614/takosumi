@@ -19,13 +19,13 @@ import type { ApiEndpoint } from "./route_families.ts";
  * Artifact upload endpoints — an optional operator-internal data plane for
  * runtime-agent compatibility handlers.
  *
- *   POST   /v1/artifacts            multipart upload (kind, metadata, body)
- *   GET    /v1/artifacts            list (cursor + limit pagination)
- *   POST   /v1/artifacts/gc         mark+sweep unreferenced artifacts
- *   GET    /v1/artifacts/kinds      list registered artifact kinds (discovery)
- *   HEAD   /v1/artifacts/:hash      existence + size + kind (header `x-takosumi-artifact-*`)
- *   GET    /v1/artifacts/:hash      bytes stream
- *   DELETE /v1/artifacts/:hash      remove
+ *   POST   /internal/v1/artifacts            multipart upload (kind, metadata, body)
+ *   GET    /internal/v1/artifacts            list (cursor + limit pagination)
+ *   POST   /internal/v1/artifacts/gc         mark+sweep unreferenced artifacts
+ *   GET    /internal/v1/artifacts/kinds      list registered artifact kinds (discovery)
+ *   HEAD   /internal/v1/artifacts/:hash      existence + size + kind (header `x-takosumi-artifact-*`)
+ *   GET    /internal/v1/artifacts/:hash      bytes stream
+ *   DELETE /internal/v1/artifacts/:hash      remove
  *
  * Auth: write-side endpoints (POST / DELETE / gc) require the
  * `TAKOSUMI_DEPLOY_TOKEN` bearer. Read-side endpoints (GET / HEAD on a
@@ -192,7 +192,7 @@ export interface RegisterArtifactRoutesOptions {
   readonly getDeployToken?: () => string | undefined;
   /**
    * Optional read-only token. When set, GET / HEAD on
-   * `/v1/artifacts/:hash` accept EITHER this token OR the deploy token.
+   * `/internal/v1/artifacts/:hash` accept EITHER this token OR the deploy token.
    * POST / DELETE / GC continue to require the deploy token. Operators
    * deploy this on the runtime-agent host so the agent can fetch artifact
    * bytes without holding the full deploy token; if the agent host is

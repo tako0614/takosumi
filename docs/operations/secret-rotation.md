@@ -117,16 +117,16 @@ Worker secret rotation 後は最低限以下を確認する:
 curl -fsS https://app.takosumi.com/healthz
 curl -fsS https://app.takosumi.com/.well-known/openid-configuration | head -c 200
 curl -fsS https://app.takosumi.com/oauth/jwks >/dev/null
-curl -s -o /dev/null -w "%{http_code}" https://app.takosumi.com/api/spaces
+curl -s -o /dev/null -w "%{http_code}" https://app.takosumi.com/api/v1/spaces
 ```
 
 expected:
 
 - OIDC issuer は `https://app.takosumi.com`
 - JWKS が 200
-- unauthenticated `/api/spaces` は 401
+- unauthenticated `/api/v1/spaces` は 401
 - accounts/control-plane bearer or handshake token を rotate した場合は dashboard login
-  と `/api` session-gated route が通る
+  と `/api/v1` session-gated route が通る
 - provider / source Connection を rotate した場合は staging の Connection test と
   source_sync / plan smoke が通る
 

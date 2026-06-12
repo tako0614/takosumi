@@ -96,9 +96,9 @@ d = json.loads(sys.stdin.read())
 assert d.get('queued') is True, f'expected queued=true, got {d!r}'
 " || { echo "FAIL: $SERVICE_HOST /queue/test did not accept Queue producer send: $SERVICE_QUEUE" >&2; exit 1; }
 
-SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" -o /dev/null -w "%{http_code}" "https://${SERVICE_HOST}/health")
+SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" -o /dev/null -w "%{http_code}" "https://${SERVICE_HOST}/capabilities")
 [[ "$SERVICE_API_STATUS" == "200" ]] || {
-	echo "FAIL: $SERVICE_HOST /health returned $SERVICE_API_STATUS (expected 200)" >&2
+	echo "FAIL: $SERVICE_HOST /capabilities returned $SERVICE_API_STATUS (expected 200)" >&2
 	exit 1
 }
 

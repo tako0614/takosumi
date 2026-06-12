@@ -16,14 +16,14 @@ takosumi logs   <run-id>
 ```
 
 The CLI never runs the heavy work (Capsule Gate / plan / apply). It tars the local Capsule with zstd, uploads it to the
-control plane, and asks `/api/deploy` to resolve/create the Installation and plan the upload snapshot. Execution happens
+control plane, and asks `/api/v1/deploy` to resolve/create the Installation and plan the upload snapshot. Execution happens
 inside the runner container with per-phase vault-minted credentials; the CLI handles no credential material.
 
 ## How deploy works
 
 1. `takosumi deploy <dir>` tars the local Capsule with `tar --zstd`.
-2. `POST /api/spaces/:id/uploads` stores the bytes in R2_SOURCE and records an **upload-origin SourceSnapshot**.
-3. `POST /api/deploy` resolves/creates the `@space/name` Installation (synthesizing a default InstallConfig when new)
+2. `POST /api/v1/spaces/:id/uploads` stores the bytes in R2_SOURCE and records an **upload-origin SourceSnapshot**.
+3. `POST /api/v1/deploy` resolves/creates the `@space/name` Installation (synthesizing a default InstallConfig when new)
    and starts a plan Run pinned to that upload snapshot.
 4. The CLI polls the Run and prints its status.
 

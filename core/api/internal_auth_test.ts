@@ -101,7 +101,7 @@ async function signedRequest(input: {
   readonly requestQuery?: string;
 }): Promise<Request> {
   const body = JSON.stringify({ ok: true });
-  const path = "/api/internal/v1/test";
+  const path = "/internal/v1/test";
   const signed = await signTakosumiInternalRequest({
     method: "POST",
     path,

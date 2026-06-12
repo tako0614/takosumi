@@ -2,8 +2,10 @@
 # Defense-in-depth assertion that the local-substrate cannot leak to
 # public DNS / ACME endpoints. Three checks:
 #
-#   1. service: retired public deploy routes return 404, so raw source
-#      posts cannot bypass the deploy control contract.
+#   1. service: the /internal/v1 deploy-control seam (and the retired
+#      unversioned /api core-seam strings) return 404 at the public edge, so the
+#      in-process seam cannot be reached from outside. The only edge-public
+#      deploy-control surface is /api/v1.
 #   2. CoreDNS: any letsencrypt.org name returns NXDOMAIN.
 #   3. host firewall: the script *recommends* nftables / iptables egress
 #      filtering (we don't apply it here, since it requires root and varies
@@ -17,31 +19,44 @@ cd "$SUBSTRATE_DIR"
 PASS=0
 FAIL=0
 
-assert_retired_public_deploy_closed() {
-	echo "==> [service] Verifying retired public deploy routes are closed"
+assert_internal_seam_not_edge_reachable() {
+	echo "==> [service] Verifying the /internal/v1 deploy-control seam is not edge-reachable"
 	local leaked=0
+	# The /internal/v1 seam (deploy-control ledger + runtime-agent gateway +
+	# container callbacks) is dialed in-process only; it must never answer at the
+	# public edge. The single edge-public deploy-control surface is /api/v1.
+	# An operator-bearer probe to a seam path must 404 (route not mounted at the
+	# edge), NOT 401/200 (which would mean the seam leaked to the edge).
+	# We also probe the retired unversioned `/api/...` core-seam strings, which
+	# must likewise not be edge-reachable after the /internal/v1 cutover.
 	local paths=(
-		"/v1/deployments"
-		"/api/public/v1/deployments"
+		"/internal/v1/spaces"
+		"/internal/v1/plan-runs"
+		"/internal/v1/apply-runs"
+		"/internal/v1/runner-profiles"
+		"/internal/v1/sources"
+		"/internal/v1/connections"
+		"/internal/v1/runtime/agents/enroll"
+		"/api/spaces"
+		"/api/connections"
 	)
 	for path in "${paths[@]}"; do
 		local http_code
 		http_code=$(curl -sk \
 			--cacert caddy/runtime/pebble-issuance-root.pem \
 			--resolve app.takosumi.test:443:127.0.0.1 \
-			-H "Authorization: Bearer ${TAKOSUMI_DEPLOY_TOKEN:-local-substrate-deploy-token}" \
+			-H "Authorization: Bearer ${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-local-substrate-deploy-control-token}" \
 			-H "Content-Type: application/json" \
-			-d '{"source":{"git":{"url":"https://example.invalid/retired-route-probe.git","ref":"main"}}}' \
 			-o /dev/null \
 			-w "%{http_code}" \
 			"https://app.takosumi.test${path}")
 		if [[ "$http_code" != "404" ]]; then
-			echo "    FAIL $path returned http=$http_code (expected 404)"
+			echo "    FAIL $path returned http=$http_code (expected 404 — seam leaked to the edge)"
 			leaked=$((leaked + 1))
 		fi
 	done
 	if [[ "$leaked" -eq 0 ]]; then
-		echo "    PASS retired deploy routes are not mounted"
+		echo "    PASS /internal/v1 seam (and retired /api core-seam strings) are not edge-mounted"
 		PASS=$((PASS + 1))
 	else
 		FAIL=$((FAIL + 1))
@@ -116,7 +131,7 @@ assert_mocks_not_host_published() {
 	fi
 }
 
-assert_retired_public_deploy_closed
+assert_internal_seam_not_edge_reachable
 assert_coredns_nxdomain_letsencrypt
 assert_mocks_not_host_published
 recommend_egress_filter

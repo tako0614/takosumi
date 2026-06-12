@@ -13,7 +13,7 @@ production hosting しません。
 platform worker が in-process で束ねる surface:
 
 - accounts plane: account / billing / bare-origin OIDC issuer / dashboard contract
-- control plane: `/api` と `/install`
+- control plane: `/api/v1` と `/install`
 - dashboard SPA: `ASSETS`
 - queue consumer / scheduled handlers
 - `CoordinationObject`
