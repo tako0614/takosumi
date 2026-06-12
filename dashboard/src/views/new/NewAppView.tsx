@@ -1,14 +1,15 @@
 /**
  * Add an app (`/new`) — catalog + Git URL, one flow.
  *
- * Two entry shapes, identical install path:
+ * Three entry shapes, identical install path:
  *   - カタログ: curated first-party / official capsules (src/catalog.ts).
  *     Picking one pre-fills the Git tab.
  *   - Git URL: the raw source form (the developer power path).
- *
- * Installs start HERE, in the dashboard, on purpose: the former external
- * install-link entry (a URL redirect from another site arriving with the
- * source pre-filled) was removed, so no URL parameter ever seeds this form.
+ *   - External install link: another site links `/install?git=…` (or the
+ *     packed `?source=git::…` form); the router forwards the query here and
+ *     lib/install-link.ts seeds the Git form. A link only PRE-FILLS — the
+ *     summary states the provenance and the visitor still confirms in this
+ *     client (compatibility check → explicit add). No worker-side handling.
  *
  * The flow runs four resumable steps — createSource → syncSource →
  * createInstallation → plan — and lands on `/runs/:id`. A 409
@@ -29,6 +30,10 @@ import { Download } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentSpaceId } from "../../lib/space-state.ts";
+import {
+  capsuleNameFromUrl,
+  parseInstallPrefill,
+} from "../../lib/install-link.ts";
 import { CATALOG, type CatalogEntry } from "../../catalog.ts";
 import {
   checkCapsuleCompatibility,
@@ -96,11 +101,25 @@ export default function NewAppView() {
 function Inner() {
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = createSignal<"catalog" | "git">("catalog");
-  const [gitUrl, setGitUrl] = createSignal("");
-  const [ref, setRef] = createSignal("main");
-  const [path, setPath] = createSignal(".");
-  const [name, setName] = createSignal("");
+  // External install link (client-handled): another site links
+  // `/install?git=…` (or the packed `?source=git::…` form), the router
+  // forwards the query here, and the parser seeds the Git form. A link only
+  // PRE-FILLS — the visitor still confirms in this client (compatibility
+  // check, then the explicit add button).
+  const prefill =
+    typeof location === "undefined"
+      ? undefined
+      : parseInstallPrefill(location.search);
+
+  const [activeTab, setActiveTab] = createSignal<"catalog" | "git">(
+    prefill ? "git" : "catalog",
+  );
+  const [gitUrl, setGitUrl] = createSignal(prefill?.git ?? "");
+  const [ref, setRef] = createSignal(prefill?.ref || "main");
+  const [path, setPath] = createSignal(prefill?.path || ".");
+  const [name, setName] = createSignal(
+    prefill ? capsuleNameFromUrl(prefill.git) : "",
+  );
   const [installConfigId, setInstallConfigId] = createSignal("");
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
@@ -424,6 +443,15 @@ function Inner() {
           <Card>
             <CardHeader title={t("new.tab.git")} />
             <CardSection>
+              {/* Link-seeded landing: say WHERE the values came from, and that
+                  confirmation is still required — the fields stay editable. */}
+              <Show when={prefill}>
+                <p class="wb-summary-line" role="note">
+                  {t("new.deeplink.summary", {
+                    capsule: capsuleNameFromUrl(gitUrl() || prefill!.git),
+                  })}
+                </p>
+              </Show>
               <Show when={managedAvailable() && !hasSpaceConnection()}>
                 <p class="wb-note" role="note">
                   {t("new.managed.notice")}

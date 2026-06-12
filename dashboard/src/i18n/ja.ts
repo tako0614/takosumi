@@ -266,6 +266,8 @@ export const ja = {
   "new.catalog.intro":
     "公式・既知の OpenTofu Capsule です。選ぶと取得元が入力された状態で追加に進みます。",
   "new.catalog.select": "これを追加",
+  "new.deeplink.summary":
+    "リンクから「{capsule}」の取得元が入力されています。内容を確認してから追加してください。",
   "new.git.url": "Git URL",
   "new.git.ref": "Ref",
   "new.git.path": "Path（モジュールパス）",

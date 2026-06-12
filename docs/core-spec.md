@@ -47,9 +47,15 @@ Talk / Files / Blog / Calls のような機能は Takosumi に内蔵しない。
 @company/internal-chat
 ```
 
-インストールは dashboard の中で始める（`/new`: カタログ + Git URL フォーム）。外部サイトからの
-URL リダイレクトで install を開始する external install link は提供しない（URL パラメータが
-install フォームを seed する入り口は持たない）。
+外部サイトは `Install to Takosumi` 導線を置ける（external install link、client-handled）。
+
+```txt
+https://app.takosumi.com/install?source=git::https://git.example.com/takos/talk.git//deploy?ref=main
+https://app.takosumi.com/install?git=https://git.example.com/takos/talk.git&ref=main&path=deploy
+```
+
+link は **pre-fill のみ**: dashboard の `/new` に取得元が入力された状態で着地し、互換性チェック
+（中身を確認）と明示的な追加操作を必ず client で挟む。URL から無確認で install が走ることはない。
 
 ### 2.1 すべては Capsule
 
@@ -3476,7 +3482,8 @@ crons = ["*/5 * * * *"]
 
 公開 edge surface は versioned で `/api/v1` にまとめる。in-process の deploy-control 実装は `/internal/v1` seam に閉じ
 (edge から到達不可)、`/api/v1` edge router がそこへ委譲する。`/hooks/*` は inbound webhook seam であり、
-operator bearer の `/api/v1` surface ではない。(external install link は廃止済み — `/install` はただの SPA パス。)
+operator bearer の `/api/v1` surface ではない。`/install` (external install link) は server 側では
+ただの SPA パスで、query は dashboard client が読んで `/new` を pre-fill する (client-handled)。
 
 ### Spaces
 
@@ -3618,6 +3625,18 @@ POST /api/v1/installations/:installationId/backups
 POST /api/v1/spaces/:spaceId/backups
 GET  /api/v1/spaces/:spaceId/backups
 ```
+
+### Install link (client-handled)
+
+```txt
+GET /install?source=git::https://...          # pre-fill のみ。server 側の特別処理なし
+GET /install?git=https://...&ref=...&path=...
+```
+
+server は `/install` を SPA としてそのまま serve する。dashboard client が query を parse して
+`/new` の Git フォームを pre-fill し、出所を明示したうえで互換性チェック → 明示的な追加操作を要求する。
+client parser は https のみ・credential 埋め込み拒否で seed を拒否し、実効的な Source URL policy は
+Source 登録 / compatibility check の server 境界で強制される。
 
 ## 39. UI
 
@@ -3808,6 +3827,7 @@ Compatibility Report
 Capsule Gate basic
 Generated Root
 OpenTofu Capsule Installation
+External install link
 Connection: Cloudflare token
 Connection: Git HTTPS token
 Connection: Git SSH key
@@ -3910,6 +3930,7 @@ Git URL validation
 Source record
 SourceSnapshot
 R2_SOURCE
+External install link
 Generic webhook
 ```
 

@@ -28,8 +28,8 @@ The two in-process entry points (consumed by both targets) are:
   origin for a self-hosted takos worker); there is no dedicated accounts subdomain.
 - `worker/src/handler.ts` — control-plane handler. On the platform worker it serves the `/api` surface and
   `/hooks/*` inbound webhook routes; inside the takos product worker it is reached via the in-process fetch
-  seam. There is no dedicated deploy-control subdomain. (The `/install` external install link was removed —
-  installs start in-dashboard at `/new`.)
+  seam. There is no dedicated deploy-control subdomain. (The `/install` external install link is
+  CLIENT-handled — a plain SPA path whose query the dashboard parses to pre-fill `/new`.)
 
 ## Public Surface
 
