@@ -502,6 +502,53 @@ test("D1AccountsStore passkey challenge is single-shot and expiry-aware", async 
   );
 });
 
+test("D1AccountsStore listSpacesForOwner backfills the by-owner index for legacy rows", async () => {
+  // The `ledger_accounts_by_owner` index is written only on
+  // saveLedgerAccount, so ledger accounts persisted BEFORE the index existed
+  // have no index entry. Simulate that pre-index state: save the account +
+  // space (which populates everything), then strip the by-owner index rows
+  // from the underlying DB so the lookup starts empty — exactly what a legacy
+  // row looks like on a deployment that gained the index after the row was
+  // written.
+  const db = new MemoryD1Database();
+  const store = new D1AccountsStore(db);
+
+  await store.saveLedgerAccount({
+    accountId: "acct_legacy",
+    legalOwnerSubject: "tsub_owner",
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+  await store.saveSpace({
+    spaceId: "space_legacy",
+    accountId: "acct_legacy",
+    kind: "personal",
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+
+  // Strip the by-owner index entries to reproduce the pre-index state.
+  for (const [rowKey, row] of [...db.indexes]) {
+    if (row.indexName === "ledger_accounts_by_owner") {
+      db.indexes.delete(rowKey);
+    }
+  }
+
+  // Sanity: with the index stripped, a raw index lookup would be empty. The
+  // lazy backfill in listSpacesForOwner must still return the legacy space.
+  const spaces = await store.listSpacesForOwner("tsub_owner");
+  expect(spaces.map((space) => space.spaceId)).toEqual(["space_legacy"]);
+
+  // The backfill is persistent: the by-owner index is now populated, and a
+  // subject who genuinely owns nothing still gets an empty list.
+  expect(
+    [...db.indexes.values()].some(
+      (row) => row.indexName === "ledger_accounts_by_owner",
+    ),
+  ).toEqual(true);
+  expect(await store.listSpacesForOwner("tsub_nobody")).toEqual([]);
+});
+
 interface DocumentRow {
   readonly document: string;
 }
