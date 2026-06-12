@@ -1,24 +1,22 @@
 /**
- * Activity view (spec §31) — the Space-scoped audit trail.
- *
- * Lists recent {@link ActivityEvent}s for the current Space via
- * `GET /api/v1/spaces/:id/activity?limit=`. Each row shows the action verb,
- * the targeted entity, the actor, and the timestamp. Activity records WHAT
- * happened (names / ids / counts) and never secrets, so metadata is rendered as
- * compact key=value chips.
+ * Activity view — the Space-scoped audit trail (the raw, expert counterpart of
+ * the notifications feed). Lists recent {@link ActivityEvent}s for the current
+ * Space via `GET /api/v1/spaces/:id/activity?limit=`. Each row shows the raw
+ * action verb, the targeted entity, the actor, and the timestamp; metadata is
+ * rendered as compact key=value chips (never secrets).
  */
 import "../../styles/wave-a.css";
 import { createResource, For, Match, Show, Switch } from "solid-js";
 import { ScrollText } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import SpaceSelector from "./SpaceSelector.tsx";
 import { currentSpaceId } from "./space-state.ts";
 import {
   type ActivityEvent,
   type ControlApiError,
   listActivity,
 } from "../../lib/control-api.ts";
+import { formatDateTime, t } from "../../i18n/index.ts";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import { Card } from "../../components/ui/Card.tsx";
 import EmptyState from "../../components/ui/EmptyState.tsx";
@@ -27,7 +25,7 @@ import Skeleton from "../../components/ui/Skeleton.tsx";
 const ACTIVITY_LIMIT = 100;
 
 export default function ControlActivityView() {
-  return <Page title="アクティビティ">{() => <Inner />}</Page>;
+  return <Page title={t("activity.title")}>{() => <Inner />}</Page>;
 }
 
 function MetadataChips(props: { metadata: Record<string, unknown> }) {
@@ -64,7 +62,9 @@ function ActivityRow(props: { event: ActivityEvent }) {
           <span>{props.event.actorId}</span>
           <span>·</span>
         </Show>
-        <time>{props.event.createdAt}</time>
+        <time datetime={props.event.createdAt}>
+          {formatDateTime(props.event.createdAt)}
+        </time>
       </div>
       <MetadataChips metadata={props.event.metadata} />
     </li>
@@ -81,12 +81,9 @@ function Inner() {
   return (
     <AppShell>
       <PageHeader
-        eyebrow="Activity"
-        title="アクティビティ"
-        subtitle="Space の監査証跡（最近の操作）です。"
+        title={t("activity.title")}
+        subtitle={t("activity.subtitle")}
       />
-
-      <SpaceSelector />
 
       <Show
         when={spaceId()}
@@ -94,8 +91,8 @@ function Inner() {
           <EmptyState
             ink
             icon={<ScrollText size={28} />}
-            title="Space を選択してください"
-            message="Space を選択するとアクティビティを表示します。"
+            title={t("space.select")}
+            message={t("space.selectMessage")}
           />
         }
       >
@@ -108,8 +105,10 @@ function Inner() {
           <Match when={events.error}>
             <EmptyState
               icon={<ScrollText size={28} />}
-              title="取得に失敗しました"
-              message={(events.error as ControlApiError).message}
+              title={t("activity.title")}
+              message={t("common.fetchFailed", {
+                message: (events.error as ControlApiError).message,
+              })}
             />
           </Match>
           <Match when={events()}>
@@ -120,8 +119,8 @@ function Inner() {
                   <EmptyState
                     ink
                     icon={<ScrollText size={28} />}
-                    title="まだアクティビティがありません"
-                    message="この Space で操作が行われると、ここに記録されます。"
+                    title={t("activity.empty.title")}
+                    message={t("activity.empty.message")}
                   />
                 }
               >

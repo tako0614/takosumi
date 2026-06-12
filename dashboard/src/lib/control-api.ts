@@ -1375,6 +1375,31 @@ export async function createConnection(input: {
   return body.connection;
 }
 
+/**
+ * Re-verifies a Space-owned Connection's stored credential
+ * (`POST /api/v1/connections/:id/test`). Returns the backend's verification
+ * projection (status etc.); secret values never round-trip.
+ */
+export async function testConnection(
+  connectionId: string,
+): Promise<unknown> {
+  return await controlFetch<unknown>(
+    `${BASE}/connections/${encodeURIComponent(connectionId)}/test`,
+    { method: "POST" },
+  );
+}
+
+/**
+ * Revokes a Space-owned Connection (`POST /api/v1/connections/:id/revoke`,
+ * 204). The sealed credential blob is deleted server-side.
+ */
+export async function revokeConnection(connectionId: string): Promise<void> {
+  await controlFetch<void>(
+    `${BASE}/connections/${encodeURIComponent(connectionId)}/revoke`,
+    { method: "POST" },
+  );
+}
+
 export interface CloudflareOAuthStart {
   readonly authorizationUrl: string;
   readonly state: string;

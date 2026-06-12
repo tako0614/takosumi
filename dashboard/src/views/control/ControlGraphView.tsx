@@ -1,21 +1,14 @@
 /**
- * Graph view (spec §31) — the Space dependency DAG.
- *
- * Reads `GET /api/v1/spaces/:id/graph` ({nodes, edges}) and renders the DAG
- * structurally as topological LAYERS (producers above consumers): layer 0 is the
- * roots (no dependencies), each subsequent layer depends only on earlier ones.
- * Edges are listed under each consumer node ("depends on ..."). This is
- * dependency-free (no graph/d3/svg-layout libraries) per the dashboard's
- * keep-it-simple convention — a layered list communicates the DAG order without
- * a layout engine. A cycle (which the backend forbids) is surfaced as a
- * remaining-nodes block rather than hanging.
+ * Graph view — the Space dependency DAG, rendered structurally as topological
+ * LAYERS (producers above consumers) with no graph/d3 layout dependency. A
+ * cycle (which the backend forbids) is surfaced as a remaining-nodes block
+ * rather than hanging. Reached from the app list and Space settings.
  */
 import "../../styles/wave-b.css";
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { Network } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import SpaceSelector from "./SpaceSelector.tsx";
 import { currentSpaceId } from "./space-state.ts";
 import {
   type ControlApiError,
@@ -23,7 +16,11 @@ import {
   type GraphNode,
 } from "../../lib/control-api.ts";
 import { layerGraph } from "./graph-layering.ts";
-import { controlInstallationStatusLabel } from "../../lib/status-labels.ts";
+import {
+  installationStatusLabel,
+  installationTone,
+} from "../../lib/labels.ts";
+import { t } from "../../i18n/index.ts";
 import {
   Badge,
   Button,
@@ -31,28 +28,10 @@ import {
   EmptyState,
   PageHeader,
   Skeleton,
-  type Tone,
 } from "../../components/ui/index.ts";
 
 export default function ControlGraphView() {
-  return <Page title="依存グラフ">{() => <Inner />}</Page>;
-}
-
-function nodeTone(status: string): Tone {
-  switch (status) {
-    case "active":
-      return "ok";
-    case "error":
-      return "danger";
-    case "stale":
-    case "pending":
-      return "warn";
-    case "disabled":
-    case "destroyed":
-      return "muted";
-    default:
-      return "neutral";
-  }
+  return <Page title={t("graph.title")}>{() => <Inner />}</Page>;
 }
 
 function NodeBox(props: {
@@ -63,13 +42,20 @@ function NodeBox(props: {
   return (
     <Card hover class="wb-graph-node">
       <div class="wb-graph-node-head">
-        <span class="wb-graph-node-name">{props.node.name}</span>
-        <Badge tone={nodeTone(props.node.status)}>
-          {controlInstallationStatusLabel(props.node.status)}
+        <a
+          class="wb-graph-node-name"
+          href={`/apps/${encodeURIComponent(props.node.installationId)}`}
+        >
+          {props.node.name}
+        </a>
+        <Badge tone={installationTone(props.node.status)}>
+          {installationStatusLabel(props.node.status)}
         </Badge>
       </div>
       <Show when={deps().length > 0}>
-        <div class="wb-graph-node-deps">↑ depends on {deps().join(", ")}</div>
+        <div class="wb-graph-node-deps">
+          {t("graph.dependsOn", { names: deps().join(", ") })}
+        </div>
       </Show>
     </Card>
   );
@@ -86,17 +72,14 @@ function Inner() {
   return (
     <AppShell>
       <PageHeader
-        eyebrow="CONTROL"
-        title="依存グラフ"
-        subtitle="Installation の依存 DAG。 上の層が producer、 下の層が consumer です。"
+        title={t("graph.title")}
+        subtitle={t("graph.subtitle")}
         actions={
-          <Button variant="secondary" href="/installations">
-            一覧へ
+          <Button variant="ghost" href="/">
+            {t("app.backToList")}
           </Button>
         }
       />
-
-      <SpaceSelector />
 
       <Show
         when={spaceId()}
@@ -104,8 +87,8 @@ function Inner() {
           <EmptyState
             ink
             icon={<Network size={28} />}
-            title="Space を選択"
-            message="Space を選択すると依存グラフを表示します。"
+            title={t("space.select")}
+            message={t("space.selectMessage")}
           />
         }
       >
@@ -116,8 +99,10 @@ function Inner() {
           <Match when={graph.error}>
             <EmptyState
               icon={<Network size={28} />}
-              title="取得に失敗しました"
-              message={(graph.error as ControlApiError).message}
+              title={t("graph.title")}
+              message={t("common.fetchFailed", {
+                message: (graph.error as ControlApiError).message,
+              })}
             />
           </Match>
           <Match when={layered()}>
@@ -128,8 +113,8 @@ function Inner() {
                   <EmptyState
                     ink
                     icon={<Network size={28} />}
-                    title="Installation がありません"
-                    message="この Space にはまだ Installation がありません。"
+                    title={t("graph.empty.title")}
+                    message={t("graph.empty.message")}
                   />
                 }
               >
@@ -138,7 +123,7 @@ function Inner() {
                     {(layer, i) => (
                       <div class="wb-graph-layer">
                         <div class="wb-graph-layer-label">
-                          層 {i()}
+                          {t("graph.layer", { n: i() })}
                           <span class="wb-graph-layer-rule" aria-hidden="true" />
                         </div>
                         <div class="wb-graph-nodes">
@@ -157,7 +142,7 @@ function Inner() {
                   <Show when={g().cyclic.length > 0}>
                     <div class="wb-graph-layer wb-graph-cyclic">
                       <div class="wb-graph-layer-label">
-                        循環（解決不能）
+                        {t("graph.cycle")}
                         <span class="wb-graph-layer-rule" aria-hidden="true" />
                       </div>
                       <div class="wb-graph-nodes">
