@@ -35,6 +35,7 @@ import {
   gte,
   inArray,
   isNull,
+  lt,
   ne,
   or,
   type SQL,
@@ -64,6 +65,7 @@ import {
   type Page,
   type PageParams,
   pageFromProbe,
+  pageFromProbeBy,
 } from "takosumi-contract/pagination";
 import type { BackupRecord } from "takosumi-contract/backups";
 import type {
@@ -115,6 +117,25 @@ function pgKeysetWhere(
   const keyset = or(
     gt(createdAtCol, cursor.createdAt),
     and(eq(createdAtCol, cursor.createdAt), gt(idCol, cursor.id)),
+  );
+  return filter === undefined ? keyset : and(filter, keyset);
+}
+
+/**
+ * Descending counterpart of {@link pgKeysetWhere} for a newest-first list
+ * (`ORDER BY createdAt DESC, id DESC`, e.g. control backups): a row qualifies
+ * when its keyset is strictly BEFORE the cursor position.
+ */
+function pgKeysetWhereDesc(
+  filter: SQL | undefined,
+  createdAtCol: PgColumn,
+  idCol: PgColumn,
+  cursor: { readonly createdAt: string; readonly id: string } | undefined,
+): SQL | undefined {
+  if (cursor === undefined) return filter;
+  const keyset = or(
+    lt(createdAtCol, cursor.createdAt),
+    and(eq(createdAtCol, cursor.createdAt), lt(idCol, cursor.id)),
   );
   return filter === undefined ? keyset : and(filter, keyset);
 }
@@ -1053,6 +1074,34 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
+  async listSourceSnapshotsPage(
+    sourceId: string,
+    params: PageParams,
+  ): Promise<Page<SourceSnapshot>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#pgManyJson<SourceSnapshot>(
+      pgSchema.sourceSnapshots,
+      pgSchema.sourceSnapshots.snapshotJson,
+      {
+        where: pgKeysetWhere(
+          eq(pgSchema.sourceSnapshots.sourceId, sourceId),
+          pgSchema.sourceSnapshots.fetchedAt,
+          pgSchema.sourceSnapshots.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          asc(pgSchema.sourceSnapshots.fetchedAt),
+          asc(pgSchema.sourceSnapshots.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbeBy(rows, limit, (s) => ({
+      createdAt: s.fetchedAt,
+      id: s.id,
+    }));
+  }
+
   async putCapsuleCompatibilityReport(
     report: CapsuleCompatibilityReport,
   ): Promise<CapsuleCompatibilityReport> {
@@ -1932,6 +1981,27 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return rows.map(usageEventFromRow);
   }
 
+  async listUsageEventsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.usageEvents)
+      .where(
+        pgKeysetWhere(
+          eq(pgSchema.usageEvents.spaceId, spaceId),
+          pgSchema.usageEvents.createdAt,
+          pgSchema.usageEvents.id,
+          decodeCursor(params.cursor),
+        ),
+      )
+      .orderBy(asc(pgSchema.usageEvents.createdAt), asc(pgSchema.usageEvents.id))
+      .limit(limit + 1);
+    return pageFromProbe(rows.map(usageEventFromRow), limit);
+  }
+
   // --- backups (§33 layer 1 / §26 R2_BACKUPS) -------------------------------
   //
   // One ledger pointer row per sealed control-backup bundle. The bundle bytes
@@ -1960,6 +2030,29 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         orderBy: [desc(pgSchema.backups.createdAt), desc(pgSchema.backups.id)],
       },
     );
+  }
+
+  async listBackupRecordsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<BackupRecord>> {
+    const limit = clampPageLimit(params.limit);
+    // Newest-first listing ⇒ descending keyset.
+    const rows = await this.#pgManyJson<BackupRecord>(
+      pgSchema.backups,
+      pgSchema.backups.backupJson,
+      {
+        where: pgKeysetWhereDesc(
+          eq(pgSchema.backups.spaceId, spaceId),
+          pgSchema.backups.createdAt,
+          pgSchema.backups.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [desc(pgSchema.backups.createdAt), desc(pgSchema.backups.id)],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
   }
 
   // Drizzle's `.insert(table).values(...)` demands a per-table insert model, so

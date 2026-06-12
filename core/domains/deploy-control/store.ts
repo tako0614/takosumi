@@ -50,6 +50,8 @@ import {
   type Page,
   type PageParams,
   pageSorted,
+  pageSortedBy,
+  pageSortedDesc,
 } from "takosumi-contract/pagination";
 import type {
   OutputShare,
@@ -345,6 +347,15 @@ export interface OpenTofuDeploymentStore {
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
   getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined>;
   listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]>;
+  /**
+   * Keyset-paged SourceSnapshot listing for a Source (spec §30 pagination). The
+   * keyset column is `fetchedAt` (not `createdAt`); the opaque cursor carries it
+   * in the `createdAt` slot.
+   */
+  listSourceSnapshotsPage(
+    sourceId: string,
+    params: PageParams,
+  ): Promise<Page<SourceSnapshot>>;
 
   // CapsuleCompatibilityReport records (spec §12 / §27).
   putCapsuleCompatibilityReport(
@@ -489,6 +500,11 @@ export interface OpenTofuDeploymentStore {
   ): Promise<readonly CreditReservation[]>;
   putUsageEvent(event: UsageEvent): Promise<UsageEvent>;
   listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]>;
+  /** Keyset-paged usage-event listing for a Space (spec §30 pagination). */
+  listUsageEventsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>>;
 
   // Control-backup ledger pointers (spec §33 layer 1 / §26 R2_BACKUPS). One row
   // per sealed control-backup bundle written to R2_BACKUPS. The bundle bytes
@@ -496,6 +512,14 @@ export interface OpenTofuDeploymentStore {
   // enters the ledger. Listing orders newest first (createdAt desc, id desc).
   putBackupRecord(record: BackupRecord): Promise<BackupRecord>;
   listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]>;
+  /**
+   * Keyset-paged control-backup listing for a Space (spec §30 pagination).
+   * Ordered newest-first (createdAt DESC, id DESC), so the keyset descends.
+   */
+  listBackupRecordsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<BackupRecord>>;
 }
 
 export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
@@ -991,6 +1015,16 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
+  async listSourceSnapshotsPage(
+    sourceId: string,
+    params: PageParams,
+  ): Promise<Page<SourceSnapshot>> {
+    return pageSortedBy(await this.listSourceSnapshots(sourceId), params, (s) => ({
+      createdAt: s.fetchedAt,
+      id: s.id,
+    }));
+  }
+
   putCapsuleCompatibilityReport(
     report: CapsuleCompatibilityReport,
   ): Promise<CapsuleCompatibilityReport> {
@@ -1418,6 +1452,13 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
+  async listUsageEventsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>> {
+    return pageSorted(await this.listUsageEvents(spaceId), params);
+  }
+
   putBackupRecord(record: BackupRecord): Promise<BackupRecord> {
     this.#backupRecords.set(record.id, record);
     return Promise.resolve(record);
@@ -1433,6 +1474,14 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
             b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
         ),
     );
+  }
+
+  async listBackupRecordsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<BackupRecord>> {
+    // Newest-first listing ⇒ descending keyset pager.
+    return pageSortedDesc(await this.listBackupRecords(spaceId), params);
   }
 }
 

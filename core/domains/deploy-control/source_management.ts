@@ -73,8 +73,9 @@ export class SourceManagement {
 
   async listSourceSnapshots(
     sourceId: string,
+    params?: PageParams,
   ): Promise<ListSourceSnapshotsResponse> {
-    return await this.#require().listSnapshots(sourceId);
+    return await this.#require().listSnapshots(sourceId, params);
   }
 
   async getSourceSnapshot(id: string): Promise<SourceSnapshot> {

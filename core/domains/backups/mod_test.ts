@@ -1023,7 +1023,7 @@ test("listBackups returns the Space's pointers newest-first", async () => {
     createdByRunId: "apply_9",
   });
 
-  const listed = await service.listBackups("space_1");
+  const listed = (await service.listBackups("space_1")).backups;
   // Same createdAt -> tie-break by id desc; both pointers present.
   expect(listed.map((b) => b.id).sort()).toEqual([first.id, second.id].sort());
   const withRun = listed.find((b) => b.id === second.id);

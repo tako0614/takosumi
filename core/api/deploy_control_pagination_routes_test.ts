@@ -12,7 +12,10 @@ import { OpenTofuDeploymentController } from "../domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../domains/deploy-control/store.ts";
 import { InstallationsService } from "../domains/installations/mod.ts";
 import type { Connection } from "takosumi-contract/connections";
-import type { Installation } from "takosumi-contract/installations";
+import type {
+  Installation,
+  InstallConfig,
+} from "takosumi-contract/installations";
 import { DEFAULT_PAGE_LIMIT } from "takosumi-contract/pagination";
 
 const SPACE_ID = "space_pagination01";
@@ -47,6 +50,25 @@ function installationFixture(i: number): Installation {
     createdAt: `2026-01-01T00:00:00.${seq}Z`,
     updatedAt: `2026-01-01T00:00:00.${seq}Z`,
   } satisfies Installation;
+}
+
+function installConfigFixture(
+  i: number,
+  spaceId?: string,
+): InstallConfig {
+  const seq = String(i).padStart(4, "0");
+  return {
+    id: `cfg_${seq}`,
+    ...(spaceId !== undefined ? { spaceId } : {}),
+    name: `config-${seq}`,
+    installType: "core",
+    trustLevel: "official",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: `2026-01-01T00:00:00.${seq}Z`,
+    updatedAt: `2026-01-01T00:00:00.${seq}Z`,
+  } satisfies InstallConfig;
 }
 
 async function makeApp(seed: (store: InMemoryOpenTofuDeploymentStore) => Promise<void>) {
@@ -182,4 +204,62 @@ test("GET /internal/v1/spaces/:id/installations caps the default page at 100 and
   for (const row of nextBody.installations) {
     expect(firstIds.has(row.id)).toBe(false);
   }
+});
+
+test("GET /internal/v1/install-configs caps the official+scoped union at 100 and pages the rest", async () => {
+  // 80 official (spaceId-less) + 170 space-scoped = 250 in the union.
+  const official = 80;
+  const scoped = 170;
+  const app = await makeApp(async (store) => {
+    for (let i = 0; i < official; i += 1) {
+      await store.putInstallConfig(installConfigFixture(i));
+    }
+    for (let i = official; i < official + scoped; i += 1) {
+      await store.putInstallConfig(installConfigFixture(i, SPACE_ID));
+    }
+  });
+
+  const seen: string[] = [];
+  let cursor: string | undefined;
+  let pages = 0;
+  for (;;) {
+    pages += 1;
+    const base = `/internal/v1/install-configs?spaceId=${SPACE_ID}`;
+    const url =
+      cursor === undefined
+        ? base
+        : `${base}&cursor=${encodeURIComponent(cursor)}`;
+    const res = await app.request(url, { headers: AUTH });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      installConfigs: { id: string }[];
+      nextCursor?: string;
+    };
+    expect(body.installConfigs.length).toBeLessThanOrEqual(DEFAULT_PAGE_LIMIT);
+    seen.push(...body.installConfigs.map((c) => c.id));
+    if (body.nextCursor === undefined) break;
+    cursor = body.nextCursor;
+    if (pages > 10) throw new Error("cursor never terminated");
+  }
+
+  expect(pages).toBe(3); // 100 + 100 + 50
+  expect(seen).toHaveLength(official + scoped);
+  expect(new Set(seen).size).toBe(official + scoped); // no dupes
+  // Merge-sorted by (createdAt, id) across the union, in id order here.
+  const expected = Array.from(
+    { length: official + scoped },
+    (_, i) => `cfg_${String(i).padStart(4, "0")}`,
+  );
+  expect(seen).toEqual(expected);
+});
+
+test("GET /internal/v1/install-configs rejects a malformed ?cursor= (400)", async () => {
+  const app = await makeApp(async (store) => {
+    await store.putInstallConfig(installConfigFixture(0));
+  });
+  const res = await app.request(
+    `/internal/v1/install-configs?spaceId=${SPACE_ID}&cursor=not-a-cursor!!`,
+    { headers: AUTH },
+  );
+  expect(res.status).toBe(400);
 });

@@ -14,6 +14,7 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+import type { Page, PageParams } from "takosumi-contract/pagination";
 
 interface D1SourceStoreSlice {
   putSource(source: StoredSource): Promise<StoredSource>;
@@ -24,6 +25,10 @@ interface D1SourceStoreSlice {
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
   getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined>;
   listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]>;
+  listSourceSnapshotsPage(
+    sourceId: string,
+    params: PageParams,
+  ): Promise<Page<SourceSnapshot>>;
 
   putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun>;
   getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined>;
@@ -125,6 +130,57 @@ for (const [name, make] of STORES) {
     expect(await store.getSourceSnapshot(a.id)).toEqual(a);
     const list = await store.listSourceSnapshots("src_abcdef0123456789");
     expect(list.map((x) => x.id)).toEqual([a.id, b.id]);
+  });
+
+  test(`${name}: source snapshot keyset page caps + round-trips the fetchedAt cursor`, async () => {
+    const store = make();
+    const total = 250;
+    for (let i = 0; i < total; i += 1) {
+      const seq = String(i).padStart(4, "0");
+      await store.putSourceSnapshot(
+        snapshot({
+          id: `snap_${"0".repeat(11)}${seq}`,
+          // Keyset column is fetchedAt (NOT createdAt): monotonic ascending.
+          fetchedAt: `2026-06-06T00:00:00.${seq}Z`,
+        }),
+      );
+    }
+    // A second source's snapshots must never leak into the page.
+    await store.putSourceSnapshot(
+      snapshot({ id: "snap_other00000000", sourceId: "src_other00000000" }),
+    );
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    for (;;) {
+      pages += 1;
+      const page = await store.listSourceSnapshotsPage(
+        "src_abcdef0123456789",
+        cursor === undefined ? {} : { cursor },
+      );
+      expect(page.items.length).toBeLessThanOrEqual(100);
+      seen.push(...page.items.map((s) => s.id));
+      if (page.nextCursor === undefined) break;
+      cursor = page.nextCursor;
+      if (pages > 10) throw new Error("cursor never terminated");
+    }
+    expect(pages).toBe(3); // 100 + 100 + 50
+    expect(seen).toHaveLength(total);
+    expect(new Set(seen).size).toBe(total); // no dupes
+    const expected = Array.from(
+      { length: total },
+      (_, i) => `snap_${"0".repeat(11)}${String(i).padStart(4, "0")}`,
+    );
+    expect(seen).toEqual(expected); // ordered by fetchedAt, no gaps
+
+    // An explicit ?limit= is honoured and emits a cursor mid-stream.
+    const limited = await store.listSourceSnapshotsPage(
+      "src_abcdef0123456789",
+      { limit: 3 },
+    );
+    expect(limited.items).toHaveLength(3);
+    expect(limited.nextCursor).toBeDefined();
   });
 
   test(`${name}: source sync run put/get/list by source`, async () => {

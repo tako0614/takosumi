@@ -291,7 +291,12 @@ export function mountDeployControlSourceRoutes(
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getSource(id);
         ensureSpacePermission(principal, existing.source.spaceId);
-        return c.json(await controller.listSourceSnapshots(id), 200);
+        const page = parsePageParams(c);
+        if (page.kind === "invalid") return page.response;
+        return c.json(
+          await controller.listSourceSnapshots(id, page.value),
+          200,
+        );
       },
     }),
   );

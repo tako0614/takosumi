@@ -39,6 +39,11 @@ import type {
   OutputSnapshot,
 } from "takosumi-contract/output-snapshots";
 import type { JsonValue } from "takosumi-contract";
+import {
+  type Page,
+  type PageParams,
+  pageSorted,
+} from "takosumi-contract/pagination";
 import { OpenTofuControllerError, requireNonEmptyString } from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import {
@@ -282,6 +287,19 @@ export class OutputSharesService {
     return Array.from(byId.values()).sort((a, b) =>
       a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
     );
+  }
+
+  /**
+   * Keyset-paged {@link listForSpace} (spec §30). The from-space + to-space
+   * grants are a small set, so the union is materialized, de-duplicated, and
+   * sorted by `(createdAt, id)` (by {@link listForSpace}), then bounded with the
+   * in-memory keyset pager — a keyset across the UNION query would be unsound.
+   */
+  async listForSpacePage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<OutputShare>> {
+    return pageSorted(await this.listForSpace(spaceId), params);
   }
 
   /** Reads an OutputShare by id (used by routes for space-permission gating). */

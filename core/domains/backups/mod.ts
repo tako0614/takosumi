@@ -39,9 +39,11 @@ import {
   type BackupRecord,
   CONTROL_BACKUP_CONTENT_TYPE,
   CONTROL_BACKUP_OBJECT_KEY,
+  type ListBackupsResponse,
   SERVICE_DATA_BACKUP_OBJECT_KEY,
   STATE_BACKUP_OBJECT_KEY,
 } from "takosumi-contract/backups";
+import type { PageParams } from "takosumi-contract/pagination";
 import type {
   Connection,
   InstallConfig,
@@ -352,8 +354,11 @@ export class BackupsService {
     });
   }
 
-  /** Lists a Space's control backups, newest first. */
-  async listBackups(spaceId: string): Promise<readonly BackupRecord[]> {
+  /** Lists a Space's control backups, newest first (keyset-paged, spec §30). */
+  async listBackups(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<ListBackupsResponse> {
     const id = spaceId.trim();
     if (id.length === 0) {
       throw new OpenTofuControllerError(
@@ -361,7 +366,14 @@ export class BackupsService {
         "spaceId is required",
       );
     }
-    return await this.#store.listBackupRecords(id);
+    const { items, nextCursor } = await this.#store.listBackupRecordsPage(
+      id,
+      params ?? {},
+    );
+    return {
+      backups: items,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+    };
   }
 
   /**

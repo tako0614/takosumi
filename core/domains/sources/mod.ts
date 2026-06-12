@@ -228,9 +228,19 @@ export class SourcesService {
     return { source: toPublicSource(next) };
   }
 
-  async listSnapshots(sourceId: string): Promise<ListSourceSnapshotsResponse> {
+  async listSnapshots(
+    sourceId: string,
+    params?: PageParams,
+  ): Promise<ListSourceSnapshotsResponse> {
     await this.#requireSource(sourceId);
-    return { snapshots: await this.#store.listSourceSnapshots(sourceId) };
+    const { items, nextCursor } = await this.#store.listSourceSnapshotsPage(
+      sourceId,
+      params ?? {},
+    );
+    return {
+      snapshots: items,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+    };
   }
 
   async getSourceSnapshot(id: string): Promise<SourceSnapshot> {

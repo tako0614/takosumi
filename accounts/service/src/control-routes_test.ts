@@ -255,17 +255,19 @@ function fakeOperations(
       },
       listBackups: async (spaceId) => {
         record("listBackups", spaceId);
-        return [
-          {
-            id: "bkp_1",
-            spaceId,
-            objectKey: `spaces/${spaceId}/backups/bkp_1/control.json.zst.enc`,
-            digest:
-              "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            sizeBytes: 128,
-            createdAt: "2026-01-01T00:00:00Z",
-          },
-        ];
+        return {
+          backups: [
+            {
+              id: "bkp_1",
+              spaceId,
+              objectKey: `spaces/${spaceId}/backups/bkp_1/control.json.zst.enc`,
+              digest:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              sizeBytes: 128,
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+          ],
+        };
       },
     },
     getSpaceBilling: async (spaceId) => {
@@ -379,6 +381,22 @@ function fakeOperations(
             createdAt: "2026-01-01T00:00:00Z",
           },
         ];
+      },
+      listForSpacePage: async (spaceId) => {
+        record("listOutputShares", spaceId);
+        return {
+          items: [
+            {
+              id: "oshare_1",
+              fromSpaceId: spaceId,
+              toSpaceId: "space_b",
+              producerInstallationId: "inst_1",
+              outputs: [{ name: "domain", sensitive: false }],
+              status: "active",
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+          ],
+        };
       },
       getShare: async (id) => {
         record("getOutputShare", id);
