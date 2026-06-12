@@ -26,6 +26,7 @@ import type {
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/installations";
+import type { PageParams } from "takosumi-contract/pagination";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import {
@@ -163,10 +164,19 @@ export class SourcesService {
     return { source: toPublicSource(stored), hookSecret };
   }
 
-  async listSources(spaceId: string): Promise<ListSourcesResponse> {
+  async listSources(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<ListSourcesResponse> {
     requireNonEmptyString(spaceId, "spaceId");
-    const rows = await this.#store.listSources(spaceId);
-    return { sources: rows.map(toPublicSource) };
+    const { items, nextCursor } = await this.#store.listSourcesPage(
+      spaceId,
+      params ?? {},
+    );
+    return {
+      sources: items.map(toPublicSource),
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+    };
   }
 
   async getSource(id: string): Promise<SourceResponse> {

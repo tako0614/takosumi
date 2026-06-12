@@ -25,6 +25,7 @@ import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
+import type { PageParams } from "takosumi-contract/pagination";
 import { OpenTofuControllerError } from "./errors.ts";
 
 /**
@@ -45,8 +46,11 @@ export class SourceManagement {
     return await this.#require().createSource(request);
   }
 
-  async listSources(spaceId: string): Promise<ListSourcesResponse> {
-    return await this.#require().listSources(spaceId);
+  async listSources(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<ListSourcesResponse> {
+    return await this.#require().listSources(spaceId, params);
   }
 
   async getSource(id: string): Promise<SourceResponse> {

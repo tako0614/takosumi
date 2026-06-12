@@ -1,0 +1,185 @@
+/**
+ * Keyset-pagination behaviour over the §30 deploy-control list routes
+ * (installations / connections). Asserts: a default (no `?limit=`) list caps at
+ * 100 rows + emits a `nextCursor`; the cursor pages the remainder with no gaps
+ * or dupes across the `(createdAt, id)` boundary; an explicit `?limit=` is
+ * honoured/clamped; a malformed `?limit=` / `?cursor=` is a 400.
+ */
+import { expect, test } from "bun:test";
+
+import { createApiApp } from "./app.ts";
+import { OpenTofuDeploymentController } from "../domains/deploy-control/mod.ts";
+import { InMemoryOpenTofuDeploymentStore } from "../domains/deploy-control/store.ts";
+import { InstallationsService } from "../domains/installations/mod.ts";
+import type { Connection } from "takosumi-contract/connections";
+import type { Installation } from "takosumi-contract/installations";
+import { DEFAULT_PAGE_LIMIT } from "takosumi-contract/pagination";
+
+const SPACE_ID = "space_pagination01";
+
+function connectionFixture(i: number): Connection {
+  const seq = String(i).padStart(4, "0");
+  return {
+    id: `conn_${seq}`,
+    spaceId: SPACE_ID,
+    provider: "cloudflare",
+    scope: "space",
+    authMethod: "static_token",
+    status: "active",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt: `2026-01-01T00:00:00.${seq}Z`,
+    updatedAt: `2026-01-01T00:00:00.${seq}Z`,
+  };
+}
+
+function installationFixture(i: number): Installation {
+  const seq = String(i).padStart(4, "0");
+  return {
+    id: `inst_${seq}`,
+    spaceId: SPACE_ID,
+    name: `app-${seq}`,
+    slug: `app-${seq}`,
+    environment: "production",
+    installType: "core",
+    installConfigId: "cfg_test",
+    currentStateGeneration: 0,
+    status: "active",
+    createdAt: `2026-01-01T00:00:00.${seq}Z`,
+    updatedAt: `2026-01-01T00:00:00.${seq}Z`,
+  } satisfies Installation;
+}
+
+async function makeApp(seed: (store: InMemoryOpenTofuDeploymentStore) => Promise<void>) {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await seed(store);
+  const controller = new OpenTofuDeploymentController({ store });
+  const installationsService = new InstallationsService({ store });
+  const app = await createApiApp({
+    registerDeployControlPublicRoutes: true,
+    deployControlPublicRouteOptions: {
+      controller,
+      installationsService,
+      authorizeDeployControlBearer: ({ token }) =>
+        token === "scoped-token"
+          ? {
+              actor: "acct_1",
+              spaceIds: [SPACE_ID],
+              operations: "*",
+              runnerProfileIds: "*",
+            }
+          : undefined,
+    },
+    requestCorrelation: false,
+  });
+  return app;
+}
+
+const AUTH = { authorization: "Bearer scoped-token" } as const;
+
+test("GET /internal/v1/connections caps the default page at 100 and pages the rest with no gaps/dupes", async () => {
+  const total = 250;
+  const app = await makeApp(async (store) => {
+    for (let i = 0; i < total; i += 1) {
+      await store.putConnection(connectionFixture(i));
+    }
+  });
+
+  const seen: string[] = [];
+  let cursor: string | undefined;
+  let pages = 0;
+  for (;;) {
+    pages += 1;
+    const url =
+      cursor === undefined
+        ? `/internal/v1/connections?spaceId=${SPACE_ID}`
+        : `/internal/v1/connections?spaceId=${SPACE_ID}&cursor=${encodeURIComponent(cursor)}`;
+    const res = await app.request(url, { headers: AUTH });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      connections: { id: string }[];
+      nextCursor?: string;
+    };
+    expect(body.connections.length).toBeLessThanOrEqual(DEFAULT_PAGE_LIMIT);
+    seen.push(...body.connections.map((c) => c.id));
+    if (body.nextCursor === undefined) break;
+    cursor = body.nextCursor;
+    if (pages > 10) throw new Error("cursor never terminated");
+  }
+
+  expect(pages).toBe(3); // 100 + 100 + 50
+  expect(seen).toHaveLength(total);
+  expect(new Set(seen).size).toBe(total); // no dupes
+  const expected = Array.from({ length: total }, (_, i) =>
+    `conn_${String(i).padStart(4, "0")}`,
+  );
+  expect(seen).toEqual(expected); // ordered, no gaps
+});
+
+test("GET /internal/v1/connections honours an explicit ?limit=", async () => {
+  const app = await makeApp(async (store) => {
+    for (let i = 0; i < 10; i += 1) await store.putConnection(connectionFixture(i));
+  });
+  const res = await app.request(
+    `/internal/v1/connections?spaceId=${SPACE_ID}&limit=3`,
+    { headers: AUTH },
+  );
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as {
+    connections: unknown[];
+    nextCursor?: string;
+  };
+  expect(body.connections).toHaveLength(3);
+  expect(body.nextCursor).toBeDefined();
+});
+
+test("GET /internal/v1/connections rejects a malformed ?limit= and ?cursor= (400)", async () => {
+  const app = await makeApp(async (store) => {
+    await store.putConnection(connectionFixture(0));
+  });
+  const badLimit = await app.request(
+    `/internal/v1/connections?spaceId=${SPACE_ID}&limit=-1`,
+    { headers: AUTH },
+  );
+  expect(badLimit.status).toBe(400);
+  const badCursor = await app.request(
+    `/internal/v1/connections?spaceId=${SPACE_ID}&cursor=not-a-cursor!!`,
+    { headers: AUTH },
+  );
+  expect(badCursor.status).toBe(400);
+});
+
+test("GET /internal/v1/spaces/:id/installations caps the default page at 100 and emits a cursor", async () => {
+  const total = 150;
+  const app = await makeApp(async (store) => {
+    for (let i = 0; i < total; i += 1) {
+      await store.putInstallation(installationFixture(i));
+    }
+  });
+  const res = await app.request(
+    `/internal/v1/spaces/${SPACE_ID}/installations`,
+    { headers: AUTH },
+  );
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as {
+    installations: { id: string }[];
+    nextCursor?: string;
+  };
+  expect(body.installations).toHaveLength(DEFAULT_PAGE_LIMIT);
+  expect(body.nextCursor).toBeDefined();
+
+  const next = await app.request(
+    `/internal/v1/spaces/${SPACE_ID}/installations?cursor=${encodeURIComponent(body.nextCursor!)}`,
+    { headers: AUTH },
+  );
+  const nextBody = (await next.json()) as {
+    installations: { id: string }[];
+    nextCursor?: string;
+  };
+  expect(nextBody.installations).toHaveLength(total - DEFAULT_PAGE_LIMIT);
+  expect(nextBody.nextCursor).toBeUndefined();
+  // No overlap across the page boundary.
+  const firstIds = new Set(body.installations.map((r) => r.id));
+  for (const row of nextBody.installations) {
+    expect(firstIds.has(row.id)).toBe(false);
+  }
+});

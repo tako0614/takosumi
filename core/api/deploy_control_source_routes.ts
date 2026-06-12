@@ -18,6 +18,7 @@ import {
   COMPATIBILITY_REPORT_ID_PATTERN,
   ensureSpacePermission,
   errorEnvelope,
+  parsePageParams,
   readOptionalJsonBody,
   readJsonBody,
   runHandler,
@@ -170,9 +171,11 @@ export function mountDeployControlSourceRoutes(
         400,
       );
     }
+    const page = parsePageParams(c);
+    if (page.kind === "invalid") return page.response;
     return await runHandler(c, async () => {
       ensureSpacePermission(auth.principal, spaceId);
-      return c.json(await controller.listSources(spaceId), 200);
+      return c.json(await controller.listSources(spaceId, page.value), 200);
     });
   });
 

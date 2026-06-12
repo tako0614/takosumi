@@ -67,6 +67,11 @@ import type {
   DependencyVisibility,
 } from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import {
+  decodeCursor,
+  type Page,
+  type PageParams,
+} from "takosumi-contract/pagination";
 import type {
   ProviderBinding,
   ProviderBindingMode,
@@ -231,6 +236,10 @@ export interface ControlPlaneOperations {
   readonly installations: {
     getInstallation(id: string): Promise<Installation>;
     listInstallations(spaceId: string): Promise<readonly Installation[]>;
+    listInstallationsPage(
+      spaceId: string,
+      params: PageParams,
+    ): Promise<Page<Installation>>;
     createInstallation(request: {
       readonly spaceId: string;
       readonly name: string;
@@ -346,7 +355,10 @@ export interface ControlPlaneOperations {
     approveShare(id: string): Promise<OutputShare>;
     revokeShare(id: string): Promise<OutputShare>;
   };
-  listConnections(spaceId: string): Promise<ListConnectionsResponse>;
+  listConnections(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<ListConnectionsResponse>;
   listOperatorConnections(): Promise<ListConnectionsResponse>;
   getConnection(connectionId: string): Promise<Connection>;
   /**
@@ -420,7 +432,10 @@ export interface ControlPlaneOperations {
    * this; the returned `Deployment` rows only carry the allowlist-projected
    * `outputsPublic` map (sensitive outputs never enter the ledger row).
    */
-  listDeployments(installationId: string): Promise<ListDeploymentsResponse>;
+  listDeployments(
+    installationId: string,
+    params?: PageParams,
+  ): Promise<ListDeploymentsResponse>;
   /**
    * Reads one Deployment ledger record by id (§30 `GET /internal/v1/deployments/:id`).
    * Used by the control surface to resolve a Deployment's owning Space (for the
@@ -455,7 +470,10 @@ export interface ControlPlaneOperations {
   getRunCost(id: string): Promise<RunCostInfo>;
   // --- Sources (§6) ---
   createSource(request: CreateSourceRequest): Promise<CreateSourceResponse>;
-  listSources(spaceId: string): Promise<ListSourcesResponse>;
+  listSources(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<ListSourcesResponse>;
   getSource(id: string): Promise<Source>;
   createSourceSync(
     sourceId: string,
@@ -691,7 +709,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
     if (leaf === "installations" && segments.length === 3) {
       if (method === "GET")
-        return await listSpaceInstallations(operations, spaceId);
+        return await listSpaceInstallations(operations, spaceId, url);
       if (method === "POST") {
         return await createInstallation(
           request,
@@ -803,7 +821,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
     if (leaf === "deployments" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await listInstallationDeployments(operations, installationId);
+      return await listInstallationDeployments(operations, installationId, url);
     }
     if (leaf === "dependencies" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -1617,15 +1635,71 @@ function actorFor(caller: PublicSpaceMember): MembershipActor {
   };
 }
 
+/**
+ * Parses the shared `?limit=` / `?cursor=` keyset-pagination query for a
+ * dashboard list route (spec §30). Mirrors the deploy-control `parsePageParams`:
+ * `limit` is a positive integer clamped to the hard cap by the store; `cursor`
+ * must decode to a `{ createdAt, id }` keyset. A malformed value is a 400.
+ */
+function parseControlPageParams(
+  url: URL,
+):
+  | { readonly ok: true; readonly params: PageParams }
+  | { readonly ok: false; readonly response: Response } {
+  const rawLimit = url.searchParams.get("limit");
+  let limit: number | undefined;
+  if (rawLimit !== null && rawLimit !== "") {
+    if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1) {
+      return {
+        ok: false,
+        response: json(
+          {
+            error: "invalid_request",
+            error_description: "limit must be a positive integer",
+          },
+          400,
+        ),
+      };
+    }
+    limit = Number(rawLimit);
+  }
+  const rawCursor = url.searchParams.get("cursor");
+  if (rawCursor !== null && rawCursor !== "") {
+    if (decodeCursor(rawCursor) === undefined) {
+      return {
+        ok: false,
+        response: json(
+          { error: "invalid_request", error_description: "cursor is malformed" },
+          400,
+        ),
+      };
+    }
+  }
+  return {
+    ok: true,
+    params: {
+      ...(limit !== undefined ? { limit } : {}),
+      ...(rawCursor !== null && rawCursor !== "" ? { cursor: rawCursor } : {}),
+    },
+  };
+}
+
 // --- Installations ---------------------------------------------------------
 
 async function listSpaceInstallations(
   operations: ControlPlaneOperations,
   spaceId: string,
+  url: URL,
 ): Promise<Response> {
-  const records = await operations.installations.listInstallations(spaceId);
+  const page = parseControlPageParams(url);
+  if (!page.ok) return page.response;
+  const { items, nextCursor } = await operations.installations.listInstallationsPage(
+    spaceId,
+    page.params,
+  );
   return json({
-    installations: records.map(publicInstallation),
+    installations: items.map(publicInstallation),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
   });
 }
 
@@ -1638,9 +1712,18 @@ async function listSpaceInstallations(
 async function listInstallationDeployments(
   operations: ControlPlaneOperations,
   installationId: string,
+  url: URL,
 ): Promise<Response> {
-  const { deployments } = await operations.listDeployments(installationId);
-  return json({ deployments: deployments.map(publicDeployment) });
+  const page = parseControlPageParams(url);
+  if (!page.ok) return page.response;
+  const { deployments, nextCursor } = await operations.listDeployments(
+    installationId,
+    page.params,
+  );
+  return json({
+    deployments: deployments.map(publicDeployment),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+  });
 }
 
 async function getInstallation(
@@ -1977,7 +2060,9 @@ async function listSources(
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
-  return json(await operations.listSources(spaceId));
+  const page = parseControlPageParams(url);
+  if (!page.ok) return page.response;
+  return json(await operations.listSources(spaceId, page.params));
 }
 
 async function createSource(
@@ -2187,7 +2272,9 @@ async function listControlConnections(
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
-  return json(await operations.listConnections(spaceId));
+  const page = parseControlPageParams(url);
+  if (!page.ok) return page.response;
+  return json(await operations.listConnections(spaceId, page.params));
 }
 
 /**

@@ -161,6 +161,12 @@ export interface ConnectionResponse {
 
 export interface ListConnectionsResponse {
   readonly connections: readonly Connection[];
+  /**
+   * Opaque keyset cursor for the next page when the listing was capped (spec §30
+   * pagination). Absent on the last page or on an unpaginated listing (e.g. the
+   * operator-scope listing). Additive: readers that ignore it are unaffected.
+   */
+  readonly nextCursor?: string;
 }
 
 export interface TestConnectionResponse {

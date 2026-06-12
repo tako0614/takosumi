@@ -135,6 +135,10 @@ function fakeOperations(
         record("listInstallations", spaceId);
         return [installation("inst_1", spaceId)];
       },
+      listInstallationsPage: async (spaceId, params) => {
+        record("listInstallationsPage", spaceId, params);
+        return { items: [installation("inst_1", spaceId)] };
+      },
       createInstallation: async (req) => {
         record("createInstallation", req);
         return installation("inst_new", req.spaceId);
@@ -1177,6 +1181,7 @@ test("space-scoped control route rejects a non-member session before dispatch", 
   });
   expect(response?.status).toEqual(403);
   expect(operations.calls.listInstallations).toBeUndefined();
+  expect(operations.calls.listInstallationsPage).toBeUndefined();
 });
 
 test("PATCH /api/v1/spaces/:id rejects a non-member session before dispatch", async () => {
@@ -1250,6 +1255,7 @@ test("installation-scoped control route rejects when its Space is inaccessible",
         updatedAt: "2026-01-01T00:00:00Z",
       }),
       listInstallations: async () => [],
+      listInstallationsPage: async () => ({ items: [] }),
       createInstallation: async () => {
         throw new Error("unexpected");
       },
@@ -1431,6 +1437,7 @@ test("POST /api/v1/output-shares rejects a producer from another inaccessible Sp
         updatedAt: "2026-01-01T00:00:00Z",
       }),
       listInstallations: async () => [],
+      listInstallationsPage: async () => ({ items: [] }),
       createInstallation: async () => {
         throw new Error("unexpected");
       },
@@ -1769,7 +1776,7 @@ test("accounts-ledger Space owner can access a Space even when ownerUserId is no
     operations,
   });
   expect(response?.status).toEqual(200);
-  expect(operations.calls.listInstallations?.[0]).toEqual("space_ledger");
+  expect(operations.calls.listInstallationsPage?.[0]).toEqual("space_ledger");
 });
 
 test("POST /api/v1/spaces uses the session subject as ownerUserId", async () => {
@@ -1815,7 +1822,7 @@ test("GET /api/v1/spaces/:id/installations lists installations", async () => {
   expect(body.installations.length).toEqual(1);
   expect((body.installations[0] as { installType?: string }).installType)
     .toBeUndefined();
-  expect(operations.calls.listInstallations?.[0]).toEqual("space_a");
+  expect(operations.calls.listInstallationsPage?.[0]).toEqual("space_a");
 });
 
 test("POST /api/v1/spaces/:id/installations creates an installation", async () => {
@@ -2911,6 +2918,7 @@ test("controller errors map to their HTTP status (not_found -> 404)", async () =
         throw Object.assign(new Error("nope"), { code: "not_found" });
       },
       listInstallations: async () => [],
+      listInstallationsPage: async () => ({ items: [] }),
       createInstallation: async () => {
         throw new Error("unused");
       },

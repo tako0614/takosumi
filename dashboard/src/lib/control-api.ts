@@ -119,6 +119,35 @@ function query(params: Record<string, string | number | undefined>): string {
   return s ? "?" + s : "";
 }
 
+/**
+ * Follows the keyset `nextCursor` of a now-capped list endpoint (spec §30
+ * pagination) until it is exhausted, concatenating every page so the dashboard
+ * keeps its previous "load the whole list" behaviour. `extract` pulls the array
+ * field out of each page body. A defensive page ceiling guards against a server
+ * that never stops returning a cursor.
+ */
+async function fetchAllPages<T>(
+  basePath: string,
+  extract: (body: { nextCursor?: string } & Record<string, unknown>) => readonly T[],
+): Promise<readonly T[]> {
+  const all: T[] = [];
+  let cursor: string | undefined;
+  for (let guard = 0; guard < 10_000; guard += 1) {
+    const sep = basePath.includes("?") ? "&" : "?";
+    const path =
+      cursor === undefined
+        ? basePath
+        : `${basePath}${sep}cursor=${encodeURIComponent(cursor)}`;
+    const body = await controlFetch<
+      { nextCursor?: string } & Record<string, unknown>
+    >(path);
+    all.push(...extract(body));
+    if (typeof body.nextCursor !== "string" || body.nextCursor === "") break;
+    cursor = body.nextCursor;
+  }
+  return all;
+}
+
 const BASE = "/api/v1";
 
 // ===========================================================================
@@ -835,10 +864,10 @@ export async function removeMember(
 export async function listInstallations(
   spaceId: string,
 ): Promise<readonly Installation[]> {
-  const body = await controlFetch<{ installations?: readonly Installation[] }>(
+  return await fetchAllPages<Installation>(
     `${BASE}/spaces/${encodeURIComponent(spaceId)}/installations`,
+    (body) => (body.installations as readonly Installation[]) ?? [],
   );
-  return body.installations ?? [];
 }
 
 export async function getInstallation(id: string): Promise<Installation> {
@@ -1046,10 +1075,10 @@ export async function listActivity(
 // --- Sources ---------------------------------------------------------------
 
 export async function listSources(spaceId: string): Promise<readonly Source[]> {
-  const body = await controlFetch<{ sources?: readonly Source[] }>(
+  return await fetchAllPages<Source>(
     `${BASE}/sources${query({ spaceId })}`,
+    (body) => (body.sources as readonly Source[]) ?? [],
   );
-  return body.sources ?? [];
 }
 
 export interface CreateSourceResult {
@@ -1209,10 +1238,10 @@ export async function createApplyRun(
 export async function listDeployments(
   installationId: string,
 ): Promise<readonly PublicDeployment[]> {
-  const body = await controlFetch<{ deployments?: readonly PublicDeployment[] }>(
+  return await fetchAllPages<PublicDeployment>(
     `${BASE}/installations/${encodeURIComponent(installationId)}/deployments`,
+    (body) => (body.deployments as readonly PublicDeployment[]) ?? [],
   );
-  return body.deployments ?? [];
 }
 
 /**
@@ -1276,10 +1305,10 @@ export async function approveRunGroup(id: string): Promise<RunGroupWithRuns> {
 export async function listConnections(
   spaceId: string,
 ): Promise<readonly Connection[]> {
-  const body = await controlFetch<{ connections?: readonly Connection[] }>(
+  return await fetchAllPages<Connection>(
     `${BASE}/connections${query({ spaceId })}`,
+    (body) => (body.connections as readonly Connection[]) ?? [],
   );
-  return body.connections ?? [];
 }
 
 export async function listOperatorConnectionDefaults(

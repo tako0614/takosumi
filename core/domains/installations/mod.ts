@@ -19,6 +19,7 @@ import type {
   Installation,
   InstallationStatus,
 } from "takosumi-contract/installations";
+import type { Page, PageParams } from "takosumi-contract/pagination";
 import {
   OpenTofuControllerError,
   requireNonEmptyString,
@@ -172,6 +173,14 @@ export class InstallationsService {
   async listInstallations(spaceId: string): Promise<readonly Installation[]> {
     requireNonEmptyString(spaceId, "spaceId");
     return await this.#store.listInstallations(spaceId);
+  }
+
+  async listInstallationsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<Installation>> {
+    requireNonEmptyString(spaceId, "spaceId");
+    return await this.#store.listInstallationsPage(spaceId, params);
   }
 
   /**
