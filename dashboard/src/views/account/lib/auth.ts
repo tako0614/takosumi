@@ -1,9 +1,7 @@
 /**
- * Auth flows for the account-plane RPC client: upstream OAuth (Google/GitHub)
- * and passkey registration (WebAuthn). The OAuth half is navigation-based; the
- * passkey half is request/response over {@link apiFetch}.
- *
- * Ported from takosumi dashboard-ui/src/lib/rpc/auth.ts.
+ * Auth flows for the account-plane RPC client: upstream OAuth (Google/GitHub),
+ * navigation-based. (Passkey/WebAuthn client code returns together with an
+ * actual passkey sign-in UI — the API stays on the backend.)
  */
 import { apiFetch, qs } from "./http.ts";
 import * as paths from "./paths.ts";
@@ -14,7 +12,7 @@ const STATE_KEY = "tg_oauth_state";
 const RETURN_KEY = "tg_oauth_return";
 const PROVIDER_KEY = "tg_oauth_provider";
 
-type Provider = "google" | "github" | "passkey";
+type Provider = "google" | "github";
 
 /**
  * Read which sign-in methods the operator configured on this worker. Public +
@@ -48,7 +46,7 @@ export function startUpstreamOAuth(provider: "google" | "github"): void {
   // Preserve intended return URL (e.g. user landed on /apps unauth and was
   // bounced to /sign-in; after auth we want to send them back to /apps).
   const url = new URL(location.href);
-  const intended = url.searchParams.get("return") ?? "/home";
+  const intended = url.searchParams.get("return") ?? "/";
   sessionStorage.setItem(RETURN_KEY, intended);
 
   location.assign(
@@ -92,7 +90,7 @@ export async function completeUpstreamOAuth(
   }
   sessionStorage.removeItem(STATE_KEY);
   sessionStorage.removeItem(PROVIDER_KEY);
-  const returnTo = sessionStorage.getItem(RETURN_KEY) ?? "/home";
+  const returnTo = sessionStorage.getItem(RETURN_KEY) ?? "/";
   sessionStorage.removeItem(RETURN_KEY);
 
   // The worker's /v1/auth/upstream/callback handler only accepts GET with
@@ -115,66 +113,4 @@ export async function completeUpstreamOAuth(
     },
     returnTo,
   };
-}
-
-export interface PasskeyRegisterOptions {
-  readonly rp: { readonly id: string; readonly name: string };
-  readonly user: {
-    readonly id: string;
-    readonly name: string;
-    readonly displayName: string;
-  };
-  readonly challenge: string;
-  readonly pubKeyCredParams?: readonly {
-    readonly alg: number;
-    readonly type: "public-key";
-  }[];
-  readonly timeout?: number;
-  readonly attestation?: AttestationConveyancePreference;
-  readonly excludeCredentials?: readonly {
-    readonly id: string;
-    readonly type: "public-key";
-  }[];
-  readonly authenticatorSelection?: AuthenticatorSelectionCriteria;
-}
-
-export async function requestPasskeyRegisterOptions(
-  subject: string,
-): Promise<PasskeyRegisterOptions> {
-  return await apiFetch<PasskeyRegisterOptions>(
-    paths.PASSKEY_REGISTER_OPTIONS,
-    { method: "POST", body: { subject } },
-  );
-}
-
-export async function completePasskeyRegistration(input: {
-  subject: string;
-  credentialId: string;
-  publicKeyJwk: JsonWebKey;
-  /**
-   * The server-minted challenge echoed back from the register/options
-   * response. The server requires this so it can confirm the ceremony is
-   * the one it issued (replay protection) and unlock clientDataJSON /
-   * attestationObject verification on the complete endpoint.
-   */
-  challenge: string;
-  /**
-   * base64url-encoded `clientDataJSON` from the authenticator's
-   * `navigator.credentials.create()` result. The server parses it and
-   * checks `type === "webauthn.create"`, the challenge, and the origin.
-   */
-  clientDataJSON: string;
-  /**
-   * base64url-encoded `attestationObject` from the authenticator. The
-   * server enforces that its `fmt` matches the requested attestation
-   * policy ("none").
-   */
-  attestationObject: string;
-  signCount?: number;
-  transports?: readonly string[];
-}): Promise<{ credential_id: string; subject: string; sign_count: number }> {
-  return await apiFetch(paths.PASSKEY_REGISTER_COMPLETE, {
-    method: "POST",
-    body: input,
-  });
 }

@@ -42,7 +42,6 @@
   position: relative;
   z-index: 1;
 }
-
 /* ===== Ink backdrop (decorative, behind shell content / auth page) ===== */
 .ink-backdrop {
   position: absolute;
@@ -71,7 +70,6 @@
 .ink-backdrop-auth {
   opacity: 0.85;
 }
-
 /* ===== Sidebar ===== */
 .sidebar {
   background: var(--tg-bg-subtle);
@@ -131,45 +129,6 @@
   line-height: 1.2;
   min-width: 0;
 }
-.sidebar-link-spec {
-  color: var(--tg-fg-subtle);
-  font-size: var(--tg-fs-xs);
-  font-weight: 400;
-}
-.sidebar-link.active .sidebar-link-spec {
-  color: var(--tg-accent-text);
-  opacity: 0.7;
-}
-.sidebar-advanced {
-  margin-top: var(--tg-s-3);
-  border-top: 1px solid var(--tg-line);
-  padding-top: var(--tg-s-3);
-}
-.sidebar-advanced-summary {
-  display: flex;
-  align-items: center;
-  gap: var(--tg-s-3);
-  padding: var(--tg-s-3) var(--tg-s-3);
-  border-radius: var(--tg-r-md);
-  color: var(--tg-fg-subtle);
-  font-size: var(--tg-fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-}
-.sidebar-advanced-summary::-webkit-details-marker {
-  display: none;
-}
-.sidebar-advanced-summary:hover {
-  background: var(--tg-bg-elev);
-  color: var(--tg-fg);
-}
-.sidebar-advanced-nav {
-  margin-top: 2px;
-}
-
 /* ===== Topbar ===== */
 .topbar {
   height: var(--tg-topbar-h);
@@ -191,7 +150,6 @@
   align-items: center;
   gap: var(--tg-s-2);
 }
-
 /* ===== Space switcher (global, in topbar) ===== */
 .topbar-space {
   position: relative;
@@ -228,13 +186,11 @@
   display: flex;
   gap: var(--tg-s-2);
 }
-.topbar-space-pop-error,
-.topbar-space-error {
+.topbar-space-pop-error,.topbar-space-error {
   color: var(--tg-danger);
   font-size: var(--tg-fs-xs);
   margin: 0;
 }
-
 /* ===== Bell badge ===== */
 .topbar-bell {
   position: relative;
@@ -290,7 +246,6 @@
   font-weight: 700;
   font-size: var(--tg-fs-sm);
 }
-
 /* ===== User menu popover ===== */
 .user-menu {
   position: relative;
@@ -381,26 +336,25 @@
   border-color: var(--tg-accent);
   background: color-mix(in srgb, var(--tg-accent) 18%, transparent);
 }
-
 /* ===== Mobile tabs ===== */
 .mobile-tabs {
   display: none;
 }
 @media (max-width: 880px) {
-  .app-shell {
+.app-shell {
     grid-template-columns: 1fr;
   }
-  .sidebar {
+.sidebar {
     display: none;
   }
-  .topbar {
+.topbar {
     padding: 0 var(--tg-s-4);
   }
-  .app-shell-content {
+.app-shell-content {
     padding: var(--tg-s-5) var(--tg-s-4)
       calc(var(--tg-mobile-tab-h) + var(--tg-s-5));
   }
-  .mobile-tabs {
+.mobile-tabs {
     position: fixed;
     bottom: 0;
     left: 0;
@@ -414,7 +368,7 @@
     border-top: 1px solid var(--tg-line);
     z-index: 40;
   }
-  .mobile-tab {
+.mobile-tab {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -424,20 +378,16 @@
     font-size: var(--tg-fs-xs);
     text-decoration: none;
   }
-  .mobile-tab.active {
+.mobile-tab.active {
     color: var(--tg-accent);
   }
 }
-
 @media (prefers-reduced-motion: reduce) {
-  .app-shell *,
-  .app-shell *::before,
-  .app-shell *::after {
+.app-shell *,.app-shell *::before,.app-shell *::after {
     transition: none !important;
     animation: none !important;
   }
 }
-
 /* ===== Auth page (sign-in) ===== */
 .auth-page {
   position: relative;
@@ -472,7 +422,6 @@
   color: var(--tg-fg-muted);
   margin-top: var(--tg-s-8);
 }
-
 .sign-in-panel {
   width: 100%;
   max-width: 420px;
@@ -554,37 +503,9 @@
   color: var(--tg-fg);
   font-size: var(--tg-fs-sm);
 }
-.sign-in-notice {
-  margin: var(--tg-s-4) 0 0;
-  padding: var(--tg-s-3) var(--tg-s-4);
-  background: color-mix(in srgb, var(--tg-success) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--tg-success) 32%, transparent);
-  border-radius: var(--tg-r-md);
-  color: var(--tg-fg);
-  font-size: var(--tg-fs-sm);
-}
 .sign-in-terms {
   margin-top: var(--tg-s-6);
   font-size: var(--tg-fs-xs);
   color: var(--tg-fg-subtle);
   text-align: center;
-}
-.sign-in-dev {
-  margin-top: var(--tg-s-7);
-  width: 100%;
-  padding: var(--tg-s-3);
-  background: transparent;
-  border: 1px dashed var(--tg-line-strong);
-  border-radius: var(--tg-r-md);
-  color: var(--tg-fg-subtle);
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-xs);
-  cursor: pointer;
-  transition:
-    border-color 120ms ease,
-    color 120ms ease;
-}
-.sign-in-dev:hover {
-  border-color: var(--tg-accent);
-  color: var(--tg-accent);
 }

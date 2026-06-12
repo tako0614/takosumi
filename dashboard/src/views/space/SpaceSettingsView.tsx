@@ -11,7 +11,7 @@ import { useParams } from "@solidjs/router";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import type { SessionRecord } from "../account/lib/session.ts";
-import { currentSpaceId } from "../control/space-state.ts";
+import { currentSpaceId } from "../../lib/space-state.ts";
 import { t } from "../../i18n/index.ts";
 import {
   EmptyState,

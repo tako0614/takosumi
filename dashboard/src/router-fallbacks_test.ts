@@ -7,7 +7,7 @@
  * URL) mount the bundle with no matching <Route> and paint nothing.
  *
  * These are pure-source assertions (no DOM / SolidJS), runnable under
- * `bun test`, in the same style as `views/control/graph-layering_test.ts`. They
+ * `bun test`, in the same style as `views/graph/graph-layering_test.ts`. They
  * read `index.tsx` and assert the route table keeps the fallback wiring, so a
  * future edit that drops a redirect or the catch-all fails loudly instead of
  * silently regressing to the white-screen bug.
