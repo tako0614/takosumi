@@ -319,7 +319,7 @@ test("template plan is blocked when the plan introduces a disallowed resource ty
     inputs: { bucketName: "b", accountId: "a" },
   });
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(planRun.policy.status).toEqual("blocked");
   expect(planRun.policy.reasons.join("\n")).toMatch(
     /cloudflare_workers_script is not allowed/,
@@ -374,7 +374,7 @@ test("template plan enforces InstallConfig scope boundary and quota", async () =
     inputs: { bucketName: "b", accountId: "acct_allowed" },
   });
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(planRun.policy.reasons.join("\n")).not.toContain("out of scope");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "resources.total count 2 exceeds 1",
@@ -406,6 +406,9 @@ test("destructive template plan requires confirmDestructive at apply", async () 
     templateVersion: "1.0.0",
     inputs: { bucketName: "b", accountId: "a" },
   });
+  // A template `requiresConfirmation` change stays `succeeded` (it is gated by
+  // `confirmDestructive` at apply, NOT by a recorded approval), so the persisted
+  // status is `succeeded` and the read projection derives `waiting_approval`.
   expect(planRun.status).toEqual("succeeded");
   expect("templateBinding" in planRun).toBe(false);
   expect(

@@ -63,12 +63,15 @@ const PLAN_STATUS_TABLE: ReadonlyArray<
 > = [
   ["queued", false, "queued"],
   ["running", false, "running"],
+  // `waiting_approval` is now a PERSISTED status; it passes through.
+  ["waiting_approval", false, "waiting_approval"],
   ["succeeded", false, "succeeded"],
+  // Back-compat: a legacy row persisted `succeeded` that the caller still
+  // observes as awaiting approval is mapped to `waiting_approval`.
   ["succeeded", true, "waiting_approval"],
-  ["blocked", true, "waiting_approval"],
-  ["blocked", false, "failed"],
   ["failed", false, "failed"],
   ["cancelled", false, "cancelled"],
+  ["expired", false, "expired"],
 ];
 
 for (const [internal, awaiting, expected] of PLAN_STATUS_TABLE) {
@@ -80,6 +83,16 @@ for (const [internal, awaiting, expected] of PLAN_STATUS_TABLE) {
     expect(run.type).toBe("plan");
   });
 }
+
+// A legacy row persisted `status: "blocked"` (before the unify) coerces to
+// `failed` on projection — the read model never surfaces the retired status.
+test("plan status legacy blocked coerces to failed", () => {
+  const run = projectPlanRun(
+    planRun({ status: "blocked" as unknown as PlanRun["status"] }),
+    { awaitingApproval: false },
+  );
+  expect(run.status).toBe("failed");
+});
 
 test("projectPlanRun maps a destroy plan to destroy_plan", () => {
   const run = projectPlanRun(
@@ -189,7 +202,7 @@ function billingAuditEvent(
 test("projectPlanRunCost surfaces an enforce-mode credit shortfall as blocked", () => {
   const cost = projectPlanRunCost(
     planRun({
-      status: "blocked",
+      status: "failed",
       policy: {
         status: "blocked",
         reasons: [
@@ -247,7 +260,7 @@ test("projectPlanRunCost surfaces a reserved plan as non-blocked with no shortfa
 test("projectPlanRunCost reports a billing-plan limit reason as blocked under enforce", () => {
   const cost = projectPlanRunCost(
     planRun({
-      status: "blocked",
+      status: "failed",
       policy: {
         status: "blocked",
         reasons: [
@@ -287,7 +300,7 @@ test("projectPlanRunCost does not block a showback-mode plan even when policy bl
   // policy block) still reports blocked=false for the billing surface.
   const cost = projectPlanRunCost(
     planRun({
-      status: "blocked",
+      status: "failed",
       policy: {
         status: "blocked",
         reasons: [

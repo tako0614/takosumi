@@ -59,10 +59,9 @@ export class RunQueryService {
 
   /**
    * Resolves a run id to the unified §6.8 {@link Run} projection, looking across
-   * the PlanRun / ApplyRun / SourceSyncRun ledgers by id prefix. A plan that is
-   * `succeeded` but still requires approval (template destructive confirmation,
-   * or its environment requires approval and it has not been approved) projects
-   * to `waiting_approval`.
+   * the PlanRun / ApplyRun / SourceSyncRun ledgers by id prefix. `waiting_approval`
+   * is now a PERSISTED status (an approval gate parks the plan there at
+   * completion); the projection reads it back directly.
    */
   async getRun(id: string): Promise<Run> {
     requireNonEmptyString(id, "runId");
@@ -224,24 +223,24 @@ export class RunQueryService {
 
   /**
    * Whether a plan run is parked awaiting an explicit approval before its apply
-   * may proceed (§25 action policy). A succeeded, un-applied, un-approved plan
-   * awaits approval when:
-   *   - it is a destroy plan (spec §10.6 always-two-stage destroy / §25
-   *     `destroy: destroy flow`); OR
-   *   - the §25 action policy flagged a delete/replace change
-   *     (`requiresApproval`, recorded at plan completion); OR
-   *   - a template plan flagged a destructive change under
-   *     `requireExplicitConfirmation` (`requiresConfirmation`).
-   * The environment no longer gates approval on its own (the provisional
-   * "non-preview environments always require approval" rule is removed):
-   * approval is driven by the plan's actual changes.
+   * may proceed (§25 action policy). `waiting_approval` is now a PERSISTED status
+   * (the plan completion parks the plan there when it is a destroy plan, an
+   * action-policy delete/replace `requiresApproval` change, or a template
+   * destructive-confirmation change), so this is a pure read of the persisted
+   * status: a plan awaits approval iff it is still `waiting_approval` and has not
+   * already been approved/applied.
+   *
+   * A legacy row persisted `succeeded` (before the persisted-status change) that
+   * still carries an approval gate is also surfaced as awaiting approval, so old
+   * rows keep their two-stage behavior.
    */
   planAwaitsApproval(planRun: PlanRun): Promise<boolean> {
-    // A §19 drift_check is read-only and can never be applied (Phase 8): it never
-    // parks waiting_approval regardless of the changes it observed.
-    if (planRun.driftCheck === true) return Promise.resolve(false);
     if (planRun.appliedApplyRunId) return Promise.resolve(false);
     if (planRun.approval) return Promise.resolve(false);
+    if (planRun.status === "waiting_approval") return Promise.resolve(true);
+    // Back-compat for rows persisted `succeeded` before `waiting_approval` was a
+    // persisted status. A §19 drift_check is read-only and never parks.
+    if (planRun.driftCheck === true) return Promise.resolve(false);
     if (planRun.status !== "succeeded") return Promise.resolve(false);
     if (planRun.operation === "destroy") return Promise.resolve(true);
     if (planRun.requiresApproval === true) return Promise.resolve(true);

@@ -50,6 +50,7 @@ import type {
   RunnerProfile,
   StateSnapshot,
 } from "@takosumi/internal/deploy-control-api";
+import { coerceRunStatus } from "@takosumi/internal/deploy-control-api";
 import type {
   Source,
   SourceSnapshot,
@@ -254,11 +255,13 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   async getPlanRun(id: string): Promise<PlanRun | undefined> {
-    return await this.#getRun<PlanRun>(id, [
-      RUN_KIND_PLAN,
-      "destroy_plan",
-      "drift_check",
-    ]);
+    return coerceRunRowStatus(
+      await this.#getRun<PlanRun>(id, [
+        RUN_KIND_PLAN,
+        "destroy_plan",
+        "drift_check",
+      ]),
+    );
   }
 
   async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
@@ -276,7 +279,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   async getApplyRun(id: string): Promise<ApplyRun | undefined> {
-    return await this.#getRun<ApplyRun>(id, [RUN_KIND_APPLY, "destroy_apply"]);
+    return coerceRunRowStatus(
+      await this.#getRun<ApplyRun>(id, [RUN_KIND_APPLY, "destroy_apply"]),
+    );
   }
 
   /**
@@ -792,6 +797,29 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       d1UpsertStateSnapshotStmt(this.#orm, input.stateSnapshot),
       ...(input.outputSnapshot
         ? [d1UpsertOutputSnapshotStmt(this.#orm, input.outputSnapshot)]
+        : []),
+      // Commit-tail fold (S2): the succeeded ApplyRun + the applied PlanRun join
+      // the SAME atomic batch as the Deployment so a torn tail can no longer
+      // leave a stuck `running` run over a finished Deployment. The apply
+      // terminal clears its lease fence (lease_token = NULL); the plan patch is a
+      // plain row write (already terminal succeeded, no lease).
+      ...(input.applyRunTerminal
+        ? [
+            d1UpsertRunStmt(
+              this.#orm,
+              applyRunType(input.applyRunTerminal),
+              input.applyRunTerminal,
+            ),
+          ]
+        : []),
+      ...(input.planRunApplied
+        ? [
+            d1UpsertRunStmt(
+              this.#orm,
+              planRunType(input.planRunApplied),
+              input.planRunApplied,
+            ),
+          ]
         : []),
       this.#orm
         .update(schema.installations)
@@ -2306,6 +2334,52 @@ function d1UpsertDeploymentStmt(
     .insert(schema.deployments)
     .values(values)
     .onConflictDoUpdate({ target: schema.deployments.id, set: values });
+}
+
+/**
+ * Read-coerces a persisted PlanRun / ApplyRun's `status` to the unified
+ * RunStatus (RunStatus unify, S2). A legacy row written before the `blocked` →
+ * `failed` collapse stored `status: "blocked"`; this maps it to `failed` on read
+ * so old rows read back in the new model. Undefined passes through.
+ */
+function coerceRunRowStatus<R extends PlanRun | ApplyRun>(
+  run: R | undefined,
+): R | undefined {
+  if (!run || run.status !== ("blocked" as unknown as R["status"])) return run;
+  return { ...run, status: coerceRunStatus(run.status) } as R;
+}
+
+/**
+ * Batch-able §27 `runs` upsert (the commit-tail fold helper). Mirrors the
+ * `#putRun` column payload so a run written through the atomic batch is
+ * identical to one written through `putPlanRun` / `putApplyRun`. Both rows fed
+ * to this helper are TERMINAL (the succeeded ApplyRun and the apply-once PlanRun
+ * marker), so the lease fence is always nulled — the fold never re-stamps a live
+ * lease.
+ */
+function d1UpsertRunStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  type: string,
+  run: PlanRun | ApplyRun,
+) {
+  const values = {
+    id: run.id,
+    runGroupId: null,
+    spaceId: run.spaceId,
+    sourceId: null,
+    installationId: run.installationId ?? null,
+    environment: null,
+    type,
+    status: run.status,
+    leaseToken: null,
+    heartbeatAt: run.heartbeatAt ?? null,
+    runJson: run as unknown,
+    createdAt: String(run.createdAt),
+  };
+  return orm
+    .insert(schema.runs)
+    .values(values)
+    .onConflictDoUpdate({ target: schema.runs.id, set: values });
 }
 
 function d1UpsertStateSnapshotStmt(

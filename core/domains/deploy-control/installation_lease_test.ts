@@ -116,6 +116,78 @@ test("the lease is released even when the work throws", async () => {
   expect(after).toBe("ok");
 });
 
+test("renewLease extends a held lease (holder + token gated)", async () => {
+  let nowMs = 1000;
+  const coordination = new InMemoryInstallationCoordination({ now: () => nowMs });
+  const scope = installationLeaseScope("env_renew", "production");
+  const lease = await coordination.acquireLease({
+    scope,
+    holderId: "run_a",
+    ttlMs: 100,
+  });
+  expect(lease.acquired).toBe(true);
+
+  // Renew before expiry pushes the deadline out; the lease stays the SAME token.
+  nowMs += 50;
+  const renewed = await coordination.renewLease({
+    scope,
+    holderId: "run_a",
+    token: lease.token,
+    ttlMs: 100,
+  });
+  expect(renewed.acquired).toBe(true);
+  expect(renewed.token).toBe(lease.token);
+
+  // Past the ORIGINAL deadline (1000 + 100) but within the renewed window: still
+  // busy for a different holder, proving the renewal extended the lease.
+  nowMs += 60; // now 1110 > original 1100, < renewed 1150
+  const busy = await coordination.acquireLease({
+    scope,
+    holderId: "run_b",
+    ttlMs: 100,
+  });
+  expect(busy.acquired).toBe(false);
+});
+
+test("renewLease fails closed for a non-holder, a stale token, or an expired lease", async () => {
+  let nowMs = 1000;
+  const coordination = new InMemoryInstallationCoordination({ now: () => nowMs });
+  const scope = installationLeaseScope("env_renew2", "production");
+  const lease = await coordination.acquireLease({
+    scope,
+    holderId: "run_a",
+    ttlMs: 100,
+  });
+
+  // Wrong token -> not renewed (never mints a fresh lease).
+  const wrongToken = await coordination.renewLease({
+    scope,
+    holderId: "run_a",
+    token: "not-the-token",
+    ttlMs: 100,
+  });
+  expect(wrongToken.acquired).toBe(false);
+
+  // Wrong holder -> not renewed.
+  const wrongHolder = await coordination.renewLease({
+    scope,
+    holderId: "run_b",
+    token: lease.token,
+    ttlMs: 100,
+  });
+  expect(wrongHolder.acquired).toBe(false);
+
+  // Expired lease -> not renewed (it may have been taken over).
+  nowMs += 200;
+  const expired = await coordination.renewLease({
+    scope,
+    holderId: "run_a",
+    token: lease.token,
+    ttlMs: 100,
+  });
+  expect(expired.acquired).toBe(false);
+});
+
 test("an expired lease can be re-acquired by a new holder", async () => {
   let nowMs = 1000;
   const coordination = new InMemoryInstallationCoordination({
