@@ -85,7 +85,7 @@ export interface RunAuditEvent {
 }
 
 /**
- * Body of `GET /api/runs/:runId/logs`. MVP: the run record's
+ * Body of `GET /internal/v1/runs/:runId/logs`. MVP: the run record's
  * structured diagnostics + the run-level audit trail (the per-run policy /
  * lease / dispatch trace). Logs pass through redaction (invariant 15); no
  * credential material or sensitive output values appear here.
@@ -96,7 +96,7 @@ export interface RunLogsResponse {
 }
 
 /**
- * Body of `GET /api/runs/:runId/events`. MVP: the run-level audit
+ * Body of `GET /internal/v1/runs/:runId/events`. MVP: the run-level audit
  * trail only.
  */
 export interface RunEventsResponse {
@@ -105,7 +105,7 @@ export interface RunEventsResponse {
 
 /**
  * Public, non-secret cost projection for a `plan` / `destroy_plan` Run
- * (`GET /api/runs/:runId/cost`). It surfaces the billing reservation values the
+ * (`GET /internal/v1/runs/:runId/cost`). It surfaces the billing reservation values the
  * controller ALREADY computed at plan time so a dashboard can explain, before
  * apply, why an apply would be blocked under `enforce` mode (insufficient
  * credits / a billing-plan limit). It carries no credit cost formula and no
@@ -141,7 +141,7 @@ export interface RunCostInfo {
   readonly reasons: readonly string[];
 }
 
-/** Body of `GET /api/runs/:runId/cost`. */
+/** Body of `GET /internal/v1/runs/:runId/cost`. */
 export interface RunCostResponse {
   readonly cost: RunCostInfo;
 }

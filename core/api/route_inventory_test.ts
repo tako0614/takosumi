@@ -67,26 +67,27 @@ test("previously-drifted all-mounted endpoints are present in both inventories",
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   const capPaths = capabilities.endpoints.map((e) => e.path);
 
-  // Public deployment routes must be represented in both inventories.
-  assert.ok(capPaths.includes("/api/deployments/:deploymentId"));
-  assert.ok(openapi.paths["/api/deployments/{deploymentId}"]?.get);
+  // Deployment routes must be represented in both inventories.
+  assert.ok(capPaths.includes("/internal/v1/deployments/:deploymentId"));
+  assert.ok(openapi.paths["/internal/v1/deployments/{deploymentId}"]?.get);
   assert.ok(
     capPaths.includes(
-      "/api/deployments/:deploymentId/rollback-plan",
+      "/internal/v1/deployments/:deploymentId/rollback-plan",
     ),
   );
   assert.ok(
-    openapi.paths["/api/deployments/{deploymentId}/rollback-plan"]?.post,
+    openapi.paths["/internal/v1/deployments/{deploymentId}/rollback-plan"]
+      ?.post,
   );
 
   // Optional operator artifact route appears when the artifact family is mounted.
-  assert.ok(capPaths.includes("/v1/artifacts/kinds"));
-  assert.ok(openapi.paths["/v1/artifacts/kinds"]?.get);
+  assert.ok(capPaths.includes("/internal/v1/artifacts/kinds"));
+  assert.ok(openapi.paths["/internal/v1/artifacts/kinds"]?.get);
 
   // BUG FIX: the runtime-agent gateway manifest was missing from capabilities.
   assert.ok(
     capPaths.includes(
-      "/api/internal/v1/runtime/agents/:agentId/gateway-manifest",
+      "/internal/v1/runtime/agents/:agentId/gateway-manifest",
     ),
   );
 });
@@ -137,15 +138,20 @@ test("all-mounted public inventory keeps retired internal ledger routes hidden",
     ALL_MOUNTED,
   );
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  // The internal ledger seam (plan-runs / apply-runs / runner-profiles /
+  // deployment-outputs) is mounted under `/internal/v1` but is NOT part of the
+  // public descriptor inventory, so it must never appear in capabilities /
+  // openapi. The `/api/public/v1/*` and bare `/v1/deployments` entries are
+  // pre-v1 retired names that must also never reappear.
   const retiredPaths = [
     "/api/public/v1/capabilities",
     "/api/public/v1/deployments",
     "/v1/deployments",
-    "/v1/plan-runs",
-    "/v1/apply-runs",
-    "/v1/runner-profiles",
-    "/v1/installations/:installationId/deployment-outputs",
-    "/v1/installations/{installationId}/deployment-outputs",
+    "/internal/v1/plan-runs",
+    "/internal/v1/apply-runs",
+    "/internal/v1/runner-profiles",
+    "/internal/v1/installations/:installationId/deployment-outputs",
+    "/internal/v1/installations/{installationId}/deployment-outputs",
   ] as const;
 
   const capabilityPaths = new Set(capabilities.endpoints.map((e) => e.path));
@@ -291,7 +297,11 @@ test("mountedEndpoints gates families and always includes process endpoints", ()
   const onlyRuntimeAgent = mountedEndpoints({
     runtimeAgentRoutesMounted: true,
   });
-  assert.ok(onlyRuntimeAgent.some((e) => e.path.startsWith("/api/internal")));
+  assert.ok(
+    onlyRuntimeAgent.some((e) =>
+      e.path.startsWith("/internal/v1/runtime/agents")
+    ),
+  );
   assert.ok(!onlyRuntimeAgent.some((e) => e.path === "/metrics"));
 });
 

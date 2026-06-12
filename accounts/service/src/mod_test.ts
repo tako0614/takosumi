@@ -403,7 +403,7 @@ test("accounts handler proxies installation PlanRun to deployControl", async () 
       fetch: (input, init) => {
         const request = new Request(input, init);
         proxiedRequests.push(request);
-        if (new URL(request.url).pathname === "/v1/plan-runs/plan_core_apply") {
+        if (new URL(request.url).pathname === "/internal/v1/plan-runs/plan_core_apply") {
           return Promise.resolve(
             Response.json({
               planRun: {
@@ -478,7 +478,7 @@ test("accounts handler proxies installation PlanRun to deployControl", async () 
   expect((await response.json()).planDigest).toEqual("sha256:abc");
   expect(proxiedRequests.length).toEqual(1);
   expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/v1/plan-runs",
+    "http://takosumi.internal:8788/internal/v1/plan-runs",
   );
   expect(proxiedRequests[0].headers.get("authorization")).toEqual(
     "Bearer deploy-control-secret",
@@ -507,7 +507,7 @@ test("accounts handler applies installation through space deployControl when con
       fetch: (input, init) => {
         const request = new Request(input, init);
         proxiedRequests.push(request);
-        if (new URL(request.url).pathname === "/v1/plan-runs/plan_core_apply") {
+        if (new URL(request.url).pathname === "/internal/v1/plan-runs/plan_core_apply") {
           return Promise.resolve(
             Response.json({
               planRun: {
@@ -648,13 +648,13 @@ test("accounts handler applies installation through space deployControl when con
   ).toEqual(["installation.created", "installation.activated-http-domain"]);
   expect(proxiedRequests.length).toEqual(2);
   expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/v1/plan-runs/plan_core_apply",
+    "http://takosumi.internal:8788/internal/v1/plan-runs/plan_core_apply",
   );
   expect(proxiedRequests[0].headers.get("authorization")).toEqual(
     "Bearer deploy-control-secret",
   );
   expect(proxiedRequests[1].url).toEqual(
-    "http://takosumi.internal:8788/v1/apply-runs",
+    "http://takosumi.internal:8788/internal/v1/apply-runs",
   );
   expect((await proxiedRequests[1].json()).planRunId).toEqual(
     "plan_core_apply",
@@ -718,7 +718,7 @@ test("accounts handler applies local source through space deployControl with loc
       fetch: (input, init) => {
         const request = new Request(input, init);
         proxiedRequests.push(request);
-        if (new URL(request.url).pathname === "/v1/plan-runs/plan_core_local") {
+        if (new URL(request.url).pathname === "/internal/v1/plan-runs/plan_core_local") {
           return Promise.resolve(
             Response.json({
               planRun: {
@@ -832,10 +832,10 @@ test("accounts handler applies local source through space deployControl with loc
   );
   expect(proxiedRequests.length).toEqual(2);
   expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/v1/plan-runs/plan_core_local",
+    "http://takosumi.internal:8788/internal/v1/plan-runs/plan_core_local",
   );
   expect(proxiedRequests[1].url).toEqual(
-    "http://takosumi.internal:8788/v1/apply-runs",
+    "http://takosumi.internal:8788/internal/v1/apply-runs",
   );
   expect((await proxiedRequests[1].json()).planRunId).toEqual(
     "plan_core_local",
@@ -875,7 +875,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
         const request = new Request(input, init);
         proxiedRequests.push(request);
         if (
-          new URL(request.url).pathname === "/v1/plan-runs/plan_dashboard_apply"
+          new URL(request.url).pathname === "/internal/v1/plan-runs/plan_dashboard_apply"
         ) {
           return Promise.resolve(
             Response.json({
@@ -4648,7 +4648,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
           authorization: new Headers(requestInit?.headers).get("authorization"),
           body,
         });
-        if (path === "/v1/installations/inst_core_revision") {
+        if (path === "/internal/v1/installations/inst_core_revision") {
           return Promise.resolve(
             Response.json({
               installation: {
@@ -4670,7 +4670,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
             }),
           );
         }
-        if (path === "/v1/plan-runs") {
+        if (path === "/internal/v1/plan-runs") {
           const source =
             typeof body.source === "object" &&
             body.source !== null &&
@@ -4721,7 +4721,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
             }),
           );
         }
-        if (path.startsWith("/v1/plan-runs/")) {
+        if (path.startsWith("/internal/v1/plan-runs/")) {
           const planRunId = decodeURIComponent(path.split("/").pop() ?? "");
           const rollbackPlan = planRunId.includes("v123");
           const ref = rollbackPlan ? "v1.2.3" : "v1.2.4";
@@ -4766,7 +4766,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
             }),
           );
         }
-        if (path === "/v1/apply-runs") {
+        if (path === "/internal/v1/apply-runs") {
           const planRunId =
             typeof body.planRunId === "string" ? body.planRunId : "";
           const rollbackApply = planRunId.includes("v123");
@@ -4835,7 +4835,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
             ),
           );
         }
-        if (path === "/v1/installations/inst_core_revision/deployments") {
+        if (path === "/internal/v1/installations/inst_core_revision/deployments") {
           return Promise.resolve(
             Response.json({
               deployments: [
@@ -4969,13 +4969,13 @@ test("accounts handler brokers deployment and rollback through space deployContr
     rolledBack.event.payload.coreDeployment.rollback.targetDeploymentId,
   ).toEqual("dep_old");
   expect(upstreamCalls.map((call) => call.path)).toEqual([
-    "/v1/installations/inst_core_revision",
-    "/v1/plan-runs",
-    "/v1/plan-runs/plan_v124",
-    "/v1/apply-runs",
-    "/v1/installations/inst_core_revision/deployments",
-    "/v1/plan-runs/plan_v123",
-    "/v1/apply-runs",
+    "/internal/v1/installations/inst_core_revision",
+    "/internal/v1/plan-runs",
+    "/internal/v1/plan-runs/plan_v124",
+    "/internal/v1/apply-runs",
+    "/internal/v1/installations/inst_core_revision/deployments",
+    "/internal/v1/plan-runs/plan_v123",
+    "/internal/v1/apply-runs",
   ]);
   expect(upstreamCalls.map((call) => call.authorization)).toEqual([
     "Bearer deploy-control-secret",
@@ -8724,7 +8724,7 @@ test("accounts handler proxies Connection create to deployControl with space own
   expect(response.status).toEqual(201);
   expect(proxiedRequests.length).toEqual(1);
   expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/api/connections/cloudflare/token",
+    "http://takosumi.internal:8788/internal/v1/connections/cloudflare/token",
   );
   expect(proxiedRequests[0].headers.get("authorization")).toEqual(
     "Bearer deploy-control-secret",
@@ -8811,7 +8811,7 @@ test("accounts handler proxies Connection list with the spaceId query", async ()
   expect(response.status).toEqual(200);
   expect(proxiedRequests.length).toEqual(1);
   expect(proxiedRequests[0].url).toEqual(
-    "http://takosumi.internal:8788/api/connections?spaceId=space_conn_1",
+    "http://takosumi.internal:8788/internal/v1/connections?spaceId=space_conn_1",
   );
 });
 
@@ -8863,8 +8863,8 @@ test("accounts handler resolves Connection spaceId before forwarding delete", as
 
   expect(response.status).toEqual(204);
   expect(proxiedPaths).toEqual([
-    "GET /api/connections/conn_del",
-    "POST /api/connections/conn_del/revoke",
+    "GET /internal/v1/connections/conn_del",
+    "POST /internal/v1/connections/conn_del/revoke",
   ]);
 });
 

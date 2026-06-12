@@ -24,14 +24,14 @@ test("Deploy Control API v1 exposes the OpenTofu deploy-control endpoint templat
     INSTALLATION_DEPLOYMENTS_PATH("{id}"),
     INSTALLATION_DEPLOYMENT_OUTPUTS_PATH("{id}"),
   ]).toEqual([
-    "/v1/runner-profiles",
-    "/v1/plan-runs",
-    "/v1/plan-runs/%7Bid%7D",
-    "/v1/apply-runs",
-    "/v1/apply-runs/%7Bid%7D",
-    "/v1/installations/%7Bid%7D",
-    "/v1/installations/%7Bid%7D/deployments",
-    "/v1/installations/%7Bid%7D/deployment-outputs",
+    "/internal/v1/runner-profiles",
+    "/internal/v1/plan-runs",
+    "/internal/v1/plan-runs/%7Bid%7D",
+    "/internal/v1/apply-runs",
+    "/internal/v1/apply-runs/%7Bid%7D",
+    "/internal/v1/installations/%7Bid%7D",
+    "/internal/v1/installations/%7Bid%7D/deployments",
+    "/internal/v1/installations/%7Bid%7D/deployment-outputs",
   ]);
 });
 

@@ -57,9 +57,9 @@ const HEADERS = {
   "content-type": "application/json",
 } as const;
 
-test("POST /api/sources requires a bearer (401)", async () => {
+test("POST /internal/v1/sources requires a bearer (401)", async () => {
   const app = await makeApp();
-  const response = await app.request("/api/sources", {
+  const response = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -71,9 +71,9 @@ test("POST /api/sources requires a bearer (401)", async () => {
   expect(response.status).toBe(401);
 });
 
-test("POST /api/sources rejects an unknown field (400)", async () => {
+test("POST /internal/v1/sources rejects an unknown field (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/api/sources", {
+  const response = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -87,9 +87,9 @@ test("POST /api/sources rejects an unknown field (400)", async () => {
   expect((await response.json()).error.code).toBe("invalid_argument");
 });
 
-test("POST /api/sources enforces space scope (403)", async () => {
+test("POST /internal/v1/sources enforces space scope (403)", async () => {
   const app = await makeApp();
-  const response = await app.request("/api/sources", {
+  const response = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -101,9 +101,9 @@ test("POST /api/sources enforces space scope (403)", async () => {
   expect(response.status).toBe(403);
 });
 
-test("POST /api/sources rejects a forbidden URL (400)", async () => {
+test("POST /internal/v1/sources rejects a forbidden URL (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/api/sources", {
+  const response = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -118,7 +118,7 @@ test("POST /api/sources rejects a forbidden URL (400)", async () => {
 
 test("source register -> sync -> snapshots flow", async () => {
   const app = await makeApp();
-  const created = await app.request("/api/sources", {
+  const created = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -133,26 +133,26 @@ test("source register -> sync -> snapshots flow", async () => {
   expect(createdBody.hookSecret).toBe("whk_route_secret");
   const sourceId = createdBody.source.id;
 
-  const list = await app.request("/api/sources?spaceId=space_1", {
+  const list = await app.request("/internal/v1/sources?spaceId=space_1", {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect((await list.json()).sources).toHaveLength(1);
 
-  const got = await app.request(`/api/sources/${sourceId}`, {
+  const got = await app.request(`/internal/v1/sources/${sourceId}`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(got.status).toBe(200);
   // The hook secret hash is never projected.
   expect(await got.text()).not.toContain("hookSecretHash");
 
-  const synced = await app.request(`/api/sources/${sourceId}/sync`, {
+  const synced = await app.request(`/internal/v1/sources/${sourceId}/sync`, {
     method: "POST",
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(synced.status).toBe(201);
   expect((await synced.json()).run.status).toBe("queued");
 
-  const snaps = await app.request(`/api/sources/${sourceId}/snapshots`, {
+  const snaps = await app.request(`/internal/v1/sources/${sourceId}/snapshots`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(snaps.status).toBe(200);
@@ -161,7 +161,7 @@ test("source register -> sync -> snapshots flow", async () => {
 
 test("source compatibility-check creates and reads a Capsule report", async () => {
   const { app, store } = await makeAppWithStore();
-  const created = await app.request("/api/sources", {
+  const created = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -188,7 +188,7 @@ test("source compatibility-check creates and reads a Capsule report", async () =
   await store.putSourceSnapshot(snapshot);
 
   const checked = await app.request(
-    `/api/sources/${source.id}/compatibility-check`,
+    `/internal/v1/sources/${source.id}/compatibility-check`,
     {
       method: "POST",
       headers: HEADERS,
@@ -229,13 +229,13 @@ test("source compatibility-check creates and reads a Capsule report", async () =
   expect(checkedBody.report.normalizedArtifactKey).toBeUndefined();
 
   const got = await app.request(
-    `/api/compatibility-reports/${checkedBody.report.id}`,
+    `/internal/v1/compatibility-reports/${checkedBody.report.id}`,
     { headers: { authorization: "Bearer scoped-token" } },
   );
   expect(got.status).toBe(200);
   expect((await got.json()).report.id).toBe(checkedBody.report.id);
 
-  const run = await app.request(`/api/runs/${compatibilityRunId}`, {
+  const run = await app.request(`/internal/v1/runs/${compatibilityRunId}`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(run.status).toBe(200);
@@ -246,20 +246,20 @@ test("source compatibility-check creates and reads a Capsule report", async () =
     compatibilityReportId: checkedBody.report.id,
   });
 
-  const logs = await app.request(`/api/runs/${compatibilityRunId}/logs`, {
+  const logs = await app.request(`/internal/v1/runs/${compatibilityRunId}/logs`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(logs.status).toBe(200);
   expect(await logs.json()).toEqual({ diagnostics: [], auditEvents: [] });
 
-  const events = await app.request(`/api/runs/${compatibilityRunId}/events`, {
+  const events = await app.request(`/internal/v1/runs/${compatibilityRunId}/events`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(events.status).toBe(200);
   expect(await events.json()).toEqual({ auditEvents: [] });
 
   const approve = await app.request(
-    `/api/runs/${compatibilityRunId}/approve`,
+    `/internal/v1/runs/${compatibilityRunId}/approve`,
     {
       method: "POST",
       headers: { authorization: "Bearer scoped-token" },
@@ -268,7 +268,7 @@ test("source compatibility-check creates and reads a Capsule report", async () =
   expect(approve.status).toBe(409);
   expect((await approve.json()).error.code).toBe("failed_precondition");
 
-  const cancel = await app.request(`/api/runs/${compatibilityRunId}/cancel`, {
+  const cancel = await app.request(`/internal/v1/runs/${compatibilityRunId}/cancel`, {
     method: "POST",
     headers: { authorization: "Bearer scoped-token" },
   });
@@ -276,7 +276,7 @@ test("source compatibility-check creates and reads a Capsule report", async () =
   expect((await cancel.json()).error.code).toBe("failed_precondition");
 });
 
-test("GET /api/compatibility-reports resolves owner from sourceSnapshot and enforces space scope", async () => {
+test("GET /internal/v1/compatibility-reports resolves owner from sourceSnapshot and enforces space scope", async () => {
   const { app, store } = await makeAppWithStore();
   await store.putSource({
     id: "src_denied00000001",
@@ -321,7 +321,7 @@ test("GET /api/compatibility-reports resolves owner from sourceSnapshot and enfo
   };
   await store.putCapsuleCompatibilityReport(report);
 
-  const got = await app.request(`/api/compatibility-reports/${report.id}`, {
+  const got = await app.request(`/internal/v1/compatibility-reports/${report.id}`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(got.status).toBe(403);
@@ -353,7 +353,7 @@ output "attachments_bucket" {
         },
       ]),
   });
-  const created = await app.request("/api/sources", {
+  const created = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -380,7 +380,7 @@ output "attachments_bucket" {
   await store.putSourceSnapshot(snapshot);
 
   const checked = await app.request(
-    `/api/sources/${source.id}/compatibility-check`,
+    `/internal/v1/sources/${source.id}/compatibility-check`,
     {
       method: "POST",
       headers: HEADERS,
@@ -397,9 +397,9 @@ output "attachments_bucket" {
   });
 });
 
-test("PATCH /api/sources updates fields", async () => {
+test("PATCH /internal/v1/sources updates fields", async () => {
   const app = await makeApp();
-  const created = await app.request("/api/sources", {
+  const created = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -409,7 +409,7 @@ test("PATCH /api/sources updates fields", async () => {
     }),
   });
   const { source } = await created.json();
-  const patched = await app.request(`/api/sources/${source.id}`, {
+  const patched = await app.request(`/internal/v1/sources/${source.id}`, {
     method: "PATCH",
     headers: HEADERS,
     body: JSON.stringify({ status: "disabled", defaultRef: "release" }),
@@ -422,15 +422,15 @@ test("PATCH /api/sources updates fields", async () => {
 
 test("source id with an unsupported shape is rejected (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/api/sources/not-a-source/snapshots", {
+  const response = await app.request("/internal/v1/sources/not-a-source/snapshots", {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(response.status).toBe(400);
 });
 
-test("GET /api/sources requires spaceId (400)", async () => {
+test("GET /internal/v1/sources requires spaceId (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/api/sources", {
+  const response = await app.request("/internal/v1/sources", {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(response.status).toBe(400);

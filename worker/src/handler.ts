@@ -1,4 +1,5 @@
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
+import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 import type { CloudflareWorkerEnv, QueueBatch } from "./bindings.ts";
 import {
   createServiceWorkerRequest,
@@ -143,8 +144,6 @@ function denyUnauthorizedCoordination(
 }
 
 function isRuntimeAgentPath(pathname: string): boolean {
-  return (
-    pathname === "/api/internal/v1/runtime/agents" ||
-    pathname.startsWith("/api/internal/v1/runtime/agents/")
-  );
+  const prefix = `${INTERNAL_V1_PREFIX}/runtime/agents`;
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
 }

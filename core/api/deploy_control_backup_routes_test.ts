@@ -58,36 +58,36 @@ const HEADERS = {
   "content-type": "application/json",
 } as const;
 
-test("POST /api/spaces/:spaceId/backups requires a bearer (401)", async () => {
+test("POST /internal/v1/spaces/:spaceId/backups requires a bearer (401)", async () => {
   const { app } = await makeApp();
-  const response = await app.request("/api/spaces/space_aaaaaaaa/backups", {
+  const response = await app.request("/internal/v1/spaces/space_aaaaaaaa/backups", {
     method: "POST",
     headers: { "content-type": "application/json" },
   });
   expect(response.status).toBe(401);
 });
 
-test("POST /api/spaces/:spaceId/backups enforces space scope (403)", async () => {
+test("POST /internal/v1/spaces/:spaceId/backups enforces space scope (403)", async () => {
   const { app } = await makeApp();
-  const response = await app.request("/api/spaces/space_bbbbbbbb/backups", {
+  const response = await app.request("/internal/v1/spaces/space_bbbbbbbb/backups", {
     method: "POST",
     headers: HEADERS,
   });
   expect(response.status).toBe(403);
 });
 
-test("POST /api/spaces/:spaceId/backups rejects a malformed spaceId (400)", async () => {
+test("POST /internal/v1/spaces/:spaceId/backups rejects a malformed spaceId (400)", async () => {
   const { app } = await makeApp();
-  const response = await app.request("/api/spaces/not-a-space/backups", {
+  const response = await app.request("/internal/v1/spaces/not-a-space/backups", {
     method: "POST",
     headers: HEADERS,
   });
   expect(response.status).toBe(400);
 });
 
-test("POST /api/spaces/:spaceId/backups creates a backup (201)", async () => {
+test("POST /internal/v1/spaces/:spaceId/backups creates a backup (201)", async () => {
   const { app, store } = await makeApp();
-  const response = await app.request("/api/spaces/space_aaaaaaaa/backups", {
+  const response = await app.request("/internal/v1/spaces/space_aaaaaaaa/backups", {
     method: "POST",
     headers: HEADERS,
   });
@@ -104,7 +104,7 @@ test("POST /api/spaces/:spaceId/backups creates a backup (201)", async () => {
   const listed = await store.listBackupRecords("space_aaaaaaaa");
   expect(listed.map((b) => b.id)).toEqual([body.backup.id]);
 
-  const runResponse = await app.request(`/api/runs/${body.backup.createdByRunId}`, {
+  const runResponse = await app.request(`/internal/v1/runs/${body.backup.createdByRunId}`, {
     headers: HEADERS,
   });
   expect(runResponse.status).toBe(200);
@@ -114,9 +114,9 @@ test("POST /api/spaces/:spaceId/backups creates a backup (201)", async () => {
   expect(runBody.run.spaceId).toBe("space_aaaaaaaa");
 });
 
-test("POST /api/installations/:installationId/backups creates a Space backup (201)", async () => {
+test("POST /internal/v1/installations/:installationId/backups creates a Space backup (201)", async () => {
   const { app } = await makeApp();
-  const response = await app.request("/api/installations/inst_aaaaaaaa/backups", {
+  const response = await app.request("/internal/v1/installations/inst_aaaaaaaa/backups", {
     method: "POST",
     headers: HEADERS,
   });
@@ -128,7 +128,7 @@ test("POST /api/installations/:installationId/backups creates a Space backup (20
   );
   expect(body.backup.createdByRunId).toBe("backup_0002");
 
-  const runResponse = await app.request(`/api/runs/${body.backup.createdByRunId}`, {
+  const runResponse = await app.request(`/internal/v1/runs/${body.backup.createdByRunId}`, {
     headers: HEADERS,
   });
   expect(runResponse.status).toBe(200);
@@ -138,7 +138,7 @@ test("POST /api/installations/:installationId/backups creates a Space backup (20
   expect(runBody.run.environment).toBe("production");
 });
 
-test("POST /api/installations/:installationId/backups enforces the Installation Space scope (403)", async () => {
+test("POST /internal/v1/installations/:installationId/backups enforces the Installation Space scope (403)", async () => {
   const { app, store } = await makeApp();
   await seedInstallationModel(store, {
     spaceId: "space_bbbbbbbb",
@@ -148,34 +148,34 @@ test("POST /api/installations/:installationId/backups enforces the Installation 
     installationId: "inst_bbbbbbbb",
     name: "other",
   });
-  const response = await app.request("/api/installations/inst_bbbbbbbb/backups", {
+  const response = await app.request("/internal/v1/installations/inst_bbbbbbbb/backups", {
     method: "POST",
     headers: HEADERS,
   });
   expect(response.status).toBe(403);
 });
 
-test("POST /api/installations/:installationId/backups rejects a malformed installationId (400)", async () => {
+test("POST /internal/v1/installations/:installationId/backups rejects a malformed installationId (400)", async () => {
   const { app } = await makeApp();
-  const response = await app.request("/api/installations/not-an-installation/backups", {
+  const response = await app.request("/internal/v1/installations/not-an-installation/backups", {
     method: "POST",
     headers: HEADERS,
   });
   expect(response.status).toBe(400);
 });
 
-test("GET /api/spaces/:spaceId/backups lists backups newest-first (200)", async () => {
+test("GET /internal/v1/spaces/:spaceId/backups lists backups newest-first (200)", async () => {
   const { app } = await makeApp();
-  await app.request("/api/spaces/space_aaaaaaaa/backups", {
+  await app.request("/internal/v1/spaces/space_aaaaaaaa/backups", {
     method: "POST",
     headers: HEADERS,
   });
-  await app.request("/api/spaces/space_aaaaaaaa/backups", {
+  await app.request("/internal/v1/spaces/space_aaaaaaaa/backups", {
     method: "POST",
     headers: HEADERS,
   });
 
-  const response = await app.request("/api/spaces/space_aaaaaaaa/backups", {
+  const response = await app.request("/internal/v1/spaces/space_aaaaaaaa/backups", {
     headers: HEADERS,
   });
   expect(response.status).toBe(200);
@@ -186,9 +186,9 @@ test("GET /api/spaces/:spaceId/backups lists backups newest-first (200)", async 
   }
 });
 
-test("GET /api/spaces/:spaceId/backups enforces space scope (403)", async () => {
+test("GET /internal/v1/spaces/:spaceId/backups enforces space scope (403)", async () => {
   const { app } = await makeApp();
-  const response = await app.request("/api/spaces/space_bbbbbbbb/backups", {
+  const response = await app.request("/internal/v1/spaces/space_bbbbbbbb/backups", {
     headers: HEADERS,
   });
   expect(response.status).toBe(403);
@@ -209,20 +209,20 @@ test("backup routes return 501 when the backups service is unwired", async () =>
     },
     requestCorrelation: false,
   });
-  const post = await app.request("/api/spaces/space_aaaaaaaa/backups", {
+  const post = await app.request("/internal/v1/spaces/space_aaaaaaaa/backups", {
     method: "POST",
     headers: HEADERS,
   });
   expect(post.status).toBe(501);
   const installationPost = await app.request(
-    "/api/installations/inst_aaaaaaaa/backups",
+    "/internal/v1/installations/inst_aaaaaaaa/backups",
     {
       method: "POST",
       headers: HEADERS,
     },
   );
   expect(installationPost.status).toBe(501);
-  const get = await app.request("/api/spaces/space_aaaaaaaa/backups", {
+  const get = await app.request("/internal/v1/spaces/space_aaaaaaaa/backups", {
     headers: HEADERS,
   });
   expect(get.status).toBe(501);
@@ -230,7 +230,7 @@ test("backup routes return 501 when the backups service is unwired", async () =>
 
 test("POST returns 501 when the artifact store seam is not wired", async () => {
   const { app } = await makeApp({ withArtifactStore: false });
-  const response = await app.request("/api/spaces/space_aaaaaaaa/backups", {
+  const response = await app.request("/internal/v1/spaces/space_aaaaaaaa/backups", {
     method: "POST",
     headers: HEADERS,
   });

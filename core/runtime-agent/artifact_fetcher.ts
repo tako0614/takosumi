@@ -1,6 +1,6 @@
 /**
  * `ArtifactFetcher` — handler-side port for retrieving DataAsset bytes from
- * an operator-mounted `/v1/artifacts` endpoint.
+ * an operator-mounted `/internal/v1/artifacts` endpoint.
  *
  * When the optional DataAsset extension is enabled, the dispatcher may include
  * an `ArtifactStoreLocator` (`baseUrl`, `token`) in `LifecycleApplyRequest`.
@@ -45,7 +45,7 @@ export interface ArtifactFetcher {
 }
 
 export interface HttpArtifactFetcherOptions {
-  /** Base URL for the artifact endpoint, including `/v1/artifacts`. */
+  /** Base URL for the artifact endpoint, including `/internal/v1/artifacts`. */
   readonly baseUrl: string;
   /** Bearer token shared with the service artifact store. */
   readonly token: string;

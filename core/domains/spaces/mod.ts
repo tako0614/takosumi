@@ -99,7 +99,7 @@ export class SpacesService {
 
   /**
    * Updates the mutable, non-identity fields of a Space (spec §30 `PATCH
-   * /api/spaces/:spaceId`). The handle, type, owner, and billing are immutable
+   * /internal/v1/spaces/:spaceId`). The handle, type, owner, and billing are immutable
    * here. Bumps `updatedAt`.
    */
   async updateSpace(

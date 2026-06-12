@@ -6,16 +6,17 @@
  * runtime handler. Credentials live ONLY on the runtime-agent host.
  *
  * Endpoints (runtime-agent HTTP API):
- *   POST /v1/lifecycle/apply
- *   POST /v1/lifecycle/destroy
- *   POST /v1/lifecycle/compensate
- *   POST /v1/lifecycle/describe
- *   GET  /v1/health
+ *   POST /internal/v1/lifecycle/apply
+ *   POST /internal/v1/lifecycle/destroy
+ *   POST /internal/v1/lifecycle/compensate
+ *   POST /internal/v1/lifecycle/describe
+ *   GET  /internal/v1/health
  *
  * Auth: bearer token shared between service and runtime-agent.
  */
 
 import type { JsonObject, JsonValue } from "./types.ts";
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
 /**
  * DataAsset descriptor carried over the compatibility `artifact` wire
@@ -23,7 +24,7 @@ import type { JsonObject, JsonValue } from "./types.ts";
  *
  * - `kind: "oci-image"` typically uses `uri` (e.g. `ghcr.io/me/api:v1`)
  * - operator-owned bundle kinds may use `hash` pointing at an object uploaded
- *   through the optional internal `POST /v1/artifacts` extension
+ *   through the optional internal `POST /internal/v1/artifacts` extension
  *
  * DataAsset / artifact handling is an optional operator extension, not an
  * public Deploy Control API concept. `kind` is intentionally open: operator handlers
@@ -31,7 +32,7 @@ import type { JsonObject, JsonValue } from "./types.ts";
  */
 export interface Artifact {
   readonly kind: string;
-  /** Content-addressed hash returned by `POST /v1/artifacts` (e.g. `sha256:abc…`). */
+  /** Content-addressed hash returned by `POST /internal/v1/artifacts` (e.g. `sha256:abc…`). */
   readonly hash?: string;
   /** External pointer (OCI registry URI, https URL, etc). */
   readonly uri?: string;
@@ -279,14 +280,18 @@ export interface LifecycleErrorBody {
 }
 
 /** HTTP path constants — single source of truth for service client + agent server. */
-export const LIFECYCLE_APPLY_PATH = "/v1/lifecycle/apply" as const;
-export const LIFECYCLE_DESTROY_PATH = "/v1/lifecycle/destroy" as const;
-export const LIFECYCLE_COMPENSATE_PATH = "/v1/lifecycle/compensate" as const;
-export const LIFECYCLE_DESCRIBE_PATH = "/v1/lifecycle/describe" as const;
-export const LIFECYCLE_HEALTH_PATH = "/v1/health" as const;
+export const LIFECYCLE_APPLY_PATH =
+  `${INTERNAL_V1_PREFIX}/lifecycle/apply` as const;
+export const LIFECYCLE_DESTROY_PATH =
+  `${INTERNAL_V1_PREFIX}/lifecycle/destroy` as const;
+export const LIFECYCLE_COMPENSATE_PATH =
+  `${INTERNAL_V1_PREFIX}/lifecycle/compensate` as const;
+export const LIFECYCLE_DESCRIBE_PATH =
+  `${INTERNAL_V1_PREFIX}/lifecycle/describe` as const;
+export const LIFECYCLE_HEALTH_PATH = `${INTERNAL_V1_PREFIX}/health` as const;
 
 /** Optional operator DataAsset/artifact extension endpoint base path. */
-export const ARTIFACTS_BASE_PATH = "/v1/artifacts" as const;
+export const ARTIFACTS_BASE_PATH = `${INTERNAL_V1_PREFIX}/artifacts` as const;
 
 /** Auth header convention (Bearer <token>). Token is shared via TAKOSUMI_AGENT_TOKEN env. */
 export const LIFECYCLE_AUTH_HEADER = "authorization" as const;

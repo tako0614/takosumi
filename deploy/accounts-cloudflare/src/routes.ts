@@ -1,3 +1,8 @@
+import {
+  ACCOUNTS_IDENTITY_PREFIX,
+  API_V1_PREFIX,
+} from "takosumi-contract/api-surface";
+
 export function isWorkerLocalPath(pathname: string): boolean {
   return normalizePathname(pathname) === "/healthz";
 }
@@ -9,20 +14,24 @@ export function isWorkerLocalPath(pathname: string): boolean {
 // NOT in this set: the SPA owns the dashboard UI now that the former
 // server-HTML dashboard has been removed from accounts-service.)
 //
+// Derived from the prefix registry (`takosumi-contract/api-surface`) so this
+// hand-maintained classifier cannot drift from the canonical taxonomy:
+//   - `API_V1_PREFIX` ("/api/v1") — the edge-public deploy-control surface.
+//     NOTE it is NOT under `/v1`, so it needs its own entry or the SPA
+//     `not_found_handling = single-page-application` fallback would shadow it.
+//   - `ACCOUNTS_IDENTITY_PREFIX` ("/v1") — covers /v1/account, /v1/auth,
+//     /v1/billing, /v1/installations, /v1/connections.
+//   - the OIDC issuer surfaces (/oauth, /.well-known, /start). `/install` and
+//     `/hooks` stay SPA-owned / platform-worker-owned and are intentionally
+//     excluded here.
+//   - "/internal" — the in-process / container-callback seam (covers the
+//     unified `/internal/v1` seam and the workload-platform-services callback).
+//
 // This set must cover EVERY non-`/dashboard` path the accounts handler routes,
-// or `not_found_handling = single-page-application` would shadow it with
-// index.html. The complete handler surface (see
-// `packages/accounts-service/src/mod.ts` dispatch + contract path constants) is:
-//   /.well-known/openid-configuration, /oauth/*, /start,
-//   /v1/account/*, /v1/billing/*, /v1/auth/* (passkeys + upstream OAuth
-//   authorize/callback), /v1/installations*, and
-//   /internal/workload-platform-services/resolve.
+// or the SPA fallback would shadow it with index.html.
 export const ACCOUNTS_API_PREFIXES = [
-  // The edge-public deploy-control surface. Must be matched here or the SPA
-  // `not_found_handling = single-page-application` fallback would shadow it
-  // with index.html. NOTE `/api/v1` is NOT under `/v1`, so it needs its own entry.
-  "/api/v1",
-  "/v1",
+  API_V1_PREFIX,
+  ACCOUNTS_IDENTITY_PREFIX,
   "/oauth",
   "/.well-known",
   "/start",

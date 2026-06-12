@@ -1318,7 +1318,8 @@ function connectionsNotConfigured(): Response {
  * Account-plane Connections collection route (create + list). The inbound
  * account-plane path is owned by the accounts contract; the create is forwarded
  * to the deploy-control §30 connection-creation subroute selected from the body
- * (`/api/connections/...`) and the list to `GET /api/connections?spaceId=...`.
+ * (`/internal/v1/connections/...`) and the list to
+ * `GET /internal/v1/connections?spaceId=...`.
  *
  * Both gate on space ownership: the authenticated subject must own the
  * LedgerAccount that owns the spaceId named in the body (create) or query

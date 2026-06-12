@@ -188,7 +188,7 @@ export interface EnqueueLongRunningOperationInput {
 /**
  * Input the service uses to issue a signed {@link SignedGatewayManifest} the
  * remote runtime-agent will pin at startup. The agent calls
- * `GET /api/internal/v1/runtime/agents/:agentId/gateway-manifest` and the
+ * `GET /internal/v1/runtime/agents/:agentId/gateway-manifest` and the
  * route delegates to {@link RuntimeAgentRegistry.issueGatewayManifest}.
  */
 export interface IssueGatewayManifestInput {
