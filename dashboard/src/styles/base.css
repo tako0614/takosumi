@@ -1,0 +1,163 @@
+/*
+ * base.css — global reset + dark base for the Takosumi dashboard SPA.
+ *
+ * Ported from takosumi/website/src/styles/global.css (the reset / body / link /
+ * code / focus-visible / reduced-motion / skip-link bits) plus the dashboard's
+ * own a11y helpers. The dashboard is dark-only; the canonical dark tokens live
+ * in styles/tokens.css.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
+html {
+  scroll-behavior: smooth;
+}
+body {
+  font-family: var(--tg-font-body);
+  background: var(--tg-bg);
+  color: var(--tg-fg);
+  line-height: var(--tg-lh-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "ss01", "ss02";
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+  transition: color 120ms ease;
+}
+a:hover {
+  color: var(--tg-accent);
+}
+
+::selection {
+  background: var(--tg-accent);
+  color: #fff;
+}
+
+code,
+pre {
+  font-family: var(--tg-font-mono);
+}
+code {
+  font-size: 0.92em;
+  background: var(--tg-code-bg);
+  color: var(--tg-code-fg);
+  padding: 0.12em 0.42em;
+  border-radius: 5px;
+}
+pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.94em;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+main {
+  display: block;
+}
+
+/* Gradient text accent (brand). */
+.grad-text {
+  background: linear-gradient(
+    120deg,
+    var(--tg-grad-from),
+    var(--tg-grad-mid) 55%,
+    var(--tg-grad-to)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Muted-text helper used across views. */
+.muted {
+  color: var(--tg-fg-muted);
+}
+.link {
+  color: var(--tg-accent);
+}
+.link:hover {
+  text-decoration: underline;
+}
+
+/* ===== Focus ring (WCAG 2.4.7) ===== */
+:focus-visible {
+  outline: 2px solid var(--tg-accent);
+  outline-offset: 3px;
+  border-radius: var(--tg-r-sm);
+}
+
+/* ===== Skip-to-content (WCAG 2.4.1) — hidden until focused ===== */
+.skip-link {
+  position: absolute;
+  left: var(--tg-s-2);
+  top: -56px;
+  z-index: 1000;
+  padding: var(--tg-s-2) var(--tg-s-4);
+  background: var(--tg-accent);
+  color: #fff;
+  border-radius: var(--tg-r-md);
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+  transition: top 120ms ease;
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  top: var(--tg-s-2);
+  text-decoration: none;
+  color: #fff;
+}
+
+/* Visually-hidden but accessible to assistive tech. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ===== Skeleton shimmer (shared by Skeleton component + view skeletons) ===== */
+@keyframes tg-skel {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}

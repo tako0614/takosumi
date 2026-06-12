@@ -3,11 +3,15 @@ import Sidebar from "./Sidebar.tsx";
 import TopBar from "./TopBar.tsx";
 import MobileTabs from "./MobileTabs.tsx";
 import { ConfirmDialogRenderer } from "../../../../components/ConfirmDialogRenderer.tsx";
-// The ported dashboard stylesheet (page-header / detail-section / kv-list /
-// account-nav / app-card / data-table / sign-in-* / revoke-confirm / shell
-// chrome classes). Imported once here so every account/installations screen
-// that wraps in <AppShell> gets the styles.
-import "../../account.css";
+import InkBackdrop from "../../../../components/ui/InkBackdrop.tsx";
+// Dark design system (tokens → base → components → shell → views). Imported once
+// here so every account/installations screen wrapped in <AppShell> gets the
+// styles even when the dashboard is consumed via the in-process takos-web alias.
+import "../../../../styles/tokens.css";
+import "../../../../styles/base.css";
+import "../../../../styles/components.css";
+import "../../../../styles/shell.css";
+import "../../../../styles/views.css";
 
 interface Props {
   children: JSX.Element;
@@ -26,6 +30,7 @@ export default function AppShell(props: Props) {
       <div class="app-shell-main">
         <TopBar />
         <main class="app-shell-content" id="main" tabindex="-1">
+          <InkBackdrop density="shell" />
           {props.children}
         </main>
       </div>

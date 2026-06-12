@@ -3,15 +3,21 @@ import { lazy } from "solid-js";
 import { render } from "solid-js/web";
 import { Navigate, Route, Router } from "@solidjs/router";
 
-// Web fonts referenced by account.css (`--tg-font-body` / `--tg-font-mono`).
+// Web fonts referenced by the design tokens (`--tg-font-body` / `--tg-font-mono`).
 import "@fontsource-variable/bricolage-grotesque";
 import "@fontsource-variable/jetbrains-mono";
 
-// The ported dashboard stylesheet (`--tg-*` tokens + shell/page classes). It is
-// also imported once from account/components/shell/AppShell.tsx, but importing
-// it here guarantees the tokens are present on the public `/sign-in` screens
-// that render before any AppShell-wrapped screen mounts.
-import "./views/account/account.css";
+// Dark "Splatoon ink" design system, split out of the retired account.css:
+//   tokens (canonical dark palette) → base (reset/body/a11y) → components
+//   (shared + ui/* classes) → shell (app chrome + auth) → views (per-view rules).
+// Imported once here so the tokens are present on the public `/sign-in` screens
+// that render before any AppShell-wrapped screen mounts. AppShell re-imports the
+// same files (idempotent) for the in-process takos-web alias path.
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./styles/components.css";
+import "./styles/shell.css";
+import "./styles/views.css";
 
 const AccountIndexView = lazy(() =>
   import("./views/account/AccountMiscViews.tsx").then((m) => ({

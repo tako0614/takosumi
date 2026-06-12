@@ -14,6 +14,7 @@ import { useNavigate, useSearchParams } from "@solidjs/router";
 import AppShell from "./components/shell/AppShell.tsx";
 import Page from "./components/auth/Page.tsx";
 import InkdropMark from "./components/brand/InkdropMark.tsx";
+import InkBackdrop from "../../components/ui/InkBackdrop.tsx";
 import { Icons } from "../../lib/Icons.tsx";
 import { ApiError, type InstallationPlanResponse, rpc } from "./lib/api.ts";
 import {
@@ -546,6 +547,7 @@ export function SignInView() {
   useDocumentTitle("サインイン");
   return (
     <div class="auth-page">
+      <InkBackdrop density="auth" />
       <a href="/" class="auth-brand">
         <InkdropMark size={32} />
         <span class="auth-brand-text">Takosumi</span>
