@@ -238,7 +238,7 @@ import {
   requiredProvidersFromCompatibilityReport,
   withDefaultProviderSupplyChainPolicy,
 } from "./provider_policy.ts";
-import { classifyDriftResourceChanges } from "./drift.ts";
+import { DriftService } from "./drift_service.ts";
 import { RunCredentialBroker } from "./run_credential_broker.ts";
 
 // Re-export the shared error primitive and the four decomposed concerns so the
@@ -946,6 +946,7 @@ export class OpenTofuDeploymentController {
   readonly #deployments: DeploymentQuery;
   readonly #billing: BillingService;
   readonly #usage: UsageReportingService;
+  readonly #drift: DriftService;
   readonly #credentials: RunCredentialBroker;
   #connectionsService?: ConnectionsService;
 
@@ -993,6 +994,16 @@ export class OpenTofuDeploymentController {
       now: this.#now,
       requireSpace: (spaceId) => this.#requireSpace(spaceId),
       billing: this.#billing,
+    });
+    this.#drift = new DriftService({
+      createPlanRun: (installationId, destroy, context, internal) =>
+        this.#createInstallationPlanRun(
+          installationId,
+          destroy,
+          context,
+          internal,
+        ),
+      recordActivity: (event) => this.#recordActivity(event),
     });
     this.#credentials = new RunCredentialBroker({
       store: this.#store,
@@ -1395,14 +1406,10 @@ export class OpenTofuDeploymentController {
     context: DeployControlActorContext = {},
     internal: Pick<CreateInstallationPlanInternal, "runGroupId"> = {},
   ): Promise<PlanRunResponse> {
-    return await this.#createInstallationPlanRun(
+    return await this.#drift.createInstallationDriftCheck(
       installationId,
-      false,
       context,
-      {
-        ...internal,
-        driftCheck: true,
-      },
+      internal,
     );
   }
 
@@ -2960,57 +2967,6 @@ export class OpenTofuDeploymentController {
       await this.#store.deletePlanRunInputs(runId);
     }
     return result;
-  }
-
-  /**
-   * Emits `installation.drift_detected` (§27 / §34 Activity) when a succeeded
-   * drift_check observed a non-empty change summary. Metadata carries the run id,
-   * add/change/destroy counts, provider/type/action aggregates, and public-safe
-   * remediation hints only (never resource names, values, or scope identifiers).
-   * A run with an empty summary emits nothing.
-   */
-  async #recordDriftDetected(
-    planRun: PlanRun,
-    changes: readonly PlanResourceChange[],
-  ): Promise<void> {
-    const summary = planRun.summary;
-    const add = summary?.add ?? 0;
-    const change = summary?.change ?? 0;
-    const destroy = summary?.destroy ?? 0;
-    if (add + change + destroy <= 0) return;
-    const classification = classifyDriftResourceChanges(changes);
-    await this.#recordActivity({
-      spaceId: planRun.spaceId,
-      action: "installation.drift_detected",
-      targetType: "installation",
-      targetId:
-        planRun.installationContext?.installationId ??
-        planRun.installationId ??
-        planRun.id,
-      runId: planRun.id,
-      metadata: {
-        ...(planRun.installationContext?.installationId
-          ? { installationId: planRun.installationContext.installationId }
-          : planRun.installationId
-            ? { installationId: planRun.installationId }
-            : {}),
-        add,
-        change,
-        destroy,
-        ...(Object.keys(classification.resourceTypes).length > 0
-          ? { resourceTypes: classification.resourceTypes }
-          : {}),
-        ...(Object.keys(classification.providers).length > 0
-          ? { providers: classification.providers }
-          : {}),
-        ...(Object.keys(classification.actions).length > 0
-          ? { actions: classification.actions }
-          : {}),
-        ...(classification.remediationHints.length > 0
-          ? { remediationHints: classification.remediationHints }
-          : {}),
-      },
-    });
   }
 
   /**
@@ -4643,7 +4599,7 @@ export class OpenTofuDeploymentController {
       // PlanRun. Emit the sanitized aggregate Activity here while the plan JSON
       // projection is still in scope.
       if (updated.driftCheck === true && updated.status === "succeeded") {
-        await this.#recordDriftDetected(
+        await this.#drift.recordDriftDetected(
           updated,
           result.planResourceChanges ?? [],
         );
