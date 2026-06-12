@@ -32,7 +32,7 @@ import DataTable, { type Column } from "../../components/ui/DataTable.tsx";
 import EmptyState from "../../components/ui/EmptyState.tsx";
 import Skeleton from "../../components/ui/Skeleton.tsx";
 
-export default function ControlRunGroupView() {
+export default function RunGroupView() {
   return <Page title={t("runGroup.title")}>{() => <Inner />}</Page>;
 }
 

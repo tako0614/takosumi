@@ -18,7 +18,7 @@ import { useNavigate } from "@solidjs/router";
 import { Boxes, Network, Plus } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId } from "../control/space-state.ts";
+import { currentSpaceId } from "../../lib/space-state.ts";
 import {
   type ControlApiError,
   getDeployment,

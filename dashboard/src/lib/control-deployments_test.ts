@@ -1,7 +1,7 @@
 /**
  * Tests for the Deployment client functions on the session `/api/v1/*`
  * surface (TASK Y — Installation 詳細 GUI). Pure-logic tests in the same style
- * as `router-fallbacks_test.ts` / `views/control/graph-layering_test.ts`,
+ * as `router-fallbacks_test.ts` / `views/graph/graph-layering_test.ts`,
  * runnable under `bun test`. They lock in the EXACT path + method each client fn
  * calls (so a drift from the server route contract in
  * packages/accounts-service/src/control-routes.ts fails loudly) and the

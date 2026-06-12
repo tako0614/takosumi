@@ -28,7 +28,7 @@ import { A, useNavigate } from "@solidjs/router";
 import { Download } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId } from "../control/space-state.ts";
+import { currentSpaceId } from "../../lib/space-state.ts";
 import { CATALOG, type CatalogEntry } from "../../catalog.ts";
 import {
   checkCapsuleCompatibility,
