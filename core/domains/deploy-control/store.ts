@@ -657,6 +657,36 @@ export interface OpenTofuDeploymentStore {
     spaceId: string,
     input: { readonly credits: number; readonly updatedAt: string },
   ): Promise<CreditBalance | undefined>;
+  /**
+   * Atomically adds a credit GRANT (top-up / pack purchase / subscription
+   * invoice grant) to a Space's available + purchased columns in a single
+   * UPDATE — no read-modify-write — so concurrent webhook deliveries cannot
+   * lose updates. Creates a zero balance row first when the Space has none, so
+   * the first grant lands. `credits` must be positive. Returns the new balance.
+   */
+  addCredits(
+    spaceId: string,
+    input: { readonly credits: number; readonly updatedAt: string },
+  ): Promise<CreditBalance>;
+  /**
+   * Atomically applies the monthly subscription RESET: carries over purchased
+   * credits and resets the monthly allotment to full, in one conditional
+   * UPDATE — `available = max(0, available - oldMonthly) + newMonthly`,
+   * `monthlyIncludedCredits = newMonthly` (all column-relative, no read). The
+   * WHERE guard (`monthlyIncludedCredits != newMonthly OR updatedAt <
+   * periodStartIso`) makes it idempotent per billing period so concurrent
+   * reconciles cannot double-grant. Returns the balance when applied,
+   * `undefined` when the guard skipped it (already reconciled) or the row is
+   * absent.
+   */
+  reconcileMonthlyCredits(
+    spaceId: string,
+    input: {
+      readonly newMonthly: number;
+      readonly periodStartIso: string;
+      readonly updatedAt: string;
+    },
+  ): Promise<CreditBalance | undefined>;
   putCreditReservation(
     reservation: CreditReservation,
   ): Promise<CreditReservation>;
@@ -1725,6 +1755,53 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
       ...balance,
       availableCredits: balance.availableCredits - input.credits,
       reservedCredits: balance.reservedCredits + input.credits,
+      updatedAt: input.updatedAt,
+    };
+    this.#creditBalances.set(spaceId, next);
+    return Promise.resolve(next);
+  }
+
+  addCredits(
+    spaceId: string,
+    input: { readonly credits: number; readonly updatedAt: string },
+  ): Promise<CreditBalance> {
+    const existing = this.#creditBalances.get(spaceId);
+    const next: CreditBalance = {
+      spaceId,
+      availableCredits: (existing?.availableCredits ?? 0) + input.credits,
+      reservedCredits: existing?.reservedCredits ?? 0,
+      monthlyIncludedCredits: existing?.monthlyIncludedCredits ?? 0,
+      purchasedCredits: (existing?.purchasedCredits ?? 0) + input.credits,
+      updatedAt: input.updatedAt,
+    };
+    this.#creditBalances.set(spaceId, next);
+    return Promise.resolve(next);
+  }
+
+  reconcileMonthlyCredits(
+    spaceId: string,
+    input: {
+      readonly newMonthly: number;
+      readonly periodStartIso: string;
+      readonly updatedAt: string;
+    },
+  ): Promise<CreditBalance | undefined> {
+    const balance = this.#creditBalances.get(spaceId);
+    if (!balance) return Promise.resolve(undefined);
+    const balanceUpdatedAtMs = Date.parse(balance.updatedAt);
+    const periodStartMs = Date.parse(input.periodStartIso);
+    const alreadyReconciled =
+      balance.monthlyIncludedCredits === input.newMonthly &&
+      Number.isFinite(balanceUpdatedAtMs) &&
+      Number.isFinite(periodStartMs) &&
+      balanceUpdatedAtMs >= periodStartMs;
+    if (alreadyReconciled) return Promise.resolve(undefined);
+    const next: CreditBalance = {
+      ...balance,
+      availableCredits:
+        Math.max(0, balance.availableCredits - balance.monthlyIncludedCredits) +
+        input.newMonthly,
+      monthlyIncludedCredits: input.newMonthly,
       updatedAt: input.updatedAt,
     };
     this.#creditBalances.set(spaceId, next);

@@ -373,6 +373,18 @@ export class BillingService {
       billingSettings: settings,
       updatedAt: nowIso,
     });
+    // On cancellation, end the monthly subscription grant: zero
+    // monthlyIncludedCredits and remove the unused monthly portion, keeping
+    // purchased credits. `reconcileMonthlyCredits(newMonthly: 0)` resolves to
+    // `available = max(0, available - oldMonthly)`, monthly = 0 — atomic and
+    // idempotent (a second cancel finds monthly already 0 and is skipped).
+    if (subscription.status === "cancelled") {
+      await this.#store.reconcileMonthlyCredits(spaceId, {
+        newMonthly: 0,
+        periodStartIso: nowIso,
+        updatedAt: nowIso,
+      });
+    }
     return { billingAccount, subscription, billing: { settings } };
   }
 
@@ -424,15 +436,13 @@ export class BillingService {
     ) {
       return;
     }
-    const purchasedAvailableCredits = Math.max(
-      0,
-      balance.availableCredits - balance.monthlyIncludedCredits,
-    );
-    await this.#store.putCreditBalance({
-      ...balance,
-      availableCredits:
-        purchasedAvailableCredits + billingPlan.plan.includedCredits,
-      monthlyIncludedCredits: billingPlan.plan.includedCredits,
+    // Atomic, idempotent-per-period monthly RESET (same semantics as the old
+    // `max(0, available - oldMonthly) + newMonthly` but in one conditional
+    // UPDATE, so a concurrent top-up can no longer clobber the read-modify-
+    // write).
+    await this.#store.reconcileMonthlyCredits(spaceId, {
+      newMonthly: billingPlan.plan.includedCredits,
+      periodStartIso: new Date(periodStartMs).toISOString(),
       updatedAt: nowIso,
     });
   }

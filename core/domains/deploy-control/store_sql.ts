@@ -2136,6 +2136,82 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     };
   }
 
+  async addCredits(
+    spaceId: string,
+    input: { readonly credits: number; readonly updatedAt: string },
+  ): Promise<CreditBalance> {
+    // Ensure a row exists so the first grant lands (a no-op upsert seeds zero).
+    await this.#db
+      .insert(pgSchema.creditBalances)
+      .values({
+        spaceId,
+        availableCredits: 0,
+        reservedCredits: 0,
+        monthlyIncludedCredits: 0,
+        purchasedCredits: 0,
+        updatedAt: input.updatedAt,
+      })
+      .onConflictDoNothing({ target: pgSchema.creditBalances.spaceId });
+    const rows = await this.#db
+      .update(pgSchema.creditBalances)
+      .set({
+        availableCredits: sql`${pgSchema.creditBalances.availableCredits} + ${input.credits}`,
+        purchasedCredits: sql`${pgSchema.creditBalances.purchasedCredits} + ${input.credits}`,
+        updatedAt: input.updatedAt,
+      })
+      .where(eq(pgSchema.creditBalances.spaceId, spaceId))
+      .returning();
+    const row = rows[0]!;
+    return {
+      spaceId: row.spaceId,
+      availableCredits: row.availableCredits,
+      reservedCredits: row.reservedCredits,
+      monthlyIncludedCredits: row.monthlyIncludedCredits,
+      purchasedCredits: row.purchasedCredits,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  async reconcileMonthlyCredits(
+    spaceId: string,
+    input: {
+      readonly newMonthly: number;
+      readonly periodStartIso: string;
+      readonly updatedAt: string;
+    },
+  ): Promise<CreditBalance | undefined> {
+    // Conditional, idempotent-per-period monthly RESET: carry over purchased
+    // credits and reset the monthly allotment to full. Column-relative so no
+    // read is needed: available = max(0, available - oldMonthly) + newMonthly.
+    const rows = await this.#db
+      .update(pgSchema.creditBalances)
+      .set({
+        availableCredits: sql`greatest(0, ${pgSchema.creditBalances.availableCredits} - ${pgSchema.creditBalances.monthlyIncludedCredits}) + ${input.newMonthly}`,
+        monthlyIncludedCredits: input.newMonthly,
+        updatedAt: input.updatedAt,
+      })
+      .where(
+        and(
+          eq(pgSchema.creditBalances.spaceId, spaceId),
+          or(
+            ne(pgSchema.creditBalances.monthlyIncludedCredits, input.newMonthly),
+            lt(pgSchema.creditBalances.updatedAt, input.periodStartIso),
+          ),
+        ),
+      )
+      .returning();
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      spaceId: row.spaceId,
+      availableCredits: row.availableCredits,
+      reservedCredits: row.reservedCredits,
+      monthlyIncludedCredits: row.monthlyIncludedCredits,
+      purchasedCredits: row.purchasedCredits,
+      updatedAt: row.updatedAt,
+    };
+  }
+
   async putCreditReservation(
     reservation: CreditReservation,
   ): Promise<CreditReservation> {

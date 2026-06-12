@@ -146,6 +146,29 @@ function accountSessionHeaders(sessionId: string): HeadersInit {
   return { authorization: `Bearer ${sessionId}` };
 }
 
+/**
+ * Minimal control-plane operations for the billing-checkout Space-ownership
+ * gate: `canAccessSpace` calls `spaces.getSpace(id)` and short-circuits when
+ * `space.ownerUserId === subject`. Only that one accessor is exercised here.
+ */
+function checkoutControlOps(
+  ownerUserId: string,
+): import("./control-routes.ts").ControlPlaneOperations {
+  return {
+    spaces: {
+      getSpace: async (id: string) => ({
+        id,
+        handle: id,
+        displayName: id,
+        type: "personal" as const,
+        ownerUserId,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+  } as unknown as import("./control-routes.ts").ControlPlaneOperations;
+}
+
 async function withTestAppInstallationAuth(
   request: Request,
   store: AccountsStore,
@@ -1278,6 +1301,7 @@ test("accounts reference operator distribution exposes Accounts, OIDC, and billi
         priceDisplay: { ja: "¥1,000 / 月", en: "$7 / mo" },
       },
     ],
+    controlPlaneOperations: checkoutControlOps("tsub_operator"),
   });
 
   const health = await handler(new Request(`${testIssuer}/healthz`));
@@ -2774,6 +2798,7 @@ test("accounts handler starts Stripe checkout sessions", async () => {
         priceDisplay: { ja: "¥1,500 / 月", en: "$10 / mo" },
       },
     ],
+    controlPlaneOperations: checkoutControlOps("tsub_account"),
   });
 
   const response = await handler(
@@ -2830,6 +2855,7 @@ test("checkout rejects an unknown planId (catalog is server-side)", async () => 
     },
     billingRedirectAllowlist: ["https://accounts.example.test"],
     billingPlans: [],
+    controlPlaneOperations: checkoutControlOps("tsub_account"),
   });
   const response = await handler(
     new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
@@ -2847,6 +2873,92 @@ test("checkout rejects an unknown planId (catalog is server-side)", async () => 
   expect(response.status).toEqual(404);
   const body = (await response.json()) as { error: { code: string } };
   expect(body.error.code).toEqual("plan_not_found");
+});
+
+test("checkout rejects a Space the session does not own (cross-account grant)", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_attacker",
+    email: "attacker@example.test",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  const checkoutSession = seedAccountSession(store, "tsub_attacker");
+  const handler = createAccountsHandler({
+    store,
+    stripeBilling: { secretKey: "sk_test", webhookSecret: "whsec_test" },
+    billingRedirectAllowlist: ["https://accounts.example.test"],
+    billingPlans: [
+      {
+        id: "plus",
+        kind: "subscription",
+        stripePriceId: "price_1",
+        credits: 1000,
+        name: { ja: "プラス", en: "Plus" },
+        priceDisplay: { ja: "¥1,500 / 月", en: "$10 / mo" },
+      },
+    ],
+    // The Space is owned by someone else; the attacker session must not be able
+    // to grant the plan's credits to it.
+    controlPlaneOperations: checkoutControlOps("tsub_victim"),
+  });
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: accountSessionHeaders(checkoutSession),
+      body: JSON.stringify({
+        subject: "tsub_attacker",
+        planId: "plus",
+        spaceId: "space_victim",
+        successUrl: "https://accounts.example.test/success",
+        cancelUrl: "https://accounts.example.test/cancel",
+      }),
+    }),
+  );
+  expect(response.status).toEqual(403);
+  const body = (await response.json()) as { error: { code: string } };
+  expect(body.error.code).toEqual("forbidden");
+});
+
+test("checkout fails closed when the control plane cannot verify ownership", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_account",
+    email: "user@example.test",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  const checkoutSession = seedAccountSession(store, "tsub_account");
+  const handler = createAccountsHandler({
+    store,
+    stripeBilling: { secretKey: "sk_test", webhookSecret: "whsec_test" },
+    billingRedirectAllowlist: ["https://accounts.example.test"],
+    billingPlans: [
+      {
+        id: "plus",
+        kind: "subscription",
+        stripePriceId: "price_1",
+        credits: 1000,
+        name: { ja: "プラス", en: "Plus" },
+        priceDisplay: { ja: "¥1,500 / 月", en: "$10 / mo" },
+      },
+    ],
+    // No controlPlaneOperations → ownership unverifiable → reject.
+  });
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: accountSessionHeaders(checkoutSession),
+      body: JSON.stringify({
+        subject: "tsub_account",
+        planId: "plus",
+        spaceId: "space_a",
+        successUrl: "https://accounts.example.test/success",
+        cancelUrl: "https://accounts.example.test/cancel",
+      }),
+    }),
+  );
+  expect(response.status).toEqual(503);
 });
 
 test("accounts handler starts Stripe Customer Portal sessions for linked customers", async () => {

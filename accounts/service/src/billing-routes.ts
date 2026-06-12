@@ -10,6 +10,10 @@ import {
   parseBillingPlans,
 } from "./billing-plans.ts";
 import type { AccountsStore } from "./store.ts";
+import {
+  canAccessSpace,
+  type ControlPlaneOperations,
+} from "./control-routes.ts";
 import type { StripeBillingOptions } from "./mod.ts";
 import {
   errorJson,
@@ -46,6 +50,15 @@ export async function handleStripeCheckoutRequest(input: {
    * `TAKOSUMI_BILLING_PLANS` env var when omitted.
    */
   billingPlans?: readonly BillingPlan[];
+  /**
+   * In-process control-plane operations used to verify the authenticated
+   * subject OWNS the target `spaceId` before checkout. Checkout server-stamps
+   * `metadata.space_id`, and the webhook grants the plan's credits to that
+   * Space; without this check a paying user could grant credits to a Space they
+   * do not own. When absent (control plane not wired) checkout fails closed: a
+   * Space ownership claim cannot be verified, so it is rejected.
+   */
+  controlPlaneOperations?: ControlPlaneOperations;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -60,6 +73,21 @@ export async function handleStripeCheckoutRequest(input: {
   }
   if (subject !== input.sessionSubject) {
     return errorJson("subject_mismatch", "checkout body subject does not match the authenticated session", 403);
+  }
+  // Space ownership gate (fail closed): the plan's credits are granted to
+  // `spaceId` by the webhook, so the buyer must own it. We cannot verify
+  // without the control plane, so reject when it is not wired.
+  if (!input.controlPlaneOperations) {
+    return errorJson("feature_unavailable", "Billing checkout requires the control plane to verify Space ownership.", 503);
+  }
+  const owns = await canAccessSpace({
+    operations: input.controlPlaneOperations,
+    store: input.store,
+    subject,
+    spaceId,
+  });
+  if (!owns) {
+    return errorJson("forbidden", "The authenticated session cannot access this Space.", 403);
   }
   const plans = resolveBillingPlans(input.billingPlans);
   const plan = findBillingPlan(plans, planId);
