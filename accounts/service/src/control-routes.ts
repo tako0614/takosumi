@@ -101,6 +101,7 @@ import {
 } from "./http-helpers.ts";
 import { requireAccountSession } from "./account-session.ts";
 import type { AccountsStore } from "./store.ts";
+import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 
 function publicInstallation(installation: Installation): PublicInstallation {
   const { installType: _installType, ...publicRecord } = installation;
@@ -181,6 +182,7 @@ export interface ControlPlaneOperations {
   // --- Spaces (§4) ---
   readonly spaces: {
     listSpaces(): Promise<readonly Space[]>;
+    listSpacesByOwner(ownerUserId: string): Promise<readonly Space[]>;
     getSpace(id: string): Promise<Space>;
     createSpace(request: {
       readonly handle: string;
@@ -1147,21 +1149,38 @@ async function listSpaces(
   store: AccountsStore,
   sessionSubject: string,
 ): Promise<Response> {
-  const spaces = await operations.spaces.listSpaces();
-  const visible: Space[] = [];
-  for (const space of spaces) {
-    if (
-      await canAccessSpace({
-        operations,
-        store,
-        subject: sessionSubject,
-        spaceId: space.id,
-        space,
-      })
-    ) {
-      visible.push(space);
+  // Scope the read to the caller's own spaces instead of loading every tenant's
+  // Space and filtering per row. This reproduces `canAccessSpace`'s accept set
+  // as a UNION of two scoped queries:
+  //   (A) deploy-control Spaces the subject directly owns (ownerUserId), and
+  //   (B) Spaces whose account is legally owned by the subject (the accounts
+  //       ledger's `legalOwnerSubject`), fetched individually so we never read
+  //       another tenant's Space.
+  const byId = new Map<string, Space>();
+  for (const space of await operations.spaces.listSpacesByOwner(
+    sessionSubject,
+  )) {
+    byId.set(space.id, space);
+  }
+  for (
+    const ledgerSpace of await store.listSpacesForOwner(
+      sessionSubject as TakosumiSubject,
+    )
+  ) {
+    if (byId.has(ledgerSpace.spaceId)) continue;
+    try {
+      byId.set(ledgerSpace.spaceId, await operations.spaces.getSpace(
+        ledgerSpace.spaceId,
+      ));
+    } catch {
+      // The deploy-control Space may not exist (or is mid-creation); skip it
+      // rather than failing the whole list.
     }
   }
+  const visible = [...byId.values()].sort(
+    (a, b) =>
+      a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+  );
   return json({ spaces: visible });
 }
 

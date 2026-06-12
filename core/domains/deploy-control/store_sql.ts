@@ -463,6 +463,17 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return rows.map((row) => parseRow(row) as Space);
   }
 
+  async listSpacesByOwner(ownerUserId: string): Promise<readonly Space[]> {
+    const rows = await this.#db
+      .select({ json: pgSchema.spaces.spaceJson })
+      .from(pgSchema.spaces)
+      .where(
+        sql`${pgSchema.spaces.spaceJson} ->> 'ownerUserId' = ${ownerUserId}`,
+      )
+      .orderBy(asc(pgSchema.spaces.createdAt), asc(pgSchema.spaces.id));
+    return rows.map((row) => parseRow(row) as Space);
+  }
+
   // --- install_configs (§11) ------------------------------------------------
 
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {

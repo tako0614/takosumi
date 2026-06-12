@@ -107,6 +107,12 @@ function fakeOperations(
         record("listSpaces");
         return [space("space_a")];
       },
+      listSpacesByOwner: async (ownerUserId) => {
+        record("listSpacesByOwner", ownerUserId);
+        // The fixture Space is owned by `tsub_ctrl`; other subjects own none
+        // directly (they reach Spaces only via the ledger legal-owner branch).
+        return ownerUserId === "tsub_ctrl" ? [space("space_a")] : [];
+      },
       getSpace: async (id) => {
         record("getSpace", id);
         return space(id);
@@ -675,7 +681,10 @@ test("GET /api/v1/spaces serves the session control surface", async () => {
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { spaces: unknown[] };
   expect(body.spaces.length).toEqual(1);
-  expect(operations.calls.listSpaces).toBeDefined();
+  // The session list scopes the read to the caller's own spaces; it must NOT
+  // load every tenant's Space via the all-spaces `listSpaces` path.
+  expect(operations.calls.listSpacesByOwner).toBeDefined();
+  expect(operations.calls.listSpaces).toBeUndefined();
 });
 
 test("anonymous /api/v1 requests are 401", async () => {
@@ -790,7 +799,74 @@ test("GET /api/v1/spaces returns spaces for a session", async () => {
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { spaces: unknown[] };
   expect(body.spaces.length).toEqual(1);
-  expect(operations.calls.listSpaces).toBeDefined();
+  expect(operations.calls.listSpacesByOwner).toBeDefined();
+  expect(operations.calls.listSpaces).toBeUndefined();
+});
+
+test("GET /api/v1/spaces unions directly-owned + legal-owner spaces, excludes foreign", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store);
+  // (B) An org Space whose deploy-control owner is someone else, but whose
+  // accounts ledger account is LEGALLY OWNED by the session subject -> visible.
+  seedLedgerSpace(store, {
+    subject,
+    accountId: "acct_org",
+    spaceId: "space_org",
+  });
+  // A foreign Space: different ledger account, legally owned by another subject
+  // -> must be absent. (Also never directly owned by the session subject.)
+  seedLedgerSpace(store, {
+    subject: "tsub_foreign",
+    accountId: "acct_foreign",
+    spaceId: "space_foreign",
+  });
+
+  const spaceRecord = (id: string, ownerUserId: string) => ({
+    id,
+    handle: id,
+    displayName: id,
+    type: "organization" as const,
+    ownerUserId,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  });
+  let listSpacesByOwnerCalled = false;
+  const operations = fakeOperations({
+    spaces: {
+      // (A) Direct owner: only the personal Space the subject owns directly.
+      listSpacesByOwner: async () => {
+        listSpacesByOwnerCalled = true;
+        return [spaceRecord("space_a", subject)];
+      },
+      // Per-id fetch is bounded to the subject's own ledger spaces; the org
+      // Space is owned (deploy-control) by another subject but is reachable via
+      // the legal-owner branch. A foreign-space fetch would still be excluded
+      // because the route only fetches ledger spaces owned by the subject.
+      getSpace: async (id) => {
+        if (id === "space_org") return spaceRecord("space_org", "tsub_other");
+        if (id === "space_foreign") {
+          return spaceRecord("space_foreign", "tsub_foreign");
+        }
+        return spaceRecord(id, subject);
+      },
+    },
+  });
+
+  const { request: req, url } = request("GET", "/api/v1/spaces", { cookie });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { spaces: { id: string }[] };
+  const ids = body.spaces.map((s) => s.id).sort();
+  expect(ids).toEqual(["space_a", "space_org"]);
+  expect(ids).not.toContain("space_foreign");
+  // The all-tenants load-all path must never run for a session list.
+  expect(operations.calls.listSpaces).toBeUndefined();
+  expect(listSpacesByOwnerCalled).toEqual(true);
 });
 
 test("GET /api/v1/spaces/:id/billing returns billing settings and balance", async () => {

@@ -413,6 +413,12 @@ export class PostgresAccountsStore implements AccountsStore {
     return installations.listSpacesForAccount(this.#client, accountId);
   }
 
+  listSpacesForOwner(
+    subject: TakosumiSubject,
+  ): Promise<readonly SpaceRecord[]> {
+    return installations.listSpacesForOwner(this.#client, subject);
+  }
+
   saveAppInstallation(record: InstallationRecord): Promise<void> {
     return installations.saveAppInstallation(this.#client, record);
   }
