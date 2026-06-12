@@ -417,9 +417,29 @@ export class BackupsService {
 
     // Per-installation fan-out: source snapshots (by source), deployments,
     // state-snapshot metadata, and output-snapshot projections.
+    //
+    // Read efficiency (Core Spec §33): rather than one store round-trip per
+    // Source / Installation, fetch each resource for the whole Space (or the
+    // already-loaded Source id batch) in a single query, group the result by the
+    // id the loop keys on, then iterate the SAME `sources` / `installations`
+    // loops over the in-memory groups. The produced bundle is byte-identical:
+    // groups are sorted exactly as the per-item store methods sorted, and the
+    // outer loop order is unchanged.
+    const sourceSnapshotsBySource = groupBy(
+      await this.#store.listSourceSnapshotsBySourceIds(
+        sources.map((source) => source.id),
+      ),
+      (snapshot) => snapshot.sourceId,
+    );
     const sourceSnapshots: BundleSourceSnapshot[] = [];
     for (const source of sources) {
-      for (const snapshot of await this.#store.listSourceSnapshots(source.id)) {
+      const group = (sourceSnapshotsBySource.get(source.id) ?? [])
+        .slice()
+        .sort(
+          (a, b) =>
+            a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id),
+        );
+      for (const snapshot of group) {
         sourceSnapshots.push({
           id: snapshot.id,
           origin: snapshot.origin,
@@ -438,6 +458,19 @@ export class BackupsService {
       }
     }
 
+    const deploymentsByInstallation = groupBy(
+      await this.#store.listDeploymentsBySpace(spaceId),
+      (deployment) => deployment.installationId,
+    );
+    const stateSnapshotsByInstallation = groupBy(
+      await this.#store.listStateSnapshotsBySpace(spaceId),
+      (snapshot) => snapshot.installationId,
+    );
+    const outputSnapshotsByInstallation = groupBy(
+      await this.#store.listOutputSnapshotsBySpace(spaceId),
+      (snapshot) => snapshot.installationId,
+    );
+
     const deployments: unknown[] = [];
     const deploymentProfiles: unknown[] = [];
     const stateSnapshots: BundleStateSnapshot[] = [];
@@ -450,15 +483,23 @@ export class BackupsService {
       if (profile) {
         deploymentProfiles.push(profile);
       }
-      for (const deployment of await this.#store.listDeployments(
-        installation.id,
-      )) {
+      const installationDeployments = (
+        deploymentsByInstallation.get(installation.id) ?? []
+      )
+        .slice()
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        );
+      for (const deployment of installationDeployments) {
         deployments.push(deployment);
       }
-      for (const snapshot of await this.#store.listStateSnapshots(
-        installation.id,
-        installation.environment,
-      )) {
+      const installationStateSnapshots = (
+        stateSnapshotsByInstallation.get(installation.id) ?? []
+      )
+        .filter((snapshot) => snapshot.environment === installation.environment)
+        .sort((a, b) => a.generation - b.generation);
+      for (const snapshot of installationStateSnapshots) {
         // METADATA only — the encrypted state bytes are NOT copied (objectKey is
         // the pointer to the R2_STATE object).
         stateSnapshots.push({
@@ -473,9 +514,17 @@ export class BackupsService {
           createdAt: snapshot.createdAt,
         });
       }
-      for (const output of await this.#store.listOutputSnapshots(
-        installation.id,
-      )) {
+      const installationOutputSnapshots = (
+        outputSnapshotsByInstallation.get(installation.id) ?? []
+      )
+        .slice()
+        .sort(
+          (a, b) =>
+            a.stateGeneration - b.stateGeneration ||
+            a.createdAt.localeCompare(b.createdAt) ||
+            a.id.localeCompare(b.id),
+        );
+      for (const output of installationOutputSnapshots) {
         // publicOutputs + spaceOutputs PROJECTIONS only — raw output VALUES are
         // never copied; the raw artifact KEY is listed but the bytes are not.
         outputSnapshots.push({
@@ -1107,6 +1156,31 @@ function isDurableServiceDataRef(ref: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Groups `items` into a Map keyed by `key(item)`, preserving insertion order
+ * within each group. Used to turn a single space-scoped (or id-batched) store
+ * read into the per-Source / per-Installation buckets the bundle loops iterate,
+ * replacing the N+1 per-item store reads. Items whose key is `undefined` are
+ * skipped.
+ */
+function groupBy<T>(
+  items: readonly T[],
+  key: (item: T) => string | undefined,
+): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const k = key(item);
+    if (k === undefined) continue;
+    const bucket = groups.get(k);
+    if (bucket) {
+      bucket.push(item);
+    } else {
+      groups.set(k, [item]);
+    }
+  }
+  return groups;
 }
 
 function primaryBackupProvider(config: InstallConfig): string | undefined {

@@ -774,6 +774,22 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
+  async listDeploymentsBySpace(
+    spaceId: string,
+  ): Promise<readonly Deployment[]> {
+    return await this.#pgManyJson<Deployment>(
+      pgSchema.deployments,
+      pgSchema.deployments.deploymentJson,
+      {
+        where: eq(pgSchema.deployments.spaceId, spaceId),
+        orderBy: [
+          asc(pgSchema.deployments.createdAt),
+          asc(pgSchema.deployments.id),
+        ],
+      },
+    );
+  }
+
   async listDeploymentsPage(
     installationId: string,
     params: PageParams,
@@ -1074,6 +1090,23 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
+  async listSourceSnapshotsBySourceIds(
+    sourceIds: readonly string[],
+  ): Promise<readonly SourceSnapshot[]> {
+    if (sourceIds.length === 0) return [];
+    return await this.#pgManyJson<SourceSnapshot>(
+      pgSchema.sourceSnapshots,
+      pgSchema.sourceSnapshots.snapshotJson,
+      {
+        where: inArray(pgSchema.sourceSnapshots.sourceId, [...sourceIds]),
+        orderBy: [
+          asc(pgSchema.sourceSnapshots.fetchedAt),
+          asc(pgSchema.sourceSnapshots.id),
+        ],
+      },
+    );
+  }
+
   async listSourceSnapshotsPage(
     sourceId: string,
     params: PageParams,
@@ -1282,6 +1315,19 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
+  async listStateSnapshotsBySpace(
+    spaceId: string,
+  ): Promise<readonly StateSnapshot[]> {
+    return await this.#pgManyJson<StateSnapshot>(
+      pgSchema.stateSnapshots,
+      pgSchema.stateSnapshots.snapshotJson,
+      {
+        where: eq(pgSchema.stateSnapshots.spaceId, spaceId),
+        orderBy: [asc(pgSchema.stateSnapshots.generation)],
+      },
+    );
+  }
+
   // --- installation_dependencies (§14 / §15) --------------------------------
 
   async putDependency(dependency: Dependency): Promise<Dependency> {
@@ -1438,6 +1484,23 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       pgSchema.outputSnapshots.snapshotJson,
       {
         where: eq(pgSchema.outputSnapshots.installationId, installationId),
+        orderBy: [
+          pgSchema.outputSnapshots.stateGeneration,
+          pgSchema.outputSnapshots.createdAt,
+          pgSchema.outputSnapshots.id,
+        ],
+      },
+    );
+  }
+
+  async listOutputSnapshotsBySpace(
+    spaceId: string,
+  ): Promise<readonly OutputSnapshot[]> {
+    return await this.#pgManyJson<OutputSnapshot>(
+      pgSchema.outputSnapshots,
+      pgSchema.outputSnapshots.snapshotJson,
+      {
+        where: eq(pgSchema.outputSnapshots.spaceId, spaceId),
         orderBy: [
           pgSchema.outputSnapshots.stateGeneration,
           pgSchema.outputSnapshots.createdAt,
