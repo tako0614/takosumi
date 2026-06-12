@@ -766,6 +766,12 @@ export async function createTakosumiService(
   const dependenciesService = new DependenciesService({
     store: sharedOpenTofuStore,
     activity: activityService,
+    // Serialize the Space's dependency-graph cycle check-then-write across
+    // isolates when a coordination seam is wired (the Workers adapter injects a
+    // DO-backed implementation). Without it, creation stays single-isolate safe.
+    ...(options.installationCoordination
+      ? { coordination: options.installationCoordination }
+      : {}),
   });
   // OutputShares domain (Core Specification §18): the cross-Space output sharing
   // grant. Validates against the producer's latest OutputSnapshot over the SAME
@@ -814,9 +820,11 @@ export async function createTakosumiService(
     ...managedDefaultApplyCapFromEnv(runtimeEnv),
     // cf-proxy scope-signing secret (managed Cloudflare hosting): lets the
     // control plane sign the proxy base_url so the edge proxy can verify it.
-    // Reuses the operator deploy-control token; absent on self-host (managed
-    // Cloudflare runs fail closed there, which is correct — self-host brings its
-    // own Connection and never uses the operator cf-proxy).
+    // Sourced from the DEDICATED `TAKOSUMI_CF_PROXY_SIGNING_SECRET` (decoupled
+    // from the deploy-control bearer; falls back to the bearer for one release).
+    // Absent on self-host (managed Cloudflare runs fail closed there, which is
+    // correct — self-host brings its own Connection and never uses the operator
+    // cf-proxy).
     ...cfProxySigningSecretFromEnv(runtimeEnv),
   });
   // RunGroups domain (Core Specification §19 / §24): space_update re-plans
@@ -1120,11 +1128,61 @@ function managedDefaultApplyCapFromEnv(
   return { managedDefaultApplyCap: Math.floor(parsed) };
 }
 
+/**
+ * Resolves the PRIMARY cf-proxy scope-signing secret the control plane signs the
+ * managed `base_url` with (see `signCfProxyScope`).
+ *
+ * Source of truth is the DEDICATED `TAKOSUMI_CF_PROXY_SIGNING_SECRET`, decoupled
+ * from the deploy-control bearer (`TAKOSUMI_DEPLOY_CONTROL_TOKEN`) so rotating the
+ * bearer no longer silently breaks managed-run signatures. The dedicated secret
+ * has its own rotation companion `TAKOSUMI_CF_PROXY_SIGNING_SECRET_PREVIOUS`,
+ * threaded into the proxy's accepted-secret set (see {@link cfProxySigningSecretsFromEnv}).
+ *
+ * Fallback (ONE release only): if the dedicated secret is unset, the deploy-control
+ * bearer is reused as before so existing operator configs do not hard-break on
+ * upgrade. Operators should set `TAKOSUMI_CF_PROXY_SIGNING_SECRET` and this
+ * fallback will be removed next release.
+ */
 function cfProxySigningSecretFromEnv(
   env: Record<string, string | undefined>,
 ): { cfProxySigningSecret: string } | Record<string, never> {
-  const secret = env.TAKOSUMI_DEPLOY_CONTROL_TOKEN?.trim();
+  const secret = cfProxySigningSecretsFromEnv(env)[0];
   return secret ? { cfProxySigningSecret: secret } : {};
+}
+
+/**
+ * Resolves the cf-proxy ACCEPTED signing secrets the edge proxy verifies a
+ * scope signature against — the primary first, then any rotation/previous
+ * secret. The control plane signs with the primary (`[0]`); the proxy admits a
+ * signature minted by either, so an operator can rotate
+ * `TAKOSUMI_CF_PROXY_SIGNING_SECRET` (moving the old value to
+ * `TAKOSUMI_CF_PROXY_SIGNING_SECRET_PREVIOUS`) without breaking in-flight runs.
+ *
+ * Order:
+ *   1. `TAKOSUMI_CF_PROXY_SIGNING_SECRET` (primary, dedicated)
+ *   2. `TAKOSUMI_CF_PROXY_SIGNING_SECRET_PREVIOUS` (rotation, optional)
+ *   3. `TAKOSUMI_DEPLOY_CONTROL_TOKEN` (deprecated one-release fallback, used as
+ *      primary ONLY when the dedicated secret is unset)
+ *
+ * Duplicates and empties are dropped. Returns `[]` when nothing is configured
+ * (the proxy is then disabled — fail closed).
+ */
+export function cfProxySigningSecretsFromEnv(
+  env: Record<string, string | undefined>,
+): readonly string[] {
+  const dedicated = env.TAKOSUMI_CF_PROXY_SIGNING_SECRET?.trim();
+  const previous = env.TAKOSUMI_CF_PROXY_SIGNING_SECRET_PREVIOUS?.trim();
+  const bearer = env.TAKOSUMI_DEPLOY_CONTROL_TOKEN?.trim();
+  const ordered = dedicated
+    ? [dedicated, previous]
+    : // Deprecated fallback (one release): the deploy-control bearer stands in
+      // as the primary when no dedicated secret is configured.
+      [bearer];
+  const accepted: string[] = [];
+  for (const secret of ordered) {
+    if (secret && !accepted.includes(secret)) accepted.push(secret);
+  }
+  return accepted;
 }
 
 function shouldEmitHttpRequestLogs(

@@ -89,6 +89,8 @@ import type {
   PlanRunInputs,
   StoredSecretBlob,
   StoredSource,
+  TransitionRunInput,
+  TransitionRunResult,
 } from "./store.ts";
 import { clampActivityLimit, InstallationPatchGuardConflict } from "./store.ts";
 import type { SqlTransaction } from "../../adapters/storage/sql.ts";
@@ -268,6 +270,63 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
 
   async getApplyRun(id: string): Promise<ApplyRun | undefined> {
     return await this.#getRun<ApplyRun>(id, RUN_KINDS_APPLY);
+  }
+
+  /**
+   * Status-conditional, lease-fenced compare-and-set transition (the queue
+   * consumer's correctness-critical claim primitive). Mirrors the CAS shape of
+   * the revoke-debt `#updateMutable`: a guarded drizzle UPDATE that only matches
+   * the row when its `status` is still in `expectFrom` (and, when set, its
+   * `leaseToken` still equals `expectLeaseToken`). On a win the row's status /
+   * run JSON advance to `input.run`; `setLeaseToken` / `clearLeaseToken` /
+   * `heartbeatAt` write the lease and heartbeat columns. A lost race (0 rows)
+   * re-reads the current row and returns it with `won: false`.
+   */
+  async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
+    const kinds =
+      input.kind === "plan"
+        ? [...RUN_KINDS_PLAN, "drift_check"]
+        : [...RUN_KINDS_APPLY];
+    // Resolve the heartbeat (input override wins over the value on `run`) and
+    // bake it into the persisted run JSON so the column and run_json agree.
+    const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
+    const persisted: PlanRun | ApplyRun =
+      heartbeatAt === undefined
+        ? input.run
+        : ({ ...input.run, heartbeatAt } as PlanRun | ApplyRun);
+    const leaseSet: { leaseToken?: string | null } = input.clearLeaseToken
+      ? { leaseToken: null }
+      : input.setLeaseToken !== undefined
+        ? { leaseToken: input.setLeaseToken }
+        : {};
+    const rows = await this.#db
+      .update(pgSchema.runs)
+      .set({
+        status: persisted.status,
+        runJson: persisted,
+        ...(heartbeatAt === undefined ? {} : { heartbeatAt }),
+        ...leaseSet,
+      })
+      .where(
+        and(
+          eq(pgSchema.runs.id, input.id),
+          inArray(pgSchema.runs.kind, kinds),
+          inArray(pgSchema.runs.status, [...input.expectFrom]),
+          input.expectLeaseToken === undefined
+            ? sql`true`
+            : eq(pgSchema.runs.leaseToken, input.expectLeaseToken),
+        ),
+      )
+      .returning({ json: pgSchema.runs.runJson });
+    const won = parseRow(rows[0]) as PlanRun | ApplyRun | undefined;
+    if (won) return { won: true, run: won };
+    // Lost the CAS race (or the row vanished): re-read the now-current row so
+    // callers observe the winning transition instead of clobbering it.
+    const current =
+      input.kind === "plan"
+        ? await this.getPlanRun(input.id)
+        : await this.getApplyRun(input.id);
+    return { won: false, ...(current ? { run: current } : {}) };
   }
 
   async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {

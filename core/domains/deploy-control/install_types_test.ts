@@ -479,7 +479,7 @@ test("managed worker install (operator-default credential) redirects the cloudfl
   const signature = baseUrlMatch![1]!;
   // The signature verifies for the scoped (namespace, slug) and is unexpired...
   expect(
-    await verifyCfProxyScope(cfProxySecret, signature, {
+    await verifyCfProxyScope([cfProxySecret], signature, {
       namespace: "takosumi-tenants",
       slug: "app",
       nowMs: 0,
@@ -487,14 +487,14 @@ test("managed worker install (operator-default credential) redirects the cloudfl
   ).toBe(true);
   // ...but not for a different slug (scope binding) or a wrong secret.
   expect(
-    await verifyCfProxyScope(cfProxySecret, signature, {
+    await verifyCfProxyScope([cfProxySecret], signature, {
       namespace: "takosumi-tenants",
       slug: "other",
       nowMs: 0,
     }),
   ).toBe(false);
   expect(
-    await verifyCfProxyScope("wrong-secret", signature, {
+    await verifyCfProxyScope(["wrong-secret"], signature, {
       namespace: "takosumi-tenants",
       slug: "app",
       nowMs: 0,

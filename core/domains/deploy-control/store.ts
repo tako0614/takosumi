@@ -22,6 +22,7 @@ import type {
   Installation,
   PlanRun,
   RunnerProfile,
+  RunStatus,
   StateSnapshot,
 } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
@@ -245,6 +246,53 @@ export interface CommitAppliedDeploymentInput {
   };
 }
 
+/**
+ * Status-conditional, lease-fenced compare-and-set transition of a single run
+ * row (the most correctness-critical primitive of the queue consumer). Unlike
+ * {@link OpenTofuDeploymentStore.putPlanRun} / `putApplyRun` (which INSERT/upsert
+ * the initial creation), `transitionRun` is the post-insert mutation: it advances
+ * a run's `status` (and lease/heartbeat) ONLY when the row still matches the
+ * pre-read expectation, so two consumers racing the same `queued → running`
+ * claim cannot both win.
+ *
+ *   - `id` / `kind` — the row to transition; `kind` selects the run family
+ *     (`plan` PlanRun rows or `apply` ApplyRun rows) so the discriminator can't
+ *     be crossed.
+ *   - `expectFrom` — the set of statuses the row MUST currently be in for the
+ *     CAS to fire. A row whose status is outside this set loses (`won: false`).
+ *   - `expectLeaseToken` — when set, the CAS additionally requires the row's
+ *     current `leaseToken` to equal this value (a stale fence token loses). When
+ *     unset, the lease column is NOT part of the predicate.
+ *   - `run` — the new PlanRun/ApplyRun to persist on a win; its `status` is the
+ *     SET target (the row's status column + run JSON both move to `run.status`).
+ *   - `setLeaseToken` / `clearLeaseToken` — the lease column write on a win:
+ *     `setLeaseToken` stamps a new fence token, `clearLeaseToken` nulls it.
+ *     Mutually exclusive; omit both to leave the lease column unchanged.
+ *   - `heartbeatAt` — when provided, the heartbeat column (and the persisted run
+ *     JSON's `heartbeatAt`) move to this value on a win; omit to take the
+ *     heartbeat carried on `run`.
+ *
+ * Returns `{ won: true, run }` with the post-transition run on a win, or
+ * `{ won: false, run }` with the RE-READ current row on a lost race (so callers
+ * observe the winning transition instead of clobbering it); `run` is absent only
+ * when the row truly vanished.
+ */
+export interface TransitionRunInput {
+  readonly id: string;
+  readonly kind: "plan" | "apply";
+  readonly expectFrom: readonly RunStatus[];
+  readonly expectLeaseToken?: string;
+  readonly run: PlanRun | ApplyRun;
+  readonly setLeaseToken?: string;
+  readonly clearLeaseToken?: boolean;
+  readonly heartbeatAt?: number;
+}
+
+export interface TransitionRunResult {
+  readonly won: boolean;
+  readonly run?: PlanRun | ApplyRun;
+}
+
 export interface OpenTofuDeploymentStore {
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile>;
   getRunnerProfile(id: string): Promise<RunnerProfile | undefined>;
@@ -264,6 +312,15 @@ export interface OpenTofuDeploymentStore {
 
   putApplyRun(run: ApplyRun): Promise<ApplyRun>;
   getApplyRun(id: string): Promise<ApplyRun | undefined>;
+
+  /**
+   * Status-conditional, lease-fenced compare-and-set transition of a run row.
+   * The post-insert mutation primitive: advances a run's status (+ lease /
+   * heartbeat) ONLY when the row still matches `expectFrom` (and, when set, the
+   * `expectLeaseToken` fence). See {@link TransitionRunInput} for the win/lose
+   * contract; a lost race re-reads and returns the current row with `won: false`.
+   */
+  transitionRun(input: TransitionRunInput): Promise<TransitionRunResult>;
 
   // SourceSyncRun ledger records (rows of `runs` with kind source_sync).
   putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun>;
@@ -616,6 +673,14 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   readonly #planRuns = new Map<string, PlanRun>();
   readonly #planRunInputs = new Map<string, PlanRunInputs>();
   readonly #applyRuns = new Map<string, ApplyRun>();
+  /**
+   * Per-run lease fence tokens. `leaseToken` is NOT a field of the public
+   * PlanRun / ApplyRun JSON (it rides only the indexed `runs.lease_token`
+   * column in the SQL / D1 backends), so the in-memory store keeps it in a
+   * side map keyed by run id to mirror the same fence semantics in
+   * {@link transitionRun}.
+   */
+  readonly #runLeases = new Map<string, string>();
   readonly #sourceSyncRuns = new Map<string, SourceSyncRun>();
   readonly #backupRuns = new Map<string, Run>();
   readonly #spaces = new Map<string, Space>();
@@ -703,6 +768,44 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
 
   getApplyRun(id: string): Promise<ApplyRun | undefined> {
     return Promise.resolve(this.#applyRuns.get(id));
+  }
+
+  /**
+   * In-memory compare-and-set. The store is single-threaded, so the read +
+   * conditional write are already atomic with respect to other awaits; the JS
+   * predicate is byte-identical in SEMANTICS to the SQL / D1 fenced UPDATE:
+   * the transition fires only when the current status is in `expectFrom` AND
+   * (when `expectLeaseToken` is set) the current lease token matches. A miss
+   * re-reads (here: returns the unchanged in-memory row) with `won: false`.
+   */
+  transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
+    const map: Map<string, PlanRun | ApplyRun> =
+      input.kind === "plan" ? this.#planRuns : this.#applyRuns;
+    const current = map.get(input.id);
+    if (!current) return Promise.resolve({ won: false });
+    const currentLease = this.#runLeases.get(input.id);
+    const statusMatches = input.expectFrom.includes(current.status);
+    const leaseMatches =
+      input.expectLeaseToken === undefined ||
+      input.expectLeaseToken === currentLease;
+    if (!statusMatches || !leaseMatches) {
+      return Promise.resolve({ won: false, run: current });
+    }
+    // Resolve the heartbeat the same way the SQL / D1 legs do: the input's
+    // explicit `heartbeatAt` wins, else the heartbeat carried on `run`.
+    const heartbeatAt =
+      input.heartbeatAt ?? input.run.heartbeatAt;
+    const persisted: PlanRun | ApplyRun = {
+      ...input.run,
+      ...(heartbeatAt === undefined ? {} : { heartbeatAt }),
+    } as PlanRun | ApplyRun;
+    map.set(input.id, persisted);
+    if (input.clearLeaseToken) {
+      this.#runLeases.delete(input.id);
+    } else if (input.setLeaseToken !== undefined) {
+      this.#runLeases.set(input.id, input.setLeaseToken);
+    }
+    return Promise.resolve({ won: true, run: persisted });
   }
 
   putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {

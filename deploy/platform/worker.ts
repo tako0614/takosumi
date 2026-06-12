@@ -31,6 +31,7 @@ import {
   type DriftSweepOperations,
 } from "../../worker/src/scheduled/drift.ts";
 import { handleCfProxyRequest } from "../../providers/cloudflare/hosting/cf_proxy_worker.ts";
+import { cfProxySigningSecretsFromEnv } from "../../core/bootstrap.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 
 export { CoordinationObject, OpenTofuRunnerObject };
@@ -102,13 +103,16 @@ export default {
     // dispatch namespace (the provider cannot place a script in a namespace).
     if (url.pathname.startsWith("/internal/cf-proxy/")) {
       // Fail closed: only forward when the control plane signed this exact
-      // (namespace, slug) scope with the operator deploy-control token and it is
-      // unexpired. An unsigned/expired/tampered base_url is rejected before any
-      // upstream Cloudflare call (closes the unauthenticated open-relay surface).
+      // (namespace, slug) scope with an accepted cf-proxy signing secret and it
+      // is unexpired. An unsigned/expired/tampered base_url is rejected before
+      // any upstream Cloudflare call (closes the unauthenticated open-relay
+      // surface). The accepted set is the dedicated signing secret + its
+      // rotation companion (+ deprecated bearer fallback), so a key rotation
+      // does not break in-flight runs.
       return handleCfProxyRequest(request, url, {
-        signingSecret: typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
-          ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
-          : undefined,
+        signingSecrets: cfProxySigningSecretsFromEnv(
+          env as unknown as Record<string, string | undefined>,
+        ),
       });
     }
     // Source webhook surface (Core Specification §6). This is a NEW top-level

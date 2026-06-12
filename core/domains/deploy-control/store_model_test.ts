@@ -1396,6 +1396,133 @@ test("runs table: plan/apply/source_sync/compatibility_check/backup rows verify 
   }
 });
 
+test("transitionRun: a matching expectFrom wins and returns the new run", async () => {
+  for (const [label, store] of await forEachStore()) {
+    await store.putPlanRun({ ...makePlanRun("run_t_a"), status: "queued" });
+
+    const result = await store.transitionRun({
+      id: "run_t_a",
+      kind: "plan",
+      expectFrom: ["queued"],
+      run: { ...makePlanRun("run_t_a"), status: "running", startedAt: 9_000 },
+      setLeaseToken: "lease_1",
+      heartbeatAt: 9_000,
+    });
+
+    expect(result.won, label).toBe(true);
+    expect(result.run?.status, label).toBe("running");
+    expect(result.run?.heartbeatAt, label).toBe(9_000);
+    // The persisted row reflects the transition on re-read.
+    const persisted = await store.getPlanRun("run_t_a");
+    expect(persisted?.status, label).toBe("running");
+    expect(persisted?.startedAt, label).toBe(9_000);
+  }
+});
+
+test("transitionRun: a non-matching expectFrom loses and leaves the row unchanged", async () => {
+  for (const [label, store] of await forEachStore()) {
+    // The row is already `running`; a claim that expects `queued` must lose.
+    await store.putPlanRun({ ...makePlanRun("run_t_b"), status: "running" });
+
+    const result = await store.transitionRun({
+      id: "run_t_b",
+      kind: "plan",
+      expectFrom: ["queued"],
+      run: { ...makePlanRun("run_t_b"), status: "succeeded" },
+    });
+
+    expect(result.won, label).toBe(false);
+    // The re-read returns the unchanged current row.
+    expect(result.run?.status, label).toBe("running");
+    const persisted = await store.getPlanRun("run_t_b");
+    expect(persisted?.status, label).toBe("running");
+  }
+});
+
+test("transitionRun: a stale lease fence token loses, the correct token wins", async () => {
+  for (const [label, store] of await forEachStore()) {
+    await store.putApplyRun({ ...makeApplyRun("run_t_c", "run_plan_c"), status: "queued" });
+
+    // Claim it and stamp a fence token.
+    const claim = await store.transitionRun({
+      id: "run_t_c",
+      kind: "apply",
+      expectFrom: ["queued"],
+      run: { ...makeApplyRun("run_t_c", "run_plan_c"), status: "running" },
+      setLeaseToken: "lease_real",
+      heartbeatAt: 1,
+    });
+    expect(claim.won, label).toBe(true);
+
+    // A heartbeat/transition with a STALE fence token must lose.
+    const stale = await store.transitionRun({
+      id: "run_t_c",
+      kind: "apply",
+      expectFrom: ["running"],
+      expectLeaseToken: "lease_stale",
+      run: { ...makeApplyRun("run_t_c", "run_plan_c"), status: "failed" },
+    });
+    expect(stale.won, label).toBe(false);
+    expect(stale.run?.status, label).toBe("running");
+
+    // The CORRECT fence token wins.
+    const fresh = await store.transitionRun({
+      id: "run_t_c",
+      kind: "apply",
+      expectFrom: ["running"],
+      expectLeaseToken: "lease_real",
+      run: { ...makeApplyRun("run_t_c", "run_plan_c"), status: "succeeded" },
+      clearLeaseToken: true,
+    });
+    expect(fresh.won, label).toBe(true);
+    expect(fresh.run?.status, label).toBe("succeeded");
+    expect((await store.getApplyRun("run_t_c"))?.status, label).toBe("succeeded");
+  }
+});
+
+test("transitionRun: two concurrent queued→running claims, exactly one wins", async () => {
+  for (const [label, store] of await forEachStore()) {
+    await store.putPlanRun({ ...makePlanRun("run_t_d"), status: "queued" });
+
+    const [a, b] = await Promise.all([
+      store.transitionRun({
+        id: "run_t_d",
+        kind: "plan",
+        expectFrom: ["queued"],
+        run: { ...makePlanRun("run_t_d"), status: "running" },
+        setLeaseToken: "lease_a",
+      }),
+      store.transitionRun({
+        id: "run_t_d",
+        kind: "plan",
+        expectFrom: ["queued"],
+        run: { ...makePlanRun("run_t_d"), status: "running" },
+        setLeaseToken: "lease_b",
+      }),
+    ]);
+
+    const winners = [a, b].filter((r) => r.won).length;
+    expect(winners, label).toBe(1);
+    // The loser re-read the now-`running` row (won:false, run.status running).
+    const loser = a.won ? b : a;
+    expect(loser.run?.status, label).toBe("running");
+    expect((await store.getPlanRun("run_t_d"))?.status, label).toBe("running");
+  }
+});
+
+test("transitionRun: a missing row loses with no run", async () => {
+  for (const [label, store] of await forEachStore()) {
+    const result = await store.transitionRun({
+      id: "run_t_missing",
+      kind: "plan",
+      expectFrom: ["queued"],
+      run: { ...makePlanRun("run_t_missing"), status: "running" },
+    });
+    expect(result.won, label).toBe(false);
+    expect(result.run, label).toBeUndefined();
+  }
+});
+
 test("Artifact ledger store: put/list by run keeps R2 pointer metadata ordered", async () => {
   for (const [label, store] of await forEachStore()) {
     await store.putArtifactRecord(

@@ -68,8 +68,14 @@ export function parseCfProxyPath(pathname: string): CfProxyScope | undefined {
 }
 
 export interface CfProxyRequestOptions {
-  /** HMAC secret the control plane signed the scope with. Absent -> disabled. */
-  readonly signingSecret?: string;
+  /**
+   * Accepted HMAC signing secrets the control plane may have signed the scope
+   * with (primary first, then any rotation/previous secret). A signature
+   * verifies when it matches ANY of them, so an operator can rotate the
+   * dedicated cf-proxy signing secret without breaking already-dispatched runs.
+   * Empty / absent -> the proxy is disabled (fail closed).
+   */
+  readonly signingSecrets?: readonly string[];
   /** Clock for expiry checks; defaults to `Date.now()`. */
   readonly nowMs?: number;
 }
@@ -110,12 +116,16 @@ export async function handleCfProxyRequest(
   // Fail closed: the managed cf-proxy only forwards when the control plane
   // signed this exact (namespace, slug) scope and it has not expired. Without a
   // configured secret the proxy is disabled; an invalid/expired/tampered
-  // signature is rejected BEFORE any upstream fetch.
-  if (!options.signingSecret) {
+  // signature is rejected BEFORE any upstream fetch. Any of the accepted
+  // signing secrets (primary + rotation) may have minted the signature.
+  const signingSecrets = (options.signingSecrets ?? []).filter(
+    (secret) => secret.length > 0,
+  );
+  if (signingSecrets.length === 0) {
     return cfErrorResponse(404, "cf_proxy_disabled");
   }
   const signatureOk = await verifyCfProxyScope(
-    options.signingSecret,
+    signingSecrets,
     scope.signature,
     {
       namespace: scope.namespace,

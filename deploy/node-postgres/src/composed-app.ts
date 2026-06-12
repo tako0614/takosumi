@@ -216,6 +216,10 @@ function embeddedServiceRuntimeEnv(
   };
   const deployControlToken = nonEmpty(runtimeEnv.TAKOSUMI_DEPLOY_CONTROL_TOKEN) ??
     `embedded-${crypto.randomUUID()}`;
+  // The dedicated cf-proxy signing secret (`TAKOSUMI_CF_PROXY_SIGNING_SECRET`
+  // [+ `_PREVIOUS`]) is decoupled from the deploy-control bearer and flows
+  // through the spread unchanged; bootstrap falls back to the bearer for one
+  // release when it is unset, so this substrate stays managed-Cloudflare ready.
   return {
     runtimeEnv: {
       ...runtimeEnv,
