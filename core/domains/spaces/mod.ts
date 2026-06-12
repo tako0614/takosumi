@@ -152,6 +152,16 @@ export class SpacesService {
   }
 
   /**
+   * Lists only the Spaces directly owned by `ownerUserId` (spec §4). Scopes the
+   * dashboard session list (`GET /api/v1/spaces`) to the caller's own spaces
+   * instead of loading every tenant's Space and filtering in the route.
+   */
+  async listSpacesByOwner(ownerUserId: string): Promise<readonly Space[]> {
+    requireNonEmptyString(ownerUserId, "ownerUserId");
+    return await this.#store.listSpacesByOwner(ownerUserId);
+  }
+
+  /**
    * Idempotent personal-Space creation for the accounts-plane login hook (wired
    * in M9). Returns the existing Space when the handle is already taken so a
    * repeated login never errors or creates a duplicate; otherwise creates a

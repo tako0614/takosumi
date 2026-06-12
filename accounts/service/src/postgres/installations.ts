@@ -202,6 +202,19 @@ export async function listSpacesForAccount(
   return rows.map(spaceFromRow);
 }
 
+export async function listSpacesForOwner(
+  client: PostgresQueryClient,
+  subject: string,
+): Promise<readonly SpaceRecord[]> {
+  const rows = (await postgresDrizzle(client, installationSchema)
+    .select(spaceColumns)
+    .from(spaces)
+    .innerJoin(ledgerAccounts, eq(spaces.accountId, ledgerAccounts.accountId))
+    .where(eq(ledgerAccounts.legalOwnerSubject, subject))
+    .orderBy(asc(spaces.createdAt), asc(spaces.spaceId))) as SpaceRow[];
+  return rows.map(spaceFromRow);
+}
+
 export async function saveAppInstallation(
   client: PostgresQueryClient,
   record: InstallationRecord,
