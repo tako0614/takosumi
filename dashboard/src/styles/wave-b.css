@@ -43,13 +43,6 @@
   font-family: var(--tg-font-mono);
   font-size: var(--tg-fs-xs);
 }
-.wb-url {
-  display: inline-block;
-  max-width: 360px;
-  overflow-wrap: anywhere;
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-xs);
-}
 
 /* Row-action cell: right-aligned, never wraps its buttons. */
 .wb-row-actions {
@@ -79,32 +72,6 @@
   font-family: var(--tg-font-mono);
   font-size: var(--tg-fs-xs);
   color: var(--tg-fg-muted);
-}
-
-/* ===== Providers: catalog card meta grid ===== */
-.wb-provider-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: var(--tg-s-4);
-}
-.wb-provider-meta {
-  display: grid;
-  gap: var(--tg-s-3);
-}
-.wb-provider-meta-row {
-  display: grid;
-  gap: var(--tg-s-1);
-}
-.wb-provider-meta-row dt {
-  margin: 0;
-  font-size: var(--tg-fs-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--tg-fg-subtle);
-}
-.wb-provider-meta-row dd {
-  margin: 0;
 }
 
 /* ===== Graph: layered DAG board ===== */

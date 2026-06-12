@@ -9,7 +9,7 @@ import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { Network } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId } from "./space-state.ts";
+import { currentSpaceId } from "../../lib/space-state.ts";
 import {
   type ControlApiError,
   getSpaceGraph,
@@ -30,7 +30,7 @@ import {
   Skeleton,
 } from "../../components/ui/index.ts";
 
-export default function ControlGraphView() {
+export default function GraphView() {
   return <Page title={t("graph.title")}>{() => <Inner />}</Page>;
 }
 

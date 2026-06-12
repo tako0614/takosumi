@@ -1,20 +1,14 @@
 /*
  * wave-a.css — CORE control-flow view styling (Wave A).
  *
- * Local supplement for the everyday control path views (Installations list +
- * detail, Run / RunGroup, Activity, Space selector). Only carries rules the
+ * Local supplement for the run / run-group / activity views and the shared
+ * detail primitives (changes, diagnostics, audit, bindings). Only carries rules the
  * shared tokens/components/views CSS does not already provide; all colours come
  * from the canonical --tg-* tokens so this stays on the dark "Splatoon ink"
  * palette. Imported locally at the top of each Wave A view (never via index).
  */
 
 /* --- Page action clusters -------------------------------------------------- */
-.wa-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--tg-s-2);
-  align-items: center;
-}
 
 /* --- Inline error / notice lines ------------------------------------------- */
 .wa-error {
@@ -44,20 +38,8 @@
 }
 
 /* --- Inline code / id chips ------------------------------------------------- */
-.wa-id {
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-xs);
-  color: var(--tg-fg-muted);
-}
 
 /* --- Installations table cell helpers -------------------------------------- */
-.installation-name {
-  font-weight: 600;
-}
-.installation-stale-reason {
-  margin-top: var(--tg-s-1);
-  font-size: var(--tg-fs-xs);
-}
 
 /* --- Dependency / depends-on lists inside cards ---------------------------- */
 .wa-dep-columns {
@@ -232,21 +214,10 @@
   font-size: var(--tg-fs-sm);
   color: var(--tg-fg-muted);
 }
-.wa-deploy {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-3);
-  margin-top: var(--tg-s-4);
-}
 .wa-deploy-warn {
   margin: 0;
   font-size: var(--tg-fs-sm);
   color: var(--tg-danger);
-}
-.wa-apply-done {
-  margin: var(--tg-s-3) 0 0;
-  color: var(--tg-ink-blue);
-  font-size: var(--tg-fs-sm);
 }
 
 /* --- Deployment history list ----------------------------------------------- */
@@ -369,41 +340,3 @@
   color: var(--tg-fg);
 }
 
-/* --- Space selector --------------------------------------------------------- */
-.wa-space-selector {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-3);
-  margin-bottom: var(--tg-s-5);
-}
-.wa-space-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--tg-s-3);
-}
-.wa-space-field {
-  flex: 1 1 260px;
-  max-width: 420px;
-}
-.wa-space-create {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--tg-s-3);
-  padding: var(--tg-s-4);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-elev);
-}
-.wa-space-create .tg-field {
-  flex: 1 1 240px;
-}
-
-/* --- Generic inline launch link in a table cell ---------------------------- */
-.wa-row-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--tg-s-2);
-  justify-content: flex-end;
-}

@@ -10,7 +10,7 @@ import { createResource, For, Match, Show, Switch } from "solid-js";
 import { ScrollText } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId } from "./space-state.ts";
+import { currentSpaceId } from "../../lib/space-state.ts";
 import {
   type ActivityEvent,
   type ControlApiError,
@@ -24,7 +24,7 @@ import Skeleton from "../../components/ui/Skeleton.tsx";
 
 const ACTIVITY_LIMIT = 100;
 
-export default function ControlActivityView() {
+export default function ActivityView() {
   return <Page title={t("activity.title")}>{() => <Inner />}</Page>;
 }
 

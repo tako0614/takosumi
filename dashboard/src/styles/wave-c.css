@@ -27,61 +27,10 @@
   gap: var(--tg-s-4);
 }
 
-/* Stat strip (Home landing) */
-.wc-stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--tg-s-4);
-}
-
-/* Nav cards (account hub) */
-.wc-nav-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--tg-s-3);
-}
-.wc-nav-card {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--tg-s-4) var(--tg-s-5);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-elev);
-  color: var(--tg-fg);
-  font-weight: 600;
-  text-decoration: none;
-  transition:
-    border-color 120ms ease,
-    transform 120ms ease,
-    color 120ms ease;
-}
-.wc-nav-card:hover {
-  border-color: var(--tg-accent);
-  transform: translateY(-1px);
-  color: var(--tg-accent);
-  text-decoration: none;
-}
-.wc-nav-card-spec {
-  font-size: var(--tg-fs-xs);
-  font-weight: 400;
-  color: var(--tg-fg-subtle);
-  font-family: var(--tg-font-mono);
-}
-.wc-nav-card:hover .wc-nav-card-spec {
-  color: var(--tg-accent);
-  opacity: 0.75;
-}
-
 /* Form rows inside Cards */
 .wc-form {
   display: flex;
   flex-direction: column;
-  gap: var(--tg-s-4);
-}
-.wc-form-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: var(--tg-s-4);
 }
 .wc-form-actions {
@@ -91,9 +40,7 @@
   align-items: center;
 }
 @media (max-width: 640px) {
-  .wc-form-row {
-    grid-template-columns: 1fr;
-  }
+  
 }
 
 /* ===== Connections: guided token + env-pair editor ===== */

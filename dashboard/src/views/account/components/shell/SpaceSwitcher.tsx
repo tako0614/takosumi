@@ -2,7 +2,7 @@
  * Global Space switcher — TopBar control, the single owner of "which Space am I
  * working in" for the whole dashboard (GitHub org-switcher analogue).
  *
- * Replaces the per-view `views/control/SpaceSelector.tsx` embeds: every view
+ * Replaces the per-view `lib/space-state.ts` signal: every view
  * now reads the same `space-state.ts` signal this control writes. Lists Spaces
  * via `GET /api/v1/spaces`, defaults to the first Space when none is selected
  * (a personal Space is auto-created on first login, so views are not stuck on
@@ -20,7 +20,7 @@ import {
 import {
   currentSpaceId,
   setCurrentSpaceId,
-} from "../../../control/space-state.ts";
+} from "../../../../lib/space-state.ts";
 import { t } from "../../../../i18n/index.ts";
 import Button from "../../../../components/ui/Button.tsx";
 import { Input, Select } from "../../../../components/ui/Form.tsx";
