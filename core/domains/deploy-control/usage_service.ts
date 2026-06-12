@@ -330,14 +330,12 @@ export class UsageReportingService {
       );
     }
     await this.#billing.reconcileSpaceMonthlyCredits(spaceId);
-    const existing = await this.#store.getCreditBalance(spaceId);
     const nowIso = new Date(this.#now()).toISOString();
-    const balance = await this.#store.putCreditBalance({
-      spaceId,
-      availableCredits: (existing?.availableCredits ?? 0) + input.credits,
-      reservedCredits: existing?.reservedCredits ?? 0,
-      monthlyIncludedCredits: existing?.monthlyIncludedCredits ?? 0,
-      purchasedCredits: (existing?.purchasedCredits ?? 0) + input.credits,
+    // Atomic grant (single UPDATE): concurrent webhook deliveries — or a top-up
+    // racing the monthly reconcile — cannot lose updates (was a read-modify-
+    // write get→compute→putCreditBalance).
+    const balance = await this.#store.addCredits(spaceId, {
+      credits: input.credits,
       updatedAt: nowIso,
     });
     return { balance };
