@@ -2089,7 +2089,12 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     // created_at is the internal record's createdAt (epoch number for plan/apply
     // runs, ISO string for source_sync) — stored verbatim so the typed get round
     // trips, and used only for stable list ordering.
-    const createdAt = JSON.parse(row.runJson).createdAt ?? 0;
+    const parsed = JSON.parse(row.runJson) as {
+      readonly createdAt?: number | string;
+      readonly leaseToken?: string | null;
+      readonly heartbeatAt?: number | null;
+    };
+    const createdAt = parsed.createdAt ?? 0;
     await this.#drizzleUpsert(schema.runs, {
       id: row.id,
       runGroupId: row.runGroupId,
@@ -2099,7 +2104,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       environment: row.environment,
       type: row.type,
       status: row.status,
-      runJson: JSON.parse(row.runJson) as unknown,
+      leaseToken: parsed.leaseToken ?? null,
+      heartbeatAt: parsed.heartbeatAt ?? null,
+      runJson: parsed as unknown,
       createdAt: String(createdAt),
     });
   }
@@ -2183,7 +2190,20 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   async #ensureSchema(): Promise<void> {
-    this.#initialized ??= ensureD1OpenTofuLedgerSchema(this.db);
+    // Serialize concurrent callers onto the one in-flight bootstrap, but never
+    // cache a REJECTED promise: a transient failure (e.g. a contended DDL) would
+    // otherwise poison the isolate so every later method rejects forever. On
+    // failure, clear the memo so the next call retries; on success, the resolved
+    // promise stays cached and bootstrap runs exactly once.
+    if (this.#initialized === undefined) {
+      const attempt = ensureD1OpenTofuLedgerSchema(this.db).catch(
+        (error: unknown) => {
+          if (this.#initialized === attempt) this.#initialized = undefined;
+          throw error;
+        },
+      );
+      this.#initialized = attempt;
+    }
     await this.#initialized;
   }
 }
@@ -2586,6 +2606,8 @@ export async function ensureD1OpenTofuLedgerSchema(
       environment text,
       type text not null,
       status text not null,
+      lease_token text,
+      heartbeat_at integer,
       run_json text not null,
       created_at text not null default ""
     )`,
@@ -2867,6 +2889,8 @@ async function migrateD1OpenTofuLedgerSchema(db: D1Database): Promise<void> {
   await ensureD1Column(db, "runs", "source_id", "text");
   await ensureD1Column(db, "runs", "installation_id", "text");
   await ensureD1Column(db, "runs", "environment", "text");
+  await ensureD1Column(db, "runs", "lease_token", "text");
+  await ensureD1Column(db, "runs", "heartbeat_at", "integer");
   await rebuildRunsTableIfNeeded(db);
   await backfillD1SourceScopedRuns(db);
   await ensureD1Column(db, "credential_mint_events", "source_id", "text");
@@ -3057,6 +3081,8 @@ async function rebuildRunsTableIfNeeded(db: D1Database): Promise<void> {
     return;
   }
   const hasSourceId = byName.has("source_id");
+  const hasLeaseToken = byName.has("lease_token");
+  const hasHeartbeatAt = byName.has("heartbeat_at");
   await db.prepare(
     `create table runs__takosumi_migrate (
       id text primary key,
@@ -3067,14 +3093,16 @@ async function rebuildRunsTableIfNeeded(db: D1Database): Promise<void> {
       environment text,
       type text not null,
       status text not null,
+      lease_token text,
+      heartbeat_at integer,
       run_json text not null,
       created_at text not null default ""
     )`,
   ).run();
   await db.prepare(
     `insert into runs__takosumi_migrate
-      (id, run_group_id, space_id, source_id, installation_id, environment, type, status, run_json, created_at)
-      select id, run_group_id, space_id, ${hasSourceId ? "source_id" : "null"}, installation_id, environment, type, status, run_json, created_at
+      (id, run_group_id, space_id, source_id, installation_id, environment, type, status, lease_token, heartbeat_at, run_json, created_at)
+      select id, run_group_id, space_id, ${hasSourceId ? "source_id" : "null"}, installation_id, environment, type, status, ${hasLeaseToken ? "lease_token" : "null"}, ${hasHeartbeatAt ? "heartbeat_at" : "null"}, run_json, created_at
       from runs`,
   ).run();
   await db.prepare(`drop table runs`).run();

@@ -5,6 +5,9 @@ import {
   InstallationPatchGuardConflict,
 } from "./store.ts";
 import { SqlOpenTofuDeploymentStore } from "./store_sql.ts";
+import { PGliteSqlClient } from "./pglite_sql_client.ts";
+import { SqliteFakeD1 } from "./sqlite_fake_d1.ts";
+import { CloudflareD1OpenTofuDeploymentStore } from "../../../worker/src/d1_opentofu_store.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import type {
   SqlClient,
@@ -233,6 +236,23 @@ class ModelSqlClient implements SqlClient {
       this.#tables.set(name, table);
     }
     return table;
+  }
+
+  /**
+   * Single in-memory connection: BEGIN / COMMIT / ROLLBACK are simulated by
+   * snapshotting the rows before `fn` and restoring them if `fn` throws. The
+   * fake is serial so there is no concurrent isolation to model.
+   */
+  async transaction<T>(
+    fn: (transaction: SqlTransaction) => T | Promise<T>,
+  ): Promise<T> {
+    const snapshot = this.snapshot();
+    try {
+      return await fn(this);
+    } catch (error) {
+      this.restore(snapshot);
+      throw error;
+    }
   }
 
   /** Deep-copies all rows so a transaction wrapper can roll back to this point. */
@@ -768,17 +788,24 @@ function artifactRecord(over: Partial<ArtifactRecord> = {}): ArtifactRecord {
   };
 }
 
-// Run the same assertions against both store implementations so the in-memory
-// dev/test store and the SQL production store stay symmetric.
-function bothStores(): readonly [string, OpenTofuDeploymentStore][] {
+// Run the same assertions against EVERY real store engine so the in-memory
+// dev/test store, the Postgres SQL store, and the D1 store stay symmetric. The
+// Postgres leg runs on PGlite (in-process WASM Postgres) and the D1 leg on a
+// bun:sqlite-backed D1 fake, so the matrix exercises the stores' actual SQL and
+// the canonical migration DDL — not a hand-rolled approximation.
+async function forEachStore(): Promise<
+  readonly [string, OpenTofuDeploymentStore][]
+> {
+  const pgClient = await PGliteSqlClient.create();
   return [
-    ["in-memory", new InMemoryOpenTofuDeploymentStore()],
-    ["sql", new SqlOpenTofuDeploymentStore({ client: new ModelSqlClient() })],
+    ["memory", new InMemoryOpenTofuDeploymentStore()],
+    ["pg", new SqlOpenTofuDeploymentStore({ client: pgClient })],
+    ["d1", new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1())],
   ];
 }
 
 test("Space store: put/get/get-by-handle/list are symmetric", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putSpace(space({ id: "space_a", handle: "alice" }));
     await store.putSpace(
       space({
@@ -800,7 +827,7 @@ test("Space store: put/get/get-by-handle/list are symmetric", async () => {
 });
 
 test("InstallConfig store: put/get/list-by-space + built-in shared configs", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     // Space-authored config + a built-in shared config (no spaceId).
     await store.putInstallConfig(
       installConfig({ id: "cfg_a", spaceId: "space_1" }),
@@ -822,7 +849,7 @@ test("InstallConfig store: put/get/list-by-space + built-in shared configs", asy
 });
 
 test("OperatorConnectionDefault store: one default per provider", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putOperatorConnectionDefault(
       operatorDefault({
         id: "ocd_a",
@@ -855,7 +882,7 @@ test("OperatorConnectionDefault store: one default per provider", async () => {
 });
 
 test("Provider Template store: entries are symmetric", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     const entry: ProviderTemplate = {
       id: "cloudflare",
       providerSource: "registry.opentofu.org/cloudflare/cloudflare",
@@ -877,7 +904,7 @@ test("Provider Template store: entries are symmetric", async () => {
 });
 
 test("CapsuleCompatibilityReport store preserves owner fields", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     const report: CapsuleCompatibilityReport = {
       id: "caprep_owner",
       sourceId: "src_1",
@@ -907,7 +934,7 @@ test("CapsuleCompatibilityReport store preserves owner fields", async () => {
 });
 
 test("Installation store: put/get/get-by-name/list/unique are symmetric", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putInstallation(
       installation({ id: "inst_a", spaceId: "space_1" }),
     );
@@ -952,7 +979,7 @@ test("Installation unique(space_id, name, environment) is enforced (in-memory)",
 });
 
 test("Installation patch: unguarded mutate is symmetric", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putInstallation(installation({ id: "inst_p" }));
     const patched = await store.patchInstallation("inst_p", {
       status: "active",
@@ -974,7 +1001,7 @@ test("Installation patch: unguarded mutate is symmetric", async () => {
 });
 
 test("Installation patch: guard fences on currentDeploymentId", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putInstallation(installation({ id: "inst_g" }));
     // Guard matches (undefined cursor) -> succeeds and advances the cursor.
     const ok = await store.patchInstallation(
@@ -1004,7 +1031,7 @@ test("Installation patch: guard fences on currentDeploymentId", async () => {
 });
 
 test("Deployment store: put/get/list-by-installation are symmetric", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putDeployment(
       deployment({ id: "dep_a", installationId: "inst_1" }),
     );
@@ -1033,7 +1060,7 @@ test("Deployment store: put/get/list-by-installation are symmetric", async () =>
 });
 
 test("commitAppliedDeployment: writes the atomic unit + supersedes the prior deployment", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     // Seed an installation that already has a current (active) deployment +
     // outputSnapshot at generation 1, so the commit must supersede it.
     await store.putInstallation(
@@ -1102,7 +1129,7 @@ test("commitAppliedDeployment: writes the atomic unit + supersedes the prior dep
 });
 
 test("commitAppliedDeployment: guard miss on a missing installation returns undefined", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     const committed = await store.commitAppliedDeployment({
       newDeployment: deployment({ id: "dep_x" }),
       stateSnapshot: stateSnapshot({ id: "state_x" }),
@@ -1118,7 +1145,7 @@ test("commitAppliedDeployment: guard miss on a missing installation returns unde
 });
 
 test("commitAppliedDeployment: guard conflict throws InstallationPatchGuardConflict", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putInstallation(
       installation({ id: "inst_1", currentDeploymentId: "dep_current" }),
     );
@@ -1199,7 +1226,7 @@ test("commitAppliedDeployment (SQL): runs inside the SqlClient transaction seam 
 });
 
 test("DeploymentProfile store: upsert keyed (installation, environment)", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putDeploymentProfile(deploymentProfile({ id: "dpf_a" }));
     // A second profile for the SAME (installation, environment) replaces it.
     await store.putDeploymentProfile(
@@ -1241,7 +1268,7 @@ test("DeploymentProfile store: upsert keyed (installation, environment)", async 
 });
 
 test("StateSnapshot store: put/latest/list keyed (installation, environment, generation)", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putStateSnapshot(
       stateSnapshot({ id: "snap_g1", generation: 1 }),
     );
@@ -1279,7 +1306,7 @@ test("StateSnapshot store: put/latest/list keyed (installation, environment, gen
 });
 
 test("runs table: plan/apply/source_sync/compatibility_check/backup rows verify kind", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     const plan = makePlanRun("run_plan_1");
     const drift = makePlanRun("run_drift_1", { driftCheck: true });
     const apply = makeApplyRun("run_apply_1", "run_plan_1");
@@ -1370,7 +1397,7 @@ test("runs table: plan/apply/source_sync/compatibility_check/backup rows verify 
 });
 
 test("Artifact ledger store: put/list by run keeps R2 pointer metadata ordered", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putArtifactRecord(
       artifactRecord({
         id: "artifact_b",
@@ -1416,7 +1443,7 @@ test("Artifact ledger store: put/list by run keeps R2 pointer metadata ordered",
 });
 
 test("Dependency store: CRUD + list by space / consumer / producer are symmetric", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     // Two edges in space_1 sharing a producer; one unrelated edge in space_2.
     await store.putDependency(
       dependency({
@@ -1476,7 +1503,7 @@ test("Dependency store: CRUD + list by space / consumer / producer are symmetric
 });
 
 test("DependencySnapshot store: put/get round-trips the pinned values", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putDependencySnapshot(
       dependencySnapshot({ id: "ds_a", runId: "run_p" }),
     );
@@ -1491,7 +1518,7 @@ test("DependencySnapshot store: put/get round-trips the pinned values", async ()
 });
 
 test("OutputSnapshot store: put/get + latest by state generation are symmetric", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putOutputSnapshot(
       outputSnapshot({ id: "out_g1", stateGeneration: 1 }),
     );
@@ -1531,7 +1558,7 @@ test("OutputSnapshot store: put/get + latest by state generation are symmetric",
 });
 
 test("OutputShare store: put/get + list from/to space are symmetric", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     // space_1 grants two shares to space_2; space_3 grants one to space_1.
     await store.putOutputShare(
       outputShare({
@@ -1606,7 +1633,7 @@ test("OutputShare store: put/get + list from/to space are symmetric", async () =
 });
 
 test("RunGroup store: put/get/list-by-space round-trip", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putRunGroup(runGroup({ id: "rg_a" }));
     await store.putRunGroup(
       runGroup({ id: "rg_b", createdAt: "2026-06-07T00:00:00.000Z" }),
@@ -1631,7 +1658,7 @@ test("RunGroup store: put/get/list-by-space round-trip", async () => {
 });
 
 test("Activity store: put/list newest-first, space-scoped, limit-clamped", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     // Three events in space_1 at distinct timestamps + one in space_2.
     await store.putActivityEvent(
       activityEvent({ id: "act_a", createdAt: "2026-06-06T00:00:01.000Z" }),
@@ -1692,7 +1719,7 @@ test("Activity store: put/list newest-first, space-scoped, limit-clamped", async
 });
 
 test("Credential mint audit store: put/list by run without values", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putCredentialMintEvent(
       credentialMintEvent({
         id: "credmint_plan",
@@ -1734,7 +1761,7 @@ test("Credential mint audit store: put/list by run without values", async () => 
 });
 
 test("SecurityFinding store: put/list newest-first, space-scoped, run-filtered", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putSecurityFinding(
       securityFinding({ id: "sec_a", createdAt: "2026-06-06T00:00:01.000Z" }),
     );
@@ -1786,7 +1813,7 @@ test("SecurityFinding store: put/list newest-first, space-scoped, run-filtered",
 });
 
 test("Billing ledger store: balance, reservation, and usage round-trip", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putBillingPlan({
       id: "pro",
       name: "Pro",
@@ -1983,7 +2010,7 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
 });
 
 test("Backup store: put/list newest-first, space-scoped, round-trips", async () => {
-  for (const [label, store] of bothStores()) {
+  for (const [label, store] of await forEachStore()) {
     await store.putBackupRecord(
       backupRecord({ id: "bkp_a", createdAt: "2026-06-06T00:00:01.000Z" }),
     );
