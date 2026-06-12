@@ -109,7 +109,7 @@ export function createTakosumiOpenApiDocument(
           type: "http",
           scheme: "bearer",
           description:
-            "Artifact write bearer from TAKOSUMI_DEPLOY_TOKEN for /v1/artifacts write routes.",
+            "Artifact write bearer from TAKOSUMI_DEPLOY_TOKEN for /internal/v1/artifacts write routes.",
         },
         artifactFetchBearer: {
           type: "http",

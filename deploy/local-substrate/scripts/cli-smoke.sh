@@ -4,8 +4,8 @@
 #   1. GET  /internal/v1/runner-profiles.
 #   2. POST /internal/v1/plan-runs.
 #   3. POST /internal/v1/apply-runs.
-#   4. GET  /v1/installations/{id}.
-#   5. GET  /v1/installations/{id}/deployments.
+#   4. GET  /internal/v1/installations/{id}.
+#   5. GET  /internal/v1/installations/{id}/deployments.
 #
 # Run: bash scripts/cli-smoke.sh
 set -euo pipefail
@@ -127,9 +127,9 @@ if [[ "$DEPLOYMENT_STATUS" != "succeeded" ]]; then
 	exit 1
 fi
 
-GET_INSTALLATION_RESPONSE="$(get_json "/v1/installations/$INSTALLATION_ID")"
+GET_INSTALLATION_RESPONSE="$(get_json "/internal/v1/installations/$INSTALLATION_ID")"
 require_code "get installation" "$GET_INSTALLATION_RESPONSE" "200"
-LIST_DEPLOYMENTS_RESPONSE="$(get_json "/v1/installations/$INSTALLATION_ID/deployments")"
+LIST_DEPLOYMENTS_RESPONSE="$(get_json "/internal/v1/installations/$INSTALLATION_ID/deployments")"
 require_code "list deployments" "$LIST_DEPLOYMENTS_RESPONSE" "200"
 
 echo "OK deploy control installation=$INSTALLATION_ID deployment=$DEPLOYMENT_ID status=$DEPLOYMENT_STATUS digest=$PLAN_DIGEST"

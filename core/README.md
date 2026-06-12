@@ -14,30 +14,33 @@ bun install
 bun src/cli/main.ts server --port 8788
 ```
 
-## Public control-plane endpoints
+## Internal deploy-control seam (`/internal/v1`)
 
-The public surface is the §30 `/api` model: Spaces, Sources, Connections, Installations, Dependencies, Runs, RunGroups,
-Deployments, OutputShares, and Activity.
+This `core/api` Hono table is **not** edge-reachable. It is the in-process deploy-control seam dialed by the accounts
+composition; the single edge-public surface is `/api/v1/*`, owned by the accounts router (see
+[`docs/reference/deploy-control-api.md`](../docs/reference/deploy-control-api.md)). The seam models the §30 vocabulary —
+Spaces, Sources, Connections, Installations, Dependencies, Runs, RunGroups, Deployments, OutputShares, and Activity:
 
-- `POST /api/spaces` / `GET /api/spaces`
-- `POST /api/sources` / `POST /api/sources/{id}/sync`
-- `POST /api/connections/*` / `GET /api/connections`
-- `POST /api/spaces/{spaceId}/installations`
-- `POST /api/installations/{id}/plan`
-- `POST /api/runs/{id}/approve`
-- `POST /api/installations/{id}/destroy-plan`
-- `GET /api/installations/{id}/deployments`
-- `GET /api/deployments/{id}`
-- `GET /api/spaces/{spaceId}/activity`
+- `POST /internal/v1/spaces` / `GET /internal/v1/spaces`
+- `POST /internal/v1/sources` / `POST /internal/v1/sources/{id}/sync`
+- `POST /internal/v1/connections/*` / `GET /internal/v1/connections`
+- `POST /internal/v1/spaces/{spaceId}/installations`
+- `POST /internal/v1/installations/{id}/plan`
+- `POST /internal/v1/runs/{id}/approve`
+- `POST /internal/v1/installations/{id}/destroy-plan`
+- `GET /internal/v1/installations/{id}/deployments`
+- `GET /internal/v1/deployments/{id}`
+- `GET /internal/v1/spaces/{spaceId}/activity`
 
-The legacy `/v1/plan-runs`, `/v1/apply-runs`, `/v1/runner-profiles`, and `/v1/installations/*` ledger routes are an
-internal compatibility seam for the accounts plane / CLI. They are not surfaced through `/capabilities` or
-`/openapi.json`.
+The `/internal/v1/plan-runs`, `/internal/v1/apply-runs`, `/internal/v1/runner-profiles`, and
+`/internal/v1/installations/*` ledger routes are part of the same internal seam dialed by the accounts plane / CLI. They
+are not surfaced through `/capabilities` or `/openapi.json`. (The account-plane product surfaces `/v1/installations` and
+`/v1/connections` are a distinct edge API, owned by the accounts plane, not this seam.)
 
 ## Operator / internal extensions
 
-- Optional `/v1/artifacts*` routes — operator-internal object extension, not part of public Deploy Control v1
-- `/api/internal/v1/runtime/agents/*` — compatibility fleet ledger for private operator distributions
+- Optional `/internal/v1/artifacts*` routes — operator-internal object extension, not part of public Deploy Control v1
+- `/internal/v1/runtime/agents/*` — compatibility fleet ledger for private operator distributions
 - `TakosumiDeploymentRecordStore` — internal apply evidence and status for reference implementation workflows
 
 ## Required env (production)

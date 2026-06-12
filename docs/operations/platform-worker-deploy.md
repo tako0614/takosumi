@@ -130,7 +130,7 @@ curl -s https://app.takosumi.com/healthz
 curl -s https://app.takosumi.com/.well-known/openid-configuration | head -c 200  # issuer = bare origin
 curl -s -o /dev/null -w "%{http_code}" https://app.takosumi.com/oauth/jwks       # 200
 curl -s -o /dev/null -w "%{http_code}" https://app.takosumi.com/                 # 200 (dashboard SPA)
-curl -s -o /dev/null -w "%{http_code}" https://app.takosumi.com/api/spaces       # 401
+curl -s -o /dev/null -w "%{http_code}" https://app.takosumi.com/api/v1/spaces       # 401
 ```
 
 ## 公開ゲート

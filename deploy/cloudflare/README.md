@@ -21,14 +21,14 @@ DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment / OutputSnapsho
 
 ## Routing Shape
 
-The Worker forwards the canonical Takosumi `/api` control-plane routes to the embedded service app:
+The Worker forwards the canonical Takosumi `/api/v1` control-plane routes to the embedded service app:
 
 - Spaces, Sources, Connections, Installations, Dependencies, OutputShares, Runs, RunGroups, Deployments, and Activity.
 - `/install` external install links when this scaffold is mounted by a platform composition.
 
-Older `/v1/runner-profiles`, `/v1/plan-runs`, `/v1/apply-runs`, and `/v1/installations/*` routes are internal
-compatibility seams for accounts-plane and CLI adapters. They are not the public Takosumi model and should not appear in
-operator-facing capability or OpenAPI inventories.
+The `/internal/v1/runner-profiles`, `/internal/v1/plan-runs`, `/internal/v1/apply-runs`, and
+`/internal/v1/installations/*` routes are internal seams for accounts-plane and CLI adapters. They are not the
+edge-public Takosumi model and should not appear in operator-facing capability or OpenAPI inventories.
 
 Destroy is represented publicly as `destroy_plan` and `destroy_apply` Runs. Internally, the compatibility seam may still
 materialize reviewed plan artifacts through older plan/apply run records. The runner adapter calls the `RUNNER`
@@ -41,8 +41,8 @@ sidecar. Apply does not depend on a still-warm runner-local file and does not re
 
 Internal/service paths are also forwarded to the embedded service app:
 
-- `/api/internal/v1/*` for operator/internal APIs.
-- `/api/internal/v1/runtime/agents/*` for private compatibility fleet ledgers when an operator distribution enables them.
+- `/internal/v1/*` for the in-process deploy-control seam (not edge-public).
+- `/internal/v1/runtime/agents/*` for private compatibility fleet ledgers when an operator distribution enables them.
 - `/capabilities`, `/readyz`, `/livez`, `/openapi.json`, and `/metrics`.
 
 The Worker-local routes remain at the edge:
@@ -50,8 +50,8 @@ The Worker-local routes remain at the edge:
 - `/healthz` reports Worker health only.
 - `/coordination/*` routes to `CoordinationObject`.
 
-The only container binding here is the OpenTofu runner. Public API wording should stay aligned with `/api`; any
-internal execution profile / plan-run / apply-run references describe internal execution compatibility only.
+The only container binding here is the OpenTofu runner. The single edge-public API surface is `/api/v1`; any
+`/internal/v1` execution profile / plan-run / apply-run references describe the internal seam only.
 
 ## Workers for Platforms Boundary
 

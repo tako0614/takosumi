@@ -1,17 +1,19 @@
 /**
- * Public OpenTofu deployment-control-plane HTTP surface (Space-direct
- * Installation model). The public vocabulary is mounted under `/api` with no
- * version prefix. The canonical route list is the composed
- * `DEPLOY_CONTROL_PUBLIC_ENDPOINTS` descriptor inventory below plus
- * `docs/reference/deploy-control-api.md`; keep new routes in their owning
- * `deploy_control_*_routes.ts` slice instead of maintaining a hand-written list
- * in this header.
+ * In-process OpenTofu deployment-control-plane HTTP seam (Space-direct
+ * Installation model). This `core/api` Hono table is the `/internal/v1/*` seam
+ * contract dialed in-process by the accounts composition; it is NOT edge-public.
+ * The single edge-public deploy-control surface is `/api/v1/*`, owned by the
+ * accounts router, which delegates to these `operations`. The canonical route
+ * list is the composed `DEPLOY_CONTROL_PUBLIC_ENDPOINTS` descriptor inventory
+ * below plus `docs/reference/deploy-control-api.md`; keep new routes in their
+ * owning `deploy_control_*_routes.ts` slice instead of maintaining a
+ * hand-written list in this header.
  *
  * The PlanRun / ApplyRun / operator execution boundary ledger routes and the
  * Installation read (+ deployments / deployment-outputs) used by the accounts
- * plane + CLI stay on the internal `/v1/*` seam (see
- * `deploy-control-api.ts`); they are not part of the public `/api`
- * vocabulary and mount only when `mountInternalLedgerRoutes` is explicitly set.
+ * plane + CLI live on the same `/internal/v1/*` seam (see
+ * `deploy-control-api.ts`); they are not surfaced through `/capabilities` or
+ * `/openapi.json` and mount only when `mountInternalLedgerRoutes` is set.
  *
  * The handlers, their descriptor slices, and their 501 fallbacks are split into
  * per-resource-group sibling modules (`deploy_control_*_routes.ts`). This module
@@ -90,13 +92,13 @@ export type {
 export { DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES } from "./deploy_control_shared.ts";
 
 // Re-export route-path constants so existing in-process consumers keep compiling.
-// The descriptor inventory below intentionally excludes the legacy `/v1`
+// The descriptor inventory below intentionally excludes the `/internal/v1`
 // ledger seam; it is mounted for internal compatibility but is not discoverable
 // through `/capabilities` or `/openapi.json`.
 export * from "./deploy_control_route_paths.ts";
 
 /**
- * The §30 `/api` deploy-control descriptor inventory, derived from the
+ * The §30 `/internal/v1` deploy-control descriptor inventory, derived from the
  * per-resource-group slices in the SAME order they are mounted below. Consumed by
  * `route_families.ts` to derive `/capabilities` and `/openapi.json`, and
  * iterated by {@link mountNotImplementedRoutes} to drive the controller-absent

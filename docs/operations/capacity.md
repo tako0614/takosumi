@@ -69,7 +69,7 @@ planning に使う conservative capacity:
 capacity review で見る signal:
 
 - platform worker 5xx / latency
-- `/api` read/write RPS
+- `/api/v1` read/write RPS
 - Provider Template read RPS and Provider Env Set create/update/rotate write rate
 - source sync / compatibility / plan / apply run counts
 - queue depth, queue age, DLQ count
