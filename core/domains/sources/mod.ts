@@ -48,6 +48,7 @@ import {
   type CapsuleSourceFile,
 } from "./capsule_compatibility.ts";
 import { evaluateSourceUrl } from "./url-policy.ts";
+import { canonicalProviderAddress } from "@takosumi/providers";
 
 const DEFAULT_REF = "main";
 const DEFAULT_PATH = ".";
@@ -605,12 +606,12 @@ export class SourcesService {
     const catalogEntries = await this.#store.listProviderTemplates();
     const catalogBySource = new Map(
       catalogEntries.map((entry) => [
-        canonicalProviderSource(entry.providerSource),
+        canonicalProviderAddress(entry.providerSource),
         entry.credentialSources,
       ]),
     );
     return providers.map((provider) => {
-      const source = canonicalProviderSource(provider.source);
+      const source = canonicalProviderAddress(provider.source);
       const credentialSources = catalogBySource.get(source);
       return credentialSources
         ? { ...provider, credentialSources }
@@ -886,29 +887,6 @@ function intersectOptionalLists(
   if (local === undefined) return ceiling;
   const allowed = new Set(ceiling);
   return local.filter((entry) => allowed.has(entry)).sort();
-}
-
-function canonicalProviderSource(source: string): string {
-  if (source.startsWith("registry.opentofu.org/")) return source;
-  if (source === "cloudflare/cloudflare") {
-    return "registry.opentofu.org/cloudflare/cloudflare";
-  }
-  if (
-    source === "hashicorp/aws" ||
-    source === "hashicorp/google" ||
-    source === "hashicorp/kubernetes" ||
-    source === "hashicorp/random" ||
-    source === "hashicorp/tls"
-  ) {
-    return `registry.opentofu.org/${source}`;
-  }
-  if (source === "integrations/github") {
-    return "registry.opentofu.org/integrations/github";
-  }
-  if (/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/u.test(source)) {
-    return `registry.opentofu.org/${source}`;
-  }
-  return source;
 }
 
 function timingSafeHexEquals(a: string, b: string): boolean {

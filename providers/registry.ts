@@ -224,6 +224,22 @@ export function providerForAddress(
   return BY_ADDRESS.get(address) ?? BY_ADDRESS.get(address.split("/").pop()!);
 }
 
+const SHORT_PROVIDER_ADDRESS = /^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/u;
+
+/**
+ * Canonicalize an OpenTofu provider source to the fully-qualified
+ * `registry.opentofu.org/<namespace>/<name>` form. A source that is already
+ * fully qualified is returned unchanged; a short `<namespace>/<name>` source is
+ * prefixed with the default registry host; anything else (a bare local name or a
+ * non-registry address) is returned unchanged. The default registry host is the
+ * registry's single source of truth, so `core` does not re-declare it.
+ */
+export function canonicalProviderAddress(source: string): string {
+  if (source.startsWith(`${OPENTOFU}/`)) return source;
+  if (SHORT_PROVIDER_ADDRESS.test(source)) return `${OPENTOFU}/${source}`;
+  return source;
+}
+
 export function providerForConnectionKind(
   kind: ConnectionKind,
 ): ManagedProvider | undefined {
