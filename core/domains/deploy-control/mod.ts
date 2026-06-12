@@ -80,11 +80,8 @@ import type {
   CreditBalance,
   CreditReservation,
   InvoiceUsageReconciliation,
-  ManagedResourceUsageMeter,
   SpaceSubscription,
   UsageEvent,
-  UsageEventKind,
-  UsageEventSource,
 } from "takosumi-contract/billing";
 import type { SourcesService } from "../sources/mod.ts";
 import type {
@@ -215,6 +212,19 @@ import {
   DISABLED_BILLING_SETTINGS,
   type ReconcileStripeSpaceSubscriptionInput,
 } from "./billing_service.ts";
+import { UsageReportingService } from "./usage_service.ts";
+// The usage input-type vocabulary is owned by the usage service; re-exported here
+// so the historical `./domains/deploy-control/mod.ts` import path stays stable.
+export type {
+  RecordMeteredUsageInput,
+  RecordManagedResourceUsageInput,
+  ReconcileInvoiceUsageInput,
+} from "./usage_service.ts";
+import type {
+  RecordMeteredUsageInput,
+  RecordManagedResourceUsageInput,
+  ReconcileInvoiceUsageInput,
+} from "./usage_service.ts";
 import {
   canonicalProviderAddress,
   compactLayeredPolicy,
@@ -588,31 +598,6 @@ function initialProviderTemplates(): readonly ProviderTemplate[] {
   ];
 }
 
-export interface RecordMeteredUsageInput {
-  readonly installationId?: string;
-  readonly runId?: string;
-  readonly kind: UsageEventKind;
-  readonly quantity: number;
-  readonly credits: number;
-  readonly source: Exclude<UsageEventSource, "runner">;
-  readonly idempotencyKey: string;
-  readonly createdAt?: string;
-}
-
-export interface RecordManagedResourceUsageInput {
-  readonly periodStart: string;
-  readonly periodEnd: string;
-  readonly meters: readonly ManagedResourceUsageMeter[];
-}
-
-export interface ReconcileInvoiceUsageInput {
-  readonly invoiceId: string;
-  readonly periodStart: string;
-  readonly periodEnd: string;
-  readonly invoicedCredits: number;
-  readonly createdAt?: string;
-}
-
 /**
  * At-rest sealer for the SENSITIVE pinned values of a DependencySnapshot entry
  * (spec §11 / §18). The host wires this with the SAME AES-GCM envelope used for
@@ -960,6 +945,7 @@ export class OpenTofuDeploymentController {
   readonly #connections: ConnectionManagement;
   readonly #deployments: DeploymentQuery;
   readonly #billing: BillingService;
+  readonly #usage: UsageReportingService;
   readonly #credentials: RunCredentialBroker;
   #connectionsService?: ConnectionsService;
 
@@ -1000,6 +986,13 @@ export class OpenTofuDeploymentController {
       requireSpace: (spaceId) => this.#requireSpace(spaceId),
       resolveRunProviderBindings: (planRun) =>
         this.#resolveRunProviderBindings(planRun),
+    });
+    this.#usage = new UsageReportingService({
+      store: this.#store,
+      newId: this.#newId,
+      now: this.#now,
+      requireSpace: (spaceId) => this.#requireSpace(spaceId),
+      billing: this.#billing,
     });
     this.#credentials = new RunCredentialBroker({
       store: this.#store,
@@ -1067,28 +1060,7 @@ export class OpenTofuDeploymentController {
       readonly plan?: BillingPlan;
     };
   }> {
-    requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
-    await this.#billing.reconcileSpaceMonthlyCredits(spaceId);
-    const settings = await this.#billing.billingSettingsForSpace(spaceId);
-    const balance = await this.#store.getCreditBalance(spaceId);
-    const account = await this.#store.getBillingAccountForOwner(
-      "space",
-      spaceId,
-    );
-    const subscription = await this.#store.getSpaceSubscription(spaceId);
-    const plan = subscription
-      ? await this.#store.getBillingPlan(subscription.planId)
-      : undefined;
-    return {
-      billing: {
-        settings,
-        ...(balance ? { balance } : {}),
-        ...(account ? { account } : {}),
-        ...(subscription ? { subscription } : {}),
-        ...(plan ? { plan } : {}),
-      },
-    };
+    return await this.#usage.getSpaceBilling(spaceId);
   }
 
   async listSpaceUsage(
@@ -1098,200 +1070,41 @@ export class OpenTofuDeploymentController {
     readonly usageEvents: readonly UsageEvent[];
     readonly nextCursor?: string;
   }> {
-    requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
-    const { items, nextCursor } = await this.#store.listUsageEventsPage(
-      spaceId,
-      params ?? {},
-    );
-    return {
-      usageEvents: items,
-      ...(nextCursor !== undefined ? { nextCursor } : {}),
-    };
+    return await this.#usage.listSpaceUsage(spaceId, params);
   }
 
   async recordMeteredUsage(
     spaceId: string,
     input: RecordMeteredUsageInput,
   ): Promise<{ readonly usageEvent: UsageEvent }> {
-    requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
-    if (input.source === "billing_reconciliation") {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "usage event source must be resource_meter or manual_adjustment",
-      );
-    }
-    if (!isExternalOperatorUsageEventSource(input.source)) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "usage event source must be resource_meter or manual_adjustment",
-      );
-    }
-    const usageEvent = await this.#store.putUsageEvent(
-      normalizeMeteredUsageEvent(
-        spaceId,
-        input,
-        () => this.#newId("usage"),
-        () => new Date(this.#now()).toISOString(),
-      ),
-    );
-    return { usageEvent };
-  }
-
-  async #recordBillingReconciliationUsage(
-    spaceId: string,
-    input: Omit<RecordMeteredUsageInput, "source"> & {
-      readonly source: "billing_reconciliation";
-    },
-  ): Promise<{ readonly usageEvent: UsageEvent }> {
-    const usageEvent = await this.#store.putUsageEvent(
-      normalizeMeteredUsageEvent(
-        spaceId,
-        input,
-        () => this.#newId("usage"),
-        () => new Date(this.#now()).toISOString(),
-      ),
-    );
-    return { usageEvent };
-  }
-
-  async #recordResourceMeterUsage(
-    spaceId: string,
-    input: Omit<RecordMeteredUsageInput, "source">,
-  ): Promise<{ readonly usageEvent: UsageEvent }> {
-    const usageEvent = await this.#store.putUsageEvent(
-      normalizeMeteredUsageEvent(
-        spaceId,
-        {
-          ...input,
-          source: "resource_meter",
-        },
-        () => this.#newId("usage"),
-        () => new Date(this.#now()).toISOString(),
-      ),
-    );
-    return { usageEvent };
+    return await this.#usage.recordMeteredUsage(spaceId, input);
   }
 
   async recordManagedResourceUsage(
     spaceId: string,
     input: RecordManagedResourceUsageInput,
   ): Promise<{ readonly usageEvents: readonly UsageEvent[] }> {
-    requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
-    const period = normalizeUsagePeriod(input);
-    const usageEvents: UsageEvent[] = [];
-    for (const meter of input.meters) {
-      const recorded = await this.#recordResourceMeterUsage(spaceId, {
-        ...(meter.installationId
-          ? { installationId: meter.installationId }
-          : {}),
-        kind: meter.kind,
-        quantity: meter.quantity,
-        credits: meter.credits,
-        idempotencyKey: [
-          "managed-resource",
-          spaceId,
-          period.periodStart,
-          period.periodEnd,
-          meter.meterId,
-          meter.installationId ?? "space",
-          meter.kind,
-        ].join(":"),
-        createdAt: period.periodEnd,
-      });
-      usageEvents.push(recorded.usageEvent);
-    }
-    return { usageEvents };
+    return await this.#usage.recordManagedResourceUsage(spaceId, input);
   }
 
   async reconcileInvoiceUsage(
     spaceId: string,
     input: ReconcileInvoiceUsageInput,
   ): Promise<InvoiceUsageReconciliation> {
-    requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
-    requireNonEmptyString(input.invoiceId, "invoiceId");
-    const period = normalizeInvoiceUsagePeriod(input);
-    const events = await this.#store.listUsageEvents(spaceId);
-    const meteredCredits = events
-      .filter((event) => isMeteredInvoiceUsageSource(event.source))
-      .filter((event) =>
-        isUsageEventInInvoicePeriod(
-          event,
-          period.periodStart,
-          period.periodEnd,
-        ),
-      )
-      .reduce((sum, event) => sum + event.credits, 0);
-    const adjustmentCredits = input.invoicedCredits - meteredCredits;
-    const { usageEvent } = await this.#recordBillingReconciliationUsage(
-      spaceId,
-      {
-        kind: "operation",
-        quantity: 1,
-        credits: adjustmentCredits,
-        source: "billing_reconciliation",
-        idempotencyKey: [
-          "invoice-reconciliation",
-          spaceId,
-          input.invoiceId,
-          period.periodStart,
-          period.periodEnd,
-        ].join(":"),
-        createdAt: input.createdAt ?? new Date(this.#now()).toISOString(),
-      },
-    );
-    return {
-      invoiceId: input.invoiceId,
-      periodStart: period.periodStart,
-      periodEnd: period.periodEnd,
-      meteredCredits,
-      invoicedCredits: input.invoicedCredits,
-      adjustmentCredits,
-      usageEvent,
-    };
+    return await this.#usage.reconcileInvoiceUsage(spaceId, input);
   }
 
   async listSpaceCreditReservations(spaceId: string): Promise<{
     readonly creditReservations: readonly CreditReservation[];
   }> {
-    requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
-    return {
-      creditReservations: await this.#store.listCreditReservations(spaceId),
-    };
+    return await this.#usage.listSpaceCreditReservations(spaceId);
   }
 
   async topUpSpaceCredits(
     spaceId: string,
     input: { readonly credits: number },
   ): Promise<{ readonly balance: CreditBalance }> {
-    requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
-    if (
-      !Number.isInteger(input.credits) ||
-      !Number.isFinite(input.credits) ||
-      input.credits <= 0
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "credits must be a positive integer",
-      );
-    }
-    await this.#billing.reconcileSpaceMonthlyCredits(spaceId);
-    const existing = await this.#store.getCreditBalance(spaceId);
-    const nowIso = new Date(this.#now()).toISOString();
-    const balance = await this.#store.putCreditBalance({
-      spaceId,
-      availableCredits: (existing?.availableCredits ?? 0) + input.credits,
-      reservedCredits: existing?.reservedCredits ?? 0,
-      monthlyIncludedCredits: existing?.monthlyIncludedCredits ?? 0,
-      purchasedCredits: (existing?.purchasedCredits ?? 0) + input.credits,
-      updatedAt: nowIso,
-    });
-    return { balance };
+    return await this.#usage.topUpSpaceCredits(spaceId, input);
   }
 
   async changeSpaceSubscription(
@@ -6642,181 +6455,6 @@ function updatedTemplateBinding(
     ...binding,
     requiresConfirmation: templatePolicy.requiresConfirmation,
   };
-}
-
-function normalizeMeteredUsageEvent(
-  spaceId: string,
-  input: RecordMeteredUsageInput,
-  newIdForUsage: () => string,
-  nowIso: () => string,
-): UsageEvent {
-  if (!isUsageEventKind(input.kind)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "usage event kind is not supported",
-    );
-  }
-  if (!isExternalUsageEventSource(input.source)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "usage event source must be resource_meter, billing_reconciliation, or manual_adjustment",
-    );
-  }
-  if (!Number.isFinite(input.quantity) || input.quantity < 0) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "usage quantity must be a non-negative finite number",
-    );
-  }
-  if (
-    !Number.isInteger(input.credits) ||
-    (input.source !== "billing_reconciliation" && input.credits < 0)
-  ) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      input.source === "billing_reconciliation"
-        ? "usage credits must be an integer"
-        : "usage credits must be a non-negative integer",
-    );
-  }
-  requireNonEmptyString(input.idempotencyKey, "idempotencyKey");
-  const createdAt = input.createdAt ?? nowIso();
-  if (Number.isNaN(Date.parse(createdAt))) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "usage createdAt must be an ISO timestamp",
-    );
-  }
-  return {
-    id: newIdForUsage(),
-    spaceId,
-    ...(input.installationId ? { installationId: input.installationId } : {}),
-    ...(input.runId ? { runId: input.runId } : {}),
-    kind: input.kind,
-    quantity: input.quantity,
-    credits: input.credits,
-    source: input.source,
-    idempotencyKey: input.idempotencyKey,
-    createdAt,
-  };
-}
-
-function normalizeUsagePeriod(input: RecordManagedResourceUsageInput): {
-  readonly periodStart: string;
-  readonly periodEnd: string;
-} {
-  const periodStartMs = Date.parse(input.periodStart);
-  const periodEndMs = Date.parse(input.periodEnd);
-  if (
-    !Number.isFinite(periodStartMs) ||
-    !Number.isFinite(periodEndMs) ||
-    periodEndMs <= periodStartMs
-  ) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "managed resource usage period must have valid ISO periodStart < periodEnd",
-    );
-  }
-  if (!Array.isArray(input.meters)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "managed resource usage meters must be an array",
-    );
-  }
-  for (const meter of input.meters) {
-    if (!isManagedResourceUsageKind(meter.kind)) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "managed resource usage kind is not supported",
-      );
-    }
-    requireNonEmptyString(meter.meterId, "meterId");
-  }
-  return {
-    periodStart: new Date(periodStartMs).toISOString(),
-    periodEnd: new Date(periodEndMs).toISOString(),
-  };
-}
-
-function normalizeInvoiceUsagePeriod(input: ReconcileInvoiceUsageInput): {
-  readonly periodStart: string;
-  readonly periodEnd: string;
-} {
-  const periodStartMs = Date.parse(input.periodStart);
-  const periodEndMs = Date.parse(input.periodEnd);
-  if (
-    !Number.isFinite(periodStartMs) ||
-    !Number.isFinite(periodEndMs) ||
-    periodEndMs <= periodStartMs
-  ) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "invoice usage period must have valid ISO periodStart < periodEnd",
-    );
-  }
-  return {
-    periodStart: new Date(periodStartMs).toISOString(),
-    periodEnd: new Date(periodEndMs).toISOString(),
-  };
-}
-
-function isUsageEventKind(value: unknown): value is UsageEventKind {
-  return (
-    value === "runner_minute" ||
-    value === "managed_compute" ||
-    value === "managed_storage_gb_hour" ||
-    value === "artifact_storage_gb_hour" ||
-    value === "backup_storage_gb_hour" ||
-    value === "egress_gb" ||
-    value === "operation"
-  );
-}
-
-function isManagedResourceUsageKind(
-  value: unknown,
-): value is ManagedResourceUsageMeter["kind"] {
-  return (
-    value === "managed_compute" ||
-    value === "managed_storage_gb_hour" ||
-    value === "artifact_storage_gb_hour" ||
-    value === "backup_storage_gb_hour" ||
-    value === "egress_gb"
-  );
-}
-
-function isExternalUsageEventSource(
-  value: unknown,
-): value is Exclude<UsageEventSource, "runner"> {
-  return (
-    value === "resource_meter" ||
-    value === "billing_reconciliation" ||
-    value === "manual_adjustment"
-  );
-}
-
-function isExternalOperatorUsageEventSource(
-  value: unknown,
-): value is "resource_meter" | "manual_adjustment" {
-  return value === "resource_meter" || value === "manual_adjustment";
-}
-
-function isMeteredInvoiceUsageSource(source: UsageEventSource): boolean {
-  return source === "runner" || source === "resource_meter";
-}
-
-function isUsageEventInInvoicePeriod(
-  event: UsageEvent,
-  periodStart: string,
-  periodEnd: string,
-): boolean {
-  const createdAt = Date.parse(event.createdAt);
-  if (!Number.isFinite(createdAt)) return false;
-  const start = Date.parse(periodStart);
-  const end = Date.parse(periodEnd);
-  if (event.source === "resource_meter") {
-    return createdAt > start && createdAt <= end;
-  }
-  return createdAt >= start && createdAt < end;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
