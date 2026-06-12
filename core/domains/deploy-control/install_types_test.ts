@@ -28,6 +28,7 @@ import {
   OpenTofuDeploymentController,
 } from "./mod.ts";
 import { projectPlanRun } from "./projection_run.ts";
+import { verifyCfProxyScope } from "../../../providers/cloudflare/hosting/cf_proxy_signature.ts";
 import { InMemoryOpenTofuDeploymentStore } from "./store.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import type {
@@ -454,12 +455,14 @@ test("managed worker install (operator-default credential) redirects the cloudfl
       ),
   };
   const managedRunner = recordingRunner({});
+  const cfProxySecret = "test-cf-proxy-secret";
   const managedController = new OpenTofuDeploymentController({
     store,
     runner: managedRunner,
     vault: operatorDefaultVault as never,
     now: sequenceNow(1),
     newId: deterministicIds(),
+    cfProxySigningSecret: cfProxySecret,
   });
   const { planRun: managedPlan } =
     await managedController.createInstallationPlan("inst_fixture");
@@ -467,10 +470,81 @@ test("managed worker install (operator-default credential) redirects the cloudfl
   const managedMainTf =
     managedRunner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
   // The cloudflare provider block carries the cf-proxy base_url scoped to the
-  // dispatch namespace + the install slug ("app"); a capsule cannot override it.
-  expect(managedMainTf).toContain(
-    'base_url = "https://app.takosumi.com/internal/cf-proxy/takosumi-tenants/app/client/v4"',
+  // dispatch namespace + the install slug ("app"), prefixed by a control-plane
+  // signature segment; a capsule cannot override it nor forge the signature.
+  const baseUrlMatch = managedMainTf.match(
+    /base_url = "https:\/\/app\.takosumi\.com\/internal\/cf-proxy\/([^/]+)\/takosumi-tenants\/app\/client\/v4"/,
   );
+  expect(baseUrlMatch).not.toBeNull();
+  const signature = baseUrlMatch![1]!;
+  // The signature verifies for the scoped (namespace, slug) and is unexpired...
+  expect(
+    await verifyCfProxyScope(cfProxySecret, signature, {
+      namespace: "takosumi-tenants",
+      slug: "app",
+      nowMs: 0,
+    }),
+  ).toBe(true);
+  // ...but not for a different slug (scope binding) or a wrong secret.
+  expect(
+    await verifyCfProxyScope(cfProxySecret, signature, {
+      namespace: "takosumi-tenants",
+      slug: "other",
+      nowMs: 0,
+    }),
+  ).toBe(false);
+  expect(
+    await verifyCfProxyScope("wrong-secret", signature, {
+      namespace: "takosumi-tenants",
+      slug: "app",
+      nowMs: 0,
+    }),
+  ).toBe(false);
+});
+
+test("managed worker install fails closed when no cf-proxy signing secret is configured", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putConnection({
+    id: "conn_op_cf",
+    scope: "operator",
+    provider: "cloudflare",
+    kind: "cloudflare_api_token",
+    authMethod: "static_secret",
+    status: "verified",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  } as Connection);
+  await store.putOperatorConnectionDefault({
+    id: "ocd_cf",
+    provider: "cloudflare",
+    connectionId: "conn_op_cf",
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+  await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "my-worker", accountId: "acct_123" },
+      policy: {},
+    },
+  });
+  // No cfProxySigningSecret -> the managed run cannot sign the proxy scope ->
+  // plan fails closed rather than emitting an unverifiable base_url.
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner: recordingRunner({}),
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+  await expect(
+    controller.createInstallationPlan("inst_fixture"),
+  ).rejects.toThrow(/cf-proxy signing secret/);
 });
 
 test("provider-using installation fails closed when the connection vault is absent", async () => {

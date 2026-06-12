@@ -107,6 +107,7 @@ import type {
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { log } from "../../shared/log.ts";
 import { isValidTenantScriptName } from "../../../providers/cloudflare/hosting/wfp_script_name.ts";
+import { signCfProxyScope } from "../../../providers/cloudflare/hosting/cf_proxy_signature.ts";
 import {
   InMemoryOpenTofuDeploymentStore,
   InstallationPatchGuardConflict,
@@ -719,6 +720,13 @@ export interface OpenTofuDeploymentControllerDependencies {
    * owns their own infrastructure, so only the hosted platform worker sets this.
    */
   readonly managedDefaultApplyCap?: number;
+  /**
+   * HMAC secret used to sign the managed cf-proxy `base_url` scope so the proxy
+   * can verify it (see {@link signCfProxyScope}). Wired from the operator's
+   * `TAKOSUMI_DEPLOY_CONTROL_TOKEN` on the platform worker. Omitted on self-host
+   * builds (no managed Cloudflare hosting), where a managed run fails closed.
+   */
+  readonly cfProxySigningSecret?: string;
 }
 
 export interface DeployControlActorContext {
@@ -943,6 +951,7 @@ export class OpenTofuDeploymentController {
   readonly #dependencyValueSealer?: DependencyValueSealer;
   readonly #defaultBillingSettings: BillingSettings;
   readonly #managedDefaultApplyCap?: number;
+  readonly #cfProxySigningSecret?: string;
   readonly #seededProfiles: Promise<void>;
   readonly #seededProviderTemplates: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
@@ -968,6 +977,7 @@ export class OpenTofuDeploymentController {
     this.#dependencyValueSealer = dependencies.dependencyValueSealer;
     this.#defaultBillingSettings =
       dependencies.defaultBillingSettings ?? DISABLED_BILLING_SETTINGS;
+    this.#cfProxySigningSecret = dependencies.cfProxySigningSecret;
     this.#managedDefaultApplyCap =
       dependencies.managedDefaultApplyCap !== undefined &&
       Number.isFinite(dependencies.managedDefaultApplyCap) &&
@@ -1331,7 +1341,7 @@ export class OpenTofuDeploymentController {
     const variables = normalizeVariables(request.variables);
     // Managed hosting: redirect the cloudflare provider base_url to the cf-proxy
     // when this run resolved the operator-default credential (no-op otherwise).
-    const installTypePlan = this.#applyManagedProxyBaseUrl(
+    const installTypePlan = await this.#applyManagedProxyBaseUrl(
       internal.installTypePlan,
       profile,
       installation,
@@ -2588,11 +2598,11 @@ export class OpenTofuDeploymentController {
    * Self-host (an owned connection) and non-cloudflare/non-Worker runs are
    * returned unchanged, so their generated root is byte-identical.
    */
-  #applyManagedProxyBaseUrl(
+  async #applyManagedProxyBaseUrl(
     installTypePlan: InstallTypePlanContext | undefined,
     profile: RunnerProfile,
     installation: Installation,
-  ): InstallTypePlanContext | undefined {
+  ): Promise<InstallTypePlanContext | undefined> {
     if (!installTypePlan?.usesOperatorDefaultCredential) return installTypePlan;
     const wfp = profile.cloudflareWorkersForPlatforms;
     if (!wfp?.apiProxy) return installTypePlan;
@@ -2604,10 +2614,26 @@ export class OpenTofuDeploymentController {
           `Workers-for-Platforms script-name prefix (1-63 char DNS label)`,
       );
     }
+    // Fail closed: a managed run requires the cf-proxy signing secret so the
+    // proxy can verify the scope. Without it the run cannot proceed (the proxy
+    // would reject every forward anyway).
+    if (!this.#cfProxySigningSecret) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "managed cf-proxy signing secret is not configured " +
+          "(TAKOSUMI_DEPLOY_CONTROL_TOKEN); managed Cloudflare runs are disabled",
+      );
+    }
+    const signature = await signCfProxyScope(this.#cfProxySigningSecret, {
+      namespace: wfp.dispatchNamespace,
+      slug,
+      expMs: this.#now() + CF_PROXY_SIGNATURE_TTL_MS,
+    });
     const baseUrl = managedCloudflareProxyBaseUrl(
       wfp.apiProxy,
       wfp.dispatchNamespace,
       slug,
+      signature,
     );
     const providerBindings = installTypePlan.providerBindings.map((binding) =>
       isCloudflareProvider(binding.provider)
@@ -6267,21 +6293,29 @@ function isCloudflareProvider(provider: string): boolean {
   return provider.split("/").pop() === "cloudflare";
 }
 
-// Builds the cf-proxy provider base_url for a managed run. The path carries the
-// dispatch namespace + the install slug (the script-name prefix) so the proxy
-// rewrites `…/workers/scripts/{n}` -> `…/dispatch/namespaces/{ns}/scripts/{slug}-{n}`
-// and passes other calls through. The capsule cannot override it (root-only
-// provider config), so the redirect's integrity does not depend on signing it.
+// cf-proxy signature lifetime. Covers the longest realistic plan+apply run (the
+// signature is minted fresh per run, so this only needs to outlast one run's
+// provider calls, not be long-lived).
+const CF_PROXY_SIGNATURE_TTL_MS = 12 * 60 * 60 * 1000;
+
+// Builds the cf-proxy provider base_url for a managed run. The path carries a
+// control-plane signature segment + the dispatch namespace + the install slug
+// (the script-name prefix) so the proxy verifies the scope, then rewrites
+// `…/workers/scripts/{n}` -> `…/dispatch/namespaces/{ns}/scripts/{slug}-{n}` and
+// passes other calls through. The signature stops the edge route being an
+// unauthenticated open relay; the capsule cannot override the base_url (root-only
+// provider config), and cannot forge the signature (control-plane secret only).
 function managedCloudflareProxyBaseUrl(
   proxy: CloudflareApiProxyConfig,
   namespace: string,
   slug: string,
+  signature: string,
 ): string {
   const origin = proxy.origin.replace(/\/+$/, "");
   const route = (proxy.route.startsWith("/") ? proxy.route : `/${proxy.route}`)
     .replace(/\/+$/, "");
   return (
-    `${origin}${route}/${encodeURIComponent(namespace)}/` +
+    `${origin}${route}/${signature}/${encodeURIComponent(namespace)}/` +
     `${encodeURIComponent(slug)}/client/v4`
   );
 }
