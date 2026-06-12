@@ -65,14 +65,32 @@ export interface ReleaseInstallationLeaseInput {
   readonly token: string;
 }
 
+export interface RenewInstallationLeaseInput {
+  readonly scope: string;
+  readonly holderId: string;
+  readonly token: string;
+  readonly ttlMs: number;
+}
+
 /**
  * Narrow coordination seam the consumer depends on. Mirrors the
- * CoordinationObject's `acquire-lease` / `release-lease` POST API but is
- * substrate-agnostic so tests can inject an in-memory impl.
+ * CoordinationObject's `acquire-lease` / `renew-lease` / `release-lease` POST
+ * API but is substrate-agnostic so tests can inject an in-memory impl.
  */
 export interface InstallationCoordination {
   acquireLease(
     input: AcquireInstallationLeaseInput,
+  ): Promise<InstallationLease>;
+  /**
+   * Extends a HELD lease's expiry (holder + token gated) so a long-running write
+   * run keeps the lease alive past its initial TTL. Returns the renewed lease,
+   * or `acquired=false` when the lease is no longer held by this holder+token
+   * (e.g. it already expired and was taken over). Renewal NEVER acquires a fresh
+   * lease — a non-held renew fails closed so the work fn can observe it was
+   * fenced out.
+   */
+  renewLease(
+    input: RenewInstallationLeaseInput,
   ): Promise<InstallationLease>;
   releaseLease(
     input: ReleaseInstallationLeaseInput,
@@ -98,10 +116,26 @@ export class InstallationLeaseBusyError extends Error {
 export const DEFAULT_INSTALLATION_LEASE_TTL_MS = 15 * 60 * 1000;
 
 /**
+ * The held-lease handle threaded into a leased `work` fn so a long-running run
+ * can extend its own lease while it executes (the renewal harness in the apply
+ * path). `scope` / `holderId` / `token` identify the held lease; `renew(ttlMs)`
+ * extends its expiry (holder + token gated). A renew that fails closed
+ * (`acquired=false`) means the lease was lost (expired + taken over); the caller
+ * should stop renewing rather than re-acquire.
+ */
+export interface LeaseHandle {
+  readonly scope: string;
+  readonly holderId: string;
+  readonly token: string;
+  renew(ttlMs?: number): Promise<InstallationLease>;
+}
+
+/**
  * Acquires the installation lease, runs `work`, and releases in `finally`.
  * Throws {@link InstallationLeaseBusyError} when the lease is held by another
  * holder (the run is left for redelivery). Returns the `work` result on
- * success.
+ * success. The held-lease handle is threaded into `work` so a long apply can
+ * renew the lease (and re-stamp the run heartbeat) while it runs.
  */
 export async function withInstallationLease<T>(
   coordination: InstallationCoordination,
@@ -111,26 +145,10 @@ export async function withInstallationLease<T>(
     readonly holderId: string;
     readonly ttlMs?: number;
   },
-  work: () => Promise<T>,
+  work: (handle: LeaseHandle) => Promise<T>,
 ): Promise<T> {
   const scope = installationLeaseScope(input.installationId, input.environment);
-  const lease = await coordination.acquireLease({
-    scope,
-    holderId: input.holderId,
-    ttlMs: input.ttlMs ?? DEFAULT_INSTALLATION_LEASE_TTL_MS,
-  });
-  if (!lease.acquired) {
-    throw new InstallationLeaseBusyError(scope);
-  }
-  try {
-    return await work();
-  } finally {
-    await coordination.releaseLease({
-      scope,
-      holderId: input.holderId,
-      token: lease.token,
-    });
-  }
+  return await withScopedLease(coordination, scope, input.holderId, input.ttlMs, work);
 }
 
 /**
@@ -147,26 +165,10 @@ export async function withPlanLease<T>(
     readonly holderId: string;
     readonly ttlMs?: number;
   },
-  work: () => Promise<T>,
+  work: (handle: LeaseHandle) => Promise<T>,
 ): Promise<T> {
   const scope = planLeaseScope(input.planRunId);
-  const lease = await coordination.acquireLease({
-    scope,
-    holderId: input.holderId,
-    ttlMs: input.ttlMs ?? DEFAULT_INSTALLATION_LEASE_TTL_MS,
-  });
-  if (!lease.acquired) {
-    throw new InstallationLeaseBusyError(scope);
-  }
-  try {
-    return await work();
-  } finally {
-    await coordination.releaseLease({
-      scope,
-      holderId: input.holderId,
-      token: lease.token,
-    });
-  }
+  return await withScopedLease(coordination, scope, input.holderId, input.ttlMs, work);
 }
 
 /**
@@ -184,23 +186,52 @@ export async function withSpaceLease<T>(
     readonly holderId: string;
     readonly ttlMs?: number;
   },
-  work: () => Promise<T>,
+  work: (handle: LeaseHandle) => Promise<T>,
 ): Promise<T> {
   const scope = spaceLeaseScope(input.spaceId);
+  return await withScopedLease(coordination, scope, input.holderId, input.ttlMs, work);
+}
+
+/**
+ * Shared acquire → run(handle) → release-in-finally body for the three scoped
+ * lease helpers. Acquires the `scope` lease, builds the {@link LeaseHandle}
+ * (whose `renew` extends the same held lease), runs `work`, and releases on
+ * every exit path. A busy lease throws {@link InstallationLeaseBusyError}.
+ */
+async function withScopedLease<T>(
+  coordination: InstallationCoordination,
+  scope: string,
+  holderId: string,
+  ttlMs: number | undefined,
+  work: (handle: LeaseHandle) => Promise<T>,
+): Promise<T> {
+  const leaseTtl = ttlMs ?? DEFAULT_INSTALLATION_LEASE_TTL_MS;
   const lease = await coordination.acquireLease({
     scope,
-    holderId: input.holderId,
-    ttlMs: input.ttlMs ?? DEFAULT_INSTALLATION_LEASE_TTL_MS,
+    holderId,
+    ttlMs: leaseTtl,
   });
   if (!lease.acquired) {
     throw new InstallationLeaseBusyError(scope);
   }
+  const handle: LeaseHandle = {
+    scope,
+    holderId,
+    token: lease.token,
+    renew: (renewTtlMs) =>
+      coordination.renewLease({
+        scope,
+        holderId,
+        token: lease.token,
+        ttlMs: renewTtlMs ?? leaseTtl,
+      }),
+  };
   try {
-    return await work();
+    return await work(handle);
   } finally {
     await coordination.releaseLease({
       scope,
-      holderId: input.holderId,
+      holderId,
       token: lease.token,
     });
   }
@@ -256,6 +287,41 @@ export class InMemoryInstallationCoordination implements InstallationCoordinatio
       scope: input.scope,
       holderId: input.holderId,
       token,
+      acquired: true,
+      expiresAt: new Date(expiresAt).toISOString(),
+    });
+  }
+
+  renewLease(input: RenewInstallationLeaseInput): Promise<InstallationLease> {
+    const now = this.#now();
+    const existing = this.#leases.get(input.scope);
+    // Renewal is holder + token gated AND requires the lease to still be live:
+    // an expired lease is not renewed (it may have been taken over). A non-held
+    // renew fails closed (acquired=false) — it NEVER mints a fresh lease.
+    if (
+      !existing ||
+      existing.holderId !== input.holderId ||
+      existing.token !== input.token ||
+      existing.expiresAt <= now
+    ) {
+      return Promise.resolve({
+        scope: input.scope,
+        holderId: input.holderId,
+        token: input.token,
+        acquired: false,
+        expiresAt: new Date(existing?.expiresAt ?? now).toISOString(),
+      });
+    }
+    const expiresAt = now + input.ttlMs;
+    this.#leases.set(input.scope, {
+      holderId: existing.holderId,
+      token: existing.token,
+      expiresAt,
+    });
+    return Promise.resolve({
+      scope: input.scope,
+      holderId: existing.holderId,
+      token: existing.token,
       acquired: true,
       expiresAt: new Date(expiresAt).toISOString(),
     });

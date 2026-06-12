@@ -839,6 +839,122 @@ test("a no-connection install mints the operator default for its required provid
   ]);
 });
 
+test("plan->apply binding TOCTOU: repointing the operator default between plan and apply fails the apply closed", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, { environment: "preview" });
+  // Two operator-scoped cloudflare connections; the operator default points at
+  // the FIRST when the plan is reviewed, then is REPOINTED to the second.
+  for (const id of ["conn_op_a", "conn_op_b"]) {
+    await store.putConnection({
+      id,
+      scope: "operator",
+      provider: "cloudflare",
+      kind: "cloudflare_api_token",
+      authMethod: "static_secret",
+      status: "verified",
+      envNames: ["CLOUDFLARE_API_TOKEN"],
+      createdAt: "2026-06-07T00:00:00.000Z",
+      updatedAt: "2026-06-07T00:00:00.000Z",
+    });
+  }
+  await store.putOperatorConnectionDefault({
+    id: "ocd_cf",
+    provider: "cloudflare",
+    connectionId: "conn_op_a",
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+  const report = {
+    id: "caprep_toctou",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    level: "ready" as const,
+    findings: [],
+    providers: [{ source: "cloudflare/cloudflare", aliases: [], allowed: true }],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    normalizedObjectKey: seeded.snapshot.archiveObjectKey,
+    normalizedDigest: seeded.snapshot.archiveDigest,
+    createdAt: "2026-06-07T00:00:00.000Z",
+  };
+  await store.putCapsuleCompatibilityReport(report);
+  await store.putInstallation({
+    ...seeded.installation,
+    compatibilityReportId: report.id,
+    compatibilityStatus: "ready",
+  });
+  const vault = {
+    register: () => Promise.reject(new Error("not used")),
+    test: () => Promise.resolve({ status: "verified" as const }),
+    revoke: () => Promise.resolve(true),
+    mint: () => Promise.resolve(new CredentialBundle({})),
+    mintForPhase: () => Promise.resolve(new PhaseMintBundle({ env: {} })),
+    mintForProviderBindings: (
+      _spaceId: string,
+      entries: readonly { provider: string; connectionId: string }[],
+    ) =>
+      Promise.resolve(
+        new CredentialBundle(
+          { TF_VAR_cloudflare_api_token: "operator-key-token" },
+          [],
+          entries.map((entry) => ({
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            connectionId: entry.connectionId,
+            delivery: "generated_root_variable" as const,
+            rootOnly: true,
+            temporary: true,
+            ttlEnforced: true,
+            expiresAt: "2026-06-07T01:00:00.000Z",
+            ttlSeconds: 3600,
+            phase: "apply" as const,
+          })),
+        ),
+      ),
+  };
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    vault: vault as never,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  // Plan against the operator default = conn_op_a; the resolved-bindings digest
+  // is pinned onto the plan.
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.resolvedBindingsDigest).toBeDefined();
+
+  // TOCTOU: the operator repoints the cloudflare default to a DIFFERENT
+  // connection after the plan was reviewed.
+  await store.putOperatorConnectionDefault({
+    id: "ocd_cf",
+    provider: "cloudflare",
+    connectionId: "conn_op_b",
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  // The apply re-resolves the live bindings and fails closed: the plan was
+  // reviewed against conn_op_a but apply would now mint conn_op_b.
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(applyRun.status).toEqual("failed");
+  expect(
+    applyRun.diagnostics?.some((d) =>
+      d.message.includes("resolved_bindings_changed"),
+    ),
+  ).toBe(true);
+  // The apply did NOT mark the Installation active (it failed before commit).
+  expect((await store.getInstallation("inst_fixture"))?.status).not.toEqual(
+    "active",
+  );
+});
+
 test("generic Capsule plan creation blocks stale CompatibilityReport as policy", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
@@ -1026,7 +1142,7 @@ test("installation plan blocks when provider lockfile digest is required but mis
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
   expect(runner.planJobs).toHaveLength(1);
-  expect(planRun.status).toBe("blocked");
+  expect(planRun.status).toBe("failed");
   expect(planRun.policy.status).toBe("blocked");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "provider lockfile digest is required by policy",
@@ -1053,7 +1169,7 @@ test("installation plan blocks when provider mirror evidence is required but mis
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
   expect(runner.planJobs).toHaveLength(1);
-  expect(planRun.status).toBe("blocked");
+  expect(planRun.status).toBe("failed");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "provider installation attestation is required by policy",
   );
@@ -1081,7 +1197,7 @@ test("installation plan requires provider mirror evidence by default when provid
   expect(runner.planJobs[0]?.providerInstallationPolicy).toEqual({
     requireMirror: true,
   });
-  expect(planRun.status).toBe("blocked");
+  expect(planRun.status).toBe("failed");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "provider installation attestation is required by policy",
   );
@@ -1129,7 +1245,7 @@ test("installation plan enforces filesystem mirror evidence for every required p
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
-  expect(planRun.status).toBe("blocked");
+  expect(planRun.status).toBe("failed");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "registry.opentofu.org/hashicorp/aws",
   );
@@ -1181,7 +1297,7 @@ test("installation plan blocks when mirror evidence omits a required provider", 
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
-  expect(planRun.status).toBe("blocked");
+  expect(planRun.status).toBe("failed");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "provider installation attestation is missing for required providers: registry.opentofu.org/hashicorp/aws",
   );
@@ -1214,7 +1330,7 @@ test("installation plan blocks when mirror evidence is not actual install attest
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
-  expect(planRun.status).toBe("blocked");
+  expect(planRun.status).toBe("failed");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "not attested as installed from the filesystem mirror",
   );
@@ -1568,6 +1684,9 @@ async function showbackEstimatedCreditsFor(
   });
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  // The plan completed `succeeded` (a delete/replace `requiresApproval` change is
+  // a display signal, not an approval-mandatory gate, so it does not park
+  // `waiting_approval`) and reserved credits.
   expect(planRun.status).toBe("succeeded");
   const reservation = await store.getCreditReservationForRun(planRun.id);
   expect(reservation).toBeDefined();
@@ -1633,7 +1752,7 @@ test("enforced billing blocks plan when credits are insufficient", async () => {
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
   expect(runner.planJobs).toHaveLength(1);
-  expect(planRun.status).toBe("blocked");
+  expect(planRun.status).toBe("failed");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "credit reservation failed",
   );
@@ -1708,7 +1827,7 @@ test("enforced billing plan limits block oversized plans before reservation", as
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
   expect(runner.planJobs).toHaveLength(1);
-  expect(planRun.status).toBe("blocked");
+  expect(planRun.status).toBe("failed");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "billing plan tiny quota resources count 2 exceeds 1 is exceeded",
   );
@@ -2156,10 +2275,10 @@ test("installation destroy-plan completes and the unified Run is waiting_approva
   const { planRun } =
     await controller.createInstallationDestroyPlan("inst_fixture");
   expect(planRun.operation).toEqual("destroy");
-  expect(planRun.status).toEqual("succeeded");
+  // A destroy plan ALWAYS lands the PERSISTED `waiting_approval` status (spec
+  // §19 two-stage destroy), independent of the environment's approval gate.
+  expect(planRun.status).toEqual("waiting_approval");
 
-  // A destroy plan ALWAYS lands waiting_approval (spec §19 two-stage destroy),
-  // independent of the environment's approval gate.
   const run = await controller.getRun(planRun.id);
   expect(run.type).toEqual("destroy_plan");
   expect(run.status).toEqual("waiting_approval");

@@ -149,13 +149,22 @@ export interface QueueBatch<T = unknown> {
   readonly messages: readonly QueueMessage<T>[];
 }
 
+export interface QueueRetryOptions {
+  /**
+   * Delay before this message is redelivered (Cloudflare Queues
+   * `MessageRetryOptions.delaySeconds`). Used to back off a run that is parked
+   * on a busy installation lease instead of burning its retry budget.
+   */
+  readonly delaySeconds?: number;
+}
+
 export interface QueueMessage<T = unknown> {
   readonly id: string;
   readonly body: T;
   /** Delivery attempt count (1-based) when the runtime provides it. */
   readonly attempts?: number;
   ack?(): void;
-  retry?(): void;
+  retry?(options?: QueueRetryOptions): void;
 }
 
 export interface DurableObjectNamespace {

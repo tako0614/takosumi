@@ -25,6 +25,7 @@ import type {
   RunStatus,
   StateSnapshot,
 } from "@takosumi/internal/deploy-control-api";
+import { coerceRunStatus } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type {
   Source,
@@ -233,6 +234,18 @@ export type InstallationPatch = Partial<
  *     guard-miss semantics as {@link OpenTofuDeploymentStore.patchInstallation}.
  *     A guard *conflict* (row moved out from under the writer) still throws
  *     {@link InstallationPatchGuardConflict}.
+ *   - `applyRunTerminal` — the succeeded apply / destroy-apply ApplyRun, written
+ *     into the SAME atomic unit so the run's terminal status can never tear from
+ *     the Deployment it produced (a crash between the commit and a separate
+ *     terminal write would otherwise leave a stuck `running` run over a finished
+ *     Deployment). Its `lease_token` fence is CLEARED on the same write (mirrors
+ *     {@link OpenTofuDeploymentStore.transitionRun} `clearLeaseToken`). Absent for
+ *     the no-state-context fallback path (which has no atomic unit to join).
+ *   - `planRunApplied` — the source PlanRun carrying its `appliedApplyRunId`
+ *     marker (apply-once), written into the SAME atomic unit so the
+ *     plan-was-applied fact lands with the Deployment + terminal ApplyRun. The
+ *     PlanRun is already terminal (`succeeded`) and carries no lease fence, so it
+ *     is a plain row write (no lease column change). Absent on the fallback path.
  */
 export interface CommitAppliedDeploymentInput {
   readonly newDeployment?: Deployment;
@@ -244,6 +257,16 @@ export interface CommitAppliedDeploymentInput {
     readonly patch: InstallationPatch;
     readonly guard: InstallationPatchGuard;
   };
+  /**
+   * Succeeded apply / destroy-apply ApplyRun, committed atomically with the
+   * Deployment. Its lease fence token is cleared on the same write.
+   */
+  readonly applyRunTerminal?: ApplyRun;
+  /**
+   * Source PlanRun with its `appliedApplyRunId` marker (apply-once), committed
+   * atomically with the Deployment. Plain row write (no lease change).
+   */
+  readonly planRunApplied?: PlanRun;
 }
 
 /**
@@ -668,6 +691,19 @@ export interface OpenTofuDeploymentStore {
   ): Promise<Page<BackupRecord>>;
 }
 
+/**
+ * Read-coerces a persisted PlanRun / ApplyRun's `status` to the unified
+ * {@link RunStatus} (RunStatus unify, S2). A row written before the `blocked` →
+ * `failed` collapse stored `status: "blocked"`; this maps it to `failed` on read
+ * so old rows read back in the new model. Undefined passes through.
+ */
+function coerceRunRowStatus<R extends PlanRun | ApplyRun>(
+  run: R | undefined,
+): R | undefined {
+  if (!run || run.status !== ("blocked" as unknown as R["status"])) return run;
+  return { ...run, status: coerceRunStatus(run.status) } as R;
+}
+
 export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   readonly #runnerProfiles = new Map<string, RunnerProfile>();
   readonly #planRuns = new Map<string, PlanRun>();
@@ -744,7 +780,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   getPlanRun(id: string): Promise<PlanRun | undefined> {
-    return Promise.resolve(this.#planRuns.get(id));
+    return Promise.resolve(coerceRunRowStatus(this.#planRuns.get(id)));
   }
 
   putPlanRunInputs(inputs: PlanRunInputs): Promise<void> {
@@ -767,7 +803,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   getApplyRun(id: string): Promise<ApplyRun | undefined> {
-    return Promise.resolve(this.#applyRuns.get(id));
+    return Promise.resolve(coerceRunRowStatus(this.#applyRuns.get(id)));
   }
 
   /**
@@ -1065,6 +1101,18 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     this.#stateSnapshots.set(input.stateSnapshot.id, input.stateSnapshot);
     if (input.outputSnapshot) {
       this.#outputSnapshots.set(input.outputSnapshot.id, input.outputSnapshot);
+    }
+    // Commit-tail fold (S2): the terminal ApplyRun + the applied PlanRun land in
+    // the SAME atomic unit as the Deployment so a crash can no longer tear them.
+    // The apply terminal clears its lease fence (mirrors transitionRun
+    // clearLeaseToken); the plan patch is a plain write (already terminal, no
+    // lease).
+    if (input.applyRunTerminal) {
+      this.#applyRuns.set(input.applyRunTerminal.id, input.applyRunTerminal);
+      this.#runLeases.delete(input.applyRunTerminal.id);
+    }
+    if (input.planRunApplied) {
+      this.#planRuns.set(input.planRunApplied.id, input.planRunApplied);
     }
     const updated: Installation = { ...existing, ...installationPatch.patch };
     this.#installations.set(installationPatch.id, updated);
