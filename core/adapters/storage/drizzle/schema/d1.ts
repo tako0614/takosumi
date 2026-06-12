@@ -318,6 +318,8 @@ export const runs = sqliteTable(
     environment: text("environment"),
     type: text("type").notNull(),
     status: text("status").notNull(),
+    leaseToken: text("lease_token"),
+    heartbeatAt: integer("heartbeat_at"),
     runJson: jsonText("run_json").notNull(),
     createdAt: text("created_at").notNull().default(""),
   },

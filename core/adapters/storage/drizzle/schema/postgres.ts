@@ -1,4 +1,5 @@
 import {
+  bigint,
   index,
   integer,
   jsonb,
@@ -317,11 +318,15 @@ export const runs = pgTable(
     spaceId: text("space_id").notNull(),
     sourceId: text("source_id"),
     installationId: text("installation_id"),
+    status: text("status").notNull(),
+    leaseToken: text("lease_token"),
+    heartbeatAt: bigint("heartbeat_at", { mode: "number" }),
     createdAt: text("created_at").notNull(),
     runJson: json("run_json").notNull(),
   },
   (table) => [
     index("takosumi_runs_kind_idx").on(table.kind),
+    index("takosumi_runs_kind_status_idx").on(table.kind, table.status),
     index("takosumi_runs_space_idx").on(table.spaceId),
     index("takosumi_runs_source_idx").on(table.sourceId),
     index("takosumi_runs_installation_idx").on(table.installationId),

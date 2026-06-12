@@ -4,6 +4,7 @@ import { getTableConfig as getPgTableConfig } from "drizzle-orm/pg-core";
 import { getTableConfig as getSqliteTableConfig } from "drizzle-orm/sqlite-core";
 import { ensureD1OpenTofuLedgerSchema } from "../../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../../domains/deploy-control/sqlite_fake_d1.ts";
+import { PGliteSqlClient } from "../../../../domains/deploy-control/pglite_sql_client.ts";
 import * as d1Schema from "./d1.ts";
 import { deployControlLogicalTables } from "./logical.ts";
 import * as postgresSchema from "./postgres.ts";
@@ -223,6 +224,8 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nullable("environment"),
     nn("type"),
     nn("status"),
+    nullable("lease_token"),
+    nullable("heartbeat_at"),
     nn("run_json"),
     defaulted("created_at"),
   ]);
@@ -637,6 +640,9 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("space_id"),
     nullable("source_id"),
     nullable("installation_id"),
+    nn("status"),
+    nullable("lease_token"),
+    nullable("heartbeat_at"),
     nn("created_at"),
     nn("run_json"),
   ]);
@@ -818,4 +824,67 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("backup_json"),
     nn("created_at"),
   ]);
+});
+
+type NameNotNull = { name: string; notNull: boolean };
+
+const nameNotNull = (columns: readonly ColumnMirror[]): NameNotNull[] =>
+  columns
+    .map((column) => ({ name: column.name, notNull: column.notNull }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+async function livePgColumnsOf(
+  client: PGliteSqlClient,
+  tableName: string,
+): Promise<NameNotNull[]> {
+  const result = await client.rawQuery<{
+    column_name: string;
+    is_nullable: string;
+  }>(
+    `select column_name, is_nullable from information_schema.columns ` +
+      `where table_name = '${tableName}'`,
+  );
+  return result.rows
+    .map((row) => ({
+      name: row.column_name,
+      notNull: row.is_nullable === "NO",
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+// Single source of truth: the migration catalog's END-STATE schema (applied on
+// in-process PGlite) must match the Postgres Drizzle schema column-for-column
+// for every deploy-control table — so a Drizzle change without a migration (or
+// vice versa) fails CI instead of silently 42P01-ing in production.
+test(
+  "Postgres migration end-state mirrors the Drizzle schema for every deploy table",
+  async () => {
+    const client = await PGliteSqlClient.create();
+    try {
+      for (const logicalName of deployControlLogicalTables) {
+        const table = postgresSchema[logicalName];
+        const tableName = getTableName(table);
+        const live = await livePgColumnsOf(client, tableName);
+        expect(live, tableName).toEqual(nameNotNull(columnsOf(table)));
+      }
+    } finally {
+      await client.close();
+    }
+  },
+);
+
+// Sharper guard for the table this wave reshapes: the runs ledger must carry the
+// status / lease_token / heartbeat_at columns in both the migration end-state
+// and the Drizzle schema, with matching nullability.
+test("takosumi_runs migration end-state carries the lease columns", async () => {
+  const client = await PGliteSqlClient.create();
+  try {
+    const live = await livePgColumnsOf(client, "takosumi_runs");
+    expect(live).toEqual(nameNotNull(columnsOf(postgresSchema.runs)));
+    expect(live).toContainEqual({ name: "status", notNull: true });
+    expect(live).toContainEqual({ name: "lease_token", notNull: false });
+    expect(live).toContainEqual({ name: "heartbeat_at", notNull: false });
+  } finally {
+    await client.close();
+  }
 });

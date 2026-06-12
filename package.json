@@ -50,6 +50,7 @@
     "yaml": "^2.8.2"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.2",
     "@types/bun": "^1.2.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",

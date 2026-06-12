@@ -158,6 +158,23 @@ class FakeSqlClient implements SqlClient {
     }
   }
 
+  // Single-connection fake: issue real begin / commit / rollback through the
+  // query path (so the runner's accounting of begin/commit holds) and run the
+  // body against this same client (serial, so there is no isolation to fake).
+  async transaction<T>(
+    fn: (transaction: SqlClient) => T | Promise<T>,
+  ): Promise<T> {
+    await this.query("begin");
+    try {
+      const value = await fn(this);
+      await this.query("commit");
+      return value;
+    } catch (error) {
+      await this.query("rollback");
+      throw error;
+    }
+  }
+
   #query<Row extends Record<string, unknown> = Record<string, unknown>>(
     sql: string,
     parameters?: SqlParameters,

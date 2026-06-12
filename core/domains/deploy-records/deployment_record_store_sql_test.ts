@@ -107,6 +107,11 @@ class FakeTakosumiSqlClient implements SqlClient {
     throw new Error(`unexpected sql in fake takosumi sql client: ${sql}`);
   }
 
+  // Single-connection fake: run the body against this same client (serial).
+  transaction<T>(fn: (transaction: SqlClient) => T | Promise<T>): Promise<T> {
+    return Promise.resolve(fn(this));
+  }
+
   #handleUpsert(
     params: readonly unknown[],
   ): SqlQueryResult<TakosumiDeploymentFakeRow> {
