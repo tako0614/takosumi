@@ -252,7 +252,7 @@ test("access control: last-owner cannot be demoted or removed on the real path",
     { subject: OWNER, body: { roles: ["member"] } },
   );
   expect(demote.status).toEqual(403);
-  expect(demote.body.error_description).toContain("last owner");
+  expect(demote.body.error.message).toContain("last owner");
 
   // Removing the sole owner must be rejected too.
   const remove = await h.call(
@@ -261,7 +261,7 @@ test("access control: last-owner cannot be demoted or removed on the real path",
     { subject: OWNER },
   );
   expect(remove.status).toEqual(403);
-  expect(remove.body.error_description).toContain("last owner");
+  expect(remove.body.error.message).toContain("last owner");
 });
 
 test("access control: spaceId is server-resolved, not taken from the body", async () => {

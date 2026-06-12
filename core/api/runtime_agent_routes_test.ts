@@ -29,6 +29,22 @@ import {
   TAKOSUMI_RUNTIME_AGENT_PATHS,
 } from "./runtime_agent_routes.ts";
 
+/**
+ * Reads an error-envelope response and strips the (random) `requestId` after
+ * asserting it is a non-empty string, so the remaining `{code,message,details}`
+ * can be compared with `assert.deepEqual`.
+ */
+async function errorEnvelopeWithoutRequestId(
+  response: Response,
+): Promise<{ error: unknown }> {
+  const body = await response.json() as {
+    error: { requestId?: unknown };
+  };
+  assert.equal(typeof body.error.requestId, "string");
+  const { requestId: _requestId, ...rest } = body.error;
+  return { error: rest };
+}
+
 test("runtime agent routes enroll, heartbeat, lease, complete, and drain", async () => {
   const registry = new InMemoryRuntimeAgentRegistry({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
@@ -145,7 +161,7 @@ test("runtime agent routes return auth and registry errors", async () => {
     },
   );
   assert.equal(deniedResponse.status, 403);
-  assert.deepEqual(await deniedResponse.json(), {
+  assert.deepEqual(await errorEnvelopeWithoutRequestId(deniedResponse), {
     error: {
       code: "permission_denied",
       message: "forbidden",
@@ -161,7 +177,7 @@ test("runtime agent routes return auth and registry errors", async () => {
     },
   );
   assert.equal(invalidEnroll.status, 400);
-  assert.deepEqual(await invalidEnroll.json(), {
+  assert.deepEqual(await errorEnvelopeWithoutRequestId(invalidEnroll), {
     error: {
       code: "invalid_argument",
       message: "provider is required",
@@ -188,7 +204,7 @@ test("runtime agent routes fail closed without signed auth or explicit authentic
   });
 
   assert.equal(response.status, 401);
-  assert.deepEqual(await response.json(), {
+  assert.deepEqual(await errorEnvelopeWithoutRequestId(response), {
     error: {
       code: "unauthenticated",
       message: "internal service secret missing",
@@ -347,7 +363,7 @@ test("runtime agent routes return common envelope for uncaught errors", async ()
   });
 
   assert.equal(response.status, 500);
-  assert.deepEqual(await response.json(), {
+  assert.deepEqual(await errorEnvelopeWithoutRequestId(response), {
     error: {
       code: "internal_error",
       message: "Internal server error",

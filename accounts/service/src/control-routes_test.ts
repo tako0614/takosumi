@@ -2939,8 +2939,8 @@ test("controller errors map to their HTTP status (not_found -> 404)", async () =
     operations,
   });
   expect(response?.status).toEqual(404);
-  const body = (await response!.json()) as { error: string };
-  expect(body.error).toEqual("not_found");
+  const body = (await response!.json()) as { error: { code: string } };
+  expect(body.error.code).toEqual("not_found");
 });
 
 test("unknown control subpath is 404 after the session gate", async () => {
@@ -3165,8 +3165,8 @@ test("POST /api/v1/plan-runs/:id/apply surfaces the controller failed_preconditi
     operations,
   });
   expect(response?.status).toEqual(409);
-  const body = (await response?.json()) as { error?: string };
-  expect(body.error).toEqual("failed_precondition");
+  const body = (await response?.json()) as { error?: { code?: string } };
+  expect(body.error?.code).toEqual("failed_precondition");
 });
 
 test("POST /api/v1/plan-runs/:id/apply surfaces failed_precondition when the plan was already applied", async () => {

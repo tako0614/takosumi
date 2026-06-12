@@ -35,6 +35,7 @@ import {
   isWorkloadServiceAccessTokenRecord,
 } from "./workload-service-tokens.ts";
 import {
+  errorJson,
   bearerChallenge,
   bearerToken,
   json,
@@ -62,17 +63,13 @@ export async function handleIssueLaunchToken(input: {
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
-    return json({
-      error: "state_conflict",
-      error_description:
-        "launch tokens can only be issued for ready installations",
-    }, 409);
+    return errorJson("state_conflict", "launch tokens can only be issued for ready installations", 409);
   }
 
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const purpose =
     body.purpose === "install-bootstrap" || body.purpose === "re-launch"
       ? body.purpose
@@ -84,18 +81,11 @@ export async function handleIssueLaunchToken(input: {
   const redirectUri = stringValue(body.redirect_uri) ??
     stringValue(body.redirectUri);
   if (!redirectUri) {
-    return json({
-      error: "invalid_request",
-      error_description: "redirect_uri is required",
-    }, 400);
+    return errorJson("invalid_request", "redirect_uri is required", 400);
   }
   const redirect = launchRedirectUrl(redirectUri);
   if (!redirect) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "redirectUri must be an absolute /_takosumi/launch URL",
-    }, 400);
+    return errorJson("invalid_request", "redirectUri must be an absolute /_takosumi/launch URL", 400);
   }
 
   const now = Date.now();
@@ -156,22 +146,15 @@ export async function handleConsumeLaunchToken(input: {
   store: AccountsStore;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const token = stringValue(body.token ?? body.launch_token);
   const redirectUri = stringValue(body.redirect_uri ?? body.redirectUri);
   if (!token || !redirectUri) {
-    return json({
-      error: "invalid_request",
-      error_description: "token and redirect_uri are required",
-    }, 400);
+    return errorJson("invalid_request", "token and redirect_uri are required", 400);
   }
   const redirect = launchRedirectUrl(redirectUri);
   if (!redirect) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "redirectUri must be an absolute /_takosumi/launch URL",
-    }, 400);
+    return errorJson("invalid_request", "redirectUri must be an absolute /_takosumi/launch URL", 400);
   }
 
   const now = Date.now();
@@ -235,10 +218,7 @@ export async function resolveLaunchTokenPairwiseSubject(input: {
   launchTokens: LaunchTokenOptions;
 }): Promise<TakosumiSubject | Response> {
   if (!input.launchTokens.pairwiseSubjectSecret) {
-    return json({
-      error: "feature_unavailable",
-      error_description: "App launch is temporarily unavailable.",
-    }, 503);
+    return errorJson("feature_unavailable", "App launch is temporarily unavailable.", 503);
   }
   const oidcClient = await input.store.findOidcClientForInstallation(
     input.installation.installationId,
@@ -285,7 +265,7 @@ export async function requireInstallationAccessTokenCapability(input: {
   if (!includesScope(record.scope, input.capability)) {
     return {
       ok: false,
-      response: json({ error: "insufficient_scope" }, 403, {
+      response: errorJson("insufficient_scope", "insufficient scope", 403, undefined, {
         "www-authenticate":
           `Bearer error="insufficient_scope", scope="${input.capability}"`,
       }),

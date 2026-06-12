@@ -8,6 +8,7 @@ import {
 import type { AccountsStore } from "./store.ts";
 import type { PasskeyHttpOptions } from "./mod.ts";
 import {
+  errorJson,
   base64UrlBytesValue,
   isRecord,
   json,
@@ -101,12 +102,12 @@ export async function handlePasskeyRegisterOptions(input: {
   passkeys: PasskeyHttpOptions;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const subject = takosumiSubjectValue(body.subject);
-  if (!subject) return json({ error: "invalid_request" }, 400);
+  if (!subject) return errorJson("invalid_request", "invalid request", 400);
 
   const account = await input.store.findAccount(subject);
-  if (!account) return json({ error: "account_not_found" }, 404);
+  if (!account) return errorJson("account_not_found", "account not found", 404);
 
   // Agent 6 item 3: bind the issued challenge to subject + session. If
   // the caller already has an authenticated session (re-registration of
@@ -147,19 +148,19 @@ export async function handlePasskeyRegisterComplete(input: {
   // could attach a passkey to any subject they can name.
   const sessionId = extractAccountSessionId(input.request);
   if (!sessionId || !sessionId.startsWith("sess_")) {
-    return json({ error: "invalid_session" }, 401, {
+    return errorJson("invalid_session", "invalid session", 401, undefined, {
       "www-authenticate": `Bearer error="invalid_session"`,
     });
   }
   const session = await input.store.findAccountSession(sessionId);
   if (!session || session.expiresAt < Date.now()) {
-    return json({ error: "invalid_session" }, 401, {
+    return errorJson("invalid_session", "invalid session", 401, undefined, {
       "www-authenticate": `Bearer error="invalid_session"`,
     });
   }
 
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const subject = takosumiSubjectValue(body.subject);
   const credentialId = stringValue(body.credentialId);
   const publicKeyJwk = isRecord(body.publicKeyJwk)
@@ -183,13 +184,13 @@ export async function handlePasskeyRegisterComplete(input: {
     !clientDataJSON ||
     !attestationObject
   ) {
-    return json({ error: "invalid_request" }, 400);
+    return errorJson("invalid_request", "invalid request", 400);
   }
 
   // Agent 6 item 1: the subject the client wants to attach the passkey to
   // must be the same subject the session belongs to. Reject otherwise.
   if (subject !== session.subject) {
-    return json({ error: "subject_mismatch" }, 403);
+    return errorJson("subject_mismatch", "subject mismatch", 403);
   }
 
   // Agent 6 item 2: the challenge presented on complete must match the
@@ -204,7 +205,7 @@ export async function handlePasskeyRegisterComplete(input: {
       presented: presentedChallenge,
     });
     if (!consumed.ok) {
-      return json({ error: consumed.error }, 400);
+      return errorJson(consumed.error, consumed.error.replaceAll("_", " "), 400);
     }
     // Agent 6 item 4: verify the registration ceremony matches the issued
     // challenge / origin / attestation policy. These checks are now always
@@ -220,10 +221,7 @@ export async function handlePasskeyRegisterComplete(input: {
         "passkey_registration_clientdata_failed",
         error instanceof Error ? error.stack ?? error.message : String(error),
       );
-      return json({
-        error: "passkey_registration_failed",
-        error_description: "passkey registration verification failed",
-      }, 400);
+      return errorJson("passkey_registration_failed", "passkey registration verification failed", 400);
     }
     try {
       await verifyPasskeyAttestationFormat({
@@ -236,10 +234,7 @@ export async function handlePasskeyRegisterComplete(input: {
         "passkey_registration_attestation_failed",
         error instanceof Error ? error.stack ?? error.message : String(error),
       );
-      return json({
-        error: "passkey_registration_failed",
-        error_description: "passkey registration verification failed",
-      }, 400);
+      return errorJson("passkey_registration_failed", "passkey registration verification failed", 400);
     }
   }
 
@@ -262,10 +257,7 @@ export async function handlePasskeyRegisterComplete(input: {
       "passkey_registration_failed",
       error instanceof Error ? error.stack ?? error.message : String(error),
     );
-    return json({
-      error: "passkey_registration_failed",
-      error_description: "passkey registration failed",
-    }, 400);
+    return errorJson("passkey_registration_failed", "passkey registration failed", 400);
   }
 }
 
@@ -275,11 +267,11 @@ export async function handlePasskeyAuthenticateOptions(input: {
   passkeys: PasskeyHttpOptions;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const subject = takosumiSubjectValue(body.subject);
-  if (!subject) return json({ error: "invalid_request" }, 400);
+  if (!subject) return errorJson("invalid_request", "invalid request", 400);
   const account = await input.store.findAccount(subject);
-  if (!account) return json({ error: "account_not_found" }, 404);
+  if (!account) return errorJson("account_not_found", "account not found", 404);
 
   const credentials = await input.store.listPasskeyCredentialsForSubject(
     subject,
@@ -312,7 +304,7 @@ export async function handlePasskeyAuthenticateComplete(input: {
   passkeys: PasskeyHttpOptions;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const credentialId = stringValue(body.credentialId);
   const expectedChallenge = stringValue(body.expectedChallenge);
   const authenticatorData = base64UrlBytesValue(body.authenticatorData);
@@ -325,7 +317,7 @@ export async function handlePasskeyAuthenticateComplete(input: {
     !clientDataJSON ||
     !signature
   ) {
-    return json({ error: "invalid_request" }, 400);
+    return errorJson("invalid_request", "invalid request", 400);
   }
 
   // Agent 6 item 2: verify the server-minted challenge by looking up the
@@ -337,10 +329,7 @@ export async function handlePasskeyAuthenticateComplete(input: {
     credentialId,
   );
   if (!existingCredential) {
-    return json({
-      error: "passkey_authentication_failed",
-      error_description: "passkey credential is not registered",
-    }, 401);
+    return errorJson("passkey_authentication_failed", "passkey credential is not registered", 401);
   }
   const presentingSessionId = extractAccountSessionId(input.request);
   const consumed = await consumeChallenge({
@@ -351,7 +340,7 @@ export async function handlePasskeyAuthenticateComplete(input: {
     presented: expectedChallenge,
   });
   if (!consumed.ok) {
-    return json({ error: consumed.error }, 400);
+    return errorJson(consumed.error, consumed.error.replaceAll("_", " "), 400);
   }
 
   try {
@@ -403,9 +392,6 @@ export async function handlePasskeyAuthenticateComplete(input: {
       "passkey_authentication_failed",
       error instanceof Error ? error.stack ?? error.message : String(error),
     );
-    return json({
-      error: "passkey_authentication_failed",
-      error_description: "passkey authentication failed",
-    }, 401);
+    return errorJson("passkey_authentication_failed", "passkey authentication failed", 401);
   }
 }

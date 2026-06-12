@@ -43,7 +43,12 @@ test("readiness route returns service unavailable for failed probes", async () =
 
   const ready = await app.request(TAKOSUMI_SERVICE_READINESS_PATHS.ready);
   assert.equal(ready.status, 503);
-  assert.deepEqual(await ready.json(), {
+  const readyBody = await ready.json() as {
+    error: { requestId?: string };
+  };
+  assert.equal(typeof readyBody.error.requestId, "string");
+  const { requestId: _readyRequestId, ...readyError } = readyBody.error;
+  assert.deepEqual({ error: readyError }, {
     error: {
       code: "readiness_probe_failed",
       message: "dependency_unavailable",
@@ -57,7 +62,12 @@ test("readiness route returns service unavailable for failed probes", async () =
 
   const live = await app.request(TAKOSUMI_SERVICE_READINESS_PATHS.live);
   assert.equal(live.status, 503);
-  assert.deepEqual(await live.json(), {
+  const liveBody = await live.json() as {
+    error: { requestId?: string };
+  };
+  assert.equal(typeof liveBody.error.requestId, "string");
+  const { requestId: _liveRequestId, ...liveError } = liveBody.error;
+  assert.deepEqual({ error: liveError }, {
     error: {
       code: "readiness_probe_failed",
       message: "event loop stalled",
@@ -78,7 +88,12 @@ test("readiness route returns service unavailable for booting probes", async () 
   const ready = await app.request(TAKOSUMI_SERVICE_READINESS_PATHS.ready);
 
   assert.equal(ready.status, 503);
-  assert.deepEqual(await ready.json(), {
+  const bootingBody = await ready.json() as {
+    error: { requestId?: string };
+  };
+  assert.equal(typeof bootingBody.error.requestId, "string");
+  const { requestId: _bootingRequestId, ...bootingError } = bootingBody.error;
+  assert.deepEqual({ error: bootingError }, {
     error: {
       code: "readiness_probe_failed",
       message: "worker daemon has not completed an initial tick",

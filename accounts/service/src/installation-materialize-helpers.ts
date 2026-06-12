@@ -26,6 +26,7 @@ import {
   serializeRuntimeBinding,
 } from "./installation-helpers.ts";
 import {
+  errorJson,
   isPlainRecord,
   isRecord,
   json,
@@ -490,11 +491,7 @@ export async function materializeCompletionFromStatusPatch(input: {
     input.requestedMode !== "dedicated" ||
     !operationId
   ) {
-    return json({
-      error: "state_conflict",
-      error_description:
-        "materialize completion requires ready shared-cell -> dedicated with operationId",
-    }, 409);
+    return errorJson("state_conflict", "materialize completion requires ready shared-cell -> dedicated with operationId", 409);
   }
   const events = await input.store.listInstallationEvents(
     input.installation.installationId,
@@ -505,22 +502,14 @@ export async function materializeCompletionFromStatusPatch(input: {
     eventTypes: [installationMaterializeRequestedEvent],
   });
   if (!requested) {
-    return json({
-      error: "operation_not_found",
-      error_description:
-        "materialize completion requires a matching materialize request event",
-    }, 409);
+    return errorJson("operation_not_found", "materialize completion requires a matching materialize request event", 409);
   }
   const requestedPreserveDigest = stringValue(requested.payload.preserveDigest);
   if (
     !requestedPreserveDigest ||
     expectedPreserveDigest !== requestedPreserveDigest
   ) {
-    return json({
-      error: "preservation_mismatch",
-      error_description:
-        "materialize completion requires preserveDigest from the materialize request",
-    }, 409);
+    return errorJson("preservation_mismatch", "materialize completion requires preserveDigest from the materialize request", 409);
   }
   const closed = findOperationEvent({
     events,
@@ -531,10 +520,7 @@ export async function materializeCompletionFromStatusPatch(input: {
     ],
   });
   if (closed) {
-    return json({
-      error: "operation_already_closed",
-      error_description: "materialize operation already has a completion event",
-    }, 409);
+    return errorJson("operation_already_closed", "materialize operation already has a completion event", 409);
   }
   const runtimeBinding = runtimeBindingFromValue({
     value: input.body.runtimeTarget,
@@ -545,18 +531,10 @@ export async function materializeCompletionFromStatusPatch(input: {
   const runtimeBindingId = runtimeBinding?.runtimeBindingId ??
     stringValue(input.body.runtimeTargetId);
   if (!runtimeBindingId) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "materialize completion requires runtimeTarget or runtimeTargetId",
-    }, 400);
+    return errorJson("invalid_request", "materialize completion requires runtimeTarget or runtimeTargetId", 400);
   }
   if (runtimeBinding?.targetType !== "dedicated") {
-    return json({
-      error: "invalid_runtime_target",
-      error_description:
-        "materialize completion requires a dedicated runtime target",
-    }, 400);
+    return errorJson("invalid_runtime_target", "materialize completion requires a dedicated runtime target", 400);
   }
   return {
     runtimeBinding,
@@ -578,11 +556,7 @@ export async function validateOperationCompletionFromStatusPatch(input: {
     eventTypes: [operationRequestedEventType(input.operation)],
   });
   if (!requested) {
-    return json({
-      error: "operation_not_found",
-      error_description:
-        `${input.operation} completion requires a matching request event`,
-    }, 409);
+    return errorJson("operation_not_found", `${input.operation} completion requires a matching request event`, 409);
   }
   const closed = findOperationEvent({
     events,
@@ -590,10 +564,6 @@ export async function validateOperationCompletionFromStatusPatch(input: {
     eventTypes: operationClosedEventTypes(input.operation),
   });
   if (closed) {
-    return json({
-      error: "operation_already_closed",
-      error_description:
-        `${input.operation} operation already has a completion event`,
-    }, 409);
+    return errorJson("operation_already_closed", `${input.operation} operation already has a completion event`, 409);
   }
 }

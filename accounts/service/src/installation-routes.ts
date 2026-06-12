@@ -13,7 +13,7 @@ import {
   serializeAppInstallation,
   serializeInstallationEvent,
 } from "./installation-helpers.ts";
-import { json } from "./http-helpers.ts";
+import { errorJson, json } from "./http-helpers.ts";
 import {
   requireAccountsBearer,
 } from "./account-session.ts";
@@ -139,10 +139,7 @@ export async function handleListAppInstallations(input: {
     input.url.searchParams.get("spaceId");
   if (!spaceId) {
     if (!bearer.ok) return bearer.response;
-    return json({
-      error: "invalid_request",
-      error_description: "space_id is required",
-    }, 400);
+    return errorJson("invalid_request", "space_id is required", 400);
   }
   if (!bearer.ok) {
     const workloadControl = await requireSameSpaceWorkloadControlToken({
@@ -159,20 +156,14 @@ export async function handleListAppInstallations(input: {
   }
   const limit = parsePageLimit(input.url.searchParams.get("limit"));
   if (limit === "invalid") {
-    return json({
-      error: "invalid_request",
-      error_description: "limit must be a positive integer",
-    }, 400);
+    return errorJson("invalid_request", "limit must be a positive integer", 400);
   }
   const afterId = decodePageCursor(input.url.searchParams.get("cursor"));
   if (afterId === "invalid") {
-    return json({
-      error: "invalid_request",
-      error_description: "cursor is malformed",
-    }, 400);
+    return errorJson("invalid_request", "cursor is malformed", 400);
   }
   const space = await input.store.findSpace(spaceId);
-  if (!space) return json({ error: "space_not_found" }, 404);
+  if (!space) return errorJson("space_not_found", "space not found", 404);
   if (
     bearer.ok &&
     !await subjectCanAccessAccount(
@@ -181,7 +172,7 @@ export async function handleListAppInstallations(input: {
       space.accountId,
     )
   ) {
-    return json({ error: "installation_not_found" }, 404);
+    return errorJson("installation_not_found", "installation not found", 404);
   }
   const installations = await input.store.listAppInstallationsForSpace(spaceId);
   const page = paginateById(installations, {
@@ -226,7 +217,7 @@ export async function handleGetAppInstallation(input: {
   const installation = workloadControl?.ok
     ? workloadControl.installation
     : await input.store.findAppInstallation(input.installationId);
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
   if (bearer.ok) {
     if (
       !await subjectCanAccessInstallation(
@@ -235,7 +226,7 @@ export async function handleGetAppInstallation(input: {
         installation,
       )
     ) {
-      return json({ error: "installation_not_found" }, 404);
+      return errorJson("installation_not_found", "installation not found", 404);
     }
   }
   // Wave 6 removed `AppBinding` / `AppGrant` / `RuntimeBinding` from the
@@ -338,22 +329,16 @@ export async function handleListInstallationEvents(input: {
   }
   const limit = parsePageLimit(input.url.searchParams.get("limit"));
   if (limit === "invalid") {
-    return json({
-      error: "invalid_request",
-      error_description: "limit must be a positive integer",
-    }, 400);
+    return errorJson("invalid_request", "limit must be a positive integer", 400);
   }
   const afterId = decodePageCursor(input.url.searchParams.get("cursor"));
   if (afterId === "invalid") {
-    return json({
-      error: "invalid_request",
-      error_description: "cursor is malformed",
-    }, 400);
+    return errorJson("invalid_request", "cursor is malformed", 400);
   }
   const installation = workloadControl?.ok
     ? workloadControl.installation
     : await input.store.findAppInstallation(input.installationId);
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
   if (bearer.ok) {
     if (
       !await subjectCanAccessAccount(
@@ -362,7 +347,7 @@ export async function handleListInstallationEvents(input: {
         installation.accountId,
       )
     ) {
-      return json({ error: "installation_not_found" }, 404);
+      return errorJson("installation_not_found", "installation not found", 404);
     }
   }
   const allEvents = await input.store.listInstallationEvents(

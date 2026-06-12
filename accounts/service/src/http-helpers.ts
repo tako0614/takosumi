@@ -15,8 +15,61 @@ export function json(
   });
 }
 
+const REQUEST_ID_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const REQUEST_ID_ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+
+/**
+ * Derives a request id for the canonical error envelope, mirroring
+ * {@link core/api/deploy_control_shared.ts resolveRequestId}: an inbound
+ * `x-request-id` / `x-correlation-id` header is echoed when well-shaped,
+ * otherwise a fresh UUID is generated.
+ */
+export function requestIdFrom(request?: Request | null): string {
+  const header = request?.headers.get("x-request-id") ??
+    request?.headers.get("x-correlation-id") ?? null;
+  if (header && isValidRequestIdShape(header)) return header;
+  return crypto.randomUUID();
+}
+
+function isValidRequestIdShape(value: string): boolean {
+  if (value.length === 0 || value.length > 64) return false;
+  return REQUEST_ID_UUID_PATTERN.test(value) ||
+    REQUEST_ID_ULID_PATTERN.test(value);
+}
+
+/**
+ * Emits the canonical account-plane error envelope
+ * `{ error: { code, message, requestId } }`, mirroring
+ * {@link core/api/deploy_control_shared.ts errorEnvelope}. The fourth argument
+ * accepts either the originating `Request` (the request id is derived from its
+ * headers) or an already-resolved request id string; when omitted a fresh
+ * UUID is generated.
+ *
+ * OIDC / OAuth (RFC 6749) responses MUST NOT use this helper; they keep their
+ * `{ error, error_description }` shape.
+ */
+export function errorJson(
+  code: string,
+  message: string,
+  status: number,
+  source?: Request | string | null,
+  headers: Record<string, string> = {},
+  details?: unknown,
+): Response {
+  const requestId = typeof source === "string"
+    ? source
+    : requestIdFrom(source ?? undefined);
+  const error = details === undefined
+    ? { code, message, requestId }
+    : { code, message, requestId, details };
+  return json({ error }, status, headers);
+}
+
 export function methodNotAllowed(allow: string): Response {
-  return json({ error: "method_not_allowed" }, 405, { allow });
+  return errorJson("method_not_allowed", "method not allowed", 405, undefined, {
+    allow,
+  });
 }
 
 export async function readJsonObject(

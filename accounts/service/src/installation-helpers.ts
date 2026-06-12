@@ -19,7 +19,7 @@ import type {
   OidcClientRecord,
 } from "./store.ts";
 import { sha256HexText, sha256Text } from "./encoding.ts";
-import { isRecord, json, stringValue } from "./http-helpers.ts";
+import { errorJson, isRecord, json, stringValue } from "./http-helpers.ts";
 import type {
   AppInstallationImportDataEntry,
   AppInstallationImportDataManifest,
@@ -358,11 +358,7 @@ function canonicalHttpOrigin(url: string | undefined): string | undefined {
 export function requiredIdempotencyKey(request: Request): string | Response {
   const value = request.headers.get("idempotency-key")?.trim();
   if (!value || value.length > 200) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "Idempotency-Key header is required and must be 1-200 characters",
-    }, 400);
+    return errorJson("invalid_request", "Idempotency-Key header is required and must be 1-200 characters", 400);
   }
   return value;
 }
@@ -407,12 +403,7 @@ export function idempotencyRequestConflict(
   // prior operation as if it matched — that would let a different body reuse
   // the key. Treat an unverifiable digest as a conflict. Newly written events
   // always carry a requestDigest, so this only affects pre-existing events.
-  return json({
-    error: "idempotency_key_conflict",
-    error_description: existingDigest
-      ? "Idempotency-Key was already used with a different request body"
-      : "Idempotency-Key was already used by an operation whose request body cannot be verified",
-  }, 409);
+  return errorJson("idempotency_key_conflict", existingDigest ? "Idempotency-Key was already used with a different request body" : "Idempotency-Key was already used by an operation whose request body cannot be verified", 409);
 }
 
 export function findInFlightInstallationOperation(
