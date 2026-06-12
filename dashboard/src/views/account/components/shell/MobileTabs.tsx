@@ -1,47 +1,42 @@
+/**
+ * Mobile bottom bar — mirrors the sidebar's five destinations plus the
+ * notifications feed (the desktop reaches it via the TopBar bell; on phones a
+ * tab keeps it one tap away). Expert surfaces are inside app detail / Space
+ * settings, so nothing is nav-chrome-only on desktop.
+ */
 import { A, useLocation } from "@solidjs/router";
 import {
-  Activity,
-  GitBranch,
+  Bell,
   Home,
-  KeyRound,
-  LayoutGrid,
+  Plus,
+  Settings2,
   UserCircle2,
 } from "lucide-solid";
+import { t } from "../../../../i18n/index.ts";
 
-/**
- * Mobile bottom bar mirrors the sidebar's primary (everyday) set so phone users
- * get the same plain-Japanese entry points. The desktop sidebar is hidden on
- * phones (account.css `@media (max-width: 880px) .sidebar { display: none }`),
- * so on mobile the advanced management surfaces (Installations / Sources /
- * Providers / Graph / Output shares / Backups / Members) are reached through the
- * "アカウント" tab → /account hub, whose "アプリの管理" section links to every
- * one of them. Nothing is removed; every route stays reachable from nav chrome.
- */
-const TABS = [
-  { href: "/home", label: "ホーム", icon: Home },
-  { href: "/installations", label: "アプリ", icon: LayoutGrid },
-  { href: "/install", label: "導入", icon: GitBranch },
-  { href: "/connections", label: "接続", icon: KeyRound },
-  { href: "/activity", label: "履歴", icon: Activity },
-  { href: "/account", label: "アカウント", icon: UserCircle2 },
-];
-
-/** Ported from takosumi dashboard-ui/src/components/shell/MobileTabs.tsx. */
 export default function MobileTabs() {
   const loc = useLocation();
+  const TABS = [
+    { href: "/", label: () => t("nav.home"), icon: Home, end: true },
+    { href: "/new", label: () => t("nav.add"), icon: Plus },
+    { href: "/notifications", label: () => t("nav.notifications"), icon: Bell },
+    { href: "/space/settings", label: () => t("nav.spaceSettings"), icon: Settings2 },
+    { href: "/account", label: () => t("nav.account"), icon: UserCircle2 },
+  ] as const;
+  const isActive = (href: string, end?: boolean) =>
+    end
+      ? loc.pathname === href
+      : loc.pathname === href || loc.pathname.startsWith(href + "/");
   return (
     <nav class="mobile-tabs" aria-label="Mobile primary">
-      {TABS.map((t) => (
+      {TABS.map((tab) => (
         <A
-          href={t.href}
+          href={tab.href}
           class="mobile-tab"
-          classList={{
-            active: loc.pathname === t.href ||
-              loc.pathname.startsWith(t.href + "/"),
-          }}
+          classList={{ active: isActive(tab.href, "end" in tab ? tab.end : false) }}
         >
-          <t.icon size={20} />
-          <span>{t.label}</span>
+          <tab.icon size={20} />
+          <span>{tab.label()}</span>
         </A>
       ))}
     </nav>

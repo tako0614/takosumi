@@ -1,18 +1,17 @@
+/**
+ * Avatar pill in TopBar: signed-in identity, account link, language switch
+ * (EN/JA — persists via i18n setLocale), and sign-out.
+ */
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { LogOut, Settings } from "lucide-solid";
+import { LogOut, UserCircle2 } from "lucide-solid";
 import {
   clearSession,
   readSession,
   type SessionRecord,
 } from "../../lib/session.ts";
+import { locale, setLocale, t } from "../../../../i18n/index.ts";
 
-/**
- * Avatar pill in TopBar that pops a small menu with the signed-in user
- * info and a sign-out button.
- *
- * Ported from takosumi dashboard-ui/src/components/auth/UserMenu.tsx.
- */
 export default function UserMenu() {
   const [open, setOpen] = createSignal(false);
   const [session, setSession] = createSignal<SessionRecord | null>(null);
@@ -37,7 +36,7 @@ export default function UserMenu() {
   };
   const label = () => {
     const s = session();
-    if (!s) return "Anonymous";
+    if (!s) return "—";
     return s.displayName ?? s.email ?? s.subject;
   };
 
@@ -51,7 +50,7 @@ export default function UserMenu() {
       <button
         type="button"
         class="topbar-user"
-        aria-label="ユーザーメニュー"
+        aria-label={t("shell.userMenu")}
         aria-expanded={open()}
         onClick={() => setOpen(!open())}
       >
@@ -70,14 +69,33 @@ export default function UserMenu() {
             href="/account"
             onClick={() => setOpen(false)}
           >
-            <Settings size={16} /> 設定
+            <UserCircle2 size={16} /> {t("nav.account")}
           </a>
+          <div class="user-menu-lang" role="group" aria-label={t("shell.language")}>
+            <span class="user-menu-lang-label">{t("shell.language")}</span>
+            <button
+              type="button"
+              class="user-menu-lang-btn"
+              classList={{ active: locale() === "ja" }}
+              onClick={() => setLocale("ja")}
+            >
+              日本語
+            </button>
+            <button
+              type="button"
+              class="user-menu-lang-btn"
+              classList={{ active: locale() === "en" }}
+              onClick={() => setLocale("en")}
+            >
+              English
+            </button>
+          </div>
           <button
             class="user-menu-item user-menu-danger"
             type="button"
             onClick={signOut}
           >
-            <LogOut size={16} /> Sign out
+            <LogOut size={16} /> {t("shell.signOut")}
           </button>
         </div>
       </Show>

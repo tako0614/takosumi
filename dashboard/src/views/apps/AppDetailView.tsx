@@ -1,0 +1,1055 @@
+/**
+ * App detail (`/apps/:id` + tab routes) — one app, four tabs:
+ *   概要     status / public outputs / dependencies / source
+ *   デプロイ  Deployment generations + recent runs (+ rollback / backup)
+ *   設定     source coordinates + provider bindings (advanced, folded)
+ *   危険な操作 destroy (review-first)
+ *
+ * Replaces the flat ControlInstallationDetailView: the friendly layer leads,
+ * expert material (bindings, snapshot ids) sits in the settings tab / detail
+ * sections. All mutations route through the same control-plane actions as
+ * before (plan / destroy plan / rollback plan / backup / put profile).
+ */
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  type JSX,
+  Match,
+  Show,
+  Switch,
+} from "solid-js";
+import { A, useNavigate, useParams } from "@solidjs/router";
+import { Archive, ArrowLeft } from "lucide-solid";
+import AppShell from "../account/components/shell/AppShell.tsx";
+import Page from "../account/components/auth/Page.tsx";
+import {
+  type BackupRecord,
+  type ControlApiError,
+  type ProviderBinding,
+  type ProviderBindingMode,
+  type ProviderBindings,
+  createDeploymentRollbackPlan,
+  createInstallationBackup,
+  destroyPlanInstallation,
+  extractRunId,
+  getDeploymentProfile,
+  getInstallation,
+  getSpaceGraph,
+  listActivity,
+  listConnections,
+  listDeployments,
+  listInstallConfigs,
+  listOperatorConnectionDefaults,
+  listSources,
+  planInstallation,
+  putDeploymentProfile,
+} from "../../lib/control-api.ts";
+import { createAction } from "../account/lib/action.tsx";
+import {
+  deploymentStatusLabel,
+  deploymentTone,
+  installationStatusLabel,
+  installationTone,
+  operationLabel,
+  runStatusLabel,
+  runTone,
+} from "../../lib/labels.ts";
+import { isUrlString, outputLabel } from "../../lib/installations-ui.ts";
+import { formatDateTime, t } from "../../i18n/index.ts";
+import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  Input,
+  KVList,
+  PageHeader,
+  Select,
+  Skeleton,
+  StatusBadge,
+  Tabs,
+  Textarea,
+} from "../../components/ui/index.ts";
+
+type TabId = "overview" | "deploys" | "settings" | "danger";
+
+export default function AppDetailView() {
+  return <Page>{() => <Inner />}</Page>;
+}
+
+function Inner() {
+  const params = useParams();
+  const navigate = useNavigate();
+  const { confirm } = useConfirmDialog();
+  const installationId = () => params.id ?? "";
+  const tab = (): TabId => {
+    const raw = params.tab;
+    return raw === "deploys" || raw === "settings" || raw === "danger"
+      ? raw
+      : "overview";
+  };
+
+  const [installation, { refetch: refetchInstallation }] = createResource(
+    installationId,
+    getInstallation,
+  );
+  const spaceId = () => installation()?.spaceId;
+  const [profile, { refetch: refetchProfile }] = createResource(
+    installationId,
+    getDeploymentProfile,
+  );
+  const [sources] = createResource(spaceId, listSources);
+  const [configs] = createResource(spaceId, listInstallConfigs);
+  const [deployments] = createResource(installationId, listDeployments);
+  const [graph] = createResource(spaceId, getSpaceGraph);
+  const [connections] = createResource(spaceId, listConnections);
+  const [operatorDefaults] = createResource(spaceId, async (id) =>
+    id ? await listOperatorConnectionDefaults(id) : [],
+  );
+  const [activity] = createResource(spaceId, (id) => listActivity(id, 100));
+
+  const source = createMemo(() =>
+    (sources() ?? []).find((item) => item.id === installation()?.sourceId),
+  );
+  const installConfig = createMemo(() =>
+    (configs() ?? []).find(
+      (item) => item.id === installation()?.installConfigId,
+    ),
+  );
+  const producers = createMemo(() => dependencyRows(installation(), graph(), "producer"));
+  const consumers = createMemo(() => dependencyRows(installation(), graph(), "consumer"));
+
+  const deploymentHistory = createMemo(() =>
+    [...(deployments() ?? [])].sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt),
+    ),
+  );
+  const currentDeployment = createMemo(() => {
+    const list = deploymentHistory();
+    const currentId = installation()?.currentDeploymentId;
+    return (
+      (currentId && list.find((d) => d.id === currentId)) || list[0] || undefined
+    );
+  });
+  const publicOutputs = createMemo(() =>
+    Object.entries(currentDeployment()?.outputsPublic ?? {}),
+  );
+
+  /** Recent run events for THIS app (activity carries metadata.installationId). */
+  const recentRuns = createMemo(() =>
+    (activity() ?? [])
+      .filter(
+        (event) =>
+          event.targetType === "run" &&
+          event.metadata.installationId === installationId(),
+      )
+      .slice(0, 8),
+  );
+
+  // --- actions ---------------------------------------------------------------
+  const plan = createAction(async () => {
+    const envelope = await planInstallation(installationId());
+    const runId = extractRunId(envelope);
+    if (runId) navigate(`/runs/${runId}`);
+  });
+  const destroyPlan = createAction(async () => {
+    const envelope = await destroyPlanInstallation(installationId());
+    const runId = extractRunId(envelope);
+    if (runId) navigate(`/runs/${runId}`);
+  });
+  const backup = createAction(async (): Promise<BackupRecord> => {
+    return await createInstallationBackup(installationId());
+  });
+  const rollback = createAction(async (deploymentId: string) => {
+    const envelope = await createDeploymentRollbackPlan(deploymentId);
+    const runId = extractRunId(envelope);
+    if (runId) navigate(`/runs/${runId}`);
+  });
+
+  const confirmDestroy = async () => {
+    const ok = await confirm({
+      title: t("app.danger.destroyTitle"),
+      message: t("app.danger.destroyBody"),
+      confirmText: t("app.danger.destroyCta"),
+      danger: true,
+    });
+    if (!ok) return;
+    void destroyPlan.run();
+  };
+
+  const tabItems = () => {
+    const base = `/apps/${encodeURIComponent(installationId())}`;
+    return [
+      { href: base, label: t("app.tab.overview"), end: true },
+      { href: `${base}/deploys`, label: t("app.tab.deploys") },
+      { href: `${base}/settings`, label: t("app.tab.settings") },
+      { href: `${base}/danger`, label: t("app.tab.danger") },
+    ];
+  };
+
+  return (
+    <AppShell>
+      <Switch>
+        <Match when={installation.loading}>
+          <Card>
+            <Skeleton variant="block" />
+          </Card>
+        </Match>
+        <Match when={installation.error}>
+          <EmptyState
+            title={t("app.notFound")}
+            message={(installation.error as ControlApiError).message}
+            action={
+              <Button variant="secondary" href="/" icon={<ArrowLeft size={16} />}>
+                {t("app.backToList")}
+              </Button>
+            }
+          />
+        </Match>
+        <Match when={installation()}>
+          {(inst) => (
+            <>
+              <PageHeader
+                eyebrow={t("app.installationSub")}
+                title={
+                  <span class="wa-title-row">
+                    {inst().name}
+                    <StatusBadge
+                      status={inst().status}
+                      label={installationStatusLabel}
+                      tone={installationTone}
+                    />
+                  </span>
+                }
+                actions={
+                  <div class="av-actions">
+                    <Button variant="ghost" href="/">
+                      {t("app.backToList")}
+                    </Button>
+                    <Button
+                      variant="primary"
+                      type="button"
+                      disabled={plan.busy()}
+                      busy={plan.busy()}
+                      onClick={() => void plan.run()}
+                    >
+                      {t("apps.reviewChanges")}
+                    </Button>
+                  </div>
+                }
+              />
+
+              <Tabs items={tabItems()} aria-label="App sections" />
+
+              <Show when={plan.error()}>
+                {(m) => <p class="wa-error" role="alert">{m()}</p>}
+              </Show>
+
+              <div class="wa-stack">
+                <Switch>
+                  <Match when={tab() === "overview"}>
+                    <OverviewTab
+                      publicOutputs={publicOutputs()}
+                      outputsLoading={deployments.loading}
+                      producers={producers()}
+                      consumers={consumers()}
+                      source={source()}
+                      installation={inst()}
+                      installConfigLabel={
+                        installConfig()
+                          ? `${installConfig()!.name} · ${installConfig()!.trustLevel}`
+                          : inst().installConfigId
+                      }
+                    />
+                  </Match>
+                  <Match when={tab() === "deploys"}>
+                    <DeploysTab
+                      loading={deployments.loading}
+                      error={
+                        deployments.error
+                          ? (deployments.error as ControlApiError).message
+                          : undefined
+                      }
+                      history={deploymentHistory()}
+                      currentId={currentDeployment()?.id}
+                      rollbackBusy={rollback.busy()}
+                      onRollback={(id) => void rollback.run(id)}
+                      rollbackError={rollback.error()}
+                      backupBusy={backup.busy()}
+                      onBackup={() => void backup.run()}
+                      backupError={backup.error()}
+                      backupResult={backup.result()}
+                      recentRuns={recentRuns()}
+                    />
+                  </Match>
+                  <Match when={tab() === "settings"}>
+                    <SettingsTab
+                      source={source()}
+                      bindings={profile()?.bindings}
+                      connections={connections() ?? []}
+                      operatorDefaults={operatorDefaults() ?? []}
+                      installationId={installationId()}
+                      onSaved={() =>
+                        void Promise.all([
+                          refetchProfile(),
+                          refetchInstallation(),
+                        ])}
+                    />
+                  </Match>
+                  <Match when={tab() === "danger"}>
+                    <Card>
+                      <CardHeader
+                        title={t("app.danger.destroyTitle")}
+                        subtitle={t("app.danger.destroyBody")}
+                      />
+                      <div class="wa-form-actions">
+                        <Button
+                          variant="danger"
+                          type="button"
+                          disabled={destroyPlan.busy()}
+                          busy={destroyPlan.busy()}
+                          onClick={() => void confirmDestroy()}
+                        >
+                          {t("app.danger.destroyCta")}
+                        </Button>
+                      </div>
+                      <Show when={destroyPlan.error()}>
+                        {(m) => <p class="wa-error" role="alert">{m()}</p>}
+                      </Show>
+                    </Card>
+                  </Match>
+                </Switch>
+              </div>
+            </>
+          )}
+        </Match>
+      </Switch>
+    </AppShell>
+  );
+}
+
+// === overview ================================================================
+
+interface DependencyRow {
+  readonly id: string;
+  readonly name: string;
+  readonly outputs: readonly { readonly from: string; readonly to: string }[];
+}
+
+function dependencyRows(
+  inst:
+    | { readonly id: string }
+    | undefined,
+  graph:
+    | {
+        readonly nodes: readonly { installationId: string; name: string }[];
+        readonly edges: readonly {
+          id: string;
+          producerInstallationId: string;
+          consumerInstallationId: string;
+          outputs: Record<string, { from: string; to: string }>;
+        }[];
+      }
+    | undefined,
+  side: "producer" | "consumer",
+): readonly DependencyRow[] {
+  if (!inst || !graph) return [];
+  const names = new Map(
+    graph.nodes.map((node) => [node.installationId, node.name]),
+  );
+  return graph.edges
+    .filter((edge) =>
+      side === "producer"
+        ? edge.consumerInstallationId === inst.id
+        : edge.producerInstallationId === inst.id,
+    )
+    .map((edge) => {
+      const otherId =
+        side === "producer"
+          ? edge.producerInstallationId
+          : edge.consumerInstallationId;
+      return {
+        id: edge.id,
+        name: names.get(otherId) ?? otherId,
+        outputs: Object.values(edge.outputs),
+      };
+    });
+}
+
+function OverviewTab(props: {
+  readonly publicOutputs: readonly [string, unknown][];
+  readonly outputsLoading: boolean;
+  readonly producers: readonly DependencyRow[];
+  readonly consumers: readonly DependencyRow[];
+  readonly source:
+    | {
+        readonly name: string;
+        readonly url: string;
+        readonly defaultRef: string;
+        readonly defaultPath: string;
+        readonly status: string;
+      }
+    | undefined;
+  readonly installation: {
+    readonly id: string;
+    readonly currentStateGeneration: number;
+    readonly currentOutputSnapshotId?: string;
+  };
+  readonly installConfigLabel: string;
+}) {
+  return (
+    <>
+      <Card>
+        <CardHeader
+          title={t("app.outputs.title")}
+          subtitle={t("app.outputs.subtitle")}
+        />
+        <Switch>
+          <Match when={props.outputsLoading}>
+            <p class="muted">{t("common.loading")}</p>
+          </Match>
+          <Match when={props.publicOutputs.length === 0}>
+            <p class="muted">{t("app.outputs.empty")}</p>
+          </Match>
+          <Match when={props.publicOutputs.length > 0}>
+            <KVList
+              items={props.publicOutputs.map(([name, value]) => ({
+                label: outputLabel(name),
+                value: <OutputValue value={value} />,
+              }))}
+            />
+          </Match>
+        </Switch>
+      </Card>
+
+      <Show when={props.producers.length > 0 || props.consumers.length > 0}>
+        <Card>
+          <CardHeader title={t("app.deps.title")} />
+          <div class="wa-dep-columns">
+            <DependencyList
+              title={t("app.deps.dependsOn")}
+              rows={props.producers}
+            />
+            <DependencyList
+              title={t("app.deps.usedBy")}
+              rows={props.consumers}
+            />
+          </div>
+        </Card>
+      </Show>
+
+      <Card>
+        <CardHeader title={t("app.source.title")} />
+        <Show
+          when={props.source}
+          fallback={<p class="muted">{t("app.source.loading")}</p>}
+        >
+          {(src) => (
+            <KVList
+              items={[
+                { label: t("app.source.name"), value: src().name },
+                {
+                  label: t("app.source.url"),
+                  value: <code>{src().url}</code>,
+                },
+                {
+                  label: t("app.source.refPath"),
+                  value: (
+                    <>
+                      <code>{src().defaultRef}</code>
+                      <span class="muted"> / </span>
+                      <code>{src().defaultPath}</code>
+                    </>
+                  ),
+                },
+                { label: t("app.source.status"), value: src().status },
+              ]}
+            />
+          )}
+        </Show>
+      </Card>
+
+      <details class="wb-disclosure">
+        <summary>{t("app.info.title")}</summary>
+        <KVList
+          items={[
+            {
+              label: t("app.info.id"),
+              value: <code>{props.installation.id}</code>,
+            },
+            {
+              label: t("app.info.generation"),
+              value: props.installation.currentStateGeneration,
+            },
+            {
+              label: t("app.info.outputSnapshot"),
+              value: props.installation.currentOutputSnapshotId
+                ? <code>{props.installation.currentOutputSnapshotId}</code>
+                : <span class="muted">{t("common.none")}</span>,
+            },
+            {
+              label: t("app.info.installConfig"),
+              value: props.installConfigLabel,
+            },
+          ]}
+        />
+      </details>
+    </>
+  );
+}
+
+function DependencyList(props: {
+  readonly title: string;
+  readonly rows: readonly DependencyRow[];
+}) {
+  return (
+    <div>
+      <h4>{props.title}</h4>
+      <Show
+        when={props.rows.length > 0}
+        fallback={<p class="muted">{t("common.none")}</p>}
+      >
+        <ul class="wa-dep-list">
+          <For each={props.rows}>
+            {(row) => (
+              <li>
+                <code>{row.name}</code>
+                <Show when={row.outputs.length > 0}>
+                  <span class="wa-dep-edge">
+                    {" "}
+                    {row.outputs
+                      .map((output) => `${output.from}→${output.to}`)
+                      .join(", ")}
+                  </span>
+                </Show>
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+    </div>
+  );
+}
+
+/** Public output value: http(s) → prominent link; otherwise monospace text. */
+function OutputValue(props: { readonly value: unknown }): JSX.Element {
+  return (
+    <Switch fallback={<code>{stringifyOutput(props.value)}</code>}>
+      <Match when={isUrlString(props.value)}>
+        <Button
+          variant="primary"
+          size="sm"
+          href={props.value as string}
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          {props.value as string}
+        </Button>
+      </Match>
+      <Match when={typeof props.value === "string"}>
+        <code>{props.value as string}</code>
+      </Match>
+    </Switch>
+  );
+}
+
+function stringifyOutput(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+// === deploys =================================================================
+
+function DeploysTab(props: {
+  readonly loading: boolean;
+  readonly error?: string;
+  readonly history: readonly {
+    readonly id: string;
+    readonly status: string;
+    readonly stateGeneration: number;
+    readonly createdAt: string;
+  }[];
+  readonly currentId?: string;
+  readonly rollbackBusy: boolean;
+  readonly onRollback: (deploymentId: string) => void;
+  readonly rollbackError: string | null;
+  readonly backupBusy: boolean;
+  readonly onBackup: () => void;
+  readonly backupError: string | null;
+  readonly backupResult: BackupRecord | undefined;
+  readonly recentRuns: readonly {
+    readonly targetId: string;
+    readonly action: string;
+    readonly createdAt: string;
+    readonly metadata: Record<string, unknown>;
+  }[];
+}) {
+  return (
+    <>
+      <Card>
+        <CardHeader
+          title={t("app.deploys.title")}
+          subtitle={t("app.deploys.subtitle")}
+          actions={
+            <Button
+              variant="secondary"
+              size="sm"
+              type="button"
+              icon={<Archive size={14} />}
+              disabled={props.backupBusy}
+              busy={props.backupBusy}
+              onClick={() => props.onBackup()}
+            >
+              {t("app.deploys.backup")}
+            </Button>
+          }
+        />
+        <Show when={props.backupResult}>
+          {(record) => (
+            <p class="wa-notice">
+              {t("app.deploys.backupCreated", { id: record().id })}
+            </p>
+          )}
+        </Show>
+        <Show when={props.backupError}>
+          {(m) => <p class="wa-error" role="alert">{m()}</p>}
+        </Show>
+        <Show when={props.rollbackError}>
+          {(m) => <p class="wa-error" role="alert">{m()}</p>}
+        </Show>
+        <Switch>
+          <Match when={props.loading}>
+            <p class="muted">{t("common.loading")}</p>
+          </Match>
+          <Match when={props.error}>
+            <p class="wa-error">
+              {t("common.fetchFailed", { message: props.error! })}
+            </p>
+          </Match>
+          <Match when={props.history.length === 0}>
+            <p class="muted">{t("app.deploys.empty")}</p>
+          </Match>
+          <Match when={props.history.length > 0}>
+            <ul class="wa-deploy-history">
+              <For each={props.history}>
+                {(deployment) => {
+                  const isCurrent = () => deployment.id === props.currentId;
+                  return (
+                    <li class="wa-deploy-row">
+                      <span class="wa-deploy-when">
+                        {formatDateTime(deployment.createdAt)}
+                      </span>
+                      <Show when={isCurrent()}>
+                        <Badge tone="ok">{t("status.deployment.active")}</Badge>
+                      </Show>
+                      <Show when={!isCurrent()}>
+                        <StatusBadge
+                          status={deployment.status}
+                          label={deploymentStatusLabel}
+                          tone={deploymentTone}
+                        />
+                      </Show>
+                      <span class="wa-deploy-meta">
+                        {t("app.deploys.generation", {
+                          n: deployment.stateGeneration,
+                        })}{" "}
+                        · <code>{deployment.id}</code>
+                      </span>
+                      <Show when={!isCurrent()}>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          type="button"
+                          disabled={props.rollbackBusy}
+                          onClick={() => props.onRollback(deployment.id)}
+                        >
+                          {t("app.deploys.restore")}
+                        </Button>
+                      </Show>
+                    </li>
+                  );
+                }}
+              </For>
+            </ul>
+          </Match>
+        </Switch>
+      </Card>
+
+      <Card>
+        <CardHeader title={t("app.recentRuns.title")} />
+        <Show
+          when={props.recentRuns.length > 0}
+          fallback={<p class="muted">{t("app.recentRuns.empty")}</p>}
+        >
+          <ul class="av-run-list">
+            <For each={props.recentRuns}>
+              {(event) => (
+                <li class="av-run-row">
+                  <span class="av-run-action">
+                    {operationLabel(
+                      typeof event.metadata.operation === "string"
+                        ? event.metadata.operation
+                        : undefined,
+                    )}
+                  </span>
+                  <RunEventBadge action={event.action} />
+                  <span class="muted">{formatDateTime(event.createdAt)}</span>
+                  <A href={`/runs/${encodeURIComponent(event.targetId)}`}>
+                    {t("app.recentRuns.open")} →
+                  </A>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+      </Card>
+    </>
+  );
+}
+
+/** Compact badge for a run.* activity verb on the recent-runs strip. */
+function RunEventBadge(props: { readonly action: string }) {
+  const status = () => {
+    switch (props.action) {
+      case "run.failed":
+        return "failed";
+      case "run.applied":
+        return "succeeded";
+      case "run.plan_created":
+        return "waiting_approval";
+      case "run.approved":
+        return "running";
+      default:
+        return undefined;
+    }
+  };
+  return (
+    <Show when={status()}>
+      {(s) => (
+        <StatusBadge status={s()} label={runStatusLabel} tone={runTone} />
+      )}
+    </Show>
+  );
+}
+
+// === settings ================================================================
+
+interface ProviderBindingRow {
+  readonly provider: string;
+  readonly alias: string;
+  readonly mode: ProviderBindingMode;
+  readonly connectionId: string;
+  readonly manualValues: string;
+}
+
+function providerBindingToRow(binding: ProviderBinding): ProviderBindingRow {
+  return {
+    provider: binding.provider,
+    alias: binding.alias ?? "",
+    mode: binding.mode,
+    connectionId: binding.connectionId ?? "",
+    manualValues: binding.values
+      ? JSON.stringify(binding.values, null, 2)
+      : "",
+  };
+}
+
+function buildBindings(
+  rows: readonly ProviderBindingRow[],
+): { readonly bindings: ProviderBindings } | { readonly error: string } {
+  const bindings: ProviderBinding[] = [];
+  for (const [index, row] of rows.entries()) {
+    const provider = row.provider.trim();
+    if (!provider) {
+      return { error: t("app.bindings.errorProvider", { index: index + 1 }) };
+    }
+    const mode = row.mode ?? "default";
+    const binding: {
+      provider: string;
+      alias?: string;
+      mode: ProviderBindingMode;
+      connectionId?: string;
+      values?: Record<string, unknown>;
+    } = { provider, mode };
+    const alias = row.alias.trim();
+    if (alias) binding.alias = alias;
+    if (mode === "connection") {
+      const connectionId = row.connectionId.trim();
+      if (!connectionId) {
+        return { error: t("app.bindings.errorConnection", { provider }) };
+      }
+      binding.connectionId = connectionId;
+    }
+    if (mode === "manual") {
+      const text = row.manualValues.trim();
+      if (!text) {
+        return { error: t("app.bindings.errorManualRequired", { provider }) };
+      }
+      let values: unknown;
+      try {
+        values = JSON.parse(text);
+      } catch {
+        return { error: t("app.bindings.errorManualJson", { provider }) };
+      }
+      if (
+        typeof values !== "object" ||
+        values === null ||
+        Array.isArray(values)
+      ) {
+        return { error: t("app.bindings.errorManualJson", { provider }) };
+      }
+      binding.values = values as Record<string, unknown>;
+    }
+    bindings.push(binding);
+  }
+  return { bindings };
+}
+
+function SettingsTab(props: {
+  readonly source:
+    | {
+        readonly name: string;
+        readonly url: string;
+        readonly defaultRef: string;
+        readonly defaultPath: string;
+        readonly status: string;
+      }
+    | undefined;
+  readonly bindings: ProviderBindings | undefined;
+  readonly connections: readonly {
+    readonly id: string;
+    readonly provider: string;
+    readonly displayName?: string;
+    readonly status: string;
+  }[];
+  readonly operatorDefaults: readonly { readonly provider: string }[];
+  readonly installationId: string;
+  readonly onSaved: () => void;
+}) {
+  const [rows, setRows] = createSignal<ProviderBindingRow[]>([]);
+  const [formError, setFormError] = createSignal<string | null>(null);
+
+  createEffect(() => {
+    const bindings = props.bindings;
+    if (!bindings) return;
+    setRows(bindings.map(providerBindingToRow));
+  });
+
+  const defaultByProvider = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of props.operatorDefaults) {
+      map.set(item.provider, item.provider);
+    }
+    return map;
+  });
+
+  const update = (index: number, patch: Partial<ProviderBindingRow>) =>
+    setRows((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+    );
+
+  const saveProfile = createAction(async () => {
+    setFormError(null);
+    const bindings = buildBindings(rows());
+    if ("error" in bindings) {
+      setFormError(bindings.error);
+      return;
+    }
+    await putDeploymentProfile(props.installationId, bindings.bindings);
+    props.onSaved();
+  });
+
+  return (
+    <>
+      <Card>
+        <CardHeader title={t("app.source.title")} />
+        <Show
+          when={props.source}
+          fallback={<p class="muted">{t("app.source.loading")}</p>}
+        >
+          {(src) => (
+            <KVList
+              items={[
+                { label: t("app.source.name"), value: src().name },
+                { label: t("app.source.url"), value: <code>{src().url}</code> },
+                {
+                  label: t("app.source.refPath"),
+                  value: (
+                    <>
+                      <code>{src().defaultRef}</code>
+                      <span class="muted"> / </span>
+                      <code>{src().defaultPath}</code>
+                    </>
+                  ),
+                },
+              ]}
+            />
+          )}
+        </Show>
+      </Card>
+
+      <details class="wb-disclosure">
+        <summary>{t("app.bindings.title")}</summary>
+        <Card>
+          <CardHeader
+            title={t("app.bindings.title")}
+            subtitle={t("app.bindings.subtitle")}
+          />
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveProfile.run();
+            }}
+          >
+            <div class="wa-binding-grid">
+              <For each={rows()}>
+                {(row, index) => (
+                  <div class="wa-binding-row">
+                    <div class="wa-binding-head">
+                      <Input
+                        value={row.provider}
+                        onInput={(e) =>
+                          update(index(), { provider: e.currentTarget.value })
+                        }
+                        placeholder="registry.opentofu.org/cloudflare/cloudflare"
+                      />
+                      <Input
+                        value={row.alias}
+                        onInput={(e) =>
+                          update(index(), { alias: e.currentTarget.value })
+                        }
+                        placeholder={t("app.bindings.aliasPlaceholder")}
+                      />
+                      <Show
+                        when={defaultByProvider().get(row.provider)}
+                        fallback={
+                          <span class="muted">
+                            {t("app.bindings.defaultUnset")}
+                          </span>
+                        }
+                      >
+                        {(provider) => (
+                          <span class="muted">
+                            {t("app.bindings.default", {
+                              provider: provider(),
+                            })}
+                          </span>
+                        )}
+                      </Show>
+                    </div>
+                    <div class="wa-binding-controls">
+                      <Select
+                        value={row.mode}
+                        onChange={(e) =>
+                          update(index(), {
+                            mode: e.currentTarget.value as ProviderBindingMode,
+                          })
+                        }
+                      >
+                        <option value="default">default</option>
+                        <option value="connection">connection</option>
+                        <option value="manual">manual</option>
+                        <option value="disabled">disabled</option>
+                      </Select>
+                      <Show when={row.mode === "connection"}>
+                        <Select
+                          value={row.connectionId}
+                          onChange={(e) =>
+                            update(index(), {
+                              connectionId: e.currentTarget.value,
+                            })
+                          }
+                        >
+                          <option value="">
+                            {t("app.bindings.selectConnection")}
+                          </option>
+                          <For each={props.connections}>
+                            {(connection) => (
+                              <option value={connection.id}>
+                                {connection.displayName ?? connection.provider}{" "}
+                                — {connection.status}
+                              </option>
+                            )}
+                          </For>
+                        </Select>
+                      </Show>
+                      <Show when={row.mode === "manual"}>
+                        <Textarea
+                          rows={3}
+                          value={row.manualValues}
+                          onInput={(e) =>
+                            update(index(), {
+                              manualValues: e.currentTarget.value,
+                            })
+                          }
+                          placeholder='{"name":"value"}'
+                          spellcheck={false}
+                        />
+                      </Show>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        type="button"
+                        onClick={() =>
+                          setRows((prev) =>
+                            prev.filter((_, i) => i !== index()),
+                          )
+                        }
+                      >
+                        {t("app.bindings.remove")}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </For>
+            </div>
+            <div class="wa-form-actions">
+              <Button
+                variant="secondary"
+                type="button"
+                onClick={() =>
+                  setRows((prev) => [
+                    ...prev,
+                    {
+                      provider: "",
+                      alias: "",
+                      mode: "default",
+                      connectionId: "",
+                      manualValues: "",
+                    },
+                  ])
+                }
+              >
+                {t("app.bindings.add")}
+              </Button>
+              <Button
+                variant="primary"
+                type="submit"
+                disabled={saveProfile.busy()}
+                busy={saveProfile.busy()}
+              >
+                {saveProfile.busy() ? t("common.saving") : t("common.save")}
+              </Button>
+            </div>
+            <Show when={formError()}>
+              {(m) => <p class="wa-error" role="alert">{m()}</p>}
+            </Show>
+            <Show when={saveProfile.error()}>
+              {(m) => <p class="wa-error" role="alert">{m()}</p>}
+            </Show>
+          </form>
+        </Card>
+      </details>
+    </>
+  );
+}

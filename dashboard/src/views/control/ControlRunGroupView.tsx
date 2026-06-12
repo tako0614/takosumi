@@ -1,10 +1,8 @@
 /**
- * RunGroup summary view (spec §31) — a Space-update RunGroup.
- *
- * A RunGroup orders multiple Runs across the dependency DAG (e.g. a Space update
- * after stale propagation). This view reads `GET /api/v1/run-groups/:id`
- * ({runGroup, runs}), shows the group status + ordered member list, and offers
- * "全て承認" (`POST /api/v1/run-groups/:id/approve`) to approve the group.
+ * RunGroup view (`/run-groups/:id`) — a grouped update: multiple Runs ordered
+ * across the dependency DAG (e.g. a Space update after stale propagation).
+ * Shows the group status + ordered member list and offers a one-shot
+ * "approve all" (`POST /api/v1/run-groups/:id/approve`).
  */
 import "../../styles/wave-a.css";
 import { createMemo, createResource, Match, Show, Switch } from "solid-js";
@@ -19,8 +17,12 @@ import {
   type Run,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
-import { controlRunStatusLabel } from "../../lib/status-labels.ts";
-import { runTone } from "./run-tone.ts";
+import {
+  operationLabel,
+  runStatusLabel,
+  runTone,
+} from "../../lib/labels.ts";
+import { t } from "../../i18n/index.ts";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import Button from "../../components/ui/Button.tsx";
 import { Card, CardHeader } from "../../components/ui/Card.tsx";
@@ -31,7 +33,7 @@ import EmptyState from "../../components/ui/EmptyState.tsx";
 import Skeleton from "../../components/ui/Skeleton.tsx";
 
 export default function ControlRunGroupView() {
-  return <Page title="Space 更新">{() => <Inner />}</Page>;
+  return <Page title={t("runGroup.title")}>{() => <Inner />}</Page>;
 }
 
 function Inner() {
@@ -58,22 +60,25 @@ function Inner() {
         </a>
       ),
     },
-    { header: "種別", cell: (r) => <code>{r.type}</code> },
     {
-      header: "状態",
+      header: t("run.details.type"),
+      cell: (r) => operationLabel(r.type),
+    },
+    {
+      header: t("members.col.status"),
       cell: (r) => (
-        <StatusBadge
-          status={r.status}
-          label={controlRunStatusLabel}
-          tone={runTone}
-        />
+        <StatusBadge status={r.status} label={runStatusLabel} tone={runTone} />
       ),
     },
     {
-      header: "Installation",
+      header: t("app.installationSub"),
       cell: (r) => (
         <Show when={r.installationId} fallback={<span class="muted">—</span>}>
-          <code>{r.installationId}</code>
+          {(id) => (
+            <a href={`/apps/${encodeURIComponent(id())}`}>
+              <code>{id()}</code>
+            </a>
+          )}
         </Show>
       ),
     },
@@ -82,12 +87,11 @@ function Inner() {
   return (
     <AppShell>
       <PageHeader
-        eyebrow="RunGroup"
-        title="Space 更新（RunGroup）"
-        subtitle="DAG 順に並んだ複数 Run のグループ。まとめて承認できます。"
+        title={t("runGroup.title")}
+        subtitle={t("runGroup.subtitle")}
         actions={
-          <Button variant="secondary" href="/installations">
-            一覧へ
+          <Button variant="ghost" href="/">
+            {t("app.backToList")}
           </Button>
         }
       />
@@ -101,18 +105,26 @@ function Inner() {
         <Match when={group.error}>
           <EmptyState
             icon={<Layers size={28} />}
-            title="取得に失敗しました"
-            message={(group.error as ControlApiError).message}
+            title={t("runGroup.title")}
+            message={t("common.fetchFailed", {
+              message: (group.error as ControlApiError).message,
+            })}
           />
         </Match>
         <Match when={group()}>
           {(g) => {
             const items = (): readonly KVItem[] => {
               const out: KVItem[] = [
-                { label: "Group ID", value: <code>{g().runGroup.id}</code> },
+                {
+                  label: t("runGroup.groupId"),
+                  value: <code>{g().runGroup.id}</code>,
+                },
               ];
               if (g().runGroup.type) {
-                out.push({ label: "種別", value: <code>{g().runGroup.type}</code> });
+                out.push({
+                  label: t("run.details.type"),
+                  value: <code>{g().runGroup.type}</code>,
+                });
               }
               return out;
             };
@@ -122,11 +134,11 @@ function Inner() {
                   <CardHeader
                     title={
                       <span class="wa-title-row">
-                        RunGroup
+                        {t("runGroup.title")}
                         <Show when={g().runGroup.status}>
                           <StatusBadge
                             status={g().runGroup.status}
-                            label={controlRunStatusLabel}
+                            label={runStatusLabel}
                             tone={runTone}
                           />
                         </Show>
@@ -140,14 +152,16 @@ function Inner() {
                           busy={approveAll.busy()}
                           onClick={() => void approveAll.run()}
                         >
-                          {approveAll.busy() ? "承認中..." : "全ての Run を承認"}
+                          {approveAll.busy()
+                            ? t("run.approving")
+                            : t("runGroup.approveAll")}
                         </Button>
                       </Show>
                     }
                   />
                   <KVList items={items()} />
                   <Show when={approveAll.error()}>
-                    {(m) => <p class="wa-error">{m()}</p>}
+                    {(m) => <p class="wa-error" role="alert">{m()}</p>}
                   </Show>
                 </Card>
 
@@ -155,7 +169,7 @@ function Inner() {
                   <CardHeader
                     title={
                       <span class="wa-title-row">
-                        メンバー Run
+                        {t("runGroup.members")}
                         <Badge tone="muted">{g().runs.length}</Badge>
                       </span>
                     }
@@ -164,7 +178,7 @@ function Inner() {
                     columns={memberColumns}
                     rows={g().runs}
                     rowKey={(r) => r.id}
-                    empty="メンバー Run はありません。"
+                    empty={t("runGroup.membersEmpty")}
                   />
                 </Card>
               </div>
