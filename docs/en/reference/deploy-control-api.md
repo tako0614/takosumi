@@ -12,22 +12,29 @@ operator-internal execution details subordinate to Connections + ProviderBinding
 
 ## Surfaces and auth model
 
-The public control-plane surfaces are `/api/*`, `/install`, and the inbound webhook seam `/hooks/*`. Account-session
-routes used by the dashboard and in-process seams used by accounts/CLI distributions are internal distribution paths,
-not this API surface.
+The public control-plane edge surfaces are **`/api/v1/*`**, `/install`, and the inbound webhook seam `/hooks/*`.
+`/api/v1/*` is the single versioned edge surface that dashboard sessions, the operator bearer, and accounts/CLI all hit.
+The in-process deploy-control implementation lives behind the **`/internal/v1/*`** seam contract and is not edge-public
+(it is dialed in-process, and the `/api/v1` edge router delegates to it).
 
-| Surface    | Purpose                  | Auth                                                                 |
-| ---------- | ------------------------ | -------------------------------------------------------------------- |
-| `/api/*`   | public control plane     | host-resolved scoped principal; reference fallback uses bearer token |
-| `/install` | public install deep link | no bearer; hands off to the dashboard session gate                   |
-| `/hooks/*` | inbound forge webhook    | hook secret, not operator bearer                                     |
+| Surface          | Purpose                          | Auth                                                                          |
+| ---------------- | -------------------------------- | ----------------------------------------------------------------------------- |
+| `/api/v1/*`      | public control plane (versioned) | host-resolved scoped principal; reference fallback uses the operator bearer    |
+| `/install`       | public install deep link         | no bearer; hands off to the dashboard session gate                            |
+| `/hooks/*`       | inbound forge webhook            | hook secret, not operator bearer                                              |
+| `/internal/v1/*` | in-process deploy-control seam   | internal (operator bearer); not reachable from the edge                       |
 
-### `/api` scoped principal
+> **Distinct from the account-plane product surfaces**: the account plane also exposes **`/v1/installations`** (the
+> takos-product AppInstallation app-distribution API) and **`/v1/connections`** (account-plane connections) as separate
+> resources. They are NOT the `/api/v1` deploy-control Installation / Connection — they intentionally coexist under a
+> different prefix. This document covers the `/api/v1` deploy-control surface.
 
-Every `/api` route is protected by a scoped principal resolved by the host worker. Dashboard sessions, accounts-plane
+### `/api/v1` scoped principal
+
+Every `/api/v1` route is protected by a scoped principal resolved by the host worker. Dashboard sessions, accounts-plane
 flows, and CLI bearer tokens are distribution-specific entry points; the API handler only sees an `actor` / `spaceIds` /
 `operations` principal. The reference fallback sources the token from `TAKOSUMI_DEPLOY_CONTROL_TOKEN`; when neither the
-token nor a bearer resolver is configured, the host hides the `/api` routes behind `404 not_found` so an unconfigured
+token nor a bearer resolver is configured, the host hides the `/api/v1` routes behind `404 not_found` so an unconfigured
 surface is not exposed on a public host.
 
 Operators and account-planes can replace the bearer resolver with a scoped principal carrying `actor` / `spaceIds` /
@@ -37,7 +44,7 @@ Operators and account-planes can replace the bearer resolver with a scoped princ
 - Mutations are authorized by `operations` (`create` / `update` / `destroy` …).
 - Space creation, operator-scope Connections, and operator connection defaults are instance-wide, so only the
   unrestricted bearer (`spaceIds: "*"`) may touch them.
-- Calling `GET /api/connections` without `spaceId` lists operator-scope Connections and is likewise unrestricted-bearer
+- Calling `GET /api/v1/connections` without `spaceId` lists operator-scope Connections and is likewise unrestricted-bearer
   only.
 
 Out-of-scope requests return `403 permission_denied`, and the `actor` is recorded on API-originated audit events. The
@@ -49,36 +56,38 @@ default fallback bearer is a principal with `spaceIds` / `operations` set to `"*
 public ingress for queueing source sync. The hook secret is returned once at creation time and is not included in normal
 Source read responses.
 
-### Internal session / CLI paths
+### Internal `/internal/v1` seam
 
-Some hosted or self-host distributions route dashboard and operator CLI calls through account sessions or an in-process
-fetch seam before delegating to the public operations. Those paths are distribution internals. The contract for external
-integrations, Capsule authors, and public API readers is only `/api/*`, `/install`, and `/hooks/*`.
+The deploy-control in-process implementation lives behind the `/internal/v1/*` seam; account sessions and the in-process
+fetch seam delegate to the public operations through it. Those paths are distribution internals (operator bearer only,
+not reachable from the edge). The contract for external integrations, Capsule authors, and public API readers is only
+`/api/v1/*`, `/install`, and `/hooks/*`.
 
-## `/api` surface
+## `/api/v1` surface
 
-No version prefix is used; everything is mounted under `/api`. `/api` routes are protected by the host-resolved scoped
-principal, with bearer token support only as the reference fallback. Operator-only admin routes require an
-operator-scoped principal.
+The public surface is versioned under `/api/v1`. `/api/v1` routes are protected by the host-resolved scoped
+principal, with operator bearer token support only as the reference fallback. Operator-only admin routes require an
+operator-scoped principal. Each route's in-process implementation delegates to the corresponding `/internal/v1` seam
+route.
 
 ### Spaces
 
 | Method | Path                    | Purpose                                                               |
 | ------ | ----------------------- | --------------------------------------------------------------------- |
-| POST   | `/api/spaces`           | Create a Space (`@handle` owner namespace). Unrestricted bearer only. |
-| GET    | `/api/spaces`           | List Spaces visible to the principal                                  |
-| GET    | `/api/spaces/{spaceId}` | Read a Space                                                          |
-| PATCH  | `/api/spaces/{spaceId}` | Update a Space (MVP: `displayName` only)                              |
+| POST   | `/api/v1/spaces`           | Create a Space (`@handle` owner namespace). Unrestricted bearer only. |
+| GET    | `/api/v1/spaces`           | List Spaces visible to the principal                                  |
+| GET    | `/api/v1/spaces/{spaceId}` | Read a Space                                                          |
+| PATCH  | `/api/v1/spaces/{spaceId}` | Update a Space (MVP: `displayName` only)                              |
 
 ### Sources
 
 | Method | Path                                | Purpose                                                                                                                     |
 | ------ | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/api/sources`                      | Register a git Source (URL-policy checked; ls-remote verification is a queued `source_sync`). Returns the hook secret once. |
-| GET    | `/api/sources?spaceId={spaceId}`    | List Sources in a Space (never includes the hook secret)                                                                    |
-| GET    | `/api/sources/{sourceId}`           | Read a Source                                                                                                               |
-| POST   | `/api/sources/{sourceId}/sync`      | Create a `source_sync` Run resolving the default ref to an archive snapshot                                                 |
-| GET    | `/api/sources/{sourceId}/snapshots` | List immutable archive snapshots for a Source (commit / digest / R2_SOURCE key)                                             |
+| POST   | `/api/v1/sources`                      | Register a git Source (URL-policy checked; ls-remote verification is a queued `source_sync`). Returns the hook secret once. |
+| GET    | `/api/v1/sources?spaceId={spaceId}`    | List Sources in a Space (never includes the hook secret)                                                                    |
+| GET    | `/api/v1/sources/{sourceId}`           | Read a Source                                                                                                               |
+| POST   | `/api/v1/sources/{sourceId}/sync`      | Create a `source_sync` Run resolving the default ref to an archive snapshot                                                 |
+| GET    | `/api/v1/sources/{sourceId}/snapshots` | List immutable archive snapshots for a Source (commit / digest / R2_SOURCE key)                                             |
 
 `POST /hooks/sources/{sourceId}` is the inbound forge-webhook seam, authenticated by the hook secret rather than the
 bearer.
@@ -91,22 +100,22 @@ and never appear in logs or responses. Bodies may carry a non-secret `expiresAt`
 
 | Method | Path                                         | Purpose                                                                                                |
 | ------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| POST   | `/api/connections/source/https-token`        | Git source HTTPS-token Connection (optional username)                                                  |
-| POST   | `/api/connections/source/ssh-key`            | Git source SSH-key Connection (`scopeHints.knownHostsEntry` required)                                  |
-| POST   | `/api/connections/cloudflare/oauth/start`    | Start a Cloudflare OAuth helper flow. Returns an authorization URL and state on success                |
-| GET    | `/api/connections/cloudflare/oauth/callback` | Complete a Cloudflare OAuth helper flow and create a write-only `provider_env_set` Connection          |
-| POST   | `/api/connections/cloudflare/token`          | Cloudflare API-token Connection (optional account/zone scope)                                          |
-| POST   | `/api/connections/aws/assume-role`           | AWS assume-role-capable Connection (`scopeHints.awsRoleArn` required; AWS env `values` are write-only) |
-| POST   | `/api/connections/gcp/oauth/start`           | Start a Google Cloud OAuth helper flow. Returns an authorization URL and state on success              |
-| GET    | `/api/connections/gcp/oauth/callback`        | Complete a Google Cloud OAuth helper flow and create a write-only `provider_env_set` Connection        |
-| POST   | `/api/connections/gcp/impersonation`         | Create a write-only Connection for Google service-account impersonation                                |
-| GET    | `/api/connections`                           | List Connections visible to the principal. Never includes secret values.                               |
-| POST   | `/api/connections/{connectionId}/test`       | Verify stored credentials with the provider                                                            |
-| POST   | `/api/connections/{connectionId}/revoke`     | Revoke a Connection and delete its sealed secret blob                                                  |
-| PUT    | `/api/operator-connection-defaults`          | Operator-scoped bearer only. Set an instance-wide default Connection for a provider                    |
-| GET    | `/api/operator-connection-defaults`          | Operator-scoped bearer only. List instance-wide default Connections                                    |
+| POST   | `/api/v1/connections/source/https-token`        | Git source HTTPS-token Connection (optional username)                                                  |
+| POST   | `/api/v1/connections/source/ssh-key`            | Git source SSH-key Connection (`scopeHints.knownHostsEntry` required)                                  |
+| POST   | `/api/v1/connections/cloudflare/oauth/start`    | Start a Cloudflare OAuth helper flow. Returns an authorization URL and state on success                |
+| GET    | `/api/v1/connections/cloudflare/oauth/callback` | Complete a Cloudflare OAuth helper flow and create a write-only `provider_env_set` Connection          |
+| POST   | `/api/v1/connections/cloudflare/token`          | Cloudflare API-token Connection (optional account/zone scope)                                          |
+| POST   | `/api/v1/connections/aws/assume-role`           | AWS assume-role-capable Connection (`scopeHints.awsRoleArn` required; AWS env `values` are write-only) |
+| POST   | `/api/v1/connections/gcp/oauth/start`           | Start a Google Cloud OAuth helper flow. Returns an authorization URL and state on success              |
+| GET    | `/api/v1/connections/gcp/oauth/callback`        | Complete a Google Cloud OAuth helper flow and create a write-only `provider_env_set` Connection        |
+| POST   | `/api/v1/connections/gcp/impersonation`         | Create a write-only Connection for Google service-account impersonation                                |
+| GET    | `/api/v1/connections`                           | List Connections visible to the principal. Never includes secret values.                               |
+| POST   | `/api/v1/connections/{connectionId}/test`       | Verify stored credentials with the provider                                                            |
+| POST   | `/api/v1/connections/{connectionId}/revoke`     | Revoke a Connection and delete its sealed secret blob                                                  |
+| PUT    | `/api/v1/operator-connection-defaults`          | Operator-scoped bearer only. Set an instance-wide default Connection for a provider                    |
+| GET    | `/api/v1/operator-connection-defaults`          | Operator-scoped bearer only. List instance-wide default Connections                                    |
 
-Operator default connections are instance-wide administration. The routes appear in the `/api` inventory, but only
+Operator default connections are instance-wide administration. The routes appear in the `/api/v1` inventory, but only
 operator-scoped principals can use this operator-only admin surface. Space / Installation APIs see them only through
 ProviderBindings with `mode: "default"`.
 
@@ -117,8 +126,8 @@ The Providers API is a read surface for provider templates. Users add provider c
 
 | Method | Path                          | Purpose                  |
 | ------ | ----------------------------- | ------------------------ |
-| GET    | `/api/providers`              | List Provider Templates  |
-| GET    | `/api/providers/{providerId}` | Read a Provider Template |
+| GET    | `/api/v1/providers`              | List Provider Templates  |
+| GET    | `/api/v1/providers/{providerId}` | Read a Provider Template |
 
 Takosumi-managed hosted providers start Cloudflare-only. AWS / GCP / GitHub / Kubernetes / arbitrary providers use
 Space-owned `provider_env_set` Connections. OAuth / AssumeRole / impersonation are helpers for creating or refreshing
@@ -135,13 +144,13 @@ Cloudflare uses `TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID` / `TAKOSUMI_CLOUDFLARE_OAU
 
 | Method | Path                                     | Purpose                                                                                                                   |
 | ------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/install-configs`                   | List official / Space-scoped InstallConfigs                                                                               |
-| GET    | `/api/install-configs/{installConfigId}` | Fetch an InstallConfig                                                                                                    |
-| POST   | `/api/spaces/{spaceId}/installations`    | Create an Installation under a Space from a Source + InstallConfig. The `environment` is part of the execution namespace. |
-| GET    | `/api/spaces/{spaceId}/installations`    | List a Space's Installations                                                                                              |
-| GET    | `/api/installations/{installationId}`    | Read an Installation                                                                                                      |
-| PATCH  | `/api/installations/{installationId}`    | Safely patch Installation status (`active` / `stale` / `error` only; destroy states stay owned by the destroy flow)       |
-| DELETE | `/api/installations/{installationId}`    | Create a destroy-plan Run instead of deleting directly; approval + destroy_apply performs teardown                        |
+| GET    | `/api/v1/install-configs`                   | List official / Space-scoped InstallConfigs                                                                               |
+| GET    | `/api/v1/install-configs/{installConfigId}` | Fetch an InstallConfig                                                                                                    |
+| POST   | `/api/v1/spaces/{spaceId}/installations`    | Create an Installation under a Space from a Source + InstallConfig. The `environment` is part of the execution namespace. |
+| GET    | `/api/v1/spaces/{spaceId}/installations`    | List a Space's Installations                                                                                              |
+| GET    | `/api/v1/installations/{installationId}`    | Read an Installation                                                                                                      |
+| PATCH  | `/api/v1/installations/{installationId}`    | Safely patch Installation status (`active` / `stale` / `error` only; destroy states stay owned by the destroy flow)       |
+| DELETE | `/api/v1/installations/{installationId}`    | Create a destroy-plan Run instead of deleting directly; approval + destroy_apply performs teardown                        |
 
 ### Deploy / Upload
 
@@ -154,30 +163,30 @@ material.
 
 | Method | Path                            | Purpose                                                                                                            |
 | ------ | ------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| POST   | `/api/spaces/{spaceId}/uploads` | Ingest a local Capsule `tar`(zstd) archive as a binary body; store it in R2_SOURCE and record an upload-origin SourceSnapshot |
-| POST   | `/api/deploy`                   | Pin the upload snapshot, resolve or create the `@space/name` Installation, and start a plan Run                   |
+| POST   | `/api/v1/spaces/{spaceId}/uploads` | Ingest a local Capsule `tar`(zstd) archive as a binary body; store it in R2_SOURCE and record an upload-origin SourceSnapshot |
+| POST   | `/api/v1/deploy`                   | Pin the upload snapshot, resolve or create the `@space/name` Installation, and start a plan Run                   |
 
-`POST /api/spaces/{spaceId}/uploads` takes **archive bytes** as the request body, not JSON (a binary ingest the
+`POST /api/v1/spaces/{spaceId}/uploads` takes **archive bytes** as the request body, not JSON (a binary ingest the
 JSON-schema OpenAPI inventory does not model). The Capsule path is passed via the optional `?path=` query (default `.`).
 The archive is capped at 64 MiB; an empty body is `400 invalid_argument` and an oversized one is `413`. A host without
 `writeSourceArchive` (R2_SOURCE) wired returns `501 not_implemented`.
 
 ```txt
-POST /api/spaces/{spaceId}/uploads?path=deploy
+POST /api/v1/spaces/{spaceId}/uploads?path=deploy
 Content-Type: application/octet-stream
 <tar.zst archive bytes>
 
 -> 201 { "snapshot": SourceSnapshot }   # origin: "upload", sourceId absent
 ```
 
-`POST /api/deploy` pins the upload snapshot, resolves or creates the Installation, and starts a plan Run. `vars` becomes
+`POST /api/v1/deploy` pins the upload snapshot, resolves or creates the Installation, and starts a plan Run. `vars` becomes
 the InstallConfig variable mapping (string values only; secret material never travels here — providers bind through
 Connections). If `snapshotId` is not an upload-origin snapshot, or belongs to another Space, the call fails with
 `invalid_argument`. If the existing Installation is already bound to a git Source, the call fails with
 `failed_precondition`, steering you to deploy through that Source instead.
 
 ```json
-POST /api/deploy
+POST /api/v1/deploy
 {
   "spaceId": "space_...",
   "name": "my-app",
@@ -213,29 +222,29 @@ mint -> Takosumi finalizes the Compatibility Report with Gate findings`.
 
 | Method | Path                                          | Purpose                                                                     |
 | ------ | --------------------------------------------- | --------------------------------------------------------------------------- |
-| POST   | `/api/sources/{sourceId}/compatibility-check` | Pin a SourceSnapshot and run Normalizer / Gate without provider credentials |
-| GET    | `/api/compatibility-reports/{reportId}`       | Read a CapsuleCompatibilityReport                                           |
+| POST   | `/api/v1/sources/{sourceId}/compatibility-check` | Pin a SourceSnapshot and run Normalizer / Gate without provider credentials |
+| GET    | `/api/v1/compatibility-reports/{reportId}`       | Read a CapsuleCompatibilityReport                                           |
 
 ### Dependencies
 
 | Method | Path                                               | Purpose                                                                                                                                                                                                                                       |
 | ------ | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/api/installations/{installationId}/dependencies` | Create a Dependency edge whose consumer is this Installation. Mode is `variable_injection` / `remote_state` / `published_output`; `remote_state` is same-Space trusted dependency, cross-Space flows through OutputShare. Cycles are rejected |
-| GET    | `/api/installations/{installationId}/dependencies` | List Dependencies (asProducer / asConsumer views)                                                                                                                                                                                             |
-| DELETE | `/api/dependencies/{dependencyId}`                 | Delete a Dependency edge (gated by the consumer's Space permission)                                                                                                                                                                           |
+| POST   | `/api/v1/installations/{installationId}/dependencies` | Create a Dependency edge whose consumer is this Installation. Mode is `variable_injection` / `remote_state` / `published_output`; `remote_state` is same-Space trusted dependency, cross-Space flows through OutputShare. Cycles are rejected |
+| GET    | `/api/v1/installations/{installationId}/dependencies` | List Dependencies (asProducer / asConsumer views)                                                                                                                                                                                             |
+| DELETE | `/api/v1/dependencies/{dependencyId}`                 | Delete a Dependency edge (gated by the consumer's Space permission)                                                                                                                                                                           |
 
 ### Runs
 
 | Method | Path                                               | Purpose                                                                                                        |
 | ------ | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| POST   | `/api/installations/{installationId}/plan`         | Installation-driven plan Run (resolves the latest SourceSnapshot and dispatches with installation state scope) |
-| POST   | `/api/installations/{installationId}/drift-check`  | Read-only drift-check Run (cannot be applied and never waits for approval)                                     |
-| POST   | `/api/installations/{installationId}/destroy-plan` | destroy-plan Run (always lands `waiting_approval`)                                                             |
-| GET    | `/api/runs/{runId}`                                | Unified Run ledger projection                                                                                  |
-| GET    | `/api/runs/{runId}/logs`                           | Structured diagnostics + run-level audit trail (redacted)                                                      |
-| GET    | `/api/runs/{runId}/events`                         | Run-level audit-event trail                                                                                    |
-| POST   | `/api/runs/{runId}/approve`                        | Approve a waiting-approval Run (destroy / destructive change), clearing the apply gate                         |
-| POST   | `/api/runs/{runId}/cancel`                         | Cancel a queued or waiting-approval Run                                                                        |
+| POST   | `/api/v1/installations/{installationId}/plan`         | Installation-driven plan Run (resolves the latest SourceSnapshot and dispatches with installation state scope) |
+| POST   | `/api/v1/installations/{installationId}/drift-check`  | Read-only drift-check Run (cannot be applied and never waits for approval)                                     |
+| POST   | `/api/v1/installations/{installationId}/destroy-plan` | destroy-plan Run (always lands `waiting_approval`)                                                             |
+| GET    | `/api/v1/runs/{runId}`                                | Unified Run ledger projection                                                                                  |
+| GET    | `/api/v1/runs/{runId}/logs`                           | Structured diagnostics + run-level audit trail (redacted)                                                      |
+| GET    | `/api/v1/runs/{runId}/events`                         | Run-level audit-event trail                                                                                    |
+| POST   | `/api/v1/runs/{runId}/approve`                        | Approve a waiting-approval Run (destroy / destructive change), clearing the apply gate                         |
+| POST   | `/api/v1/runs/{runId}/cancel`                         | Cancel a queued or waiting-approval Run                                                                        |
 
 Run type is `source_sync` / `compatibility_check` / `plan` / `apply` / `destroy_plan` / `destroy_apply` /
 `drift_check` / `backup` / `restore`.
@@ -244,27 +253,27 @@ Run type is `source_sync` / `compatibility_check` / `plan` / `apply` / `destroy_
 
 | Method | Path                                   | Purpose                                                                                               |
 | ------ | -------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| POST   | `/api/spaces/{spaceId}/plan-update`    | Create a `space_update` RunGroup (re-plan every stale Installation + downstream in topological order) |
-| POST   | `/api/spaces/{spaceId}/drift-check`    | Create a `space_drift_check` RunGroup (one read-only drift_check Run per active Installation)         |
-| GET    | `/api/run-groups/{runGroupId}`         | Read a RunGroup with its member Runs and computed status                                              |
-| POST   | `/api/run-groups/{runGroupId}/approve` | Approve every waiting-approval member Run                                                             |
+| POST   | `/api/v1/spaces/{spaceId}/plan-update`    | Create a `space_update` RunGroup (re-plan every stale Installation + downstream in topological order) |
+| POST   | `/api/v1/spaces/{spaceId}/drift-check`    | Create a `space_drift_check` RunGroup (one read-only drift_check Run per active Installation)         |
+| GET    | `/api/v1/run-groups/{runGroupId}`         | Read a RunGroup with its member Runs and computed status                                              |
+| POST   | `/api/v1/run-groups/{runGroupId}/approve` | Approve every waiting-approval member Run                                                             |
 
 ### Deployments
 
 | Method | Path                                              | Purpose                                                                                                      |
 | ------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| GET    | `/api/installations/{installationId}/deployments` | List an Installation's Deployments                                                                           |
-| GET    | `/api/deployments/{deploymentId}`                 | Read a Deployment ledger record                                                                              |
-| POST   | `/api/deployments/{deploymentId}/rollback-plan`   | Create a rollback plan Run pinned to that Deployment's source snapshot (flows through normal approval/apply) |
+| GET    | `/api/v1/installations/{installationId}/deployments` | List an Installation's Deployments                                                                           |
+| GET    | `/api/v1/deployments/{deploymentId}`                 | Read a Deployment ledger record                                                                              |
+| POST   | `/api/v1/deployments/{deploymentId}/rollback-plan`   | Create a rollback plan Run pinned to that Deployment's source snapshot (flows through normal approval/apply) |
 
 ### Output shares
 
 | Method | Path                                   | Purpose                                                                                        |
 | ------ | -------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| POST   | `/api/output-shares`                   | Create a cross-Space OutputShare as `pending` (permission-gated on the granting `fromSpaceId`) |
-| GET    | `/api/output-shares?spaceId=`          | List OutputShares granted or received by a Space                                               |
-| POST   | `/api/output-shares/{shareId}/approve` | Receiving Space acceptance flow                                                                |
-| POST   | `/api/output-shares/{shareId}/revoke`  | Revoke an OutputShare (permission-gated on the granting `fromSpaceId`)                         |
+| POST   | `/api/v1/output-shares`                   | Create a cross-Space OutputShare as `pending` (permission-gated on the granting `fromSpaceId`) |
+| GET    | `/api/v1/output-shares?spaceId=`          | List OutputShares granted or received by a Space                                               |
+| POST   | `/api/v1/output-shares/{shareId}/approve` | Receiving Space acceptance flow                                                                |
+| POST   | `/api/v1/output-shares/{shareId}/revoke`  | Revoke an OutputShare (permission-gated on the granting `fromSpaceId`)                         |
 
 A sensitive entry (`outputs[].sensitive: true`) requires `sensitivePolicy.allow === true` and a non-empty `reason`, and
 the host-injected resolver must confirm the encrypted raw output artifact contains that output with `sensitive: true`.
@@ -277,23 +286,23 @@ can render, not raw audit payloads or secret literals.
 
 | Method | Path                             | Purpose                                        |
 | ------ | -------------------------------- | ---------------------------------------------- |
-| GET    | `/api/spaces/{spaceId}/activity` | List a Space's Activity events (`limit` aware) |
+| GET    | `/api/v1/spaces/{spaceId}/activity` | List a Space's Activity events (`limit` aware) |
 
 ### Billing
 
 Billing is the Space-scoped public surface. Implementation conformance is tracked in
 [`core-conformance.md`](../../core-conformance.md).
-The `GET /billing` plan projection includes typed `BillingPlanLimits`, and plan completion evaluates the active
+The `GET /api/v1/spaces/{spaceId}/billing` plan projection includes typed `BillingPlanLimits`, and plan completion evaluates the active
 subscription's `maxEstimatedCreditsPerRun` / `quota`. `enforce` blocks an over-limit run before reservation, while
 `showback` records audit evidence and continues.
 
 | Method | Path                                        | Purpose                                                   |
 | ------ | ------------------------------------------- | --------------------------------------------------------- |
-| GET    | `/api/spaces/{spaceId}/billing`             | Space billing mode / plan / credit balance projection     |
-| GET    | `/api/spaces/{spaceId}/credit-reservations` | Space credit reservations                                 |
-| POST   | `/api/spaces/{spaceId}/credits/top-up`      | Credit top-up through the hosted/operator billing adapter |
-| GET    | `/api/spaces/{spaceId}/usage`               | Space usage events                                        |
-| POST   | `/api/spaces/{spaceId}/subscription/change` | Plan changes through the hosted/operator billing adapter  |
+| GET    | `/api/v1/spaces/{spaceId}/billing`             | Space billing mode / plan / credit balance projection     |
+| GET    | `/api/v1/spaces/{spaceId}/credit-reservations` | Space credit reservations                                 |
+| POST   | `/api/v1/spaces/{spaceId}/credits/top-up`      | Credit top-up through the hosted/operator billing adapter |
+| GET    | `/api/v1/spaces/{spaceId}/usage`               | Space usage events                                        |
+| POST   | `/api/v1/spaces/{spaceId}/subscription/change` | Plan changes through the hosted/operator billing adapter  |
 
 ### Backups
 
@@ -301,9 +310,9 @@ Backups expose the Space ledger control backup and the service-data backup archi
 
 | Method | Path                                          | Purpose                                                           |
 | ------ | --------------------------------------------- | ----------------------------------------------------------------- |
-| POST   | `/api/installations/{installationId}/backups` | Resolve the Installation and create a backup for its owning Space |
-| POST   | `/api/spaces/{spaceId}/backups`               | Create a backup for the Space                                     |
-| GET    | `/api/spaces/{spaceId}/backups`               | List a Space's backup ledger pointers newest-first                |
+| POST   | `/api/v1/installations/{installationId}/backups` | Resolve the Installation and create a backup for its owning Space |
+| POST   | `/api/v1/spaces/{spaceId}/backups`               | Create a backup for the Space                                     |
+| GET    | `/api/v1/spaces/{spaceId}/backups`               | List a Space's backup ledger pointers newest-first                |
 
 ### Implementation extensions
 
@@ -311,7 +320,7 @@ The following routes are implementation extensions. External integrations should
 
 | Method | Path                      | Treatment                                                |
 | ------ | ------------------------- | -------------------------------------------------------- |
-| PATCH  | `/api/sources/{sourceId}` | Operator/dashboard extension for Source metadata updates |
+| PATCH  | `/api/v1/sources/{sourceId}` | Operator/dashboard extension for Source metadata updates |
 
 ## 501 surfaces
 

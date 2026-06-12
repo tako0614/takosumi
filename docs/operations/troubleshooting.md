@@ -6,7 +6,7 @@
 > 恒久対策の順に確認する。
 
 正本 model は [`../core-spec.md`](../core-spec.md)。 Run の確認は dashboard の Activity か
-`GET /api/runs/:runId` / `GET /api/runs/:runId/logs` を使う。
+`GET /api/v1/runs/:runId` / `GET /api/v1/runs/:runId/logs` を使う。
 
 ## 早見表
 
@@ -24,16 +24,16 @@
 
 ## 切り分けの基本
 
-1. **Run を特定する**: dashboard の Activity か `GET /api/runs/:runId` で
+1. **Run を特定する**: dashboard の Activity か `GET /api/v1/runs/:runId` で
    `status` / `errorCode` / `policyStatus` を確認する。
-2. **phase を特定する**: logs (`GET /api/runs/:runId/logs`) で
+2. **phase を特定する**: logs (`GET /api/v1/runs/:runId/logs`) で
    source / build / plan / apply のどの phase で失敗したかを見る。 phase ごとに
    渡る credential が異なる (source → git のみ、 build → なし、 plan/apply →
    provider のみ) ので、 credential 系エラーは phase で原因が絞れる。
 3. **検証エラーは再 plan**: apply は saved plan のみを実行し、 plan digest /
    source snapshot / dependency snapshot / state generation を検証する。 検証
    エラーは状態が進んだサイン。 ロールバック的な操作も
-   `POST /api/deployments/:deploymentId/rollback-plan` で plan からやり直す。
+   `POST /api/v1/deployments/:deploymentId/rollback-plan` で plan からやり直す。
 4. **依存起因は graph で見る**: producer の outputs が変わると downstream は
    stale になる。 単発で直すより RunGroup (Space update) で DAG 順に流す。
 

@@ -23,7 +23,7 @@ export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
 bun src/cli/main.ts server --port 8788
 ```
 
-別 terminal で `/api` を叩きます。
+別 terminal で `/api/v1` を叩きます。
 
 ```bash
 export BASE=http://127.0.0.1:8788
@@ -44,8 +44,8 @@ takosumi deploy ./my-capsule --space @me --name my-app --var region=apac
 takosumi plan   ./my-capsule --space @me --name my-app   # upload + plan のみ
 ```
 
-CLI はローカルを `tar`(zstd) で固めて `POST /api/spaces/:id/uploads` に送り (R2_SOURCE に保存され **upload origin の
-SourceSnapshot** が記録される)、`POST /api/deploy` に「upload snapshot を pin して `@space/name` Installation を
+CLI はローカルを `tar`(zstd) で固めて `POST /api/v1/spaces/:id/uploads` に送り (R2_SOURCE に保存され **upload origin の
+SourceSnapshot** が記録される)、`POST /api/v1/deploy` に「upload snapshot を pin して `@space/name` Installation を
 解決/作成し plan せよ」と依頼します。upload origin なので **Source 行は不要で `Installation.sourceId` は不在**であり、
 Capsule Gate / plan / apply / DAG の downstream は origin 非依存に同じ pipeline を通ります。詳細は
 [CLI](../reference/cli.md) と [Control Plane API](../reference/deploy-control-api.md) の Deploy / Upload を参照。
@@ -55,11 +55,11 @@ Capsule Gate / plan / apply / DAG の downstream は origin 非依存に同じ p
 ## 2. Space と Source を登録
 
 ```bash
-curl -s -X POST "$BASE/api/spaces" -H "$AUTH" -H 'content-type: application/json' \
+curl -s -X POST "$BASE/api/v1/spaces" -H "$AUTH" -H 'content-type: application/json' \
   -d '{"handle":"shota","displayName":"Shota","type":"personal","ownerUserId":"user_dev"}'
 # -> {"space":{"id":"space_...", ...}}
 
-curl -s -X POST "$BASE/api/sources" -H "$AUTH" -H 'content-type: application/json' \
+curl -s -X POST "$BASE/api/v1/sources" -H "$AUTH" -H 'content-type: application/json' \
   -d '{"spaceId":"<spaceId>","name":"hello","url":"https://git.example.com/example/hello.git","defaultRef":"main","defaultPath":"."}'
 # -> {"source":{"id":"src_...", ...}}  (public repo なら authConnectionId は不要)
 ```
@@ -69,14 +69,14 @@ curl -s -X POST "$BASE/api/sources" -H "$AUTH" -H 'content-type: application/jso
 runner substrate を構成している場合は SourceSnapshot を作成します。SourceSnapshot は Git ref を commit に固定した immutable input です。
 
 ```bash
-curl -s -X POST "$BASE/api/sources/<sourceId>/sync" -H "$AUTH"
+curl -s -X POST "$BASE/api/v1/sources/<sourceId>/sync" -H "$AUTH"
 # source_sync Run が ref を commit に固定し SourceSnapshot を作ります
 ```
 
 ## 3. Provider と Connection 方針を確認
 
 ```bash
-curl -s "$BASE/api/providers" -H "$AUTH"
+curl -s "$BASE/api/v1/providers" -H "$AUTH"
 ```
 
 Takosumi提供は Cloudflare only です。AWS / GCP / GitHub / Kubernetes / 任意 provider は Space-owned Connection の
@@ -84,13 +84,13 @@ Takosumi提供は Cloudflare only です。AWS / GCP / GitHub / Kubernetes / 任
 
 ## 4. Installation を作る
 
-InstallConfig は公式カタログ由来のもの (`GET /api/install-configs`) か Space 自身のものを使います。InstallConfig は
+InstallConfig は公式カタログ由来のもの (`GET /api/v1/install-configs`) か Space 自身のものを使います。InstallConfig は
 `modulePath` / `normalization` / variable mapping / output allowlist / policy を持つ service-side config です。
 
 ```bash
-curl -s "$BASE/api/install-configs" -H "$AUTH"
+curl -s "$BASE/api/v1/install-configs" -H "$AUTH"
 
-curl -s -X POST "$BASE/api/spaces/<spaceId>/installations" -H "$AUTH" -H 'content-type: application/json' \
+curl -s -X POST "$BASE/api/v1/spaces/<spaceId>/installations" -H "$AUTH" -H 'content-type: application/json' \
   -d '{"name":"hello","environment":"production","sourceId":"<sourceId>","installConfigId":"<installConfigId>"}'
 # -> {"installation":{"id":"inst_...","status":"pending", ...}}
 ```
@@ -100,11 +100,11 @@ curl -s -X POST "$BASE/api/spaces/<spaceId>/installations" -H "$AUTH" -H 'conten
 Compatibility Check は SourceSnapshot を固定し、Capsule Normalizer と Capsule Gate を provider credential なしで実行します。runner-backed source reader が未配線の host では、`capsule_source_files_unavailable` warning を含む report になります。
 
 ```bash
-curl -s -X POST "$BASE/api/sources/<sourceId>/compatibility-check" -H "$AUTH" -H 'content-type: application/json' \
+curl -s -X POST "$BASE/api/v1/sources/<sourceId>/compatibility-check" -H "$AUTH" -H 'content-type: application/json' \
   -d '{"sourceSnapshotId":"<sourceSnapshotId>"}'
 # -> {"report":{"id":"compat_...","level":"ready" | "auto_capsulized" | "needs_patch" | "unsupported", ...}}
 
-curl -s "$BASE/api/compatibility-reports/<reportId>" -H "$AUTH"
+curl -s "$BASE/api/v1/compatibility-reports/<reportId>" -H "$AUTH"
 ```
 
 ## 6. plan → (approve) → apply
@@ -112,19 +112,19 @@ curl -s "$BASE/api/compatibility-reports/<reportId>" -H "$AUTH"
 この API surface は正本の Run contract です。runner-backed plan/apply が未構成の local service では、Run が queued / failed / adapter-unavailable の応答になることがあります。
 
 ```bash
-curl -s -X POST "$BASE/api/installations/<installationId>/plan" -H "$AUTH"
+curl -s -X POST "$BASE/api/v1/installations/<installationId>/plan" -H "$AUTH"
 # -> plan Run。platform pipeline は SourceSnapshot / Compatibility Report / DependencySnapshot を固定し、generated root で tofu plan を実行します
 
-curl -s "$BASE/api/runs/<runId>" -H "$AUTH"
+curl -s "$BASE/api/v1/runs/<runId>" -H "$AUTH"
 # status が waiting_approval (destroy / destructive change のみ) なら:
-curl -s -X POST "$BASE/api/runs/<runId>/approve" -H "$AUTH"
+curl -s -X POST "$BASE/api/v1/runs/<runId>/approve" -H "$AUTH"
 ```
 
 apply は saved plan のみを実行し、plan digest / source snapshot / compatibility report / dependency snapshot / state generation を検証します。成功すると StateSnapshot 世代が進み、OutputSnapshot と Deployment が記録されます。
 
 ```bash
-curl -s "$BASE/api/installations/<installationId>/deployments" -H "$AUTH"
-curl -s "$BASE/api/spaces/<spaceId>/activity" -H "$AUTH"
+curl -s "$BASE/api/v1/installations/<installationId>/deployments" -H "$AUTH"
+curl -s "$BASE/api/v1/spaces/<spaceId>/activity" -H "$AUTH"
 ```
 
 ## 6. Billing mode を確認
@@ -132,8 +132,8 @@ curl -s "$BASE/api/spaces/<spaceId>/activity" -H "$AUTH"
 Billing は Space 単位の ledger です。self-host や local dev では `disabled`、費用表示だけをしたい場合は `showback`、hosted で apply を credit reservation によって止めたい場合は `enforce` を使います。この quickstart では ledger surface を確認します。
 
 ```bash
-curl -s "$BASE/api/spaces/<spaceId>/billing" -H "$AUTH"
-curl -s "$BASE/api/spaces/<spaceId>/usage" -H "$AUTH"
+curl -s "$BASE/api/v1/spaces/<spaceId>/billing" -H "$AUTH"
+curl -s "$BASE/api/v1/spaces/<spaceId>/usage" -H "$AUTH"
 ```
 
 dashboard を使う場合は Install OpenTofu Capsule flow (`/install?git=...&ref=...&path=...` link からの prefill 対応) が同じ手順を UI で実行します。

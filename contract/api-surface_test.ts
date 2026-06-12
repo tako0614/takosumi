@@ -32,7 +32,8 @@ test("isApiV1Path matches the prefix and nested paths only", () => {
   assert.ok(isApiV1Path("/api/v1/spaces"));
   assert.ok(isApiV1Path("/api/v1/installations/inst_1/plan"));
   assert.ok(!isApiV1Path("/api/v1x"));
-  assert.ok(!isApiV1Path("/api/internal/v1/runtime/agents"));
+  // A path under /api/ that is NOT /api/v1 must not match the edge surface.
+  assert.ok(!isApiV1Path("/api/internal/runtime/agents"));
   assert.ok(!isApiV1Path("/v1/account/session/me"));
 });
 

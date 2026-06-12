@@ -79,8 +79,8 @@ DAG）は出自に依存しない。`SourceSnapshot.origin` が `git` か `uploa
 
 ### 2.1.1 Upload origin（`takosumi deploy`）
 
-`takosumi deploy` はローカル作業ディレクトリを `tar --zstd` で固めて `POST /api/spaces/:id/uploads` に送る。worker は
-R2_SOURCE に保存して `origin: "upload"` の SourceSnapshot を記録し、`POST /api/deploy` が `@space/name` Installation を
+`takosumi deploy` はローカル作業ディレクトリを `tar --zstd` で固めて `POST /api/v1/spaces/:id/uploads` に送る。worker は
+R2_SOURCE に保存して `origin: "upload"` の SourceSnapshot を記録し、`POST /api/v1/deploy` が `@space/name` Installation を
 解決/作成（無ければ既定 InstallConfig を合成）して、その upload snapshot を pin した plan Run を起こす。runner は
 plan/apply 時に snapshot の `archiveObjectKey` から R2 を復元する（git を再 clone しない）ので、upload も git も同じ
 実行経路を通る。CLI は credential を一切扱わず、bundle / upload / Run トリガ / 表示だけを担う。
@@ -638,7 +638,7 @@ type ProviderEnvSetConnection = Connection & {
 作成 API。
 
 ```txt
-POST /api/connections/provider-env-set
+POST /api/v1/connections/provider-env-set
 ```
 
 例。
@@ -658,10 +658,10 @@ Provider helper。
 
 ```txt
 Cloudflare token helper:
-  POST /api/connections/cloudflare/token
+  POST /api/v1/connections/cloudflare/token
 
 AWS AssumeRole helper:
-  POST /api/connections/aws/assume-role
+  POST /api/v1/connections/aws/assume-role
 
 Future GCP helper:
   OAuth bootstrap / service account impersonation
@@ -3476,148 +3476,149 @@ crons = ["*/5 * * * *"]
 
 ## 38. API
 
-Version prefix は置かず `/api` にまとめる。`/install` は public deep link で、dashboard session gate へ渡す。
-`/hooks/*` は inbound webhook seam であり、operator bearer の `/api` surface ではない。
+公開 edge surface は versioned で `/api/v1` にまとめる。in-process の deploy-control 実装は `/internal/v1` seam に閉じ
+(edge から到達不可)、`/api/v1` edge router がそこへ委譲する。`/install` は public deep link で、dashboard session gate へ
+渡す。`/hooks/*` は inbound webhook seam であり、operator bearer の `/api/v1` surface ではない。
 
 ### Spaces
 
 ```txt
-POST /api/spaces
-GET  /api/spaces
-GET  /api/spaces/:spaceId
-PATCH /api/spaces/:spaceId
+POST /api/v1/spaces
+GET  /api/v1/spaces
+GET  /api/v1/spaces/:spaceId
+PATCH /api/v1/spaces/:spaceId
 ```
 
 ### Sources
 
 ```txt
-POST /api/sources
-GET  /api/sources?spaceId={spaceId}
-GET  /api/sources/:sourceId
-GET  /api/sources/:sourceId/snapshots
-POST /api/sources/:sourceId/sync
+POST /api/v1/sources
+GET  /api/v1/sources?spaceId={spaceId}
+GET  /api/v1/sources/:sourceId
+GET  /api/v1/sources/:sourceId/snapshots
+POST /api/v1/sources/:sourceId/sync
 POST /hooks/sources/:sourceId
 ```
 
 ### Connections
 
 ```txt
-POST /api/connections/source/https-token
-POST /api/connections/source/ssh-key
-POST /api/connections/cloudflare/oauth/start
-GET  /api/connections/cloudflare/oauth/callback
-POST /api/connections/cloudflare/token
-POST /api/connections/aws/assume-role
-POST /api/connections/gcp/oauth/start
-GET  /api/connections/gcp/oauth/callback
-POST /api/connections/gcp/impersonation
-GET  /api/connections
-POST /api/connections/:connectionId/test
-POST /api/connections/:connectionId/revoke
-PUT  /api/operator-connection-defaults
-GET  /api/operator-connection-defaults
+POST /api/v1/connections/source/https-token
+POST /api/v1/connections/source/ssh-key
+POST /api/v1/connections/cloudflare/oauth/start
+GET  /api/v1/connections/cloudflare/oauth/callback
+POST /api/v1/connections/cloudflare/token
+POST /api/v1/connections/aws/assume-role
+POST /api/v1/connections/gcp/oauth/start
+GET  /api/v1/connections/gcp/oauth/callback
+POST /api/v1/connections/gcp/impersonation
+GET  /api/v1/connections
+POST /api/v1/connections/:connectionId/test
+POST /api/v1/connections/:connectionId/revoke
+PUT  /api/v1/operator-connection-defaults
+GET  /api/v1/operator-connection-defaults
 ```
 
 ### Providers
 
 ```txt
-GET  /api/providers
-GET  /api/providers/:providerId
+GET  /api/v1/providers
+GET  /api/v1/providers/:providerId
 ```
 
 ### Capsule compatibility
 
 ```txt
-POST /api/sources/:sourceId/compatibility-check
-GET  /api/compatibility-reports/:reportId
+POST /api/v1/sources/:sourceId/compatibility-check
+GET  /api/v1/compatibility-reports/:reportId
 ```
 
 ### Install configs
 
 ```txt
-GET /api/install-configs
-GET /api/install-configs/:installConfigId
+GET /api/v1/install-configs
+GET /api/v1/install-configs/:installConfigId
 ```
 
 ### Installations
 
 ```txt
-POST /api/spaces/:spaceId/installations
-GET  /api/spaces/:spaceId/installations
-GET  /api/installations/:installationId
-PATCH /api/installations/:installationId
-DELETE /api/installations/:installationId
+POST /api/v1/spaces/:spaceId/installations
+GET  /api/v1/spaces/:spaceId/installations
+GET  /api/v1/installations/:installationId
+PATCH /api/v1/installations/:installationId
+DELETE /api/v1/installations/:installationId
 ```
 
 ### Dependencies
 
 ```txt
-POST /api/installations/:installationId/dependencies
-GET  /api/installations/:installationId/dependencies
-DELETE /api/dependencies/:dependencyId
+POST /api/v1/installations/:installationId/dependencies
+GET  /api/v1/installations/:installationId/dependencies
+DELETE /api/v1/dependencies/:dependencyId
 ```
 
 ### Output shares
 
 ```txt
-POST /api/output-shares
-GET  /api/output-shares
-POST /api/output-shares/:shareId/approve
-POST /api/output-shares/:shareId/revoke
+POST /api/v1/output-shares
+GET  /api/v1/output-shares
+POST /api/v1/output-shares/:shareId/approve
+POST /api/v1/output-shares/:shareId/revoke
 ```
 
 ### Runs
 
 ```txt
-POST /api/installations/:installationId/plan
-POST /api/runs/:runId/approve
-POST /api/runs/:runId/cancel
-POST /api/installations/:installationId/destroy-plan
-POST /api/installations/:installationId/drift-check
-GET  /api/runs/:runId
-GET  /api/runs/:runId/logs
-GET  /api/runs/:runId/events
+POST /api/v1/installations/:installationId/plan
+POST /api/v1/runs/:runId/approve
+POST /api/v1/runs/:runId/cancel
+POST /api/v1/installations/:installationId/destroy-plan
+POST /api/v1/installations/:installationId/drift-check
+GET  /api/v1/runs/:runId
+GET  /api/v1/runs/:runId/logs
+GET  /api/v1/runs/:runId/events
 ```
 
 ### Run groups
 
 ```txt
-POST /api/spaces/:spaceId/plan-update
-POST /api/spaces/:spaceId/drift-check
-POST /api/run-groups/:runGroupId/approve
-GET  /api/run-groups/:runGroupId
+POST /api/v1/spaces/:spaceId/plan-update
+POST /api/v1/spaces/:spaceId/drift-check
+POST /api/v1/run-groups/:runGroupId/approve
+GET  /api/v1/run-groups/:runGroupId
 ```
 
 ### Deployments
 
 ```txt
-GET /api/installations/:installationId/deployments
-GET /api/deployments/:deploymentId
-POST /api/deployments/:deploymentId/rollback-plan
+GET /api/v1/installations/:installationId/deployments
+GET /api/v1/deployments/:deploymentId
+POST /api/v1/deployments/:deploymentId/rollback-plan
 ```
 
 ### Activity
 
 ```txt
-GET /api/spaces/:spaceId/activity
+GET /api/v1/spaces/:spaceId/activity
 ```
 
 ### Billing
 
 ```txt
-GET  /api/spaces/:spaceId/billing
-GET  /api/spaces/:spaceId/usage
-GET  /api/spaces/:spaceId/credit-reservations
-POST /api/spaces/:spaceId/credits/top-up
-POST /api/spaces/:spaceId/subscription/change
+GET  /api/v1/spaces/:spaceId/billing
+GET  /api/v1/spaces/:spaceId/usage
+GET  /api/v1/spaces/:spaceId/credit-reservations
+POST /api/v1/spaces/:spaceId/credits/top-up
+POST /api/v1/spaces/:spaceId/subscription/change
 ```
 
 ### Backups
 
 ```txt
-POST /api/installations/:installationId/backups
-POST /api/spaces/:spaceId/backups
-GET  /api/spaces/:spaceId/backups
+POST /api/v1/installations/:installationId/backups
+POST /api/v1/spaces/:spaceId/backups
+GET  /api/v1/spaces/:spaceId/backups
 ```
 
 ### Install link

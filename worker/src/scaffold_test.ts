@@ -63,11 +63,11 @@ test("Cloudflare scaffold docs describe internal plan/apply Run routing", async 
   assert.match(readme, /Provider Template proof/);
   assert.match(readme, /secret-boundary proof/);
   assert.match(readme, /OpenTofu/);
-  assert.match(readme, /\/v1\/plan-runs/);
-  assert.match(readme, /\/v1\/apply-runs/);
+  assert.match(readme, /\/internal\/v1\/plan-runs/);
+  assert.match(readme, /\/internal\/v1\/apply-runs/);
   assert.match(readme, /destroy_plan/);
   assert.match(readme, /destroy_apply/);
-  assert.match(readme, /\/api\/internal\/v1\/\*/);
+  assert.match(readme, /\/internal\/v1\/\*/);
   assert.match(readme, /D1/);
   assert.match(readme, /R2/);
   assert.match(readme, /r2_object_storage/);

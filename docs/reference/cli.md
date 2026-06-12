@@ -15,14 +15,14 @@ takosumi logs   <run-id>
 ```
 
 CLI は重い処理（Capsule Gate / plan / apply）を実行しません。ローカルを tar(zstd) で固めて control plane に
-upload し、`/api/deploy` に「Installation を解決/作成して upload snapshot を plan せよ」と依頼するだけです。
+upload し、`/api/v1/deploy` に「Installation を解決/作成して upload snapshot を plan せよ」と依頼するだけです。
 実行は runner container 内で、credential は vault が phase ごとに mint します。CLI は credential を一切扱いません。
 
 ## Deploy のしくみ
 
 1. `takosumi deploy <dir>` がローカル Capsule を `tar --zstd` で固める
-2. `POST /api/spaces/:id/uploads` に binary で送り、R2_SOURCE に保存して **upload origin の SourceSnapshot** を記録
-3. `POST /api/deploy` が `@space/name` の Installation を解決/作成し（無ければ既定 InstallConfig を合成）、その
+2. `POST /api/v1/spaces/:id/uploads` に binary で送り、R2_SOURCE に保存して **upload origin の SourceSnapshot** を記録
+3. `POST /api/v1/deploy` が `@space/name` の Installation を解決/作成し（無ければ既定 InstallConfig を合成）、その
    upload snapshot を pin した plan Run を起こす
 4. CLI が Run を poll し、状態を表示する
 

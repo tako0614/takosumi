@@ -5,6 +5,7 @@ import type {
   SpaceCreateRequest,
   SpaceSummary,
 } from "./types.ts";
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 import {
   assertNoCanonicalDelimiter,
   hmacSha256Hex,
@@ -47,8 +48,8 @@ export interface InternalGroupRequest extends Partial<GroupCreateRequest> {
 export type InternalGroupSummary = GroupSummary;
 
 export const TAKOSUMI_INTERNAL_PATHS = {
-  spaces: "/api/internal/v1/spaces",
-  groups: "/api/internal/v1/groups",
+  spaces: `${INTERNAL_V1_PREFIX}/spaces`,
+  groups: `${INTERNAL_V1_PREFIX}/groups`,
 } as const;
 
 export interface SignedInternalResponseInput {
