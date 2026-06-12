@@ -300,10 +300,9 @@ subscription's `maxEstimatedCreditsPerRun` / `quota`. `enforce` blocks an over-l
 | Method | Path                                        | Purpose                                                   |
 | ------ | ------------------------------------------- | --------------------------------------------------------- |
 | GET    | `/api/v1/spaces/{spaceId}/billing`             | Space billing mode / plan / credit balance projection     |
+| GET    | `/api/v1/billing/plans`                        | Public projection of the operator plan catalog (plans/packs; no Stripe price ids) |
 | GET    | `/api/v1/spaces/{spaceId}/credit-reservations` | Space credit reservations                                 |
-| POST   | `/api/v1/spaces/{spaceId}/credits/top-up`      | Credit top-up through the hosted/operator billing adapter |
 | GET    | `/api/v1/spaces/{spaceId}/usage`               | Space usage events                                        |
-| POST   | `/api/v1/spaces/{spaceId}/subscription/change` | Plan changes through the hosted/operator billing adapter  |
 
 ### Backups
 
