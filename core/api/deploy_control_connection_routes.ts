@@ -12,6 +12,7 @@ import type {
   ConnectionScopeHints,
   CreateConnectionRequest,
 } from "@takosumi/internal/deploy-control-api";
+import { providerForConnectionKind } from "@takosumi/providers";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import {
   authorizeDeployControl,
@@ -129,14 +130,34 @@ function buildSourceConnectionRequest(
   };
 }
 
+/**
+ * Resolves the `{ provider, kind }` identity a managed-provider subroute fixes
+ * from the @takosumi/providers registry (single source of truth): the
+ * Connection kind's driver provider supplies the wire `provider` id, so the
+ * subroute never re-declares the provider string. The registry is statically
+ * complete for the managed kinds these subroutes use.
+ */
+function providerIdentityForKind(kind: ConnectionKind): {
+  readonly provider: string;
+  readonly kind: ConnectionKind;
+} {
+  const provider = providerForConnectionKind(kind);
+  if (!provider) {
+    throw new OpenTofuControllerError(
+      "not_implemented",
+      `no managed provider registered for connection kind ${kind}`,
+    );
+  }
+  return { provider: provider.id, kind };
+}
+
 /** Builds a Cloudflare API-token Connection create request (§30 subroute). */
 function buildCloudflareConnectionRequest(
   body: ConnectionSubrouteBody,
 ): CreateConnectionRequest {
   return {
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
-    provider: "cloudflare",
-    kind: "cloudflare_api_token",
+    ...providerIdentityForKind("cloudflare_api_token"),
     authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
     ...(body.scope ? { scope: body.scope } : {}),
@@ -179,8 +200,7 @@ function buildAwsAssumeRoleConnectionRequest(
   };
   return {
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
-    provider: "aws",
-    kind: "aws_assume_role",
+    ...providerIdentityForKind("aws_assume_role"),
     authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
     ...(body.scope ? { scope: body.scope } : {}),

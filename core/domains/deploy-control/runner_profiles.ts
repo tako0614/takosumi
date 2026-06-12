@@ -14,11 +14,23 @@ import { log } from "../../shared/log.ts";
 // source of truth); a runner profile owns only its presentation + runtime. `id`
 // is the provider id (e.g. "cloudflare"), not the runner profile id.
 function networkFor(id: string): NonNullable<RunnerProfile["networkPolicy"]> {
+  return requireProvider(id).network;
+}
+
+// The provider source addresses are likewise owned by the registry: a runner
+// profile's allowedProviders list is just the provider's OpenTofu provider
+// addresses, not a re-declared literal. `id` is the provider id (the
+// kubernetes provider already carries both its kubernetes + helm addresses).
+function providerAddressesFor(id: string): readonly string[] {
+  return requireProvider(id).providerAddresses;
+}
+
+function requireProvider(id: string) {
   const provider = providerById(id);
   if (!provider) {
     throw new Error(`no managed provider registered for "${id}"`);
   }
-  return provider.network;
+  return provider;
 }
 
 /**
@@ -103,24 +115,13 @@ function withProfileEnabledLabel(profile: RunnerProfile): RunnerProfile {
 export function createDefaultRunnerProfiles(
   now = Date.now(),
 ): readonly RunnerProfile[] {
-  const cloudflareProvider = "registry.opentofu.org/cloudflare/cloudflare";
-  const awsProvider = "registry.opentofu.org/hashicorp/aws";
-  const gcpProvider = "registry.opentofu.org/hashicorp/google";
-  const azureProvider = "registry.opentofu.org/hashicorp/azurerm";
-  const kubernetesProvider = "registry.opentofu.org/hashicorp/kubernetes";
-  const helmProvider = "registry.opentofu.org/hashicorp/helm";
-  const dockerProvider = "registry.opentofu.org/kreuzwerker/docker";
-  const githubProvider = "registry.opentofu.org/integrations/github";
-  const digitalOceanProvider =
-    "registry.opentofu.org/digitalocean/digitalocean";
-
   return [
     defaultProviderRunnerProfile(now, {
       id: "cloudflare-default",
       name: "Cloudflare default",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use Cloudflare resources.",
-      allowedProviders: [cloudflareProvider],
+      allowedProviders: providerAddressesFor("cloudflare"),
       networkPolicy: networkFor("cloudflare"),
       cloudflareWorkersForPlatforms: {
         dispatchNamespace: providerById("cloudflare")!.hosting!.dispatchNamespace,
@@ -147,7 +148,7 @@ export function createDefaultRunnerProfiles(
       name: "AWS verified-space template",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use AWS resources.",
-      allowedProviders: [awsProvider],
+      allowedProviders: providerAddressesFor("aws"),
       labels: templateRunnerProfileLabels(),
       networkPolicy: networkFor("aws"),
     }),
@@ -156,7 +157,7 @@ export function createDefaultRunnerProfiles(
       name: "GCP verified-space template",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use Google Cloud resources.",
-      allowedProviders: [gcpProvider],
+      allowedProviders: providerAddressesFor("gcp"),
       labels: templateRunnerProfileLabels(),
       networkPolicy: networkFor("gcp"),
     }),
@@ -165,7 +166,7 @@ export function createDefaultRunnerProfiles(
       name: "Azure template",
       description:
         "Future/custom reference Cloudflare Container runner for OpenTofu modules that use Azure resources.",
-      allowedProviders: [azureProvider],
+      allowedProviders: providerAddressesFor("azure"),
       labels: templateRunnerProfileLabels(),
       networkPolicy: networkFor("azure"),
     }),
@@ -174,7 +175,7 @@ export function createDefaultRunnerProfiles(
       name: "Kubernetes verified-space template",
       description:
         "Operator-managed OpenTofu runner for Kubernetes and Helm modules.",
-      allowedProviders: [kubernetesProvider, helmProvider],
+      allowedProviders: providerAddressesFor("kubernetes"),
       labels: templateRunnerProfileLabels(),
       networkPolicy: networkFor("kubernetes"),
     }),
@@ -183,7 +184,7 @@ export function createDefaultRunnerProfiles(
       name: "GitHub verified-space template",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use GitHub resources.",
-      allowedProviders: [githubProvider],
+      allowedProviders: providerAddressesFor("github"),
       labels: templateRunnerProfileLabels(),
       networkPolicy: networkFor("github"),
     }),
@@ -192,7 +193,7 @@ export function createDefaultRunnerProfiles(
       name: "DigitalOcean template",
       description:
         "Future/custom reference Cloudflare Container runner for OpenTofu modules that use DigitalOcean resources.",
-      allowedProviders: [digitalOceanProvider],
+      allowedProviders: providerAddressesFor("digitalocean"),
       labels: templateRunnerProfileLabels(),
       networkPolicy: networkFor("digitalocean"),
     }),
@@ -202,7 +203,7 @@ export function createDefaultRunnerProfiles(
       substrate: "local",
       description:
         "Provider env set example runner profile for OpenTofu modules that use a host Docker daemon.",
-      allowedProviders: [dockerProvider],
+      allowedProviders: providerAddressesFor("docker"),
       credentialRefs: [],
       cloudflareContainer: false,
       labels: templateRunnerProfileLabels(),

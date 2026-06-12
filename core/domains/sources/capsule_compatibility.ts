@@ -8,6 +8,7 @@ import type {
 } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/installations";
 import type { SourceSnapshot } from "takosumi-contract/sources";
+import { providerById } from "@takosumi/providers";
 
 export interface CapsuleSourceFile {
   readonly path: string;
@@ -40,16 +41,27 @@ export interface CapsuleCompatibilityAnalyzer {
   ): Promise<CapsuleCompatibilityAnalysis>;
 }
 
-const DEFAULT_ALLOWED_PROVIDERS = new Set([
-  "registry.opentofu.org/cloudflare/cloudflare",
-  "registry.opentofu.org/hashicorp/aws",
-  "registry.opentofu.org/hashicorp/random",
-  "registry.opentofu.org/hashicorp/tls",
-  "cloudflare/cloudflare",
-  "hashicorp/aws",
-  "hashicorp/random",
-  "hashicorp/tls",
-]);
+// The managed provider-allowlist seed. The cloudflare + aws entries derive from
+// the @takosumi/providers registry (single source of truth for their OpenTofu
+// provider addresses) in both fully-qualified and short `<ns>/<name>` forms;
+// random + tls are benign local-material helper providers the registry does not
+// manage, so they stay as explicit allowlist literals.
+function defaultAllowedProviders(): ReadonlySet<string> {
+  const seed = new Set<string>();
+  for (const id of ["cloudflare", "aws"]) {
+    for (const address of providerById(id)?.providerAddresses ?? []) {
+      seed.add(address);
+      seed.add(address.replace("registry.opentofu.org/", ""));
+    }
+  }
+  for (const helper of ["hashicorp/random", "hashicorp/tls"]) {
+    seed.add(`registry.opentofu.org/${helper}`);
+    seed.add(helper);
+  }
+  return seed;
+}
+
+const DEFAULT_ALLOWED_PROVIDERS = defaultAllowedProviders();
 
 // Default instance-wide resource-type allowlist (Core Specification §29 policy
 // layer "resource-type allowlist"). The managed Takosumi default deliberately
