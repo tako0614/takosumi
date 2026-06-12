@@ -262,8 +262,6 @@ export const en: Record<keyof typeof ja, string> = {
   "new.catalog.intro":
     "Official and known OpenTofu Capsules. Picking one pre-fills the source.",
   "new.catalog.select": "Add this",
-  "new.deeplink.summary": "Adding {capsule} to {space}.",
-  "new.deeplink.editSource": "Details (edit source — advanced)",
   "new.git.url": "Git URL",
   "new.git.ref": "Ref",
   "new.git.path": "Path (module path)",

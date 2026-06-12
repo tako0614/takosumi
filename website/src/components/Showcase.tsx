@@ -19,9 +19,11 @@ const TABS: readonly Tab[] = [
       <>
         <span class="c"># Git の OpenTofu module を Installation に</span>
         {"\n"}
-        <span class="k">GET</span>{" "}
-        /install?git=https://git.example.com/acme/api.git&ref=main{"\n"}
+        <span class="c"># dashboard の「追加」にカタログ or Git URL を入れるだけ</span>
+        {"\n"}
         <span class="k">POST</span> /api/spaces/sp_prod/installations{"\n"}
+        <span class="c">{"  "}↳ git: https://git.example.com/acme/api.git (main)</span>
+        {"\n"}
         <span class="c">{"  "}✓ Installation created</span>
         {"\n"}
         <span class="c">{"  "}✓ Run run_8f2a…  waiting approval</span>

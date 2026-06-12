@@ -21,7 +21,6 @@ test("prefix constants are the canonical taxonomy values", () => {
     "/oauth",
     "/.well-known",
     "/start",
-    "/install",
     "/hooks",
   ]);
   assert.deepEqual([...HEALTH_PATHS], ["/healthz", "/readyz", "/livez"]);
@@ -51,12 +50,13 @@ test("isAccountsIdentityPath matches /v1 but the caller must test /api/v1 first"
   assert.ok(!isAccountsIdentityPath("/api/v1/spaces"));
 });
 
-test("isExternalStandardPath matches OIDC / install / webhook surfaces", () => {
+test("isExternalStandardPath matches OIDC / webhook surfaces", () => {
   assert.ok(isExternalStandardPath("/oauth/token"));
   assert.ok(isExternalStandardPath("/.well-known/openid-configuration"));
   assert.ok(isExternalStandardPath("/start"));
-  assert.ok(isExternalStandardPath("/install"));
   assert.ok(isExternalStandardPath("/hooks/sources/src_1"));
+  // /install is a plain SPA path — the external install link was removed.
+  assert.ok(!isExternalStandardPath("/install"));
   assert.ok(!isExternalStandardPath("/api/v1/spaces"));
 });
 

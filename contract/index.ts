@@ -29,7 +29,6 @@ export * from "./activity.ts";
 export * from "./pagination.ts";
 export * from "./output-snapshots.ts";
 export * from "./deployments.ts";
-export * from "./install-link.ts";
 export * from "./backups.ts";
 export * from "./billing.ts";
 export * from "./security.ts";

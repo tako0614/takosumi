@@ -43,9 +43,8 @@ const TakosStartView = lazy(() => import("./views/account/TakosStartView.tsx"));
 
 // --- redirects ---------------------------------------------------------------
 
-/** Redirect preserving the query string (deep links carry params, e.g.
- * the worker's `/install?git=…` external install link and the Cloudflare
- * OAuth callback's `/connections?connected=1`). */
+/** Redirect preserving the query string (the Cloudflare OAuth callback's
+ * `/connections?connected=1` carries a load-bearing result param). */
 function RedirectWithQuery(props: { readonly to: string }) {
   const loc = useLocation();
   return <Navigate href={`${props.to}${loc.search}`} />;
@@ -83,10 +82,12 @@ function App() {
       <Route path="/account" component={AccountView} />
       <Route path="/takos/start" component={TakosStartView} />
 
-      {/* Old paths → new homes. Backend-emitted deep links keep their query:
-          the worker's /install external link and the Cloudflare OAuth
-          callback's /connections both redirect with params intact. */}
-      <Route path="/install" component={() => <RedirectWithQuery to="/new" />} />
+      {/* Old paths → new homes. /install drops its query on purpose: the
+          external install-link entry (URL-redirect installs from other sites)
+          was removed, so install params are never read — the visitor just
+          lands on the add page. The Cloudflare OAuth callback's /connections
+          keeps its result query. */}
+      <Route path="/install" component={() => <Navigate href="/new" />} />
       <Route
         path="/connections"
         component={() => <RedirectWithQuery to="/space/settings/connections" />}

@@ -139,7 +139,7 @@ curl -s "$BASE/api/v1/spaces/<spaceId>/billing" -H "$AUTH"
 curl -s "$BASE/api/v1/spaces/<spaceId>/usage" -H "$AUTH"
 ```
 
-The dashboard's Install OpenTofu Capsule flow (prefilled by `/install?git=...&ref=...&path=...` links) drives the same steps from the UI.
+The dashboard's add flow (`/new`: catalog + Git URL form) drives the same steps from the UI. Installs start inside the dashboard — there is no external install-link entry that starts an install from a URL redirect.
 
 ## Next
 
