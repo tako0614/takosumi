@@ -43,8 +43,9 @@ const TakosStartView = lazy(() => import("./views/account/TakosStartView.tsx"));
 
 // --- redirects ---------------------------------------------------------------
 
-/** Redirect preserving the query string (the Cloudflare OAuth callback's
- * `/connections?connected=1` carries a load-bearing result param). */
+/** Redirect preserving the query string (the external install link's
+ * `/install?git=…` prefill and the Cloudflare OAuth callback's
+ * `/connections?connected=1` both carry load-bearing params). */
 function RedirectWithQuery(props: { readonly to: string }) {
   const loc = useLocation();
   return <Navigate href={`${props.to}${loc.search}`} />;
@@ -82,12 +83,12 @@ function App() {
       <Route path="/account" component={AccountView} />
       <Route path="/takos/start" component={TakosStartView} />
 
-      {/* Old paths → new homes. /install drops its query on purpose: the
-          external install-link entry (URL-redirect installs from other sites)
-          was removed, so install params are never read — the visitor just
-          lands on the add page. The Cloudflare OAuth callback's /connections
-          keeps its result query. */}
-      <Route path="/install" component={() => <Navigate href="/new" />} />
+      {/* Old paths → new homes. /install is the external install link
+          (client-handled): it forwards its query to /new, where
+          lib/install-link.ts seeds the Git form — pre-fill only, the visitor
+          always confirms before anything installs. The Cloudflare OAuth
+          callback's /connections keeps its result query too. */}
+      <Route path="/install" component={() => <RedirectWithQuery to="/new" />} />
       <Route
         path="/connections"
         component={() => <RedirectWithQuery to="/space/settings/connections" />}

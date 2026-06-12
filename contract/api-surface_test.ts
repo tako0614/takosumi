@@ -55,7 +55,7 @@ test("isExternalStandardPath matches OIDC / webhook surfaces", () => {
   assert.ok(isExternalStandardPath("/.well-known/openid-configuration"));
   assert.ok(isExternalStandardPath("/start"));
   assert.ok(isExternalStandardPath("/hooks/sources/src_1"));
-  // /install is a plain SPA path — the external install link was removed.
+  // /install is a plain SPA path — the external install link is client-handled.
   assert.ok(!isExternalStandardPath("/install"));
   assert.ok(!isExternalStandardPath("/api/v1/spaces"));
 });

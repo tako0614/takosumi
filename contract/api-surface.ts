@@ -35,8 +35,8 @@ export const ACCOUNTS_IDENTITY_PREFIX = "/v1" as const;
 /**
  * External / standards-compliant prefixes that must not be renamed: the OIDC
  * authorization/discovery surface (`/oauth`, `/.well-known`), the sign-in entry
- * (`/start`), and inbound webhooks (`/hooks`). (The `/install` external
- * install link was removed — `/install` is a plain SPA path now.)
+ * (`/start`), and inbound webhooks (`/hooks`). (`/install` — the external
+ * install link — is a plain SPA path: the dashboard client reads its query.)
  */
 export const EXTERNAL_STANDARD_PREFIXES = [
   "/oauth",
