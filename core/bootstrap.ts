@@ -793,6 +793,12 @@ export async function createTakosumiService(
     // by the hosted platform worker via env; absent on self-host (uncapped, since
     // a self-hoster applies on their own infrastructure/Connection).
     ...managedDefaultApplyCapFromEnv(runtimeEnv),
+    // cf-proxy scope-signing secret (managed Cloudflare hosting): lets the
+    // control plane sign the proxy base_url so the edge proxy can verify it.
+    // Reuses the operator deploy-control token; absent on self-host (managed
+    // Cloudflare runs fail closed there, which is correct — self-host brings its
+    // own Connection and never uses the operator cf-proxy).
+    ...cfProxySigningSecretFromEnv(runtimeEnv),
   });
   // RunGroups domain (Core Specification §19 / §24): space_update re-plans
   // stale Installations and space_drift_check groups read-only drift checks.
@@ -1065,6 +1071,13 @@ function managedDefaultApplyCapFromEnv(
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return {};
   return { managedDefaultApplyCap: Math.floor(parsed) };
+}
+
+function cfProxySigningSecretFromEnv(
+  env: Record<string, string | undefined>,
+): { cfProxySigningSecret: string } | Record<string, never> {
+  const secret = env.TAKOSUMI_DEPLOY_CONTROL_TOKEN?.trim();
+  return secret ? { cfProxySigningSecret: secret } : {};
 }
 
 function shouldEmitHttpRequestLogs(

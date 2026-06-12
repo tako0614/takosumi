@@ -102,7 +102,15 @@ export default {
     // here so a plain `cloudflare_workers_script` is redirected into the WfP
     // dispatch namespace (the provider cannot place a script in a namespace).
     if (url.pathname.startsWith("/internal/cf-proxy/")) {
-      return handleCfProxyRequest(request, url);
+      // Fail closed: only forward when the control plane signed this exact
+      // (namespace, slug) scope with the operator deploy-control token and it is
+      // unexpired. An unsigned/expired/tampered base_url is rejected before any
+      // upstream Cloudflare call (closes the unauthenticated open-relay surface).
+      return handleCfProxyRequest(request, url, {
+        signingSecret: typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
+          ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
+          : undefined,
+      });
     }
     // Source webhook surface (Core Specification §6). This is a NEW top-level
     // prefix the accounts handler does not own; handle it here via the
