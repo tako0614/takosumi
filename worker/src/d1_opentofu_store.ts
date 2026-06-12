@@ -92,6 +92,7 @@ import type {
 } from "takosumi-contract/security";
 import type { ProviderTemplate } from "takosumi-contract/providers";
 import type {
+  CommitAppliedDeploymentInput,
   InstallationPatch,
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
@@ -673,6 +674,87 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       expectedStatus: guard.status,
       actualStatus: actual.status,
     });
+  }
+
+  /**
+   * Atomic apply / destroy-apply ledger commit (spec §20 / §21 / §16) for D1.
+   *
+   * D1 has NO interactive transaction, but `batch([...])` commits a set of
+   * statements atomically (all-or-nothing). So every WRITE — new/superseded
+   * Deployment(s), StateSnapshot, (apply) OutputSnapshot, and the Installation
+   * advance — is committed in ONE `this.#orm.batch(...)` call; a crash between
+   * statements can no longer leave torn state.
+   *
+   * The guarded Installation advance can't be a fenced UPDATE that gates the
+   * other (unconditional) batch writes, because D1 batch cannot make one
+   * statement's success depend on another's row count. Instead the guard is
+   * evaluated in JS against a pre-batch READ of the row, exactly mirroring the
+   * guard predicate {@link patchInstallation} fences in SQL:
+   *   - row gone -> `{ installation: undefined }` (no writes), same as today;
+   *   - guard mismatch -> throw {@link InstallationPatchGuardConflict} (no writes);
+   *   - guard match -> batch all writes + the (now-safe) unconditional UPDATE.
+   *
+   * This leaves a tiny read-then-write window between the guard read and the
+   * batch — but it is PRE-EXISTING (D1 is effectively single-writer; the runner
+   * serializes a Run's apply) and no wider than the prior per-statement write
+   * sequence, which had the same window plus the torn-state hazard this fix
+   * removes.
+   */
+  async commitAppliedDeployment(
+    input: CommitAppliedDeploymentInput,
+  ): Promise<{ readonly installation: Installation | undefined }> {
+    await this.#ensureSchema();
+    const { installationPatch } = input;
+    const current = await this.getInstallation(installationPatch.id);
+    if (!current) return { installation: undefined };
+    const guard = installationPatch.guard;
+    if (
+      current.currentDeploymentId !== guard.currentDeploymentId ||
+      (guard.status !== undefined && current.status !== guard.status)
+    ) {
+      throw new InstallationPatchGuardConflict({
+        id: installationPatch.id,
+        expectedCurrentDeploymentId: guard.currentDeploymentId,
+        actualCurrentDeploymentId: current.currentDeploymentId,
+        expectedStatus: guard.status,
+        actualStatus: current.status,
+      });
+    }
+    const updated: Installation = { ...current, ...installationPatch.patch };
+    const statements = [
+      ...(input.newDeployment
+        ? [d1UpsertDeploymentStmt(this.#orm, input.newDeployment)]
+        : []),
+      ...(input.supersededDeployment
+        ? [d1UpsertDeploymentStmt(this.#orm, input.supersededDeployment)]
+        : []),
+      d1UpsertStateSnapshotStmt(this.#orm, input.stateSnapshot),
+      ...(input.outputSnapshot
+        ? [d1UpsertOutputSnapshotStmt(this.#orm, input.outputSnapshot)]
+        : []),
+      this.#orm
+        .update(schema.installations)
+        .set({
+          currentDeploymentId: updated.currentDeploymentId ?? null,
+          currentStateGeneration: updated.currentStateGeneration,
+          currentOutputSnapshotId: updated.currentOutputSnapshotId ?? null,
+          status: updated.status,
+          recordJson: updated,
+          updatedAt: updated.updatedAt,
+        })
+        .where(eq(schema.installations.id, updated.id)),
+    ];
+    // D1's atomic batch. The binding always exposes batch in production; when a
+    // (test) binding omits it, fall back to the prior non-atomic sequence — the
+    // same behavior as before this fix, never worse.
+    if (typeof this.db.batch === "function") {
+      await this.#orm.batch(
+        statements as [(typeof statements)[number], ...typeof statements],
+      );
+    } else {
+      for (const statement of statements) await statement;
+    }
+    return { installation: updated };
   }
 
   // -- Deployment -------------------------------------------------------------
@@ -2110,6 +2192,91 @@ export function createCloudflareD1OpenTofuDeploymentStore(
   db: D1Database,
 ): OpenTofuDeploymentStore {
   return new CloudflareD1OpenTofuDeploymentStore(db);
+}
+
+// -- atomic-commit statement builders ------------------------------------------
+//
+// These return the UNAWAITED drizzle insert builders the atomic
+// commitAppliedDeployment batch feeds to this.#orm.batch(...). The column
+// payloads mirror the #drizzleUpsert calls in
+// put{Deployment,StateSnapshot,OutputSnapshot} exactly so a record written
+// through the atomic batch is byte-for-byte identical to one written through the
+// individual put* path.
+
+function d1UpsertDeploymentStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  deployment: Deployment,
+) {
+  const values = {
+    id: deployment.id,
+    spaceId: deployment.spaceId,
+    installationId: deployment.installationId,
+    environment: deployment.environment,
+    applyRunId: deployment.applyRunId,
+    sourceSnapshotId: deployment.sourceSnapshotId,
+    dependencySnapshotId: deployment.dependencySnapshotId ?? null,
+    stateGeneration: deployment.stateGeneration,
+    outputSnapshotId: deployment.outputSnapshotId,
+    outputsPublicJson: deployment.outputsPublic,
+    status: deployment.status,
+    createdAt: deployment.createdAt,
+  };
+  return orm
+    .insert(schema.deployments)
+    .values(values)
+    .onConflictDoUpdate({ target: schema.deployments.id, set: values });
+}
+
+function d1UpsertStateSnapshotStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  snapshot: StateSnapshot,
+) {
+  return orm
+    .insert(schema.stateSnapshots)
+    .values({
+      id: snapshot.id,
+      spaceId: snapshot.spaceId,
+      installationId: snapshot.installationId,
+      environment: snapshot.environment,
+      generation: snapshot.generation,
+      objectKey: snapshot.objectKey,
+      digest: snapshot.digest,
+      createdByRunId: snapshot.createdByRunId,
+      createdAt: snapshot.createdAt,
+    })
+    .onConflictDoUpdate({
+      target: [
+        schema.stateSnapshots.installationId,
+        schema.stateSnapshots.environment,
+        schema.stateSnapshots.generation,
+      ],
+      set: {
+        id: snapshot.id,
+        spaceId: snapshot.spaceId,
+        objectKey: snapshot.objectKey,
+        digest: snapshot.digest,
+        createdByRunId: snapshot.createdByRunId,
+        createdAt: snapshot.createdAt,
+      },
+    });
+}
+
+function d1UpsertOutputSnapshotStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  snapshot: OutputSnapshot,
+) {
+  const values = {
+    id: snapshot.id,
+    spaceId: snapshot.spaceId,
+    installationId: snapshot.installationId,
+    stateGeneration: snapshot.stateGeneration,
+    recordJson: snapshot,
+    createdAt: snapshot.createdAt,
+  };
+  return orm
+    .insert(schema.outputSnapshots)
+    .values(values)
+    .onConflictDoUpdate({ target: schema.outputSnapshots.id, set: values });
 }
 
 // -- run-kind discriminators ---------------------------------------------------
