@@ -17,6 +17,8 @@
  *     secret is stored hashed and returned exactly once at creation.
  */
 
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
+
 /**
  * GitHub-agnostic Git coordinate. The only repository identity Takosumi core
  * understands. `credentialId` references a `source_git_*` Connection (none for a
@@ -204,20 +206,20 @@ export interface MintResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Public API paths (`/api`, no version prefix).
+// INTERNAL deploy-control seam paths (`/internal/v1`, reached in-process).
 // ---------------------------------------------------------------------------
 
-export const SOURCES_PATH = "/api/sources" as const;
+export const SOURCES_PATH = `${INTERNAL_V1_PREFIX}/sources` as const;
 export const SOURCE_PATH = (id: string): string =>
-  `/api/sources/${encodeURIComponent(id)}`;
+  `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}`;
 export const SOURCE_SYNC_PATH = (id: string): string =>
-  `/api/sources/${encodeURIComponent(id)}/sync`;
+  `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}/sync`;
 export const SOURCE_SNAPSHOTS_PATH = (id: string): string =>
-  `/api/sources/${encodeURIComponent(id)}/snapshots`;
+  `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}/snapshots`;
 export const SOURCE_COMPATIBILITY_CHECK_PATH = (id: string): string =>
-  `/api/sources/${encodeURIComponent(id)}/compatibility-check`;
+  `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}/compatibility-check`;
 export const COMPATIBILITY_REPORT_PATH = (id: string): string =>
-  `/api/compatibility-reports/${encodeURIComponent(id)}`;
+  `${INTERNAL_V1_PREFIX}/compatibility-reports/${encodeURIComponent(id)}`;
 
 /** Webhook route on the PLATFORM worker surface (not the deploy-control /api). */
 export const SOURCE_HOOK_PATH = (id: string): string =>
@@ -230,7 +232,7 @@ export const SOURCE_HOOK_PATH = (id: string): string =>
  * No Source row and no Runner git clone are involved.
  */
 export const SPACE_UPLOADS_PATH = (spaceId: string): string =>
-  `/api/spaces/${encodeURIComponent(spaceId)}/uploads`;
+  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/uploads`;
 
 export interface CreateSourceRequest {
   readonly spaceId: string;

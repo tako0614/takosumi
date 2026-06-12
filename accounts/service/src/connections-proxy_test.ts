@@ -75,7 +75,7 @@ test("forwardCreateConnection POSTs the cloudflare/token subroute with the body 
   expect(calls[0]?.method).toEqual("POST");
   // A provider credential routes to the §30 cloudflare/token subroute.
   expect(calls[0]?.url).toEqual(
-    "https://deploy-control.internal/api/connections/cloudflare/token",
+    "https://deploy-control.internal/internal/v1/connections/cloudflare/token",
   );
   expect(calls[0]?.authorization).toEqual("Bearer deploy-secret");
   expect(calls[0]?.contentType).toEqual("application/json");
@@ -104,11 +104,11 @@ test("forwardCreateConnection routes a source_git_ssh_key body to the ssh-key su
     },
   });
   expect(calls[0]?.url).toEqual(
-    "https://deploy-control.internal/api/connections/source/ssh-key",
+    "https://deploy-control.internal/internal/v1/connections/source/ssh-key",
   );
 });
 
-test("forwardListConnections GETs /api/connections?spaceId=...", async () => {
+test("forwardListConnections GETs /internal/v1/connections?spaceId=...", async () => {
   const { fetch: fetchImpl, calls } = recordingFetch(() =>
     Response.json({ connections: [] }, { status: 200 })
   );
@@ -121,12 +121,12 @@ test("forwardListConnections GETs /api/connections?spaceId=...", async () => {
   expect(result.status).toEqual(200);
   expect(calls[0]?.method).toEqual("GET");
   expect(calls[0]?.url).toEqual(
-    "https://deploy-control.internal/api/connections?spaceId=space%201%2Fwith%3Fchars",
+    "https://deploy-control.internal/internal/v1/connections?spaceId=space%201%2Fwith%3Fchars",
   );
   expect(calls[0]?.body).toBeUndefined();
 });
 
-test("forwardTestConnection POSTs /api/connections/{id}/test", async () => {
+test("forwardTestConnection POSTs /internal/v1/connections/{id}/test", async () => {
   const { fetch: fetchImpl, calls } = recordingFetch(() =>
     Response.json({ status: "verified" }, { status: 200 })
   );
@@ -139,11 +139,11 @@ test("forwardTestConnection POSTs /api/connections/{id}/test", async () => {
   expect(result.status).toEqual(200);
   expect(calls[0]?.method).toEqual("POST");
   expect(calls[0]?.url).toEqual(
-    "https://deploy-control.internal/api/connections/conn_abc/test",
+    "https://deploy-control.internal/internal/v1/connections/conn_abc/test",
   );
 });
 
-test("forwardRevokeConnection POSTs /api/connections/{id}/revoke and yields a bodyless 204", async () => {
+test("forwardRevokeConnection POSTs /internal/v1/connections/{id}/revoke and yields a bodyless 204", async () => {
   const { fetch: fetchImpl, calls } = recordingFetch(() =>
     new Response(null, { status: 204 })
   );
@@ -156,7 +156,7 @@ test("forwardRevokeConnection POSTs /api/connections/{id}/revoke and yields a bo
   expect(result.status).toEqual(204);
   expect(calls[0]?.method).toEqual("POST");
   expect(calls[0]?.url).toEqual(
-    "https://deploy-control.internal/api/connections/conn_abc/revoke",
+    "https://deploy-control.internal/internal/v1/connections/conn_abc/revoke",
   );
 
   const response = responseFromConnectionsResult(result);

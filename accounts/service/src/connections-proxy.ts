@@ -1,20 +1,26 @@
+import { CONNECTIONS_PATH } from "takosumi-contract/connections";
 import type { DeployControlProxyOptions } from "./deploy-control-proxy.ts";
 
 /**
  * Account-plane proxy for the deploy-control Connections surface
- * (`/api/connections/...`, spec §30). Connections register provider
+ * (`/internal/v1/connections/...`, spec §30). Connections register provider
  * credentials; the deploy-control plane owns the secret blob and the Vault
  * broker that mints credential bundles for runs. The account plane only
  * forwards the session-authenticated, space-ownership-checked request to
  * deploy-control over the same in-process seam the PlanRun / ApplyRun proxy
  * uses.
  *
+ * NOTE: the EDGE path this proxy is reached at stays the account-plane
+ * `/v1/connections` surface; only the in-process seam transport path moves to
+ * the unified `/internal/v1` deploy-control seam (`CONNECTIONS_PATH`).
+ *
  * Connection creation is split into kind-specific §30 subroutes
- * (`/api/connections/source/https-token`, `/source/ssh-key`,
+ * (`/internal/v1/connections/source/https-token`, `/source/ssh-key`,
  * `/cloudflare/token`, `/aws/assume-role`); this proxy selects the subroute
  * from the create body's `kind` / `provider` (the body still carries the
  * write-only credential `values`). Connection revoke maps to the §30
- * `POST /api/connections/{id}/revoke` subroute (the former DELETE handler).
+ * `POST /internal/v1/connections/{id}/revoke` subroute (the former DELETE
+ * handler).
  *
  * SECRETS: the create body carries write-only `values` (credential material).
  * This module is a pure forwarder — it never logs, echoes, or serializes the
@@ -27,12 +33,10 @@ import type { DeployControlProxyOptions } from "./deploy-control-proxy.ts";
  * `DeployControlOperations` facade), the Connections routes are forwarded over
  * the {@link DeployControlProxyOptions.fetch} transport: that transport
  * dispatches into the embedded deploy-control router where the control plane
- * registers the `/api/connections/...` routes. The single-worker host always
- * injects a `fetch` seam alongside `operations`, so this path is available
- * in-process.
+ * registers the `/internal/v1/connections/...` routes. The single-worker host
+ * always injects a `fetch` seam alongside `operations`, so this path is
+ * available in-process.
  */
-
-const CONNECTIONS_PATH = "/api/connections";
 
 /**
  * Selects the §30 connection-creation subroute from the create body. Mirrors

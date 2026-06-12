@@ -21,6 +21,7 @@ import {
   type LifecycleDestroyRequest,
   type LifecycleErrorBody,
 } from "takosumi-contract/reference/runtime-agent-lifecycle";
+import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 import type { TarRunner } from "takosumi-contract/reference/runtime-capability";
 import { HttpArtifactFetcher } from "./artifact_fetcher.ts";
 import { serveHttp } from "./subprocess/serve.ts";
@@ -72,7 +73,7 @@ export function createRuntimeAgentApp(
   // should hit this after starting the agent to verify their env vars
   // produced the expected handler set BEFORE running an apply that fails
   // with `runtime_handler_not_found`.
-  app.get("/v1/runtime-handlers", (c) => {
+  app.get(`${INTERNAL_V1_PREFIX}/runtime-handlers`, (c) => {
     const auth = c.req.header("authorization");
     if (!auth || auth !== expectedAuth) {
       return c.json(errorBody("unauthorized"), 401);
@@ -85,7 +86,7 @@ export function createRuntimeAgentApp(
     return c.json({ handlers }, 200);
   });
 
-  app.use("/v1/lifecycle/*", async (c, next) => {
+  app.use(`${INTERNAL_V1_PREFIX}/lifecycle/*`, async (c, next) => {
     const auth = c.req.header("authorization");
     if (!auth || auth !== expectedAuth) {
       return c.json(errorBody("unauthorized"), 401);
@@ -154,7 +155,7 @@ export function createRuntimeAgentApp(
   // handlers when absent. RuntimeHandlers without a `verify` hook are
   // reported as `{ ok: true, note: "no verify hook" }` so the table shows
   // them as "credentials cannot be checked" but not failed.
-  app.post("/v1/lifecycle/verify", async (c) => {
+  app.post(`${INTERNAL_V1_PREFIX}/lifecycle/verify`, async (c) => {
     let filter: { shape?: string; provider?: string } = {};
     if (c.req.header("content-length") !== "0") {
       try {

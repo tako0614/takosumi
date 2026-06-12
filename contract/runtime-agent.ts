@@ -26,20 +26,22 @@
  */
 
 import type { JsonObject } from "./types.ts";
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
 /**
  * Reference internal HTTP endpoint paths for runtime-agent RPC.
  *
- * Every path is prefixed with `/api/internal/v1/runtime/agents/` and is signed
+ * Every path is prefixed with `/internal/v1/runtime/agents/` and is signed
  * with the same internal-auth scheme as other internal RPC calls.
  */
 export const RUNTIME_AGENT_RPC_PATHS = {
-  enroll: "/api/internal/v1/runtime/agents/enroll",
-  heartbeat: "/api/internal/v1/runtime/agents/:agentId/heartbeat",
-  lease: "/api/internal/v1/runtime/agents/:agentId/leases",
-  report: "/api/internal/v1/runtime/agents/:agentId/reports",
-  drain: "/api/internal/v1/runtime/agents/:agentId/drain",
-  gatewayManifest: "/api/internal/v1/runtime/agents/:agentId/gateway-manifest",
+  enroll: `${INTERNAL_V1_PREFIX}/runtime/agents/enroll`,
+  heartbeat: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/heartbeat`,
+  lease: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/leases`,
+  report: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/reports`,
+  drain: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/drain`,
+  gatewayManifest:
+    `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/gateway-manifest`,
 } as const;
 
 /**
@@ -76,7 +78,7 @@ export type RuntimeAgentRpcPath =
 /**
  * Resolve a templated agent path to a concrete path for `agentId`.
  *
- * `RUNTIME_AGENT_RPC_PATHS.heartbeat` → `/api/internal/v1/runtime/agents/agent_1/heartbeat`.
+ * `RUNTIME_AGENT_RPC_PATHS.heartbeat` → `/internal/v1/runtime/agents/agent_1/heartbeat`.
  */
 export function resolveRuntimeAgentRpcPath(
   template: RuntimeAgentRpcPath,
@@ -105,7 +107,7 @@ export interface RuntimeAgentCapabilitiesPayload {
 }
 
 /**
- * `POST /api/internal/v1/runtime/agents/enroll` — registration request.
+ * `POST /internal/v1/runtime/agents/enroll` — registration request.
  *
  * The agent supplies a host-key digest so the service can detect impersonation
  * across re-enrollments (the same `agentId` must always present the same
@@ -150,7 +152,7 @@ export interface RuntimeAgentRegistrationResponse {
 }
 
 /**
- * `POST /api/internal/v1/runtime/agents/:agentId/heartbeat` — periodic
+ * `POST /internal/v1/runtime/agents/:agentId/heartbeat` — periodic
  * liveness ping. Carries lightweight TTL metadata so the service can detect
  * stale agents without a long-poll connection.
  */
@@ -181,7 +183,7 @@ export interface RuntimeAgentHeartbeatResponse {
 }
 
 /**
- * `POST /api/internal/v1/runtime/agents/:agentId/leases` — work lease pull.
+ * `POST /internal/v1/runtime/agents/:agentId/leases` — work lease pull.
  *
  * The service responds with at most one lease. If no work is available,
  * `lease` is `null` and the agent retries after a short backoff.
@@ -230,7 +232,7 @@ export type RuntimeAgentLeaseResponse = {
 };
 
 /**
- * `POST /api/internal/v1/runtime/agents/:agentId/reports` — operation result.
+ * `POST /internal/v1/runtime/agents/:agentId/reports` — operation result.
  *
  * A single endpoint covers all three flavours via `status`:
  *   - `progress` — operation still in flight; carries renewed lease window
@@ -290,7 +292,7 @@ export interface RuntimeAgentReportResponse {
 }
 
 /**
- * `POST /api/internal/v1/runtime/agents/:agentId/drain` — operator-initiated
+ * `POST /internal/v1/runtime/agents/:agentId/drain` — operator-initiated
  * drain. The agent is allowed to finish its current leases but will not be
  * granted new ones. Service caller signs the request as usual.
  */

@@ -17,9 +17,11 @@ import {
 } from "./cli-help.ts";
 import { isRecord, parseJson, stringValue } from "./cli-util.ts";
 import type { CliIo } from "./cli-io.ts";
+import { CONNECTIONS_PATH } from "takosumi-contract/connections";
+import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 
-const CONNECTIONS_PATH = "/api/connections";
-const OPERATOR_DEFAULTS_PATH = "/api/operator-connection-defaults";
+const OPERATOR_DEFAULTS_PATH =
+  `${INTERNAL_V1_PREFIX}/operator-connection-defaults`;
 
 export async function runConnections(
   args: string[],

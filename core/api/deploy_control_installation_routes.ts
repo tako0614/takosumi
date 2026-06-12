@@ -327,7 +327,7 @@ export function mountDeployControlInstallationRoutes(
             errorEnvelope(
               c,
               "invalid_argument",
-              "PATCH /api/installations/:installationId requires status",
+              "PATCH /internal/v1/installations/:installationId requires status",
             ),
             400,
           );

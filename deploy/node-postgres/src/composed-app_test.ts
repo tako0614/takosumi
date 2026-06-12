@@ -125,7 +125,7 @@ test("composed app builds accounts handler with an in-process service deploy con
     createAccountsHandler: async (deployControl) => {
       assert.equal(typeof deployControl.token, "string");
       const res = await deployControl.fetch!(
-        new Request(`${deployControl.url}/v1/runner-profiles`, {
+        new Request(`${deployControl.url}/internal/v1/runner-profiles`, {
           method: "GET",
           headers: {
             "authorization": `Bearer ${deployControl.token}`,

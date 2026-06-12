@@ -1,9 +1,9 @@
 /**
  * RunGroup HTTP route tests (Core Specification §19 / §24).
  *
- *   POST /api/spaces/:spaceId/plan-update   -> create a space_update RunGroup
- *   GET  /api/run-groups/:runGroupId        -> read group + member Runs + status
- *   POST /api/run-groups/:runGroupId/approve -> approve waiting members
+ *   POST /internal/v1/spaces/:spaceId/plan-update   -> create a space_update RunGroup
+ *   GET  /internal/v1/run-groups/:runGroupId        -> read group + member Runs + status
+ *   POST /internal/v1/run-groups/:runGroupId/approve -> approve waiting members
  *
  * Drives the full surface over the public routes against an in-memory store +
  * a fake runner whose producer apply emits a `base_domain` output a downstream
@@ -88,7 +88,7 @@ async function seedInstallation(
   spaceId: string,
   name: string,
 ): Promise<string> {
-  const sourceRes = await app.request("/api/sources", {
+  const sourceRes = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -124,7 +124,7 @@ async function seedInstallation(
   };
   await operations.installations.putInstallConfig(config);
 
-  const installRes = await app.request(`/api/spaces/${spaceId}/installations`, {
+  const installRes = await app.request(`/internal/v1/spaces/${spaceId}/installations`, {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -177,17 +177,17 @@ async function applyInstallation(
   installationId: string,
 ): Promise<void> {
   const planRes = await app.request(
-    `/api/installations/${installationId}/plan`,
+    `/internal/v1/installations/${installationId}/plan`,
     { method: "POST", headers: headers() },
   );
   expect(planRes.status).toBe(201);
   const run = (await planRes.json()).run as Run;
-  const planFetch = await app.request(`/v1/plan-runs/${run.id}`, {
+  const planFetch = await app.request(`/internal/v1/plan-runs/${run.id}`, {
     headers: headers(),
   });
   expect(planFetch.status).toBe(200);
   const plan = (await planFetch.json()).planRun;
-  const applyRes = await app.request("/v1/apply-runs", {
+  const applyRes = await app.request("/internal/v1/apply-runs", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -214,7 +214,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
     startWorkerDaemon: false,
   });
 
-  const spaceRes = await app.request("/api/spaces", {
+  const spaceRes = await app.request("/internal/v1/spaces", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -245,7 +245,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
 
   // Dependency: consumer injects producer's base_domain.
   const depRes = await app.request(
-    `/api/installations/${consumer}/dependencies`,
+    `/internal/v1/installations/${consumer}/dependencies`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -270,7 +270,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
   await applyInstallation(app, consumer);
 
   // Before any stale: plan-update is failed_precondition nothing_to_update.
-  const emptyRes = await app.request(`/api/spaces/${spaceId}/plan-update`, {
+  const emptyRes = await app.request(`/internal/v1/spaces/${spaceId}/plan-update`, {
     method: "POST",
     headers: headers(),
   });
@@ -280,7 +280,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
   // Space drift-check: active Installations are grouped under one RunGroup and
   // each member projects as read-only drift_check.
   const driftGroupRes = await app.request(
-    `/api/spaces/${spaceId}/drift-check`,
+    `/internal/v1/spaces/${spaceId}/drift-check`,
     {
       method: "POST",
       headers: headers(),
@@ -301,13 +301,13 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
   // Producer re-applies with a CHANGED output -> consumer goes stale.
   producerValue.producer = "v2.example.com";
   await applyInstallation(app, producer);
-  const consumerRow = await app.request(`/api/installations/${consumer}`, {
+  const consumerRow = await app.request(`/internal/v1/installations/${consumer}`, {
     headers: headers(),
   });
   expect((await consumerRow.json()).installation.status).toBe("stale");
 
   // plan-update: builds the group with the consumer as the sole member.
-  const updateRes = await app.request(`/api/spaces/${spaceId}/plan-update`, {
+  const updateRes = await app.request(`/internal/v1/spaces/${spaceId}/plan-update`, {
     method: "POST",
     headers: headers(),
   });
@@ -323,7 +323,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
 
   // GET the group: same member, computed status. Preview members auto-succeed
   // (no approval gate), so the group reads succeeded.
-  const getRes = await app.request(`/api/run-groups/${group.runGroup.id}`, {
+  const getRes = await app.request(`/internal/v1/run-groups/${group.runGroup.id}`, {
     headers: headers(),
   });
   expect(getRes.status).toBe(200);
@@ -336,14 +336,14 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
 
   // Approve is a no-op here (no waiting members) but must still return the group.
   const approveRes = await app.request(
-    `/api/run-groups/${group.runGroup.id}/approve`,
+    `/internal/v1/run-groups/${group.runGroup.id}/approve`,
     { method: "POST", headers: headers() },
   );
   expect(approveRes.status).toBe(200);
   expect((await approveRes.json()).runGroup.id).toBe(group.runGroup.id);
 
   // An unknown run group is 404.
-  const missingRes = await app.request("/api/run-groups/rg_missing00000001", {
+  const missingRes = await app.request("/internal/v1/run-groups/rg_missing00000001", {
     headers: headers(),
   });
   expect(missingRes.status).toBe(404);
@@ -363,14 +363,14 @@ test("plan-update rejects a malformed spaceId and run-group rejects a malformed 
     startWorkerDaemon: false,
   });
 
-  const badSpace = await app.request("/api/spaces/not-a-space/plan-update", {
+  const badSpace = await app.request("/internal/v1/spaces/not-a-space/plan-update", {
     method: "POST",
     headers: headers(),
   });
   expect(badSpace.status).toBe(400);
 
   const badDriftSpace = await app.request(
-    "/api/spaces/not-a-space/drift-check",
+    "/internal/v1/spaces/not-a-space/drift-check",
     {
       method: "POST",
       headers: headers(),
@@ -378,7 +378,7 @@ test("plan-update rejects a malformed spaceId and run-group rejects a malformed 
   );
   expect(badDriftSpace.status).toBe(400);
 
-  const badGroup = await app.request("/api/run-groups/not-a-group", {
+  const badGroup = await app.request("/internal/v1/run-groups/not-a-group", {
     headers: headers(),
   });
   expect(badGroup.status).toBe(400);

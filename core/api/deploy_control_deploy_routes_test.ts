@@ -42,18 +42,18 @@ async function makeApp() {
 
 const TAR = new Uint8Array([0x74, 0x61, 0x72, 0x0a, 0x01, 0x02, 0x03]);
 
-test("POST /api/spaces/:id/uploads requires a bearer (401)", async () => {
+test("POST /internal/v1/spaces/:id/uploads requires a bearer (401)", async () => {
   const { app } = await makeApp();
-  const res = await app.request("/api/spaces/space_aaaaaaaa/uploads", {
+  const res = await app.request("/internal/v1/spaces/space_aaaaaaaa/uploads", {
     method: "POST",
     body: TAR,
   });
   expect(res.status).toBe(401);
 });
 
-test("POST /api/spaces/:id/uploads records an upload snapshot and stores the archive", async () => {
+test("POST /internal/v1/spaces/:id/uploads records an upload snapshot and stores the archive", async () => {
   const { app, store, archives } = await makeApp();
-  const res = await app.request("/api/spaces/space_aaaaaaaa/uploads", {
+  const res = await app.request("/internal/v1/spaces/space_aaaaaaaa/uploads", {
     method: "POST",
     headers: { authorization: "Bearer scoped-token" },
     body: TAR,
@@ -72,9 +72,9 @@ test("POST /api/spaces/:id/uploads records an upload snapshot and stores the arc
   expect(body.snapshot.archiveDigest.startsWith("sha256:")).toBe(true);
 });
 
-test("POST /api/spaces/:id/uploads rejects a Space outside the principal scope (403)", async () => {
+test("POST /internal/v1/spaces/:id/uploads rejects a Space outside the principal scope (403)", async () => {
   const { app } = await makeApp();
-  const res = await app.request("/api/spaces/space_bbbbbbbb/uploads", {
+  const res = await app.request("/internal/v1/spaces/space_bbbbbbbb/uploads", {
     method: "POST",
     headers: { authorization: "Bearer scoped-token" },
     body: TAR,
@@ -82,9 +82,9 @@ test("POST /api/spaces/:id/uploads rejects a Space outside the principal scope (
   expect(res.status).toBe(403);
 });
 
-test("POST /api/deploy requires a bearer (401)", async () => {
+test("POST /internal/v1/deploy requires a bearer (401)", async () => {
   const { app } = await makeApp();
-  const res = await app.request("/api/deploy", {
+  const res = await app.request("/internal/v1/deploy", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ spaceId: "space_aaaaaaaa", name: "x", snapshotId: "snap_x" }),
@@ -92,10 +92,10 @@ test("POST /api/deploy requires a bearer (401)", async () => {
   expect(res.status).toBe(401);
 });
 
-test("POST /api/deploy rejects a non-upload snapshot (4xx)", async () => {
+test("POST /internal/v1/deploy rejects a non-upload snapshot (4xx)", async () => {
   const { app } = await makeApp();
   // No such upload snapshot -> not_found / invalid_argument (never 5xx).
-  const res = await app.request("/api/deploy", {
+  const res = await app.request("/internal/v1/deploy", {
     method: "POST",
     headers: {
       authorization: "Bearer scoped-token",

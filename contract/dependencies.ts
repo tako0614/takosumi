@@ -17,13 +17,16 @@
  */
 
 import type { OutputValueType } from "./installations.ts";
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
 export const INSTALLATION_DEPENDENCIES_PATH = (
   installationId: string,
 ): string =>
-  `/api/installations/${encodeURIComponent(installationId)}/dependencies`;
+  `${INTERNAL_V1_PREFIX}/installations/${
+    encodeURIComponent(installationId)
+  }/dependencies`;
 export const DEPENDENCY_PATH = (dependencyId: string): string =>
-  `/api/dependencies/${encodeURIComponent(dependencyId)}`;
+  `${INTERNAL_V1_PREFIX}/dependencies/${encodeURIComponent(dependencyId)}`;
 
 export type DependencyMode =
   | "remote_state"

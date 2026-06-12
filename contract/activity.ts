@@ -17,8 +17,10 @@
  * credential values are never stored as public ledger values.
  */
 
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
+
 export const SPACE_ACTIVITY_PATH = (spaceId: string): string =>
-  `/api/spaces/${encodeURIComponent(spaceId)}/activity`;
+  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/activity`;
 
 /** Default page size for an Activity listing when no limit is given. */
 export const ACTIVITY_DEFAULT_LIMIT = 100;
@@ -57,7 +59,7 @@ export interface ActivityEvent {
   readonly createdAt: string;
 }
 
-/** The body of an Activity listing (`GET /api/spaces/:spaceId/activity`). */
+/** The body of an Activity listing (`GET /internal/v1/spaces/:spaceId/activity`). */
 export interface ListActivityResponse {
   readonly events: readonly ActivityEvent[];
 }

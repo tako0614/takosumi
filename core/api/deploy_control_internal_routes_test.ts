@@ -20,20 +20,20 @@ test("deploy_control_internal_routes — public /api endpoints respond with 501 
     });
 
     const endpoints = [
-      ["GET", "/api/spaces", undefined],
-      ["POST", "/api/spaces", {}],
-      ["GET", "/api/sources", undefined],
-      ["POST", "/api/sources", {}],
-      ["GET", "/api/installations/ins_abcdef12", undefined],
-      ["POST", "/api/installations/ins_abcdef12/plan", {}],
-      ["GET", "/api/runs/plan_abcdef12", undefined],
-      ["POST", "/api/runs/plan_abcdef12/approve", {}],
-      ["GET", "/api/spaces/space_abcdef12/billing", undefined],
-      ["GET", "/api/spaces/space_abcdef12/usage", undefined],
-      ["POST", "/api/spaces/space_abcdef12/credits/top-up", { credits: 1 }],
+      ["GET", "/internal/v1/spaces", undefined],
+      ["POST", "/internal/v1/spaces", {}],
+      ["GET", "/internal/v1/sources", undefined],
+      ["POST", "/internal/v1/sources", {}],
+      ["GET", "/internal/v1/installations/ins_abcdef12", undefined],
+      ["POST", "/internal/v1/installations/ins_abcdef12/plan", {}],
+      ["GET", "/internal/v1/runs/plan_abcdef12", undefined],
+      ["POST", "/internal/v1/runs/plan_abcdef12/approve", {}],
+      ["GET", "/internal/v1/spaces/space_abcdef12/billing", undefined],
+      ["GET", "/internal/v1/spaces/space_abcdef12/usage", undefined],
+      ["POST", "/internal/v1/spaces/space_abcdef12/credits/top-up", { credits: 1 }],
       [
         "POST",
-        "/api/spaces/space_abcdef12/subscription/change",
+        "/internal/v1/spaces/space_abcdef12/subscription/change",
         { billingSettings: { mode: "disabled", provider: "none" } },
       ],
     ] as const;
@@ -63,7 +63,7 @@ test("deploy_control_internal_routes — disabled without TAKOSUMI_DEPLOY_CONTRO
       requestCorrelation: false,
     });
 
-    const response = await app.request("/api/spaces", {
+    const response = await app.request("/internal/v1/spaces", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
@@ -83,7 +83,7 @@ test("deploy_control_internal_routes — rejects invalid bearer", async () => {
     requestCorrelation: false,
   });
 
-  const response = await app.request("/api/spaces", {
+  const response = await app.request("/internal/v1/spaces", {
     method: "POST",
     headers: {
       "authorization": "Bearer wrong-token",
@@ -127,7 +127,7 @@ test("deploy_control_internal_routes — scoped bearer enforces space and record
     requestCorrelation: false,
   });
 
-  const denied = await app.request("/v1/plan-runs", {
+  const denied = await app.request("/internal/v1/plan-runs", {
     method: "POST",
     headers: {
       "authorization": "Bearer scoped-token",
@@ -143,7 +143,7 @@ test("deploy_control_internal_routes — scoped bearer enforces space and record
   });
   expect(denied.status).toEqual(403);
 
-  const allowed = await app.request("/v1/plan-runs", {
+  const allowed = await app.request("/internal/v1/plan-runs", {
     method: "POST",
     headers: {
       "authorization": "Bearer scoped-token",
@@ -210,7 +210,7 @@ test("deploy_control_internal_routes — scoped bearer defaults to deny when sco
     requestCorrelation: false,
   });
 
-  const response = await app.request("/v1/plan-runs", {
+  const response = await app.request("/internal/v1/plan-runs", {
     method: "POST",
     headers: {
       "authorization": "Bearer actor-only",
@@ -248,7 +248,7 @@ test("deploy_control_internal_routes — runner profile list is scoped", async (
     requestCorrelation: false,
   });
 
-  const response = await app.request("/v1/runner-profiles", {
+  const response = await app.request("/internal/v1/runner-profiles", {
     headers: { authorization: "Bearer scoped-token" },
   });
 
@@ -324,7 +324,7 @@ async function outputShareApp() {
 
 test("output-shares create — scoped bearer allowed on its fromSpace (§18)", async () => {
   const app = await outputShareApp();
-  const res = await app.request("/api/output-shares", {
+  const res = await app.request("/internal/v1/output-shares", {
     method: "POST",
     headers: {
       authorization: "Bearer scoped-token",
@@ -343,7 +343,7 @@ test("output-shares create — scoped bearer allowed on its fromSpace (§18)", a
 
 test("output-shares create — scoped bearer denied on a foreign fromSpace (§18)", async () => {
   const app = await outputShareApp();
-  const res = await app.request("/api/output-shares", {
+  const res = await app.request("/internal/v1/output-shares", {
     method: "POST",
     headers: {
       authorization: "Bearer scoped-token",
@@ -363,7 +363,7 @@ test("output-shares create — scoped bearer denied on a foreign fromSpace (§18
 test("output-shares list — scoped bearer denied on a foreign spaceId (§18)", async () => {
   const app = await outputShareApp();
   // space_denied01 is a valid id shape the scoped principal is NOT allowed.
-  const res = await app.request("/api/output-shares?spaceId=space_denied01", {
+  const res = await app.request("/internal/v1/output-shares?spaceId=space_denied01", {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(res.status).toEqual(403);

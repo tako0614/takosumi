@@ -68,16 +68,16 @@ function makeApp(
   });
 }
 
-const CF_PATH = "/api/connections/cloudflare/token";
-const HTTPS_PATH = "/api/connections/source/https-token";
-const SSH_PATH = "/api/connections/source/ssh-key";
-const AWS_PATH = "/api/connections/aws/assume-role";
-const GCP_IMPERSONATION_PATH = "/api/connections/gcp/impersonation";
+const CF_PATH = "/internal/v1/connections/cloudflare/token";
+const HTTPS_PATH = "/internal/v1/connections/source/https-token";
+const SSH_PATH = "/internal/v1/connections/source/ssh-key";
+const AWS_PATH = "/internal/v1/connections/aws/assume-role";
+const GCP_IMPERSONATION_PATH = "/internal/v1/connections/gcp/impersonation";
 const RESERVED_DRIVER_PATHS = [
-  ["POST", "/api/connections/cloudflare/oauth/start"],
-  ["GET", "/api/connections/cloudflare/oauth/callback"],
-  ["POST", "/api/connections/gcp/oauth/start"],
-  ["GET", "/api/connections/gcp/oauth/callback"],
+  ["POST", "/internal/v1/connections/cloudflare/oauth/start"],
+  ["GET", "/internal/v1/connections/cloudflare/oauth/callback"],
+  ["POST", "/internal/v1/connections/gcp/oauth/start"],
+  ["GET", "/internal/v1/connections/gcp/oauth/callback"],
 ] as const;
 
 const HEADERS = {
@@ -99,7 +99,7 @@ function stsSuccessXml(): string {
 </AssumeRoleResponse>`;
 }
 
-test("POST /api/connections/cloudflare/token requires a bearer (401)", async () => {
+test("POST /internal/v1/connections/cloudflare/token requires a bearer (401)", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {
     method: "POST",
@@ -113,7 +113,7 @@ test("POST /api/connections/cloudflare/token requires a bearer (401)", async () 
   expect((await response.json()).error.code).toBe("unauthenticated");
 });
 
-test("POST /api/connections/cloudflare/token rejects an unknown body field (400)", async () => {
+test("POST /internal/v1/connections/cloudflare/token rejects an unknown body field (400)", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {
     method: "POST",
@@ -128,7 +128,7 @@ test("POST /api/connections/cloudflare/token rejects an unknown body field (400)
   expect((await response.json()).error.code).toBe("invalid_argument");
 });
 
-test("POST /api/connections/cloudflare/token enforces space scope (403)", async () => {
+test("POST /internal/v1/connections/cloudflare/token enforces space scope (403)", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {
     method: "POST",
@@ -142,7 +142,7 @@ test("POST /api/connections/cloudflare/token enforces space scope (403)", async 
   expect((await response.json()).error.code).toBe("permission_denied");
 });
 
-test("POST /api/connections/cloudflare/token rejects a space session asking scope:operator (403)", async () => {
+test("POST /internal/v1/connections/cloudflare/token rejects a space session asking scope:operator (403)", async () => {
   const app = await makeApp();
   // Privilege-escalation guard: a space session (scoped-token, spaceIds:
   // [SPACE_ID]) supplies its OWN spaceId but asks for `scope: "operator"`. The
@@ -161,7 +161,7 @@ test("POST /api/connections/cloudflare/token rejects a space session asking scop
   expect((await response.json()).error.code).toBe("permission_denied");
 });
 
-test("POST /api/connections/cloudflare/token happy path returns 201 and never echoes values", async () => {
+test("POST /internal/v1/connections/cloudflare/token happy path returns 201 and never echoes values", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {
     method: "POST",
@@ -182,7 +182,7 @@ test("POST /api/connections/cloudflare/token happy path returns 201 and never ec
   expect(payload.connection.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
   expect(payload.connection.values).toBeUndefined();
 
-  const activity = await app.request(`/api/spaces/${SPACE_ID}/activity`, {
+  const activity = await app.request(`/internal/v1/spaces/${SPACE_ID}/activity`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(activity.status).toBe(200);
@@ -199,7 +199,7 @@ test("POST /api/connections/cloudflare/token happy path returns 201 and never ec
   expect(JSON.stringify(events)).not.toContain("cf-secret-token");
 });
 
-test("POST /api/connections/source/https-token returns 201 with the source kind", async () => {
+test("POST /internal/v1/connections/source/https-token returns 201 with the source kind", async () => {
   const app = await makeApp();
   const response = await app.request(HTTPS_PATH, {
     method: "POST",
@@ -218,7 +218,7 @@ test("POST /api/connections/source/https-token returns 201 with the source kind"
   expect(payload.connection.kind).toBe("source_git_https_token");
 });
 
-test("POST /api/connections/source/ssh-key requires knownHosts (400)", async () => {
+test("POST /internal/v1/connections/source/ssh-key requires knownHosts (400)", async () => {
   const app = await makeApp();
   const response = await app.request(SSH_PATH, {
     method: "POST",
@@ -234,7 +234,7 @@ test("POST /api/connections/source/ssh-key requires knownHosts (400)", async () 
   expect(payload.error.message).toContain("knownHostsEntry");
 });
 
-test("POST /api/connections/source/ssh-key with knownHosts returns 201", async () => {
+test("POST /internal/v1/connections/source/ssh-key with knownHosts returns 201", async () => {
   const app = await makeApp();
   const response = await app.request(SSH_PATH, {
     method: "POST",
@@ -254,7 +254,7 @@ test("POST /api/connections/source/ssh-key with knownHosts returns 201", async (
   expect(JSON.parse(text).connection.kind).toBe("source_git_ssh_key");
 });
 
-test("POST /api/connections/aws/assume-role requires a role ARN hint (400)", async () => {
+test("POST /internal/v1/connections/aws/assume-role requires a role ARN hint (400)", async () => {
   const app = await makeApp();
   const response = await app.request(AWS_PATH, {
     method: "POST",
@@ -273,7 +273,7 @@ test("POST /api/connections/aws/assume-role requires a role ARN hint (400)", asy
   expect(payload.error.message).toContain("awsRoleArn");
 });
 
-test("POST /api/connections/aws/assume-role returns 201 and never echoes values", async () => {
+test("POST /internal/v1/connections/aws/assume-role returns 201 and never echoes values", async () => {
   const app = await makeApp();
   const response = await app.request(AWS_PATH, {
     method: "POST",
@@ -355,7 +355,7 @@ test("Cloudflare OAuth helper starts and completes as a write-only env-set Conne
     },
   });
 
-  const started = await app.request("/api/connections/cloudflare/oauth/start", {
+  const started = await app.request("/internal/v1/connections/cloudflare/oauth/start", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
@@ -371,7 +371,7 @@ test("Cloudflare OAuth helper starts and completes as a write-only env-set Conne
   });
 
   const completed = await app.request(
-    "/api/connections/cloudflare/oauth/callback?code=code_cf&state=state_cf",
+    "/internal/v1/connections/cloudflare/oauth/callback?code=code_cf&state=state_cf",
     {
       method: "GET",
       headers: { authorization: "Bearer scoped-token" },
@@ -407,7 +407,7 @@ test("OAuth callback requires code and state once helper is configured", async (
     },
   });
 
-  const missing = await app.request("/api/connections/gcp/oauth/callback", {
+  const missing = await app.request("/internal/v1/connections/gcp/oauth/callback", {
     method: "GET",
     headers: { authorization: "Bearer scoped-token" },
   });
@@ -415,7 +415,7 @@ test("OAuth callback requires code and state once helper is configured", async (
   expect((await missing.json()).error.message).toContain("code");
 });
 
-test("POST /api/connections/gcp/impersonation registers a Google provider Connection", async () => {
+test("POST /internal/v1/connections/gcp/impersonation registers a Google provider Connection", async () => {
   const app = await makeApp();
   const response = await app.request(GCP_IMPERSONATION_PATH, {
     method: "POST",
@@ -448,7 +448,7 @@ test("POST /api/connections/gcp/impersonation registers a Google provider Connec
   });
 });
 
-test("POST /api/connections/gcp/impersonation requires service account and project hints", async () => {
+test("POST /internal/v1/connections/gcp/impersonation requires service account and project hints", async () => {
   const app = await makeApp();
   const response = await app.request(GCP_IMPERSONATION_PATH, {
     method: "POST",
@@ -465,7 +465,7 @@ test("POST /api/connections/gcp/impersonation requires service account and proje
   expect((await response.json()).error.message).toContain("gcpProjectId");
 });
 
-test("GET /api/connections lists connections without secret values", async () => {
+test("GET /internal/v1/connections lists connections without secret values", async () => {
   const app = await makeApp();
   await app.request(CF_PATH, {
     method: "POST",
@@ -476,7 +476,7 @@ test("GET /api/connections lists connections without secret values", async () =>
     }),
   });
 
-  const response = await app.request(`/api/connections?spaceId=${SPACE_ID}`, {
+  const response = await app.request(`/internal/v1/connections?spaceId=${SPACE_ID}`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(response.status).toBe(200);
@@ -487,7 +487,7 @@ test("GET /api/connections lists connections without secret values", async () =>
   expect(payload.connections[0].provider).toBe("cloudflare");
 });
 
-test("GET /api/connections with no spaceId lists operator-scoped connections for the unrestricted bearer", async () => {
+test("GET /internal/v1/connections with no spaceId lists operator-scoped connections for the unrestricted bearer", async () => {
   const app = await makeApp();
   // Operator-scoped connection (no spaceId): only the unrestricted bearer.
   await app.request(CF_PATH, {
@@ -502,7 +502,7 @@ test("GET /api/connections with no spaceId lists operator-scoped connections for
     }),
   });
 
-  const response = await app.request("/api/connections", {
+  const response = await app.request("/internal/v1/connections", {
     headers: { authorization: "Bearer operator-token" },
   });
   expect(response.status).toBe(200);
@@ -511,9 +511,9 @@ test("GET /api/connections with no spaceId lists operator-scoped connections for
   expect(payload.connections[0].scope).toBe("operator");
 });
 
-test("GET /api/connections with no spaceId is denied for a scoped bearer (403)", async () => {
+test("GET /internal/v1/connections with no spaceId is denied for a scoped bearer (403)", async () => {
   const app = await makeApp();
-  const response = await app.request("/api/connections", {
+  const response = await app.request("/internal/v1/connections", {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(response.status).toBe(403);
@@ -536,7 +536,7 @@ test("operator connection defaults require unrestricted bearer and operator-scop
   expect(operatorCreated.status).toBe(201);
   const operatorConnection = (await operatorCreated.json()).connection;
 
-  const scopedDenied = await app.request("/api/operator-connection-defaults", {
+  const scopedDenied = await app.request("/internal/v1/operator-connection-defaults", {
     method: "PUT",
     headers: HEADERS,
     body: JSON.stringify({
@@ -547,7 +547,7 @@ test("operator connection defaults require unrestricted bearer and operator-scop
   expect(scopedDenied.status).toBe(403);
   expect((await scopedDenied.json()).error.code).toBe("permission_denied");
 
-  const stored = await app.request("/api/operator-connection-defaults", {
+  const stored = await app.request("/internal/v1/operator-connection-defaults", {
     method: "PUT",
     headers: {
       authorization: "Bearer operator-token",
@@ -564,7 +564,7 @@ test("operator connection defaults require unrestricted bearer and operator-scop
     provider: "cloudflare",
   });
 
-  const listed = await app.request("/api/operator-connection-defaults", {
+  const listed = await app.request("/internal/v1/operator-connection-defaults", {
     headers: { authorization: "Bearer operator-token" },
   });
   expect(listed.status).toBe(200);
@@ -581,7 +581,7 @@ test("operator connection defaults require unrestricted bearer and operator-scop
   expect(spaceCreated.status).toBe(201);
   const spaceConnection = (await spaceCreated.json()).connection;
   const rejectedSpaceConnection = await app.request(
-    "/api/operator-connection-defaults",
+    "/internal/v1/operator-connection-defaults",
     {
       method: "PUT",
       headers: {
@@ -600,7 +600,7 @@ test("operator connection defaults require unrestricted bearer and operator-scop
   );
 });
 
-test("POST /api/connections/{id}/test verifies via injected fetch (200 verified)", async () => {
+test("POST /internal/v1/connections/{id}/test verifies via injected fetch (200 verified)", async () => {
   const fakeFetch = (): Promise<Response> =>
     Promise.resolve(
       new Response(
@@ -619,7 +619,7 @@ test("POST /api/connections/{id}/test verifies via injected fetch (200 verified)
   });
   const { connection } = await created.json();
 
-  const tested = await app.request(`/api/connections/${connection.id}/test`, {
+  const tested = await app.request(`/internal/v1/connections/${connection.id}/test`, {
     method: "POST",
     headers: HEADERS,
   });
@@ -627,7 +627,7 @@ test("POST /api/connections/{id}/test verifies via injected fetch (200 verified)
   expect((await tested.json()).status).toBe("verified");
 });
 
-test("POST /api/connections/{id}/test verifies aws assume-role via STS (200 verified)", async () => {
+test("POST /internal/v1/connections/{id}/test verifies aws assume-role via STS (200 verified)", async () => {
   let called:
     | {
         readonly url: string;
@@ -668,7 +668,7 @@ test("POST /api/connections/{id}/test verifies aws assume-role via STS (200 veri
   expect(created.status).toBe(201);
   const { connection } = await created.json();
 
-  const tested = await app.request(`/api/connections/${connection.id}/test`, {
+  const tested = await app.request(`/internal/v1/connections/${connection.id}/test`, {
     method: "POST",
     headers: HEADERS,
   });
@@ -682,7 +682,7 @@ test("POST /api/connections/{id}/test verifies aws assume-role via STS (200 veri
   expect(called?.auth).toContain("AWS4-HMAC-SHA256");
 });
 
-test("POST /api/connections/{id}/revoke revokes and returns 204", async () => {
+test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async () => {
   const app = await makeApp();
   const created = await app.request(CF_PATH, {
     method: "POST",
@@ -695,7 +695,7 @@ test("POST /api/connections/{id}/revoke revokes and returns 204", async () => {
   const { connection } = await created.json();
 
   const revoked = await app.request(
-    `/api/connections/${connection.id}/revoke`,
+    `/internal/v1/connections/${connection.id}/revoke`,
     {
       method: "POST",
       headers: { authorization: "Bearer scoped-token" },
@@ -703,12 +703,12 @@ test("POST /api/connections/{id}/revoke revokes and returns 204", async () => {
   );
   expect(revoked.status).toBe(204);
 
-  const list = await app.request(`/api/connections?spaceId=${SPACE_ID}`, {
+  const list = await app.request(`/internal/v1/connections?spaceId=${SPACE_ID}`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect((await list.json()).connections).toHaveLength(0);
 
-  const activity = await app.request(`/api/spaces/${SPACE_ID}/activity`, {
+  const activity = await app.request(`/internal/v1/spaces/${SPACE_ID}/activity`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(activity.status).toBe(200);
@@ -730,7 +730,7 @@ test("POST /api/connections/{id}/revoke revokes and returns 204", async () => {
 
 test("connection id with an unsupported shape is rejected (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/api/connections/not-a-conn-id/test", {
+  const response = await app.request("/internal/v1/connections/not-a-conn-id/test", {
     method: "POST",
     headers: HEADERS,
   });

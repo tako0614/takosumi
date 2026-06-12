@@ -163,7 +163,7 @@ export function mountDeployControlSpaceRoutes(
     }),
   );
 
-  // §30 `PATCH /api/spaces/:spaceId` — mutable Space settings.
+  // §30 `PATCH /internal/v1/spaces/:spaceId` — mutable Space settings.
   app.patch(
     TAKOSUMI_SPACE_ROUTE,
     deployControlBodyLimit,

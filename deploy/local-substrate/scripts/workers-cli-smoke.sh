@@ -107,9 +107,9 @@ DEPLOY_CONTROL_TOKEN="${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-local-substrate-deploy-co
 RUNNER_PROFILES=$(curl -sk --cacert "$CA" \
 	-H "Authorization: Bearer $DEPLOY_CONTROL_TOKEN" \
 	-H "Content-Type: application/json" \
-	"https://${SERVICE_HOST}/v1/runner-profiles")
+	"https://${SERVICE_HOST}/internal/v1/runner-profiles")
 PROFILE_COUNT=$(echo "$RUNNER_PROFILES" | python3 -c "import json,sys;print(len(json.loads(sys.stdin.read()).get('runnerProfiles') or []))")
-[[ "$PROFILE_COUNT" -gt 0 ]] || { echo "FAIL: /v1/runner-profiles returned no profiles: $RUNNER_PROFILES" >&2; exit 1; }
+[[ "$PROFILE_COUNT" -gt 0 ]] || { echo "FAIL: /internal/v1/runner-profiles returned no profiles: $RUNNER_PROFILES" >&2; exit 1; }
 
 # 4. OIDC discovery shape
 DISC=$(curl -sk --cacert "$CA" https://app.takosumi.test/.well-known/openid-configuration)

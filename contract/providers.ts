@@ -1,6 +1,8 @@
-export const PROVIDERS_PATH = "/api/providers" as const;
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
+
+export const PROVIDERS_PATH = `${INTERNAL_V1_PREFIX}/providers` as const;
 export const PROVIDER_PATH = (id: string): string =>
-  `/api/providers/${encodeURIComponent(id)}`;
+  `${INTERNAL_V1_PREFIX}/providers/${encodeURIComponent(id)}`;
 
 export type ProviderCredentialSource =
   | "takosumi_managed"

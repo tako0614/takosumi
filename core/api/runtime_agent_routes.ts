@@ -30,13 +30,16 @@ export interface MutationBoundaryEntitlementService {
   }): Promise<unknown>;
 }
 
+import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
+
 export const TAKOSUMI_RUNTIME_AGENT_PATHS = {
-  enroll: "/api/internal/v1/runtime/agents/enroll",
-  heartbeat: "/api/internal/v1/runtime/agents/:agentId/heartbeat",
-  lease: "/api/internal/v1/runtime/agents/:agentId/leases",
-  report: "/api/internal/v1/runtime/agents/:agentId/reports",
-  drain: "/api/internal/v1/runtime/agents/:agentId/drain",
-  gatewayManifest: "/api/internal/v1/runtime/agents/:agentId/gateway-manifest",
+  enroll: `${INTERNAL_V1_PREFIX}/runtime/agents/enroll`,
+  heartbeat: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/heartbeat`,
+  lease: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/leases`,
+  report: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/reports`,
+  drain: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/drain`,
+  gatewayManifest:
+    `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/gateway-manifest`,
 } as const;
 
 /**

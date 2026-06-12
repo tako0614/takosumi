@@ -1,30 +1,28 @@
+import {
+  isInternalV1Path,
+  PROCESS_OBSERVABILITY_PATHS,
+} from "takosumi-contract/api-surface";
+
 export const TAKOSUMI_CLOUDFLARE_FRONT_HEADER =
   "x-takosumi-cloudflare-front" as const;
 
-const SERVICE_CONTROL_PLANE_EXACT_PATHS = new Set([
+/**
+ * Always-on process / observability endpoints, served regardless of role:
+ * the canonical probes + capabilities/openapi/metrics from the prefix
+ * registry, plus the legacy `/health` probe (dropped in the health-dedup
+ * stage). Everything else routed to the service app is the unified
+ * `/internal/v1` seam — derived from {@link isInternalV1Path} so this
+ * classifier never drifts from the contract taxonomy.
+ */
+const SERVICE_CONTROL_PLANE_EXACT_PATHS = new Set<string>([
+  ...PROCESS_OBSERVABILITY_PATHS,
   "/health",
-  "/capabilities",
-  "/openapi.json",
-  "/livez",
-  "/readyz",
-  "/metrics",
 ]);
 
 export function isServiceControlPlanePath(pathname: string): boolean {
   const normalized = normalizePathname(pathname);
   if (SERVICE_CONTROL_PLANE_EXACT_PATHS.has(normalized)) return true;
-  return (
-    normalized === "/api/internal/v1" ||
-    normalized.startsWith("/api/internal/v1/") ||
-    normalized === "/v1/runner-profiles" ||
-    normalized === "/v1/plan-runs" ||
-    normalized.startsWith("/v1/plan-runs/") ||
-    normalized === "/v1/apply-runs" ||
-    normalized.startsWith("/v1/apply-runs/") ||
-    /^\/v1\/installations\/(?:ins|inst)_[0-9A-Za-z]+(?:$|\/(?:deployments|deployment-outputs)$)/.test(
-      normalized,
-    )
-  );
+  return isInternalV1Path(normalized);
 }
 
 export function createServiceWorkerRequest(request: Request): Request {

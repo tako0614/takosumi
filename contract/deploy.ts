@@ -17,9 +17,10 @@
 
 import type { PublicInstallation } from "./installations.ts";
 import type { Run } from "./runs.ts";
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
-/** Public API path (`/api`, no version prefix). */
-export const DEPLOY_PATH = "/api/deploy" as const;
+/** INTERNAL deploy-control seam path (`/internal/v1`, reached in-process). */
+export const DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
 
 /**
  * Body of `POST {@link DEPLOY_PATH}`.

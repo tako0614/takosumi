@@ -14,16 +14,22 @@
  * preserving the prior JSON-404 behavior.
  */
 
+import {
+  ACCOUNTS_IDENTITY_PREFIX,
+  API_V1_PREFIX,
+} from "takosumi-contract/api-surface";
+
 // Mirror of deploy/accounts-cloudflare/src/routes.ts ACCOUNTS_API_PREFIXES.
-// Keep both in sync: every non-`/dashboard` path the accounts/service handler
-// routes must be listed, or the SPA fallback would shadow it. `/healthz` and
-// signed export downloads are handled by `preHandle` before static serving, so
-// they are not repeated here. `/dashboard/*` is intentionally absent: the SPA
-// owns the dashboard UI now that the former server-HTML dashboard has been
-// removed from accounts-service.
+// Both derive from the same prefix registry (`takosumi-contract/api-surface`)
+// and a test asserts they do not drift. Every non-`/dashboard` path the
+// accounts/service handler routes must be covered, or the SPA fallback would
+// shadow it. `/healthz` and signed export downloads are handled by `preHandle`
+// before static serving, so they are not repeated here. `/dashboard/*` is
+// intentionally absent: the SPA owns the dashboard UI now that the former
+// server-HTML dashboard has been removed from accounts-service.
 export const ACCOUNTS_API_PREFIXES = [
-  "/api/v1",
-  "/v1",
+  API_V1_PREFIX,
+  ACCOUNTS_IDENTITY_PREFIX,
   "/oauth",
   "/.well-known",
   "/start",
