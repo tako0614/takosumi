@@ -124,21 +124,19 @@ export interface CloudflareWorkerHandler {
 
 export interface CreateCloudflareWorkerOptions {
   /**
-   * In-process deploy-control transport. When supplied, the deploy-control proxy
-   * seam (`deployControl.fetch`) is routed to this fetch instead of an HTTP URL,
-   * so the deploy-control plane runs in-process and owns no public route. The
-   * unified Takos worker passes the embedded deploy-control service's
-   * `app.fetch` here.
+   * @deprecated Inert. The deploy-control proxy is now in-process only and
+   * dispatches through {@link deployControlOperations}; the synthetic-Request
+   * `fetch` transport was removed (it was dead once `operations` is injected).
+   * Still accepted for source compatibility with hosts that pass it, but ignored.
    */
   readonly deployControlFetch?: (env: CloudflareWorkerEnv) => typeof fetch;
   /**
-   * In-process deploy-control typed operations. When supplied, the proxy calls
-   * these contract-DTO operations directly instead of building a synthetic
-   * Request and dialing it back through the embedded router in the same worker:
-   * no self-issued Bearer handshake, no JSON serialize/parse round-trip. The
-   * unified Takos worker passes the embedded service's typed `operations` facade
-   * here. `deployControlFetch` remains as the fallback transport (and the only
-   * transport for a genuine remote deploy-control origin).
+   * In-process deploy-control typed operations. The proxy calls these contract-DTO
+   * operations directly instead of building a synthetic Request and dialing it
+   * back through the embedded router in the same worker: no self-issued Bearer
+   * handshake, no JSON serialize/parse round-trip. The unified Takos worker passes
+   * the embedded service's typed `operations` facade here. This is the only
+   * deploy-control transport (in-process composition, per AGENTS.md).
    */
   readonly deployControlOperations?: (
     env: CloudflareWorkerEnv,
@@ -303,11 +301,7 @@ async function buildAccountsHandler(
     upstreamOAuth: parseUpstreamOAuth(env),
     passkeys: parsePasskeys(env),
     managedOfferingAccess: parseManagedOfferingAccess(env),
-    deployControl: parseDeployControl(
-      env,
-      options.deployControlFetch?.(env),
-      deployControlOperations,
-    ),
+    deployControl: parseDeployControl(env, deployControlOperations),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     ...(controlPlaneOperations
       ? {
@@ -807,45 +801,17 @@ function parseCustomOidcUpstreamProvider(
 // Synthetic absolute base for the in-process deploy-control transport. The proxy
 // only uses this to build `new URL(path, url)`; the actual transport is the
 // injected `fetch`, so the host part is never dialed.
-const IN_PROCESS_DEPLOY_CONTROL_BASE = "https://deploy-control.internal/";
-
 function parseDeployControl(
-  env: CloudflareWorkerEnv,
-  deployControlFetch?: typeof fetch,
+  _env: CloudflareWorkerEnv,
   deployControlOperations?: DeployControlOperations,
-):
-  | {
-      url: string;
-      token?: string;
-      fetch?: typeof fetch;
-      operations?: DeployControlOperations;
-    }
-  | undefined {
+): { operations: DeployControlOperations } | undefined {
   // In-process transport (unified single-worker deployment): the deploy-control
-  // plane runs in this same worker. When the host injects the typed `operations`
-  // facade the proxy calls the controller directly (no Bearer handshake, no JSON
-  // round-trip); the injected fetch remains a fallback transport. The bearer
-  // (still threaded for the fetch fallback) must match the embedded service's
-  // `TAKOSUMI_DEPLOY_CONTROL_TOKEN` (which gates `authorizeDeployControl`), so we
-  // read that shared secret here and pass a syntactically valid synthetic base.
-  if (deployControlFetch || deployControlOperations) {
-    const token = optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN);
-    const url =
-      optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL) ??
-      IN_PROCESS_DEPLOY_CONTROL_BASE;
-    return {
-      url,
-      ...(token ? { token } : {}),
-      ...(deployControlFetch ? { fetch: deployControlFetch } : {}),
-      ...(deployControlOperations
-        ? { operations: deployControlOperations }
-        : {}),
-    };
-  }
-  const url = optionalString(env.TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL);
-  if (!url) return undefined;
-  const token = optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN);
-  return token ? { url, token } : { url };
+  // plane runs in this same worker, so the host injects the typed `operations`
+  // facade and the proxy calls the controller directly (no Bearer handshake, no
+  // JSON round-trip through an embedded router). Per AGENTS.md there is no remote
+  // deploy-control origin / standalone-worker split; the proxy is in-process only.
+  if (!deployControlOperations) return undefined;
+  return { operations: deployControlOperations };
 }
 
 function parseWorkloadPlatformServices(

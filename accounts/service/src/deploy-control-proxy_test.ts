@@ -16,13 +16,6 @@ import {
   requestInstallationPlanRun,
 } from "./mod.ts";
 
-// `fetch` must never be dialed once typed `operations` are injected — the proxy
-// is supposed to call the in-process controller facade directly. Any host that
-// reaches this means the transport fallback fired by mistake.
-const fetchThatMustNotBeCalled: typeof fetch = () => {
-  throw new Error("deployControl.fetch must not be used when operations exist");
-};
-
 function planRun(overrides: Partial<PlanRun> = {}): PlanRun {
   return {
     id: "plan_inproc",
@@ -85,9 +78,6 @@ test("requestInstallationPlanRun dispatches through typed operations, not fetch"
 
   const result = await requestInstallationPlanRun({
     deployControl: {
-      url: "https://deploy-control.internal/",
-      token: "secret",
-      fetch: fetchThatMustNotBeCalled,
       operations,
     },
     body: {
@@ -133,9 +123,6 @@ test("requestInstallationApply reads the reviewed PlanRun and applies in-process
 
   const result = await requestInstallationApply({
     deployControl: {
-      url: "https://deploy-control.internal/",
-      token: "secret",
-      fetch: fetchThatMustNotBeCalled,
       operations,
     },
     body: {
@@ -174,9 +161,6 @@ test("in-process controller errors map to the contract HTTP status + envelope", 
 
   const result = await requestDeploymentApply({
     deployControl: {
-      url: "https://deploy-control.internal/",
-      token: "secret",
-      fetch: fetchThatMustNotBeCalled,
       operations,
     },
     installationId: "inst_1",

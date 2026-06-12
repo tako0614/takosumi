@@ -43,43 +43,6 @@ export async function requireAppInstallationCreateWriteAccess(input: {
   });
 }
 
-/**
- * Authorize a Connection write/read against the space named in the request.
- *
- * Authentication: Account session OR PAT (the `scope` decides read vs write).
- * Authorization: the authenticated subject MUST own the LedgerAccount that owns
- * the space. Mirrors {@link requireInstallationPlanRunWriteAccess}: an EXISTING
- * space owned by someone else is rejected with `space_not_found` (404,
- * non-disclosure). Unlike the PlanRun case there is no new-user/not-yet-created
- * space path — a Connection always targets an existing space — so a missing
- * space is also rejected.
- */
-export async function requireConnectionSpaceAccess(input: {
-  request: Request;
-  store: AccountsStore;
-  spaceId: string;
-  scope: AccountsBearerRequiredScope;
-}): Promise<Response | undefined> {
-  const bearer = await requireAccountsBearer({
-    request: input.request,
-    store: input.store,
-    scope: input.scope,
-  });
-  if (!bearer.ok) return bearer.response;
-  const space = await input.store.findSpace(input.spaceId);
-  if (
-    !space ||
-    !await subjectCanAccessAccount(
-      input.store,
-      bearer.auth.subject,
-      space.accountId,
-    )
-  ) {
-    return errorJson("space_not_found", "space not found", 404);
-  }
-  return undefined;
-}
-
 export async function requireInstallationPlanRunWriteAccess(input: {
   request: Request;
   store: AccountsStore;

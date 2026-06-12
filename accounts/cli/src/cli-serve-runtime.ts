@@ -14,7 +14,6 @@ import {
   customOidcOAuthProvider,
   InMemorySharedCellWarmPool,
   type InstallationExportArchiveDataFile,
-  type DeployControlProxyOptions,
   isAppBindingKind,
   type ManagedOfferingAccessPolicy,
   type PasskeyHttpOptions,
@@ -343,9 +342,21 @@ export function buildPasskeyOptions(
   };
 }
 
+/**
+ * Standalone-serve deploy-control config used only for the dry-run diagnostic.
+ * The account-plane deploy-control proxy is in-process only (it dispatches
+ * through the injected typed `operations` facade, per AGENTS.md); the standalone
+ * CLI serve has no operations to inject, so this config no longer wires a live
+ * proxy — it is parsed solely to echo + redact the configured url/token.
+ */
+export interface DeployControlServeConfig {
+  readonly url: string;
+  readonly token?: string;
+}
+
 export async function buildDeployControlProxyOptions(
   options: Record<string, string | boolean>,
-): Promise<DeployControlProxyOptions | undefined> {
+): Promise<DeployControlServeConfig | undefined> {
   const url = optionalStringOption(options, "deployControlUrl") ??
     await optionalEnvString("TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL");
   const token = optionalStringOption(options, "deployControlToken") ??

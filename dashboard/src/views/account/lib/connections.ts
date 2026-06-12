@@ -1,17 +1,24 @@
 /**
- * Connections RPC for the account plane.
+ * Connections RPC for the dashboard.
  *
  * A Connection registers provider credentials (a Cloudflare API token, etc.)
- * for a Space. The deploy-control plane owns the secret blob; this client only
- * talks to the same-origin account-plane proxy (`/v1/connections`, session
- * cookie auth). Secret `values` are write-only: they are sent on create and
- * NEVER returned — the {@link Connection} type has no value fields, and the
- * caller must clear any in-memory secret right after submit.
+ * for a Space. The deploy-control plane owns the secret blob; this client talks
+ * to the same-origin, session-authed control surface (`/api/v1/connections`,
+ * served in-process by control-routes via the typed operations facade). Secret
+ * `values` are write-only: they are sent on create and NEVER returned — the
+ * {@link Connection} type has no value fields, and the caller must clear any
+ * in-memory secret right after submit.
  *
- * Same transport + path conventions as installations.ts (apiFetch / paths).
+ * Same transport conventions as installations.ts (apiFetch / qs).
  */
 import { apiFetch, qs } from "./http.ts";
-import * as paths from "./paths.ts";
+
+/**
+ * The session-authed control surface that owns the Connection resource. The
+ * account plane no longer carries a `/v1/connections` edge — list / create /
+ * test / revoke are all served here under one prefix.
+ */
+const CONNECTIONS_BASE = "/api/v1/connections";
 
 export type ConnectionAuthMethod = "static_secret";
 export type ConnectionOwner = "service" | "customer";
@@ -177,7 +184,7 @@ export async function listConnections(
   spaceId: string,
 ): Promise<readonly Connection[]> {
   const body = await apiFetch<ListResponse>(
-    paths.CONNECTIONS + qs({ spaceId }),
+    CONNECTIONS_BASE + qs({ spaceId }),
   );
   return body.connections ?? [];
 }
@@ -194,27 +201,33 @@ export interface CreateConnectionInput {
 export async function createConnection(
   input: CreateConnectionInput,
 ): Promise<Connection> {
-  return await apiFetch<Connection>(paths.CONNECTIONS, {
+  // The control surface forces `scope: "space"` server-side and answers with the
+  // `{ connection }` envelope (the public projection — never secret values).
+  const body = await apiFetch<{ connection: Connection }>(CONNECTIONS_BASE, {
     method: "POST",
     body: {
       spaceId: input.spaceId,
       provider: input.provider,
-      authMethod: "static_secret",
       ...(input.displayName ? { displayName: input.displayName } : {}),
-      ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.scope ? { scopeHints: input.scope } : {}),
       values: input.values,
     },
   });
+  return body.connection;
 }
 
 export async function testConnection(
   id: string,
 ): Promise<ConnectionTestResult> {
-  return await apiFetch<ConnectionTestResult>(paths.connectionTest(id), {
-    method: "POST",
-  });
+  return await apiFetch<ConnectionTestResult>(
+    `${CONNECTIONS_BASE}/${encodeURIComponent(id)}/test`,
+    { method: "POST" },
+  );
 }
 
 export async function removeConnection(id: string): Promise<void> {
-  await apiFetch<unknown>(paths.connection(id), { method: "DELETE" });
+  await apiFetch<unknown>(
+    `${CONNECTIONS_BASE}/${encodeURIComponent(id)}/revoke`,
+    { method: "POST" },
+  );
 }

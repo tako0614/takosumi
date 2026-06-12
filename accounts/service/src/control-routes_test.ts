@@ -461,6 +461,15 @@ function fakeOperations(
         ReturnType<ControlPlaneOperations["createConnection"]>
       >;
     },
+    testConnection: async (connectionId) => {
+      record("testConnection", connectionId);
+      return { status: "verified" } as unknown as Awaited<
+        ReturnType<ControlPlaneOperations["testConnection"]>
+      >;
+    },
+    revokeConnection: async (connectionId) => {
+      record("revokeConnection", connectionId);
+    },
     createInstallationPlan: async (installationId) => {
       record("createInstallationPlan", installationId);
       return { planRun: { id: "plan_1" } } as unknown as Awaited<
@@ -755,6 +764,8 @@ test("anonymous control requests are 401 across the family", async () => {
     ["GET", "/api/v1/runs/plan_1/cost"],
     ["GET", "/api/v1/run-groups/rg_1"],
     ["GET", "/api/v1/connections?spaceId=space_a"],
+    ["POST", "/api/v1/connections/conn_1/test"],
+    ["POST", "/api/v1/connections/conn_1/revoke"],
     ["GET", "/api/v1/operator-connection-defaults"],
     ["GET", "/api/v1/spaces/space_a/managed-defaults"],
   ];
@@ -2597,6 +2608,80 @@ test("Cloudflare OAuth: 501 when the operator has not wired the helper", async (
     operations,
   });
   expect(callbackResp?.status).toEqual(501);
+});
+
+test("POST /api/v1/connections/:id/test resolves the Space and re-verifies the connection", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/connections/conn_abc/test",
+    { cookie },
+  );
+  const response = await handleControlRoute({ request: req, url, store, operations });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { status: string };
+  expect(body.status).toEqual("verified");
+  // Ownership is resolved from the Connection's spaceId before the test runs.
+  expect(operations.calls.getConnection).toEqual(["conn_abc"]);
+  expect(operations.calls.testConnection).toEqual(["conn_abc"]);
+});
+
+test("POST /api/v1/connections/:id/revoke deletes the connection and answers 204", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/connections/conn_abc/revoke",
+    { cookie },
+  );
+  const response = await handleControlRoute({ request: req, url, store, operations });
+  expect(response?.status).toEqual(204);
+  expect(operations.calls.revokeConnection).toEqual(["conn_abc"]);
+});
+
+test("POST /api/v1/connections/:id/revoke 404s (non-disclosing) for a Space the caller does not own", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  // The Connection belongs to a Space owned by a different subject -> the
+  // ownership gate must answer a non-disclosing connection_not_found, and the
+  // revoke must never run.
+  const operations = fakeOperations({
+    getConnection: async (connectionId) => ({
+      id: connectionId,
+      spaceId: "space_foreign",
+      provider: "cloudflare",
+      kind: "cloudflare_api_token",
+      authMethod: "static_secret",
+      scope: "space",
+      status: "active",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    }) as unknown as ReturnType<ControlPlaneOperations["getConnection"]>,
+    spaces: {
+      getSpace: async (id) => ({
+        id,
+        handle: id,
+        displayName: id,
+        type: "personal" as const,
+        ownerUserId: "tsub_other",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/connections/conn_foreign/revoke",
+    { cookie },
+  );
+  const response = await handleControlRoute({ request: req, url, store, operations });
+  expect(response?.status).toEqual(404);
+  const body = (await response!.json()) as { error: { code: string } };
+  expect(body.error.code).toEqual("connection_not_found");
+  expect(operations.calls.revokeConnection).toBeUndefined();
 });
 
 test("Cloudflare OAuth: start authorizes and callback redirects to /connections, minting a Space-owned connection", async () => {
