@@ -7,7 +7,9 @@
  * happened (names / ids / counts) and never secrets, so metadata is rendered as
  * compact key=value chips.
  */
+import "../../styles/wave-a.css";
 import { createResource, For, Match, Show, Switch } from "solid-js";
+import { ScrollText } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
@@ -17,6 +19,10 @@ import {
   type ControlApiError,
   listActivity,
 } from "../../lib/control-api.ts";
+import PageHeader from "../../components/ui/PageHeader.tsx";
+import { Card } from "../../components/ui/Card.tsx";
+import EmptyState from "../../components/ui/EmptyState.tsx";
+import Skeleton from "../../components/ui/Skeleton.tsx";
 
 const ACTIVITY_LIMIT = 100;
 
@@ -31,10 +37,10 @@ function MetadataChips(props: { metadata: Record<string, unknown> }) {
     );
   return (
     <Show when={entries().length > 0}>
-      <div class="activity-meta">
+      <div class="wa-meta">
         <For each={entries()}>
           {([k, v]) => (
-            <span class="activity-meta-chip">
+            <span class="wa-meta-chip">
               <span class="muted">{k}</span>=<code>{String(v)}</code>
             </span>
           )}
@@ -46,14 +52,14 @@ function MetadataChips(props: { metadata: Record<string, unknown> }) {
 
 function ActivityRow(props: { event: ActivityEvent }) {
   return (
-    <li class="activity-row">
-      <div class="activity-row-head">
-        <code class="activity-action">{props.event.action}</code>
-        <span class="muted activity-target">
+    <li class="wa-activity-row">
+      <div class="wa-activity-head">
+        <code class="wa-activity-action">{props.event.action}</code>
+        <span class="wa-activity-target">
           {props.event.targetType} · {props.event.targetId}
         </span>
       </div>
-      <div class="activity-row-meta muted">
+      <div class="wa-activity-rowmeta">
         <Show when={props.event.actorId}>
           <span>{props.event.actorId}</span>
           <span>·</span>
@@ -74,45 +80,58 @@ function Inner() {
 
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>アクティビティ</h1>
-        <p class="page-sub">Space の監査証跡（最近の操作）です。</p>
-      </div>
+      <PageHeader
+        eyebrow="Activity"
+        title="アクティビティ"
+        subtitle="Space の監査証跡（最近の操作）です。"
+      />
 
       <SpaceSelector />
 
       <Show
         when={spaceId()}
         fallback={
-          <section class="empty-state">
-            <p>Space を選択するとアクティビティを表示します。</p>
-          </section>
+          <EmptyState
+            ink
+            icon={<ScrollText size={28} />}
+            title="Space を選択してください"
+            message="Space を選択するとアクティビティを表示します。"
+          />
         }
       >
         <Switch>
           <Match when={events.loading}>
-            <div class="grid-skel"><div class="skel-block" /></div>
+            <Card>
+              <Skeleton variant="row" count={5} />
+            </Card>
           </Match>
           <Match when={events.error}>
-            <section class="empty-state error-state">
-              <p>取得に失敗しました — {(events.error as ControlApiError).message}</p>
-            </section>
+            <EmptyState
+              icon={<ScrollText size={28} />}
+              title="取得に失敗しました"
+              message={(events.error as ControlApiError).message}
+            />
           </Match>
           <Match when={events()}>
             {(list) => (
               <Show
                 when={list().length > 0}
                 fallback={
-                  <section class="empty-state">
-                    <p>まだアクティビティがありません。</p>
-                  </section>
+                  <EmptyState
+                    ink
+                    icon={<ScrollText size={28} />}
+                    title="まだアクティビティがありません"
+                    message="この Space で操作が行われると、ここに記録されます。"
+                  />
                 }
               >
-                <ul class="activity-list">
-                  <For each={list()}>
-                    {(event) => <ActivityRow event={event} />}
-                  </For>
-                </ul>
+                <Card>
+                  <ul class="wa-activity">
+                    <For each={list()}>
+                      {(event) => <ActivityRow event={event} />}
+                    </For>
+                  </ul>
+                </Card>
               </Show>
             )}
           </Match>

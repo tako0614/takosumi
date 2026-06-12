@@ -33,6 +33,7 @@
  * Both shapes drive the identical createInstallation / plan flow, compatibility
  * check, and InstallConfig resolution; only copy and disclosure differ.
  */
+import "../../styles/wave-b.css";
 import {
   createMemo,
   createResource,
@@ -42,6 +43,7 @@ import {
   Show,
 } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
+import { Download } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
@@ -65,6 +67,18 @@ import {
   syncSource,
   waitForLatestSourceSnapshot,
 } from "../../lib/control-api.ts";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  CardSection,
+  EmptyState,
+  FormField,
+  Input,
+  PageHeader,
+  type Tone,
+} from "../../components/ui/index.ts";
 
 /**
  * Reads `git` / `ref` / `path` from the path-route search OR the M9 hash link.
@@ -123,6 +137,20 @@ function findModulePathMarker(value: string): number {
 }
 
 type StepState = "idle" | "running" | "done" | "error";
+
+/** Plain-Japanese tone for each compatibility level. */
+function compatibilityTone(level: CapsuleCompatibilityLevel): Tone {
+  switch (level) {
+    case "ready":
+    case "auto_capsulized":
+      return "ok";
+    case "needs_patch":
+      return "warn";
+    case "unsupported":
+      return "danger";
+  }
+}
+
 export default function InstallFromGitView() {
   return <Page title="Git から導入">{() => <Inner />}</Page>;
 }
@@ -409,295 +437,273 @@ function Inner() {
 
   const stepIcon = (s: StepState): string =>
     s === "done" ? "✓" : s === "error" ? "✕" : s === "running" ? "…" : "·";
+  const stepClass = (s: StepState): string =>
+    s === "running"
+      ? "is-active"
+      : s === "done"
+      ? "is-done"
+      : s === "error"
+      ? "is-error"
+      : "";
+
+  const gitFields = () => (
+    <>
+      <FormField label="Git URL">
+        <Input
+          type="text"
+          value={gitUrl()}
+          onInput={(e) => {
+            setGitUrl(e.currentTarget.value);
+            resetCompatibility();
+          }}
+          placeholder="https://github.com/owner/repo.git"
+          autocomplete="off"
+          spellcheck={false}
+        />
+      </FormField>
+
+      <div class="wb-form-row">
+        <FormField label="Ref">
+          <Input
+            type="text"
+            value={ref()}
+            onInput={(e) => {
+              setRef(e.currentTarget.value);
+              resetCompatibility();
+            }}
+            placeholder="main"
+            autocomplete="off"
+            spellcheck={false}
+          />
+        </FormField>
+        <FormField label="Path（モジュールパス）">
+          <Input
+            type="text"
+            value={path()}
+            onInput={(e) => {
+              setPath(e.currentTarget.value);
+              resetCompatibility();
+            }}
+            placeholder="."
+            autocomplete="off"
+            spellcheck={false}
+          />
+        </FormField>
+      </div>
+    </>
+  );
 
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>{cameFromDeepLink ? "アプリを入れる" : "Git から入れる"}</h1>
-        <p class="page-sub">
-          {cameFromDeepLink
+      <PageHeader
+        eyebrow="CONTROL"
+        title={cameFromDeepLink ? "アプリを入れる" : "Git から入れる"}
+        subtitle={
+          cameFromDeepLink
             ? "リンクから飛んできたアプリを、あなたの Space に入れます。中身を確認してから進めます。"
-            : "Git URL を入力してアプリの中身を確認し、問題なければあなたの Space に入れます。"}
-        </p>
-        <div class="page-actions">
-          <a href="/installations" class="btn btn-secondary">
+            : "Git URL を入力してアプリの中身を確認し、問題なければあなたの Space に入れます。"
+        }
+        actions={
+          <Button variant="secondary" href="/installations">
             一覧へ
-          </a>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
       <SpaceSelector />
 
       <Show
         when={spaceId()}
         fallback={
-          <section class="empty-state">
-            <p>導入先の Space を選択してください。</p>
-          </section>
+          <EmptyState
+            ink
+            icon={<Download size={28} />}
+            title="Space を選択"
+            message="導入先の Space を選択してください。"
+          />
         }
       >
-        <section class="detail-section">
-          <h2>{cameFromDeepLink ? "入れるアプリ" : "OpenTofu Capsule"}</h2>
-          {/* Default path is managed: the operator's cloud covers the apply, so
-              a beginner can install with no setup. We only warn about needing a
-              credential when the managed default is unavailable AND the Space
-              has brought no connection of its own. The "bring your own cloud"
-              link below is a quiet opt-in, never shown as required. */}
-          <Show when={managedAvailable() && !hasSpaceConnection()}>
-            <p class="muted" role="note">
-              このまま、運営のクラウド（managed）で入れられます。クラウドの接続を
-              自分で用意する必要はありません。
-            </p>
-          </Show>
-          <Show when={needsCloudCredential()}>
-            <p class="muted" role="note">
-              適用には Cloudflare や AWS などクラウドの接続が必要です。まだ接続が
-              ないようです。{" "}
-              <A href="/connections" class="link">
-                先にクラウドに接続する
-              </A>
-              （接続のページが開きます）。
-            </p>
-          </Show>
-          <details class="connection-advanced">
-            <summary>自分のクラウドに出したい場合（任意）</summary>
-            <p class="muted">
-              既定では運営のクラウド（managed）で入りますが、自分の Cloudflare や
-              AWS など自分のクラウドに出したい場合は、Space に接続を設定できます。{" "}
-              <A href="/connections" class="link">
-                自分のクラウドの接続を設定する
-              </A>
-              （接続のページが開きます）。設定しなくても、このまま入れられます。
-            </p>
-          </details>
-          <form
-            class="install-form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (canContinue()) void runFlow();
-              else void runCompatibilityCheck();
-            }}
-          >
-            <Show
-              when={cameFromDeepLink}
-              fallback={
-                <>
-                  <label class="form-field">
-                    Git URL
-                    <input
-                      type="text"
-                      value={gitUrl()}
-                      onInput={(e) => {
-                        setGitUrl(e.currentTarget.value);
-                        resetCompatibility();
-                      }}
-                      placeholder="https://github.com/owner/repo.git"
-                      autocomplete="off"
-                      spellcheck={false}
-                    />
-                  </label>
-
-                  <div class="install-form-row">
-                    <label class="form-field">
-                      Ref
-                      <input
-                        type="text"
-                        value={ref()}
-                        onInput={(e) => {
-                          setRef(e.currentTarget.value);
-                          resetCompatibility();
-                        }}
-                        placeholder="main"
-                        autocomplete="off"
-                        spellcheck={false}
-                      />
-                    </label>
-                    <label class="form-field">
-                      Path（モジュールパス）
-                      <input
-                        type="text"
-                        value={path()}
-                        onInput={(e) => {
-                          setPath(e.currentTarget.value);
-                          resetCompatibility();
-                        }}
-                        placeholder="."
-                        autocomplete="off"
-                        spellcheck={false}
-                      />
-                    </label>
-                  </div>
-                </>
-              }
-            >
-              {/* Deep-link landing: lead with a plain summary, then fold the
-                  raw Git URL / Ref / Path into a 詳細 disclosure so a power user
-                  can still edit them. Editing keeps the same setters, so the
-                  createInstallation / plan path is unchanged. */}
-              <div class="compatibility-result">
-                <p>
-                  <strong>{capsuleDisplayName()}</strong> を{" "}
-                  <strong>{spaceHandle()}</strong> に入れます。
-                </p>
-                <p class="muted">{gitUrl()}</p>
-              </div>
-
-              <details class="connection-advanced">
-                <summary>詳細（取得元の編集・上級者向け）</summary>
-                <label class="form-field">
-                  Git URL
-                  <input
-                    type="text"
-                    value={gitUrl()}
-                    onInput={(e) => {
-                      setGitUrl(e.currentTarget.value);
-                      resetCompatibility();
-                    }}
-                    placeholder="https://github.com/owner/repo.git"
-                    autocomplete="off"
-                    spellcheck={false}
-                  />
-                </label>
-
-                <div class="install-form-row">
-                  <label class="form-field">
-                    Ref
-                    <input
-                      type="text"
-                      value={ref()}
-                      onInput={(e) => {
-                        setRef(e.currentTarget.value);
-                        resetCompatibility();
-                      }}
-                      placeholder="main"
-                      autocomplete="off"
-                      spellcheck={false}
-                    />
-                  </label>
-                  <label class="form-field">
-                    Path（モジュールパス）
-                    <input
-                      type="text"
-                      value={path()}
-                      onInput={(e) => {
-                        setPath(e.currentTarget.value);
-                        resetCompatibility();
-                      }}
-                      placeholder="."
-                      autocomplete="off"
-                      spellcheck={false}
-                    />
-                  </label>
-                </div>
-              </details>
-            </Show>
-
-            <label class="form-field">
-              {cameFromDeepLink ? "この導入の名前" : "Installation 名"}
-              <input
-                type="text"
-                value={name()}
-                onInput={(e) => {
-                  setName(e.currentTarget.value);
-                  resetCompatibility();
-                }}
-                placeholder="talk"
-                autocomplete="off"
-                spellcheck={false}
-              />
-            </label>
-
-            <Show when={!configs.loading && configList().length === 0}>
-              <p class="sign-in-error" role="alert">
-                OpenTofu Capsule profile が利用できません。
+        <Card>
+          <CardHeader
+            title={cameFromDeepLink ? "入れるアプリ" : "OpenTofu Capsule"}
+          />
+          <CardSection>
+            {/* Default path is managed: the operator's cloud covers the apply,
+                so a beginner can install with no setup. We only warn about
+                needing a credential when the managed default is unavailable AND
+                the Space has brought no connection of its own. The "bring your
+                own cloud" link below is a quiet opt-in, never shown as required. */}
+            <Show when={managedAvailable() && !hasSpaceConnection()}>
+              <p class="wb-note" role="note">
+                このまま、運営のクラウド（managed）で入れられます。クラウドの接続を
+                自分で用意する必要はありません。
               </p>
             </Show>
-
-            <Show when={compatibility()}>
-              {(result) => (
-                <section class="compatibility-result">
-                  <div class="compatibility-result-head">
-                    <h3>{cameFromDeepLink ? "入れられるか" : "Compatibility result"}</h3>
-                    <span
-                      class={`status-pill compatibility-${result().level.replaceAll("_", "-")}`}
-                    >
-                      {compatibilityLabel(result().level)}
-                    </span>
-                  </div>
-                  <p>{result().summary}</p>
-                  <Show when={result().diagnostics.length > 0}>
-                    <ul class="compatibility-diagnostics">
-                      <For each={result().diagnostics}>
-                        {(diagnostic) => (
-                          <li class={`compatibility-${diagnostic.severity}`}>
-                            {diagnostic.message}
-                            <Show when={diagnostic.detail}>
-                              {(detail) => (
-                                <span class="muted"> — {detail()}</span>
-                              )}
-                            </Show>
-                          </li>
-                        )}
-                      </For>
-                    </ul>
-                  </Show>
-                </section>
-              )}
+            <Show when={needsCloudCredential()}>
+              <p class="wb-note" role="note">
+                適用には Cloudflare や AWS などクラウドの接続が必要です。まだ接続が
+                ないようです。{" "}
+                <A href="/connections" class="link">
+                  先にクラウドに接続する
+                </A>
+                （接続のページが開きます）。
+              </p>
             </Show>
+            <details class="wb-disclosure">
+              <summary>自分のクラウドに出したい場合（任意）</summary>
+              <p class="wb-note">
+                既定では運営のクラウド（managed）で入りますが、自分の Cloudflare や
+                AWS など自分のクラウドに出したい場合は、Space に接続を設定できます。{" "}
+                <A href="/connections" class="link">
+                  自分のクラウドの接続を設定する
+                </A>
+                （接続のページが開きます）。設定しなくても、このまま入れられます。
+              </p>
+            </details>
 
-            <div class="form-actions">
-              <button
-                class="btn btn-secondary"
-                type="button"
-                disabled={checkingCompatibility() || busy()}
-                onClick={() => void runCompatibilityCheck()}
-              >
-                {checkingCompatibility() ? "確認中..." : "中身を確認"}
-              </button>
-              <button
-                class="btn btn-primary"
-                type="submit"
-                disabled={busy() || !canContinue()}
-              >
-                {busy() ? "準備中..." : "確認して入れる"}
-              </button>
-              <Show when={syncRequired() && !busy()}>
-                <button
-                  class="btn btn-secondary"
-                  type="button"
-                  onClick={() => void runFlow()}
-                >
-                  再試行
-                </button>
+            <form
+              class="wb-install-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (canContinue()) void runFlow();
+                else void runCompatibilityCheck();
+              }}
+            >
+              <Show when={cameFromDeepLink} fallback={gitFields()}>
+                {/* Deep-link landing: lead with a plain summary, then fold the
+                    raw Git URL / Ref / Path into a 詳細 disclosure so a power
+                    user can still edit them. Editing keeps the same setters, so
+                    the createInstallation / plan path is unchanged. */}
+                <Card>
+                  <CardSection>
+                    <p class="wb-summary-line">
+                      <strong>{capsuleDisplayName()}</strong> を{" "}
+                      <strong>{spaceHandle()}</strong> に入れます。
+                    </p>
+                    <p class="wb-note">{gitUrl()}</p>
+                  </CardSection>
+                </Card>
+
+                <details class="wb-disclosure">
+                  <summary>詳細（取得元の編集・上級者向け）</summary>
+                  {gitFields()}
+                </details>
               </Show>
-            </div>
 
-            <Show when={error()}>
-              {(m) => <p class="sign-in-error">{m()}</p>}
+              <FormField
+                label={cameFromDeepLink ? "この導入の名前" : "Installation 名"}
+              >
+                <Input
+                  type="text"
+                  value={name()}
+                  onInput={(e) => {
+                    setName(e.currentTarget.value);
+                    resetCompatibility();
+                  }}
+                  placeholder="talk"
+                  autocomplete="off"
+                  spellcheck={false}
+                />
+              </FormField>
+
+              <Show when={!configs.loading && configList().length === 0}>
+                <p class="wb-error" role="alert">
+                  OpenTofu Capsule profile が利用できません。
+                </p>
+              </Show>
+
+              <Show when={compatibility()}>
+                {(result) => (
+                  <Card>
+                    <CardSection>
+                      <div class="wb-compat-head">
+                        <h3 class="tg-card-title">
+                          {cameFromDeepLink ? "入れられるか" : "Compatibility result"}
+                        </h3>
+                        <Badge tone={compatibilityTone(result().level)}>
+                          {compatibilityLabel(result().level)}
+                        </Badge>
+                      </div>
+                      <p class="wb-compat-summary">{result().summary}</p>
+                      <Show when={result().diagnostics.length > 0}>
+                        <ul class="wb-diagnostics">
+                          <For each={result().diagnostics}>
+                            {(diagnostic) => (
+                              <li
+                                class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
+                              >
+                                {diagnostic.message}
+                                <Show when={diagnostic.detail}>
+                                  {(detail) => (
+                                    <span class="muted"> — {detail()}</span>
+                                  )}
+                                </Show>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                      </Show>
+                    </CardSection>
+                  </Card>
+                )}
+              </Show>
+
+              <div class="wb-form-actions">
+                <Button
+                  variant="secondary"
+                  type="button"
+                  busy={checkingCompatibility()}
+                  disabled={checkingCompatibility() || busy()}
+                  onClick={() => void runCompatibilityCheck()}
+                >
+                  中身を確認
+                </Button>
+                <Button
+                  variant="primary"
+                  type="submit"
+                  busy={busy()}
+                  disabled={busy() || !canContinue()}
+                >
+                  確認して入れる
+                </Button>
+                <Show when={syncRequired() && !busy()}>
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    onClick={() => void runFlow()}
+                  >
+                    再試行
+                  </Button>
+                </Show>
+              </div>
+
+              <Show when={error()}>
+                {(m) => <p class="wb-error" role="alert">{m()}</p>}
+              </Show>
+            </form>
+
+            <Show when={stepSource() !== "idle"} fallback={null}>
+              <ol class="wb-steps">
+                <li class={`wb-step ${stepClass(stepSource())}`}>
+                  <span class="wb-step-icon">{stepIcon(stepSource())}</span>
+                  Source を登録
+                </li>
+                <li class={`wb-step ${stepClass(stepSync())}`}>
+                  <span class="wb-step-icon">{stepIcon(stepSync())}</span>
+                  Source を同期
+                </li>
+                <li class={`wb-step ${stepClass(stepInstall())}`}>
+                  <span class="wb-step-icon">{stepIcon(stepInstall())}</span>
+                  OpenTofu Capsule Installation を作成
+                </li>
+                <li class={`wb-step ${stepClass(stepPlan())}`}>
+                  <span class="wb-step-icon">{stepIcon(stepPlan())}</span>
+                  Plan を実行
+                </li>
+              </ol>
             </Show>
-          </form>
-
-          <Show when={stepSource() !== "idle"} fallback={null}>
-            <ol class="install-steps">
-              <li classList={{ active: stepSource() === "running" }}>
-                <span class="install-step-icon">{stepIcon(stepSource())}</span>
-                Source を登録
-              </li>
-              <li classList={{ active: stepSync() === "running" }}>
-                <span class="install-step-icon">{stepIcon(stepSync())}</span>
-                Source を同期
-              </li>
-              <li classList={{ active: stepInstall() === "running" }}>
-                <span class="install-step-icon">{stepIcon(stepInstall())}</span>
-                OpenTofu Capsule Installation を作成
-              </li>
-              <li classList={{ active: stepPlan() === "running" }}>
-                <span class="install-step-icon">{stepIcon(stepPlan())}</span>
-                Plan を実行
-              </li>
-            </ol>
-          </Show>
-        </section>
+          </CardSection>
+        </Card>
       </Show>
     </AppShell>
   );

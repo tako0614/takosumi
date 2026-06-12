@@ -1,3 +1,4 @@
+import "../../styles/wave-d.css";
 import {
   createMemo,
   createResource,
@@ -7,10 +8,19 @@ import {
   Show,
   Switch,
 } from "solid-js";
+import { Box } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import AppCard from "../account/components/AppCard.tsx";
 import { ApiError, rpc } from "../account/lib/api.ts";
+import {
+  Button,
+  EmptyState,
+  FormField,
+  Input,
+  PageHeader,
+  Skeleton,
+} from "../../components/ui/index.ts";
 
 // localStorage key preserved from the takosumi dashboard-ui port so a
 // previously-selected space survives the migration into the takos SPA.
@@ -54,69 +64,75 @@ function InstallationsListInner() {
 
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>アプリ</h1>
-        <p class="page-sub">Space ごとの導入済みアプリを確認します。</p>
-        <div class="page-actions">
-          <a href="/install" class="btn btn-primary">
+      <PageHeader
+        eyebrow="Installations"
+        title="アプリ"
+        subtitle="Space ごとの導入済みアプリを確認します。"
+        actions={
+          <Button href="/install" variant="primary">
             + アプリを追加
-          </a>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
-      <section class="space-picker">
-        <form onSubmit={applySpace}>
-          <label>
-            Space ID
-            <input
-              type="text"
-              value={draft()}
-              onInput={(e) => setDraft(e.currentTarget.value)}
-              placeholder="space_xxxxxx"
-              autocomplete="off"
-            />
-          </label>
-          <button class="btn btn-secondary" type="submit">
-            表示
-          </button>
-        </form>
-      </section>
+      <form class="wave-d-picker" onSubmit={applySpace}>
+        <FormField label="Space ID">
+          <Input
+            type="text"
+            value={draft()}
+            onInput={(e) => setDraft(e.currentTarget.value)}
+            placeholder="space_xxxxxx"
+            autocomplete="off"
+          />
+        </FormField>
+        <Button type="submit" variant="secondary">
+          表示
+        </Button>
+      </form>
 
       <Show
         when={hasSpace()}
         fallback={
-          <section class="empty-state">
-            <p>space を指定するとアプリ一覧を表示します。</p>
-          </section>
+          <EmptyState
+            ink
+            icon={<Box size={28} />}
+            title="Space を選択してください"
+            message="Space を指定するとアプリ一覧を表示します。"
+          />
         }
       >
         <Switch>
           <Match when={apps.loading}>
-            <div class="grid-skel">
-              <div class="skel-card" />
-              <div class="skel-card" />
-              <div class="skel-card" />
+            <div class="wave-d-apps-grid">
+              <Skeleton variant="card" count={3} />
             </div>
           </Match>
           <Match when={apps.error}>
-            <section class="empty-state error-state">
-              <p>取得に失敗しました — {(apps.error as ApiError).message}</p>
-            </section>
+            <EmptyState
+              icon={<Box size={28} />}
+              title="取得に失敗しました"
+              message={(apps.error as ApiError).message}
+            />
           </Match>
           <Match when={apps()}>
             {(list) => (
               <Show
                 when={list().length > 0}
                 fallback={
-                  <section class="empty-state">
-                    <p>この space にはまだアプリがありません。</p>
-                    <a href="/install" class="btn btn-primary">
-                      最初のアプリを追加 →
-                    </a>
-                  </section>
+                  <EmptyState
+                    ink
+                    icon={<Box size={28} />}
+                    title="まだアプリがありません"
+                    message="この Space にはまだアプリがありません。"
+                    action={
+                      <Button href="/install" variant="primary">
+                        最初のアプリを追加 →
+                      </Button>
+                    }
+                  />
                 }
               >
-                <div class="apps-grid">
+                <div class="wave-d-apps-grid">
                   <For each={list()}>{(a) => <AppCard app={a} />}</For>
                 </div>
               </Show>

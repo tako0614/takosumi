@@ -1,15 +1,15 @@
+import "../../styles/wave-b.css";
 import {
   createMemo,
   createResource,
-  For,
   Match,
   Show,
   Switch,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
+import { GitBranch, RefreshCw } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import StatusPill from "../account/components/StatusPill.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
 import { currentSpaceId } from "./space-state.ts";
 import {
@@ -17,12 +17,27 @@ import {
   extractRunId,
   listConnections,
   listSources,
+  type Source,
   syncSource,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
+import {
+  Badge,
+  Button,
+  type Column,
+  DataTable,
+  EmptyState,
+  PageHeader,
+} from "../../components/ui/index.ts";
 
 export default function ControlSourcesView() {
   return <Page title="Sources">{() => <Inner />}</Page>;
+}
+
+function sourceTone(status: string): "ok" | "danger" | "muted" {
+  if (status === "active") return "ok";
+  if (status === "error") return "danger";
+  return "muted";
 }
 
 function Inner() {
@@ -46,130 +61,140 @@ function Inner() {
     if (runId) navigate(`/runs/${runId}`);
   });
 
+  const columns: readonly Column<Source>[] = [
+    {
+      header: "名前",
+      cell: (source) => (
+        <>
+          <strong>{source.name}</strong>
+          <div class="wb-subline">
+            <code>{source.id}</code>
+          </div>
+        </>
+      ),
+    },
+    {
+      header: "Git",
+      cell: (source) => <code class="wb-url">{source.url}</code>,
+    },
+    {
+      header: "Ref / Path",
+      cell: (source) => (
+        <span class="wb-mono">
+          <code>{source.defaultRef}</code>
+          <span class="muted"> / </span>
+          <code>{source.defaultPath}</code>
+        </span>
+      ),
+    },
+    {
+      header: "Auth",
+      cell: (source) => (
+        <Show
+          when={source.authConnectionId}
+          fallback={<span class="muted">none</span>}
+        >
+          {(id) => (
+            <span>
+              {connectionName().get(id()) ?? id()}
+              <div class="wb-subline">
+                <code>{id()}</code>
+              </div>
+            </span>
+          )}
+        </Show>
+      ),
+    },
+    {
+      header: "状態",
+      cell: (source) => (
+        <Badge tone={sourceTone(source.status)}>{source.status}</Badge>
+      ),
+    },
+    {
+      header: "",
+      align: "right",
+      cell: (source) => (
+        <div class="wb-row-actions">
+          <Button
+            size="sm"
+            busy={sync.busy()}
+            disabled={sync.busy()}
+            onClick={() => void sync.run(source.id)}
+          >
+            同期
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>Sources</h1>
-        <p class="page-sub">
-          Space に登録された Git Source と、SourceSnapshot 同期を管理します。
-        </p>
-        <div class="page-actions">
-          <a href="/install" class="btn btn-primary">+ Git から導入</a>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="CONTROL"
+        title="Sources"
+        subtitle="Space に登録された Git Source と、SourceSnapshot 同期を管理します。"
+        actions={
+          <Button variant="primary" href="/install" icon={<GitBranch size={16} />}>
+            Git から導入
+          </Button>
+        }
+      />
 
       <SpaceSelector />
 
       <Show
         when={spaceId()}
         fallback={
-          <section class="empty-state">
-            <p>Space を選択すると Source 一覧を表示します。</p>
-          </section>
+          <EmptyState
+            ink
+            icon={<GitBranch size={28} />}
+            title="Space を選択"
+            message="Space を選択すると Source 一覧を表示します。"
+          />
         }
       >
-        <Show when={sync.error()}>
-          {(m) => <p class="sign-in-error">{m()}</p>}
-        </Show>
-        <Switch>
-          <Match when={sources.loading}>
-            <div class="grid-skel">
-              <div class="skel-card" />
-              <div class="skel-card" />
-            </div>
-          </Match>
-          <Match when={sources.error}>
-            <section class="empty-state error-state">
-              <p>取得に失敗しました — {(sources.error as ControlApiError).message}</p>
-            </section>
-          </Match>
-          <Match when={sources()}>
-            {(list) => (
+        <div class="wb-stack">
+          <Show when={sync.error()}>
+            {(m) => <p class="wb-error" role="alert">{m()}</p>}
+          </Show>
+          <Switch>
+            <Match when={sources.error}>
+              <EmptyState
+                icon={<RefreshCw size={28} />}
+                title="取得に失敗しました"
+                message={(sources.error as ControlApiError).message}
+              />
+            </Match>
+            <Match when={!sources.error}>
               <Show
-                when={list().length > 0}
+                when={sources.loading || (sources()?.length ?? 0) > 0}
                 fallback={
-                  <section class="empty-state">
-                    <p>この Space にはまだ Source がありません。</p>
-                    <a href="/install" class="btn btn-primary">
-                      Git から導入
-                    </a>
-                  </section>
+                  <EmptyState
+                    ink
+                    icon={<GitBranch size={28} />}
+                    title="まだ Source がありません"
+                    message="この Space にはまだ Source がありません。"
+                    action={
+                      <Button variant="primary" href="/install">
+                        Git から導入
+                      </Button>
+                    }
+                  />
                 }
               >
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th>名前</th>
-                      <th>Git</th>
-                      <th>Ref / Path</th>
-                      <th>Auth</th>
-                      <th>状態</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <For each={list()}>
-                      {(source) => (
-                        <tr>
-                          <td>
-                            <strong>{source.name}</strong>
-                            <div class="muted installation-type">
-                              <code>{source.id}</code>
-                            </div>
-                          </td>
-                          <td class="source-url-cell">
-                            <code>{source.url}</code>
-                          </td>
-                          <td>
-                            <code>{source.defaultRef}</code>
-                            <span class="muted"> / </span>
-                            <code>{source.defaultPath}</code>
-                          </td>
-                          <td>
-                            <Show
-                              when={source.authConnectionId}
-                              fallback={<span class="muted">none</span>}
-                            >
-                              {(id) => (
-                                <span>
-                                  {connectionName().get(id()) ?? id()}
-                                  <div class="muted installation-type">
-                                    <code>{id()}</code>
-                                  </div>
-                                </span>
-                              )}
-                            </Show>
-                          </td>
-                          <td>
-                            <StatusPill
-                              class={source.status === "active"
-                                ? "status-ready"
-                                : source.status === "error"
-                                ? "status-error"
-                                : "status-suspended"}
-                            >
-                              {source.status}
-                            </StatusPill>
-                          </td>
-                          <td class="installation-row-actions">
-                            <button
-                              class="btn btn-secondary btn-sm"
-                              type="button"
-                              disabled={sync.busy()}
-                              onClick={() => void sync.run(source.id)}
-                            >
-                              同期
-                            </button>
-                          </td>
-                        </tr>
-                      )}
-                    </For>
-                  </tbody>
-                </table>
+                <DataTable
+                  columns={columns}
+                  rows={sources()}
+                  rowKey={(source) => source.id}
+                  loading={sources.loading}
+                  skeletonRows={4}
+                />
               </Show>
-            )}
-          </Match>
-        </Switch>
+            </Match>
+          </Switch>
+        </div>
       </Show>
     </AppShell>
   );

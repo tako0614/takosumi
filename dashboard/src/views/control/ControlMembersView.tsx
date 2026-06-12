@@ -18,7 +18,9 @@
  * email-invite or notification side-channel, so 招待 here adds an EXISTING
  * account handle / subject directly as an active member.
  */
+import "../../styles/wave-b.css";
 import {
+  createMemo,
   createResource,
   createSignal,
   For,
@@ -26,7 +28,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { ShieldCheck, Trash2, UserPlus } from "lucide-solid";
+import { ShieldCheck, Trash2, UserPlus, Users } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import SpaceSelector from "./SpaceSelector.tsx";
@@ -42,6 +44,20 @@ import {
 } from "../../lib/control-api.ts";
 import type { SessionRecord } from "../account/lib/session.ts";
 import { createAction } from "../account/lib/action.tsx";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  CardSection,
+  type Column,
+  DataTable,
+  EmptyState,
+  FormField,
+  Input,
+  PageHeader,
+  Select,
+} from "../../components/ui/index.ts";
 
 /** 平易日本語の役割ラベル (owner/admin/member/viewer)。 */
 const ROLE_LABEL: Record<ControlSpaceRole, string> = {
@@ -63,6 +79,12 @@ const STATUS_LABEL: Record<PublicSpaceMember["status"], string> = {
   invited: "招待中",
   suspended: "削除済み",
 };
+
+function statusTone(status: PublicSpaceMember["status"]): "ok" | "info" | "muted" {
+  if (status === "active") return "ok";
+  if (status === "invited") return "info";
+  return "muted";
+}
 
 function rolesLabel(roles: readonly ControlSpaceRole[]): string {
   if (roles.length === 0) return "—";
@@ -150,208 +172,215 @@ function Inner(props: { readonly session: SessionRecord }) {
     member.roles.includes("owner") &&
     activeOwnerCount() <= 1;
 
+  const columns = createMemo<readonly Column<PublicSpaceMember>[]>(() => {
+    const base: Column<PublicSpaceMember>[] = [
+      {
+        header: "メンバー",
+        cell: (member) => (
+          <>
+            <code class="wb-mono">{member.accountId}</code>
+            <Show when={member.accountId === callerSubject()}>
+              <Badge tone="info" class="wb-you-tag">あなた</Badge>
+            </Show>
+          </>
+        ),
+      },
+      {
+        header: "役割",
+        cell: (member) => rolesLabel(member.roles),
+      },
+      {
+        header: "状態",
+        cell: (member) => (
+          <Badge tone={statusTone(member.status)}>
+            {STATUS_LABEL[member.status]}
+          </Badge>
+        ),
+      },
+    ];
+    if (canManage()) {
+      base.push({
+        header: "操作",
+        align: "right",
+        // The 操作 column (役割変更・削除) is owner-only; the inner gate mirrors
+        // the column-level <Show when={canManage()}> for an extra fail-closed
+        // backstop in the access-control-sensitive membership surface.
+        cell: (member) => (
+          <Show when={canManage()} fallback={<span class="muted">—</span>}>
+            <Show
+              when={member.status === "active"}
+              fallback={<span class="muted">—</span>}
+            >
+              <div class="wb-members-actions">
+              <label class="wb-role-select">
+                <ShieldCheck size={14} />
+                <Select
+                  disabled={changeRole.busy() || isLastOwner(member)}
+                  value={member.roles[0] ?? "member"}
+                  onChange={(e) =>
+                    void changeRole.run(
+                      member,
+                      e.currentTarget.value as ControlSpaceRole,
+                    )}
+                  title={
+                    isLastOwner(member)
+                      ? "最後のオーナーは降格できません。先に別のオーナーを指名してください。"
+                      : "役割を変更"
+                  }
+                >
+                  <For each={ROLE_ORDER}>
+                    {(role) => <option value={role}>{ROLE_LABEL[role]}</option>}
+                  </For>
+                </Select>
+              </label>
+              <Button
+                variant="danger"
+                size="sm"
+                icon={<Trash2 size={14} />}
+                disabled={remove.busy() || isLastOwner(member)}
+                title={
+                  isLastOwner(member)
+                    ? "最後のオーナーは削除できません。先に別のオーナーを指名してください。"
+                    : "メンバーを削除"
+                }
+                onClick={() => void remove.run(member)}
+              >
+                削除
+              </Button>
+              </div>
+            </Show>
+          </Show>
+        ),
+      });
+    }
+    return base;
+  });
+
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>メンバー</h1>
-        <p class="page-sub">
-          この Space のメンバーと役割を管理します。招待・役割の変更・削除は
-          オーナーまたは管理者のみ行えます。
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="CONTROL"
+        title="メンバー"
+        subtitle="この Space のメンバーと役割を管理します。招待・役割の変更・削除はオーナーまたは管理者のみ行えます。"
+      />
 
       <SpaceSelector />
 
       <Show
         when={spaceId()}
         fallback={
-          <section class="empty-state">
-            <p>Space を選択するとメンバー一覧を表示します。</p>
-          </section>
+          <EmptyState
+            ink
+            icon={<Users size={28} />}
+            title="Space を選択"
+            message="Space を選択するとメンバー一覧を表示します。"
+          />
         }
       >
-        {/* 招待フォーム — owner/admin のみ表示。 */}
-        <Show when={canInvite()}>
-          <section class="card member-invite">
-            <h2>メンバーを招待</h2>
-            <p class="muted">
-              既存のアカウントのハンドル（@なし）またはアカウント ID を入力すると、
-              この Space のメンバーとして追加します。メール招待は未対応です。
-            </p>
-            <form
-              class="member-invite-form"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void invite.run();
-              }}
-            >
-              <label class="form-field">
-                ハンドル / アカウント ID
-                <input
-                  type="text"
-                  value={inviteAccount()}
-                  onInput={(e) => setInviteAccount(e.currentTarget.value)}
-                  placeholder="alice"
-                  autocomplete="off"
-                  spellcheck={false}
-                />
-              </label>
-              <label class="form-field">
-                役割
-                <select
-                  value={inviteRole()}
-                  onChange={(e) =>
-                    setInviteRole(e.currentTarget.value as ControlSpaceRole)
-                  }
+        <div class="wb-stack">
+          {/* 招待フォーム — owner/admin のみ表示。 */}
+          <Show when={canInvite()}>
+            <Card>
+              <CardHeader
+                title="メンバーを招待"
+                subtitle="既存のアカウントのハンドル（@なし）またはアカウント ID を入力すると、この Space のメンバーとして追加します。メール招待は未対応です。"
+              />
+              <CardSection>
+                <form
+                  class="wb-invite-form"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void invite.run();
+                  }}
                 >
-                  <For each={ROLE_ORDER}>
-                    {(role) => (
-                      // owner ロールの付与は owner のみ。admin は選べない。
-                      <Show when={role !== "owner" || callerIsOwner()}>
-                        <option value={role}>{ROLE_LABEL[role]}</option>
-                      </Show>
-                    )}
-                  </For>
-                </select>
-              </label>
-              <button
-                class="btn btn-primary"
-                type="submit"
-                disabled={invite.busy()}
-              >
-                <UserPlus size={16} />
-                招待
-              </button>
-            </form>
-            <Show when={invite.error()}>
-              {(m) => <p class="sign-in-error">{m()}</p>}
-            </Show>
-          </section>
-        </Show>
+                  <FormField label="ハンドル / アカウント ID">
+                    <Input
+                      type="text"
+                      value={inviteAccount()}
+                      onInput={(e) => setInviteAccount(e.currentTarget.value)}
+                      placeholder="alice"
+                      autocomplete="off"
+                      spellcheck={false}
+                    />
+                  </FormField>
+                  <FormField label="役割">
+                    <Select
+                      value={inviteRole()}
+                      onChange={(e) =>
+                        setInviteRole(e.currentTarget.value as ControlSpaceRole)}
+                    >
+                      <For each={ROLE_ORDER}>
+                        {(role) => (
+                          // owner ロールの付与は owner のみ。admin は選べない。
+                          <Show when={role !== "owner" || callerIsOwner()}>
+                            <option value={role}>{ROLE_LABEL[role]}</option>
+                          </Show>
+                        )}
+                      </For>
+                    </Select>
+                  </FormField>
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    icon={<UserPlus size={16} />}
+                    busy={invite.busy()}
+                    disabled={invite.busy()}
+                  >
+                    招待
+                  </Button>
+                </form>
+                <Show when={invite.error()}>
+                  {(m) => <p class="wb-error" role="alert">{m()}</p>}
+                </Show>
+              </CardSection>
+            </Card>
+          </Show>
 
-        <Show when={changeRole.error()}>
-          {(m) => <p class="sign-in-error">{m()}</p>}
-        </Show>
-        <Show when={remove.error()}>
-          {(m) => <p class="sign-in-error">{m()}</p>}
-        </Show>
+          <Show when={changeRole.error()}>
+            {(m) => <p class="wb-error" role="alert">{m()}</p>}
+          </Show>
+          <Show when={remove.error()}>
+            {(m) => <p class="wb-error" role="alert">{m()}</p>}
+          </Show>
 
-        <Switch>
-          <Match when={members.loading}>
-            <div class="grid-skel"><div class="skel-block" /></div>
-          </Match>
-          <Match when={members.error}>
-            <section class="empty-state error-state">
-              <p>
-                取得に失敗しました — {(members.error as ControlApiError).message}
-              </p>
-            </section>
-          </Match>
-          <Match when={members()}>
-            {(list) => (
+          <Switch>
+            <Match when={members.error}>
+              <EmptyState
+                icon={<Users size={28} />}
+                title="取得に失敗しました"
+                message={(members.error as ControlApiError).message}
+              />
+            </Match>
+            <Match when={!members.error}>
               <Show
-                when={list().length > 0}
+                when={members.loading || (members()?.length ?? 0) > 0}
                 fallback={
-                  <section class="empty-state">
-                    <p>まだメンバーがいません。</p>
-                  </section>
+                  <EmptyState
+                    ink
+                    icon={<Users size={28} />}
+                    title="まだメンバーがいません"
+                    message="この Space にはまだメンバーがいません。"
+                  />
                 }
               >
-                <table class="data-table members-table">
-                  <thead>
-                    <tr>
-                      <th>メンバー</th>
-                      <th>役割</th>
-                      <th>状態</th>
-                      <Show when={canManage()}>
-                        <th>操作</th>
-                      </Show>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <For each={list()}>
-                      {(member) => (
-                        <tr>
-                          <td>
-                            <code>{member.accountId}</code>
-                            <Show when={member.accountId === callerSubject()}>
-                              <span class="badge">あなた</span>
-                            </Show>
-                          </td>
-                          <td>{rolesLabel(member.roles)}</td>
-                          <td>
-                            <span class="muted">
-                              {STATUS_LABEL[member.status]}
-                            </span>
-                          </td>
-                          {/* 役割変更・削除は owner のみ。閲覧者には列ごと出さない。 */}
-                          <Show when={canManage()}>
-                            <td class="members-actions">
-                              <Show
-                                when={member.status === "active"}
-                                fallback={<span class="muted">—</span>}
-                              >
-                                <label class="members-role-select">
-                                  <ShieldCheck size={14} />
-                                  <select
-                                    disabled={
-                                      changeRole.busy() || isLastOwner(member)
-                                    }
-                                    value={member.roles[0] ?? "member"}
-                                    onChange={(e) =>
-                                      void changeRole.run(
-                                        member,
-                                        e.currentTarget.value as ControlSpaceRole,
-                                      )
-                                    }
-                                    title={
-                                      isLastOwner(member)
-                                        ? "最後のオーナーは降格できません。先に別のオーナーを指名してください。"
-                                        : "役割を変更"
-                                    }
-                                  >
-                                    <For each={ROLE_ORDER}>
-                                      {(role) => (
-                                        <option value={role}>
-                                          {ROLE_LABEL[role]}
-                                        </option>
-                                      )}
-                                    </For>
-                                  </select>
-                                </label>
-                                <button
-                                  class="btn btn-danger btn-sm"
-                                  type="button"
-                                  disabled={remove.busy() || isLastOwner(member)}
-                                  title={
-                                    isLastOwner(member)
-                                      ? "最後のオーナーは削除できません。先に別のオーナーを指名してください。"
-                                      : "メンバーを削除"
-                                  }
-                                  onClick={() => void remove.run(member)}
-                                >
-                                  <Trash2 size={14} />
-                                  削除
-                                </button>
-                              </Show>
-                            </td>
-                          </Show>
-                        </tr>
-                      )}
-                    </For>
-                  </tbody>
-                </table>
+                <DataTable
+                  columns={columns()}
+                  rows={members()}
+                  rowKey={(member) => member.accountId}
+                  loading={members.loading}
+                  skeletonRows={3}
+                />
               </Show>
-            )}
-          </Match>
-        </Switch>
+            </Match>
+          </Switch>
 
-        {/* オーナーでない閲覧者向けの注記。 */}
-        <Show when={members() && !canInvite()}>
-          <p class="muted">
-            メンバーの招待・役割変更・削除はオーナーまたは管理者のみ行えます。
-          </p>
-        </Show>
+          {/* オーナーでない閲覧者向けの注記。 */}
+          <Show when={members() && !canInvite()}>
+            <p class="wb-note">
+              メンバーの招待・役割変更・削除はオーナーまたは管理者のみ行えます。
+            </p>
+          </Show>
+        </div>
       </Show>
     </AppShell>
   );

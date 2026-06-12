@@ -1,0 +1,409 @@
+/*
+ * wave-a.css — CORE control-flow view styling (Wave A).
+ *
+ * Local supplement for the everyday control path views (Installations list +
+ * detail, Run / RunGroup, Activity, Space selector). Only carries rules the
+ * shared tokens/components/views CSS does not already provide; all colours come
+ * from the canonical --tg-* tokens so this stays on the dark "Splatoon ink"
+ * palette. Imported locally at the top of each Wave A view (never via index).
+ */
+
+/* --- Page action clusters -------------------------------------------------- */
+.wa-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  align-items: center;
+}
+
+/* --- Inline error / notice lines ------------------------------------------- */
+.wa-error {
+  margin: var(--tg-s-3) 0 0;
+  color: var(--tg-danger);
+  font-size: var(--tg-fs-sm);
+}
+.wa-notice {
+  margin: var(--tg-s-3) 0 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+
+/* --- Card stack spacing ----------------------------------------------------- */
+.wa-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-5);
+}
+
+/* --- Status heading row (title + badge inline) ----------------------------- */
+.wa-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--tg-s-3);
+}
+
+/* --- Inline code / id chips ------------------------------------------------- */
+.wa-id {
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-muted);
+}
+
+/* --- Installations table cell helpers -------------------------------------- */
+.installation-name {
+  font-weight: 600;
+}
+.installation-stale-reason {
+  margin-top: var(--tg-s-1);
+  font-size: var(--tg-fs-xs);
+}
+
+/* --- Dependency / depends-on lists inside cards ---------------------------- */
+.wa-dep-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--tg-s-5);
+}
+.wa-dep-list {
+  list-style: none;
+  margin: var(--tg-s-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-1);
+}
+.wa-dep-list li {
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-sm);
+}
+.wa-dep-list .wa-dep-edge {
+  color: var(--tg-fg-muted);
+  font-family: var(--tg-font-body);
+}
+
+/* --- Run change summary ----------------------------------------------------- */
+.wa-change-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-3);
+  margin-bottom: var(--tg-s-4);
+}
+.wa-change-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--tg-s-1);
+  padding: var(--tg-s-1) var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-elev);
+  font-size: var(--tg-fs-sm);
+}
+.wa-change-stat strong {
+  font-size: var(--tg-fs-base);
+}
+.wa-change-create strong {
+  color: var(--tg-ink-blue);
+}
+.wa-change-update strong {
+  color: var(--tg-accent);
+}
+.wa-change-delete strong {
+  color: var(--tg-danger);
+}
+
+.wa-change-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--tg-s-4);
+}
+.wa-change-col h4 {
+  margin: 0 0 var(--tg-s-2);
+  font-size: var(--tg-fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--tg-fg-muted);
+}
+.wa-change-col ul,
+.wa-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-1);
+}
+.wa-change-col li code,
+.wa-list li code {
+  font-size: var(--tg-fs-xs);
+  word-break: break-all;
+}
+
+/* --- Diagnostics ------------------------------------------------------------ */
+.wa-diags {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.wa-diag {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--tg-s-2) var(--tg-s-3);
+  align-items: start;
+  padding: var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-elev);
+}
+.wa-diag-sev {
+  font-size: var(--tg-fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  color: var(--tg-fg-muted);
+}
+.wa-diag-error .wa-diag-sev {
+  color: var(--tg-danger);
+}
+.wa-diag-warning .wa-diag-sev {
+  color: var(--tg-accent);
+}
+.wa-diag-msg {
+  font-size: var(--tg-fs-sm);
+}
+.wa-pre {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: var(--tg-s-2) var(--tg-s-3);
+  background: var(--tg-bg);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-sm);
+  font-size: var(--tg-fs-xs);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- Audit trail ------------------------------------------------------------ */
+.wa-audit {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.wa-audit-row {
+  padding: var(--tg-s-2) 0;
+  border-top: 1px solid var(--tg-line);
+}
+.wa-audit-row:first-child {
+  border-top: 0;
+}
+.wa-audit-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--tg-s-3);
+}
+
+/* --- Run cost / deploy notices --------------------------------------------- */
+.wa-cost {
+  padding: var(--tg-s-3) var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-elev);
+  margin-bottom: var(--tg-s-4);
+}
+.wa-cost-blocked {
+  border-color: var(--tg-danger);
+  background: color-mix(in srgb, var(--tg-danger) 8%, transparent);
+}
+.wa-cost-line {
+  margin: 0 0 var(--tg-s-1);
+  font-size: var(--tg-fs-sm);
+}
+.wa-cost-reasons {
+  margin: var(--tg-s-2) 0 0;
+  padding-left: var(--tg-s-5);
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg-muted);
+}
+.wa-deploy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+  margin-top: var(--tg-s-4);
+}
+.wa-deploy-warn {
+  margin: 0;
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-danger);
+}
+.wa-apply-done {
+  margin: var(--tg-s-3) 0 0;
+  color: var(--tg-ink-blue);
+  font-size: var(--tg-fs-sm);
+}
+
+/* --- Deployment history list ----------------------------------------------- */
+.wa-deploy-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.wa-deploy-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-3) 0;
+  border-top: 1px solid var(--tg-line);
+}
+.wa-deploy-row:first-child {
+  border-top: 0;
+}
+.wa-deploy-when {
+  font-weight: 600;
+}
+.wa-deploy-meta {
+  flex: 1 1 auto;
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-muted);
+}
+
+/* --- Provider binding editor ----------------------------------------------- */
+.wa-binding-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+}
+.wa-binding-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+  padding: var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-elev);
+}
+.wa-binding-head,
+.wa-binding-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  align-items: center;
+}
+.wa-binding-head .tg-input {
+  flex: 1 1 200px;
+}
+
+/* --- Form action rows ------------------------------------------------------- */
+.wa-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  margin-top: var(--tg-s-4);
+}
+
+/* --- Activity feed ---------------------------------------------------------- */
+.wa-activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.wa-activity-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-1);
+  padding: var(--tg-s-3) 0;
+  border-top: 1px solid var(--tg-line);
+}
+.wa-activity-row:first-child {
+  border-top: 0;
+}
+.wa-activity-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--tg-s-2);
+}
+.wa-activity-action {
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-accent);
+}
+.wa-activity-target {
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-muted);
+}
+.wa-activity-rowmeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-muted);
+}
+.wa-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  margin-top: var(--tg-s-1);
+}
+.wa-meta-chip {
+  font-size: var(--tg-fs-xs);
+  padding: 2px var(--tg-s-2);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-sm);
+  background: var(--tg-bg-elev);
+}
+.wa-meta-chip code {
+  color: var(--tg-fg);
+}
+
+/* --- Space selector --------------------------------------------------------- */
+.wa-space-selector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+  margin-bottom: var(--tg-s-5);
+}
+.wa-space-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--tg-s-3);
+}
+.wa-space-field {
+  flex: 1 1 260px;
+  max-width: 420px;
+}
+.wa-space-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-elev);
+}
+.wa-space-create .tg-field {
+  flex: 1 1 240px;
+}
+
+/* --- Generic inline launch link in a table cell ---------------------------- */
+.wa-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  justify-content: flex-end;
+}

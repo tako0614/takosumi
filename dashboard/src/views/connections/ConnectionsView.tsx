@@ -1,3 +1,4 @@
+import "../../styles/wave-c.css";
 import {
   createMemo,
   createResource,
@@ -8,6 +9,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
+import { Link, Plug, Plus, Trash } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -33,6 +35,40 @@ import {
 } from "../../lib/control-api.ts";
 import SpaceSelector from "../control/SpaceSelector.tsx";
 import { currentSpaceId } from "../control/space-state.ts";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  type Column,
+  DataTable,
+  EmptyState,
+  FormField,
+  Input,
+  PageHeader,
+  Select,
+  Skeleton,
+  StatusBadge,
+  Toast,
+  type Tone,
+} from "../../components/ui/index.ts";
+
+/** Maps a Connection status to a Badge tone for the StatusBadge. */
+function connectionStatusTone(status: string | undefined): Tone {
+  switch (status) {
+    case "verified":
+      return "ok";
+    case "pending":
+      return "warn";
+    case "error":
+      return "danger";
+    case "revoked":
+    case "expired":
+      return "muted";
+    default:
+      return "neutral";
+  }
+}
 
 /**
  * Sentinel `<select>` value for the generic Provider Env Set path. The
@@ -51,12 +87,14 @@ interface EnvPair {
   readonly value: string;
 }
 
-/** Connection status badge — reuses the shared `.status-pill` styling. */
+/** Connection status badge — token-driven StatusBadge. */
 function ConnectionStatusPill(props: { status: Connection["status"] }) {
   return (
-    <span class={`status-pill status-connection-${props.status}`}>
-      {connectionStatusLabel(props.status)}
-    </span>
+    <StatusBadge
+      status={props.status}
+      label={connectionStatusLabel}
+      tone={connectionStatusTone}
+    />
   );
 }
 
@@ -329,247 +367,118 @@ function ConnectionsInner() {
     void remove.run(c.id);
   };
 
+  const operatorColumns: readonly Column<{ provider: string }>[] = [
+    { header: "プロバイダー", cell: (d) => <code class="wc-code">{d.provider}</code> },
+    { header: "状態", cell: () => <Badge tone="ok">設定済み</Badge> },
+  ];
+
   return (
     <AppShell>
-      <div class="page-header">
-        <h1>接続</h1>
-        <p class="page-sub">
-          provider の認証情報を Space ごとに登録します。 値は書き込み専用で、
-          一度保存すると再表示されません。
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Connection"
+        title="接続"
+        subtitle="provider の認証情報を Space ごとに登録します。値は書き込み専用で、一度保存すると再表示されません。"
+      />
 
       {/* Result banner from the Cloudflare OAuth backend callback redirect. */}
       <Show when={oauthNotice()}>
         {(notice) => (
           <Switch>
             <Match when={notice().kind === "ok"}>
-              <p class="sign-in-notice">Cloudflare に接続しました。</p>
+              <Toast tone="success">Cloudflare に接続しました。</Toast>
             </Match>
             <Match when={notice().kind === "error"}>
-              <p class="sign-in-error">
-                接続に失敗しました。 もう一度お試しください。
-              </p>
+              <Toast tone="error">
+                接続に失敗しました。もう一度お試しください。
+              </Toast>
             </Match>
           </Switch>
         )}
       </Show>
 
-      {/* Operator default connections (spec §9 / §31) — instance-wide defaults
-          a ProviderBinding of `default` resolves to. Read-only here. */}
-      <Show when={(operatorDefaults() ?? []).length > 0}>
-        <section class="detail-section">
-          <h2>オペレーター既定の接続</h2>
-          <p class="page-sub">
-            ProviderBinding が <code>default</code> のとき解決される、
-            インスタンス全体の既定接続です。
-          </p>
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>プロバイダー</th>
-                <th>状態</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={operatorDefaults() ?? []}>
-                {(d) => (
-                  <tr>
-                    <td>
-                      <code>{d.provider}</code>
-                    </td>
-                    <td>設定済み</td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </section>
-      </Show>
-      <Show when={operatorDefaults.error}>
-        <p class="sign-in-error">
-          オペレーター既定の取得に失敗しました —{" "}
-          {(operatorDefaults.error as ControlApiError).message}
-        </p>
-      </Show>
-
-      <SpaceSelector />
-
-      <Show
-        when={hasSpace()}
-        fallback={
-          <section class="empty-state">
-            <p>Space を選ぶと接続一覧を表示します。</p>
-          </section>
-        }
-      >
-        {/* ----- register form ----- */}
-        <section class="detail-section">
-          <h2>接続を追加</h2>
-
-          <label class="form-field">
-            Provider
-            <select
-              value={provider()}
-              onChange={(e) => {
-                setProvider(e.currentTarget.value);
-                // Switching provider drops any half-entered secret values.
-                setValues({});
-                setHelperToken("");
-                setEnvSetProvider("");
-                setEnvPairs([{ name: "", value: "" }]);
-              }}
-            >
-              <For each={PROVIDERS}>
-                {(p) => <option value={p.provider}>{p.label}</option>}
-              </For>
-              <option value={PROVIDER_ENV_SET_OPTION}>
-                その他のプロバイダー（Provider Env Set）
-              </option>
-            </select>
-          </label>
-
-          <label class="form-field">
-            表示名（任意）
-            <input
-              type="text"
-              value={displayName()}
-              onInput={(e) => setDisplayName(e.currentTarget.value)}
-              placeholder="本番 Cloudflare"
-              autocomplete="off"
+      <div class="wc-stack">
+        {/* Operator default connections (spec §9 / §31) — instance-wide defaults
+            a ProviderBinding of `default` resolves to. Read-only here. */}
+        <Show when={(operatorDefaults() ?? []).length > 0}>
+          <Card>
+            <CardHeader
+              title="オペレーター既定の接続"
+              subtitle="ProviderBinding が default のとき解決される、インスタンス全体の既定接続です。"
             />
-          </label>
+            <DataTable
+              columns={operatorColumns}
+              rows={operatorDefaults() ?? []}
+              rowKey={(d) => d.provider}
+            />
+          </Card>
+        </Show>
+        <Show when={operatorDefaults.error}>
+          <Toast tone="error">
+            オペレーター既定の取得に失敗しました —{" "}
+            {(operatorDefaults.error as ControlApiError).message}
+          </Toast>
+        </Show>
 
-          <Show
-            when={isEnvSet()}
-            fallback={
+        <SpaceSelector />
+
+        <Show
+          when={hasSpace()}
+          fallback={
+            <EmptyState
+              ink
+              icon={<Plug size={26} />}
+              title="Space を選択"
+              message="Space を選ぶと接続一覧を表示します。"
+            />
+          }
+        >
+          {/* ----- register form ----- */}
+          <Card>
+            <CardHeader
+              title="接続を追加"
+              subtitle="provider を選び、トークンを貼り付けるか環境変数として登録します。"
+            />
+            <div class="wc-form">
+              <FormField label="Provider">
+                <Select
+                  value={provider()}
+                  onChange={(e) => {
+                    setProvider(e.currentTarget.value);
+                    // Switching provider drops any half-entered secret values.
+                    setValues({});
+                    setHelperToken("");
+                    setEnvSetProvider("");
+                    setEnvPairs([{ name: "", value: "" }]);
+                  }}
+                >
+                  <For each={PROVIDERS}>
+                    {(p) => <option value={p.provider}>{p.label}</option>}
+                  </For>
+                  <option value={PROVIDER_ENV_SET_OPTION}>
+                    その他のプロバイダー（Provider Env Set）
+                  </option>
+                </Select>
+              </FormField>
+
+              <FormField label="表示名（任意）">
+                <Input
+                  type="text"
+                  value={displayName()}
+                  onInput={(e) => setDisplayName(e.currentTarget.value)}
+                  placeholder="本番 Cloudflare"
+                  autocomplete="off"
+                />
+              </FormField>
+
               <Show
-                when={tokenHelper()}
+                when={isEnvSet()}
                 fallback={
-                  /* No guided helper for this provider — raw fields are the path. */
-                  <form
-                    class="connection-form"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      void create.run();
-                    }}
-                  >
-                    <Index each={fields()}>
-                      {(field) => (
-                        <label class="form-field">
-                          {field().label}
-                          <Show when={field().required}>
-                            <span class="form-required" aria-hidden="true">
-                              *
-                            </span>
-                          </Show>
-                          <input
-                            type={field().secret ? "password" : "text"}
-                            value={values()[field().envName] ?? ""}
-                            onInput={(e) =>
-                              setFieldValue(
-                                field().envName,
-                                e.currentTarget.value,
-                              )
-                            }
-                            placeholder={field().placeholder}
-                            autocomplete="off"
-                            spellcheck={false}
-                          />
-                        </label>
-                      )}
-                    </Index>
-                    <div class="form-actions">
-                      <button
-                        class="btn btn-primary"
-                        type="submit"
-                        disabled={create.busy()}
-                      >
-                        {create.busy() ? "登録中..." : "接続を登録"}
-                      </button>
-                    </div>
-                    <ActionError error={create.error} />
-                  </form>
-                }
-              >
-                {(helper) => (
-                  <>
-                    {/* Primary guided-token flow: open the provider's OWN token
-                    screen → create there → paste back. */}
-                    <div class="connection-guided">
-                      <p class="page-sub">
-                        {descriptor()?.label} に接続します。 トークンは{" "}
-                        {descriptor()?.label} の画面で作成し、
-                        貼り付けるだけです。
-                      </p>
-                      <ol class="connection-steps">
-                        <For each={helper().steps}>{(s) => <li>{s}</li>}</For>
-                      </ol>
-
-                      <div class="form-actions">
-                        <a
-                          class="btn btn-primary"
-                          href={helper().createTokenUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {descriptor()?.label} を開いてトークンを作成
-                        </a>
-                        {/* OAuth button appears ONLY when the operator wired the
-                        upstream client (probed). Otherwise it never renders, so
-                        there is no dead button. */}
-                        <Show when={oauthAvailable()}>
-                          <button
-                            class="btn btn-secondary"
-                            type="button"
-                            onClick={() => startOAuth()}
-                          >
-                            {descriptor()?.label} で自動接続
-                          </button>
-                        </Show>
-                      </div>
-
+                  <Show
+                    when={tokenHelper()}
+                    fallback={
+                      /* No guided helper for this provider — raw fields are the path. */
                       <form
-                        class="connection-form"
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          void createFromHelper.run();
-                        }}
-                      >
-                        <label class="form-field">
-                          作成したトークンを貼り付け
-                          <span class="form-required" aria-hidden="true">
-                            *
-                          </span>
-                          <input
-                            type="password"
-                            value={helperToken()}
-                            onInput={(e) =>
-                              setHelperToken(e.currentTarget.value)
-                            }
-                            placeholder="ここにトークンを貼り付け"
-                            autocomplete="off"
-                            spellcheck={false}
-                          />
-                        </label>
-                        <div class="form-actions">
-                          <button
-                            class="btn btn-primary"
-                            type="submit"
-                            disabled={createFromHelper.busy()}
-                          >
-                            {createFromHelper.busy() ? "接続中..." : "接続する"}
-                          </button>
-                        </div>
-                        <ActionError error={createFromHelper.error} />
-                      </form>
-                    </div>
-
-                    {/* Advanced fallback: the raw multi-field form, demoted. */}
-                    <details class="connection-advanced">
-                      <summary>詳細設定（上級者向け）</summary>
-                      <form
-                        class="connection-form"
+                        class="wc-form"
                         onSubmit={(e) => {
                           e.preventDefault();
                           void create.run();
@@ -577,14 +486,11 @@ function ConnectionsInner() {
                       >
                         <Index each={fields()}>
                           {(field) => (
-                            <label class="form-field">
-                              {field().label}
-                              <Show when={field().required}>
-                                <span class="form-required" aria-hidden="true">
-                                  *
-                                </span>
-                              </Show>
-                              <input
+                            <FormField
+                              label={field().label}
+                              required={field().required}
+                            >
+                              <Input
                                 type={field().secret ? "password" : "text"}
                                 value={values()[field().envName] ?? ""}
                                 onInput={(e) =>
@@ -597,205 +503,332 @@ function ConnectionsInner() {
                                 autocomplete="off"
                                 spellcheck={false}
                               />
-                            </label>
+                            </FormField>
                           )}
                         </Index>
-                        <div class="form-actions">
-                          <button
-                            class="btn btn-secondary"
+                        <div class="wc-form-actions">
+                          <Button
+                            variant="primary"
                             type="submit"
-                            disabled={create.busy()}
+                            busy={create.busy()}
                           >
-                            {create.busy() ? "登録中..." : "値を直接登録"}
-                          </button>
+                            {create.busy() ? "登録中..." : "接続を登録"}
+                          </Button>
                         </div>
                         <ActionError error={create.error} />
                       </form>
-                    </details>
-                  </>
-                )}
-              </Show>
-            }
-          >
-            {/* Generic Provider Env Set: a free-form provider name + NAME=value
-                env pairs. This makes "any provider via Provider Env Set"
-                reachable from the UI; the backend stores a non-Cloudflare
-                provider as a `provider_env_set` Connection. */}
-            <div class="connection-guided">
-              <p class="page-sub">
-                AWS / GCP / Kubernetes など任意の OpenTofu provider
-                の認証情報を、 環境変数 (NAME=value) として登録します。
-                値は書き込み専用で、 保存後は env 名のみ表示されます。
-              </p>
-
-              <form
-                class="connection-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void createEnvSet.run();
-                }}
-              >
-                <label class="form-field">
-                  プロバイダー名
-                  <span class="form-required" aria-hidden="true">
-                    *
-                  </span>
-                  <input
-                    type="text"
-                    value={envSetProvider()}
-                    onInput={(e) => setEnvSetProvider(e.currentTarget.value)}
-                    placeholder="aws / google / kubernetes / …"
-                    autocomplete="off"
-                    spellcheck={false}
-                  />
-                </label>
-
-                <Index each={envPairs()}>
-                  {(pair, index) => (
-                    <div class="env-pair-row">
-                      <label class="form-field">
-                        環境変数名
-                        <input
-                          type="text"
-                          value={pair().name}
-                          onInput={(e) =>
-                            setEnvPair(index, { name: e.currentTarget.value })
-                          }
-                          placeholder="AWS_ACCESS_KEY_ID"
-                          autocomplete="off"
-                          spellcheck={false}
-                        />
-                      </label>
-                      <label class="form-field">
-                        値
-                        <input
-                          type="password"
-                          value={pair().value}
-                          onInput={(e) =>
-                            setEnvPair(index, { value: e.currentTarget.value })
-                          }
-                          placeholder="値を貼り付け"
-                          autocomplete="off"
-                          spellcheck={false}
-                        />
-                      </label>
-                      <Show when={envPairs().length > 1}>
-                        <button
-                          class="btn btn-secondary"
-                          type="button"
-                          onClick={() => removeEnvPair(index)}
-                        >
-                          削除
-                        </button>
-                      </Show>
-                    </div>
-                  )}
-                </Index>
-
-                <div class="form-actions">
-                  <button
-                    class="btn btn-secondary"
-                    type="button"
-                    onClick={() => addEnvPair()}
+                    }
                   >
-                    環境変数を追加
-                  </button>
-                  <button
-                    class="btn btn-primary"
-                    type="submit"
-                    disabled={createEnvSet.busy()}
-                  >
-                    {createEnvSet.busy() ? "登録中..." : "接続を登録"}
-                  </button>
-                </div>
-                <ActionError error={createEnvSet.error} />
-              </form>
-            </div>
-          </Show>
-        </section>
+                    {(helper) => (
+                      <>
+                        {/* Primary guided-token flow: open the provider's OWN
+                        token screen → create there → paste back. */}
+                        <div class="wc-guided">
+                          <p class="muted">
+                            {descriptor()?.label} に接続します。トークンは{" "}
+                            {descriptor()?.label} の画面で作成し、
+                            貼り付けるだけです。
+                          </p>
+                          <ol class="wc-steps">
+                            <For each={helper().steps}>
+                              {(s) => <li>{s}</li>}
+                            </For>
+                          </ol>
 
-        {/* ----- list ----- */}
-        <Switch>
-          <Match when={connections.loading}>
-            <div class="grid-skel">
-              <div class="skel-card" />
-              <div class="skel-card" />
-            </div>
-          </Match>
-          <Match when={connections.error}>
-            <section class="empty-state error-state">
-              <p>
-                取得に失敗しました — {(connections.error as ApiError).message}
-              </p>
-            </section>
-          </Match>
-          <Match when={connections()}>
-            {(list) => (
-              <Show
-                when={list().length > 0}
-                fallback={
-                  <section class="empty-state">
-                    <p>この Space にはまだ接続がありません。</p>
-                  </section>
+                          <div class="wc-form-actions">
+                            <Button
+                              variant="primary"
+                              href={helper().createTokenUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {descriptor()?.label} を開いてトークンを作成
+                            </Button>
+                            {/* OAuth button appears ONLY when the operator wired
+                            the upstream client (probed). Otherwise it never
+                            renders, so there is no dead button. */}
+                            <Show when={oauthAvailable()}>
+                              <Button
+                                variant="secondary"
+                                type="button"
+                                onClick={() => startOAuth()}
+                              >
+                                {descriptor()?.label} で自動接続
+                              </Button>
+                            </Show>
+                          </div>
+
+                          <form
+                            class="wc-form"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              void createFromHelper.run();
+                            }}
+                          >
+                            <FormField
+                              label="作成したトークンを貼り付け"
+                              required
+                            >
+                              <Input
+                                type="password"
+                                value={helperToken()}
+                                onInput={(e) =>
+                                  setHelperToken(e.currentTarget.value)
+                                }
+                                placeholder="ここにトークンを貼り付け"
+                                autocomplete="off"
+                                spellcheck={false}
+                              />
+                            </FormField>
+                            <div class="wc-form-actions">
+                              <Button
+                                variant="primary"
+                                type="submit"
+                                busy={createFromHelper.busy()}
+                                icon={<Link size={16} />}
+                              >
+                                {createFromHelper.busy()
+                                  ? "接続中..."
+                                  : "接続する"}
+                              </Button>
+                            </div>
+                            <ActionError error={createFromHelper.error} />
+                          </form>
+                        </div>
+
+                        {/* Advanced fallback: the raw multi-field form, demoted. */}
+                        <details class="connection-advanced">
+                          <summary>詳細設定（上級者向け）</summary>
+                          <form
+                            class="wc-form"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              void create.run();
+                            }}
+                          >
+                            <Index each={fields()}>
+                              {(field) => (
+                                <FormField
+                                  label={field().label}
+                                  required={field().required}
+                                >
+                                  <Input
+                                    type={field().secret ? "password" : "text"}
+                                    value={values()[field().envName] ?? ""}
+                                    onInput={(e) =>
+                                      setFieldValue(
+                                        field().envName,
+                                        e.currentTarget.value,
+                                      )
+                                    }
+                                    placeholder={field().placeholder}
+                                    autocomplete="off"
+                                    spellcheck={false}
+                                  />
+                                </FormField>
+                              )}
+                            </Index>
+                            <div class="wc-form-actions">
+                              <Button
+                                variant="secondary"
+                                type="submit"
+                                busy={create.busy()}
+                              >
+                                {create.busy() ? "登録中..." : "値を直接登録"}
+                              </Button>
+                            </div>
+                            <ActionError error={create.error} />
+                          </form>
+                        </details>
+                      </>
+                    )}
+                  </Show>
                 }
               >
-                <section class="detail-section">
-                  <h2>登録済みの接続</h2>
-                  <ActionError error={remove.error} />
-                  <Show when={testError()}>
-                    {(m) => <p class="sign-in-error">{m()}</p>}
-                  </Show>
-                  <ul class="connection-list">
-                    <For each={list()}>
-                      {(c) => (
-                        <li class="connection-row">
-                          <div class="connection-row-main">
-                            <span class="connection-name">
-                              {c.displayName ?? c.id}
-                            </span>
-                            <ConnectionStatusPill status={c.status} />
-                          </div>
-                          <div class="connection-row-meta muted">
-                            <span>{c.provider}</span>
-                            <span>·</span>
-                            <span class="connection-scope">
-                              {connectionScopeLabel(
-                                scopeById().get(c.id) ?? "space",
-                              )}
-                            </span>
-                            <span>·</span>
-                            <code>{c.envNames.join(", ")}</code>
-                          </div>
-                          <div class="connection-row-actions">
-                            <button
-                              class="btn btn-secondary"
+                {/* Generic Provider Env Set: a free-form provider name +
+                    NAME=value env pairs. This makes "any provider via Provider
+                    Env Set" reachable from the UI; the backend stores a
+                    non-Cloudflare provider as a `provider_env_set` Connection. */}
+                <div class="wc-guided">
+                  <p class="muted">
+                    AWS / GCP / Kubernetes など任意の OpenTofu provider
+                    の認証情報を、環境変数 (NAME=value) として登録します。
+                    値は書き込み専用で、保存後は env 名のみ表示されます。
+                  </p>
+
+                  <form
+                    class="wc-form"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void createEnvSet.run();
+                    }}
+                  >
+                    <FormField label="プロバイダー名" required>
+                      <Input
+                        type="text"
+                        value={envSetProvider()}
+                        onInput={(e) => setEnvSetProvider(e.currentTarget.value)}
+                        placeholder="aws / google / kubernetes / …"
+                        autocomplete="off"
+                        spellcheck={false}
+                      />
+                    </FormField>
+
+                    <Index each={envPairs()}>
+                      {(pair, index) => (
+                        <div class="wc-env-pair">
+                          <FormField label="環境変数名">
+                            <Input
+                              type="text"
+                              value={pair().name}
+                              onInput={(e) =>
+                                setEnvPair(index, {
+                                  name: e.currentTarget.value,
+                                })
+                              }
+                              placeholder="AWS_ACCESS_KEY_ID"
+                              autocomplete="off"
+                              spellcheck={false}
+                            />
+                          </FormField>
+                          <FormField label="値">
+                            <Input
+                              type="password"
+                              value={pair().value}
+                              onInput={(e) =>
+                                setEnvPair(index, {
+                                  value: e.currentTarget.value,
+                                })
+                              }
+                              placeholder="値を貼り付け"
+                              autocomplete="off"
+                              spellcheck={false}
+                            />
+                          </FormField>
+                          <Show when={envPairs().length > 1}>
+                            <Button
+                              variant="ghost"
                               type="button"
-                              onClick={() => void runTest(c.id)}
-                              disabled={testBusyId() === c.id}
-                            >
-                              {testBusyId() === c.id
-                                ? "確認中..."
-                                : "接続テスト"}
-                            </button>
-                            <button
-                              class="btn btn-danger"
-                              type="button"
-                              onClick={() => void confirmRemove(c)}
-                              disabled={remove.busy()}
+                              onClick={() => removeEnvPair(index)}
+                              icon={<Trash size={16} />}
                             >
                               削除
-                            </button>
-                          </div>
-                        </li>
+                            </Button>
+                          </Show>
+                        </div>
                       )}
-                    </For>
-                  </ul>
-                </section>
+                    </Index>
+
+                    <div class="wc-form-actions">
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        onClick={() => addEnvPair()}
+                        icon={<Plus size={16} />}
+                      >
+                        環境変数を追加
+                      </Button>
+                      <Button
+                        variant="primary"
+                        type="submit"
+                        busy={createEnvSet.busy()}
+                      >
+                        {createEnvSet.busy() ? "登録中..." : "接続を登録"}
+                      </Button>
+                    </div>
+                    <ActionError error={createEnvSet.error} />
+                  </form>
+                </div>
               </Show>
-            )}
-          </Match>
-        </Switch>
-      </Show>
+            </div>
+          </Card>
+
+          {/* ----- list ----- */}
+          <Switch>
+            <Match when={connections.loading}>
+              <Skeleton variant="card" count={2} />
+            </Match>
+            <Match when={connections.error}>
+              <Toast tone="error">
+                取得に失敗しました — {(connections.error as ApiError).message}
+              </Toast>
+            </Match>
+            <Match when={connections()}>
+              {(list) => (
+                <Show
+                  when={list().length > 0}
+                  fallback={
+                    <EmptyState
+                      ink
+                      icon={<Plug size={26} />}
+                      title="接続がありません"
+                      message="この Space にはまだ接続がありません。上のフォームから追加できます。"
+                    />
+                  }
+                >
+                  <Card>
+                    <CardHeader title="登録済みの接続" />
+                    <div class="wc-card-stack">
+                      <ActionError error={remove.error} />
+                      <Show when={testError()}>
+                        {(m) => <Toast tone="error">{m()}</Toast>}
+                      </Show>
+                      <ul class="wc-conn-list">
+                        <For each={list()}>
+                          {(c) => (
+                            <li class="wc-conn-row">
+                              <div class="wc-conn-head">
+                                <span class="wc-conn-name">
+                                  {c.displayName ?? c.id}
+                                </span>
+                                <ConnectionStatusPill status={c.status} />
+                              </div>
+                              <div class="wc-conn-meta">
+                                <span>{c.provider}</span>
+                                <span aria-hidden="true">·</span>
+                                <Badge tone="muted">
+                                  {connectionScopeLabel(
+                                    scopeById().get(c.id) ?? "space",
+                                  )}
+                                </Badge>
+                                <span aria-hidden="true">·</span>
+                                <code>{c.envNames.join(", ")}</code>
+                              </div>
+                              <div class="wc-conn-actions">
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  type="button"
+                                  onClick={() => void runTest(c.id)}
+                                  busy={testBusyId() === c.id}
+                                >
+                                  {testBusyId() === c.id
+                                    ? "確認中..."
+                                    : "接続テスト"}
+                                </Button>
+                                <Button
+                                  variant="danger"
+                                  size="sm"
+                                  type="button"
+                                  onClick={() => void confirmRemove(c)}
+                                  disabled={remove.busy()}
+                                  icon={<Trash size={14} />}
+                                >
+                                  削除
+                                </Button>
+                              </div>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </div>
+                  </Card>
+                </Show>
+              )}
+            </Match>
+          </Switch>
+        </Show>
+      </div>
     </AppShell>
   );
 }
